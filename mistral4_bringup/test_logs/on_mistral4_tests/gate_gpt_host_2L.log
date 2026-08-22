@@ -1,0 +1,502 @@
+### BRANCH: ssalice/mistral4-tests @ be32abcfa2c
+### CMD: python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_mistral4_prefill_transformer -k 2_layers and pcc-random and gpt_host -vvv --tb=short
+### START: 2026-08-22T00:37:17+00:00
+2026-08-22 00:37:28.329 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ssalice/.cache/ttnn,model_cache_path=/home/ssalice/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-9.0.3, pluggy-1.6.0 -- /data/ssalice/temp/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /tmp/claude-4076/-data-ssalice-temp-tt-metal/b1e60977-fbb5-439d-844a-6d926fd407e2/scratchpad/sf-trial
+configfile: pytest.ini
+plugins: benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, split-0.11.0, dash-2.15.0, anyio-4.14.2, cov-7.0.0, repeat-0.9.4
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-08-22 00:37:42.034 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:227)
+2026-08-22 00:37:42.034 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-22 00:37:42.055 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-22 00:37:42.055 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-22 00:37:42.133 | info     |             UMD | Established firmware bundle version: 19.12.0 (topology_discovery.cpp:575)
+2026-08-22 00:37:42.138 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-22 00:37:43.573 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}/[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31, 16, 17, 18, 19, 20, 21, 22, 23] and remote chip ids {} (cluster.cpp:173)
+2026-08-22 00:37:43.574 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-22 00:37:43.574 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-22 00:37:43.574 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-22 00:37:43.592 | info     |             UMD | Starting devices in cluster (cluster.cpp:1188)
+2026-08-22 00:37:45.158 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1196)
+collected 12 items / 11 deselected / 1 selected
+
+models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_mistral4_prefill_transformer[blackhole-mistral4-torus-xy-8x4-e128_gpt_host-2_layers-5k-non_balanced-pcc-random-random_weights] 2026-08-22 00:37:51.971 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:424)
+2026-08-22 00:37:51.971 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:486)
+2026-08-22 00:37:51.987 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4, 3:16, 4:12} (topology_mapper_utils.cpp:3341)
+2026-08-22 00:37:51.987 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3349)
+2026-08-22 00:37:51.989 | INFO     | conftest:mesh_device:636 - No trace region size for (8, 4)
+2026-08-22 00:37:51.990 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_2D_TORUS_XY, reinitializing control plane (metal_env.cpp:324)
+2026-08-22 00:37:51.990 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:424)
+2026-08-22 00:37:51.990 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:486)
+2026-08-22 00:37:51.994 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:32} (topology_mapper_utils.cpp:3341)
+2026-08-22 00:37:51.994 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {4:24, 5:8} (topology_mapper_utils.cpp:3349)
+2026-08-22 00:37:51.997 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-08-22 00:37:51.997 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-08-22 00:37:51.997 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-08-22 00:37:51.997 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-08-22 00:37:52.585 | warning  |          Fabric | phys 7 M0D13 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-08-22 00:37:52.585 | warning  |          Fabric | phys 31 M0D14 in direction 2 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-08-22 00:37:52.585 | warning  |          Fabric | phys 15 M0D17 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-08-22 00:37:52.585 | warning  |          Fabric | phys 23 M0D18 in direction 0 has 4 eth channels, but only 2 routing planes are available (control_plane.cpp:1073)
+2026-08-22 00:37:52.639 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-22 00:37:52.887 | info     |           Metal | Fabric initialized on 32 devices (fabric_firmware_initializer.cpp:444)
+2026-08-22 00:37:52.887 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_2D_TORUS_XY (fabric_firmware_initializer.cpp:313)
+2026-08-22 00:37:54.100 | DEBUG    | conftest:mesh_device:654 - multidevice with 32 devices is created
+2026-08-22 00:37:54.115 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1504 - [mistral4 transformer] mesh=[8, 4] isl_total=5120 isl_per_chip=640 num_layers=2 n_routed_experts=128 gate_fallback_mode=GateComputeMode.GPT_HOST pcc_validation=True
+2026-08-22 00:38:41.537 | INFO     | models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer:__init__:191 - Building TtPrefillTransformer with 2 layers, seq_len=5120
+2026-08-22 00:38:41.537 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding:__init__:165 - Initializing TtParallelEmbedding: vocab_size=131072, emb_dim=4096, mesh_shape=MeshShape([8, 4]), tp_factor=4
+2026-08-22 00:38:43.942 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding:_create_weight_from_torch:212 - Created sharded weight: Shape([131072, 1024])
+2026-08-22 00:38:43.943 | INFO     | models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer:__init__:218 - Building layer 0/2 (global idx 0)...
+2026-08-22 00:38:43.943 | INFO     | models.demos.deepseek_v3_d_p.tt.tt_prefill_block:__init__:294 - Building TtPrefillBlock layer_idx=0 (MoE, kv_only=False)
+2026-08-22 00:38:43.943 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:189 - Initializing TtDistributedRmsNorm with emb_dim=4096, epsilon=1e-06
+2026-08-22 00:38:43.943 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:190 - Mesh shape: MeshShape([8, 4]), num_devices=32
+2026-08-22 00:38:43.943 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:191 - CCL config: cluster_axis=1, num_links=2, topology=Topology.Ring
+2026-08-22 00:38:43.943 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:195 - Creating weight from provided torch tensor
+2026-08-22 00:38:43.943 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:225 - Weight shape: torch.Size([4096])
+2026-08-22 00:38:43.943 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:237 - Created sharded weight: Shape([1, 1, 32, 32])
+2026-08-22 00:38:44.304 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:__init__:534 - Loaded 8 weights in MLA layer 0 (kv_only=False)
+2026-08-22 00:38:44.304 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:189 - Initializing TtDistributedRmsNorm with emb_dim=4096, epsilon=1e-06
+2026-08-22 00:38:44.304 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:190 - Mesh shape: MeshShape([8, 4]), num_devices=32
+2026-08-22 00:38:44.305 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:191 - CCL config: cluster_axis=1, num_links=2, topology=Topology.Ring
+2026-08-22 00:38:44.305 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:195 - Creating weight from provided torch tensor
+2026-08-22 00:38:44.305 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:225 - Weight shape: torch.Size([4096])
+2026-08-22 00:38:44.305 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:237 - Created sharded weight: Shape([1, 1, 32, 32])
+2026-08-22 00:38:44.305 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:334 - TtMoe: shared-expert reduce-scatter forced to Linear (overlapped with dispatch on a TP-ring fabric) to avoid an EDM deadlock; other TP collectives keep Ring
+2026-08-22 00:38:44.306 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_dispatch_table:248 - [ExpertMapping.create_dispatch_table] OUTPUT: table.shape=torch.Size([4, 129])
+2026-08-22 00:38:44.327 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:386 - Initializing TtMoe
+2026-08-22 00:38:44.327 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:387 -   mesh_device.shape=MeshShape([8, 4])
+2026-08-22 00:38:44.328 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:388 -   dispatch_group_size=8, num_dispatch_groups=4
+2026-08-22 00:38:44.328 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:389 -   experts_per_chip=4, num_routed_experts=128
+2026-08-22 00:38:44.328 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:390 -   num_experts_per_tok=4
+2026-08-22 00:38:44.328 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:391 -   seq_len_per_chip=640, emb_dim=4096, hidden_dim=2048
+2026-08-22 00:38:44.328 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:173 - [shard_expert_dispatch_table] INPUT: expert_dispatch_table.shape=torch.Size([4, 129]), dispatch_axis=0
+2026-08-22 00:38:44.328 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:180 - [shard_expert_dispatch_table] Using dims=(None, 0)
+2026-08-22 00:38:44.331 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:194 - [shard_expert_dispatch_table] OUTPUT: result.shape=Shape([1, 129])
+2026-08-22 00:38:44.331 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:425 - Sub-devices: grid=12x10, dispatch=rows[0,1), shared=rows[1,10)
+2026-08-22 00:38:44.332 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_global_expert_idx_table:290 - [ExpertMapping.create_global_expert_idx_table] OUTPUT: table.shape=torch.Size([4, 8, 4])
+2026-08-22 00:38:44.332 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:369 - Initializing TtRoutedExpert with experts_per_chip=4
+2026-08-22 00:38:44.332 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:370 - emb_dim=4096, hidden_dim=2048
+2026-08-22 00:38:44.333 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:371 - Mesh shape: MeshShape([8, 4]), num_devices=32, total_experts=128
+2026-08-22 00:38:44.333 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:388 - Creating weights from provided torch tensors (128 experts)
+Expert weights (convert):   0%|          | 0/4 [00:00<?, ?it/s]Expert weights (convert):  25%|██▌       | 1/4 [00:04<00:12,  4.12s/it]Expert weights (convert):  50%|█████     | 2/4 [00:08<00:08,  4.16s/it]Expert weights (convert):  75%|███████▌  | 3/4 [00:12<00:04,  4.21s/it]Expert weights (convert): 100%|██████████| 4/4 [00:16<00:00,  4.25s/it]Expert weights (convert): 100%|██████████| 4/4 [00:16<00:00,  4.22s/it]
+2026-08-22 00:39:01.325 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:278 - Initializing TtSharedExpert with emb_dim=4096, hidden_dim=2048
+2026-08-22 00:39:01.325 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:279 - Mesh shape: MeshShape([8, 4]), num_devices=32
+2026-08-22 00:39:01.326 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:280 - CCL config: num_links=2, topology=Topology.Linear
+2026-08-22 00:39:01.326 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:284 - Creating weights from provided torch tensors
+2026-08-22 00:39:01.501 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:551 - TtMoe initialization complete
+2026-08-22 00:39:01.501 | INFO     | models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer:__init__:218 - Building layer 1/2 (global idx 1)...
+2026-08-22 00:39:01.501 | INFO     | models.demos.deepseek_v3_d_p.tt.tt_prefill_block:__init__:294 - Building TtPrefillBlock layer_idx=1 (MoE, kv_only=False)
+2026-08-22 00:39:01.501 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:189 - Initializing TtDistributedRmsNorm with emb_dim=4096, epsilon=1e-06
+2026-08-22 00:39:01.501 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:190 - Mesh shape: MeshShape([8, 4]), num_devices=32
+2026-08-22 00:39:01.501 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:191 - CCL config: cluster_axis=1, num_links=2, topology=Topology.Ring
+2026-08-22 00:39:01.501 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:195 - Creating weight from provided torch tensor
+2026-08-22 00:39:01.501 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:225 - Weight shape: torch.Size([4096])
+2026-08-22 00:39:01.502 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:237 - Created sharded weight: Shape([1, 1, 32, 32])
+2026-08-22 00:39:01.667 | INFO     | models.demos.deepseek_v3_d_p.tt.mla.mla:__init__:534 - Loaded 8 weights in MLA layer 1 (kv_only=False)
+2026-08-22 00:39:01.667 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:189 - Initializing TtDistributedRmsNorm with emb_dim=4096, epsilon=1e-06
+2026-08-22 00:39:01.667 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:190 - Mesh shape: MeshShape([8, 4]), num_devices=32
+2026-08-22 00:39:01.667 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:191 - CCL config: cluster_axis=1, num_links=2, topology=Topology.Ring
+2026-08-22 00:39:01.668 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:195 - Creating weight from provided torch tensor
+2026-08-22 00:39:01.668 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:225 - Weight shape: torch.Size([4096])
+2026-08-22 00:39:01.668 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:237 - Created sharded weight: Shape([1, 1, 32, 32])
+2026-08-22 00:39:01.668 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:334 - TtMoe: shared-expert reduce-scatter forced to Linear (overlapped with dispatch on a TP-ring fabric) to avoid an EDM deadlock; other TP collectives keep Ring
+2026-08-22 00:39:01.669 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_dispatch_table:248 - [ExpertMapping.create_dispatch_table] OUTPUT: table.shape=torch.Size([4, 129])
+2026-08-22 00:39:01.680 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:386 - Initializing TtMoe
+2026-08-22 00:39:01.680 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:387 -   mesh_device.shape=MeshShape([8, 4])
+2026-08-22 00:39:01.680 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:388 -   dispatch_group_size=8, num_dispatch_groups=4
+2026-08-22 00:39:01.681 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:389 -   experts_per_chip=4, num_routed_experts=128
+2026-08-22 00:39:01.681 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:390 -   num_experts_per_tok=4
+2026-08-22 00:39:01.681 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:391 -   seq_len_per_chip=640, emb_dim=4096, hidden_dim=2048
+2026-08-22 00:39:01.681 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:173 - [shard_expert_dispatch_table] INPUT: expert_dispatch_table.shape=torch.Size([4, 129]), dispatch_axis=0
+2026-08-22 00:39:01.681 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:180 - [shard_expert_dispatch_table] Using dims=(None, 0)
+2026-08-22 00:39:01.681 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:shard_expert_dispatch_table:194 - [shard_expert_dispatch_table] OUTPUT: result.shape=Shape([1, 129])
+2026-08-22 00:39:01.681 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:425 - Sub-devices: grid=12x10, dispatch=rows[0,1), shared=rows[1,10)
+2026-08-22 00:39:01.682 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.init_helpers:create_global_expert_idx_table:290 - [ExpertMapping.create_global_expert_idx_table] OUTPUT: table.shape=torch.Size([4, 8, 4])
+2026-08-22 00:39:01.682 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:369 - Initializing TtRoutedExpert with experts_per_chip=4
+2026-08-22 00:39:01.682 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:370 - emb_dim=4096, hidden_dim=2048
+2026-08-22 00:39:01.682 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:371 - Mesh shape: MeshShape([8, 4]), num_devices=32, total_experts=128
+2026-08-22 00:39:01.682 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:__init__:388 - Creating weights from provided torch tensors (128 experts)
+Expert weights (convert):   0%|          | 0/4 [00:00<?, ?it/s]Expert weights (convert):  25%|██▌       | 1/4 [00:04<00:12,  4.11s/it]Expert weights (convert):  50%|█████     | 2/4 [00:08<00:08,  4.16s/it]Expert weights (convert):  75%|███████▌  | 3/4 [00:12<00:04,  4.20s/it]Expert weights (convert): 100%|██████████| 4/4 [00:16<00:00,  4.20s/it]Expert weights (convert): 100%|██████████| 4/4 [00:16<00:00,  4.19s/it]
+2026-08-22 00:39:18.539 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:278 - Initializing TtSharedExpert with emb_dim=4096, hidden_dim=2048
+2026-08-22 00:39:18.539 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:279 - Mesh shape: MeshShape([8, 4]), num_devices=32
+2026-08-22 00:39:18.539 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:280 - CCL config: num_links=2, topology=Topology.Linear
+2026-08-22 00:39:18.539 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:__init__:284 - Creating weights from provided torch tensors
+2026-08-22 00:39:18.708 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:__init__:551 - TtMoe initialization complete
+2026-08-22 00:39:18.708 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:189 - Initializing TtDistributedRmsNorm with emb_dim=4096, epsilon=1e-06
+2026-08-22 00:39:18.708 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:190 - Mesh shape: MeshShape([8, 4]), num_devices=32
+2026-08-22 00:39:18.708 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:191 - CCL config: cluster_axis=1, num_links=2, topology=Topology.Ring
+2026-08-22 00:39:18.708 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:__init__:195 - Creating weight from provided torch tensor
+2026-08-22 00:39:18.708 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:225 - Weight shape: torch.Size([4096])
+2026-08-22 00:39:18.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:_create_sharded_weight_from_torch:237 - Created sharded weight: Shape([1, 1, 32, 32])
+2026-08-22 00:39:18.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_lm_head:__init__:216 - Initializing TtLMHead with emb_dim=4096, vocab_size=131072
+2026-08-22 00:39:18.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_lm_head:__init__:217 - Mesh shape: MeshShape([8, 4]), num_devices=32
+2026-08-22 00:39:18.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_lm_head:__init__:218 - CCL config: num_links=2, topology=Topology.Ring
+2026-08-22 00:39:18.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_lm_head:__init__:219 - is_balanced=False, weight_cache_path=None
+2026-08-22 00:39:18.709 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_lm_head:__init__:222 - Creating weight from provided torch tensor
+2026-08-22 00:39:21.289 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_lm_head:_create_weight_from_torch:320 - Created sharded LM head weight: Shape([4096, 32768])
+2026-08-22 00:39:21.290 | INFO     | models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer:__init__:313 - TtPrefillTransformer construction complete (2 layers)
+2026-08-22 00:39:21.321 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1573 - [mistral4 transformer] running TtPrefillTransformer forward
+2026-08-22 00:39:21.348 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding:forward:237 - Forward: token_ids shape=Shape([1, 1, 640])
+2026-08-22 00:39:21.355 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding:forward:246 - Output: embeddings shape=Shape([1, 640, 1024])
+2026-08-22 00:39:21.688 | INFO     | tracy:signpost:49 - forward_layer_0_start
+2026-08-22 00:39:21.688 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:257 - Forward pass: input shape=Shape([1, 1, 640, 1024])
+2026-08-22 00:39:21.699 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:270 - Pre-all-gather stats shape: Shape([1, 1, 640, 32])
+2026-08-22 00:39:21.704 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.704 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.704 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.705 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.705 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.705 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.705 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.706 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.706 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.706 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.706 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.707 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.707 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.707 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.707 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.708 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.708 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.708 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.708 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.708 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.709 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.709 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.709 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.709 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.710 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.710 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.710 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.710 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.711 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.711 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.711 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.711 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.770 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:330 - Gathered stats shape: Shape([1, 1, 640, 128])
+2026-08-22 00:39:21.782 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:343 - Output shape: Shape([1, 1, 640, 1024])
+2026-08-22 00:39:21.783 | INFO     | tracy:signpost:49 - MLA_START
+2026-08-22 00:39:21.899 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.900 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.900 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.901 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.901 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.902 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.902 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.903 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.903 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.903 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.904 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.904 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.905 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.905 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.905 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.906 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.906 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.907 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.907 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.908 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.908 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.908 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.909 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.909 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.910 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.910 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.911 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.911 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.911 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.912 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.912 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:21.913 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.035 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.035 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.036 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.036 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.037 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.037 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.037 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.038 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.038 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.039 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.039 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.039 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.040 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.040 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.041 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.041 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.042 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.042 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.042 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.043 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.043 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.044 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.044 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.045 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.045 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.045 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.046 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.046 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.047 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.047 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.047 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.048 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:22.503 | INFO     | tracy:signpost:49 - MLA_END
+2026-08-22 00:39:22.539 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:257 - Forward pass: input shape=Shape([1, 1, 640, 1024])
+2026-08-22 00:39:22.539 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:270 - Pre-all-gather stats shape: Shape([1, 1, 640, 32])
+2026-08-22 00:39:22.541 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:330 - Gathered stats shape: Shape([1, 1, 640, 128])
+2026-08-22 00:39:22.541 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:343 - Output shape: Shape([1, 1, 640, 1024])
+2026-08-22 00:39:22.541 | INFO     | tracy:signpost:49 - MoE_START
+2026-08-22 00:39:22.541 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:606 - [TtMoe.forward] INPUT SHAPES:
+2026-08-22 00:39:22.542 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:607 -   x.shape=Shape([1, 640, 1024])
+2026-08-22 00:39:22.542 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill:forward:1163 - [MoeGate] fallback_mode=gpt_host
+2026-08-22 00:39:22.542 | WARNING  | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill:_device_matmul:804 - [MoeGate] No matmul program config for (640, 1024, 128), using TTNN default
+2026-08-22 00:39:23.745 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup:forward:218 - ttnn_top_k_experts_indices.shape=Shape([640, 4])
+2026-08-22 00:39:23.751 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-22 00:39:23.752 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.752 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.752 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.753 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.753 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.753 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.753 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.753 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.753 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.753 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.753 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.753 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.753 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.753 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.753 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.753 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.754 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.754 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.754 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.754 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.754 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.754 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.754 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.754 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.754 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.754 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.754 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.754 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.755 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.755 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.755 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.755 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 512 B pages. Configure 2048 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:23.782 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:705 -   scores.shape=Shape([1, 640, 4]) scores.memory_config()=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)
+2026-08-22 00:39:23.782 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:706 -   indices.shape=Shape([1, 640, 4]) indices.memory_config()=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)
+2026-08-22 00:39:23.941 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:724 - [TtMoe.forward] x (after all_gather) shape: Shape([1, 640, 4096])
+2026-08-22 00:39:23.941 | INFO     | tracy:signpost:49 - shared_expert_and_dispatch_start
+2026-08-22 00:39:23.941 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:747 - [TtMoe.forward] x.shape=Shape([1, 640, 4096]) x.memory_config()=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)
+2026-08-22 00:39:23.941 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:394 - Forward pass: input shape=Shape([1, 640, 4096]), batch_size=1
+2026-08-22 00:39:24.218 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:510 - After shared_expert_ffn: Shape([1, 640, 1024])
+2026-08-22 00:39:24.219 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:750 - [TtMoe.forward] Shared expert output shape: Shape([1, 640, 1024])
+2026-08-22 00:39:24.219 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:757 - [TtMoe.forward] routed_x.shape=Shape([1, 640, 4096]) routed_x.memory_config()=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)
+2026-08-22 00:39:24.219 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:256 - [TtDispatchModule.forward] INPUT SHAPES:
+2026-08-22 00:39:24.219 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:257 -   x.shape=Shape([1, 640, 4096])
+2026-08-22 00:39:24.219 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:258 -   weights.shape=Shape([1, 640, 4])
+2026-08-22 00:39:24.219 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:259 -   indices.shape=Shape([1, 640, 4])
+2026-08-22 00:39:24.219 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:260 -   tt_expert_offsets.shape=Shape([1, 128])
+2026-08-22 00:39:24.219 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:261 -   tt_expert_dispatch_table.shape=Shape([1, 129])
+2026-08-22 00:39:24.219 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:262 - [TtDispatchModule.forward] CONFIG:
+2026-08-22 00:39:24.219 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:263 -   dispatch_group_size=8, experts_per_chip=4
+2026-08-22 00:39:24.219 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:264 -   num_routed_experts=128, num_experts_per_tok=4
+2026-08-22 00:39:24.219 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:265 -   metadata_len=3, max_dispatch_buffer_token_size=41056
+2026-08-22 00:39:24.219 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:268 -   cluster_axis=0, num_links=2, topology=Topology.Ring
+2026-08-22 00:39:24.221 | info     |              Op | Prefill dispatch: input tensor is TILE layout (dispatch_program_factory.cpp:1142)
+2026-08-22 00:39:24.358 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:297 - [TtDispatchModule.forward] OUTPUT SHAPES:
+2026-08-22 00:39:24.359 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:298 -   tt_dispatched_buffer.shape=Shape([1, 1, 41056, 4096])
+2026-08-22 00:39:24.359 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:299 -   tt_dispatch_metadata.shape=Shape([1, 1, 41056, 3])
+2026-08-22 00:39:24.359 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:794 - [TtMoe.forward] Dispatch output: buffer=Shape([1, 1, 41056, 4096]), metadata=Shape([1, 1, 41056, 3])
+2026-08-22 00:39:24.359 | INFO     | tracy:signpost:49 - shared_expert_and_dispatch_end
+2026-08-22 00:39:24.359 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:535 - Forward pass: dispatched_buffer shape=Shape([41056, 4096])
+2026-08-22 00:39:24.359 | INFO     | tracy:signpost:49 - UnifiedRoutedExpertMoe
+2026-08-22 00:39:24.499 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:563 - Final expert_outputs shape: Shape([41056, 4096])
+2026-08-22 00:39:24.499 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:814 - [TtMoe.forward] expert_outputs shape: Shape([41056, 4096])
+2026-08-22 00:39:24.499 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:820 - [TtMoe.forward] expert_outputs (unsqueezed) shape: Shape([1, 1, 41056, 4096])
+2026-08-22 00:39:24.499 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:826 - [TtMoe.forward] expert_outputs shape: Shape([1, 1, 41056, 4096]) expert_outputs.dtype=DataType.BFLOAT8_B
+2026-08-22 00:39:24.668 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:834 - [TtMoe.forward] combined_output shape: Shape([1, 1, 640, 4, 4096]) combined_output.dtype=DataType.BFLOAT16
+2026-08-22 00:39:24.920 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:851 - [TtMoe.forward] routed_output (after reduce) shape: Shape([1, 1, 640, 1024])
+2026-08-22 00:39:24.920 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:868 - [TtMoe.forward] routed_output (squeezed) shape: Shape([1, 640, 1024])
+2026-08-22 00:39:24.920 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:876 - [TtMoe.forward] final_output (tiled) shape: Shape([1, 640, 1024])
+2026-08-22 00:39:24.922 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:892 - [TtMoe.forward] max per-chip dispatched token sum: 1281 (max_dispatch_buffer_token_size=41056)
+2026-08-22 00:39:24.923 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:915 - [TtMoe.forward] max expert region offset: 1248 (token_count for that expert: 67, max_dispatch_buffer_token_size=41056)
+2026-08-22 00:39:24.923 | INFO     | tracy:signpost:49 - MoE_END
+2026-08-22 00:39:24.924 | INFO     | tracy:signpost:49 - forward_layer_0_end
+2026-08-22 00:39:25.288 | INFO     | tracy:signpost:49 - forward_layer_1_start
+2026-08-22 00:39:25.288 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:257 - Forward pass: input shape=Shape([1, 1, 640, 1024])
+2026-08-22 00:39:25.288 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:270 - Pre-all-gather stats shape: Shape([1, 1, 640, 32])
+2026-08-22 00:39:25.289 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:330 - Gathered stats shape: Shape([1, 1, 640, 128])
+2026-08-22 00:39:25.290 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:343 - Output shape: Shape([1, 1, 640, 1024])
+2026-08-22 00:39:25.290 | INFO     | tracy:signpost:49 - MLA_START
+2026-08-22 00:39:25.296 | INFO     | tracy:signpost:49 - MLA_END
+2026-08-22 00:39:25.297 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:257 - Forward pass: input shape=Shape([1, 1, 640, 1024])
+2026-08-22 00:39:25.297 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:270 - Pre-all-gather stats shape: Shape([1, 1, 640, 32])
+2026-08-22 00:39:25.297 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:330 - Gathered stats shape: Shape([1, 1, 640, 128])
+2026-08-22 00:39:25.298 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:343 - Output shape: Shape([1, 1, 640, 1024])
+2026-08-22 00:39:25.298 | INFO     | tracy:signpost:49 - MoE_START
+2026-08-22 00:39:25.298 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:606 - [TtMoe.forward] INPUT SHAPES:
+2026-08-22 00:39:25.298 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:607 -   x.shape=Shape([1, 640, 1024])
+2026-08-22 00:39:25.298 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill:forward:1163 - [MoeGate] fallback_mode=gpt_host
+2026-08-22 00:39:25.298 | WARNING  | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill:_device_matmul:804 - [MoeGate] No matmul program config for (640, 1024, 128), using TTNN default
+2026-08-22 00:39:25.310 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup:forward:218 - ttnn_top_k_experts_indices.shape=Shape([640, 4])
+2026-08-22 00:39:25.310 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-22 00:39:25.311 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:705 -   scores.shape=Shape([1, 640, 4]) scores.memory_config()=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)
+2026-08-22 00:39:25.311 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:706 -   indices.shape=Shape([1, 640, 4]) indices.memory_config()=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)
+2026-08-22 00:39:25.312 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:724 - [TtMoe.forward] x (after all_gather) shape: Shape([1, 640, 4096])
+2026-08-22 00:39:25.312 | INFO     | tracy:signpost:49 - shared_expert_and_dispatch_start
+2026-08-22 00:39:25.312 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:747 - [TtMoe.forward] x.shape=Shape([1, 640, 4096]) x.memory_config()=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)
+2026-08-22 00:39:25.312 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:394 - Forward pass: input shape=Shape([1, 640, 4096]), batch_size=1
+2026-08-22 00:39:25.346 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert:forward:510 - After shared_expert_ffn: Shape([1, 640, 1024])
+2026-08-22 00:39:25.346 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:750 - [TtMoe.forward] Shared expert output shape: Shape([1, 640, 1024])
+2026-08-22 00:39:25.346 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:757 - [TtMoe.forward] routed_x.shape=Shape([1, 640, 4096]) routed_x.memory_config()=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0)
+2026-08-22 00:39:25.346 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:256 - [TtDispatchModule.forward] INPUT SHAPES:
+2026-08-22 00:39:25.346 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:257 -   x.shape=Shape([1, 640, 4096])
+2026-08-22 00:39:25.346 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:258 -   weights.shape=Shape([1, 640, 4])
+2026-08-22 00:39:25.346 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:259 -   indices.shape=Shape([1, 640, 4])
+2026-08-22 00:39:25.346 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:260 -   tt_expert_offsets.shape=Shape([1, 128])
+2026-08-22 00:39:25.346 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:261 -   tt_expert_dispatch_table.shape=Shape([1, 129])
+2026-08-22 00:39:25.346 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:262 - [TtDispatchModule.forward] CONFIG:
+2026-08-22 00:39:25.346 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:263 -   dispatch_group_size=8, experts_per_chip=4
+2026-08-22 00:39:25.347 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:264 -   num_routed_experts=128, num_experts_per_tok=4
+2026-08-22 00:39:25.347 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:265 -   metadata_len=3, max_dispatch_buffer_token_size=41056
+2026-08-22 00:39:25.347 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:268 -   cluster_axis=0, num_links=2, topology=Topology.Ring
+2026-08-22 00:39:25.359 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:297 - [TtDispatchModule.forward] OUTPUT SHAPES:
+2026-08-22 00:39:25.359 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:298 -   tt_dispatched_buffer.shape=Shape([1, 1, 41056, 4096])
+2026-08-22 00:39:25.359 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch:forward:299 -   tt_dispatch_metadata.shape=Shape([1, 1, 41056, 3])
+2026-08-22 00:39:25.359 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:794 - [TtMoe.forward] Dispatch output: buffer=Shape([1, 1, 41056, 4096]), metadata=Shape([1, 1, 41056, 3])
+2026-08-22 00:39:25.359 | INFO     | tracy:signpost:49 - shared_expert_and_dispatch_end
+2026-08-22 00:39:25.359 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:535 - Forward pass: dispatched_buffer shape=Shape([41056, 4096])
+2026-08-22 00:39:25.359 | INFO     | tracy:signpost:49 - UnifiedRoutedExpertMoe
+2026-08-22 00:39:25.360 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert:forward:563 - Final expert_outputs shape: Shape([41056, 4096])
+2026-08-22 00:39:25.360 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:814 - [TtMoe.forward] expert_outputs shape: Shape([41056, 4096])
+2026-08-22 00:39:25.360 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:820 - [TtMoe.forward] expert_outputs (unsqueezed) shape: Shape([1, 1, 41056, 4096])
+2026-08-22 00:39:25.360 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:826 - [TtMoe.forward] expert_outputs shape: Shape([1, 1, 41056, 4096]) expert_outputs.dtype=DataType.BFLOAT8_B
+2026-08-22 00:39:25.361 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:834 - [TtMoe.forward] combined_output shape: Shape([1, 1, 640, 4, 4096]) combined_output.dtype=DataType.BFLOAT16
+2026-08-22 00:39:25.362 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:851 - [TtMoe.forward] routed_output (after reduce) shape: Shape([1, 1, 640, 1024])
+2026-08-22 00:39:25.362 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:868 - [TtMoe.forward] routed_output (squeezed) shape: Shape([1, 640, 1024])
+2026-08-22 00:39:25.362 | DEBUG    | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:876 - [TtMoe.forward] final_output (tiled) shape: Shape([1, 640, 1024])
+2026-08-22 00:39:25.364 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:892 - [TtMoe.forward] max per-chip dispatched token sum: 1078 (max_dispatch_buffer_token_size=41056)
+2026-08-22 00:39:25.367 | INFO     | models.demos.deepseek_v3_d_p.tt.moe.tt_moe:forward:915 - [TtMoe.forward] max expert region offset: 800 (token_count for that expert: 318, max_dispatch_buffer_token_size=41056)
+2026-08-22 00:39:25.367 | INFO     | tracy:signpost:49 - MoE_END
+2026-08-22 00:39:25.368 | INFO     | tracy:signpost:49 - forward_layer_1_end
+2026-08-22 00:39:25.716 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:257 - Forward pass: input shape=Shape([1, 1, 640, 1024])
+2026-08-22 00:39:25.716 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:270 - Pre-all-gather stats shape: Shape([1, 1, 640, 32])
+2026-08-22 00:39:25.717 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:330 - Gathered stats shape: Shape([1, 1, 640, 128])
+2026-08-22 00:39:25.717 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm:forward:343 - Output shape: Shape([1, 1, 640, 1024])
+2026-08-22 00:39:26.065 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_lm_head:forward:339 - [TtLMHead.forward] INPUT SHAPES:
+2026-08-22 00:39:26.065 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_lm_head:forward:340 -   x.shape=Shape([1, 1, 640, 1024])
+2026-08-22 00:39:26.065 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_lm_head:forward:359 - [TtLMHead.forward] After narrow (local_token_id=639 tile_start=608): x.shape=Shape([1, 1, 32, 1024]) token_offset=31
+2026-08-22 00:39:26.065 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-22 00:39:26.067 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.068 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.068 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.068 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.068 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.068 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.068 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.068 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.068 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.068 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.068 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.068 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.068 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.069 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.069 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.069 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.069 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.069 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.069 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.069 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.069 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.069 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.069 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.069 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.069 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.070 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.070 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.070 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.070 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.070 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.070 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.070 | warning  |              Op | Fabric packet size 4096 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-22 00:39:26.171 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_lm_head:forward:378 - [TtLMHead.forward] x_full (after all_gather) shape: Shape([1, 1, 32, 4096])
+2026-08-22 00:39:26.184 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_lm_head:forward:382 - [TtLMHead.forward] output (after matmul) shape: Shape([1, 1, 32, 32768])
+2026-08-22 00:39:26.195 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer:_lm_head_and_extract:580 - [TtPrefillTransformer._extract] Shape([1, 1, 32, 32768])
+2026-08-22 00:39:26.195 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer:_lm_head_and_extract:581 - [TtPrefillTransformer._extract] torch.Size([1, 1, 32, 131072])
+2026-08-22 00:39:26.195 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer:_lm_head_and_extract:582 - [TtPrefillTransformer._extract] torch.Size([1, 1, 131072])
+2026-08-22 00:39:26.198 | DEBUG    | models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer:_sample:620 - [TtPrefillTransformer._sample] first_token_id=115867, first_token_prob=0.0003
+2026-08-22 00:39:26.200 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1587 - [mistral4 transformer] first token: ID=115867, prob=0.0003
+2026-08-22 00:39:26.200 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1598 - [mistral4 transformer] chaining 2 x reference.mistral_small_4.mistral4_decoder_layer_reference on host
+2026-08-22 00:39:26.221 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:_mistral4_reference_snapshots:1355 - [mistral4 transformer] CPU reference layer 0/2
+2026-08-22 00:39:31.149 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:_mistral4_reference_snapshots:1355 - [mistral4 transformer] CPU reference layer 1/2
+2026-08-22 00:39:37.001 | DEBUG    | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:_compare_intermediate_pcc:124 - embed                 PCC = 1.000000
+2026-08-22 00:39:37.202 | DEBUG    | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:_compare_intermediate_pcc:124 - layer_0               PCC = 0.987135
+2026-08-22 00:39:37.399 | DEBUG    | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:_compare_intermediate_pcc:124 - layer_1               PCC = 0.968953
+2026-08-22 00:39:37.590 | DEBUG    | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:_compare_intermediate_pcc:124 - norm                  PCC = 0.968778
+2026-08-22 00:39:37.591 | DEBUG    | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:_compare_intermediate_pcc:106 - lm_head               PCC = 0.968950
+2026-08-22 00:39:37.591 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1616 -
+==================================================
+2026-08-22 00:39:37.591 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1617 - Stage                        PCC    Status
+2026-08-22 00:39:37.591 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1618 - --------------------------------------------------
+2026-08-22 00:39:37.591 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1622 - embed                   1.000000      PASS
+2026-08-22 00:39:37.591 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1622 - layer_0                 0.987135      FAIL
+2026-08-22 00:39:37.591 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1622 - layer_1                 0.968953      FAIL
+2026-08-22 00:39:37.591 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1622 - norm                    0.968778      FAIL
+2026-08-22 00:39:37.591 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1622 - lm_head                 0.968950      FAIL
+2026-08-22 00:39:37.591 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1625 - ==================================================
+2026-08-22 00:39:37.591 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1628 -
+============================================================
+2026-08-22 00:39:37.592 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1629 - Timing Report
+2026-08-22 00:39:37.592 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1630 - ============================================================
+2026-08-22 00:39:37.592 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1632 -   weights_creation: 47421.02 ms
+2026-08-22 00:39:37.592 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1632 -   tt_transformer_creation: 39753.66 ms
+2026-08-22 00:39:37.592 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1632 -   tt_forward: 4879.04 ms
+2026-08-22 00:39:37.592 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1632 -   reference_computation: 10748.27 ms
+2026-08-22 00:39:37.592 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1632 -   pcc_validation: 642.51 ms
+2026-08-22 00:39:37.592 | INFO     | models.demos.deepseek_v3_d_p.tests.test_prefill_transformer:test_mistral4_prefill_transformer:1632 -   total_test_time: 103476.29 ms
+FAILED2026-08-22 00:39:39.159 | INFO     | conftest:pytest_runtest_teardown:1213 - In custom teardown, open device ids: {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}
+
+
+=================================== FAILURES ===================================
+_ test_mistral4_prefill_transformer[blackhole-mistral4-torus-xy-8x4-e128_gpt_host-2_layers-5k-non_balanced-pcc-random-random_weights] _
+models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py:1653: in test_mistral4_prefill_transformer
+    pytest.fail(f"PCC below {threshold} at: " + "; ".join(f"{label}: {pcc:.6f}" for label, pcc in failures))
+E   Failed: PCC below 0.99 at: layer_0: 0.987135; layer_1: 0.968953; norm: 0.968778; lm_head: 0.968950
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+../../../../../../data/ssalice/temp/tt-metal/python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291
+  /data/ssalice/temp/tt-metal/python_env/lib/python3.10/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /tmp/claude-4076/-data-ssalice-temp-tt-metal/b1e60977-fbb5-439d-844a-6d926fd407e2/scratchpad/sf-trial/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+103.49s call     models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_mistral4_prefill_transformer[blackhole-mistral4-torus-xy-8x4-e128_gpt_host-2_layers-5k-non_balanced-pcc-random-random_weights]
+2.61s setup    models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_mistral4_prefill_transformer[blackhole-mistral4-torus-xy-8x4-e128_gpt_host-2_layers-5k-non_balanced-pcc-random-random_weights]
+0.29s teardown models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_mistral4_prefill_transformer[blackhole-mistral4-torus-xy-8x4-e128_gpt_host-2_layers-5k-non_balanced-pcc-random-random_weights]
+=========================== short test summary info ============================
+FAILED models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_mistral4_prefill_transformer[blackhole-mistral4-torus-xy-8x4-e128_gpt_host-2_layers-5k-non_balanced-pcc-random-random_weights] - Failed: PCC below 0.99 at: layer_0: 0.987135; layer_1: 0.968953; norm: 0.968778; lm_head: 0.968950
+=========== 1 failed, 11 deselected, 3 warnings in 118.55s (0:01:58) ===========
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-08-22 00:39:41.540 | info     |    BuildKernels | JIT cache stats: 1199/1205 hits (99.5%) [1199 cached, 3076 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-22 00:39:41.540 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-22 00:39:41.758 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:547)
+2026-08-22 00:39:41.758 | info     |             UMD | Closing devices in cluster (cluster.cpp:1201)
+2026-08-22 00:39:49.761 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1210)
+2026-08-22 00:39:49.761 | info     |             UMD | Cluster destructor started. (cluster.cpp:916)
+2026-08-22 00:39:49.761 | info     |             UMD | Cluster destructor completed. (cluster.cpp:919)
+### END: 2026-08-22T00:39:50+00:00 rc=1
