@@ -1101,30 +1101,33 @@ static std::vector<Tensor> pool2d(
             input = ttnn::to_layout(input, Layout::ROW_MAJOR);
         }
 
-        // Canonicalize to (batch_size, 1, H*W, C) form using an explicit logical+padded reshape.
-        // This is format-agnostic: it accepts both flat (1, 1, N*H*W, C) input from direct
-        // avg_pool2d callers and NHWC (N, H, W, C) input from the global_avg_pool2d Python
-        // wrapper, and it preserves any pre-existing padding (e.g., legacy callers that
-        // pad_to_tile zero-pad the spatial dim) by carrying padded_shape through. The gate
-        // above ensures total_padded_spatial divides cleanly by batch_size.
-        const auto& post_padded = input.padded_shape();
-        uint32_t total_padded_spatial = post_padded[0] * post_padded[1] * post_padded[2];
-        uint32_t channels_padded = post_padded[3];
-        TT_FATAL(
-            total_padded_spatial % batch_size == 0,
-            "Global pool fast path: padded spatial elements ({}) must be divisible by batch_size ({})",
-            total_padded_spatial,
-            batch_size);
-        uint32_t hw_padded_per_batch = total_padded_spatial / batch_size;
-        ttnn::Shape canonical_logical({batch_size, 1, hw, channels});
-        ttnn::Shape canonical_padded({batch_size, 1, hw_padded_per_batch, channels_padded});
-        Tensor canonical = ttnn::reshape(input, canonical_logical, canonical_padded);
+        // Present the spatial extent as (batch_size, H, W, C) and let the reduce collapse dims 1-2.
+        // An NHWC tensor already is that, so it passes through untouched — describing its layout is
+        // the reduce's job, and a tensor padded on W has pad rows between its H rows that no flat
+        // shape can express. Flat (1, 1, N*H*W, C) input from direct avg_pool2d callers still needs
+        // the split into per-batch rows: that is pool's own convention (each batch pools separately),
+        // not a layout claim, and dim 1 == 1 leaves the reduce nothing to collapse.
+        Tensor canonical = input;
+        if (input.logical_shape() != ttnn::Shape({batch_size, input_h, input_w, channels})) {
+            const auto& post_padded = input.padded_shape();
+            uint32_t total_padded_spatial = post_padded[0] * post_padded[1] * post_padded[2];
+            uint32_t channels_padded = post_padded[3];
+            TT_FATAL(
+                total_padded_spatial % batch_size == 0,
+                "Global pool fast path: padded spatial elements ({}) must be divisible by batch_size ({})",
+                total_padded_spatial,
+                batch_size);
+            uint32_t hw_padded_per_batch = total_padded_spatial / batch_size;
+            ttnn::Shape canonical_logical({batch_size, 1, hw, channels});
+            ttnn::Shape canonical_padded({batch_size, 1, hw_padded_per_batch, channels_padded});
+            canonical = ttnn::reshape(input, canonical_logical, canonical_padded);
+        }
 
-        // ttnn::sum exposes a scalar parameter, but pool_sum is the only reduction entry point
-        // that accepts (N, 1, H*W, C) tensors with H*W padding without producing garbage.
+        // ttnn::sum exposes a scalar parameter, but pool_sum_dims_1_2 is the only reduction entry
+        // point that collapses both spatial axes at once and tolerates padding between them.
         // Replace once ttnn::sum gains equivalent handling.
         //
-        // Forwarding output_layout into pool_sum makes the to_layout below a no-op; nullopt keeps
+        // Forwarding output_layout into the reduce makes the to_layout below a no-op; nullopt keeps
         // the reduce's native layout and defers the conversion.
         //
         // ROW_MAJOR: forwarded at any batch size. Untilizing the (N, 1, 1, C) result spreads over
@@ -1140,9 +1143,9 @@ static std::vector<Tensor> pool2d(
             output_layout == Layout::ROW_MAJOR ? !tt::tt_metal::is_block_float(canonical.dtype()) : batch_size == 1;
         const std::optional<Layout> reduce_output_layout =
             forward_output_layout ? std::optional<Layout>(output_layout) : std::nullopt;
-        Tensor output = ttnn::operations::reduction::pool_sum(
-            canonical, 2, reduce_mem, compute_kernel_config, scalar, reduce_output_layout);
-        // pool_sum returns (N, 1, 1, C). For batch=1 this is (1, 1, 1, C), the avg_pool2d output
+        Tensor output = ttnn::operations::reduction::pool_sum_dims_1_2(
+            canonical, reduce_mem, compute_kernel_config, scalar, reduce_output_layout);
+        // The reduce returns (N, 1, 1, C). For batch=1 this is (1, 1, 1, C), the avg_pool2d output
         // convention (1, 1, N*out_H*out_W, C) coincides. For batch>1 we reshape to (1, 1, N, C).
         const auto& output_padded_shape = output.padded_shape();
         if (batch_size == 1) {

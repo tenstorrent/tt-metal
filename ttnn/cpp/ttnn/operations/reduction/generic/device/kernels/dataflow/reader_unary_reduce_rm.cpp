@@ -29,8 +29,13 @@
 // rt_start). w_chunks inner — chunk_idx in compute resets per h_chunk.
 //
 // H reduce: outer iteration is the core's output-tile range (rt_count outputs starting at
-// rt_start, decomposed into (nc, wt_in_nc)). h_chunks inner. wt_tiles_per_chunk is mandated 1 by
-// the H factory, so each output tile is one work unit.
+// rt_start, decomposed into (group, slice, wt_in_nc)). h_chunks inner. wt_tiles_per_chunk is
+// mandated 1 by the H factory, so each output tile is one work unit. A work unit spans
+// reduce_batch_size dim-1 slices, whose rows all land in the same output row.
+//
+// Rows are addressed logically and mapped to pages through H_padded: one slice's rows are
+// contiguous, but consecutive slices sit H_padded pages apart, so a tensor whose H carries padding
+// is read without ever touching a pad row.
 //
 template <ckernel::ReduceDim DIM>
 void reduce_rm_reader() {
@@ -40,8 +45,9 @@ void reduce_rm_reader() {
     const uint32_t rt_count = get_arg_val<uint32_t>(1);
     const uint32_t rt_start = get_arg_val<uint32_t>(2);
 
-    // Compile-time args. Slots 0-7 shared between paths. H reduce uses slot 8 for H_logical;
-    // TensorAccessor args follow at slot 8 (W) or slot 9 (H).
+    // Compile-time args. Slots 0-9 shared between paths — both need H_logical / H_padded to turn a
+    // logical row into a page. The H path additionally carries the split geometry and the NC
+    // grouping at 10-12, so TensorAccessor args follow at slot 10 (W) or slot 13 (H).
     constexpr uint32_t scaler_bits = get_compile_time_arg_val(0);
     constexpr uint32_t W_logical = get_compile_time_arg_val(1);
     constexpr uint32_t elem_bytes = get_compile_time_arg_val(2);
@@ -50,8 +56,9 @@ void reduce_rm_reader() {
     constexpr uint32_t wt_tiles_per_chunk = get_compile_time_arg_val(5);
     constexpr uint32_t rm_rows_per_tile = get_compile_time_arg_val(6);
     constexpr uint32_t ht_tiles_per_chunk = get_compile_time_arg_val(7);
-    // H path carries H_logical (8) and the H-axis-split geometry (9-10); the W path omits all three.
-    constexpr auto tensor_args = TensorAccessorArgs<(DIM == ckernel::ReduceDim::REDUCE_ROW) ? 8 : 11>();
+    constexpr uint32_t H_logical = get_compile_time_arg_val(8);
+    constexpr uint32_t H_padded = get_compile_time_arg_val(9);
+    constexpr auto tensor_args = TensorAccessorArgs<(DIM == ckernel::ReduceDim::REDUCE_ROW) ? 10 : 13>();
 
     constexpr uint32_t cb_id_scaler = tt::CBIndex::c_2;
     constexpr uint32_t cb_id_rm = tt::CBIndex::c_24;
@@ -87,7 +94,10 @@ void reduce_rm_reader() {
     //   reserve → bulk identity-fill the whole slab → async_read real_rows real rows → barrier → push.
     // Padded rows past `real_rows` and padded columns past `valid_bytes` retain the identity (0 for
     // SUM) from the fill, contributing nothing to the running sum.
-    auto stage_slab = [&](uint32_t slab_first_global_row, uint32_t real_rows, const RmWChunkBytes& w_range) {
+    //
+    // `page_of` maps a logical row index to its page. Each row is mapped individually because a slab
+    // of TILE_HEIGHT rows can straddle dim-1 slices, which are H_padded pages apart.
+    auto stage_slab = [&](auto&& page_of, uint32_t slab_first_row, uint32_t real_rows, const RmWChunkBytes& w_range) {
         cb_rm.reserve_back(rm_rows_per_tile);
         rm_fill_page_with_clear_template(
             noc, cb_rm, rm_rows_per_tile * page_bytes, clear_template_src, clear_template_bytes);
@@ -97,7 +107,7 @@ void reduce_rm_reader() {
                     tensor_accessor,
                     cb_rm,
                     w_range.valid_bytes,
-                    {.page_id = slab_first_global_row + r, .offset_bytes = w_range.chunk_start_bytes},
+                    {.page_id = page_of(slab_first_row + r), .offset_bytes = w_range.chunk_start_bytes},
                     {.offset_bytes = r * page_bytes});
             }
         }
@@ -107,6 +117,15 @@ void reduce_rm_reader() {
 
     if constexpr (DIM == ckernel::ReduceDim::REDUCE_ROW) {
         // === W reduce ===
+        // Work is split over the global logical rows (NC * H_logical of them). A dense H makes row
+        // index and page index the same; a padded H needs the slice hop.
+        auto page_of_logical_row = [](uint32_t row) -> uint32_t {
+            if constexpr (H_padded == H_logical) {
+                return row;
+            } else {
+                return (row / H_logical) * H_padded + (row % H_logical);
+            }
+        };
         const uint32_t num_logical_rows = rt_count;
         const uint32_t Ht_reader = (num_logical_rows + rm_rows_per_tile - 1) / rm_rows_per_tile;
 
@@ -123,33 +142,48 @@ void reduce_rm_reader() {
                     const uint32_t slab_rows_avail = num_logical_rows - slab_base_row_local;
                     const uint32_t real_rows =
                         (slab_rows_avail < rm_rows_per_tile) ? slab_rows_avail : rm_rows_per_tile;
-                    stage_slab(rt_start + slab_base_row_local, real_rows, w_range);
+                    stage_slab(page_of_logical_row, rt_start + slab_base_row_local, real_rows, w_range);
                 }
             }
         }
     } else {
         // === H reduce ===
-        // H_logical / split geometry are only meaningful on the H path. The indices embed DIM so the
-        // W-branch (where slots 8-10 don't exist) doesn't eagerly instantiate them.
-        constexpr uint32_t H_logical = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 8 : 0);
-        constexpr uint32_t num_h_slices = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 9 : 0);
+        // The split geometry and NC grouping are only meaningful on the H path. The indices embed DIM
+        // so the W-branch (where slots 10-12 don't exist) doesn't eagerly instantiate them.
+        constexpr uint32_t num_h_slices = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 10 : 0);
         // Tiles per work unit == the compute kernel's Ht loop bound; == Ht_rm when num_h_slices == 1.
-        constexpr uint32_t slice_Ht = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 10 : 0);
+        constexpr uint32_t slice_Ht = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 11 : 0);
+        // Dim-1 slices folded into one output row; their rows concatenate into one reduction.
+        constexpr uint32_t reduce_batch_size =
+            get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 12 : 0);
+        constexpr uint32_t rows_per_unit = reduce_batch_size * H_logical;
 
         // Each owned output tile is one work unit (wt_tiles_per_chunk == 1). Decompose its global id
-        // into (nc, slice, wt_in_nc) and read only this slice's contiguous H slice. Tiles that run
-        // past H_logical (last slice's overhang) stage as all-identity (real_rows == 0) → contribute 0.
+        // into (group, slice, wt_in_nc) and read only this slice's rows. Tiles that run past
+        // rows_per_unit (last slice's overhang) stage as all-identity (real_rows == 0) → contribute 0.
         for (uint32_t out_idx = 0; out_idx < rt_count; ++out_idx) {
             const uint32_t global_tile_id = rt_start + out_idx;
             const uint32_t wt_in_nc = global_tile_id % Wt;
-            // Peeling off the W-column leaves the flattened (nc, slice) index == nc*num_h_slices + slice.
+            // Peeling off the W-column leaves the flattened (group, slice) index ==
+            // group*num_h_slices + slice.
             const uint32_t nc_slice_idx = global_tile_id / Wt;
             const uint32_t h_slice_idx = nc_slice_idx % num_h_slices;
-            const uint32_t nc = nc_slice_idx / num_h_slices;
+            const uint32_t group = nc_slice_idx / num_h_slices;
             const RmWChunkBytes w_range =
                 rm_compute_w_chunk_bytes(wt_in_nc, wt_tiles_per_chunk, valid_row_bytes, elem_bytes);
-            const uint32_t nc_base_page = nc * H_logical;
             const uint32_t slice_first_tile = h_slice_idx * slice_Ht;
+
+            // Row r of this work unit lives in the group's slice r / H_logical. Slices start
+            // H_padded pages apart, so advancing past a slice's H_logical real rows steps over the
+            // pad rows that follow them.
+            auto page_of_unit_row = [group](uint32_t r) -> uint32_t {
+                if constexpr (reduce_batch_size == 1 && H_padded == H_logical) {
+                    return group * H_logical + r;
+                } else {
+                    const uint32_t b = r / H_logical;
+                    return (group * reduce_batch_size + b) * H_padded + (r - b * H_logical);
+                }
+            };
 
             for (uint32_t slice_tile_base = 0; slice_tile_base < slice_Ht; slice_tile_base += ht_tiles_per_chunk) {
                 const uint32_t ht_in_chunk = (slice_tile_base + ht_tiles_per_chunk < slice_Ht)
@@ -157,12 +191,12 @@ void reduce_rm_reader() {
                                                  : (slice_Ht - slice_tile_base);
 
                 for (uint32_t hti = 0; hti < ht_in_chunk; ++hti) {
-                    const uint32_t slab_base_row_in_nc = (slice_first_tile + slice_tile_base + hti) * rm_rows_per_tile;
+                    const uint32_t slab_base_row = (slice_first_tile + slice_tile_base + hti) * rm_rows_per_tile;
                     const uint32_t slab_rows_avail =
-                        (slab_base_row_in_nc < H_logical) ? (H_logical - slab_base_row_in_nc) : 0;
+                        (slab_base_row < rows_per_unit) ? (rows_per_unit - slab_base_row) : 0;
                     const uint32_t real_rows =
                         (slab_rows_avail < rm_rows_per_tile) ? slab_rows_avail : rm_rows_per_tile;
-                    stage_slab(nc_base_page + slab_base_row_in_nc, real_rows, w_range);
+                    stage_slab(page_of_unit_row, slab_base_row, real_rows, w_range);
                 }
             }
         }

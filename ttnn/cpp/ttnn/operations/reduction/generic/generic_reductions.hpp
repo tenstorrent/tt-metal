@@ -26,6 +26,19 @@ Tensor pool_sum(
     float scalar,
     const std::optional<Layout>& output_layout = std::nullopt);
 
+// Collapse dims 1 and 2 of a 4D tensor to (D0, 1, 1, D3) in a single launch, applying `scalar` once.
+// Chooses how based on the buffer: a tensor contiguous across the dim-1/dim-2 boundary is reshaped
+// into one long axis, which keeps the H-axis split available; a ROW_MAJOR tensor whose dim 2 is
+// padded has pad rows between the dim-1 slices and no single-axis form, so it is reduced with NC
+// grouping instead. Split out from the single-dim entry point because pool needs both axes at once.
+[[deprecated]]
+Tensor pool_sum_dims_1_2(
+    const Tensor& input_tensor_arg,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar,
+    const std::optional<Layout>& output_layout = std::nullopt);
+
 }  // namespace operations::reduction
 
 // Generic reductions

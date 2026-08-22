@@ -26,13 +26,19 @@ RmPlan make_rm_plan(
     tt::DataFormat src_cb_data_format,
     tt::DataFormat dst_cb_data_format,
     tt::tt_metal::ReduceOpMath math_op,
-    tt::tt_metal::ReduceOpDim dim) {
+    tt::tt_metal::ReduceOpDim dim,
+    uint32_t reduce_batch_size) {
     RmPlan plan{};
     plan.H_logical = logical_shape[2];
     plan.W_logical = logical_shape[3];
+    plan.H_padded = padded_shape[2];
     plan.rm_rows_per_tile = tile_height;
     plan.Wt = tt::div_up(padded_shape[3], tile_width);
-    plan.Ht_rm = tt::div_up(plan.H_logical, plan.rm_rows_per_tile);
+    // On the H path a work unit reduces `reduce_batch_size` dim-1 slices at once, so Ht_rm counts
+    // the tiles of one work unit rather than of one slice. The W path splits by row and ignores it.
+    const uint32_t rows_per_unit =
+        (dim == tt::tt_metal::ReduceOpDim::H) ? reduce_batch_size * plan.H_logical : plan.H_logical;
+    plan.Ht_rm = tt::div_up(rows_per_unit, plan.rm_rows_per_tile);
 
     // Only supports ReduceOpDim::W or ReduceOpDim::H.
     //
@@ -89,6 +95,16 @@ void validate_rm_preconditions(
         dim_label,
         math_op);
     TT_FATAL(!negate, "{} RM path does not currently support 'negate'", dim_label);
+    // Padding on dim 3 is masked per row (valid_row_bytes) and dim 2 is strided over via H_padded,
+    // but the reader derives a slice's first page as slice_index * H_padded, which has no term for
+    // padding in the dims above it.
+    TT_FATAL(
+        input.padded_shape()[0] == input.logical_shape()[0] && input.padded_shape()[1] == input.logical_shape()[1],
+        "{} RM path supports padding on dims 2-3 but not on dims 0-1: the page base is "
+        "slice_index * padded H. Got logical {} padded {}",
+        dim_label,
+        input.logical_shape(),
+        input.padded_shape());
 }
 
 std::vector<uint32_t> build_rm_reader_ct_args(
@@ -97,11 +113,13 @@ std::vector<uint32_t> build_rm_reader_ct_args(
     const tt::tt_metal::MeshTensor& src,
     tt::tt_metal::ReduceOpDim dim,
     uint32_t num_h_slices,
-    uint32_t slice_Ht) {
-    // Slots 0-7 are shared by both paths. The reader's REDUCE_COL (H) branch additionally consumes
-    // H_logical at slot 8 and the H-axis-split geometry (num_h_slices, slice_Ht) at slots 9-10; the
-    // W path omits all three, so the source TensorAccessor args follow at slot 8 (W) or slot 11 (H).
-    // The kernel is templated on REDUCE_DIM so the unused slots are genuinely dropped.
+    uint32_t slice_Ht,
+    uint32_t reduce_batch_size) {
+    // Slots 0-9 are shared by both paths: both need H_logical / H_padded to turn a logical row into
+    // a page. The reader's REDUCE_COL (H) branch additionally consumes the H-axis-split geometry
+    // (num_h_slices, slice_Ht) and the NC grouping (reduce_batch_size) at slots 10-12, so the source
+    // TensorAccessor args follow at slot 10 (W) or slot 13 (H). The kernel is templated on
+    // REDUCE_DIM so the unused slots are genuinely dropped.
     // Only supports ReduceOpDim::W or ReduceOpDim::H
     std::vector<uint32_t> args = {
         scaler_bits,
@@ -112,11 +130,13 @@ std::vector<uint32_t> build_rm_reader_ct_args(
         plan.wt_tiles_per_chunk,
         plan.rm_rows_per_tile,
         plan.ht_tiles_per_chunk,
+        plan.H_logical,
+        plan.H_padded,
     };
     if (dim == tt::tt_metal::ReduceOpDim::H) {
-        args.push_back(plan.H_logical);
         args.push_back(num_h_slices);
         args.push_back(slice_Ht == 0 ? plan.Ht_rm : slice_Ht);
+        args.push_back(reduce_batch_size);
     }
     tt::tt_metal::TensorAccessorArgs(src).append_to(args);
     return args;
