@@ -246,29 +246,32 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
     uint64_t min_ts = s.min_zone_ts, max_ts = s.max_zone_ts;
     uint64_t* const last_ts = s.last_zone_ts.data();
 
-    auto emit = [&](uint32_t lane, uint32_t type, uint32_t zone_id, uint64_t ts, uint32_t dur, uint32_t prog) {
-        const PerfDebugRawRecType rt = type == PP_ZONE_ATOMIC  ? PerfDebugRawRecType::ZoneAtomic
-                                       : type == PP_ZONE_START ? PerfDebugRawRecType::ZoneStart
-                                                               : PerfDebugRawRecType::ZoneEnd;
-        // Counts COMPLETED zones (an atomic packet or a legacy pair's END half), not marker halves --
-        // the report prints it verbatim, so a START must not contribute.
-        zone_markers += (type != PP_ZONE_START) ? 1 : 0;
-        // PRODUCER-STALL, matched by ELF-resolved NAME via the id table: a producer RISC blocked on
-        // a FULL ring. STALL_ONLY mode only -- on a normal run this per-marker probe is redundant
-        // (the control plane reads the workers' own L1 stall counters at teardown) and measures ~10%
-        // of the decode wall, so the hot path does not pay for a diagnostic the device already keeps.
-        stall_zones += (count_stalls && type == PP_ZONE_START && is_stall(zone_id)) ? 1 : 0;
-        if (ts < last_ts[lane]) {
-            order_regressions++;
-        } else {
-            last_ts[lane] = ts;
+    auto emit = [&](uint32_t lane, uint32_t type, uint32_t zone_id, uint64_t ts, uint32_t prog, uint32_t duration) {
+        PerfDebugRawRecType rt = PerfDebugRawRecType::ZoneTotal;
+        if (type == PP_ZONE_ATOMIC) {
+            rt = PerfDebugRawRecType::Zone;
+        } else if (type != PP_ZONE_TOTAL) {
+            rt = type == PP_ZONE_START ? PerfDebugRawRecType::ZoneStart : PerfDebugRawRecType::ZoneEnd;
         }
-        if (min_ts == 0) {
-            min_ts = ts;
+        if (type != PP_ZONE_TOTAL) {
+            zone_markers++;
+            // PRODUCER-STALL, matched by ELF-resolved NAME via the id table: a producer RISC blocked on
+            // a FULL ring. STALL_ONLY mode only -- on a normal run this per-marker probe is redundant
+            // (the control plane reads the workers' own L1 stall counters at teardown) and measures ~10%
+            // of the decode wall, so the hot path does not pay for a diagnostic the device already keeps.
+            stall_zones += (count_stalls && type == PP_ZONE_START && is_stall(zone_id)) ? 1 : 0;
+            if (ts < last_ts[lane]) {
+                order_regressions++;
+            } else {
+                last_ts[lane] = ts;
+            }
+            if (min_ts == 0) {
+                min_ts = ts;
+            }
+            max_ts = ts;
         }
-        max_ts = ts;
         if (sink) {
-            w.emit_store(pos++, PerfDebugRawRec{ts, zone_id, {0, lane, dev, rt}, prog, dur});
+            w.emit_store(pos++, PerfDebugRawRec{ts, zone_id, {0, lane, dev, rt}, prog, duration});
         }
     };
     auto emit_data = [&](uint32_t lane,
@@ -295,10 +298,7 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
 
 #if defined(__AVX2__)
     auto emit_zones8 = [&](uint32_t lane, uint32_t th, uint32_t prog, __m256i w0s, __m256i w1s) {
-        // Completed-zone count: this block is 8 LEGACY marker halves; only the ENDs are finished zones
-        // (bit27 of word0 -> sign bit via <<4, one movemask+popcount for all 8).
-        zone_markers += static_cast<unsigned>(__builtin_popcount(
-            static_cast<uint32_t>(_mm256_movemask_ps(_mm256_castsi256_ps(_mm256_slli_epi32(w0s, 4))))));
+        zone_markers += 8;
         // Order invariant at block endpoints only: the producer guarantees monotonicity inside a run, so
         // in-block inversions would need a producer bug, while the boundary compare still catches every
         // head-mirror/resync error class. th is block-constant, so comparing on it is exact.
@@ -360,54 +360,54 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         }
         pos += 8;
     };
-    // COUNT-LIMITED: only the n leading lanes are real records; the rest are speculative over-read the
-    // decoder authorized against the frame tail and must not be emitted or counted.
-    auto emit_atomic8 =
-        [&](uint32_t lane, uint32_t th, uint32_t prog, __m256i w0s, __m256i w1s, __m256i w2s, uint32_t n) {
-            zone_markers += n;  // every atomic record is a completed zone
-            const uint64_t th_hi = static_cast<uint64_t>(th) << 32;
-            alignas(32) uint32_t w1_arr[8];
-            alignas(32) uint32_t id_arr[8];
-            alignas(32) uint32_t w2_arr[8];
-            _mm256_store_si256(reinterpret_cast<__m256i*>(w1_arr), w1s);
-            _mm256_store_si256(
-                reinterpret_cast<__m256i*>(id_arr), _mm256_and_si256(w0s, _mm256_set1_epi32(0x07FFFFFF)));
-            _mm256_store_si256(reinterpret_cast<__m256i*>(w2_arr), w2s);
-            // Order invariant at block endpoints, exactly as emit_zones8 argues. ENDs are the per-lane
-            // order invariant on this wire, and atomic ts IS the zone END.
-            const uint64_t ts_first = th_hi | w1_arr[0];
-            const uint64_t ts_last = th_hi | w1_arr[n - 1];
-            order_regressions += ts_first < last_ts[lane] ? 1 : 0;
-            last_ts[lane] = ts_last;
-            if (min_ts == 0) {
-                min_ts = ts_first;
+    auto emit_atomic8 = [&](
+                            uint32_t lane, uint32_t th, uint32_t prog, __m256i w0s, __m256i w1s, __m256i w2s,
+                            uint32_t n) {
+        zone_markers += n;
+        const uint64_t ts_first =
+            (static_cast<uint64_t>(th) << 32) | static_cast<uint32_t>(_mm256_extract_epi32(w1s, 0));
+        alignas(32) uint32_t w1_arr[8];
+        _mm256_store_si256(reinterpret_cast<__m256i*>(w1_arr), w1s);
+        const uint64_t ts_last = (static_cast<uint64_t>(th) << 32) | w1_arr[n - 1];
+        order_regressions += ts_first < last_ts[lane] ? 1 : 0;
+        last_ts[lane] = ts_last;
+        if (min_ts == 0) {
+            min_ts = ts_first;
+        }
+        max_ts = ts_last;
+        // No PRODUCER-STALL probe here: the scalar path only counts STALL starts on the 2-word wire
+        // (type == PP_ZONE_START), so atomic records are exempt on both paths alike.
+        if (!sink) {
+            return;
+        }
+        const __m256i ids = _mm256_and_si256(w0s, _mm256_set1_epi32(0x07FFFFFF));
+        // A complete zone: type = Zone (0), so meta carries only lane and dev; duration rides quadword 2's
+        // high half above prog.
+        const uint64_t meta64 = static_cast<uint64_t>((lane << 16) | (dev << 26)) << 32;
+        alignas(32) uint32_t id_arr[8];
+        alignas(32) uint32_t dur_arr[8];
+        _mm256_store_si256(reinterpret_cast<__m256i*>(id_arr), ids);
+        _mm256_store_si256(reinterpret_cast<__m256i*>(dur_arr), w2s);
+        const uint64_t th_hi = static_cast<uint64_t>(th) << 32;
+        const uint64_t prog64 = prog;
+        const uint64_t slot0 = pos & ring_mask;
+        if (slot0 + n <= ring_mask + 1) {
+            auto* q = reinterpret_cast<long long*>(ring_base + slot0 * sizeof(PerfDebugRawRec));
+            for (uint32_t k = 0; k < n; k++, q += 3) {
+                _mm_stream_si64(q + 0, static_cast<long long>(th_hi | w1_arr[k]));
+                _mm_stream_si64(q + 1, static_cast<long long>(meta64 | id_arr[k]));
+                _mm_stream_si64(q + 2, static_cast<long long>((static_cast<uint64_t>(dur_arr[k]) << 32) | prog64));
             }
-            max_ts = ts_last;
-            // No PRODUCER-STALL probe: the stall zone deliberately keeps the legacy pair encoding.
-            if (!sink) {
-                return;
+        } else {
+            for (uint32_t k = 0; k < n; k++) {
+                auto* q = reinterpret_cast<long long*>(w.emit_slot_ptr(pos + k));
+                _mm_stream_si64(q + 0, static_cast<long long>(th_hi | w1_arr[k]));
+                _mm_stream_si64(q + 1, static_cast<long long>(meta64 | id_arr[k]));
+                _mm_stream_si64(q + 2, static_cast<long long>((static_cast<uint64_t>(dur_arr[k]) << 32) | prog64));
             }
-            const uint64_t meta_id_hi = static_cast<uint64_t>((lane << 16) | (dev << 26) | (3u << 29))
-                                        << 32;  // type = ZoneAtomic
-            const uint64_t prog64 = prog;
-            const uint64_t slot0 = pos & ring_mask;
-            if (slot0 + n <= ring_mask + 1) {
-                auto* q = reinterpret_cast<long long*>(ring_base + slot0 * sizeof(PerfDebugRawRec));
-                for (uint32_t k = 0; k < n; k++, q += 3) {
-                    _mm_stream_si64(q + 0, static_cast<long long>(th_hi | w1_arr[k]));
-                    _mm_stream_si64(q + 1, static_cast<long long>(meta_id_hi | id_arr[k]));
-                    _mm_stream_si64(q + 2, static_cast<long long>((static_cast<uint64_t>(w2_arr[k]) << 32) | prog64));
-                }
-            } else {
-                for (uint32_t k = 0; k < n; k++) {
-                    auto* q = reinterpret_cast<long long*>(w.emit_slot_ptr(pos + k));
-                    _mm_stream_si64(q + 0, static_cast<long long>(th_hi | w1_arr[k]));
-                    _mm_stream_si64(q + 1, static_cast<long long>(meta_id_hi | id_arr[k]));
-                    _mm_stream_si64(q + 2, static_cast<long long>((static_cast<uint64_t>(w2_arr[k]) << 32) | prog64));
-                }
-            }
-            pos += n;
-        };
+        }
+        pos += n;
+    };
 #endif
 
     const uint64_t t0 = tsc_now();
@@ -450,12 +450,14 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         if (sink) {
             w.emit_reserve(pos + fw);
         }
+        const uint64_t tf0 = tsc_now();
 #if defined(__AVX2__)
         const uint32_t payload = profiler::spsc_decode_frame(
             s.decode, frame, emit, emit_data, profiler::SpscIgnoreProg{}, emit_zones8, emit_atomic8, fw);
 #else
         const uint32_t payload = profiler::spsc_decode_frame(s.decode, frame, emit, emit_data);
 #endif
+        s.frame_ticks += tsc_now() - tf0;
         if (payload != 0 && payload != w1) {
             s.bad_frames++;
         }
@@ -463,7 +465,9 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         pages_done += fw / kernel_profiler::SPSC_SPAN_PAGE_WORDS;
         frames++;
         if (frames % kAckBatchFrames == 0) {
+            const uint64_t ta0 = tsc_now();
             s.sock->pop(pages_done - acked_pages, true);
+            s.ack_ticks += tsc_now() - ta0;
             acked_pages = pages_done;
         }
     }
@@ -478,7 +482,9 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
     s.max_zone_ts = max_ts;
     s.decode_ticks += tsc_now() - t0;
     if (pages_done > acked_pages) {
+        const uint64_t ta0 = tsc_now();
         s.sock->pop(pages_done - acked_pages, true);
+        s.ack_ticks += tsc_now() - ta0;
     }
     if (pages_done == 0) {
         if (s.producers_done.load(std::memory_order_acquire)) {
@@ -584,6 +590,18 @@ PerfDebugConsumerHandle PerfDebugReceiver::add_consumer(std::string name, PerfDe
     return consumers_.back()->handle;
 }
 
+PerfDebugConsumerHandle PerfDebugReceiver::add_raw_consumer(std::string name, PerfDebugRawRecordCallback cb) {
+    TT_FATAL(!t_in_consumer, "add_raw_consumer must not be called from a consumer callback");
+    std::lock_guard<std::mutex> lk(consumers_mu_);
+    auto c = std::make_unique<Consumer>();
+    c->name = std::move(name);
+    c->raw_cb = std::move(cb);
+    c->handle = next_handle_++;
+    c->thread = std::thread(&PerfDebugReceiver::consumer_thread, this, std::ref(*c));
+    consumers_.push_back(std::move(c));
+    return consumers_.back()->handle;
+}
+
 void PerfDebugReceiver::remove_consumer(PerfDebugConsumerHandle handle) {
     TT_FATAL(!t_in_consumer, "remove_consumer must not be called from a consumer callback");
     std::unique_ptr<Consumer> victim;
@@ -617,7 +635,7 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
     }
     std::vector<PerfDebugRawRec> scratch(kConsumerScratchRecs);
     std::vector<uint64_t> last_dropped(readers.size(), 0);
-    // ---- The pairing stage ------------------------------------------------------------------------
+    // ---- The pairing stage (public consumers only) ------------------------------------------------
     // Zones are RAII scopes on the device, so per lane the raw stream obeys strict stack discipline:
     // push on ZoneStart, pop on ZoneEnd, and the pop's mate is the matching open. One stack per
     // (dev, lane), owned by THIS thread -- every consumer thread reads the whole ring independently,
@@ -629,7 +647,9 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
         uint32_t prog;
     };
     std::vector<std::vector<OpenZone>> stacks;
-    stacks.resize(ctx_.devices.size() * kPerfDebugMaxLanes);
+    if (c.raw_cb == nullptr) {
+        stacks.resize(ctx_.devices.size() * kPerfDebugMaxLanes);
+    }
     std::vector<PerfDebugRec> out;
     out.reserve(kConsumerScratchRecs);
     uint64_t unmatched_ends = 0;  // ZoneEnd with an empty stack (only possible after ring drops)
@@ -639,15 +659,6 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
         for (const PerfDebugRawRec& r : got) {
             const uint32_t si = r.meta.dev * kPerfDebugMaxLanes + r.meta.lane;
             switch (r.meta.type) {
-                case PerfDebugRawRecType::ZoneAtomic: {
-                    // Already a whole zone: ts is the END, dur the duration -- no stack involved.
-                    PerfDebugRec& o = out.emplace_back();
-                    o.data.zone = {r.ts - r.dur, r.dur};
-                    o.id = r.id;
-                    o.meta = {0, r.meta.lane, r.meta.dev, PerfDebugRecType::Zone};
-                    o.prog = r.prog;
-                    break;
-                }
                 case PerfDebugRawRecType::ZoneStart: stacks[si].push_back({r.ts, r.id, r.prog}); break;
                 case PerfDebugRawRecType::ZoneEnd: {
                     if (stacks[si].empty()) {
@@ -665,6 +676,14 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
                     o.id = open.id;
                     o.meta = {0, r.meta.lane, r.meta.dev, PerfDebugRecType::Zone};
                     o.prog = open.prog;
+                    break;
+                }
+                case PerfDebugRawRecType::ZoneTotal: {
+                    PerfDebugRec& o = out.emplace_back();
+                    o.data.sum = r.ts;
+                    o.id = r.id;
+                    o.meta = {0, r.meta.lane, r.meta.dev, PerfDebugRecType::ZoneTotal};
+                    o.prog = r.prog;
                     break;
                 }
                 default: {  // Data / Event / Ext / Cont: 1:1
@@ -699,12 +718,17 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
             const uint64_t dropped_delta = dropped - last_dropped[r];
             last_dropped[r] = dropped;
             try {
-                pair_batch(got);
-                if (out.empty() && dropped_delta == 0) {
-                    continue;  // a batch of nothing but ZoneStarts; the Zones come with their ends
+                if (c.raw_cb != nullptr) {
+                    c.delivered += got.size();
+                    c.raw_cb(PerfDebugRawRecordBatch{got, dropped_delta, &ctx_});
+                } else {
+                    pair_batch(got);
+                    if (out.empty() && dropped_delta == 0) {
+                        continue;  // a batch of nothing but ZoneStarts; the Zones come with their ends
+                    }
+                    c.delivered += out.size();
+                    c.cb(PerfDebugRecordBatch{std::span<const PerfDebugRec>(out), dropped_delta, &ctx_});
                 }
-                c.delivered += out.size();
-                c.cb(PerfDebugRecordBatch{std::span<const PerfDebugRec>(out), dropped_delta, &ctx_});
             } catch (const std::exception& e) {
                 log_warning(tt::LogMetal, "[perf-debug receiver] consumer \"{}\" threw: {}", c.name, e.what());
             }
@@ -809,7 +833,8 @@ void PerfDebugReceiver::log_report() const {
         last_tsc = std::max(last_tsc, s.last_commit_tsc);
         log_info(
             tt::LogMetal,
-            "[perf-debug receiver] d{}/s{}: {} frames ({:.1f} MB) in {} passes | decode {:.1f} ms | {} records "
+            "[perf-debug receiver] d{}/s{}: {} frames ({:.1f} MB) in {} passes | decode {:.1f} ms (frame {:.1f} + "
+            "ack {:.1f} + other {:.1f}) | {} records "
             "({} zones, {} stall-zones) | resyncs {} ({} words) | head-lag {} | anomalies {} | bad frames {} | "
             "unknown-core frames {} | order regressions {} [MUST be 0]",
             s.dev,
@@ -818,8 +843,11 @@ void PerfDebugReceiver::log_report() const {
             s.pages * static_cast<double>(kPageBytes) / 1e6,
             s.passes,
             ticks_to_ms(s.decode_ticks),
+            ticks_to_ms(s.frame_ticks),
+            ticks_to_ms(s.ack_ticks),
+            ticks_to_ms(s.decode_ticks - std::min(s.decode_ticks, s.frame_ticks + s.ack_ticks)),
             s.records,
-            s.zone_markers,
+            s.zone_markers / 2,
             s.stall_zones,
             s.decode.resync_events,
             s.decode.resync_words,
@@ -836,7 +864,7 @@ void PerfDebugReceiver::log_report() const {
             "{} vec-block rejects",
             s.dev,
             s.sock_idx,
-            allrec != 0 ? 100.0 * static_cast<double>(vrec) / static_cast<double>(allrec) : 0.0,
+            allrec ? 100.0 * static_cast<double>(vrec) / static_cast<double>(allrec) : 0.0,
             s.decode.vec_zone_recs,
             s.decode.vec_atomic_recs,
             s.decode.scalar_recs,
@@ -856,7 +884,7 @@ void PerfDebugReceiver::log_report() const {
     const double wall_ms = (first_tsc != 0 && last_tsc > first_tsc) ? ticks_to_ms(last_tsc - first_tsc) : 0.0;
     const double d2h_gb = total_pages * static_cast<double>(kPageBytes) / 1e9;
     const double wire_gb = total_wire_words * 4.0 / 1e9;
-    const double mzones = total_zone_markers / 1e6;  // zone_markers counts completed zones directly
+    const double mzones = total_zone_markers / 2.0 / 1e6;
     auto rate = [](double num, double ms) { return ms > 0.0 ? num / (ms / 1e3) : 0.0; };
     log_info(
         tt::LogMetal,

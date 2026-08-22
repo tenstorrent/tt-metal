@@ -72,38 +72,9 @@ static constexpr int kWallClockLowIdx = 0;
         }                                                                 \
     }
 
-// EMPTY body (ZONE_MODE == 2): the pure-overhead microbenchmark. Ten fully unrolled back-to-back empty
-// zones per iteration, nothing between them, so the profiler measures ITSELF: each zone's recorded
-// DURATION = open's clock read -> close's clock read with an empty body (the in-zone overhead: the
-// close's ring room check + the wall-clock read), and the GAP between one zone's end and the next
-// zone's start = the close's post-clock work (sticky check + 3 ring stores + publish) plus the next
-// open's clock read. duration + gap = the full cost one zone adds at max rate. The host workload
-// (--empty 1) registers a consumer that computes exactly those two numbers per RISC.
-#define ZONE_EMPTY(NAME)         \
-    {                            \
-        DeviceZoneScopedN(NAME); \
-    }
-
 // GRADUATED (ZONE_MODE == 0) keeps the wall-clock spin (ZONE_WALL above): its point is durations calibrated in
 // microseconds for a representative capture, which a nop-iteration count cannot express.
-
-// PRICE-CLOCK body (ZONE_MODE == 3): the EMPTY zone plus ONE extra latched wall-clock read pair in
-// the body. duration(mode 3) - duration(mode 2) = the cost of one read_wall_clock on this RISC.
-#define ZONE_PRICE_CLOCK(NAME)                                                             \
-    {                                                                                      \
-        DeviceZoneScopedN(NAME);                                                           \
-        volatile tt_reg_ptr uint32_t* _pwc =                                               \
-            reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); \
-        uint32_t _plo = _pwc[0];                                                           \
-        uint32_t _phi = _pwc[1];                                                           \
-        asm volatile("" ::"r"(_plo), "r"(_phi));                                           \
-    }
-
-#if ZONE_MODE == 3
-#define ZONE(NAME, GRADUATED) ZONE_PRICE_CLOCK(NAME)
-#elif ZONE_MODE == 2
-#define ZONE(NAME, GRADUATED) ZONE_EMPTY(NAME)
-#elif ZONE_MODE
+#if ZONE_MODE
 #define ZONE(NAME, GRADUATED) ZONE_NOPS(NAME, ZONE_CYC)
 #else
 #define ZONE(NAME, GRADUATED) ZONE_WALL(NAME, GRADUATED)
@@ -112,17 +83,13 @@ static constexpr int kWallClockLowIdx = 0;
 void kernel_main() {
     // Durations span ~1..100 us (typical ~10 us). CYC = us * 2500 (see ZONE calibration note above).
     for (uint32_t it = 0; it < (uint32_t)N_ITERS; it++) {
-        // Three POINT markers per iteration, so a capture of this workload exercises every point-marker
-        // shape on the streaming wire, not just zones: PP_EVENT (a bare 2-word flag -- nothing else in
-        // the tree emits one) and PP_DATA with a compile-time tag + payload. The third marker carries the
-        // iteration index as PAYLOAD -- a runtime value on this wire is ordinary DeviceData payload (the
-        // separate runtime-id event type is gone). Kept at three so the offered marker load stays
-        // comparable with older knee/decode benchmarks of this workload.
-#if ZONE_MODE != 2  // EMPTY overhead mode wants a pure zone stream: no point markers between zones
+        // The three POINT-marker types, once per iteration, so a capture of this workload exercises every
+        // packet shape on the streaming wire, not just zones: PP_EVENT (a bare 2-word flag -- nothing else
+        // in the tree emits one), PP_DATA with a compile-time tag + payload, and the runtime-id event
+        // (PP_DATA whose payload is the kernel's runtime value, named "RUNTIME-EVENT" from the ELF).
         DeviceFlag(ZTAG "_Flag");
         DeviceTimestampedData(ZTAG "_Data", ((uint64_t)0xF00D << 32) | it);
-        DeviceTimestampedData(ZTAG "_Iter", it);
-#endif
+        DeviceFlag(ZTAG "_Event");  // A/B port: DeviceRecordEvent removed in v6; same 2-word wire footprint
         ZONE(ZTAG "_Zone0", 2500u);    // ~1 us
         ZONE(ZTAG "_Zone1", 5000u);    // ~2 us
         ZONE(ZTAG "_Zone2", 7500u);    // ~3 us

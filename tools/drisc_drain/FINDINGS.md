@@ -6351,3 +6351,47 @@ diagnostics that disable a safety mechanism (stamps) while leaving the machinery
 (issue-time publish) -- the diag itself then generates corruption and every subsequent A/B is polluted;
 (c) per-site anomaly counters + a 4-shot context dump located in one run what three days of A/B gates
 could not.
+
+## N+70: The kimi stall regression is per-STREAM host-ack starvation, not device-side (yyz 8xp150, 2026-08-22)
+
+Post-merge kimi runs PASS with anomalies 0 everywhere, but 4-5 of 16 streams "die": ~2-6k frames moved
+(vs ~70-125k healthy), the stream's mover at ~30% socket credit-wait with ~4,300 bounded 50 ms timeouts
+(worst sweep 550 ms = 11 back-to-back), its fillers' DRAM rings at 100% with producers stalling grid-wide
+on those chips, and 12k+ frames dropped per victim. Localization chain:
+
+1. Device side EXONERATED: healthy drainers idle at 0.6% ring; decode is fast (372 MB in 202 ms); the
+   per-lane trigger cut synthetic stalls 34k -> 4k and ring pressure 81% -> 20% but did not move kimi --
+   the kimi stalls are Mode A (downstream hole), not filler service.
+2. The dead set MOVES between runs (valve run: d1/4/5/6/7 s0; trigger run: d0/2/3/4 s0) -- not a device,
+   socket index, or topology property. Decided at bring-up, sticky for the run.
+3. NOT thread starvation: with DECODE_THREADS=4, thread 0 owned d0/d2/d4/d6 s0 and served three at ~70k
+   while d6/s0 got 485 -- a healthy thread polled the victim all run and pages_available() stayed 0.
+4. NOT a torn socket config: victims TRICKLE (~1 data-pass per ~3 s, 12-56 frames each; below the
+   receiver's starvation watchdog) -- the path works, so one leg of the credit loop (mover's ack-read
+   visibility or notify-write landing) runs seconds-slow for that one socket instance.
+5. Weak-N observation: 16 threads -> 4-5 victims (2 runs); 4 threads -> 1 victim (1 run, repeat pending).
+   Could be scheduling pressure on the probe/ack path or bring-up timing luck.
+
+Same failure CLASS as the pre-merge "one-chip >50 ms writer episode" (final-state variance 0/35/1841) --
+the merge amplified incidence, not invented it. Candidates for the slow leg: UMD static-vs-dynamic TLB
+path for the socket's ack writes under 16-stream contention (171 vs 382 ns/write measured, but contention
+behavior unmeasured), and per-socket TLB window assignment luck. Next: per-stream ack/notify timing
+instrumentation on a victim run; check init_sender_tlb's static-path decision per victim stream.
+
+Also of record: two intermittent bring-up hazards resurfaced during the hunt -- the N+29-class niu-mode
+LaunchProgram MMIO timeout (~2/7 attempts under dense reset cycling; survives tt-smi -r once wedged), and
+an uncaught second UmdException after a HANDLED profiler-init failure that core-dumps the whole pytest
+instead of running captureless (robustness gap, host).
+
+### N+70 addendum: the dead-stream amplification is BOX STATE, not the merge (controlled, 2026-08-22 ~03:00)
+
+The pre-merge tree (yusuf/drisc-atomic, clean at 21:13 with in-band stalls) rerun UNMODIFIED on the
+late-night box: d5/s0 dead at 3,577 frames, its chip at 86,458 stalls, the other seven chips at 0-160.
+Identical failure on code that predates the integration -- so the per-socket credit-loop episode is
+environmental, its incidence loaded by accumulated box/link state (a night of ~12 resets, several
+aborted bring-ups, the N+29/N+31 wedge storm). tt-smi -r does NOT clear this state class (measured
+surviving consecutive resets). Escalation lever: tenstorrent driver reload (root; the privileged-docker
+path) or host reboot, then ONE validation run. The N+70 line "the merge amplified incidence" is hereby
+corrected: the MERGE was exonerated by this control; the NIGHT did the amplifying. Integration verdict:
+Mo's device producer + our host + split kernels is correctness-green everywhere and stall-behavior is
+indistinguishable from pre-merge at equal box state.
