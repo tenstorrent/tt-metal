@@ -62,4 +62,12 @@ struct SortProgramFactorySingleRowMultiCore {
         const SortParams& attributes, const SortInputs& tensor_args, std::vector<Tensor>& output_tensors);
 };
 
+// Mergesort row engine (issue #33492 roadmap): one row per core, full sort on the TopK XL
+// SFPU kernels (fused linearly-tagged keys, both-halves merge level). Blackhole-only,
+// stable bfloat16 with UINT32 indices, padded W in {2048, 4096}.
+struct SortProgramFactoryMergesortRowParallel {
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const SortParams& attributes, const SortInputs& tensor_args, std::vector<Tensor>& output_tensors);
+};
+
 }  // namespace ttnn::prim

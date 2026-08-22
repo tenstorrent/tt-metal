@@ -770,6 +770,7 @@ class TOPK_XL(TemplateParameter):
     lsb_row_major: bool = False
     reinit_after_copy: bool = False
     full_sort: bool = False
+    linear_stamp: bool = False
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -791,6 +792,7 @@ class TOPK_XL(TemplateParameter):
             f"constexpr bool TOPK_XL_LSB_ROW_MAJOR = {str(self.lsb_row_major).lower()};",
             f"constexpr bool TOPK_XL_REINIT_AFTER_COPY = {str(self.reinit_after_copy).lower()};",
             f"constexpr bool TOPK_XL_FULL_SORT = {str(self.full_sort).lower()};",
+            f"constexpr bool TOPK_XL_LINEAR_STAMP = {str(self.linear_stamp).lower()};",
         ]
         return "\n".join(lines)
 

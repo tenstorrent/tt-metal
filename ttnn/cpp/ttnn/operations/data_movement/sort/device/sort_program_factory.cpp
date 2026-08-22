@@ -2165,4 +2165,275 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
+// SortProgramFactoryMergesortRowParallel — mergesort row engine (issue #33492 roadmap).
+//
+// One row per core at a time: the compute kernel runs a full sort of the row
+// on the TopK XL SFPU kernels (fused linearly-tagged keys, both-halves merge
+// level, rebuild per half), so stability is structural and the cost is per
+// ELEMENT — unlike the tile-pair bitonic factories whose cost is per
+// tile-row. Blackhole-only (the TopK XL LLKs have no Wormhole tree), stable
+// bfloat16 with UINT32 indices, padded W in {2048, 4096}.
+ttnn::device_operation::ProgramArtifacts SortProgramFactoryMergesortRowParallel::create_program_artifacts(
+    const SortParams& attributes, const SortInputs& tensor_args, std::vector<Tensor>& output_tensors) {
+    const bool is_row_major = (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR);
+
+    const auto& input_mesh_tensor = tensor_args.input_tensor.mesh_tensor();
+    const auto& value_mesh_tensor = output_tensors.at(0).mesh_tensor();
+    const auto& index_mesh_tensor = output_tensors.at(1).mesh_tensor();
+
+    const auto input_shape =
+        is_row_major ? tensor_args.input_tensor.logical_shape() : tensor_args.input_tensor.padded_shape();
+    const uint32_t W = input_shape[3];
+    const uint32_t Wt = W / tt::constants::TILE_WIDTH;
+    const uint32_t num_rows = input_shape[0] * input_shape[1] * input_shape[2];
+
+    constexpr uint32_t MERGESORT_K = 2048;
+    const uint32_t num_chunks = W / MERGESORT_K;
+    TT_FATAL(num_chunks == 1 || num_chunks == 2, "mergesort factory expects W in {{2048, 4096}}, got {}", W);
+    TT_FATAL(
+        tensor_args.input_tensor.dtype() == DataType::BFLOAT16 && output_tensors.at(1).dtype() == DataType::UINT32,
+        "mergesort factory: bfloat16 values with UINT32 indices only");
+
+    auto* device = tensor_args.input_tensor.device();
+    const auto grid = device->compute_with_storage_grid_size();
+    const uint32_t total_number_of_cores = grid.x * grid.y;
+    const uint32_t active_cores = std::min(num_rows, total_number_of_cores);
+
+    // Row-major-ordered core enumeration; the first `residuum` cores absorb
+    // one extra row when rows don't divide evenly.
+    const uint32_t rows_per_core = num_rows / active_cores;
+    const uint32_t rows_residuum = num_rows % active_cores;
+
+    CoreRangeSet core_range;
+    {
+        const uint32_t full_rows = active_cores / grid.x;
+        const uint32_t rem_cols = active_cores % grid.x;
+        if (full_rows == 0) {
+            core_range = CoreRangeSet(CoreRange({0, 0}, {rem_cols - 1, 0}));
+        } else {
+            core_range = CoreRangeSet(CoreRange({0, 0}, {grid.x - 1, full_rows - 1}));
+            if (rem_cols != 0) {
+                core_range = core_range.merge(CoreRangeSet(CoreRange({0, full_rows}, {rem_cols - 1, full_rows})));
+            }
+        }
+    }
+
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+
+    const DFBSpecName INPUT_STAGE{"input_stage"};
+    const DFBSpecName READER_SCRATCH{"reader_scratch"};
+    const DFBSpecName VALUES_OUT{"values_out"};
+    const DFBSpecName INDICES_OUT{"indices_out"};
+    const DFBSpecName VALUES_SCRATCH{"values_scratch"};
+    const DFBSpecName INDICES_SCRATCH{"indices_scratch"};
+
+    const TensorParamName INPUT_PARAM{"input"};
+    const TensorParamName VALUE_PARAM{"value_output"};
+    const TensorParamName INDEX_PARAM{"index_output"};
+
+    ProgramSpec spec;
+    spec.name = "sort_mergesort_row_parallel";
+
+    // Input staging: TILES_PER_RUN bf16 tile pages per chunk (1024 consecutive
+    // row elements per page — the TopK XL copy consumes them as fake tiles),
+    // double buffered so the reader can gather chunk c+1 under chunk c's sort.
+    constexpr uint32_t TILES_PER_RUN = 2;
+    const uint32_t input_tile_bytes = tile_size(tt::DataFormat::Float16_b);
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = INPUT_STAGE,
+        .entry_size = input_tile_bytes,
+        .num_entries = 2 * TILES_PER_RUN,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    });
+    // One K-element page per run. Values pack fp32 DEST words to bf16; index
+    // words are raw u32 and must ride a 32-bit page format (a 16-bit pack
+    // would round the index bits away — the documented no-u16-pack rule).
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = VALUES_OUT,
+        .entry_size = MERGESORT_K * 2,
+        .num_entries = 2 * num_chunks,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    });
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = INDICES_OUT,
+        .entry_size = MERGESORT_K * 4,
+        .num_entries = 2 * num_chunks,
+        .data_format_metadata = tt::DataFormat::Float32,
+    });
+    if (!is_row_major) {
+        // TILE gather scratch: Blackhole DRAM reads require 64 B alignment, so
+        // the reader stages the aligned 64 B window around each 32 B face row
+        // (two windows per input tile) and compacts on the RISC-V core.
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = READER_SCRATCH,
+            .entry_size = (MERGESORT_K / tt::constants::TILE_HEIGHT) * 128,
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::Float16_b,
+        });
+    }
+    if (is_row_major) {
+        // Writer-side slice-permute scratch (one run each).
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = VALUES_SCRATCH,
+            .entry_size = MERGESORT_K * 2,
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::Float16_b,
+        });
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = INDICES_SCRATCH,
+            .entry_size = MERGESORT_K * 4,
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::Float32,
+        });
+    }
+
+    spec.tensor_parameters.push_back(
+        TensorParameter{.unique_id = INPUT_PARAM, .spec = input_mesh_tensor.tensor_spec()});
+    spec.tensor_parameters.push_back(
+        TensorParameter{.unique_id = VALUE_PARAM, .spec = value_mesh_tensor.tensor_spec()});
+    spec.tensor_parameters.push_back(
+        TensorParameter{.unique_id = INDEX_PARAM, .spec = index_mesh_tensor.tensor_spec()});
+
+    Group<DFBBinding> reader_dfb_bindings;
+    reader_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = INPUT_STAGE, .accessor_name = "input_stage", .endpoint_type = DFBEndpointType::PRODUCER});
+    if (!is_row_major) {
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = READER_SCRATCH,
+            .accessor_name = "reader_scratch",
+            .endpoint_type = DFBEndpointType::PRODUCER});
+        reader_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = READER_SCRATCH,
+            .accessor_name = "reader_scratch",
+            .endpoint_type = DFBEndpointType::CONSUMER});
+    }
+
+    Group<DFBBinding> writer_dfb_bindings;
+    writer_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = VALUES_OUT, .accessor_name = "values_out", .endpoint_type = DFBEndpointType::CONSUMER});
+    writer_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = INDICES_OUT, .accessor_name = "indices_out", .endpoint_type = DFBEndpointType::CONSUMER});
+    if (is_row_major) {
+        writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = VALUES_SCRATCH,
+            .accessor_name = "values_scratch",
+            .endpoint_type = DFBEndpointType::PRODUCER});
+        writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = VALUES_SCRATCH,
+            .accessor_name = "values_scratch",
+            .endpoint_type = DFBEndpointType::CONSUMER});
+        writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = INDICES_SCRATCH,
+            .accessor_name = "indices_scratch",
+            .endpoint_type = DFBEndpointType::PRODUCER});
+        writer_dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = INDICES_SCRATCH,
+            .accessor_name = "indices_scratch",
+            .endpoint_type = DFBEndpointType::CONSUMER});
+    }
+
+    Group<DFBBinding> compute_dfb_bindings;
+    compute_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = INPUT_STAGE, .accessor_name = "input_stage", .endpoint_type = DFBEndpointType::CONSUMER});
+    compute_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = VALUES_OUT, .accessor_name = "values_out", .endpoint_type = DFBEndpointType::PRODUCER});
+    compute_dfb_bindings.push_back(DFBBinding{
+        .dfb_spec_name = INDICES_OUT, .accessor_name = "indices_out", .endpoint_type = DFBEndpointType::PRODUCER});
+
+    const auto layout_defines_map = layout_defines(is_row_major);
+
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = READER,
+        .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_mergesort_row.cpp",
+        .compiler_options = {.defines = layout_defines_map},
+        .dfb_bindings = std::move(reader_dfb_bindings),
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input_tensor"}},
+        .compile_time_args =
+            {
+                {"Wt", Wt},
+                {"num_chunks", num_chunks},
+                {"W_value_bytes", W * 2},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"start_row", "num_rows"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    });
+
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = WRITER,
+        .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_mergesort_row.cpp",
+        .compiler_options = {.defines = layout_defines_map},
+        .dfb_bindings = std::move(writer_dfb_bindings),
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = VALUE_PARAM, .accessor_name = "value_tensor"},
+                TensorBinding{.tensor_parameter_name = INDEX_PARAM, .accessor_name = "index_tensor"},
+            },
+        .compile_time_args =
+            {
+                {"Wt", Wt},
+                {"num_chunks", num_chunks},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"start_row", "num_rows"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    });
+
+    // 32-bit DEST (fused [bf16|u16] words + u32 indices) and single-buffered
+    // DEST: the W=4096 window uses all 8 fp32 tiles.
+    ComputeGen1Config compute_hw_config{.enable_32_bit_dest = true, .double_buffer_dest = false};
+    spec.kernels.push_back(KernelSpec{
+        .unique_id = COMPUTE,
+        .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_mergesort_row.cpp",
+        .compiler_options = {.opt_level = KernelSpec::CompilerOptions::OptLevel::O3},
+        .dfb_bindings = std::move(compute_dfb_bindings),
+        .compile_time_args =
+            {
+                {"num_chunks", num_chunks},
+                {"descending", static_cast<uint32_t>(attributes.descending)},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"num_rows"}},
+        .hw_config = ComputeHardwareConfig{compute_hw_config},
+    });
+
+    spec.work_units.push_back(WorkUnitSpec{
+        .name = "main",
+        .kernels = {READER, WRITER, COMPUTE},
+        .target_nodes = core_range,
+    });
+
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
+    KernelRunArgs compute_run_args{.kernel = COMPUTE};
+
+    uint32_t start_row = 0;
+    uint32_t core_index = 0;
+    for (uint32_t core_y = 0; core_y < grid.y; core_y++) {
+        for (uint32_t core_x = 0; core_x < grid.x; core_x++) {
+            const CoreCoord core = {core_x, core_y};
+            if (!core_range.contains(core)) {
+                continue;
+            }
+            const uint32_t rows = rows_per_core + ((core_index < rows_residuum) ? 1 : 0);
+            AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values, core, {{"start_row", start_row}, {"num_rows", rows}});
+            AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values, core, {{"start_row", start_row}, {"num_rows", rows}});
+            AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"num_rows", rows}});
+            start_row += rows;
+            core_index++;
+        }
+    }
+    TT_FATAL(start_row == num_rows, "mergesort factory assigned {} rows, expected {}", start_row, num_rows);
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(writer_run_args));
+    run_args.kernel_run_args.push_back(std::move(compute_run_args));
+    run_args.tensor_args.emplace(INPUT_PARAM, input_mesh_tensor);
+    run_args.tensor_args.emplace(VALUE_PARAM, value_mesh_tensor);
+    run_args.tensor_args.emplace(INDEX_PARAM, index_mesh_tensor);
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
 }  // namespace ttnn::prim

@@ -22,6 +22,22 @@ constexpr uint32_t SORT_WT_THRESHOLD = 64;
 // OOMs during program allocation.
 constexpr uint32_t SORT_WT_THRESHOLD_UINT16_ROW_MAJOR = 32;
 
+// Mergesort row-engine eligibility (issue #33492 roadmap): stable bfloat16 rows of padded
+// width 2048 or 4096 on Blackhole run a full per-row sort on the TopK XL SFPU kernels
+// (fused linearly-tagged keys — stability is structural, no comparator), one row per core.
+// Blackhole-only because the TopK XL LLKs have no Wormhole tree. The engine's fused tags
+// live in 32-bit DEST words, so its indices ride the UINT32 transport (the u16-in-32-bit-
+// DEST combination has no working pack path); a caller who preallocates UINT16 index
+// tensors opts out to the previous routing in select_program_factory.
+static bool mergesort_row_engine_eligible(
+    const SortDeviceOperation::operation_attributes_t& attributes,
+    const SortDeviceOperation::tensor_args_t& tensor_args,
+    uint32_t sort_w_dim) {
+    return attributes.stable && tensor_args.input_tensor.dtype() == DataType::BFLOAT16 &&
+           tensor_args.input_tensor.device()->arch() == tt::ARCH::BLACKHOLE &&
+           (sort_w_dim == 2048 || sort_w_dim == 4096);
+}
+
 SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const bool is_row_major = (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR);
@@ -50,6 +66,12 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
     const bool is_uint16 = (input_dtype == DataType::UINT16);
     const uint32_t single_core_wt_threshold =
         (is_uint16 && is_row_major) ? SORT_WT_THRESHOLD_UINT16_ROW_MAJOR : SORT_WT_THRESHOLD;
+
+    // Mergesort row engine: eligible stable bf16 cells with UINT32 indices (the dtype the
+    // gate in compute_output_specs selects; a preallocated UINT16 index tensor falls back).
+    if (mergesort_row_engine_eligible(attributes, tensor_args, w_dim) && index_dtype == DataType::UINT32) {
+        return SortProgramFactoryMergesortRowParallel{};
+    }
 
     if (Wt <= single_core_wt_threshold) {
         // Small-Ht wide-tile reroute (#33492 roadmap, routing fix): the single-core factory
@@ -229,9 +251,13 @@ SortDeviceOperation::spec_return_value_t SortDeviceOperation::compute_output_spe
     const uint32_t sort_wt = sort_w_dim / tensor_args.input_tensor.tensor_spec().tile().get_width();
     const bool stable_bf16_single_core =
         attributes.stable && (tensor_args.input_tensor.dtype() == DataType::BFLOAT16) && (sort_wt <= SORT_WT_THRESHOLD);
+    // Mergesort row engine (Blackhole, stable bf16, W in {2048, 4096}): fused u16 tags in
+    // 32-bit DEST, so its indices are UINT32 for the same pack-path reason. W=2048 is
+    // already covered by the single-core gate above; this adds W=4096 on Blackhole.
+    const bool stable_bf16_mergesort = mergesort_row_engine_eligible(attributes, tensor_args, sort_w_dim);
     DataType index_dtype = DataType::UINT16;
     if (output_shape[-1] >= std::numeric_limits<uint16_t>::max() || input_is_fp32 || input_is_uint16 ||
-        stable_bf16_single_core) {
+        stable_bf16_single_core || stable_bf16_mergesort) {
         index_dtype = DataType::UINT32;
     }
 

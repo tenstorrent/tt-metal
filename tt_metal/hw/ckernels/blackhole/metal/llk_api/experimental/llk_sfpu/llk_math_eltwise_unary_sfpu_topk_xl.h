@@ -45,6 +45,41 @@ inline void llk_math_eltwise_unary_sfpu_topk_xl_rebuild(
         ckernel::sfpu::_topk_xl_rebuild_<K, fused>, dst_index, vector_mode, dst_index, ascending);
 }
 
+// MERGESORT ADDITIONS (full-sort outer schedule on the TopK XL kernels):
+// both-halves merge level, linear (stability-carrying) index stamp, and the
+// linear index split. New entry points only — the base wrappers are unchanged.
+template <uint32_t K, bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_topk_xl_merge_both_halves(
+    uint dst_index, bool ascending, VectorMode vector_mode = VectorMode::RC_custom) {
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::_topk_xl_merge_both_halves_<K, APPROXIMATE>, dst_index, vector_mode, dst_index, ascending);
+}
+
+template <uint32_t K, bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_topk_xl_add_linear_indices(
+    uint dst_index, uint32_t chunk_base, bool complement_non_negative) {
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::_topk_xl_add_linear_indices_<K>,
+        dst_index,
+        VectorMode::RC_custom,
+        chunk_base,
+        complement_non_negative);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_linear_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(ckernel::sfpu::_topk_xl_separate_indices_linear_init_);
+}
+
+template <uint32_t K, bool APPROXIMATE, uint32_t indices_dst_offset>
+inline void llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_linear(uint dst_index, bool complement_non_negative) {
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::_topk_xl_separate_indices_linear_<K, indices_dst_offset>,
+        dst_index,
+        VectorMode::RC_custom,
+        complement_non_negative);
+}
+
 inline void llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(ckernel::sfpu::_topk_xl_add_lsb_indices_init_);
 }
