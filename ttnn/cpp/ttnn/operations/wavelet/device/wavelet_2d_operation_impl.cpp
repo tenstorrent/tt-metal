@@ -26,6 +26,8 @@
 #include "tt-metalium/tile.hpp"
 #include "tt-metalium/workload_descriptor.hpp"
 #include "ttnn/operations/wavelet/common/wavelet_host.hpp"
+#include "ttnn/operations/wavelet/device/wavelet_program_utils.hpp"
+#include "ttnn/operations/wavelet/device/wavelet_tensor_validation.hpp"
 #include "ttnn/operations/wavelet/planner/inverse_plan_2d.hpp"
 #include "ttnn/operations/wavelet/planner/plan_2d.hpp"
 #include "ttnn/operations/wavelet/planner/policy.hpp"
@@ -34,6 +36,11 @@
 namespace ttnn::prim {
 
 using namespace operations::wavelet;
+using wavelet_program_utils::checked_u32;
+using wavelet_program_utils::core_range_set;
+using wavelet_program_utils::CoreChunkWork;
+using wavelet_tensor_validation::validate_input_memory_config;
+using wavelet_tensor_validation::validate_output_memory_config;
 
 namespace {
 
@@ -69,28 +76,12 @@ struct WorkingBuffers2D {
     std::vector<tt::tt_metal::CoreCoord> cores;
 };
 
-struct MetadataOwner2D {
-    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> buffer;
-    std::vector<uint32_t> payload;
-};
-
-struct CoreChunkWork {
-    tt::tt_metal::CoreCoord core;
-    uint32_t chunk_begin{0};
-    uint32_t chunk_count{0};
-};
-
 struct Logical2DShape {
     uint32_t batch_count{1};
     uint32_t height{0};
     uint32_t width{0};
     bool rank_four{false};
 };
-
-[[nodiscard]] uint32_t checked_u32(const size_t value, const char* label) {
-    TT_FATAL(value <= std::numeric_limits<uint32_t>::max(), "{} exceeds uint32_t", label);
-    return static_cast<uint32_t>(value);
-}
 
 [[nodiscard]] Logical2DShape logical_2d_shape(const Tensor& tensor, const char* tensor_name) {
     const auto& shape = tensor.logical_shape();
@@ -142,62 +133,6 @@ struct Logical2DShape {
         tile_count,
         device_protocol::kLwt2DSplitScratchTileCount);
     return checked_u32(tile_count, "2D NoC scratch tile count");
-}
-
-[[nodiscard]] std::vector<tt::tt_metal::CoreCoord> select_cores(
-    tt::tt_metal::distributed::MeshDevice& mesh_device, const uint32_t active_core_count) {
-    const auto grid = mesh_device.compute_with_storage_grid_size();
-    TT_FATAL(
-        active_core_count > 0 && active_core_count <= static_cast<uint32_t>(grid.x * grid.y),
-        "2D LWT active core count exceeds the worker grid");
-    return tt::tt_metal::grid_to_cores(
-        active_core_count, static_cast<uint32_t>(grid.x), static_cast<uint32_t>(grid.y), true);
-}
-
-[[nodiscard]] tt::tt_metal::CoreRangeSet core_set(const std::vector<tt::tt_metal::CoreCoord>& cores) {
-    std::vector<tt::tt_metal::CoreRange> ranges;
-    ranges.reserve(cores.size());
-    for (const auto& core : cores) {
-        ranges.emplace_back(core);
-    }
-    return tt::tt_metal::CoreRangeSet(std::move(ranges)).merge_ranges();
-}
-
-[[nodiscard]] std::vector<CoreChunkWork> partition_work(
-    const std::vector<tt::tt_metal::CoreCoord>& cores, const uint32_t chunk_count) {
-    TT_FATAL(!cores.empty() && chunk_count >= cores.size(), "Invalid 2D LWT chunk partition");
-    const uint32_t core_count = checked_u32(cores.size(), "2D LWT core count");
-    const uint32_t base = chunk_count / core_count;
-    const uint32_t extra = chunk_count % core_count;
-    std::vector<CoreChunkWork> work;
-    work.reserve(cores.size());
-    uint32_t begin = 0;
-    for (uint32_t core = 0; core < core_count; ++core) {
-        const uint32_t count = base + (core < extra ? 1U : 0U);
-        work.push_back(CoreChunkWork{
-            .core = cores[core],
-            .chunk_begin = begin,
-            .chunk_count = count,
-        });
-        begin += count;
-    }
-    TT_FATAL(begin == chunk_count, "2D LWT chunk partition is incomplete");
-    return work;
-}
-
-[[nodiscard]] std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_dram_pages(
-    tt::tt_metal::distributed::MeshDevice& mesh_device, const size_t page_count, const uint32_t page_bytes) {
-    TT_FATAL(page_count > 0, "2D LWT DRAM buffer requires at least one page");
-    return tt::tt_metal::distributed::MeshBuffer::create(
-        tt::tt_metal::distributed::ReplicatedBufferConfig{
-            .size = static_cast<uint64_t>(page_count) * page_bytes,
-        },
-        tt::tt_metal::distributed::DeviceLocalBufferConfig{
-            .page_size = page_bytes,
-            .buffer_type = tt::tt_metal::BufferType::DRAM,
-            .bottom_up = false,
-        },
-        &mesh_device);
 }
 
 void add_cb(
@@ -521,38 +456,8 @@ namespace {
 constexpr uint32_t kL1SignalBudgetBytes2D = 768 * 1024;
 constexpr size_t kCompactBoundaryRouteThreshold = 52;
 
-[[nodiscard]] uint32_t core_limit_2d(tt::tt_metal::distributed::MeshDevice& mesh_device) {
-    const auto grid = mesh_device.compute_with_storage_grid_size();
-    const uint32_t core_count = static_cast<uint32_t>(grid.x * grid.y);
-    TT_FATAL(core_count > 0, "2D wavelet transforms require at least one worker core");
-    return core_count;
-}
-
-void validate_output_memory_config_2d(const MemoryConfig& memory_config, const char* operation_name) {
-    TT_FATAL(
-        memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
-            memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM && !memory_config.is_sharded(),
-        "{} supports only DRAM-interleaved outputs in its first TTNN version",
-        operation_name);
-}
-
-void validate_input_memory_config_2d(const MemoryConfig& memory_config, const char* tensor_name) {
-    const bool supported_buffer = memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM ||
-                                  memory_config.buffer_type() == tt::tt_metal::BufferType::L1;
-    TT_FATAL(
-        memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED && supported_buffer &&
-            !memory_config.is_sharded(),
-        "{} must use INTERLEAVED memory with DRAM or L1 storage; sharded inputs are unsupported",
-        tensor_name);
-}
-
 void validate_2d_tensor(const Tensor& tensor, const char* tensor_name) {
-    TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} must be a device tensor", tensor_name);
-    TT_FATAL(
-        tensor.is_allocated() && tensor.buffer() != nullptr, "{} must have an allocated device buffer", tensor_name);
-    TT_FATAL(tensor.device() != nullptr, "{} has no device", tensor_name);
-    TT_FATAL(tensor.device()->num_devices() == 1, "{} must be placed on exactly one physical device", tensor_name);
-    TT_FATAL(tensor.dtype() == DataType::FLOAT32, "{} must have FLOAT32 dtype", tensor_name);
+    wavelet_tensor_validation::validate_device_tensor(tensor, tensor_name);
     TT_FATAL(tensor.layout() == Layout::TILE, "{} must use TILE layout", tensor_name);
     const Logical2DShape shape = logical_2d_shape(tensor, tensor_name);
     TT_FATAL(shape.height > 0 && shape.width > 0, "{} height and width must be positive", tensor_name);
@@ -561,7 +466,7 @@ void validate_2d_tensor(const Tensor& tensor, const char* tensor_name) {
         tile.get_height() == kTileHeight2D && tile.get_width() == kTileWidth2D,
         "{} must use standard 32x32 TTNN tiles",
         tensor_name);
-    validate_input_memory_config_2d(tensor.memory_config(), tensor_name);
+    validate_input_memory_config(tensor.memory_config(), tensor_name);
 
     const size_t padded_height = round_up(static_cast<size_t>(shape.height), kTileHeight2D);
     const size_t padded_width = round_up(static_cast<size_t>(shape.width), kTileWidth2D);
@@ -600,48 +505,11 @@ void validate_preallocated_output_2d(
     const tt::tt_metal::distributed::MeshDevice* expected_device,
     const char* output_name) {
     validate_2d_tensor(output, output_name);
-    validate_output_memory_config_2d(output.memory_config(), output_name);
-    TT_FATAL(output.device() == expected_device, "{} must be on the same device as the inputs", output_name);
+    wavelet_tensor_validation::validate_preallocated_output_placement(output, expected_device, output_name);
     TT_FATAL(
         output.tensor_spec() == expected_spec,
         "{} tensor spec does not match the wavelet output specification",
         output_name);
-}
-
-[[nodiscard]] std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> upload_metadata_2d(
-    tt::tt_metal::distributed::MeshDevice& mesh_device,
-    const size_t page_count,
-    const uint32_t page_bytes,
-    std::vector<uint32_t> payload,
-    tt::tt_metal::WorkloadDescriptor& workload) {
-    auto buffer = create_dram_pages(mesh_device, page_count, page_bytes);
-    const size_t physical_words = static_cast<size_t>(buffer->get_backing_buffer()->size()) / sizeof(uint32_t);
-    TT_FATAL(
-        payload.size() <= physical_words,
-        "2D wavelet metadata has {} words but its device buffer holds only {}",
-        payload.size(),
-        physical_words);
-    payload.resize(physical_words, 0);
-    auto owner = std::make_shared<MetadataOwner2D>(MetadataOwner2D{
-        .buffer = buffer,
-        .payload = std::move(payload),
-    });
-    tt::tt_metal::distributed::EnqueueWriteMeshBuffer(
-        mesh_device.mesh_command_queue(), owner->buffer, owner->payload, false);
-    workload.buffers.push_back({owner, buffer->get_backing_buffer()});
-    return buffer;
-}
-
-void append_programs_2d(
-    tt::tt_metal::WorkloadDescriptor& workload,
-    tt::tt_metal::ProgramDescriptor descriptor,
-    const MeshCoordinateRangeSet& tensor_coords) {
-    const auto& ranges = tensor_coords.ranges();
-    TT_FATAL(!ranges.empty(), "2D wavelet workload has no mesh coordinate range");
-    for (size_t index = 0; index + 1 < ranges.size(); ++index) {
-        workload.programs.push_back({ranges[index], descriptor});
-    }
-    workload.programs.push_back({ranges.back(), std::move(descriptor)});
 }
 
 template <typename Scheme>
@@ -655,7 +523,7 @@ template <typename Scheme>
     Lwt2DExecutionPlan plan = make_lwt_2d_execution_plan<Scheme>(
         height,
         width,
-        core_limit_2d(mesh_device),
+        wavelet_program_utils::worker_core_count(mesh_device, "2D wavelet transforms require at least one worker core"),
         l1_budget_bytes,
         boundary_mode,
         true,
@@ -686,7 +554,7 @@ template <typename Scheme>
     Ilwt2DExecutionPlan plan = make_ilwt_2d_execution_plan<Scheme>(
         height,
         width,
-        core_limit_2d(mesh_device),
+        wavelet_program_utils::worker_core_count(mesh_device, "2D wavelet transforms require at least one worker core"),
         l1_budget_bytes,
         boundary_mode,
         architecture_policy.inverse_2d_coordination_penalty_cycles_per_core);
@@ -732,8 +600,13 @@ template <typename Scheme>
     const uint32_t chunks_per_sample = checked_u32(plan.chunks.size(), "2D LWT chunks per sample");
     const uint32_t total_work_items =
         checked_u32(static_cast<size_t>(chunks_per_sample) * input_shape.batch_count, "2D LWT total batch work items");
-    std::vector<tt::tt_metal::CoreCoord> cores =
-        select_cores(mesh_device, std::min(core_limit_2d(mesh_device), total_work_items));
+    std::vector<tt::tt_metal::CoreCoord> cores = wavelet_program_utils::select_row_major_cores(
+        mesh_device,
+        std::min(
+            wavelet_program_utils::worker_core_count(
+                mesh_device, "2D wavelet transforms require at least one worker core"),
+            total_work_items),
+        "2D LWT active core count exceeds the worker grid");
     tt::tt_metal::WorkloadDescriptor workload;
     constexpr size_t expected_route_count = 4U * Scheme::num_steps;
     for (const auto& chunk : plan.chunks) {
@@ -753,24 +626,27 @@ template <typename Scheme>
         route_count * device_protocol::kLwt2DRouteConfigPageBytes,
         config_capacity);
 
-    auto chunk_config = upload_metadata_2d(
+    auto chunk_config = wavelet_program_utils::upload_replicated_dram_metadata(
         mesh_device,
         plan.chunks.size(),
         device_protocol::kLwt2DChunkConfigPageBytes,
         build_lwt_2d_chunk_config_words(plan),
-        workload);
-    auto route_config = upload_metadata_2d(
+        workload,
+        "2D wavelet metadata");
+    auto route_config = wavelet_program_utils::upload_replicated_dram_metadata(
         mesh_device,
         plan.chunks.size() * route_count,
         device_protocol::kLwt2DRouteConfigPageBytes,
         build_lwt_2d_route_config_words(plan),
-        workload);
-    auto band_config = upload_metadata_2d(
+        workload,
+        "2D wavelet metadata");
+    auto band_config = wavelet_program_utils::upload_replicated_dram_metadata(
         mesh_device,
         plan.chunks.size(),
         device_protocol::kLwt2DBandConfigPageBytes,
         build_lwt_2d_band_config_words(plan),
-        workload);
+        workload,
+        "2D wavelet metadata");
 
     WorkingBuffers2D buffers{
         .plane_tile_counts = {},
@@ -795,7 +671,7 @@ template <typename Scheme>
                                        route_count >= kCompactBoundaryRouteThreshold ||
                                        operation_attributes.boundary_mode == BoundaryMode::kAntireflect;
     auto descriptor = create_program_descriptor(
-        core_set(buffers.cores),
+        core_range_set(buffers.cores),
         input_buffers,
         buffers,
         Scheme::compute_scheme_header,
@@ -804,7 +680,8 @@ template <typename Scheme>
         compact_boundary_code,
         false,
         scratch_tile_count);
-    const std::vector<CoreChunkWork> work = partition_work(buffers.cores, total_work_items);
+    const std::vector<CoreChunkWork> work =
+        wavelet_program_utils::partition_chunk_work(buffers.cores, total_work_items, "2D LWT");
     const auto [min_work, max_work] = std::minmax_element(
         work.begin(), work.end(), [](const auto& lhs, const auto& rhs) { return lhs.chunk_count < rhs.chunk_count; });
     log_debug(
@@ -830,7 +707,8 @@ template <typename Scheme>
         descriptor.kernels[2].emplace_runtime_args(
             core_work.core, writer_args(plan, buffers, core_work, chunks_per_sample, output_tiles_per_sample));
     }
-    append_programs_2d(workload, std::move(descriptor), tensor_coords);
+    wavelet_program_utils::append_program_to_mesh_ranges(
+        workload, std::move(descriptor), tensor_coords, "2D wavelet workload has no mesh coordinate range");
     return workload;
 }
 
@@ -854,8 +732,13 @@ template <typename Scheme>
     const uint32_t chunks_per_sample = checked_u32(plan.chunks.size(), "2D ILWT chunks per sample");
     const uint32_t total_work_items =
         checked_u32(static_cast<size_t>(chunks_per_sample) * band_shape.batch_count, "2D ILWT total batch work items");
-    std::vector<tt::tt_metal::CoreCoord> cores =
-        select_cores(mesh_device, std::min(core_limit_2d(mesh_device), total_work_items));
+    std::vector<tt::tt_metal::CoreCoord> cores = wavelet_program_utils::select_row_major_cores(
+        mesh_device,
+        std::min(
+            wavelet_program_utils::worker_core_count(
+                mesh_device, "2D wavelet transforms require at least one worker core"),
+            total_work_items),
+        "2D ILWT active core count exceeds the worker grid");
     tt::tt_metal::WorkloadDescriptor workload;
     using InverseScheme = typename Scheme::inverse;
     constexpr size_t expected_route_count = 4U * InverseScheme::num_steps;
@@ -873,24 +756,27 @@ template <typename Scheme>
         route_count * device_protocol::kLwt2DRouteConfigPageBytes <= config_capacity,
         "2D ILWT route descriptors exceed the per-RISC preload region");
 
-    auto chunk_config = upload_metadata_2d(
+    auto chunk_config = wavelet_program_utils::upload_replicated_dram_metadata(
         mesh_device,
         plan.chunks.size(),
         device_protocol::kLwt2DChunkConfigPageBytes,
         build_ilwt_2d_chunk_config_words(plan),
-        workload);
-    auto route_config = upload_metadata_2d(
+        workload,
+        "2D wavelet metadata");
+    auto route_config = wavelet_program_utils::upload_replicated_dram_metadata(
         mesh_device,
         plan.chunks.size() * route_count,
         device_protocol::kLwt2DRouteConfigPageBytes,
         build_ilwt_2d_route_config_words(plan),
-        workload);
-    auto band_config = upload_metadata_2d(
+        workload,
+        "2D wavelet metadata");
+    auto band_config = wavelet_program_utils::upload_replicated_dram_metadata(
         mesh_device,
         plan.chunks.size(),
         device_protocol::kLwt2DBandConfigPageBytes,
         build_ilwt_2d_band_config_words(plan),
-        workload);
+        workload,
+        "2D wavelet metadata");
 
     WorkingBuffers2D buffers{
         .plane_tile_counts = {},
@@ -912,7 +798,7 @@ template <typename Scheme>
     }
     const ArchitecturePolicy architecture_policy = make_architecture_policy(mesh_device.arch());
     auto descriptor = create_program_descriptor(
-        core_set(buffers.cores),
+        core_range_set(buffers.cores),
         band_buffers,
         buffers,
         InverseScheme::compute_scheme_header,
@@ -921,7 +807,8 @@ template <typename Scheme>
         architecture_policy.compact_2d_reader,
         true,
         scratch_tile_count);
-    const std::vector<CoreChunkWork> work = partition_work(buffers.cores, total_work_items);
+    const std::vector<CoreChunkWork> work =
+        wavelet_program_utils::partition_chunk_work(buffers.cores, total_work_items, "2D ILWT");
     const auto [min_work, max_work] = std::minmax_element(
         work.begin(), work.end(), [](const auto& lhs, const auto& rhs) { return lhs.chunk_count < rhs.chunk_count; });
     log_debug(
@@ -947,14 +834,15 @@ template <typename Scheme>
         descriptor.kernels[2].emplace_runtime_args(
             core_work.core, inverse_writer_args(plan, buffers, core_work, chunks_per_sample, output_tiles_per_sample));
     }
-    append_programs_2d(workload, std::move(descriptor), tensor_coords);
+    wavelet_program_utils::append_program_to_mesh_ranges(
+        workload, std::move(descriptor), tensor_coords, "2D wavelet workload has no mesh coordinate range");
     return workload;
 }
 
 void validate_forward_inputs_2d(const Lwt2DParams& operation_attributes, const Lwt2DInputs& tensor_args) {
     validate_2d_tensor(tensor_args.input, "2D DWT input");
     const Logical2DShape input_shape = logical_2d_shape(tensor_args.input, "2D DWT input");
-    validate_output_memory_config_2d(operation_attributes.output_memory_config, "2D DWT");
+    validate_output_memory_config(operation_attributes.output_memory_config, "2D DWT");
     TT_FATAL(
         operation_attributes.scheme_id != SchemeId::kUnknown, "2D DWT received an invalid wavelet scheme identifier");
     TT_FATAL(
@@ -975,13 +863,14 @@ void validate_forward_inputs_2d(const Lwt2DParams& operation_attributes, const L
                 expected[index],
                 tensor_args.input.device(),
                 "2D DWT preallocated output");
-            TT_FATAL(
-                (*tensor_args.preallocated_outputs)[index].buffer() != tensor_args.input.buffer(),
+            wavelet_tensor_validation::validate_distinct_buffers(
+                (*tensor_args.preallocated_outputs)[index],
+                tensor_args.input,
                 "2D DWT outputs must not alias the input");
             for (size_t previous = 0; previous < index; ++previous) {
-                TT_FATAL(
-                    (*tensor_args.preallocated_outputs)[index].buffer() !=
-                        (*tensor_args.preallocated_outputs)[previous].buffer(),
+                wavelet_tensor_validation::validate_distinct_buffers(
+                    (*tensor_args.preallocated_outputs)[index],
+                    (*tensor_args.preallocated_outputs)[previous],
                     "2D DWT output bands must not alias each other");
             }
         }
@@ -992,16 +881,18 @@ void validate_inverse_inputs_2d(const Ilwt2DParams& operation_attributes, const 
     const std::array<const Tensor*, 4> inputs = {&tensor_args.ll, &tensor_args.lh, &tensor_args.hl, &tensor_args.hh};
     for (const auto* input : inputs) {
         validate_2d_tensor(*input, "2D IDWT input band");
-        TT_FATAL(input->device() == tensor_args.ll.device(), "All 2D IDWT bands must be on the same device");
+        wavelet_tensor_validation::validate_same_device(
+            *input, tensor_args.ll.device(), "All 2D IDWT bands must be on the same device");
         TT_FATAL(
             input->logical_shape() == tensor_args.ll.logical_shape(), "All 2D IDWT bands must have identical shapes");
     }
     for (size_t index = 0; index < inputs.size(); ++index) {
         for (size_t previous = 0; previous < index; ++previous) {
-            TT_FATAL(inputs[index]->buffer() != inputs[previous]->buffer(), "2D IDWT input bands must not alias");
+            wavelet_tensor_validation::validate_distinct_buffers(
+                *inputs[index], *inputs[previous], "2D IDWT input bands must not alias");
         }
     }
-    validate_output_memory_config_2d(operation_attributes.output_memory_config, "2D IDWT");
+    validate_output_memory_config(operation_attributes.output_memory_config, "2D IDWT");
     TT_FATAL(
         operation_attributes.output_height > 0 && operation_attributes.output_width > 0,
         "2D IDWT output_shape dimensions must be positive");
@@ -1037,9 +928,8 @@ void validate_inverse_inputs_2d(const Ilwt2DParams& operation_attributes, const 
             tensor_args.ll.device(),
             "2D IDWT output");
         for (const auto* input : inputs) {
-            TT_FATAL(
-                tensor_args.preallocated_output->buffer() != input->buffer(),
-                "2D IDWT output must not alias an input band");
+            wavelet_tensor_validation::validate_distinct_buffers(
+                *tensor_args.preallocated_output, *input, "2D IDWT output must not alias an input band");
         }
     }
 }
