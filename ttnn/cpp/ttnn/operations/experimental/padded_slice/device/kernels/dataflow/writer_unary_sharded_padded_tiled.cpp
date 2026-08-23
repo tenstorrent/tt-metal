@@ -3,59 +3,56 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include <cstdint>
-#include "api/dataflow/dataflow_api.h"
-#include "internal/dataflow/dataflow_api_addrgen.h"
-#include "api/debug/dprint.h"
-#include "ckernel_defs.h"
-#include "tt-metalium/constants.hpp"
-#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
-uint32_t round_down(uint32_t value, uint32_t multiple) {
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/scratchpad.h"
+#include "ckernel_defs.h"
+#include "experimental/kernel_args.h"
+#include "tt-metalium/constants.hpp"
+#include "ttnn/operations/pool/device/kernels/experimental_device_api.hpp"
+
+constexpr uint32_t MAX_RANK = 8;
+
+FORCE_INLINE uint32_t round_down(uint32_t value, uint32_t multiple) {
     if (value % multiple != 0) {
-        value -= (value % multiple);
+        value -= value % multiple;
     }
     return value;
 }
-void kernel_main() {
-    constexpr uint32_t cb_untilized_id = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_out_id = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_padding_id = get_compile_time_arg_val(2);
-    constexpr uint32_t is_non_aligned = get_compile_time_arg_val(3);
-    constexpr uint32_t num_dims = get_compile_time_arg_val(4);
-    constexpr uint32_t output_elem_size = get_compile_time_arg_val(5);
-    constexpr uint32_t output_row_size_bytes = get_compile_time_arg_val(6);
 
-    const uint32_t total_num_tiles = get_arg_val<uint32_t>(0);
-    const uint32_t num_tiles_per_read = get_arg_val<uint32_t>(1);
-    const uint32_t num_sticks_this_core = get_arg_val<uint32_t>(2);
-    const uint32_t padded_channels_elems = get_arg_val<uint32_t>(3);
-    const uint32_t misalignment = get_arg_val<uint32_t>(4);
-    const uint32_t output_coord_addr = get_arg_addr(5);
-    const uint32_t output_start_in_input_addr = get_arg_addr(5 + num_dims);
-    const uint32_t output_end_addr = get_arg_addr(5 + 2 * num_dims);
+template <uint32_t is_non_aligned, uint32_t num_dims, uint32_t output_elem_size, uint32_t output_row_size_bytes>
+TT_KERNEL void writer(
+    uint32_t total_num_tiles,
+    uint32_t num_tiles_per_read,
+    uint32_t num_sticks_this_core,
+    uint32_t padded_channels_elems,
+    uint32_t misalignment) {
+    uint32_t output_coord[MAX_RANK];
+    uint32_t output_start_in_input[MAX_RANK];
+    uint32_t output_end[MAX_RANK];
+    for (uint32_t j = 0; j < num_dims; ++j) {
+        output_coord[j] = get_vararg(j);
+        output_start_in_input[j] = get_vararg(num_dims + j);
+        output_end[j] = get_vararg(2 * num_dims + j);
+    }
 
-    constexpr uint32_t tile_size = get_tile_size(cb_out_id);
+    constexpr uint32_t tile_size = get_tile_size(dfb::output);
     const uint32_t read_size = tile_size * num_tiles_per_read;
 
-    volatile tt_l1_ptr uint32_t* output_coord = (tt_l1_ptr uint32_t*)(output_coord_addr);
-
-    const volatile tt_l1_ptr uint32_t* const output_start_in_input = (tt_l1_ptr uint32_t*)(output_start_in_input_addr);
-
-    const volatile tt_l1_ptr uint32_t* const output_end = (tt_l1_ptr uint32_t*)(output_end_addr);
-
+    DataflowBuffer untilized(dfb::untilized);
+    DataflowBuffer output(dfb::output);
+    Scratchpad<uint32_t> padding(scratch::padding);
     Noc noc;
-    experimental::CB cb_untilized(cb_untilized_id);
-    experimental::CB cb_out(cb_out_id);
-    experimental::CB cb_padding(cb_padding_id);
 
     uint32_t write_offset = 0;
     uint32_t rows_remaining = num_sticks_this_core;
     uint32_t tiles_read = 0;
-    uint32_t block_row_size = read_size / tt::constants::TILE_HEIGHT;
-    const uint32_t pad_addr = cb_padding.get_read_ptr();
-    const uint32_t output_row_size_elems = output_row_size_bytes / output_elem_size;
-
+    const uint32_t block_row_size = read_size / tt::constants::TILE_HEIGHT;
+    const uint32_t pad_addr = padding.get_base_address();
+    constexpr uint32_t output_row_size_elems = output_row_size_bytes / output_elem_size;
     const uint32_t padded_channels_bytes = padded_channels_elems * output_elem_size;
 
     if (padded_channels_elems > 0) {
@@ -73,68 +70,23 @@ void kernel_main() {
     }
 
     const uint32_t pad_src_l1_addr = pad_addr + output_row_size_bytes - padded_channels_bytes;
-
-#ifdef DEBUG
-    DPRINT(
-        "total_num_tiles: {}, num_tiles_per_read: {}, tile_size: {}, read_size: {}, block_row_size: {}\n",
-        total_num_tiles,
-        num_tiles_per_read,
-        tile_size,
-        read_size,
-        block_row_size);
-    DPRINT("untilized CB ID: {} Out CB ID: {}\n", cb_untilized_id, cb_out_id);
-    DPRINT(
-        "pad_addr : {} pad_src_l1_addr : {} padded_channels_elems: {}\n",
-        pad_addr,
-        pad_src_l1_addr,
-        padded_channels_elems);
-    DPRINT("Unaligned {}\n", is_non_aligned);
-    DPRINT(
-        "Output Row Size Elems {} Bytes: {} Output Elem Size: {}\n",
-        output_row_size_elems,
-        output_row_size_bytes,
-        output_elem_size);
-#endif
-
     const uint32_t output_end_width_in_input = output_end[1] + output_start_in_input[1];
-    uint32_t row_count = 0;
     UnicastEndpoint self_ep;
     while (tiles_read < total_num_tiles && rows_remaining > 0) {
-        uint32_t width_start_in_input = output_start_in_input[1] + output_coord[1];
-        uint32_t width_tile_start_in_input = round_down(width_start_in_input, ckernel::TILE_HEIGHT);
-        uint32_t width_tile_end_in_input = width_tile_start_in_input + ckernel::TILE_HEIGHT;
+        const uint32_t width_start_in_input = output_start_in_input[1] + output_coord[1];
+        const uint32_t width_tile_start_in_input = round_down(width_start_in_input, ckernel::TILE_HEIGHT);
+        const uint32_t width_tile_end_in_input = width_tile_start_in_input + ckernel::TILE_HEIGHT;
 
-        uint32_t read_start_offset = width_start_in_input - width_tile_start_in_input;
+        const uint32_t read_start_offset = width_start_in_input - width_tile_start_in_input;
         uint32_t read_rows_size = ckernel::TILE_HEIGHT - read_start_offset;
         if (width_tile_end_in_input > output_end_width_in_input) {
-            read_rows_size -= (width_tile_end_in_input - output_end_width_in_input);
+            read_rows_size -= width_tile_end_in_input - output_end_width_in_input;
         }
         read_rows_size = std::min(read_rows_size, rows_remaining);
         rows_remaining -= read_rows_size;
 
-#ifdef DEBUG
-        DPRINT(
-            "Width Start in Input: {} Width Tile Start in Input: {} Read Start Offset: {} Read Rows Size: {} Remaining "
-            "{}\n",
-            width_start_in_input,
-            width_tile_start_in_input,
-            read_start_offset,
-            read_rows_size,
-            rows_remaining);
-
-        DPRINT(
-            "Tiles Read {} Output Coord: {} {} {} {}\n",
-            tiles_read,
-            output_coord[0],
-            output_coord[1],
-            output_coord[2],
-            output_coord[3]);
-        DPRINT("Write Offset {}\n", write_offset);
-
-#endif
-
-        cb_untilized.wait_front(num_tiles_per_read);
-        const uint32_t noc_read_src_base = cb_untilized.get_read_ptr() + read_start_offset * block_row_size;
+        untilized.wait_front(num_tiles_per_read);
+        const uint32_t noc_read_src_base = untilized.get_read_ptr() + read_start_offset * block_row_size;
 
         if constexpr (is_non_aligned) {
             uint32_t current_src_l1 = noc_read_src_base;
@@ -142,7 +94,7 @@ void kernel_main() {
             for (uint32_t row = 0; row < read_rows_size; row++) {
                 noc.async_read(
                     self_ep,
-                    cb_out,
+                    output,
                     output_row_size_bytes,
                     experimental::local_addr(current_src_l1 + misalignment, noc.get_noc_id()),
                     {.offset_bytes = current_write_offset});
@@ -152,48 +104,32 @@ void kernel_main() {
         } else {
             noc.async_read(
                 self_ep,
-                cb_out,
+                output,
                 read_rows_size * block_row_size,
                 experimental::local_addr(noc_read_src_base, noc.get_noc_id()),
                 {.offset_bytes = write_offset});
         }
+
         uint32_t pad_write_offset = write_offset + output_row_size_bytes - padded_channels_bytes;
         if (padded_channels_elems > 0) {
-#ifdef DEBUG
-            volatile tt_l1_ptr uint16_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
-                pad_addr + output_row_size_bytes - padded_channels_bytes);
-            DPRINT("Pad Data = ");
-            for (uint32_t i = 0; i < padded_channels_elems; ++i) {
-                DPRINT("{} ", pad_ptr[i]);
-            }
-            DPRINT("\n");
-            DPRINT("Pad Write Offset : {}\n", pad_write_offset);
-#endif
             const auto pad_src = experimental::local_addr(pad_src_l1_addr, noc.get_noc_id());
             for (uint32_t row_index = 0; row_index < read_rows_size; row_index++) {
-                noc.async_read(
-                    self_ep,
-                    cb_out,
-                    padded_channels_elems * output_elem_size,
-                    pad_src,
-                    {.offset_bytes = pad_write_offset});
+                noc.async_read(self_ep, output, padded_channels_bytes, pad_src, {.offset_bytes = pad_write_offset});
                 pad_write_offset += output_row_size_bytes;
             }
         }
         noc.async_read_barrier();
 
         write_offset += read_rows_size * output_row_size_bytes;
-        cb_untilized.pop_front(num_tiles_per_read);
+        untilized.pop_front(num_tiles_per_read);
         tiles_read += num_tiles_per_read;
 
-        // output_coord keeps track of the current position in the output tensor
-        // Increment the output coordinate for the next read by the size of the current read.
+        // Advance the coordinate by the output rows emitted from this tile block.
         output_coord[1] += read_rows_size;
-
-        // If output_coord goes beyond output_end, reset it to 0 and increment the next dimension.
         for (uint32_t index = 1; index < num_dims - 1; index++) {
             if (output_coord[index] >= output_end[index]) {
                 output_coord[index] = 0;
+                // Carry a completed dimension into the next outer dimension.
                 output_coord[index + 1] += 1;
             }
         }

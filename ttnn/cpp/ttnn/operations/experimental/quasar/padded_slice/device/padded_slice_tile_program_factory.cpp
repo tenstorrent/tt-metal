@@ -485,7 +485,7 @@ PaddedSliceTileProgramFactory::cached_program_t PaddedSliceTileProgramFactory::c
     };
 
     const std::string compute_kernel =
-        "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/compute/pack_untilize.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/quasar/padded_slice/device/kernels/compute/pack_untilize.cpp";
 
     auto untilize_compute_kernel_id = CreateKernel(
         program, compute_kernel, total_cores, ComputeConfig{.fp32_dest_acc_en = false, .compile_args = compute_args});

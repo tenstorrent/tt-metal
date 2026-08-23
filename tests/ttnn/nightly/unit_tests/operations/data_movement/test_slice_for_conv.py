@@ -71,6 +71,62 @@ def num_to_core_range_set(x):
     )
 
 
+@pytest.mark.parametrize("input_buffer_type", [ttnn.BufferType.DRAM, ttnn.BufferType.L1])
+def test_padded_slice_rm_aligned_row_misaligned_begin(device, input_buffer_type):
+    """An aligned 16-element output row still needs the unaligned reader when begin=1."""
+    torch_input = torch.arange(1 * 1 * 8 * 17, dtype=torch.bfloat16).reshape(1, 1, 8, 17)
+    input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, input_buffer_type)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=input_memory_config,
+    )
+
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    output_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_grid, (8, 16), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    output = ttnn.experimental.padded_slice(
+        input_tensor,
+        [0, 0, 0, 1],
+        [1, 1, 8, 17],
+        [1, 1, 1, 1],
+        memory_config=output_memory_config,
+    )
+    assert torch.equal(torch_input[..., 1:17], ttnn.to_torch(output))
+
+
+def test_padded_slice_rm_misaligned_row_and_begin_dram(device):
+    """Exercise the staged reader when both the DRAM row width and begin offset are misaligned."""
+    torch_input = torch.arange(1 * 1 * 8 * 9, dtype=torch.bfloat16).reshape(1, 1, 8, 9)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    output_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_grid, (8, 8), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    output = ttnn.experimental.padded_slice(
+        input_tensor,
+        [0, 0, 0, 1],
+        [1, 1, 8, 9],
+        [1, 1, 1, 1],
+        memory_config=output_memory_config,
+    )
+    assert torch.equal(torch_input[..., 1:9], ttnn.to_torch(output))
+
+
 _HEIGHT_SHARDED_DIMS = [
     [[2, 256, 300, 64], 128, 22],
     [[2, 256, 128, 32], 64, 8],
