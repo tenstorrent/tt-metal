@@ -1408,6 +1408,60 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         }
     }
 
+    // Split-head forwarding dedup roles (see the buddy_gate semaphore comment). Enabled per row
+    // pair (2i, 2i+1), which shares one head in EVERY pass when segs_per_head == 2 and the row
+    // count is even (head = (p*rows + y) / 2, and p*rows is even). Requirements per pair: same
+    // fabric direction half (identical deterministic ring sequences and identical remote
+    // destination device — the cross-direction middle pair keeps duplicate forwarding), equal
+    // q_count (identical gate schedules), and both injectors known. Roles: 0 = none (forward and
+    // gate as before), 1 = leader (forward; relay gate to buddy), 2 = follower (skip forwarding;
+    // gate on the leader's relay).
+    std::vector<uint32_t> row_dedup_role(sdpa_grid.y, 0);
+    std::vector<CoreCoord> row_buddy_injector(sdpa_grid.y, CoreCoord{0, 0});
+    if (mcast_chains > 0 && segs_per_head == 2 && (sdpa_grid.y % 2 == 0)) {
+        for (uint32_t y = 0; y + 1 < sdpa_grid.y; y += 2) {
+            const uint32_t yf = y + 1;
+            const bool same_direction = (y < num_workers_per_link) == (yf < num_workers_per_link);
+            const uint32_t qc_leader = core_work.at(y * sdpa_grid.x).q_count;
+            const uint32_t qc_follower = core_work.at(yf * sdpa_grid.x).q_count;
+            const auto& inj_leader = injector_physical_by_row.at(y);
+            const auto& inj_follower = injector_physical_by_row.at(yf);
+            if (same_direction && qc_leader == qc_follower && qc_leader > 0 && inj_leader.has_value() &&
+                inj_follower.has_value()) {
+                row_dedup_role[y] = 1;
+                row_dedup_role[yf] = 2;
+                row_buddy_injector[y] = inj_follower.value();
+                row_buddy_injector[yf] = inj_leader.value();
+            }
+        }
+    }
+
+    // Follower rows send nothing over fabric, so they do not connect to the MUX at all: the MUX
+    // config allocates channels only for FORWARDING rows (compact channel ids per direction
+    // half), and the freed L1 goes into deeper per-channel buffering (num_buffers_per_channel is
+    // scaled up by the client reduction). With dedup off every row forwards and this reduces to
+    // the original 1:1 layout.
+    uint32_t fwd_rows_dir0 = 0;
+    uint32_t fwd_rows_dir1 = 0;
+    std::vector<uint32_t> row_mux_channel(sdpa_grid.y, 0);
+    for (uint32_t y = 0; y < sdpa_grid.y; ++y) {
+        if (row_dedup_role[y] == 2) {
+            continue;
+        }
+        if (y < num_workers_per_link) {
+            row_mux_channel[y] = fwd_rows_dir0++;
+        } else {
+            row_mux_channel[y] = fwd_rows_dir1++;
+        }
+    }
+    TT_FATAL(
+        fwd_rows_dir0 == fwd_rows_dir1 && fwd_rows_dir0 > 0,
+        "Split-head dedup produced asymmetric forwarding groups ({} backward vs {} forward): the "
+        "shared MUX config and termination count require equal per-direction client counts.",
+        fwd_rows_dir0,
+        fwd_rows_dir1);
+    const uint32_t num_mux_clients_per_group = fwd_rows_dir0;
+
     // ---- Fabric MUX config (needed for writer kernel CT args below) ----
     // Default: MUX cores are placed at the last x coordinate of the user grid.
     //   Backward MUX: first y (0) and last y (sdpa_grid.y - 1). Forward MUX: middle y - 1 and middle y.
@@ -1428,9 +1482,12 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const uint32_t num_mux_full_size_channels = num_workers_per_link;
+    const uint32_t num_mux_full_size_channels = num_mux_clients_per_group;
     const uint32_t num_mux_header_only_channels = 0;
-    const uint32_t num_mux_buffers_per_channel = args.num_buffers_per_channel;
+    // The caller's num_buffers_per_channel is calibrated for one channel per row; with follower
+    // rows disconnected, redistribute the same L1 across the remaining channels.
+    const uint32_t num_mux_buffers_per_channel =
+        args.num_buffers_per_channel * num_workers_per_link / num_mux_clients_per_group;
     const size_t mux_buffer_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
         num_mux_full_size_channels,
@@ -1471,7 +1528,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // Fabric writer: columns sdpa_grid.x-2 and sdpa_grid.x-1 (backward and forward MUX clients)
     CoreRange mux_writer_range({sdpa_grid.x - 2, 0}, {sdpa_grid.x - 1, sdpa_grid.y - 1});
     auto writer_fabric_compile_time_args = writer_compile_time_args;
-    fabric_mux_connection_ct_args(num_workers_per_link, mux_kernel_config, writer_fabric_compile_time_args);
+    fabric_mux_connection_ct_args(num_mux_clients_per_group, mux_kernel_config, writer_fabric_compile_time_args);
 
     // All-gather CT args for the fabric writer (integrated K/V all-gather on MUX client columns)
     const uint32_t ag_page_size = input_tensor_k.buffer()->page_size();
@@ -1540,34 +1597,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     const uint32_t ag_output_Wt = ag_output_shape[3] / tt::constants::TILE_WIDTH;
     const uint32_t ag_output_Ht = ag_output_shape[2] / tt::constants::TILE_HEIGHT;
 
-    // Split-head forwarding dedup roles (see the buddy_gate semaphore comment). Enabled per row
-    // pair (2i, 2i+1), which shares one head in EVERY pass when segs_per_head == 2 and the row
-    // count is even (head = (p*rows + y) / 2, and p*rows is even). Requirements per pair: same
-    // fabric direction half (identical deterministic ring sequences and identical remote
-    // destination device — the cross-direction middle pair keeps duplicate forwarding), equal
-    // q_count (identical gate schedules), and both injectors known. Roles: 0 = none (forward and
-    // gate as before), 1 = leader (forward; relay gate to buddy), 2 = follower (skip forwarding;
-    // gate on the leader's relay).
-    std::vector<uint32_t> row_dedup_role(sdpa_grid.y, 0);
-    std::vector<CoreCoord> row_buddy_injector(sdpa_grid.y, CoreCoord{0, 0});
-    if (mcast_chains > 0 && segs_per_head == 2 && (sdpa_grid.y % 2 == 0)) {
-        for (uint32_t y = 0; y + 1 < sdpa_grid.y; y += 2) {
-            const uint32_t yf = y + 1;
-            const bool same_direction = (y < num_workers_per_link) == (yf < num_workers_per_link);
-            const uint32_t qc_leader = core_work.at(y * sdpa_grid.x).q_count;
-            const uint32_t qc_follower = core_work.at(yf * sdpa_grid.x).q_count;
-            const auto& inj_leader = injector_physical_by_row.at(y);
-            const auto& inj_follower = injector_physical_by_row.at(yf);
-            if (same_direction && qc_leader == qc_follower && qc_leader > 0 && inj_leader.has_value() &&
-                inj_follower.has_value()) {
-                row_dedup_role[y] = 1;
-                row_dedup_role[yf] = 2;
-                row_buddy_injector[y] = inj_follower.value();
-                row_buddy_injector[yf] = inj_leader.value();
-            }
-        }
-    }
-
     // Set reader rt args
     for (uint32_t i = 0; i < num_sdpa_cores; ++i) {
         CoreCoord core = {i % sdpa_grid.x, i / sdpa_grid.x};
@@ -1633,10 +1662,13 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         reader_args.push_back(chain.mcast_num_dests);
         reader_args.push_back(chain.mcast_sender_wait);
 
-        // Determine if this core's writer has a valid MUX connection (for reader-side forwarding)
+        // Determine if this core's writer has a valid MUX connection (for reader-side forwarding).
+        // Split-head dedup follower rows forward nothing, so their clients do not connect and
+        // their readers do not feed c_14/c_15 at all.
+        const bool row_forwards = row_dedup_role.at(core.y) != 2;
         const bool is_mux_writer = (core.x >= sdpa_grid.x - 2);
         bool is_mux_writer_valid = false;
-        if (is_mux_writer) {
+        if (is_mux_writer && row_forwards) {
             const uint32_t half_within_col = core.y / num_workers_per_link;
             const bool is_backward = (half_within_col == 0);
             const uint32_t link = (core.x == sdpa_grid.x - 1) ? 1 : 0;
@@ -1693,9 +1725,18 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             const uint32_t half_within_col = core.y / num_workers_per_link;
             const bool is_backward = (half_within_col == 0);
             const uint32_t link = (core.x == sdpa_grid.x - 1) ? 1 : 0;
-            const uint32_t worker_idx = core.y % num_workers_per_link;
-            const bool is_term_master = (worker_idx == 0);
-            const CoreCoord termination_master_logical = {core.x, half_within_col * num_workers_per_link};
+            // Compact channel id among the direction half's FORWARDING rows (followers do not
+            // connect and hold no channel). Term master = channel 0 of the group; with dedup off
+            // this is the original worker_idx layout (row 0 of each half).
+            const uint32_t worker_idx = row_mux_channel.at(core.y);
+            const bool is_term_master = row_forwards && (worker_idx == 0);
+            // First forwarding row of this direction half hosts the termination master.
+            uint32_t term_master_row = half_within_col * num_workers_per_link;
+            while (term_master_row + 1 < (half_within_col + 1) * num_workers_per_link &&
+                   row_dedup_role.at(term_master_row) == 2) {
+                term_master_row++;
+            }
+            const CoreCoord termination_master_logical = {core.x, term_master_row};
 
             const bool link_in_range = (link < args.num_links) && (link < mux_backward_logical_cores.size()) &&
                                        (link < mux_forward_logical_cores.size());
@@ -1706,7 +1747,8 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             if (link_in_range) {
                 const CoreCoord& mux_core =
                     is_backward ? mux_backward_logical_cores[link] : mux_forward_logical_cores[link];
-                const bool valid = is_backward ? backward_coord.has_value() : forward_coord.has_value();
+                const bool valid =
+                    row_forwards && (is_backward ? backward_coord.has_value() : forward_coord.has_value());
                 fabric_mux_connection_rt_args(
                     valid,
                     is_term_master,
