@@ -24,7 +24,24 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
-using namespace tt::tt_metal::experimental;
+using tt::tt_metal::experimental::AdvancedKernelRunArgs;
+using tt::tt_metal::experimental::ConsumerOf;
+using tt::tt_metal::experimental::DataflowBufferSpec;
+using tt::tt_metal::experimental::DFBSpecName;
+using tt::tt_metal::experimental::KernelRunArgs;
+using tt::tt_metal::experimental::KernelSpec;
+using tt::tt_metal::experimental::KernelSpecName;
+using tt::tt_metal::experimental::ProducerOf;
+using tt::tt_metal::experimental::ProgramRunArgs;
+using tt::tt_metal::experimental::ProgramSpec;
+using tt::tt_metal::experimental::ScratchpadBinding;
+using tt::tt_metal::experimental::ScratchpadSpec;
+using tt::tt_metal::experimental::ScratchpadSpecName;
+using tt::tt_metal::experimental::TensorArgument;
+using tt::tt_metal::experimental::TensorBinding;
+using tt::tt_metal::experimental::TensorParameter;
+using tt::tt_metal::experimental::TensorParamName;
+using tt::tt_metal::experimental::WorkUnitSpec;
 
 static std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>>
 get_padded_slice_runtime_args_rm_sharded_output(
@@ -90,7 +107,6 @@ get_padded_slice_runtime_args_rm_sharded_output(
             num_input_sticks_per_dim[i],
             accumulated_total_per_dim[i]);
     }
-    using namespace tt::tt_metal::experimental;
     auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? hal::get_dram_alignment()
                                     : hal::get_l1_alignment();
