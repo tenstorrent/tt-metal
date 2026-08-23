@@ -308,3 +308,48 @@ def test_the_inert_signpost_machinery_is_gone():
     assert "_signpost" not in tr
     assert "stage_windows" not in tt and "_per_stage_buckets" not in tt and "stage_buckets" not in tt
     assert "_peak_for_stage" not in sm
+
+
+def test_the_general_path_actually_emits_when_driven(monkeypatch, capsys):
+    """EXECUTED, not inspected. Every previous check of this measurement asked whether the code was
+    present and wired; none drove it. It sat in _measure_native -- present, wired, and unreachable
+    for this model -- through four mechanisms built on top of it.
+
+    So this one calls _measure_stage on the non-self-traced branch with a stubbed ttnn and asserts
+    the marker comes out with the right number.
+    """
+    import types
+
+    dec = types.ModuleType("ttnn.decorators")
+
+    class Operation:
+        def __call__(self, *a, **kw):
+            return None
+
+    dec.Operation = Operation
+    tt = types.ModuleType("ttnn")
+    tt.decorators = dec
+    for _n in ("synchronize_device", "end_trace_capture", "execute_trace", "release_trace"):
+        setattr(tt, _n, lambda *a, **k: None)
+    tt.begin_trace_capture = lambda *a, **k: 7
+    monkeypatch.setitem(sys.modules, "ttnn", tt)
+    monkeypatch.setitem(sys.modules, "ttnn.decorators", dec)
+
+    import importlib
+
+    import agent.trace_replay as tr
+
+    importlib.reload(tr)
+
+    w = _DevT(1_000_000)
+
+    class _Stage:
+        name = "decode"
+        self_traced = False
+
+        def step(self):
+            Operation()(w)
+
+    tr._measure_stage(object(), _Stage())
+    out = capsys.readouterr().out
+    assert "TRACE_STAGE_BYTES[decode]=2000000" in out, out  # 1M elements x 2 bytes, bf16
