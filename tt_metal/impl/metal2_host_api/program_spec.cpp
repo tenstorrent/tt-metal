@@ -482,11 +482,15 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 "Kernel '{}' scratchpad accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 binding.accessor_name);
+            const bool has_scratchpad = collected.scratchpad_by_name.contains(binding.scratchpad_spec_name);
             TT_FATAL(
-                collected.scratchpad_by_name.contains(binding.scratchpad_spec_name),
+                has_scratchpad || binding.allow_unbound_for_constexpr_discard,
                 "Kernel '{}' references unknown scratchpad '{}'",
                 kernel.unique_id,
                 binding.scratchpad_spec_name);
+            if (!has_scratchpad) {
+                continue;
+            }
             // A kernel may bind a given scratchpad at most once. Two bindings would request two
             // separate per-node allocations of the same spec under one kernel — muddy semantics, and
             // a node-level violation of "one binding instance per node". This is structural (no node
@@ -2502,11 +2506,11 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
 
     size_t crta_word_index = scratchpad_base_crta_word;
     for (const auto& binding : kernel.scratchpad_bindings) {
-        const ScratchpadSpec* scratchpad_spec = scratchpad_by_name.at(binding.scratchpad_spec_name);
+        const auto scratchpad_it = scratchpad_by_name.find(binding.scratchpad_spec_name);
 
         ScratchpadBindingHandle handle;
         handle.accessor_name = binding.accessor_name;
-        handle.size_bytes = scratchpad_spec->size_per_node;
+        handle.size_bytes = scratchpad_it == scratchpad_by_name.end() ? 0 : scratchpad_it->second->size_per_node;
         handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
         // handle.allocated_address stays 0 until allocate_scratchpads runs.
         out.handles.push_back(std::move(handle));

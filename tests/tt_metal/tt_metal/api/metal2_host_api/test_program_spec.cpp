@@ -1472,6 +1472,17 @@ TEST_F(ProgramSpecTestQuasar, UnknownScratchpadReferenceFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("references unknown scratchpad")));
 }
 
+TEST_F(ProgramSpecTestQuasar, OptionalUnboundScratchpadForConstexprDiscardSucceeds) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"compile_time_discarded"},
+        .accessor_name = "optional_scratch",
+        .allow_unbound_for_constexpr_discard = true}};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
 TEST_F(ProgramSpecTestQuasar, UnboundScratchpadFails) {
     // A ScratchpadSpec declared in spec.scratchpads that no kernel binds. An unbound scratchpad
     // reserves L1 no kernel can reach.

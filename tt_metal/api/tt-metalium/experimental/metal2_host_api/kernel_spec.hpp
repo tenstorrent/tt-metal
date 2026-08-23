@@ -164,6 +164,10 @@ struct KernelSpec {
     struct ScratchpadBinding {
         ScratchpadSpecName scratchpad_spec_name;  // identify the scratchpad within the ProgramSpec
         std::string accessor_name;                // scratchpad accessor name (used in the kernel source code)
+        // Compatibility escape hatch for a token referenced only from a compile-time-discarded branch.
+        // If the named spec is absent, emit a zero-sized token and allocate no L1. Using that token at
+        // runtime is invalid; normal scratchpad bindings must leave this false.
+        bool allow_unbound_for_constexpr_discard = false;
     };
     Group<ScratchpadBinding> scratchpad_bindings;
 
