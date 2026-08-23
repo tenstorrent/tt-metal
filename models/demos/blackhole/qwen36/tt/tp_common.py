@@ -12,6 +12,17 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
+# Pure block/CB arithmetic for the tuned prefill matmuls (host-checkable, no ttnn — see
+# tests/test_prefill_mm_cb_budget.py). The re-exported helpers keep their historical names.
+from models.demos.blackhole.qwen36.tt.prefill_mm_blocks import (
+    _best_prefill_cols,
+    _find_largest_divisor,
+    _get_out_subblock_w,
+    _widest_prefill_cols,
+    capped_out_block_h,
+    prefill_mm_blocks,
+)
+
 # Hardware constants
 TILE_SIZE = 32
 DRAM_CORES = 8
@@ -70,13 +81,6 @@ def prefill_tuning(num_devices):
 
 def _roundup(a, b):
     return b * math.ceil(a / b)
-
-
-def _find_largest_divisor(n, max_div=8):
-    for d in range(max_div, 0, -1):
-        if n % d == 0:
-            return d
-    return 1
 
 
 def _find_grid(n_tiles, target=32):
@@ -197,14 +201,7 @@ def create_activation_shard_config(k):
     )
 
 
-# 2D prefill matmul config
-def _get_out_subblock_w(per_core_n, out_subblock_h):
-    for w in range(min(per_core_n, 4 // out_subblock_h), 0, -1):
-        if per_core_n % w == 0:
-            return w
-    return 1
-
-
+# 2D prefill matmul config (block arithmetic lives in prefill_mm_blocks — pure + host-checkable)
 def _full_grid_crs(grid):
     """Full-grid allowed_worker_cores for CCL-fused matmuls, which bypass ttnn::prim::matmul()'s normalize_program_config()."""
     gx, gy = grid
@@ -215,70 +212,28 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
     """2D prefill matmul progcfg (DRAM-interleaved).
 
     fused_activation in packer; sharded kernel rejects ttnn.linear(activation=...) with progcfg.
-    tuning: a `_PREFILL_TUNING` entry (see `prefill_tuning`); None = the frozen TP=4 behavior."""
+    tuning: a `_PREFILL_TUNING` entry (see `prefill_tuning`); None = the frozen TP=4 behavior.
+
+    HP3: out_block_h caps the CB-scaling M-block at the S=2048 sweep level for m > 2048 (the
+    factory sizes CBs on out_block, not per_core_M — see prefill_mm_blocks). m <= 2048 emits
+    out_block_h == per_core_M, i.e. exactly the pre-cap config the sweep validated."""
     if grid_size is None:
         grid_size = prefill_grid_default()
     tuning = tuning or _PREFILL_TUNING[4]
-    per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
-    per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
-
-    out_subblock_h = 1
-    out_subblock_w = _get_out_subblock_w(per_core_N, out_subblock_h)
-
-    k_tiles = math.ceil(k / TILE_SIZE)
-    cap = tuning["in0_block_w_cap"]
-    if tuning["in0_block_w_divisor"]:
-        # in0_block_w only has to divide k_tiles (no K tail in the 2D mcast kernel), so take the
-        # largest legal block rather than scaling with grid width -- see _PREFILL_TUNING.
-        in0_block_w = _find_largest_divisor(k_tiles, cap)
-    else:
-        in0_block_w = min(cap, max(1, k_tiles // grid_size[0]))
-
+    b = prefill_mm_blocks(m, k, n, grid_size[0], grid_size[1], tuning["in0_block_w_divisor"], tuning["in0_block_w_cap"])
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
-        in0_block_w=in0_block_w,
-        out_subblock_h=out_subblock_h,
-        out_subblock_w=out_subblock_w,
-        per_core_M=per_core_M,
-        per_core_N=per_core_N,
+        in0_block_w=b["in0_block_w"],
+        out_subblock_h=b["out_subblock_h"],
+        out_subblock_w=b["out_subblock_w"],
+        out_block_h=b["out_block_h"],
+        out_block_w=b["out_block_w"],
+        per_core_M=b["per_core_M"],
+        per_core_N=b["per_core_N"],
         transpose_mcast=False,
         fused_activation=fused_activation,
         fuse_batch=False,
     )
-
-
-def _widest_prefill_cols(n, max_cols, subblock_slack=1):
-    """Widest grid whose output subblock stays within `subblock_slack` of the best achievable.
-
-    The TP=8 counterpart to `_best_prefill_cols`. More columns is usually a win at TP=8 (the halved
-    per-device N leaves cores idle), but NOT when the extra width collapses the subblock: measured
-    at S=2048, mlp_gate (N=2176 -> 68 tiles) goes cols 9 -> 11, per_core_N 8 -> 7, and 7 is prime so
-    out_subblock_w drops 4 -> 1 -- a 2058us -> 2118us REGRESSION, i.e. the subblock-first ranking
-    was right for that shape. Guarding on the subblock keeps the wide grid exactly where it pays:
-
-        matmul     default        this rule       measured
-        attn_wo    c10_bw2_sw4    c11_bw4_sw3     803.5 -> 718.7us
-        gdn_out    c10_bw2_sw4    c11_bw4_sw3     802.3 -> 719.9us
-        mlp_down   c10_bw4_sw4    c11_bw4_sw3    1787.4 -> 1724.9us
-        mlp_gate   c9_bw4_sw4     c9_bw4_sw4     2058.1us (unchanged -- already optimal)
-    """
-    n_tiles = math.ceil(n / TILE_SIZE)
-    sw = {cols: _get_out_subblock_w(math.ceil(n_tiles / cols), 1) for cols in range(1, max_cols + 1)}
-    floor = max(sw.values()) - subblock_slack
-    return max((cols for cols, w in sw.items() if w >= floor), default=1)
-
-
-def _best_prefill_cols(n, max_cols):
-    """Grid width (<=max_cols) maximizing the output subblock, tie-broken to more cores — avoids the
-    1x1-subblock stall (e.g. gate/up N=4352 -> 7-wide -> 1x4) the default full width can force."""
-    n_tiles = math.ceil(n / TILE_SIZE)
-    best_cols, best_key = 1, None
-    for cols in range(1, max_cols + 1):
-        sw = _get_out_subblock_w(math.ceil(n_tiles / cols), 1)
-        key = (sw, cols)  # prefer wider subblock, then more columns (more compute cores)
-        if best_key is None or key > best_key:
-            best_key, best_cols = key, cols
-    return best_cols
 
 
 def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max_cols=None, tuning=None):
@@ -535,6 +490,7 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
     # grid (8,8) leaves rows 8-9 for the 2 RS worker rows.
     num_links = 2
     per_core_N = max(1, math.ceil(N / TILE_SIZE / grid[0]))
+    per_core_M = max(1, math.ceil(M / TILE_SIZE / grid[1]))
     pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=min(4, max(1, K_local // TILE_SIZE // grid[0])),
@@ -542,8 +498,12 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
         # Keep 1x1: op242 is RS-bound and this op is pipelined to overlap the matmul with the RS.
         # Widening the subblock desyncs that overlap and measured net-negative on traced_8k TTFT.
         out_subblock_w=1,
-        per_core_M=max(1, math.ceil(M / TILE_SIZE / grid[1])),
+        per_core_M=per_core_M,
         per_core_N=per_core_N,
+        # HP3: CBs scale on out_block_h x out_block_w (fp32 out+interm here), NOT per_core_M —
+        # cap the M-block at its M=2048 level (8 on this 8-row grid) so chunk 4096/8192 keeps
+        # the validated CB budget (uncapped, chunk 8192 alone needs ~2.6 MB of out+interm CB).
+        out_block_h=capped_out_block_h(per_core_M, grid[1]),
         out_block_w=max(1, per_core_N // 2),
         transpose_mcast=False,
         fused_activation=None,
