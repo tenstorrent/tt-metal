@@ -197,14 +197,10 @@ TT_KERNEL void reader_pool_2d(uint32_t core_nhw_index) {
     constexpr uint32_t in_cb_id = dfb::in_cb;
     constexpr uint32_t in_shard_cb_id = dfb::in_shard_cb;
     constexpr uint32_t in_reader_indices_cb_id = dfb::reader_indices_cb;
-#if READER_ID == 0 || defined(HAS_SECOND_SCALAR_CB)
     constexpr uint32_t in_scalar_cb_id = dfb::in_scalar_cb;
-#endif
     constexpr uint32_t clear_value_cb_id = dfb::clear_value_cb;
     constexpr bool is_avg_pool = static_cast<bool>(pool_type_is_avg);
-#ifdef HAS_CONFIG
     constexpr uint32_t config_cb_id = dfb::config_cb;
-#endif
 
     constexpr bool use_split_reader = split_reader;
 
@@ -226,14 +222,10 @@ TT_KERNEL void reader_pool_2d(uint32_t core_nhw_index) {
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
     DataflowBuffer clear_value_dfb(clear_value_cb_id);
-#if READER_ID == 0 || defined(HAS_SECOND_SCALAR_CB)
     DataflowBuffer in_scalar_dfb(in_scalar_cb_id);
-#endif
     DataflowBuffer in_shard_dfb(in_shard_cb_id);
     DataflowBuffer reader_indices_dfb(in_reader_indices_cb_id);
-#ifdef HAS_CONFIG
     DataflowBuffer config_dfb(config_cb_id);
-#endif
 
     // fill the clear cb
     if constexpr (is_avg_pool || need_to_initialize_in_cb) {
@@ -251,15 +243,13 @@ TT_KERNEL void reader_pool_2d(uint32_t core_nhw_index) {
     }
 
     // initialize the scalar CB
-#if READER_ID == 0
-    if constexpr (one_scalar_per_core) {
+    if constexpr (reader_id == 0 && one_scalar_per_core) {
         // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
         // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
         // between the first and second face.
         fill_with_val(in_scalar_dfb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
         in_scalar_dfb.push_back(1);
     }
-#endif
     const uint32_t in_l1_read_base_addr = in_shard_dfb.get_read_ptr();
     if constexpr (config_in_dram) {
         if (reader_id == 0) {
@@ -286,8 +276,7 @@ TT_KERNEL void reader_pool_2d(uint32_t core_nhw_index) {
     uint32_t scalar_value;
     uint32_t scalar_end;
     uint32_t counter = reader_id;
-#ifdef HAS_CONFIG
-    {
+    if constexpr (!one_scalar_per_core) {
         uint32_t config_l1_addr = config_dfb.get_read_ptr();
         if constexpr (config_in_dram) {
             if (reader_id == 0) {
@@ -305,7 +294,6 @@ TT_KERNEL void reader_pool_2d(uint32_t core_nhw_index) {
         scalar_value = config_ptr[1];
         scalar_end = config_ptr[2];
     }
-#endif
 
     uint16_t num_segments = reader_indices_ptr[0] & 0xffff;
     bool first_row_value = reader_id == 0 || !use_split_reader;
@@ -322,8 +310,7 @@ TT_KERNEL void reader_pool_2d(uint32_t core_nhw_index) {
 
         constexpr uint32_t stride_multiple = use_split_reader ? 2 : 1;
         for (uint16_t ind = start; ind <= end; ind += stride_multiple * stride_w) {
-#ifdef HAS_CONFIG
-            {
+            if constexpr (!one_scalar_per_core) {
                 fill_scalar<
                     one_scalar_per_core,
                     in_scalar_cb_id,
@@ -332,7 +319,6 @@ TT_KERNEL void reader_pool_2d(uint32_t core_nhw_index) {
                     multi_buffering_factor>(
                     in_scalar_dfb, scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
             }
-#endif
             read_kernel_with_top_left_index<
                 in_nblocks_c,
                 in_cb_id,

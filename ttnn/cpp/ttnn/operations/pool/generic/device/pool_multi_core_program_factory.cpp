@@ -904,15 +904,21 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
         }
         // Reader-indices CB: reader0=P / reader1=C when split (DRAM push -> wait), else self-loop.
         if (params.split_reader) {
-            b.push_back(DFBBinding{
+            auto binding = DFBBinding{
                 .dfb_spec_name = DFB_READER_INDICES,
                 .accessor_name = "reader_indices_cb",
-                .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER});
+                .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER};
+            if (!return_indices && one_scalar_per_core) {
+                binding.accessor_aliases.push_back("config_cb");
+            }
+            b.push_back(std::move(binding));
         } else {
             b.push_back(DFBBinding{
                 .dfb_spec_name = DFB_READER_INDICES,
                 .accessor_name = "reader_indices_cb",
-                .endpoint_type = DFBEndpointType::PRODUCER});
+                .endpoint_type = DFBEndpointType::PRODUCER,
+                .accessor_aliases =
+                    (!return_indices && one_scalar_per_core) ? Group<std::string>{"config_cb"} : Group<std::string>{}});
             b.push_back(DFBBinding{
                 .dfb_spec_name = DFB_READER_INDICES,
                 .accessor_name = "reader_indices_cb",
@@ -1027,10 +1033,14 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
             }
             // clear value: reader0=P / reader1=C when split, self-loop on reader0 otherwise.
             if (params.split_reader) {
-                b.push_back(DFBBinding{
+                auto binding = DFBBinding{
                     .dfb_spec_name = DFB_CLEAR_VALUE,
                     .accessor_name = "clear_value_cb",
-                    .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER});
+                    .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER};
+                if (is_reader1 && !has_second_scalar_cb) {
+                    binding.accessor_aliases.push_back("in_scalar_cb");
+                }
+                b.push_back(std::move(binding));
             } else {
                 b.push_back(DFBBinding{
                     .dfb_spec_name = DFB_CLEAR_VALUE,
@@ -1056,6 +1066,8 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
         }
         if (!one_scalar_per_core) {
             tb.push_back(TensorBinding{.tensor_parameter_name = CONFIG_TENSOR, .accessor_name = "config"});
+        } else if (!return_indices) {
+            tb.push_back(TensorBinding{.tensor_parameter_name = READER_INDICES_TENSOR, .accessor_name = "config"});
         }
         return tb;
     };
@@ -1077,14 +1089,11 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
     // reader_mpwi.cpp #ifdef-gates its per-role token references on READER_ID so each
     // reader binary references only the DFB tokens it actually drives. reader_pool_2d.cpp
     // #ifdef-gates dfb::config_cb / tensor::config on HAS_CONFIG (avg-pool, !one_scalar).
-    KernelSpec::CompilerOptions::Defines reader0_defines{{"READER_ID", "0"}};
-    KernelSpec::CompilerOptions::Defines reader1_defines{{"READER_ID", "1"}};
-    if (!one_scalar_per_core) {
-        reader0_defines.insert({"HAS_CONFIG", "1"});
-        reader1_defines.insert({"HAS_CONFIG", "1"});
-    }
-    if (has_second_scalar_cb) {
-        reader1_defines.insert({"HAS_SECOND_SCALAR_CB", "1"});
+    KernelSpec::CompilerOptions::Defines reader0_defines;
+    KernelSpec::CompilerOptions::Defines reader1_defines;
+    if (return_indices) {
+        reader0_defines.insert({"READER_ID", "0"});
+        reader1_defines.insert({"READER_ID", "1"});
     }
     if (return_indices && params.is_large_kernel) {
         reader0_defines.insert({"LARGE_KERNEL", "1"});
