@@ -112,14 +112,10 @@ inline bool reserve_pages_bounded(
 // (head publish for unverified consumers, the stop path) keep the acked flush.
 template <bool sent_only = false>
 inline bool write_barrier_bounded(uint64_t deadline) {
-    // Bounded on ITERATIONS as well as cycles. The cycle deadline alone assumes two things that a wedged NIU
-    // breaks: that get_timestamp() advances, and that the loop gets to evaluate it at all. Under slow dispatch
-    // the DRISC was observed stuck here with the 50 ms deadline never firing (phase=11 forever), which can only
-    // happen if control never returns from the flush check or the clock is frozen. An iteration cap escapes the
-    // first case and distinguishes it from the second. MEASURED (forced JIT rebuild, 0/18 cache hits): the
-    // iteration cap does NOT free it either -- so control never returns from the flush check, and the core is
-    // stuck inside the NIU register read. No software bound can help; the cap stays only because a barrier
-    // bounded two ways is strictly better than one bounded by a clock it has to be running to read.
+    // Bounded on ITERATIONS as well as cycles: the cycle deadline assumes get_timestamp() advances AND
+    // that the loop gets to evaluate it, and a wedged NIU breaks both. The cap does not actually free a
+    // wedged core -- measured; control never returns from the flush check -- but a barrier bounded two
+    // ways beats one bounded by a clock it must be running to read.
     // 4M iterations is far beyond any healthy flush (worst observed is a handful).
     constexpr uint32_t kMaxSpins = 4u << 20;
     uint32_t spins = 0;

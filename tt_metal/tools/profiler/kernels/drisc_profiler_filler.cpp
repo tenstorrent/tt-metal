@@ -6,15 +6,7 @@
 // complete frames into this filler's own device-DRAM ring. No socket, no PCIe, no host MMIO -- its
 // back-pressure is a DRAM ring of tens of MB, not the 12 MiB host FIFO. Four fillers cover the grid.
 //
-// Sweep shape (CV-first): read each core's ring TAILS (32 B), decide the ship set (per-core threshold +
-// predictive valve + age bound), bulk-read whole spans only for the ship set -- ONE unsplit NoC read per
-// span, because the shipped control vector is the span's own first bytes and only a single ascending read
-// guarantees every tail is captured before the data it points at. Frames are staged in L1 and written to
-// the DRAM ring in runs; each frame gets a trailing 4 B seq stamp on the same route, so the mover can
-// verify landing ("stamp visible => frame landed") and heads publish at write-ISSUE time.
-//
-// The full architecture story (roles, placement evidence, wire format) lives in
-// the single-drainer fallback this file was carved from, since deleted.
+// Roles, placement evidence and wire format: tools/drisc_drain/FINDINGS.md.
 
 #include "drisc_drain_common.hpp"
 
@@ -117,28 +109,14 @@ void kernel_main() {
     constexpr uint32_t kLaneShipWords = kernel_profiler::PROFILER_L1_VECTOR_SIZE / 2u;
     constexpr uint32_t kShipMaxAgeSweeps = 512u;
     constexpr uint32_t kShipMinWords = (kLiveWords * kShipMinPct) / 100u;
-    // CV-FIRST SWEEPS. A filler's sweep is two phases: read each core's ring TAILS (32 B), decide the ship
-    // set, bulk-read spans only for it. The tails read is a HINT -- the span read re-reads the control
-    // vector as its leading bytes and stays the authoritative snapshot, so every consistency argument is
-    // untouched. Sweeps stay cheap, which is what closes the burst-onset service race.
+    // CV-FIRST SWEEPS. Two phases: read each core's ring TAILS (32 B), decide the ship set, bulk-read
+    // spans only for it. The tails read is a HINT -- the span read re-reads the control vector as its
+    // leading bytes and remains the authoritative snapshot, so no consistency argument rests on the hint.
     //
-    // DMA MOVER. Each mover's two peer rings live in its OWN bank and are read with the per-core GDDR<->L1
-    // DMA engine -- separate hardware from the NIU, so ring reads pipeline against the PCIe push in
-    // kGenSlots-frame sub-batches across the two staging generations. Args 42/43 are CHANNEL-local ring
-    // bases (raw DMA addresses; bank offsets exist only for get_noc_addr_from_bank_id).
-    // Per-visit cap bounds PEER STARVATION (the other ring waits one visit). 24 over-throttled (~2.4
-    // us/frame, rings filled); 192 (~2 MB) amortizes overheads to ~1 us/frame while starvation stays ~10x
-    // below the unbounded 6.7 ms whole-ring visit that motivated the cap.
-    // Frame-sequence verification (replaces the distance-based chase guard). The spec leaves NoC-write vs
-    // DMA-read same-address ordering UNDEFINED and WR_ACK is not a cross-master fence, so instead of
-    // predicting visibility the mover VERIFIES it: the filler stamps every frame's monotonic ring index
-    // into prefix word kSeqWord (dead space the host decoder skips), and the mover consumes only the
-    // verified PREFIX of each sub-batch -- a LOW stamp is a frame whose (already-published) DRAM write
-    // has not landed yet, left in the ring for the next visit; a HIGH stamp can only be corruption.
-    // Verification as flow control: the filler may publish heads at write-ISSUE time, moving the DRAM
-    // ack wait off its sweep path entirely, and no retry spins or timeouts exist anywhere.
-    // Word 3, not 2: the trailing stamp write must be alignment-congruent with its L1 source (BH NoC
-    // requires src%16 == dst%16), and the value's staging home is word 7 (offset 28 == 12 mod 16).
+    // Heads publish at write-ISSUE time, which keeps the DRAM ack wait off the sweep path. That is only
+    // sound because the mover VERIFIES landing per frame (see kSeqWord): NoC-write vs DMA-read ordering
+    // at the same address is UNDEFINED and WR_ACK is not a cross-master fence, so visibility is proven,
+    // never predicted.
     constexpr uint32_t kSeqWord = 3u;
     constexpr uint32_t kSeqSrcWord = 7u;
     // In-place re-reads per sub-batch before deferring to the next visit: each costs one partial DMA
@@ -185,16 +163,9 @@ void kernel_main() {
     //   +16 tail     mover NoC-writes,       filler reads locally
     //   +32 probe_f  host writes a magic,    mover NoC-reads and echoes into its own L1  (proves reads work)
     //   +48 probe_m  mover NoC-writes magic, host reads it off the filler                (proves writes work)
-    // Both probes exist because this is a SECOND producer/consumer path, and the last one of those silently
-    // destroyed a capture (1.03M records lost, every lane's nesting corrupt) while every existing counter
-    // read clean. An unverified peer-L1 coordinate would fail exactly that way: plausible counters, garbage
-    // handshake. So the addressing is checked at bring-up rather than assumed.
-    //
-    // The magics are PER-PEER, not one constant. With four fillers a single shared magic proves only "the
-    // mover read SOME filler's probe word" -- a mover whose peer-1 coordinate accidentally named peer 0's
-    // filler (or any other filler) would pass. The host plants kProbeFillerMagic + <filler index> and checks
-    // the echo against the index it MEANT; the mover writes back kProbeMoverMagic + <peer slot>, so the host
-    // can also tell peer 0's write from peer 1's.
+    // Both directions are probed at bring-up rather than assumed: a wrong peer-L1 coordinate yields
+    // plausible counters and a garbage handshake, which is how this class of bug hides. The magics carry
+    // the peer INDEX, so a mover that named the wrong filler cannot pass by reading someone else's probe.
     constexpr uint32_t kHsHead = 0, kHsTail = 16, kHsProbeF = 32, kHsProbeM = 48;
     constexpr uint32_t kProbeMoverMagic = 0x5A0FE1EDu;
     static_assert(kRole == kRoleFiller || kRole == kRoleMover, "unknown drainer role");
@@ -409,15 +380,10 @@ void kernel_main() {
     bool self_busy = false;           // inside self_publish: suppress marker emission (re-entrancy)
     bool self_work = false;           // THIS sweep did work (set by self_arm / the end-of-sweep check)
     bool self_from_start = false;     // instrumented from the top of the sweep, not armed part-way in
-    // PHASE TOTALS OVER THE INSTRUMENTED-FROM-THE-START SWEEPS ONLY -- the cross-check the zones are worth
-    // nothing without. The out[10..19] lifetime totals cannot verify a sampled instrument: they cover the whole
-    // run while the zones cover ~0.5% of it. These cover exactly the sweeps the zones do, so the host can
-    // compare zone durations summed out of the Tracy capture against them:
-    //   sum(READ) + sum(READ-WAIT) ~= c_read delta      sum(CREDIT-WAIT) ~= c_reserve delta
-    //   sum(PROC) - sum(CREDIT-WAIT) - sum(WRITE) ~= c_proc delta      sum(WR-BARRIER) ~= c_barrier delta
-    // APPROXIMATE, not exact: a zone boundary is its own clock read, a few cycles away from the counter's.
-    // Restricted to from-the-start sweeps because a sweep ARMED part-way through has zones for only part of it,
-    // and comparing those against a whole-sweep counter delta would fail for a reason that is not a bug.
+    // Phase totals over the instrumented-FROM-THE-START sweeps only, so summed Tracy zone durations have
+    // something to be checked against: the out[10..19] lifetime totals cover the whole run while the zones
+    // cover ~0.5% of it. Restricted to from-the-start sweeps because a sweep armed part-way through has
+    // zones for only part of itself, and would mismatch for a reason that is not a bug.
     uint32_t self_ck_sweeps = 0;
     uint64_t self_ck_read = 0, self_ck_proc = 0, self_ck_rsv = 0, self_ck_write = 0, self_ck_bar = 0;
     if constexpr (kSelfZones != 0) {
@@ -448,15 +414,12 @@ void kernel_main() {
     // Append one 2-word marker at a FRESH timestamp, read here. Publishes first if the ring is too full to
     // hold a sticky plus a marker; a marker is only ever dropped if that publish could not free it (egress
     // dead), and then it is counted rather than lost silently.
-    // Takes a RAW word0 rather than (type, zone_id) so the PP_DATA sample can share this prologue: the room
-    // check, the publish-and-carry-on path and the sticky-timer refresh are the fiddly parts, and having two
-    // copies of them cost 244 B of DRISC code the region does not have. Returns whether the words were
-    // actually written -- a caller appending a PAYLOAD after the header must not write orphan words when the
-    // header was dropped.
-    // NOINLINE-by-size (the call sites guard with their own inline self_on checks -- the N+41 lesson: a call
-    // that only checks a flag and returns still costs a real call in the scan loop). What staying out of
-    // line buys is large: this prologue reaches self_publish(), so inlining it at ~10 sites would replicate
-    // the whole publish path ~10 times.
+    // Takes a RAW word0 rather than (type, zone_id) so the PP_DATA sample shares this prologue -- two
+    // copies of the room check, publish-and-carry-on and sticky refresh do not fit the DRISC code region.
+    // Returns whether the words were written: a caller appending a PAYLOAD must not write orphan words
+    // when the header was dropped. Kept out of line because this prologue reaches self_publish(), so
+    // inlining it at ~10 sites would replicate the whole publish path; call sites guard with their own
+    // inline self_on check, since a call that only tests a flag still costs a call in the scan loop.
     auto self_mark_w0 = [&](uint32_t w0) -> bool {
         if constexpr (kSelfZones == 0) {
             (void)w0;
@@ -593,23 +556,16 @@ void kernel_main() {
             }
             kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_WRITE, SelfMarkPhase> z_write(self_mark_phase);
             *phase = kPhWrChunk;
-            // Stamp each frame's monotonic ring index into the prefix (dead space the host skips). The
-            // mover VERIFIES this stamp after its GDDR-DMA read -- the visibility handshake that replaces
-            // any WR_ACK assumption (see kSeqWord). The fence orders these stores before the NIU reads
-            // the slab, same as ship_once's.
-            // 1-BASED: never-written GDDR plausibly reads 0, and frame 0's stamp must not match it.
-            // Each frame's stamp is a separate trailing 4 B write issued after the bulk writes on the
-            // same NoC/VC/route, so in-order delivery makes a visible stamp prove every packet of its
-            // frame landed -- what the mover's verification needs now that heads publish at issue time.
-            // The bulk image carries 0 at kSeqWord; the stamp VALUE rides in kSeqSrcWord (28 = 12 mod 16,
-            // the BH src/dst congruence), which doubles as the small write's L1 source and must persist
-            // until sent -- the generation reuse gate covers that.
-            // PACK INTO THE RING, rather than leaving the gather to the mover. The two are interchangeable
-            // for the host -- same wire layout either way -- but not for the device: the mover's ~11 gather
-            // issues per frame are what its burst is made of (measured: write 14.2% + wr-barrier 5.3% of a
-            // 750 ms residency against a ~130 ms burst), while a filler's whole write path runs at ~1.3%,
-            // and there are twice as many fillers as movers. A frame that lands contiguous here costs the
-            // mover ONE issue to ship and no control-vector walk at all.
+            // Each frame's seq stamp is a separate trailing 4 B write, issued AFTER that frame's bulk
+            // writes on the same route: in-order delivery then makes a visible stamp prove every packet
+            // of the frame landed. 1-BASED, because never-written GDDR can read 0 and frame 0 must not
+            // alias that. The value rides in kSeqSrcWord (28 == 12 mod 16) to satisfy the BH src/dst
+            // congruence, and doubles as the small write's L1 source, so it must persist until sent --
+            // which the generation reuse gate covers.
+            // PACK INTO THE RING rather than leaving the gather to the mover. Same wire layout either way,
+            // but not the same cost: gathering at ship time was ~11 NIU write issues per frame on the
+            // write-bound mover, against a filler write path with headroom to spare and twice as many
+            // fillers. A frame that lands contiguous here ships in ONE issue.
             const uint32_t slot0 = frames_staged % kDramFrames;
             uint32_t fpages = 0;
             for (uint32_t f = 0; f < count; f++) {

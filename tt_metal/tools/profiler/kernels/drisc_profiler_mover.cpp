@@ -13,8 +13,7 @@
 // only the stamped prefix of each sub-batch, re-read briefly for stamps still in NoC flight, treat a
 // HIGH stamp as corruption. Peers are visited sequentially, each getting the whole staging area.
 //
-// The full architecture story (roles, placement evidence, wire format) lives in
-// the single-drainer fallback this file was carved from, since deleted.
+// Roles, placement evidence and wire format: tools/drisc_drain/FINDINGS.md.
 
 #include "drisc_drain_common.hpp"
 
@@ -155,16 +154,9 @@ void kernel_main() {
     //   +16 tail     mover NoC-writes,       filler reads locally
     //   +32 probe_f  host writes a magic,    mover NoC-reads and echoes into its own L1  (proves reads work)
     //   +48 probe_m  mover NoC-writes magic, host reads it off the filler                (proves writes work)
-    // Both probes exist because this is a SECOND producer/consumer path, and the last one of those silently
-    // destroyed a capture (1.03M records lost, every lane's nesting corrupt) while every existing counter
-    // read clean. An unverified peer-L1 coordinate would fail exactly that way: plausible counters, garbage
-    // handshake. So the addressing is checked at bring-up rather than assumed.
-    //
-    // The magics are PER-PEER, not one constant. With four fillers a single shared magic proves only "the
-    // mover read SOME filler's probe word" -- a mover whose peer-1 coordinate accidentally named peer 0's
-    // filler (or any other filler) would pass. The host plants kProbeFillerMagic + <filler index> and checks
-    // the echo against the index it MEANT; the mover writes back kProbeMoverMagic + <peer slot>, so the host
-    // can also tell peer 0's write from peer 1's.
+    // Both directions are probed at bring-up rather than assumed: a wrong peer-L1 coordinate yields
+    // plausible counters and a garbage handshake, which is how this class of bug hides. The magics carry
+    // the peer INDEX, so a mover that named the wrong filler cannot pass by reading someone else's probe.
     constexpr uint32_t kHsHead = 0, kHsTail = 16, kHsProbeF = 32, kHsProbeM = 48;
     constexpr uint32_t kProbeMoverMagic = 0x5A0FE1EDu;
     static_assert(kRole == kRoleFiller || kRole == kRoleMover, "unknown drainer role");
@@ -395,15 +387,10 @@ void kernel_main() {
     bool self_busy = false;           // inside self_publish: suppress marker emission (re-entrancy)
     bool self_work = false;           // THIS sweep did work (set by self_arm / the end-of-sweep check)
     bool self_from_start = false;     // instrumented from the top of the sweep, not armed part-way in
-    // PHASE TOTALS OVER THE INSTRUMENTED-FROM-THE-START SWEEPS ONLY -- the cross-check the zones are worth
-    // nothing without. The out[10..19] lifetime totals cannot verify a sampled instrument: they cover the whole
-    // run while the zones cover ~0.5% of it. These cover exactly the sweeps the zones do, so the host can
-    // compare zone durations summed out of the Tracy capture against them:
-    //   sum(READ) + sum(READ-WAIT) ~= c_read delta      sum(CREDIT-WAIT) ~= c_reserve delta
-    //   sum(PROC) - sum(CREDIT-WAIT) - sum(WRITE) ~= c_proc delta      sum(WR-BARRIER) ~= c_barrier delta
-    // APPROXIMATE, not exact: a zone boundary is its own clock read, a few cycles away from the counter's.
-    // Restricted to from-the-start sweeps because a sweep ARMED part-way through has zones for only part of it,
-    // and comparing those against a whole-sweep counter delta would fail for a reason that is not a bug.
+    // Phase totals over the instrumented-FROM-THE-START sweeps only, so summed Tracy zone durations have
+    // something to be checked against: the out[10..19] lifetime totals cover the whole run while the zones
+    // cover ~0.5% of it. Restricted to from-the-start sweeps because a sweep armed part-way through has
+    // zones for only part of itself, and would mismatch for a reason that is not a bug.
     uint32_t self_ck_sweeps = 0;
     uint64_t self_ck_read = 0, self_ck_proc = 0, self_ck_rsv = 0, self_ck_write = 0, self_ck_bar = 0;
     if constexpr (kSelfZones != 0) {
@@ -437,15 +424,12 @@ void kernel_main() {
     // Append one 2-word marker at a FRESH timestamp, read here. Publishes first if the ring is too full to
     // hold a sticky plus a marker; a marker is only ever dropped if that publish could not free it (egress
     // dead), and then it is counted rather than lost silently.
-    // Takes a RAW word0 rather than (type, zone_id) so the PP_DATA sample can share this prologue: the room
-    // check, the publish-and-carry-on path and the sticky-timer refresh are the fiddly parts, and having two
-    // copies of them cost 244 B of DRISC code the region does not have. Returns whether the words were
-    // actually written -- a caller appending a PAYLOAD after the header must not write orphan words when the
-    // header was dropped.
-    // NOINLINE-by-size (the call sites guard with their own inline self_on checks -- the N+41 lesson: a call
-    // that only checks a flag and returns still costs a real call in the scan loop). What staying out of
-    // line buys is large: this prologue reaches self_publish(), so inlining it at ~10 sites would replicate
-    // the whole publish path ~10 times.
+    // Takes a RAW word0 rather than (type, zone_id) so the PP_DATA sample shares this prologue -- two
+    // copies of the room check, publish-and-carry-on and sticky refresh do not fit the DRISC code region.
+    // Returns whether the words were written: a caller appending a PAYLOAD must not write orphan words
+    // when the header was dropped. Kept out of line because this prologue reaches self_publish(), so
+    // inlining it at ~10 sites would replicate the whole publish path; call sites guard with their own
+    // inline self_on check, since a call that only tests a flag still costs a call in the scan loop.
     auto self_mark_w0 = [&](uint32_t w0) -> bool {
         if constexpr (kSelfZones == 0) {
             (void)w0;
@@ -539,15 +523,12 @@ void kernel_main() {
             reinterpret_cast<const tt_l1_ptr uint32_t*>(slot)[1]);
     };
 
-    // Ship `count` adjacent staged slots as PACKED frames: per frame, the prefix + control vector and then
-    // each live lane's window, NIU-gathered straight out of the slot. Nothing is copied; the dead ring
-    // tails simply never ship.
-    // Returns false if this send was dropped (credit wait expired), so an amplified run stops repeating
-    // into a consumer that is not acking instead of billing one dropped frame per repeat.
-    // Set when pushes advanced bytes_sent without a notify. The notify is what publishes bytes_sent to the
-    // host, and the host can only ack what it was told about -- so ANY exit path that grew bytes_sent must
-    // eventually notify, or credit never returns and every later reserve times out (measured: one skipped
-    // notify on a drop path cascaded into 4,7xx 50 ms credit timeouts and a full-run capture loss).
+    // Ship `count` adjacent staged slots. The filler already packed each frame contiguously, so this is
+    // one push per frame and no gather. Returns false if the send was dropped (credit wait expired).
+    //
+    // notify_pending: ANY exit path that grew bytes_sent must eventually notify. The notify is what
+    // publishes bytes_sent to the host, and the host can only ack what it was told about, so one skipped
+    // notify on a drop path starves credit for the rest of the run.
     bool notify_pending = false;
     auto ship_once = [&](uint32_t start, uint32_t count, bool do_notify) -> bool {
         uint32_t npages = 0;
@@ -946,17 +927,11 @@ void kernel_main() {
             // PACE is deliberately SWEEP's sibling at depth 0, not its child.
             kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_SWEEP, SelfMarkNow> z_sweep(self_mark_now);
             if constexpr (kRole == kRoleMover) {
-                // ---- MOVER: kNPeer DRAM rings -> staging -> the existing D2H socket ----
-                //
-                // No worker grid, no control-vector scan, no head write-back. The frames in the ring are already
-                // complete (prefix + span, written by the filler), so this is a copy and a push -- which is why the
-                // socket protocol, the host FIFO and the host decoder are all untouched by the role split.
-                //
-                // The peers are visited SEQUENTIALLY and each gets the whole staging area. The write barrier at the
-                // end of a peer's visit is what makes that safe (it already had to be there for staging reuse), and
-                // it is also why splitting the slots between peers would buy nothing: the two pushes go into ONE
-                // socket, so they could not have overlapped anyway. Cost of getting this wrong is direct -- halving
-                // the batch doubles the per-frame credit-wait/notify overhead, which is where the knee lives.
+                // Peers are visited SEQUENTIALLY, each getting the WHOLE staging area. Safe because the
+                // write barrier ending a peer's visit had to be there anyway for staging reuse, and
+                // splitting the slots between peers would buy nothing: both pushes go into one socket, so
+                // they could never have overlapped. Halving the batch would double the per-frame
+                // credit-wait/notify overhead, which is where the knee lives.
                 for (uint32_t peer = 0; peer < kNPeer; peer++) {
                     if (peer_retired[peer]) {
                         continue;
