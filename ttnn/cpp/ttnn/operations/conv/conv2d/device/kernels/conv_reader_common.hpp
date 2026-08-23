@@ -351,22 +351,6 @@ FORCE_INLINE void read_sticks_activation_reuse(
     }
 }
 
-template <uint32_t dram_addr_index, uint32_t page_size_index, uint32_t tensor_args_index, uint32_t cb_reader_index>
-void load_config_tensor_if_in_dram(Noc noc, DataflowBuffer reader_dfb, uint32_t core_index) {
-#ifdef CONFIG_TENSOR_IN_DRAM
-    // TODO: Instead of all cores reading from dram, only the first column reads, and does an MCAST to all the other
-    // cores in the row.
-    constexpr uint32_t config_dram_addr = get_compile_time_arg_val(dram_addr_index);
-    constexpr uint32_t config_page_size = get_compile_time_arg_val(page_size_index);
-    const auto config_tensor_args = TensorAccessorArgs<tensor_args_index>();
-    const auto config_accessor = TensorAccessor(config_tensor_args, config_dram_addr);
-
-    noc.async_read(config_accessor, reader_dfb, config_page_size, {.page_id = core_index}, {});
-    noc.async_read_barrier();
-    reader_dfb.push_back(1);
-#endif
-}
-
 template <int window_height, int window_width>
 FORCE_INLINE void read_dilated_channels(
     Noc noc,
