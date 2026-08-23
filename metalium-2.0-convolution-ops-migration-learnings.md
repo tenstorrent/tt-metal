@@ -1860,6 +1860,10 @@ explicit Gen1 multi-binding. Focused framework tests cover these contracts.
 Both factories verify that emitted non-borrowed DFB storage matches the
 precomputed Conv2D L1 budget, and full tensor specifications participate in
 cache identity while each invocation rebinds fresh tensor addresses.
+The migration also removes the unused 64-byte `L1_ARRAY` circular buffer; no
+host or device code referenced it. Consequently, the Conv2D per-core L1
+estimate is intentionally 64 bytes smaller, which reflects the actual emitted
+resources rather than reserving dead storage.
 
 The exact release build/install passed. Final framework and C++ checks passed
 193/193 ProgramSpec cases and 3/3 Conv2D fixture cases. The exhaustive Python

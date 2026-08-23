@@ -208,7 +208,7 @@ TT_KERNEL void kernel_main(
                         if (block_weight_h == num_blocks_weight_h - 1) {
                             // Last core sometimes has less work to do, but we still need to push the same number of
                             // tiles to avoid blocking compute kernels
-                            push_remaining_tiles<dfb::act_second_reader, act_block_w_tiles, image_width_tiles>(
+                            push_remaining_tiles<act_block_w_tiles, image_width_tiles>(
                                 cb_act_second_obj, remaining_tiles_to_push, cb_start_addr);
                         }
                     }

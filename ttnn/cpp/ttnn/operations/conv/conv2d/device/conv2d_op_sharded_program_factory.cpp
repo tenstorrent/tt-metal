@@ -4,7 +4,7 @@
 
 // Metal 2.0 port of the non-width-sharded conv2d program factory.
 //
-// Scope (per CB_TAXONOMY_ANALYSIS.md / METAL2_PORT_REPORT.md):
+// Scope:
 //   - height-sharded conv
 //   - block-sharded conv, including the zero-copy shared split-reader overlap
 //   - 1D depthwise conv (height-sharded)
@@ -567,12 +567,11 @@ static void populate_writer_receiver_runtime_args(
 static void populate_compute_runtime_args(
     tt::tt_metal::experimental::KernelRunArgs& compute_run_args,
     bool check_skip_compute,
-    bool has_skip_compute_runtime_arg,
     bool is_conv_1d_depthwise_conv,
     bool transpose_mcast,
     const CoreRangeSet& all_cores,
     const CoreRangeSet& output_cores) {
-    if (!is_conv_1d_depthwise_conv && has_skip_compute_runtime_arg) {
+    if (!is_conv_1d_depthwise_conv) {
         CoreCoord bottom_right_core_out = output_cores.bounding_box().end_coord;
         uint32_t end_coord_x = bottom_right_core_out.x;
         uint32_t end_coord_y = bottom_right_core_out.y;
@@ -1299,6 +1298,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // ---- Dataflow buffers ----
     auto make_dfb = [&](const tt::tt_metal::experimental::DFBSpecName& id, Conv2dCb name) {
         const CBInfo& info = cb(name);
+        TT_FATAL(info.num_pages > 0, "Conv2D DFB '{}' must have at least one page", id);
         return tt::tt_metal::experimental::DataflowBufferSpec{
             .unique_id = id,
             .entry_size = info.page_size,
@@ -1409,8 +1409,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const tt::tt_metal::NOC reader_noc =
         writer_mcast_noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
-    // grid (for the block-sharded act-mcast Y/X lookup varargs)
-
     // ============================================================================
     //  Kernel sources
     // ============================================================================
@@ -1449,7 +1447,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     std::vector<tt::tt_metal::experimental::DFBBinding> reader_dfb_bindings;
     std::vector<tt::tt_metal::experimental::TensorBinding> reader_tensor_bindings;
     std::vector<tt::tt_metal::experimental::SemaphoreBinding> reader_sem_bindings;
-    if (block_sharded) {
+    if (create_writer_mcast_receiver && block_sharded) {
         // 2D reader: produces ACT_ROW_MAJOR + ACT (mcast), consumes ACT_TILIZED (mcast source); self-loops
         // borrowed ACT_SHARDED + READER_INDICES; uses act mcast semaphores.
         reader_dfb_bindings = {
@@ -2286,7 +2284,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     populate_compute_runtime_args(
         compute_run_args,
         check_skip_compute,
-        true,
         is_conv_1d_depthwise_conv,
         transpose_mcast,
         height_sharded ? input_cores : all_cores,

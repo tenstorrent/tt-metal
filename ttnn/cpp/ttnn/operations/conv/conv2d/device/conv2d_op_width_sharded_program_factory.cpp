@@ -469,6 +469,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
     // OUT/MATMUL_PARTIALS->OUTPUT, READER_INDICES->indices tensor when L1-resident).
     auto make_dfb = [&](const tt::tt_metal::experimental::DFBSpecName& id, Conv2dCb name) {
         const CBInfo& info = cb(name);
+        TT_FATAL(info.num_pages > 0, "Conv2D DFB '{}' must have at least one page", id);
         return tt::tt_metal::experimental::DataflowBufferSpec{
             .unique_id = id,
             .entry_size = info.page_size,
@@ -506,7 +507,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
 
     // MATMUL_PARTIALS: compute self-loop accumulator.  Borrowed-from OUTPUT when
     // partials_cb_uses_output (in-place accumulate into the output buffer); the self-loop on the
-    // single compute kernel keeps it SPSC-clean.  See CB_TAXONOMY_ANALYSIS.md resolution #2.
+    // single compute kernel keeps it SPSC-clean: compute explicitly owns both endpoint roles
+    // because there is no independent producer or consumer kernel for this accumulator.
     {
         auto dfb = make_dfb(conv2d_width_matmul_partials_dfb, Conv2dCb::MATMUL_PARTIALS);
         if (partials_cb_uses_output) {
@@ -518,7 +520,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
 
     // OUT: compute packer -> OUTPUT shard (borrowed).  Producer-only fake CB; bind a degenerate
     // consumer on the compute kernel itself (width-sharded has no DM output kernel) via a self-loop
-    // to satisfy the spec completeness check.  See CB_TAXONOMY_ANALYSIS.md resolution #1.
+    // to satisfy the spec completeness check; the final result remains resident in the borrowed
+    // output shard and no additional data movement is required.
     {
         auto dfb = make_dfb(conv2d_width_out_dfb, Conv2dCb::OUT);
         dfb.borrowed_from = conv2d_width_output_tensor;

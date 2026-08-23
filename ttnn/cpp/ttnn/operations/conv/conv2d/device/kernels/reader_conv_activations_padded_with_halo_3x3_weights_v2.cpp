@@ -188,8 +188,7 @@ TT_KERNEL void kernel_main(uint32_t core_index, uint32_t remaining_tiles_to_push
         // Last core sometimes has less work to do, but we still need to push the same number of tiles
         // to avoid blocking compute kernels
         if constexpr (need_to_push_remaining_tiles) {
-            push_remaining_tiles<cb_id_act, act_block_w_tiles, image_width_tiles>(
-                cb_act, remaining_tiles_to_push, cb_start_addr);
+            push_remaining_tiles<act_block_w_tiles, image_width_tiles>(cb_act, remaining_tiles_to_push, cb_start_addr);
         }
     }
 
