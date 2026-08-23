@@ -145,3 +145,41 @@ def test_tok_pos_length_mismatch_still_merges_when_both_wide_enough():
     assert src == "merged"
     assert toks.tolist() == [100]
     assert pos.tolist() == [4]
+
+
+def test_slot_remap_beyond_host_batch_indexes_device_rows():
+    """A slot id >= host_b is a valid *device row*, not out of bounds.
+
+    Device feedback is padded to width 32 while the host batch can be 1, and a
+    request may occupy any slot. The bound was previously ``host_b``, so a
+    request living in slot 1 with host_b=1 was rejected as OOB and silently fell
+    back to host tokens. The bound is the device buffer width.
+    """
+    host_toks = torch.tensor([111], dtype=torch.int32)
+    host_pos = torch.tensor([100], dtype=torch.int64)
+    dev_toks = torch.zeros(32, dtype=torch.int32)
+    dev_pos = torch.zeros(32, dtype=torch.int64)
+    # slot 0 is stale; slot 1 is this request's real device row.
+    dev_toks[0], dev_pos[0] = 999, 7
+    dev_toks[1], dev_pos[1] = 222, 100
+
+    merged, merged_pos, src = merge_async_ahead_decode_tokens(
+        host_toks, host_pos, dev_toks, dev_pos, slot_remap_local=torch.tensor([1])
+    )
+    assert src == "merged"
+    # Must read slot 1, never slot 0's stale 999.
+    assert int(merged[0]) == 222
+    assert int(merged_pos[0]) == 100
+
+
+def test_slot_remap_beyond_device_width_still_falls_back():
+    """Past the device buffer width is still OOB and must fall back."""
+    host_toks = torch.tensor([111], dtype=torch.int32)
+    host_pos = torch.tensor([100], dtype=torch.int64)
+    dev_toks = torch.zeros(32, dtype=torch.int32)
+    dev_pos = torch.zeros(32, dtype=torch.int64)
+    merged, merged_pos, src = merge_async_ahead_decode_tokens(
+        host_toks, host_pos, dev_toks, dev_pos, slot_remap_local=torch.tensor([32])
+    )
+    assert src == "host_fallback"
+    assert int(merged[0]) == 111

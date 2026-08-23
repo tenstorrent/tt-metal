@@ -57,18 +57,41 @@ def merge_async_ahead_decode_tokens(
     if dev_len < host_b or pos_len < host_b:
         return host_toks, host_pos, "host_fallback"
 
-    dev_toks = dev_toks_full[:host_b]
-    dev_pos = dev_pos_full[:host_b]
     if slot_remap_local is not None:
+        # ``slot_remap_local`` entries are *device rows* (KV slots), so they are
+        # bounded by the device buffer width, not by the host batch. Bounding
+        # them by ``host_b`` rejected every legitimate mapping whenever the
+        # device buffer is wider than the host batch (e.g. slot 1 with host_b=1),
+        # silently forcing host_fallback.
         remap_t = (
             (slot_remap_local if isinstance(slot_remap_local, torch.Tensor) else torch.tensor(slot_remap_local))
             .long()
             .reshape(-1)
         )
-        if int(remap_t.numel()) != host_b or bool((remap_t < 0).any()) or bool((remap_t >= host_b).any()):
+        dev_rows = min(dev_len, pos_len)
+        if int(remap_t.numel()) != host_b or bool((remap_t < 0).any()) or bool((remap_t >= dev_rows).any()):
             return host_toks, host_pos, "host_fallback"
-        dev_toks = dev_toks[remap_t]
-        dev_pos = dev_pos[remap_t]
+        dev_toks = dev_toks_full[remap_t]
+        dev_pos = dev_pos_full[remap_t]
+    else:
+        # No slot mapping: assume host row j is device row j and take the front
+        # ``host_b`` rows. This is what keeps continuing users on device tokens
+        # across nearest-bucket changes (requiring dev_len == host_b forced
+        # host_fallback on every mode switch and restaged stale host tokens ->
+        # "TheThe user user" doubling), so it is deliberately preserved.
+        #
+        # CAVEAT: the assumption is false when a request occupies a device slot
+        # other than its host index -- seen on WH-T3K at max_num_seqs=1, where
+        # every request is placed in slot 1 ("Prefilling User 1") while host_b=1,
+        # so the front slice describes slot 0. The ``use_dev`` position guard
+        # below is the only thing separating the rows, and it compares values,
+        # not identities. The durable fix is for the caller to pass the real
+        # per-row device slots (the plugin tracks them in ``_req_state_slot`` but
+        # only forwards an identity remap on the non-lane path); until then the
+        # async-decode capability gate in ``Gemma4Generator.decode_forward``
+        # keeps this path off wherever async decode is disabled.
+        dev_toks = dev_toks_full[:host_b]
+        dev_pos = dev_pos_full[:host_b]
 
     use_dev = (dev_pos == host_pos) | (dev_pos == host_pos + 1)
     if prefilled_local:

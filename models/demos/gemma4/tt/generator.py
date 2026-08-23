@@ -1264,8 +1264,17 @@ class ChunkedPrefillPageTableGuardMixin:
             int(tokens[0].shape[0]) if tokens else 1,
         )
 
+        # Only merge device token/pos feedback when async decode is actually
+        # enabled. ``model_capabilities["supports_async_decode"]`` is the single
+        # source of truth (tt-inference-server llm.yaml -> GEMMA4_SUPPORTS_ASYNC_DECODE
+        # -> capability, resolved once in Gemma4ForCausalLM); previously this path
+        # ran regardless, so disabling async in config turned off vLLM's async
+        # scheduler while Gemma4 kept doing async-ahead device feedback. With async
+        # off the host tokens are authoritative and there is nothing to merge.
+        async_decode_enabled = bool(getattr(self, "model_capabilities", {}).get("supports_async_decode", False))
         if (
-            on_device_sampling
+            async_decode_enabled
+            and on_device_sampling
             and (reset_batch or mode_switched)
             and enable_trace
             and self.trace_inputs_decode[decode_trace_key]
