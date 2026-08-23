@@ -6,12 +6,11 @@
 
 #include <optional>
 #include <variant>
-#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/global_circular_buffer.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/pool/grid_sample/device/grid_sample_device_operation_types.hpp"
 
 namespace ttnn::prim {
@@ -21,12 +20,12 @@ constexpr uint32_t PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST = 2;
 constexpr uint32_t STANDARD_GRID_ELEMENTS_PER_POINT = 2;
 
 struct GridSampleBilinearProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const GridSampleParams& operation_attributes, const GridSampleInputs& tensor_args, Tensor& output_tensor);
 };
 
 struct GridSampleNearestProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const GridSampleParams& operation_attributes, const GridSampleInputs& tensor_args, Tensor& output_tensor);
 };
 

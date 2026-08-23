@@ -4,47 +4,29 @@
 
 #include <cmath>
 #include <stdint.h>
-#include "api/compile_time_args.h"
 #include <api/dataflow/dataflow_api.h>
+#include "experimental/kernel_args.h"
 #include "ttnn/operations/pool/device/kernels/pool_kernels_common.hpp"
 #include "../grid_sample_reader_common.hpp"
 
-#define PRINT_AND_PROFILE 0
-#if PRINT_AND_PROFILE
-#include "tt_metal/tools/profiler/kernel_profiler.hpp"
-#include "api/debug/dprint.h"
-#endif
+template <
+    uint32_t input_stick_nbytes,
+    uint32_t grid_stick_nbytes,
+    uint32_t input_height,
+    uint32_t input_width,
+    uint32_t grid_batches,
+    uint32_t grid_dtype,
+    uint32_t output_hw_size,
+    uint32_t use_precomputed_grid,
+    uint32_t align_corners,
+    uint32_t in_nblocks_c,
+    uint32_t input_chunk_nbytes,
+    uint32_t last_chunk_partial>
+TT_KERNEL void reader_grid_sample_interleaved(uint32_t num_pages, uint32_t start_page_id) {
+    const auto grid_tensor_accessor = TensorAccessor(tensor::grid);
+    const auto input_tensor_accessor = TensorAccessor(tensor::input);
 
-void kernel_main() {
-    uint32_t input_addr = get_arg_val<uint32_t>(0);
-    uint32_t grid_addr = get_arg_val<uint32_t>(1);
-    uint32_t num_pages = get_arg_val<uint32_t>(2);
-    uint32_t start_page_id = get_arg_val<uint32_t>(3);
-
-    constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t grid_cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t scalar_cb_index = get_compile_time_arg_val(2);
-    constexpr uint32_t input_stick_nbytes = get_compile_time_arg_val(3);
-    constexpr uint32_t grid_stick_nbytes = get_compile_time_arg_val(4);
-
-    constexpr uint32_t input_height = get_compile_time_arg_val(6);
-    constexpr uint32_t input_width = get_compile_time_arg_val(7);
-    constexpr uint32_t grid_batches = get_compile_time_arg_val(8);
-    constexpr uint32_t grid_dtype = get_compile_time_arg_val(9);
-    constexpr uint32_t output_hw_size = get_compile_time_arg_val(10);
-    constexpr bool use_precomputed_grid = get_compile_time_arg_val(11);
-    constexpr bool align_corners = get_compile_time_arg_val(12);
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(13);
-    constexpr uint32_t input_chunk_nbytes = get_compile_time_arg_val(14);
-    constexpr bool last_chunk_partial = get_compile_time_arg_val(15);
-
-    constexpr auto src_args = TensorAccessorArgs<16>();
-    constexpr auto grid_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
-
-    const auto grid_tensor_accessor = TensorAccessor(grid_args, grid_addr);
-    const auto input_tensor_accessor = TensorAccessor(src_args, input_addr);
-
-    DataflowBuffer grid_dfb(grid_cb_index);
+    DataflowBuffer grid_dfb(dfb::grid);
     Noc noc;
 
     const uint32_t end_id = start_page_id + num_pages;
@@ -59,9 +41,9 @@ void kernel_main() {
     However, if there was no previous read for the appropriate stick, the memory in that location is invalid, and could
     include NaN and Inf values. For that reason we zero out the input_dfb at the start.
     */
-    DataflowBuffer input_dfb(input_cb_index);
-    DataflowBuffer scalar_dfb(scalar_cb_index);
-    zero_out_tiles<input_cb_index>(noc, input_dfb);
+    DataflowBuffer input_dfb(dfb::input);
+    DataflowBuffer scalar_dfb(dfb::scalar);
+    zero_out_tiles<dfb::input>(noc, input_dfb);
 
     // Calculate starting batch from starting spatial position (avoid division in loop)
     uint32_t curr_batch = start_page_id / output_hw_size;
@@ -91,8 +73,8 @@ void kernel_main() {
                 in_nblocks_c,
                 input_chunk_nbytes,
                 last_chunk_partial,
-                input_cb_index,
-                scalar_cb_index>(noc, input_dfb, scalar_dfb, grid_ptr, grid_idx, input_tensor_accessor, batch_offset);
+                dfb::input,
+                dfb::scalar>(noc, input_dfb, scalar_dfb, grid_ptr, grid_idx, input_tensor_accessor, batch_offset);
         }
 
         // Update batch tracking (avoid division in loop)

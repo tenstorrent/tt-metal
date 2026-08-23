@@ -16,7 +16,6 @@ constexpr uint32_t BUFFERING_FACTOR = 2;
 constexpr uint32_t REDUCTION_SIZE = 4;
 constexpr uint32_t MAX_ROWS_FOR_REDUCTION = 16;  // Height of one face (always 16)
 constexpr bool ONE_SCALAR_PER_CORE = false;
-constexpr uint32_t DUMMY_CB_ID = 32;
 
 // Function declarations
 bool should_use_split_reader(

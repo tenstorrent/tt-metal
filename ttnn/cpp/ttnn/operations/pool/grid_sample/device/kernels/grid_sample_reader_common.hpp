@@ -375,7 +375,7 @@ ALWI void process_grid_point(
     // Iterate over channel chunks. For the common case in_nblocks_c == 1 the loop runs once and the
     // behavior matches the original non-chunked reader (chunk_bytes == input_stick_nbytes,
     // src_byte_offset == 0, write_stride == input_stick_nbytes). last_chunk_partial is computed
-    // host-side to mirror compute_pool_2d's tile-reduce condition so the per-stick write stride
+    // host-side to mirror pool_2d_compute_impl.hpp's tilize_reconfig condition so the per-stick write stride
     // matches the unpacker's tiles_to_reduce; computing it independently here would silently diverge
     // if the host ever lifted the padded_C % TILE_WIDTH == 0 invariant.
     constexpr uint32_t last_chunk_idx = in_nblocks_c - 1;
