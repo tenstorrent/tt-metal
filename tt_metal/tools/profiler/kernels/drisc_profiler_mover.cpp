@@ -82,9 +82,11 @@ void kernel_main() {
     constexpr uint32_t kPeerDmas[2] = {get_compile_time_arg_val(42), get_compile_time_arg_val(43)};
     static_assert(kGenSlots * kSlotBytes <= 262128u, "a DMA sub-batch must fit one 14-bit DMA transfer");
     static_assert((kSlotBytes & 0xFu) == 0, "GDDR DMA transfers must be 16 B multiples");
-    // Per-visit cap bounds PEER STARVATION (the other ring waits one visit). 24 over-throttled (~2.4
-    // us/frame, rings filled); 192 (~2 MB) amortizes overheads to ~1 us/frame while starvation stays ~10x
-    // below the unbounded 6.7 ms whole-ring visit that motivated the cap.
+    // Per-visit cap bounds PEER STARVATION, and starvation here means LOST CAPTURE, not just latency:
+    // ABLATED on kimi (cap -> kDramFrames), one visit drained the whole 6,316-frame ring, the sibling ring
+    // filled, its filler's ring-room wait timed out, and frames were DROPPED (12-57 per drainer) -- 474,125
+    // decode resyncs against 0 with the cap. Sizing: 24 over-throttled (~2.4 us/frame, rings filled); 192
+    // (~2 MB) amortizes overheads to ~1 us/frame while starvation stays ~10x below the unbounded visit.
     constexpr uint32_t kDmaVisitCap = 64u * kGenSlots;
     // Frame-sequence verification: the spec leaves NoC-write vs DMA-read same-address ordering UNDEFINED
     // and WR_ACK is not a cross-master fence, so the mover VERIFIES visibility: the filler stamps every
