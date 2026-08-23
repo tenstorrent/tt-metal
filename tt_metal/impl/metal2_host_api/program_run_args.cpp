@@ -469,7 +469,8 @@ void AttachBorrowedDFBBuffers(
             dfb_id,
             tp_name);
         auto dfb_impl = program_impl.get_dataflow_buffer(dfb_id);
-        const uint32_t dfb_total_bytes = dfb_impl->config.entry_size * dfb_impl->config.num_entries;
+        const uint64_t dfb_total_bytes =
+            static_cast<uint64_t>(dfb_impl->config.entry_size) * dfb_impl->config.num_entries;
         TT_FATAL(
             static_cast<uint64_t>(memory_offset) + dfb_total_bytes <= buffer->aligned_size_per_bank(),
             "Borrowed-memory DFB id {} (from TensorParameter '{}') has subrange offset {} + size {} B, which "

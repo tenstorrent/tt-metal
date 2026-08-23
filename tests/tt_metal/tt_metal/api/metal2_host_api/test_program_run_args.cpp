@@ -28,6 +28,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <limits>
 #include <optional>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -1360,6 +1361,27 @@ TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_ResizingBorrowedDFBBeyondB
     EXPECT_THAT(
         [&] { UpdateProgramRunArgs(program, upd); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds the borrowed")));
+}
+
+// The fit check must widen before multiplication. UINT32_MAX * 2 wraps to 0xfffffffe in uint32_t,
+// which could otherwise make an impossibly large borrowed DFB appear to fit a small L1 buffer.
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_BorrowedDFBSizeDoesNotWrapBeforeFitCheck) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec);
+    ProgramRunArgs setup = MakeBorrowedDFBRunArgs();
+    setup.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
+    SetProgramRunArgs(program, setup);
+
+    ProgramRunArgs upd;
+    upd.dfb_run_overrides.push_back(
+        {.dfb = DFBSpecName{"dfb"}, .entry_size = std::numeric_limits<uint32_t>::max(), .num_entries = 2});
+    upd.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
+    EXPECT_THAT(
+        [&] { UpdateProgramRunArgs(program, upd); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("size 8589934590 B")));
 }
 
 // Regression: a kernel that binds a tensor but declares no scalar args (no named/vararg RTAs or
