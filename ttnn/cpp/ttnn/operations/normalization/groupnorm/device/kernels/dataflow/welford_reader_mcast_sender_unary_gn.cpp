@@ -352,8 +352,15 @@ void kernel_main() {
                 noc.async_read_barrier();
             }
 
-            // Read dfb_ex_global through read-typed views; the writes below reuse the write-typed pointers (same L1
-            // addresses).
+#ifdef WELFORD_SFPU_GLOBAL_COMBINE
+            static_assert(num_mcast_cores == 8);
+            // Compact into the even columns read by one SFPU load.
+            for (std::uint32_t i = 1; i < num_mcast_cores; ++i) {
+                p_global_means[i << 1] = p_global_means[i * global_stride];
+                p_global_vars[i << 1] = p_global_vars[i * global_stride];
+            }
+#else
+            // Read mean and variance arrays from dfb_ex_global, then combine using Welford
             auto p_global_means_read = reinterpret_cast<stats_read_t*>(global_means_ptr);
             auto p_global_vars_read = reinterpret_cast<stats_read_t*>(global_vars_ptr);
             auto global_result =
@@ -363,6 +370,7 @@ void kernel_main() {
             // Write this to dfb_ex_global
             p_global_means[0] = global_result.mean;
             p_global_vars[0] = global_result.variance;
+#endif
 
 #ifdef GN_DISTRIBUTED_AG
             // Stage the DEVICE-GLOBAL stat (post intra-device combine) for the fabric AG — not the

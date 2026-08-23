@@ -230,6 +230,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     const bool use_sfpu_local_combine =
         use_welford && device->arch() == tt::ARCH::BLACKHOLE && fp32_dest_acc_en && tile_width == 32;
+    const bool use_sfpu_global_combine =
+        use_sfpu_local_combine && num_cores_per_batch * num_cores_per_group == 8 && num_groups_per_core <= 4;
 
     // Float32 input requires fp32_dest_acc_en=true on both GroupNorm paths:
     //  - Welford: prerequisite for UnpackToDestFp32 (set below), which bypasses the unpacker's
@@ -319,6 +321,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     uint32_t x_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t xmm_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t ex_partial_CB_size = single_tile_size * (use_welford ? 2 : 1);
+    const uint32_t sfpu_global_CB_size = use_sfpu_global_combine ? 2 * num_groups_per_core * single_tile_size : 0;
     uint32_t ex2_partial_CB_size = single_tile_size;
     uint32_t ex_global_CB_size = ex_partial_CB_size * (use_welford ? num_groups_per_core : 1);
     uint32_t ex2_global_CB_size = ex2_partial_CB_size;
@@ -363,6 +366,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         .xmm3 = xmm3_CB_size_group_1,
         .partial_stats = ex_partial_CB_size,
         .global_stats = ex_global_CB_size,
+        .sfpu_global_stats = sfpu_global_CB_size,
         .normalisation_stats = ex2pe_CB_size,
     };
     const auto lowest_occupied_l1 = device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
@@ -451,6 +455,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     if (use_sfpu_local_combine) {
         reader_mcast_sender_defines["WELFORD_SFPU_LOCAL_COMBINE"] = "1";
         reader_mcast_receiver_defines["WELFORD_SFPU_LOCAL_COMBINE"] = "1";
+    }
+    if (use_sfpu_global_combine) {
+        reader_mcast_sender_defines["WELFORD_SFPU_GLOBAL_COMBINE"] = "1";
     }
     if (gamma.has_value()) {
         reader_mcast_sender_defines["FUSE_GAMMA"] = "1";
@@ -679,6 +686,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     std::map<std::string, std::string> eltwise_binary_defines;
     if (use_sfpu_local_combine) {
         eltwise_binary_defines["WELFORD_SFPU_LOCAL_COMBINE"] = "1";
+    }
+    if (use_sfpu_global_combine) {
+        eltwise_binary_defines["WELFORD_SFPU_GLOBAL_COMBINE"] = "1";
     }
     if (reader_repack_output) {
         eltwise_binary_defines["READER_REPACK"] = "1";
@@ -1087,6 +1097,18 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             .page_size = single_tile_size,
         }}},
     });
+    if (use_sfpu_global_combine) {
+        constexpr std::uint32_t sfpu_global_cb_index = tt::CBIndex::c_18;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = sfpu_global_CB_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<std::uint8_t>(sfpu_global_cb_index),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size,
+            }}},
+        });
+    }
 
     if (!use_welford) {
         constexpr uint32_t ex2_cb_partial_index = tt::CBIndex::c_21;

@@ -762,12 +762,18 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
     const bool use_sfpu_local_combine =
         use_welford && device->arch() == tt::ARCH::BLACKHOLE && fp32_dest_acc_en && tile_width == 32;
+    const bool use_sfpu_global_combine =
+        use_sfpu_local_combine && num_cores_per_mcast_group == 8 && num_groups_per_core <= 4;
     if (use_sfpu_local_combine) {
         reader_mcast_sender_desc.defines.emplace_back("WELFORD_SFPU_LOCAL_COMBINE", "1");
         if (has_receiver_kernel) {
             reader_mcast_receiver_desc.defines.emplace_back("WELFORD_SFPU_LOCAL_COMBINE", "1");
         }
         eltwise_binary_defines["WELFORD_SFPU_LOCAL_COMBINE"] = "1";
+    }
+    if (use_sfpu_global_combine) {
+        reader_mcast_sender_desc.defines.emplace_back("WELFORD_SFPU_GLOBAL_COMBINE", "1");
+        eltwise_binary_defines["WELFORD_SFPU_GLOBAL_COMBINE"] = "1";
     }
 
     // Float32 input requires fp32_dest_acc_en=true on both GroupNorm paths:
@@ -1121,6 +1127,18 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             .page_size = single_tile_size,
         }}},
     });
+    if (use_sfpu_global_combine) {
+        constexpr std::uint32_t sfpu_global_cb_index = tt::CBIndex::c_18;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 2 * num_groups_per_core * single_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<std::uint8_t>(sfpu_global_cb_index),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size,
+            }}},
+        });
+    }
 
     // ex_external: Not used by Welford.
     if (!use_welford) {

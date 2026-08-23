@@ -611,6 +611,48 @@ sfpi_inline void _two_pass_clear_stats_()
     TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
 }
 
+#ifdef WELFORD_SFPU_GLOBAL_COMBINE
+sfpi_inline void _two_pass_combine_global_stats_8_()
+{
+    constexpr std::uint32_t mean_tile_offset = 0;
+    constexpr std::uint32_t var_tile_offset  = 64;
+
+    TT_SFPLOAD(ckernel::p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, mean_tile_offset);
+    TT_SFPLOAD(ckernel::p_sfpu::LREG4, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, var_tile_offset);
+
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0x3f00); // 0.5
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, 0x3e80); // 0.25
+
+#define TWO_PASS_MERGE_EQUAL_STAGE(NUM_ROTATES)                                                                       \
+    TTI_SFPMOV(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, 0);                                                 \
+    TTI_SFPMOV(0, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG5, 0);                                                 \
+    for (std::uint32_t rotate = 0; rotate < NUM_ROTATES; ++rotate)                                                    \
+    {                                                                                                                 \
+        TTI_SFPSHFT2(0, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);         \
+        TTI_SFPSHFT2(0, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);         \
+        TTI_SFPNOP;                                                                                                   \
+    }                                                                                                                 \
+    TTI_SFPMAD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG2, 1); \
+    TTI_SFPNOP;                                                                                                       \
+    TTI_SFPMAD(ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG3, 0); \
+    TTI_SFPMAD(ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, 0);    \
+    TTI_SFPADD(ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG4, 0); \
+    TTI_SFPNOP;                                                                                                       \
+    TTI_SFPMUL(ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG4, 0); \
+    TTI_SFPNOP;                                                                                                       \
+    TTI_SFPMAD(ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG4, 0);    \
+    TTI_SFPNOP
+
+    TWO_PASS_MERGE_EQUAL_STAGE(1);
+    TWO_PASS_MERGE_EQUAL_STAGE(2);
+    TWO_PASS_MERGE_EQUAL_STAGE(4);
+#undef TWO_PASS_MERGE_EQUAL_STAGE
+
+    TT_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, mean_tile_offset);
+    TT_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, var_tile_offset);
+}
+#endif
+
 template <bool dual_m2>
 sfpi_inline void _two_pass_store_mean_m2_to_dst_()
 {

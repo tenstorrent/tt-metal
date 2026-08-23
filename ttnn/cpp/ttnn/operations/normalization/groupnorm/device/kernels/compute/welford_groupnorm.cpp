@@ -136,6 +136,11 @@ void kernel_main() {
     constexpr uint32_t dfb_xmm_id = tt::CBIndex::c_25;
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
+#ifdef WELFORD_SFPU_GLOBAL_COMBINE
+    constexpr uint32_t dfb_stats_id = tt::CBIndex::c_18;
+#else
+    constexpr uint32_t dfb_stats_id = dfb_ex_global_id;
+#endif
     constexpr uint32_t dfb_ex2pe_id = tt::CBIndex::c_27;
 
     // interim cbs reuse
@@ -173,6 +178,7 @@ void kernel_main() {
     DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
+    DataflowBuffer dfb_stats(dfb_stats_id);
     DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_in(dfb_in_id);
     DataflowBuffer dfb_in0(dfb_in0_id);
@@ -406,18 +412,37 @@ void kernel_main() {
         // Start Normalization Factor Calculation
         // Wait for final welford values in cb_ex_global_id
         dfb_ex_global.wait_front(2 * num_groups);
+#ifdef WELFORD_SFPU_GLOBAL_COMBINE
+        static_assert(num_cores_per_mcast_group == 8);
+        static_assert(num_groups <= 4);
+        copy_tile_to_dst_init_short(dfb_ex_global_id);
+        for (uint32_t g = 0; g < num_groups; ++g) {
+            dfb_stats.reserve_back(2);
+            tile_regs_acquire();
+            copy_tile(dfb_ex_global_id, g << 1, 0);
+            copy_tile(dfb_ex_global_id, 1 + (g << 1), 1);
+            two_pass_stats_combine_global_stats_8(0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_block(0, dfb_stats_id, 2);
+            tile_regs_release();
+            dfb_stats.push_back(2);
+        }
+        dfb_ex_global.pop_front(2 * num_groups);
+#endif
+        dfb_stats.wait_front(2 * num_groups);
         dfb_ex2pe.reserve_back(num_groups);
         // (Var + eps)
-        // fp32: dfb_ex_global is fp32 (var), dfb_eps is bf16; the welford intake left SrcA on the fp32 input alias.
+        // fp32: dfb_stats is fp32 (var), dfb_eps is bf16; the welford intake left SrcA on the fp32 input alias.
         // Reset both srcs so they match the operands read below. no-op for bf16.
         if constexpr (enable_fp32_reconfig) {
-            reconfig_data_format_srca(dfb_ex_global_id);
+            reconfig_data_format_srca(dfb_stats_id);
         }
         reconfig_data_format_srcb(dfb_eps_id);
-        add_init(dfb_ex_global_id, dfb_eps_id);
+        add_init(dfb_stats_id, dfb_eps_id);
         for (uint32_t g = 0; g < num_groups; ++g) {
             tile_regs_acquire();
-            add_tiles(dfb_ex_global_id, dfb_eps_id, 1 + (g << 1), 0, dst0);
+            add_tiles(dfb_stats_id, dfb_eps_id, 1 + (g << 1), 0, dst0);
 
             // 1/[sqrt(Var + eps)]
             rsqrt_tile_init<true>();
@@ -472,19 +497,19 @@ void kernel_main() {
 
                         // // Now let us do the actual computation for the current group here
                         // // a. x-u
-                        // fp32: SrcA needs dfb_in0 (fp32 input), SrcB needs dfb_ex_global (fp32 mean); the prior
+                        // fp32: SrcA needs dfb_in0 (fp32 input), SrcB needs dfb_stats (fp32 mean); the prior
                         // group's mul_tiles(dfb_xmm) left SrcA on dfb_xmm. Use the unconditional 1-arg form: the old
-                        // 2-arg srcb(dfb_eps -> dfb_ex_global) never reset SrcA at all.
+                        // 2-arg srcb(dfb_eps -> dfb_stats) never reset SrcA at all.
                         if constexpr (enable_fp32_reconfig) {
                             reconfig_data_format_srca(dfb_in0_id);
-                            reconfig_data_format_srcb(dfb_ex_global_id);
+                            reconfig_data_format_srcb(dfb_stats_id);
                         } else {
-                            reconfig_data_format_srcb(dfb_eps_id, dfb_ex_global_id);
+                            reconfig_data_format_srcb(dfb_eps_id, dfb_stats_id);
                         }
-                        sub_bcast_scalar_init(dfb_in0_id, dfb_ex_global_id);
+                        sub_bcast_scalar_init(dfb_in0_id, dfb_stats_id);
 
                         tile_regs_acquire();
-                        sub_tiles_bcast_scalar(dfb_in0_id, dfb_ex_global_id, 0, 0 + (g << 1), dst0);
+                        sub_tiles_bcast_scalar(dfb_in0_id, dfb_stats_id, 0, 0 + (g << 1), dst0);
                         tile_regs_commit();
                         tile_regs_wait();
                         pack_tile(dst0, dfb_xmm_id);
@@ -499,7 +524,7 @@ void kernel_main() {
                         if constexpr (enable_fp32_reconfig) {
                             reconfig_data_format_srca(dfb_in0_id, dfb_xmm_id);
                         }
-                        reconfig_data_format_srcb(dfb_ex_global_id, dfb_ex2pe_id);
+                        reconfig_data_format_srcb(dfb_stats_id, dfb_ex2pe_id);
                         mul_bcast_scalar_init(dfb_xmm_id, dfb_ex2pe_id);
                         tile_regs_acquire();
                         mul_tiles_bcast_scalar(dfb_xmm_id, dfb_ex2pe_id, 0, g, dst0);
@@ -680,7 +705,7 @@ void kernel_main() {
         }
         // End Final Normalization
 
-        dfb_ex_global.pop_front(2 * num_groups);
+        dfb_stats.pop_front(2 * num_groups);
         dfb_ex2pe.pop_front(num_groups);
     }
 

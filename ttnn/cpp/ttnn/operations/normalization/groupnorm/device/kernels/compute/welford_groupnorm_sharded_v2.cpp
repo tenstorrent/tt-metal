@@ -23,6 +23,7 @@
 void kernel_main() {
     constexpr std::uint32_t do_gamma = get_compile_time_arg_val(1);
     constexpr std::uint32_t do_beta = get_compile_time_arg_val(2);
+    constexpr std::uint32_t num_cores_per_mcast_group = get_compile_time_arg_val(3);
 
     constexpr std::uint32_t num_batches = get_compile_time_arg_val(4);
     constexpr std::uint32_t num_groups = get_compile_time_arg_val(5);
@@ -81,6 +82,11 @@ void kernel_main() {
     constexpr std::uint32_t dfb_xmm_id = tt::CBIndex::c_2;
     constexpr std::uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr std::uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
+#ifdef WELFORD_SFPU_GLOBAL_COMBINE
+    constexpr std::uint32_t dfb_stats_id = tt::CBIndex::c_18;
+#else
+    constexpr std::uint32_t dfb_stats_id = dfb_ex_global_id;
+#endif
     constexpr std::uint32_t dfb_ex2pe_id = tt::CBIndex::c_17;
 
     // output cb
@@ -115,6 +121,7 @@ void kernel_main() {
     DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
+    DataflowBuffer dfb_stats(dfb_stats_id);
     DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_in(dfb_in_id);
     DataflowBuffer dfb_in_welford(dfb_in_welford_id);
@@ -344,17 +351,36 @@ void kernel_main() {
         // Start Variance Calc
         // Wait for final welford values in cb_ex_global_id
         dfb_ex_global.wait_front(2 * num_groups);
+#ifdef WELFORD_SFPU_GLOBAL_COMBINE
+        static_assert(num_cores_per_mcast_group == 8);
+        static_assert(num_groups <= 4);
+        copy_tile_to_dst_init_short(dfb_ex_global_id);
+        for (std::uint32_t g = 0; g < num_groups; ++g) {
+            dfb_stats.reserve_back(2);
+            tile_regs_acquire();
+            copy_tile(dfb_ex_global_id, g << 1, 0);
+            copy_tile(dfb_ex_global_id, 1 + (g << 1), 1);
+            two_pass_stats_combine_global_stats_8(0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_block(0, dfb_stats_id, 2);
+            tile_regs_release();
+            dfb_stats.push_back(2);
+        }
+        dfb_ex_global.pop_front(2 * num_groups);
+#endif
+        dfb_stats.wait_front(2 * num_groups);
         dfb_ex2pe.reserve_back(num_groups);
         // (Var + eps)
         // fp32: dfb_ex_global is fp32 (var), dfb_eps is bf16; the welford intake left SrcA on the fp32 input alias.
         if constexpr (enable_fp32_reconfig) {
-            reconfig_data_format_srca(dfb_ex_global_id);
+            reconfig_data_format_srca(dfb_stats_id);
         }
         reconfig_data_format_srcb(dfb_eps_id);
-        add_init(dfb_ex_global_id, dfb_eps_id);
+        add_init(dfb_stats_id, dfb_eps_id);
         for (std::uint32_t g = 0; g < num_groups; ++g) {
             tile_regs_acquire();
-            add_tiles(dfb_ex_global_id, dfb_eps_id, 1 + (g << 1), 0, dst0);
+            add_tiles(dfb_stats_id, dfb_eps_id, 1 + (g << 1), 0, dst0);
 
             // 1/[sqrt(Var + eps)]
             rsqrt_tile_init<true>();
@@ -396,14 +422,14 @@ void kernel_main() {
 
                     // // Now let us do the actual computation for the current group here
                     // // a. x-u
-                    reconfig_data_format(dfb_in0_id, dfb_ex_global_id);
-                    sub_bcast_scalar_init(dfb_in0_id, dfb_ex_global_id);
+                    reconfig_data_format(dfb_in0_id, dfb_stats_id);
+                    sub_bcast_scalar_init(dfb_in0_id, dfb_stats_id);
 
                     tile_regs_acquire();
 #ifdef TILIZE_IN
-                    sub_tiles_bcast_scalar(dfb_in_id, dfb_ex_global_id, tile_id, 0 + (g << 1), dst0);
+                    sub_tiles_bcast_scalar(dfb_in_id, dfb_stats_id, tile_id, 0 + (g << 1), dst0);
 #else
-                    sub_tiles_bcast_scalar(dfb_in0_id, dfb_ex_global_id, tile_id, 0 + (g << 1), dst0);
+                    sub_tiles_bcast_scalar(dfb_in0_id, dfb_stats_id, tile_id, 0 + (g << 1), dst0);
 #endif
                     tile_regs_commit();
                     tile_regs_wait();
@@ -413,7 +439,7 @@ void kernel_main() {
 
                     // // b. (x - u) * 1/[sqrt(Var + eps)]
                     dfb_xmm.wait_front(1);
-                    reconfig_data_format(dfb_in0_id, dfb_xmm_id, dfb_ex_global_id, dfb_ex2pe_id);
+                    reconfig_data_format(dfb_in0_id, dfb_xmm_id, dfb_stats_id, dfb_ex2pe_id);
                     mul_bcast_scalar_init(dfb_xmm_id, dfb_ex2pe_id);
                     tile_regs_acquire();
                     mul_tiles_bcast_scalar(dfb_xmm_id, dfb_ex2pe_id, 0, g, dst0);
@@ -568,7 +594,7 @@ void kernel_main() {
             }
         }
 
-        dfb_ex_global.pop_front(2 * num_groups);
+        dfb_stats.pop_front(2 * num_groups);
         dfb_ex2pe.pop_front(num_groups);
     }
 
