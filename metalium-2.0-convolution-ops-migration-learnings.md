@@ -1833,6 +1833,16 @@ final pass found no actionable correctness, API, cache, topology, performance,
 UB, specialization, or maintainability issue and ended with explicit
 `APPROVED` (`/tmp/conv3d-metal2-opus-review-3.txt`).
 
+A follow-up audit removed the migration-added `HAS_BIAS`, `HAS_REDUCTION`,
+`USE_L1_PREFETCH`, `HAS_DRAM_STAGING`, `HAS_HALO`, and `HAS_MASK` kernel
+macros. These choices now use the existing named constexpr arguments; unused
+resource names alias already-bound DFBs or tensors strictly to keep every
+specialization's typed interface complete, without allocating storage or
+copying data. The exact release build passed, and the complete Conv3D unit suite
+passed 36/36 from a fresh cache with 0/222 JIT hits
+(`/tmp/conv3d-constexpr-cold-unit.log`). The focused Opus review returned
+explicit `APPROVED` (`/tmp/conv3d-constexpr-opus-review-1.txt`).
+
 ### Conv2D migration implementation and validation (2026-08-22)
 
 Both Conv2D factories now use one semantic

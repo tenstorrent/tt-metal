@@ -863,49 +863,25 @@ TT_KERNEL void reader_vol2col(
     constexpr bool enable_dram_read_staging = enable_dram_read_staging_value == 1;
     constexpr bool halo_mode = halo_mode_value == 1;
     constexpr bool mask_mode = mask_mode_value == 1;
-#ifdef USE_L1_PREFETCH
-    static_assert(T_shard_max > 0, "USE_L1_PREFETCH requires a nonzero shard depth");
-#else
-    static_assert(T_shard_max == 0, "a nonzero shard depth requires USE_L1_PREFETCH");
-#endif
-#ifdef HAS_DRAM_STAGING
-    static_assert(enable_dram_read_staging, "HAS_DRAM_STAGING must match its semantic CTA");
-#else
-    static_assert(!enable_dram_read_staging, "DRAM staging requires HAS_DRAM_STAGING");
-#endif
-#ifdef HAS_HALO
-    static_assert(halo_mode, "HAS_HALO must match its semantic CTA");
-#else
-    static_assert(!halo_mode, "halo mode requires HAS_HALO");
-#endif
-#ifdef HAS_MASK
-    static_assert(mask_mode, "HAS_MASK must match its semantic CTA");
-#else
-    static_assert(!mask_mode, "mask mode requires HAS_MASK");
-#endif
     constexpr uint32_t padded_page_bytes = kT * kH * kW * C_in_block_bytes + patch_pad_bytes;
     const auto in_reader = TensorAccessor(tensor::input);
-#ifdef HAS_HALO
     const auto halo_reader = TensorAccessor(tensor::halo);
-#else
-    const auto halo_reader = in_reader;
-#endif
     // Reset mask globals every invocation
     g_mask_h_start = 0;
     g_mask_w_start = 0;
-#ifdef HAS_MASK
-    const auto offset_reader = TensorAccessor(tensor::pad_offset);
-    Noc off_noc;
-    experimental::CB pad_off_cb(dfb::pad_offset);
-    pad_off_cb.reserve_back(1);
-    const uint32_t off_l1 = pad_off_cb.get_write_ptr();
-    off_noc.async_read(
-        offset_reader, pad_off_cb, 2u * sizeof(uint32_t), {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = 0});
-    off_noc.async_read_barrier();
-    volatile tt_l1_ptr uint32_t* off_p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(off_l1);
-    g_mask_h_start = off_p[0];
-    g_mask_w_start = off_p[1];
-#endif
+    if constexpr (mask_mode) {
+        const auto offset_reader = TensorAccessor(tensor::pad_offset);
+        Noc off_noc;
+        experimental::CB pad_off_cb(dfb::pad_offset);
+        pad_off_cb.reserve_back(1);
+        const uint32_t off_l1 = pad_off_cb.get_write_ptr();
+        off_noc.async_read(
+            offset_reader, pad_off_cb, 2u * sizeof(uint32_t), {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = 0});
+        off_noc.async_read_barrier();
+        volatile tt_l1_ptr uint32_t* off_p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(off_l1);
+        g_mask_h_start = off_p[0];
+        g_mask_w_start = off_p[1];
+    }
 
     // Compact halo section bases (pages), layout [H-top | H-bot | W-left | W-right]
     constexpr uint32_t halo_outer = N * T_in;
@@ -927,18 +903,8 @@ TT_KERNEL void reader_vol2col(
     constexpr uint32_t H_shard_max_W_shard_max = H_shard_max * W_shard_max;
 
     // Reserve shard buffer once (used as scratch space, not streaming CB)
-#ifdef USE_L1_PREFETCH
     experimental::CB shard_cb(dfb::input_shard);
-#else
-    experimental::CB shard_cb(dfb::vol2col_rm);
-#endif
-#ifdef HAS_DRAM_STAGING
     experimental::CB dram_read_scratch_cb(dfb::dram_read_scratch);
-#elif defined(USE_L1_PREFETCH)
-    experimental::CB dram_read_scratch_cb(dfb::input_shard);
-#else
-    experimental::CB dram_read_scratch_cb(dfb::vol2col_rm);
-#endif
     if constexpr (enable_dram_read_staging) {
         dram_read_scratch_cb.reserve_back(1);
     }

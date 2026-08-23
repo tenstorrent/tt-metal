@@ -675,42 +675,46 @@ ttnn::device_operation::ProgramArtifacts Conv3dProgramFactory::create_program_ar
         inner_gather_burst,
         gather_trids);
 
-    KernelSpec::CompilerOptions::Defines reader_defines;
     Group<DFBBinding> reader_bindings = {
         ProducerOf(DFB_VOL2COL_RM, "vol2col_rm"),
     };
     if (T_shard_max > 0) {
-        reader_defines["USE_L1_PREFETCH"] = "1";
         reader_bindings.push_back(ProducerOf(DFB_INPUT_SHARD, "input_shard"));
         reader_bindings.push_back(ConsumerOf(DFB_INPUT_SHARD, "input_shard"));
+    } else {
+        reader_bindings.front().accessor_aliases.push_back("input_shard");
     }
     if (enable_dram_read_staging) {
-        reader_defines["HAS_DRAM_STAGING"] = "1";
         reader_bindings.push_back(ProducerOf(DFB_DRAM_READ_SCRATCH, "dram_read_scratch"));
         reader_bindings.push_back(ConsumerOf(DFB_DRAM_READ_SCRATCH, "dram_read_scratch"));
-    }
-    if (halo_mode) {
-        reader_defines["HAS_HALO"] = "1";
+    } else if (T_shard_max > 0) {
+        reader_bindings[1].accessor_aliases.push_back("dram_read_scratch");
+    } else {
+        reader_bindings.front().accessor_aliases.push_back("dram_read_scratch");
     }
     if (mask_mode) {
-        reader_defines["HAS_MASK"] = "1";
         reader_bindings.push_back(ProducerOf(DFB_PAD_OFFSET, "pad_offset"));
         reader_bindings.push_back(ConsumerOf(DFB_PAD_OFFSET, "pad_offset"));
+    } else {
+        reader_bindings.front().accessor_aliases.push_back("pad_offset");
     }
     Group<TensorBinding> reader_tensor_bindings = {
         TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}};
     if (halo_mode) {
         reader_tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = HALO, .accessor_name = "halo"});
+    } else {
+        reader_tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "halo"});
     }
     if (mask_mode) {
         reader_tensor_bindings.push_back(
             TensorBinding{.tensor_parameter_name = PAD_OFFSET, .accessor_name = "pad_offset"});
+    } else {
+        reader_tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "pad_offset"});
     }
     KernelSpec reader_spec{
         .unique_id = READER,
         .source =
             std::filesystem::path{"ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/reader_vol2col.cpp"},
-        .compiler_options = {.defines = std::move(reader_defines)},
         .dfb_bindings = std::move(reader_bindings),
         .tensor_bindings = std::move(reader_tensor_bindings),
         .compile_time_args =
@@ -804,12 +808,12 @@ ttnn::device_operation::ProgramArtifacts Conv3dProgramFactory::create_program_ar
         compute_bindings.push_back(ConsumerOf(DFB_REDUCTION_TILED, "reduction_tiled"));
         compute_bindings.push_back(ConsumerOf(DFB_WORKER_ACK_BACK, "worker_ack_back"));
     }
-    KernelSpec::CompilerOptions::Defines compute_defines;
-    if (use_bias) {
-        compute_defines["HAS_BIAS"] = "1";
+    if (!use_bias) {
+        compute_bindings[3].accessor_aliases.push_back("bias_tiled");
     }
-    if (C_in_num_blocks > 1) {
-        compute_defines["HAS_REDUCTION"] = "1";
+    if (C_in_num_blocks == 1) {
+        compute_bindings[4].accessor_aliases.push_back("reduction_tiled");
+        compute_bindings[4].accessor_aliases.push_back("worker_ack_back");
     }
     auto compute_hw = ttnn::to_compute_hardware_config(
         device->arch(),
@@ -841,7 +845,7 @@ ttnn::device_operation::ProgramArtifacts Conv3dProgramFactory::create_program_ar
     KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = std::filesystem::path{"ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/compute.cpp"},
-        .compiler_options = {.defines = std::move(compute_defines), .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
+        .compiler_options = {.opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
         .dfb_bindings = std::move(compute_bindings),
         .compile_time_args =
             {{"N", N},
@@ -859,7 +863,8 @@ ttnn::device_operation::ProgramArtifacts Conv3dProgramFactory::create_program_ar
              {"subblock_h", out_subblock_h},
              {"subblock_w", out_subblock_w},
              {"use_fp32_partials_value", static_cast<uint32_t>(use_fp32_partials)},
-             {"enable_streaming_output_value", static_cast<uint32_t>(enable_streaming_output)}},
+             {"enable_streaming_output_value", static_cast<uint32_t>(enable_streaming_output)},
+             {"has_reduction_value", static_cast<uint32_t>(C_in_num_blocks > 1)}},
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"c_in_block_start",
@@ -895,13 +900,16 @@ ttnn::device_operation::ProgramArtifacts Conv3dProgramFactory::create_program_ar
         TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
         TensorBinding{.tensor_parameter_name = WEIGHT, .accessor_name = "weight"},
     };
-    KernelSpec::CompilerOptions::Defines writer_defines;
     if (use_bias) {
-        writer_defines["HAS_BIAS"] = "1";
         writer_tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = BIAS, .accessor_name = "bias"});
+    } else {
+        writer_bindings[1].accessor_aliases.push_back("bias_tiled");
+        writer_tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = WEIGHT, .accessor_name = "bias"});
     }
-    if (C_in_num_blocks > 1) {
-        writer_defines["HAS_REDUCTION"] = "1";
+    if (C_in_num_blocks == 1) {
+        writer_bindings[1].accessor_aliases.push_back("matmul_interm_tiled");
+        writer_bindings[1].accessor_aliases.push_back("reduction_tiled");
+        writer_bindings[1].accessor_aliases.push_back("worker_ack_back");
     }
     const uint32_t num_worker_coord_varargs = C_in_num_blocks > 1 ? 2 + 2 * (C_in_num_blocks - 1) : 0;
     const auto writer_hw_config = ttnn::create_writer_datamovement_config(device->arch());
@@ -915,7 +923,6 @@ ttnn::device_operation::ProgramArtifacts Conv3dProgramFactory::create_program_ar
     KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = std::filesystem::path{"ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp"},
-        .compiler_options = {.defines = std::move(writer_defines)},
         .dfb_bindings = std::move(writer_bindings),
         .semaphore_bindings =
             {SemaphoreBinding{.semaphore_spec_name = REDUCTION_DONE, .accessor_name = "reduction_done"},
@@ -939,7 +946,8 @@ ttnn::device_operation::ProgramArtifacts Conv3dProgramFactory::create_program_ar
              {"weight_share_mode_value", static_cast<uint32_t>(weight_share_mode)},
              {"enable_streaming_output_value", static_cast<uint32_t>(enable_streaming_output)},
              {"output_pad_h", operation_attributes.output_pad_h},
-             {"output_pad_w", operation_attributes.output_pad_w}},
+             {"output_pad_w", operation_attributes.output_pad_w},
+             {"has_reduction_value", static_cast<uint32_t>(C_in_num_blocks > 1)}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"c_in_block_start", "c_in_block_end",     "c_out_block_start",
                                    "c_out_block_end",  "t_out_start",        "t_out_end",

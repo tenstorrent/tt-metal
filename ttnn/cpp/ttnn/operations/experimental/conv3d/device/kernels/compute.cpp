@@ -230,7 +230,8 @@ template <
     uint32_t subblock_h,
     uint32_t subblock_w,
     uint32_t use_fp32_partials_value,
-    uint32_t enable_streaming_output_value>
+    uint32_t enable_streaming_output_value,
+    uint32_t has_reduction_value>
 TT_KERNEL void compute(
     uint32_t c_in_block_start,
     uint32_t c_in_block_end,
@@ -249,26 +250,14 @@ TT_KERNEL void compute(
     constexpr uint32_t cb_weight_tiled = dfb::weight_tiled;
     constexpr uint32_t cb_matmul_interm_tiled = dfb::matmul_interm_tiled;
     constexpr uint32_t cb_matmul_result_rm = dfb::matmul_result_rm;
-#ifdef HAS_BIAS
     constexpr uint32_t cb_bias_tiled = dfb::bias_tiled;
-#else
-    constexpr uint32_t cb_bias_tiled = cb_weight_tiled;
-#endif
-#ifdef HAS_REDUCTION
     constexpr uint32_t cb_reduction_tiled = dfb::reduction_tiled;
     constexpr uint32_t cb_worker_ack_back = dfb::worker_ack_back;
-#endif
     constexpr bool use_bias = use_bias_value == 1;
     constexpr bool use_fp32_partials = use_fp32_partials_value == 1;
     constexpr bool enable_streaming_output = enable_streaming_output_value == 1;
-#ifdef HAS_BIAS
-    static_assert(use_bias, "HAS_BIAS must match its semantic CTA");
-#else
-    static_assert(!use_bias, "bias requires HAS_BIAS");
-#endif
-#ifdef HAS_REDUCTION
-    static_assert(!enable_streaming_output, "reduction and streaming output are mutually exclusive");
-#endif
+    constexpr bool has_reduction = has_reduction_value == 1;
+    static_assert(!has_reduction || !enable_streaming_output, "reduction and streaming output are mutually exclusive");
 
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
@@ -281,10 +270,8 @@ TT_KERNEL void compute(
     CircularBuffer cb_bias_tiled_cb(cb_bias_tiled);
     CircularBuffer cb_matmul_interm_tiled_cb(cb_matmul_interm_tiled);
     CircularBuffer cb_matmul_result_rm_cb(cb_matmul_result_rm);
-#ifdef HAS_REDUCTION
     CircularBuffer cb_reduction_tiled_cb(cb_reduction_tiled);
     CircularBuffer cb_worker_ack_back_cb(cb_worker_ack_back);
-#endif
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
     matmul_init(cb_vol2col_tiled, cb_weight_tiled);
@@ -399,39 +386,39 @@ TT_KERNEL void compute(
                                 // Stall on matmul/bias to finish
                                 cb_matmul_interm_tiled_cb.wait_front(output_tiles);
 
-#ifdef HAS_REDUCTION
-                                if (!is_reducer) {
-                                    // Signal to writer that we have partial results.
-                                    cb_reduction_tiled_cb.reserve_back(output_tiles);
-                                    cb_reduction_tiled_cb.push_back(output_tiles);
+                                if constexpr (has_reduction) {
+                                    if (!is_reducer) {
+                                        // Signal to writer that we have partial results.
+                                        cb_reduction_tiled_cb.reserve_back(output_tiles);
+                                        cb_reduction_tiled_cb.push_back(output_tiles);
 
-                                    // Wait for writer to ack that our data has been used.
-                                    cb_worker_ack_back_cb.wait_front(1);
-                                    cb_worker_ack_back_cb.pop_front(1);
+                                        // Wait for writer to ack that our data has been used.
+                                        cb_worker_ack_back_cb.wait_front(1);
+                                        cb_worker_ack_back_cb.pop_front(1);
 
-                                    // Clear our partial results and continue.
-                                    cb_matmul_interm_tiled_cb.pop_front(output_tiles);
+                                        // Clear our partial results and continue.
+                                        cb_matmul_interm_tiled_cb.pop_front(output_tiles);
+                                    } else {
+                                        reduce_bias_untilize_fullblock<
+                                            matmul_M_t,
+                                            matmul_N_t,
+                                            use_fp32_partials,
+                                            use_bias,
+                                            cb_matmul_interm_tiled,
+                                            cb_reduction_tiled,
+                                            cb_bias_tiled,
+                                            cb_matmul_result_rm>(num_workers);
+                                    }
                                 } else {
-                                    reduce_bias_untilize_fullblock<
+                                    bias_untilize_fullblock_math<
                                         matmul_M_t,
                                         matmul_N_t,
                                         use_fp32_partials,
                                         use_bias,
                                         cb_matmul_interm_tiled,
-                                        cb_reduction_tiled,
                                         cb_bias_tiled,
-                                        cb_matmul_result_rm>(num_workers);
+                                        cb_matmul_result_rm>();
                                 }
-#else
-                                bias_untilize_fullblock_math<
-                                    matmul_M_t,
-                                    matmul_N_t,
-                                    use_fp32_partials,
-                                    use_bias,
-                                    cb_matmul_interm_tiled,
-                                    cb_bias_tiled,
-                                    cb_matmul_result_rm>();
-#endif
                             }  // end if constexpr (!enable_streaming_output)
                         }
                     }

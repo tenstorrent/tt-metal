@@ -51,7 +51,8 @@ template <
     uint32_t weight_share_mode_value,
     uint32_t enable_streaming_output_value,
     uint32_t output_pad_h,
-    uint32_t output_pad_w>
+    uint32_t output_pad_w,
+    uint32_t has_reduction_value>
 TT_KERNEL void writer(
     uint32_t c_in_block_start,
     uint32_t c_in_block_end,
@@ -78,30 +79,18 @@ TT_KERNEL void writer(
     uint32_t num_workers) {
     constexpr uint32_t cb_matmul_result_rm = dfb::matmul_result_rm;
     constexpr uint32_t cb_weight_tiled = dfb::weight_tiled;
-#ifdef HAS_BIAS
     constexpr uint32_t cb_bias_tiled = dfb::bias_tiled;
-#else
-    constexpr uint32_t cb_bias_tiled = cb_weight_tiled;
-#endif
-#ifdef HAS_REDUCTION
     constexpr uint32_t cb_matmul_interm_tiled = dfb::matmul_interm_tiled;
     constexpr uint32_t cb_reduction_tiled = dfb::reduction_tiled;
     constexpr uint32_t cb_worker_ack_back = dfb::worker_ack_back;
-#endif
     constexpr bool use_bias = use_bias_value == 1;
     // weight_share_mode (see WeightShareMode in conv3d_weight_share.hpp): Disabled, Chain, or Mcast.
     constexpr WeightShareMode weight_share_mode = static_cast<WeightShareMode>(weight_share_mode_value);
     constexpr bool enable_weight_chain = weight_share_mode == WeightShareMode::Chain;
     constexpr bool enable_weight_mcast = weight_share_mode == WeightShareMode::Mcast;
     constexpr bool enable_streaming_output = enable_streaming_output_value == 1;
-#ifdef HAS_BIAS
-    static_assert(use_bias, "HAS_BIAS must match its semantic CTA");
-#else
-    static_assert(!use_bias, "bias requires HAS_BIAS");
-#endif
-#ifdef HAS_REDUCTION
-    static_assert(!enable_streaming_output, "reduction and streaming output are mutually exclusive");
-#endif
+    constexpr bool has_reduction = has_reduction_value == 1;
+    static_assert(!has_reduction || !enable_streaming_output, "reduction and streaming output are mutually exclusive");
     // weight_share_role: see WeightShareRole in conv3d_weight_share.hpp.
     const WeightShareRole weight_share_role = static_cast<WeightShareRole>(weight_share_role_value);
 
@@ -109,35 +98,27 @@ TT_KERNEL void writer(
     experimental::CB cb_out(cb_matmul_result_rm);
     experimental::CB cb_weight(cb_weight_tiled);
     experimental::CB cb_bias(cb_bias_tiled);
-#ifdef HAS_REDUCTION
     experimental::CB cb_interm(cb_matmul_interm_tiled);
     experimental::CB cb_reduction(cb_reduction_tiled);
     experimental::CB cb_ack(cb_worker_ack_back);
-#endif
     Semaphore<> sem(sem::reduction_done);
     Semaphore<> weights_mcast_sender_sem(sem::weight_sender);
     Semaphore<> weights_mcast_receiver_sem(sem::weight_receiver);
 
     // Reducer coordinates and worker core coordinates are only present when num_workers > 0
     uint32_t reducer_core_x = 0, reducer_core_y = 0;
-#ifdef HAS_REDUCTION
-    if (num_workers > 0) {
-        reducer_core_x = get_vararg(0);
-        reducer_core_y = get_vararg(1);
+    if constexpr (has_reduction) {
+        if (num_workers > 0) {
+            reducer_core_x = get_vararg(0);
+            reducer_core_y = get_vararg(1);
+        }
     }
-#endif
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_weight_tiled);
-#ifdef HAS_REDUCTION
     constexpr uint32_t partials_tile_bytes = get_tile_size(cb_matmul_interm_tiled);
-#endif
     const auto out_writer = TensorAccessor(tensor::output);
     const auto weight_reader = TensorAccessor(tensor::weight);
-#ifdef HAS_BIAS
     const auto bias_reader = TensorAccessor(tensor::bias);
-#else
-    const auto bias_reader = weight_reader;
-#endif
 
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
@@ -297,47 +278,47 @@ TT_KERNEL void writer(
                         for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
                             const uint32_t w_block_end = std::min(w_block + W_block_size, w_out_end);
 
-#ifdef HAS_REDUCTION
-                            if (!is_reducer) {
-                                // Wait for compute, signal the reducer, then acknowledge compute after the
-                                // reducer has consumed our partial result.
-                                cb_reduction.wait_front(output_tiles);
-                                sem.set(0);
-                                sem.up(noc, reducer_core_x, reducer_core_y, 1);
-                                sem.wait(1);
-                                cb_reduction.pop_front(output_tiles);
-                                cb_ack.reserve_back(1);
-                                cb_ack.push_back(1);
-                                continue;
-                            }
+                            if constexpr (has_reduction) {
+                                if (!is_reducer) {
+                                    // Wait for compute, signal the reducer, then acknowledge compute after the
+                                    // reducer has consumed our partial result.
+                                    cb_reduction.wait_front(output_tiles);
+                                    sem.set(0);
+                                    sem.up(noc, reducer_core_x, reducer_core_y, 1);
+                                    sem.wait(1);
+                                    cb_reduction.pop_front(output_tiles);
+                                    cb_ack.reserve_back(1);
+                                    cb_ack.push_back(1);
+                                    continue;
+                                }
 
-                            if (num_workers > 0) {
-                                // Wait for all workers to finish.
-                                sem.wait(num_workers);
+                                if (num_workers > 0) {
+                                    // Wait for all workers to finish.
+                                    sem.wait(num_workers);
 
-                                // Reset our semaphore.
-                                sem.set(0);
+                                    // Reset our semaphore.
+                                    sem.set(0);
 
-                                const uint32_t worker_output_read_ptr = cb_interm.get_read_ptr();
-                                for (uint32_t worker_idx = 0; worker_idx < num_workers; worker_idx++) {
-                                    // Read data from worker into reduction buffer.
-                                    cb_reduction.reserve_back(output_tiles);
-                                    const uint16_t worker_x = get_vararg(2 + worker_idx);
-                                    const uint16_t worker_y = get_vararg(2 + num_workers + worker_idx);
-                                    UnicastEndpoint ep;
-                                    noc.async_read(
-                                        ep,
-                                        cb_reduction,
-                                        output_tiles * partials_tile_bytes,
-                                        {.noc_x = worker_x, .noc_y = worker_y, .addr = worker_output_read_ptr},
-                                        {.offset_bytes = 0});
-                                    noc.async_read_barrier();
-                                    cb_reduction.push_back(output_tiles);
+                                    const uint32_t worker_output_read_ptr = cb_interm.get_read_ptr();
+                                    for (uint32_t worker_idx = 0; worker_idx < num_workers; worker_idx++) {
+                                        // Read data from worker into reduction buffer.
+                                        cb_reduction.reserve_back(output_tiles);
+                                        const uint16_t worker_x = get_vararg(2 + worker_idx);
+                                        const uint16_t worker_y = get_vararg(2 + num_workers + worker_idx);
+                                        UnicastEndpoint ep;
+                                        noc.async_read(
+                                            ep,
+                                            cb_reduction,
+                                            output_tiles * partials_tile_bytes,
+                                            {.noc_x = worker_x, .noc_y = worker_y, .addr = worker_output_read_ptr},
+                                            {.offset_bytes = 0});
+                                        noc.async_read_barrier();
+                                        cb_reduction.push_back(output_tiles);
 
-                                    sem.up(noc, worker_x, worker_y, 1);
+                                        sem.up(noc, worker_x, worker_y, 1);
+                                    }
                                 }
                             }
-#endif
 
                             // Streaming output drains one single-tile C_out row at a time to overlap writes with
                             // the remaining compute tail.
