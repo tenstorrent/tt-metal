@@ -1111,6 +1111,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         cb_info.empty() ? false : get_cb_info_by_name(cb_info, Conv2dCb::ACT).overlapped_by_cb.has_value();
     const auto& act_storage_dfb = overlap_act_cb ? conv2d_sharded_act_tilized_dfb : conv2d_sharded_act_dfb;
     const bool split_reader_cb_shared = enable_split_reader && overlap_im2col_cb && block_sharded;
+    TT_FATAL(
+        !(arch_is_quasar && (overlap_act_cb || split_reader_cb_shared)),
+        "Sharded Conv2D activation-buffer overlap requires Gen1 plain-CB compatibility lowering, which is not "
+        "supported on Quasar");
     uint32_t split_reader_act_write_offset = 0;
     uint32_t split_reader_act_write_offset_last = 0;
     if (split_reader_cb_shared) {

@@ -432,6 +432,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
 
     const bool partials_cb_uses_output = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
     const bool overlap_act_cb = get_cb_info_by_name(cb_info, Conv2dCb::ACT).overlapped_by_cb.has_value();
+    TT_FATAL(
+        !(device->arch() == tt::ARCH::QUASAR && overlap_act_cb),
+        "Width-sharded Conv2D activation-buffer overlap requires Gen1 plain-CB compatibility lowering, which is "
+        "not supported on Quasar");
     const auto& act_storage_dfb = overlap_act_cb ? conv2d_width_act_tilized_dfb : conv2d_width_act_dfb;
 
     // Convenience accessor for CB sizing.
