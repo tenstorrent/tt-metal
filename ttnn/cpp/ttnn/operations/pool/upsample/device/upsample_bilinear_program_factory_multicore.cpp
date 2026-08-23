@@ -62,6 +62,8 @@ ttnn::device_operation::ProgramArtifacts UpsampleBilinearProgramFactory::create_
     TT_FATAL(
         operation_attributes.sliding_window_config.has_value(),
         "Bilinear upsample requires sliding_window_config to be provided");
+    // The input tensor contains haloed shards; the sliding-window configuration retains
+    // the original pre-halo N/H/W/C dimensions needed for coordinate reconstruction.
     const auto sliding_window_config = operation_attributes.sliding_window_config.value();
     const std::uint32_t in_batch_size = sliding_window_config.batch_size;
     const std::uint32_t in_h = sliding_window_config.input_hw.first;
@@ -212,6 +214,8 @@ ttnn::device_operation::ProgramArtifacts UpsampleBilinearProgramFactory::create_
         .runtime_arg_schema = {.runtime_arg_names = {"start_output_idx", "min_input_offset", "output_shard_height"}},
         .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
     };
+    // Reader and writer intentionally share one source; is_reader selects the two roles at
+    // compile time while each role keeps its architecture-preferred NoC configuration.
 
     constexpr tt::tt_metal::ReduceOpMath reduce_op = tt::tt_metal::ReduceOpMath::SUM;
     constexpr tt::tt_metal::ReduceOpDim reduce_dim = tt::tt_metal::ReduceOpDim::H;
@@ -297,6 +301,8 @@ ttnn::device_operation::ProgramArtifacts UpsampleBilinearProgramFactory::create_
             std::min(max_out_sticks_per_core, total_output_sticks - total_sticks_processed);
         std::uint32_t min_input_offset = 0;
         if (out_sticks_this_core > 0) {
+            // Derive the smallest input trace entry touched by this core's output interval.
+            // Empty tail cores keep offset zero and execute no device work.
             const std::uint32_t output_index_end =
                 std::min(
                     start_output_idx + out_sticks_this_core, static_cast<std::uint32_t>(op_trace_metadata.size())) -
