@@ -28,7 +28,6 @@ FORWARD_WALL_MS.
 from __future__ import annotations
 
 import os
-import sys
 import time
 
 import ttnn
@@ -195,67 +194,6 @@ def _measure_native(device, stage):
     return per_s * 1000.0, path
 
 
-def _profiling() -> bool:
-    """Is a device-profiler capture running in THIS process?
-
-    The one fact that decides how a stage should be measured. _run_full_pipeline_ms pops this var
-    because a full-depth tracy capture overflows the 12000-marker buffer, so the stopwatch path runs
-    without it; the profiling path sets it to "1".
-    """
-    return str(os.environ.get("TT_METAL_DEVICE_PROFILER") or "").strip() == "1"
-
-
-def _signpost(name: str) -> None:
-    """Emit a tracy signpost. Silent with no capture running; LOUD when one is and it fails.
-
-    signpost() goes out through ttnn.tracy_message -- the same channel the op records travel -- and
-    process_ops_logs turns it into a row whose OP TYPE is "signpost", which is exactly what
-    tt-perf-report slices on. So a mark is a real row in the op stream, not a host-side annotation.
-    """
-    try:
-        from tracy import signpost as _sp
-
-        _sp(name)
-    except Exception as exc:  # noqa: BLE001
-        if _profiling():
-            print(
-                "  [trace_replay] PROFILED RUN COULD NOT EMIT SIGNPOST %r (%s: %s) -- the capture "
-                "will carry no stage marks, so every stack shares one math-fidelity peak."
-                % (name, type(exc).__name__, str(exc)[:160]),
-                file=sys.stderr,
-                flush=True,
-            )
-
-
-def _measure_stage_profiled(device, stage):
-    """Run ONE stage eagerly, bracketed by marks, so the capture can be sliced per stage.
-
-    WHY EAGER AND NOT TRACED. A trace replay runs as one fused program and emits NO per-op device
-    data -- profiling it floods the post-processor with a "device data missing" warning per traced op
-    (~180k for a pipeline) and the no-output watchdog kills the run. That is why the profiled path is
-    eager, and it is a deliberate decision, not an accident.
-
-    WHY HERE AND NOT IN THE GENERATED TEST. The profiled path used to live in the perf test the LLM
-    writes from a skeleton -- `if _PERF_TRACE and not _PROFILING: ... else: _eager_forward()` -- so
-    the harness's most safety-critical measurement was authored per model. It also meant a mark
-    emitted from measure_adapter could never reach a capture, because the test skipped this whole
-    function whenever the profiler was on. Owning it here makes the profiled workload identical
-    across models and lets the marks land.
-
-    WHAT IS MEASURED CHANGES, and that is the honest cost: one representative step per stage instead
-    of one whole run_head. It is the same quantity the coverage window already approximates -- the
-    smallest depth holding every distinct op -- so the op MIX is unchanged; the repeat count is not.
-    """
-    _signpost("stage:%s" % stage.name)
-    t0 = time.perf_counter()
-    try:
-        stage.step()
-        ttnn.synchronize_device(device)
-    finally:
-        _signpost("stage:%s:end" % stage.name)
-    return (time.perf_counter() - t0) * 1000.0, "eager+profiled"
-
-
 def _measure_stage(device, stage):
     """Capture stage.step as a trace, replay it on a single command queue, return (ms, path).
 
@@ -269,11 +207,6 @@ def _measure_stage(device, stage):
     to reach steady state: the hook counts the distinct DEVICE tensors this stage's ops touch, which
     is the quantity params x width is trying to approximate.
     """
-    # A CAPTURE IS RUNNING: measure eagerly, bracketed by marks. Trace capture and per-op profiling
-    # are mutually exclusive (a replay emits no per-op data), so this is the only shape that yields
-    # both a per-stage boundary and the op detail the ladder reads.
-    if _profiling():
-        return _measure_stage_profiled(device, stage)
     if getattr(stage, "self_traced", False):
         return _measure_native(device, stage)
     _ws_bytes = 0

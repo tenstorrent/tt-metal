@@ -298,43 +298,12 @@ def test_a_self_traced_stage_still_measures_its_own():
     raise AssertionError("_measure_native is gone")
 
 
-def test_the_marks_are_emitted_where_a_capture_can_see_them():
-    """The first attempt put them in measure_adapter's capture-and-replay loop, and the perf test
-    skipped that whole function whenever the profiler was on -- `if _PERF_TRACE and not _PROFILING` --
-    so a mark could never reach a capture. Emission now hangs off _profiling(), on the branch taken
-    WHEN a capture is running, and the skeleton no longer bypasses measure_adapter.
-
-    Asserted on the branch, not on the presence of the call: present-and-unreachable is exactly the
-    state this spent ten commits in."""
-    import ast
-
-    src = (_PA / "agent" / "trace_replay.py").read_text()
-    stmts = None
-    for node in ast.walk(ast.parse(src)):
-        if isinstance(node, ast.FunctionDef) and node.name == "_measure_stage":
-            # STATEMENTS, not the whole unparse: "self_traced" appears in the docstring too, and
-            # ordering asserted over prose tests where words sit, not what runs -- the same slip this
-            # file already corrected once for stage_read_bytes.
-            body = node.body[1:] if _is_docstring(node.body[0]) else node.body
-            stmts = "\n".join(ast.unparse(x) for x in body)
-    assert stmts, "_measure_stage is gone"
-    assert "_profiling()" in stmts, "nothing routes on whether a capture is running"
-    assert "_measure_stage_profiled" in stmts
-    assert stmts.index("_profiling()") < stmts.index("self_traced"), "the profiled branch is not reached first"
-
-    prof = None
-    for node in ast.walk(ast.parse(src)):
-        if isinstance(node, ast.FunctionDef) and node.name == "_measure_stage_profiled":
-            prof = ast.unparse(node)
-    assert prof and prof.count("_signpost(") == 2, "a stage is not bracketed by two marks"
-    assert "_capture_step_trace" not in prof, "the profiled path must be eager: a replay emits no per-op data"
-
-
-def test_the_skeleton_no_longer_skips_the_harness_when_profiling():
-    """That guard is the single reason the first attempt could not work."""
-    src = (_PA / "agent" / "perf_test_gen.py").read_text()
-    body = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
-    assert "not _PROFILING" not in body, "the skeleton still bypasses measure_adapter under the profiler"
+# The two tests that stood here asserted the stage marks live in measure_adapter and that the
+# skeleton's profiler guard was gone. Both described a design that has been removed: measure_adapter
+# is the STOPWATCH's machinery, it runs with the profiler popped, and a mark there marks nothing.
+# Per-stage marks now belong to the tracy run and are covered by
+# tests/test_stage_marks_go_where_the_per_op_data_is.py. What remains here is the READ SET, which is
+# genuinely the stopwatch's to measure -- a byte total needs full depth.
 
 
 def test_an_unmarked_capture_still_falls_back_and_says_so():

@@ -159,12 +159,44 @@ def test_<task>_perf(device_params, device):
     #     there could never reach a capture. The eager forward stays as the fallback for a model
     #     whose stages cannot be driven one at a time.
     _PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
-    if _PERF_TRACE:
+    if _PERF_TRACE and not _PROFILING:
         if not _try_traced():
             print("TRACE_REPLAY_FALLBACK=eager  # trace_replay isn't working — timing eagerly", flush=True)
             _eager_forward()
     else:
+        # THE MEASURED REGION, bracketed by the conventional pair. resolve_signposts already looks
+        # for start/stop and refine() already slices on them, so the main report sees EXACTLY the op
+        # set it saw before -- which matters because the marked pass below adds ops to the capture
+        # and must not be counted into it.
+        _sm = None
+        if _PROFILING:
+            try:
+                from models.experimental.perf_automation.agent import stage_marks as _sm
+
+                _sm.signpost("start")
+            except Exception:  # noqa: BLE001
+                _sm = None
         _eager_forward()
+        if _sm is not None:
+            _sm.signpost("stop")
+            # A SECOND, MARKED PASS -- fidelity rollup only. run_head is one opaque call, so the ops
+            # it emits carry no stage; running each declared stage once between marks gives the
+            # report a per-stage window without touching what was just measured. Additive: if the
+            # pipeline declares no stages, or a stage will not run alone, the split is simply absent.
+            try:
+                from models.experimental.perf_automation.agent.perf_adapter import PipelineStageAdapter
+
+                def _build_for_marks(dev):
+                    return _stage_inputs_from_demo(_get_pipe(dev))
+
+                _sm.mark_stages(
+                    PipelineStageAdapter(_build_for_marks, prompt_ids_for_isl(get_tokenizer(), PERF_ISL_TOKENS), batch=PERF_BATCH),
+                    device,
+                )
+            except Exception as _me:  # noqa: BLE001
+                print("STAGE_MARKS_SKIPPED=%r" % (_me,), flush=True)
+        if _PERF_TRACE:
+            _try_traced()
 """
 
 
