@@ -206,3 +206,25 @@ def test_the_generator_injects_before_it_validates():
     j = src.index("out_path.write_text(content)", i)
     k = src.index("validate_generated_perf_test(out_path", j)
     assert i < j < k, "injection does not precede the write and the validation"
+
+
+def test_a_reused_test_gets_the_marks_too():
+    """THE SEVENTH GATE. Injection at the write point fires only when a test is GENERATED. A test
+    that already exists returns from ensure_perf_test before any of that -- so run 23 ran a test
+    written three hours earlier, unmarked, and reported "no stage signposts" for the seventh time.
+
+    Both paths must inject, and the injector is idempotent precisely so the second one is safe."""
+    src = (_PA / "agent" / "perf_test_gen.py").read_text()
+    i = src.index("if out_path.exists() and not force:")
+    j = src.index("return node", i)
+    assert "inject_stage_marks" in src[i:j], "a reused perf test still ships without stage marks"
+    assert src.count("inject_stage_marks") >= 2, "only one of the two paths injects"
+
+
+def test_injecting_an_already_marked_file_rewrites_nothing():
+    """The reuse path runs on every run. Without idempotence it would append a marked pass each time."""
+    from agent.stage_marks import inject_stage_marks
+
+    once, _ = inject_stage_marks(_real_test_src())
+    again, why = inject_stage_marks(once)
+    assert again == once and why == "already injected"

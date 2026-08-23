@@ -1205,6 +1205,22 @@ def generate_perf_test(
     out_path = root / out_rel
     node = f"{out_rel}::test_{task}_perf"
     if out_path.exists() and not force:
+        # A REUSED TEST STILL NEEDS THE MARKS. Injection at the write point only fires when a test is
+        # GENERATED, and a test that already exists returns here first -- which is how run 23 ran an
+        # unmarked test written three hours earlier and reported "no stage signposts" for the seventh
+        # time. The injector is idempotent and refuses when it cannot place the block, so applying it
+        # to an existing file is safe and is the only way the marks reach a run that regenerates
+        # nothing.
+        try:
+            from .stage_marks import inject_stage_marks as _inject_marks
+
+            _cur = out_path.read_text()
+            _new, _why = _inject_marks(_cur)
+            if _new != _cur:
+                out_path.write_text(_new)
+                print("      · stage marks (existing test): %s" % _why, file=sys.stderr, flush=True)
+        except Exception as _mi:  # noqa: BLE001
+            print("      · stage marks (existing test): not injected (%s)" % _mi, file=sys.stderr, flush=True)
         return node
     if source_kind == "pcc":
         src_file = Path(source_abs) if source_abs else None
