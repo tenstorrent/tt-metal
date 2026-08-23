@@ -252,7 +252,8 @@ ttnn::device_operation::ProgramArtifacts SliceWriteRMInterleavedProgramFactory::
         writer.compile_time_args = {
             {"alignment_offset", page_alignment_offset},
             {"page_begins_offset", begins_bytes},
-            {"element_size", output.element_size()}};
+            {"element_size", output.element_size()},
+            {"output_row_stride", tt::round_up(output_row_size_bytes, alignment)}};
         writer.scratchpad_bindings = {ScratchpadBinding{
             .scratchpad_spec_name = RM_INTERLEAVED_OUTPUT_ROWS_SCRATCH, .accessor_name = "output_rows"}};
     } else {

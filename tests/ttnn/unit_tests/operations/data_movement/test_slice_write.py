@@ -126,3 +126,24 @@ def test_slice_write_nd(rank, layout, device):
 
     assert_equal(torch_src, written_region)
     assert_equal(torch_out_ref, out_host)
+
+
+def test_slice_write_strided_unaligned_batched_rows(device):
+    """Each scratch row needs an aligned pitch when one barrier stages multiple rows."""
+    shape = (8, 65)
+    begins, ends, strides = [0, 1], [8, 64], [1, 2]
+    slices = tuple(slice(b, e, s) for b, e, s in zip(begins, ends, strides))
+
+    torch_out_ref = torch.zeros(shape, dtype=torch.bfloat16)
+    torch_src = offset_increment_tensor(torch_out_ref[slices].shape, dtype=torch.bfloat16)
+    torch_out_ref[slices] = torch_src
+
+    tt_out = ttnn.from_torch(
+        torch.zeros_like(torch_out_ref), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
+    )
+    tt_in = ttnn.from_torch(torch_src, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+    tt_in = ttnn.to_memory_config(tt_in, ttnn.L1_MEMORY_CONFIG)
+
+    ttnn.experimental.slice_write(tt_in, tt_out, begins, ends, strides)
+
+    assert_equal(torch_out_ref, ttnn.to_torch(tt_out))

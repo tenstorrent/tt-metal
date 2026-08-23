@@ -14,7 +14,7 @@
 
 #include "slice_write_writer_common.hpp"
 
-template <uint32_t alignment_offset, uint32_t page_begins_offset, uint32_t element_size>
+template <uint32_t alignment_offset, uint32_t page_begins_offset, uint32_t element_size, uint32_t output_row_stride>
 TT_KERNEL void writer(
     uint32_t output_stick_size,
     uint32_t input_stick_size,
@@ -50,7 +50,7 @@ TT_KERNEL void writer(
                 output_stick_size,
                 {.page_id = src_stick_id},
                 {});
-            output_offset += output_stick_size;
+            output_offset += output_row_stride;
             src_stick_id += geometry.reverse_stride[1];
             slice_write::advance(num_dims, geometry, src_stick_id);
         }
@@ -78,7 +78,7 @@ TT_KERNEL void writer(
                 output_stick_size,
                 {},
                 {.page_id = dst_stick_id});
-            output_offset += output_stick_size;
+            output_offset += output_row_stride;
             src_offset += stick_size_offset;
             dst_stick_id += geometry.reverse_stride[1];
             slice_write::advance(num_dims, geometry, dst_stick_id);
