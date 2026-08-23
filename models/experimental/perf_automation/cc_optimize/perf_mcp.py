@@ -6202,6 +6202,21 @@ def termination_check() -> dict:
             "grid": o.get("grid"),
             "weight_dtype": o.get("weight_dtype"),
         }
+        # THE STAGE AXIS, CARRIED. router has had "regime" among its DIMENSIONS all along,
+        # declare_stages() fills its vocabulary from the model's own PIPELINE_STAGES, and
+        # recall_knobs(regime=...) narrows on it -- but a per-op target never carried one, so the only
+        # value ever to reach the axis was the host gate's generation_loop. A knob section written for
+        # one stage was therefore unreachable from an op in that stage: the KV-cache section is
+        # `op_class: attention, datamove` + `regime: decode`, and narrowing by op_class alone cannot
+        # find it.
+        #
+        # ABSENT RATHER THAN "na" when the op does not know. "na" is a VALUE in that vocabulary -- it
+        # asserts "belongs to no stage" -- so passing it would narrow the search to levers tagged
+        # stage-less rather than leaving the axis open. Ops carry "na" today because their source is
+        # unwired (tracy_tool: TBD(regime-source)), and an unwired source must read as silence.
+        _rg = str(o.get("regime") or "").strip().lower()
+        if _rg and _rg != "na":
+            entry["regime"] = _rg
         done, rung, reason = _op_ladder_status(o, op_code, attempts)
         if done:
             cleared.append({**entry, "verdict": reason})
