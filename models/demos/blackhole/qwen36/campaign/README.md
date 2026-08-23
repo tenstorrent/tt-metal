@@ -80,3 +80,35 @@ decode / MLP / CCL / sampling dominates the decode step.
 sbatch --export=ALL,REF=<ref>,QWEN38_BENCH_STEPS=1024,RUN_PREFILL=1 \
     models/demos/blackhole/qwen36/campaign/run_bench.sbatch
 ```
+
+## Accuracy gate (precision ladder)
+
+`eval_gate.py` + `run_eval.sbatch` (job name `qwen38-eval`, own singleton) — the
+go/no-go for every precision rung (bfp8 KV, bfp4 down-proj, ...). Self-contained
+(no eval service); runs the same serving path the benches measure. Two stages,
+each emitting an `EVAL_JSON {...}` line (appended to
+`/data/ayerofieiev/qwen38/eval_results.jsonl`):
+
+- **`test_gpqa_diamond_10`** — GPQA-diamond 10-doc subset, free generation +
+  letter extraction. HARD-FAILS on empty responses (serving collapse must not
+  masquerade as a low score). Needs the one-time data fetch below; skips
+  (loudly) without it.
+- **`test_top1_agreement`** — the cheap rung gate: `QWEN38_EVAL_TF_STEPS` (200)
+  teacher-forced decode steps over a fixed corpus, greedy top-1 recorded per
+  step. Dump the reference config once (`QWEN38_EVAL_DUMP_REF=/data/.../tf_ref.json`),
+  then each rung reports agreement % against it (`QWEN38_EVAL_REF=...`); also
+  asserts step determinism across identical batch rows.
+
+GPQA data is HF-gated and cluster egress is slow — fetch the 10-doc subset once
+on a workstation (exact recipe in the `eval_gate.py` docstring) and rsync it to
+`/data/ayerofieiev/qwen38/eval_data/gpqa_diamond_10.json` (`QWEN38_GPQA_PATH`
+overrides).
+
+```
+# reference (once per model/mesh)
+sbatch --export=ALL,REF=<ref>,QWEN38_EVAL_DUMP_REF=/data/ayerofieiev/qwen38/eval_data/tf_ref.json \
+    models/demos/blackhole/qwen36/campaign/run_eval.sbatch
+# each precision rung
+sbatch --export=ALL,REF=<rung-branch>,QWEN38_EVAL_REF=/data/ayerofieiev/qwen38/eval_data/tf_ref.json \
+    models/demos/blackhole/qwen36/campaign/run_eval.sbatch
+```
