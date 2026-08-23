@@ -2369,6 +2369,71 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             attributes.output_mem_config,
             std::nullopt);
     }
+
+    // ---- fused greedy-argmax epilogue eligibility (opt-in via the preallocated partials tensor) ----
+    // Blackhole DRAM-sharded matmul only: the pack RISC's RVV unit scans each worker's freshly
+    // packed output tiles in the pack shadow and emits per-worker (index, value) partials.
+    // Opt-in is explicit, so an unsupported configuration is a hard error rather than a silent
+    // fallback (keeps A/B measurements unambiguous).
+    if (args.fused_argmax_partials.has_value()) {
+        const auto& partials = args.fused_argmax_partials.value();
+        TT_FATAL(
+            input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE,
+            "matmul fused_argmax requires a Blackhole device (TRISC vector unit)");
+        TT_FATAL(
+            std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
+                chosen_program_config),
+            "matmul fused_argmax is only supported with MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig");
+        const auto& ds_config =
+            std::get<operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(chosen_program_config);
+        TT_FATAL(!optional_bias.has_value(), "matmul fused_argmax does not support a fused bias");
+        TT_FATAL(
+            !ds_config.fused_activation.has_value(),
+            "matmul fused_argmax does not support a fused activation (greedy argmax wants the raw logits)");
+        TT_FATAL(!attributes.untilize_out, "matmul fused_argmax requires TILE output (untilize_out=false)");
+        TT_FATAL(!attributes.transpose_a && !attributes.transpose_b, "matmul fused_argmax requires no transposes");
+        TT_FATAL(
+            ds_config.per_core_M == 1,
+            "matmul fused_argmax supports decode shapes only (per_core_M == 1, got {})",
+            ds_config.per_core_M);
+        TT_FATAL(
+            a_shape_padded[-2] == in0_tile.get_tile_shape()[0] && get_batch_size(a_shape_padded) == 1,
+            "matmul fused_argmax supports a single output tile-row (padded M == tile height, no batching)");
+        TT_FATAL(
+            in0_tile.get_tile_shape()[0] == 32 && in0_tile.get_tile_shape()[1] == 32 &&
+                in1_tile.get_tile_shape()[0] == 32 && in1_tile.get_tile_shape()[1] == 32,
+            "matmul fused_argmax requires standard 32x32 tiles");
+        TT_FATAL(
+            !(in1_tile.get_transpose_of_faces() || in1_tile.get_transpose_within_face()),
+            "matmul fused_argmax does not support transposed in1 tiles");
+        const auto out_dtype = attributes.output_dtype.value_or(input_tensor_a.dtype());
+        TT_FATAL(
+            out_dtype == DataType::BFLOAT16,
+            "matmul fused_argmax requires BFLOAT16 output (the RVV scan reads packed bf16 tiles), got {}",
+            out_dtype);
+        TT_FATAL(
+            input_tensor_b.dtype() == DataType::BFLOAT16 || input_tensor_b.dtype() == DataType::BFLOAT8_B,
+            "matmul fused_argmax requires BFLOAT16 or BFLOAT8_B weights, got {}",
+            input_tensor_b.dtype());
+        // Partials tensor contract: one 64-word page per DRAM-bank worker.
+        TT_FATAL(
+            partials.dtype() == DataType::UINT32, "fused_argmax partials must be UINT32, got {}", partials.dtype());
+        TT_FATAL(
+            partials.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            "fused_argmax partials must be ROW_MAJOR, got {}",
+            partials.layout());
+        TT_FATAL(
+            partials.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "fused_argmax partials must be INTERLEAVED, got {}",
+            partials.memory_config().memory_layout());
+        const uint32_t num_dram_banks = input_tensor_a.device()->num_dram_channels();
+        TT_FATAL(
+            partials.logical_shape()[-1] == 64 && partials.logical_shape()[-2] == num_dram_banks &&
+                partials.logical_volume() == static_cast<uint64_t>(64) * num_dram_banks,
+            "fused_argmax partials must have shape [1, 1, num_dram_banks ({}), 64], got {}",
+            num_dram_banks,
+            partials.logical_shape());
+    }
 }
 
 MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output_specs(
@@ -2738,6 +2803,10 @@ ttsl::hash::hash_t MatmulDeviceOperation::compute_descriptor_program_hash(
             hash = ttsl::hash::hash_objects(hash, optional_output_tensor.value());
         }
     }
+
+    if (args.fused_argmax_partials.has_value()) {
+        hash = ttsl::hash::hash_objects(hash, args.fused_argmax_partials.value());
+    }
     return hash;
 }
 
@@ -2880,7 +2949,8 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
     const Tensor& input_tensor_b,
     const std::optional<Tensor>& bias,
     const std::optional<Tensor>& optional_output_tensor,
-    const MatmulParams& attributes) {
+    const MatmulParams& attributes,
+    const std::optional<Tensor>& fused_argmax_partials) {
     MatmulParams normalized_attributes = attributes;
     if (!normalized_attributes.program_config.has_value()) {
         uint32_t bias_single_tile_size = 0;
@@ -2900,7 +2970,8 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
     operations::matmul::normalize_program_config(
         normalized_attributes.program_config.value(), input_tensor_a.device()->compute_with_storage_grid_size());
     return ttnn::device_operation::launch<MatmulDeviceOperation>(
-        normalized_attributes, {{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}});
+        normalized_attributes,
+        {{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}, fused_argmax_partials});
 }
 
 MatmulDeviceOperation::tensor_return_value_t matmul(

@@ -43,7 +43,8 @@ Tensor matmul(
     const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
     std::optional<Tensor> optional_output_tensor = std::nullopt,
     const std::optional<const GlobalCircularBuffer>& global_cb = std::nullopt,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
+    const std::optional<Tensor>& fused_argmax_partials = std::nullopt);
 
 std::vector<Tensor> matmul_batched_weights(
     const Tensor& input_tensor_a,

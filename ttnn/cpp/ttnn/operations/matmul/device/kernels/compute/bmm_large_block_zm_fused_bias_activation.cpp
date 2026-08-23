@@ -21,6 +21,279 @@
 #include "bmm_fused_activation.hpp"
 #endif
 
+// ============================================================================
+// FUSED_ARGMAX — opt-in greedy-argmax epilogue for the DRAM-sharded decode
+// matmul (Blackhole only; factory sets the define only when the caller
+// provides the partials tensor and the eligibility gates pass: no bias, no
+// activation, TILE bf16 output, per_core_M == 1, 32x32 tiles).
+//
+// The pack RISC (TRISC2) carries a Zve32f vector unit that is idle in this
+// kernel. After each output subblock's pack sequence is QUEUED, TRISC2 scans
+// the PREVIOUS subblock's freshly packed bf16 tiles straight out of the
+// output CB and keeps per-row running argmax+maxval state; per-worker
+// (global_index, value_bits) partials are staged into a small CB that the
+// in1 sender/writer drains to the preallocated partials tensor (8 DRAM-bank
+// workers => 8 partials, combined by the caller: 8 compares).
+//
+// Deferred-consume order (the silicon-measured mechanic, THREEWAY_
+// OPPORTUNITIES.md MEASURED M.3): scanning the subblock that was just packed
+// would chain the NEXT subblock's queue behind pack_done + scan and stall the
+// math thread on DST halves (+24% measured at the LM-head cadence). Deferring
+// the scan by one FULL SUBBLOCK means the mailbox wait for subblock s-1 is
+// answered while subblock s's whole sequence sits queued in the Tensix FIFO,
+// so the scan runs entirely inside the queued-work shadow (defer-by-2 at
+// tile granularity measured +0.21% wall; a subblock defer is the same
+// mechanic at 8-tile granularity). The mailbox is the c_out received stream
+// register: the queued cb_push_back STOREREG updates it only after the pack
+// HW physically wrote the tiles — true data-ready, and legal by construction
+// because this kernel single-buffers the whole output block (pages are not
+// recycled until the writer drains them at the end).
+//
+// Semantics — exactly ttnn.argmax's bfloat16_greater + smallest-index rule:
+// bfloat16_greater is a pure sign-magnitude bit-pattern total order; the xor
+// trick (t = x ^ 0x8000) makes unsigned lane max agree with it whenever any
+// sign-0 pattern exists, and an all-negative row takes an exact unsigned-MIN
+// fix-up (both-negative order is reversed). Cross-tile combines happen in the
+// fully monotone domain m = x ^ ((x >> 15 arith) | 0x8000), seeded with
+// m(0xFF80) — the incumbent's -inf init. Strictly-greater updates plus a
+// first-match in-tile re-scan preserve the smallest-index tie-break; across
+// workers, ascending-bank host combine with strictly-greater keeps the
+// lowest GLOBAL index. The scan covers only the LOGICAL output width, so
+// padded-vocab tail columns never participate (no -inf mask add needed).
+//
+// REGISTER BUDGET (hard-earned, argmax_rvv_tile_compute.cpp): e16m4 keeps the
+// vector working set at 8 of 32 vregs; helpers stay noinline; any change must
+// be checked for vlenb-scaled stack frames (TRISC2 has ~256B of stack; e16m8
+// dual-stream spills multi-KB and hangs silicon). VLEN=128: 16 lanes of e16
+// need m2 (e16m1 caps vl at 8).
+// ============================================================================
+#if defined(FUSED_ARGMAX) && defined(TRISC_PACK)
+#include <riscv_vector.h>
+#include "api/compute/common.h"           // get_local_cb_interface / stream-register CB pointers
+#include "internal/tt-1xx/risc_common.h"  // invalidate_l1_cache(), reg_read
+
+namespace fused_argmax {
+
+constexpr uint16_t kSignBit = 0x8000u;
+// Monotone image of 0xFF80 (-inf) — the incumbent scan's initial max value.
+constexpr uint16_t kInitMono = 0x007Fu;
+
+// Running per-row state. Static => local data memory, not the (tiny) stack.
+static uint16_t s_mono[32];
+static uint16_t s_raw[32];
+static uint32_t s_idx[32];
+
+struct FaState {
+    uint32_t c_out_base = 0;     // byte address of output CB page 0 (pre-push snapshot)
+    uint32_t page_bytes = 0;     // output CB page stride (bf16 32x32 tile = 2048B)
+    uint32_t recv_reg = 0;       // MMIO address of the output CB received stream register
+    uint16_t recv_base = 0;      // its value before the first push
+    uint32_t n_tile_offset = 0;  // this worker's global column offset, in tiles
+    uint32_t valid_w = 0;        // valid (logical) output tiles on this worker
+    uint32_t valid_rows = 0;     // valid output rows (decode batch), <= 32
+    uint32_t n_groups = 0;       // row-pair groups = ceil(valid_rows / 2)
+    uint32_t sb_tiles = 0;       // tiles per subblock push
+    uint32_t total_tiles = 0;    // per-core output tiles (incl. subblock padding)
+    uint32_t sb_pushed = 0;      // subblock pack sequences queued so far
+    uint32_t sb_consumed = 0;    // subblocks scanned so far
+};
+static FaState fa;
+
+inline void init(uint32_t out_cb, uint32_t sb_tiles, uint32_t total_tiles) {
+    LocalCBInterface& intf = get_local_cb_interface(out_cb);
+    fa.c_out_base = intf.fifo_wr_ptr << 4;  // pre-push: wr ptr == base
+    fa.page_bytes = intf.fifo_page_size << 4;
+    fa.recv_reg = (uint32_t)(uintptr_t)get_cb_tiles_received_ptr((int)out_cb);
+    fa.recv_base = (uint16_t)reg_read(fa.recv_reg);
+    fa.n_tile_offset = get_arg_val<uint32_t>(1);
+    fa.valid_w = get_arg_val<uint32_t>(2);
+    fa.valid_rows = get_arg_val<uint32_t>(3);
+    fa.n_groups = (fa.valid_rows + 1) / 2;
+    fa.sb_tiles = sb_tiles;
+    fa.total_tiles = total_tiles;
+    fa.sb_pushed = 0;
+    fa.sb_consumed = 0;
+    for (uint32_t r = 0; r < 32; r++) {
+        s_mono[r] = kInitMono;
+        s_raw[r] = 0xFF80u;  // -inf: the incumbent's init value
+        s_idx[r] = 0;
+    }
+}
+
+// Scan row-pair group `g` across a run of `ntiles` CONSECUTIVE packed bf16
+// 32x32 tiles (faces 0..3, 512B each; left faces hold cols 0..15, right
+// faces +512B cols 16..31) starting at L1 address base0, and fold it into
+// the running per-row state. Batching pass A across the whole subblock
+// amortizes the (expensive) per-row lane reductions over ntiles tiles —
+// exactly the argmax-RVV op's chunk structure, with a contiguous-page walk.
+// first_tile_col is the GLOBAL column index of the first tile in the run.
+__attribute__((noinline)) static void scan_group_run(
+    uint32_t base0, uint32_t ntiles, uint32_t g, uint32_t rows_in_group, uint32_t first_tile_col) {
+    const uint32_t left_off = ((g < 8) ? 0u : 1024u) + (g & 7u) * 64u;
+    const size_t vl = __riscv_vsetvl_e16m4(32);
+
+    // Pass A: lane-wise max of x ^ 0x8000 across the run's tiles. The two
+    // 16-elem face rows of a row-pair are CONTIGUOUS in a face, so one e16m4
+    // (vl=32) load covers rows {2g, 2g+1} x one face.
+    vuint16m4_t acc_l = __riscv_vmv_v_x_u16m4(0, vl);
+    vuint16m4_t acc_r = __riscv_vmv_v_x_u16m4(0, vl);
+    for (uint32_t t = 0; t < ntiles; t++) {
+        const uint32_t base = base0 + t * fa.page_bytes;
+        vuint16m4_t va = __riscv_vle16_v_u16m4((const uint16_t*)(base + left_off), vl);
+        vuint16m4_t vb = __riscv_vle16_v_u16m4((const uint16_t*)(base + left_off + 512u), vl);
+        va = __riscv_vxor_vx_u16m4(va, kSignBit, vl);
+        vb = __riscv_vxor_vx_u16m4(vb, kSignBit, vl);
+        acc_l = __riscv_vmaxu_vv_u16m4(acc_l, va, vl);
+        acc_r = __riscv_vmaxu_vv_u16m4(acc_r, vb, vl);
+    }
+
+    for (uint32_t rr = 0; rr < rows_in_group; rr++) {
+        const uint32_t row = 2 * g + rr;
+        const uint32_t row_off = left_off + rr * 32u;  // 16 bf16 = 32B per face row
+
+        vuint16m4_t sl = rr ? __riscv_vslidedown_vx_u16m4(acc_l, 16, vl) : acc_l;
+        vuint16m4_t sr = rr ? __riscv_vslidedown_vx_u16m4(acc_r, 16, vl) : acc_r;
+        const vuint16m1_t z = __riscv_vmv_s_x_u16m1(0, 1);
+        uint16_t t_row = __riscv_vmv_x_s_u16m1_u16(__riscv_vredmaxu_vs_u16m4_u16m1(sl, z, 16));
+        const uint16_t t_r = __riscv_vmv_x_s_u16m1_u16(__riscv_vredmaxu_vs_u16m4_u16m1(sr, z, 16));
+        if (t_r > t_row) {
+            t_row = t_r;
+        }
+
+        uint16_t mono;
+        uint16_t raw;
+        if (t_row >= kSignBit) {
+            // Some sign-0 pattern exists: xor-domain max IS the winner.
+            mono = t_row;
+            raw = (uint16_t)(t_row ^ kSignBit);
+        } else {
+            // All-negative run-row: both-negative order is reversed — take
+            // the exact unsigned MIN over the (still resident) run.
+            // NOTE: 16 lanes of e16 need m2 — VLEN=128 caps e16m1 at vl=8.
+            const size_t vl1 = __riscv_vsetvl_e16m2(16);
+            vuint16m2_t mn = __riscv_vmv_v_x_u16m2(0xFFFFu, vl1);
+            for (uint32_t t = 0; t < ntiles; t++) {
+                const uint32_t base = base0 + t * fa.page_bytes;
+                vuint16m2_t a = __riscv_vle16_v_u16m2((const uint16_t*)(base + row_off), vl1);
+                vuint16m2_t b = __riscv_vle16_v_u16m2((const uint16_t*)(base + row_off + 512u), vl1);
+                a = __riscv_vxor_vx_u16m2(a, kSignBit, vl1);
+                b = __riscv_vxor_vx_u16m2(b, kSignBit, vl1);
+                mn = __riscv_vminu_vv_u16m2(mn, a, vl1);
+                mn = __riscv_vminu_vv_u16m2(mn, b, vl1);
+            }
+            const uint16_t t_min =
+                __riscv_vmv_x_s_u16m1_u16(__riscv_vredminu_vs_u16m2_u16m1(mn, __riscv_vmv_s_x_u16m1(0xFFFFu, 1), vl1));
+            mono = (uint16_t)(t_min ^ 0x7FFFu);
+            raw = (uint16_t)(t_min ^ kSignBit);
+        }
+
+        // Strictly-greater keeps the earliest occurrence across runs;
+        // ascending first-match re-scan keeps it within the run.
+        if (mono > s_mono[row]) {
+            const size_t vl1 = __riscv_vsetvl_e16m2(16);
+            uint32_t idx = 0;
+            for (uint32_t t = 0; t < ntiles; t++) {
+                const uint32_t base = base0 + t * fa.page_bytes;
+                const vuint16m2_t ca = __riscv_vle16_v_u16m2((const uint16_t*)(base + row_off), vl1);
+                const long f_l = __riscv_vfirst_m_b8(__riscv_vmseq_vx_u16m2_b8(ca, raw, vl1), vl1);
+                if (f_l >= 0) {
+                    idx = (first_tile_col + t) * 32u + (uint32_t)f_l;
+                    break;
+                }
+                const vuint16m2_t cb = __riscv_vle16_v_u16m2((const uint16_t*)(base + row_off + 512u), vl1);
+                const long f_r = __riscv_vfirst_m_b8(__riscv_vmseq_vx_u16m2_b8(cb, raw, vl1), vl1);
+                if (f_r >= 0) {
+                    idx = (first_tile_col + t) * 32u + 16u + (uint32_t)f_r;
+                    break;
+                }
+            }
+            s_mono[row] = mono;
+            s_raw[row] = raw;
+            s_idx[row] = idx;
+        }
+    }
+}
+
+// Consume one pushed subblock: mailbox-wait until the output CB received
+// stream register (updated by the queued cb_push_back STOREREG only after
+// the pack HW physically wrote the tiles) covers it, then scan its (valid)
+// tiles as one contiguous run per row-pair group.
+static void consume_subblock(uint32_t sbi) {
+    const uint32_t t0 = sbi * fa.sb_tiles;
+    uint32_t t1 = t0 + fa.sb_tiles;
+    if (t1 > fa.total_tiles) {
+        t1 = fa.total_tiles;
+    }
+    while ((uint16_t)((uint16_t)reg_read(fa.recv_reg) - fa.recv_base) < (uint16_t)t1) {
+    }
+    fa.sb_consumed = sbi + 1;
+    // Clamp to the logical width: subblock-pad DST lanes and bank-pad tiles
+    // are packed but never scanned.
+    const uint32_t tv = (t1 < fa.valid_w) ? t1 : fa.valid_w;
+    if (tv <= t0) {
+        return;
+    }
+    invalidate_l1_cache();  // BH: L1 data reads after MMIO count poll
+    const uint32_t base0 = fa.c_out_base + t0 * fa.page_bytes;
+    for (uint32_t g = 0; g < fa.n_groups; g++) {
+        const uint32_t rows_in_group = (fa.valid_rows - 2 * g < 2u) ? (fa.valid_rows - 2 * g) : 2u;
+        scan_group_run(base0, tv - t0, g, rows_in_group, fa.n_tile_offset + t0);
+    }
+}
+
+// Called right after each output subblock's pack sequence is queued:
+// defer-by-one-subblock consume order (see header note).
+//
+// MODE SPLIT (silicon-measured): for decode-b1 shapes (<= 2 row-pair groups)
+// the per-subblock scan is light enough to ride the pack shadow (+0.9%
+// per-op device span). For full-tile row counts the per-run extraction cost
+// times 16 groups exceeds the LAST inner K-block's shadow (all output packs
+// concentrate there in this kernel's K-outer loop order; measured +34%/op
+// when scanned per subblock). Those shapes skip the in-loop scans entirely
+// and take ONE full-width run per group at finalize — the argmax-RVV op's
+// chunk shape, amortizing extraction over the whole per-core width, and
+// overlapping the writer's output write-back instead.
+inline void on_subblock_pushed() {
+    fa.sb_pushed++;
+    if (fa.n_groups <= 2 && fa.sb_pushed >= 2) {
+        consume_subblock(fa.sb_pushed - 2);
+    }
+}
+
+// Tail: scan whatever is still outstanding, then publish the partials page
+// (32 x (index, value bits) u32 pairs) into the staging CB — we are its sole
+// producer; the in1 sender/writer drains it with plain dataflow calls.
+static void finalize(uint32_t cb_partials) {
+    const uint32_t n_subblocks = (fa.total_tiles + fa.sb_tiles - 1) / fa.sb_tiles;
+    if (fa.n_groups <= 2) {
+        while (fa.sb_consumed < n_subblocks) {
+            consume_subblock(fa.sb_consumed);
+        }
+    } else if (fa.valid_w > 0) {
+        // Full-tile row counts: one full-width run per group (see the mode
+        // note at on_subblock_pushed). Wait once for every tile, then scan.
+        while ((uint16_t)((uint16_t)reg_read(fa.recv_reg) - fa.recv_base) < (uint16_t)fa.total_tiles) {
+        }
+        invalidate_l1_cache();  // BH: L1 data reads after MMIO count poll
+        for (uint32_t g = 0; g < fa.n_groups; g++) {
+            const uint32_t rows_in_group = (fa.valid_rows - 2 * g < 2u) ? (fa.valid_rows - 2 * g) : 2u;
+            scan_group_run(fa.c_out_base, fa.valid_w, g, rows_in_group, fa.n_tile_offset);
+        }
+    }
+    LocalCBInterface& intf = get_local_cb_interface(cb_partials);
+    volatile uint32_t* page = (volatile uint32_t*)(intf.fifo_wr_ptr << 4);
+    for (uint32_t r = 0; r < 32; r++) {
+        page[2 * r] = s_idx[r];
+        page[2 * r + 1] = (uint32_t)s_raw[r];
+    }
+    asm volatile("fence" ::: "memory");
+    (void)page[63];                                      // read-back orders the L1 stores before the MMIO count store
+    get_cb_tiles_received_ptr((int)cb_partials)[0] = 1;  // sole producer; counter is 0 at launch
+}
+
+}  // namespace fused_argmax
+#endif  // FUSED_ARGMAX && TRISC_PACK
+
 // Please update
 // tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation_copy.cpp
 // when making any changes to this file.
@@ -266,6 +539,12 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_id);
     matmul_block_init(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+
+#if defined(FUSED_ARGMAX) && defined(TRISC_PACK)
+    // Snapshot the output CB geometry BEFORE any push (wr ptr still == base) and
+    // load this worker's scan extent from the runtime args.
+    fused_argmax::init(out_dfb_id, out_subblock_num_tiles, out_block_num_tiles);
+#endif
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
@@ -411,6 +690,12 @@ void kernel_main() {
 
                                 tile_regs_release();
                                 mm_out_dfb.push_back(out_subblock_num_tiles);
+
+#if defined(FUSED_ARGMAX) && defined(TRISC_PACK)
+                                // RVV argmax scan of the PREVIOUS subblock, in the shadow of
+                                // the sequence just queued (defer-by-one-subblock).
+                                fused_argmax::on_subblock_pushed();
+#endif
 
                             } else {
                                 tile_regs_commit();
@@ -619,5 +904,10 @@ void kernel_main() {
     if constexpr (num_blocks_w_dim == 1) {
         bias_dfb.pop_front(bias_ntiles);
     }
+#endif
+
+#if defined(FUSED_ARGMAX) && defined(TRISC_PACK)
+    // Scan the last outstanding subblock(s) and publish this worker's partials page.
+    fused_argmax::finalize(get_named_compile_time_arg_val("cb_argmax_partials"));
 #endif
 }

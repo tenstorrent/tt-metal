@@ -69,7 +69,8 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
     const Tensor& input_tensor_b,
     const std::optional<Tensor>& bias = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    const MatmulParams& attributes = MatmulParams());
+    const MatmulParams& attributes = MatmulParams(),
+    const std::optional<Tensor>& fused_argmax_partials = std::nullopt);
 
 MatmulDeviceOperation::tensor_return_value_t matmul(
     const std::vector<Tensor>& input_tensors,

@@ -10,6 +10,9 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#ifdef FUSED_ARGMAX
+#include "internal/tt-1xx/risc_common.h"  // invalidate_l1_cache()
+#endif
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -214,6 +217,32 @@ void kernel_main() {
 #endif
 
     dfb_out.pop_front(out_block_num_tiles);
+
+#ifdef FUSED_ARGMAX
+    // Fused greedy-argmax epilogue: drain this worker's partials page (32 x
+    // (global_index, value_bits) u32 pairs, raw-produced by the pack RISC once
+    // its scan finishes) and write it to page `partials_page_id` of the
+    // preallocated INTERLEAVED partials tensor. Bias is excluded by the host
+    // validation, so the compile-time args sit at fixed indices 9/10.. and the
+    // runtime args at 7 + 3 * num_shard_to_write_back.
+    {
+        constexpr uint32_t partials_page_size = get_compile_time_arg_val(9);
+        constexpr auto partials_acc_args = TensorAccessorArgs<10>();
+        constexpr uint32_t dfb_id_partials = get_named_compile_time_arg_val("cb_argmax_partials");
+
+        const uint32_t partials_rt_base = 7 + 3 * num_shard_to_write_back;
+        const uint32_t partials_addr = get_arg_val<uint32_t>(partials_rt_base);
+        const uint32_t partials_page_id = get_arg_val<uint32_t>(partials_rt_base + 1);
+
+        DataflowBuffer dfb_partials(dfb_id_partials);
+        dfb_partials.wait_front(1);
+        invalidate_l1_cache();  // BH: L1 data reads after the stream-register wait
+        const auto s_partials = TensorAccessor(partials_acc_args, partials_addr, partials_page_size);
+        noc_async_write(dfb_partials.get_read_ptr(), s_partials.get_noc_addr(partials_page_id), partials_page_size);
+        noc_async_write_barrier();
+        dfb_partials.pop_front(1);
+    }
+#endif
 
     // Restore NCRISC_RD_CMD_BUF NOC_CTRL to the firmware default (VC=1, set in
     // noc_init). set_async_read_state<NocOptions::CUSTOM_VC> writes a per-bank VC into NOC_CTRL
