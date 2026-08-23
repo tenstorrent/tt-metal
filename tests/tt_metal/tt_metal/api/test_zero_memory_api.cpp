@@ -514,20 +514,33 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApiRawL1Batched) {
          .num_chunks = 4});
 }
 
-// Zeros streamed to DRAM from a Scratchpad, with no CB/DFB in the program.
-TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApiDramFromScratchpad) {
-    constexpr uint32_t pad_bytes = 1024;  // >= min(page_size, NOC_MAX_BURST_SIZE) = 512
+// Zeros streamed to DRAM from a raw L1 handle, with no CB/DFB in the program.
+static void RunDramFromRawL1Test(distributed::MeshDevice& mesh_device, RawL1Target target) {
+    // The pre-zeroed prefix must cover min(page_size, NOC_MAX_BURST_SIZE) -- the largest single burst
+    // overload (2) issues from the (never-advancing) scratch address. NOC_MAX_BURST_SIZE is 512 B on
+    // WH but 16 KB on BH and 64 KB on Quasar, so on those two that minimum is the WHOLE page: size the
+    // region to a full page, or the burst reads past the region and streams whatever follows it in L1
+    // to DRAM. A smaller region can still pass by luck when the bytes after it happen to be zero.
+    // Also >= one 32x32 BFLOAT16 tile so the LocalTensorAccessor target is a legal TILE-layout tensor.
+    constexpr uint32_t region_bytes = 4096;
     constexpr uint32_t num_pages = 4;
     constexpr uint32_t page_size_bytes = 4 * 1024;
     constexpr uint32_t total_words = num_pages * (page_size_bytes / sizeof(uint32_t));
-    constexpr uint32_t flag_addr = 100 * 1024;
+    constexpr uint32_t kFlagAddr = 100 * 1024;
+    constexpr uint32_t kCoreLocalMemAddr = 104 * 1024 + 16;
     const experimental::NodeCoord node{0, 0};
 
     std::vector<uint32_t> sentinel{0xBAADF00Du};
-    slow_dispatch::WriteToL1(this->device(), node, flag_addr, sentinel);
+    slow_dispatch::WriteToL1(mesh_device, node, kFlagAddr, sentinel);
 
-    auto tensor =
-        MeshTensor::allocate_on_device(this->device(), make_flat_dram_tensor_spec(page_size_bytes, num_pages));
+    // Seed the CoreLocalMem region with junk, so the kernel's own all-zero check on the scratch
+    // proves overload (1) ran rather than finding incidentally-zero L1.
+    if (target == RawL1Target::CoreLocalMem) {
+        std::vector<uint32_t> junk(region_bytes / sizeof(uint32_t), 0xEEEEEEEEu);
+        slow_dispatch::WriteToL1(mesh_device, node, kCoreLocalMemAddr, junk);
+    }
+
+    auto tensor = MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(page_size_bytes, num_pages));
     std::vector<uint32_t> stamped(total_words, 0xFFFFFFFFu);
     slow_dispatch::WriteToBuffer(tensor.mesh_buffer(), stamped);
 
@@ -542,43 +555,67 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApiDramFromScratchpad) {
     experimental::KernelSpec kernel{
         .unique_id = RAW_L1_KERNEL,
         .source =
-            std::filesystem::path{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_dram_from_scratchpad.cpp"},
+            std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_dram_from_raw_l1.cpp"},
         .num_threads = 1,
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "out"}},
-        .runtime_arg_schema = {.runtime_arg_names = {"page_start", "page_end", "page_size", "flag_addr"}},
-        .hw_config = make_dm_config(this->device().arch(), DataMovementProcessor::RISCV_0, NOC::RISCV_0_default),
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"page_start", "page_end", "page_size", "flag_addr", "region_bytes", "region_addr"}},
+        .hw_config = make_dm_config(mesh_device.arch(), DataMovementProcessor::RISCV_0, NOC::RISCV_0_default),
     };
-    kernel.scratchpad_bindings.push_back(experimental::KernelSpec::ScratchpadBinding{
-        .scratchpad_spec_name = experimental::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    kernel.compiler_options.defines.emplace(TargetDefine(target), "1");
 
     experimental::ProgramSpec spec{
-        .name = "zero_memory_api_dram_from_scratchpad",
+        .name = "zero_memory_api_dram_from_raw_l1",
         .kernels = {kernel},
-        .scratchpads = {experimental::ScratchpadSpec{
-            .unique_id = experimental::ScratchpadSpecName{"pad"}, .size_per_node = pad_bytes}},
         .tensor_parameters = {{.unique_id = OUT_TENSOR, .spec = tensor.tensor_spec()}},
         .work_units = {{.name = "main", .kernels = {RAW_L1_KERNEL}, .target_nodes = node}},
     };
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+
+    // Per-target binding for the scratch region.
+    std::optional<MeshTensor> local_tensor;
+    if (target == RawL1Target::Scratchpad) {
+        spec.scratchpads = {experimental::ScratchpadSpec{
+            .unique_id = experimental::ScratchpadSpecName{"pad"}, .size_per_node = region_bytes}};
+        spec.kernels[0].scratchpad_bindings.push_back(experimental::KernelSpec::ScratchpadBinding{
+            .scratchpad_spec_name = experimental::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    } else if (target == RawL1Target::LocalTensorAccessor) {
+        // region_bytes of BFLOAT16 (2 B/elem) as whole 32-wide tile rows.
+        const uint32_t elems = region_bytes / 2;
+        auto region_param = MakeShardedTensorParameter("region", Shape{elems / 32, 32}, {elems / 32, 32}, 1);
+        spec.tensor_parameters.push_back(region_param);
+        spec.kernels[0].tensor_bindings.push_back(
+            {.tensor_parameter_name = experimental::TensorParamName{"region"}, .accessor_name = "region"});
+        local_tensor.emplace(MeshTensor::allocate_on_device(mesh_device, region_param.spec));
+    }
+
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = RAW_L1_KERNEL,
         .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
             node,
-            {{"page_start", 0u}, {"page_end", num_pages}, {"page_size", page_size_bytes}, {"flag_addr", flag_addr}}),
+            {{"page_start", 0u},
+             {"page_end", num_pages},
+             {"page_size", page_size_bytes},
+             {"flag_addr", kFlagAddr},
+             {"region_bytes", region_bytes},
+             {"region_addr", kCoreLocalMemAddr}}),
     }};
     params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{tensor}}};
+    if (local_tensor.has_value()) {
+        params.tensor_args.emplace(
+            experimental::TensorParamName{"region"}, experimental::ProgramRunArgs::TensorArgument{*local_tensor});
+    }
     experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;
     const distributed::MeshCoordinate zero_coord{0, 0};
     workload.add_program(distributed::MeshCoordinateRange{zero_coord, zero_coord}, std::move(program));
-    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, /*blocking=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
 
     std::vector<uint32_t> flag_out;
-    slow_dispatch::ReadFromL1(this->device(), node, flag_addr, sizeof(uint32_t), flag_out);
+    slow_dispatch::ReadFromL1(mesh_device, node, kFlagAddr, sizeof(uint32_t), flag_out);
     ASSERT_EQ(flag_out.size(), 1u);
     EXPECT_EQ(flag_out[0], kStatusOk) << "in-kernel status: " << StatusName(flag_out[0]) << " (0x" << std::hex
                                       << flag_out[0] << ")";
@@ -592,6 +629,18 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApiDramFromScratchpad) {
             return;
         }
     }
+}
+
+TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApiDramFromScratchpad) {
+    RunDramFromRawL1Test(this->device(), RawL1Target::Scratchpad);
+}
+
+TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApiDramFromCoreLocalMem) {
+    RunDramFromRawL1Test(this->device(), RawL1Target::CoreLocalMem);
+}
+
+TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApiDramFromLocalTensorAccessor) {
+    RunDramFromRawL1Test(this->device(), RawL1Target::LocalTensorAccessor);
 }
 
 }  // namespace tt::tt_metal
