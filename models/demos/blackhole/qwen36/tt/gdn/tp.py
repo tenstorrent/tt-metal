@@ -565,8 +565,11 @@ class TPGatedDeltaNet:
             self.reset_state()
 
         # Prefill qkvzab in L1: keeps proj + q/k/v/z/a/b resident for conv+gate prep.
-        # HP3: chunk > 4096 spills them to DRAM (qkvzab ~307 KB/bank + qkv slice ~186 KB/bank at
-        # 8192 collide with program CBs); chunk <= 4096 keeps the validated L1 placement.
+        # HP3: chunk > 4096 spills them to DRAM. The dominant clash is INSIDE the in-proj AGMM:
+        # out_mc also places its [T, dim] activation-gather intermediate (~764 KB/bank at 8192),
+        # which collides with the AGMM's own ~443 KB CB region ("L1 buffer allocated at 335616,
+        # CB region ends at 443392", 8x9 grid); qkvzab (~307 KB/bank) and the qkv slice add to
+        # it. Chunk <= 4096 keeps the silicon-validated L1 placement (45.13 s / 100k @ 4096).
         _act_mc = ttnn.L1_MEMORY_CONFIG if tpc.prefill_act_in_l1(T) else ttnn.DRAM_MEMORY_CONFIG
         qkv, z, a, b = self._project_qkvzab(x, T, out_mc=_act_mc)
 

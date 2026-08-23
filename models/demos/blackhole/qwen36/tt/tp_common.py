@@ -307,7 +307,14 @@ def all_gather_matmul_prefill(
     x: K-sharded activation [.,S,K/tp]; weight: [K,N] col-sharded (K full). Gathers x to full K and
     matmuls in one op, replacing a separate all_gather + linear. fused_activation applied per tile
     before pack (non-parametrized op, e.g. ttnn.UnaryOpType.SILU). out_memory_config places the result
-    (default DRAM; L1 keeps it resident for downstream slices)."""
+    (default DRAM; L1 keeps it resident for downstream slices).
+
+    HP3 caution: out_memory_config ALSO places the op's activation-gather intermediate
+    [S, K_full] (create_output_specs slot 0 uses output_mem_config for it) — at S=8192 that is
+    ~764 KB/bank in L1, which collides with the op's own ~443 KB CB region ("L1 buffer allocated
+    at 335616, CB region ends at 443392", 8x9 grid). The matmul CBs themselves are
+    MinimalMatmulConfig block-sized and S-independent. Callers wanting an L1 result must gate on
+    prefill_act_in_l1(S) (as gdn _project_qkvzab does); S <= 4096 with L1 is silicon-validated."""
     S, K_local = x.shape[-2], x.shape[-1]
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
     # AG-bound: 2 ethernet links parallelize the gather (P150x4 max; traced_8k TTFT win). grid.x must

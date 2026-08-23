@@ -172,3 +172,46 @@ def test_prefill_l1_activation_gate():
     per_bank = {m: act_bytes_per_bank(m, DIM) for m in (2048, 4096, 8192)}
     assert per_bank[4096] + sweep_cb < bank_l1, "chunk 4096 w2/wo partial must fit beside sweep-level CBs"
     assert per_bank[8192] + sweep_cb > bank_l1, "chunk 8192 w2/wo partial cannot fit beside sweep-level CBs"
+
+
+def _agmm_cb_bytes(m_block, k_block, n_block, in0="bf16", in1="bfp8", out="bf16", interm="fp32"):
+    """Scaled-CB model of all_gather_minimal_matmul_async / minimal_matmul (program factory:
+    in0/in1/out double-buffered on the M/K/N block sizes, interm single-buffered) — every term
+    is a fixed MinimalMatmulConfig block, so the total is chunk-length-INDEPENDENT by
+    construction. Keep in lockstep with tp_common.all_gather_matmul_prefill's config."""
+    from models.demos.blackhole.qwen36.tt.prefill_mm_blocks import TILE_BYTES as T
+
+    return (
+        2 * m_block * k_block * T[in0]
+        + 2 * k_block * n_block * T[in1]
+        + 2 * m_block * n_block * T[out]
+        + m_block * n_block * T[interm]
+    )
+
+
+def test_agmm_l1_budget():
+    """The 8192 wall the fleet hit was NOT AGMM CB growth (frames: gdn _project_qkvzab ->
+    all_gather_matmul_prefill, 8x9 grid): the CBs are block-fixed (~397 KB + AG packet CBs =
+    the observed 443,392 B region, chunk-independent). The colliding L1 *buffer* is the op's
+    activation-gather intermediate [M, dim] — placed by out_memory_config (device op
+    create_output_specs slot 0) — plus the L1 qkvzab output. This asserts the arithmetic:
+    fixed CBs, 4096-with-L1 fits a bank (silicon-validated), 8192-with-L1 cannot (the measured
+    clash), and the prefill_act_in_l1 gate spills exactly the 8192 case to DRAM."""
+    from models.demos.blackhole.qwen36.tt.prefill_mm_blocks import prefill_act_in_l1
+
+    # tp_common.all_gather_matmul_prefill config at TP=8: M_block=4, K_block=agmm_k_block_size
+    # (K_local=640 -> 20 tiles -> 4), N_block=8.
+    cb = _agmm_cb_bytes(4, 4, 8)
+    assert cb == 397_312, "AGMM scaled-CB model drifted"
+    assert cb < 443_392 < MAX_L1_CB_BYTES, "fixed CBs must sit within the observed CB region"
+
+    bank_l1 = 1_400_000  # ~1.37 MB usable per bank (same budget as the activation-gate test)
+    qkvzab_w = 2064  # gdn_qkvz_dim_tp + tile-padded a|b block
+    for m in (2048, 4096, 8192):
+        gather_interm = act_bytes_per_bank(m, DIM)  # [M, dim] gathered activation
+        qkvzab_out = act_bytes_per_bank(m, qkvzab_w)
+        l1_resident = gather_interm + qkvzab_out + 443_392
+        if prefill_act_in_l1(m):
+            assert l1_resident < bank_l1, f"chunk {m} must fit with the validated L1 placement ({l1_resident})"
+        else:
+            assert l1_resident > bank_l1, f"chunk {m} spills to DRAM for a reason ({l1_resident})"
