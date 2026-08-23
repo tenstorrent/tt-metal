@@ -18,6 +18,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
@@ -77,9 +78,19 @@ def shared_expert_sub_device(mesh_device):
             KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE,
             ACTIVATION_SITU,
         ),
+        # DeepSeek-V4-Pro is the only model whose down projection is 24 K-tiles rather than 16 or 48,
+        # so it is the only one where the matmul K block resolves to 12. No MoE test carries a
+        # v4_pro variant, which leaves this the only cover for that branch.
+        (
+            PREFILL_CHUNK_TOKENS_PER_CHIP,
+            DeepSeekV4ProConfig.EMB_SIZE,
+            DeepSeekV4ProConfig.MOE_INTERMEDIATE_SIZE,
+            ACTIVATION_SILU,
+        ),
     ],
-    # Ids name what differs from the case above (the 6144 shared intermediate, the activation).
-    ids=["isl_5k", "isl_5k-k3-6144", "isl_5k-k3-6144-situ"],
+    # Ids name what differs from the case above (the 6144 shared intermediate, the activation, the
+    # v4_pro shape).
+    ids=["isl_5k", "isl_5k-k3-6144", "isl_5k-k3-6144-situ", "isl_5k-v4pro-3072"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
