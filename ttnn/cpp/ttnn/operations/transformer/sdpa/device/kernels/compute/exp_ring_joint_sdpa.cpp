@@ -97,7 +97,10 @@ void kernel_main() {
     constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
     constexpr uint32_t cb_signal = tt::CBIndex::c_12;
 
-    constexpr uint32_t num_q_chunks = local_padded_Nt / Sq_chunk_t + Lt / Sq_chunk_t;
+    // div_up: the last local chunk may be partial (padded Q rows). Matches the factory's
+    // num_q_chunks so flat-id decoding stays consistent across host and kernels.
+    constexpr uint32_t num_q_chunks =
+        (local_padded_Nt + Sq_chunk_t - 1) / Sq_chunk_t + (Lt + Sq_chunk_t - 1) / Sq_chunk_t;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
     matmul_init(cb_q_in, cb_k_in);

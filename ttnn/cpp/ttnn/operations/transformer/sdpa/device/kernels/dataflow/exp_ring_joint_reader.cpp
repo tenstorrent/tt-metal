@@ -82,6 +82,13 @@ void kernel_main() {
 
     RingSDPAOpIndexer fused_op_indexer = RingSDPAOpIndexer(argidx);
 
+    // Split-head forwarding dedup descriptor (meaningful on injector cores only):
+    // 0 = none, 1 = leader (gate on fabric, relay each gate pass to the buddy injector),
+    // 2 = follower (this row's remote twin forwards nothing; gate on the leader's relay).
+    const uint32_t dedup_role = get_arg_val<uint32_t>(argidx++);
+    const uint32_t buddy_injector_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t buddy_injector_y = get_arg_val<uint32_t>(argidx++);
+
     // After fused-op receiver consumed its runtime args, remaining RT args are S&F chain metadata
 
     // Compile-time semaphore ids and mcast flag are appended after all TensorAccessorArgs().
@@ -93,9 +100,29 @@ void kernel_main() {
     // Streamed Q (host fallback when resident Q does not fit L1): cb_q_in holds one chunk, so each
     // pass's Q is re-read every ring iteration and compute pops it at the end of the pass.
     constexpr bool stream_q = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 4) == 1;
+    // Ping-pong valid flag: K broadcasts land on receiver_semaphore_id, V broadcasts on this one.
+    // Separate flags per channel let a receiver post its credit (reserve + flag reset + ack) for
+    // chunk n+1 immediately after consuming chunk n, so the injector never waits a post-receipt
+    // round trip between consecutive mcasts (V of chunk n and K of chunk n+1 overlap in flight).
+    const uint32_t receiver_semaphore_b_id = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 5);
+    // V-channel ack counter, separate from the K-channel counter (sender_semaphore_id). K and V
+    // ack totals MUST be counted independently: K credits run one chunk ahead of V credits, so a
+    // combined total would let fast receivers' K(n+1) credits mask a slow receiver's missing V(n)
+    // credit, releasing the V(n) mcast before that receiver reset its V flag (lost VALID ->
+    // deadlock). Per channel, a receiver is at most one credit ahead — exactly the awaited event.
+    const uint32_t sender_semaphore_v_id = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 6);
+    // Split-head forwarding dedup buddy gate (see the AG gate below).
+    const uint32_t buddy_gate_semaphore_id = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 7);
 
     // Receiver flips this to INVALID before each wait; initialize so the first iteration sees it as VALID.
     Semaphore<>(valid_semaphore_id).set(VALID);
+
+    // Injector-side cumulative ack target for the ping-pong protocol. Receivers only ever
+    // increment sender_semaphore (one ack per K or V chunk credit); the injector waits for the
+    // running total instead of wait(N)+set(0), which would race with credits pre-posted for the
+    // next chunk. Reset to 0 at kernel end for cached-program reruns.
+    [[maybe_unused]] uint32_t mcast_k_acks_expected = 0;
+    [[maybe_unused]] uint32_t mcast_v_acks_expected = 0;
 
     uint32_t sender_wait_count = 1;
     if constexpr (mcast_enabled) {
@@ -176,6 +203,20 @@ void kernel_main() {
             continue;
         }
 
+        // Non-skipped KV chunk count this ring iteration (identical for every pass — the skip
+        // predicate depends only on ring_id). Caps the ping-pong credit pre-posting so a receiver
+        // never acks a chunk the injector will not send: a stale credit would let a later mcast
+        // bypass its receiver handshake and clobber an unconsumed CB slot.
+        uint32_t chunks_this_iter = 0;
+        for (uint32_t kc = 0; kc < num_kv_chunks; ++kc) {
+            const bool kc_is_joint = kc >= num_local_k_chunks;
+            const uint32_t kc_global_start_tile = local_padded_Nt * ring_id + kc * Sk_chunk_t;
+            if (!kc_is_joint && kc_global_start_tile >= logical_nt) {
+                continue;
+            }
+            chunks_this_iter++;
+        }
+
         // Passes are serial within a ring iteration: pass p attends head (p * rows + my_row) against
         // this iteration's K/V shard. Every core of a row runs the same number of passes in the same
         // order, which is what keeps the row's K/V CB pointers in lockstep for the mcast.
@@ -206,6 +247,46 @@ void kernel_main() {
             // Every chunk this core owns is on its row's chain, so participation alone decides.
             const bool should_forward = is_chain_participant && !is_sink;
             const bool should_receive = is_chain_participant && !is_injector;
+
+            // Ping-pong receive credits (mcast path only). A credit = reserve the next chunk's CB
+            // slot, reset that channel's valid flag, then ack the injector. Order matters: the
+            // reset must precede the ack, because the injector's mcast for that chunk (data +
+            // valid relay) is released by the ack — resetting after could erase an already-landed
+            // VALID. The reserve must precede the ack so the mcast has a landing slot; it also
+            // provides compute-paced backpressure (reserving chunk n+1 waits for chunk n-1's pop).
+            // Credits are capped at chunks_this_iter so the ack total exactly matches the
+            // injector's cumulative expectation.
+            uint32_t k_credits = 0;
+            uint32_t v_credits = 0;
+            auto post_k_credit = [&]() {
+                if (k_credits < chunks_this_iter) {
+                    CircularBuffer(cb_k_in).reserve_back(k_chunk_tiles);
+                    if (is_mux_writer) {
+                        CircularBuffer(cb_k_writer_in).reserve_back(k_chunk_tiles);
+                    }
+                    Semaphore<>(receiver_semaphore_id).set(INVALID);
+                    Semaphore<>(sender_semaphore_id).up(noc, prev_physical_x, prev_physical_y, 1);
+                    k_credits++;
+                }
+            };
+            auto post_v_credit = [&]() {
+                if (v_credits < chunks_this_iter) {
+                    CircularBuffer(cb_v_in).reserve_back(v_chunk_tiles);
+                    if (is_mux_writer) {
+                        CircularBuffer(cb_v_writer_in).reserve_back(v_chunk_tiles);
+                    }
+                    Semaphore<>(receiver_semaphore_b_id).set(INVALID);
+                    Semaphore<>(sender_semaphore_v_id).up(noc, prev_physical_x, prev_physical_y, 1);
+                    v_credits++;
+                }
+            };
+            if constexpr (mcast_enabled) {
+                if (should_receive) {
+                    // Prime the pipeline: credits for the first K and V chunks of this pass.
+                    post_k_credit();
+                    post_v_credit();
+                }
+            }
 
             // Resident Q: read this pass's chunk exactly once, on the first active ring iteration.
             // Streamed Q: read it every pass, every active iteration (the reserve blocks until
@@ -255,43 +336,75 @@ void kernel_main() {
                 // Per-chunk sync: wait for EACH link's MUX writer to finish writing this chunk
                 if (is_injector && ring_iter > 0 && !kv_chunk_is_joint) {
                     chunks_signaled_by_remote++;
-                    for (uint32_t lnk = 0; lnk < num_links; ++lnk) {
-                        noc_semaphore_wait_min(per_link_sem_ptrs[lnk], chunks_signaled_by_remote);
+                    if (dedup_role == 2) {
+                        // Split-head dedup follower: the remote twin of this row forwards nothing.
+                        // The leader row of the pair (same device, same head, same deterministic
+                        // ring sequence, same gathered region) relays its gate result here.
+                        Semaphore<>(buddy_gate_semaphore_id).wait_min(chunks_signaled_by_remote);
+                    } else {
+                        for (uint32_t lnk = 0; lnk < num_links; ++lnk) {
+                            noc_semaphore_wait_min(per_link_sem_ptrs[lnk], chunks_signaled_by_remote);
+                        }
+                        if (dedup_role == 1) {
+                            // Leader: this chunk of the shared head is proven present in the
+                            // gathered tensor — release the follower row's injector.
+                            Semaphore<>(buddy_gate_semaphore_id).up(noc, buddy_injector_x, buddy_injector_y, 1);
+                        }
                     }
                 }
 
-                // K: get data into CB buffer
+                // K: get data into CB buffer. On the mcast path a receiver's slot was already
+                // reserved when its credit was posted (see post_k_credit), so it only waits for
+                // the valid flag here; the injector reserves/fetches as before.
                 CircularBuffer cb_k(cb_k_in);
                 CircularBuffer cb_k_writer(cb_k_writer_in);
-                cb_k.reserve_back(k_chunk_tiles);
-                if (is_mux_writer) {
-                    cb_k_writer.reserve_back(k_chunk_tiles);
+                uint32_t cb_k_start_address = 0;
+                bool k_mcast_receive = false;
+                if constexpr (mcast_enabled) {
+                    k_mcast_receive = should_receive;
                 }
-                uint32_t cb_k_start_address = cb_k.get_write_ptr();
-                if (should_receive) {
-                    Semaphore<> receiver_sem(receiver_semaphore_id);
-                    receiver_sem.set(INVALID);
-                    Semaphore<>(sender_semaphore_id).up(noc, prev_physical_x, prev_physical_y, 1);
-                    receiver_sem.wait(VALID);
+                if (k_mcast_receive) {
+                    Semaphore<>(receiver_semaphore_id).wait(VALID);
                 } else {
-                    fetch_block(
-                        kv_chunk_is_joint ? joint_k_generator
-                                          : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
-                        kv_slice,
-                        end_seq_tile,
-                        cb_k_in,
-                        cb_k_start_address,
-                        k_tile_bytes,
-                        true /*transpose*/
-                    );
+                    cb_k.reserve_back(k_chunk_tiles);
+                    if (is_mux_writer) {
+                        cb_k_writer.reserve_back(k_chunk_tiles);
+                    }
+                    cb_k_start_address = cb_k.get_write_ptr();
+                    if (should_receive) {
+                        // Unicast-chain path (mcast disabled): original 1-deep handshake.
+                        Semaphore<> receiver_sem(receiver_semaphore_id);
+                        receiver_sem.set(INVALID);
+                        Semaphore<>(sender_semaphore_id).up(noc, prev_physical_x, prev_physical_y, 1);
+                        receiver_sem.wait(VALID);
+                    } else {
+                        fetch_block(
+                            kv_chunk_is_joint ? joint_k_generator
+                                              : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
+                            kv_slice,
+                            end_seq_tile,
+                            cb_k_in,
+                            cb_k_start_address,
+                            k_tile_bytes,
+                            true /*transpose*/
+                        );
+                    }
                 }
 
                 // Forward K to next core(s) before push_back — prevents compute from
                 // popping the buffer while the mcast is still reading from it.
                 if (should_forward) {
-                    Semaphore<> sender_sem(sender_semaphore_id);
-                    sender_sem.wait(sender_wait_count);
-                    sender_sem.set(0);
+                    if constexpr (mcast_enabled) {
+                        // Receivers pre-post their credit for this chunk right after consuming the
+                        // previous K chunk, so this wait is normally already satisfied — the
+                        // post-receipt round trip is off the critical path.
+                        mcast_k_acks_expected += sender_wait_count;
+                        Semaphore<>(sender_semaphore_id).wait_min(mcast_k_acks_expected);
+                    } else {
+                        Semaphore<> sender_sem(sender_semaphore_id);
+                        sender_sem.wait(sender_wait_count);
+                        sender_sem.set(0);
+                    }
                     if constexpr (mcast_enabled) {
                         noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(cb_k_start_address),
@@ -338,6 +451,11 @@ void kernel_main() {
                     cb_k_writer.push_back(k_chunk_tiles);
                     ASSERT(cb_k.get_write_ptr() == cb_k_writer.get_write_ptr());
                 }
+                // Credit the NEXT K chunk now (reserve after push keeps the CB cursor correct),
+                // so the injector's next K mcast is released before this core reaches its wait.
+                if (k_mcast_receive) {
+                    post_k_credit();
+                }
 
                 // Download Q on the first K iteration — after K is downloaded and forwarded.
                 // Push Q one subblock at a time so compute can start QK matmul incrementally.
@@ -367,38 +485,54 @@ void kernel_main() {
                     q_chunks_pushed++;
                 }
 
-                // V: get data into CB buffer
+                // V: get data into CB buffer — same ping-pong structure as K, on the second
+                // valid flag (receiver_semaphore_b_id).
                 CircularBuffer cb_v(cb_v_in);
                 CircularBuffer cb_v_writer(cb_v_writer_in);
-                cb_v.reserve_back(v_chunk_tiles);
-                if (is_mux_writer) {
-                    cb_v_writer.reserve_back(v_chunk_tiles);
+                uint32_t cb_v_start_address = 0;
+                bool v_mcast_receive = false;
+                if constexpr (mcast_enabled) {
+                    v_mcast_receive = should_receive;
                 }
-                uint32_t cb_v_start_address = cb_v.get_write_ptr();
-                if (should_receive) {
-                    Semaphore<> receiver_sem(receiver_semaphore_id);
-                    receiver_sem.set(INVALID);
-                    Semaphore<>(sender_semaphore_id).up(noc, prev_physical_x, prev_physical_y, 1);
-                    receiver_sem.wait(VALID);
+                if (v_mcast_receive) {
+                    Semaphore<>(receiver_semaphore_b_id).wait(VALID);
                 } else {
-                    fetch_block(
-                        kv_chunk_is_joint ? joint_v_generator
-                                          : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
-                        kv_slice,
-                        end_seq_tile,
-                        cb_v_in,
-                        cb_v_start_address,
-                        v_tile_bytes,
-                        false /*transpose*/
-                    );
+                    cb_v.reserve_back(v_chunk_tiles);
+                    if (is_mux_writer) {
+                        cb_v_writer.reserve_back(v_chunk_tiles);
+                    }
+                    cb_v_start_address = cb_v.get_write_ptr();
+                    if (should_receive) {
+                        // Unicast-chain path (mcast disabled): original 1-deep handshake.
+                        Semaphore<> receiver_sem(receiver_semaphore_id);
+                        receiver_sem.set(INVALID);
+                        Semaphore<>(sender_semaphore_id).up(noc, prev_physical_x, prev_physical_y, 1);
+                        receiver_sem.wait(VALID);
+                    } else {
+                        fetch_block(
+                            kv_chunk_is_joint ? joint_v_generator
+                                              : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
+                            kv_slice,
+                            end_seq_tile,
+                            cb_v_in,
+                            cb_v_start_address,
+                            v_tile_bytes,
+                            false /*transpose*/
+                        );
+                    }
                 }
 
                 // Forward V to next core(s) before push_back — prevents compute from
                 // popping the buffer while the mcast is still reading from it.
                 if (should_forward) {
-                    Semaphore<> sender_sem(sender_semaphore_id);
-                    sender_sem.wait(sender_wait_count);
-                    sender_sem.set(0);
+                    if constexpr (mcast_enabled) {
+                        mcast_v_acks_expected += sender_wait_count;
+                        Semaphore<>(sender_semaphore_v_id).wait_min(mcast_v_acks_expected);
+                    } else {
+                        Semaphore<> sender_sem(sender_semaphore_id);
+                        sender_sem.wait(sender_wait_count);
+                        sender_sem.set(0);
+                    }
                     if constexpr (mcast_enabled) {
                         noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(cb_v_start_address),
@@ -413,10 +547,11 @@ void kernel_main() {
                              .addr = cb_v_start_address},
                             true /* linked: semaphore mcast follows */);
                         // Companion semaphore mcast — see K path above for rationale.
+                        // V lands on the second (ping-pong) valid flag.
                         Semaphore<>(valid_semaphore_id)
                             .relay_multicast(
                                 noc,
-                                Semaphore<>(receiver_semaphore_id),
+                                Semaphore<>(receiver_semaphore_b_id),
                                 prev_physical_x,
                                 prev_physical_y,
                                 next_physical_x,
@@ -443,6 +578,10 @@ void kernel_main() {
                 if (is_mux_writer) {
                     cb_v_writer.push_back(v_chunk_tiles);
                     ASSERT(cb_v.get_write_ptr() == cb_v_writer.get_write_ptr());
+                }
+                // Credit the NEXT V chunk (see the K credit above).
+                if (v_mcast_receive) {
+                    post_v_credit();
                 }
             }
 
@@ -474,6 +613,19 @@ void kernel_main() {
         for (uint32_t lnk = 0; lnk < num_links; ++lnk) {
             // noc_semaphore_wait_min(per_link_sem_ptrs[lnk], chunks_signaled_by_remote+1);
             noc_semaphore_set(per_link_sem_ptrs[lnk], 0);
+        }
+        if constexpr (mcast_enabled) {
+            // The cumulative ping-pong ack counters must restart at 0 on a cached-program rerun.
+            // Safe: the last forward's waits already observed every ack (credit caps guarantee
+            // the receivers' ack totals equal the injector's expected totals), so none are in flight.
+            Semaphore<>(sender_semaphore_id).set(0);
+            Semaphore<>(sender_semaphore_v_id).set(0);
+        }
+        if (dedup_role == 2) {
+            // Follower's buddy gate is cumulative — restart at 0 for cached reruns. Safe: the
+            // final wait_min observed the leader's full count (leader and follower run identical
+            // gate schedules), so no incs are in flight.
+            Semaphore<>(buddy_gate_semaphore_id).set(0);
         }
     }
     noc.async_writes_flushed();
