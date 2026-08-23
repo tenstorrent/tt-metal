@@ -284,7 +284,10 @@ ttnn::device_operation::ProgramArtifacts Conv3dProgramFactory::create_program_ar
     log_debug(tt::LogOp, "CB vol2col_tiled: page_size={} bytes, num_pages={}", tile_size, out_subblock_h * matmul_K_t);
     log_debug(tt::LogOp, "CB weight_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_K_t * matmul_N_t);
     log_debug(
-        tt::LogOp, "CB matmul_interm_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_N_t);
+        tt::LogOp,
+        "CB matmul_interm_tiled: page_size={} bytes, num_pages={}",
+        partial_tile_size,
+        matmul_M_t * matmul_N_t);
     log_debug(tt::LogOp, "CB matmul_result_rm: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_N_t);
 
     bool is_padding_zeros = operation_attributes.padding_mode == "zeros";
