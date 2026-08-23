@@ -3429,6 +3429,34 @@ TEST_F(ProgramSpecTestGen1, DFBIncompleteEndpointCoverageSucceedsWithCompatibili
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
+TEST_F(ProgramSpecTestGen1, DFBIncompleteProducerEndpointCoverageSucceedsWithCompatibilityFlag) {
+    // Mirror the consumer-only padding topology above: some legacy descriptors place a producer
+    // kernel on a padding node where runtime args make it return before touching the CB.
+    NodeCoord active_node{0, 0};
+    NodeCoord padding_node{1, 0};
+
+    ProgramSpec spec;
+    spec.name = "incomplete_producer_endpoint_coverage";
+
+    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+    auto consumer = MakeMinimalGen1ComputeKernel("consumer");
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb.advanced_options.allow_incomplete_endpoint_coverage = true;
+
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("active", active_node, {"producer", "consumer"}),
+        MakeMinimalWorkUnit("padding", padding_node, {"producer"}),
+    };
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
 TEST_F(ProgramSpecTestGen1, DFBIncompleteAndMultiBindingCompatibilityFlagsFailTogether) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     spec.dataflow_buffers[0].advanced_options.allow_instance_multi_binding = true;

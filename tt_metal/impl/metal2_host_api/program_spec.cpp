@@ -326,12 +326,14 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 if (inserted) {
                     TT_FATAL(
                         IsValidCppIdentifier(accessor_name),
-                        "DFB accessor_name '{}' must be a valid C++ identifier",
+                        "Kernel '{}' DFB accessor_name '{}' must be a valid C++ identifier",
+                        kernel.unique_id,
                         accessor_name);
                 } else {
                     TT_FATAL(
                         info.dfb_spec_name == dfb_binding.dfb_spec_name,
-                        "Kernel '{}' uses accessor_name '{}' for two different DFBs",
+                        "Kernel '{}' uses accessor_name '{}' for two different DFBs; an accessor name may be reused "
+                        "only by the producer/consumer pair of the same self-loop DFB",
                         kernel.unique_id,
                         accessor_name);
                     TT_FATAL(

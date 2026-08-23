@@ -836,10 +836,9 @@ public:
         // Cache-miss path only. TT_FATALs on a TensorArgument that references
         // neither an io tensor nor a factory op-owned tensor.
         //
-        // NOTE on host perf: the index-based binding scheme keeps the cache-hit
-        // path allocation-free for the common case (up to eight io tensors).
-        // apply_descriptor resolves io and op-owned indices directly instead of
-        // copying and extending the io enumeration for every coordinate range.
+        // NOTE on host perf: the index-based binding scheme avoids copying and
+        // extending the MeshTensor enumeration on a cache hit. apply_descriptor
+        // still rebuilds the small TensorArgument table for each coordinate range.
         static std::vector<ResolvedTensorBinding> resolve_bindings(
             const tt::tt_metal::experimental::Table<TensorParamName, TensorArgument>& factory_tensor_args,
             const MeshTensorRefs& mesh_tensors) {
