@@ -255,10 +255,8 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     static_assert(MAX_TILES_PER_REDUCTION == 1, "MAX_TILES_PER_REDUCTION must be 1 for MPWI");
     constexpr uint32_t max_write_inc = TILE_WIDTH * BYTES_PER_ELEM;
 
-    // Each reader constructs only the CBs it drives (the others' dfb:: tokens are not bound on
-    // this reader). reader0 produces in_cb; reader1 produces out_cb/out_idx_cb and consumes
-    // pack_tmp_cb/pack_idx_tmp_cb. The function is template-instantiated per reader, but the
-    // preprocessor can't see the reader_id template arg, so the gate uses the READER_ID define.
+    // Each reader constructs only the CBs it drives. Accessor aliases keep the common template
+    // arguments valid while reader_id constexpr-discarding prevents the inactive role from using them.
     DataflowBuffer in_cb(in_cb_id);
     DataflowBuffer out_cb(out_cb_id);
     DataflowBuffer out_idx_cb(out_idx_cb_id);
@@ -275,9 +273,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
         }
 
         uint32_t write_offset = 0;
-        // Reader-role gating is via the READER_ID *define* (not the reader_id template arg): in_cb /
-        // out_cb / pack_* are now declared only in their owning reader's build, so the discarded
-        // branch of an `if constexpr (reader_id == ...)` would name-look-up an undeclared object.
+        // reader_id is a named constexpr argument, so the inactive reader role is discarded.
         if constexpr (reader_id == 0) {
             in_cb.reserve_back(1);
             // page zeroing is only necessary for tiled block output format so that scale is not affected by
@@ -407,16 +403,15 @@ template <
 TT_KERNEL void reader_mpwi(uint32_t core_nhw_index, uint32_t start_row, uint32_t start_col) {
     // CB ids now come from Metal 2.0 DFB bindings. reader0 and reader1 run on the SAME nodes,
     // so a DFB endpoint cannot be bound on both readers — each reader binary must reference
-    // only the dfb:: tokens it actually drives. The host emits READER_ID (0 or 1, matching the
-    // reader_id CTA) and we preprocessor-gate the role-specific token references: an `if constexpr
-    // (reader_id == ...)` is NOT enough, because the discarded branch still name-looks-up dfb::.
+    // only the DFBs it actually drives. The host supplies reader_id as a named constexpr argument;
+    // accessor aliases resolve common entry-point arguments for the inactive reader role.
     //
     // reader0-driven (produced by reader0, consumed by COMPUTE): in_cb, in_scalar_cb, clear_value_cb,
     //   in_idx_cb, right_inc_cb, down_left_wrap_inc_cb, up_left_wrap_inc_cb, intra_* (large-kernel).
     // reader1-driven (writer face): out_cb, out_idx_cb, pack_tmp_cb, pack_idx_tmp_cb.
     // Shared (both readers reference): in_shard_cb (input-shard base read), reader_indices_cb
-    //   (reader0 produces in DRAM path / reader1 wait_fronts). For tokens this reader does not
-    //   drive we keep the alias as a harmless 0 so call-site template arguments still resolve.
+    //   (reader0 produces in DRAM path / reader1 wait_fronts). Inactive accessor names alias a
+    //   bound DFB so common entry-point template arguments still resolve without extra storage.
     constexpr uint32_t in_cb_id = dfb::in_cb;
     constexpr uint32_t in_scalar_cb_id_0 = dfb::in_scalar_cb;
     constexpr uint32_t clear_value_cb_id = dfb::clear_value_cb;
@@ -424,9 +419,9 @@ TT_KERNEL void reader_mpwi(uint32_t core_nhw_index, uint32_t start_row, uint32_t
     constexpr uint32_t in_reader_indices_cb_id = dfb::reader_indices_cb;
     // MPWI is max-pool-only with one scalar per core, but the common reader schema still
     // carries the regular-pool specialization parameters as entry-point template arguments.
-    // MPWI-specific args start here. CB-id tokens are role-gated (see READER_ID note above):
+    // MPWI-specific args start here. CB-id usage is role-gated by reader_id:
     // the index/increment CBs are reader0-driven (consumed by COMPUTE); the output/pack CBs are
-    // reader1-driven. Non-driven tokens alias to 0 so call-site template args resolve.
+    // reader1-driven. Non-driven accessor names alias an existing binding.
     constexpr uint32_t in_idx_cb_id = dfb::in_idx_cb;
     constexpr uint32_t right_inc_cb_id = dfb::right_inc_cb;
     constexpr uint32_t down_left_wrap_inc_cb_id = dfb::down_left_wrap_inc_cb;
@@ -445,9 +440,7 @@ TT_KERNEL void reader_mpwi(uint32_t core_nhw_index, uint32_t start_row, uint32_t
     constexpr bool wide_reduction = in_nblocks_c > 1;
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
-    // fill the clear cb. Gated by READER_ID (not `if constexpr (reader_id == 0)`) because these
-    // blocks reference reader0-only dfb:: tokens (clear_value_cb, in_cb, in_idx_cb, *_inc_cb,
-    // in_scalar_cb) that are not declared in reader1's build.
+    // Fill the clear CB only on reader0; reader_id is compile-time constant.
     if constexpr (reader_id == 0) {
         DataflowBuffer clear_value_cb(clear_value_cb_id);
         fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
@@ -491,7 +484,7 @@ TT_KERNEL void reader_mpwi(uint32_t core_nhw_index, uint32_t start_row, uint32_t
     if constexpr (config_in_dram) {
         // reader_indices_cb is a shared DFB (reader0 produces in the DRAM path / reader1 consumes).
         // Only reader0 reads from DRAM, so tensor::reader_indices is referenced (and bound) on
-        // reader0 only — gate by READER_ID so reader1's build doesn't bind the tensor.
+        // reader0 only; the constexpr branch prevents reader1 from referencing the tensor.
         if constexpr (reader_id == 0) {
             // Inlined load_config_tensor_if_in_dram: the reader-indices tensor flows in via its
             // Metal 2.0 TensorBinding (tensor::reader_indices) instead of a CTA-baked DRAM address.

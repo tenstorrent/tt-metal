@@ -1080,9 +1080,8 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
         return b;
     };
 
-    // Regular reader1 reaches the DRAM TensorAccessor through a runtime reader-id branch,
-    // so both regular readers bind the generated tensors. MPWI reader1 is preprocessor-gated
-    // to the writer face and never names reader_indices.
+    // Both regular readers can reach the DRAM TensorAccessor. The MPWI reader role is selected
+    // by the reader_id constexpr argument, and reader1 never names reader_indices.
     auto make_reader_tensor_bindings = [&]() {
         Group<TensorBinding> tb;
         tb.push_back(TensorBinding{.tensor_parameter_name = READER_INDICES_TENSOR, .accessor_name = "reader_indices"});
@@ -1108,14 +1107,9 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
     KernelSpec::CompileTimeArgs reader1_cta = reader_cta;
     reader1_cta["reader_id"] = 1u;
 
-    // Remaining defines configure the existing large-kernel implementation only.
-    KernelSpec::CompilerOptions::Defines reader0_defines;
-    KernelSpec::CompilerOptions::Defines reader1_defines;
-
     KernelSpec reader0{
         .unique_id = READER0_KERNEL,
         .source = reader_path,
-        .compiler_options = {.defines = reader0_defines},
         .dfb_bindings = make_reader_bindings(false),
         .tensor_bindings = make_reader_tensor_bindings(),
         .compile_time_args = reader_cta,
@@ -1132,7 +1126,6 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
         reader1 = KernelSpec{
             .unique_id = READER1_KERNEL,
             .source = reader_path,
-            .compiler_options = {.defines = reader1_defines},
             .dfb_bindings = make_reader_bindings(true),
             .tensor_bindings = make_reader_tensor_bindings(),
             .compile_time_args = reader1_cta,

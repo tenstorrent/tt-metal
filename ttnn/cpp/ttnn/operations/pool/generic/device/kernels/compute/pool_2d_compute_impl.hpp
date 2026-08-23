@@ -78,7 +78,8 @@ ALWI void pool_2d_compute_impl(uint32_t runtime_num_out_sticks) {
     constexpr bool is_avg_pool = REDUCE_OP == PoolType::AVG;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
     // otherwise we can reduce 8 tiles at a time. Callers (e.g. grid_sample under fp32_dest_acc_en) can
-    // also force the 4-tile limit via ct_arg[16] so each chunk fits in half-sync DEST (= 4 fp32 tiles)
+    // also force the 4-tile limit via force_max_tiles_per_reduction_4 so each chunk fits in half-sync DEST
+    // (= 4 fp32 tiles)
     // without forcing dst_full_sync_en.
     constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
     constexpr uint32_t MAX_TILES_PER_REDUCTION =
