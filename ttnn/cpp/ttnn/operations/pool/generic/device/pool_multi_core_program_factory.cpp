@@ -572,6 +572,7 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
         in_h,
         in_w,
         output_layout);
+    TT_FATAL(params.split_reader, "Pool2D factory requires its two-reader topology");
 
     const uint32_t eff_kernel_h = ((kernel_h - 1) * dilation_h) + 1;
     const uint32_t eff_kernel_w = ((kernel_w - 1) * dilation_w) + 1;
@@ -902,61 +903,25 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
     // the writer face); for pool2d they are symmetric input producers.
     auto make_reader_bindings = [&](bool is_reader1) {
         Group<DFBBinding> b;
-        // Shard input (fake CB, base-pointer read by both readers): reader0=P / reader1=C when
-        // split, self-loop on reader0 otherwise.
-        if (params.split_reader) {
-            b.push_back(DFBBinding{
-                .dfb_spec_name = DFB_IN_SHARD,
-                .accessor_name = "in_shard_cb",
-                .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER});
-        } else {
-            b.push_back(DFBBinding{
-                .dfb_spec_name = DFB_IN_SHARD,
-                .accessor_name = "in_shard_cb",
-                .endpoint_type = DFBEndpointType::PRODUCER});
-            b.push_back(DFBBinding{
-                .dfb_spec_name = DFB_IN_SHARD,
-                .accessor_name = "in_shard_cb",
-                .endpoint_type = DFBEndpointType::CONSUMER});
+        // The factory always uses two readers: reader0 owns each shared stream's producer
+        // endpoint and reader1 owns its consumer endpoint.
+        b.push_back(DFBBinding{
+            .dfb_spec_name = DFB_IN_SHARD,
+            .accessor_name = "in_shard_cb",
+            .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER});
+        auto reader_indices_binding = DFBBinding{
+            .dfb_spec_name = DFB_READER_INDICES,
+            .accessor_name = "reader_indices_cb",
+            .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER};
+        if (!return_indices && one_scalar_per_core) {
+            reader_indices_binding.accessor_aliases.push_back("config_cb");
         }
-        // Reader-indices CB: reader0=P / reader1=C when split (DRAM push -> wait), else self-loop.
-        if (params.split_reader) {
-            auto binding = DFBBinding{
-                .dfb_spec_name = DFB_READER_INDICES,
-                .accessor_name = "reader_indices_cb",
-                .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER};
-            if (!return_indices && one_scalar_per_core) {
-                binding.accessor_aliases.push_back("config_cb");
-            }
-            b.push_back(std::move(binding));
-        } else {
-            b.push_back(DFBBinding{
-                .dfb_spec_name = DFB_READER_INDICES,
-                .accessor_name = "reader_indices_cb",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-                .accessor_aliases =
-                    (!return_indices && one_scalar_per_core) ? Group<std::string>{"config_cb"} : Group<std::string>{}});
-            b.push_back(DFBBinding{
-                .dfb_spec_name = DFB_READER_INDICES,
-                .accessor_name = "reader_indices_cb",
-                .endpoint_type = DFBEndpointType::CONSUMER});
-        }
+        b.push_back(std::move(reader_indices_binding));
         if (!one_scalar_per_core) {
-            if (params.split_reader) {
-                b.push_back(DFBBinding{
-                    .dfb_spec_name = DFB_CONFIG,
-                    .accessor_name = "config_cb",
-                    .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER});
-            } else {
-                b.push_back(DFBBinding{
-                    .dfb_spec_name = DFB_CONFIG,
-                    .accessor_name = "config_cb",
-                    .endpoint_type = DFBEndpointType::PRODUCER});
-                b.push_back(DFBBinding{
-                    .dfb_spec_name = DFB_CONFIG,
-                    .accessor_name = "config_cb",
-                    .endpoint_type = DFBEndpointType::CONSUMER});
-            }
+            b.push_back(DFBBinding{
+                .dfb_spec_name = DFB_CONFIG,
+                .accessor_name = "config_cb",
+                .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER});
         }
 
         if (return_indices) {
@@ -1048,26 +1013,14 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
                     .accessor_name = "in_scalar_cb",
                     .endpoint_type = DFBEndpointType::PRODUCER});
             }
-            // clear value: reader0=P / reader1=C when split, self-loop on reader0 otherwise.
-            if (params.split_reader) {
-                auto binding = DFBBinding{
-                    .dfb_spec_name = DFB_CLEAR_VALUE,
-                    .accessor_name = "clear_value_cb",
-                    .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER};
-                if (is_reader1 && !has_second_scalar_cb) {
-                    binding.accessor_aliases.push_back("in_scalar_cb");
-                }
-                b.push_back(std::move(binding));
-            } else {
-                b.push_back(DFBBinding{
-                    .dfb_spec_name = DFB_CLEAR_VALUE,
-                    .accessor_name = "clear_value_cb",
-                    .endpoint_type = DFBEndpointType::PRODUCER});
-                b.push_back(DFBBinding{
-                    .dfb_spec_name = DFB_CLEAR_VALUE,
-                    .accessor_name = "clear_value_cb",
-                    .endpoint_type = DFBEndpointType::CONSUMER});
+            auto clear_value_binding = DFBBinding{
+                .dfb_spec_name = DFB_CLEAR_VALUE,
+                .accessor_name = "clear_value_cb",
+                .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER};
+            if (is_reader1 && !has_second_scalar_cb) {
+                clear_value_binding.accessor_aliases.push_back("in_scalar_cb");
             }
+            b.push_back(std::move(clear_value_binding));
         }
         if (return_indices) {
             const auto target_dfb = is_reader1 ? DFB_OUT : DFB_IN_0;
@@ -1139,22 +1092,19 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
             },
     };
 
-    std::optional<KernelSpec> reader1;
-    if (params.split_reader) {
-        reader1 = KernelSpec{
-            .unique_id = READER1_KERNEL,
-            .source = reader_path,
-            .dfb_bindings = make_reader_bindings(true),
-            .tensor_bindings = make_reader_tensor_bindings(),
-            .compile_time_args = reader1_cta,
-            .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-            .hw_config =
-                DataMovementGen1Config{
-                    .processor = DataMovementProcessor::RISCV_1,
-                    .noc = NOC::RISCV_1_default,
-                },
-        };
-    }
+    KernelSpec reader1{
+        .unique_id = READER1_KERNEL,
+        .source = reader_path,
+        .dfb_bindings = make_reader_bindings(true),
+        .tensor_bindings = make_reader_tensor_bindings(),
+        .compile_time_args = reader1_cta,
+        .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
+        .hw_config =
+            DataMovementGen1Config{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_1_default,
+            },
+    };
 
     // -----------------------------------------------------------------------
     // Compute kernel.
@@ -1326,17 +1276,9 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
     };
     compute.compiler_options.defines = std::move(compute_defines);
 
-    spec.kernels = {reader0};
-    if (reader1.has_value()) {
-        spec.kernels.push_back(*reader1);
-    }
-    spec.kernels.push_back(compute);
+    spec.kernels = {reader0, reader1, compute};
 
-    Group<KernelSpecName> wu_kernels = {READER0_KERNEL};
-    if (reader1.has_value()) {
-        wu_kernels.push_back(READER1_KERNEL);
-    }
-    wu_kernels.push_back(COMPUTE_KERNEL);
+    Group<KernelSpecName> wu_kernels = {READER0_KERNEL, READER1_KERNEL, COMPUTE_KERNEL};
     spec.work_units = {WorkUnitSpec{.name = "pool2d_wu", .kernels = wu_kernels, .target_nodes = all_cores}};
 
     const uint32_t post_allocate_size =
@@ -1414,9 +1356,7 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
         KernelRunArgs::RuntimeArgValues& compute_rtas = compute_run.runtime_arg_values;
         reader0_rtas["core_nhw_index"][node] = core_nhw_index;
         compute_rtas["out_nhw_this_core"][node] = out_nhw_this_core;
-        if (reader1.has_value()) {
-            reader1_rtas["core_nhw_index"][node] = core_nhw_index;
-        }
+        reader1_rtas["core_nhw_index"][node] = core_nhw_index;
         if (return_indices) {
             const uint32_t start_index = core_starting_indices[core_i];
             const uint32_t start_mod_batch = start_index % (in_w_padded * in_h_padded);
@@ -1436,24 +1376,18 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
                     {"start_row", start_row},
                     {"start_col", start_col},
                 });
-            if (reader1.has_value()) {
-                AddRuntimeArgsForNode(
-                    reader1_rtas,
-                    node,
-                    {
-                        {"start_row", start_row},
-                        {"start_col", start_col},
-                    });
-            }
+            AddRuntimeArgsForNode(
+                reader1_rtas,
+                node,
+                {
+                    {"start_row", start_row},
+                    {"start_col", start_col},
+                });
         }
     }
 
     ProgramRunArgs run_args;
-    run_args.kernel_run_args = {reader0_run};
-    if (reader1.has_value()) {
-        run_args.kernel_run_args.push_back(reader1_run);
-    }
-    run_args.kernel_run_args.push_back(compute_run);
+    run_args.kernel_run_args = {reader0_run, reader1_run, compute_run};
 
     run_args.tensor_args = {
         {INPUT_TENSOR, TensorArgument{std::cref(input.mesh_tensor())}},
