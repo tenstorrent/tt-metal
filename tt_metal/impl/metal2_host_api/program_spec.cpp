@@ -1433,9 +1433,14 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     "This node has a producer but no consumer — ensure a consumer kernel covers it "
                     "(via its WorkUnitSpec membership).";
             } else {
-                guidance =
-                    "Multiple same-role kernel instances land on this node — their placements overlap; "
-                    "give each disjoint nodes.";
+                guidance = allow_incomplete
+                               ? "allow_incomplete_endpoint_coverage permits a missing endpoint, not duplicate "
+                                 "producers or consumers. Give same-role kernels disjoint nodes; if multiple "
+                                 "instances intentionally share a Gen1 plain CB, use allow_instance_multi_binding "
+                                 "instead (the compatibility flags are mutually exclusive)."
+                               : "Multiple same-role kernel instances land on this node — their placements overlap; "
+                                 "give each disjoint nodes. If they intentionally share a Gen1 plain CB, use "
+                                 "allow_instance_multi_binding.";
             }
             TT_FATAL(
                 false,

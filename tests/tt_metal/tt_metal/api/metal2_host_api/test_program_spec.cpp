@@ -3490,6 +3490,36 @@ TEST_F(ProgramSpecTestGen1, DFBMultipleProducersOnSameNodeFailsWithoutFlag) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("2 producer instance(s)")));
 }
 
+TEST_F(ProgramSpecTestGen1, DFBIncompleteCoverageFlagDiagnosesDuplicateProducer) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "multi_producer_with_incomplete_coverage_flag";
+
+    auto producer1 = MakeMinimalGen1DMKernel("producer1", DataMovementProcessor::RISCV_0);
+    auto producer2 = MakeMinimalGen1DMKernel("producer2", DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalGen1ComputeKernel("consumer");
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb.advanced_options.allow_incomplete_endpoint_coverage = true;
+
+    producer1.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    producer2.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer1, producer2, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units =
+        std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer1", "producer2", "consumer"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("2 producer instance(s)"),
+            ::testing::HasSubstr("permits a missing endpoint, not duplicate producers or consumers"),
+            ::testing::HasSubstr("use allow_instance_multi_binding instead"))));
+}
+
 TEST_F(ProgramSpecTestGen1, DFBIncompleteEndpointCoverageSucceedsWithCompatibilityFlag) {
     // Legacy descriptors may place a consumer kernel on padding nodes where runtime args make it
     // return before touching the CB. The explicit compatibility flag preserves that topology
