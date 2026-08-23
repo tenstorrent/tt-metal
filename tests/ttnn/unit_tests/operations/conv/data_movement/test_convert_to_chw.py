@@ -113,3 +113,16 @@ def test_convert_to_chw_with_program_cache(device):
         )
 
     assert device.num_program_cache_entries() == 4
+
+
+def test_convert_to_chw_rejects_non_bfloat16_output(device, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.randn([1, 1, 32, 2], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+    input_memory_config = ttnn.create_sharded_memory_config(
+        [1, 1, 32, 32], ttnn.CoreGrid(x=1, y=1), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR
+    )
+    input_tensor = ttnn.to_device(input_tensor, device, input_memory_config)
+
+    with expect_error(RuntimeError, "ConvertToCHW output dtype must be BFLOAT16"):
+        ttnn.experimental.convert_to_chw(input_tensor, dtype=ttnn.float32)

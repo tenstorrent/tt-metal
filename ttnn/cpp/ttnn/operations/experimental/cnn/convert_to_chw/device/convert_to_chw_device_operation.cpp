@@ -24,6 +24,10 @@ void ConvertToCHWDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(shape[0] == 1 && shape[1] == 1, "Expected input tensor to be shape [1, 1, HW, C]");
     TT_FATAL(C <= TILE_HEIGHT, "C must be less than or equal to 32 (was {})", C);
     TT_FATAL(HW % TILE_HEIGHT == 0, "HW must be divisible by tile size");
+    TT_FATAL(
+        args.dtype == DataType::BFLOAT16,
+        "ConvertToCHW output dtype must be BFLOAT16 because the transpose and writer use 2-byte elements (was {})",
+        args.dtype);
 
     TT_FATAL(input.is_sharded(), "Input tensor must be sharded");
 

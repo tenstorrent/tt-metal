@@ -3,48 +3,44 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "convert_to_chw_program_factory.hpp"
-#include "tt-metalium/tt_backend_api_types.hpp"
+#include <limits>
+
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::experimental::prim {
 
-using namespace tt::constants;
+using tt::tt_metal::KernelBuildOptLevel;
+using tt::tt_metal::MathFidelity;
+using tt::tt_metal::Precision;
+using tt::tt_metal::experimental::ComputeGen1Config;
+using tt::tt_metal::experimental::DataflowBufferSpec;
+using tt::tt_metal::experimental::DFBBinding;
+using tt::tt_metal::experimental::DFBEndpointType;
+using tt::tt_metal::experimental::DFBSpecName;
+using tt::tt_metal::experimental::KernelRunArgs;
+using tt::tt_metal::experimental::KernelSpec;
+using tt::tt_metal::experimental::KernelSpecName;
+using tt::tt_metal::experimental::ProgramRunArgs;
+using tt::tt_metal::experimental::ProgramSpec;
+using tt::tt_metal::experimental::TensorParameter;
+using tt::tt_metal::experimental::TensorParamName;
+using tt::tt_metal::experimental::WorkUnitSpec;
 
-namespace {
-// Helper function to set runtime arguments for reader, writer, and compute kernels
-void set_runtime_args_for_all_kernels(
-    tt::tt_metal::Program& program,
-    const std::vector<CoreCoord>& cores,
-    tt::tt_metal::KernelHandle reader_kernel_id,
-    tt::tt_metal::KernelHandle writer_kernel_id,
-    tt::tt_metal::KernelHandle compute_kernel_id,
-    uint32_t total_tiles_per_core) {
-    std::vector<std::vector<uint32_t>> reader_runtime_args = {cores.size(), {0}};   // (num_tiles_per_core)
-    std::vector<std::vector<uint32_t>> writer_runtime_args = {cores.size(), {0}};   // (num_tiles_per_core)
-    std::vector<std::vector<uint32_t>> compute_runtime_args = {cores.size(), {0}};  // (num_tiles_per_core)
-
-    for (uint32_t i = 0; i < cores.size(); i++) {
-        reader_runtime_args[i][0] = total_tiles_per_core;
-        writer_runtime_args[i][0] = total_tiles_per_core;
-        compute_runtime_args[i][0] = total_tiles_per_core;
-    }
-    SetRuntimeArgs(program, reader_kernel_id, cores, reader_runtime_args);
-    SetRuntimeArgs(program, writer_kernel_id, cores, writer_runtime_args);
-    SetRuntimeArgs(program, compute_kernel_id, cores, compute_runtime_args);
-}
-}  // namespace
-
-ConvertToCHWProgramFactory::cached_program_t ConvertToCHWProgramFactory::create(
+ttnn::device_operation::ProgramArtifacts ConvertToCHWProgramFactory::create_program_artifacts(
     const ConvertToCHWParams& /*operation_attributes*/, const Tensor& tensor_args, Tensor& tensor_return_value) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
-
     const auto& a = tensor_args;
     auto& output = tensor_return_value;
+    TT_FATAL(
+        a.device()->arch() != tt::ARCH::QUASAR,
+        "ConvertToCHW uses a Gen1 plain-CB self-loop for its output writer and is not supported on Quasar");
 
     const auto& input_shape = a.logical_shape();
     const auto input_core_grid = a.shard_spec()->grid;
-    const auto input_cores = corerange_to_cores(
-        input_core_grid, std::nullopt, a.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+    const uint32_t num_cores = input_core_grid.num_cores();
 
     const auto output_shard_shape = output.shard_spec()->shape;
 
@@ -53,34 +49,20 @@ ConvertToCHWProgramFactory::cached_program_t ConvertToCHWProgramFactory::create(
 
     log_debug(tt::LogType::LogOp, "Running op with HW={}, C={}, shard_shape={}", HW, C, a.shard_spec()->shape);
 
-    TT_FATAL(C <= TILE_HEIGHT, "C must not exceed 32");
     TT_FATAL(
-        tt::div_up(HW, a.shard_spec()->shape[0]) == input_cores.size(),
-        "Mismatch between core grid and input/shard shapes");
+        C <= tt::constants::TILE_HEIGHT, "C must not exceed TILE_HEIGHT ({}), was {}", tt::constants::TILE_HEIGHT, C);
+    TT_FATAL(
+        tt::div_up(HW, a.shard_spec()->shape[0]) == num_cores, "Mismatch between core grid and input/shard shapes");
 
-    const uint32_t total_tiles = HW / TILE_HEIGHT;  // assume C < 32
-    const uint32_t total_tiles_per_core = tt::div_up(total_tiles, input_cores.size());
+    const uint32_t total_tiles = HW / tt::constants::TILE_HEIGHT;  // C <= TILE_HEIGHT: one tile column.
+    const uint32_t total_tiles_per_core = tt::div_up(total_tiles, num_cores);
+    TT_FATAL(
+        total_tiles_per_core <= std::numeric_limits<uint16_t>::max(),
+        "Tiles per core ({}) exceed the device-side DataflowBuffer transaction-count limit (uint16: {})",
+        total_tiles_per_core,
+        std::numeric_limits<uint16_t>::max());
 
     log_debug(tt::LogType::LogOp, "Processing {} tiles per core ({} total tiles)", total_tiles_per_core, total_tiles);
-
-    const auto create_circular_buffer = [&program, &input_core_grid](
-                                            uint32_t index,
-                                            uint32_t total_size,
-                                            uint32_t page_size,
-                                            const tt::DataFormat& format,
-                                            tt::tt_metal::Buffer* buffer = nullptr) -> tt::tt_metal::CBHandle {
-        log_debug(
-            tt::LogType::LogOp,
-            "Creating CB at index {} with total size {} B and page size {} B",
-            index,
-            total_size,
-            page_size);
-        auto config = tt::tt_metal::CircularBufferConfig(total_size, {{index, format}}).set_page_size(index, page_size);
-        if (buffer != nullptr) {
-            config = config.set_globally_allocated_address(*buffer);
-        }
-        return tt::tt_metal::CreateCircularBuffer(program, input_core_grid, config);
-    };
 
     const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     const uint32_t input_tile_size = tt::tile_size(input_format);
@@ -88,96 +70,123 @@ ConvertToCHWProgramFactory::cached_program_t ConvertToCHWProgramFactory::create(
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
     const uint32_t intermediary_tile_size = tt::tile_size(intermediary_format);
 
-    const uint32_t cb_in_id = tt::CBIndex::c_0;
-    const uint32_t cb_in_total_size = total_tiles_per_core * input_tile_size;
-    const uint32_t cb_in_page_size = input_tile_size;
-    const auto cb_in = create_circular_buffer(cb_in_id, cb_in_total_size, cb_in_page_size, input_format, a.buffer());
-
     const tt::DataFormat output_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    const uint32_t cb_out_id = tt::CBIndex::c_1;
     const uint32_t element_size = tt::datum_size(output_format);
-    const uint32_t cb_out_total_size = output_shard_shape[0] * output_shard_shape[1] * element_size;
-    const uint32_t cb_out_page_size = output_shard_shape[1] * element_size;
-    const auto cb_out =
-        create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output.buffer());
 
-    const uint32_t cb_in_transpose_id = tt::CBIndex::c_2;
-    const uint32_t cb_in_transpose_total_size = 16 * intermediary_tile_size;
-    const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
-    create_circular_buffer(
-        cb_in_transpose_id, cb_in_transpose_total_size, cb_in_transpose_page_size, intermediary_format);
+    constexpr uint32_t compute_batch_size = 8;  // Must match BATCH_SIZE in the compute and writer kernels.
+    constexpr uint32_t transpose_dfb_entries = 2 * compute_batch_size;
+    log_debug(
+        tt::LogType::LogOp,
+        "ConvertToCHW DFB geometry: input={}x{}B, output={}x{}B, transpose={}x{}B",
+        total_tiles_per_core,
+        input_tile_size,
+        output_shard_shape[0],
+        output_shard_shape[1] * element_size,
+        transpose_dfb_entries,
+        intermediary_tile_size);
 
-    std::vector<uint32_t> reader_compile_time_args = {cb_in_id};
-    std::vector<uint32_t> writer_compile_time_args = {cb_in_transpose_id, cb_out_id, C};
-    std::vector<uint32_t> compute_compile_time_args = {cb_in_id, cb_in_transpose_id};
+    const DFBSpecName INPUT_DFB{"input"};
+    const DFBSpecName TRANSPOSE_DFB{"transpose"};
+    const DFBSpecName OUTPUT_DFB{"output"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName COMPUTE{"compute"};
+    const KernelSpecName WRITER{"writer"};
 
-    auto reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_chw/device/kernels/reader_convert_to_chw.cpp",
-        input_core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    const DataflowBufferSpec input_dfb{
+        .unique_id = INPUT_DFB,
+        .entry_size = input_tile_size,
+        .num_entries = total_tiles_per_core,
+        .data_format_metadata = input_format,
+        .borrowed_from = INPUT,
+    };
+    // Retain two compute batches for double buffering.
+    const DataflowBufferSpec transpose_dfb{
+        .unique_id = TRANSPOSE_DFB,
+        .entry_size = intermediary_tile_size,
+        .num_entries = transpose_dfb_entries,
+        .data_format_metadata = intermediary_format,
+    };
+    const DataflowBufferSpec output_dfb{
+        .unique_id = OUTPUT_DFB,
+        .entry_size = output_shard_shape[1] * element_size,
+        .num_entries = output_shard_shape[0],
+        .data_format_metadata = output_format,
+        .borrowed_from = OUTPUT,
+    };
 
-    auto writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_chw/device/kernels/writer_convert_to_chw.cpp",
-        input_core_grid,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    const TensorParameter input_param{.unique_id = INPUT, .spec = a.tensor_spec()};
+    const TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
 
-    auto compute_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_chw/device/kernels/convert_to_chw.cpp",
-        input_core_grid,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .fp32_dest_acc_en = false,
-            .math_approx_mode = false,
-            .compile_args = compute_compile_time_args});
+    const KernelSpec reader{
+        .unique_id = READER,
+        .source = "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_chw/device/kernels/reader_convert_to_chw.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .runtime_arg_schema = {.common_runtime_arg_names = {"tiles_per_core"}},
+        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+    };
+    const KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source = "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_chw/device/kernels/convert_to_chw.cpp",
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {DFBBinding{
+                 .dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = TRANSPOSE_DFB,
+                 .accessor_name = "transpose",
+                 .endpoint_type = DFBEndpointType::PRODUCER}},
+        .runtime_arg_schema = {.common_runtime_arg_names = {"tiles_per_core"}},
+        // Legacy fp32_dest_acc_en, dst_full_sync_en, and bfp8_pack_precise were false; Metalium 2.0 defaults
+        // preserve those settings.
+        .hw_config =
+            ComputeGen1Config{
+                .fpu_math_fidelity = MathFidelity::HiFi4,
+                .sfpu_precision_mode = Precision::Precise,
+            },
+    };
+    const KernelSpec writer{
+        .unique_id = WRITER,
+        .source = "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_chw/device/kernels/writer_convert_to_chw.cpp",
+        // The Gen1 plain-CB output writer binds OUTPUT_DFB as both producer and consumer (a self-loop).
+        .dfb_bindings =
+            {DFBBinding{
+                 .dfb_spec_name = TRANSPOSE_DFB,
+                 .accessor_name = "transpose",
+                 .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = OUTPUT_DFB, .accessor_name = "output", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = OUTPUT_DFB, .accessor_name = "output", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .compile_time_args = {{"channels", C}},
+        .runtime_arg_schema = {.common_runtime_arg_names = {"tiles_per_core"}},
+        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+    };
 
-    // Set initial runtime args
-    tt::tt_metal::Buffer* a_buffer = a.buffer();
-    tt::tt_metal::Buffer* output_buffer = output.buffer();
-    UpdateDynamicCircularBufferAddress(program, cb_in, *a_buffer);
-    UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);
+    KernelRunArgs reader_run{.kernel = READER, .common_runtime_arg_values = {{"tiles_per_core", total_tiles_per_core}}};
+    KernelRunArgs compute_run{
+        .kernel = COMPUTE, .common_runtime_arg_values = {{"tiles_per_core", total_tiles_per_core}}};
+    KernelRunArgs writer_run{.kernel = WRITER, .common_runtime_arg_values = {{"tiles_per_core", total_tiles_per_core}}};
 
-    set_runtime_args_for_all_kernels(
-        program, input_cores, reader_kernel_id, writer_kernel_id, compute_kernel_id, total_tiles_per_core);
-
-    return cached_program_t{
-        std::move(program),
-        shared_variables_t{
-            .cb_in = cb_in,
-            .cb_out = cb_out,
-            .input_cores = input_cores,
-            .reader_kernel_id = reader_kernel_id,
-            .writer_kernel_id = writer_kernel_id,
-            .compute_kernel_id = compute_kernel_id,
-            .total_tiles_per_core = total_tiles_per_core,
-        }};
-}
-
-void ConvertToCHWProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ConvertToCHWParams& /*operation_attributes*/,
-    const Tensor& tensor_args,
-    Tensor& output) {
-    auto& program = cached_program.program;
-    const auto& cb_in = cached_program.shared_variables.cb_in;
-    const auto& cb_out = cached_program.shared_variables.cb_out;
-    const auto& input_cores = cached_program.shared_variables.input_cores;
-    const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    const auto& compute_kernel_id = cached_program.shared_variables.compute_kernel_id;
-    const auto& total_tiles_per_core = cached_program.shared_variables.total_tiles_per_core;
-
-    // buffers are not provided so we take them from output/input tensors
-    auto* output_dram_buffer = output.buffer();
-    auto* input_dram_buffer = tensor_args.buffer();
-
-    UpdateDynamicCircularBufferAddress(program, cb_in, *input_dram_buffer);
-    UpdateDynamicCircularBufferAddress(program, cb_out, *output_dram_buffer);
-
-    set_runtime_args_for_all_kernels(
-        program, input_cores, reader_kernel_id, writer_kernel_id, compute_kernel_id, total_tiles_per_core);
+    ProgramSpec spec{
+        .name = "convert_to_chw",
+        .kernels = {reader, compute, writer},
+        // Preserve the legacy physical CB-slot order: input=c0, output=c1, transpose=c2.
+        .dataflow_buffers = {input_dfb, output_dfb, transpose_dfb},
+        .tensor_parameters = {input_param, output_param},
+        .work_units = {WorkUnitSpec{
+            .name = "convert_to_chw",
+            .kernels = {READER, COMPUTE, WRITER},
+            .target_nodes = input_core_grid,
+        }},
+    };
+    ProgramRunArgs run_args{
+        .kernel_run_args = {std::move(reader_run), std::move(compute_run), std::move(writer_run)},
+        .tensor_args = {{INPUT, a.mesh_tensor()}, {OUTPUT, output.mesh_tensor()}},
+    };
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::experimental::prim
