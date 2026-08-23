@@ -353,7 +353,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
 
     // src1 is an intermediate L1 scratch, present only when the stick is not L1-aligned.
     // It is touched by a single kernel (the writer, by raw pointer) -> self-loop DFB, and its
-    // binding is conditional on !is_l1_aligned (matched by a kernel-side #ifdef).
+    // binding is conditional on !is_l1_aligned (matched by the kernel's named constexpr argument).
     DataflowBufferSpec src1_dfb = make_dfb(SRC1, stick_nbytes * stride_w * stride_h, 1, dfb_data_format);
 
     TensorParameter input_param{.unique_id = INPUT, .spec = input_tensor.tensor_spec()};
@@ -367,13 +367,8 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
         {"stride_w", stride_w},
         {"input_width", input_width},
     };
-
-    // Emit the NOT_L1_ALIGNED define to the writer only when the src1 scratch is bound
-    // (the define and the binding share one condition — Pattern: Conditional / optional DFB bindings).
-    KernelSpec::CompilerOptions::Defines writer_defines;
-    if (!is_l1_aligned) {
-        writer_defines.insert({"FOLD_RM_NOT_L1_ALIGNED", "1"});
-    }
+    auto writer_cta = common_cta;
+    writer_cta.insert({"needs_intermediate", !is_l1_aligned});
 
     KernelSpec reader_spec{
         .unique_id = READER,
@@ -394,14 +389,19 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
             DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER});
         writer_dfbs.push_back(
             DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER});
+    } else {
+        writer_dfbs.push_back(DFBBinding{
+            .dfb_spec_name = SRC1,
+            .accessor_name = "in1",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+            .allow_unbound_for_constexpr_discard = true});
     }
     KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = std::filesystem::path{WRITER_RM},
-        .compiler_options = {.defines = writer_defines},
         .dfb_bindings = writer_dfbs,
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
-        .compile_time_args = common_cta,
+        .compile_time_args = writer_cta,
         .runtime_arg_schema = {.runtime_arg_names = {"work_per_core", "dst_index"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
