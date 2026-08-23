@@ -20,7 +20,6 @@ DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
 # atol for the non-tile-aligned regressions, matching the tile-aligned specify_grid cases.
 NON_TILE_ALIGNED_ATOL = 0.08
 STATISTICS_MODES = ("tile_reduction", "two_pass")
-LEGACY_RECIPROCAL_MODE = "two_pass_with_legacy_reciprocal_lut"
 
 GROUP_NORM_DRAM_SHAPES = [
     (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
@@ -177,7 +176,7 @@ def run_group_norm_DRAM(
         grid_for_params = grid_size
     else:
         # Exercises the C++ automatic grid selection.
-        # We must prepare gamma/beta/mask/reciprocals for that *same* auto-selected
+        # We must prepare gamma/beta/mask for that *same* auto-selected
         # grid; otherwise their shapes (driven by num_virtual_cols/num_virtual_rows)
         # would not match the grid the op actually picks at runtime.
         grid_for_params = ttnn.determine_expected_group_norm_dram_grid_size(
@@ -188,8 +187,7 @@ def run_group_norm_DRAM(
             num_batches=N,
         )
 
-    use_welford = statistics_mode in ("two_pass", LEGACY_RECIPROCAL_MODE)
-    use_reciprocals = statistics_mode == LEGACY_RECIPROCAL_MODE
+    use_welford = statistics_mode == "two_pass"
 
     # torch input tensor
     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
@@ -221,37 +219,6 @@ def run_group_norm_DRAM(
         [torch_weight, torch_bias], C, num_groups, device, core_grid=grid_for_params, return_mask=True
     )
 
-    # Create reciprocals tensor if needed
-    reciprocals_tensor = None
-    if use_reciprocals:
-        # Generate reciprocals tensor
-        torch_reciprocals = ttnn.create_group_norm_reciprocals(N, C, H, W, num_groups, grid_for_params)
-        reciprocals_tensor = ttnn.from_torch(
-            torch_reciprocals,
-            dtype=ttnn.DataType.FLOAT32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=ttnn.MemoryConfig(
-                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                buffer_type=ttnn.BufferType.L1,
-                shard_spec=ttnn.ShardSpec(
-                    ttnn.CoreRangeSet(
-                        {
-                            ttnn.CoreRange(
-                                ttnn.CoreCoord(0, 0),
-                                ttnn.CoreCoord(grid_for_params.x - 1, grid_for_params.y - 1),
-                            )
-                        }
-                    ),
-                    (
-                        torch_reciprocals.shape[0] // (grid_for_params.x * grid_for_params.y),
-                        torch_reciprocals.shape[1],
-                    ),
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            ),
-        )
-
     # groupnorm
 
     num_itr = 2  # second iteration to help catch potential runtime args issue.
@@ -271,7 +238,6 @@ def run_group_norm_DRAM(
             inplace=False,
             num_out_blocks=num_out_blocks if specify_grid else None,
             use_welford=use_welford,
-            reciprocals=reciprocals_tensor,
         )
         ttnn.synchronize_device(device)
 
@@ -340,24 +306,6 @@ def test_group_norm_DRAM(
         use_input_mask=True,
         perf_test_mode=perf_test_mode,
         specify_grid=specify_grid,
-    )
-
-
-@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-def test_group_norm_DRAM_legacy_reciprocal_compatibility(device):
-    """The deprecated reciprocal argument remains accepted without duplicating the full matrix."""
-    run_group_norm_DRAM(
-        device,
-        1,
-        480,
-        1,
-        64,
-        8,
-        1,
-        1,
-        1,
-        LEGACY_RECIPROCAL_MODE,
-        use_input_mask=True,
     )
 
 
@@ -1059,15 +1007,14 @@ GN_INTERLEAVED_SHAPES = [
 def test_group_norm_interleaved_all_config(
     device, N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x, in_dtype, gb_dtype, statistics_mode
 ):
-    # Interleaved (DRAM) group_norm across all statistics modes. The modes differ only in
-    # use_welford/use_reciprocals and the accuracy thresholds; everything else (fp32/bf16 input,
+    # Interleaved (DRAM) group_norm across both statistics modes. The modes differ only in
+    # use_welford and the accuracy thresholds; everything else (fp32/bf16 input,
     # fp32/bf16 gamma-beta, gamma/beta/mask prep via dram_group_norm_params_from_torch) is identical.
     # Interleaved input/output is TILE-only (ROW_MAJOR is rejected by the op for non-sharded tensors).
     grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
     torch.manual_seed(0)
 
-    use_welford = statistics_mode in ("two_pass", LEGACY_RECIPROCAL_MODE)
-    use_reciprocals = statistics_mode == LEGACY_RECIPROCAL_MODE
+    use_welford = statistics_mode == "two_pass"
 
     x = torch.rand((N, C, H, W), dtype=torch.float32)
     w = torch.rand((C,), dtype=torch.float32)
@@ -1091,26 +1038,6 @@ def test_group_norm_interleaved_all_config(
         [w, b], C, num_groups, device, core_grid=grid, return_mask=True, dtype=gb_dtype
     )
 
-    # Create reciprocals tensor if needed (host-precomputed 1/count fed via the reciprocals= arg)
-    reciprocals_tensor = None
-    if use_reciprocals:
-        torch_reciprocals = ttnn.create_group_norm_reciprocals(N, C, H, W, num_groups, grid)
-        reciprocals_tensor = ttnn.from_torch(
-            torch_reciprocals,
-            dtype=ttnn.DataType.FLOAT32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=ttnn.MemoryConfig(
-                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                buffer_type=ttnn.BufferType.L1,
-                shard_spec=ttnn.ShardSpec(
-                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}),
-                    (torch_reciprocals.shape[0] // (grid.x * grid.y), torch_reciprocals.shape[1]),
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            ),
-        )
-
     out = ttnn.group_norm(
         xt,
         num_groups=num_groups,
@@ -1124,7 +1051,6 @@ def test_group_norm_interleaved_all_config(
         use_welford=use_welford,
         num_out_blocks=num_out_blocks,
         inplace=False,
-        reciprocals=reciprocals_tensor,
     )
     out = ttnn.to_torch(ttnn.from_device(out)).float().reshape(ref.shape)
 

@@ -64,7 +64,6 @@ void kernel_main() {
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
     // When set, stats CBs hold fp32; the Welford combine reads/writes them as float not bf16.
     constexpr bool stats_is_fp32 = get_named_compile_time_arg_val("stats_is_fp32") != 0;
-    constexpr bool sfpu_two_pass = get_named_compile_time_arg_val("sfpu_two_pass") != 0;
     constexpr bool sfpu_two_pass_l1_replay = get_named_compile_time_arg_val("sfpu_two_pass_l1_replay") != 0;
 
     Noc noc;
@@ -127,7 +126,7 @@ void kernel_main() {
     uint32_t index_b_offset = 0;
     for (uint32_t b = 0; b < num_batches; ++b) {
         uint32_t mt_offset = 0;
-        constexpr uint32_t num_stats_passes = sfpu_two_pass && !sfpu_two_pass_l1_replay ? 2 : 1;
+        constexpr uint32_t num_stats_passes = sfpu_two_pass_l1_replay ? 1 : 2;
         for (uint32_t stats_pass = 0; stats_pass < num_stats_passes; ++stats_pass) {
             mt_offset = 0;
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {

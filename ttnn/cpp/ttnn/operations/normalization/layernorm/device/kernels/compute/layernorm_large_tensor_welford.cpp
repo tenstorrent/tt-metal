@@ -666,9 +666,9 @@ void kernel_main() {
     dfb_eps_obj.wait_front(onetile);  // comes from the reader
 
     constexpr uint32_t dst0 = 0;
-    constexpr uint32_t input_dst = 0;  // Input tile for Welford's algorithm
-    constexpr uint32_t mean_dst = 1;   // Mean tile for Welford's
-    constexpr uint32_t var_dst = 2;    // Variance tile for Welford's
+    constexpr uint32_t input_dst = 0;
+    constexpr uint32_t mean_dst = 1;
+    constexpr uint32_t var_dst = 2;
 
     // Get pointer to the reciprocal LUT
     using recip_lut_t = std::array<uint32_t, W>;

@@ -62,7 +62,6 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
     const auto& beta = tensor_args.beta;
     const auto& input_mask = tensor_args.input_mask;
     const auto& negative_mask = tensor_args.negative_mask;
-    const auto& reciprocals = tensor_args.reciprocals;
     const uint32_t tile_height = a.tensor_spec().tile().get_height();
     const uint32_t tile_width = a.tensor_spec().tile().get_width();
 
@@ -298,18 +297,6 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             output_layout);
     }
 
-    // Reciprocals tensor validation
-    if (reciprocals.has_value()) {
-        TT_FATAL(args.use_welford, "Reciprocals tensor can only be provided when use_welford is True");
-        TT_FATAL(
-            reciprocals.value().dtype() == DataType::FLOAT32,
-            "Reciprocals tensor must be FLOAT32, got: {}",
-            reciprocals.value().dtype());
-        TT_FATAL(reciprocals.value().storage_type() == StorageType::DEVICE, "Reciprocals tensor must be on device");
-        TT_FATAL(reciprocals.value().buffer() != nullptr, "Reciprocals tensor must be allocated in buffers on device");
-        TT_FATAL(a.device() == reciprocals.value().device(), "Input and reciprocals tensors must be on same device");
-    }
-
     // For non-sharded DRAM tensors, validate that the grid produces uniform
     // multicast groups.  Non-uniform groups cause a deadlock because the sender
     // kernel waits for an exact semaphore count equal to (group_size - 1).
@@ -395,7 +382,6 @@ Tensor group_norm(
     std::optional<Tensor> beta,
     std::optional<Tensor> input_mask,
     std::optional<Tensor> negative_mask,
-    std::optional<Tensor> reciprocals,
     bool synthesize_negative_mask) {
     if (negative_mask.has_value()) {
         TT_FATAL(
@@ -424,8 +410,7 @@ Tensor group_norm(
         .gamma = std::move(gamma),
         .beta = std::move(beta),
         .input_mask = std::move(input_mask),
-        .negative_mask = std::move(negative_mask),
-        .reciprocals = std::move(reciprocals)};
+        .negative_mask = std::move(negative_mask)};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

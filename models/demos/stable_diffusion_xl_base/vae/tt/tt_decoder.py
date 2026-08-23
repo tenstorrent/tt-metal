@@ -12,7 +12,7 @@ from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_midblock2d import TtUNetMidBlock2D
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_upblock2d import TtUpDecoderBlock2D
-from models.demos.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_slice_config, get_DRAM_GN_shape
+from models.demos.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_slice_config
 
 
 class TtDecoder(LightweightModule):
@@ -68,18 +68,6 @@ class TtDecoder(LightweightModule):
             self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
             or self.groupnorm_memory_config == ttnn.DRAM_MEMORY_CONFIG
         ), "Only L1_BLOCK_SHARDED_MEMORY_CONFIG and DRAM_MEMORY_CONFIG is supported for GN"
-
-        N, C, H, W = get_DRAM_GN_shape(None, 1)
-        torch_reciprocals = ttnn.create_group_norm_reciprocals(
-            N, C, H, W, self.norm_groups, self.groupnorm_config["core_grid"]
-        )
-        self.reciprocals_tensor = ttnn.from_torch(
-            torch_reciprocals,
-            dtype=ttnn.DataType.FLOAT32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
 
         self.compute_in_config = model_config.get_conv_compute_config(module_path="decoder.conv_in")
         self.conv_in_config = model_config.get_conv_config(conv_path="decoder.conv_in")
@@ -148,13 +136,6 @@ class TtDecoder(LightweightModule):
             hidden_states, [C, H, W] = up_block.forward(hidden_states, [B, C, H, W])
 
         logger.info("Executing out ops")
-        sharded_mem_config = ttnn.create_sharded_memory_config(
-            shape=self.reciprocals_tensor.shape,
-            core_grid=self.groupnorm_config["core_grid"],
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        reciprocals_tensor = ttnn.to_memory_config(self.reciprocals_tensor, sharded_mem_config)
         mem_cfg = ttnn.DRAM_MEMORY_CONFIG
         if self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
             mem_cfg = ttnn.create_sharded_memory_config(
@@ -177,7 +158,6 @@ class TtDecoder(LightweightModule):
             epsilon=self.norm_eps,
             memory_config=hidden_states.memory_config(),
             use_welford=use_welford_decoder,
-            reciprocals=reciprocals_tensor if use_welford_decoder else None,
             **self.groupnorm_config,
         )
 

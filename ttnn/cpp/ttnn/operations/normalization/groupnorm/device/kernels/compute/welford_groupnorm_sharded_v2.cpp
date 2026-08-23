@@ -59,7 +59,6 @@ void kernel_main() {
     // True when a reconfig-relevant operand is fp32: the per-tile reconfig_data_format calls below
     // are then required. All-bf16 compiles them out (no-ops). See program factory.
     constexpr bool enable_fp32_reconfig = get_named_compile_time_arg_val("enable_fp32_reconfig") != 0;
-    constexpr bool sfpu_two_pass = get_named_compile_time_arg_val("sfpu_two_pass") != 0;
     constexpr std::uint32_t sfpu_two_pass_reciprocal = get_named_compile_time_arg_val("sfpu_two_pass_reciprocal");
 
     // dst regs
@@ -160,9 +159,6 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in0_id);
 #endif
 
-    // Sharded v2 does not use reciprocal lookup table, so we pass an empty array
-    constexpr std::array<std::uint32_t, 0> empty_reciprocal_lut{};
-
     dfb_eps.wait_front(1);
     dfb_input_mask.wait_front(num_tiles_input_mask);
 
@@ -190,34 +186,20 @@ void kernel_main() {
             transpose_init(dfb_in0_id);
         }
         tile_regs_acquire();
-        if constexpr (sfpu_two_pass) {
-            two_pass_stats_init();
-        } else {
-            welford_init();
-        }
-
-        std::uint32_t block_xy_coord = 0;
+        two_pass_stats_init();
 
         std::uint32_t active_group = 0;
-        if constexpr (sfpu_two_pass) {
-            // Group 0 starts directly from the cleared LREG state. Only the
-            // other groups need an initialized state in DST before first use.
-            for (std::uint32_t g = 1; g < num_groups; ++g) {
-                welford_save_state(mean_dst, g);
-            }
-        } else {
-            for (std::uint32_t g = 0; g < num_groups; ++g) {
-                welford_save_state(mean_dst, g);
-            }
+        // Group 0 starts directly from the cleared LREG state. Only the
+        // other groups need an initialized state in DST before first use.
+        for (std::uint32_t g = 1; g < num_groups; ++g) {
+            welford_save_state(mean_dst, g);
         }
 
         for (std::uint32_t i = 0; i < block_h; ++i) {
-            if constexpr (sfpu_two_pass) {
-                if (i > 0) {
-                    welford_save_state(mean_dst, active_group);
-                    active_group = 0;
-                    welford_restore_state(mean_dst, active_group);
-                }
+            if (i > 0) {
+                welford_save_state(mean_dst, active_group);
+                active_group = 0;
+                welford_restore_state(mean_dst, active_group);
             }
 
             // This indicates the smallest group that is yet to be processed for this block
@@ -232,11 +214,6 @@ void kernel_main() {
             // left to be processed for the min_group, we will process them in the next tile
             std::uint32_t channels_left = num_channels_per_group;
 
-            // This tracks the global index of the first element in a given group in a tile.
-            // It is used by the Welford's algorithm to scale the running mean and m2.
-            // This moves reverse of channels_left, except that it is the global index.
-            std::uint32_t curr_xy_coord = block_xy_coord;
-
             for (std::uint32_t nt = 0; nt < per_core_N; ++nt) {
 #ifdef TILIZE_IN
                 transpose_init(dfb_in_welford_id);
@@ -246,37 +223,15 @@ void kernel_main() {
                 transpose_tile(dfb_in0_welford_id, tile_id, input_dst);
 #endif
 
-                // Re-establish the welford SFPU replay buffer state. When transpose_tile
-                // takes the unpack-to-DEST fp32 path, transpose_tile calls
-                // llk_math_transpose_dest, whose math-side init records slots [16, 32) of
-                // the math-thread replay buffer, clobbering welford's LREG2 / LREG3 portions.
-                // Without welford_init<WelfordInitMode::PreserveStats>(), welford_update_rows would replay stale
-                // transpose-dest ops.
-                // When the unpack-to-DEST fp32 path is inactive, transpose_tile routes
-                // through SrcA without touching the math-thread replay buffer, so re-init is
-                // not needed.
-                if constexpr (welford_fp32_alias && !sfpu_two_pass) {
-                    welford_init<WelfordInitMode::PreserveStats>();
-                }
-
                 std::uint32_t group_offset = 0;
                 for (std::uint32_t g = min_group; g < num_groups; ++g) {
-                    // Start Welford's Calculation
                     std::uint32_t cols_available = tile_width - group_offset;
                     std::uint32_t cols_consumed = std::min(cols_available, channels_left);
 
-                    if constexpr (sfpu_two_pass) {
-                        two_pass_stats_update_rows<false>(input_dst, group_offset, cols_consumed);
-                    } else {
-                        welford_restore_state(mean_dst, g);
-                        welford_update_rows<0>(
-                            input_dst, curr_xy_coord, group_offset, cols_consumed, empty_reciprocal_lut);
-                        welford_save_state(mean_dst, g);
-                    }
+                    two_pass_stats_update_rows<false>(input_dst, group_offset, cols_consumed);
 
                     channels_left -= cols_consumed;
                     group_offset += cols_consumed;
-                    curr_xy_coord += cols_consumed;
 
                     // There are still channels left to be processed for the current group
                     // This can only be done in the next tile. So we don't do any more groups
@@ -289,15 +244,12 @@ void kernel_main() {
                     // processed all the channels for the current group.
                     // We update the min_group so we never revisit this group again.
                     ++min_group;
-                    if constexpr (sfpu_two_pass) {
-                        if (min_group < num_groups) {
-                            welford_save_state(mean_dst, active_group);
-                            active_group = min_group;
-                            welford_restore_state(mean_dst, active_group);
-                        }
+                    if (min_group < num_groups) {
+                        welford_save_state(mean_dst, active_group);
+                        active_group = min_group;
+                        welford_restore_state(mean_dst, active_group);
                     }
                     channels_left = num_channels_per_group;
-                    curr_xy_coord = block_xy_coord;
 
                     // All available columns have been used for this tile, so we don't do any
                     // more groups for this tile.
@@ -307,83 +259,72 @@ void kernel_main() {
                 }
                 ++tile_id;
             }
-            block_xy_coord += num_channels_per_group;
         }
 
-        if constexpr (sfpu_two_pass) {
-            // Convert sums to means, ending with group 0 resident in LREGs so
-            // the second pass can begin without another save/restore pair.
+        // Convert sums to means, ending with group 0 resident in LREGs so
+        // the second pass can begin without another save/restore pair.
+        two_pass_stats_finish_mean(sfpu_two_pass_reciprocal);
+        if constexpr (num_groups > 1) {
+            welford_save_state(mean_dst, active_group);
+        }
+        for (std::uint32_t g = 1; g + 1 < num_groups; ++g) {
+            welford_restore_state(mean_dst, g);
             two_pass_stats_finish_mean(sfpu_two_pass_reciprocal);
-            if constexpr (num_groups > 1) {
-                welford_save_state(mean_dst, active_group);
-            }
-            for (std::uint32_t g = 1; g + 1 < num_groups; ++g) {
-                welford_restore_state(mean_dst, g);
-                two_pass_stats_finish_mean(sfpu_two_pass_reciprocal);
-                welford_save_state(mean_dst, g);
-            }
-            if constexpr (num_groups > 1) {
-                welford_restore_state(mean_dst, 0);
-                two_pass_stats_finish_mean(sfpu_two_pass_reciprocal);
-            }
+            welford_save_state(mean_dst, g);
+        }
+        if constexpr (num_groups > 1) {
+            welford_restore_state(mean_dst, 0);
+            two_pass_stats_finish_mean(sfpu_two_pass_reciprocal);
+        }
 
-            // Second pass: accumulate centered squared residuals in FP32 SFPU.
-            tile_id = b * block_hw;
-            block_xy_coord = 0;
-            active_group = 0;
-            for (std::uint32_t i = 0; i < block_h; ++i) {
-                if (i > 0) {
-                    welford_save_state(mean_dst, active_group);
-                    active_group = 0;
-                    welford_restore_state(mean_dst, active_group);
-                }
-                std::uint32_t min_group = 0;
-                std::uint32_t channels_left = num_channels_per_group;
-                for (std::uint32_t nt = 0; nt < per_core_N; ++nt) {
+        // Second pass: accumulate centered squared residuals in FP32 SFPU.
+        tile_id = b * block_hw;
+        active_group = 0;
+        for (std::uint32_t i = 0; i < block_h; ++i) {
+            if (i > 0) {
+                welford_save_state(mean_dst, active_group);
+                active_group = 0;
+                welford_restore_state(mean_dst, active_group);
+            }
+            std::uint32_t min_group = 0;
+            std::uint32_t channels_left = num_channels_per_group;
+            for (std::uint32_t nt = 0; nt < per_core_N; ++nt) {
 #ifdef TILIZE_IN
-                    transpose_init(dfb_in_welford_id);
-                    transpose_tile(dfb_in_welford_id, tile_id, input_dst);
+                transpose_init(dfb_in_welford_id);
+                transpose_tile(dfb_in_welford_id, tile_id, input_dst);
 #else
-                    transpose_init(dfb_in0_welford_id);
-                    transpose_tile(dfb_in0_welford_id, tile_id, input_dst);
+                transpose_init(dfb_in0_welford_id);
+                transpose_tile(dfb_in0_welford_id, tile_id, input_dst);
 #endif
-                    std::uint32_t group_offset = 0;
-                    for (std::uint32_t g = min_group; g < num_groups; ++g) {
-                        const std::uint32_t cols_available = tile_width - group_offset;
-                        const std::uint32_t cols_consumed = std::min(cols_available, channels_left);
-                        two_pass_stats_update_rows<true, num_groups == 1>(input_dst, group_offset, cols_consumed);
-                        channels_left -= cols_consumed;
-                        group_offset += cols_consumed;
-                        if (channels_left > 0) {
-                            break;
-                        }
-                        ++min_group;
-                        if (min_group < num_groups) {
-                            welford_save_state(mean_dst, active_group);
-                            active_group = min_group;
-                            welford_restore_state(mean_dst, active_group);
-                        }
-                        channels_left = num_channels_per_group;
-                        if (group_offset == tile_width) {
-                            break;
-                        }
+                std::uint32_t group_offset = 0;
+                for (std::uint32_t g = min_group; g < num_groups; ++g) {
+                    const std::uint32_t cols_available = tile_width - group_offset;
+                    const std::uint32_t cols_consumed = std::min(cols_available, channels_left);
+                    two_pass_stats_update_rows<true, num_groups == 1>(input_dst, group_offset, cols_consumed);
+                    channels_left -= cols_consumed;
+                    group_offset += cols_consumed;
+                    if (channels_left > 0) {
+                        break;
                     }
-                    ++tile_id;
+                    ++min_group;
+                    if (min_group < num_groups) {
+                        welford_save_state(mean_dst, active_group);
+                        active_group = min_group;
+                        welford_restore_state(mean_dst, active_group);
+                    }
+                    channels_left = num_channels_per_group;
+                    if (group_offset == tile_width) {
+                        break;
+                    }
                 }
-                block_xy_coord += num_channels_per_group;
+                ++tile_id;
             }
-            // Finalize the resident last group before loading the others.
-            two_pass_stats_finalize_to_face<num_groups == 1>(mean_dst, active_group, sfpu_two_pass_reciprocal);
-            for (std::uint32_t g = 0; g + 1 < num_groups; ++g) {
-                welford_restore_state(mean_dst, g);
-                two_pass_stats_finalize_to_face<false>(mean_dst, g, sfpu_two_pass_reciprocal);
-            }
-        } else {
-            for (std::uint32_t g = 0; g < num_groups; ++g) {
-                // Convert M2 to variance
-                welford_restore_state(mean_dst, g);
-                welford_finalize_to_face<0>(mean_dst, g, block_xy_coord - 1, empty_reciprocal_lut);
-            }
+        }
+        // Finalize the resident last group before loading the others.
+        two_pass_stats_finalize_to_face<num_groups == 1>(mean_dst, active_group, sfpu_two_pass_reciprocal);
+        for (std::uint32_t g = 0; g + 1 < num_groups; ++g) {
+            welford_restore_state(mean_dst, g);
+            two_pass_stats_finalize_to_face<false>(mean_dst, g, sfpu_two_pass_reciprocal);
         }
 
         tile_regs_commit();

@@ -109,13 +109,13 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t dst0 = 0;
-    constexpr uint32_t input_dst = 0;  // Input tile for Welford's algorithm
+    constexpr uint32_t input_dst = 0;
     constexpr uint32_t mean_dst = 1;
     constexpr uint32_t var_dst = 2;
     constexpr uint32_t retained_input_dst = 3;
 
     // The number of valid columns in the last tile in width dimension.
-    // Because the Welford's llk is given transposed data, skip some rows when
+    // Because the statistics LLK is given transposed data, skip some rows when
     // we want to skip some columns from getting processed by layer_norm.
     constexpr uint32_t last_tile_rows = (W % tile_width) == 0 ? tile_width : W % tile_width;
 
@@ -179,7 +179,7 @@ void kernel_main() {
         reconfig_data_format(dfb_in, dfb_x, dfb_inb, dfb_ex);
 #endif
 
-        // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm.
+        // Calculate E[x] and Var[x] using stable two-pass statistics.
         //
         // Welford reads input tiles through dfb_x_welford, which shares SRAM with dfb_x but
         // is configured for UnpackToDest (vs dfb_x's default TF32 SrcA path).
@@ -262,11 +262,7 @@ void kernel_main() {
         welford_update_rows<W>(input_dst, start_N, 0, last_tile_rows, *p_reciprocals);
 
         // Store the mean and variance to the destination registers
-        if constexpr (sfpu_two_pass) {
-            two_pass_stats_finalize_to_row(mean_dst, (*p_reciprocals)[W - 1]);
-        } else {
-            welford_finalize_to_row<W>(mean_dst, W - 1, *p_reciprocals);
-        }
+        two_pass_stats_finalize_to_row(mean_dst, (*p_reciprocals)[W - 1]);
         tile_regs_commit();
 
         // Pop dfb_x_welford so its rd_ptr advances in lock-step with dfb_x's pop in the eltwise

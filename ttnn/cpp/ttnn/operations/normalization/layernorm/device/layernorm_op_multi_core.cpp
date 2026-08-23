@@ -439,9 +439,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     ////////////////////////////////////////////////////////////////////////////
     const auto use_welford_and_not_rms_norm = use_welford && !rms_norm;
     const auto fuse_pre_add = b.has_value();
-    const bool use_sfpu_two_pass = use_welford_and_not_rms_norm;
-    const bool sfpu_two_pass = use_sfpu_two_pass && !large_tensor_needed;
-    const bool sfpu_two_pass_large = use_sfpu_two_pass && large_tensor_needed;
+    const bool two_pass_small = use_welford_and_not_rms_norm && !large_tensor_needed;
 
     // The two-pass kernel retains the current row until its mean, centered M2,
     // and x-mean traversals are complete. When L1 permits, let the reader fill
@@ -450,7 +448,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     // fused path the current a/b row has already been consumed into cb_x, so two
     // rows in each input CB allow the reader to stay ahead of the longer compute
     // phase.
-    if (sfpu_two_pass) {
+    if (two_pass_small) {
         const std::uint32_t read_ahead_in0_t = fuse_pre_add ? 2 * Wt_next_block_up : 3 * in0_t;
         const std::uint32_t read_ahead_in1_t = fuse_pre_add ? 2 * Wt_next_block_up : in1_t;
         auto read_ahead_footprint = make_cb_footprint(true);

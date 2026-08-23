@@ -20,7 +20,6 @@
 #include "api/compute/welford.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-#include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "api/dataflow/dataflow_buffer.h"
 
 // The optional fused activation is applied to the final output tile in DEST, right before it is
@@ -51,26 +50,17 @@ void kernel_main() {
      * This is a high level description of the stages of this kernel, tags will be added to show
      * where in the code each stage starts and ends.
      *
-     * Welford's Online Algorithm for Group Normalization:
-     * This kernel implements Welford's online algorithm for numerically stable computation of
-     * mean and variance across groups in a single pass through the data.
-     *
-     * Welford's algorithm maintains running statistics:
-     * - Count: number of elements processed
-     * - Mean: running average μ = Σ(x_i) / count
-     * - M2: sum of squared differences from current mean = Σ((x_i - μ)^2)
-     * - Variance: M2 / count (for population)
+     * Two-pass Statistics for Group Normalization:
+     * The first pass computes each group's mean and the second accumulates centered squared
+     * residuals. Both passes use FP32 SFPU accumulation.
      *
      * Batch Loop:
      *   Input tiles:
-     *       For each group, we accumulate Welford statistics across all channels in that group
-     *       Welford Partial Tile Updates:
-     *           Process input tiles incrementally, updating running mean and M2 for each group
-     *           Uses welford_update_rows()
-     *           Intermediate results stored in dst registers between tiles
+     *       For each group, accumulate its mean and centered M2 across all local channels
+     *       Intermediate results are stored in dst registers between tiles
      *   Statistics Aggregation:
      *       Local aggregation per core:
-     *           Convert accumulated M2 to variance using welford_finalize_to_face()
+     *           Convert accumulated centered M2 to variance
      *           Store per-group statistics in cb_ex_partial_id for inter-core communication
      *       Global reduction across cores:
      *           Reader kernels aggregate local statistics from all cores into cb_ex_global_id
@@ -87,15 +77,8 @@ void kernel_main() {
      *         Gamma scaling: result * γ
      *         Beta shift: result + β
      *
-     * Key Welford operations:
-     * - welford_init(): Initialize algorithm state
-     * - welford_update_rows(): Update running statistics for partial tile data
-     * - welford_save_state(): Save intermediate statistics to dst registers
-     * - welford_restore_state(): Restore statistics for continued processing
-     * - welford_finalize_to_face(): Convert M2 to final variance
-     *
      * To find code sections, search for "Start LABEL" or "End LABEL" comments
-     * Examples: "Start Welford Partial Tile" or "End Statistics Aggregation"
+     * Examples: "Start Statistics Aggregation" or "End Statistics Aggregation"
      */
 
     constexpr uint32_t do_gamma = get_named_compile_time_arg_val("do_gamma");
@@ -118,7 +101,6 @@ void kernel_main() {
 
     // These are numbers in absolute terms, on a per group, per batch without tiling
     constexpr uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
-    constexpr uint32_t reciprocal_size = get_named_compile_time_arg_val("reciprocal_size");
     constexpr uint32_t tile_width = get_named_compile_time_arg_val("TILE_WIDTH");
 
     // dst regs
@@ -135,26 +117,17 @@ void kernel_main() {
     constexpr uint32_t dfb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
     // Boolean indicating whether the welford kernel uses the alias CB.
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
-    // True when the welford intake CB is configured with UnpackToDestFp32, i.e. the FP32
-    // path. Covers both the TILIZE_IN branch (intake CB is c_29) and the non-TILIZE_IN
-    // alias branch (intake CB is dfb_in0_welford, see welford_fp32_alias). On this path,
-    // transpose_tile routes through llk_math_transpose_dest, whose math-side init
-    // records slots [16, 32) of the math-thread replay buffer, clobbering welford's
-    // LREG2 / LREG3 portions, so the welford SFPU state must be re-initialized after each
-    // transpose. For bf16 input, transpose routes through SrcA without touching the
-    // math-thread replay buffer, so no re-init is needed.
+    // True when the statistics intake CB is configured with UnpackToDestFp32.
     constexpr bool welford_unpack_fp32_active = get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
     // True when a reconfig-relevant operand is fp32: the per-tile reconfig_data_format calls below
     // are then required. All-bf16 compiles them out (no-ops). See program factory.
     constexpr bool enable_fp32_reconfig = get_named_compile_time_arg_val("enable_fp32_reconfig") != 0;
-    constexpr bool sfpu_two_pass = get_named_compile_time_arg_val("sfpu_two_pass") != 0;
     constexpr bool sfpu_two_pass_l1_replay = get_named_compile_time_arg_val("sfpu_two_pass_l1_replay") != 0;
     constexpr uint32_t sfpu_two_pass_reciprocal = get_named_compile_time_arg_val("sfpu_two_pass_reciprocal");
     constexpr uint32_t dfb_eps_id = tt::CBIndex::c_3;
     constexpr uint32_t dfb_gamma_id = tt::CBIndex::c_5;
     constexpr uint32_t dfb_beta_id = tt::CBIndex::c_6;
     constexpr uint32_t dfb_input_mask_id = tt::CBIndex::c_28;
-    constexpr uint32_t dfb_reciprocals_id = tt::CBIndex::c_18;
 
     // interim cbs
     constexpr uint32_t dfb_repack_id = tt::CBIndex::c_26;
@@ -247,11 +220,6 @@ void kernel_main() {
         out_block_h_last = (block_h % num_out_blocks);
     }
 
-    // Get pointer to the reciprocal LUT
-    using recip_lut_t = std::array<uint32_t, reciprocal_size>;
-    auto p_reciprocal =
-        norm::kernel_util::compute::memory::get_pointer_to_cb_data<recip_lut_t>(dfb_reciprocals_id, /*tile_idx=*/0);
-
     dfb_eps.wait_front(1);
     dfb_input_mask.wait_front(num_tiles_input_mask);
 
@@ -280,39 +248,23 @@ void kernel_main() {
 #endif
         dfb_ex_partial.reserve_back(2);
         tile_regs_acquire();
-        if constexpr (sfpu_two_pass) {
-            two_pass_stats_init();
-        } else {
-            welford_init();
-        }
-
-        uint32_t block_xy_coord = 0;
+        two_pass_stats_init();
         uint32_t active_group = 0;
 
-        if constexpr (sfpu_two_pass) {
-            for (uint32_t g = 1; g < num_groups; ++g) {
-                welford_save_state(mean_dst, g);
-            }
-        } else {
-            for (uint32_t g = 0; g < num_groups; ++g) {
-                welford_save_state(mean_dst, g);
-            }
+        for (uint32_t g = 1; g < num_groups; ++g) {
+            welford_save_state(mean_dst, g);
         }
 
-        // First statistics traversal: Welford updates its running state, while
-        // two-pass accumulates raw sums for each group.
+        // First statistics traversal: accumulate raw sums for each group.
         for (uint32_t mt = 0; mt < block_h; ++mt) {
-            if constexpr (sfpu_two_pass) {
-                if (mt > 0) {
-                    welford_save_state(mean_dst, active_group);
-                    active_group = 0;
-                    welford_restore_state(mean_dst, active_group);
-                }
+            if (mt > 0) {
+                welford_save_state(mean_dst, active_group);
+                active_group = 0;
+                welford_restore_state(mean_dst, active_group);
             }
 
             uint32_t min_group = 0;
             uint32_t channels_left = num_channels_per_group;
-            uint32_t curr_xy_coord = block_xy_coord;
 
             for (uint32_t nt = 0; nt < per_core_N; ++nt) {
                 const uint32_t stats_input_tile = mt * per_core_N + nt;
@@ -328,41 +280,26 @@ void kernel_main() {
                 transpose_tile(dfb_in0_welford_id, sfpu_two_pass_l1_replay ? stats_input_tile : 0, input_dst);
 #endif
 
-                if constexpr (welford_unpack_fp32_active && !sfpu_two_pass) {
-                    welford_init<WelfordInitMode::PreserveStats>();
-                }
-
                 uint32_t group_offset = 0;
                 for (uint32_t g = min_group; g < num_groups; ++g) {
                     const uint32_t cols_available = tile_width - group_offset;
                     const uint32_t cols_consumed = std::min(cols_available, channels_left);
 
-                    if constexpr (sfpu_two_pass) {
-                        two_pass_stats_update_rows<false>(input_dst, group_offset, cols_consumed);
-                    } else {
-                        welford_restore_state(mean_dst, g);
-                        welford_update_rows<reciprocal_size>(
-                            input_dst, curr_xy_coord, group_offset, cols_consumed, *p_reciprocal);
-                        welford_save_state(mean_dst, g);
-                    }
+                    two_pass_stats_update_rows<false>(input_dst, group_offset, cols_consumed);
 
                     channels_left -= cols_consumed;
                     group_offset += cols_consumed;
-                    curr_xy_coord += cols_consumed;
                     if (channels_left > 0) {
                         break;
                     }
 
                     ++min_group;
-                    if constexpr (sfpu_two_pass) {
-                        if (min_group < num_groups) {
-                            welford_save_state(mean_dst, active_group);
-                            active_group = min_group;
-                            welford_restore_state(mean_dst, active_group);
-                        }
+                    if (min_group < num_groups) {
+                        welford_save_state(mean_dst, active_group);
+                        active_group = min_group;
+                        welford_restore_state(mean_dst, active_group);
                     }
                     channels_left = num_channels_per_group;
-                    curr_xy_coord = block_xy_coord;
                     if (group_offset == tile_width) {
                         break;
                     }
@@ -374,89 +311,81 @@ void kernel_main() {
                     }
                 }
             }
-            block_xy_coord += num_channels_per_group;
         }
 
-        if constexpr (sfpu_two_pass) {
-            // Convert each group's raw sum into its mean, leaving group zero
-            // resident for the centered-M2 traversal.
+        // Convert each group's raw sum into its mean, leaving group zero
+        // resident for the centered-M2 traversal.
+        two_pass_stats_finish_mean(sfpu_two_pass_reciprocal);
+        if constexpr (num_groups > 1) {
+            welford_save_state(mean_dst, active_group);
+        }
+        for (uint32_t g = 1; g + 1 < num_groups; ++g) {
+            welford_restore_state(mean_dst, g);
             two_pass_stats_finish_mean(sfpu_two_pass_reciprocal);
-            if constexpr (num_groups > 1) {
+            welford_save_state(mean_dst, g);
+        }
+        if constexpr (num_groups > 1) {
+            welford_restore_state(mean_dst, 0);
+            two_pass_stats_finish_mean(sfpu_two_pass_reciprocal);
+        }
+
+        // The reader streams the same local input tiles a second time.
+        active_group = 0;
+        for (uint32_t mt = 0; mt < block_h; ++mt) {
+            if (mt > 0) {
                 welford_save_state(mean_dst, active_group);
+                active_group = 0;
+                welford_restore_state(mean_dst, active_group);
             }
-            for (uint32_t g = 1; g + 1 < num_groups; ++g) {
-                welford_restore_state(mean_dst, g);
-                two_pass_stats_finish_mean(sfpu_two_pass_reciprocal);
-                welford_save_state(mean_dst, g);
-            }
-            if constexpr (num_groups > 1) {
-                welford_restore_state(mean_dst, 0);
-                two_pass_stats_finish_mean(sfpu_two_pass_reciprocal);
-            }
-
-            // The reader streams the same local input tiles a second time.
-            active_group = 0;
-            for (uint32_t mt = 0; mt < block_h; ++mt) {
-                if (mt > 0) {
-                    welford_save_state(mean_dst, active_group);
-                    active_group = 0;
-                    welford_restore_state(mean_dst, active_group);
+            uint32_t min_group = 0;
+            uint32_t channels_left = num_channels_per_group;
+            for (uint32_t nt = 0; nt < per_core_N; ++nt) {
+                const uint32_t stats_input_tile = mt * per_core_N + nt;
+                dfb_in0.wait_front(sfpu_two_pass_l1_replay ? stats_input_tile + 1 : 1);
+                if constexpr (welford_fp32_alias) {
+                    dfb_in0_welford.wait_front(sfpu_two_pass_l1_replay ? stats_input_tile + 1 : 1);
                 }
-                uint32_t min_group = 0;
-                uint32_t channels_left = num_channels_per_group;
-                for (uint32_t nt = 0; nt < per_core_N; ++nt) {
-                    const uint32_t stats_input_tile = mt * per_core_N + nt;
-                    dfb_in0.wait_front(sfpu_two_pass_l1_replay ? stats_input_tile + 1 : 1);
-                    if constexpr (welford_fp32_alias) {
-                        dfb_in0_welford.wait_front(sfpu_two_pass_l1_replay ? stats_input_tile + 1 : 1);
-                    }
 #ifdef TILIZE_IN
-                    transpose_init(dfb_in_id);
-                    transpose_tile(dfb_in_id, 0, input_dst);
+                transpose_init(dfb_in_id);
+                transpose_tile(dfb_in_id, 0, input_dst);
 #else
-                    transpose_init(dfb_in0_welford_id);
-                    transpose_tile(dfb_in0_welford_id, sfpu_two_pass_l1_replay ? stats_input_tile : 0, input_dst);
+                transpose_init(dfb_in0_welford_id);
+                transpose_tile(dfb_in0_welford_id, sfpu_two_pass_l1_replay ? stats_input_tile : 0, input_dst);
 #endif
-                    uint32_t group_offset = 0;
-                    for (uint32_t g = min_group; g < num_groups; ++g) {
-                        const uint32_t cols_available = tile_width - group_offset;
-                        const uint32_t cols_consumed = std::min(cols_available, channels_left);
-                        two_pass_stats_update_rows<true, num_groups == 1>(input_dst, group_offset, cols_consumed);
-                        channels_left -= cols_consumed;
-                        group_offset += cols_consumed;
-                        if (channels_left > 0) {
-                            break;
-                        }
-                        ++min_group;
-                        if (min_group < num_groups) {
-                            welford_save_state(mean_dst, active_group);
-                            active_group = min_group;
-                            welford_restore_state(mean_dst, active_group);
-                        }
-                        channels_left = num_channels_per_group;
-                        if (group_offset == tile_width) {
-                            break;
-                        }
+                uint32_t group_offset = 0;
+                for (uint32_t g = min_group; g < num_groups; ++g) {
+                    const uint32_t cols_available = tile_width - group_offset;
+                    const uint32_t cols_consumed = std::min(cols_available, channels_left);
+                    two_pass_stats_update_rows<true, num_groups == 1>(input_dst, group_offset, cols_consumed);
+                    channels_left -= cols_consumed;
+                    group_offset += cols_consumed;
+                    if (channels_left > 0) {
+                        break;
                     }
-                    if constexpr (!sfpu_two_pass_l1_replay) {
-                        dfb_in0.pop_front(1);
-                        if constexpr (welford_fp32_alias) {
-                            dfb_in0_welford.pop_front(1);
-                        }
+                    ++min_group;
+                    if (min_group < num_groups) {
+                        welford_save_state(mean_dst, active_group);
+                        active_group = min_group;
+                        welford_restore_state(mean_dst, active_group);
+                    }
+                    channels_left = num_channels_per_group;
+                    if (group_offset == tile_width) {
+                        break;
+                    }
+                }
+                if constexpr (!sfpu_two_pass_l1_replay) {
+                    dfb_in0.pop_front(1);
+                    if constexpr (welford_fp32_alias) {
+                        dfb_in0_welford.pop_front(1);
                     }
                 }
             }
+        }
 
-            two_pass_stats_finalize_to_face<num_groups == 1>(mean_dst, active_group, sfpu_two_pass_reciprocal);
-            for (uint32_t g = 0; g + 1 < num_groups; ++g) {
-                welford_restore_state(mean_dst, g);
-                two_pass_stats_finalize_to_face<false>(mean_dst, g, sfpu_two_pass_reciprocal);
-            }
-        } else {
-            for (uint32_t g = 0; g < num_groups; ++g) {
-                welford_restore_state(mean_dst, g);
-                welford_finalize_to_face<reciprocal_size>(mean_dst, g, block_xy_coord - 1, *p_reciprocal);
-            }
+        two_pass_stats_finalize_to_face<num_groups == 1>(mean_dst, active_group, sfpu_two_pass_reciprocal);
+        for (uint32_t g = 0; g + 1 < num_groups; ++g) {
+            welford_restore_state(mean_dst, g);
+            two_pass_stats_finalize_to_face<false>(mean_dst, g, sfpu_two_pass_reciprocal);
         }
 
         tile_regs_commit();

@@ -161,7 +161,7 @@ Computationally, Welford's method has a couple distinct advantages:
 The following plot shows the Frobenious error (%) of a skewed random normal distribution $randn() + 100$ for `torch.float32` datatype for three accumulation methods:
 
 1. Legacy: Two-pass, accumulate in `bfloat16` precision
-2. Legacy w/ FP32 reduce: Two-pass, acumulate in `fp32` precision
+2. Legacy w/ FP32 reduce: Two-pass, accumulate in `fp32` precision
 3. Welford: Welford, accumulate in `fp32` precision
 
 <img src="images/welford_accuracy.png" style="width:600px;"/>
@@ -182,10 +182,10 @@ program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(<other configs>, use_
 GroupNorm (specified as boolean input to `ttnn.group_norm`):
 
 ```python
-output_tensor = ttnn.group_norm(<other inputs>, use_welford=use_welford)
+output_tensor = ttnn.group_norm(<other inputs>, use_welford=True)
 ```
 
-While the Welford method invoked as defined above works, it is advisable to create and pass in a tensor of reciprocals to substantially accelerate the calculation. This can be done by the following:
+GroupNorm uses compile-time reciprocal constants in its stable two-pass path and does not require a reciprocals tensor. LayerNorm configurations that use a reciprocal lookup table can create one as follows:
 
 LayerNorm:
 
@@ -198,20 +198,4 @@ reciprocals = ttnn.create_layer_norm_reciprocals(device, core_range_set, w)
 
 # Pass into ttnn.layer_norm()
 output_tensor = ttnn.layer_norm(<other inputs>, recip_tensor=reciprocals)
-```
-
-GroupNorm:
-
-```python
-# Create the reciprocals
-grid_size = device.compute_with_storage_grid_size()
-torch_reciprocals = ttnn.create_group_norm_reciprocals(N, C, H, W, num_groups, grid_size)
-reciprocals = ttnn.from_torch(
-   torch_reciprocals,
-   device=device,
-   memory_config=ttnn.L1_MEMORY_CONFIG,
-   dtype=ttnn.float32)
-
-# Pass into ttnn.group_norm()
-output_tensor = ttnn.group_norm(<other inputs>, reciprocals=reciprocals, use_welford=True)
 ```

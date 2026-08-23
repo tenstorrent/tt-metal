@@ -19,7 +19,7 @@
 
 /**
  * @brief This kernel computes layernorm for sharded tensors using
- *        Welford's algorithm for the mean and variance calculations
+ *        stable two-pass mean and variance calculations
  *
  * @details Computes layernorm(x) = (x - E[x]) / sqrt(Var[x] + eps) * gamma + beta
  *
@@ -263,7 +263,7 @@ void kernel_main() {
     const uint32_t block_ht = (block_wt == 1) ? block_ht_volatile : block_ht_const;
     const uint32_t subblock_wt = (block_wt <= 2) ? subblock_wt_volatile : subblock_wt_const;
 
-    // This core's real (logical) column count. Welford has no per-column mask, so each core must reduce
+    // This core's real (logical) column count. This path has no per-column mask, so each core must reduce
     // over exactly its logical columns: cores before the last own a full block_w, and the last real
     // core owns the remaining logical columns; a whole number of full tiles plus, when the logical
     // width is not tile-aligned, a final partial tile. The reduce must stop there rather than at the
@@ -272,7 +272,7 @@ void kernel_main() {
     const uint32_t welford_reduce_w = get_arg(args::welford_reduce_w);
     const uint32_t partial_reduce_W = welford_reduce_w;
 
-    // Split the Welford reduction into full tiles and a final partial tile (present only when the
+    // Split the local reduction into full tiles and a final partial tile (present only when the
     // logical width is not a multiple of the tile width).
     const uint32_t num_full_welford_tiles = welford_reduce_w / tile_width;
     const uint32_t partial_welford_tile_w = welford_reduce_w % tile_width;
@@ -321,7 +321,7 @@ void kernel_main() {
     // Only used for the transpose workaround
     constexpr uint32_t num_dest_regs = FLOAT32_DTYPE ? 4 : 8;
 
-    // Welford destination registers
+    // Statistics destination registers
     constexpr uint32_t welford_input_dst = 0;
     constexpr uint32_t welford_mean_dst = 1;
     constexpr uint32_t welford_var_dst = 2;
@@ -392,25 +392,19 @@ void kernel_main() {
 #endif
 
     // ---------------------------------------------------------------------------
-    // Compute E[x] and Var[x] using Welford's algorithm
+    // Compute E[x] and Var[x] using stable two-pass statistics
     // ---------------------------------------------------------------------------
     reconfig_data_format_srca(dfb_x_welford_id);
     dfb_ex_partial.reserve_back(num_block_ht_result_tiles);
     // Reconfigure the transpose op for the welford intake buffer. When the alias is active,
     // it has UnpackToDest mode so transpose_tile preserves fp32 precision.
     transpose_init(dfb_x_welford_id);
-    if constexpr (sfpu_two_pass) {
-        two_pass_stats_init();
-    } else {
-        welford_init();
-    }
+    two_pass_stats_init();
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_ht; i++) {
         tile_regs_acquire();
         welford_clear();
-        uint32_t sample_idx = 0;
-
-        // Do the full Welford tiles
+        // Do the full statistics tiles
         for (uint32_t w = 0; w < num_full_welford_tiles; w++) {
             if constexpr (welford_fp32_alias && !sfpu_two_pass) {
                 // Initialize the fp32 transpose immediately before use. Online Welford restores
@@ -435,56 +429,38 @@ void kernel_main() {
             }
             sample_idx += tile_width;
         }
-        // Do the partial Welford tile, if any. It is the tile immediately after this core's full tiles
+        // Do the partial statistics tile, if any. It is the tile immediately after this core's full tiles
         // (index_h_offset + num_full_welford_tiles), i.e. the last real tile of this core's logical
         // columns; not necessarily the last physical tile of the shard (block_wt - 1), which on the
         // final core is a pure-padding tile when the width is split across cores.
         if (partial_welford_tile_w > 0) {
-            if constexpr (welford_fp32_alias && !sfpu_two_pass) {
-                transpose_init(dfb_x_welford_id);
-            }
             const uint32_t stats_input_dst =
-                sfpu_two_pass && num_full_welford_tiles < 3
+                num_full_welford_tiles < 3
                     ? (num_full_welford_tiles == 0 ? retained_welford_input_dst : num_full_welford_tiles)
                     : welford_input_dst;
             transpose_tile(dfb_x_welford_id, index_h_offset + num_full_welford_tiles, stats_input_dst);
-            if constexpr (welford_fp32_alias && !sfpu_two_pass) {
-                welford_init<WelfordInitMode::PreserveStats>();
-            }
-            if constexpr (sfpu_two_pass) {
-                two_pass_stats_update_rows<false>(stats_input_dst, 0, partial_welford_tile_w);
-            } else {
-                welford_update_rows<per_core_recip_lut_size>(
-                    welford_input_dst, sample_idx, 0, partial_welford_tile_w, *p_reciprocals);
-            }
+            two_pass_stats_update_rows<false>(stats_input_dst, 0, partial_welford_tile_w);
         }
-        if constexpr (sfpu_two_pass) {
-            two_pass_stats_finish_mean((*p_reciprocals)[partial_reduce_W - 1]);
+        two_pass_stats_finish_mean((*p_reciprocals)[partial_reduce_W - 1]);
 
-            for (uint32_t w = 0; w < num_full_welford_tiles; ++w) {
-                const uint32_t stats_input_dst =
-                    w < 3 ? (w == 0 ? retained_welford_input_dst : w) : welford_input_dst;
-                if (w >= 3) {
-                    transpose_tile(dfb_x_welford_id, w + index_h_offset, welford_input_dst);
-                }
-                two_pass_stats_update_rows<true>(stats_input_dst, 0, tile_width);
+        for (uint32_t w = 0; w < num_full_welford_tiles; ++w) {
+            const uint32_t stats_input_dst = w < 3 ? (w == 0 ? retained_welford_input_dst : w) : welford_input_dst;
+            if (w >= 3) {
+                transpose_tile(dfb_x_welford_id, w + index_h_offset, welford_input_dst);
             }
-            if (partial_welford_tile_w > 0) {
-                const uint32_t stats_input_dst =
-                    num_full_welford_tiles < 3
-                        ? (num_full_welford_tiles == 0 ? retained_welford_input_dst : num_full_welford_tiles)
-                        : welford_input_dst;
-                if (num_full_welford_tiles >= 3) {
-                    transpose_tile(dfb_x_welford_id, index_h_offset + num_full_welford_tiles, welford_input_dst);
-                }
-                two_pass_stats_update_rows<true>(stats_input_dst, 0, partial_welford_tile_w);
+            two_pass_stats_update_rows<true>(stats_input_dst, 0, tile_width);
+        }
+        if (partial_welford_tile_w > 0) {
+            const uint32_t stats_input_dst =
+                num_full_welford_tiles < 3
+                    ? (num_full_welford_tiles == 0 ? retained_welford_input_dst : num_full_welford_tiles)
+                    : welford_input_dst;
+            if (num_full_welford_tiles >= 3) {
+                transpose_tile(dfb_x_welford_id, index_h_offset + num_full_welford_tiles, welford_input_dst);
             }
+            two_pass_stats_update_rows<true>(stats_input_dst, 0, partial_welford_tile_w);
         }
-        if constexpr (sfpu_two_pass) {
-            two_pass_stats_finalize_to_row(welford_mean_dst, (*p_reciprocals)[partial_reduce_W - 1]);
-        } else {
-            welford_finalize_to_row<per_core_recip_lut_size>(welford_mean_dst, partial_reduce_W - 1, *p_reciprocals);
-        }
+        two_pass_stats_finalize_to_row(welford_mean_dst, (*p_reciprocals)[partial_reduce_W - 1]);
         // We should transpose back to columns here
         // However, transpose_dest() is currently buggy.
         // So we transpose to an intermediate buffer downstream

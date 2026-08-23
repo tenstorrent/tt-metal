@@ -268,7 +268,6 @@ Tensor group_norm(
     const std::optional<Tensor>& input_mask,
     const std::optional<Tensor>& weight,
     const std::optional<Tensor>& bias,
-    const std::optional<Tensor>& reciprocals,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DataType> dtype,
     std::optional<CoreGrid> core_grid,
@@ -319,11 +318,9 @@ Tensor group_norm(
         nhw,
         ttnn::types::TILE_SIZE);
 
-    // The #50682 correction exists only on the two-pass path: Welford transposes H*W into the tile
-    // columns and counts in tile units, so the padding rows cannot be excluded. Route here and drop
-    // the Welford-only reciprocals LUT. Only place that enforces it -- a new direct
-    // ttnn::prim::group_norm caller would need its own guard.
-    std::optional<Tensor> effective_reciprocals = reciprocals;
+    // The SFPU two-pass path transposes H*W into tile columns and cannot exclude padding rows.
+    // Route non-tile-aligned inputs to the tile-reduction path, which applies the #50682 correction.
+    // A new direct ttnn::prim::group_norm caller would need its own equivalent guard.
     const uint32_t tile_height_align = input_tensor.tensor_spec().tile().get_height();
     if (use_welford && (input_shape[2] % tile_height_align != 0)) {
         // Once per process: group_norm runs inside per-step model loops.
@@ -332,13 +329,12 @@ Tensor group_norm(
             log_warning(
                 tt::LogOp,
                 "group_norm: use_welford is not supported for non-tile-aligned H*W ({} % {} != 0); "
-                "falling back to the two-pass path, which handles this case correctly (#50682). "
+                "falling back to the tile-reduction path, which handles this case correctly (#50682). "
                 "This warning is emitted once per process.",
                 input_shape[2],
                 tile_height_align);
         });
         use_welford = false;
-        effective_reciprocals = std::nullopt;
     }
 
     // For 0V tensors
@@ -401,25 +397,6 @@ Tensor group_norm(
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, approx_mode, fp32_acc);
 
-    // Reciprocals must be sharded to L1 via the legacy ShardSpec representation:
-    // the program factory reads shard_spec().value().numel() as the compile-time
-    // reciprocal_size and binds the cb_reciprocals CB to the per-bank addresses
-    // of the buffer. Interleaved, DRAM-sharded, or NdShardSpec reciprocals would
-    // either trip bad_optional_access or violate the per-core-L1-bank assumption
-    // downstream.
-    if (reciprocals.has_value()) {
-        TT_FATAL(
-            reciprocals->is_sharded() && reciprocals->memory_config().buffer_type() == BufferType::L1,
-            "group_norm: reciprocals tensor must be sharded to L1 (got is_sharded={}, buffer_type={}); "
-            "interleaved or DRAM-sharded reciprocals are not supported.",
-            reciprocals->is_sharded(),
-            reciprocals->memory_config().buffer_type());
-        TT_FATAL(
-            reciprocals->shard_spec().has_value(),
-            "group_norm: reciprocals tensor must use the legacy ShardSpec "
-            "representation (NdShardSpec sharding is not currently supported).");
-    }
-
     const bool core_grid_auto_selected = !core_grid.has_value();
 
     if (core_grid_auto_selected) {
@@ -432,13 +409,6 @@ Tensor group_norm(
             // rather than recomputing from scratch, so that program_config's
             // grid_size matches the cores where kernels are actually placed.
             const auto bbox = shard_spec_opt->grid.bounding_box();
-            core_grid = ttnn::operations::normalization::core_grid_from_shard_bounding_box(bbox);
-        } else if (reciprocals.has_value() && reciprocals->is_sharded()) {
-            // The reciprocals LUT is sharded on a specific grid; its length
-            // encodes num_virtual_rows which must match the compute grid.
-            // Infer the grid from the reciprocals tensor so the kernel sees a
-            // consistent LUT.
-            const auto bbox = reciprocals->shard_spec()->grid.bounding_box();
             core_grid = ttnn::operations::normalization::core_grid_from_shard_bounding_box(bbox);
         } else {
             const auto dev_grid = input_tensor.device()->compute_with_storage_grid_size();
@@ -476,30 +446,6 @@ Tensor group_norm(
             "group_norm: num_out_blocks ({}) is invalid. Use -1 to request the auto-heuristic, "
             "or an explicit chunk count in [1, block_h].",
             *num_out_blocks);
-    }
-
-    // The per-shard numel (consumed by the compute kernel as the compile-time
-    // `reciprocal_size`) and the per-bank addresses bound to the reciprocals CB
-    // are baked for a specific grid. The compute kernel runs on `core_grid`,
-    // so the reciprocals must be sharded on that same grid; otherwise the LUT
-    // is the wrong length and/or lives on the wrong banks. This covers all
-    // three paths to picking core_grid (sharded input, reciprocals inference,
-    // and an explicit user-provided core_grid).
-    if (reciprocals.has_value()) {
-        // Precondition above guarantees is_sharded() and shard_spec().has_value()
-        // whenever reciprocals is provided.
-        const auto recip_bbox = reciprocals->shard_spec()->grid.bounding_box();
-        const auto recip_grid = ttnn::operations::normalization::core_grid_from_shard_bounding_box(recip_bbox);
-        TT_FATAL(
-            recip_grid.x == core_grid->x && recip_grid.y == core_grid->y,
-            "group_norm: reciprocals shard grid (x={}, y={}) must match the compute core_grid "
-            "(x={}, y={}). The reciprocals LUT length and per-bank addresses are baked for a "
-            "specific grid; running the kernel on a different grid will read past the LUT or "
-            "use unallocated banks.",
-            recip_grid.x,
-            recip_grid.y,
-            core_grid->x,
-            core_grid->y);
     }
 
     // For non-sharded DRAM tensors, validate that the requested core grid is not too
@@ -576,7 +522,6 @@ Tensor group_norm(
             beta,
             effective_input_mask,
             negative_mask,
-            effective_reciprocals,
             synthesize_negative_mask);
     }
 
@@ -666,7 +611,6 @@ Tensor group_norm(
         beta,
         effective_input_mask,
         negative_mask,
-        effective_reciprocals,
         // The interleaved factories have no negative-mask code path at all.
         /*synthesize_negative_mask=*/false);
     if (untilize_out_on_host) {

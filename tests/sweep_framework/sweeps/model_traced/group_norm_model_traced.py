@@ -220,10 +220,6 @@ def run(
     bias_shape=None,
     bias_dtype=None,
     bias_memory_config=None,
-    reciprocals_shape=None,
-    reciprocals_dtype=None,
-    reciprocals_layout=None,
-    reciprocals_memory_config=None,
     inplace=False,
     num_out_blocks=None,
     use_welford=False,
@@ -252,10 +248,6 @@ def run(
     bias_shape = _clean(bias_shape)
     bias_dtype = _clean(bias_dtype)
     bias_memory_config = _clean(bias_memory_config)
-    reciprocals_shape = _clean(reciprocals_shape)
-    reciprocals_dtype = _clean(reciprocals_dtype)
-    reciprocals_layout = _clean(reciprocals_layout)
-    reciprocals_memory_config = _clean(reciprocals_memory_config)
     output_memory_config = _clean(output_memory_config)
     inplace = False if inplace == "__ABSENT__" else inplace
     num_out_blocks = _clean(num_out_blocks)
@@ -401,7 +393,6 @@ def run(
     input_mask = None
     weight_tensor = None
     bias_tensor = None
-    reciprocals_tensor = None
 
     # Determine core_grid early - needed for proper mask/weight/bias creation
     # The core_grid.y value determines the num_cores_across_channel parameter
@@ -533,48 +524,6 @@ def run(
             print(f"Warning: create_group_norm_weight_bias_rm for bias failed: {e}")
             bias_tensor = None
 
-    if reciprocals_shape and use_welford and not is_host:
-        skip_reciprocals = False
-        reciprocals_mem_cfg = reciprocals_memory_config if reciprocals_memory_config else ttnn.DRAM_MEMORY_CONFIG
-
-        if (
-            reciprocals_mem_cfg
-            and hasattr(reciprocals_mem_cfg, "memory_layout")
-            and hasattr(reciprocals_mem_cfg, "buffer_type")
-        ):
-            is_recip_sharded = reciprocals_mem_cfg.memory_layout in [
-                ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.types.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.types.TensorMemoryLayout.BLOCK_SHARDED,
-            ]
-            is_l1 = reciprocals_mem_cfg.buffer_type == ttnn.types.BufferType.L1
-
-            if is_recip_sharded and is_l1:
-                skip_reciprocals = True
-
-        if not skip_reciprocals:
-            torch_reciprocals = torch.ones(reciprocals_shape, dtype=torch.float32)
-            recip_layout = reciprocals_layout or ttnn.TILE_LAYOUT
-            recip_dtype = reciprocals_dtype or ttnn.float32
-
-            if is_mesh_device and input_a_tensor_placement:
-                reciprocals_tensor = create_tensor_on_mesh(
-                    torch_reciprocals,
-                    device,
-                    recip_dtype,
-                    recip_layout,
-                    reciprocals_mem_cfg,
-                    input_a_tensor_placement,
-                )
-            else:
-                reciprocals_tensor = ttnn.from_torch(
-                    torch_reciprocals,
-                    dtype=recip_dtype,
-                    layout=recip_layout,
-                    device=device,
-                    memory_config=reciprocals_mem_cfg,
-                )
-
     start_time = start_measuring_time()
 
     # inplace groupnorm is only supported for sharded tensors
@@ -614,8 +563,6 @@ def run(
         group_norm_kwargs["weight"] = weight_tensor
     if bias_tensor is not None:
         group_norm_kwargs["bias"] = bias_tensor
-    if reciprocals_tensor is not None:
-        group_norm_kwargs["reciprocals"] = reciprocals_tensor
     if num_out_blocks is not None:
         group_norm_kwargs["num_out_blocks"] = num_out_blocks
     if use_welford:

@@ -190,7 +190,7 @@ def test_std_var_fp32_w_l1_replay_respects_occupied_l1(device):
 
     device.enable_program_cache()
     torch.manual_seed(20260731)
-    # W=4096 is the largest FP32 row admitted by this branch's 512 KiB replay cap.
+    # This FP32 row requires 512 KiB of replay storage.
     torch_input = (torch.randn((1, 1, 32, 4096), dtype=torch.float32) + 1e4).contiguous()
     warm_input = ttnn.from_torch(
         torch_input,

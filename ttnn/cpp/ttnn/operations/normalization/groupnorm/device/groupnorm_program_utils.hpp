@@ -16,7 +16,7 @@
 
 namespace ttnn::prim {
 
-enum class GroupNormMode : uint32_t { LEGACY = 0, WELFORD_NATIVE = 1, WELFORD_RECIPROCALS = 2 };
+enum class GroupNormMode : uint32_t { LEGACY = 0, TWO_PASS = 1 };
 
 // Non-tile-aligned H*W: the reduce scaler must divide by the real element count (`scaler_bits`),
 // and the padding rows must be excluded from both accumulation passes. The interleaved kernels do
@@ -54,10 +54,6 @@ inline bool group_norm_core_owns_pad_tile(uint32_t m_index, uint32_t num_cores_p
 // reconfig_data_format calls. When all are bf16 those calls are no-ops and the kernel skips them.
 bool groupnorm_needs_fp32_reconfig(std::initializer_list<tt::DataFormat> reconfig_formats);
 
-constexpr bool groupnorm_uses_sfpu_two_pass(bool use_welford, bool input_requires_tilize) {
-    return use_welford && !input_requires_tilize;
-}
-
 struct GroupNormInterleavedCbFootprint {
     std::uint64_t output = 0;
     std::uint64_t input_staging = 0;
@@ -76,12 +72,9 @@ struct GroupNormInterleavedCbFootprint {
     std::uint64_t partial_stats = 0;
     std::uint64_t global_stats = 0;
     std::uint64_t normalisation_stats = 0;
-    std::uint64_t reciprocals = 0;
-
     constexpr std::uint64_t total_with_input(std::uint64_t input) const {
         return input + output + input_staging + untilize_output + scaler + epsilon + column_scaler + gamma + beta +
-               input_mask + repack + x + xmm + xmm2 + xmm3 + partial_stats + global_stats + normalisation_stats +
-               reciprocals;
+               input_mask + repack + x + xmm + xmm2 + xmm3 + partial_stats + global_stats + normalisation_stats;
     }
 };
 

@@ -5,7 +5,7 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params, prepare_linear_params
-from models.demos.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_slice_config, get_DRAM_GN_shape
+from models.demos.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_slice_config
 
 
 class TtResnetBlock2D(LightweightModule):
@@ -56,19 +56,6 @@ class TtResnetBlock2D(LightweightModule):
             or self.groupnorm_memory_config_1 == ttnn.DRAM_MEMORY_CONFIG
         ), "Only L1_BLOCK_SHARDED_MEMORY_CONFIG and DRAM_MEMORY_CONFIG is supported for GN"
 
-        if self.groupnorm_memory_config_1 == ttnn.DRAM_MEMORY_CONFIG:
-            N, C, H, W = get_DRAM_GN_shape(module_path, 1)
-            torch_reciprocals = ttnn.create_group_norm_reciprocals(
-                N, C, H, W, self.norm_groups, self.groupnorm_config_1["core_grid"]
-            )
-            self.reciprocals_tensor_1 = ttnn.from_torch(
-                torch_reciprocals,
-                dtype=ttnn.DataType.FLOAT32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
         (
             self.groupnorm_config_2,
             self.groupnorm_memory_config_2,
@@ -83,19 +70,6 @@ class TtResnetBlock2D(LightweightModule):
             self.groupnorm_memory_config_2 == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
             or self.groupnorm_memory_config_2 == ttnn.DRAM_MEMORY_CONFIG
         ), "Only L1_BLOCK_SHARDED_MEMORY_CONFIG and DRAM_MEMORY_CONFIG is supported for GN"
-
-        if self.groupnorm_memory_config_2 == ttnn.DRAM_MEMORY_CONFIG:
-            N, C, H, W = get_DRAM_GN_shape(module_path, 2)
-            torch_reciprocals = ttnn.create_group_norm_reciprocals(
-                N, C, H, W, self.norm_groups, self.groupnorm_config_2["core_grid"]
-            )
-            self.reciprocals_tensor_2 = ttnn.from_torch(
-                torch_reciprocals,
-                dtype=ttnn.DataType.FLOAT32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
 
         self.compute1_config = model_config.get_conv_compute_config(module_path=f"{module_path}.conv1")
         self.conv1_config = model_config.get_conv_config(conv_path=f"{module_path}.conv1")
@@ -143,19 +117,10 @@ class TtResnetBlock2D(LightweightModule):
                 strategy=ttnn.ShardStrategy.BLOCK,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
             )
-            reciprocals_tensor = None
-        else:
-            sharded_mem_config = ttnn.create_sharded_memory_config(
-                shape=self.reciprocals_tensor_1.shape,
-                core_grid=self.groupnorm_config_1["core_grid"],
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            )
-            reciprocals_tensor = ttnn.to_memory_config(self.reciprocals_tensor_1, sharded_mem_config)
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
         # NOTE: On Blackhole, using welford causes PCC drop in unit tests
-        use_welford = reciprocals_tensor is not None
+        use_welford = self.groupnorm_memory_config_1 == ttnn.DRAM_MEMORY_CONFIG
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
@@ -166,15 +131,11 @@ class TtResnetBlock2D(LightweightModule):
             epsilon=self.norm_eps,
             memory_config=hidden_states.memory_config(),
             use_welford=use_welford,
-            reciprocals=reciprocals_tensor if use_welford else None,
             **self.groupnorm_config_1,
         )
 
         if self.conv1_slice_config != ttnn.Conv2dL1FullSliceConfig:
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-
-        if reciprocals_tensor is not None:
-            ttnn.deallocate(reciprocals_tensor)
 
         hidden_states = ttnn.silu(hidden_states)
 
@@ -214,19 +175,10 @@ class TtResnetBlock2D(LightweightModule):
                 strategy=ttnn.ShardStrategy.BLOCK,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
             )
-            reciprocals_tensor = None
-        else:
-            sharded_mem_config = ttnn.create_sharded_memory_config(
-                shape=self.reciprocals_tensor_2.shape,
-                core_grid=self.groupnorm_config_2["core_grid"],
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            )
-            reciprocals_tensor = ttnn.to_memory_config(self.reciprocals_tensor_2, sharded_mem_config)
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
         # NOTE: On Blackhole, using welford causes PCC drop in unit tests
-        use_welford = reciprocals_tensor is not None
+        use_welford = self.groupnorm_memory_config_2 == ttnn.DRAM_MEMORY_CONFIG
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
@@ -237,15 +189,11 @@ class TtResnetBlock2D(LightweightModule):
             epsilon=self.norm_eps,
             memory_config=hidden_states.memory_config(),
             use_welford=use_welford,
-            reciprocals=reciprocals_tensor if use_welford else None,
             **self.groupnorm_config_2,
         )
 
         if self.conv2_slice_config != ttnn.Conv2dL1FullSliceConfig:
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-
-        if reciprocals_tensor is not None:
-            ttnn.deallocate(reciprocals_tensor)
 
         hidden_states = ttnn.silu(hidden_states)  # note: silu hangs if not tile
 

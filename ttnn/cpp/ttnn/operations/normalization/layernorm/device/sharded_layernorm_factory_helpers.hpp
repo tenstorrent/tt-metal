@@ -268,7 +268,6 @@ struct SpecConfig {
     // Exposes the Welford intake under a second buffer index configured for UnpackToDest, so
     // transpose_tile does not truncate Float32 input to TF32 on the SrcA path.
     bool welford_fp32_alias = false;
-    bool sfpu_two_pass = false;
 
     // Buffer sizes
     DFBSizeParams::Sizes sizes;
