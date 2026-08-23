@@ -76,6 +76,10 @@ tt::tt_metal::MeshTensor build_config_mesh_tensor(
 ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_program_artifacts(
     const HaloParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor) {
     auto* device = input_tensor.device();
+    TT_FATAL(
+        device->arch() != tt::ARCH::QUASAR,
+        "UntilizeWithHalo uses the tt-1xx zero-fill memory map and Gen1 plain-CB compatibility lowering; it is not "
+        "supported on Quasar");
     const std::uint32_t pad_val = operation_attributes.pad_val;
     const std::uint32_t ncores_nhw = operation_attributes.config.num_cores_nhw;
     const std::uint32_t max_out_nsticks_per_core = operation_attributes.max_out_nsticks_per_core;
