@@ -1982,7 +1982,7 @@ def profile_model() -> dict:
             {"op": o.get("op_code") or o.get("bucket"), "gap_ms": o.get("gap_ms"), "bound_by": o.get("bound_by")}
             for o in (rep.get("open_ops") or [])
         ]
-        _persist_throughput(rep)  # fresh static target for the RUN_REPORT roofline table (non-stale)
+        _persist_throughput(rep, prof)  # fresh static target for the RUN_REPORT roofline table (non-stale)
     except Exception:
         pass
     # OBJECTIVE termination signal: you are NOT done while residual_gap is material and open_ops remain.
@@ -5954,7 +5954,7 @@ def _dominant_peak_flops(rep: dict) -> float:
         return 0.0
 
 
-def _persist_throughput(rep: dict) -> None:
+def _persist_throughput(rep: dict, prof_for_peak: dict | None = None) -> None:
     """Write a FRESH static roofline-target snapshot (theoretical ceiling / band / active_bytes /
     peak BW / floor) each time we profile. Deliberately stores NO measured number — the report
     computes measured tok/s + utilization from the exact ms it is reporting, so a stale measured can
@@ -6019,6 +6019,21 @@ def _persist_throughput(rep: dict) -> None:
         # KEYED ON THE UNIT, exactly like the byte anchor, because the renderer looks it up by the
         # unit the ceiling describes. Not on _win: a peak is a property of the math mode and the
         # silicon, not of how many layers the profiler happened to build.
+        # PER-STAGE PEAKS pinned beside the per-stage bytes, when the capture marked its stages.
+        try:
+            for _st, _bk in ((prof_for_peak or {}).get("stage_buckets") or {}).items():
+                _p = _dominant_peak_flops({"open_ops": [o for b in _bk for o in (b.get("top_ops") or [])]})
+                if _st and _p > 0:
+                    _ledger().anchor(
+                        _ledger().KIND_PEAK_FLOPS,
+                        _p,
+                        depth=str(_st).strip().lower(),
+                        mode="roofline",
+                        source="_persist_throughput per-stage",
+                        model=_MODEL_ROOT.name if _MODEL_ROOT else "",
+                    )
+        except Exception:  # noqa: BLE001
+            pass
         _pk = _dominant_peak_flops(rep)
         if _pk > 0:
             _ledger().anchor(

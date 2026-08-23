@@ -298,58 +298,48 @@ def test_a_self_traced_stage_still_measures_its_own():
     raise AssertionError("_measure_native is gone")
 
 
-def test_the_inert_signpost_machinery_is_gone():
-    """Emission sat in measure_adapter, which the perf test skips whenever the profiler is on
-    (`if _PERF_TRACE and not _PROFILING`) -- so it could never mark a capture. The reader, the window
-    slicing, the profile key and the per-stage peak built on top of it were all dead with it."""
-    tr = (_PA / "agent" / "trace_replay.py").read_text()
+def test_the_marks_are_emitted_where_a_capture_can_see_them():
+    """The first attempt put them in measure_adapter's capture-and-replay loop, and the perf test
+    skipped that whole function whenever the profiler was on -- `if _PERF_TRACE and not _PROFILING` --
+    so a mark could never reach a capture. Emission now hangs off _profiling(), on the branch taken
+    WHEN a capture is running, and the skeleton no longer bypasses measure_adapter.
+
+    Asserted on the branch, not on the presence of the call: present-and-unreachable is exactly the
+    state this spent ten commits in."""
+    import ast
+
+    src = (_PA / "agent" / "trace_replay.py").read_text()
+    stmts = None
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.FunctionDef) and node.name == "_measure_stage":
+            # STATEMENTS, not the whole unparse: "self_traced" appears in the docstring too, and
+            # ordering asserted over prose tests where words sit, not what runs -- the same slip this
+            # file already corrected once for stage_read_bytes.
+            body = node.body[1:] if _is_docstring(node.body[0]) else node.body
+            stmts = "\n".join(ast.unparse(x) for x in body)
+    assert stmts, "_measure_stage is gone"
+    assert "_profiling()" in stmts, "nothing routes on whether a capture is running"
+    assert "_measure_stage_profiled" in stmts
+    assert stmts.index("_profiling()") < stmts.index("self_traced"), "the profiled branch is not reached first"
+
+    prof = None
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.FunctionDef) and node.name == "_measure_stage_profiled":
+            prof = ast.unparse(node)
+    assert prof and prof.count("_signpost(") == 2, "a stage is not bracketed by two marks"
+    assert "_capture_step_trace" not in prof, "the profiled path must be eager: a replay emits no per-op data"
+
+
+def test_the_skeleton_no_longer_skips_the_harness_when_profiling():
+    """That guard is the single reason the first attempt could not work."""
+    src = (_PA / "agent" / "perf_test_gen.py").read_text()
+    body = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
+    assert "not _PROFILING" not in body, "the skeleton still bypasses measure_adapter under the profiler"
+
+
+def test_an_unmarked_capture_still_falls_back_and_says_so():
+    """Additive: no marks -> no windows -> no stage_buckets -> the whole-profile peak, plus a line
+    saying which footing the reader is on."""
     tt = (_PA / "agent" / "tracy_tool.py").read_text()
-    sm = (_PA / "cc_optimize" / "summary.py").read_text()
-    assert "_signpost" not in tr
-    assert "stage_windows" not in tt and "_per_stage_buckets" not in tt and "stage_buckets" not in tt
-    assert "_peak_for_stage" not in sm
-
-
-def test_the_general_path_actually_emits_when_driven(monkeypatch, capsys):
-    """EXECUTED, not inspected. Every previous check of this measurement asked whether the code was
-    present and wired; none drove it. It sat in _measure_native -- present, wired, and unreachable
-    for this model -- through four mechanisms built on top of it.
-
-    So this one calls _measure_stage on the non-self-traced branch with a stubbed ttnn and asserts
-    the marker comes out with the right number.
-    """
-    import types
-
-    dec = types.ModuleType("ttnn.decorators")
-
-    class Operation:
-        def __call__(self, *a, **kw):
-            return None
-
-    dec.Operation = Operation
-    tt = types.ModuleType("ttnn")
-    tt.decorators = dec
-    for _n in ("synchronize_device", "end_trace_capture", "execute_trace", "release_trace"):
-        setattr(tt, _n, lambda *a, **k: None)
-    tt.begin_trace_capture = lambda *a, **k: 7
-    monkeypatch.setitem(sys.modules, "ttnn", tt)
-    monkeypatch.setitem(sys.modules, "ttnn.decorators", dec)
-
-    import importlib
-
-    import agent.trace_replay as tr
-
-    importlib.reload(tr)
-
-    w = _DevT(1_000_000)
-
-    class _Stage:
-        name = "decode"
-        self_traced = False
-
-        def step(self):
-            Operation()(w)
-
-    tr._measure_stage(object(), _Stage())
-    out = capsys.readouterr().out
-    assert "TRACE_STAGE_BYTES[decode]=2000000" in out, out  # 1M elements x 2 bytes, bf16
+    assert "def stage_windows(" in tt and "_per_stage_buckets" in tt
+    assert "no stage signposts in the capture" in tt

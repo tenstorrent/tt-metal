@@ -150,15 +150,21 @@ def test_<task>_perf(device_params, device):
     #     build has no memory left for its KV cache and dies before any marker is printed.
     # So the gate runs TRACE FIRST and only falls back to the eager forward when trace genuinely
     # could not be measured. That is the designed contract: trace by default, eager as the fallback.
+    #   AND UNDER TRACY THE STAGES ARE MEASURED BY THE HARNESS, not by this file. measure_adapter
+    #     owns both shapes now: with a capture running it runs each declared stage EAGERLY, bracketed
+    #     by tracy signposts, so the capture carries a per-stage boundary and the report can price
+    #     each stack against its own math fidelity instead of one shared peak; with no capture it
+    #     captures and replays as before. This file used to skip measure_adapter entirely whenever
+    #     the profiler was on -- `if _PERF_TRACE and not _PROFILING` -- which is why a mark emitted
+    #     there could never reach a capture. The eager forward stays as the fallback for a model
+    #     whose stages cannot be driven one at a time.
     _PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
-    if _PERF_TRACE and not _PROFILING:
+    if _PERF_TRACE:
         if not _try_traced():
             print("TRACE_REPLAY_FALLBACK=eager  # trace_replay isn't working — timing eagerly", flush=True)
             _eager_forward()
     else:
         _eager_forward()
-        if _PERF_TRACE:
-            _try_traced()
 """
 
 

@@ -412,6 +412,55 @@ def _neighbours(ordered: list) -> dict:
     return out
 
 
+def stage_windows(raw_csv: str | Path) -> list:
+    """[(stage, start, end)] the capture actually marked, in order. [] when unmarked.
+
+    Read from the CAPTURE, not from the stage list the harness expects: a stage that failed to run
+    leaves no marks, and pricing it from a window that is not there would invent a measurement.
+    Signposts are identified exactly as tt-perf-report identifies them -- rows whose OP TYPE is
+    "signpost" -- so the window list and the slicer agree by construction.
+    """
+    names = []
+    try:
+        with open(raw_csv, newline="") as f:
+            for row in csv.DictReader(f):
+                if str(row.get("OP TYPE") or "").strip().lower() != "signpost":
+                    continue
+                nm = str(row.get("OP CODE") or "").strip()
+                if nm and nm not in names:
+                    names.append(nm)
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for nm in names:
+        if nm.startswith("stage:") and not nm.endswith(":end"):
+            end = "%s:end" % nm
+            if end in names:
+                out.append((nm.split(":", 1)[1], nm, end))
+    return out
+
+
+def _per_stage_buckets(raw_csv, profiles_dir, available_cores, arch) -> dict:
+    """{stage: [buckets]} for every stage the capture marked. {} when it marked none.
+
+    One refine() per window over the same raw rows -- no extra device work. Best-effort per stage: a
+    window that fails to refine costs that stage its split, not the profile.
+    """
+    out = {}
+    for stage, s0, s1 in stage_windows(raw_csv):
+        try:
+            rep = Path(profiles_dir) / ("iter_baseline_report_%s.csv" % stage)
+            refine(raw_csv, rep, s0, s1, None, arch)
+            bk = build_buckets(rep, raw_csv, available_cores)
+            if bk:
+                for b in bk:
+                    b.setdefault("tags", {})["regime"] = stage
+                out[stage] = bk
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
 def build_buckets(
     report_csv: str | Path,
     raw_csv: str | Path,
@@ -702,6 +751,18 @@ def tracy_tool(
     refine(raw_dest, report_csv, start_signpost, end_signpost, id_range, arch)
 
     buckets = build_buckets(report_csv, raw_dest, available_cores)
+    # PER-STAGE SLICES from the marks measure_adapter emits around each stage under a capture. Purely
+    # additive: an unmarked capture yields no windows, no stage_buckets, and every consumer keeps the
+    # whole-profile figure it already had.
+    stage_buckets = _per_stage_buckets(raw_dest, profiles_dir, available_cores, arch)
+    if not stage_buckets:
+        print(
+            "  [tracy] no stage signposts in the capture -- the roofline falls back to whole-profile "
+            "figures (one math-fidelity peak shared by every stack). Expected stage:<name> / "
+            "stage:<name>:end from measure_adapter; check that `tracy` imports in the workload.",
+            file=sys.stderr,
+            flush=True,
+        )
     wall_ms = warm_wall_ms(walls)
     device_ms = round(sum(b["device_ms"] for b in buckets), 4)
     host = host_overhead_bucket(buckets, device_ms)
@@ -719,6 +780,9 @@ def tracy_tool(
     return {
         "wall_ms": wall_ms,
         "forward_wall_ms": forward_wall_ms(profiles_dir, runs),
+        # The per-stage split when the capture carried marks; absent otherwise, and absence must read
+        # as "no split available" rather than as an empty one.
+        "stage_buckets": stage_buckets,
         "per_token_ms": pt_ms,
         "tokens_per_sec_per_user": tput["tokens_per_sec_per_user"],
         "tokens_per_sec": tput["tokens_per_sec"],
