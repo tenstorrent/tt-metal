@@ -1250,6 +1250,51 @@ def _unit_work_name(unit) -> str:
     return "inference"
 
 
+def stage_read_bytes(stage, *, model: str = "", task: str = "", measured=None, estimate=None) -> int:
+    """THE bytes one unit of `stage` reads. Every consumer asks here; nobody derives it again.
+
+    Three sources, in this order, and the order is the point:
+
+      1. THE PINNED BASELINE (ledger KIND_STAGE_BYTES). The ladder shrinks the read set by design --
+         bf16 -> bf8_b halves a weight -- so a ceiling recomputed each round retreats ahead of the
+         measurement and is never reached. "The floor is a property of the IMPLEMENTATION, not a
+         goal."
+      2. THIS BUILD'S MEASUREMENT (trace_replay's dispatch hook: the distinct device tensors this
+         stage's ops touched, observed while the stage ran alone). The first actual measurement of a
+         stage's read set -- everything before it inferred the number from the checkpoint.
+      3. THE ESTIMATE, last: the checkpoint apportioned by a tower NAME LIST, which is a guess about
+         how a model spells its encoder.
+
+    WHY THIS IS A FUNCTION AND NOT A LINE INSIDE _stage_roofs. Eleven commits have been about this
+    one quantity, and each fixed whichever consumer looked wrong -- the census total, the anchor's
+    key, the checkpoint inference, the pinning, the per-stage split. None began by asking who else
+    read it, so each left the others on a different source. The twelfth symptom was a DECODE row
+    whose floor said 2.350 GB and whose bandwidth said 4.784 GB, three lines apart, because the
+    derivation lived inside one function's loop and the other renderer reached for the model-level
+    figure instead. A quantity with one answer needs one place to ask.
+
+    `estimate` is a callable so the fallback is only paid for when the two measurements are absent --
+    it prices activations and KV from the model's geometry and is not free.
+    """
+    try:
+        _p = _pinned_stage_bytes(stage, model, task)
+        if _p and int(_p) > 0:
+            return int(_p)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        _m = int((measured or {}).get(stage) or 0)
+        if _m > 0:
+            return _m
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        _e = estimate() if callable(estimate) else estimate
+        return int(_e or 0)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def _measured_bw_gbps(rf: dict, ms):
     """Achieved DRAM bandwidth for ONE stage: the bytes IT reads over the time IT took.
 
@@ -1573,7 +1618,11 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # bucket anyway. Three ways of returning 0, so the line always fell through to the estimate
         # while reading as though it preferred a measurement. Deleted rather than repaired -- the real
         # observation is the one above it now.
-        _b = _pinned_stage_bytes(name, model, task) or int((_meas_bytes or {}).get(name) or 0) or _bytes_for(name, toks)
+        # ONE PLACE TO ASK. See stage_read_bytes: the order pinned -> measured -> estimate is the
+        # whole property, and it lived inline here while other renderers reached elsewhere.
+        _b = stage_read_bytes(
+            name, model=model, task=task, measured=_meas_bytes, estimate=lambda: _bytes_for(name, toks)
+        )
         _b_now = int((_meas_bytes or {}).get(name) or 0)
         mem_ms = (_b / (float(peak_bw_gbps) * 1e9)) * 1000.0 if _b else None
         out[name] = {

@@ -147,33 +147,41 @@ def test_nothing_on_device_reports_zero_and_zero_is_a_refusal():
     assert b == 0
 
 
+def _is_docstring(node):
+    import ast as _a
+
+    return isinstance(node, _a.Expr) and isinstance(node.value, _a.Constant) and isinstance(node.value.value, str)
+
+
 def test_the_consumer_prefers_the_measurement_over_the_estimate():
     """Order of preference: the pinned baseline, then this build's reading, then the estimate.
 
-    The PIN comes first for the reason the floor is pinned -- measuring the bytes made them right and
-    did nothing about them moving, and the dtype rung halves them by construction, so a ceiling
-    recomputed each round retreats ahead of the measurement.
+    Asserted against stage_read_bytes, which is now the ONE place the question is answered. It used
+    to be a chain inline in _stage_roofs, and that is precisely why a renderer outside that function
+    reached for the model-level figure and printed a second answer in the same row.
+
+    The pin comes first for the reason the floor is pinned: measuring the bytes made them right and
+    did nothing about them moving, and the dtype rung halves them by construction.
     """
+    import ast
+
     import cc_optimize.summary as S
 
     src = (_PA / "cc_optimize" / "summary.py").read_text()
-    # AST, not line matching. The first version keyed on the literal line `_b = (`, which black
-    # deleted by collapsing the expression onto one line once it fit -- a test of formatting, not of
-    # behaviour, and it failed on a reformat that changed nothing.
-    import ast
-
-    tree = ast.parse(src)
-    block = None
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and "_pinned_stage_bytes" in ast.unparse(node.value):
-            block = ast.unparse(node.value)
-            break
-    assert block, "the byte-preference chain is gone"
-    assert "_stage_measured_bytes" not in block, "the dead reader is back in the chain"
-    for nxt in ("_meas_bytes", "_bytes_for(name, toks)"):
-        assert nxt in block, block
-    assert block.index("_pinned_stage_bytes") < block.index("_meas_bytes") < block.index("_bytes_for")
-    assert callable(S._measured_stage_bytes) and callable(S._pinned_stage_bytes)
+    body = None
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.FunctionDef) and node.name == "stage_read_bytes":
+            # STATEMENTS ONLY -- not the signature, not the docstring. `measured=None` in the
+            # signature and the word "measured" in the prose both sort before the code, so ordering
+            # asserted over the whole unparse tests where the words appear, not what runs.
+            stmts = node.body[1:] if _is_docstring(node.body[0]) else node.body
+            body = "\n".join(ast.unparse(x) for x in stmts)
+    assert body, "the owner is gone"
+    for nxt in ("_pinned_stage_bytes", "measured", "estimate"):
+        assert nxt in body, body
+    assert body.index("_pinned_stage_bytes") < body.index("measured") < body.index("estimate")
+    assert "_stage_measured_bytes" not in body, "the dead reader is back in the chain"
+    assert callable(S.stage_read_bytes) and callable(S._measured_stage_bytes)
 
 
 def test_the_read_set_is_pinned_so_a_dtype_win_cannot_move_the_ceiling(tmp_path, monkeypatch):

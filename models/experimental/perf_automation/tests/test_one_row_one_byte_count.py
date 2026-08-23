@@ -98,3 +98,83 @@ def test_the_owner_is_registered():
     """So a new consumer is a test failure rather than a discovery six commits later."""
     src = (_PA / "tests" / "test_single_source_of_truth.py").read_text()
     assert '"the per-stage read set"' in src
+
+
+# --- one place to ask ----------------------------------------------------------------------------
+
+
+def _srb():
+    from cc_optimize.summary import stage_read_bytes
+
+    return stage_read_bytes
+
+
+def test_the_order_is_pinned_then_measured_then_estimate(tmp_path, monkeypatch):
+    """The order IS the property. Pinned first because the ladder shrinks the read set by design and
+    a ceiling recomputed each round retreats ahead of the measurement. Measured before the estimate
+    because the estimate apportions the checkpoint with a tower NAME LIST."""
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("PERF_MCP_TASK", "main")
+    monkeypatch.delenv("PERF_MCP_LEDGER", raising=False)
+    import cc_optimize.summary as S
+
+    led = S._ledger()
+    monkeypatch.setattr(
+        led, "ledger_path", lambda model="", task="": tmp_path / ("%s_%s.jsonl" % (model or "m", task or "main"))
+    )
+    srb = _srb()
+    # estimate only
+    assert srb("decode", model="m", task="main", estimate=lambda: 999) == 999
+    # measured beats estimate
+    assert srb("decode", model="m", task="main", measured={"decode": 500}, estimate=lambda: 999) == 500
+    # pinned beats both
+    led.anchor(led.KIND_STAGE_BYTES, 0.001, depth="decode", mode="bytes_mb", source="t", model="m")
+    assert srb("decode", model="m", task="main", measured={"decode": 500}, estimate=lambda: 999) == 1000
+
+
+def test_the_estimate_is_not_paid_for_when_a_measurement_exists():
+    """It prices activations and KV from the model's geometry -- not free, and pointless when the
+    stage was measured."""
+    calls = []
+    got = _srb()("decode", measured={"decode": 42}, estimate=lambda: calls.append(1) or 999)
+    assert got == 42 and calls == [], "the estimate ran anyway"
+
+
+def test_a_stage_with_nothing_known_returns_zero_not_a_guess():
+    assert _srb()("vocoder") == 0
+    assert _srb()("vocoder", measured={}, estimate=None) == 0
+
+
+def test_stage_roofs_asks_the_owner_rather_than_deriving_it_again():
+    """The derivation lived inside _stage_roofs' loop, which is why a renderer outside it reached for
+    the model-level figure instead and printed a second answer in the same row."""
+    src = (_PA / "cc_optimize" / "summary.py").read_text()
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_stage_roofs":
+            body = ast.unparse(node)
+            assert "stage_read_bytes(" in body, "_stage_roofs no longer asks the owner"
+            assert "_pinned_stage_bytes(name" not in body, "the pinned->measured->estimate chain is inline again"
+
+
+def test_no_other_module_reimplements_the_chain():
+    """perf_mcp PRODUCES the pieces (parses the marker, persists them, pins the baseline) and exposes
+    a raw reader. Deriving the ANSWER a second time there is what this forbids."""
+    src = (_PA / "cc_optimize" / "perf_mcp.py").read_text()
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        body = ast.unparse(node)
+        if "KIND_STAGE_BYTES" in body and "anchor_value" in body:
+            assert node.name in ("read_stage_bytes",), (
+                "%s resolves the pinned read set outside summary.stage_read_bytes" % node.name
+            )
+
+
+def test_it_is_importable_by_name_so_a_consumer_need_not_reach_inside():
+    """Public, deliberately: a consumer that has to reach for a private helper will write its own."""
+    from cc_optimize.summary import stage_read_bytes
+
+    assert callable(stage_read_bytes)
+    assert not stage_read_bytes.__name__.startswith("_")
