@@ -58,17 +58,43 @@ applicable, focused validation, and the migration guardrail checks pass.
 | 13 | CONV-003 | Complete | All migrated operations; one Conv2D migration-only source-lifetime policy removed | 31 source audits; exact height-sharded `--dev` gate |
 | 14 | CONV-004 | Complete | Conv2D/Conv3D dense and divergent ACK populations | 32 source audits; host helper gtests; exact block Conv2D and Conv3D gates |
 | 15 | MCAST-007 | Complete | Object-qualified offset chaining across all migrated kernels | 33 source audits; focused Conv3D, Matmul, Conv2D, Move, GroupNorm, and LayerNorm gates |
+| 16 | GROUP-ATTN-MATMUL-001 | Complete | Rotating sender/receiver dispatch and divergent partial-rectangle ACKs | 33 source audits; all 48 focused Group Attention cases under `--dev` |
+| 17 | SDPA-DECODE-001 | Complete | Replicated-Q K sharing across column families | Build; 33 source audits; MLA decode stress 4/4 under `--dev` |
 
 ## Open review queue
 
-The completed table above covers the feedback execution pass through
-MCAST-007. Two subsequently filed items remain open and are intentionally not
-claimed as tracker completions:
-
-- GROUP-ATTN-MATMUL-001 — use helper role queries for rotating dispatch.
-- SDPA-DECODE-001 — represent replicated-Q K sharing as 1D multicast families.
+No actionable feedback remains open on this branch. `ALL-GATHER-CONCAT-001`
+remains future-only because its helper migration is not present here.
 
 ## Evidence log
+
+### SDPA-DECODE-001 (complete)
+
+- Replaced the `grid_size.x * (grid_size.y / P)` fixed-sender `Mcast2D`
+  objects with `grid_size.y / P` fixed-sender `Mcast1DShape::PerColumn`
+  families, one full-width family per `P`-row band.
+- Runtime binding now selects a family only by `core.y / P`; sender index zero,
+  receiver population, no-handshake policy, adopted K semaphore, wire layout,
+  and caller-managed completion policy are unchanged.
+- `./build_metal.sh` and all 33 source audits passed. The complete four-case
+  MLA decode stress file passed under `--dev`, covering both replicated-Q
+  configurations and both ordinary configurations with three iterations and
+  cache reuse per case.
+
+### GROUP-ATTN-MATMUL-001 (complete)
+
+- Replaced rotating sender coordinate comparisons with
+  `should_send(tile_row_id)` and the legacy receiver-role alias with
+  `can_receive()`. Optional sender/receiver storage remains role-conditional.
+- The first broad q32 gate exposed a pre-existing regression from the earlier
+  pipe-alias conversion: it had dropped the operation-owned per-core ACK-count
+  override, so a partial receiver bounding rectangle waited for idle landing
+  cores. An A/B run reproduced the same hang with the old coordinate dispatch.
+  Restoring the runtime override in the aliased `SenderPipe` construction made
+  the exact q32 node pass and preserves both inside- and outside-rectangle
+  sender populations.
+- All 33 source audits and all 48 focused `test_group_attn_matmul`
+  parameterizations passed under `--dev`.
 
 ### MCAST-007 (complete)
 

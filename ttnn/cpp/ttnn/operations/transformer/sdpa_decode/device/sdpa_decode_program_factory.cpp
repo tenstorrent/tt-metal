@@ -640,20 +640,24 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
 
     const ttnn::kernel_lib::host::McastConfig k_mcast_config{
         .noc = tt::tt_metal::NOC::NOC_0, .handshake = false, .sem_ids = std::vector<uint32_t>{k_mcast_semaphore_id}};
-    std::vector<ttnn::kernel_lib::host::Mcast2D> k_mcasts;
+    std::vector<ttnn::kernel_lib::host::Mcast1D> k_mcasts;
     if (use_col_major_group_indexing) {
         TT_FATAL(grid_size.y % q_heads_parallel_factor == 0, "K multicast groups must fill complete columns");
-        for (uint32_t x = 0; x < grid_size.x; ++x) {
-            for (uint32_t y = 0; y < grid_size.y; y += q_heads_parallel_factor) {
-                k_mcasts.emplace_back(
-                    device,
-                    CoreRangeSet(CoreRange({x, y + 1}, {x, y + q_heads_parallel_factor - 1})),
-                    CoreCoord{x, y},
-                    k_mcast_config);
-            }
+        for (uint32_t y = 0; y < grid_size.y; y += q_heads_parallel_factor) {
+            k_mcasts.emplace_back(
+                device,
+                CoreRangeSet(CoreRange({0, y}, {grid_size.x - 1, y + q_heads_parallel_factor - 1})),
+                ttnn::kernel_lib::host::Mcast1DShape::PerColumn,
+                /*starting_sender_index=*/0,
+                k_mcast_config);
         }
     } else {
-        k_mcasts.emplace_back(device, CoreRangeSet(CoreRange({0, 0}, {0, 0})), CoreCoord{0, 0}, k_mcast_config);
+        k_mcasts.emplace_back(
+            device,
+            CoreRangeSet(CoreRange({0, 0}, {0, 0})),
+            ttnn::kernel_lib::host::Mcast1DShape::PerColumn,
+            /*starting_sender_index=*/0,
+            k_mcast_config);
     }
 
     // If q is sharded, directly read in q_chunk_size_bytes if q is row major or tilized but with full tiles
@@ -921,9 +925,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         reader_rt_args.push_back(core_num_in_output);
         reader_rt_args.push_back(cur_pos);
         reader_rt_args.push_back(static_cast<uint32_t>(do_k_mcast));
-        const uint32_t mcast_index = use_col_major_group_indexing ? core.x * (grid_size.y / q_heads_parallel_factor) +
-                                                                        core.y / q_heads_parallel_factor
-                                                                  : 0;
+        const uint32_t mcast_index = use_col_major_group_indexing ? core.y / q_heads_parallel_factor : 0;
         reader_rt_args.append(output_core_physical_xs);
         reader_rt_args.append(output_core_physical_ys);
         k_mcasts[mcast_index].append_runtime_args_to(reader_rt_args, core);

@@ -594,7 +594,7 @@ route passed at PCC 0.999991419 after its known Watcher skip (#37184).
 ### GROUP-ATTN-MATMUL-001 — Use multicast role queries for rotating send and receive branches
 
 - Date: 2026-08-23
-- Status: Open
+- Status: Resolved (2026-08-23)
 - Kernel:
   `ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/reader_mcast_transformer_group_attn_matmul.cpp`
 
@@ -622,12 +622,21 @@ Keep the existing role-conditional construction of `SenderPipe` and
 `ReceiverPipe`; this feedback only removes duplicated role selection and the
 misleading legacy alias.
 
+Resolution: rotating dispatch now uses `should_send(tile_row_id)` followed by
+`can_receive()`, and the legacy coordinate comparison and
+`in1_sender_in_receiver_grid` alias are gone. The role-conditional optional
+pipe storage remains. Validation also exposed that the earlier alias conversion
+had stopped applying the operation's per-core divergent ACK count; sender-pipe
+construction now retains that runtime override, restoring partial-rectangle
+behavior. All 48 focused Group Attention parameterizations passed under
+Watcher, and the source audit guards both the role queries and ACK override.
+
 ## SDPA Decode
 
 ### SDPA-DECODE-001 — Represent replicated-Q K sharing as 1D multicast families
 
 - Date: 2026-08-23
-- Status: Open
+- Status: Resolved (2026-08-23)
 - Factory:
   `ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_program_factory.cpp`
 - Affected path: Column-major, locally available replicated-Q MLA K multicast
@@ -669,6 +678,15 @@ handshake, the operation-owned K semaphore, and the existing caller-managed
 source-lifetime/barrier policy. A program has one `P`, so its groups differ
 only in coordinates, not in shape or protocol; that regularity is why a
 per-band `Mcast1D` family is the natural host model.
+
+Resolution: the column-major replicated-Q path now constructs one fixed-sender
+`Mcast1DShape::PerColumn` object for each `P`-row band. Each object spans every
+grid column, uses sender index zero, and is selected by `core.y / P`; the former
+per-column `Mcast2D` loop and x-dependent index are gone. The non-column-major
+path uses the same type as a degenerate one-core family, leaving the helper wire
+unchanged. The release build, all 33 source audits, and all four MLA decode
+stress cases under Watcher passed, including three iterations and cache reuse
+for both replicated-Q configurations.
 
 ## All-gather concat heads
 

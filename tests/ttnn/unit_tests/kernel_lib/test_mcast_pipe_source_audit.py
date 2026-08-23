@@ -138,6 +138,12 @@ def test_mixed_role_kernels_use_direct_mcast_pipe_aliases():
     group_attention = mixed_role_kernels[-1].read_text()
     assert "if (in1_mcast_args.can_send())" in group_attention
     assert "if (in1_mcast_args.can_receive())" in group_attention
+    assert "if (in1_mcast_args.should_send(tile_row_id))" in group_attention
+    assert "else if (in1_mcast_args.can_receive())" in group_attention
+    assert "in1_sender_pipe.emplace(noc, in1_mcast_args.rect(), in1_mcast_num_dests);" in group_attention
+    assert "in1_sender_in_receiver_grid" not in group_attention
+    assert "sender_x(tile_row_id)" not in group_attention
+    assert "sender_y(tile_row_id)" not in group_attention
 
 
 def test_migrated_kernels_use_objects_for_offsets_and_reserve_aliases_for_pipe_types():
@@ -410,7 +416,11 @@ def test_sdpa_decode_read_k_uses_opaque_fixed_star_and_keeps_blackhole_completio
     assert "noc.async_atomic_barrier();" in read_k
     assert "McastArgs<attention_sink_args.next_compile_time_args_offset(), 16 + 2 * num_output_cores>" in reader
     assert "mcast_x" not in reader + factory
-    assert "std::vector<ttnn::kernel_lib::host::Mcast2D> k_mcasts" in factory
+    assert "std::vector<ttnn::kernel_lib::host::Mcast1D> k_mcasts" in factory
+    assert "Mcast1DShape::PerColumn" in factory
+    assert "CoreRangeSet(CoreRange({0, y}, {grid_size.x - 1, y + q_heads_parallel_factor - 1}))" in factory
+    assert "core.y / q_heads_parallel_factor" in factory
+    assert "core.x * (grid_size.y / q_heads_parallel_factor)" not in factory
     assert "k_mcasts[mcast_index].append_runtime_args_to(reader_rt_args, core);" in factory
 
 

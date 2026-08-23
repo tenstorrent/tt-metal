@@ -65,7 +65,7 @@ void kernel_main() {
     std::optional<In1McastArgs::SenderPipe> in1_sender_pipe;
     std::optional<In1McastArgs::ReceiverPipe> in1_receiver_pipe;
     if (in1_mcast_args.can_send()) {
-        in1_sender_pipe.emplace(in1_mcast_args.sender(noc));
+        in1_sender_pipe.emplace(noc, in1_mcast_args.rect(), in1_mcast_num_dests);
     }
     if (in1_mcast_args.can_receive()) {
         in1_receiver_pipe.emplace(in1_mcast_args.receiver(noc));
@@ -83,7 +83,6 @@ void kernel_main() {
     uint32_t local_noc_y = my_y[noc.get_noc_id()];
     UnicastEndpoint local_src;
 
-    const bool in1_sender_in_receiver_grid = in1_mcast_args.can_receive();
     bool mcast_in1_to_local_cb = false;
     uint32_t in1_sharded_cb_addr = cb_in2_obj.get_read_ptr();
 #ifdef IN1_SHARDED
@@ -136,8 +135,7 @@ void kernel_main() {
                         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks;
                              in1_subblock++) {  // TODO: Must be 1; for generic padding, need full + partial subblocks
                             // Read in1 block
-                            if (local_noc_x == in1_mcast_args.sender_x(tile_row_id) &&
-                                local_noc_y == in1_mcast_args.sender_y(tile_row_id)) {
+                            if (in1_mcast_args.should_send(tile_row_id)) {
 // MCAST SENDER: send all kv_heads in one user batch
 #ifdef IN1_SHARDED
                                 if (!mcast_in1_to_local_cb) {
@@ -202,7 +200,7 @@ void kernel_main() {
                                     in1_sender_pipe->send(
                                         l1_write_addr_in1, l1_write_addr_in1, in1_block_num_tiles * in1_tile_bytes);
                                 }
-                            } else if (in1_sender_in_receiver_grid) {
+                            } else if (in1_mcast_args.can_receive()) {
                                 // MCAST RECEIVER: receive all kv_heads in one user batch
                                 // All cores in mcast grid needs to participate in receiving otherwise data corruption
                                 // since we mcast from and to the same CB
