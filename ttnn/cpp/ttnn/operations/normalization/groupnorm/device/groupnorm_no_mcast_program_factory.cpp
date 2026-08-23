@@ -7,7 +7,6 @@
 #include "kernels/groupnorm_constants.hpp"
 
 #include <bit>
-#include <cstdlib>
 #include <map>
 #include <string>
 #include <optional>
@@ -316,9 +315,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     // welford_fp32_alias is the non-TILIZE_IN sub-case (c_19 alias is only useful when
     // c_0 isn't itself the consumer of the FP32 transpose, i.e. when tilize_in is false).
     const bool welford_fp32_alias = welford_unpack_fp32_active && !tilize_in;
-    // The row-major repack path has different CB ownership and still uses Welford. Tile-layout
-    // inputs use two-pass SFPU by default, with an opt-out for bring-up and A/B comparisons.
-    const bool sfpu_two_pass = use_welford && !tilize_in && std::getenv("TTNN_GROUPNORM_USE_WELFORD") == nullptr;
+    const bool sfpu_two_pass = groupnorm_uses_sfpu_two_pass(use_welford, tilize_in);
 
     // cb_reciprocals is excluded: it's fp32 here but the reconfigs never touch it.
     const bool enable_fp32_reconfig = groupnorm_needs_fp32_reconfig(
@@ -499,24 +496,32 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     // Retain one complete core-local batch when the total CB footprint leaves
     // a conservative 5% L1 margin. This lets the two SFPU statistics traversals
     // and final normalization all consume the same locally resident input pages.
-    const auto cb_usage_with_input = [&](std::uint32_t input_size,
-                                         std::uint32_t in_size,
-                                         std::uint32_t out_size,
-                                         std::uint32_t x_size,
-                                         std::uint32_t xmm_size,
-                                         std::uint32_t xmm2_size,
-                                         std::uint32_t xmm3_size) -> std::uint64_t {
-        std::uint64_t total = input_size + out_size + in_size;
-        total += untilize_out ? in_size : 0;
-        total += in2_CB_size + in3_CB_size + in2_CB_size;
-        total += gamma.has_value() ? in5_CB_size : 0;
-        total += beta.has_value() ? in6_CB_size : 0;
-        // The writer synthesises this CB when an input mask is not supplied.
-        total += in_mask_CB_size;
-        total += reader_repack_output ? repack_CB_size : 0;
-        total += x_size + xmm_size + xmm2_size + xmm3_size;
-        total += ex_partial_CB_size + ex_global_CB_size + ex2pe_CB_size + reciprocal_CB_size;
-        return total;
+    const auto make_cb_footprint = [&](std::uint32_t in_size,
+                                       std::uint32_t out_size,
+                                       std::uint32_t x_size,
+                                       std::uint32_t xmm_size,
+                                       std::uint32_t xmm2_size,
+                                       std::uint32_t xmm3_size) {
+        return GroupNormInterleavedCbFootprint{
+            .output = out_size,
+            .input_staging = in_size,
+            .untilize_output = untilize_out ? in_size : 0,
+            .scaler = in2_CB_size,
+            .epsilon = in3_CB_size,
+            .column_scaler = in2_CB_size,
+            .gamma = gamma.has_value() ? in5_CB_size : 0,
+            .beta = beta.has_value() ? in6_CB_size : 0,
+            .input_mask = in_mask_CB_size,
+            .repack = reader_repack_output ? repack_CB_size : 0,
+            .x = x_size,
+            .xmm = xmm_size,
+            .xmm2 = xmm2_size,
+            .xmm3 = xmm3_size,
+            .partial_stats = ex_partial_CB_size,
+            .global_stats = ex_global_CB_size,
+            .normalisation_stats = ex2pe_CB_size,
+            .reciprocals = reciprocal_CB_size,
+        };
     };
     const auto lowest_occupied_l1 = device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
     const auto cb_l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -524,25 +529,25 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     const std::uint64_t usable_l1_bytes = available_cb_l1_bytes * 95 / 100;
     const std::uint32_t replay_input_size_group_1 = block_ht_group_1 * per_core_Nt * in_single_tile_size;
     const std::uint32_t replay_input_size_group_2 = block_ht_group_2 * per_core_Nt * in_single_tile_size;
-    const bool l1_replay_enabled = std::getenv("TTNN_GROUPNORM_DISABLE_L1_REPLAY") == nullptr;
-    const bool sfpu_two_pass_l1_replay_group_1 = sfpu_two_pass && l1_replay_enabled &&
-                                                 cb_usage_with_input(
-                                                     replay_input_size_group_1,
-                                                     in_CB_size_group_1,
-                                                     out_CB_size_group_1,
-                                                     x_CB_size_group_1,
-                                                     xmm_CB_size_group_1,
-                                                     xmm2_CB_size_group_1,
-                                                     xmm3_CB_size_group_1) < usable_l1_bytes;
-    const bool sfpu_two_pass_l1_replay_group_2 = sfpu_two_pass && l1_replay_enabled && block_ht_group_2 > 0 &&
-                                                 cb_usage_with_input(
-                                                     replay_input_size_group_2,
-                                                     in_CB_size_group_2,
-                                                     out_CB_size_group_2,
-                                                     x_CB_size_group_2,
-                                                     xmm_CB_size_group_2,
-                                                     xmm2_CB_size_group_2,
-                                                     xmm3_CB_size_group_2) < usable_l1_bytes;
+    const auto cb_footprint_group_1 = make_cb_footprint(
+        in_CB_size_group_1,
+        out_CB_size_group_1,
+        x_CB_size_group_1,
+        xmm_CB_size_group_1,
+        xmm2_CB_size_group_1,
+        xmm3_CB_size_group_1);
+    const auto cb_footprint_group_2 = make_cb_footprint(
+        in_CB_size_group_2,
+        out_CB_size_group_2,
+        x_CB_size_group_2,
+        xmm_CB_size_group_2,
+        xmm2_CB_size_group_2,
+        xmm3_CB_size_group_2);
+    const bool sfpu_two_pass_l1_replay_group_1 =
+        sfpu_two_pass && cb_footprint_group_1.total_with_input(replay_input_size_group_1) < usable_l1_bytes;
+    const bool sfpu_two_pass_l1_replay_group_2 =
+        sfpu_two_pass && block_ht_group_2 > 0 &&
+        cb_footprint_group_2.total_with_input(replay_input_size_group_2) < usable_l1_bytes;
     if (sfpu_two_pass_l1_replay_group_1) {
         in0_CB_size_group_1 = replay_input_size_group_1;
     }
@@ -1659,8 +1664,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             }
             if (input_mask.has_value()) {
                 // Wrap on the set size, not the whole tensor: the row-masked set is an offset off this.
-                input_mask_tile_start_id =
-                    (input_mask_tile_start_id + input_mask_num_tiles_per_core) % mask_set_tiles;
+                input_mask_tile_start_id = (input_mask_tile_start_id + input_mask_num_tiles_per_core) % mask_set_tiles;
             }
         }
 

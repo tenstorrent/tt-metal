@@ -58,11 +58,6 @@ inline void llk_math_two_pass_sfpu_combine_block_to_dst(
 }
 
 template <bool dual_m2>
-inline void llk_math_two_pass_sfpu_finish_variance(std::uint32_t reciprocal_bits) {
-    ckernel::sfpu::_two_pass_finish_variance_<dual_m2>(reciprocal_bits);
-}
-
-template <bool dual_m2>
 inline void llk_math_two_pass_sfpu_store_mean_var_to_dst_row(
     std::uint32_t mean_dst_idx, std::uint32_t reciprocal_bits) {
     _llk_math_welfords_sfpu_params_(

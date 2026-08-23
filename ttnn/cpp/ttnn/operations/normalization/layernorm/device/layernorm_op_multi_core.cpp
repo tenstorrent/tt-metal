@@ -7,6 +7,7 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation_types.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_stats_selector.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -20,7 +21,6 @@
 
 #include <optional>
 #include <bit>
-#include <cstdlib>
 #include <cstdint>
 
 using namespace tt::constants;
@@ -240,11 +240,18 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     std::uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    const bool blackhole_use_sfpu_stats =
-        device->arch() == tt::ARCH::BLACKHOLE && !rms_norm && !input_is_row_major && fp32_dest_acc_en &&
-        use_blackhole_sfpu_stats(in_data_format, Wp, b.has_value(), gamma.has_value(), beta.has_value());
-    const bool use_welford = requested_use_welford && (device->arch() != tt::ARCH::BLACKHOLE || rms_norm ||
-                                                       input_is_row_major || blackhole_use_sfpu_stats);
+    const auto statistics_backend = layernorm::select_interleaved_statistics_backend(
+        requested_use_welford,
+        device->arch(),
+        rms_norm,
+        input_is_row_major,
+        fp32_dest_acc_en,
+        {.input_format = in_data_format,
+         .padded_width = Wp,
+         .fuse_pre_add = b.has_value(),
+         .has_gamma = gamma.has_value(),
+         .has_beta = beta.has_value()});
+    const bool use_welford = statistics_backend == layernorm::StatisticsBackend::SFPU_TWO_PASS;
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat interm_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat gamma_data_format = gamma.has_value()
@@ -444,9 +451,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     ////////////////////////////////////////////////////////////////////////////
     const auto use_welford_and_not_rms_norm = use_welford && !rms_norm;
     const auto fuse_pre_add = b.has_value();
-    // Two-pass SFPU replaces Welford for LayerNorm. Retain an opt-out while the Welford kernel
-    // remains useful for architecture bring-up and direct numerical/performance comparisons.
-    const bool use_sfpu_two_pass = use_welford_and_not_rms_norm && std::getenv("TTNN_LAYERNORM_USE_WELFORD") == nullptr;
+    const bool use_sfpu_two_pass = use_welford_and_not_rms_norm;
     const bool sfpu_two_pass = use_sfpu_two_pass && !large_tensor_needed;
     const bool sfpu_two_pass_large = use_sfpu_two_pass && large_tensor_needed;
 
@@ -996,9 +1001,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
         // Merged readers (rm_and_tile, large_tensor_rm_and_tile) use a unified start_tile_row = curr_row.
         // Legacy kernels (welford large-tensor, rm_gb) still expect tile_offset = curr_row * Wt.
-        const bool using_legacy_tile_reader =
+        const bool reader_uses_tile_offset =
             (use_welford_and_not_rms_norm && large_tensor_needed) || (use_row_major_kernel && !input_is_row_major);
-        const std::uint32_t reader_start = using_legacy_tile_reader ? tile_offset : curr_row;
+        const std::uint32_t reader_start = reader_uses_tile_offset ? tile_offset : curr_row;
 
         m2::AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,

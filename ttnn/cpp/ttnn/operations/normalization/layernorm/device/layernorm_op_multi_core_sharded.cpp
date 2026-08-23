@@ -7,6 +7,7 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation_types.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_stats_selector.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -20,7 +21,6 @@
 
 #include <optional>
 #include <bit>
-#include <cstdlib>
 #include <cstdint>
 
 using namespace tt::constants;
@@ -122,11 +122,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     ////////////////////////////////////////////////////////////////////////////
     IDevice* device = a.device();
 
-    // Blackhole's centred tile-reduction kernel is substantially faster and showed no numerical
-    // disadvantage versus the transpose/SFPU two-pass kernel for non-distributed sharded LayerNorm.
-    // Keep the latter on other architectures until they have equivalent numerical and performance validation.
-    const bool use_welford =
-        requested_use_welford && !(device->arch() == tt::ARCH::BLACKHOLE && !is_pre_all_gather && !is_post_all_gather);
+    const auto statistics_backend = layernorm::select_sharded_statistics_backend(
+        requested_use_welford, device->arch(), is_pre_all_gather, is_post_all_gather);
+    const bool use_welford = statistics_backend == layernorm::StatisticsBackend::SFPU_TWO_PASS;
 
     // convert data format
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());

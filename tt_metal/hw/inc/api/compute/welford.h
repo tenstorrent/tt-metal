@@ -123,11 +123,6 @@ ALWI void two_pass_stats_combine_block(
 }
 
 template <bool dual_m2 = true>
-ALWI void two_pass_stats_finish_variance(std::uint32_t reciprocal_bits) {
-    MATH((llk_math_two_pass_sfpu_finish_variance<dual_m2>(reciprocal_bits)));
-}
-
-template <bool dual_m2 = true>
 ALWI void two_pass_stats_finalize_to_row(std::uint32_t mean_dst_idx, std::uint32_t reciprocal_bits) {
     MATH((llk_math_two_pass_sfpu_store_mean_var_to_dst_row<dual_m2>(mean_dst_idx, reciprocal_bits)));
 }

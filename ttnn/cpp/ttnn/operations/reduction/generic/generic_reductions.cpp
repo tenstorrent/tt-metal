@@ -24,7 +24,6 @@
 #include <bit>
 #include <cmath>
 #include <numeric>
-#include <cstdint>
 
 namespace ttnn::operations::reduction {
 
@@ -32,7 +31,7 @@ namespace ttnn::operations::reduction {
 template <reduction_common::ReduceType reduce_type>
 Tensor reduce(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, std::int64_t, ttsl::SmallVector<int>>>& dim_arg = std::nullopt,
+    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim_arg = std::nullopt,
     bool keepdim = false,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
@@ -105,10 +104,10 @@ float get_pad_value(
         if (reduce_type == reduction_common::ReduceType::Max) {
             // SFPU int32 MAX reduce can return an incorrect maximum when the INT32_MIN bit pattern (0x80000000)
             // appears in padded lanes; use INT32_MIN + 1 instead.
-            return std::bit_cast<float>(static_cast<std::uint32_t>(0x80000001u));  // INT32_MIN + 1
+            return std::bit_cast<float>(static_cast<uint32_t>(0x80000001u));  // INT32_MIN + 1
         }
         if (reduce_type == reduction_common::ReduceType::Min) {
-            return std::bit_cast<float>(static_cast<std::uint32_t>(0x7FFFFFFFu));  // INT32_MAX
+            return std::bit_cast<float>(static_cast<uint32_t>(0x7FFFFFFFu));  // INT32_MAX
         }
         return 0.0f;
     }
@@ -124,7 +123,7 @@ Tensor adjust_shape(
     bool keepdim,
     const ttsl::SmallVector<int>& height_width_dims,
     const ttsl::SmallVector<int>& non_height_width_dims) {
-    ttsl::SmallVector<std::uint32_t> output_shape;
+    ttsl::SmallVector<uint32_t> output_shape;
     for (int axis = 0; axis < input_shape.size(); axis++) {
         bool in_height_width_dims =
             std::find(height_width_dims.begin(), height_width_dims.end(), axis) != height_width_dims.end();
@@ -273,7 +272,7 @@ static Tensor reduce_impl(
             TT_THROW("Unsupported dim");
         }
 
-        std::uint64_t reduced_volume = 1;
+        uint64_t reduced_volume = 1;
         for (int axis : dim) {
             reduced_volume *= input_shape[axis];
         }
@@ -360,7 +359,7 @@ static Tensor std_var_impl(
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
 
-    std::uint64_t reduced_volume = 1;
+    uint64_t reduced_volume = 1;
     if (rank != 0) {
         for (int axis : dim) {
             reduced_volume *= input_shape[axis];
@@ -391,7 +390,7 @@ static Tensor std_var_impl(
 
     // Validate that the divisor is positive (Bessel's correction subtracts 1).
     // This could fail if e.g. there is only one element across the reduction dimensions and correction is true.
-    std::uint64_t divisor = correction ? (reduced_volume - 1) : reduced_volume;
+    uint64_t divisor = correction ? (reduced_volume - 1) : reduced_volume;
     TT_FATAL(divisor > 0, "Reduction is performed on too few elements, yielding divisor of {}", divisor);
 
     // Numerically stable statistics reductions use an SFPU two-pass algorithm for all supported input dtypes.
@@ -404,9 +403,9 @@ static Tensor std_var_impl(
     //   2+ dims:            unified HW path with reduce_batch_size
     tt::tt_metal::ReduceOpDim reduce_dim;
     ttnn::Tensor input_tensor = input_tensor_arg;
-    std::uint32_t reduce_batch_size = 1;
+    uint32_t reduce_batch_size = 1;
     bool needs_inverse_permute = false;
-    ttsl::SmallVector<std::int64_t> permute_swap;
+    ttsl::SmallVector<int64_t> permute_swap;
 
     if (single_h || single_w) {
         reduce_dim = single_w ? tt::tt_metal::ReduceOpDim::W : tt::tt_metal::ReduceOpDim::H;
@@ -432,15 +431,15 @@ static Tensor std_var_impl(
 
         // Build permutation: kept dims first (in original order), then all
         // reduction dims.  dim is already sorted ascending by generate_reduce_dim.
-        ttsl::SmallVector<std::int64_t> perm;
+        ttsl::SmallVector<int64_t> perm;
         perm.reserve(rank);
-        for (std::uint32_t i = 0; i < rank; ++i) {
+        for (uint32_t i = 0; i < rank; ++i) {
             if (std::find(dim.begin(), dim.end(), static_cast<int>(i)) == dim.end()) {
-                perm.push_back(static_cast<std::int64_t>(i));
+                perm.push_back(static_cast<int64_t>(i));
             }
         }
         for (int d : dim) {
-            perm.push_back(static_cast<std::int64_t>(d));
+            perm.push_back(static_cast<int64_t>(d));
         }
 
         // ttnn::permute checks for identity internally and skips data movement if not needed.
@@ -533,7 +532,7 @@ Tensor non_height_width_reduce(
 template <reduction_common::ReduceType reduce_type>
 Tensor reduce(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, std::int64_t, ttsl::SmallVector<int>>>& dim_arg,
+    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim_arg,
     const bool keepdim,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
@@ -571,7 +570,7 @@ Tensor reduce(
     // For INT32 the pad sentinel is carried as a raw bit pattern (see get_pad_value); pass it through
     // PadValue's integer arm so fill_pad reinterprets the bits rather than decoding numerically.
     const ttnn::PadValue fill_pad_value = input_tensor_arg.dtype() == tt::tt_metal::DataType::INT32
-                                              ? ttnn::PadValue{std::bit_cast<std::uint32_t>(pad_value)}
+                                              ? ttnn::PadValue{std::bit_cast<uint32_t>(pad_value)}
                                               : ttnn::PadValue{pad_value};
     auto input_tensor =
         is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, fill_pad_value) : input_tensor_arg;
@@ -674,7 +673,7 @@ namespace ttnn {
 
 Tensor sum(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, std::int64_t, ttsl::SmallVector<int>>>& dim_arg,
+    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim_arg,
     bool keepdim,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
@@ -700,7 +699,7 @@ Tensor sum(
 
 Tensor mean(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, std::int64_t, ttsl::SmallVector<int>>>& dim_arg,
+    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim_arg,
     bool keepdim,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
@@ -726,7 +725,7 @@ Tensor mean(
 
 Tensor max(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, std::int64_t, ttsl::SmallVector<int>>>& dim_arg,
+    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim_arg,
     bool keepdim,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
@@ -762,7 +761,7 @@ Tensor max(
 
 Tensor min(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, std::int64_t, ttsl::SmallVector<int>>>& dim_arg,
+    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim_arg,
     bool keepdim,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
@@ -798,7 +797,7 @@ Tensor min(
 
 Tensor std(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, std::int64_t, ttsl::SmallVector<int>>>& dim_arg,
+    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim_arg,
     bool keepdim,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
@@ -818,7 +817,7 @@ Tensor std(
 
 Tensor var(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, std::int64_t, ttsl::SmallVector<int>>>& dim_arg,
+    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim_arg,
     bool keepdim,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,

@@ -7,7 +7,6 @@
 #include "kernels/groupnorm_constants.hpp"
 
 #include <bit>
-#include <cstdlib>
 #include <map>
 #include <string>
 #include <optional>
@@ -265,9 +264,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     // welford_fp32_alias is the non-TILIZE_IN sub-case (c_19 alias is only useful when
     // c_0 isn't itself the consumer of the FP32 transpose, i.e. when tilize_in is false).
     const bool welford_fp32_alias = welford_unpack_fp32_active && !tilize_in;
-    // The row-major repack path has different CB ownership and still uses Welford. Tile-layout
-    // inputs use two-pass SFPU by default, with an opt-out for bring-up and A/B comparisons.
-    const bool sfpu_two_pass = use_welford && !tilize_in && std::getenv("TTNN_GROUPNORM_USE_WELFORD") == nullptr;
+    const bool sfpu_two_pass = groupnorm_uses_sfpu_two_pass(use_welford, tilize_in);
 
     // cb_reciprocals is excluded: it's fp32 here but the reconfigs never touch it.
     const bool enable_fp32_reconfig = groupnorm_needs_fp32_reconfig(
@@ -364,18 +361,25 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     // traversals and final normalization. The cb_in0/cb_in0_welford aliases share
     // this allocation, so the full FP32 two-pass path then needs one input read
     // instead of three. Keep a 5% margin for non-CB L1 users.
-    const auto cb_usage_with_input = [&](std::uint32_t input_size) -> std::uint64_t {
-        std::uint64_t total = input_size + out_CB_size_group_1 + in_CB_size_group_1;
-        total += untilize_out ? in_CB_size_group_1 : 0;
-        total += in2_CB_size + in3_CB_size + in2_CB_size;
-        total += gamma.has_value() ? in5_CB_size : 0;
-        total += beta.has_value() ? in6_CB_size : 0;
-        // The writer synthesises this CB when an input mask is not supplied.
-        total += in_mask_CB_size;
-        total += reader_repack_output ? repack_CB_size : 0;
-        total += x_CB_size_group_1 + xmm_CB_size_group_1 + xmm2_CB_size_group_1 + xmm3_CB_size_group_1;
-        total += ex_partial_CB_size + ex_global_CB_size + ex2pe_CB_size + reciprocal_CB_size;
-        return total;
+    const GroupNormInterleavedCbFootprint cb_footprint{
+        .output = out_CB_size_group_1,
+        .input_staging = in_CB_size_group_1,
+        .untilize_output = untilize_out ? in_CB_size_group_1 : 0,
+        .scaler = in2_CB_size,
+        .epsilon = in3_CB_size,
+        .column_scaler = in2_CB_size,
+        .gamma = gamma.has_value() ? in5_CB_size : 0,
+        .beta = beta.has_value() ? in6_CB_size : 0,
+        .input_mask = in_mask_CB_size,
+        .repack = reader_repack_output ? repack_CB_size : 0,
+        .x = x_CB_size_group_1,
+        .xmm = xmm_CB_size_group_1,
+        .xmm2 = xmm2_CB_size_group_1,
+        .xmm3 = xmm3_CB_size_group_1,
+        .partial_stats = ex_partial_CB_size,
+        .global_stats = ex_global_CB_size,
+        .normalisation_stats = ex2pe_CB_size,
+        .reciprocals = reciprocal_CB_size,
     };
     const auto lowest_occupied_l1 = device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
     const auto cb_l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -383,8 +387,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     const std::uint64_t usable_cb_l1_bytes = available_cb_l1_bytes * 95 / 100;
     const std::uint32_t replay_input_tiles_group_1 = block_ht_group_1 * per_core_Nt;
     const std::uint32_t replay_input_size_group_1 = replay_input_tiles_group_1 * in_single_tile_size;
-    const bool sfpu_two_pass_l1_replay = sfpu_two_pass && std::getenv("TTNN_GROUPNORM_DISABLE_L1_REPLAY") == nullptr &&
-                                         cb_usage_with_input(replay_input_size_group_1) < usable_cb_l1_bytes;
+    const bool sfpu_two_pass_l1_replay =
+        sfpu_two_pass && cb_footprint.total_with_input(replay_input_size_group_1) < usable_cb_l1_bytes;
     if (sfpu_two_pass_l1_replay) {
         in0_CB_size_group_1 = replay_input_size_group_1;
     }
@@ -1331,8 +1335,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             }
             if (input_mask.has_value()) {
                 // Wrap on the set size, not the whole tensor: the row-masked set is an offset off this.
-                input_mask_tile_start_id =
-                    (input_mask_tile_start_id + input_mask_num_tiles_per_core) % mask_set_tiles;
+                input_mask_tile_start_id = (input_mask_tile_start_id + input_mask_num_tiles_per_core) % mask_set_tiles;
             }
         }
 

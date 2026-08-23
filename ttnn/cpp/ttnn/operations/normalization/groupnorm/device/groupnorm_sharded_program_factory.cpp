@@ -6,7 +6,6 @@
 #include "groupnorm_program_utils.hpp"
 
 #include <bit>
-#include <cstdlib>
 #include <map>
 #include <string>
 #include <optional>
@@ -46,9 +45,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     CoreCoord grid_size = program_config.compute_with_storage_grid_size;
     bool inplace = program_config.inplace;
     bool use_welford = operation_attributes.use_welford;
-    // Two-pass SFPU is the default numerically-stable implementation. Keep an opt-out while
-    // Welford remains available for architecture bring-up and direct A/B comparisons.
-    const bool sfpu_two_pass = use_welford && std::getenv("TTNN_GROUPNORM_USE_WELFORD") == nullptr;
+    const bool sfpu_two_pass = groupnorm_uses_sfpu_two_pass(use_welford, false);
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     // Begin sharded implementation
@@ -1380,8 +1377,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             // Tile id for negative mask is same as input mask. Wrap on the set size, not the whole
             // tensor: under the pad correction the caller's mask carries a second (row-masked) set
             // beyond the first that the sharded writer never reads.
-            input_mask_tile_start_id =
-                (input_mask_tile_start_id + input_mask_num_tiles_per_core) % mask_set_tiles;
+            input_mask_tile_start_id = (input_mask_tile_start_id + input_mask_num_tiles_per_core) % mask_set_tiles;
         }
     }
 
