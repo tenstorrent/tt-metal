@@ -64,87 +64,75 @@ COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
 )
 
 
-def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int, fuse_silu: bool = True):
-    """Program configs for the gate / up / down matmuls on Blackhole.
+# Larger K blocks keep getting faster, but the gate matmul's PCC slides from 0.9998 at 16 tiles to
+# 0.9994 at 56: bf16 dest accumulates more terms before the packer flushes. 16 keeps ~97% of the
+# speed at the best accuracy.
+MAX_IN0_BLOCK_W = 16
+
+
+def _in0_block_w(k_tiles: int) -> int:
+    """Largest K block that tiles k_tiles without a remainder."""
+    for w in range(min(MAX_IN0_BLOCK_W, k_tiles), 0, -1):
+        if k_tiles % w == 0:
+            return w
+    return 1
+
+
+def _out_subblock(per_core_M: int, per_core_N: int) -> tuple[int, int]:
+    """Largest h*w within the 8-tile DST budget that tiles the per-core output block, widest first."""
+    best = (1, 1)
+    for h in range(1, per_core_M + 1):
+        for w in range(1, per_core_N + 1):
+            if per_core_M % h or per_core_N % w or h * w > 8:
+                continue
+            if (h * w, w) > (best[0] * best[1], best[1]):
+                best = (h, w)
+    return best
+
+
+def get_program_configs(
+    grid: ttnn.CoreCoord,
+    m_tiles: int,
+    k_tiles: int,
+    gate_n_tiles: int,
+    down_k_tiles: int,
+    down_n_tiles: int,
+    fuse_silu: bool = True,
+):
+    """2D program configs for the gate / up / down matmuls.
 
     ``fuse_silu=False`` leaves the gate matmul's accumulator raw, for a GLU activation that is
     binary over (gate, up) and so has no ``UnaryOpType`` to fuse -- SiTU-GLU.
+
+    A 1D factory splits one axis only, so its core count caps at ``max(m_tiles, n_tiles)``. At the
+    prefill chunk depth m_tiles is 20 and the shared expert's gate is 48 tiles wide, both far under
+    the 99 cores of an overlapped sub-device. The 2D factory splits M over the grid's rows and N over
+    its columns, so the two multiply.
+
+    Each per-core extent rounds up, which costs cores rather than correctness: the launched grid is
+    ``ceil(m_tiles / per_core_M) x ceil(n_tiles / per_core_N)``, so a per_core_M of 3 over 20 M-tiles
+    lights 7 rows, not 9. Measured still beats every 1D arrangement of these shapes.
     """
-    grid = ttnn.CoreCoord(11, 9)
-    gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=4,
-        out_subblock_h=1,
-        out_subblock_w=8,
-        per_core_M=per_core_M,
-        per_core_N=gate_n_tiles,
-        fuse_batch=False,
-        mcast_in0=False,
-        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU) if fuse_silu else None,
-    )
-    up = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=4,
-        out_subblock_h=1,
-        out_subblock_w=8,
-        per_core_M=per_core_M,
-        per_core_N=gate_n_tiles,
-        fuse_batch=False,
-        mcast_in0=False,
-    )
-    down = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=1,
-        out_subblock_h=1,
-        out_subblock_w=8,
-        per_core_M=per_core_M,
-        per_core_N=down_n_tiles,
-        fuse_batch=False,
-        mcast_in0=False,
-    )
-    return gate, up, down
 
+    def cfg(k: int, n: int, activation=None):
+        per_core_M = -(-m_tiles // grid.y)
+        per_core_N = -(-n // grid.x)
+        subblock_h, subblock_w = _out_subblock(per_core_M, per_core_N)
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=grid,
+            in0_block_w=_in0_block_w(k),
+            out_subblock_h=subblock_h,
+            out_subblock_w=subblock_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            transpose_mcast=False,
+            fuse_batch=False,
+            fused_activation=activation,
+        )
 
-def get_wh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int, fuse_silu: bool = True):
-    """Program configs for the gate / up / down matmuls on Wormhole.
-
-    ``fuse_silu=False`` leaves the gate matmul's accumulator raw, for a GLU activation that is
-    binary over (gate, up) and so has no ``UnaryOpType`` to fuse -- SiTU-GLU.
-    """
-    grid = ttnn.CoreCoord(8, 7)
-    gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=4,
-        out_subblock_h=1,
-        out_subblock_w=8,
-        per_core_M=per_core_M,
-        per_core_N=gate_n_tiles,
-        fuse_batch=False,
-        mcast_in0=False,
-        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU) if fuse_silu else None,
-    )
-    up = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=4,
-        out_subblock_h=1,
-        out_subblock_w=8,
-        per_core_M=per_core_M,
-        per_core_N=gate_n_tiles,
-        fuse_batch=False,
-        mcast_in0=False,
-    )
-    down = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=1,
-        out_subblock_h=1,
-        out_subblock_w=1,
-        out_block_h=1,
-        out_block_w=1,
-        per_core_M=per_core_M,
-        per_core_N=down_n_tiles,
-        fuse_batch=False,
-        mcast_in0=False,
-    )
+    gate = cfg(k_tiles, gate_n_tiles, ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU) if fuse_silu else None)
+    up = cfg(k_tiles, gate_n_tiles)
+    down = cfg(down_k_tiles, down_n_tiles)
     return gate, up, down
 
 
@@ -484,32 +472,29 @@ class TtSharedExpert(LightweightModule):
             self.gate_proj.shape[-1] == self.down_proj.shape[-2]
         ), f"Matmul shape mismatch: gate_proj[-1]={self.gate_proj.shape[-1]} != down_proj[-2]={self.down_proj.shape[-2]}"
 
-        # ===== Inlined shared expert FFN — height-sharded sub-device matmuls =====
-        # Available compute grid: BH = 11x9, WH = 8x7.
+        # ===== Inlined shared expert FFN — 2D sub-device matmuls =====
         TILE = 32
-        max_cores = 11 * 9 if is_blackhole() else 8 * 7
+        # The grid these matmuls may use: the sub-device's when the expert is overlapped with the MoE
+        # dispatch, the whole device's otherwise. Deriving it also drops a hardcoded 11x9 that was a
+        # row short of Blackhole's 11x10 whenever there was no sub-device to be confined to.
+        grid = (
+            self.subdevice_cores.bounding_box().grid_size()
+            if self.subdevice_cores is not None
+            else self.mesh_device.compute_with_storage_grid_size()
+        )
 
-        # Pick the largest divisor of M_tiles that fits in the sub-device — gives
-        # max parallelism with no padding waste.
         m_tiles = x.padded_shape[-2] // TILE
-        num_cores = m_tiles
-        while num_cores > max_cores or m_tiles % num_cores != 0:
-            num_cores -= 1
-        per_core_M = m_tiles // num_cores
-
-        gate_n_tiles = self.gate_proj.padded_shape[-1] // TILE
-        down_n_tiles = self.down_proj.padded_shape[-1] // TILE
-        # SiTU-GLU is binary over (gate, up), so it cannot ride along as the gate matmul's fused
-        # unary; the gate accumulator has to come out raw and be combined below.
-        fuse_silu = self.activation == ACTIVATION_SILU
-        if is_blackhole():
-            gate_program_config, up_program_config, down_program_config = get_bh_program_configs(
-                per_core_M, gate_n_tiles, down_n_tiles, fuse_silu=fuse_silu
-            )
-        else:
-            gate_program_config, up_program_config, down_program_config = get_wh_program_configs(
-                per_core_M, gate_n_tiles, down_n_tiles, fuse_silu=fuse_silu
-            )
+        gate_program_config, up_program_config, down_program_config = get_program_configs(
+            grid,
+            m_tiles,
+            self.gate_proj.padded_shape[-2] // TILE,
+            self.gate_proj.padded_shape[-1] // TILE,
+            self.down_proj.padded_shape[-2] // TILE,
+            self.down_proj.padded_shape[-1] // TILE,
+            # SiTU-GLU is binary over (gate, up), so it cannot ride along as the gate matmul's fused
+            # unary; the gate accumulator has to come out raw and be combined below.
+            fuse_silu=self.activation == ACTIVATION_SILU,
+        )
 
         # 1) Compute gate and up projections
         gate_out = ttnn.matmul(
