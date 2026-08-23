@@ -24,14 +24,22 @@
 #   ALLOW_DIRTY=1             allow a dirty working tree
 #   PERF_RUN_TYPES=<A,B>      pass --perf-run-types to narrow the sweep (cost knob)
 #   BUILD_ROOT=<dir>          private build tree (artefacts land in <dir>/tt-llk-build)
+#   WIPE_BUILD=1              cold-compile every iteration (see below)
 #
 # BUILD_ROOT is strongly recommended on a shared machine. The default artefact
 # path is the shared /tmp/tt-llk-build that every other user also builds into;
 # a run of several hours there can have its ELFs wiped or rebuilt underneath it.
-# The build tree is intentionally NOT wiped between iterations: iteration 1 pays
-# the compile, iterations 2..N reuse identical ELFs and measure only. Rebuilding
-# the same sources yields byte-identical ELFs, so nothing is lost, and what is
-# left is the device-side noise the gate threshold has to survive.
+# By default the build tree is NOT wiped between iterations: iteration 1 pays the
+# compile, iterations 2..N reuse the ELFs and measure only. That isolates the
+# device-side noise and is far cheaper.
+#
+# WIPE_BUILD=1 rebuilds from cold before every iteration. Slower -- N cold
+# compiles instead of one -- but it is what a PR gate actually does: a fresh
+# runner compiles, then measures, every time. Use it when the question is "what
+# noise would the gate see" rather than "how stable is the silicon". It is also
+# the only way to tell a cold-start effect from a one-off glitch: with a warm
+# tree, iteration 1 is the sole cold run, so anything cold-specific can only ever
+# appear as "run 1 differs".
 #
 # On this branch --perf-run-types is not yet on main, so the branch differs from
 # origin/main in conftest.py and helpers/perf/core.py and the main check trips.
@@ -60,6 +68,16 @@ export LLK_HOME="${LLK_HOME:-$LLK_ROOT}"
 if [ -n "${BUILD_ROOT:-}" ]; then
     mkdir -p "$BUILD_ROOT"
     export RUNNER_TEMP="$BUILD_ROOT"
+fi
+BUILD_TREE="${RUNNER_TEMP:+$RUNNER_TEMP/tt-llk-build}"
+BUILD_TREE="${BUILD_TREE:-/tmp/tt-llk-build}"
+
+# Never wipe a build tree we do not own: the default is the shared
+# /tmp/tt-llk-build that every other user on the machine also builds into.
+if [ -n "${WIPE_BUILD:-}" ] && [ -z "${BUILD_ROOT:-}" ] && [ -e "$BUILD_TREE" ] && [ ! -O "$BUILD_TREE" ]; then
+    echo "error: WIPE_BUILD=1 refuses to wipe $BUILD_TREE: it belongs to another user." >&2
+    echo "       Set BUILD_ROOT=<your-own-dir> to build somewhere private." >&2
+    exit 2
 fi
 PERF_DATA="$LLK_HOME/perf_data"
 
@@ -108,6 +126,7 @@ fi
     echo "host: $(hostname)"
     echo "perf_run_types: ${PERF_RUN_TYPES:-<test default>}"
     echo "build_root: ${BUILD_ROOT:-<shared default>}"
+    echo "wipe_build: ${WIPE_BUILD:+yes}${WIPE_BUILD:-no}"
 } | tee "$OUT_DIR/run_metadata.txt"
 
 cd "$LLK_HOME/tests/python_tests"
@@ -123,6 +142,11 @@ for i in $(seq 1 "$ITERATIONS"); do
     # A stale perf_data would let a previous iteration's CSV survive a test that
     # failed to report this time, hiding the gap instead of showing it.
     rm -rf "$PERF_DATA"
+
+    if [ -n "${WIPE_BUILD:-}" ]; then
+        echo "   cold compile: wiping $BUILD_TREE"
+        rm -rf "$BUILD_TREE"
+    fi
 
     # A handful of tests can time out or fail on any given iteration, and pytest
     # then exits 1. That must NOT abort the baseline: the surviving tests still

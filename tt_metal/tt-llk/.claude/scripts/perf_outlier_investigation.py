@@ -21,6 +21,10 @@ falsify a claim rather than merely illustrate one.
    the dominant test, each ``cfg_`` column is scored by how much the flag rate
    varies across its values. This is association only -- it cannot establish a
    cause, and the report says so.
+5. **What threshold would cover everything?** For each absolute-cycle floor, the
+   smallest percentage that flags nothing. This is exact rather than a percentile
+   estimate, and it prices the alternative to fixing the outliers: adopting a
+   threshold large enough to absorb them.
 
     python perf_outlier_investigation.py <points.csv> "<title>" <out.md> [RUN_TYPE]
 """
@@ -151,6 +155,28 @@ def config_association(frame, flagged, top=6):
     return lines
 
 
+_FLOORS = (0, 10, 20, 30, 50, 100, 200, 500)
+
+
+def threshold_coverage(frame):
+    """Smallest percentage with zero false failures, per absolute-cycle floor.
+
+    ``spread`` is (max-min)/median over the runs, so the smallest rule that flags
+    nothing is just above the largest spread among points the floor still admits.
+    Raising the floor only helps where the offending points are small; where they
+    are large it changes nothing, and that is the useful signal.
+    """
+    lines = [
+        "| cycle floor | points above it | smallest % that flags nothing |",
+        "|--:|--:|--:|",
+    ]
+    for floor in _FLOORS:
+        eligible = frame[frame["abs_spread"] > floor]
+        need = "n/a" if eligible.empty else f"{eligible['spread'].max() * 100:.2f}%"
+        lines.append(f"| {floor} | {len(eligible):,} | {need} |")
+    return lines
+
+
 def main():
     if len(sys.argv) < 4:
         print(__doc__)
@@ -190,6 +216,9 @@ def main():
 
     out += ["", "## 4. Does any sweep parameter separate flagged from unflagged?", ""]
     out += config_association(frame, flagged)
+
+    out += ["", "## 5. What threshold would cover everything?", ""]
+    out += threshold_coverage(frame)
 
     text = "\n".join(out) + "\n"
     with open(out_path, "w") as handle:
