@@ -126,3 +126,136 @@ def test_slice_write_nd(rank, layout, device):
 
     assert_equal(torch_src, written_region)
     assert_equal(torch_out_ref, out_host)
+
+
+def test_slice_write_strided_unaligned_batched_rows(device):
+    """Each scratch row needs an aligned pitch when one barrier stages multiple rows."""
+    shape = (512, 65)
+    begins, ends, strides = [0, 0], [512, 64], [1, 2]
+    slices = tuple(slice(b, e, s) for b, e, s in zip(begins, ends, strides))
+
+    torch_out_ref = torch.zeros(shape, dtype=torch.bfloat16)
+    torch_src = offset_increment_tensor(torch_out_ref[slices].shape, dtype=torch.bfloat16)
+    torch_out_ref[slices] = torch_src
+
+    tt_out = ttnn.from_torch(
+        torch.zeros_like(torch_out_ref), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
+    )
+    tt_in = ttnn.from_torch(torch_src, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+    tt_in = ttnn.to_memory_config(tt_in, ttnn.L1_MEMORY_CONFIG)
+
+    ttnn.experimental.slice_write(tt_in, tt_out, begins, ends, strides)
+
+    assert_equal(torch_out_ref, ttnn.to_torch(tt_out))
+
+
+def test_slice_write_unaligned_begin_multiple_rows_per_core(device):
+    """An unaligned begin must retain each row tail in its own DFB slot."""
+    output_shape = (512, 65)
+    begins, ends, strides = [0, 1], [512, 65], [1, 1]
+    slices = tuple(slice(b, e, s) for b, e, s in zip(begins, ends, strides))
+    torch.manual_seed(2005)
+    torch_src = torch.randint(-8, 9, (512, 64), dtype=torch.int32).to(torch.bfloat16)
+    torch_out_ref = torch.zeros(output_shape, dtype=torch.bfloat16)
+    torch_out_ref[slices] = torch_src
+
+    tt_out = ttnn.from_torch(
+        torch.zeros_like(torch_out_ref), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
+    )
+    tt_in = ttnn.from_torch(torch_src, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+    ttnn.experimental.slice_write(tt_in, tt_out, begins, ends, strides)
+
+    assert_equal(torch_out_ref, ttnn.to_torch(tt_out))
+
+
+def test_slice_write_zero_volume_is_noop(device):
+    input_tensor = ttnn.from_torch(
+        torch.ones((1, 1, 1, 16), dtype=torch.bfloat16),
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+    )
+    expected = torch.arange(64, dtype=torch.bfloat16).reshape(1, 1, 4, 16)
+    output_tensor = ttnn.from_torch(
+        expected,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+    )
+    result = ttnn.experimental.slice_write(
+        input_tensor,
+        output_tensor,
+        [0, 0, 2, 0],
+        [1, 1, 2, 16],
+        [1, 1, 1, 1],
+    )
+    assert_equal(expected, ttnn.to_torch(result))
+
+
+@pytest.mark.parametrize("shape", [(1, 1, 8193, 32), (1, 1, 61441, 26)])
+def test_slice_write_uneven_barrier_batches(device, shape):
+    """Uneven core groups must share a DFB-divisible barrier batch."""
+    torch.manual_seed(2005)
+    torch_input = torch.randint(-8, 9, shape, dtype=torch.int32).to(torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.from_torch(
+        torch.zeros_like(torch_input),
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    result = ttnn.experimental.slice_write(
+        input_tensor,
+        output_tensor,
+        [0, 0, 0, 0],
+        list(shape),
+        [1, 1, 1, 1],
+    )
+    assert_equal(torch_input, ttnn.to_torch(result))
+
+
+def test_slice_write_strided_uneven_barrier_batches(device):
+    """Uneven core groups must fit both the input DFB and strided-row scratch."""
+    torch.manual_seed(2005)
+    torch_input = torch.randint(-8, 9, (1, 1, 8193, 16), dtype=torch.int32).to(torch.bfloat16)
+    expected = torch.zeros((1, 1, 8193, 32), dtype=torch.bfloat16)
+    expected[..., ::2] = torch_input
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.from_torch(
+        torch.zeros_like(expected),
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    result = ttnn.experimental.slice_write(
+        input_tensor,
+        output_tensor,
+        [0, 0, 0, 0],
+        [1, 1, 8193, 32],
+        [1, 1, 1, 2],
+    )
+    assert_equal(expected, ttnn.to_torch(result))
+
+
+def test_slice_write_rejects_rank_above_device_limit(device, expect_error):
+    shape = (1,) * 9
+    torch_tensor = torch.zeros(shape, dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(torch_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+    tt_out = ttnn.from_torch(torch_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+
+    with expect_error(RuntimeError, "slice_write supports tensors up to rank 8, but got rank 9"):
+        ttnn.experimental.slice_write(tt_in, tt_out, [0] * 9, [1] * 9, [1] * 9)

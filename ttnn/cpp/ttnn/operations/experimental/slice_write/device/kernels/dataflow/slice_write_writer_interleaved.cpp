@@ -2,96 +2,63 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
 #include <algorithm>
+#include <stdint.h>
+
 #include "api/dataflow/dataflow_api.h"
-#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/tensor_accessor.h"
+#include "slice_write_writer_common.hpp"
 
-void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t output_stick_size = get_arg_val<uint32_t>(1);
-    const uint32_t input_stick_size = get_arg_val<uint32_t>(2);
-    const uint32_t stick_size_offset = get_arg_val<uint32_t>(3);
-    const uint32_t num_dims = get_arg_val<uint32_t>(4);
-    const uint32_t start_id = get_arg_val<uint32_t>(5);
-    const uint32_t num_sticks_per_core = get_arg_val<uint32_t>(6);
-    const uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(7);
-    const uint32_t num_read_per_barrier = get_arg_val<uint32_t>(8);
-
-#ifdef UNPAD_INPUT_WIDTH
-    const uint32_t padding_width_ntiles = get_arg_val<uint32_t>(21);
-#endif
-
-#ifdef DEBUG
-    DPRINT("dst_addr: {}\n", dst_addr);
-    DPRINT("output_stick_size: {}\n", output_stick_size);
-    DPRINT("input_stick_size: {}\n", input_stick_size);
-    DPRINT("stick_size_offset: {}\n", stick_size_offset);
-    DPRINT("num_dims: {}\n", num_dims);
-    DPRINT("start_id: {}\n", start_id);
-    DPRINT("num_sticks_per_core: {}\n", num_sticks_per_core);
-    DPRINT("num_sticks_per_core_read: {}\n", num_sticks_per_core_read);
-    DPRINT("num_read_per_barrier: {}\n", num_read_per_barrier);
-#ifdef UNPAD_INPUT_WIDTH
-    DPRINT("padding_width_ntiles: {}\n", padding_width_ntiles);
-#endif
-
-#endif
-    tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
-    volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
-    volatile tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t page_offset = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
-
-    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
-    // program cache hits.
-    const auto s0 = TensorAccessor(dst_args, dst_addr, output_stick_size);
+template <uint32_t unpad_input_width>
+TT_KERNEL void writer(
+    uint32_t output_byte_offset,
+    uint32_t output_stick_size,
+    uint32_t input_stick_size,
+    uint32_t stick_size_offset,
+    uint32_t num_dims,
+    uint32_t start_id,
+    uint32_t num_sticks_per_core,
+    uint32_t num_sticks_per_core_read,
+    uint32_t num_read_per_barrier,
+    uint32_t padding_width_units) {
+    auto geometry = slice_write::load_geometry(num_dims);
+    const uint32_t output_base =
+        get_common_arg_val<uint32_t>(decltype(tensor::output)::addr_crta_offset / sizeof(uint32_t));
+    const auto output_accessor =
+        TensorAccessor(decltype(tensor::output)::args, output_base + output_byte_offset, output_stick_size);
     const uint32_t noc_write_size = std::min(output_stick_size, input_stick_size);
 
     Noc noc;
-    experimental::CB cb_out0(cb_id_out0);
+    DataflowBuffer input(dfb::input);
 
     uint32_t dst_stick_id = start_id;
     uint32_t sticks_read = 0;
-    for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_read < num_sticks_per_core; ++iter) {
-        cb_out0.wait_front(num_read_per_barrier);
+    for (uint32_t iter = 0; iter < num_sticks_per_core_read && sticks_read < num_sticks_per_core; ++iter) {
+        input.wait_front(num_read_per_barrier);
         uint32_t src_offset = 0;
 
-        for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
+        for (uint32_t i = 0; i < num_read_per_barrier && sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
-#ifdef UNPAD_INPUT_WIDTH
-            if ((id_per_dim[0] + padding_width_ntiles + 1) <= num_unpadded_sticks[0]) {
-                noc.async_write(cb_out0, s0, noc_write_size, {.offset_bytes = src_offset}, {.page_id = dst_stick_id});
+            if constexpr (unpad_input_width != 0) {
+                if ((geometry.id[0] + padding_width_units + 1) <= geometry.num_unpadded[0]) {
+                    noc.async_write(
+                        input,
+                        output_accessor,
+                        noc_write_size,
+                        {.offset_bytes = src_offset},
+                        {.page_id = dst_stick_id});
+                }
+            } else {
+                noc.async_write(
+                    input, output_accessor, noc_write_size, {.offset_bytes = src_offset}, {.page_id = dst_stick_id});
             }
-#else
-            noc.async_write(
-                cb_out0, s0, noc_write_size, {.offset_bytes = src_offset + page_offset}, {.page_id = dst_stick_id});
-#endif
-#ifdef DEBUG
-            DPRINT(
-                "SRC L1 : {} Dst Stick ID {} sticks_read: {} Coord {}, {}, {}, {}\n",
-                src_offset,
-                dst_stick_id,
-                sticks_read,
-                id_per_dim[0],
-                id_per_dim[1],
-                id_per_dim[2],
-                id_per_dim[3]);
-#endif
             src_offset += stick_size_offset;
             dst_stick_id++;
-            for (uint32_t j = 0; j < num_dims; j++) {
-                id_per_dim[j]++;
-                if (id_per_dim[j] == num_unpadded_sticks[j]) {
-                    id_per_dim[j] = 0;
-                    dst_stick_id += num_padded_sticks[j];
-                } else {
-                    break;
-                }
-            }
+            slice_write::advance(num_dims, geometry, dst_stick_id);
         }
         noc.async_write_barrier();
-        cb_out0.pop_front(num_read_per_barrier);
+        input.pop_front(num_read_per_barrier);
     }
 }

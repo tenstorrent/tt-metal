@@ -7,9 +7,13 @@
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
-using namespace tt::tt_metal;
-
 namespace ttnn::experimental::prim {
+
+using tt::tt_metal::Layout;
+
+namespace {
+constexpr uint32_t MAX_SUPPORTED_RANK = 8;
+}
 
 SliceWriteDeviceOperation::program_factory_t SliceWriteDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -44,6 +48,11 @@ void SliceWriteDeviceOperation::validate_on_program_cache_miss(
     const auto& output_tensor = tensor_args.output;
     const auto output_padded_shape = output_tensor.padded_shape();
 
+    TT_FATAL(
+        output_padded_shape.rank() <= MAX_SUPPORTED_RANK,
+        "slice_write supports tensors up to rank {}, but got rank {}",
+        MAX_SUPPORTED_RANK,
+        output_padded_shape.rank());
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to slice_write need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to slice_write need to be allocated in buffers on device!");
     TT_FATAL(
@@ -105,6 +114,15 @@ Tensor slice_write(
     const ttnn::Shape& slice_end,
     const ttnn::Shape& step) {
     using OperationType = ttnn::experimental::prim::SliceWriteDeviceOperation;
+
+    // The public operation currently filters empty slices before entering the prim. Keep the same no-op behavior for
+    // direct C++ prim callers: because no device program is needed, this deliberately returns before device-op
+    // validation and leaves the supplied output tensor untouched.
+    for (uint32_t i = 0; i < slice_start.rank(); ++i) {
+        if (slice_start[i] == slice_end[i]) {
+            return output_tensor;
+        }
+    }
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .slice_start = slice_start,
