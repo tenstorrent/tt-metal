@@ -167,7 +167,8 @@ struct DFBAdvancedOptions {
     // of its endpoint pair when the kernel on that node is guaranteed not to access the DFB.
     // This does not create an endpoint, storage copy, or synchronization; misuse is unsafe. It is
     // mutually exclusive with allow_instance_multi_binding: incomplete coverage still permits at
-    // most one producer and at most one consumer on each node.
+    // most one producer and at most one consumer on each node. Gen1 compatibility only: Gen2 DFB
+    // lowering requires a real producer and consumer endpoint on every instantiated node.
     bool allow_incomplete_endpoint_coverage = false;
 };
 

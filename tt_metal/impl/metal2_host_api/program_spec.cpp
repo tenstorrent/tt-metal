@@ -1274,6 +1274,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 "DFB '{}' sets allow_instance_multi_binding, which is only supported on Gen1 (WH/BH) "
                 "architectures. On Gen2 a DFB instance must have exactly one producer and one consumer.",
                 dfb.unique_id);
+            TT_FATAL(
+                !dfb.advanced_options.allow_incomplete_endpoint_coverage,
+                "DFB '{}' sets allow_incomplete_endpoint_coverage, which is only supported on Gen1 (WH/BH) "
+                "architectures. On Gen2 every DFB instance must have a real producer and consumer endpoint.",
+                dfb.unique_id);
         }
     }
 
@@ -1405,11 +1410,13 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         // Per-node census. Under allow_multi, the "exactly one" upper bound relaxes to "at least one"
         // on both sides. Under allow_incomplete, a node may omit one side for a runtime no-op kernel,
         // but it may not host multiple instances of either role.
+        bool has_incomplete_node = false;
         for (const NodeCoord& node : footprint) {
             auto p_it = producers_on_node.find(node);
             auto c_it = consumers_on_node.find(node);
             const size_t num_producers = p_it == producers_on_node.end() ? 0 : p_it->second.size();
             const size_t num_consumers = c_it == consumers_on_node.end() ? 0 : c_it->second.size();
+            has_incomplete_node |= num_producers == 0 || num_consumers == 0;
             const bool node_ok = allow_multi ? (num_producers >= 1 && num_consumers >= 1)
                                              : (allow_incomplete ? (num_producers <= 1 && num_consumers <= 1)
                                                                  : (num_producers == 1 && num_consumers == 1));
@@ -1443,6 +1450,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 names_at(consumers_on_node, node),
                 guidance);
         }
+        TT_FATAL(
+            !allow_incomplete || has_incomplete_node,
+            "DFB '{}' sets allow_incomplete_endpoint_coverage, but its producer and consumer coverage is "
+            "already complete on every node; remove the compatibility flag",
+            dfb.unique_id);
 
         // Find a self-loop participant: a kernel bound to this DFB as both producer and consumer.
         // Stays nullptr if the DFB is not self-looped. Iterating producers in vector order keeps the

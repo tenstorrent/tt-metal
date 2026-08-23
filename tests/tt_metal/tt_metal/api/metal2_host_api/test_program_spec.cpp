@@ -666,6 +666,15 @@ TEST_F(ProgramSpecTestQuasar, MultiBindingFlagOnGen2Fails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("only supported on Gen1")));
 }
 
+TEST_F(ProgramSpecTestQuasar, IncompleteEndpointCoverageFlagOnGen2Fails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.dataflow_buffers[0].advanced_options.allow_incomplete_endpoint_coverage = true;
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("only supported on Gen1")));
+}
+
 TEST_F(ProgramSpecTestQuasar, DFBProducerConsumerCoverageMismatchFails) {
     NodeCoord node0{0, 0};
     NodeCoord node1{1, 0};
@@ -3546,6 +3555,15 @@ TEST_F(ProgramSpecTestGen1, DFBIncompleteAndMultiBindingCompatibilityFlagsFailTo
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("cannot combine")));
+}
+
+TEST_F(ProgramSpecTestGen1, DFBIncompleteEndpointCoverageFlagRejectsCompleteTopology) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.dataflow_buffers[0].advanced_options.allow_incomplete_endpoint_coverage = true;
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("coverage is already complete")));
 }
 
 TEST_F(ProgramSpecTestGen1, DFBMultipleProducersOnSameNodeSucceedsWithFlag) {
