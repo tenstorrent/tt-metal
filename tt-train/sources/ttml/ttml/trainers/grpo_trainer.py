@@ -247,6 +247,15 @@ _BASE_COLUMNS = (
     "lr",
     "step_time_s",
     "generation_time_s",
+    # Per-stage decomposition of the ttml training side of a step, useful for
+    # locating training-time spikes. ``host_setup`` and ``old_lp`` run once per
+    # generation batch and are attributed to the first mini-epoch's step only
+    # (same convention as ``generation_time_s``); the rest run per mini-epoch.
+    "host_setup_time_s",
+    "old_lp_time_s",
+    "micro_forward_time_s",
+    "micro_backward_time_s",
+    "optimizer_step_time_s",
 )
 
 
@@ -960,6 +969,7 @@ class GRPOTrainer:
         ):
             num_batches += 1
 
+            host_setup_t0 = time.perf_counter()
             completions_strs = [tokenizer.decode(c, skip_special_tokens=True) for c in completions_batch]
             prompts_strs = [tokenizer.decode(p) for p in prompts_batch]
             rewards = dispatch_reward(self.reward_func, completions_strs, prompts_strs, dataset_columns_dict)
@@ -967,9 +977,11 @@ class GRPOTrainer:
 
             advantages_np = compute_advantages_host(rewards_np, grpo_cfg.num_generations)
             completion_lens = [len(c) for c in completions_batch]
+            host_setup_time_s = time.perf_counter() - host_setup_t0
 
             # Reference (old) log-probs for every micro-batch in the generation
             # batch, computed once and reused across mini-epochs.
+            old_lp_t0 = time.perf_counter()
             probs_old_list = []
             tt_model.eval()
             with no_grad():
@@ -978,10 +990,17 @@ class GRPOTrainer:
                     nlog_old.set_requires_grad(False)
                     mask.set_requires_grad(False)
                     probs_old_list.append((nlog_old, mask))
+            old_lp_time_s = time.perf_counter() - old_lp_t0
 
             for mini_epoch in range(grpo_cfg.num_iterations):
                 tt_model.train()
                 optimizer.zero_grad()
+
+                # Per-stage timings accumulated across the mini-epoch's
+                # ``grad_accum`` micro-batches; surfaced in the CSV so
+                # training-time spikes can be attributed to a specific stage.
+                micro_forward_time_s = 0.0
+                micro_backward_time_s = 0.0
 
                 # Accumulate gradients over all ``grad_accum`` micro-batches of
                 # the generation batch before taking a single optimizer step.
@@ -999,6 +1018,7 @@ class GRPOTrainer:
                     adv_ttml = ttml.autograd.create_tensor(adv_slice_val, requires_grad=False)
 
                     nlog_old, mask_old = probs_old_list[i]
+                    fwd_t0 = time.perf_counter()
                     nlog_probs_new, mask_new = completer.compute_nlog_probs(p, c)
 
                     # ``len(prompts_batch)`` is the global completion count of the
@@ -1014,9 +1034,12 @@ class GRPOTrainer:
                         grpo_cfg.epsilon,
                         ddp_world_size=grad_sync_world_size,
                     )
+                    micro_forward_time_s += time.perf_counter() - fwd_t0
 
+                    bwd_t0 = time.perf_counter()
                     loss.backward(retain_graph=False)
                     ttml.autograd.AutoContext.get_instance().reset_graph()
+                    micro_backward_time_s += time.perf_counter() - bwd_t0
 
                     _deallocate_tensors([nlog_probs_new, mask_new, adv_ttml, loss])
 
@@ -1049,12 +1072,18 @@ class GRPOTrainer:
                 self._callback_times = {}
                 for cb in self.callbacks:
                     self._time_callback(cb, "on_before_optimizer_step", self)
+                opt_t0 = time.perf_counter()
                 optimizer.step()
                 optimizer.zero_grad()
+                optimizer_step_time_s = time.perf_counter() - opt_t0
 
-                # Generation runs once per effective batch; attribute its cost to
-                # the first mini-epoch's step only.
+                # Generation runs once per effective batch; attribute its cost
+                # to the first mini-epoch's step only. Same convention for the
+                # host-setup and reference log-probs stages, which are computed
+                # once per generation batch above.
                 generation_time_s_for_step = generation_time_s if mini_epoch == 0 else 0.0
+                host_setup_time_s_for_step = host_setup_time_s if mini_epoch == 0 else 0.0
+                old_lp_time_s_for_step = old_lp_time_s if mini_epoch == 0 else 0.0
 
                 num_steps += 1
                 mean_reward = float(rewards_np.mean())
@@ -1088,6 +1117,11 @@ class GRPOTrainer:
                     "max_completion_len": max_completion_len,
                     "lr": base_lr * warmup_factor,
                     "generation_time_s": generation_time_s_for_step,
+                    "host_setup_time_s": host_setup_time_s_for_step,
+                    "old_lp_time_s": old_lp_time_s_for_step,
+                    "micro_forward_time_s": micro_forward_time_s,
+                    "micro_backward_time_s": micro_backward_time_s,
+                    "optimizer_step_time_s": optimizer_step_time_s,
                     **self._callback_times,
                 }
                 if grpo_cfg.log_completions and grpo_cfg.num_completions_to_print > 0:
