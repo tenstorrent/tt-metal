@@ -1480,7 +1480,42 @@ TEST_F(ProgramSpecTestQuasar, OptionalUnboundScratchpadForConstexprDiscardSuccee
         .accessor_name = "optional_scratch",
         .allow_unbound_for_constexpr_discard = true}};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    const auto& handles = program.impl().get_kernel_by_spec_name("dm_kernel")->scratchpad_binding_handles();
+    ASSERT_EQ(handles.size(), 1u);
+    EXPECT_EQ(handles[0].accessor_name, "optional_scratch");
+    EXPECT_EQ(handles[0].size_bytes, 0u);
+    EXPECT_EQ(handles[0].allocated_address, 0u);
+}
+
+TEST_F(ProgramSpecTestQuasar, OptionalScratchpadRejectsPresentSpec) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"unexpected_scratch"}, .size_per_node = 1024}};
+    spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"unexpected_scratch"},
+        .accessor_name = "optional_scratch",
+        .allow_unbound_for_constexpr_discard = true}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("optional bindings must be unbound")));
+}
+
+TEST_F(ProgramSpecTestQuasar, DuplicateOptionalUnboundScratchpadFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].scratchpad_bindings = {
+        KernelSpec::ScratchpadBinding{
+            .scratchpad_spec_name = ScratchpadSpecName{"compile_time_discarded"},
+            .accessor_name = "optional_a",
+            .allow_unbound_for_constexpr_discard = true},
+        KernelSpec::ScratchpadBinding{
+            .scratchpad_spec_name = ScratchpadSpecName{"compile_time_discarded"},
+            .accessor_name = "optional_b",
+            .allow_unbound_for_constexpr_discard = true}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("more than once")));
 }
 
 TEST_F(ProgramSpecTestQuasar, UnboundScratchpadFails) {
@@ -3216,6 +3251,20 @@ protected:
     std::shared_ptr<distributed::MeshDevice> mesh_device_;
     std::optional<ScopedSlowDispatchOverride> slow_dispatch_override_;
 };
+
+TEST_F(ProgramSpecTestGen1, OptionalUnboundScratchpadForConstexprDiscardEmitsZeroToken) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"compile_time_discarded"},
+        .accessor_name = "optional_scratch",
+        .allow_unbound_for_constexpr_discard = true}};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    const auto& handles = program.impl().get_kernel_by_spec_name("dm_kernel")->scratchpad_binding_handles();
+    ASSERT_EQ(handles.size(), 1u);
+    EXPECT_EQ(handles[0].size_bytes, 0u);
+    EXPECT_EQ(handles[0].allocated_address, 0u);
+}
 
 // Gen1 counterpart of the compute-config translation-stability tests (the Gen2 pair lives in the
 // Quasar suite): a default ComputeGen1Config{} must yield the historical internal ComputeConfig

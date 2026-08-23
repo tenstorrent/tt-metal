@@ -488,9 +488,12 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 "Kernel '{}' references unknown scratchpad '{}'",
                 kernel.unique_id,
                 binding.scratchpad_spec_name);
-            if (!has_scratchpad) {
-                continue;
-            }
+            TT_FATAL(
+                !(has_scratchpad && binding.allow_unbound_for_constexpr_discard),
+                "Kernel '{}' marks scratchpad '{}' as optional for constexpr discard, but that ScratchpadSpec is "
+                "present; optional bindings must be unbound so accidental L1 allocation is diagnosed",
+                kernel.unique_id,
+                binding.scratchpad_spec_name);
             // A kernel may bind a given scratchpad at most once. Two bindings would request two
             // separate per-node allocations of the same spec under one kernel — muddy semantics, and
             // a node-level violation of "one binding instance per node". This is structural (no node
@@ -503,6 +506,9 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 kernel.unique_id,
                 binding.scratchpad_spec_name,
                 binding.accessor_name);
+            if (!has_scratchpad) {
+                continue;
+            }
             collected.scratchpad_binders[binding.scratchpad_spec_name].push_back(&kernel);
         }
     }
