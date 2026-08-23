@@ -49,6 +49,27 @@ implementations had the same class of gap.
    inherits a default hash. Confirm the default is specific enough for this
    op's actual configuration space before assuming it's fine.
 
+6. **Hashing a buffer address** — the inverse mistake: *including* a field that
+   must not be in the key. Folding `buffer()->address()` into the hash puts the
+   allocation itself into the cache key, so every reallocation produces a new
+   entry: unbounded cache growth, a fresh compile on essentially every call, and
+   the cache stops functioning as a cache. An address is never a structural
+   property. If a hash is reaching for one, the thing actually needed is a
+   per-dispatch refresh (a `BufferBinding`, or a re-apply in
+   `override_runtime_arguments`), not a key field.
+
+7. **`ProgramDescriptor::custom_program_hash` misuse**: this replaces the
+   descriptor's *structural* hash outright. It is **not** the op's
+   `compute_program_hash`, and setting it discards the structural keying the
+   framework would otherwise derive. You almost never want it — treat any new
+   use as needing explicit justification.
+
+8. **Excluding shape while the program bakes a per-core work distribution**: a
+   hash that omits shape or volume lets one cached program be shared across
+   different work splits, so per-core tile counts baked at the first miss are
+   wrong for later calls. Excluding a field is only safe if it is also
+   re-applied per dispatch — there is no third category.
+
 ## Bad Code Examples
 
 ```cpp
@@ -79,6 +100,26 @@ size_t compute_program_hash() const {
 size_t compute_program_hash() const {
     return tt::stl::hash::hash_objects_with_default_seed(output_shape);
 }
+```
+
+```cpp
+// BUG: hashing a buffer address puts the allocation in the cache key. Every
+// reallocation is a brand-new entry, so the cache grows without bound and
+// recompiles on essentially every call. The address needed a per-dispatch
+// refresh (a BufferBinding), not a key field.
+size_t compute_program_hash() const {
+    return tt::stl::hash::hash_objects_with_default_seed(
+        input_tensor.padded_shape(),
+        input_tensor.buffer()->address());
+}
+```
+
+```cpp
+// BUG: custom_program_hash replaces the descriptor's STRUCTURAL hash. This
+// is not compute_program_hash — setting it here throws away the framework's
+// structural keying and silently narrows the key to one attribute.
+ProgramDescriptor desc = build_descriptor(...);
+desc.custom_program_hash = tt::stl::hash::hash_objects_with_default_seed(attrs.mode);
 ```
 
 ## Good Code Examples
@@ -112,5 +153,31 @@ size_t compute_program_hash() const {
         input_tensor_b.padded_shape(),
         broadcast_alignment_a,
         broadcast_alignment_b);
+}
+```
+
+```cpp
+// GOOD: only structural properties are hashed. The buffer address is handled
+// as a per-dispatch binding instead of a key field, so the cache stays small
+// and the address is refreshed on every hit.
+size_t compute_program_hash() const {
+    return tt::stl::hash::hash_objects_with_default_seed(
+        input_tensor.padded_shape(),
+        input_tensor.dtype(),
+        input_tensor.memory_config());
+}
+
+// ... and in the factory:
+kernel.emplace_runtime_args(core, {input_tensor.buffer(), num_tiles});
+```
+
+```cpp
+// GOOD: the shape the work split is derived from is part of the key, so a
+// different split is a cache miss rather than a silently-reused program.
+size_t compute_program_hash() const {
+    return tt::stl::hash::hash_objects_with_default_seed(
+        operation_attributes.mode,
+        input_tensor.padded_shape(),
+        input_tensor.memory_config());
 }
 ```
