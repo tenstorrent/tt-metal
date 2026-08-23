@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-08-22",
+  "last_scan_date": "2026-08-24",
   "scanned_run_ids": [
     "30387358745",
     "30493606319",
@@ -24,7 +24,8 @@
     31596449343,
     "32028413134",
     "32053638633",
-    32101971921
+    32101971921,
+    32613186861
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -46,7 +47,8 @@
     "runtime-integration-tests.yaml",
     "models-t2-unit-tests.yaml",
     "t3000-perf-tests.yaml",
-    "single-card-ttnn-models-frequent-tests"
+    "single-card-ttnn-models-frequent-tests",
+    "models-t1-e2e-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -166,7 +168,14 @@
       "workflow": "single-card-ttnn-models-frequent-tests",
       "note": "Validation run 32185496888 (single-card-ttnn-models-frequent-tests, bge_m3) completed/success but test-execution jobs (matrix.test-group.name, aggregate-ops-recording) were skipped -- no conv2d test actually ran. Classified inconclusive, /codeowners ping comment posted, PR marked ready for review (2026-08-19). Re-dispatch needed on a run that actually exercises conv2d-containing model end-to-end.",
       "number": 53585
+    },
+    {
+      "pr": null,
+      "branch": "silencer/demote-rotary-embedding-seqlen-mismatch-warning-v2",
+      "pattern": "rotary_embedding_llama sequence tile coverage mismatch",
+      "status": "pr-just-opened-dispatch-requested",
+      "notes": "Re-application of #52592, which was closed without merging (fix never landed). Warning reconfirmed still firing in models-t1-e2e-tests run 32613186861 jobs 97130138239/97130138280. Demoted log_warning->log_debug in rotary_embedding_llama_multi_core_program_factory.cpp decode path. Dispatched models-t1-e2e-tests (model=llama3.1-8b) for validation."
     }
   ],
-  "backlog_cursor": "continue backlog: models-t1-e2e-tests, models-t3-*, tt-metal-l2-nightly, perf-device-models, runtime-perf-tests, runtime-sanity-tests, pipeline-select-profiler (single-card-* sampled this run)"
+  "backlog_cursor": "models-t1-e2e-tests.yaml scanned (run 32613186861); next: continue rotation to next untracked workflow"
 }
