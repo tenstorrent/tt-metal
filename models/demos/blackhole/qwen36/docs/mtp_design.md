@@ -302,3 +302,54 @@ pattern, so a batched repro would confirm it.
   the text demo (reachable from every test id — spec ignores `use_trace`; the
   `spec_128` / `spec_2k` / `paged_128` ids are the probe entry points, and
   `QWEN36_PROMPT_FILE` overrides the prompt distribution).
+
+## vLLM wrapper integration — DESIGN (no code yet; user-directed)
+
+Survey verdict (this tree ships wrappers only; the fork is an installed
+package): **no spec-decode hooks exist anywhere in the TT vLLM surface.** No
+`supports_speculative_*` capability flag, no proposer/draft/`num_lookahead`
+reference in any wrapper (`models/tt_transformers/tt/generator.py`, gemma4,
+deepseek_v3, llama3_70b_galaxy, qwen36). gemma4's `spec_decode.py` has zero
+linkage to its wrapper — no prior art. The `decode_forward` contract is
+strictly one token per slot per step: host sampling returns `[B, 1, vocab]`
+logits, device sampling a flat `[B]` id tensor; there is no multi-token
+return shape. The fused decoder meanwhile owns its own loop
+(`generate()` + `SpecSlot` bookkeeping + `_first_verify` /
+`_align_anchor_to_head` arming) — it has no `step()`-shaped entry a per-step
+`decode_forward` could drive. That is the fundamental mismatch.
+
+**Decision point (surfaced, not solved here):** three reconciliations exist.
+
+- **A — fork-side propose/verify API** (upstream-vLLM-style speculative
+  scheduling: the scheduler owns K+1 slots and drives draft + verify calls).
+  Cleanest long-term; requires `tt_model_runner` changes in the fork plus a
+  new capability flag; largest cross-repo scope and timeline risk.
+- **B — model-internal loop behind a token queue** (zero fork changes): the
+  wrapper runs one fused iteration whenever a user's queue drains and feeds
+  vLLM one queued id per `decode_forward` call. Greedy-only (tokens are
+  committed inside the model), vLLM's `start_pos` lags the model's true
+  positions between iterations, and `slot_remap` must condense the queue,
+  `SpecSlot`s, drafter KV rows, and GDN stash rows together. Demo-grade
+  serving, not general.
+- **C — multi-token return contract**: the fork's runner accepts
+  `[B, <=K+1]` ids + per-user counts from `decode_forward`. Keeps the
+  model-internal loop, much smaller fork delta than A; still a fork change.
+
+Recommendation: ask for C (it matches how the fused loop actually commits);
+build B only if fork changes are off the table for this cycle.
+
+Binding contract details for any option:
+
+- Static K: c8 ⇒ K=3 (verify width B·(K+1) ≤ 32 tile rows — the production
+  width-32 decode bucket). Decode bucketing must be disabled on the spec path
+  (the fused verify IS the width-32 bucket); smaller active batches pad with
+  idempotent replay rows or fall back to plain decode.
+- Slot lifecycle: `prefill_forward(empty_slots)` arms a `SpecSlot` per vLLM
+  slot; the first decode call runs `_first_verify` + anchor alignment;
+  `slot_remap` (global indices, DP-rebased, bucketing force-disabled when
+  set) must remap GDN live state (`_remap_gdn_slots`, exists), drafter KV
+  page-table rows, per-layer stash rows, and `SpecSlot`/queue state in one
+  transaction.
+- Sampling: the verify already computes per-row argmax scores; non-greedy
+  (rejection-sampling acceptance) is future work — under B this pins
+  greedy-only serving.
