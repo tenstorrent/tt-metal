@@ -73,6 +73,8 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
         ]
         self._conv_win = [None] * len(self._dns)
         self._vio = None  # persistent verify I/O (built at the first fused verify)
+        self._win_buf = [None] * len(self._dns)  # traced mode: persistent conv windows
+        self._last_accepts = [0] * self.B  # traced mode: the commit, uploaded as data
         # Constant window-select one-hot: rows t*(K-1)+j pick x_padded row t+1+j —
         # the conv shift register ending at candidate t (x_padded = [carry | qkv rows]).
         conv_k = self._dns[0].K
@@ -123,16 +125,29 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
         qkv_rm = ttnn.untilize(qkv, use_multicore=True)
         ttnn.deallocate(qkv)
         qkv_rm = ttnn.reshape(qkv_rm, (self.B, self.W, D))
-        carry_rm = ttnn.untilize(dn._batched_conv_carry, use_multicore=True)
+        if self._use_trace:
+            # Commit-as-pure-data: the carry is the accepted window of the
+            # PREVIOUS verify, selected by the uploaded one-hot (read strictly
+            # before this layer's window write below).
+            carry = ttnn.matmul(self._vio["sel"], self._win_buf[li])  # [B, K-1, D]
+            carry_rm = ttnn.untilize(carry, use_multicore=True)
+            ttnn.deallocate(carry)
+        else:
+            carry_rm = ttnn.untilize(dn._batched_conv_carry, use_multicore=True)
         xp_rm = ttnn.concat([carry_rm, qkv_rm], dim=1)  # [B, K-1+W, D]
         ttnn.deallocate(carry_rm)
         ttnn.deallocate(qkv_rm)
         xp = ttnn.to_layout(xp_rm, ttnn.TILE_LAYOUT)
         # Conv-window stash: shift-register contents after every candidate row
-        # (the commit-by-select source for _batched_conv_carry).
+        # (next iteration's carry source in traced mode; the eager commit-by-
+        # select source otherwise).
         win = ttnn.matmul(self._win_sel, xp)  # [B, W*(K-1), D]
         ttnn.deallocate(xp)
-        wins[li] = win
+        if self._use_trace:
+            ttnn.copy(win, self._win_buf[li])
+            ttnn.deallocate(win)
+        else:
+            wins[li] = win
         # Depthwise causal FIR + SiLU inlined over the SAME window tensor:
         # out = silu(sum_k xp[:, k:k+W] * tap_k). RM slices keep every step a
         # plain device op.
@@ -166,6 +181,9 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
             dv=self._dv,
             users=self.B,
             w=self.W,
+            # Traced mode anchors on stash row u*W + acc[u] (the previous
+            # verify's accepted row) — rec_state drops out of the loop.
+            accepts=self._vio["acc"] if self._use_trace else None,
         )
         ttnn.deallocate(conv_flat)
         ttnn.deallocate(conv_rm)
@@ -213,6 +231,20 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
             "gated": dev(torch.zeros(1, R, self._nv * self._dv, dtype=torch.float32), ttnn.float32, tile),
             "trace": None,  # {"id", "xn", "idx", "val"} once captured
         }
+        if self._use_trace:
+            # Commit-as-pure-data inputs: the accepted-row index per user (the
+            # recurrence reader anchors on stash row u*W + acc[u]) and the
+            # matching conv-window select one-hot. Uploaded, never recreated.
+            conv_k = self._conv_k
+            dw = self._dns[0].qkv_dim_tp
+            self._vio["acc"] = dev(torch.zeros(1, max(self.B, 8), dtype=torch.int32), ttnn.int32, rm)
+            self._vio["sel"] = dev(
+                torch.zeros(self.B, conv_k - 1, self.W * (conv_k - 1), dtype=torch.float32), ttnn.bfloat16, tile
+            )
+            self._win_buf = [
+                dev(torch.zeros(self.B, self.W * (conv_k - 1), dw, dtype=torch.float32), ttnn.bfloat16, tile)
+                for _ in self._dns
+            ]
 
     def _verify_upload(self, drafts):
         """Stage this iteration's verify inputs into the persistent buffers
@@ -240,6 +272,17 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
         for t in range(self.W):
             m = [p if (i % self.W) == t else -1 for i, p in enumerate(poss)]
             stage.append((torch.tensor(m, dtype=torch.int32), ttnn.int32, rm, self._vio["upd"][t]))
+        if self._use_trace:
+            # The commit, as data: last iteration's accepted row per user.
+            conv_k = self._conv_k
+            acc = torch.zeros(1, self._vio["acc"].shape[-1], dtype=torch.int32)
+            sel = torch.zeros(self.B, conv_k - 1, self.W * (conv_k - 1), dtype=torch.float32)
+            for u, mm in enumerate(self._last_accepts):
+                acc[0, u] = mm
+                for j in range(conv_k - 1):
+                    sel[u, j, mm * (conv_k - 1) + j] = 1.0
+            stage.append((acc, ttnn.int32, rm, self._vio["acc"]))
+            stage.append((sel.to(torch.bfloat16), ttnn.bfloat16, tile, self._vio["sel"]))
         for host_t, dtype, layout, dst in stage:
             src = ttnn.from_torch(host_t, dtype=dtype, layout=layout, **mk)
             ttnn.copy_host_to_device_tensor(src, dst)
@@ -310,6 +353,8 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
 
     def _swap_conv_wins(self, wins):
         for li, win in enumerate(wins):
+            if win is None:  # traced mode: the window lives in _win_buf instead
+                continue
             if self._conv_win[li] is not None and self._conv_win[li] is not win:
                 ttnn.deallocate(self._conv_win[li])
             self._conv_win[li] = win
@@ -389,30 +434,34 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
                 cw = ttnn.slice(self._conv_win[li], (u, w0, 0), (u + 1, w0 + conv_k - 1, dn.qkv_dim_tp))
                 dn._write_index(dn._batched_conv_carry, cw, u, dim=0)
 
-    # ── traced-drafter setup ─────────────────────────────────────────────────
-    def _warm_commit_programs(self):
-        """Dry-compile every m-variant of the commit-select slices. Accepted m
-        values differ across iterations, and a fresh slice offset must never
-        compile after the drafter traces are parked (post-park compiles clobber
-        parked traces). Non-mutating: slice + deallocate only."""
+    # ── traced setup ─────────────────────────────────────────────────────────
+    def _seed_select_state(self):
+        """One-time pre-loop seeding for commit-as-pure-data (traced mode):
+        place every user's post-prefill anchor where accepts=0 selects it —
+        stash row u*W <- rec_state[u], win_buf leading rows <- the conv carry.
+        Eager and BEFORE any capture, so its allocations are safe."""
+        self._ensure_verify_io()
         conv_k = self._conv_k
-        dn = self._dns[0]
-        for u in range(self.B):
-            for m in range(self.W):
-                r = u * self.W + m
-                row = ttnn.slice(self._stash[0], (r, 0, 0, 0), (r + 1, self._nv, self._dk, self._dv))
-                ttnn.deallocate(row)
-                w0 = m * (conv_k - 1)
-                cw = ttnn.slice(self._conv_win[0], (u, w0, 0), (u + 1, w0 + conv_k - 1, dn.qkv_dim_tp))
-                ttnn.deallocate(cw)
+        for li, dn in enumerate(self._dns):
+            for u in range(self.B):
+                row = ttnn.slice(dn.rec_state, (u, 0, 0, 0), (u + 1, self._nv, self._dk, self._dv))
+                dn._write_index(self._stash[li], row, u * self.W, dim=0)
+            tail = ttnn.slice(self._win_buf[li], (0, conv_k - 1, 0), (self.B, self.W * (conv_k - 1), dn.qkv_dim_tp))
+            seeded = ttnn.concat([dn._batched_conv_carry, tail], dim=1)
+            ttnn.deallocate(tail)
+            ttnn.copy(seeded, self._win_buf[li])
+            ttnn.deallocate(seeded)
+        self._last_accepts = [0] * self.B
 
     def _setup_drafter_traces(self):
         """Compile + capture the batched drafter windows, then the verify trace,
-        AFTER one full eager iteration: every fused-verify and commit-select
-        program must already exist when the first trace parks (all compiles
-        strictly before all captures). The drafter capture-time KV writes land
-        at each user's head position and are rewritten by the next window's
-        real legs before anything attends to them."""
+        AFTER one full eager iteration: every fused-verify program must already
+        exist when the first trace parks (all compiles strictly before all
+        captures). Capture records without executing (dispatch runs in bypass
+        mode), so the capture passes leave KV and select-state untouched. From
+        here the loop is allocation-free: uploads into persistent buffers,
+        replays, and readbacks only — 55287 showed ANY fresh L1 allocation
+        while traces are parked can land under a parked trace's CB region."""
         K = self.draft_len
         w_max = (K + 2) + K - 1  # steady-state legs: pendings (<= K+1, +1 slack) + chain
         self.mtp.ensure_batched_window(w_max, self.B)
@@ -420,13 +469,9 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
             [torch.full((w_max,), int(self._sched_pending(slot)[-1][2]), dtype=torch.int32) for slot in self.slots]
         )
         self.mtp.stage_batched_window(setup_pos)
-        self._warm_commit_programs()
         self.mtp.compile_batched_window()
         self.mtp.capture_batched_window()
-        # TT_SPEC_VERIFY_TRACE=0: drafter-only tracing (verify stays eager) —
-        # the silicon bisection lever if the verify capture misbehaves.
-        if os.environ.get("TT_SPEC_VERIFY_TRACE", "1") == "1":
-            self._capture_verify_trace()
+        self._capture_verify_trace()
 
     # ── the loop ─────────────────────────────────────────────────────────────
     def _align_anchor_to_head(self):
@@ -482,6 +527,8 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
         # then align every anchor to its committed head for the fused invariant.
         self._first_verify()
         self._align_anchor_to_head()
+        if self._use_trace:
+            self._seed_select_state()
         traced_armed = False
         first_iter_done = False
 
@@ -526,7 +573,13 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
                     if len(slot.out) >= max_new_tokens:
                         break
                 slot.a = len(slot.committed) - 1  # fused invariant: anchor == head
-            self._commit_select(accepts)
+            if self._use_trace:
+                # The commit IS data: the next verify anchors on stash row
+                # u*W + m and carry-selects the matching window (uploaded in
+                # _verify_upload). A finished user's selection is dead state.
+                self._last_accepts = [m if m is not None else 0 for m in accepts]
+            else:
+                self._commit_select(accepts)
             self._timing["commit"] += time.perf_counter() - t0
             first_iter_done = True
             if os.environ.get("TT_SPEC_TIMING", "0") == "1":

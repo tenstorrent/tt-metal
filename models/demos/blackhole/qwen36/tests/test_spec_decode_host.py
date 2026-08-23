@@ -497,11 +497,12 @@ def _make_fake_fused_spec(draft_len, prompt_lens, monkeypatch, use_trace=False):
             self._use_trace = use_trace
             self.W = draft_len + 1
             self.commit_rows = []  # (iteration, [m_u])
-            self.warm_ran_before_capture = None
+            self._last_accepts = [0] * B
             self.verify_captured_after_drafter = None
+            self.seeded_select = False
 
-        def _warm_commit_programs(self):  # device slices; here only the order matters
-            self.warm_ran_before_capture = not getattr(self.mtp, "captured", True)
+        def _seed_select_state(self):  # device seeding; here only the ordering matters
+            self.seeded_select = True
 
         def _capture_verify_trace(self):  # device capture; here only the order matters
             self.verify_captured_after_drafter = getattr(self.mtp, "captured", False)
@@ -655,9 +656,11 @@ def test_fused_traced_drafter_matches_eager(monkeypatch):
             assert len(row) >= 50
         outs[use_trace] = (rows, [list(s.accepts) for s in spec.slots], [list(s.k_used) for s in spec.slots])
         if use_trace:
-            assert spec.warm_ran_before_capture, "commit-select programs must warm before the traces park"
+            assert spec.seeded_select, "traced mode must seed the select-state before the loop"
             assert mtp.captured
             assert spec.verify_captured_after_drafter, "verify trace must capture after the drafter captures"
+            # The commit rode as data: upload indices always stayed in-range.
+            assert all(0 <= m <= spec.draft_len for m in spec._last_accepts)
             # One setup staging + one per traced iteration (iteration 1 is eager).
             iters = max(len(s.accepts) for s in spec.slots)
             assert mtp.stage_count == iters, f"{mtp.stage_count} stagings for {iters} iterations"
