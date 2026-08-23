@@ -289,7 +289,7 @@ ttnn::device_operation::ProgramArtifacts GridSampleBilinearProgramFactory::creat
         if (enable_split_reader) {
             source =
                 "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/"
-                "pool_2d_bilinear_split_metal2.cpp";
+                "pool_2d_bilinear_split.cpp";
             bindings = {
                 ConsumerOf(INPUT0, "input0"),
                 ConsumerOf(INPUT1, "input1"),
@@ -297,7 +297,7 @@ ttnn::device_operation::ProgramArtifacts GridSampleBilinearProgramFactory::creat
                 ConsumerOf(SCALAR1, "scalar1"),
             };
         } else {
-            source = "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/pool_2d_bilinear_metal2.cpp";
+            source = "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/pool_2d_bilinear.cpp";
             bindings = {ConsumerOf(INPUT0, "input"), ConsumerOf(SCALAR0, "scalar")};
         }
         bindings.push_back(ProducerOf(OUTPUT_DFB, "output"));
@@ -344,7 +344,7 @@ ttnn::device_operation::ProgramArtifacts GridSampleBilinearProgramFactory::creat
             .unique_id = WRITER,
             .source =
                 "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/"
-                "writer_pool_stick_interleaved_metal2.cpp",
+                "writer_pool_stick_interleaved.cpp",
             .dfb_bindings = {ConsumerOf(OUTPUT_DFB, "output")},
             .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
             .compile_time_args =

@@ -481,7 +481,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceTileProgramFactory::create_p
         .unique_id = TILE_COMPUTE,
         .source =
             "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/compute/"
-            "pack_untilize_metal2.cpp",
+            "pack_untilize.cpp",
         // Legacy ComputeConfig defaults to O3; Metal 2.0 CompilerOptions defaults to O2.
         .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings = {ConsumerOf(TILE_INPUT_DFB, "input"), ProducerOf(TILE_UNTILIZED_DFB, "untilized")},

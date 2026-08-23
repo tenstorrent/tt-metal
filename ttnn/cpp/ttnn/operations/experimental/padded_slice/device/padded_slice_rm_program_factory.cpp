@@ -331,7 +331,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
                       ? "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"
                         "writer_unary_sharded_padded_rm.cpp"
                       : "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"
-                        "writer_unary_sharded_metal2.cpp",
+                        "writer_unary_sharded.cpp",
         .dfb_bindings = {ConsumerOf(OUTPUT_DFB, "output")},
         .runtime_arg_schema =
             {.runtime_arg_names = pad_output_row
