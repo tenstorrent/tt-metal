@@ -1447,7 +1447,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     std::vector<tt::tt_metal::experimental::DFBBinding> reader_dfb_bindings;
     std::vector<tt::tt_metal::experimental::TensorBinding> reader_tensor_bindings;
     std::vector<tt::tt_metal::experimental::SemaphoreBinding> reader_sem_bindings;
-    if (create_writer_mcast_receiver && block_sharded) {
+    if (block_sharded) {
         // 2D reader: produces ACT_ROW_MAJOR + ACT (mcast), consumes ACT_TILIZED (mcast source); self-loops
         // borrowed ACT_SHARDED + READER_INDICES; uses act mcast semaphores.
         reader_dfb_bindings = {
@@ -1914,7 +1914,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                 .accessor_name = "weights_mcast_receiver"},
         };
     }
-    if (block_sharded) {
+    if (create_writer_mcast_receiver && block_sharded) {
         writer_receiver_spec.semaphore_bindings.push_back(tt::tt_metal::experimental::SemaphoreBinding{
             .semaphore_spec_name = conv2d_sharded_act_split_reserve_done_semaphore,
             .accessor_name = "act_split_reserve_done"});
