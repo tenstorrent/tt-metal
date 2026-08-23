@@ -259,14 +259,11 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     // this reader). reader0 produces in_cb; reader1 produces out_cb/out_idx_cb and consumes
     // pack_tmp_cb/pack_idx_tmp_cb. The function is template-instantiated per reader, but the
     // preprocessor can't see the reader_id template arg, so the gate uses the READER_ID define.
-#if READER_ID == 0
     DataflowBuffer in_cb(in_cb_id);
-#else
     DataflowBuffer out_cb(out_cb_id);
     DataflowBuffer out_idx_cb(out_idx_cb_id);
     DataflowBuffer pack_tmp_cb(pack_tmp_cb_id);
     DataflowBuffer pack_idx_tmp_cb(pack_idx_tmp_cb_id);
-#endif
     Noc noc;
     UnicastEndpoint self_ep;
 
@@ -281,23 +278,20 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
         // Reader-role gating is via the READER_ID *define* (not the reader_id template arg): in_cb /
         // out_cb / pack_* are now declared only in their owning reader's build, so the discarded
         // branch of an `if constexpr (reader_id == ...)` would name-look-up an undeclared object.
-#if READER_ID == 0
-        in_cb.reserve_back(1);
-        // page zeroing is only necessary for tiled block output format so that scale is not affected by
-        // junk/padding data
-        if constexpr (zero_pages) {
-            if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
-                zero_out_page(noc, in_cb);
+        if constexpr (reader_id == 0) {
+            in_cb.reserve_back(1);
+            // page zeroing is only necessary for tiled block output format so that scale is not affected by
+            // junk/padding data
+            if constexpr (zero_pages) {
+                if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
+                    zero_out_page(noc, in_cb);
+                }
             }
         }
-#else
-        (void)write_offset;
-#endif
         for (uint32_t h = 0; h < kernel_h; ++h) {
             auto process_h = [&](uint32_t w, uint32_t w_multiple) __attribute__((always_inline)) {
                 uint32_t w_offset = w * dilation_w;
-#if READER_ID == 0
-                {
+                if constexpr (reader_id == 0) {
                     const uint32_t stick_offset = ind + w_offset + h * dilation_h * in_w_padded;
                     const uint32_t read_offset =
                         in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
@@ -309,24 +303,18 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                         {.offset_bytes = write_offset});
                     write_offset += max_write_inc * w_multiple;
                 }
-#else
-                (void)w_offset;
-#endif
                 bool kernel_complete = h == kernel_h - 1 && w == kernel_w - 1;
                 bool push_chunk =
                     kernel_complete || (is_large_kernel && ((w + 1) % sticks_per_chunk == 0 || w == (kernel_w - 1)));
                 if (push_chunk) {
-#if READER_ID == 0  // push a chunk
-                    {
+                    if constexpr (reader_id == 0) {
                         noc.async_read_barrier();
                         in_cb.push_back(1);
                         if (!kernel_complete) {
                             in_cb.reserve_back(1);
                             write_offset = 0;
                         }
-                    }
-#else
-                    {
+                    } else {
                         if (kernel_complete) {  // write output once all chunks are done
                             // Mirror compute_pool_2d.cpp: pack 1 face for "single partial tile
                             // fits in one face" or "last tile has exactly FACE_WIDTH valid".
@@ -366,7 +354,6 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                             out_idx_cb.push_back(output_faces);
                         }
                     }
-#endif
                 }
             };
 
@@ -430,14 +417,9 @@ TT_KERNEL void reader_mpwi(uint32_t core_nhw_index, uint32_t start_row, uint32_t
     // Shared (both readers reference): in_shard_cb (input-shard base read), reader_indices_cb
     //   (reader0 produces in DRAM path / reader1 wait_fronts). For tokens this reader does not
     //   drive we keep the alias as a harmless 0 so call-site template arguments still resolve.
-#if READER_ID == 0
     constexpr uint32_t in_cb_id = dfb::in_cb;
     constexpr uint32_t in_scalar_cb_id_0 = dfb::in_scalar_cb;
     constexpr uint32_t clear_value_cb_id = dfb::clear_value_cb;
-#else
-    constexpr uint32_t in_cb_id = 0;
-    constexpr uint32_t clear_value_cb_id = 0;
-#endif
     constexpr uint32_t in_shard_cb_id = dfb::in_shard_cb;
     constexpr uint32_t in_reader_indices_cb_id = dfb::reader_indices_cb;
     // MPWI is max-pool-only with one scalar per core, but the common reader schema still
@@ -445,34 +427,16 @@ TT_KERNEL void reader_mpwi(uint32_t core_nhw_index, uint32_t start_row, uint32_t
     // MPWI-specific args start here. CB-id tokens are role-gated (see READER_ID note above):
     // the index/increment CBs are reader0-driven (consumed by COMPUTE); the output/pack CBs are
     // reader1-driven. Non-driven tokens alias to 0 so call-site template args resolve.
-#if READER_ID == 0
     constexpr uint32_t in_idx_cb_id = dfb::in_idx_cb;
     constexpr uint32_t right_inc_cb_id = dfb::right_inc_cb;
     constexpr uint32_t down_left_wrap_inc_cb_id = dfb::down_left_wrap_inc_cb;
     constexpr uint32_t up_left_wrap_inc_cb_id = dfb::up_left_wrap_inc_cb;
-#ifdef LARGE_KERNEL
     constexpr uint32_t intra_kernel_right_inc_cb_id = dfb::intra_kernel_right_inc_cb;
     constexpr uint32_t intra_kernel_down_left_wrap_inc_cb_id = dfb::intra_kernel_down_left_wrap_inc_cb;
-#else
-    constexpr uint32_t intra_kernel_right_inc_cb_id = 0;
-    constexpr uint32_t intra_kernel_down_left_wrap_inc_cb_id = 0;
-#endif
-    constexpr uint32_t out_cb_id = 0;
-    constexpr uint32_t out_idx_cb_id = 0;
-    constexpr uint32_t pack_tmp_cb_id = 0;
-    constexpr uint32_t pack_idx_tmp_cb_id = 0;
-#else
-    constexpr uint32_t in_idx_cb_id = 0;
-    constexpr uint32_t right_inc_cb_id = 0;
-    constexpr uint32_t down_left_wrap_inc_cb_id = 0;
-    constexpr uint32_t up_left_wrap_inc_cb_id = 0;
-    constexpr uint32_t intra_kernel_right_inc_cb_id = 0;
-    constexpr uint32_t intra_kernel_down_left_wrap_inc_cb_id = 0;
     constexpr uint32_t out_cb_id = dfb::out_cb;
     constexpr uint32_t out_idx_cb_id = dfb::out_idx_cb;
     constexpr uint32_t pack_tmp_cb_id = dfb::pack_tmp_cb;
     constexpr uint32_t pack_idx_tmp_cb_id = dfb::pack_idx_tmp_cb;
-#endif
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
     constexpr uint32_t window_size_hw = kernel_h * kernel_w;
@@ -484,15 +448,11 @@ TT_KERNEL void reader_mpwi(uint32_t core_nhw_index, uint32_t start_row, uint32_t
     // fill the clear cb. Gated by READER_ID (not `if constexpr (reader_id == 0)`) because these
     // blocks reference reader0-only dfb:: tokens (clear_value_cb, in_cb, in_idx_cb, *_inc_cb,
     // in_scalar_cb) that are not declared in reader1's build.
-#if READER_ID == 0
-    {
+    if constexpr (reader_id == 0) {
         DataflowBuffer clear_value_cb(clear_value_cb_id);
         fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
         clear_value_cb.push_back(1);
         clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), DataflowBuffer(in_cb_id), clear_value_cb);
-    }
-
-    {
         initialize_return_indices_data<
             kernel_h,
             kernel_w,
@@ -516,10 +476,8 @@ TT_KERNEL void reader_mpwi(uint32_t core_nhw_index, uint32_t start_row, uint32_t
             intra_kernel_right_inc_cb_id,
             intra_kernel_down_left_wrap_inc_cb_id,
             indexes_32_bit>(start_row, start_col);
-    }
 
-    // initialize the scalar CB (reader0-only: in_scalar_cb is reader0-driven in MPWI).
-    {
+        // initialize the scalar CB (reader0-only: in_scalar_cb is reader0-driven in MPWI).
         // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
         // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
         // between the first and second face.
@@ -527,7 +485,6 @@ TT_KERNEL void reader_mpwi(uint32_t core_nhw_index, uint32_t start_row, uint32_t
         fill_with_val(in_scalar_cb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
         in_scalar_cb.push_back(1);
     }
-#endif  // READER_ID == 0
     DataflowBuffer in_shard_cb(in_shard_cb_id);
     const uint32_t in_l1_read_base_addr = in_shard_cb.get_read_ptr();
     DataflowBuffer in_reader_indices_cb(in_reader_indices_cb_id);
@@ -535,19 +492,19 @@ TT_KERNEL void reader_mpwi(uint32_t core_nhw_index, uint32_t start_row, uint32_t
         // reader_indices_cb is a shared DFB (reader0 produces in the DRAM path / reader1 consumes).
         // Only reader0 reads from DRAM, so tensor::reader_indices is referenced (and bound) on
         // reader0 only — gate by READER_ID so reader1's build doesn't bind the tensor.
-#if READER_ID == 0
-        // Inlined load_config_tensor_if_in_dram: the reader-indices tensor flows in via its
-        // Metal 2.0 TensorBinding (tensor::reader_indices) instead of a CTA-baked DRAM address.
-        Noc cfg_noc;
-        const auto reader_indices_accessor = TensorAccessor(tensor::reader_indices);
-        cfg_noc.async_read(
-            reader_indices_accessor, in_reader_indices_cb, reader_page_size, {.page_id = core_nhw_index}, {});
-        cfg_noc.async_read_barrier();
-        in_reader_indices_cb.push_back(1);
-#else
-        (void)core_nhw_index;
-        in_reader_indices_cb.wait_front(1);
-#endif
+        if constexpr (reader_id == 0) {
+            // Inlined load_config_tensor_if_in_dram: the reader-indices tensor flows in via its
+            // Metal 2.0 TensorBinding (tensor::reader_indices) instead of a CTA-baked DRAM address.
+            Noc cfg_noc;
+            const auto reader_indices_accessor = TensorAccessor(tensor::reader_indices);
+            cfg_noc.async_read(
+                reader_indices_accessor, in_reader_indices_cb, reader_page_size, {.page_id = core_nhw_index}, {});
+            cfg_noc.async_read_barrier();
+            in_reader_indices_cb.push_back(1);
+        } else {
+            (void)core_nhw_index;
+            in_reader_indices_cb.wait_front(1);
+        }
     }
     uint32_t reader_indices_l1_addr = in_reader_indices_cb.get_read_ptr();
     volatile tt_l1_ptr uint32_t* reader_indices_ptr =

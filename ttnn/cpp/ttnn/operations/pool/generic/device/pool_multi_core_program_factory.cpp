@@ -1052,18 +1052,40 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
                     .endpoint_type = DFBEndpointType::CONSUMER});
             }
         }
+        if (return_indices) {
+            const auto target_dfb = is_reader1 ? DFB_OUT : DFB_IN_0;
+            auto target = std::find_if(b.begin(), b.end(), [&](const DFBBinding& binding) {
+                return binding.dfb_spec_name == target_dfb && binding.endpoint_type == DFBEndpointType::PRODUCER;
+            });
+            TT_FATAL(target != b.end(), "Missing MPWI reader{} alias target", static_cast<uint32_t>(is_reader1));
+            if (is_reader1) {
+                target->accessor_aliases = {
+                    "in_cb",
+                    "in_scalar_cb",
+                    "clear_value_cb",
+                    "in_idx_cb",
+                    "right_inc_cb",
+                    "down_left_wrap_inc_cb",
+                    "up_left_wrap_inc_cb",
+                    "intra_kernel_right_inc_cb",
+                    "intra_kernel_down_left_wrap_inc_cb"};
+            } else {
+                target->accessor_aliases = {"out_cb", "out_idx_cb", "pack_tmp_cb", "pack_idx_tmp_cb"};
+                if (!params.is_large_kernel) {
+                    target->accessor_aliases.push_back("intra_kernel_right_inc_cb");
+                    target->accessor_aliases.push_back("intra_kernel_down_left_wrap_inc_cb");
+                }
+            }
+        }
         return b;
     };
 
     // Regular reader1 reaches the DRAM TensorAccessor through a runtime reader-id branch,
     // so both regular readers bind the generated tensors. MPWI reader1 is preprocessor-gated
     // to the writer face and never names reader_indices.
-    auto make_reader_tensor_bindings = [&](bool is_reader1) {
+    auto make_reader_tensor_bindings = [&]() {
         Group<TensorBinding> tb;
-        if (!return_indices || !is_reader1) {
-            tb.push_back(
-                TensorBinding{.tensor_parameter_name = READER_INDICES_TENSOR, .accessor_name = "reader_indices"});
-        }
+        tb.push_back(TensorBinding{.tensor_parameter_name = READER_INDICES_TENSOR, .accessor_name = "reader_indices"});
         if (!one_scalar_per_core) {
             tb.push_back(TensorBinding{.tensor_parameter_name = CONFIG_TENSOR, .accessor_name = "config"});
         } else if (!return_indices) {
@@ -1086,15 +1108,9 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
     KernelSpec::CompileTimeArgs reader1_cta = reader_cta;
     reader1_cta["reader_id"] = 1u;
 
-    // reader_mpwi.cpp #ifdef-gates its per-role token references on READER_ID so each
-    // reader binary references only the DFB tokens it actually drives. reader_pool_2d.cpp
-    // #ifdef-gates dfb::config_cb / tensor::config on HAS_CONFIG (avg-pool, !one_scalar).
+    // Remaining defines configure the existing large-kernel implementation only.
     KernelSpec::CompilerOptions::Defines reader0_defines;
     KernelSpec::CompilerOptions::Defines reader1_defines;
-    if (return_indices) {
-        reader0_defines.insert({"READER_ID", "0"});
-        reader1_defines.insert({"READER_ID", "1"});
-    }
     if (return_indices && params.is_large_kernel) {
         reader0_defines.insert({"LARGE_KERNEL", "1"});
         reader1_defines.insert({"LARGE_KERNEL", "1"});
@@ -1105,7 +1121,7 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
         .source = reader_path,
         .compiler_options = {.defines = reader0_defines},
         .dfb_bindings = make_reader_bindings(false),
-        .tensor_bindings = make_reader_tensor_bindings(false),
+        .tensor_bindings = make_reader_tensor_bindings(),
         .compile_time_args = reader_cta,
         .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
         .hw_config =
@@ -1122,7 +1138,7 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
             .source = reader_path,
             .compiler_options = {.defines = reader1_defines},
             .dfb_bindings = make_reader_bindings(true),
-            .tensor_bindings = make_reader_tensor_bindings(true),
+            .tensor_bindings = make_reader_tensor_bindings(),
             .compile_time_args = reader1_cta,
             .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
             .hw_config =
