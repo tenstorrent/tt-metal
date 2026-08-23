@@ -147,3 +147,13 @@ def test_slice_write_strided_unaligned_batched_rows(device):
     ttnn.experimental.slice_write(tt_in, tt_out, begins, ends, strides)
 
     assert_equal(torch_out_ref, ttnn.to_torch(tt_out))
+
+
+def test_slice_write_rejects_rank_above_device_limit(device, expect_error):
+    shape = (1,) * 9
+    torch_tensor = torch.zeros(shape, dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(torch_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+    tt_out = ttnn.from_torch(torch_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+
+    with expect_error(RuntimeError, "slice_write supports tensors up to rank 8, but got rank 9"):
+        ttnn.experimental.slice_write(tt_in, tt_out, [0] * 9, [1] * 9, [1] * 9)

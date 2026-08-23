@@ -11,6 +11,10 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
+namespace {
+constexpr uint32_t MAX_SUPPORTED_RANK = 8;
+}
+
 SliceWriteDeviceOperation::program_factory_t SliceWriteDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
@@ -44,6 +48,11 @@ void SliceWriteDeviceOperation::validate_on_program_cache_miss(
     const auto& output_tensor = tensor_args.output;
     const auto output_padded_shape = output_tensor.padded_shape();
 
+    TT_FATAL(
+        output_padded_shape.rank() <= MAX_SUPPORTED_RANK,
+        "slice_write supports tensors up to rank {}, but got rank {}",
+        MAX_SUPPORTED_RANK,
+        output_padded_shape.rank());
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to slice_write need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to slice_write need to be allocated in buffers on device!");
     TT_FATAL(
