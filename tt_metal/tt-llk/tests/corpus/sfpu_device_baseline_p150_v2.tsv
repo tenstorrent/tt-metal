@@ -6,7 +6,8 @@
 # Seeded from /home/ttuser/sfpi-uplift/sweep-2x2/weekly-e2e-weekly-20260821 by tools/seed_kernel_baseline.py; committing an
 # update is a REVIEWED manual step (review the run's KERNEL-DELTA.md alongside).
 # Pin anchors (conf_lint R5b/R6b enforce these against sweep_2x2.conf):
-#  24. c944257c78f3b2c27d954f7e9378776215bfe5bd3827e2023f0741483e9b58d3 (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 24 = pin 23 + FT window-pairing drain tuner + FU IRA dual-bank binding (2026-08-22)
+#  25. 1540d13a4054a9263e2d7dc5f8afc58a6a090b161fb3ce3bb30efb70be8100f3 (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 25 = pin 24 + FV X6 face-transpose builtins + surface (2026-08-22)
+#  24. c944257c78f3b2c27d954f7e9378776215bfe5bd3827e2023f0741483e9b58d3 (superseded by 25; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 24 = pin 23 + FT window-pairing drain tuner + FU IRA dual-bank binding (2026-08-22)
 #  23. 9acd8c1761b5712287c6d45cf49fc5804368b7e41d21351a0ee8fed52bdb7671 (superseded by 24; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 23 = pin 22 + FR FP-2 replay-vision checker + FS FP-3 persistence model (2026-08-22)
 #  22. 1505b01f7b6fde1f2c3d00fc42e9cc1018f7321bb0650324992ce1edd6ffd646 (superseded by 23; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 22 = pin 21 + FP-1 fix (2026-08-22)
 #  21. c5bc09aab243c614d5cadf07a0738660bfb779f6c062e75dd69d538554f76b68 (superseded by 22; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 21 = pin 20 + FL trio + crosslane-lower (2026-08-22)
