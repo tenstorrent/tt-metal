@@ -1080,8 +1080,9 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
         return b;
     };
 
-    // Both regular readers can reach the DRAM TensorAccessor. The MPWI reader role is selected
-    // by the reader_id constexpr argument, and reader1 never names reader_indices.
+    // Both regular readers can reach the DRAM TensorAccessor. MPWI selects the active role with
+    // reader_id, but both specializations bind reader_indices because the discarded branch still
+    // requires tensor::reader_indices to resolve during template parsing.
     auto make_reader_tensor_bindings = [&]() {
         Group<TensorBinding> tb;
         tb.push_back(TensorBinding{.tensor_parameter_name = READER_INDICES_TENSOR, .accessor_name = "reader_indices"});

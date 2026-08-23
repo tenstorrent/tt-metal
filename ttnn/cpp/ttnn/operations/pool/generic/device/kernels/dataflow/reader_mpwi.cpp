@@ -483,8 +483,8 @@ TT_KERNEL void reader_mpwi(uint32_t core_nhw_index, uint32_t start_row, uint32_t
     DataflowBuffer in_reader_indices_cb(in_reader_indices_cb_id);
     if constexpr (config_in_dram) {
         // reader_indices_cb is a shared DFB (reader0 produces in the DRAM path / reader1 consumes).
-        // Only reader0 reads from DRAM, so tensor::reader_indices is referenced (and bound) on
-        // reader0 only; the constexpr branch prevents reader1 from referencing the tensor.
+        // Only reader0 executes the DRAM read. Both reader specializations bind tensor::reader_indices
+        // so the name resolves while parsing this constexpr-discarded branch.
         if constexpr (reader_id == 0) {
             // Inlined load_config_tensor_if_in_dram: the reader-indices tensor flows in via its
             // Metal 2.0 TensorBinding (tensor::reader_indices) instead of a CTA-baked DRAM address.
