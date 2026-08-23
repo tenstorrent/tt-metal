@@ -2488,6 +2488,33 @@ void PerfDebugProfiler::stop() {
             auto pct = [cyc](uint64_t v) {
                 return cyc ? (100.0 * static_cast<double>(v) / static_cast<double>(cyc)) : 0.0;
             };
+            // A phase cannot exceed the residency it is a phase OF. When one does, the counter word is not a
+            // duration -- a drainer that never reached its results write leaves stale L1 there, and the
+            // percentage then prints as nonsense (observed: "reserve(credit-wait) 1653073683357.0%", and
+            // "proc 18727729111430.1%" before that). Say which counter is unusable instead of formatting it.
+            {
+                const std::pair<const char*, uint64_t> phases[] = {{"read", c_read},
+                                                                   {"proc", c_proc},
+                                                                   {"reserve", c_res},
+                                                                   {"write", c_wr},
+                                                                   {"wr-barrier", c_bar},
+                                                                   {"pace", c_pace}};
+                std::string bad;
+                for (const auto& [name, v] : phases) {
+                    if (v > cyc) {
+                        bad += fmt::format("{}={} ", name, v);
+                    }
+                }
+                if (!bad.empty()) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[perf-debug profiler] DRISC {}: phase counters exceed the {:.1f} ms residency, so they "
+                        "are not durations -- treat the phase line below as unusable for this drainer. Raw: {}",
+                        d,
+                        cyc / kCycPerUs / 1000.0,
+                        bad);
+                }
+            }
             log_info(
                 tt::LogMetal,
                 "[perf-debug profiler] DRISC phases of {:.1f} ms: read {:.1f}% | proc {:.1f}% | "
