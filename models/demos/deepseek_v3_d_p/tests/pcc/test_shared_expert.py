@@ -32,20 +32,21 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, hidden_dim, activation",
     [
-        (4096, 7 * 1024, 2 * 1024, ACTIVATION_SILU),
-        (3200, 7 * 1024, 2 * 1024, ACTIVATION_SILU),
+        # 640 is the per-chip prefill chunk: 5120 tokens over sp_factor 8. Every case here runs that
+        # depth, which pins the matmul program configs to per_core_M=1 -- the blocking prefill uses.
+        (640, 7 * 1024, 2 * 1024, ACTIVATION_SILU),
         # Kimi-K3: one shared-expert MLP at moe_intermediate_size * num_shared_experts = 3072 * 2.
         # Worth its own case because every prior model has num_shared_experts == 1, so hidden_dim and
         # the shared intermediate coincided and 6144 was never exercised here.
-        (3200, KimiK3Config.EMB_SIZE, KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE, ACTIVATION_SILU),
+        (640, KimiK3Config.EMB_SIZE, KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE, ACTIVATION_SILU),
         # ...and the same shape on the activation the K3 checkpoint actually uses. This builds
         # TtSharedExpert without a sub-device, so ttnn.situ_glu runs here on the full grid; its
         # sub_core_grids form is only reachable through the MoE (test_ttnn_moe).
-        (3200, KimiK3Config.EMB_SIZE, KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE, ACTIVATION_SITU),
+        (640, KimiK3Config.EMB_SIZE, KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE, ACTIVATION_SITU),
     ],
-    # Ids label seq_len_per_chip first, so the K3 cases keep the "3.2K" prefix they share with the
-    # case above and add what actually differs (the 6144 shared intermediate, the activation).
-    ids=["4K", "3.2K", "3.2K-k3-6144", "3.2K-k3-6144-situ"],
+    # Ids label seq_len_per_chip first, then what differs from the case above it (the 6144 shared
+    # intermediate, the activation).
+    ids=["640", "640-k3-6144", "640-k3-6144-situ"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
