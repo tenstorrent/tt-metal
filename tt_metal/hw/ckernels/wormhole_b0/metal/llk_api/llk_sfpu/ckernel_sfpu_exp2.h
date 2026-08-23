@@ -52,7 +52,13 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
         // e < 255
         v_block {
             sfpi::vInt e_lt_255 = __builtin_rvtt_sfpiadd_i(e.get(), -255, sfpi::SFPIADD_MOD1_CC_LT0);
-            y = sfpi::setexp(r, e);
+            // Only rebuild via setexp when the biased exponent is representable.
+            // For e >= 255, y already holds inf (from r * inf above); overwriting
+            // it with setexp would produce NaN or wrapped garbage.
+            v_if(e_lt_255 < 0) {
+                y = sfpi::setexp(r, e);
+            }
+            v_endif;
             // e < 1
             v_if(e_lt_255 < -254) {
                 // Underflow, including subnormals.

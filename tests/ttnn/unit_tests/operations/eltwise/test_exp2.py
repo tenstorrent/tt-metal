@@ -193,6 +193,52 @@ def test_exp2_fp32_special_values(device):
 # to +inf before the tensor reaches the SFPU (same root cause as the xfail in
 # tests/.../test_fmod.py: "NaN is packed as inf for ttnn.bfloat16"), so a
 # device-side NaN-propagation test is not expressible at this dtype.
+
+def test_exp2_fp32_overflow_range(device):
+    """Regression test for #54054: exp2(x) must return +inf for x >= 128.
+
+    The kernel's setexp path previously overwrote the correct +inf with NaN
+    (for x in [128, 128.5)) or wrapped finite garbage (for x >= 128.5).
+    """
+    # Cover the exact boundary, the NaN-producing range [128, 128.5),
+    # and representative points across the wrapped-garbage range.
+    input_tensor = torch.tensor(
+        [
+            127.999,
+            128.0,
+            128.001,
+            128.25,
+            128.4999,
+            128.5,
+            129.0,
+            160.0,
+            200.0,
+            255.0,
+            256.0,
+            300.0,
+            1000.0,
+            float("inf"),
+        ],
+        dtype=torch.float32,
+    ).reshape(1, 1, -1)
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_result = ttnn.exp2(tt_in)
+    result = ttnn.to_torch(tt_result).reshape(-1)
+
+    for i, x in enumerate(input_tensor.reshape(-1).tolist()):
+        assert torch.isposinf(result[i]), (
+            f"exp2({x}): expected +inf, got {result[i].item()}"
+        )
+
+
 def test_exp2_special_values(device):
     # Tile must be 32x32; pack edge-case scalars then pad the rest of the tile
     # with a value (0.0) whose result is known and stable.
