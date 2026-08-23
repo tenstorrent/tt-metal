@@ -636,3 +636,36 @@ def test_lgamma_fp32(device, shapes):
     tt_out = ttnn.to_torch(z_tt)
 
     assert_with_pcc(z_torch, tt_out, 0.999)
+
+
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        "float32",
+        "bfloat16",
+    ],
+)
+@pytest.mark.parametrize("beta, threshold, x_boundary, x_above", [(1.0, 20.0, 20.0, 20.5), (2.0, 5.0, 2.5, 2.75)])
+def test_softplus_boundary_equality(dtype, beta, threshold, x_boundary, x_above, device):
+    """Regression test for #53261.
+
+    PyTorch reverts to the linear branch only when input * beta > threshold,
+    so at exactly input * beta == threshold softplus must still be evaluated.
+    The kernel used a strict `<` compare and returned the raw linear value at
+    the boundary point.
+    """
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+
+    x_list = [x_boundary, x_above, -x_boundary]
+    torch_input = torch.tensor([x_list] * 32, dtype=torch_dtype)
+    torch_output = torch.nn.functional.softplus(torch_input, beta=beta, threshold=threshold)
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.softplus(ttnn_input, beta=beta, threshold=threshold)
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    if dtype == "float32":
+        assert_allclose(torch_output, ttnn_output, rtol=1e-05, atol=1e-05)
+    else:
+        assert_with_ulp(torch_output, ttnn_output, 1)
