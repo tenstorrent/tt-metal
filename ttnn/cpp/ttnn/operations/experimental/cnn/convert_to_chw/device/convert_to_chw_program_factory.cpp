@@ -16,6 +16,9 @@ ttnn::device_operation::ProgramArtifacts ConvertToCHWProgramFactory::create_prog
     const ConvertToCHWParams& /*operation_attributes*/, const Tensor& tensor_args, Tensor& tensor_return_value) {
     const auto& a = tensor_args;
     auto& output = tensor_return_value;
+    TT_FATAL(
+        a.device()->arch() != tt::ARCH::QUASAR,
+        "ConvertToCHW uses a Gen1 plain-CB self-loop for its output writer and is not supported on Quasar");
 
     const auto& input_shape = a.logical_shape();
     const auto input_core_grid = a.shard_spec()->grid;
