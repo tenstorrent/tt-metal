@@ -313,6 +313,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
             .compile_time_args =
                 {{"pad_val", pad_val},
                  {"input_npages", input_npages},
+                 {"skip_untilize", static_cast<std::uint32_t>(skip_untilize)},
                  {"aligned_stick_nbytes", aligned_stick_nbytes},
                  {"is_block_sharded", static_cast<std::uint32_t>(is_block_sharded)},
                  {"is_col_major", static_cast<std::uint32_t>(transpose_mcast)},
@@ -333,12 +334,22 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
             block_start_offset == 0 ? tt::tt_metal::experimental::ProducerOf(output_dfb_name, "out")
                                     : tt::tt_metal::experimental::ConsumerOf(output_dfb_name, "out"));
         if (block_start_offset == 0) {
-            reader.dfb_bindings.push_back(tt::tt_metal::experimental::ProducerOf(input_dfb_name, "src"));
+            auto binding = tt::tt_metal::experimental::ProducerOf(input_dfb_name, "src");
+            if (skip_untilize) {
+                binding.accessor_aliases.push_back("untilize_out");
+            }
+            reader.dfb_bindings.push_back(std::move(binding));
         } else if (skip_untilize) {
-            reader.dfb_bindings.push_back(tt::tt_metal::experimental::ConsumerOf(input_dfb_name, "src"));
+            auto binding = tt::tt_metal::experimental::ConsumerOf(input_dfb_name, "src");
+            binding.accessor_aliases.push_back("untilize_out");
+            reader.dfb_bindings.push_back(std::move(binding));
         }
         if (!skip_untilize) {
-            reader.dfb_bindings.push_back(tt::tt_metal::experimental::ConsumerOf(untilize_dfb, "untilize_out"));
+            auto binding = tt::tt_metal::experimental::ConsumerOf(untilize_dfb, "untilize_out");
+            if (block_start_offset != 0) {
+                binding.accessor_aliases.push_back("src");
+            }
+            reader.dfb_bindings.push_back(std::move(binding));
         }
         if (use_pad_scratch) {
             reader.scratchpad_bindings.push_back(tt::tt_metal::experimental::ScratchpadBinding{
@@ -356,9 +367,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
         tt::tt_metal::experimental::KernelSpec::CompilerOptions::Defines defines;
         if (config_tensors_in_dram) {
             defines.emplace("CONFIG_TENSOR_IN_DRAM", "1");
-        }
-        if (skip_untilize) {
-            defines.emplace("SKIP_UNTILIZE", "1");
         }
         if (block_start_offset == 0) {
             defines.emplace("SRC_PRODUCER", "1");

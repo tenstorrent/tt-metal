@@ -180,6 +180,7 @@ FORCE_INLINE void write_stick_async(
 template <
     uint32_t PadVal,
     uint32_t InputNPages,
+    uint32_t SkipUntilize,
     uint32_t AlignedStickNBytes,
     uint32_t IsBlockSharded,
     uint32_t IsColumnMajor,
@@ -190,12 +191,7 @@ template <
     uint32_t BlockStride>
 FORCE_INLINE void gather(uint32_t config_read_index) {
     static_assert(BlockStride >= 1, "Block stride must be at least one");
-    constexpr bool enable_blocking =
-#ifdef SKIP_UNTILIZE
-        false;
-#else
-        true;
-#endif
+    constexpr bool enable_blocking = !SkipUntilize;
     constexpr uint32_t total_tiles_in_single_block = (BlockSizeHeight / TILE_SIZE) * BlockSizeWidthTiles;
 
     Noc noc;
@@ -258,12 +254,14 @@ FORCE_INLINE void gather(uint32_t config_read_index) {
     }
 #endif
 
-#if defined(SRC_PRODUCER) && defined(SKIP_UNTILIZE)
+#ifdef SRC_PRODUCER
     // The other reader consumes the already-resident shard directly; making it wait/pop would race
     // this shared read pointer and retire pages while reader 0 may still be using them. Keep this
     // wait immediately before gather, after padding, to preserve the legacy stream-register and NOC
     // issue ordering.
-    src.wait_front(static_cast<uint16_t>(InputNPages));
+    if constexpr (SkipUntilize) {
+        src.wait_front(static_cast<uint16_t>(InputNPages));
+    }
 #endif
 
     const tt_l1_ptr uint16_t* config = reinterpret_cast<const tt_l1_ptr uint16_t*>(gather_config_l1_addr);
@@ -271,17 +269,15 @@ FORCE_INLINE void gather(uint32_t config_read_index) {
     uint16_t segments_remaining = config[config_index++];
     if (segments_remaining != 0) {
         uint16_t block_boundary_offset = BlockSizeHeight + BlockSizeHeight * BlockStartOffset;
-#ifndef SKIP_UNTILIZE
-        DataflowBuffer input(dfb::untilize_out);
-        input.wait_front(total_tiles_in_single_block);
-#else
+        DataflowBuffer input(SkipUntilize ? dfb::src : dfb::untilize_out);
+        if constexpr (!SkipUntilize) {
+            input.wait_front(total_tiles_in_single_block);
+        }
         // Row-major input is already resident and ready; only reader 0 owns its FIFO bookkeeping.
-        DataflowBuffer input(dfb::src);
         // This read pointer cannot advance on the row-major path, so materialize the source once.
         // Keeping it stable also preserves the legacy readers' relative NOC issue timing when both
         // RISCs gather into the same output shard.
         const CoreLocalMem<uint32_t> input_source(input.get_read_ptr());
-#endif
         const uint16_t my_noc_x = my_x[noc.get_noc_id()];
         const uint16_t my_noc_y = my_y[noc.get_noc_id()];
         while (segments_remaining != 0) {
@@ -296,37 +292,46 @@ FORCE_INLINE void gather(uint32_t config_read_index) {
                 const uint16_t src_offset = config[config_index++];
                 const uint16_t dst_offset = config[config_index++];
                 const uint16_t transfer_size = config[config_index++];
-#ifndef SKIP_UNTILIZE
-                // Transfers are globally ordered by ascending block ID, so retire blocks until the
-                // current transfer falls within this split reader's active block.
-                while (src_offset >= block_boundary_offset) {
-                    noc.async_write_barrier();
-                    input.pop_front(total_tiles_in_single_block);
-                    input.wait_front(total_tiles_in_single_block);
-                    block_boundary_offset += BlockSizeHeight * BlockStride;
+                if constexpr (!SkipUntilize) {
+                    // Transfers are globally ordered by ascending block ID, so retire blocks until the
+                    // current transfer falls within this split reader's active block.
+                    while (src_offset >= block_boundary_offset) {
+                        noc.async_write_barrier();
+                        input.pop_front(total_tiles_in_single_block);
+                        input.wait_front(total_tiles_in_single_block);
+                        block_boundary_offset += BlockSizeHeight * BlockStride;
+                    }
                 }
-#endif
-#ifndef SKIP_UNTILIZE
-                write_stick_async<AlignedStickNBytes, enable_blocking, BlockSizeHeight>(
-                    noc, input, out_base_l1_addr, dst_noc_x, dst_noc_y, src_offset, dst_offset, transfer_size);
-#else
-                write_stick_async<AlignedStickNBytes, enable_blocking, BlockSizeHeight>(
-                    noc, input_source, out_base_l1_addr, dst_noc_x, dst_noc_y, src_offset, dst_offset, transfer_size);
-#endif
+                if constexpr (SkipUntilize) {
+                    write_stick_async<AlignedStickNBytes, enable_blocking, BlockSizeHeight>(
+                        noc,
+                        input_source,
+                        out_base_l1_addr,
+                        dst_noc_x,
+                        dst_noc_y,
+                        src_offset,
+                        dst_offset,
+                        transfer_size);
+                } else {
+                    write_stick_async<AlignedStickNBytes, enable_blocking, BlockSizeHeight>(
+                        noc, input, out_base_l1_addr, dst_noc_x, dst_noc_y, src_offset, dst_offset, transfer_size);
+                }
                 --transfers_remaining;
             }
             --segments_remaining;
         }
-#ifndef SKIP_UNTILIZE
-        input.pop_front(total_tiles_in_single_block);
-#endif
+        if constexpr (!SkipUntilize) {
+            input.pop_front(total_tiles_in_single_block);
+        }
     }
 
     noc.async_read_barrier();
     noc.async_write_barrier();
-#if defined(SRC_PRODUCER) && defined(SKIP_UNTILIZE)
+#ifdef SRC_PRODUCER
     // Balance reader 0's reserve/push/wait only after both its input reads and output writes finish.
-    src.pop_front(static_cast<uint16_t>(InputNPages));
+    if constexpr (SkipUntilize) {
+        src.pop_front(static_cast<uint16_t>(InputNPages));
+    }
 #endif
 }
 

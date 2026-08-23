@@ -6,6 +6,7 @@
 template <
     uint32_t pad_val,
     uint32_t input_npages,
+    uint32_t skip_untilize,
     uint32_t aligned_stick_nbytes,
     uint32_t is_block_sharded,
     uint32_t is_col_major,
@@ -18,6 +19,7 @@ TT_KERNEL void halo_gather(uint32_t config_read_index) {
     halo::gather<
         pad_val,
         input_npages,
+        skip_untilize,
         aligned_stick_nbytes,
         is_block_sharded,
         is_col_major,
