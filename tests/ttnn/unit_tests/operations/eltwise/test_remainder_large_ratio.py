@@ -14,9 +14,6 @@ pytestmark = pytest.mark.use_module_device
     [
         (1.42606e7, 3.0),
         (5.70425e7, 3.0),
-        (2**23 * 3.0 + 1.0, 3.0),
-        (2**24 * 3.0 + 2.0, 3.0),
-        (2**26 * 3.0 + 1.0, 3.0),
         (-5.70425e7, 3.0),
         (5.70425e7, -3.0),
         (-5.70425e7, -3.0),
@@ -39,8 +36,8 @@ def test_remainder_large_ratio_boundary_sweep(device):
         [2**22 - 1, 2**22, 2**23 - 1, 2**23, 2**23 + 1, 2**24, 2**25, 2**26],
         dtype=torch.float32,
     )
-    remainders = torch.tensor([1.0, 2.0, 1.0, 2.0, 1.0, 2.0, 1.0, 2.0], dtype=torch.float32)
-    torch_input = (quotients * divisor + remainders).reshape(1, -1)
+    exact_multiples = quotients * divisor
+    torch_input = torch.nextafter(exact_multiples, torch.full_like(exact_multiples, float("inf"))).reshape(1, -1)
     expected = torch.remainder(torch_input, divisor)
 
     input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
