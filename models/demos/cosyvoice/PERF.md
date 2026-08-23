@@ -578,14 +578,10 @@ The same statistic without changing shape: each group's channel sum is a **matmu
 `[C, G]` indicator**, what remains is a reduction over `T` (an axis that needs no re-tiling), and
 normalise-plus-affine folds into one multiply and one add.
 
-| | `p150b`† | n300 | PCC vs torch |
+| | `p150b` | n300 | PCC vs torch |
 |---|---:|---:|---:|
-| `[2, 141, 256]` permute → matmul | `0.2190` → `0.0940` (**2.33×**) | `0.3820` → `0.1874` (**2.04×**) | `0.999988854` |
-| `[2, 282, 256]` permute → matmul | `0.3975` → `0.0978` (**4.06×**) | `0.6691` → `0.2045` (**3.27×**) | `0.999992251` |
-
-† `p150b` still predates the `relu` and has not been re-measured (no Blackhole access when
-these n300 numbers were taken) -- treat it as the same kind of stale figure the note below
-already calls out for the old n300 column, not as validated post-fix.
+| `[2, 141, 256]` permute → matmul | `0.2202` → `0.1012` (**2.18×**) | `0.3820` → `0.1874` (**2.04×**) | `0.999988854` |
+| `[2, 282, 256]` permute → matmul | `0.3993` → `0.1056` (**3.78×**) | `0.6691` → `0.2045` (**3.27×**) | `0.999992251` |
 
 The matmul form is nearly **independent of T** where the permute form doubles with it, which is the
 re-tiling cost showing itself directly. On the stage, A/B-ed: flow `1.41×` on `p150b` and `1.34×` on
@@ -602,17 +598,27 @@ where the true variance is small against the mean's square, bfloat16 rounding dr
 variance before `eps` closes it, the guard every framework uses for this formula. **The two PCCs in
 the table are measured on one fixed golden geometry, which never lands in the cancellation regime**,
 so they are evidence for the transform's arithmetic and not for its robustness across shapes — the
-distinction that let this ship. The `p150b` timings above still predate the added `relu` and have
-not been re-measured (no Blackhole access when this note was written). **n300 has been
-re-measured** (`scripts/probe_groupnorm.py`, same two shapes, `relu` added to the probe's own
+distinction that let this ship. **Both columns above are now re-measured** with the `relu` in
+place (`scripts/probe_groupnorm.py`, same two shapes, `relu` added to the probe's own
 `matmul_form` to match `estimator.py` exactly -- the probe carries its own copy of the formula
-rather than importing it, so it needed the same fix applied separately): `0.1839 -> 0.1874 ms`
-and `0.2000 -> 0.2045 ms`, a ~2 % cost from the one extra elementwise op, speedup `2.07x -> 2.04x`
-and `3.33x -> 3.27x`. The matmul form is still comfortably faster than permute. PCC is unchanged
-to 9 decimal places at both shapes (`0.999988854`, `0.999992251`) -- exactly what the argument
-above predicts: `torch.randn`-generated test data essentially never lands in the cancellation
-regime, so the accuracy check was never going to move even with the guard in place, which is the
-whole reason it did not catch the bug in the first place.
+rather than importing it, so it needed the same fix applied separately). n300 (Titan):
+`0.1839 -> 0.1874 ms` / `0.2000 -> 0.2045 ms`, a ~2 % cost, speedup `2.07x -> 2.04x` /
+`3.33x -> 3.27x`. p150b (Tiptoe): `0.0940 -> 0.1012 ms` / `0.0978 -> 0.1056 ms`, ~8 % (a bigger
+share of a smaller baseline), speedup `2.33x -> 2.18x` / `4.06x -> 3.78x`. The matmul form is
+still comfortably faster than permute on both parts. PCC is unchanged to 9 decimal places at
+every shape and platform (`0.999988854`, `0.999992251`) -- exactly what the argument above
+predicts: `torch.randn`-generated test data essentially never lands in the cancellation regime,
+so the accuracy check was never going to move even with the guard in place, which is the whole
+reason it did not catch the bug in the first place.
+
+Tiptoe's device also would not open at all until `TT_VISIBLE_DEVICES=0` was set explicitly on
+the container -- without it, fabric/mesh discovery tried to reconcile all four `/dev/tenstorrent`
+nodes into the topology instead of being pinned to one, and failed with "Graph specified in MGD
+could not fit in the discovered physical topology." Not a hardware fault; worth remembering
+before writing off a Blackhole box as broken from that error alone. (Tavern, the other Blackhole
+box, is separately and genuinely PCIe-hung -- `tt-smi -r 0` ran but re-init failed with the same
+`Read 0xffffffff` error both before and after, so that one needs a deeper reset this session
+didn't have privileges for.)
 
 ## The vocoder
 
