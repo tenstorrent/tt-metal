@@ -462,6 +462,87 @@ held would put nearly 100% on a single run. It does not.
 
 ---
 
+### 8.8 It is not anything the harness controls
+
+The harness can record which variant ran on which worker, in order
+(`--record-test-order`), and replay that exact sequence (`--test-order-file`
+with `--rewind-runner`). Replaying one worker's sequence at `-n 1` pins execution
+to core (0,0) and fixes the order, leaving nothing under software control to
+vary.
+
+**Two replays of the same sequence.** 1,980 `TILE_LOOP` points. 1,377 differed,
+but almost all by a few cycles — median 1, quartiles −8 to +6. One point differed
+by more than 2%.
+
+**Ten replays of the same sequence:**
+
+| movement across the ten replays | points of 1,980 |
+|---|--:|
+| >0.1% | 264 |
+| >0.5% | 46 |
+| >1% | 12 |
+| >2% | **2** |
+| >5% | 0 |
+
+The rule fires on **2 of 1,980 — 0.101%**. The parallel baseline rate is 42 of
+29,712 matmul `TILE_LOOP` points, or 0.141%, which predicts **2.8** here.
+Observed 2. Statistically indistinguishable.
+
+**Serial execution does not suppress the effect.**
+
+The shape is unchanged too:
+
+```
+14,804 ×9 runs, one run at 14,505     −299 cycles, 2.02%
+```
+
+Nine identical values and one discrete step — the same signature as the parallel
+runs.
+
+A separate observation from this experiment: at `-n 1` there is a floor of
+few-cycle jitter on most matmul points, 264 of 1,980 moving more than 0.1%. It is
+far below any threshold under discussion (±8 cycles on a 120,000-cycle point is
+0.007%) and invisible in the baseline tables, but it is not zero.
+
+### 8.9 What is left
+
+Everything the test harness governs has now been excluded:
+
+| hypothesis | verdict | how |
+|---|---|---|
+| Sweep configuration | Excluded | No parameter separates flagged from clean (§8.5) |
+| A fixed set of bad configurations | Excluded | The flagged set is not reproducible (§8.6) |
+| A per-run state | Excluded | The odd run is spread evenly across runs (§8.7) |
+| Core placement | Excluded | `-n 1` uses only core (0,0); rate unchanged |
+| Execution order, leftover state from the previous test | Excluded | Identical order file, different results |
+| Cross-core contention from 15 concurrent tests | Excluded | No concurrency at `-n 1`; rate unchanged |
+| Cold build / first-run effect | Excluded | Both replays warm |
+
+Now line up which measurements are affected, across every configuration measured:
+
+| what is measured | Wormhole flags |
+|---|--:|
+| `MATH_ISOLATE` — math thread only | **0** of 94,692 |
+| `UNPACK_ISOLATE` — unpack thread only | **0** of 96,846 |
+| `PACK_ISOLATE` — pack thread only | 1,457 of 99,414 |
+| `L1_TO_L1` — unpack start to **pack end** | 83 of 100,971 |
+
+**Every failing measurement depends on when the packer finishes.** The two that
+never touch pack timing are clean across 191,538 Wormhole measurements and
+204,604 on Blackhole. Add the format association within `PACK_ISOLATE` —
+`Float16_b` output at a 13% flag rate against 0% for `Float32` and `Bfp8_b` — and
+the conclusion is:
+
+> **The packer's completion time is bistable.** It lands on one of two discrete
+> values at low probability per execution, independent of core, execution order,
+> concurrency, build state and sweep configuration, with a rate that depends on
+> the output format.
+
+That is a packer or hardware question, not a measurement artefact, and no
+threshold can absorb it.
+
+---
+
 ## 9. What we know, and what we do not
 
 ### Established
@@ -476,19 +557,23 @@ held would put nearly 100% on a single run. It does not.
 5. **Matmul is bistable**: measurements land on one of two discrete values, 2–6%
    apart, at low per-run probability.
 6. **The cause is not the configuration** (§8.5), **not a fixed set of tests**
-   (§8.6), and **not a per-run state** (§8.7). By elimination it is execution
-   context: order, core placement, or device state.
-7. **The packer path is the worst case** — Wormhole `PACK_ISOLATE` reaches 24%,
+   (§8.6), **not a per-run state** (§8.7), and **not core placement, execution
+   order or concurrency** (§8.8). Serial replay of a fixed order on one core
+   reproduces it at 0.101% against a parallel baseline of 0.141%.
+7. **Every affected measurement depends on packer completion time** (§8.9).
+   `MATH_ISOLATE` and `UNPACK_ISOLATE` are clean across 396,142 measurements on
+   the two architectures; `PACK_ISOLATE` and `L1_TO_L1` carry every failure.
+8. **The packer path is the worst case** — Wormhole `PACK_ISOLATE` reaches 24%,
    with `Float16_b` output at a 13% flag rate against 0% for `Float32` and
    `Bfp8_b`.
 
 ### Not established
 
-1. **Why matmul is bistable.** Two live hypotheses: which Tensix core the test
-   landed on, and state left behind by the test that ran before it on that core
-   (the repo documents reconfig escapes as a real phenomenon). Distinguishable by
-   replaying a recorded order at `-n 1`, which pins the core and leaves order as
-   the only variable.
+1. **The mechanism inside the packer.** We know the packer's completion time is
+   bistable and that nothing the harness controls explains it (§8.8, §8.9). What
+   we do not know is why — whether it is arbitration in the pack pipeline, an
+   interaction with output-format conversion, or something below that. This needs
+   someone who owns the packer path, and the `Float16_b` association is the lead.
 2. **Whether this reproduces across machines and days.** Every measurement here
    is one card in one session, so all of it is a **lower bound** on the noise a
    real gate would see.
