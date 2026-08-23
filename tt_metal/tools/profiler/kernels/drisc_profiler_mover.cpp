@@ -14,7 +14,7 @@
 // HIGH stamp as corruption. Peers are visited sequentially, each getting the whole staging area.
 //
 // The full architecture story (roles, placement evidence, wire format) lives in
-// drisc_profiler_drain.cpp, the single-drainer fallback this file was carved from.
+// the single-drainer fallback this file was carved from, since deleted.
 
 #include "drisc_drain_common.hpp"
 
@@ -60,7 +60,7 @@ void kernel_main() {
     // Span reads issue on BOTH NoCs (half a span each): the busy sweep is read-latency bound and L1 only
     // holds kGenSlots spans, so doubling outstanding transactions is the one lever that costs nothing.
     // ---- ROLE SPLIT (see the header). 0 = today's full-job drainer, and every arg below is then 0. ----
-    constexpr uint32_t kRoleFull = 0, kRoleFiller = 1, kRoleMover = 2;
+    constexpr uint32_t kRoleFiller = 1, kRoleMover = 2;
     constexpr uint32_t kRole = kRoleMover;  // this file IS the mover; carg 20 stays reserved
     constexpr uint32_t kDramBank = get_compile_time_arg_val(21);    // allocator bank id of this ring
     constexpr uint32_t kDramAddr = get_compile_time_arg_val(22);    // bank-relative base of this ring
@@ -162,7 +162,7 @@ void kernel_main() {
     // can also tell peer 0's write from peer 1's.
     constexpr uint32_t kHsHead = 0, kHsTail = 16, kHsProbeF = 32, kHsProbeM = 48;
     constexpr uint32_t kProbeMoverMagic = 0x5A0FE1EDu;
-    static_assert(kRole == kRoleFull || kRole == kRoleFiller || kRole == kRoleMover, "unknown drainer role");
+    static_assert(kRole == kRoleFiller || kRole == kRoleMover, "unknown drainer role");
     static_assert(kGenSlots >= 1, "need at least one slot per staging generation");
 
     static_assert(kSelfZones == 0 || kSelfHoldCycles >= 1, "a 0-cycle window hold would trace nothing");

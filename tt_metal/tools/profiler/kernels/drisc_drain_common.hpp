@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Shared spine of the DRISC drainer kernels (drisc_profiler_filler.cpp, drisc_profiler_mover.cpp,
-// drisc_profiler_drain.cpp): the D2H write/credit/barrier primitives, the drainer's own zone ids and
-// the NoC-footprint instrument. Role-specific logic lives in the kernels; only code that is byte-for-byte
-// identical across roles belongs here.
+// Shared spine of the DRISC drainer kernels (drisc_profiler_filler.cpp, drisc_profiler_mover.cpp): the
+// D2H write/credit/barrier primitives, the drainer's own zone ids and the NoC-footprint instrument.
+// Role-specific logic lives in the kernels; only code that is byte-for-byte identical across roles
+// belongs here.
 #pragma once
 
 #include <cstdint>

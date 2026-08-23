@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // SINGLE SOURCE OF TRUTH for the host-side decode of the DRISC drainer's wire
-// (producer: tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp).
+// (producer: tt_metal/tools/profiler/kernels/drisc_profiler_filler.cpp).
 //
 // The wire carries only whole variable-length BULK_SPAN frames (layout and geometry rules in
 // profiler_common.h): a 16-word prefix whose word 1 is the payload length, the worker's 64-word control

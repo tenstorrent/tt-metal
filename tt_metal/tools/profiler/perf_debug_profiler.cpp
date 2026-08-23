@@ -229,18 +229,6 @@ bool env_flag(const char* name) {
     return true;
 }
 
-// DEFAULT ON. The 6-DRISC split is the production shape -- it moved the knee from delay 60 to 15 (§N+40) --
-// and the 2-drainer fallback is well past its own knee at the delays we care about: measured 22,761 producer
-// stalls across 120 of 120 cores at delay 15 with the split off against 0 with it on. Both are lossless, so
-// the old default cost workload perturbation rather than correctness. Set a falsy value to force the
-// 2-drainer path; that is a bisect tool, not a production choice.
-bool role_split() {
-    static const bool v = [] {
-        const char* s = std::getenv("TT_METAL_PERF_DEBUG_ROLE_SPLIT");
-        return (s == nullptr || *s == '\0') ? true : env_flag("TT_METAL_PERF_DEBUG_ROLE_SPLIT");
-    }();
-    return v;
-}
 
 
 // Per-filler DRAM ring size, in MiB. The whole reason to stage in DRAM is that this number is not capped by
@@ -299,10 +287,10 @@ const std::vector<uint32_t>& role_filler_banks() {
 }
 
 
-constexpr uint32_t kRoleFull = 0, kRoleFiller = 1, kRoleMover = 2;
+constexpr uint32_t kRoleFiller = 1, kRoleMover = 2;
 // Rings per mover bank under the DMA mover (mover m drains fillers m and m + kNSockets).
 constexpr uint32_t kNPeerRings = 2;
-// Must match drisc_profiler_drain.cpp's kProbeMoverMagic and handshake offsets.
+// Must match drisc_profiler_mover.cpp's kProbeMoverMagic and handshake offsets.
 constexpr uint32_t kProbeFillerMagic = 0xF11E5A17u;
 constexpr uint32_t kProbeMoverMagic = 0x5A0FE1EDu;
 constexpr uint32_t kHsHead = 0, kHsTail = 16, kHsProbeF = 32, kHsProbeM = 48, kHsBytes = 64;
@@ -435,7 +423,7 @@ uint32_t nstage_cap(uint32_t computed) {
 }  // namespace
 
 // Declared in the header, so it lives OUTSIDE the anonymous namespace above (external linkage) while still
-// seeing role_split()/role_ring_mb() from it.
+// seeing role_ring_mb() from it.
 //
 // The HAL sizes its per-bank DRAM PROFILER region as
 // `per_risc_bytes * MaxProcessorsPerCoreType * CEIL_NUM_CORES_PER_DRAM_CHANNEL` (5 * 20 = 100 on Blackhole and
@@ -449,9 +437,6 @@ uint32_t nstage_cap(uint32_t computed) {
 uint32_t rings_per_bank() { return kNPeerRings; }
 
 uint32_t perf_debug_dram_region_bytes_per_risc() {
-    if (!role_split()) {
-        return 0;
-    }
     // With the DMA mover each mover's TWO peer rings co-locate in its own bank, so the per-bank region
     // must hold both.
     const uint64_t want_bytes = static_cast<uint64_t>(role_ring_mb()) * rings_per_bank() * 1024ull * 1024ull;
@@ -572,7 +557,7 @@ PerfDebugSync sync_device_clock(
     // irrelevant).
     //
     // CORRECTED: an earlier version of this comment said "the same registers the drainer firmware co-samples in
-    // calibrate()". THERE IS NO SUCH FUNCTION -- `calibrate` appears nowhere in drisc_profiler_drain.cpp, in
+    // calibrate()". THERE IS NO SUCH FUNCTION -- `calibrate` appears nowhere in the drain kernels, in
     // tt_metal/hw, or anywhere else on the device side. The drainer does NOT co-sample two clocks; the whole
     // reason §N+46 needed a per-core HOST anchor is that no device-side rebase exists to lean on.
     //
@@ -1168,41 +1153,23 @@ bool PerfDebugProfiler::boot_device(
     // drainer's core in ONE launch (see its comment) and because a mover's compile args reference its
     // filler's L1, so the fillers must be set up first. The default path takes the `else` and is unchanged.
     const uint32_t nbanks = static_cast<uint32_t>(soc.get_num_dram_views());
-    // DEGRADE, don't fail, when the part cannot host the full roster. The 6-DRISC split needs kNFillers filler
-    // banks plus kNSockets host-facing banks, and the fillers' RINGS need banks too; a harvested or smaller
-    // part may not have them. Nothing downstream checked this -- the roster was fixed before
-    // pick_unused_dram_logical_core() was ever called, so a short part would have indexed past the end of
-    // kSafeBanks / the filler-bank list rather than reporting anything.
-    //
-    // Ladder: 6 (4 fillers + 2 movers) -> 2 full-role drainers -> 1. Each step is a configuration already
-    // measured to work, just with a worse knee (§N+34: 1 drainer knee 100, 2 -> 20; §N+40: the split -> 15).
-    // Losslessness never depends on the count: fewer drainers means producers stall sooner, not that markers
-    // are dropped.
+    // The 6-DRISC roster (kNFillers filler banks + kNSockets host-facing banks) is now the ONLY shape:
+    // the full-role drainer it used to degrade to was a second implementation of this whole kernel, and
+    // carrying it meant every drain-path fix had to be written twice. A part that cannot host the roster
+    // gets no streaming profiler rather than a shape nothing is tested on.
     const uint32_t need_split = kNFillers + kNSockets;
-    bool rsplit = role_split();
-    if (rsplit && nbanks < need_split) {
+    if (nbanks < need_split) {
         log_warning(
             tt::LogMetal,
-            "[perf-debug profiler] role split needs {} DRAM views (4 fillers + 2 movers) but this part has {} "
-            "-- falling back to {} full-role drainer(s). Capture stays LOSSLESS; the knee moves in (§N+34).",
+            "[perf-debug profiler] needs {} DRAM views (4 fillers + 2 movers) but this part has {} -- the "
+            "streaming profiler is OFF for this device.",
             need_split,
-            nbanks,
-            std::min<uint32_t>(kNSockets, nbanks));
-        rsplit = false;
-    }
-    // Second rung: even the 2-drainer path needs 2 host-facing banks. With one, run a single drainer over the
-    // whole grid -- the original shape, knee ~100 (§N+34) but still complete.
-    const uint32_t n_full = std::min<uint32_t>(kNSockets, nbanks == 0 ? 1u : nbanks);
-    if (!rsplit && n_full < kNSockets) {
-        log_warning(
-            tt::LogMetal,
-            "[perf-debug profiler] only {} DRAM view(s) available: running {} drainer(s) over the whole grid.",
-            nbanks,
-            n_full);
+            nbanks);
+        return false;
     }
     std::vector<uint32_t> banks;     // DRAM bank hosting DRISC d itself
     std::vector<uint32_t> ringbank;  // DRAM bank holding the ring DRISC d reads/writes (0 when unused)
-    if (rsplit) {
+    {
         ctx.n_drisc = kNFillers + kNSockets;
         const auto& fb = role_filler_banks();
         TT_FATAL(
@@ -1239,17 +1206,6 @@ bool PerfDebugProfiler::boot_device(
             // A mover owns no ring of its own -- it reads its PEERS' rings (both live in its own bank).
             // Recorded as peer 0's for the log line.
             ringbank.push_back(kSafeBanks[m]);
-        }
-    } else {
-        ctx.n_drisc = n_full;
-        const int bank_ov_pre = drisc_bank_override();
-        for (uint32_t d = 0; d < n_full; d++) {
-            ctx.role[d] = kRoleFull;
-            ctx.sock_of[d] = d;
-            banks.push_back(
-                (bank_ov_pre >= 0) ? static_cast<uint32_t>((static_cast<uint32_t>(bank_ov_pre) + d) % nbanks)
-                                   : kSafeBanks[d]);
-            ringbank.push_back(0);
         }
     }
 
@@ -1292,7 +1248,7 @@ bool PerfDebugProfiler::boot_device(
     //
     // Frames are still whole: capacity truncates to a multiple of the 165-page frame, so a FRAME never
     // straddles the wrap (a RUN of frames still can, and stage_run splits it).
-    if (rsplit) {
+    {
         try {
             const auto& hal = MetalContext::instance().hal();
             const uint32_t region_bytes = hal.get_dev_size(HalDramMemAddrType::PROFILER);
@@ -1420,7 +1376,7 @@ bool PerfDebugProfiler::boot_device(
         // as kNSockets. Off: 2 full-job drainers take halves. On: kNFillers fillers take kNFillers-ths, which
         // is the entire point of the change (the knee is the filler's scan over its slice, FINDINGS N+28), so
         // getting this denominator wrong would look like a working build that simply did not improve.
-        const uint32_t n_slices = rsplit ? kNFillers : kNSockets;
+        const uint32_t n_slices = kNFillers;
         const uint32_t slice = is_mover ? 0u : d;
         const uint32_t lo = is_mover ? 0u : static_cast<uint32_t>((num_cores * slice) / n_slices);
         const uint32_t hi = is_mover ? 0u : static_cast<uint32_t>((num_cores * (slice + 1)) / n_slices);
@@ -1952,17 +1908,8 @@ bool PerfDebugProfiler::boot_device(
                 my_cores * 32u <= 4u * kernel_profiler::PROFILER_L1_BUFFER_SIZE,
                 "CV-first tails staging ({} cores x 32 B) does not fit the self slot's dead ring space",
                 my_cores);
-            // Per-role kernel files are the default. TT_METAL_PERF_DEBUG_SPLIT_KERNELS=0 falls back to the
-            // monolith, which is also what a drainer with no role split still builds (it needs kRoleFull,
-            // and only the monolith has it).
-            static const bool ksplit = [] {
-                const char* s = std::getenv("TT_METAL_PERF_DEBUG_SPLIT_KERNELS");
-                return (s == nullptr || *s == '\0') ? true : (*s != '0');
-            }();
-            const std::string kdrain = !ksplit     ? "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp"
-                                       : is_mover  ? "tt_metal/tools/profiler/kernels/drisc_profiler_mover.cpp"
-                                       : is_filler ? "tt_metal/tools/profiler/kernels/drisc_profiler_filler.cpp"
-                                                   : "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp";
+            const std::string kdrain = is_mover ? "tt_metal/tools/profiler/kernels/drisc_profiler_mover.cpp"
+                                                : "tt_metal/tools/profiler/kernels/drisc_profiler_filler.cpp";
             auto drain_id =
                     CreateKernel(
                           *ctx.drain_program[d],

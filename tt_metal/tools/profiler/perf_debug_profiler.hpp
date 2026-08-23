@@ -128,7 +128,7 @@ private:
         uint32_t stop_addr[kMaxDrisc] = {};  // host writes 1 to quiesce, 2 to release the NIU
         uint32_t done_addr[kMaxDrisc] = {};  // drainer publishes 0xD09E**** once its last page is out
         uint32_t results_addr[kMaxDrisc] = {};
-        // ---- role split (all zero / kRoleFull when the knob is off) ----
+        // ---- role split (the only roster: 4 fillers + 2 movers) ----
         uint32_t n_drisc = kNSockets;      // 2 normally, kNFillers + kNSockets with the role split on
         uint32_t role[kMaxDrisc] = {};     // 0 = full job, 1 = filler, 2 = mover
         uint32_t sock_of[kMaxDrisc] = {};  // socket index this DRISC owns, or kNoSocket

@@ -15,7 +15,7 @@ PerfDebugTracyConsumer::PerfDebugTracyConsumer(PerfDebugTracyHandler* handler) :
     // deliberate idleness and gets a recessive grey. Mover rows use their own hues because the two roles'
     // same-named phases have different meanings and scales (a filler's CREDIT-WAIT is DRAM ring room, a
     // mover's is host FIFO credit). Keys are the zone NAMES the drain kernel declares (TT_ZONE_DEFINE_ID
-    // in drisc_profiler_drain.cpp) -- names are the only stable handle on a structural zone id.
+    // in drisc_drain_common.hpp) -- names are the only stable handle on a structural zone id.
     zone_colors_["DRISC-SWEEP"] = 0x2E86C1;
     zone_colors_["DRISC-PACE"] = 0x707B7C;
     zone_colors_["DRISC-READ"] = 0x27AE60;
