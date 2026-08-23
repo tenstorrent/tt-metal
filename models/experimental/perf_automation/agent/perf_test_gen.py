@@ -150,51 +150,13 @@ def test_<task>_perf(device_params, device):
     #     build has no memory left for its KV cache and dies before any marker is printed.
     # So the gate runs TRACE FIRST and only falls back to the eager forward when trace genuinely
     # could not be measured. That is the designed contract: trace by default, eager as the fallback.
-    #   AND UNDER TRACY THE STAGES ARE MEASURED BY THE HARNESS, not by this file. measure_adapter
-    #     owns both shapes now: with a capture running it runs each declared stage EAGERLY, bracketed
-    #     by tracy signposts, so the capture carries a per-stage boundary and the report can price
-    #     each stack against its own math fidelity instead of one shared peak; with no capture it
-    #     captures and replays as before. This file used to skip measure_adapter entirely whenever
-    #     the profiler was on -- `if _PERF_TRACE and not _PROFILING` -- which is why a mark emitted
-    #     there could never reach a capture. The eager forward stays as the fallback for a model
-    #     whose stages cannot be driven one at a time.
     _PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
     if _PERF_TRACE and not _PROFILING:
         if not _try_traced():
             print("TRACE_REPLAY_FALLBACK=eager  # trace_replay isn't working — timing eagerly", flush=True)
             _eager_forward()
     else:
-        # THE MEASURED REGION, bracketed by the conventional pair. resolve_signposts already looks
-        # for start/stop and refine() already slices on them, so the main report sees EXACTLY the op
-        # set it saw before -- which matters because the marked pass below adds ops to the capture
-        # and must not be counted into it.
-        _sm = None
-        if _PROFILING:
-            try:
-                from models.experimental.perf_automation.agent import stage_marks as _sm
-
-                _sm.signpost("start")
-            except Exception:  # noqa: BLE001
-                _sm = None
         _eager_forward()
-        if _sm is not None:
-            _sm.signpost("stop")
-            # A SECOND, MARKED PASS -- fidelity rollup only. run_head is one opaque call, so the ops
-            # it emits carry no stage; running each declared stage once between marks gives the
-            # report a per-stage window without touching what was just measured. Additive: if the
-            # pipeline declares no stages, or a stage will not run alone, the split is simply absent.
-            try:
-                from models.experimental.perf_automation.agent.perf_adapter import PipelineStageAdapter
-
-                def _build_for_marks(dev):
-                    return _stage_inputs_from_demo(_get_pipe(dev))
-
-                _sm.mark_stages(
-                    PipelineStageAdapter(_build_for_marks, prompt_ids_for_isl(get_tokenizer(), PERF_ISL_TOKENS), batch=PERF_BATCH),
-                    device,
-                )
-            except Exception as _me:  # noqa: BLE001
-                print("STAGE_MARKS_SKIPPED=%r" % (_me,), flush=True)
         if _PERF_TRACE:
             _try_traced()
 """
@@ -1621,6 +1583,18 @@ def generate_perf_test(
             continue
         prev_draft = content
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        # STAGE MARKS ARE INJECTED, NOT REQUESTED. The skeleton above is a "structural reference
+        # handed to the LLM", so anything added to it is a suggestion -- and the generated test for
+        # voxtral came back with zero references to the marked pass, leaving five commits' worth of
+        # downstream machinery starved behind an emission that never ran. This puts it in after the
+        # model-specific content is written and before it is validated, so what ships is what runs.
+        try:
+            from .stage_marks import inject_stage_marks as _inject_marks
+
+            content, _why_marks = _inject_marks(content)
+            print("      · stage marks: %s" % _why_marks, file=sys.stderr, flush=True)
+        except Exception as _mi:  # noqa: BLE001
+            print("      · stage marks: not injected (%s)" % _mi, file=sys.stderr, flush=True)
         out_path.write_text(content)
         if not validate:
             return node

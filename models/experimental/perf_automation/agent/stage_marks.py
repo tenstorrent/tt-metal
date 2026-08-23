@@ -94,3 +94,74 @@ def mark_stages(adapter, device) -> int:
         finally:
             signpost("stage:%s:end" % name)
     return n
+
+
+# --- deterministic injection into the generated perf test ----------------------------------------
+
+# The names the injected block leans on. All are in scope at the injection point -- some are test
+# locals, some module-level -- and all come from the skeleton the generator works from. They are
+# CHECKED before injecting rather than assumed: a test that names things differently gets no marks
+# and says so, instead of shipping a NameError into the one run that measures per-op time.
+_REQUIRED_NAMES = (
+    "_stage_inputs_from_demo",
+    "_get_pipe",
+    "prompt_ids_for_isl",
+    "get_tokenizer",
+    "PERF_ISL_TOKENS",
+    "PERF_BATCH",
+)
+
+_INJECT_TEMPLATE = """{i}# --- stage marks (injected by perf_test_gen) -------------------------------------
+{i}# The measured region is bracketed by the conventional start/stop pair so the main report
+{i}# slices exactly the ops run_head emitted; the pass below is additive and feeds per-stage
+{i}# fidelity only. Injected rather than written by the generator: the skeleton is advisory and
+{i}# a generated test simply omitted this, which is why five earlier attempts measured nothing.
+{i}try:
+{i}    from models.experimental.perf_automation.agent import stage_marks as _tt_sm
+{i}    from models.experimental.perf_automation.agent.perf_adapter import PipelineStageAdapter as _TtPSA
+{i}except Exception:  # noqa: BLE001
+{i}    _tt_sm = None
+{i}if _tt_sm is not None:
+{i}    _tt_sm.signpost("start")
+{body}{i}if _tt_sm is not None:
+{i}    _tt_sm.signpost("stop")
+{i}    try:
+{i}        _tt_sm.mark_stages(
+{i}            _TtPSA(
+{i}                lambda _d: _stage_inputs_from_demo(_get_pipe(_d)),
+{i}                prompt_ids_for_isl(get_tokenizer(), PERF_ISL_TOKENS),
+{i}                batch=PERF_BATCH,
+{i}            ),
+{i}            device,
+{i}        )
+{i}    except Exception as _tt_e:  # noqa: BLE001
+{i}        print("STAGE_MARKS_SKIPPED=%r" % (_tt_e,), flush=True)
+"""
+
+
+def inject_stage_marks(text: str) -> tuple:
+    """Wrap the profiled eager measurement in marks and append the per-stage pass. (text, why).
+
+    Deterministic, because the skeleton is not. _SKELETON_REF is "structural reference handed to the
+    LLM", so anything added there is a suggestion: the generated test for voxtral came back with zero
+    references to it, and five attempts' worth of downstream machinery sat starved behind that.
+
+    Idempotent, and refuses rather than guesses: no bare `_eager_forward()` statement, or a test that
+    does not define the helpers the block needs, means no injection and a stated reason.
+    """
+    import re
+
+    if "_tt_sm" in text:
+        return text, "already injected"
+    missing = [n for n in _REQUIRED_NAMES if n not in text]
+    if missing:
+        return text, "generated test does not define %s" % ", ".join(missing)
+    lines = text.splitlines(keepends=True)
+    at = [k for k, l in enumerate(lines) if re.match(r"^(\s*)_eager_forward\(\)\s*$", l)]
+    if not at:
+        return text, "no bare _eager_forward() statement"
+    # The LAST one is the profiled branch; an earlier one is the trace-replay fallback.
+    k = at[-1]
+    ind = re.match(r"^(\s*)", lines[k]).group(1)
+    lines[k] = _INJECT_TEMPLATE.format(i=ind, body=lines[k])
+    return "".join(lines), "injected at line %d" % (k + 1)

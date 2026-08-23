@@ -126,12 +126,83 @@ def test_the_marks_are_not_in_the_run_that_cannot_see_fidelity():
     assert "_measure_stage_profiled" not in tr
 
 
-def test_the_measured_region_is_bracketed_so_the_marked_pass_is_not_counted_into_it():
-    """The extra pass adds ops to the capture. Without start/stop around the measured region the
-    main report would count them, and every per-op number would shift for a reason unrelated to the
+# --- the marks are INJECTED, because the skeleton is only advice ---------------------------------
+
+
+def _real_test_src():
+    p = Path("/home/ttuser/voxtral-wt/models/tt_transformers/demo/voxtral_mini_3b_2507/tests/e2e/test_main_perf.py")
+    if not p.is_file():
+        pytest.skip("no generated perf test on this box")
+    return p.read_text()
+
+
+def test_injection_lands_on_a_real_generated_test():
+    """THE SIXTH GATE. _SKELETON_REF is "structural reference handed to the LLM", so the marked pass
+    added there was a suggestion -- and the generated test came back with ZERO references to it,
+    leaving five commits of downstream machinery starved behind an emission that never ran.
+
+    Run against the real generated file, not a fixture: the point is that it survives whatever the
+    generator actually wrote."""
+    import ast as _ast
+
+    from agent.stage_marks import inject_stage_marks
+
+    out, why = inject_stage_marks(_real_test_src())
+    assert "injected at line" in why, why
+    _ast.parse(out)
+    assert '_tt_sm.signpost("start")' in out and '_tt_sm.signpost("stop")' in out
+    assert "mark_stages(" in out
+
+
+def test_injection_is_idempotent():
+    """It runs on every generation; twice must not mean two marked passes."""
+    from agent.stage_marks import inject_stage_marks
+
+    once, _ = inject_stage_marks(_real_test_src())
+    twice, why = inject_stage_marks(once)
+    assert twice == once and why == "already injected"
+
+
+def test_it_refuses_rather_than_guesses():
+    """A test that does not define the helpers the block leans on, or has no bare _eager_forward()
+    call, gets no marks and a stated reason -- never a NameError shipped into the one run that
+    measures per-op time."""
+    from agent.stage_marks import inject_stage_marks
+
+    _, why = inject_stage_marks("def test_x():\n    pass\n")
+    assert "does not define" in why, why
+    names = "".join(
+        "%s=1\n" % n
+        for n in (
+            "_stage_inputs_from_demo",
+            "_get_pipe",
+            "prompt_ids_for_isl",
+            "get_tokenizer",
+            "PERF_ISL_TOKENS",
+            "PERF_BATCH",
+        )
+    )
+    _, why2 = inject_stage_marks(names)
+    assert "no bare _eager_forward()" in why2, why2
+
+
+def test_the_measured_call_stays_inside_the_pair():
+    """The marked pass adds ops to the capture. Without start/stop around the measured region the
+    main report would count them and every per-op number would move for no reason to do with the
     model."""
+    from agent.stage_marks import inject_stage_marks
+
+    out, _ = inject_stage_marks(_real_test_src())
+    a = out.index('_tt_sm.signpost("start")')
+    b = out.index('_tt_sm.signpost("stop")')
+    assert "_eager_forward()" in out[a:b]
+    assert out.index("mark_stages(") > b
+
+
+def test_the_generator_injects_before_it_validates():
+    """What ships must be what was validated -- and what runs."""
     src = (_PA / "agent" / "perf_test_gen.py").read_text()
-    i = src.index('_sm.signpost("start")')
-    j = src.index('_sm.signpost("stop")')
-    assert "_eager_forward()" in src[i:j], "the measured call is not inside the start/stop pair"
-    assert src.index("mark_stages(") > j, "the marked pass runs before the measured region closes"
+    i = src.index("inject_stage_marks")
+    j = src.index("out_path.write_text(content)", i)
+    k = src.index("validate_generated_perf_test(out_path", j)
+    assert i < j < k, "injection does not precede the write and the validation"
