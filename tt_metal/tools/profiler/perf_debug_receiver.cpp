@@ -65,6 +65,11 @@ constexpr size_t kConsumerScratchRecs = 1 << 16;
 constexpr uint32_t kEmptyPollsBeforeSleep = 1000;
 // Decode threads probe the FIFO at least this often when idle; consumers are latency-tolerant and may
 // sleep longer. Anything under ~50 us needs the timer slack shrunk or sleep_for quietly rounds up to it.
+// Load-bearing, and the wakeup cost is the point: at 5 us each thread churns ~80 K context switches/s
+// (1.3 M/s across 16 streams, ~6 cores) but credit keeps flowing through the micro-gaps mid-burst where
+// avail briefly hits 0. Raising it to 200 us to reclaim those cores doubled the movers' worst credit wait
+// (1.3 -> 2.7 ms), took producer stalls from 600-1257 to 1178-4732 and filled five DRAM rings instead of
+// two -- the sleep becomes a window in which no credit is returned at all.
 constexpr uint32_t kProbeSleepCapUs = 5;
 constexpr uint32_t kConsumerSleepCapUs = 100;
 
