@@ -215,6 +215,12 @@ class TPGatedDeltaNet:
         # Only used when valid_len is None (masked buckets keep the MAC FIR).
         self._gdn_conv1d = True
         self._conv1d_wprep = None  # prepared depthwise weight (populated on first prefill call)
+        # HP3: cap on a single native-conv1d invocation length. The conv's statically allocated
+        # CBs scale ~linearly with input length (~1.04 MB @ T=2048 on the 11x6 grid ->
+        # ~2.08 MB @ 4096, past the 1.5 MB L1 cap), so prefill chunks longer than this are
+        # split into <=_conv1d_max_t sub-slices carrying a (K-1)-token input halo — same math,
+        # bounded CBs (see _conv1d_prefill_subchunked). T <= _conv1d_max_t is untouched.
+        self._conv1d_max_t = int(os.environ.get("QWEN38_GDN_CONV1D_MAX_T", "2048"))
         # Persistent zero sources for trace-safe reset_state_inplace (alloc before any trace)
         self._zero_conv0 = None
         self._zero_conv_carry = None
@@ -296,7 +302,13 @@ class TPGatedDeltaNet:
 
         Prepends K-1 carry rows with padding=0 so one program serves every chunk (native pad only zeros,
         so it can't inject cross-chunk carry into a shared trace).
+
+        Chunks longer than _conv1d_max_t route to _conv1d_prefill_subchunked (same math, the
+        conv invoked per <=_conv1d_max_t sub-slice to keep its CBs inside L1); T <= _conv1d_max_t
+        keeps this single-invocation path exactly as validated.
         """
+        if T > self._conv1d_max_t:
+            return self._conv1d_prefill_subchunked(qkv, T, conv_state)
         dev, K, C = self.mesh, self.K, self.qkv_dim_tp
         _dram = ttnn.DRAM_MEMORY_CONFIG
         Lin = (K - 1) + T
@@ -312,6 +324,68 @@ class TPGatedDeltaNet:
         else:
             xin = ttnn.concat([conv_state, qkv], dim=1, memory_config=_dram)
         xin = ttnn.to_layout(xin, ttnn.ROW_MAJOR_LAYOUT, memory_config=_dram)
+        out = self._conv1d_run(xin, Lin, T)
+        out = ttnn.to_layout(out, ttnn.TILE_LAYOUT, memory_config=_dram)
+        # SiLU stays separate (folding via conv_config.activation drops PCC to ~0.84 on this depthwise).
+        return ttnn.silu(out, memory_config=_dram), new_state
+
+    def _conv1d_prefill_subchunked(self, qkv, T, conv_state):
+        """_conv1d_prefill for T > _conv1d_max_t: identical math, CBs bounded by the sub-slice length.
+
+        The conv is causal FIR (kernel K, stride 1, dilation 1, zero left-pad K-1): out[t] depends
+        only on x[t-(K-1)..t]. So the chunk-length axis splits into <=_conv1d_max_t sub-slices,
+        each prepended with the previous K-1 input tokens (the halo; the first sub-slice uses the
+        cross-chunk carry exactly like the single-shot path), and the concatenated per-slice
+        outputs equal one conv over the full chunk. This is the same carry construction the
+        outer chunks already use (conv_carry), applied intra-chunk.
+        Trace-safe: static sub-slice count for a given bucket T, device-only ops throughout.
+        """
+        dev, K, C = self.mesh, self.K, self.qkv_dim_tp
+        _dram = ttnn.DRAM_MEMORY_CONFIG
+        S = self._conv1d_max_t
+        # TILE-layout concat of the per-slice conv outputs needs tile-aligned slice heights
+        # (buckets and the default cap are 32-multiples; ragged tails go through the FIR path).
+        assert S % tpc.TILE_SIZE == 0 and T % tpc.TILE_SIZE == 0, f"conv1d sub-chunking needs 32-aligned T/S ({T}/{S})"
+        # new_state: last K-1 real input tokens (identical to the single-shot path), TILE/DRAM.
+        new_state = ttnn.slice(qkv, (0, T - (K - 1), 0), (1, T, C))
+        new_state = ttnn.to_memory_config(ttnn.to_layout(new_state, ttnn.TILE_LAYOUT), _dram)
+        # Untilize the full chunk once; every sub-slice input INCLUDING its halo is then one
+        # plain row-major slice of this buffer (halo rows are just qkv[s-(K-1):s]).
+        qkv_rm = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=_dram)
+        if conv_state is None:
+            head = ttnn.zeros(
+                [1, K - 1, C], device=dev, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=_dram
+            )
+        else:
+            head = ttnn.to_layout(conv_state, ttnn.ROW_MAJOR_LAYOUT, memory_config=_dram)
+        outs = []
+        for s in range(0, T, S):
+            L = min(S, T - s)
+            if s == 0:
+                first = ttnn.slice(qkv_rm, (0, 0, 0), (1, L, C), memory_config=_dram)
+                xin = ttnn.concat([head, first], dim=1, memory_config=_dram)
+                ttnn.deallocate(first)
+                ttnn.deallocate(head)
+            else:
+                # Halo: previous sub-slice's last K-1 input tokens, read straight from qkv_rm.
+                xin = ttnn.slice(qkv_rm, (0, s - (K - 1), 0), (1, s + L, C), memory_config=_dram)
+            outs.append(self._conv1d_run(xin, (K - 1) + L, L))  # consumes xin
+        ttnn.deallocate(qkv_rm)
+        out = ttnn.concat(outs, dim=1, memory_config=_dram)
+        for o in outs:
+            ttnn.deallocate(o)
+        out = ttnn.to_layout(out, ttnn.TILE_LAYOUT, memory_config=_dram)
+        # SiLU stays separate (folding via conv_config.activation drops PCC to ~0.84 on this depthwise).
+        return ttnn.silu(out, memory_config=_dram), new_state
+
+    def _conv1d_run(self, xin, Lin, T_out):
+        """One native depthwise-conv1d invocation (shared by the single-shot and sub-chunked paths).
+
+        xin: ROW_MAJOR [1, Lin, C] interleaved input, halo/carry rows already prepended
+        (consumed). Returns the pre-SiLU conv output [1, T_out, C] DRAM interleaved,
+        T_out = Lin - (K-1)."""
+        dev, K, C = self.mesh, self.K, self.qkv_dim_tp
+        _dram = ttnn.DRAM_MEMORY_CONFIG
         xin = ttnn.reshape(xin, (1, Lin, 1, C))
         cc = ttnn.init_device_compute_kernel_config(
             dev.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
@@ -368,10 +442,7 @@ class TPGatedDeltaNet:
         )
         ttnn.deallocate(xin)
         out = ttnn.sharded_to_interleaved(out, _dram)
-        out = ttnn.reshape(out, (1, T, C))
-        out = ttnn.to_layout(out, ttnn.TILE_LAYOUT, memory_config=_dram)
-        # SiLU stays separate (folding via conv_config.activation drops PCC to ~0.84 on this depthwise).
-        return ttnn.silu(out, memory_config=_dram), new_state
+        return ttnn.reshape(out, (1, T_out, C))
 
     def _row_proj(self, x, weight):
         """Row-parallel out projection: DRAM-sharded decode/prefill matmul (K=gdn_value_dim_tp),

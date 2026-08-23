@@ -556,3 +556,75 @@ def test_gdn_tp_fused_chunk_prefill(mesh_device, monkeypatch, reset_seeds, ensur
     passing_fd, pcc_fd = comp_pcc(dec, fused, thr)
     logger.info(f"GDN fused-chunk prefill vs step-decode PCC (T={T}) = {pcc_fd}")
     assert passing_fd, f"fused chunk prefill disagrees with step-by-step decode: PCC {pcc_fd} < {thr}"
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_gdn_tp_prefill_conv_subchunk(mesh_device, reset_seeds, ensure_gc, request):
+    """HP3 gate: ONE T=4096 forward_prefill (conv1d sub-chunked at 2048) == TWO carried 2048 chunks.
+
+    The 2x2048 chunk-outer carry is the production-validated semantics (bench chunk=2048).
+    A single 4096-token call — which routes the depthwise conv through
+    _conv1d_prefill_subchunked (halo carry at the 2048 boundary) — must reproduce it:
+    prefill outputs row-for-row, a tight window around the sub-chunk boundary (where a halo
+    bug would concentrate: only the first K-1 rows after the seam depend on it), and the
+    post-prefill state, grounded by one decode step on each instance.
+    """
+    os.environ.setdefault("HF_MODEL", model_path())
+    T, half, chunk = 4096, 2048, 128
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=2 * T)
+    nd = mesh_device.get_num_devices()
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    logger.info(f"devices={nd} gdn layer={li} T={T} conv sub-chunk cap=2048")
+
+    sd = load_gdn_layer(args.CKPT_DIR, li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
+    tw = load_gdn_weights_tp(mesh_device, sd, args)
+    comp = tp_composer(mesh_device)
+
+    x = torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16)
+    xd = torch.randn(1, 1, 1, args.dim, dtype=torch.bfloat16)  # decode grounding token
+
+    # ---- reference: two CARRIED 2048 chunks (validated path; conv1d single-shot per chunk) ----
+    gref = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
+    assert gref._conv1d_max_t >= half, "reference halves must take the single-shot conv path"
+    gref.reset_state()
+    gref._stable_state = True
+    gref.reset_state_inplace()
+    o1 = gref.forward_prefill(shard_to_device(mesh_device, x[:, :, :half], dim=-1), chunk_size=chunk)
+    o2 = gref.forward_prefill(
+        shard_to_device(mesh_device, x[:, :, half:], dim=-1), chunk_size=chunk, capture_state=True
+    )
+    ref = torch.cat(
+        [ttnn.to_torch(o1, mesh_composer=comp)[0, 0].float(), ttnn.to_torch(o2, mesh_composer=comp)[0, 0].float()],
+        dim=0,
+    )  # [T, dim]
+    dec_ref = ttnn.to_torch(gref.forward_decode(replicate_to_device(mesh_device, xd)), mesh_composer=comp)[
+        0, 0, 0
+    ].float()
+
+    # ---- test: one 4096-token call (conv1d sub-chunks internally at _conv1d_max_t=2048) ----
+    g = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
+    assert g._conv1d_max_t < T, "T must exceed the conv cap so the sub-chunked path is exercised"
+    g.reset_state()
+    g._stable_state = True
+    g.reset_state_inplace()
+    o = g.forward_prefill(shard_to_device(mesh_device, x, dim=-1), chunk_size=chunk, capture_state=True)
+    out = ttnn.to_torch(o, mesh_composer=comp)[0, 0].float()  # [T, dim]
+    dec_t = ttnn.to_torch(g.forward_decode(replicate_to_device(mesh_device, xd)), mesh_composer=comp)[0, 0, 0].float()
+
+    thr = get_pcc_threshold(request)
+    passing, pcc = comp_pcc(ref, out, thr)
+    logger.info(f"GDN conv-subchunk prefill 4096 vs 2x2048 PCC = {pcc}")
+    assert passing, f"sub-chunked 4096 prefill disagrees with 2x2048 carried chunks: PCC {pcc} < {thr}"
+    # Seam window: rows just after the 2048 boundary are the only ones a halo bug can touch.
+    passing_b, pcc_b = comp_pcc(ref[half - 32 : half + 32], out[half - 32 : half + 32], thr)
+    logger.info(f"GDN conv-subchunk boundary-window PCC = {pcc_b}")
+    assert passing_b, f"sub-chunk seam mismatch (halo carry): PCC {pcc_b} < {thr}"
+    # State grounding: decode after prefill must agree (recurrent + conv decode state match).
+    passing_d, pcc_d = comp_pcc(dec_ref, dec_t, thr)
+    logger.info(f"GDN conv-subchunk post-prefill decode PCC = {pcc_d}")
+    assert passing_d, f"post-prefill decode disagrees (state carry): PCC {pcc_d} < {thr}"
+    logger.info(f"PASSED: HP3 conv1d sub-chunk gate (T={T}) PCC out={pcc} seam={pcc_b} decode={pcc_d}")
