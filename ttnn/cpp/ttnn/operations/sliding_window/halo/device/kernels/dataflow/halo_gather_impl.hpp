@@ -189,7 +189,10 @@ template <
     uint32_t BlockSizeHeight,
     uint32_t BlockSizeWidthTiles,
     uint32_t BlockStartOffset,
-    uint32_t BlockStride>
+    uint32_t BlockStride,
+    uint32_t ConfigTensorInDram,
+    uint32_t EnablePadding,
+    uint32_t UsePadScratch>
 FORCE_INLINE void gather(uint32_t config_read_index) {
     static_assert(BlockStride >= 1, "Block stride must be at least one");
     constexpr bool enable_blocking = !SkipUntilize;
@@ -200,36 +203,36 @@ FORCE_INLINE void gather(uint32_t config_read_index) {
     const uint32_t out_base_l1_addr = output.get_write_ptr();
     uint32_t gather_config_l1_addr;
     uint32_t padding_config_l1_addr = 0;
-#ifdef CONFIG_TENSOR_IN_DRAM
-    TensorAccessor gather_config(tensor::gather_config);
-    Scratchpad<uint32_t> gather_scratch(scratch::gather_config);
-    gather_config_l1_addr = gather_scratch.get_base_address();
-    noc.async_read(
-        gather_config,
-        CoreLocalMem<uint32_t>(gather_config_l1_addr),
-        gather_scratch.size_in_bytes(),
-        {.page_id = config_read_index},
-        {});
-#ifdef ENABLE_PADDING
-    TensorAccessor padding_config(tensor::padding_config);
-    Scratchpad<uint32_t> padding_scratch(scratch::padding_config);
-    padding_config_l1_addr = padding_scratch.get_base_address();
-    noc.async_read(
-        padding_config,
-        CoreLocalMem<uint32_t>(padding_config_l1_addr),
-        padding_scratch.size_in_bytes(),
-        {.page_id = config_read_index},
-        {});
-#endif
-    noc.async_read_barrier();
-#else
-    TensorAccessor gather_config(tensor::gather_config);
-    gather_config_l1_addr = gather_config.get_bank_base_address();
-#ifdef ENABLE_PADDING
-    TensorAccessor padding_config(tensor::padding_config);
-    padding_config_l1_addr = padding_config.get_bank_base_address();
-#endif
-#endif
+    if constexpr (ConfigTensorInDram) {
+        TensorAccessor gather_config(tensor::gather_config);
+        Scratchpad<uint32_t> gather_scratch(scratch::gather_config);
+        gather_config_l1_addr = gather_scratch.get_base_address();
+        noc.async_read(
+            gather_config,
+            CoreLocalMem<uint32_t>(gather_config_l1_addr),
+            gather_scratch.size_in_bytes(),
+            {.page_id = config_read_index},
+            {});
+        if constexpr (EnablePadding) {
+            TensorAccessor padding_config(tensor::padding_config);
+            Scratchpad<uint32_t> padding_scratch(scratch::padding_config);
+            padding_config_l1_addr = padding_scratch.get_base_address();
+            noc.async_read(
+                padding_config,
+                CoreLocalMem<uint32_t>(padding_config_l1_addr),
+                padding_scratch.size_in_bytes(),
+                {.page_id = config_read_index},
+                {});
+        }
+        noc.async_read_barrier();
+    } else {
+        TensorAccessor gather_config(tensor::gather_config);
+        gather_config_l1_addr = gather_config.get_bank_base_address();
+        if constexpr (EnablePadding) {
+            TensorAccessor padding_config(tensor::padding_config);
+            padding_config_l1_addr = padding_config.get_bank_base_address();
+        }
+    }
 
     DataflowBuffer src(dfb::src);
     if constexpr (SrcProducer) {
@@ -239,21 +242,19 @@ FORCE_INLINE void gather(uint32_t config_read_index) {
         src.push_back(static_cast<uint16_t>(InputNPages));
     }
 
-#ifdef ENABLE_PADDING
-    if constexpr (PadVal == 0) {
-        copy_padding<AlignedStickNBytes, MEM_ZEROS_SIZE>(noc, padding_config_l1_addr, out_base_l1_addr, MEM_ZEROS_BASE);
-    } else {
-#ifdef USE_PAD_SCRATCH
-        Scratchpad<uint32_t> pad(scratch::pad);
-        constexpr uint32_t num_elements = AlignedStickNBytes / sizeof(uint16_t);
-        fill_with_val<num_elements, static_cast<uint16_t>(PadVal)>(pad.get_base_address());
-        copy_padding<AlignedStickNBytes, AlignedStickNBytes>(
-            noc, padding_config_l1_addr, out_base_l1_addr, pad.get_base_address());
-#else
-        static_assert(PadVal == 0, "Nonzero padding requires the pad scratch binding");
-#endif
+    if constexpr (EnablePadding) {
+        if constexpr (PadVal == 0) {
+            copy_padding<AlignedStickNBytes, MEM_ZEROS_SIZE>(
+                noc, padding_config_l1_addr, out_base_l1_addr, MEM_ZEROS_BASE);
+        } else {
+            static_assert(UsePadScratch, "Nonzero padding requires the pad scratch binding");
+            Scratchpad<uint32_t> pad(scratch::pad);
+            constexpr uint32_t num_elements = AlignedStickNBytes / sizeof(uint16_t);
+            fill_with_val<num_elements, static_cast<uint16_t>(PadVal)>(pad.get_base_address());
+            copy_padding<AlignedStickNBytes, AlignedStickNBytes>(
+                noc, padding_config_l1_addr, out_base_l1_addr, pad.get_base_address());
+        }
     }
-#endif
 
     if constexpr (SrcProducer && SkipUntilize) {
         // The other reader consumes the already-resident shard directly; making it wait/pop would race

@@ -189,13 +189,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
             .unique_id = gather_config0_param, .spec = gather_config0.tensor_spec()},
         tt::tt_metal::experimental::TensorParameter{
             .unique_id = gather_config1_param, .spec = gather_config1.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{.unique_id = pad_config0_param, .spec = pad_config0.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{.unique_id = pad_config1_param, .spec = pad_config1.tensor_spec()},
     };
-    if (enable_padding) {
-        tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
-            .unique_id = pad_config0_param, .spec = pad_config0.tensor_spec()});
-        tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
-            .unique_id = pad_config1_param, .spec = pad_config1.tensor_spec()});
-    }
 
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dataflow_buffers = {
         tt::tt_metal::experimental::DataflowBufferSpec{
@@ -322,15 +318,16 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
                  {"block_size_height", clamped_block_size_height},
                  {"block_size_width_tiles", ntiles_per_block},
                  {"block_start_offset", block_start_offset},
-                 {"block_stride", block_stride}},
+                 {"block_stride", block_stride},
+                 {"config_tensor_in_dram", static_cast<std::uint32_t>(config_tensors_in_dram)},
+                 {"enable_padding", static_cast<std::uint32_t>(enable_padding)},
+                 {"use_pad_scratch", static_cast<std::uint32_t>(use_pad_scratch)}},
             .hw_config = std::move(reader_hw_config),
         };
         reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{
             .tensor_parameter_name = gather_config_name, .accessor_name = "gather_config"});
-        if (enable_padding) {
-            reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{
-                .tensor_parameter_name = pad_config_name, .accessor_name = "padding_config"});
-        }
+        reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{
+            .tensor_parameter_name = pad_config_name, .accessor_name = "padding_config"});
         reader.dfb_bindings.push_back(
             block_start_offset == 0 ? tt::tt_metal::experimental::ProducerOf(output_dfb_name, "out")
                                     : tt::tt_metal::experimental::ConsumerOf(output_dfb_name, "out"));
@@ -356,30 +353,21 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
             }
             reader.dfb_bindings.push_back(std::move(binding));
         }
-        if (use_pad_scratch) {
-            reader.scratchpad_bindings.push_back(tt::tt_metal::experimental::ScratchpadBinding{
-                .scratchpad_spec_name = pad_scratch, .accessor_name = "pad"});
-        }
+        reader.scratchpad_bindings.push_back(tt::tt_metal::experimental::ScratchpadBinding{
+            .scratchpad_spec_name = pad_scratch,
+            .accessor_name = "pad",
+            .allow_unbound_for_constexpr_discard = !use_pad_scratch});
         if (config_tensors_in_dram) {
             reader.runtime_arg_schema = {.runtime_arg_names = {"config_read_index"}};
-            reader.scratchpad_bindings.push_back(tt::tt_metal::experimental::ScratchpadBinding{
-                .scratchpad_spec_name = gather_scratch, .accessor_name = "gather_config"});
-            if (enable_padding) {
-                reader.scratchpad_bindings.push_back(tt::tt_metal::experimental::ScratchpadBinding{
-                    .scratchpad_spec_name = pad_config_scratch, .accessor_name = "padding_config"});
-            }
         }
-        tt::tt_metal::experimental::KernelSpec::CompilerOptions::Defines defines;
-        if (config_tensors_in_dram) {
-            defines.emplace("CONFIG_TENSOR_IN_DRAM", "1");
-        }
-        if (enable_padding) {
-            defines.emplace("ENABLE_PADDING", "1");
-        }
-        if (use_pad_scratch) {
-            defines.emplace("USE_PAD_SCRATCH", "1");
-        }
-        reader.compiler_options.defines = std::move(defines);
+        reader.scratchpad_bindings.push_back(tt::tt_metal::experimental::ScratchpadBinding{
+            .scratchpad_spec_name = gather_scratch,
+            .accessor_name = "gather_config",
+            .allow_unbound_for_constexpr_discard = !config_tensors_in_dram});
+        reader.scratchpad_bindings.push_back(tt::tt_metal::experimental::ScratchpadBinding{
+            .scratchpad_spec_name = pad_config_scratch,
+            .accessor_name = "padding_config",
+            .allow_unbound_for_constexpr_discard = !(config_tensors_in_dram && enable_padding)});
         return reader;
     };
 
@@ -452,13 +440,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
         {output_param, tt::tt_metal::experimental::TensorArgument{std::cref(output_tensor.mesh_tensor())}},
         {gather_config0_param, tt::tt_metal::experimental::TensorArgument{std::cref(gather_config0)}},
         {gather_config1_param, tt::tt_metal::experimental::TensorArgument{std::cref(gather_config1)}},
+        {pad_config0_param, tt::tt_metal::experimental::TensorArgument{std::cref(pad_config0)}},
+        {pad_config1_param, tt::tt_metal::experimental::TensorArgument{std::cref(pad_config1)}},
     };
-    if (enable_padding) {
-        run_args.tensor_args.insert(
-            {pad_config0_param, tt::tt_metal::experimental::TensorArgument{std::cref(pad_config0)}});
-        run_args.tensor_args.insert(
-            {pad_config1_param, tt::tt_metal::experimental::TensorArgument{std::cref(pad_config1)}});
-    }
 
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),
