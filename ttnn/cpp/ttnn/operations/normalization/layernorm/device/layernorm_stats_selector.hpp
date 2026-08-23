@@ -18,6 +18,10 @@ struct BlackholeStatsSelectorParams {
     bool fuse_pre_add;
     bool has_gamma;
     bool has_beta;
+    std::uint32_t num_tile_rows;
+    std::uint32_t active_cores;
+    std::uint32_t available_cores;
+    bool compact_two_pass_fits_in_l1;
 };
 
 // Crossover points measured against the centred tile-reduction path.
@@ -26,9 +30,19 @@ struct BlackholeStatsSelectorParams {
 // affine-finalisation optimisations that are outside this branch.
 constexpr bool use_blackhole_sfpu_stats(const BlackholeStatsSelectorParams& params) {
     const bool has_full_affine = params.has_gamma && params.has_beta;
+    if (!params.compact_two_pass_fits_in_l1) {
+        return false;
+    }
+
+    // FP32 crossover measurements were taken with enough rows to occupy the
+    // selected grid. Keep small or restricted-core workloads on the tile path
+    // until independently calibrated.
+    const bool fp32_parallelism_calibrated = params.active_cores == params.available_cores &&
+                                             params.available_cores >= 100 &&
+                                             params.num_tile_rows >= params.active_cores;
     if (params.fuse_pre_add && has_full_affine) {
         if (params.input_format == tt::DataFormat::Float32) {
-            return params.padded_width >= 2048;
+            return fp32_parallelism_calibrated && params.padded_width >= 2048;
         }
         if (params.input_format == tt::DataFormat::Float16_b) {
             return params.padded_width <= 256 || params.padded_width >= 2880;
@@ -38,7 +52,7 @@ constexpr bool use_blackhole_sfpu_stats(const BlackholeStatsSelectorParams& para
 
     if (has_full_affine) {
         if (params.input_format == tt::DataFormat::Float32) {
-            return params.padded_width >= 2880;
+            return fp32_parallelism_calibrated && params.padded_width >= 2880;
         }
         return params.input_format == tt::DataFormat::Float16_b;
     }

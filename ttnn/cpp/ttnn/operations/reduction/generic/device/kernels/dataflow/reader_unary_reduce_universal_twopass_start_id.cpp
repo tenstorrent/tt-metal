@@ -8,28 +8,26 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     std::uint32_t src_addr = get_arg_val<std::uint32_t>(0);
     std::uint32_t num_tiles = get_arg_val<std::uint32_t>(1);
     std::uint32_t start_id = get_arg_val<std::uint32_t>(2);
 
-    constexpr std::uint32_t scaler_bits = get_compile_time_arg_val(0);
-    constexpr std::uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr auto tensor_args = TensorAccessorArgs<2>();
-
-    constexpr std::uint32_t cb_id_in2 = tt::CBIndex::c_2;
-    float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
+    constexpr std::uint32_t Wt = get_compile_time_arg_val(0);
+    constexpr auto tensor_args = TensorAccessorArgs<1>();
 
     constexpr std::uint32_t cb_id_in0 = tt::CBIndex::c_0;
-    constexpr std::uint32_t onetile = 1;
+    constexpr std::uint32_t max_read_batch = WELFORD_TWO_PASS_STREAMING_CB_TILES;
     const std::uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
     Noc noc;
     CircularBuffer cb_in0(cb_id_in0);
+
+#ifndef WELFORD_TWO_PASS_L1_REPLAY
+    std::uint32_t stream_write_page = 0;
+#endif
 
     const std::uint32_t num_rows = num_tiles / Wt;
     for (std::uint32_t row = 0; row < num_rows; ++row) {
@@ -37,7 +35,20 @@ void kernel_main() {
 #ifdef WELFORD_TWO_PASS_L1_REPLAY
         // The compute kernel keeps this complete row in the enlarged input CB and
         // indexes it twice, so DRAM is traversed only once.
-        constexpr std::uint32_t num_passes = 1;
+        for (std::uint32_t wt_base = 0; wt_base < Wt; wt_base += max_read_batch) {
+            const std::uint32_t read_batch = std::min(max_read_batch, Wt - wt_base);
+            cb_in0.reserve_back(read_batch);
+            for (std::uint32_t wt = 0; wt < read_batch; ++wt) {
+                noc.async_read(
+                    tensor_accessor,
+                    cb_in0,
+                    tile_bytes,
+                    {.page_id = row_start_id + wt_base + wt},
+                    {.offset_bytes = wt * tile_bytes});
+            }
+            noc.async_read_barrier();
+            cb_in0.push_back(read_batch);
+        }
 #else
 #ifdef WELFORD_TWO_PASS_BFP8_INPUT
         constexpr std::uint32_t num_front_retained = 2;
@@ -45,25 +56,31 @@ void kernel_main() {
         constexpr std::uint32_t num_front_retained = 3;
 #endif
         constexpr std::uint32_t num_passes = Wt <= num_front_retained + 1 ? 1 : 2;
-#endif
         for (std::uint32_t pass = 0; pass < num_passes; ++pass) {
-#ifdef WELFORD_TWO_PASS_L1_REPLAY
-            constexpr std::uint32_t pass_start = 0;
-            constexpr std::uint32_t pass_end = Wt;
-#else
             // Compute retains the first two or three transposed tiles and the final
             // tile in DEST across passes, so only stream the middle tiles on
             // pass two. Tile order remains unchanged.
             const std::uint32_t pass_start = pass == 0 ? 0 : std::min(Wt, num_front_retained);
             const std::uint32_t pass_end = pass == 0 ? Wt : Wt - 1;
-#endif
-            for (std::uint32_t wt = pass_start; wt < pass_end; ++wt) {
-                cb_in0.reserve_back(onetile);
-                noc.async_read(
-                    tensor_accessor, cb_in0, tile_bytes, {.page_id = row_start_id + wt}, {.offset_bytes = 0});
+            for (std::uint32_t wt_base = pass_start; wt_base < pass_end;) {
+                const std::uint32_t contiguous_pages = max_read_batch - stream_write_page;
+                const std::uint32_t read_batch =
+                    std::min(std::min(max_read_batch, pass_end - wt_base), contiguous_pages);
+                cb_in0.reserve_back(read_batch);
+                for (std::uint32_t wt = 0; wt < read_batch; ++wt) {
+                    noc.async_read(
+                        tensor_accessor,
+                        cb_in0,
+                        tile_bytes,
+                        {.page_id = row_start_id + wt_base + wt},
+                        {.offset_bytes = wt * tile_bytes});
+                }
                 noc.async_read_barrier();
-                cb_in0.push_back(onetile);
+                cb_in0.push_back(read_batch);
+                wt_base += read_batch;
+                stream_write_page = (stream_write_page + read_batch) % max_read_batch;
             }
         }
+#endif
     }
 }

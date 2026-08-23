@@ -152,13 +152,25 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
 @pytest.mark.parametrize(
     "shape,dim",
     [
+        ((32, 8192), -1),
         ((32, 16384), -1),
         ((4096, 32), -2),
         ((4097, 32), -2),
+        ((12289, 32), -2),
         ((4096, 64), (-2, -1)),
         ((4097, 64), (-2, -1)),
+        ((12289, 64), (-2, -1)),
     ],
-    ids=["W", "H_l1_replay", "H_streaming_fallback", "HW_l1_replay", "HW_streaming_fallback"],
+    ids=[
+        "W_dynamic_l1_replay",
+        "W_streaming_fallback",
+        "H_l1_replay",
+        "H_dynamic_l1_replay",
+        "H_streaming_fallback",
+        "HW_l1_replay",
+        "HW_dynamic_l1_replay",
+        "HW_streaming_fallback",
+    ],
 )
 def test_var_fp32_large_reduction_translation_stability(device, shape, dim):
     """Keep a long FP32 reduction stable when the variance is tiny relative to its mean."""

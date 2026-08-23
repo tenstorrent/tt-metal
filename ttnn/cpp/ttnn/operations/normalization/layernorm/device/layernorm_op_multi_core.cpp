@@ -240,18 +240,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     std::uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    const auto statistics_backend = layernorm::select_interleaved_statistics_backend(
-        requested_use_welford,
-        device->arch(),
-        rms_norm,
-        input_is_row_major,
-        fp32_dest_acc_en,
-        {.input_format = in_data_format,
-         .padded_width = Wp,
-         .fuse_pre_add = b.has_value(),
-         .has_gamma = gamma.has_value(),
-         .has_beta = beta.has_value()});
-    const bool use_welford = statistics_backend == layernorm::StatisticsBackend::SFPU_TWO_PASS;
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat interm_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat gamma_data_format = gamma.has_value()
@@ -302,7 +290,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
          num_tile_rows_per_core_group_1,
          num_tile_rows_per_core_group_2] = split_work_to_cores(requested_cores, num_tile_rows, true /* row_wise */);
 
-    // Use passed-in reciprocal LUT tensor if using Welford
+    // Validate the requested reciprocal LUT before the selected backend is known.
     std::optional<Tensor> recip_tensor = std::nullopt;
     uint32_t reciprocal_buffer_size_bytes = 0;
     if (use_welford) {
@@ -465,25 +453,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (sfpu_two_pass) {
         const std::uint32_t read_ahead_in0_t = fuse_pre_add ? 2 * Wt_next_block_up : 3 * in0_t;
         const std::uint32_t read_ahead_in1_t = fuse_pre_add ? 2 * Wt_next_block_up : in1_t;
-        const bool read_ahead_input_fits = CB_can_fit_in_L1(
-            read_ahead_in0_t * in_single_tile_size,
-            read_ahead_in1_t * inb_single_tile_size,
-            out0_t * out_single_tile_size,
-            im0_t * single_tile_size,
-            im3_t * single_tile_size,
-            in5_t * gamma_single_tile_size,
-            in6_t * beta_single_tile_size,
-            im6_t * single_tile_size,
-            im5_t * single_tile_size,
-            im4_t * single_tile_size,
-            im1_t * single_tile_size,
-            in2_t * scaler_tile_size,
-            in3_t * bfloat16_tile_size,
-            im2_t * single_tile_size,
-            reciprocal_CB_size_bytes,
-            in_rm_size + out_rm_size,
-            usable_cb_l1_bytes);
-        if (read_ahead_input_fits) {
+        auto read_ahead_footprint = make_cb_footprint(true);
+        read_ahead_footprint.input = static_cast<std::uint64_t>(read_ahead_in0_t) * in_single_tile_size;
+        read_ahead_footprint.residual_input =
+            fuse_pre_add ? static_cast<std::uint64_t>(read_ahead_in1_t) * inb_single_tile_size : 0;
+        if (read_ahead_footprint.fits(usable_cb_l1_bytes)) {
             in0_t = read_ahead_in0_t;
             in1_t = read_ahead_in1_t;
         }

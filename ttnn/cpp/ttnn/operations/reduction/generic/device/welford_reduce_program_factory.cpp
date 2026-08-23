@@ -53,13 +53,6 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(tensor_arg.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
-    // Keep one complete reduction span in L1 when it fits within a conservative
-    // per-core budget. The SFPU two-pass kernel can then replay the same CB pages for
-    // variance instead of issuing a second set of DRAM reads. W reductions retain Wt
-    // tiles; H and HW reductions retain one Ht-tile column at a time. The lower tile
-    // threshold is selected below after work has been split across cores.
-    constexpr std::uint32_t two_pass_l1_replay_max_bytes = 512 * 1024;
-
     // Float32 input on the statistics path requires fp32_dest_acc_en=true as a prerequisite for
     // UnpackToDestFp32 (set below). UnpackToDestFp32 is what bypasses the unpacker's
     // Float32 → TF32 truncation in SrcA; fp32_dest_acc_en provides the 32-bit DEST that
@@ -70,13 +63,6 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         "ttnn.std/var with Float32 input requires fp32_dest_acc_en=true in the compute kernel "
         "config; otherwise precision is silently lost in the unpacker format conversion.");
 
-    // Match cb_scalar's data format to the input. When cb_in is FP32, cb_scalar must also be
-    // FP32: mul_tiles_bcast_scalar reads cb_in as SrcA and cb_scalar as SrcB, and a
-    // format/stride mismatch between the two operands would cause the unpacker to silently
-    // produce zeros into DEST.
-    tt::DataFormat scalar_cb_data_format =
-        (input_cb_data_format == tt::DataFormat::Float32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    uint32_t scalar_single_tile_size = tt::tile_size(scalar_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(tensor_return_value.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
@@ -191,7 +177,8 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     const std::uint32_t two_pass_l1_replay_tiles = reduce_w ? Wt : Ht;
     const std::uint64_t replay_input_size =
         static_cast<std::uint64_t>(two_pass_l1_replay_tiles) * input_single_tile_size;
-    std::uint64_t replay_cb_footprint = replay_input_size + scalar_single_tile_size + 2 * dst_single_tile_size;
+    constexpr std::uint32_t two_pass_streaming_cb_tiles = 8;
+    std::uint64_t replay_cb_footprint = replay_input_size + 2 * dst_single_tile_size;
     replay_cb_footprint += reduce_w ? w_scratch_single_tile_size : 0;
     replay_cb_footprint += reduce_hw ? 4 * partial_single_tile_size + combined_single_tile_size : 0;
 
@@ -199,9 +186,8 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     const auto cb_l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const std::uint64_t available_cb_l1_bytes = lowest_occupied_l1 > cb_l1_base ? lowest_occupied_l1 - cb_l1_base : 0;
     const std::uint64_t usable_cb_l1_bytes = available_cb_l1_bytes * 95 / 100;
-    const bool two_pass_l1_replay = two_pass_l1_replay_tiles >= two_pass_l1_replay_min_tiles &&
-                                    replay_input_size <= two_pass_l1_replay_max_bytes &&
-                                    replay_cb_footprint < usable_cb_l1_bytes;
+    const bool two_pass_l1_replay =
+        two_pass_l1_replay_tiles >= two_pass_l1_replay_min_tiles && replay_cb_footprint < usable_cb_l1_bytes;
 
     ProgramDescriptor desc;
 
@@ -211,7 +197,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     // truncate FP32 to TF32). The user scalar is applied as an SFPU post-multiplication on
     // the reduced output, not by pre-scaling the input -- see post_mul_scaler below.
     CBIndex input_cb_index = CBIndex::c_0;
-    std::uint32_t input_tiles_per_cb = two_pass_l1_replay ? two_pass_l1_replay_tiles : 2;
+    std::uint32_t input_tiles_per_cb = two_pass_l1_replay ? two_pass_l1_replay_tiles : two_pass_streaming_cb_tiles;
     desc.cbs.push_back(CBDescriptor{
         .total_size = input_tiles_per_cb * input_single_tile_size,
         .core_ranges = all_cores,
@@ -219,17 +205,6 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
             .buffer_index = static_cast<uint8_t>(input_cb_index),
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
-        }}},
-    });
-
-    CBIndex scalar_cb_index = CBIndex::c_2;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = scalar_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(scalar_cb_index),
-            .data_format = scalar_cb_data_format,
-            .page_size = scalar_single_tile_size,
         }}},
     });
 
@@ -319,6 +294,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         reduce_op_utils::get_defines(operation_attributes.math_op, operation_attributes.reduce_dim);
     reduce_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
     reduce_defines["DST_SYNC_FULL"] = dst_full_sync_en ? "1" : "0";
+    reduce_defines["WELFORD_TWO_PASS_STREAMING_CB_TILES"] = std::to_string(two_pass_streaming_cb_tiles);
     // Enables the SFPU post-multiplication of the reduced output by the user scalar in the
     // compute kernel (see post_mul_scaler above). Only the compute kernel reads this; the
     // reader/writer ignore it.
@@ -343,7 +319,6 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
          std::bit_cast<std::uint32_t>(1.0f / static_cast<float>(two_pass_variance_divisor))});
 
     // --- Reader kernel ---
-    uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scalar);
     KernelDescriptor reader_desc;
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
@@ -359,7 +334,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
             Ht,
             Wt,
             HtWt,
-            scaler_bits,
+            /*scaler_bits=*/0u,
             /*sfpu_two_pass=*/1u,
             /*enable_fp32_sfpu=*/0u};
         TensorAccessorArgs(input).append_to(reader_compile_time_args);
@@ -369,8 +344,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         reader_desc.compile_time_args = reader_compile_time_args;
     } else {
         // W-reduce: sequential reader reads tiles row by row.
-        std::vector<std::uint32_t> reader_compile_time_args = {scaler_bits};
-        reader_compile_time_args.push_back(Wt);
+        std::vector<std::uint32_t> reader_compile_time_args = {Wt};
         TensorAccessorArgs(input).append_to(reader_compile_time_args);
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
@@ -474,16 +448,13 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (input_cb_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_0)] =
-            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     if (reduce_w && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
-        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_19)] =
-            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_19)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     if (reduce_hw && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
-        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_22)] =
-            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_22)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     KernelDescriptor compute_desc_g1;

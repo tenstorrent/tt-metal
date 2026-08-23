@@ -34,16 +34,22 @@ void kernel_main() {
     // Int32 SFPU max keeps one acc DST per column plus one shared work DST (DEST_AUTO_LIMIT - 1).
     constexpr DataFormat reduce_format = get_dataformat(dfb_id_in0);
     constexpr bool use_sfpu_reduce_path = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format, fp32_mode>();
-    constexpr uint32_t row_chunk =
-        sfpu_two_pass
-            ? 1
-            : (use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1) : compute_kernel_lib::DEST_AUTO_LIMIT);
+    constexpr uint32_t row_chunk = sfpu_two_pass ? 1
+                                                 : (use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1)
+                                                                         : compute_kernel_lib::DEST_AUTO_LIMIT);
 
     constexpr uint32_t onetile = 1;
+#ifdef WELFORD_TWO_PASS_STREAMING_CB_TILES
+    constexpr std::uint32_t max_read_batch = WELFORD_TWO_PASS_STREAMING_CB_TILES;
+#else
+    constexpr std::uint32_t max_read_batch = 1;
+#endif
 
-    constexpr uint32_t dfb_id_in2 = tt::CBIndex::c_2;
-    float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<dfb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
+    if constexpr (!sfpu_two_pass) {
+        constexpr uint32_t dfb_id_in2 = tt::CBIndex::c_2;
+        float scaler_f = __builtin_bit_cast(float, scaler_bits);
+        dataflow_kernel_lib::prepare_reduce_scaler<dfb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
+    }
 
     constexpr auto tensor_args = TensorAccessorArgs<6>();
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
@@ -54,6 +60,9 @@ void kernel_main() {
     const uint32_t tile_bytes = dfb_in0.get_tile_size();
 
     uint32_t w = curr_col_in_batch;
+#ifndef WELFORD_TWO_PASS_L1_REPLAY
+    std::uint32_t stream_write_page = 0;
+#endif
 
     // tiles are read in the N W_skip H W_chunk order
     // W_skip(chunk size) represents the number of tile columns whose reading will be intertwined
@@ -71,28 +80,69 @@ void kernel_main() {
     // reset_w - resets w to the column number in the batch of the starting column
     // reset_curr_id - resets curr_id to the next tile in the starting column
     for (uint32_t i = 0; i < num_cols; i += row_chunk) {
-        uint32_t chunk_end = std::min(i + row_chunk, num_cols);
         uint32_t reset_curr_id = col_start_tile_id;
-        uint32_t reset_w = w;
-        uint32_t reset_col_start = col_start_tile_id;
 
 #ifdef WELFORD_TWO_PASS_L1_REPLAY
-        constexpr uint32_t num_passes = 1;
+        for (std::uint32_t ht_base = 0; ht_base < Ht; ht_base += max_read_batch) {
+            const std::uint32_t read_batch = std::min(max_read_batch, Ht - ht_base);
+            dfb_in0.reserve_back(read_batch);
+            for (std::uint32_t ht = 0; ht < read_batch; ++ht) {
+                noc.async_read(
+                    tensor_accessor,
+                    dfb_in0,
+                    tile_bytes,
+                    {.page_id = reset_curr_id + (ht_base + ht) * Wt},
+                    {.offset_bytes = ht * tile_bytes});
+            }
+            noc.async_read_barrier();
+            dfb_in0.push_back(read_batch);
+        }
+        ++w;
+        if (w == Wt) {
+            col_start_tile_id = reset_curr_id + (Ht - 1) * Wt + 1;
+            w = 0;
+        } else {
+            col_start_tile_id = reset_curr_id + 1;
+        }
 #else
-        constexpr uint32_t num_passes = sfpu_two_pass && Ht > 4 ? 2 : 1;
-#endif
-        for (uint32_t pass = 0; pass < num_passes; ++pass) {
-#ifdef WELFORD_TWO_PASS_L1_REPLAY
-            constexpr uint32_t pass_start = 0;
-            constexpr uint32_t pass_end = Ht;
-#else
-            // Two-pass compute retains the first three tiles and the final
-            // tile in DEST, so pass two only streams the middle tiles.
-            const uint32_t pass_start = pass == 0 ? 0 : std::min(Ht, static_cast<uint32_t>(3));
-            const uint32_t pass_end = pass == 0 ? Ht : Ht - 1;
-#endif
-            uint32_t curr_id = reset_curr_id + pass_start * Wt;
-            for (uint32_t j = pass_start; j < pass_end; ++j) {
+        static_assert(!sfpu_two_pass || row_chunk == 1);
+        if constexpr (sfpu_two_pass) {
+            constexpr std::uint32_t num_passes = Ht > 4 ? 2 : 1;
+            for (std::uint32_t pass = 0; pass < num_passes; ++pass) {
+                const std::uint32_t pass_start = pass == 0 ? 0 : std::min(Ht, static_cast<std::uint32_t>(3));
+                const std::uint32_t pass_end = pass == 0 ? Ht : Ht - 1;
+                for (std::uint32_t ht_base = pass_start; ht_base < pass_end;) {
+                    const std::uint32_t contiguous_pages = max_read_batch - stream_write_page;
+                    const std::uint32_t read_batch =
+                        std::min(std::min(max_read_batch, pass_end - ht_base), contiguous_pages);
+                    dfb_in0.reserve_back(read_batch);
+                    for (std::uint32_t ht = 0; ht < read_batch; ++ht) {
+                        noc.async_read(
+                            tensor_accessor,
+                            dfb_in0,
+                            tile_bytes,
+                            {.page_id = reset_curr_id + (ht_base + ht) * Wt},
+                            {.offset_bytes = ht * tile_bytes});
+                    }
+                    noc.async_read_barrier();
+                    dfb_in0.push_back(read_batch);
+                    ht_base += read_batch;
+                    stream_write_page = (stream_write_page + read_batch) % max_read_batch;
+                }
+            }
+            ++w;
+            if (w == Wt) {
+                col_start_tile_id = reset_curr_id + (Ht - 1) * Wt + 1;
+                w = 0;
+            } else {
+                col_start_tile_id = reset_curr_id + 1;
+            }
+        } else {
+            uint32_t chunk_end = std::min(i + row_chunk, num_cols);
+            uint32_t reset_w = w;
+            uint32_t reset_col_start = col_start_tile_id;
+            for (uint32_t j = 0; j < Ht; ++j) {
+                uint32_t curr_id = reset_curr_id + j * Wt;
                 w = reset_w;
                 col_start_tile_id = reset_col_start;
                 for (uint32_t k = i; k < chunk_end; ++k) {
@@ -112,8 +162,8 @@ void kernel_main() {
                         ++col_start_tile_id;
                     }
                 }
-                curr_id = reset_curr_id + (j + 1) * Wt;  // stride in H
             }
         }
+#endif
     }
 }

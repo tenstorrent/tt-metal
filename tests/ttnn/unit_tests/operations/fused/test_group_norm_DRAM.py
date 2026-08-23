@@ -19,7 +19,8 @@ from models.common.utility_functions import is_blackhole, is_watcher_enabled, ru
 DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
 # atol for the non-tile-aligned regressions, matching the tile-aligned specify_grid cases.
 NON_TILE_ALIGNED_ATOL = 0.08
-STATISTICS_MODES = ("tile_reduction", "online_welford", "online_welford_reciprocal_lut")
+STATISTICS_MODES = ("tile_reduction", "two_pass")
+LEGACY_RECIPROCAL_MODE = "two_pass_with_legacy_reciprocal_lut"
 
 GROUP_NORM_DRAM_SHAPES = [
     (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
@@ -187,9 +188,8 @@ def run_group_norm_DRAM(
             num_batches=N,
         )
 
-    # Determine welford and reciprocals settings
-    use_welford = statistics_mode in ("online_welford", "online_welford_reciprocal_lut")
-    use_reciprocals = statistics_mode == "online_welford_reciprocal_lut"
+    use_welford = statistics_mode in ("two_pass", LEGACY_RECIPROCAL_MODE)
+    use_reciprocals = statistics_mode == LEGACY_RECIPROCAL_MODE
 
     # torch input tensor
     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
@@ -343,6 +343,24 @@ def test_group_norm_DRAM(
     )
 
 
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+def test_group_norm_DRAM_legacy_reciprocal_compatibility(device):
+    """The deprecated reciprocal argument remains accepted without duplicating the full matrix."""
+    run_group_norm_DRAM(
+        device,
+        1,
+        480,
+        1,
+        64,
+        8,
+        1,
+        1,
+        1,
+        LEGACY_RECIPROCAL_MODE,
+        use_input_mask=True,
+    )
+
+
 # Post-commit smoke coverage for the ROW_MAJOR path; the full sweep over GROUP_NORM_ROW_MAJOR_SHAPES
 # lives in nightly. Tests across all three layout combinations that involve ROW_MAJOR.
 @skip_for_blackhole("interleaved ROW_MAJOR group_norm is Wormhole-only, see #52279")
@@ -492,7 +510,7 @@ def run_group_norm_non_tile_aligned_DRAM(
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", GROUP_NORM_NON_TILE_ALIGNED_DRAM_SHAPES)
-@pytest.mark.parametrize("use_welford", [False, True], ids=["tile_reduction", "online_welford"])
+@pytest.mark.parametrize("use_welford", [False, True], ids=["tile_reduction", "two_pass"])
 def test_group_norm_non_tile_aligned_DRAM(device, N, C, H, W, num_groups, use_welford):
     # Fused interleaved group_norm must match torch even when N*H*W is not a multiple of the tile
     # height. use_welford=True is routed to the two-pass path; auto grid selection.
@@ -1048,9 +1066,8 @@ def test_group_norm_interleaved_all_config(
     grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
     torch.manual_seed(0)
 
-    # Determine welford and reciprocals settings
-    use_welford = statistics_mode in ("online_welford", "online_welford_reciprocal_lut")
-    use_reciprocals = statistics_mode == "online_welford_reciprocal_lut"
+    use_welford = statistics_mode in ("two_pass", LEGACY_RECIPROCAL_MODE)
+    use_reciprocals = statistics_mode == LEGACY_RECIPROCAL_MODE
 
     x = torch.rand((N, C, H, W), dtype=torch.float32)
     w = torch.rand((C,), dtype=torch.float32)

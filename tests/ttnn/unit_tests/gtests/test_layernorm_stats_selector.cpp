@@ -23,6 +23,10 @@ constexpr BlackholeStatsSelectorParams default_params() {
         .fuse_pre_add = false,
         .has_gamma = true,
         .has_beta = true,
+        .num_tile_rows = 512,
+        .active_cores = 110,
+        .available_cores = 110,
+        .compact_two_pass_fits_in_l1 = true,
     };
 }
 
@@ -69,6 +73,17 @@ TEST(LayerNormStatsSelector, BlackholeCalibratedBoundaries) {
     auto bfp8_affine = default_params();
     bfp8_affine.input_format = tt::DataFormat::Bfp8_b;
 
+    auto fp32_underutilized = default_params();
+    fp32_underutilized.num_tile_rows = 32;
+    fp32_underutilized.active_cores = 32;
+
+    auto fp32_restricted_grid = default_params();
+    fp32_restricted_grid.active_cores = 64;
+    fp32_restricted_grid.available_cores = 64;
+
+    auto two_pass_does_not_fit = bf16_affine;
+    two_pass_does_not_fit.compact_two_pass_fits_in_l1 = false;
+
     struct TestCase {
         std::string_view name;
         BlackholeStatsSelectorParams params;
@@ -88,6 +103,9 @@ TEST(LayerNormStatsSelector, BlackholeCalibratedBoundaries) {
         {"bf16 parameter-free at crossover", bf16_plain_at, true},
         {"bf16 gamma-only at parameter-free crossover", bf16_gamma_only, true},
         {"bfp8 affine", bfp8_affine, false},
+        {"fp32 underutilized", fp32_underutilized, false},
+        {"fp32 restricted grid", fp32_restricted_grid, false},
+        {"two-pass compact allocation does not fit", two_pass_does_not_fit, false},
     };
 
     for (const auto& test_case : cases) {
