@@ -975,8 +975,16 @@ void PerfDebugProfiler::set_drisc_niu_mode(
     detail::CompileProgram(device, p, /*force_slow_dispatch=*/true);
     g_bringup_step = who + ":WriteRuntimeArgs";
     detail::WriteRuntimeArgsToDevice(device, p, /*force_slow_dispatch=*/true);
-    g_bringup_step = who + ":LaunchProgram(dram_barrier+wait_until_cores_done)";
-    detail::LaunchProgram(device, p, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    // SPLIT for the same reason the single-core path above is split, and it should have been from the
+    // start: the two halves fail for different reasons and only the label tells them apart. The barrier
+    // runs BEFORE any core here is in stream mode (that is what one-launch buys, N+32/N+34), so a failure
+    // on the first label means a core was ALREADY in stream mode when this run began -- a restore that did
+    // not complete, or a reset that did not cover it. A failure on the second is the poll-after-flip
+    // hazard, which is inherent to this kernel because its whole body IS the flip.
+    g_bringup_step = who + ":LaunchProgram(dram_barrier,no-wait)";
+    detail::LaunchProgram(device, p, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+    g_bringup_step = who + ":WaitProgramDone(poll-after-flip)";
+    detail::WaitProgramDone(device, p);
     g_bringup_step = who + ":done";
 }
 
