@@ -13,83 +13,67 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/add_int_sfpu.h"
 #include "api/compute/copy_dest_values.h"
-#include "api/dataflow/dataflow_buffer.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
-#define DEBUG_PRINT 0
+constexpr uint32_t face_height = 16;
+constexpr uint32_t face_width = 16;
+constexpr uint32_t tile_width = 32;
+constexpr uint32_t mpwi_tiles_per_reduction = 1;
 
-#if DEBUG_PRINT == 1
-#include "api/debug/dprint.h"
-#include "api/debug/dprint_pages.h"
-#include "api/debug/dprint_tensix.h"
-#include "tools/profiler/kernel_profiler.hpp"
-#endif
-
-#define ALWI inline __attribute__((always_inline))
-
-#define FACE_HEIGHT 16
-#define FACE_WIDTH 16
-#define TILE_HEIGHT 32
-#define TILE_WIDTH 32
-
-#define MPWI_TILES_PER_REDUCTION 1
-
-void kernel_main() {
+template <
+    uint32_t in_ntiles_c,
+    uint32_t window_size_hw,
+    uint32_t split_reader,
+    uint32_t max_out_sticks_per_core,
+    uint32_t in_c,
+    uint32_t in_nblocks_c,
+    uint32_t max_sticks_for_reduction,
+    uint32_t one_scalar_per_core,
+    uint32_t is_output_tiled,
+    uint32_t is_output_block_format,
+    uint32_t stride_h,
+    uint32_t stride_w,
+    uint32_t in_h_padded,
+    uint32_t in_w_padded,
+    uint32_t eff_kernel_h,
+    uint32_t eff_kernel_w,
+    uint32_t pad_l,
+    uint32_t kernel_h,
+    uint32_t kernel_w,
+    uint32_t indexes_32_bit>
+TT_KERNEL void compute_mpwi(uint32_t out_nhw_this_core, uint32_t start_row, uint32_t start_col) {
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet. When ntiles_hw > 1 the large
     // kernel is called
-    constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(0);
-    constexpr uint32_t window_size_hw = get_compile_time_arg_val(1);
-
-    constexpr uint32_t max_out_sticks_per_core = get_compile_time_arg_val(3);
-    constexpr uint32_t in_c = get_compile_time_arg_val(4);
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(5);
-    constexpr uint32_t max_sticks_for_reduction = get_compile_time_arg_val(6);
-
-    constexpr uint32_t in_cb_id_0 = get_compile_time_arg_val(7);
-    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(9);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
-    constexpr uint32_t pre_tilize_cb_id = get_compile_time_arg_val(13);
-    constexpr bool is_output_tiled = get_compile_time_arg_val(14);  // 1 = TILED, 0 = ROW_MAJOR
-    constexpr bool is_output_block_format = (bool)get_compile_time_arg_val(15);
-    // ct_arg(16) is force_max_tiles_per_reduction_4 (consumed by compute_pool_2d.cpp only)
+    // CB ids are Metal 2.0 DFB tokens (dfb::<name> converts implicitly to uint32_t). Legacy
+    // variable names are preserved so the rest of the kernel is unchanged.
+    constexpr auto in_cb_id_0 = dfb::in_cb_0;
+    constexpr auto in_scalar_cb_id_0 = dfb::in_scalar_cb_0;
     // MPWI-specific args start here
-    constexpr uint32_t in_idx_cb_id = get_compile_time_arg_val(17);
-    constexpr uint32_t pack_tmp_cb_id = get_compile_time_arg_val(18);
-    constexpr uint32_t pack_idx_tmp_cb_id = get_compile_time_arg_val(19);
-    constexpr uint32_t right_inc_cb_id = get_compile_time_arg_val(20);
-    constexpr uint32_t down_left_wrap_inc_cb_id = get_compile_time_arg_val(21);
-    constexpr uint32_t up_left_wrap_inc_cb_id = get_compile_time_arg_val(22);
-    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(23);
-    constexpr uint32_t stride_h = get_compile_time_arg_val(24);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(25);
-    constexpr uint32_t in_h_padded = get_compile_time_arg_val(26);
-    constexpr uint32_t in_w_padded = get_compile_time_arg_val(27);
-    constexpr uint32_t eff_kernel_h = get_compile_time_arg_val(28);
-    constexpr uint32_t eff_kernel_w = get_compile_time_arg_val(29);
-    constexpr uint32_t pad_l = get_compile_time_arg_val(30);
-    constexpr uint32_t intra_kernel_right_inc_cb_id = get_compile_time_arg_val(31);
-    constexpr uint32_t intra_kernel_down_left_wrap_inc_cb_id = get_compile_time_arg_val(32);
-    constexpr uint32_t compute_tmp_idx_cb_id = get_compile_time_arg_val(33);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(34);
-    constexpr uint32_t kernel_h = get_compile_time_arg_val(35);
-    constexpr uint32_t kernel_w = get_compile_time_arg_val(36);
-    constexpr uint32_t indexes_32_bit = get_compile_time_arg_val(37);
-
+    constexpr auto in_idx_cb_id = dfb::in_idx_cb;
+    constexpr auto pack_tmp_cb_id = dfb::pack_tmp_cb;
+    constexpr auto pack_idx_tmp_cb_id = dfb::pack_idx_tmp_cb;
+    constexpr auto right_inc_cb_id = dfb::right_inc_cb;
+    constexpr auto down_left_wrap_inc_cb_id = dfb::down_left_wrap_inc_cb;
+    constexpr auto up_left_wrap_inc_cb_id = dfb::up_left_wrap_inc_cb;
+    constexpr auto intra_kernel_right_inc_cb_id = dfb::intra_kernel_right_inc_cb;
+    constexpr auto intra_kernel_down_left_wrap_inc_cb_id = dfb::intra_kernel_down_left_wrap_inc_cb;
+    constexpr auto compute_tmp_idx_cb_id = dfb::compute_tmp_idx_cb;
+    constexpr auto clear_value_cb_id = dfb::clear_value_cb;
     // DataflowBuffer wrappers for CB operations
-    DataflowBuffer in_scalar_dfb(in_scalar_cb_id_0);
-    DataflowBuffer in_idx_dfb(in_idx_cb_id);
-    DataflowBuffer pack_tmp_dfb(pack_tmp_cb_id);
-    DataflowBuffer pack_idx_tmp_dfb(pack_idx_tmp_cb_id);
-    DataflowBuffer right_inc_dfb(right_inc_cb_id);
-    DataflowBuffer down_left_wrap_inc_dfb(down_left_wrap_inc_cb_id);
-    DataflowBuffer up_left_wrap_inc_dfb(up_left_wrap_inc_cb_id);
-    DataflowBuffer out_idx_dfb(out_idx_cb_id);
-    DataflowBuffer intra_kernel_right_inc_dfb(intra_kernel_right_inc_cb_id);
-    DataflowBuffer intra_kernel_down_left_wrap_inc_dfb(intra_kernel_down_left_wrap_inc_cb_id);
-    DataflowBuffer compute_tmp_idx_dfb(compute_tmp_idx_cb_id);
-    DataflowBuffer clear_value_dfb(clear_value_cb_id);
-    DataflowBuffer in_dfb_0(in_cb_id_0);
+    DataflowBuffer in_scalar_cb(in_scalar_cb_id_0);
+    DataflowBuffer in_idx_cb(in_idx_cb_id);
+    DataflowBuffer pack_tmp_cb(pack_tmp_cb_id);
+    DataflowBuffer pack_idx_tmp_cb(pack_idx_tmp_cb_id);
+    DataflowBuffer right_inc_cb(right_inc_cb_id);
+    DataflowBuffer down_left_wrap_inc_cb(down_left_wrap_inc_cb_id);
+    DataflowBuffer up_left_wrap_inc_cb(up_left_wrap_inc_cb_id);
+    DataflowBuffer intra_kernel_right_inc_cb(intra_kernel_right_inc_cb_id);
+    DataflowBuffer intra_kernel_down_left_wrap_inc_cb(intra_kernel_down_left_wrap_inc_cb_id);
+    DataflowBuffer compute_tmp_idx_cb(compute_tmp_idx_cb_id);
+    DataflowBuffer clear_value_cb(clear_value_cb_id);
+    DataflowBuffer in_cb_0(in_cb_id_0);
 
     constexpr DataFormat copy_format = indexes_32_bit ? DataFormat::UInt32 : DataFormat::UInt16;
 
@@ -102,43 +86,39 @@ void kernel_main() {
     constexpr uint32_t index_scratch_out_dst_idx = 6;
     constexpr uint32_t index_temp_dst_idx = 5;  // only used for large kernels
 
-    constexpr uint32_t face_r_dim = FACE_HEIGHT;
-    constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
+    constexpr uint32_t face_r_dim = face_height;
+    constexpr bool last_tile_is_partial = in_c % tile_width != 0;
     constexpr uint32_t num_faces_in_input_tile = 4;
     constexpr uint32_t num_faces_in_output_tile = 2;
-    constexpr uint32_t num_faces_in_last_output_tile = last_tile_is_partial && in_c % TILE_WIDTH <= FACE_WIDTH ? 1 : 2;
+    constexpr uint32_t num_faces_in_last_output_tile = last_tile_is_partial && in_c % tile_width <= face_width ? 1 : 2;
     constexpr uint32_t num_out_sticks = 1;
 
     // MPWI requires 1 tile at a time for max reduction with indices
     constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
     constexpr uint32_t max_tiles_per_iter =
-        in_ntiles_c < MPWI_TILES_PER_REDUCTION ? in_ntiles_c : MPWI_TILES_PER_REDUCTION;
+        in_ntiles_c < mpwi_tiles_per_reduction ? in_ntiles_c : mpwi_tiles_per_reduction;
     constexpr uint32_t partial_iter_output_tiles =
-        in_ntiles_c % MPWI_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MPWI_TILES_PER_REDUCTION;
-
-    static_assert(REDUCE_OP == PoolType::MAX, "MPWI only supports REDUCE_OP = MAX");
+        in_ntiles_c % mpwi_tiles_per_reduction == 0 ? max_tiles_per_iter : in_ntiles_c % mpwi_tiles_per_reduction;
 
     constexpr uint32_t w_chunks = kernel_w % max_sticks_for_reduction == 0 ? kernel_w / max_sticks_for_reduction
                                                                            : kernel_w / max_sticks_for_reduction + 1;
     constexpr uint32_t interm_reduction_chunks = is_large_kernel ? w_chunks * kernel_h : 1;
 
-    in_scalar_dfb.wait_front(1);
+    in_scalar_cb.wait_front(1);
 
     uint32_t current_idx_col;
     uint32_t current_idx_row;
-    const uint32_t start_row = get_arg_val<uint32_t>(2);
-    const uint32_t start_col = get_arg_val<uint32_t>(3);
     current_idx_col = start_col;
     current_idx_row = start_row;
 
     constexpr uint32_t sticks_per_chunk = kernel_w <= max_sticks_for_reduction ? kernel_w : max_sticks_for_reduction;
-    right_inc_dfb.wait_front(1);
-    down_left_wrap_inc_dfb.wait_front(1);
-    up_left_wrap_inc_dfb.wait_front(1);
+    right_inc_cb.wait_front(1);
+    down_left_wrap_inc_cb.wait_front(1);
+    up_left_wrap_inc_cb.wait_front(1);
     if constexpr (is_large_kernel) {
-        intra_kernel_right_inc_dfb.wait_front(1);
-        intra_kernel_down_left_wrap_inc_dfb.wait_front(1);
-        clear_value_dfb.wait_front(1);
+        intra_kernel_right_inc_cb.wait_front(1);
+        intra_kernel_down_left_wrap_inc_cb.wait_front(1);
+        clear_value_cb.wait_front(1);
     }
 
     unary_op_init_common(in_cb_id_0, in_cb_id_0);
@@ -147,7 +127,7 @@ void kernel_main() {
     // if max out sticks is non-zero then this will be used as the number of out sticks for every core
     // otherwise the runtime args are referenced for core-specific number of out sticks, for Pool2D
     // runtime args are used while for grid sample the max out sticks is set
-    uint32_t num_out_sticks_this_core = max_out_sticks_per_core ? max_out_sticks_per_core : get_arg_val<uint32_t>(0);
+    uint32_t num_out_sticks_this_core = max_out_sticks_per_core ? max_out_sticks_per_core : out_nhw_this_core;
 
     bool first_iteration = true;
     for (uint32_t n = 0; n < num_out_sticks_this_core; ++n) {
@@ -160,14 +140,14 @@ void kernel_main() {
             reconfig_data_format_srca(compute_tmp_idx_cb_id);
             copy_tile_to_dst_init_short(compute_tmp_idx_cb_id);
             if (first_iteration) {  // move the initial indexes from the reader to DST
-                in_idx_dfb.wait_front(1);
+                in_idx_cb.wait_front(1);
                 copy_tile(in_idx_cb_id, mpwi_cb_tile_idx, index_dst_idx);
-                in_idx_dfb.pop_front(1);
+                in_idx_cb.pop_front(1);
                 first_iteration = false;
             } else {  // move incremented indexes from compute back to DST
-                compute_tmp_idx_dfb.wait_front(1);
+                compute_tmp_idx_cb.wait_front(1);
                 copy_tile(compute_tmp_idx_cb_id, mpwi_cb_tile_idx, index_dst_idx);
-                compute_tmp_idx_dfb.pop_front(1);
+                compute_tmp_idx_cb.pop_front(1);
             }
             if constexpr (is_large_kernel) {
                 // clear the accumulation tiles since they will contain garbage data which is partially loaded
@@ -184,7 +164,7 @@ void kernel_main() {
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 bool last_chunk = chunk == interm_reduction_chunks - 1;
 
-                in_dfb_0.wait_front(1);
+                in_cb_0.wait_front(1);
                 reconfig_data_format_srca(in_cb_id_0);
                 copy_tile_to_dst_init_short(in_cb_id_0);
                 copy_tile(in_cb_id_0, mpwi_cb_tile_idx, data_dst_idx);
@@ -247,7 +227,7 @@ void kernel_main() {
                     }
                 }
 
-                in_dfb_0.pop_front(1);
+                in_cb_0.pop_front(1);
             }
 
             // After all chunks: if not last C block, restore base indices for next C block
@@ -260,27 +240,27 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_wait();
 
-            pack_tmp_dfb.reserve_back(1);
+            pack_tmp_cb.reserve_back(1);
             pack_reconfig_data_format(pack_tmp_cb_id);
             pack_tile<true>(data_dst_idx, pack_tmp_cb_id, mpwi_cb_tile_idx);  // for reader (output data)
-            pack_tmp_dfb.push_back(1);
+            pack_tmp_cb.push_back(1);
 
-            pack_idx_tmp_dfb.reserve_back(1);
+            pack_idx_tmp_cb.reserve_back(1);
             pack_reconfig_data_format(pack_idx_tmp_cb_id);
             pack_tile<true>(index_dst_idx, pack_idx_tmp_cb_id, mpwi_cb_tile_idx);  // for reader (output indexes)
-            pack_idx_tmp_dfb.push_back(1);
+            pack_idx_tmp_cb.push_back(1);
 
             // Only push to compute_tmp_idx_cb_id if there's a next iteration that will consume it
             // This prevents leaving stale data in the CB between program runs when using caching
             bool is_last_iteration = (n == num_out_sticks_this_core - 1) && last_c_block;
             if (!is_last_iteration) {
-                compute_tmp_idx_dfb.reserve_back(1);
+                compute_tmp_idx_cb.reserve_back(1);
                 pack_reconfig_data_format(compute_tmp_idx_cb_id);
                 pack_tile<true>(
                     index_scratch_out_dst_idx,
                     compute_tmp_idx_cb_id,
                     mpwi_cb_tile_idx);  // for compute (incremented indexes)
-                compute_tmp_idx_dfb.push_back(1);
+                compute_tmp_idx_cb.push_back(1);
             }
 
             tile_regs_release();
@@ -288,13 +268,13 @@ void kernel_main() {
     }
 
     // This prevents leaving stale data in the CB between program runs when using caching
-    in_scalar_dfb.pop_front(1);
-    right_inc_dfb.pop_front(1);
-    down_left_wrap_inc_dfb.pop_front(1);
-    up_left_wrap_inc_dfb.pop_front(1);
+    in_scalar_cb.pop_front(1);
+    right_inc_cb.pop_front(1);
+    down_left_wrap_inc_cb.pop_front(1);
+    up_left_wrap_inc_cb.pop_front(1);
     if constexpr (is_large_kernel) {
-        intra_kernel_right_inc_dfb.pop_front(1);
-        intra_kernel_down_left_wrap_inc_dfb.pop_front(1);
-        clear_value_dfb.pop_front(1);
+        intra_kernel_right_inc_cb.pop_front(1);
+        intra_kernel_down_left_wrap_inc_cb.pop_front(1);
+        clear_value_cb.pop_front(1);
     }
 }

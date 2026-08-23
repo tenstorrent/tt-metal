@@ -5,6 +5,9 @@
 
 #include <cstdint>
 #include <api/dataflow/dataflow_api.h>
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/tensor_accessor.h"
+#include "experimental/kernel_args.h"
 #include <ttnn/cpp/ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
 
 #define ENABLE_DEBUG_PRINT 0
@@ -162,62 +165,47 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
 /**
  * Pool 2D (Max pool 2D and Avg pool 2D)
  */
-void kernel_main() {
-    constexpr uint32_t reader_nindices = get_compile_time_arg_val(0);
-    constexpr uint32_t kernel_h = get_compile_time_arg_val(1);
-    constexpr uint32_t kernel_w = get_compile_time_arg_val(2);
-
-    constexpr int32_t pad_w = get_compile_time_arg_val(3);
-
-    // channel size in bytes
-    constexpr uint32_t in_nbytes_leftover = get_compile_time_arg_val(4);
-
-    // input tensor height / width / channels
-    constexpr int32_t in_w = get_compile_time_arg_val(5);
-
-    constexpr uint32_t in_c = get_compile_time_arg_val(6);
-
-    constexpr uint32_t split_reader = get_compile_time_arg_val(7);
-    constexpr uint32_t reader_id = get_compile_time_arg_val(8);
-
-    constexpr uint32_t bf16_scalar = get_compile_time_arg_val(9);
-    constexpr uint32_t bf16_init_value = get_compile_time_arg_val(10);
-
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(11);
-    constexpr uint32_t in_cb_sz = get_compile_time_arg_val(12);
-    constexpr uint32_t max_sticks_for_reduction = get_compile_time_arg_val(13);
-    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(14);
-
-    constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(16) : get_compile_time_arg_val(15);
-    constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(17);
-    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(18);
-    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(19);
-    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(20);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(21);
-    constexpr bool is_avg_pool = (bool)get_compile_time_arg_val(22);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(23);
-    constexpr uint32_t config_cb_id = get_compile_time_arg_val(24);
-    constexpr uint32_t in_nbytes_c = get_compile_time_arg_val(25);
-    constexpr uint32_t shard_width_bytes = get_compile_time_arg_val(26);
-    constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(27);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(28);
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(29);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(30);
-    constexpr bool zero_pages = (bool)get_compile_time_arg_val(31);
-    constexpr uint32_t config_in_dram = get_compile_time_arg_val(32);
-    constexpr uint32_t config_dram_addr = get_compile_time_arg_val(33);
-    constexpr uint32_t config_page_size = get_compile_time_arg_val(34);
-    constexpr uint32_t reader_dram_addr = get_compile_time_arg_val(35);
-    constexpr uint32_t reader_page_size = get_compile_time_arg_val(36);
-    constexpr uint32_t reader_tensor_args_index = 55;
+template <
+    uint32_t reader_nindices,
+    uint32_t kernel_h,
+    uint32_t kernel_w,
+    uint32_t pad_w,
+    uint32_t in_nbytes_leftover,
+    uint32_t in_w,
+    uint32_t in_c,
+    uint32_t split_reader,
+    uint32_t reader_id,
+    uint32_t bf16_scalar,
+    uint32_t bf16_init_value,
+    uint32_t in_nblocks_c,
+    uint32_t in_cb_sz,
+    uint32_t max_sticks_for_reduction,
+    uint32_t ceil_pad_w,
+    uint32_t pool_type_is_avg,
+    uint32_t one_scalar_per_core,
+    uint32_t in_nbytes_c,
+    uint32_t shard_width_bytes,
+    uint32_t multi_buffering_factor,
+    uint32_t stride_w,
+    uint32_t dilation_h,
+    uint32_t dilation_w,
+    uint32_t zero_pages,
+    uint32_t config_in_dram,
+    uint32_t config_page_size,
+    uint32_t reader_page_size>
+TT_KERNEL void reader_pool_2d(uint32_t core_nhw_index) {
+    constexpr uint32_t in_cb_id = dfb::in_cb;
+    constexpr uint32_t in_shard_cb_id = dfb::in_shard_cb;
+    constexpr uint32_t in_reader_indices_cb_id = dfb::reader_indices_cb;
+    constexpr uint32_t in_scalar_cb_id = dfb::in_scalar_cb;
+    constexpr uint32_t clear_value_cb_id = dfb::clear_value_cb;
+    constexpr bool is_avg_pool = static_cast<bool>(pool_type_is_avg);
+    constexpr uint32_t config_cb_id = dfb::config_cb;
 
     constexpr bool use_split_reader = split_reader;
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
-    constexpr uint32_t in_scalar_cb_id =
-        use_split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
-
     constexpr uint32_t window_size_hw = kernel_h * kernel_w;
     constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT ? window_size_hw : FACE_HEIGHT;
     constexpr uint32_t num_faces_in_input_tile =
@@ -262,17 +250,15 @@ void kernel_main() {
         fill_with_val(in_scalar_dfb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
         in_scalar_dfb.push_back(1);
     }
-    const uint32_t core_nhw_index = get_arg_val<uint32_t>(1);
-
     const uint32_t in_l1_read_base_addr = in_shard_dfb.get_read_ptr();
     if constexpr (config_in_dram) {
         if (reader_id == 0) {
-            load_config_tensor_if_in_dram<
-                reader_dram_addr,
-                reader_page_size,
-                reader_tensor_args_index,
-                in_reader_indices_cb_id>(Noc(), reader_indices_dfb, core_nhw_index);
-
+            Noc cfg_noc;
+            const auto reader_indices_accessor = TensorAccessor(tensor::reader_indices);
+            cfg_noc.async_read(
+                reader_indices_accessor, reader_indices_dfb, reader_page_size, {.page_id = core_nhw_index}, {});
+            cfg_noc.async_read_barrier();
+            reader_indices_dfb.push_back(1);
         } else {
             reader_indices_dfb.wait_front(1);
         }
@@ -294,13 +280,11 @@ void kernel_main() {
         uint32_t config_l1_addr = config_dfb.get_read_ptr();
         if constexpr (config_in_dram) {
             if (reader_id == 0) {
-                constexpr uint32_t config_tensor_args_index =
-                    TensorAccessorArgs<reader_tensor_args_index>().next_compile_time_args_offset();
-                load_config_tensor_if_in_dram<
-                    config_dram_addr,
-                    config_page_size,
-                    config_tensor_args_index,
-                    config_cb_id>(Noc(), config_dfb, core_nhw_index);
+                Noc cfg_noc;
+                const auto config_accessor = TensorAccessor(tensor::config);
+                cfg_noc.async_read(config_accessor, config_dfb, config_page_size, {.page_id = core_nhw_index}, {});
+                cfg_noc.async_read_barrier();
+                config_dfb.push_back(1);
             } else {
                 config_dfb.wait_front(1);
             }
@@ -363,4 +347,4 @@ void kernel_main() {
             }
         }
     }
-}  // kernel_main()
+}  // TT_KERNEL

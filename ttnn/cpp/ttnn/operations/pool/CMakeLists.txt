@@ -16,8 +16,10 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
+    device/kernels/*.cpp
     device/kernels/*.hpp
     generic/device/kernels/*.cpp
+    grid_sample/device/kernels/*.cpp
     grid_sample/device/kernels/*.hpp
     rotate/device/kernels/*.cpp
     upsample/device/kernels/*.cpp

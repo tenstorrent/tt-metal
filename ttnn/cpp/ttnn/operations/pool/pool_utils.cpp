@@ -257,7 +257,8 @@ PoolCBSizes calculate_pool_cb_sizes(
     uint32_t in_cb_page_padded = tt::round_up(in_cb_sz, tt::constants::TILE_HW);
     sizes.in_cb_pagesize = params.nbytes * in_cb_page_padded;
     sizes.in_cb_npages = params.multi_buffering_factor;
-    sizes.has_split_reader = params.split_reader;
+    // MPWI's second DM kernel is the writer face, not a second input producer.
+    sizes.has_split_reader = params.split_reader && !return_indices;
 
     // MPWI CBs (return_indices temporaries)
     sizes.mpwi_total_size = 0;
