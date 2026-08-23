@@ -18,8 +18,9 @@ inline void Noc::async_write_zeros(
     static_assert(
         DSpecT::is_dram, "noc.async_write_zeros<TensorAccessor, Scratch> requires a DRAM-backed accessor.");
     static_assert(
-        std::is_same_v<Scratch, CircularBuffer> || std::is_same_v<Scratch, DataflowBuffer>,
-        "noc.async_write_zeros scratch must be a CircularBuffer or DataflowBuffer.");
+        noc_zero_l1_endpoint_v<Scratch>,
+        "noc.async_write_zeros scratch must be a local-L1 endpoint: CircularBuffer, DataflowBuffer, "
+        "CoreLocalMem, Scratchpad or LocalTensorAccessor.");
     ASSERT(args.offset_bytes + size_bytes <= accessor.get_aligned_page_size());
     // Largest single noc_async_write the loop below will issue from scratch.
     // Caller's pre-zeroed prefix must cover at least this many bytes.
@@ -27,9 +28,9 @@ inline void Noc::async_write_zeros(
         (size_bytes > (uint32_t)NOC_MAX_BURST_SIZE) ? (uint32_t)NOC_MAX_BURST_SIZE : size_bytes;
     if constexpr (std::is_same_v<Scratch, DataflowBuffer>) {
         // DFB exposes get_entry_size(); assert one reserved entry is big enough.
-        // CircularBuffer has no public size accessor, so the equivalent assert
-        // is intentionally omitted there — callers using a CB scratch own the
-        // size-vs-page-size discipline at the host program-factory level.
+        // The other admitted scratch types have no size accessor reachable from here, so the
+        // equivalent assert is intentionally omitted — callers own the size-vs-page-size discipline
+        // (at the host program-factory level for a CB or a Scratchpad).
         ASSERT(scratch.get_entry_size() >= max_chunk);
     }
     uint32_t src_addr = get_src_ptr<AddressType::LOCAL_L1>(scratch, src_args_t<Scratch>{});

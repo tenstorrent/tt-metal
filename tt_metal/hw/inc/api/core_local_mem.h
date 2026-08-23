@@ -196,4 +196,13 @@ struct noc_traits_t<CoreLocalMem<T, AddressType>> {
         static_assert(false, "CoreLocalMem cannot be used as NoC mcast destination");
     }
 };
+
+template <typename T, typename AddressType>
+inline constexpr bool noc_zero_l1_endpoint_v<CoreLocalMem<T, AddressType>> = true;
+#ifdef ARCH_QUASAR
+#include "internal/tt-2xx/noc_zero_l1.inl"
+#else
+#include "internal/tt-1xx/noc_zero_l1.inl"
+#endif
+#include "internal/noc_zero_dram.inl"
 #endif  // !defined(COMPILE_FOR_TRISC)
