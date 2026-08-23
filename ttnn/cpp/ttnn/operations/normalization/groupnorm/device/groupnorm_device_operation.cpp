@@ -86,7 +86,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             std::visit([](const auto& config) -> Layout { return config.output_layout; }, args.program_config);
         TT_FATAL(
             a.layout() == Layout::TILE && output_layout == Layout::TILE,
-            "group_norm: ROW_MAJOR interleaved input/output is not supported on the Welford path yet. "
+            "group_norm: ROW_MAJOR interleaved input/output is not supported on the two-pass path yet. "
             "Use TILE layout for both input and output, or use the legacy (non-Welford) path "
             "(use_welford=false).");
     }
