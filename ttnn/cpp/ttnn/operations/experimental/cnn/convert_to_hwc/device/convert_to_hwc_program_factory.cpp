@@ -432,6 +432,10 @@ ttnn::device_operation::ProgramArtifacts ConvertToHWCProgramFactory::create_prog
                  .dfb_spec_name = TRANSPOSE_1_DFB,
                  .accessor_name = "transpose",
                  .endpoint_type = DFBEndpointType::CONSUMER},
+             // Gen1 compatibility shim: this second DM writes disjoint addresses in the borrowed
+             // output shard, but the primary writer owns the single producer endpoint. Binding the
+             // secondary as CONSUMER preserves the legacy per-RISC plain-CB view without another
+             // buffer, copy, or FIFO operation.
              DFBBinding{
                  .dfb_spec_name = OUTPUT_DFB, .accessor_name = "output", .endpoint_type = DFBEndpointType::CONSUMER}},
         .compile_time_args =
