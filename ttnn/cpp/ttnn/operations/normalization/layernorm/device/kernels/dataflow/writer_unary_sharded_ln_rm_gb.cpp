@@ -62,8 +62,6 @@ void kernel_main() {
     DataflowBuffer dfb_out_obj(dfb_out);
     DataflowBuffer dfb_out_resharded_obj(dfb_out_resharded);
 
-    const uint32_t out_single_tile_size_bytes = get_tile_size(dfb_out);
-
     if constexpr (!use_welford) {
         constexpr uint32_t dfb_in_2 = get_named_compile_time_arg_val("cb_in_2");
         const uint32_t scalar_w_bits = get_arg_val<uint32_t>(1);
@@ -93,7 +91,7 @@ void kernel_main() {
     }
 
     if constexpr (fuse_gamma) {
-        const uint32_t gamma_tile_bytes = get_tile_size(dfb_gamma);
+        const uint32_t gamma_tile_bytes = dfb_gamma_obj.get_tile_size();
         const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
         constexpr uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_GAMMA ? 64 : 32;
@@ -124,7 +122,7 @@ void kernel_main() {
     }
 
     if constexpr (fuse_beta) {
-        const uint32_t beta_tile_bytes = get_tile_size(dfb_beta);
+        const uint32_t beta_tile_bytes = dfb_beta_obj.get_tile_size();
         const auto beta = TensorAccessor(beta_args, beta_addr);
 
         uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_BETA ? 64 : 32;

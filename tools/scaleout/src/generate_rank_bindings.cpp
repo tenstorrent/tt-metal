@@ -182,22 +182,17 @@ TopologyMappingWithLocalMaps run_topology_mapping(
         config.hostname_to_asics[desc.host_name].insert(asic_id);
     }
 
-    // Build pinnings once, in each MGD's LOCAL mesh-id space, exactly as the single-MGD path feeds one MGD's
-    // pinnings to build_physical_multi_mesh_adjacency_graph (get_valid_groupings_for_mgd filters pins by the MGD's
-    // own local mesh ids). `per_mgd_pinnings[i]` is threaded into the physical builder for MGD i (PGD<->MGD match +
-    // PSD placement); the same pins are also remapped to GLOBAL mesh ids and concatenated into config.pinnings for
-    // the mesh->physical CSP solve, so both stages apply identical pins (the same places as the normal path).
-    std::vector<std::optional<std::vector<PinningConstraint>>> per_mgd_pinnings(mesh_graph_descriptors.size());
+    // Build pinnings once, in each MGD's LOCAL mesh-id space, already keyed by mesh (MGD populate + galaxy
+    // corner pins merged into the same map). `per_mgd_pinnings[i]` is threaded into the physical builder for
+    // MGD i; the same pins are remapped to GLOBAL mesh ids and concatenated into config.pinnings for the
+    // mesh->physical CSP solve, so both stages apply identical pins.
+    std::vector<std::optional<PinningsByMesh>> per_mgd_pinnings(mesh_graph_descriptors.size());
     const int world_size =
         static_cast<int>(*tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->size());
     for (std::size_t mgi = 0; mgi < mesh_graph_descriptors.size(); ++mgi) {
-        std::vector<PinningConstraint> local_pins;
+        PinningsByMesh local_pins = mesh_graph_descriptors[mgi].get_pinnings();
 
-        // (1) The MGD's own many-to-many pinning groups (already in this MGD's local mesh-id space).
-        const auto& mgd_pins = mesh_graph_descriptors[mgi].get_pinnings();
-        local_pins.insert(local_pins.end(), mgd_pins.begin(), mgd_pins.end());
-
-        // (2) Galaxy corner pins per full-galaxy mesh (local mesh id), same as the control plane / single-MGD path.
+        // Galaxy corner pins per full-galaxy mesh (local mesh id), same as the control plane / single-MGD path.
         if (cluster.is_ubb_galaxy()) {
             for (const auto& mesh_id : mesh_graphs[mgi].get_all_mesh_ids()) {
                 const auto& mesh_shape = mesh_graphs[mgi].get_mesh_shape(mesh_id);
@@ -205,7 +200,7 @@ TopologyMappingWithLocalMaps run_topology_mapping(
                 if (!is_1d && mesh_shape.mesh_size() % 32 == 0) {
                     auto corner_pins = get_galaxy_fixed_asic_position_pinnings_for_mesh(
                         mesh_id, mesh_shape, /*hard_pin_node_0=*/world_size == 1, /*nw_corner_only=*/false);
-                    local_pins.insert(local_pins.end(), corner_pins.begin(), corner_pins.end());
+                    merge_pinnings_by_mesh(local_pins, corner_pins);
                 }
             }
         }
@@ -217,16 +212,18 @@ TopologyMappingWithLocalMaps run_topology_mapping(
         per_mgd_pinnings[mgi] = local_pins;
         // Mirror the same pins into config.pinnings (CSP) after remapping fabric_nodes local -> global mesh id.
         const auto& local_to_global = per_part_local_to_global_mesh_ids.at(mgi);
-        for (const auto& group : local_pins) {
-            ::tt::tt_fabric::AsicPinningGroup remapped;
-            remapped.asic_positions = group.asic_positions;
-            remapped.fabric_nodes.reserve(group.fabric_nodes.size());
-            for (const auto& fabric_node : group.fabric_nodes) {
-                const auto it = local_to_global.find(fabric_node.mesh_id);
-                const MeshId global_mesh = (it != local_to_global.end()) ? it->second : fabric_node.mesh_id;
-                remapped.fabric_nodes.emplace_back(global_mesh, fabric_node.chip_id);
+        for (const auto& [_, groups] : local_pins) {
+            for (const auto& group : groups) {
+                ::tt::tt_fabric::AsicPinningGroup remapped;
+                remapped.asic_positions = group.asic_positions;
+                remapped.fabric_nodes.reserve(group.fabric_nodes.size());
+                for (const auto& fabric_node : group.fabric_nodes) {
+                    const auto it = local_to_global.find(fabric_node.mesh_id);
+                    const MeshId global_mesh = (it != local_to_global.end()) ? it->second : fabric_node.mesh_id;
+                    remapped.fabric_nodes.emplace_back(global_mesh, fabric_node.chip_id);
+                }
+                config.pinnings.push_back(std::move(remapped));
             }
-            config.pinnings.push_back(std::move(remapped));
         }
     }
 
@@ -675,6 +672,19 @@ int main(int argc, char** argv) {
 
     try {
         log_info(tt::LogFabric, "Generating rank bindings...");
+
+        // Factory System Descriptor (FSD) path comes from RTOptions, populated from the
+        // TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH environment variable (set by tt-run and propagated to this
+        // MPI worker). NOTE: FSD-driven mapping is not yet implemented; today we always fall back to live PSD
+        // discovery below. See issue #52859 for the follow-up that consumes this.
+        const auto& fsd_path = tt::tt_metal::MetalContext::instance().rtoptions().get_factory_system_descriptor_path();
+        if (!fsd_path.empty()) {
+            log_info(
+                tt::LogFabric,
+                "Factory System Descriptor provided via TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH ({}); FSD-driven "
+                "mapping not yet implemented, falling back to live PSD discovery.",
+                fsd_path);
+        }
 
         // Stage: Run PSD discovery
         log_info(tt::LogFabric, "Stage: Running Physical System Descriptor discovery...");

@@ -292,6 +292,7 @@ class ttMLA:
         has_indexer: bool | None = None,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         active_seq_len: Optional[int] = None,
+        first_layer_idx: Optional[int] = None,
     ):
         # DSA indexer weights (v3.2 / GLM): extract NON-mutating, so the caller's state_dict survives
         # repeated construction / cache build+load (the old pop() emptied it on the first pass). Dense
@@ -583,6 +584,7 @@ class ttMLA:
                     active_seq_len=self.active_seq_len,
                     slot_num=slot_num,
                     layer_num=self.layer_num,
+                    first_layer_idx=first_layer_idx,
                 )
         else:
             self._indexer = NullIndexer()  # dense v3.1: forward calls .forward() -> None (dense path)

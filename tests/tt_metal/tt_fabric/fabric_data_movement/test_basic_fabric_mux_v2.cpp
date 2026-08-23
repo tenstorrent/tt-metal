@@ -786,16 +786,15 @@ void run_test_case(BaseFabricFixture& fixture, const TestCaseConfig& test_case) 
         const auto& receiver_device_context = receiver_device_context_entry.second;
         fixture.RunProgramNonblocking(
             receiver_device_context.receiver_mux_deployment.device,
-            *receiver_device_context.receiver_mux_deployment.program);
+            std::move(*receiver_device_context.receiver_mux_deployment.program));
     }
-    fixture.RunProgramNonblocking(sender_mux_deployment->device, *sender_mux_deployment->program);
-
-    fixture.WaitForSingleProgramDone(sender_mux_deployment->device, *sender_mux_deployment->program);
+    tt_metal::LaunchProgram(
+        *sender_mux_deployment->device,
+        std::move(*sender_mux_deployment->program),
+        /*wait_until_cores_done=*/true);
     for (const auto& receiver_device_context_entry : receiver_device_contexts.value()) {
         const auto& receiver_device_context = receiver_device_context_entry.second;
-        fixture.WaitForSingleProgramDone(
-            receiver_device_context.receiver_mux_deployment.device,
-            *receiver_device_context.receiver_mux_deployment.program);
+        fixture.WaitForSingleProgramDone(receiver_device_context.receiver_mux_deployment.device);
     }
 
     const uint64_t expected_bytes =

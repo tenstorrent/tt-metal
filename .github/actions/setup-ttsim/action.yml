@@ -68,6 +68,7 @@ runs:
         case "$asset" in
           libttsim_wh*) soc=wormhole_b0_80_arch.yaml ;;
           libttsim_bh*) soc=blackhole_140_arch.yaml ;;
+          libttsim_qsr*) soc=quasar_32_arch.yaml ;;
           *) echo "::error::Cannot derive an arch from ttsim_lib '$asset' for SKU '${{ inputs.sku }}'."; exit 1 ;;
         esac
 
