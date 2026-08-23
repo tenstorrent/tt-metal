@@ -2064,6 +2064,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         }
     }
 
+    // Unlike the legacy KernelDescriptor lowering, which forwarded only math fidelity and FP32
+    // accumulation, Metal2 preserves the complete user compute configuration. In particular,
+    // math_approx_mode and dst_full_sync_en are intentionally honored here.
     auto compute_hw_config = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
     if (compute_kernel_config.fp32_dest_acc_en) {
         auto& unpack_modes = tt::tt_metal::experimental::unpack_modes(compute_hw_config);
