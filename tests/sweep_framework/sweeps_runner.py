@@ -850,6 +850,18 @@ _FABRIC_INFRA_SIGNATURES = (
     # produced both phantom failures and a correct NOT_RUN, purely by ordering.
     # Matched on the invariant phrase, not on an ASIC ID or core coordinate, both of which vary.
     "timed out waiting for eth heartbeat",
+    # The sibling error from the same UMD file, raised by the same discovery step: an ETH core's
+    # routing firmware is in the wrong state, so the cluster never comes up. UMD reports it as
+    # UnexpectedRoutingFirmwareConfigError from verify_routing_firmware_state
+    # (topology_discovery_wormhole.cpp:200):
+    #   Routing firmware for device ASIC ID: 87033183734870352 ETH core e9-0 (NOC0) is
+    #   unexpectedly enabled.
+    # It was named as a candidate when the heartbeat signature went in but deliberately left out
+    # until it was actually seen, rather than added on speculation. Scheduled lead-models run
+    # 32439829508 saw it: 3 vectors (2 add, 1 linear) booked as FAIL_ASSERT_EXCEPTION on one host,
+    # for a fault that happens before any op kernel runs.
+    # Matched on the invariant phrase -- the ASIC ID, the core and enabled/disabled all vary.
+    "routing firmware for device asic id",
     # The host came up with fewer chips than the traced topology needs, so mesh open fails
     # before any kernel runs. Seen on main run 30681057227 job 91319472767 (runner g03glx03):
     #   TT_FATAL @ tt_metal/distributed/system_mesh.cpp:159: requested_size <= system_size
