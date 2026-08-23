@@ -265,6 +265,12 @@ def test_group_norm_sfpu_global_combine_core_counts(device, grid_size, spatial_s
     )
     input_mask = ttnn.create_group_norm_input_mask(C, num_groups, 1, ttnn.bfloat8_b)
     input_mask = ttnn.to_device(input_mask, device)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+    )
 
     output = ttnn.group_norm(
         input_tensor,
@@ -273,6 +279,7 @@ def test_group_norm_sfpu_global_combine_core_counts(device, grid_size, spatial_s
         memory_config=memory_config,
         core_grid=grid_size,
         use_welford=True,
+        compute_kernel_config=compute_kernel_config,
     )
     output = ttnn.to_torch(ttnn.from_device(output)).float()
 

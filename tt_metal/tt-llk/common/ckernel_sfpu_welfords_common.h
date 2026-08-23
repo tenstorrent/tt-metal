@@ -871,7 +871,7 @@ sfpi_inline void _two_pass_store_combined_mean_var_to_dst_raw_group_(std::uint32
     constexpr std::uint32_t mean_tile_offset = 0;
     constexpr std::uint32_t var_tile_offset  = 64;
     const std::uint32_t group_offset         = group_id << 2;
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, mean_tile_offset + group_offset);
+    TT_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, mean_tile_offset + group_offset);
 
     // Add variance(mean) to the average lane variance.
     TTI_SFPLOAD(ckernel::p_sfpu::LREG1, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, scratch_tile_offset);
@@ -886,7 +886,7 @@ sfpi_inline void _two_pass_store_combined_mean_var_to_dst_raw_group_(std::uint32
     TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, lane_reciprocal_bits & 0xffff);
     TTI_SFPMUL(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG5, 0);
     TTI_SFPNOP;
-    TTI_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, var_tile_offset + group_offset);
+    TT_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, var_tile_offset + group_offset);
 }
 
 /*
