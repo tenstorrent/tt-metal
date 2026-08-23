@@ -475,7 +475,7 @@ def test_batched_schedule_positions(monkeypatch):
 # generate() with fake device ops — per-user targets, commit-by-select rows,
 # and the anchor==head invariant.
 # --------------------------------------------------------------------------- #
-def _make_fake_fused_spec(draft_len, prompt_lens, monkeypatch):
+def _make_fake_fused_spec(draft_len, prompt_lens, monkeypatch, use_trace=False):
     from types import SimpleNamespace
 
     import torch
@@ -485,18 +485,22 @@ def _make_fake_fused_spec(draft_len, prompt_lens, monkeypatch):
 
     monkeypatch.setattr(sb_mod, "ttnn", SimpleNamespace(deallocate=lambda *_a, **_k: None))
     monkeypatch.setattr(sf_mod, "ttnn", SimpleNamespace(deallocate=lambda *_a, **_k: None))
-    monkeypatch.setenv("TT_SPEC_TRACE", "0")
+    monkeypatch.setenv("TT_SPEC_TRACE", "1" if use_trace else "0")
     B = len(prompt_lens)
 
     class _FakeFused(sf_mod.Qwen36FusedSpeculativeDecoder):
         def __init__(self, mtp):
             # Bypass the device-heavy __init__ chain; wire only the bookkeeping.
-            model_stub = SimpleNamespace(num_devices=8, layers=[])
+            model_stub = SimpleNamespace(num_devices=8, layers=[], args=SimpleNamespace(dim=3))
             page_table = torch.arange(B * 4, dtype=torch.int32).reshape(B, 4)
             sb_mod.Qwen36BatchedSpeculativeDecoder.__init__(self, model_stub, mtp, page_table, draft_len=draft_len)
-            self._use_trace = False
+            self._use_trace = use_trace
             self.W = draft_len + 1
             self.commit_rows = []  # (iteration, [m_u])
+            self.warm_ran_before_capture = None
+
+        def _warm_commit_programs(self):  # device slices; here only the order matters
+            self.warm_ran_before_capture = not getattr(self.mtp, "captured", True)
 
         def seed(self):
             for u, T in enumerate(prompt_lens):
@@ -568,3 +572,107 @@ def test_fused_loop_desync(monkeypatch):
         for u, m in enumerate(row):
             if m is not None:
                 assert m == spec.slots[u].accepts[it]
+
+
+# --------------------------------------------------------------------------- #
+# Traced batched drafter windows (host emulation): the REAL _draft_traced +
+# _setup_drafter_traces scheduling against a window-shaped oracle.
+# --------------------------------------------------------------------------- #
+class _WindowOracleMTP(_BatchedOracleDrafter):
+    """Batched-window drafter emulation over the same per-user oracle rule.
+
+    step_batched consumes the staged position table exactly like the device
+    traces (leg j reads column j; chained legs feed each user's previous
+    hidden), so scheduling bugs surface as convention asserts or wrong
+    drafts. Also enforces the ensure -> stage -> compile -> capture -> replay
+    discipline."""
+
+    def __init__(self, users):
+        super().__init__(users)
+        self._bwin = None
+        self._staged = None
+        self._h = [None] * users
+        self.captured = False
+        self.stage_count = 0
+
+    def ensure_batched_window(self, w_max, users):
+        assert users == self.users
+        if self._bwin is None:
+            self._bwin = {"w_max": w_max, "traces": {}}
+
+    def stage_batched_window(self, pos_table):
+        assert self._bwin is not None, "staged before ensure_batched_window"
+        assert pos_table.shape[0] == self.users and pos_table.shape[1] <= self._bwin["w_max"]
+        self._staged = pos_table.clone()
+        self.stage_count += 1
+
+    def compile_batched_window(self):
+        if not self._bwin["traces"]:
+            self._bwin["traces"] = {j: True for j in range(self._bwin["w_max"])}
+
+    def capture_batched_window(self):
+        assert self._bwin["traces"], "captured before the compile pass"
+        self.captured = True
+
+    def step_batched(self, j, tokens, hiddens=None, chain_hidden=False, want_tokens=False):
+        assert self.captured, "replayed before capture"
+        assert self._staged is not None and j < self._staged.shape[1]
+        picks = []
+        for u in range(self.users):
+            pos = int(self._staged[u, j])
+            h = self._h[u] if chain_hidden else hiddens[u]
+            logits, g = self.step(int(tokens[u]), h, pos, user=u)
+            self._h[u] = g
+            picks.append(int(logits.argmax()))
+        return picks if want_tokens else None
+
+
+def _run_fused(prompt_lens, monkeypatch, use_trace, max_new=50, stop_tokens=None):
+    fake_cls = _make_fake_fused_spec(3, prompt_lens, monkeypatch, use_trace=use_trace)
+    mtp = _WindowOracleMTP(len(prompt_lens)) if use_trace else _BatchedOracleDrafter(len(prompt_lens))
+    spec = fake_cls(mtp)
+    if stop_tokens is not None:
+        spec.stop_tokens = stop_tokens
+    spec.seed()
+    rows, stats = spec.generate(max_new)
+    return spec, mtp, rows
+
+
+def test_fused_traced_drafter_matches_eager(monkeypatch):
+    """The traced batched drafter window (end-aligned schedule, chained legs,
+    iteration-1 eager warmup) produces bit-identical outputs and accept traces
+    to the eager per-user drafter."""
+    prompt_lens = [100, 70, 130, 65]
+    outs = {}
+    for use_trace in (False, True):
+        spec, mtp, rows = _run_fused(prompt_lens, monkeypatch, use_trace)
+        for u, (row, T) in enumerate(zip(rows, prompt_lens)):
+            assert row == [_tok_u(u, T + i) for i in range(len(row))], f"user {u} diverged (trace={use_trace})"
+            assert len(row) >= 50
+        outs[use_trace] = (rows, [list(s.accepts) for s in spec.slots], [list(s.k_used) for s in spec.slots])
+        if use_trace:
+            assert spec.warm_ran_before_capture, "commit-select programs must warm before the traces park"
+            assert mtp.captured
+            # One setup staging + one per traced iteration (iteration 1 is eager).
+            iters = max(len(s.accepts) for s in spec.slots)
+            assert mtp.stage_count == iters, f"{mtp.stage_count} stagings for {iters} iterations"
+    assert outs[True] == outs[False], "the traced drafter changed the loop's outputs"
+
+
+def test_fused_traced_drafter_with_finished_user(monkeypatch):
+    """A user finishing mid-run shrinks to ONE idempotent replay leg in the
+    schedule; the traced and eager loops still agree exactly."""
+    prompt_lens = [100, 70, 130]
+    stop = {_tok_u(1, 78)}  # user 1 stops after ~8 tokens
+    outs = {}
+    for use_trace in (False, True):
+        spec, _mtp, rows = _run_fused(prompt_lens, monkeypatch, use_trace, stop_tokens=stop)
+        for u, (row, T) in enumerate(zip(rows, prompt_lens)):
+            target = [_tok_u(u, T + i) for i in range(len(row))]
+            assert row == target, f"user {u} diverged (trace={use_trace})"
+        outs[use_trace] = (rows, [list(s.accepts) for s in spec.slots])
+        done_users = [u for u, s in enumerate(spec.slots) if s.done]
+        assert done_users, "the stop token never fired"
+        for u in done_users:
+            assert spec.slots[u].committed[-1] in stop
+    assert outs[True] == outs[False]

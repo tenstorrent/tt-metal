@@ -714,6 +714,16 @@ class Qwen36BatchedSpeculativeDecoder:
         self.mtp.capture_batched_window()
         self._verify_trace_capture()
 
+    def _sched_pending(self, slot):
+        """The pending list a drafter schedule sees for `slot`: a finished (or
+        drained) slot contributes ONE idempotent replay leg, so a dead user's
+        long tail never widens (or overflows) the shared window."""
+        if slot.pending and not slot.done:
+            return slot.pending
+        if slot.pending:
+            return slot.pending[-1:]
+        return [(slot.committed[-1], None, max(0, len(slot.committed) - 2))]
+
     def _schedule_positions(self, width):
         """End-aligned per-user drafter schedule for `width` legs.
 
@@ -725,7 +735,7 @@ class Qwen36BatchedSpeculativeDecoder:
         pos = torch.zeros(self.B, width, dtype=torch.int32)
         pads = []
         for u, slot in enumerate(self.slots):
-            pending = slot.pending if slot.pending else [(slot.committed[-1], None, max(0, len(slot.committed) - 2))]
+            pending = self._sched_pending(slot)
             n_legs = len(pending) + K - 1
             pad = width - n_legs
             assert pad >= 0, f"user {u}: {n_legs} legs exceed window {width}"
@@ -739,6 +749,44 @@ class Qwen36BatchedSpeculativeDecoder:
                     pos[u, j] = pending[-1][2] + (j - pad - len(pending) + 1)
             pads.append(pad)
         return pos, pads
+
+    def _draft_traced(self, width, max_new_tokens):
+        """One end-aligned traced drafter window advancing ALL users K legs.
+
+        Per-iteration pos/rope upload; catch-up legs read nothing back; each
+        draft leg reads two tiny score tensors for all users at once. Returns
+        per-user drafts ([] for inactive users, whose legs are idempotent
+        replays)."""
+        K = self.draft_len
+        pos_table, pads = self._schedule_positions(width)
+        self.mtp.stage_batched_window(pos_table)
+        active = [not (s.done or len(s.out) >= max_new_tokens) for s in self.slots]
+        for u, slot in enumerate(self.slots):
+            if active[u]:
+                slot.k_used.append(K)
+        # Catch-up legs 0..width-K (leg width-K is every user's LAST pending).
+        for j in range(width - K + 1):
+            toks, hids = [], []
+            for u, slot in enumerate(self.slots):
+                pending = self._sched_pending(slot)
+                i = min(max(0, j - pads[u]), len(pending) - 1)
+                tok_u, hid_u, _pos = pending[i]
+                toks.append(tok_u)
+                hids.append(hid_u if hid_u is not None else torch.zeros(self.model.args.dim))
+            picks = self.mtp.step_batched(j, toks, torch.stack([h.float() for h in hids]), want_tokens=(j == width - K))
+        drafts = [[picks[u]] for u in range(self.B)]
+        # Chained draft legs (uniform across users at static K).
+        for j in range(width - K + 1, width):
+            toks = [drafts[u][-1] for u in range(self.B)]
+            picks = self.mtp.step_batched(j, toks, chain_hidden=True, want_tokens=True)
+            for u in range(self.B):
+                drafts[u].append(picks[u])
+        for u, slot in enumerate(self.slots):
+            if active[u]:
+                slot.pending = []
+            else:
+                drafts[u] = []
+        return drafts
 
     # ── per-user commit ──────────────────────────────────────────────────────
     def _commit_user(self, u):
@@ -813,38 +861,9 @@ class Qwen36BatchedSpeculativeDecoder:
             # (or an oversized iteration-1 window): per-user B=1 legs.
             t0 = time.perf_counter()
             drafts = [[] for _ in range(self.B)]
-            width = max((len(s2.pending) if s2.pending else 1) for s2 in self.slots) + K - 1
+            width = max(len(self._sched_pending(s2)) for s2 in self.slots) + K - 1
             if use_trace and width <= w_max:
-                pos_table, pads = self._schedule_positions(width)
-                self.mtp.stage_batched_window(pos_table)
-                active = [not (s2.done or len(s2.out) >= max_new_tokens) for s2 in self.slots]
-                for u, slot in enumerate(self.slots):
-                    if active[u]:
-                        slot.k_used.append(K)
-                # Catch-up legs 0..width-K (leg width-K is every user's LAST pending).
-                for j in range(width - K + 1):
-                    toks, hids = [], []
-                    for u, slot in enumerate(self.slots):
-                        pending = slot.pending if slot.pending else [(slot.committed[-1], None, 0)]
-                        i = min(max(0, j - pads[u]), len(pending) - 1)
-                        tok_u, hid_u, _pos = pending[i]
-                        toks.append(tok_u)
-                        hids.append(hid_u if hid_u is not None else torch.zeros(self.model.args.dim))
-                    picks = self.mtp.step_batched(
-                        j, toks, torch.stack([h.float() for h in hids]), want_tokens=(j == width - K)
-                    )
-                for u in range(self.B):
-                    drafts[u] = [picks[u]]
-                # Chained draft legs (uniform across users at static K).
-                for j in range(width - K + 1, width):
-                    toks = [drafts[u][-1] for u in range(self.B)]
-                    picks = self.mtp.step_batched(j, toks, chain_hidden=True, want_tokens=True)
-                    for u in range(self.B):
-                        drafts[u].append(picks[u])
-                for u, slot in enumerate(self.slots):
-                    slot.pending = []
-                    if not active[u]:
-                        drafts[u] = []
+                drafts = self._draft_traced(width, max_new_tokens)
             else:
                 for u, slot in enumerate(self.slots):
                     if slot.done or len(slot.out) >= max_new_tokens:

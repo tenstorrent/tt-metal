@@ -42,7 +42,10 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
         super().__init__(
             model, mtp_head, page_table, draft_len=draft_len, stop_tokens=stop_tokens, seed_window=seed_window
         )
-        self._use_trace = False  # eager v1 (the traced form rides the production decode trace)
+        # TT_SPEC_TRACE gates the traced batched DRAFTER only (0 = eager
+        # per-user legs); the verify itself stays eager until it rides the
+        # production decode-width trace.
+        self._use_trace = os.environ.get("TT_SPEC_TRACE", "1") == "1"
         self.W = self.draft_len + 1
         assert self.B * self.W <= 32, f"width {self.B}x{self.W} must fit one tile row (K<= {32 // self.B - 1})"
         try:
@@ -348,6 +351,40 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
                 cw = ttnn.slice(self._conv_win[li], (u, w0, 0), (u + 1, w0 + conv_k - 1, dn.qkv_dim_tp))
                 dn._write_index(dn._batched_conv_carry, cw, u, dim=0)
 
+    # ── traced-drafter setup ─────────────────────────────────────────────────
+    def _warm_commit_programs(self):
+        """Dry-compile every m-variant of the commit-select slices. Accepted m
+        values differ across iterations, and a fresh slice offset must never
+        compile after the drafter traces are parked (post-park compiles clobber
+        parked traces). Non-mutating: slice + deallocate only."""
+        conv_k = self._conv_k
+        dn = self._dns[0]
+        for u in range(self.B):
+            for m in range(self.W):
+                r = u * self.W + m
+                row = ttnn.slice(self._stash[0], (r, 0, 0, 0), (r + 1, self._nv, self._dk, self._dv))
+                ttnn.deallocate(row)
+                w0 = m * (conv_k - 1)
+                cw = ttnn.slice(self._conv_win[0], (u, w0, 0), (u + 1, w0 + conv_k - 1, dn.qkv_dim_tp))
+                ttnn.deallocate(cw)
+
+    def _setup_drafter_traces(self):
+        """Compile + capture the batched drafter windows AFTER one full eager
+        iteration: every fused-verify and commit-select program must already
+        exist when the first trace parks. The capture-time KV writes land at
+        each user's head position and are rewritten by the next window's real
+        legs before anything attends to them."""
+        K = self.draft_len
+        w_max = (K + 2) + K - 1  # steady-state legs: pendings (<= K+1, +1 slack) + chain
+        self.mtp.ensure_batched_window(w_max, self.B)
+        setup_pos = torch.stack(
+            [torch.full((w_max,), int(self._sched_pending(slot)[-1][2]), dtype=torch.int32) for slot in self.slots]
+        )
+        self.mtp.stage_batched_window(setup_pos)
+        self._warm_commit_programs()
+        self.mtp.compile_batched_window()
+        self.mtp.capture_batched_window()
+
     # ── the loop ─────────────────────────────────────────────────────────────
     def _align_anchor_to_head(self):
         """One-time post-prefill catch-up: advance every user's state through all
@@ -375,6 +412,26 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
             slot.a = len(slot.committed) - 1
         self._snapshot_from_live()
 
+    def _draft_eager(self, max_new_tokens):
+        """Per-user eager drafter legs (iteration 1, and the TT_SPEC_TRACE=0
+        fallback)."""
+        K = self.draft_len
+        drafts = [[] for _ in range(self.B)]
+        for u, slot in enumerate(self.slots):
+            if slot.done or len(slot.out) >= max_new_tokens:
+                continue
+            slot.k_used.append(K)
+            last_pos = slot.pending[-1][2]
+            for tok, hid_row, pos in slot.pending[:-1]:
+                self.mtp.step(tok, hid_row, pos, user=u)
+            d_logits, g = self.mtp.step(*slot.pending[-1], user=u)
+            slot.pending = []
+            drafts[u] = [int(d_logits.argmax())]
+            for j in range(1, K):
+                d_logits, g = self.mtp.step(drafts[u][-1], g, last_pos + j, user=u)
+                drafts[u].append(int(d_logits.argmax()))
+        return drafts
+
     def generate(self, max_new_tokens, adaptive_k=False):
         assert not adaptive_k, "the fused verify is static-K (width B*(K+1) is fixed)"
         K = self.draft_len
@@ -382,23 +439,22 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
         # then align every anchor to its committed head for the fused invariant.
         self._first_verify()
         self._align_anchor_to_head()
+        traced_armed = False
+        first_iter_done = False
 
         while any(not s.done and len(s.out) < max_new_tokens for s in self.slots):
+            if self._use_trace and first_iter_done and not traced_armed:
+                # Iteration 1 ran fully eager and compiled every verify/commit
+                # program; parking traces is safe from here on.
+                self._setup_drafter_traces()
+                traced_armed = True
             t0 = time.perf_counter()
-            drafts = [[] for _ in range(self.B)]
-            for u, slot in enumerate(self.slots):
-                if slot.done or len(slot.out) >= max_new_tokens:
-                    continue
-                slot.k_used.append(K)
-                last_pos = slot.pending[-1][2]
-                for tok, hid_row, pos in slot.pending[:-1]:
-                    self.mtp.step(tok, hid_row, pos, user=u)
-                d_logits, g = self.mtp.step(*slot.pending[-1], user=u)
-                slot.pending = []
-                drafts[u] = [int(d_logits.argmax())]
-                for j in range(1, K):
-                    d_logits, g = self.mtp.step(drafts[u][-1], g, last_pos + j, user=u)
-                    drafts[u].append(int(d_logits.argmax()))
+            if traced_armed:
+                width = max(len(self._sched_pending(s2)) for s2 in self.slots) + K - 1
+                assert width <= self.mtp._bwin["w_max"], f"steady-state window {width} overflows"
+                drafts = self._draft_traced(width, max_new_tokens)
+            else:
+                drafts = self._draft_eager(max_new_tokens)
             self._timing["draft"] += time.perf_counter() - t0
 
             t0 = time.perf_counter()
@@ -429,6 +485,7 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
                 slot.a = len(slot.committed) - 1  # fused invariant: anchor == head
             self._commit_select(accepts)
             self._timing["commit"] += time.perf_counter() - t0
+            first_iter_done = True
             if os.environ.get("TT_SPEC_TIMING", "0") == "1":
                 it = max(len(s2.accepts) for s2 in self.slots)
                 logger.info(

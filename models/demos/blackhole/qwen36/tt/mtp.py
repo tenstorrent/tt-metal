@@ -519,13 +519,15 @@ class Qwen36MTPHead:
         B, w_max = bw["B"], bw["w_max"]
         width = pos_table.shape[1]
         assert pos_table.shape[0] == B and width <= w_max
-        pos = torch.zeros(B, w_max, dtype=torch.int32)
+        # Unused columns replicate column 0: only the compile/capture passes
+        # execute those indices, and their KV writes land where the real leg-0
+        # replay rewrites them (a zero-pad would leak capture garbage to KV
+        # position 0 instead).
+        pos = pos_table[:, :1].expand(B, w_max).contiguous().to(torch.int32)
         pos[:, :width] = pos_table.to(torch.int32)
-        cos = torch.zeros(B, w_max, self.rope.head_dim, dtype=torch.bfloat16)
-        sin = torch.zeros(B, w_max, self.rope.head_dim, dtype=torch.bfloat16)
-        flat = pos_table.reshape(-1).to(torch.long)
-        cos[:, :width] = self.rope.cos_cpu[flat].reshape(B, width, -1).to(torch.bfloat16)
-        sin[:, :width] = self.rope.sin_cpu[flat].reshape(B, width, -1).to(torch.bfloat16)
+        flat = pos.reshape(-1).to(torch.long)
+        cos = self.rope.cos_cpu[flat].reshape(B, w_max, -1).to(torch.bfloat16)
+        sin = self.rope.sin_cpu[flat].reshape(B, w_max, -1).to(torch.bfloat16)
         for host_t, dtype, dst in ((pos, ttnn.int32, "pos"), (cos, ttnn.bfloat16, "cos"), (sin, ttnn.bfloat16, "sin")):
             src = ttnn.from_torch(host_t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, **self._mesh_kwargs)
             ttnn.copy_host_to_device_tensor(src, bw[dst])
@@ -561,10 +563,17 @@ class Qwen36MTPHead:
         parked anywhere (per-index slice offsets may compile distinct programs)."""
         if self._bwin["traces"]:
             return
+        normed = None
         for j in range(self._bwin["w_max"]):
+            if normed is not None:
+                ttnn.deallocate(normed)
             idx, val, normed = self._batched_step_body(j)
-            for t in (idx, val, normed):
+            for t in (idx, val):
                 ttnn.deallocate(t)
+        # Warm the chain-hidden copy with the exact normed spec: the first
+        # chained leg must not compile a program after traces are parked.
+        ttnn.copy(normed, self._bwin["h"])
+        ttnn.deallocate(normed)
         ttnn.synchronize_device(self.device)
 
     def capture_batched_window(self):
