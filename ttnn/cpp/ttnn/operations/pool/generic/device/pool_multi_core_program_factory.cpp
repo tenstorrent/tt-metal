@@ -679,14 +679,16 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
     // Regular split-reader pooling has a second input stream. A second scalar stream is
     // only needed for AvgPool configurations with per-output scalar runs. MPWI reader1 is
     // the writer face, so it has neither second input nor second scalar DFB.
-    const bool has_second_input_cb = cb_sizes.has_split_reader;
+    const bool has_second_input_cb = cb_sizes.has_split_reader && !return_indices;
+    const bool has_reserved_second_input_cb = cb_sizes.has_split_reader && return_indices;
     const bool has_second_scalar_cb = cb_sizes.has_second_scalar_cb;
 
     // mandatory: in_scalar_0, clear_value, in_shard, reader_indices, in_0, out
     constexpr uint32_t num_mandatory_dfbs = 6;
     dfbs.reserve(
-        num_mandatory_dfbs + (has_second_input_cb ? 1 : 0) + (has_second_scalar_cb ? 1 : 0) + (return_indices ? 9 : 0) +
-        (cb_sizes.has_pre_tilize ? 2 : 0) + (cb_sizes.has_out_idx ? 1 : 0) + (one_scalar_per_core ? 0 : 1));
+        num_mandatory_dfbs + (cb_sizes.has_split_reader ? 1 : 0) + (has_second_scalar_cb ? 1 : 0) +
+        (return_indices ? 9 : 0) + (cb_sizes.has_pre_tilize ? 2 : 0) + (cb_sizes.has_out_idx ? 1 : 0) +
+        (one_scalar_per_core ? 0 : 1));
 
     dfbs.push_back(local_dfb(
         DFB_IN_SCALAR_0, cb_sizes.scalar_cb_pagesize, cb_sizes.scalar_cb_npages, params.data_format, scalar_face));
@@ -719,6 +721,12 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
     dfbs.push_back(
         local_dfb(DFB_IN_0, cb_sizes.in_cb_pagesize, cb_sizes.in_cb_npages, params.data_format, input_face_geometry));
     if (has_second_input_cb) {
+        dfbs.push_back(local_dfb(
+            DFB_IN_1, cb_sizes.in_cb_pagesize, cb_sizes.in_cb_npages, params.data_format, input_face_geometry));
+    }
+    if (has_reserved_second_input_cb) {
+        // Preserve the legacy MPWI L1 footprint. Its second DM kernel is the writer and never
+        // touches this allocation, so the DFB intentionally has no endpoint bindings.
         dfbs.push_back(local_dfb(
             DFB_IN_1, cb_sizes.in_cb_pagesize, cb_sizes.in_cb_npages, params.data_format, input_face_geometry));
     }
@@ -934,6 +942,18 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
             if (!is_reader1) {
                 b.push_back(DFBBinding{
                     .dfb_spec_name = DFB_IN_0, .accessor_name = "in_cb", .endpoint_type = DFBEndpointType::PRODUCER});
+                if (has_reserved_second_input_cb) {
+                    // This self-loop represents the legacy reserved allocation only; the MPWI
+                    // kernel deliberately has no device-side accessor for it.
+                    b.push_back(DFBBinding{
+                        .dfb_spec_name = DFB_IN_1,
+                        .accessor_name = "reserved_in_cb_1",
+                        .endpoint_type = DFBEndpointType::PRODUCER});
+                    b.push_back(DFBBinding{
+                        .dfb_spec_name = DFB_IN_1,
+                        .accessor_name = "reserved_in_cb_1",
+                        .endpoint_type = DFBEndpointType::CONSUMER});
+                }
                 b.push_back(DFBBinding{
                     .dfb_spec_name = DFB_IN_SCALAR_0,
                     .accessor_name = "in_scalar_cb",
@@ -1133,12 +1153,16 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
     }
 
     Group<DFBBinding> compute_bindings;
-    compute_bindings.push_back(
-        DFBBinding{.dfb_spec_name = DFB_IN_0, .accessor_name = "in_cb_0", .endpoint_type = DFBEndpointType::CONSUMER});
+    compute_bindings.push_back(DFBBinding{
+        .dfb_spec_name = DFB_IN_0,
+        .accessor_name = "in_cb_0",
+        .endpoint_type = DFBEndpointType::CONSUMER,
+        .accessor_aliases = has_second_input_cb ? Group<std::string>{} : Group<std::string>{"in_cb_1"}});
     compute_bindings.push_back(DFBBinding{
         .dfb_spec_name = DFB_IN_SCALAR_0,
         .accessor_name = "in_scalar_cb_0",
-        .endpoint_type = DFBEndpointType::CONSUMER});
+        .endpoint_type = DFBEndpointType::CONSUMER,
+        .accessor_aliases = has_second_scalar_cb ? Group<std::string>{} : Group<std::string>{"in_scalar_cb_1"}});
     // Regular split-reader compute always consumes a second input stream.
     if (has_second_input_cb) {
         compute_bindings.push_back(DFBBinding{
@@ -1158,7 +1182,11 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
         // check (mirrors the mpwi writer-face self-loop on DFB_OUT); no kernel-side
         // pop is needed since the data is the final resident output.
         compute_bindings.push_back(DFBBinding{
-            .dfb_spec_name = DFB_OUT, .accessor_name = "out_cb", .endpoint_type = DFBEndpointType::PRODUCER});
+            .dfb_spec_name = DFB_OUT,
+            .accessor_name = "out_cb",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+            .accessor_aliases = cb_sizes.has_pre_tilize ? Group<std::string>{}
+                                                        : Group<std::string>{"pre_tilize_cb", "fast_tilize_cb"}});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_OUT, .accessor_name = "out_cb", .endpoint_type = DFBEndpointType::CONSUMER});
         if (cb_sizes.has_pre_tilize) {
@@ -1226,21 +1254,11 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
             .endpoint_type = DFBEndpointType::CONSUMER});
     }
 
-    // Compute defines (REDUCE_OP / REDUCE_DIM, etc.) plus the conditional-binding gates the
-    // compute kernel uses to preprocessor-guard optional DFB token references.
+    // Compute defines are limited to LLK configuration consumed by existing implementation headers.
     const auto pool_defines_map = get_defines(pool_type);
     KernelSpec::CompilerOptions::Defines compute_defines;
     for (const auto& [k, v] : pool_defines_map) {
         compute_defines.insert({k, v});
-    }
-    if (cb_sizes.has_split_reader) {
-        compute_defines.insert({"SPLIT_READER", "1"});
-    }
-    if (has_second_scalar_cb) {
-        compute_defines.insert({"HAS_SECOND_SCALAR_CB", "1"});
-    }
-    if (is_output_tiled) {
-        compute_defines.insert({"OUTPUT_TILED", "1"});
     }
     if (return_indices && params.is_large_kernel) {
         compute_defines.insert({"LARGE_KERNEL", "1"});

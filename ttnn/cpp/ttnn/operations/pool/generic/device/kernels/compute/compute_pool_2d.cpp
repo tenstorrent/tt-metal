@@ -16,25 +16,10 @@ template <
     uint32_t is_output_tiled,
     uint32_t is_output_block_format>
 TT_KERNEL void compute_pool_2d(uint32_t out_nhw_this_core) {
-#ifdef SPLIT_READER
     constexpr auto in_cb_1 = dfb::in_cb_1;
-#else
-    constexpr auto in_cb_1 = dfb::in_cb_0;
-#endif
-
-#ifdef HAS_SECOND_SCALAR_CB
     constexpr auto in_scalar_cb_1 = dfb::in_scalar_cb_1;
-#else
-    constexpr auto in_scalar_cb_1 = dfb::in_scalar_cb_0;
-#endif
-
-#ifdef OUTPUT_TILED
     constexpr auto pre_tilize_cb = dfb::pre_tilize_cb;
     constexpr auto fast_tilize_cb = dfb::fast_tilize_cb;
-#else
-    constexpr auto pre_tilize_cb = dfb::out_cb;
-    constexpr auto fast_tilize_cb = dfb::out_cb;
-#endif
 
     pool_2d_compute_impl<
         in_ntiles_c,
