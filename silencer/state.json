@@ -69,7 +69,7 @@
       "branch": "silencer/dedupe-matmul-memconfig-mismatch-warning-77496cdc6bbbe3a9",
       "pattern": "Mismatch between computed/provided mem config warning - 102x repeats, only 2 distinct pairs",
       "status": "open-pr-no-validation-run-found",
-      "note": "PR #51894 draft, no comments yet. No dedicated single-card-demo-tests run found on branch (prior dispatch apparently did not fire). Not re-dispatched this run (1/1 dispatch_workflow budget used elsewhere). Only generic PR Gate Status checks visible. Awaiting maintainer review; re-attempt dispatch next run if still unvalidated.",
+      "note": "PR #51894 still draft, no dedicated validation run found on branch this run either. Deferred again this run: reconciliation focus was PR #52996's outstanding validation-redispatch. Re-attempt dispatch + validation next run if still unvalidated.",
       "number": 51894
     },
     {
@@ -140,8 +140,8 @@
     {
       "branch": "silencer/eth-buffer-movement-log-noise",
       "number": 52996,
-      "status": "validation-redispatched",
-      "note": "No CI run found on branch for runtime-integration-tests (only Cycode security scans present). Re-dispatched runtime-integration-tests on branch 2026-08-22. Status comment posted (/codeowners ping) and PR marked ready for review. Awaiting run completion for re-grep of test-execution logs."
+      "status": "resolved",
+      "note": "PR #52996 fully resolved: validation run 32597833863 (runtime-integration-tests, workflow_dispatch on branch) completed/success. Re-grepped galaxy_eth job 97092943062 (3+29+29 tests PASSED) and bh_multicard_eth job 97092943055 (test_buffer_movement_kernels.cpp exercised): 0 occurrences of demoted patterns in either. Outcome commented (/codeowners ping) and marked ready for review (2026-08-22)."
     },
     {
       "branch": "silencer/groupnorm-unused-var-warning",
