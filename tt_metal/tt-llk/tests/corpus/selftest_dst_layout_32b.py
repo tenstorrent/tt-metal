@@ -87,9 +87,27 @@ check(
         NODE_32B.replace("dest_acc:Yes", "dest_acc:DestAccumulation.Yes")
     ),
 )
+# ON-set promotion 2026-08-23 (corpus commit 461ed6c796): lreg-alloc is IN
+# the reviewed ON set, so the plain ON leg carries a consumer and a
+# dest_acc:Yes node's ON leg GETS the declaration — the reviewed wiring
+# update this selftest's tripwire demanded.  A genuinely consumer-free leg
+# (ON minus every consumer, the drop-one off leg's shape) must stay
+# byte-identical exactly as before.
+ON_SANS_CONSUMERS = " ".join(
+    t for t in sweep.ON_FLAGS.split() if t not in sweep.DST_LAYOUT_CONSUMERS
+)
 check(
-    "32b node WITHOUT consumer: ON leg byte-identical",
-    sweep.dst_layout_flags(sweep.ON_FLAGS, NODE_32B) == sweep.ON_FLAGS,
+    "32b node + plain ON leg (consumer promoted): GETS the declaration",
+    sweep.dst_layout_flags(sweep.ON_FLAGS, NODE_32B) == f"{sweep.ON_FLAGS} {FLAG}",
+    sweep.dst_layout_flags(sweep.ON_FLAGS, NODE_32B),
+)
+check(
+    "16b node + plain ON leg (consumer promoted): fails closed, NO declaration",
+    sweep.dst_layout_flags(sweep.ON_FLAGS, NODE_16B) == sweep.ON_FLAGS,
+)
+check(
+    "32b node WITHOUT consumer (ON minus consumers): leg byte-identical",
+    sweep.dst_layout_flags(ON_SANS_CONSUMERS, NODE_32B) == ON_SANS_CONSUMERS,
 )
 check(
     "32b node WITHOUT consumer: OFF leg byte-identical",
@@ -110,17 +128,22 @@ check(
     sweep.dst_layout_flags(f"{CONSUMER}-extended", NODE_32B) == f"{CONSUMER}-extended",
 )
 
-# The main reviewed legs must never carry a consumer silently: if the
-# allocator flag is ever promoted into ON_FLAGS, the injection scope (and
-# every jobkey on dest_acc:Yes rows) changes — that promotion must land
-# WITH a reviewed update to this wiring, so fail loudly here.
+# The main reviewed legs must never carry a consumer silently: any change
+# to the consumer population of ON/OFF/TRUE-DEFAULT changes the injection
+# scope (and every jobkey on dest_acc:Yes rows), so it must land WITH a
+# reviewed update to this wiring.  REVIEWED STATE (ON-set promotion
+# 2026-08-23, corpus 461ed6c796 + lane FY wiring update): ON carries
+# EXACTLY the lreg-alloc consumer; OFF and TRUE-DEFAULT carry none.  Any
+# other population fails loudly here until the next reviewed update.
 check(
-    "no consumer flag hiding in ON/OFF/TRUE-DEFAULT (promotion needs a "
-    "reviewed wiring update)",
-    not any(
+    "ON consumer population == the reviewed promotion (exactly lreg-alloc); "
+    "none in OFF/TRUE-DEFAULT (changes need a reviewed wiring update)",
+    [c for c in sweep.DST_LAYOUT_CONSUMERS if c in sweep.ON_FLAGS.split()]
+    == ["-mtt-tensix-optimize-lreg-alloc"]
+    and not any(
         c in (s or "").split()
         for c in sweep.DST_LAYOUT_CONSUMERS
-        for s in (sweep.ON_FLAGS, sweep.OFF_FLAGS, sweep.TRUE_DEFAULT_FLAGS)
+        for s in (sweep.OFF_FLAGS, sweep.TRUE_DEFAULT_FLAGS)
     ),
 )
 
@@ -185,9 +208,10 @@ with tempfile.TemporaryDirectory() as td:
     s.classify(row, "sem-perf", legs=legs_spec, tag="dz-classify")
     wrote = (s.ev / "dztest" / "dz-classify" / "sem-perf" / "flags-off.txt").read_text()
     check(
-        "classify(): 32b node consumer leg env + flags-file carry the flag",
-        seen.get("compile-off.log") == sweep.ON_FLAGS
-        and wrote.strip() == sweep.ON_FLAGS,
+        "classify(): 32b node consumer leg env + flags-file carry the flag "
+        "(plain ON carries the promoted consumer, so the off leg injects too)",
+        seen.get("compile-off.log") == f"{sweep.ON_FLAGS} {FLAG}"
+        and wrote.strip() == f"{sweep.ON_FLAGS} {FLAG}",
         seen,
     )
     # second leg only runs if the first passes — re-run with only the
