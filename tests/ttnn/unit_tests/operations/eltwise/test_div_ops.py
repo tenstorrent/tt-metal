@@ -458,3 +458,17 @@ def test_optional_output_tensor_remainder(device):
     optional_output_tensor = ttnn.to_torch(optional_output_tensor)
 
     assert_with_ulp(optional_output_tensor, torch_golden, ulp_threshold=0)
+
+def test_remainder_large_ratio_overflow(device):
+    # Regression test for ttnn.remainder (#54048)
+    import ttnn
+    import torch
+    in_data = torch.tensor([1.42606e7, 5.70425e7, -5.70425e7] * (32 * 32 // 3 + 1), dtype=torch.float32)[:32*32].reshape(1, 1, 32, 32)
+    scalar = 3.0
+    
+    in_dev = ttnn.from_torch(in_data, layout=ttnn.TILE_LAYOUT, device=device)
+    got = ttnn.remainder(in_dev, scalar)
+    got = ttnn.to_torch(got)
+    
+    ref = torch.remainder(in_data, scalar)
+    assert torch.allclose(got, ref, atol=1e-5, rtol=1e-5)
