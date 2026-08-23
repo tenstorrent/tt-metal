@@ -255,6 +255,10 @@ ttnn::device_operation::ProgramArtifacts ConvertToHWCProgramFactory::create_prog
     Tensor& tensor_return_value) {
     const auto& a = tensor_args.input;
     auto& output = tensor_return_value;
+    TT_FATAL(
+        a.device()->arch() != tt::ARCH::QUASAR,
+        "ConvertToHWC uses Gen1 plain-CB compatibility lowering for its secondary output writer and is not "
+        "supported on Quasar");
 
     // Create configuration from input tensors
     auto config = ConvertToHwcConfig::create_from_tensors(a, output);
