@@ -114,6 +114,8 @@ void kernel_main() {
 #endif
 
     constexpr std::uint32_t out_block_h_normal = block_h / num_out_blocks;
+    constexpr std::uint32_t input_cb_tiles = out_block_h_normal * block_w;
+    constexpr std::uint32_t max_read_batch = input_cb_tiles < 8 ? input_cb_tiles : 8;
     std::uint32_t num_out_blocks_padded = num_out_blocks;
     std::uint32_t extra_out_block = false;
     std::uint32_t out_block_h_last = out_block_h_normal;
@@ -139,22 +141,7 @@ void kernel_main() {
 
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
                 for (std::uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
-                    for (std::uint32_t nt = 0; nt < per_core_N; ++nt) {
-                        dfb_in0.reserve_back(1);
-                        const std::uint32_t l1_write_addr = dfb_in0.get_write_ptr();
-                        noc.async_read(
-                            src_a,
-                            CoreLocalMem<std::uint32_t>(l1_write_addr),
-                            src0_tile_bytes,
-                            {.page_id = start_id + index_b_offset + mt_offset + nt},
-                            {});
-                        noc.async_read_barrier();
-                        dfb_in0.push_back(1);
-                        if constexpr (welford_fp32_alias) {
-                            dfb_in0_welford.reserve_back(1);
-                            dfb_in0_welford.push_back(1);
-                        }
-                    }
+#include "groupnorm_read_input_row.inc"
                     mt_offset += num_channels_tiles;
                 }
 #endif
@@ -232,26 +219,7 @@ void kernel_main() {
                 }
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
                 for (std::uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
-                    for (std::uint32_t nt = 0; nt < per_core_N; ++nt) {
-                        dfb_in0.reserve_back(1);
-                        const std::uint32_t l1_write_addr = dfb_in0.get_write_ptr();
-                        noc.async_read(
-                            src_a,
-                            CoreLocalMem<std::uint32_t>(l1_write_addr),
-                            src0_tile_bytes,
-                            {.page_id = start_id + index_b_offset + mt_offset + nt},
-                            {});
-                        noc.async_read_barrier();
-                        dfb_in0.push_back(1);
-                        if constexpr (welford_fp32_alias) {
-                            // Mirror the dfb_in0 push on the alias. They share SRAM (multi-buffer-index
-                            // alias) so the noc.async_read above already filled both views; this is
-                            // purely bookkeeping so compute's welford section can wait_front
-                            // on dfb_in0_welford independently of dfb_in0.
-                            dfb_in0_welford.reserve_back(1);
-                            dfb_in0_welford.push_back(1);
-                        }
-                    }
+#include "groupnorm_read_input_row.inc"
                     mt_offset += num_channels_tiles;
                 }
 #endif
