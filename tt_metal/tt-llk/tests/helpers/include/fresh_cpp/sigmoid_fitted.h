@@ -21,6 +21,16 @@
 //   fitter refits, re-derive from the then-current
 //   paper/results/frontier_pareto/silicon/bh/bf16/summary_bf16.csv selection.
 
+// LANE-GC WINNER-REFRESH AUDIT (2026-08-23): still the frontier winner at
+// tt-polynomial-fitter origin/main 4cbc636d7fc7202d01a8bdb6ea08eb214445e05e —
+// data/coefficients/sigmoid_p2_s1_uniform_any_ulp.csv byte-identical since
+// the vendoring sha; tier_silicon_summary.csv sigmoid row = P2/s1, certified
+// max_ulp_pure_bf16 0.7880 @ 1.80us vs TTNN 0.7880 @ 2.81us.  Corpus-domain
+// re-verification (U[-8, 8] exhaustive bf16, fp64 sigmoid golden, ttpoly
+// units.py pure-ULP semantics, two-rounding AND fma_model_bh mad models):
+// max 0.7880 — golden agreement exact.  No eltwise-bodies PR filed upstream
+// as of 2026-08-23 (lane GB recon).  Coefficients unchanged by lane GC.
+
 #include <cstdint>
 
 #include "fresh_cpp/helpers.h"

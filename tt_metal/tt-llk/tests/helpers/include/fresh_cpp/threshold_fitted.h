@@ -28,6 +28,18 @@
 //   RE-SYNC: when the rlibm refits merge upstream or the fitter refits,
 //   re-derive from the then-current frontier selection.
 
+// LANE-GC WINNER-REFRESH AUDIT (2026-08-23): KEPT — the fitter's main-branch
+// threshold winner at origin/main 4cbc636d7fc7202d01a8bdb6ea08eb214445e05e is
+// still data/coefficients/threshold_p1_s32_chebyshev_any_ulp.csv, a fit of
+// the threshold(0, 0) == relu spec (the lane-CR PARAM MISMATCH stands; lane
+// CW's threshold_t5_v10 refit branch agent/rlibm-refits remains unmerged
+// upstream).  Both this arm and the fitter winner are EXACT on their own
+// contracts (tier summary: 0.0 vs 0.0 pure ULP).  Corpus-domain
+// re-verification (U[-5, 5] exhaustive bf16, torch strict-> golden, ttpoly
+// units.py pure-ULP semantics): max 0.0 — golden agreement exact, boundary
+// x == 5.0 -> 10.0 ownership re-confirmed.  Coefficients unchanged by
+// lane GC.
+
 #include <cstdint>
 
 #include "fresh_cpp/helpers.h"

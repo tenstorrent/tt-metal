@@ -22,6 +22,26 @@
 //   the measured range-controlled config: the corpus log contract is
 //   log-uniform on [1e-4, 1e3] with the golden's (-inf, 1e-6) hole excluded,
 //   so the decompose input is always a positive normal.
+//
+// LANE-GC WINNER-REFRESH AUDIT (2026-08-23): P5 rootpin KEPT DELIBERATELY.
+// At tt-polynomial-fitter origin/main 4cbc636d7fc7202d01a8bdb6ea08eb214445e05e
+// the CSV is byte-identical and P5/s1 rootpin is STILL the BH silicon board's
+// selected headline winner (pareto_winners.csv selected=1, headline gate
+// pure<=ttnn_pure at lowest runtime).  The tier_silicon_summary.csv log row
+// additionally carries a cr_uplift tier overlay (pure<=0.5 within a 5%
+// runtime budget) selecting log_p6_s1_uniform_any_ulp_rootpin_polish
+// (0.4996 @ 1.77us vs P5's 0.5050 @ 1.70us) — lane GC vendored that P6 arm
+// and MEASURED it on our vehicle at ON-28/pin-26: KERNEL vs-hand +39.81%
+// (103864 cy) against P5's booked +23.27% (91576 cy) — the extra Horner rung
+// costs ~13% here; run headline-laneGC-fitted-20260823 (corr device-golden
+// PASS, CRAQ pinned-sim PASS both legs).  Per the honest-booking rule the
+// FASTER arm stays live; the accuracy delta (0.5050 vs 0.4996 pure ULP) is
+// contract-irrelevant on our board (both sub-ULP, gates identical).
+// Corpus-domain re-verification of THIS P5 arm (log-uniform contract
+// [1e-4, 1e3] exhaustive bf16, np.log fp64 golden, ttpoly units.py pure-ULP
+// semantics, two-rounding AND fma_model_bh mad models): max 0.5050 — golden
+// agreement exact.  No eltwise-bodies PR filed upstream as of 2026-08-23
+// (lane GB recon).
 //   RE-SYNC: when the generic_lut_activation kernels merge upstream or the
 //   fitter refits, re-derive from the then-current
 //   paper/results/frontier_pareto/silicon/bh/bf16/summary_bf16.csv selection.
