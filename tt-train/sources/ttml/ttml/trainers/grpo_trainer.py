@@ -305,7 +305,11 @@ class GRPOMonitor(TrainerCallback):
     # -- lifecycle -----------------------------------------------------------
 
     def on_train_begin(self, trainer: Any) -> None:
-        callback_time_columns = [f"{type(cb).__name__}_time_s" for cb in trainer.callbacks]
+        # Skip GRPOMonitor: its cost is deliberately outside step_time_s and it
+        # never populates _callback_times, so a column would always be empty.
+        callback_time_columns = [
+            f"{type(cb).__name__}_time_s" for cb in trainer.callbacks if not isinstance(cb, GRPOMonitor)
+        ]
 
         preseeded: list[str] = []
         seen = set(_BASE_COLUMNS) | set(callback_time_columns) | _NON_CSV_KEYS
@@ -732,14 +736,18 @@ class GRPOTrainer:
         """Fire ``cb.<method_name>(*args, **kwargs)`` and accumulate its wall-clock
         time into ``self._callback_times[<ClassName>_time_s]`` for the current step.
 
+        ``GRPOMonitor`` is intentionally excluded from the accumulator: it runs
+        last, after ``step_time_s`` has been sealed, and its own cost sits
+        outside the step wall time by design.
+
         Returns the metrics key so callers can refresh ``self.metrics`` in-place
-        between callbacks in the same hook loop (used so ``GRPOMonitor``, always
-        last, sees the current step's totals for earlier callbacks).
+        between callbacks in the same hook loop.
         """
         cb_t0 = time.perf_counter()
         getattr(cb, method_name)(*args, **kwargs)
         key = f"{type(cb).__name__}_time_s"
-        self._callback_times[key] = self._callback_times.get(key, 0.0) + (time.perf_counter() - cb_t0)
+        if not isinstance(cb, GRPOMonitor):
+            self._callback_times[key] = self._callback_times.get(key, 0.0) + (time.perf_counter() - cb_t0)
         return key
 
     def _compute_grpo_loss(
@@ -1044,8 +1052,6 @@ class GRPOTrainer:
                 optimizer.step()
                 optimizer.zero_grad()
 
-                step_time_s = time.perf_counter() - step_t0
-
                 # Generation runs once per effective batch; attribute its cost to
                 # the first mini-epoch's step only.
                 generation_time_s_for_step = generation_time_s if mini_epoch == 0 else 0.0
@@ -1069,8 +1075,11 @@ class GRPOTrainer:
                 # Splat in the timings accumulated so far this step (from
                 # ``on_before_optimizer_step``); the ``on_step_end`` loop
                 # below refreshes each entry after its callback returns so
-                # ``GRPOMonitor`` (auto-appended last) sees the current
-                # step's total for every earlier callback.
+                # ``GRPOMonitor`` (which runs last, after ``step_time_s`` is
+                # sealed) sees the current step's total for every prior callback.
+                # ``step_time_s`` is filled in below, once the entire step
+                # (including non-monitor ``on_step_end`` callbacks and any
+                # checkpoint save) has completed.
                 self.metrics = {
                     "reward_mean": mean_reward,
                     "reward_std": float(rewards_np.std()),
@@ -1078,7 +1087,6 @@ class GRPOTrainer:
                     "min_completion_len": min_completion_len,
                     "max_completion_len": max_completion_len,
                     "lr": base_lr * warmup_factor,
-                    "step_time_s": step_time_s,
                     "generation_time_s": generation_time_s_for_step,
                     **self._callback_times,
                 }
@@ -1088,11 +1096,13 @@ class GRPOTrainer:
                     self.metrics["completions"] = completions_strs[:k]
                     self.metrics["rewards"] = list(rewards[:k])
 
+                # Run every callback's ``on_step_end`` EXCEPT ``GRPOMonitor``
+                # (which logs the row and must see the final ``step_time_s``).
+                monitor_cb = next((cb for cb in self.callbacks if isinstance(cb, GRPOMonitor)), None)
                 for cb in self.callbacks:
+                    if cb is monitor_cb:
+                        continue
                     key = self._time_callback(cb, "on_step_end", self, num_steps, **self.metrics)
-                    # Refresh so subsequent callbacks in this same step (in
-                    # particular the auto-appended ``GRPOMonitor``) see the
-                    # up-to-date current-step total for every prior callback.
                     self.metrics[key] = self._callback_times[key]
 
                 if grpo_cfg.checkpointing and num_steps % grpo_cfg.checkpoint_interval == 0:
@@ -1108,7 +1118,21 @@ class GRPOTrainer:
                         model_source=self.model_source,
                     )
                     for cb in self.callbacks:
-                        self._time_callback(cb, "on_save", self, num_steps, ckpt_dir)
+                        if cb is monitor_cb:
+                            continue
+                        key = self._time_callback(cb, "on_save", self, num_steps, ckpt_dir)
+                        self.metrics[key] = self._callback_times[key]
+
+                # Seal ``step_time_s`` after all non-monitor work is done, so it
+                # covers the full per-step wall time (generation, host post-gen,
+                # reference log-probs, training loop, non-monitor callbacks, and
+                # any checkpoint save). ``GRPOMonitor``'s own cost is
+                # deliberately outside this window.
+                step_time_s = time.perf_counter() - step_t0
+                self.metrics["step_time_s"] = step_time_s
+
+                if monitor_cb is not None:
+                    self._time_callback(monitor_cb, "on_step_end", self, num_steps, **self.metrics)
 
                 step_t0 = time.perf_counter()
 
