@@ -311,7 +311,6 @@ FORCE_INLINE void set_l1_mux_ctrl(PerfCounterGroup counter_group) {
     *mux_reg = (*mux_reg & ~L1_MUX_MASK) | (mux_sel << 4);
 }
 
-#if COMPILE_FOR_TRISC == 1
 // --- TRISC1-only: start/stop counters around the compute kernel ------------
 
 __attribute__((noinline)) void start_single_group(PerfCounterGroup counter_group) {
@@ -354,9 +353,6 @@ struct PerfCounterWrapper {
     ~PerfCounterWrapper() { kernel_profiler::stop_perf_counter(); }
 };
 
-#endif  // COMPILE_FOR_TRISC == 1
-
-#if defined(COMPILE_FOR_BRISC)
 // --- BRISC-only: counter readout and DRAM push -----------------------------
 
 // Lookup tables indexed by PerfCounterGroup (same ordering as cntl_reg_for_group).
@@ -418,6 +414,7 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group)
         reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_read_register_for_counter_group(counter_group));
     const auto* counters = get_counters_for_counter_group(counter_group);
     const uint32_t counters_size = get_num_counters_for_counter_group(counter_group);
+
     for (unsigned int i = 0; i < counters_size; i++) {
         uint32_t counter_sel = counters[i].second;
         uint32_t expected_mode = counter_sel << PERF_CNT_BANK_SELECT_SHIFT | PERF_CNT_CONTINUOUS_MODE;
@@ -427,8 +424,6 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group)
         uint32_t ref_cnt_val = read_reg[0];
         uint32_t counter_val = read_reg[1];
         PerfCounter counter(counter_val, ref_cnt_val, counters[i].first);
-        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
-            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 2);
         kernel_profiler::timeStampedData<
             PERF_COUNTER_PROFILER_ID,
             kernel_profiler::DoingDispatch::DISPATCH,
@@ -471,8 +466,6 @@ void read_perf_counters() {
     read_single_group(PerfCounterGroup::L1_4);
 #endif
 }
-
-#endif  // COMPILE_FOR_BRISC
 
 }  // namespace kernel_profiler
 
