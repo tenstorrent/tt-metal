@@ -17,23 +17,20 @@
 
 namespace ttnn::prim {
 
-using namespace tt::tt_metal;
-namespace metal2 = tt::tt_metal::experimental;
-
 constexpr std::uint32_t BUFFERING_FACTOR = 2;
 
 ttnn::device_operation::ProgramArtifacts UpsampleNearestFloatProgramFactory::create_program_artifacts(
     const UpsampleParams& operation_attributes, const Tensor& input, Tensor& output_tensor) {
-    const metal2::KernelSpecName READER{"reader"};
-    const metal2::KernelSpecName WRITER{"writer"};
-    const metal2::DFBSpecName OUT{"out"};
-    const metal2::TensorParamName INPUT{"input"};
-    const metal2::TensorParamName OUTPUT{"output"};
+    const tt::tt_metal::experimental::KernelSpecName reader_kernel{"reader"};
+    const tt::tt_metal::experimental::KernelSpecName writer_kernel{"writer"};
+    const tt::tt_metal::experimental::DFBSpecName out_dfb_name{"out"};
+    const tt::tt_metal::experimental::TensorParamName input_param{"input"};
+    const tt::tt_metal::experimental::TensorParamName output_param{"output"};
 
     const auto& input_mesh = input.mesh_tensor();
     const auto& output_mesh = output_tensor.mesh_tensor();
 
-    const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
+    const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     auto* const device = output_tensor.device();
 
     const auto& input_shape = input.logical_shape();
@@ -77,32 +74,36 @@ ttnn::device_operation::ProgramArtifacts UpsampleNearestFloatProgramFactory::cre
         input_page_size,
         output_page_size);
 
-    const CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
+    const tt::tt_metal::CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-            split_work_to_cores(compute_grid_size, total_pages_in_output);
+            tt::tt_metal::split_work_to_cores(compute_grid_size, total_pages_in_output);
 
-    const std::vector<CoreCoord> logical_cores = corerange_to_cores(all_cores, std::nullopt, true);
+    const std::vector<tt::tt_metal::CoreCoord> logical_cores =
+        tt::tt_metal::corerange_to_cores(all_cores, std::nullopt, true);
 
     // Calculate stick sizes (aligned based on buffer type for efficient reads)
     const std::uint32_t num_cb_pages = BUFFERING_FACTOR;
     const std::uint32_t output_cb_page_size = aligned_output_page_size;
 
-    metal2::DataflowBufferSpec out_dfb{
-        .unique_id = OUT,
+    tt::tt_metal::experimental::DataflowBufferSpec out_dfb_spec{
+        .unique_id = out_dfb_name,
         .entry_size = output_cb_page_size,
         .num_entries = num_cb_pages * BUFFERING_FACTOR,
         .data_format_metadata = output_cb_data_format,
     };
 
-    metal2::KernelSpec reader{
-        .unique_id = READER,
+    tt::tt_metal::experimental::KernelSpec reader{
+        .unique_id = reader_kernel,
         .source =
             std::filesystem::path{
                 "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/reader_upsample_nearest_float.cpp"},
-        .dfb_bindings = {metal2::DFBBinding{
-            .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = metal2::DFBEndpointType::PRODUCER}},
-        .tensor_bindings = {metal2::TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
+        .dfb_bindings = {tt::tt_metal::experimental::DFBBinding{
+            .dfb_spec_name = out_dfb_name,
+            .accessor_name = "out",
+            .endpoint_type = tt::tt_metal::experimental::DFBEndpointType::PRODUCER}},
+        .tensor_bindings = {tt::tt_metal::experimental::TensorBinding{
+            .tensor_parameter_name = input_param, .accessor_name = "input"}},
         .compile_time_args =
             {
                 {"aligned_input_page_size", aligned_input_page_size},
@@ -118,51 +119,54 @@ ttnn::device_operation::ProgramArtifacts UpsampleNearestFloatProgramFactory::cre
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
 
-    metal2::KernelSpec writer{
-        .unique_id = WRITER,
+    tt::tt_metal::experimental::KernelSpec writer{
+        .unique_id = writer_kernel,
         .source =
             std::filesystem::path{
                 "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_nearest_float.cpp"},
-        .dfb_bindings = {metal2::DFBBinding{
-            .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = metal2::DFBEndpointType::CONSUMER}},
-        .tensor_bindings = {metal2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
+        .dfb_bindings = {tt::tt_metal::experimental::DFBBinding{
+            .dfb_spec_name = out_dfb_name,
+            .accessor_name = "out",
+            .endpoint_type = tt::tt_metal::experimental::DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {tt::tt_metal::experimental::TensorBinding{
+            .tensor_parameter_name = output_param, .accessor_name = "output"}},
         .compile_time_args = {{"aligned_stick_nbytes", aligned_output_page_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_sticks", "start_stick_id"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
-    metal2::ProgramSpec spec{
+    tt::tt_metal::experimental::ProgramSpec spec{
         .name = "upsample_nearest_float",
         .kernels = {reader, writer},
-        .dataflow_buffers = {out_dfb},
+        .dataflow_buffers = {out_dfb_spec},
         .tensor_parameters =
             {
-                {.unique_id = INPUT, .spec = input_mesh.tensor_spec()},
-                {.unique_id = OUTPUT, .spec = output_mesh.tensor_spec()},
+                {.unique_id = input_param, .spec = input_mesh.tensor_spec()},
+                {.unique_id = output_param, .spec = output_mesh.tensor_spec()},
             },
-        .work_units = {metal2::WorkUnitSpec{
+        .work_units = {tt::tt_metal::experimental::WorkUnitSpec{
             .name = "main",
-            .kernels = {READER, WRITER},
+            .kernels = {reader_kernel, writer_kernel},
             .target_nodes = all_cores,
         }},
     };
 
     // Set runtime arguments for each core
-    metal2::ProgramRunArgs run_args;
-    metal2::KernelRunArgs reader_run_args{.kernel = READER};
-    metal2::KernelRunArgs writer_run_args{.kernel = WRITER};
+    tt::tt_metal::experimental::ProgramRunArgs run_args;
+    tt::tt_metal::experimental::KernelRunArgs reader_run_args{.kernel = reader_kernel};
+    tt::tt_metal::experimental::KernelRunArgs writer_run_args{.kernel = writer_kernel};
 
     std::uint32_t sticks_processed = 0;
     for (std::uint32_t i = 0; i < num_cores; i++) {
-        const CoreCoord& core = logical_cores[i];
+        const tt::tt_metal::CoreCoord& core = logical_cores[i];
         const std::uint32_t num_sticks =
             core_group_1.contains(core) ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
 
-        metal2::AddRuntimeArgsForNode(
+        tt::tt_metal::experimental::AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values,
             core,
             {{"num_sticks", num_sticks}, {"start_stick_id", sticks_processed}});
-        metal2::AddRuntimeArgsForNode(
+        tt::tt_metal::experimental::AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values,
             core,
             {{"num_sticks", num_sticks}, {"start_stick_id", sticks_processed}});
@@ -171,8 +175,8 @@ ttnn::device_operation::ProgramArtifacts UpsampleNearestFloatProgramFactory::cre
     }
     run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
     run_args.tensor_args = {
-        {INPUT, metal2::TensorArgument{input_mesh}},
-        {OUTPUT, metal2::TensorArgument{output_mesh}},
+        {input_param, tt::tt_metal::experimental::TensorArgument{input_mesh}},
+        {output_param, tt::tt_metal::experimental::TensorArgument{output_mesh}},
     };
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};

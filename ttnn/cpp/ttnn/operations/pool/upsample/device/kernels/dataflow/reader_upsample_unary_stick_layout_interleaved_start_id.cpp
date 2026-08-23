@@ -8,12 +8,8 @@
 #include "experimental/kernel_args.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
-void kernel_main() {
-    uint32_t num_pages = get_arg(args::num_pages);
-    uint32_t start_page_id = get_arg(args::start_page_id);
-
-    constexpr auto page_size = get_arg(args::aligned_input_unit_size);
-
+template <uint32_t aligned_input_unit_size>
+TT_KERNEL void reader(uint32_t num_pages, uint32_t start_page_id) {
     const auto s0 = TensorAccessor(tensor::input);
 
     DataflowBuffer in_dfb(dfb::in0);
@@ -25,7 +21,7 @@ void kernel_main() {
     for (uint32_t i = start_page_id; i < end_id; ++i) {
         in_dfb.reserve_back(1);
 
-        noc.async_read(s0, in_dfb, page_size, {.page_id = i}, {});
+        noc.async_read(s0, in_dfb, aligned_input_unit_size, {.page_id = i}, {});
 
         noc.async_read_barrier();
 

@@ -8,7 +8,15 @@
 #include "experimental/kernel_args.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
-void kernel_main() {
+template <
+    uint32_t output_page_size,
+    uint32_t scale_h,
+    uint32_t scale_w,
+    uint32_t height,
+    uint32_t width,
+    uint32_t block_height,
+    uint32_t num_tiles_per_block_row>
+TT_KERNEL void writer(uint32_t num_blocks_to_read, uint32_t start_block_id) {
     /*
     In the case the input was tiled, a single block refers to TILE_HEIGHT rows of data after untilization, block_height
     = TILE_HEIGHT
@@ -16,17 +24,6 @@ void kernel_main() {
     In the case the input was ROW_MAJOR, a single block simply refers to a single output stick, in which case
     block_height = 1
     */
-    uint32_t num_blocks_to_read = get_arg(args::num_blocks_to_read);
-    uint32_t start_block_id = get_arg(args::start_block_id);
-
-    constexpr auto output_page_size = get_arg(args::output_page_size);
-    constexpr auto scale_h = get_arg(args::scale_h);
-    constexpr auto scale_w = get_arg(args::scale_w);
-    constexpr auto height = get_arg(args::height);
-    constexpr auto width = get_arg(args::width);
-    constexpr auto block_height = get_arg(args::block_height);
-    constexpr auto num_tiles_per_block_row = get_arg(args::num_tiles_per_block_row);
-
     const auto s0 = TensorAccessor(tensor::output);
 
     DataflowBuffer out_dfb(dfb::out);

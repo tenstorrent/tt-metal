@@ -17,12 +17,7 @@
 #include "ttnn/operations/pool/upsample/device/upsample_common.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 
-using namespace tt::tt_metal;
-
 namespace ttnn::prim {
-
-using namespace tt;
-namespace metal2 = tt::tt_metal::experimental;
 
 namespace {
 
@@ -37,7 +32,7 @@ struct StickInterval {
 
 Tensor create_config_tensor(
     IDevice* device,
-    ShardSpec shard_spec,
+    tt::tt_metal::ShardSpec shard_spec,
     const std::uint32_t batch_size,
     const std::uint32_t in_h,
     const std::uint32_t in_w,
@@ -59,7 +54,7 @@ Tensor create_config_tensor(
     std::uint32_t output_nsticks_per_core_reader =
         (output_nsticks_per_core + 1) / 2;  // Total number of sticks per core in the output
 
-    auto logical_cores = corerange_to_cores(
+    auto logical_cores = tt::tt_metal::corerange_to_cores(
         shard_spec.grid, shard_spec.num_cores(), shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
     if (!is_height_sharded) {
@@ -148,7 +143,7 @@ Tensor create_config_tensor(
         2 * elems_per_core_reader;  // because two readers per tensix core which get equal number of stick intervals
 
     // Based on core calculate physical location of cores
-    CoreCoord core_coords;
+    tt::tt_metal::CoreCoord core_coords;
 
     // In case last input shard is not full, fill the rest of the config vector with placeholder values
     const auto pad_uneven_shards =
@@ -181,9 +176,9 @@ Tensor create_config_tensor(
             }
             for (; j < dst_core_end_idx_map[ind]; ++j) {
                 core_coords = device->worker_core_from_logical_core(
-                    is_height_sharded
-                        ? CoreCoord(logical_core_to_stick_map[j].core_x, logical_core_to_stick_map[j].core_y)
-                        : CoreCoord(i, logical_core_to_stick_map[j].core_y));
+                    is_height_sharded ? tt::tt_metal::CoreCoord(
+                                            logical_core_to_stick_map[j].core_x, logical_core_to_stick_map[j].core_y)
+                                      : tt::tt_metal::CoreCoord(i, logical_core_to_stick_map[j].core_y));
                 // Combine the x and y coordinates of the core into a single 16-bit value.
                 config_vector.push_back(core_coords.x);
                 config_vector.push_back(core_coords.y);
@@ -206,15 +201,15 @@ Tensor create_config_tensor(
         elems_per_core);
 
     ttnn::Shape config_shape({tt::div_up(config_vector.size(), elems_per_core), elems_per_core});
-    auto config_buffer = HostBuffer(std::move(config_vector));
+    auto config_buffer = tt::tt_metal::HostBuffer(std::move(config_vector));
     return Tensor(std::move(config_buffer), config_shape, DataType::UINT16, Layout::ROW_MAJOR);
 }
 
 // Returns a reduced CoreRangeSet containing only cores that have actual work.
 // For height sharding: returns first N cores from the grid.
 // For block sharding: keeps all channel cores, reduces NHW dimension.
-CoreRangeSet get_cores_with_work(
-    const CoreRangeSet& all_cores,
+tt::tt_metal::CoreRangeSet get_cores_with_work(
+    const tt::tt_metal::CoreRangeSet& all_cores,
     std::uint32_t total_nhw,
     std::uint32_t nsticks_per_core,
     bool is_height_sharded,
@@ -247,23 +242,24 @@ CoreRangeSet get_cores_with_work(
         return all_cores;
     }
 
-    const CoreCoord new_end = row_major ? CoreCoord(range.end_coord.x, nhw_start + nhw_cores_needed - 1)
-                                        : CoreCoord(nhw_start + nhw_cores_needed - 1, range.end_coord.y);
-    return CoreRangeSet(CoreRange(range.start_coord, new_end));
+    const tt::tt_metal::CoreCoord new_end =
+        row_major ? tt::tt_metal::CoreCoord(range.end_coord.x, nhw_start + nhw_cores_needed - 1)
+                  : tt::tt_metal::CoreCoord(nhw_start + nhw_cores_needed - 1, range.end_coord.y);
+    return tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(range.start_coord, new_end));
 }
 
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreShardedProgramFactory::create_program_artifacts(
     const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor) {
-    const metal2::KernelSpecName SHARD_WRITER{"upsample_shard_writer"};
-    const metal2::KernelSpecName SHARD_READER{"upsample_shard_reader"};
-    const metal2::DFBSpecName SHARD_IN{"upsample_shard_in"};
-    const metal2::DFBSpecName SHARD_OUT{"upsample_shard_out"};
-    const metal2::DFBSpecName SHARD_CONFIG{"upsample_shard_config"};
-    const metal2::TensorParamName SHARD_INPUT{"upsample_shard_input"};
-    const metal2::TensorParamName SHARD_OUTPUT{"upsample_shard_output"};
-    const metal2::TensorParamName SHARD_CONFIG_TENSOR{"upsample_shard_config_tensor"};
+    const tt::tt_metal::experimental::KernelSpecName shard_writer_kernel{"upsample_shard_writer"};
+    const tt::tt_metal::experimental::KernelSpecName shard_reader_kernel{"upsample_shard_reader"};
+    const tt::tt_metal::experimental::DFBSpecName shard_in_dfb_name{"upsample_shard_in"};
+    const tt::tt_metal::experimental::DFBSpecName shard_out_dfb_name{"upsample_shard_out"};
+    const tt::tt_metal::experimental::DFBSpecName shard_config_dfb_name{"upsample_shard_config"};
+    const tt::tt_metal::experimental::TensorParamName shard_input_param{"upsample_shard_input"};
+    const tt::tt_metal::experimental::TensorParamName shard_output_param{"upsample_shard_output"};
+    const tt::tt_metal::experimental::TensorParamName shard_config_param{"upsample_shard_config_tensor"};
 
     constexpr const char* SHARD_KERNEL =
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp";
@@ -283,8 +279,8 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreShardedProgramFactory:
 
     distributed::MeshDevice* device = input.device();
 
-    const tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     TT_FATAL(input.logical_shape()[-1] == output.logical_shape()[-1], "Expected input and output channels to match");
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Only row-major layout is currently supported in nearest upsample");
@@ -308,7 +304,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreShardedProgramFactory:
         ncores);
 
     // extra limitation to avoid post upsample step of resharding
-    if (input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+    if (input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
         ncores_x = all_cores.ranges().begin()->end_coord.x - all_cores.ranges().begin()->start_coord.x + 1;
         input_stick_nbytes = input_stick_nbytes / ncores_x;
         output_stick_nbytes = output_stick_nbytes / ncores_x;
@@ -316,11 +312,12 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreShardedProgramFactory:
 
     const std::uint32_t input_nsticks_per_core = shard_spec.shape[0];
     const std::uint32_t output_nsticks_per_core = input_nsticks_per_core * scale_factor_h * scale_factor_w;
-    const bool is_height_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    const bool is_height_sharded =
+        input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED;
     const std::uint32_t total_nhw = input.padded_shape()[0] * input.padded_shape()[1] * in_w;
 
     // Reduced core set - only cores that actually have work
-    const CoreRangeSet cores_with_work =
+    const tt::tt_metal::CoreRangeSet cores_with_work =
         get_cores_with_work(all_cores, total_nhw, input_nsticks_per_core, is_height_sharded, shard_spec.orientation);
 
     // --- Op-owned config tensor: construction UNCHANGED from legacy ---
@@ -330,12 +327,13 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreShardedProgramFactory:
     const auto shard_shape =
         std::array<std::uint32_t, 2>({1, static_cast<std::uint32_t>(config_tensor.logical_shape()[-1])});
     const auto config_tensor_shard_orientation =
-        input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ? ShardOrientation::COL_MAJOR
-                                                                                   : shard_spec.orientation;
+        input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED
+            ? ShardOrientation::COL_MAJOR
+            : shard_spec.orientation;
     // Use cores_with_work for config tensor sharding - only cores that have actual work need config data
-    const ShardSpec config_shard_spec(cores_with_work, shard_shape, config_tensor_shard_orientation);
+    const tt::tt_metal::ShardSpec config_shard_spec(cores_with_work, shard_shape, config_tensor_shard_orientation);
     const MemoryConfig config_memory_config{
-        TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1_SMALL, config_shard_spec};
 
     Tensor config_tensor_dev = config_tensor.to_device(device, config_memory_config);
     const std::uint32_t config_tensor_width = static_cast<std::uint32_t>(config_tensor_dev.logical_shape()[-1]);
@@ -352,49 +350,49 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreShardedProgramFactory:
     const std::uint32_t in_cb_pagesize = aligned_input_stick_nbytes;
     const std::uint32_t in_cb_npages = input_nsticks_per_core * buffering_factor;
 
-    metal2::DataflowBufferSpec in_dfb{
-        .unique_id = SHARD_IN,
+    tt::tt_metal::experimental::DataflowBufferSpec in_dfb_spec{
+        .unique_id = shard_in_dfb_name,
         .entry_size = in_cb_pagesize,
         .num_entries = in_cb_npages,
         .data_format_metadata = input_cb_data_format,
-        .borrowed_from = SHARD_INPUT,
+        .borrowed_from = shard_input_param,
     };
 
     // output sharded CB with upsampled data
     const std::uint32_t out_cb_pagesize = tt::round_up(output_stick_nbytes, output.buffer()->alignment());
     const std::uint32_t out_cb_npages = output_nsticks_per_core * buffering_factor;
 
-    metal2::DataflowBufferSpec out_dfb{
-        .unique_id = SHARD_OUT,
+    tt::tt_metal::experimental::DataflowBufferSpec out_dfb_spec{
+        .unique_id = shard_out_dfb_name,
         .entry_size = out_cb_pagesize,
         .num_entries = out_cb_npages,
         .data_format_metadata = output_cb_data_format,
-        .borrowed_from = SHARD_OUTPUT,
+        .borrowed_from = shard_output_param,
     };
 
     // The config buffer lives on op_owned_tensors so it outlives this ProgramSpec and the cached
     // Program (the config DFB reresolves its backing address each dispatch via borrowed_from).
     constexpr tt::DataFormat config_df = tt::DataFormat::RawUInt16;
 
-    metal2::DataflowBufferSpec config_dfb{
-        .unique_id = SHARD_CONFIG,
+    tt::tt_metal::experimental::DataflowBufferSpec config_dfb_spec{
+        .unique_id = shard_config_dfb_name,
         .entry_size = config_buffer_page_size,
         .num_entries = 1,
         .data_format_metadata = config_df,
-        .borrowed_from = SHARD_CONFIG_TENSOR,
+        .borrowed_from = shard_config_param,
     };
 
-    log_debug(LogOp, "in_dfb: {}, npages: {}, pagesize: {}", SHARD_IN, in_cb_npages, in_cb_pagesize);
-    log_debug(LogOp, "out_dfb: {}, npages: {}, pagesize: {}", SHARD_OUT, out_cb_npages, out_cb_pagesize);
-    log_debug(LogOp, "input_stick_nbytes: {}, output_stick_nbytes: {}", input_stick_nbytes, output_stick_nbytes);
-    log_debug(LogOp, "ncores: {}, ncores_x: {}", ncores, ncores_x);
+    log_debug(tt::LogOp, "in_dfb: {}, npages: {}, pagesize: {}", shard_in_dfb_name, in_cb_npages, in_cb_pagesize);
+    log_debug(tt::LogOp, "out_dfb: {}, npages: {}, pagesize: {}", shard_out_dfb_name, out_cb_npages, out_cb_pagesize);
+    log_debug(tt::LogOp, "input_stick_nbytes: {}, output_stick_nbytes: {}", input_stick_nbytes, output_stick_nbytes);
+    log_debug(tt::LogOp, "ncores: {}, ncores_x: {}", ncores, ncores_x);
     log_debug(
-        LogOp,
+        tt::LogOp,
         "input_nsticks_per_core: {}, output_nsticks_per_core: {}",
         input_nsticks_per_core,
         output_nsticks_per_core);
 
-    metal2::KernelSpec::CompileTimeArgs common_cta{
+    tt::tt_metal::experimental::KernelSpec::CompileTimeArgs common_cta{
         {"stick_nbytes", input_stick_nbytes},
         {"in_nsticks_per_core", input_nsticks_per_core},
         {"scale_h", scale_factor_h},
@@ -404,72 +402,77 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreShardedProgramFactory:
     };
 
     auto make_cta = [&](std::uint32_t is_reader) {
-        metal2::KernelSpec::CompileTimeArgs cta = common_cta;
+        tt::tt_metal::experimental::KernelSpec::CompileTimeArgs cta = common_cta;
         cta.insert({"is_reader", is_reader});
         return cta;
     };
 
-    metal2::KernelSpec writer_spec{
-        .unique_id = SHARD_WRITER,
+    tt::tt_metal::experimental::KernelSpec writer_spec{
+        .unique_id = shard_writer_kernel,
         .source = std::filesystem::path{SHARD_KERNEL},
         .dfb_bindings =
-            {metal2::DFBBinding{
-                 .dfb_spec_name = SHARD_IN, .accessor_name = "in0", .endpoint_type = metal2::DFBEndpointType::PRODUCER},
-             metal2::DFBBinding{
-                 .dfb_spec_name = SHARD_OUT,
+            {tt::tt_metal::experimental::DFBBinding{
+                 .dfb_spec_name = shard_in_dfb_name,
+                 .accessor_name = "in0",
+                 .endpoint_type = tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+             tt::tt_metal::experimental::DFBBinding{
+                 .dfb_spec_name = shard_out_dfb_name,
                  .accessor_name = "out0",
-                 .endpoint_type = metal2::DFBEndpointType::PRODUCER},
-             metal2::DFBBinding{
-                 .dfb_spec_name = SHARD_CONFIG,
+                 .endpoint_type = tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+             tt::tt_metal::experimental::DFBBinding{
+                 .dfb_spec_name = shard_config_dfb_name,
                  .accessor_name = "config",
-                 .endpoint_type = metal2::DFBEndpointType::PRODUCER}},
+                 .endpoint_type = tt::tt_metal::experimental::DFBEndpointType::PRODUCER}},
         .compile_time_args = make_cta(/*is_reader=*/0),
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
-    metal2::KernelSpec reader_spec{
-        .unique_id = SHARD_READER,
+    tt::tt_metal::experimental::KernelSpec reader_spec{
+        .unique_id = shard_reader_kernel,
         .source = std::filesystem::path{SHARD_KERNEL},
         .dfb_bindings =
-            {metal2::DFBBinding{
-                 .dfb_spec_name = SHARD_IN, .accessor_name = "in0", .endpoint_type = metal2::DFBEndpointType::CONSUMER},
-             metal2::DFBBinding{
-                 .dfb_spec_name = SHARD_OUT,
+            {tt::tt_metal::experimental::DFBBinding{
+                 .dfb_spec_name = shard_in_dfb_name,
+                 .accessor_name = "in0",
+                 .endpoint_type = tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+             tt::tt_metal::experimental::DFBBinding{
+                 .dfb_spec_name = shard_out_dfb_name,
                  .accessor_name = "out0",
-                 .endpoint_type = metal2::DFBEndpointType::CONSUMER},
-             metal2::DFBBinding{
-                 .dfb_spec_name = SHARD_CONFIG,
+                 .endpoint_type = tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+             tt::tt_metal::experimental::DFBBinding{
+                 .dfb_spec_name = shard_config_dfb_name,
                  .accessor_name = "config",
-                 .endpoint_type = metal2::DFBEndpointType::CONSUMER}},
+                 .endpoint_type = tt::tt_metal::experimental::DFBEndpointType::CONSUMER}},
         .compile_time_args = make_cta(/*is_reader=*/1),
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
 
-    metal2::ProgramSpec spec{
+    tt::tt_metal::experimental::ProgramSpec spec{
         .name = "upsample_multicore_sharded",
         .kernels = {writer_spec, reader_spec},
-        .dataflow_buffers = {in_dfb, out_dfb, config_dfb},
+        .dataflow_buffers = {in_dfb_spec, out_dfb_spec, config_dfb_spec},
         .tensor_parameters =
             {
-                {.unique_id = SHARD_INPUT, .spec = input_mesh.tensor_spec()},
-                {.unique_id = SHARD_OUTPUT, .spec = output_mesh.tensor_spec()},
-                {.unique_id = SHARD_CONFIG_TENSOR, .spec = config_mesh_tensor.tensor_spec()},
+                {.unique_id = shard_input_param, .spec = input_mesh.tensor_spec()},
+                {.unique_id = shard_output_param, .spec = output_mesh.tensor_spec()},
+                {.unique_id = shard_config_param, .spec = config_mesh_tensor.tensor_spec()},
             },
-        .work_units = {metal2::WorkUnitSpec{
+        .work_units = {tt::tt_metal::experimental::WorkUnitSpec{
             .name = "main",
-            .kernels = {SHARD_WRITER, SHARD_READER},
+            .kernels = {shard_writer_kernel, shard_reader_kernel},
             .target_nodes = cores_with_work,
         }},
     };
 
     // No runtime args on either kernel; provide empty entries so every kernel has a KernelRunArgs.
-    metal2::ProgramRunArgs run_args;
+    tt::tt_metal::experimental::ProgramRunArgs run_args;
     run_args.kernel_run_args = {
-        metal2::KernelRunArgs{.kernel = SHARD_WRITER}, metal2::KernelRunArgs{.kernel = SHARD_READER}};
+        tt::tt_metal::experimental::KernelRunArgs{.kernel = shard_writer_kernel},
+        tt::tt_metal::experimental::KernelRunArgs{.kernel = shard_reader_kernel}};
     run_args.tensor_args = {
-        {SHARD_INPUT, metal2::TensorArgument{input_mesh}},
-        {SHARD_OUTPUT, metal2::TensorArgument{output_mesh}},
-        {SHARD_CONFIG_TENSOR, metal2::TensorArgument{config_mesh_tensor}},
+        {shard_input_param, tt::tt_metal::experimental::TensorArgument{input_mesh}},
+        {shard_output_param, tt::tt_metal::experimental::TensorArgument{output_mesh}},
+        {shard_config_param, tt::tt_metal::experimental::TensorArgument{config_mesh_tensor}},
     };
 
     return ttnn::device_operation::ProgramArtifacts{

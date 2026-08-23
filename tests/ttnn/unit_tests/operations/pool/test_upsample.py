@@ -218,6 +218,7 @@ def upsample_multicore_common(
     scale_factor = (scale_h, scale_w)
     input_tensor = ttnn.from_torch(tt_input, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
     input_tensor = ttnn.to_memory_config(input_tensor, memory_config=in_sharded_mem_config)
+    first_output = None
     if mode == "bilinear":
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=math_fidelity,
@@ -231,7 +232,11 @@ def upsample_multicore_common(
             compute_kernel_config=compute_kernel_config,
         )
         if run_twice:
+            first_output = ttnn.to_torch(output_tensor)
             ttnn.deallocate(output_tensor, True)
+            ttnn.deallocate(input_tensor, True)
+            input_tensor = ttnn.from_torch(tt_input, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+            input_tensor = ttnn.to_memory_config(input_tensor, memory_config=in_sharded_mem_config)
             output_tensor = ttnn.upsample(
                 input_tensor,
                 scale_factor,
@@ -245,6 +250,8 @@ def upsample_multicore_common(
             output_tensor = ttnn.upsample(input_tensor, scale_factor)
     output_tensor = ttnn.to_memory_config(output_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
+    if first_output is not None:
+        assert torch.equal(first_output, output_tensor)
 
     return (torch_result, output_tensor)
 
@@ -420,6 +427,28 @@ def test_bilinear_multi_core(
     logger.info(pcc_msg)
 
     assert allclose
+    assert passing
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_bilinear_multi_core_program_cache_fresh_allocations(device):
+    """A cached bilinear program must rebind fresh input and output allocations exactly."""
+    torch_result, output_tensor = upsample_multicore_common(
+        device,
+        input_shape=[1, 1280, 8, 8],
+        scale_h=2,
+        scale_w=2,
+        shard_strategy=ttnn.ShardStrategy.HEIGHT,
+        shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        mode="bilinear",
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        run_twice=True,
+    )
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_result, output_tensor, pcc=0.999)
+    logger.info(pcc_msg)
+    assert torch.allclose(output_tensor, torch_result, atol=1e-1, rtol=5e-2)
     assert passing
 
 
