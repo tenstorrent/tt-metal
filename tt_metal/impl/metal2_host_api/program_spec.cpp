@@ -349,6 +349,26 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             for (const auto& alias : dfb_binding.accessor_aliases) {
                 register_accessor(alias, false);
             }
+            const bool has_dfb = collected.dfb_by_name.contains(dfb_binding.dfb_spec_name);
+            TT_FATAL(
+                has_dfb || dfb_binding.allow_unbound_for_constexpr_discard,
+                "Kernel '{}' references unknown DFB '{}'",
+                kernel.unique_id,
+                dfb_binding.dfb_spec_name);
+            TT_FATAL(
+                !(has_dfb && dfb_binding.allow_unbound_for_constexpr_discard),
+                "Kernel '{}' marks DFB '{}' as optional for constexpr discard, but that DataflowBufferSpec is "
+                "present; optional bindings must be unbound so accidental L1 allocation is diagnosed",
+                kernel.unique_id,
+                dfb_binding.dfb_spec_name);
+            TT_FATAL(
+                !dfb_binding.allow_unbound_for_constexpr_discard || dfb_binding.accessor_aliases.empty(),
+                "Kernel '{}' optional constexpr-discard DFB '{}' cannot declare accessor aliases",
+                kernel.unique_id,
+                dfb_binding.dfb_spec_name);
+            if (!has_dfb) {
+                continue;
+            }
             const bool is_producer = (dfb_binding.endpoint_type == DFBEndpointType::PRODUCER);
             bool& seen_this_type = is_producer ? info.has_producer : info.has_consumer;
             TT_FATAL(
@@ -380,13 +400,6 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 is_producer ? "PRODUCER" : "CONSUMER",
                 dfb_binding.dfb_spec_name);
             role_already_bound = true;
-
-            // Referential integrity: the DFB must exist
-            TT_FATAL(
-                collected.dfb_by_name.contains(dfb_binding.dfb_spec_name),
-                "Kernel '{}' references unknown DFB '{}'",
-                kernel.unique_id,
-                dfb_binding.dfb_spec_name);
 
             CollectedSpecData::DFBEndpointInfo& endpoint_info = collected.dfb_endpoints[dfb_binding.dfb_spec_name];
 
@@ -2534,7 +2547,17 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
-        const uint32_t slot = dfb_name_to_slot.at(dfb_binding.dfb_spec_name);
+        const auto slot_it = dfb_name_to_slot.find(dfb_binding.dfb_spec_name);
+        if (slot_it == dfb_name_to_slot.end()) {
+            TT_FATAL(
+                dfb_binding.allow_unbound_for_constexpr_discard,
+                "Kernel '{}' has no device slot for DFB '{}'",
+                kernel_spec.unique_id,
+                dfb_binding.dfb_spec_name);
+            out.emplace(dfb_binding.accessor_name, uint16_t{0});
+            continue;
+        }
+        const uint32_t slot = slot_it->second;
         TT_FATAL(
             slot <= std::numeric_limits<uint16_t>::max(),
             "Kernel '{}' DFB '{}' device slot {} does not fit uint16_t",

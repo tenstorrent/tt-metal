@@ -1472,6 +1472,27 @@ TEST_F(ProgramSpecTestQuasar, UnknownScratchpadReferenceFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("references unknown scratchpad")));
 }
 
+TEST_F(ProgramSpecTestQuasar, OptionalUnboundDFBForConstexprDiscardSucceeds) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+
+    spec.kernels[0].dfb_bindings.push_back(KernelSpec::DFBBinding{
+        .dfb_spec_name = DFBSpecName{"compile_time_discarded"},
+        .accessor_name = "optional_dfb",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+        .allow_unbound_for_constexpr_discard = true});
+
+    EXPECT_NO_THROW((void)MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, OptionalDFBRejectsPresentSpec) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].dfb_bindings[0].allow_unbound_for_constexpr_discard = true;
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("optional bindings must be unbound")));
+}
+
 TEST_F(ProgramSpecTestQuasar, OptionalUnboundScratchpadForConstexprDiscardSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 

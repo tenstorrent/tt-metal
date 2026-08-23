@@ -145,6 +145,10 @@ struct KernelSpec {
         // for migrating legacy kernels in which multiple semantic CB names intentionally shared one
         // physical CB index. Aliases do not add endpoints, storage, or data movement.
         std::vector<std::string> accessor_aliases = {};
+        // Compatibility escape hatch for a token referenced only from a compile-time-discarded branch.
+        // If the named spec is absent, emit a placeholder token and allocate no DFB storage. Using that
+        // token at runtime is invalid; normal DFB bindings must leave this false.
+        bool allow_unbound_for_constexpr_discard = false;
     };
     Group<DFBBinding> dfb_bindings;
 
