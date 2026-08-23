@@ -15,14 +15,15 @@ namespace ckernel::sfpu {
 sfpi_inline sfpi::vFloat _sfpu_neg_exp_f32_(sfpi::vFloat val) {
     sfpi::vFloat result = 0.0f;
 
-    constexpr float UNDERFLOW_THRESHOLD = -126.5f;
-
     // Step 1: Compute k = round(x / ln(2))
     // z = x / ln(2) = x * (1/ln(2))
+    //
+    // NOTE: do NOT clamp z here. Clamping the range-reduction driver makes
+    // k (and therefore r = x - k*ln(2)) freeze while the residual keeps
+    // growing for more negative inputs, pushing r far outside the domain
+    // of the polynomial below and producing garbage after reconstruction.
+    // Instead, the underflow is handled on the OUTPUT exponent below.
     sfpi::vFloat z = val * sfpi::vConstFloatPrgm0;
-
-    // Clamp z to -126.5: exp(x) underflows to 0 for large negative x
-    z = sfpi::max(z, UNDERFLOW_THRESHOLD);
 
     // Round z to nearest integer using round-to-nearest
     sfpi::vInt k_int;
@@ -79,8 +80,17 @@ sfpi_inline sfpi::vFloat _sfpu_neg_exp_f32_(sfpi::vFloat val) {
     // Add k_int to get the new exponent
     sfpi::vInt new_exp = p_exp + k_int;
 
-    // Set the new exponent
-    result = sfpi::setexp(p, new_exp);
+    // Guard the OUTPUT exponent: for x below ~-87.7 (=-126.5*ln(2)) the true
+    // exp(x) is subnormal or zero, which the SFPU cannot represent. Returning
+    // 0 keeps the absolute error below FLT_MIN, while reconstructing with an
+    // out-of-range exponent produced garbage magnitudes / NaN.
+    // (Same underflow guard as the exp kernel: reconstruct only when the
+    // biased exponent is >= 1.)
+    result = 0.0f;
+    v_if(new_exp >= 1) {
+        result = sfpi::setexp(p, new_exp);
+    }
+    v_endif;
 
     return result;
 }

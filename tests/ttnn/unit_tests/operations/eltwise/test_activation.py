@@ -616,6 +616,43 @@ def test_xielu(alpha_p, alpha_n, dtype, device):
 
 
 @pytest.mark.parametrize(
+    "dtype",
+    [
+        "float32",
+        "bfloat16",
+    ],
+)
+@pytest.mark.parametrize("alpha_p, alpha_n", [(0.8, 0.8), (1.0, 0.5)])
+def test_xielu_underflow_region(dtype, alpha_p, alpha_n, device):
+    """Regression test for #54046.
+
+    For x < -87.68 (= -126.5 * ln(2)), exp(x) underflows the fp32 normal
+    range. The negative-input branch of xielu used to clamp the
+    range-reduction driver instead of guarding the reconstructed exponent,
+    so the residual grew unbounded and the kernel returned garbage
+    magnitudes up to ~2.7e38 or NaN in that region. The correct output is
+    dominated by the -x term there and must stay finite.
+    """
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+
+    x_values = [-80.0, -87.5, -88.0, -90.0, -100.0, -126.0, -200.0, -300.0, -1000.0]
+    torch_input = torch.tensor([x_values] * 32, dtype=torch_dtype)
+    golden_fn = ttnn.get_golden_function(ttnn.xielu)
+    torch_output = golden_fn(torch_input, alpha_p=alpha_p, alpha_n=alpha_n)
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.xielu(ttnn_input, alpha_p=alpha_p, alpha_n=alpha_n)
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert torch.isfinite(ttnn_output.float()).all(), "xielu produced non-finite values in the underflow region"
+    if dtype == "float32":
+        assert_allclose(torch_output, ttnn_output, rtol=6e-05, atol=1e-06)
+    else:
+        assert_with_ulp(torch_output, ttnn_output, 1)
+
+
+@pytest.mark.parametrize(
     "shapes",
     [
         (3, 4, 64, 32),
