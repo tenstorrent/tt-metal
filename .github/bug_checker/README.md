@@ -154,6 +154,8 @@ python .github/bug_checker/run_bug_checker.py --branch --subcommand dry-run
 - Current rules:
   - `ccl-ring-buffer-mismatch` — blocking, paths: `tt_metal/impl/ccl/**`, `ttnn/cpp/ttnn/operations/ccl/**`, labels: `area:ccl`
   - `reshape-dim-check` — warning, paths: `ttnn/cpp/ttnn/operations/data_movement/**`, labels: `area:ops`
+  - `program-cache-hash-collision` — blocking, paths: `ttnn/cpp/ttnn/operations/**/device/*device_operation*`, `tt-train/sources/**/device/*device*`
+  - `smuggled-buffer-runtime-arg` — blocking, paths: `ttnn/cpp/ttnn/operations/**/device/*program_factory*`, `tt_metal/impl/program/**`, `tt-train/sources/**/device/*program_factory*`
 
 ### LLM Analysis — `llm.py` : `LLMSession.analyze_rule()`
 

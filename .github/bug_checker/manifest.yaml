@@ -19,3 +19,22 @@ rules:
       - "ttnn/cpp/ttnn/operations/data_movement/**"
     labels:
       - "area:ops"
+
+  program-cache-hash-collision:
+    file: program-cache-hash-collision.md
+    severity: blocking
+    suggest_fix: true
+    model: null
+    paths:
+      - "ttnn/cpp/ttnn/operations/**/device/*device_operation*"
+      - "tt-train/sources/**/device/*device*"
+
+  smuggled-buffer-runtime-arg:
+    file: smuggled-buffer-runtime-arg.md
+    severity: blocking
+    suggest_fix: true
+    model: null
+    paths:
+      - "ttnn/cpp/ttnn/operations/**/device/*program_factory*"
+      - "tt_metal/impl/program/**"
+      - "tt-train/sources/**/device/*program_factory*"
