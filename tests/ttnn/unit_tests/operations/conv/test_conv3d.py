@@ -623,6 +623,77 @@ def test_conv3d_fp32_reduction_c_in_blocking(device, C_in_block):
     )
 
 
+def test_conv3d_weight_mcast_passive_bbox_slots(device):
+    """Multicast rectangle padding participates without running compute work."""
+    input_shape = (1, 32, 3, 2, 1)
+    out_channels = 32
+    kernel_size = (1, 1, 1)
+    stride = (1, 1, 1)
+    padding = (0, 0, 0)
+
+    tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
+        input_shape, out_channels, kernel_size, stride, 1, padding, "zeros", device
+    )
+    grid_size = (8, 8)
+    config = create_conv3d_config(C_in_block=32, C_out_block=32, compute_with_storage_grid_size=grid_size)
+
+    # Mirror the factory's parallelism selection to make the intended path explicit:
+    # one C-in/C-out group shares weights across six spatial workers in an eight-core
+    # row-strip, leaving two McastPassive slots in the multicast rectangle.
+    c_in_num_blocks = input_shape[1] // config.C_in_block
+    c_out_num_blocks = out_channels // config.C_out_block
+    num_cores = grid_size[0] * grid_size[1]
+    c_in_parallel_factor = min(c_in_num_blocks, num_cores)
+    cores_per_output = num_cores // c_in_parallel_factor
+    c_out_parallel_factor = min(c_out_num_blocks, cores_per_output)
+    remaining_parallel = cores_per_output // c_out_parallel_factor
+    spatial_blocks = input_shape[2:]
+    spatial_factors = []
+    for blocks in spatial_blocks:
+        factor = min(blocks, remaining_parallel)
+        spatial_factors.append(factor)
+        remaining_parallel //= factor
+    group_size = spatial_factors[0] * spatial_factors[1] * spatial_factors[2]
+    num_groups = c_in_parallel_factor * c_out_parallel_factor
+    rows_per_group = (group_size + grid_size[0] - 1) // grid_size[0]
+    assert group_size > 1
+    assert num_groups * rows_per_group <= grid_size[1]
+    assert group_size < grid_size[0] * rows_per_group
+
+    tt_weight = ttnn.from_torch(conv3d_module.weight.data, dtype=ttnn.bfloat16, pad_value=0)
+    tt_weight = ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=tt_weight, groups=1, C_in_block=config.C_in_block, alignment=ALIGNMENT, device=device
+    )
+    tt_bias = ttnn.from_torch(
+        conv3d_module.bias.data.reshape(1, -1),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        pad_value=0,
+    )
+
+    tt_output = ttnn.experimental.conv3d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        device=device,
+        bias_tensor=tt_bias,
+        dtype=ttnn.bfloat16,
+        output_channels=out_channels,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        padding_mode="zeros",
+        groups=1,
+        config=config,
+        compute_kernel_config=kernel_config,
+    )
+
+    N, D_out, H_out, W_out = output_dims
+    actual = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+    passed, message = check_with_pcc(gt_output, actual, pcc=0.999)
+    assert passed, message
+
+
 def apply_logical_pad_mask(input_tensor, h_start, w_start, logical_h_mask, logical_w_mask):
     """Zero the [N, C, D, H, W] positions conv3d's logical-pad mask drops.
 

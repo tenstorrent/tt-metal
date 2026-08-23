@@ -34,69 +34,65 @@ FORCE_INLINE void read_weight_block(
     noc.async_read_barrier();
 }
 
-void kernel_main() {
-    constexpr uint32_t cb_matmul_result_rm = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_weight_tiled = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_bias_tiled = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_matmul_interm_tiled = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_reduction_tiled = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_worker_ack_back = get_compile_time_arg_val(5);
-    constexpr uint32_t N = get_compile_time_arg_val(6);
-    constexpr uint32_t T_out = get_compile_time_arg_val(7);
-    constexpr uint32_t H_out = get_compile_time_arg_val(8);
-    constexpr uint32_t W_out = get_compile_time_arg_val(9);
-    constexpr uint32_t T_block_size = get_compile_time_arg_val(10);
-    constexpr uint32_t H_block_size = get_compile_time_arg_val(11);
-    constexpr uint32_t W_block_size = get_compile_time_arg_val(12);
-    constexpr uint32_t C_out_num_blocks = get_compile_time_arg_val(13);
-    constexpr uint32_t matmul_M_t = get_compile_time_arg_val(14);
-    constexpr uint32_t matmul_K_t = get_compile_time_arg_val(15);
-    constexpr uint32_t matmul_N_t = get_compile_time_arg_val(16);
-    constexpr uint32_t num_patches_tile_padded = get_compile_time_arg_val(17);
-    constexpr uint32_t C_out_block_bytes = get_compile_time_arg_val(19);
-    constexpr bool use_bias = get_compile_time_arg_val(20) == 1;
-    constexpr uint32_t semaphore_id = get_compile_time_arg_val(21);
+template <
+    uint32_t N,
+    uint32_t T_out,
+    uint32_t H_out,
+    uint32_t W_out,
+    uint32_t T_block_size,
+    uint32_t H_block_size,
+    uint32_t W_block_size,
+    uint32_t C_out_num_blocks,
+    uint32_t matmul_M_t,
+    uint32_t matmul_K_t,
+    uint32_t matmul_N_t,
+    uint32_t C_out_block_bytes,
+    uint32_t use_bias_value,
+    uint32_t weight_share_mode_value,
+    uint32_t enable_streaming_output_value,
+    uint32_t output_pad_h,
+    uint32_t output_pad_w,
+    uint32_t has_reduction_value>
+TT_KERNEL void writer(
+    uint32_t c_in_block_start,
+    uint32_t c_in_block_end,
+    uint32_t c_out_block_start,
+    uint32_t c_out_block_end,
+    uint32_t t_out_start,
+    uint32_t t_out_end,
+    uint32_t h_out_start,
+    uint32_t h_out_end,
+    uint32_t w_out_start,
+    uint32_t w_out_end,
+    uint32_t is_reducer,
+    uint32_t weight_share_role_value,
+    uint32_t weight_src_noc_x,
+    uint32_t weight_src_noc_y,
+    uint32_t chain_succ_noc_x,
+    uint32_t chain_succ_noc_y,
+    uint32_t mcast_bbox_start_x,
+    uint32_t mcast_bbox_start_y,
+    uint32_t mcast_bbox_end_x,
+    uint32_t mcast_bbox_end_y,
+    uint32_t mcast_num_dests,
+    uint32_t mcast_num_iters,
+    uint32_t num_workers) {
+    constexpr uint32_t cb_matmul_result_rm = dfb::matmul_result_rm;
+    constexpr uint32_t cb_weight_tiled = dfb::weight_tiled;
+    constexpr uint32_t cb_bias_tiled = dfb::bias_tiled;
+    constexpr uint32_t cb_matmul_interm_tiled = dfb::matmul_interm_tiled;
+    constexpr uint32_t cb_reduction_tiled = dfb::reduction_tiled;
+    constexpr uint32_t cb_worker_ack_back = dfb::worker_ack_back;
+    constexpr bool use_bias = use_bias_value == 1;
     // weight_share_mode (see WeightShareMode in conv3d_weight_share.hpp): Disabled, Chain, or Mcast.
-    constexpr WeightShareMode weight_share_mode = static_cast<WeightShareMode>(get_compile_time_arg_val(22));
+    constexpr WeightShareMode weight_share_mode = static_cast<WeightShareMode>(weight_share_mode_value);
     constexpr bool enable_weight_chain = weight_share_mode == WeightShareMode::Chain;
     constexpr bool enable_weight_mcast = weight_share_mode == WeightShareMode::Mcast;
-    constexpr uint32_t weights_mcast_sender_sem_id = get_compile_time_arg_val(23);
-    constexpr uint32_t weights_mcast_receiver_sem_id = get_compile_time_arg_val(24);
-    constexpr bool enable_streaming_output = get_compile_time_arg_val(25) == 1;
-    // Padded-output mode
-    // 0 == compact (page index unchanged).
-    constexpr uint32_t output_pad_h = get_compile_time_arg_val(26);
-    constexpr uint32_t output_pad_w = get_compile_time_arg_val(27);
-
-    uint32_t argidx = 0;
-    const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t weight_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t bias_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t c_in_block_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t c_in_block_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t c_out_block_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t c_out_block_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t t_out_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t t_out_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t h_out_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t h_out_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t w_out_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t is_reducer = get_arg_val<uint32_t>(argidx++);
+    constexpr bool enable_streaming_output = enable_streaming_output_value == 1;
+    constexpr bool has_reduction = has_reduction_value == 1;
+    static_assert(!has_reduction || !enable_streaming_output, "reduction and streaming output are mutually exclusive");
     // weight_share_role: see WeightShareRole in conv3d_weight_share.hpp.
-    const WeightShareRole weight_share_role = static_cast<WeightShareRole>(get_arg_val<uint32_t>(argidx++));
-    const uint32_t weight_src_noc_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t weight_src_noc_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t chain_succ_noc_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t chain_succ_noc_y = get_arg_val<uint32_t>(argidx++);
-    // Mcast bbox + counts. Only mcast sender (role 4) needs the bbox; passive (role 6) needs iters.
-    const uint32_t mcast_bbox_start_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t mcast_bbox_start_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t mcast_bbox_end_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t mcast_bbox_end_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t mcast_num_dests = get_arg_val<uint32_t>(argidx++);
-    const uint32_t mcast_num_iters = get_arg_val<uint32_t>(argidx++);
-    const uint32_t num_workers = get_arg_val<uint32_t>(argidx++);
+    const WeightShareRole weight_share_role = static_cast<WeightShareRole>(weight_share_role_value);
 
     Noc noc;
     experimental::CB cb_out(cb_matmul_result_rm);
@@ -105,30 +101,24 @@ void kernel_main() {
     experimental::CB cb_interm(cb_matmul_interm_tiled);
     experimental::CB cb_reduction(cb_reduction_tiled);
     experimental::CB cb_ack(cb_worker_ack_back);
-    Semaphore<> sem(semaphore_id);
-    Semaphore<> weights_mcast_sender_sem(weights_mcast_sender_sem_id);
-    Semaphore<> weights_mcast_receiver_sem(weights_mcast_receiver_sem_id);
+    Semaphore<> sem(sem::reduction_done);
+    Semaphore<> weights_mcast_sender_sem(sem::weight_sender);
+    Semaphore<> weights_mcast_receiver_sem(sem::weight_receiver);
 
     // Reducer coordinates and worker core coordinates are only present when num_workers > 0
     uint32_t reducer_core_x = 0, reducer_core_y = 0;
-    tt_l1_ptr uint32_t* worker_core_xs = nullptr;
-    tt_l1_ptr uint32_t* worker_core_ys = nullptr;
-    if (num_workers > 0) {
-        reducer_core_x = get_arg_val<uint32_t>(argidx++);
-        reducer_core_y = get_arg_val<uint32_t>(argidx++);
-        worker_core_xs = (tt_l1_ptr uint32_t*)(get_arg_addr(argidx));
-        argidx += num_workers;
-        worker_core_ys = (tt_l1_ptr uint32_t*)(get_arg_addr(argidx));
+    if constexpr (has_reduction) {
+        if (num_workers > 0) {
+            reducer_core_x = get_vararg(0);
+            reducer_core_y = get_vararg(1);
+        }
     }
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_weight_tiled);
     constexpr uint32_t partials_tile_bytes = get_tile_size(cb_matmul_interm_tiled);
-    constexpr auto out_args = TensorAccessorArgs<28>();
-    constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
-    constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
-    const auto out_writer = TensorAccessor(out_args, out_addr);
-    const auto weight_reader = TensorAccessor(weight_args, weight_addr);
-    const auto bias_reader = TensorAccessor(bias_args, bias_addr);
+    const auto out_writer = TensorAccessor(tensor::output);
+    const auto weight_reader = TensorAccessor(tensor::weight);
+    const auto bias_reader = TensorAccessor(tensor::bias);
 
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
@@ -288,26 +278,20 @@ void kernel_main() {
                         for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
                             const uint32_t w_block_end = std::min(w_block + W_block_size, w_out_end);
 
-                            if (!is_reducer) {
-                                // I'm a worker.
-                                // Wait for compute to finish.
-                                cb_reduction.wait_front(output_tiles);
+                            if constexpr (has_reduction) {
+                                if (!is_reducer) {
+                                    // Wait for compute, signal the reducer, then acknowledge compute after the
+                                    // reducer has consumed our partial result.
+                                    cb_reduction.wait_front(output_tiles);
+                                    sem.set(0);
+                                    sem.up(noc, reducer_core_x, reducer_core_y, 1);
+                                    sem.wait(1);
+                                    cb_reduction.pop_front(output_tiles);
+                                    cb_ack.reserve_back(1);
+                                    cb_ack.push_back(1);
+                                    continue;
+                                }
 
-                                // Reset our semaphore.
-                                sem.set(0);
-
-                                // Signal to reducer that we have data ready.
-                                sem.up(noc, reducer_core_x, reducer_core_y, 1);
-
-                                // Wait for reducer to ack that it has read our data.
-                                sem.wait(1);
-
-                                // Handshake with compute so it can continue.
-                                cb_reduction.pop_front(output_tiles);
-                                cb_ack.reserve_back(1);
-                                cb_ack.push_back(1);
-                            } else {
-                                // I'm a reducer.
                                 if (num_workers > 0) {
                                     // Wait for all workers to finish.
                                     sem.wait(num_workers);
@@ -319,8 +303,8 @@ void kernel_main() {
                                     for (uint32_t worker_idx = 0; worker_idx < num_workers; worker_idx++) {
                                         // Read data from worker into reduction buffer.
                                         cb_reduction.reserve_back(output_tiles);
-                                        const uint16_t worker_x = worker_core_xs[worker_idx];
-                                        const uint16_t worker_y = worker_core_ys[worker_idx];
+                                        const uint16_t worker_x = get_vararg(2 + worker_idx);
+                                        const uint16_t worker_y = get_vararg(2 + num_workers + worker_idx);
                                         UnicastEndpoint ep;
                                         noc.async_read(
                                             ep,
@@ -334,48 +318,46 @@ void kernel_main() {
                                         sem.up(noc, worker_x, worker_y, 1);
                                     }
                                 }
+                            }
 
-                                // Streaming output drains one single-tile C_out row at a time to overlap writes with
-                                // the remaining compute tail.
-                                constexpr uint32_t row_tiles = matmul_N_t;
-                                if constexpr (!enable_streaming_output) {
-                                    cb_out.wait_front(output_tiles);
-                                }
-                                uint32_t patch_idx = 0;
-                                uint32_t cb_read_offset = 0;
-                                uint32_t rows_waited = 0;
-                                for (uint32_t t = t_block; t < t_block_end; ++t) {
-                                    for (uint32_t h = h_block; h < h_block_end; ++h) {
-                                        for (uint32_t w = w_block; w < w_block_end; ++w) {
-                                            if constexpr (enable_streaming_output) {
-                                                if (patch_idx % tt::constants::TILE_HEIGHT == 0) {
-                                                    rows_waited++;
-                                                    cb_out.wait_front(rows_waited * row_tiles);
-                                                }
+                            // Streaming output drains one single-tile C_out row at a time to overlap writes with
+                            // the remaining compute tail.
+                            constexpr uint32_t row_tiles = matmul_N_t;
+                            if constexpr (!enable_streaming_output) {
+                                cb_out.wait_front(output_tiles);
+                            }
+                            uint32_t patch_idx = 0;
+                            uint32_t cb_read_offset = 0;
+                            uint32_t rows_waited = 0;
+                            for (uint32_t t = t_block; t < t_block_end; ++t) {
+                                for (uint32_t h = h_block; h < h_block_end; ++h) {
+                                    for (uint32_t w = w_block; w < w_block_end; ++w) {
+                                        if constexpr (enable_streaming_output) {
+                                            if (patch_idx % tt::constants::TILE_HEIGHT == 0) {
+                                                rows_waited++;
+                                                cb_out.wait_front(rows_waited * row_tiles);
                                             }
-                                            uint32_t out_page_idx = batch_idx * T_out_H_out_W_out +
-                                                                    t * H_out_p * W_out_p +
-                                                                    (h + output_pad_h) * W_out_p + (w + output_pad_w);
-                                            noc.async_write(
-                                                cb_out,
-                                                out_writer,
-                                                C_out_block_bytes,
-                                                {.offset_bytes = cb_read_offset},
-                                                {.page_id = out_page_idx,
-                                                 .offset_bytes = c_out_block * C_out_block_bytes});
-                                            cb_read_offset += C_out_block_bytes;
-                                            if constexpr (enable_streaming_output) {
-                                                patch_idx++;
-                                            }
+                                        }
+                                        uint32_t out_page_idx = batch_idx * T_out_H_out_W_out + t * H_out_p * W_out_p +
+                                                                (h + output_pad_h) * W_out_p + (w + output_pad_w);
+                                        noc.async_write(
+                                            cb_out,
+                                            out_writer,
+                                            C_out_block_bytes,
+                                            {.offset_bytes = cb_read_offset},
+                                            {.page_id = out_page_idx, .offset_bytes = c_out_block * C_out_block_bytes});
+                                        cb_read_offset += C_out_block_bytes;
+                                        if constexpr (enable_streaming_output) {
+                                            patch_idx++;
                                         }
                                     }
                                 }
-                                if constexpr (enable_streaming_output) {
-                                    cb_out.wait_front(output_tiles);
-                                }
-                                noc.async_write_barrier();
-                                cb_out.pop_front(output_tiles);
                             }
+                            if constexpr (enable_streaming_output) {
+                                cb_out.wait_front(output_tiles);
+                            }
+                            noc.async_write_barrier();
+                            cb_out.pop_front(output_tiles);
                         }
                     }
                 }
@@ -385,10 +367,9 @@ void kernel_main() {
     // Flush writes before retiring, not just atomics. The weight multicast above is issued
     // linked and is deliberately NOT barriered against the flag mcast (same NoC + static VC
     // keeps them ordered), which is conv2d's pattern -- but conv2d also ends its kernel with a
-    // write barrier, and that half was missing here. The only other write barrier is inside the
-    // `is_reducer` branch, so a McastSender that is a *worker* retired with multicast write-acks
-    // still outstanding: noc_nonposted_writes_num_issued > ..._acked, a linked command still
-    // holding its VC, and the next op's NoC traffic wedging against the leftover state.
+    // write barrier, and that half was missing here. Without this final barrier, a McastSender
+    // worker could retire with multicast write-acks still outstanding, leaving a linked command
+    // holding its VC and wedging the next operation's NoC traffic against stale state.
     noc.async_write_barrier();
     noc.async_atomic_barrier();
 }

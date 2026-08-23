@@ -214,42 +214,50 @@ void reduce_bias_untilize_fullblock(uint32_t num_workers) {
     bias_untilize_fullblock_math<rows, cols, use_fp32_partials, use_bias, local_cb, bias_cb, out_cb>();
 }
 
-void kernel_main() {
-    constexpr uint32_t cb_vol2col_rm = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_vol2col_tiled = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_weight_tiled = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_bias_tiled = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_matmul_interm_tiled = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_matmul_result_rm = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_reduction_tiled = get_compile_time_arg_val(6);
-    constexpr uint32_t cb_worker_ack_back = get_compile_time_arg_val(7);
-    constexpr uint32_t N = get_compile_time_arg_val(8);
-
-    constexpr uint32_t num_patches = get_compile_time_arg_val(9);
-    constexpr uint32_t matmul_M_t = get_compile_time_arg_val(10);
-    constexpr uint32_t matmul_K_t = get_compile_time_arg_val(11);
-    constexpr uint32_t matmul_N_t = get_compile_time_arg_val(12);
-
-    constexpr bool use_bias = get_compile_time_arg_val(13) == 1;
-    constexpr uint32_t T_out = get_compile_time_arg_val(14);
-    constexpr uint32_t H_out = get_compile_time_arg_val(15);
-    constexpr uint32_t W_out = get_compile_time_arg_val(16);
-    constexpr uint32_t T_block_size = get_compile_time_arg_val(17);
-    constexpr uint32_t H_block_size = get_compile_time_arg_val(18);
-    constexpr uint32_t W_block_size = get_compile_time_arg_val(19);
-    constexpr uint32_t C_out_num_blocks = get_compile_time_arg_val(20);
-
-    // matmul parameters
-    constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(21);
-    constexpr uint32_t in1_num_subblocks = get_compile_time_arg_val(22);
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(23);
-    constexpr uint32_t subblock_h = get_compile_time_arg_val(24);
-    constexpr uint32_t subblock_w = get_compile_time_arg_val(25);
-
-    constexpr uint32_t semaphore_id = get_compile_time_arg_val(26);
-    constexpr bool use_fp32_partials = get_compile_time_arg_val(27) == 1;
-    // Stream final single-tile C_out rows through bias/untilize when the writer can overlap the compute tail.
-    constexpr bool enable_streaming_output = get_compile_time_arg_val(28) == 1;
+template <
+    uint32_t N,
+    uint32_t num_patches,
+    uint32_t matmul_M_t,
+    uint32_t matmul_K_t,
+    uint32_t matmul_N_t,
+    uint32_t use_bias_value,
+    uint32_t T_block_size,
+    uint32_t H_block_size,
+    uint32_t W_block_size,
+    uint32_t in0_num_subblocks,
+    uint32_t in1_num_subblocks,
+    uint32_t in0_block_w,
+    uint32_t subblock_h,
+    uint32_t subblock_w,
+    uint32_t use_fp32_partials_value,
+    uint32_t enable_streaming_output_value,
+    uint32_t has_reduction_value>
+TT_KERNEL void compute(
+    uint32_t c_in_block_start,
+    uint32_t c_in_block_end,
+    uint32_t c_out_block_start,
+    uint32_t c_out_block_end,
+    uint32_t t_out_start,
+    uint32_t t_out_end,
+    uint32_t h_out_start,
+    uint32_t h_out_end,
+    uint32_t w_out_start,
+    uint32_t w_out_end,
+    uint32_t is_reducer,
+    uint32_t num_workers) {
+    constexpr uint32_t cb_vol2col_rm = dfb::vol2col_rm;
+    constexpr uint32_t cb_vol2col_tiled = dfb::vol2col_tiled;
+    constexpr uint32_t cb_weight_tiled = dfb::weight_tiled;
+    constexpr uint32_t cb_matmul_interm_tiled = dfb::matmul_interm_tiled;
+    constexpr uint32_t cb_matmul_result_rm = dfb::matmul_result_rm;
+    constexpr uint32_t cb_bias_tiled = dfb::bias_tiled;
+    constexpr uint32_t cb_reduction_tiled = dfb::reduction_tiled;
+    constexpr uint32_t cb_worker_ack_back = dfb::worker_ack_back;
+    constexpr bool use_bias = use_bias_value == 1;
+    constexpr bool use_fp32_partials = use_fp32_partials_value == 1;
+    constexpr bool enable_streaming_output = enable_streaming_output_value == 1;
+    constexpr bool has_reduction = has_reduction_value == 1;
+    static_assert(!has_reduction || !enable_streaming_output, "reduction and streaming output are mutually exclusive");
 
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
@@ -268,21 +276,6 @@ void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
     matmul_init(cb_vol2col_tiled, cb_weight_tiled);
     MATH((llk_math_reconfig_remap(true)));
-
-    // Load range parameters
-    uint32_t argidx = 0;
-    const uint32_t c_in_block_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t c_in_block_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t c_out_block_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t c_out_block_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t t_out_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t t_out_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t h_out_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t h_out_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t w_out_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t is_reducer = get_arg_val<uint32_t>(argidx++);
-    const uint32_t num_workers = get_arg_val<uint32_t>(argidx++);
 
     // Process each batch element
     for (uint32_t batch_idx = 0; batch_idx < N; batch_idx++) {
@@ -393,31 +386,38 @@ void kernel_main() {
                                 // Stall on matmul/bias to finish
                                 cb_matmul_interm_tiled_cb.wait_front(output_tiles);
 
-                                if (!is_reducer) {
-                                    // not reducer implies that we are a worker and there are multiple workers in this
-                                    // reduction group
+                                if constexpr (has_reduction) {
+                                    if (!is_reducer) {
+                                        // Signal to writer that we have partial results.
+                                        cb_reduction_tiled_cb.reserve_back(output_tiles);
+                                        cb_reduction_tiled_cb.push_back(output_tiles);
 
-                                    // Signal to writer that we have partial results
-                                    cb_reduction_tiled_cb.reserve_back(output_tiles);
-                                    cb_reduction_tiled_cb.push_back(output_tiles);
+                                        // Wait for writer to ack that our data has been used.
+                                        cb_worker_ack_back_cb.wait_front(1);
+                                        cb_worker_ack_back_cb.pop_front(1);
 
-                                    // Wait for writer to ack that our data has been used
-                                    cb_worker_ack_back_cb.wait_front(1);
-                                    cb_worker_ack_back_cb.pop_front(1);
-
-                                    // Clear our partial results and continue
-                                    cb_matmul_interm_tiled_cb.pop_front(output_tiles);
+                                        // Clear our partial results and continue.
+                                        cb_matmul_interm_tiled_cb.pop_front(output_tiles);
+                                    } else {
+                                        reduce_bias_untilize_fullblock<
+                                            matmul_M_t,
+                                            matmul_N_t,
+                                            use_fp32_partials,
+                                            use_bias,
+                                            cb_matmul_interm_tiled,
+                                            cb_reduction_tiled,
+                                            cb_bias_tiled,
+                                            cb_matmul_result_rm>(num_workers);
+                                    }
                                 } else {
-                                    // We are a reducer core.
-                                    reduce_bias_untilize_fullblock<
+                                    bias_untilize_fullblock_math<
                                         matmul_M_t,
                                         matmul_N_t,
                                         use_fp32_partials,
                                         use_bias,
                                         cb_matmul_interm_tiled,
-                                        cb_reduction_tiled,
                                         cb_bias_tiled,
-                                        cb_matmul_result_rm>(num_workers);
+                                        cb_matmul_result_rm>();
                                 }
                             }  // end if constexpr (!enable_streaming_output)
                         }

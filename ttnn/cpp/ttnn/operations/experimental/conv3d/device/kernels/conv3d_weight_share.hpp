@@ -8,8 +8,7 @@
 
 // Shared between conv3d_program_factory (host) and writer.cpp (kernel). The kernel receives
 // the role as a uint32_t runtime arg and casts back to this enum; cast direction is host →
-// kernel via SetRuntimeArgs/get_arg_val. The fixed underlying type makes the wire format
-// stable.
+// kernel through the named runtime schema. The fixed underlying type makes the wire format stable.
 //
 // Single weight-share strategy enum used as a compile-time arg (`weight_share_mode`).
 enum class WeightShareMode : uint32_t {

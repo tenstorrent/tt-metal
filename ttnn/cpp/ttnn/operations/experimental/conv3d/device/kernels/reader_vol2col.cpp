@@ -430,44 +430,65 @@ void gather_rows_to_shard(
                     if (logical_masked) {
                         zeroPad<C_in_block_bytes>(noc, shard_cb, shard_offset);
                     } else {
-                    const bool w_outside = (w_in < 0 || w_in >= static_cast<int32_t>(W_in));
-                    const bool in_padding = t_outside || h_outside || w_outside;
-                    if (in_padding) {
-                        if constexpr (halo_mode) {
-                            // Temporal boundary stays zero; spatial boundary reads
-                            // the neighbor's stick from the compact [Htop|Hbot|Wleft|Wright] halo buffer.
-                            if (t_outside) {
+                        const bool w_outside = (w_in < 0 || w_in >= static_cast<int32_t>(W_in));
+                        const bool in_padding = t_outside || h_outside || w_outside;
+                        if (in_padding) {
+                            if constexpr (halo_mode) {
+                                // Temporal boundary stays zero; spatial boundary reads
+                                // the neighbor's stick from the compact [Htop|Hbot|Wleft|Wright] halo buffer.
+                                if (t_outside) {
+                                    zeroPad<C_in_block_bytes>(noc, shard_cb, shard_offset);
+                                } else {
+                                    const uint32_t frame = halo_frame_base + static_cast<uint32_t>(t_in);
+                                    uint32_t halo_page;
+                                    if (w_outside) {
+                                        const uint32_t hrow =
+                                            static_cast<uint32_t>(h_in + static_cast<int32_t>(halo_padding_h));
+                                        if (w_in < 0) {
+                                            halo_page =
+                                                halo_wleft_base + (frame * halo_h_total + hrow) * halo_padding_w +
+                                                static_cast<uint32_t>(w_in + static_cast<int32_t>(halo_padding_w));
+                                        } else {
+                                            halo_page = halo_wright_base +
+                                                        (frame * halo_h_total + hrow) * halo_padding_w +
+                                                        static_cast<uint32_t>(w_in - static_cast<int32_t>(W_in));
+                                        }
+                                    } else if (h_in < 0) {
+                                        halo_page =
+                                            halo_htop_base +
+                                            (frame * halo_padding_h +
+                                             static_cast<uint32_t>(h_in + static_cast<int32_t>(halo_padding_h))) *
+                                                W_in +
+                                            static_cast<uint32_t>(w_in);
+                                    } else {
+                                        halo_page = halo_hbot_base +
+                                                    (frame * halo_padding_h +
+                                                     static_cast<uint32_t>(h_in - static_cast<int32_t>(H_in))) *
+                                                        W_in +
+                                                    static_cast<uint32_t>(w_in);
+                                    }
+                                    read_input_row_maybe_staged<EnableDramReadStaging, dram_read_alignment>(
+                                        noc,
+                                        halo_reader,
+                                        halo_page,
+                                        c_in_offset_bytes,
+                                        in_row_size_bytes,
+                                        shard_cb,
+                                        shard_offset,
+                                        C_in_block_bytes,
+                                        dram_read_scratch_cb);
+                                }
+                            } else if constexpr (is_padding_zeros) {
                                 zeroPad<C_in_block_bytes>(noc, shard_cb, shard_offset);
                             } else {
-                                const uint32_t frame = halo_frame_base + static_cast<uint32_t>(t_in);
-                                uint32_t halo_page;
-                                if (w_outside) {
-                                    const uint32_t hrow =
-                                        static_cast<uint32_t>(h_in + static_cast<int32_t>(halo_padding_h));
-                                    if (w_in < 0) {
-                                        halo_page = halo_wleft_base + (frame * halo_h_total + hrow) * halo_padding_w +
-                                                    static_cast<uint32_t>(w_in + static_cast<int32_t>(halo_padding_w));
-                                    } else {
-                                        halo_page = halo_wright_base + (frame * halo_h_total + hrow) * halo_padding_w +
-                                                    static_cast<uint32_t>(w_in - static_cast<int32_t>(W_in));
-                                    }
-                                } else if (h_in < 0) {
-                                    halo_page = halo_htop_base +
-                                                (frame * halo_padding_h +
-                                                 static_cast<uint32_t>(h_in + static_cast<int32_t>(halo_padding_h))) *
-                                                    W_in +
-                                                static_cast<uint32_t>(w_in);
-                                } else {
-                                    halo_page = halo_hbot_base +
-                                                (frame * halo_padding_h +
-                                                 static_cast<uint32_t>(h_in - static_cast<int32_t>(H_in))) *
-                                                    W_in +
-                                                static_cast<uint32_t>(w_in);
-                                }
+                                const int32_t w_clamped = clampIndex(w_in, 0, static_cast<int32_t>(W_in) - 1);
+                                const uint32_t page_idx =
+                                    batch_page_base + static_cast<uint32_t>(t_clamped) * H_in_W_in +
+                                    static_cast<uint32_t>(h_clamped) * W_in + static_cast<uint32_t>(w_clamped);
                                 read_input_row_maybe_staged<EnableDramReadStaging, dram_read_alignment>(
                                     noc,
-                                    halo_reader,
-                                    halo_page,
+                                    in_reader,
+                                    page_idx,
                                     c_in_offset_bytes,
                                     in_row_size_bytes,
                                     shard_cb,
@@ -475,13 +496,9 @@ void gather_rows_to_shard(
                                     C_in_block_bytes,
                                     dram_read_scratch_cb);
                             }
-                        } else if constexpr (is_padding_zeros) {
-                            zeroPad<C_in_block_bytes>(noc, shard_cb, shard_offset);
                         } else {
-                            const int32_t w_clamped = clampIndex(w_in, 0, static_cast<int32_t>(W_in) - 1);
-                            const uint32_t page_idx = batch_page_base + static_cast<uint32_t>(t_clamped) * H_in_W_in +
-                                                      static_cast<uint32_t>(h_clamped) * W_in +
-                                                      static_cast<uint32_t>(w_clamped);
+                            const uint32_t page_idx = batch_page_base + static_cast<uint32_t>(t_in) * H_in_W_in +
+                                                      static_cast<uint32_t>(h_in) * W_in + static_cast<uint32_t>(w_in);
                             read_input_row_maybe_staged<EnableDramReadStaging, dram_read_alignment>(
                                 noc,
                                 in_reader,
@@ -493,20 +510,6 @@ void gather_rows_to_shard(
                                 C_in_block_bytes,
                                 dram_read_scratch_cb);
                         }
-                    } else {
-                        const uint32_t page_idx = batch_page_base + static_cast<uint32_t>(t_in) * H_in_W_in +
-                                                  static_cast<uint32_t>(h_in) * W_in + static_cast<uint32_t>(w_in);
-                        read_input_row_maybe_staged<EnableDramReadStaging, dram_read_alignment>(
-                            noc,
-                            in_reader,
-                            page_idx,
-                            c_in_offset_bytes,
-                            in_row_size_bytes,
-                            shard_cb,
-                            shard_offset,
-                            C_in_block_bytes,
-                            dram_read_scratch_cb);
-                    }
                     }  // end logical_masked else
                 } else {
                     // Fast path: no conv-padding checks
@@ -807,93 +810,69 @@ void gather_rows_to_shard_selected(
     }
 }
 
-void kernel_main() {
-    constexpr uint32_t cb_vol2col = get_compile_time_arg_val(0);
-    constexpr uint32_t N = get_compile_time_arg_val(1);
-    constexpr uint32_t T_in = get_compile_time_arg_val(2);
-    constexpr uint32_t H_in = get_compile_time_arg_val(3);
-    constexpr uint32_t W_in = get_compile_time_arg_val(4);
-    constexpr uint32_t C_in = get_compile_time_arg_val(5);
-    constexpr uint32_t T_out = get_compile_time_arg_val(6);
-    constexpr uint32_t H_out = get_compile_time_arg_val(7);
-    constexpr uint32_t W_out = get_compile_time_arg_val(8);
-    constexpr uint32_t C_out = get_compile_time_arg_val(9);
-    constexpr uint32_t padding_t = get_compile_time_arg_val(10);
-    constexpr uint32_t padding_h = get_compile_time_arg_val(11);
-    constexpr uint32_t padding_w = get_compile_time_arg_val(12);
-    constexpr uint32_t kT = get_compile_time_arg_val(13);
-    constexpr uint32_t kH = get_compile_time_arg_val(14);
-    constexpr uint32_t kW = get_compile_time_arg_val(15);
-    constexpr uint32_t T_block_size = get_compile_time_arg_val(16);
-    constexpr uint32_t H_block_size = get_compile_time_arg_val(17);
-    constexpr uint32_t W_block_size = get_compile_time_arg_val(18);
-    constexpr uint32_t C_out_num_blocks = get_compile_time_arg_val(19);
-    constexpr uint32_t in_row_size_bytes = get_compile_time_arg_val(20);
-    constexpr uint32_t C_in_block_bytes = get_compile_time_arg_val(21);
-    constexpr uint32_t out_row_size_bytes = get_compile_time_arg_val(22);
-    constexpr bool is_padding_zeros = get_compile_time_arg_val(23) == 1;
-    constexpr uint32_t semaphore_id = get_compile_time_arg_val(24);
-    constexpr uint32_t stride_t = get_compile_time_arg_val(25);
-    constexpr uint32_t stride_h = get_compile_time_arg_val(26);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(27);
-    constexpr uint32_t dilation_t = get_compile_time_arg_val(28);
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(29);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(30);
-    // L1 prefetch buffer parameters
-    constexpr uint32_t cb_input_shard = get_compile_time_arg_val(31);
-    constexpr uint32_t T_shard_max = get_compile_time_arg_val(32);
-    constexpr uint32_t H_shard_max = get_compile_time_arg_val(33);
-    constexpr uint32_t W_shard_max = get_compile_time_arg_val(34);
-
-    // Padding bytes to append after each patch row to reach tile-aligned CB page width
-    constexpr uint32_t patch_pad_bytes = get_compile_time_arg_val(35);
-    // Trid-ring depth for gather_rows_to_shard.  See plan in conv3d_gather_trid_pipeline_plan.md.
-    constexpr uint32_t gather_trids = get_compile_time_arg_val(36);
-    constexpr bool enable_coalesced_shard_reads = get_compile_time_arg_val(37) == 1;
-    constexpr uint32_t coalesced_scratch_rows = get_compile_time_arg_val(38);
-    constexpr uint32_t cb_dram_read_scratch = get_compile_time_arg_val(39);
-    constexpr bool enable_dram_read_staging = get_compile_time_arg_val(40) == 1;
-    constexpr uint32_t dram_read_alignment = get_compile_time_arg_val(41);
-    constexpr bool halo_mode = get_compile_time_arg_val(42) == 1;
-    // Logical-pad masking
-    constexpr bool mask_mode = get_compile_time_arg_val(43) == 1;
-    constexpr uint32_t logical_h_mask = get_compile_time_arg_val(44);
-    constexpr uint32_t logical_w_mask = get_compile_time_arg_val(45);
-    constexpr uint32_t cb_pad_offset = get_compile_time_arg_val(46);
+template <
+    uint32_t N,
+    uint32_t T_in,
+    uint32_t H_in,
+    uint32_t W_in,
+    uint32_t padding_t,
+    uint32_t padding_h,
+    uint32_t padding_w,
+    uint32_t kT,
+    uint32_t kH,
+    uint32_t kW,
+    uint32_t T_block_size,
+    uint32_t H_block_size,
+    uint32_t W_block_size,
+    uint32_t in_row_size_bytes,
+    uint32_t C_in_block_bytes,
+    uint32_t is_padding_zeros_value,
+    uint32_t stride_t,
+    uint32_t stride_h,
+    uint32_t stride_w,
+    uint32_t dilation_t,
+    uint32_t dilation_h,
+    uint32_t dilation_w,
+    uint32_t T_shard_max,
+    uint32_t H_shard_max,
+    uint32_t W_shard_max,
+    uint32_t patch_pad_bytes,
+    uint32_t gather_trids,
+    uint32_t enable_coalesced_shard_reads_value,
+    uint32_t coalesced_scratch_rows,
+    uint32_t enable_dram_read_staging_value,
+    uint32_t dram_read_alignment,
+    uint32_t halo_mode_value,
+    uint32_t mask_mode_value,
+    uint32_t logical_h_mask,
+    uint32_t logical_w_mask>
+TT_KERNEL void reader_vol2col(
+    uint32_t c_in_block_start,
+    uint32_t c_in_block_end,
+    uint32_t c_out_block_start,
+    uint32_t c_out_block_end,
+    uint32_t t_out_start,
+    uint32_t t_out_end,
+    uint32_t h_out_start,
+    uint32_t h_out_end,
+    uint32_t w_out_start,
+    uint32_t w_out_end) {
+    constexpr uint32_t cb_vol2col = dfb::vol2col_rm;
+    constexpr bool is_padding_zeros = is_padding_zeros_value == 1;
+    constexpr bool enable_coalesced_shard_reads = enable_coalesced_shard_reads_value == 1;
+    constexpr bool enable_dram_read_staging = enable_dram_read_staging_value == 1;
+    constexpr bool halo_mode = halo_mode_value == 1;
+    constexpr bool mask_mode = mask_mode_value == 1;
     constexpr uint32_t padded_page_bytes = kT * kH * kW * C_in_block_bytes + patch_pad_bytes;
-
-    // Load input/output addresses and range parameters
-    uint32_t argidx = 0;
-    const uint32_t in_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t c_in_block_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t c_in_block_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t c_out_block_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t c_out_block_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t t_out_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t t_out_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t h_out_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t h_out_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t w_out_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
-    // Trailing halo buffer address (halo mode only), then the per-device offset addr (mask mode only).
-    const uint32_t halo_addr = halo_mode ? get_arg_val<uint32_t>(argidx++) : 0u;
-    const uint32_t pad_offset_addr = mask_mode ? get_arg_val<uint32_t>(argidx++) : 0u;
-
-    // Tensor accessor for input tensor (CT args 42..46 are scalar flags; input accessor starts at 47).
-    constexpr auto in_args = TensorAccessorArgs<47>();
-    const auto in_reader = TensorAccessor(in_args, in_addr);
-    // Halo buffer accessor follows the input accessor.
-    constexpr auto halo_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
-    const auto halo_reader = TensorAccessor(halo_args, halo_addr);
+    const auto in_reader = TensorAccessor(tensor::input);
+    const auto halo_reader = TensorAccessor(tensor::halo);
     // Reset mask globals every invocation
     g_mask_h_start = 0;
     g_mask_w_start = 0;
-    // Per-device [h_start, w_start] offset accessor follows the halo accessor
     if constexpr (mask_mode) {
-        constexpr auto offset_args = TensorAccessorArgs<halo_args.next_compile_time_args_offset()>();
-        const auto offset_reader = TensorAccessor(offset_args, pad_offset_addr);
+        const auto offset_reader = TensorAccessor(tensor::pad_offset);
         Noc off_noc;
-        experimental::CB pad_off_cb(cb_pad_offset);
+        experimental::CB pad_off_cb(dfb::pad_offset);
         pad_off_cb.reserve_back(1);
         const uint32_t off_l1 = pad_off_cb.get_write_ptr();
         off_noc.async_read(
@@ -924,8 +903,8 @@ void kernel_main() {
     constexpr uint32_t H_shard_max_W_shard_max = H_shard_max * W_shard_max;
 
     // Reserve shard buffer once (used as scratch space, not streaming CB)
-    experimental::CB shard_cb(cb_input_shard);
-    experimental::CB dram_read_scratch_cb(cb_dram_read_scratch);
+    experimental::CB shard_cb(dfb::input_shard);
+    experimental::CB dram_read_scratch_cb(dfb::dram_read_scratch);
     if constexpr (enable_dram_read_staging) {
         dram_read_scratch_cb.reserve_back(1);
     }
