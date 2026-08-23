@@ -81,6 +81,9 @@ execution record for this pass.
   READMEs define how to interpret dated status claims.
 - [`design/`](design/) — still-valid contracts, hazards, feasibility analysis,
   and bake-off evidence; consult when changing the API or investigating a gap.
+- [`plan.md`](plan.md) and
+  [`tracker.md`](tracker.md) — the active family/group, exact multi-rectangle,
+  GroupNorm, chain-forwarding, and Conv3D extension plan and execution record.
 - `ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp` and
   `ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp` — the materialized API v14
   contract; superseded intent and proposal documents are archived.

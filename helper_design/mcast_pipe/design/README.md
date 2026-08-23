@@ -19,3 +19,10 @@ Read them when changing the helper API, investigating a capability gap, or
 checking whether a migration preserves the original synchronization contract.
 For current status and next work, start at `../README.md` and
 `../migration/ledger.json`.
+
+## Active extension plan
+
+- [`../plan.md`](../plan.md) defines the agreed
+  `McastFamily`/`McastGroup`, exact multi-rectangle, GroupNorm,
+  chain-forwarding, and Conv3D implementation sequence. Its execution state is
+  tracked in [`../tracker.md`](../tracker.md).
