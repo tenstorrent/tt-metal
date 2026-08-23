@@ -248,6 +248,6 @@ TT_KERNEL void activation_reader_width_sharded(uint32_t this_core_x, uint32_t th
             }
         }
     }
-    noc.async_read_barrier();
-    noc.async_write_barrier();
+    // Drain reads, writes, and non-posted semaphore atomics before the Metalium 2.0 kernel epilogue returns.
+    noc.async_full_barrier();
 }

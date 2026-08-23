@@ -220,5 +220,6 @@ TT_KERNEL void kernel_main(
         }  // out_num_blocks_h
     }  // out_num_blocks_w
 
-    noc.async_write_barrier();
+    // Drain non-posted semaphore atomics before the Metalium 2.0 kernel epilogue returns.
+    noc.async_full_barrier();
 }
