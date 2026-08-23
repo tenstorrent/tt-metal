@@ -71,8 +71,31 @@ public:
      */
     explicit BroadcastRing(size_t capacity) :
         capacity_(capacity ? std::bit_ceil(capacity) : 1),
-        storage_(allocate_slots(capacity_)),
+        storage_(allocate_slots(capacity_, /*construct_slots=*/true)),
         writer_(&shared_state_, view()) {}
+
+    /**
+     * @brief Constructs the ring but leaves its slots UNTOUCHED, for a caller that will call
+     *        construct_slots() from the thread that is going to write them.
+     *
+     * First touch decides a page's NUMA node for the life of the mapping. Constructing the slots here binds
+     * every page to whichever thread happened to build the ring -- for a multi-GB ring written by a
+     * different thread at tens of GB/s, that is an interconnect crossing on every store. Deferring lets the
+     * writing thread fault its own pages, so the memory follows the thread rather than the constructor, with
+     * no affinity policy required.
+     */
+    struct DeferSlotInit {};
+    BroadcastRing(size_t capacity, DeferSlotInit) :
+        capacity_(capacity ? std::bit_ceil(capacity) : 1),
+        storage_(allocate_slots(capacity_, /*construct_slots=*/false)),
+        writer_(&shared_state_, view()) {}
+
+    /** @brief Constructs the deferred slots. Call ONCE, from the thread that will write the ring. */
+    void construct_slots() noexcept {
+        for (size_t i = 0; i < capacity_; i++) {
+            new (storage_.slots + i) Slot();
+        }
+    }
 
     ~BroadcastRing() {
         TT_FATAL(
@@ -481,7 +504,7 @@ private:
     // Large slot arrays are walked far beyond TLB reach, so back them with 2 MiB pages. THP is
     // madvise-opt-in on typical deployments, hence the explicit mmap + MADV_HUGEPAGE (over-mapped by one
     // huge page to guarantee an aligned start, which the huge-page fault path requires).
-    static SlotStorage allocate_slots(size_t n) {
+    static SlotStorage allocate_slots(size_t n, bool construct_slots) {
         SlotStorage storage;
 #if defined(__linux__)
         static constexpr size_t kHugePageSize = size_t{2} << 20;
@@ -497,8 +520,10 @@ private:
                     (reinterpret_cast<uintptr_t>(base) + kHugePageSize - 1) & ~(kHugePageSize - 1);
                 ::madvise(reinterpret_cast<void*>(aligned), bytes, MADV_HUGEPAGE);
                 storage.slots = reinterpret_cast<Slot*>(aligned);
-                for (size_t i = 0; i < n; i++) {
-                    new (storage.slots + i) Slot();
+                if (construct_slots) {
+                    for (size_t i = 0; i < n; i++) {
+                        new (storage.slots + i) Slot();
+                    }
                 }
                 return storage;
             }

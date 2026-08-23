@@ -7,9 +7,6 @@
 #include <algorithm>
 #include <bit>
 #include <chrono>
-#include <fstream>
-#include <unordered_set>
-#include <sched.h>
 #include <sys/prctl.h>
 #include <x86intrin.h>
 
@@ -127,7 +124,11 @@ PerfDebugReceiver::PerfDebugReceiver(ReceiverConfig config, std::vector<Receiver
     watchdog_ = std::chrono::seconds(env_u32("TT_METAL_PERF_DEBUG_WRITER_TIMEOUT_S", 120));
     // 2 GiB per stream ring: big enough that a whole capture's records fit, so the consumer side only
     // drops on truly pathological lag instead of on every heavy run.
-    const uint64_t ring_recs = env_u64("TT_METAL_PERF_DEBUG_RING_RECS", 128ull << 20);
+    // 16 Mi records x 24 B = ~403 MB per stream, so sixteen streams (eight devices, two sockets each) is
+    // ~6.4 GB; 32 Mi would be ~12.9 GB. At the measured ~78 Mzones/s per stream that is ~215 ms of consumer
+    // lag tolerance against a ~240 ms burst, and a reader that falls further behind is overwritten and
+    // counted, never blocking the decode thread.
+    const uint64_t ring_recs = env_u64("TT_METAL_PERF_DEBUG_RING_RECS", 16ull << 20);
     for (uint32_t d = 0; d < devices_.size(); d++) {
         auto& dev = devices_[d];
         const uint32_t nl = dev.num_cores * profiler::kSpscNRiscDecode;
@@ -143,8 +144,9 @@ PerfDebugReceiver::PerfDebugReceiver(ReceiverConfig config, std::vector<Receiver
             s->sock = dev.sockets[sk].get();
             s->dev = d;
             s->sock_idx = sk;
-            s->numa_node = dev.numa_node;
-            s->ring = std::make_unique<BroadcastRing<PerfDebugRawRec>>(ring_recs);
+            // Slots are constructed by the DECODE THREAD, not here -- see construct_slots().
+            s->ring = std::make_unique<BroadcastRing<PerfDebugRawRec>>(
+                ring_recs, BroadcastRing<PerfDebugRawRec>::DeferSlotInit{});
             s->decode.reset(dev.num_cores);
             s->decode.core_of_xy = dev.core_of_xy;
             s->last_zone_ts.assign(nl, 0);
@@ -160,13 +162,12 @@ void PerfDebugReceiver::start() {
     started_ = true;
     const uint32_t nthreads =
         std::clamp<uint32_t>(env_u32("TT_METAL_PERF_DEBUG_DECODE_THREADS", streams_.size()), 1, streams_.size());
-    plan_decode_affinity(nthreads);
     for (uint32_t t = 0; t < nthreads; t++) {
         std::vector<Stream*> owned;
         for (uint32_t i = t; i < streams_.size(); i += nthreads) {
             owned.push_back(streams_[i].get());
         }
-        decode_threads_.emplace_back(&PerfDebugReceiver::decode_thread, this, std::move(owned), t);
+        decode_threads_.emplace_back(&PerfDebugReceiver::decode_thread, this, std::move(owned));
     }
 }
 
@@ -515,85 +516,16 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
     return true;
 }
 
-// Keep each decode thread on the NUMA node holding the FIFO it reads -- every CPU of that node, siblings
-// included, so the scheduler still balances freely inside it. The only thing excluded is the other node.
-//
-// The spread this addresses is entirely inside frame decoding (measured: one stream's "frame 172.0 ms"
-// against a peer's 111 ms for work within 4% of the same size), so it is memory locality, not ack cost and
-// not consumer back-pressure -- the BroadcastRing producer cannot block, slow readers are overwritten and
-// counted. It matters because the SLOWEST stream gates the pipeline: its mover blocks on credit, its ring
-// fills, its producers stall.
-void PerfDebugReceiver::plan_decode_affinity(uint32_t nthreads) {
-    aff_node_.assign(nthreads, -1);
-    node_cpus_.clear();
-    if (!env_flag("TT_METAL_PERF_DEBUG_DECODE_AFFINITY", true)) {
-        return;
-    }
-    for (int node = 0; node < 64; node++) {
-        std::ifstream f("/sys/devices/system/node/node" + std::to_string(node) + "/cpulist");
-        std::string list;
-        if (!f.good() || !std::getline(f, list) || list.empty()) {
-            continue;
-        }
-        auto& v = node_cpus_[node];
-        for (size_t p0 = 0; p0 <= list.size();) {
-            const size_t comma = list.find(',', p0);
-            const std::string tok = list.substr(p0, comma == std::string::npos ? std::string::npos : comma - p0);
-            if (!tok.empty()) {
-                const size_t dash = tok.find('-');
-                const int lo = std::stoi(tok.substr(0, dash));
-                const int hi = (dash == std::string::npos) ? lo : std::stoi(tok.substr(dash + 1));
-                for (int c = lo; c <= hi; c++) {
-                    v.push_back(c);
-                }
-            }
-            if (comma == std::string::npos) {
-                break;
-            }
-            p0 = comma + 1;
-        }
-    }
-    // ONLY WHEN THE STREAMS SPAN MORE THAN ONE NODE. Binding expresses a locality CHOICE -- "this thread
-    // belongs near that device's buffer" -- and with every stream on one node there is no choice to
-    // express: the mask would restrict the scheduler without telling it anything it could not have done
-    // itself. Measured, single device at delay 200 with four runs each way: bound decode 100-121 ms against
-    // 89-96 ms unbound, a real 15-25% loss for no locality gain. Across eight devices on two nodes the same
-    // binding is what collapses the decode spread from ~58 ms to ~20 ms and credit-wait from 2.6% to 0.2%,
-    // taking delay-200 from 19,911 stalls to zero.
-    std::unordered_set<int> nodes_in_play;
-    for (uint32_t t = 0; t < nthreads && t < streams_.size(); t++) {
-        if (streams_[t]->numa_node >= 0) {
-            nodes_in_play.insert(streams_[t]->numa_node);
-        }
-    }
-    if (nodes_in_play.size() < 2) {
-        return;
-    }
-    uint32_t placed = 0;
-    for (uint32_t t = 0; t < nthreads && t < streams_.size(); t++) {
-        const int node = streams_[t]->numa_node;
-        if (node >= 0 && node_cpus_.count(node) != 0 && node_cpus_.at(node).size() > 1) {
-            aff_node_[t] = node;
-            placed++;
-        }
-    }
-    if (placed != 0) {
-        log_info(tt::LogMetal, "[perf-debug receiver] {} of {} decode threads bound to their device's NUMA node",
-                 placed, nthreads);
-    }
-}
-
-void PerfDebugReceiver::decode_thread(std::vector<Stream*> streams, uint32_t thread_index) {
-    if (thread_index < aff_node_.size() && aff_node_[thread_index] >= 0) {
-        cpu_set_t set;
-        CPU_ZERO(&set);
-        for (int cpu : node_cpus_.at(aff_node_[thread_index])) {
-            CPU_SET(static_cast<uint32_t>(cpu), &set);
-        }
-        if (sched_setaffinity(0, sizeof(set), &set) != 0) {
-            log_warning(tt::LogMetal, "[perf-debug receiver] decode thread {} could not bind to node {}",
-                        thread_index, aff_node_[thread_index]);
-        }
+void PerfDebugReceiver::decode_thread(std::vector<Stream*> streams) {
+    // FIRST-TOUCH OUR OWN RING. First touch fixes a page's NUMA node for the life of the mapping, and this
+    // thread NT-stores into the ring at tens of GB/s while reading the FIFO at tens more. Constructed on
+    // the main thread instead, every stream's ring landed on whichever node built the receiver, so the
+    // decode threads the scheduler placed on the other node crossed the interconnect on every store --
+    // measured as one stream taking 172 ms of frame time against a peer's 111 ms for the same work, and
+    // that slowest stream is what gates the pipeline: its mover blocks on credit, its ring fills, its
+    // producers stall. Faulting here makes the memory follow the thread, with no affinity policy at all.
+    for (Stream* st : streams) {
+        st->ring->construct_slots();
     }
     std::string name = "pd-dec:";
     for (Stream* s : streams) {
