@@ -21,6 +21,23 @@ from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
 
+def lm_head_dtype_and_tag():
+    """QWEN36_LM_HEAD_BF4=1 stores the LM head as bfloat4_b under a distinct .bfp4 cache name."""
+    if os.environ.get("QWEN36_LM_HEAD_BF4", "0") == "1":
+        return ttnn.bfloat4_b, ".bfp4"
+    return ttnn.bfloat8_b, ""
+
+
+def kv_cache_dtype(requested):
+    """QWEN_SDPA_BF8=1 forces the paged KV cache to bfloat8_b (halves SDPA's KV read bandwidth).
+
+    Runtime allocation only — no weight-cache key involved. Must stay in sync with
+    Qwen36AttentionTP._sdpa_bf8 (prefill fill/Q casts read the same env var)."""
+    if os.environ.get("QWEN_SDPA_BF8", "0") == "1":
+        return ttnn.bfloat8_b
+    return requested
+
+
 class Qwen36Model:
     """Qwen3.5-9B text LM on Blackhole P150. HF_MODEL env var selects checkpoint."""
 
@@ -127,9 +144,7 @@ class Qwen36Model:
                 f"LM-head vocab {lm_head_weight.shape[-1]} not divisible by num_devices "
                 f"{self.num_devices}; falling back to replicated LM head."
             )
-        # QWEN36_LM_HEAD_BF4=1: bfloat4_b under a distinct .bfp4 cache name (does not touch BF8).
-        lm_head_dtype = ttnn.bfloat4_b if os.environ.get("QWEN36_LM_HEAD_BF4", "0") == "1" else ttnn.bfloat8_b
-        lm_tag = ".bfp4" if lm_head_dtype == ttnn.bfloat4_b else ""
+        lm_head_dtype, lm_tag = lm_head_dtype_and_tag()
         if self._lmhead_vocab_sharded:
             # Separate cache (.vshard): as_tensor ignores mesh_mapper on reload.
             lm_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
@@ -990,7 +1005,10 @@ class Qwen36Model:
         QWEN36_ROPE_PERMUTE=1: expanded to full-dim permuted tables [1, 1, length, head_dim]
         (all TP prefill variants and their trace buffers derive shapes from here, so the
         captured programs stay consistent with the permuted weights)."""
-        from models.demos.blackhole.qwen36.tt.attention.rope_tp import permute_rope_tables_full_dim, rope_permute_enabled
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import (
+            permute_rope_tables_full_dim,
+            rope_permute_enabled,
+        )
 
         rd = self.args.rope_head_dim
         cos_t, sin_t = self.rope.prefill_cos_sin_torch(start, length)  # [length, rd] bf16
@@ -2701,9 +2719,7 @@ class Qwen36Model:
     def allocate_kv_caches(self, kv_cache_shape, dtype, batch_size=1):
         """Allocate caches for all 32 layers. Returns only the attention KV caches (for vLLM)."""
         assert self._deltanet_external_states is None, "allocate_kv_caches already called; deallocate first"
-        # QWEN_SDPA_BF8: bf8 paged KV for SDPA; halves KV memory (gated — validate PCC at long ctx).
-        if os.environ.get("QWEN_SDPA_BF8", "0") == "1":
-            dtype = ttnn.bfloat8_b
+        dtype = kv_cache_dtype(dtype)
         if self.num_devices > 1:
             return self._allocate_kv_caches_tp(kv_cache_shape, dtype, batch_size)
 
