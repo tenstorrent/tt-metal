@@ -105,6 +105,7 @@ def _prompt_from_file(path, tokenizer, cap, index=None):
     else:
         prompts = [raw]
     idx = int(os.environ.get("QWEN36_PROMPT_INDEX", "0")) if index is None else int(index)
+    idx %= len(prompts)  # round-robin callers pass the raw user index
     prompt = prompts[idx]
     if os.environ.get("QWEN36_PROMPT_RAW", "0") == "1":
         ids = tokenizer(prompt, return_tensors="pt")["input_ids"]
@@ -1242,11 +1243,11 @@ def _run_spec_generation_batched(model, tokenizer, token_ids, max_generated_toke
     prompts = []
     for u in range(batch):
         if prompt_file:
+            # _prompt_from_file wraps the index, so u round-robins the file
+            # (the 53908 leg silently fell back to prompt 0 for users past the
+            # file's end, collapsing half the batch onto one prompt).
             idx = int(pinned) if pinned is not None else u
-            try:
-                prompts.append(_prompt_from_file(prompt_file, tokenizer, token_ids.shape[1], index=idx))
-            except IndexError:
-                prompts.append(_prompt_from_file(prompt_file, tokenizer, token_ids.shape[1], index=0))
+            prompts.append(_prompt_from_file(prompt_file, tokenizer, token_ids.shape[1], index=idx))
         else:
             prompts.append(token_ids.clone())
     logger.info(f"[spec c{batch}] prompt mode: {'UNIFORM (row-equality armed)' if uniform else 'round-robin desync'}")
@@ -1304,7 +1305,9 @@ def _run_spec_generation_batched(model, tokenizer, token_ids, max_generated_toke
     per_user_ms = 1000.0 * decode_s * batch / max(1, total_tokens)
     logger.info(
         f"[spec c{batch} K={draft_len}] {total_tokens} tokens over {batch} users in {stats['iterations']} "
-        f"iterations ({stats['tokens_per_user_iteration']:.2f} tok/user-iter, accept {stats['accept_rate']:.2f}); "
+        f"iterations ({stats['tokens_per_user_iteration']:.2f} tok/user-iter, "
+        f"{stats['tokens_per_active_iteration']:.2f} tok/active-iter, accept {stats['accept_rate']:.2f}, "
+        f"per-position {stats['per_position_accept']}); "
         f"ttft={ttft:.1f}s, {per_user_ms:.1f} ms/token/user "
         f"({1000.0 / per_user_ms:.1f} t/s/u), timing={stats['timing_s']}"
     )

@@ -923,12 +923,28 @@ class Qwen36BatchedSpeculativeDecoder:
         iters = max((len(s.accepts) for s in self.slots), default=0)
         total = sum(sum(s.accepts) for s in self.slots)
         proposed = sum(sum(s.k_used) for s in self.slots)
+        # Active-normalized throughput: a user that stops early idles its slot
+        # for the remaining iterations — the plain per-user metric charges those
+        # dead rows, understating what a refilled slot would sustain.
+        active_iters = sum(len(s.accepts) for s in self.slots)
+        # Conditional accept per draft position: p_j = P(draft j lands | drafts
+        # 1..j-1 landed). Flat p's mean K is the lever's limit; a die-off at
+        # some j says the drafter chain degrades there.
+        ms = [m for s in self.slots for m in s.accepts]
+        per_pos = []
+        for j in range(1, self.draft_len + 1):
+            prev = sum(1 for m in ms if m >= j - 1)
+            per_pos.append(round(sum(1 for m in ms if m >= j) / prev, 3) if prev else 0.0)
         return {
             "users": self.B,
             "iterations": iters,
             "accepted_drafts": total,
             "accept_rate": (total / proposed) if proposed else 0.0,
             "tokens_per_user_iteration": (sum(len(s.out) for s in self.slots) / (self.B * iters) if iters else 0.0),
+            "tokens_per_active_iteration": (
+                sum(len(s.accepts) + sum(s.accepts) for s in self.slots) / active_iters if active_iters else 0.0
+            ),
+            "per_position_accept": per_pos,
             "per_user_accepts": [list(s.accepts) for s in self.slots],
             "timing_s": dict(self._timing),
         }
