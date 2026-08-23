@@ -273,7 +273,7 @@ Resolution: the width-sharded Conv2D activation ABI now emits its 21-word
 fixed operation prefix, the opaque activation-multicast block, and then the
 DRAM config-tensor address, page size, and `TensorAccessorArgs` only when
 `CONFIG_TENSOR_IN_DRAM` is compiled. The kernel derives all three tail indices
-from `ActMcastArgs::next_compile_time_args_offset()`; the non-DRAM factory no
+from `act_mcast_args.next_compile_time_args_offset()`; the non-DRAM factory no
 longer emits four filler words. The ledger-wide audit found no other filler
 introduced solely to stabilize a following migrated helper: the similar
 sharded-Conv and SDPA descriptors are operation-owned fixed ABIs rather than
@@ -283,6 +283,56 @@ audits, the exact non-DRAM width-sharded node under Watcher (PCC 0.999956503),
 and the exact DRAM-config node (PCC 0.998234911) passed; the DRAM node retained
 its known unrelated Watcher/C++17 `ASSERT` compile incompatibility and passed
 unchanged without Watcher.
+
+### MCAST-007 — Chain offsets through the existing `McastArgs` object
+
+- Date: 2026-08-23
+- Status: Resolved (2026-08-23)
+- Scope: Every kernel migrated to `mcast_pipe`
+
+Prefer object-qualified offset chaining when a kernel already constructs a
+named constexpr `McastArgs` object. For example, write:
+
+```cpp
+constexpr McastArgs<CT_BASE, RT_BASE> mcast_args;
+uint32_t argidx = mcast_args.next_runtime_args_offset();
+```
+
+rather than introducing a type alias solely to make a type-qualified static
+call:
+
+```cpp
+using WeightMcastArgs = McastArgs<CT_BASE, RT_BASE>;
+constexpr WeightMcastArgs weights_mcast_args;
+uint32_t argidx = WeightMcastArgs::next_runtime_args_offset();
+```
+
+Keep `next_compile_time_args_offset()` and `next_runtime_args_offset()` static
+and constexpr: the boundaries belong to the compile-time wire type and must not
+become runtime object state. C++ permits a static member to be called through
+the existing constexpr object, which gives the clearer kernel spelling without
+changing the helper API or undoing MCAST-005's single-source runtime-base rule.
+
+Audit all migrated kernels and replace type-qualified offset calls with the
+corresponding named object call. Declare chained helper objects in order so the
+next helper type can use the preceding object's offsets. Remove a `using` alias
+unless it independently names a nested `SenderPipe` or `ReceiverPipe` type; do
+not create otherwise-unused helper objects merely to remove an alias. This is a
+kernel call-site cleanup only; it requires no helper API version bump or host
+ABI change.
+
+Resolution: audited the complete migrated-kernel inventory and converted every
+type-qualified offset call, including the Matmul, Conv3D, width-sharded Conv2D,
+GroupNorm, and Move cases. All aliases without a nested pipe-type use were
+removed; block-sharded Matmul, width-sharded Conv2D, Group Attention, and
+Argmax retain only the aliases needed for `SenderPipe`/`ReceiverPipe`. A
+fleet-wide source guard enforces both rules. The helper methods remain static
+constexpr, API v14 and every wire ABI are unchanged. All 33 source audits
+passed, as did focused Conv3D, Matmul, Conv2D, tiled/row-major Move,
+sharded/interleaved legacy and Welford GroupNorm, and pre/post-allgather
+LayerNorm gates. The interleaved GroupNorm parameters passed without `--dev`
+after independently encountering the known Watcher/C++17 `ASSERT` compile
+incompatibility while building `eltwise_typecast`.
 
 ## Matmul
 
@@ -538,3 +588,139 @@ deferred and was not authorized for migration by this feedback. A source guard
 enforces all five dispositions. All 32 audits passed; the exact block-sharded
 Conv2D route passed under Watcher at PCC 0.999944614, and the focused Conv3D
 route passed at PCC 0.999991419 after its known Watcher skip (#37184).
+
+## Group Attention Matmul
+
+### GROUP-ATTN-MATMUL-001 — Use multicast role queries for rotating send and receive branches
+
+- Date: 2026-08-23
+- Status: Open
+- Kernel:
+  `ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/reader_mcast_transformer_group_attn_matmul.cpp`
+
+Use `in1_mcast_args.should_send(tile_row_id)` to select the sender for each
+rotating multicast round. Do not identify the sender by comparing the local NoC
+coordinates with `sender_x(tile_row_id)` and `sender_y(tile_row_id)`. That
+coordinate comparison predates `McastArgs::should_send()` and now duplicates
+the role and sender-phase information owned by the helper.
+
+Likewise, remove the legacy-named `in1_sender_in_receiver_grid` local. The
+branch is testing whether this core has the receiver role, not whether a sender
+is geometrically inside the receiver grid, so express it directly with
+`in1_mcast_args.can_receive()` (the kernel-side receiver-role query). The
+resulting dispatch should have the form:
+
+```cpp
+if (in1_mcast_args.should_send(tile_row_id)) {
+    // sender work
+} else if (in1_mcast_args.can_receive()) {
+    // receiver work
+}
+```
+
+Keep the existing role-conditional construction of `SenderPipe` and
+`ReceiverPipe`; this feedback only removes duplicated role selection and the
+misleading legacy alias.
+
+## SDPA Decode
+
+### SDPA-DECODE-001 — Represent replicated-Q K sharing as 1D multicast families
+
+- Date: 2026-08-23
+- Status: Open
+- Factory:
+  `ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_program_factory.cpp`
+- Affected path: Column-major, locally available replicated-Q MLA K multicast
+
+Do not construct one fixed-sender `Mcast2D` host object for every individual
+vertical K-sharing group. The groups form regular column families: for
+`P = q_heads_parallel_factor`, each `P`-row band has the first core in every
+column send to the other `P - 1` cores in that column. Represent each band with
+one fixed-sender `Mcast1D` using `Mcast1DShape::PerColumn` and sender index zero.
+
+For a configured `Gx × Gy` grid, the current nested loops construct
+
+```text
+N(Mcast2D) = Gx × (Gy / P)
+```
+
+objects, where this path requires `P > 1` and `Gy % P == 0`. The proposed
+family representation needs only
+
+```text
+N(Mcast1D) = Gy / P
+```
+
+objects: one per `P`-row band, with each object deriving the `Gx` independent
+column multicasts. Thus the host-object reduction is exactly a factor of `Gx`.
+Only `num_active_cores / P` groups can perform work for a particular invocation;
+the current host loop nevertheless creates objects for all `Gx × Gy / P`
+grid groups and supplies zeroed reader arguments to idle cores.
+For example, an `8 × 8` grid uses 16 `Mcast2D` objects at `P = 4`, but needs
+only two `Mcast1D` families. At the current largest unharvested Blackhole
+compute-with-storage grid (`13 × 10`), the maximum is 65 `Mcast2D` objects at
+`P = 2`, reducible to five `Mcast1D` families. More generally, the operation
+has no smaller fixed object-count cap than `Gx × Gy / P`; future grids scale
+the current construction proportionally.
+
+Preserve the existing behavior: one fixed sender at the top of each band and
+column, the same `1 × (P - 1)` receiver population, no consumer-ready
+handshake, the operation-owned K semaphore, and the existing caller-managed
+source-lifetime/barrier policy. A program has one `P`, so its groups differ
+only in coordinates, not in shape or protocol; that regularity is why a
+per-band `Mcast1D` family is the natural host model.
+
+## All-gather concat heads
+
+### ALL-GATHER-CONCAT-001 — Reuse one completion semaphore across all concat receivers
+
+- Date: 2026-08-23
+- Status: Future feedback — migration not present on this branch
+- Factory:
+  `ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/all_gather_concat_program_factory.cpp`
+- Kernels:
+  `ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/llama_all_gather_concat_writer.cpp`
+  and
+  `ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/llama_concat_reader.cpp`
+
+> ⭐ **Future-only: this cannot be resolved on the current
+> `sjovic/mcast-migration` branch because that branch does not contain the
+> all-gather-concat helper migration. Keep this item for the future migration
+> or when `sjovic/mcast-migration-multi-device` is reconciled; do not mark it
+> resolved from the current legacy source.**
+
+Model the required behavior as one event: after the global all-gather
+completion count is satisfied, release the same 16 local concat receivers to
+consume the remote rows. Do not treat the two legacy semaphore IDs as two
+required protocol events merely because the current implementation publishes
+both.
+
+The legacy factory allocates `concat_semaphore_id` and
+`concat_semaphore_id2`. The writer sets both to the same Flag value and
+multicasts them back-to-back, at the same completion point, to the same three
+dense receiver rectangles. The reader selects between the two IDs only through
+the compile-time `ROWS_TO_READ` branch, while this factory passes the constant
+`first_phase = 1`. Therefore the current generated reader waits only on the
+first semaphore; the second publication has no distinct timing, payload,
+receiver population, or active consumer in this factory.
+
+When this path is migrated, first verify that no separately compiled or
+out-of-tree variant supplies `ROWS_TO_READ = 2`. If that audit holds, retain one
+operation-owned completion semaphore, pass that one ID to every concat reader,
+and construct only one no-handshake Flag `Mcast2D` per existing receiver
+rectangle:
+
+```text
+3 dense receiver rectangles × 1 completion semaphore = 3 Mcast2D objects
+```
+
+Do not construct six `Mcast2D` objects solely to preserve the legacy
+`3 rectangles × 2 semaphore IDs` implementation. This is an operation cleanup,
+not a missing helper capability: one semaphore ID denotes a separate local L1
+cell on every participating core, each receiver resets its own cell after the
+wait, and all receivers are observing the same completion event.
+
+Validate the future cleanup on the target `test_concat_fuse_6u` 8×4,
+four-device ring, `num_links=4` route. Keep the three receiver rectangles and
+their 2/6/8 fan-outs unchanged; this feedback removes only the redundant second
+semaphore family and its three duplicate signal publications.

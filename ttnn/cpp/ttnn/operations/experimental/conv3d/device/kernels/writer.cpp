@@ -93,9 +93,8 @@ void kernel_main() {
     const uint32_t mcast_num_iters = get_arg_val<uint32_t>(argidx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(argidx++);
 
-    using WeightMcastArgs = McastArgs<bias_args.next_compile_time_args_offset(), 21>;
-    constexpr WeightMcastArgs weights_mcast_args;
-    argidx = WeightMcastArgs::next_runtime_args_offset();
+    constexpr McastArgs<bias_args.next_compile_time_args_offset(), 21> weights_mcast_args;
+    argidx = weights_mcast_args.next_runtime_args_offset();
 
     Noc noc;
     experimental::CB cb_out(cb_matmul_result_rm);

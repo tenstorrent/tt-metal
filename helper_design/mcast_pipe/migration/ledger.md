@@ -37,9 +37,13 @@ compile-time tail now place those tails after the opaque helper and derive their
 starts from the corresponding next offset; all matching producers use the same
 order. The final Conv feedback pass also restored original terminal drains,
 removed migration-only source-lifetime synchronization, clarified independent
-input ownership, and audited dense versus divergent ACK populations. The host
-build, 36/36 host gtests, 80/80 helper device tests under `--dev`, 32/32 source
-audits, and sequential focused Matmul, Conv2D, and Conv3D gates passed. The
+input ownership, and audited dense versus divergent ACK populations. Every
+migrated-kernel offset chain now uses a named constexpr helper object, and
+aliases remain only where nested pipe types need them;
+static API and wire semantics are unchanged. The host build, 36/36 host gtests,
+80/80 helper device tests under `--dev`, 33/33 source
+audits, and sequential focused Matmul, Conv2D, Conv3D, Move, GroupNorm, and
+LayerNorm gates passed. The
 API-v13 tagged optional ABI and its present/absent/chained coverage remain
 intact. Detailed evidence, known Watcher exceptions, and the isolated unrelated
 BFLOAT16 block-Conv hang are recorded in

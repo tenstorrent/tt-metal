@@ -151,9 +151,8 @@ void kernel_main() {
 #else
     constexpr uint32_t operation_rt_args_end = 17;
 #endif
-    using In1McastArgs = dataflow_kernel_lib::McastArgs<operation_ct_args_end, operation_rt_args_end>;
-    constexpr In1McastArgs in1_mcast_args;
-    rt_args_idx = In1McastArgs::next_runtime_args_offset();
+    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, operation_rt_args_end> in1_mcast_args;
+    rt_args_idx = in1_mcast_args.next_runtime_args_offset();
 
 #ifdef IN1_DRAM_WIDTH_SHARDED
     const uint32_t vc = get_arg_val<uint32_t>(rt_args_idx++);

@@ -22,11 +22,13 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr uint32_t return_sem_idx = get_compile_time_arg_val(dst_args.next_compile_time_args_offset());
     constexpr uint32_t num_workers = get_compile_time_arg_val(dst_args.next_compile_time_args_offset() + 1);
-    using Release0Args = dataflow_kernel_lib::McastArgs<dst_args.next_compile_time_args_offset() + 2, 5>;
-    using Release1Args = dataflow_kernel_lib::
-        McastArgs<Release0Args::next_compile_time_args_offset(), Release0Args::next_runtime_args_offset()>;
-    using Release2Args = dataflow_kernel_lib::
-        McastArgs<Release1Args::next_compile_time_args_offset(), Release1Args::next_runtime_args_offset()>;
+    constexpr dataflow_kernel_lib::McastArgs<dst_args.next_compile_time_args_offset() + 2, 5> release0_args;
+    constexpr dataflow_kernel_lib::
+        McastArgs<release0_args.next_compile_time_args_offset(), release0_args.next_runtime_args_offset()>
+            release1_args;
+    constexpr dataflow_kernel_lib::
+        McastArgs<release1_args.next_compile_time_args_offset(), release1_args.next_runtime_args_offset()>
+            release2_args;
 
     Noc noc;
     DataflowBuffer dfb(cb_id);
@@ -53,25 +55,25 @@ void kernel_main() {
 
     if (release_region == 3) {
         return_sem.wait(num_workers);
-        if constexpr (Release0Args::active) {
-            Release0Args().sender(noc).send_signal();
+        if constexpr (release0_args.active) {
+            release0_args.sender(noc).send_signal();
         }
-        if constexpr (Release1Args::active) {
-            Release1Args().sender(noc).send_signal();
+        if constexpr (release1_args.active) {
+            release1_args.sender(noc).send_signal();
         }
-        if constexpr (Release2Args::active) {
-            Release2Args().sender(noc).send_signal();
+        if constexpr (release2_args.active) {
+            release2_args.sender(noc).send_signal();
         }
     } else {
         if (release_region == 0) {
-            return_sem.up(noc, Release0Args().sender_x(), Release0Args().sender_y(), 1);
-            Release0Args().receiver(noc).receive_signal();
+            return_sem.up(noc, release0_args.sender_x(), release0_args.sender_y(), 1);
+            release0_args.receiver(noc).receive_signal();
         } else if (release_region == 1) {
-            return_sem.up(noc, Release1Args().sender_x(), Release1Args().sender_y(), 1);
-            Release1Args().receiver(noc).receive_signal();
+            return_sem.up(noc, release1_args.sender_x(), release1_args.sender_y(), 1);
+            release1_args.receiver(noc).receive_signal();
         } else {
-            return_sem.up(noc, Release2Args().sender_x(), Release2Args().sender_y(), 1);
-            Release2Args().receiver(noc).receive_signal();
+            return_sem.up(noc, release2_args.sender_x(), release2_args.sender_y(), 1);
+            release2_args.receiver(noc).receive_signal();
         }
     }
 

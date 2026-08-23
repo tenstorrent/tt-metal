@@ -123,3 +123,29 @@ Let `Mcast1D` derive `span - 1` and `Mcast2D` derive `area - 1` when every
 non-sender landing core acknowledges. Pass an explicit ACK override only when
 the landing and acknowledging populations diverge, and record why. Do not
 silently carry raw geometric count ABIs into a future helper migration.
+
+## 17. Chain offsets through an existing helper object
+
+Keep `next_compile_time_args_offset()` and `next_runtime_args_offset()` static
+constexpr because they describe the compile-time wire type. When a kernel
+has a named constexpr `McastArgs` object, call the static member through that
+object for subsequent parsing or helper composition, such as
+`mcast_args.next_runtime_args_offset()`. For chained helpers, declare each
+object before using its offsets to instantiate the next object. Do not
+introduce or retain a type alias unless it independently names a nested
+`SenderPipe` or `ReceiverPipe` type.
+
+## 18. Construct each pipe face outside repeated work loops
+
+Never instantiate a `SenderPipe` or `ReceiverPipe` inside a batch, block,
+round, tile, or other repeated work loop. Construct each permitted pipe face
+once after the `Noc` and multicast arguments are available, then reuse that
+object for every `send()` or `receive()` call. In a mixed-role kernel, use
+role-conditional optional storage outside the loops so a core constructs only
+the faces allowed by `McastArgs::can_send()` and `can_receive()`.
+
+Pipe construction is setup, not per-transfer work. `SenderPipe` precomputes
+topology and fan-out state, while `ReceiverPipe` initializes its signal state
+and retains its absolute receive round. Reconstructing either face in a loop
+duplicates invariant setup and can reset protocol state, especially for a Flag
+receiver or a Counter receiver whose round must remain monotone.

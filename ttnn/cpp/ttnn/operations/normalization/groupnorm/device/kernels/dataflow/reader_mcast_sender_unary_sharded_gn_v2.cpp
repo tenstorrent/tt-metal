@@ -40,17 +40,16 @@ void kernel_main() {
     tt_l1_ptr uint32_t* noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(num_mcast_cores));
 
     constexpr uint32_t operation_rt_args_end = 2 * num_mcast_cores;
-    using MidMcastArgs = dataflow_kernel_lib::McastArgs<8, operation_rt_args_end>;
-    using FirstMcastArgs = dataflow_kernel_lib::
-        McastArgs<MidMcastArgs::next_compile_time_args_offset(), MidMcastArgs::next_runtime_args_offset()>;
-    using LastMcastArgs = dataflow_kernel_lib::
-        McastArgs<FirstMcastArgs::next_compile_time_args_offset(), FirstMcastArgs::next_runtime_args_offset()>;
-    constexpr MidMcastArgs mid_mcast_args;
-    constexpr FirstMcastArgs first_mcast_args;
-    constexpr LastMcastArgs last_mcast_args;
+    constexpr dataflow_kernel_lib::McastArgs<8, operation_rt_args_end> mid_mcast_args;
+    constexpr dataflow_kernel_lib::
+        McastArgs<mid_mcast_args.next_compile_time_args_offset(), mid_mcast_args.next_runtime_args_offset()>
+            first_mcast_args;
+    constexpr dataflow_kernel_lib::
+        McastArgs<first_mcast_args.next_compile_time_args_offset(), first_mcast_args.next_runtime_args_offset()>
+            last_mcast_args;
 
     Noc noc;
-    Semaphore<> reduce_receiver_sem(MidMcastArgs::consumer_ready);
+    Semaphore<> reduce_receiver_sem(mid_mcast_args.consumer_ready);
     auto mid_pipe = mid_mcast_args.sender(noc);
     auto first_pipe = first_mcast_args.sender(noc);
     auto last_pipe = last_mcast_args.sender(noc);

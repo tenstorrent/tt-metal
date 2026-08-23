@@ -11,8 +11,7 @@ void kernel_main() {
 
     constexpr uint32_t operation_ct_args_end = 17;
     constexpr uint32_t operation_rt_args_end = 7;
-    using ReduceMcastArgs = dataflow_kernel_lib::McastArgs<operation_ct_args_end, operation_rt_args_end>;
-    constexpr ReduceMcastArgs reduce_mcast_args;
+    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, operation_rt_args_end> reduce_mcast_args;
 
     constexpr uint32_t stats_tiles = rms_norm ? 1 : 2;
 

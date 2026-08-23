@@ -68,7 +68,7 @@ void kernel_main() {
     constexpr uint32_t operation_ct_args_end = 21;
     using ActMcastArgs = dataflow_kernel_lib::McastArgs<operation_ct_args_end, 3>;
     constexpr ActMcastArgs act_mcast_args;
-    constexpr uint32_t config_dram_addr_index = ActMcastArgs::next_compile_time_args_offset();
+    constexpr uint32_t config_dram_addr_index = act_mcast_args.next_compile_time_args_offset();
     constexpr uint32_t config_page_size_index = config_dram_addr_index + 1;
     constexpr uint32_t config_tensor_args_index = config_page_size_index + 1;
 

@@ -60,9 +60,8 @@ void kernel_main() {
     constexpr bool stats_is_fp32 = get_named_compile_time_arg_val("stats_is_fp32") != 0;
 
     constexpr uint32_t operation_rt_args_end = 5;
-    using MidMcastArgs =
-        dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), operation_rt_args_end>;
-    constexpr MidMcastArgs mid_mcast_args;
+    constexpr dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), operation_rt_args_end>
+        mid_mcast_args;
 
     Noc noc;
     auto reduce_pipe = mid_mcast_args.receiver(noc);

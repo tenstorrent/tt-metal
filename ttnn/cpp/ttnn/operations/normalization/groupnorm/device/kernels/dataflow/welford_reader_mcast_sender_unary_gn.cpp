@@ -65,15 +65,14 @@ void kernel_main() {
     constexpr bool stats_is_fp32 = get_named_compile_time_arg_val("stats_is_fp32") != 0;
 
     constexpr uint32_t operation_rt_args_end = 5 + 2 * num_mcast_cores;
-    using MidMcastArgs =
-        dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), operation_rt_args_end>;
-    using FirstMcastArgs = dataflow_kernel_lib::
-        McastArgs<MidMcastArgs::next_compile_time_args_offset(), MidMcastArgs::next_runtime_args_offset()>;
-    using LastMcastArgs = dataflow_kernel_lib::
-        McastArgs<FirstMcastArgs::next_compile_time_args_offset(), FirstMcastArgs::next_runtime_args_offset()>;
-    constexpr MidMcastArgs mid_mcast_args;
-    constexpr FirstMcastArgs first_mcast_args;
-    constexpr LastMcastArgs last_mcast_args;
+    constexpr dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), operation_rt_args_end>
+        mid_mcast_args;
+    constexpr dataflow_kernel_lib::
+        McastArgs<mid_mcast_args.next_compile_time_args_offset(), mid_mcast_args.next_runtime_args_offset()>
+            first_mcast_args;
+    constexpr dataflow_kernel_lib::
+        McastArgs<first_mcast_args.next_compile_time_args_offset(), first_mcast_args.next_runtime_args_offset()>
+            last_mcast_args;
 
     Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);

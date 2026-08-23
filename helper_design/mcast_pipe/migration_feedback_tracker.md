@@ -13,6 +13,9 @@ applicable, focused validation, and the migration guardrail checks pass.
   semaphore ownership.
 - Keep helper compile-time and runtime blocks opaque and contiguous.
 - Derive every post-helper offset; do not encode helper block widths.
+- Qualify every migrated-kernel next-offset call through a named constexpr
+  `McastArgs` object; reserve type aliases for nested `SenderPipe` and
+  `ReceiverPipe` names.
 - Keep `McastArgs` runtime bases template-owned; put runtime-sized operation
   tails after the helper and derive their start from its next offset.
 - Put genuinely optional compile-time operation tails after the helper and
@@ -27,6 +30,9 @@ applicable, focused validation, and the migration guardrail checks pass.
   operation roles by what they own rather than with multicast-looking booleans.
 - Derive ACK populations from dense helper geometry, and retain an explicit
   override only when landing and acknowledging populations genuinely diverge.
+- Construct each permitted sender or receiver pipe face once outside repeated
+  work loops and reuse it for every transfer; use role-conditional optional
+  storage in mixed-role kernels.
 - Audit TensorAccessor bases, optional tails, fused-operation fields, descriptor
   paths, legacy paths, and cache overrides after ABI changes.
 - Add no migration-only preprocessor branches and keep diffs focused.
@@ -51,8 +57,25 @@ applicable, focused validation, and the migration guardrail checks pass.
 | 12 | CONV-002 | Complete (premise corrected) | All migrated Conv sender-role scalars | Build; 32 source audits; exact block-sharded `--dev` gate |
 | 13 | CONV-003 | Complete | All migrated operations; one Conv2D migration-only source-lifetime policy removed | 31 source audits; exact height-sharded `--dev` gate |
 | 14 | CONV-004 | Complete | Conv2D/Conv3D dense and divergent ACK populations | 32 source audits; host helper gtests; exact block Conv2D and Conv3D gates |
+| 15 | MCAST-007 | Complete | Object-qualified offset chaining across all migrated kernels | 33 source audits; focused Conv3D, Matmul, Conv2D, Move, GroupNorm, and LayerNorm gates |
 
 ## Evidence log
+
+### MCAST-007 (complete)
+
+- Converted every migrated-kernel offset chain to a named constexpr object,
+  including chained GroupNorm and Move helpers. Removed every alias without an
+  independent nested `SenderPipe`/`ReceiverPipe` use.
+- Retained only the pipe-type aliases in block-sharded Matmul, width-sharded
+  Conv2D, Group Attention, and Argmax.
+- The helper functions remain static constexpr; API v14 and every CT/RT wire are
+  unchanged. All 33 source audits passed. Existing focused Conv3D, Matmul, and
+  Conv2D gates passed, followed by tiled and row-major Move under `--dev`,
+  sharded legacy/Welford GroupNorm under `--dev`, interleaved legacy/Welford
+  GroupNorm without `--dev`, and pre/post-allgather LayerNorm under `--dev`.
+  The interleaved GroupNorm `--dev` attempt hit the known unrelated
+  Watcher/C++17 `ASSERT` compile incompatibility in `eltwise_typecast`; the exact
+  unchanged parameters then passed without Watcher.
 
 ### CONV-004 (complete)
 
@@ -115,7 +138,7 @@ applicable, focused validation, and the migration guardrail checks pass.
   activation helper. The DRAM variant emits the address, page size, and
   accessor; the separately compiled non-DRAM variant emits none of them.
 - The kernel derives the optional tail from
-  `ActMcastArgs::next_compile_time_args_offset()`. A ledger-wide audit found no
+  `act_mcast_args.next_compile_time_args_offset()`. A ledger-wide audit found no
   second migration-created filler before a helper, and the source guard now
   permits only this registered, derived optional CT tail.
 - `./build_metal.sh` and all 28 source audits passed. The exact non-DRAM

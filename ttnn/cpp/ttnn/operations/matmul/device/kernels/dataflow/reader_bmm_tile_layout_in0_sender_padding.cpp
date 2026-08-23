@@ -82,9 +82,8 @@ void kernel_main() {
     // sparsity args
     const uint32_t sparsity_addr = get_arg_val<uint32_t>(rt_args_idx++);
 
-    using In0McastArgs = dataflow_kernel_lib::McastArgs<operation_ct_args_end, 4>;
-    constexpr In0McastArgs in0_mcast_args;
-    rt_args_idx = In0McastArgs::next_runtime_args_offset();
+    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, 4> in0_mcast_args;
+    rt_args_idx = in0_mcast_args.next_runtime_args_offset();
 
     // 0 is used to specify "INVALID" state, i.e. when the multicasted data has not been received by the receiver.
     // 0x1 is used to specify "VALID" state, i.e. when the batch is valid.

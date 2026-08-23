@@ -40,8 +40,10 @@ operation tails now follow the opaque helper block and derive their start from
 it; fixed-width layouts retain ordinary helper tails. The final Conv review
 also restored operation terminal drains, removed migration-only source-lifetime
 synchronization, clarified independent input ownership, and verified dense
-versus divergent ACK-count policy. The host build, 36 helper host tests, all 80
-helper device/wire tests under `--dev`, all 32 source audits, and focused
+versus divergent ACK-count policy. Kernel offset chaining now uses an existing
+named constexpr helper object wherever one is available, without changing the
+static API or wire. The host build, 36 helper host tests, all 80 helper
+device/wire tests under `--dev`, all 33 source audits, and focused
 sequential Matmul, Conv2D, and Conv3D device gates passed. The inherited v13
 gates still cover present, absent, and chained helper blocks.
 Exact evidence is recorded in `migration_feedback_tracker.md`.

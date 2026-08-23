@@ -43,8 +43,7 @@ void kernel_main() {
 
     constexpr uint32_t operation_ct_args_end = 17;
     constexpr uint32_t operation_rt_args_end = get_named_compile_time_arg_val("mcast_operation_rt_args");
-    using ReduceMcastArgs = dataflow_kernel_lib::McastArgs<operation_ct_args_end, operation_rt_args_end>;
-    constexpr ReduceMcastArgs reduce_mcast_args;
+    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, operation_rt_args_end> reduce_mcast_args;
 
     const uint32_t num_tiles_to_read = is_last_all_to_all_worker ? num_tiles_per_worker_last : num_tiles_per_worker;
 

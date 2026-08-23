@@ -19,7 +19,7 @@ from the runtime rectangle and accepts the ACK override carried by `McastArgs`.
   one writer binary.
 - The four-word helper runtime block starts at operation slot 19 on every core, including Chain and
   Disabled modes. The kernel resumes operation-owned parsing at
-  `WeightMcastArgs::next_runtime_args_offset()`; the trailing iteration/worker ABI remains fixed.
+  `weights_mcast_args.next_runtime_args_offset()`; the trailing iteration/worker ABI remains fixed.
 - The sender reads the weight block from DRAM, then uses default `SourceL1Guard` for
   `send(local_addr, local_addr, bytes)`. This preserves source lifetime until the next receiver-ACK gate;
   using caller-managed source lifetime here would permit the next DRAM fill to reuse the one-block CB

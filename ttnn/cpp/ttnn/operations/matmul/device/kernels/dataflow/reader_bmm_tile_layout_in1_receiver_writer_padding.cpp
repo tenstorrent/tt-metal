@@ -81,10 +81,9 @@ void kernel_main() {
 #else
     constexpr uint32_t operation_rt_args_end = 13;
 #endif
-    using In1McastArgs =
-        dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), operation_rt_args_end>;
-    constexpr In1McastArgs in1_mcast_args;
-    rt_args_idx = In1McastArgs::next_runtime_args_offset();
+    constexpr dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), operation_rt_args_end>
+        in1_mcast_args;
+    rt_args_idx = in1_mcast_args.next_runtime_args_offset();
 
     OpSignaler op_signaler;
     if constexpr (fuse_op_reduce_scatter) {

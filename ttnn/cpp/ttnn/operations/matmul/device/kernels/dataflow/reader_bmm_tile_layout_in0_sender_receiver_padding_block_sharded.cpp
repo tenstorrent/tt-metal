@@ -16,8 +16,6 @@
 #include "api/core_local_mem.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
-using namespace dataflow_kernel_lib;
-
 void kernel_main() {
     constexpr bool core_has_output_block_work = (bool)get_compile_time_arg_val(0);
 
@@ -57,9 +55,9 @@ void kernel_main() {
 
     constexpr uint32_t num_remote_senders = (num_blocks_inner_dim + num_blocks_per_shard - 1) / num_blocks_per_shard;
 
-    using In0McastArgs = McastArgs<14, 1>;
+    using In0McastArgs = dataflow_kernel_lib::McastArgs<14, 1>;
     constexpr In0McastArgs in0_mcast_args;
-    operation_rt_args_idx = In0McastArgs::next_runtime_args_offset();
+    operation_rt_args_idx = in0_mcast_args.next_runtime_args_offset();
     static_assert(num_remote_senders <= in0_mcast_args.num_senders);
 
     MatmulOpReceiver fused_op_receiver;

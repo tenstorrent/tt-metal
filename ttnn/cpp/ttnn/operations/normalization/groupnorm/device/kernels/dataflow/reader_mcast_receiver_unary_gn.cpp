@@ -107,8 +107,7 @@ void kernel_main() {
     const uint32_t out_start_id = get_arg_val<uint32_t>(3);
     uint32_t num_channels_tiles = get_arg_val<uint32_t>(4);
 
-    using MidMcastArgs = dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), 5>;
-    constexpr MidMcastArgs mid_mcast_args;
+    constexpr dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), 5> mid_mcast_args;
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;    // E[x] partial reduce
     constexpr uint32_t dfb_ex2_partial_id = tt::CBIndex::c_21;  // E[x] partial reduce
@@ -128,7 +127,7 @@ void kernel_main() {
 #endif
 
     Noc noc;
-    Semaphore<> reduce_receiver_sem(MidMcastArgs::consumer_ready);
+    Semaphore<> reduce_receiver_sem(mid_mcast_args.consumer_ready);
     auto reduce_pipe = mid_mcast_args.receiver(noc);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex2_partial(dfb_ex2_partial_id);

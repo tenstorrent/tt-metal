@@ -23,8 +23,7 @@ void kernel_main() {
     constexpr uint32_t tile_height = get_compile_time_arg_val(5);
 
     constexpr uint32_t operation_ct_args_end = 6;
-    using MidMcastArgs = dataflow_kernel_lib::McastArgs<operation_ct_args_end, 0>;
-    constexpr MidMcastArgs mid_mcast_args;
+    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, 0> mid_mcast_args;
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex_id = tt::CBIndex::c_9;

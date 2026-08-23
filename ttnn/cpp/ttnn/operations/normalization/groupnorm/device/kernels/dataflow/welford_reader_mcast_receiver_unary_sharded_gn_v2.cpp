@@ -30,8 +30,7 @@ void kernel_main() {
     constexpr bool stats_is_fp32 = get_compile_time_arg_val(9) != 0;
 
     constexpr uint32_t operation_ct_args_end = 10;
-    using MidMcastArgs = dataflow_kernel_lib::McastArgs<operation_ct_args_end, 0>;
-    constexpr MidMcastArgs mid_mcast_args;
+    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, 0> mid_mcast_args;
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex_global_id = tt::CBIndex::c_15;

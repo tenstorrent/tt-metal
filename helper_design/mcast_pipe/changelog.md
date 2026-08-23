@@ -6,6 +6,22 @@ feedback round lands.
 
 ---
 
+## Round 36 — object-qualified kernel offset chaining (2026-08-23)
+
+- Kept both `McastArgs::next_*_args_offset()` functions static constexpr while
+  making every migrated kernel qualify offset chaining through a named
+  constexpr helper object.
+- Removed every `McastArgs` alias without a nested `SenderPipe`/`ReceiverPipe`
+  type use, including the chained GroupNorm and Move aliases. Retained only the
+  aliases that independently name those pipe types.
+- Added a fleet-wide source guard for that rule. Helper API v14, runtime base
+  ownership, and every CT/RT wire remain unchanged.
+- Validation passed: 33/33 source audits and focused Conv3D, Matmul, Conv2D,
+  tiled/row-major Move, sharded/interleaved legacy and Welford GroupNorm, and
+  pre/post-allgather LayerNorm operation gates.
+
+---
+
 ## Round 35 — optional CT tail and Conv migration-contract cleanup (2026-08-23)
 
 - Added the compile-time analogue of Round 34's variable-tail exception. The

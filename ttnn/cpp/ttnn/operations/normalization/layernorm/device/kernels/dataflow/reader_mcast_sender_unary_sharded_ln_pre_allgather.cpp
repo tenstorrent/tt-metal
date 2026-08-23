@@ -43,8 +43,7 @@ void kernel_main() {
 
     constexpr uint32_t operation_ct_args_end = 20;
     constexpr uint32_t operation_rt_args_end = get_named_compile_time_arg_val("mcast_operation_rt_args");
-    using ReduceMcastArgs = dataflow_kernel_lib::McastArgs<operation_ct_args_end, operation_rt_args_end>;
-    constexpr ReduceMcastArgs reduce_mcast_args;
+    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, operation_rt_args_end> reduce_mcast_args;
 
     constexpr uint32_t dfb_ex_partial2 = tt::CBIndex::c_11;
     constexpr uint32_t dfb_ex2 = tt::CBIndex::c_12;
