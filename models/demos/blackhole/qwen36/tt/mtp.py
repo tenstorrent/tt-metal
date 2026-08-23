@@ -544,8 +544,14 @@ class Qwen36MTPHead:
         # ROW_MAJOR (a padded-TILE reshape is a host-fallback read — illegal
         # under capture).
         vs = logits.shape[-1]
-        l_rm = ttnn.untilize(logits, use_multicore=True)  # [B,1,Vs] RM (no padding)
+        l_rm = ttnn.untilize(logits, use_multicore=True)
         ttnn.deallocate(logits)
+        if l_rm.shape[-2] != 1:
+            # untilize carries the padded tile rows ([B,1,Vs] -> [B,32,Vs]);
+            # row 0 of each user's block is the real one (56397).
+            l_v = ttnn.slice(l_rm, (0, 0, 0), (B, 1, vs))
+            ttnn.deallocate(l_rm)
+            l_rm = l_v
         l4 = ttnn.reshape(l_rm, (1, 1, B, vs))
         lp = ttnn.pad(l4, [(0, 0), (0, 0), (0, 32 - B), (0, 0)], value=0.0)
         ttnn.deallocate(l_rm)

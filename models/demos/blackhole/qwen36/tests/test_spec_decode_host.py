@@ -667,6 +667,80 @@ def test_fused_traced_drafter_matches_eager(monkeypatch):
     assert outs[True] == outs[False], "the traced drafter changed the loop's outputs"
 
 
+def _shape_sim_ttnn(untilize_pads):
+    """Shape-semantics ttnn stand-in: every op propagates shapes only, reshape
+    enforces volume equality, and untilize either strips or carries the padded
+    tile rows (silicon shows both, per op variant — 56397)."""
+    import math
+    from types import SimpleNamespace
+
+    class T:
+        def __init__(self, shape, layout="TILE"):
+            self.shape = list(shape)
+            self.layout = layout
+
+        def volume(self):
+            return math.prod(self.shape)
+
+    def _pad2(shape):
+        s = list(shape)
+        s[-2] = ((s[-2] + 31) // 32) * 32
+        return s
+
+    def _reshape(t, shape):
+        assert math.prod(shape) == t.volume(), f"reshape volume: {t.shape} -> {list(shape)}"
+        return T(list(shape), t.layout)
+
+    fake = SimpleNamespace(
+        TILE_LAYOUT="TILE",
+        ROW_MAJOR_LAYOUT="RM",
+        DRAM_MEMORY_CONFIG="DRAM",
+        deallocate=lambda *a, **k: None,
+        to_memory_config=lambda t, mc: t,
+        to_layout=lambda t, layout: T(t.shape, layout),
+        slice=lambda t, s, e: T([b - a for a, b in zip(s, e)], t.layout),
+        reshape=_reshape,
+        untilize=lambda t, use_multicore=False: T(_pad2(t.shape) if untilize_pads else list(t.shape), "RM"),
+        pad=lambda t, spec, value: T([d + lo + hi for d, (lo, hi) in zip(t.shape, spec)], t.layout),
+        argmax=lambda t, dim, keepdim=False, memory_config=None: T(t.shape[:-1], "RM"),
+        max=lambda t, dim, memory_config=None: T(t.shape[:-1], t.layout),
+    )
+    return fake, T
+
+
+@pytest.mark.parametrize("untilize_pads", [False, True], ids=["untilize-strips", "untilize-pads"])
+def test_batched_step_body_shapes(monkeypatch, untilize_pads):
+    """The REAL _batched_step_body against shape-simulating ttnn: the argmax
+    row-merge must hold whether untilize strips the padded tile rows or
+    carries them into the volume (the 56397 regression class)."""
+    from types import SimpleNamespace
+
+    import models.demos.blackhole.qwen36.tt.mtp as mtp_mod
+
+    fake, T = _shape_sim_ttnn(untilize_pads)
+    monkeypatch.setattr(mtp_mod, "ttnn", fake)
+    B, w_max, rd, dim, vs = 8, 7, 64, 96, 320
+    stub = SimpleNamespace(
+        _bwin={
+            "B": B,
+            "w_max": w_max,
+            "traces": {},
+            "pos": T([B, w_max], "RM"),
+            "cos": T([B, w_max, rd], "RM"),
+            "sin": T([B, w_max, rd], "RM"),
+            "tok": T([B, 1], "RM"),
+            "h": T([B, 1, dim]),
+            "pt": T([B, 4], "RM"),
+        },
+        rope=SimpleNamespace(head_dim=rd),
+        _step_graph=lambda tok, h, cur_pos, cos, sin, page_table=None: (T([B, 1, vs]), T([B, 1, dim])),
+    )
+    idx, val, normed = mtp_mod.Qwen36MTPHead._batched_step_body(stub, 0)
+    assert idx.shape == [1, 1, 32], f"idx shape {idx.shape}"
+    assert val.shape == [1, 1, 32], f"val shape {val.shape}"
+    assert normed.shape == [B, 1, dim]
+
+
 def test_fused_traced_drafter_with_finished_user(monkeypatch):
     """A user finishing mid-run shrinks to ONE idempotent replay leg in the
     schedule; the traced and eager loops still agree exactly."""
