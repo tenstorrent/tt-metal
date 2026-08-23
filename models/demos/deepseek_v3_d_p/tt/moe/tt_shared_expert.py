@@ -78,8 +78,16 @@ def _in0_block_w(k_tiles: int) -> int:
     return 1
 
 
-def _out_subblock(per_core_M: int, per_core_N: int) -> tuple[int, int]:
-    """Largest h*w within the 8-tile DST budget that tiles the per-core output block, widest first."""
+def _out_subblock(per_core_M: int, per_core_N: int, deep_k: bool) -> tuple[int, int]:
+    """Subblock tiling the per-core output block within the 8-tile DST budget.
+
+    Which shape wins splits on K, measured across every model's gate and down projection: the
+    gate's deep K (128-224 tiles) prefers one tall column, the down's shallow K (16-48) prefers the
+    widest block that fits. Area-first is the wrong objective for the gate -- 3x1 beat 1x5 on all
+    five gate shapes.
+    """
+    if deep_k and per_core_M <= 8:
+        return (per_core_M, 1)
     best = (1, 1)
     for h in range(1, per_core_M + 1):
         for w in range(1, per_core_N + 1):
@@ -117,7 +125,9 @@ def get_program_configs(
     def cfg(k: int, n: int, activation=None):
         per_core_M = -(-m_tiles // grid.y)
         per_core_N = -(-n // grid.x)
-        subblock_h, subblock_w = _out_subblock(per_core_M, per_core_N)
+        # Across every model the gate/up projections sit at K/N >= 4.7 and the down projections at
+        # <= 0.21, so the threshold falls in a wide empty gap rather than near either cluster.
+        subblock_h, subblock_w = _out_subblock(per_core_M, per_core_N, deep_k=k >= 2 * n)
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid,
             in0_block_w=_in0_block_w(k),
