@@ -11,6 +11,7 @@
 #include <random>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -977,13 +978,12 @@ std::vector<uint32_t> sfpu_quasar_run(
     const experimental::ProgramRunArgs& params,
     const std::vector<std::pair<std::shared_ptr<tt::tt_metal::Buffer>, const std::vector<uint32_t>*>>& inputs,
     const std::shared_ptr<tt::tt_metal::Buffer>& out_buf) {
-    auto* device = mesh_device->get_devices()[0];
     auto program = experimental::MakeProgramFromSpec(*mesh_device, spec);
     experimental::SetProgramRunArgs(program, params);
     for (const auto& [buf, data] : inputs) {
         tt_metal::detail::WriteToBuffer(buf, *data);
     }
-    tt_metal::detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
     std::vector<uint32_t> dest;
     tt_metal::detail::ReadFromBuffer(out_buf, dest);
     return dest;

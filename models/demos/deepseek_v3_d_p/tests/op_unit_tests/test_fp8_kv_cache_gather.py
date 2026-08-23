@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import (
     _dram_chunk_size_bytes,
     build_and_serialize_kv_chunk_table,
 )
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import PREFILL_CHUNK_OUTPUT_TOKENS, MlaKvCacheFormat
 
 
@@ -143,7 +144,7 @@ def test_fp8_row_major_kv_cache_all_gather(mesh_device, tmp_path):
         barrier_semaphore=barrier_semaphore,
         num_links=1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        topology=ttnn.Topology.Linear,
+        topology=per_axis_topology()[sp_axis],
         cluster_axis=sp_axis,
     )
     ttnn.synchronize_device(mesh_device)
