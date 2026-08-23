@@ -50,6 +50,7 @@ static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
 #ifdef LLK_TRISC_UNPACK
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -99,7 +100,8 @@ static_assert(sfpi::facetranspose_impl_::bh_alu_fp32_enabled_mask == ALU_ACC_CTR
 static_assert(sfpi::facetranspose_impl_::bh_alu_zero_flag_dis_src_addr32 == ALU_ACC_CTRL_Zero_Flag_disabled_src_ADDR32, "X6 constant drift: zero-flag addr32");
 static_assert(sfpi::facetranspose_impl_::bh_alu_zero_flag_dis_src_shamt == ALU_ACC_CTRL_Zero_Flag_disabled_src_SHAMT, "X6 constant drift: zero-flag shamt");
 static_assert(sfpi::facetranspose_impl_::bh_alu_zero_flag_dis_src_mask == ALU_ACC_CTRL_Zero_Flag_disabled_src_MASK, "X6 constant drift: zero-flag mask");
-static_assert(sfpi::facetranspose_impl_::bh_disable_implied_srca_fmt_setc16 == DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, "X6 constant drift: implied-fmt SETC16 index");
+static_assert(
+    sfpi::facetranspose_impl_::bh_disable_implied_srca_fmt_setc16 == DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, "X6 constant drift: implied-fmt SETC16 index");
 static_assert(sfpi::facetranspose_impl_::bh_fmt_float32 == static_cast<unsigned>(DataFormat::Float32), "X6 constant drift: Float32 code");
 static_assert(sfpi::facetranspose_impl_::bh_fmt_tf32 == static_cast<unsigned>(DataFormat::Tf32), "X6 constant drift: Tf32 code");
 static_assert(sfpi::facetranspose_impl_::bh_fmt_float16_b == static_cast<unsigned>(DataFormat::Float16_b), "X6 constant drift: Float16_b code");
@@ -129,7 +131,9 @@ constexpr unsigned NOINC   = 7;
 inline void copy_rows_out(unsigned src_vrow_base, unsigned n)
 {
     for (unsigned i = 0; i < n; ++i)
+    {
         STROW(LDROW(src_vrow_base + i), i);
+    }
 }
 
 inline void body_identity()
@@ -140,10 +144,22 @@ inline void body_identity()
 inline void body_rowtag()
 {
 #define ROWTAG(i) STROW(__builtin_rvtt_sfpxloadi(nullptr, 0x00A00000 + (i), 0, 0, 31), i)
-    ROWTAG(0); ROWTAG(1); ROWTAG(2); ROWTAG(3);
-    ROWTAG(4); ROWTAG(5); ROWTAG(6); ROWTAG(7);
-    ROWTAG(8); ROWTAG(9); ROWTAG(10); ROWTAG(11);
-    ROWTAG(12); ROWTAG(13); ROWTAG(14); ROWTAG(15);
+    ROWTAG(0);
+    ROWTAG(1);
+    ROWTAG(2);
+    ROWTAG(3);
+    ROWTAG(4);
+    ROWTAG(5);
+    ROWTAG(6);
+    ROWTAG(7);
+    ROWTAG(8);
+    ROWTAG(9);
+    ROWTAG(10);
+    ROWTAG(11);
+    ROWTAG(12);
+    ROWTAG(13);
+    ROWTAG(14);
+    ROWTAG(15);
 #undef ROWTAG
 }
 
@@ -151,7 +167,9 @@ inline void body_lanetag()
 {
     auto v = __builtin_rvtt_sfpreadlreg(15); /* vConstTileId */
     for (unsigned i = 0; i < 16; ++i)
+    {
         STROW(v, i);
+    }
 }
 
 // --- mode 3: Dst16-row calibration ------------------------------------
@@ -164,13 +182,25 @@ inline void body_dstrow_cal()
     namespace fi = sfpi::facetranspose_impl_;
     sfpi::face_transpose_cfg_enter();
     fi::set_srca_format<fi::bh_fmt_tf32>();
-#define RT1(r) \
+#define RT1(r)                                 \
     __builtin_rvtt_ttmovd2b(0, 16, 7, 0, (r)); \
     __builtin_rvtt_ttmovb2d(0, 16, 7, 0, 32 + (r))
-    RT1(0); RT1(1); RT1(2); RT1(3);
-    RT1(4); RT1(5); RT1(6); RT1(7);
-    RT1(8); RT1(9); RT1(10); RT1(11);
-    RT1(12); RT1(13); RT1(14); RT1(15);
+    RT1(0);
+    RT1(1);
+    RT1(2);
+    RT1(3);
+    RT1(4);
+    RT1(5);
+    RT1(6);
+    RT1(7);
+    RT1(8);
+    RT1(9);
+    RT1(10);
+    RT1(11);
+    RT1(12);
+    RT1(13);
+    RT1(14);
+    RT1(15);
 #undef RT1
     sfpi::face_transpose_cfg_leave();
     copy_rows_out(16, 8);
@@ -258,11 +288,8 @@ inline void body_zeroflag_twin()
     // zero-flag FORCED to 0 (flush ENABLED) -- the contract-necessity
     // twin the oracle predicts flushed lanes for.
     __builtin_rvtt_ttsetc16(fi::bh_disable_implied_srca_fmt_setc16, 1);
-    fi::cfg_field_rmw<fi::bh_alu_zero_flag_dis_src_addr32,
-                      fi::bh_alu_zero_flag_dis_src_shamt,
-                      fi::bh_alu_zero_flag_dis_src_mask, 0>();
-    __builtin_rvtt_ttstallwait(fi::bh_stall_cfg,
-                               fi::bh_wait_sfpu | fi::bh_srca_vld | fi::bh_srcb_vld);
+    fi::cfg_field_rmw<fi::bh_alu_zero_flag_dis_src_addr32, fi::bh_alu_zero_flag_dis_src_shamt, fi::bh_alu_zero_flag_dis_src_mask, 0>();
+    __builtin_rvtt_ttstallwait(fi::bh_stall_cfg, fi::bh_wait_sfpu | fi::bh_srca_vld | fi::bh_srcb_vld);
     raw_pass1_lo16_park();
     raw_pass2_hi16();
     raw_pass3_lo16_writeback();
@@ -274,23 +301,41 @@ inline void body_zeroflag_twin()
 inline void probe_body()
 {
     if constexpr (PROBE_MODE == 0)
+    {
         body_identity();
+    }
     else if constexpr (PROBE_MODE == 1)
+    {
         body_rowtag();
+    }
     else if constexpr (PROBE_MODE == 2)
+    {
         body_lanetag();
+    }
     else if constexpr (PROBE_MODE == 3)
+    {
         body_dstrow_cal();
+    }
     else if constexpr (PROBE_MODE == 4)
+    {
         body_face<0>();
+    }
     else if constexpr (PROBE_MODE == 5)
+    {
         body_face<16>();
+    }
     else if constexpr (PROBE_MODE == 6)
+    {
         body_batch2();
+    }
     else if constexpr (PROBE_MODE == 7)
+    {
         body_hi_stage();
+    }
     else if constexpr (PROBE_MODE == 8)
+    {
         body_zeroflag_twin();
+    }
 }
 
 } // namespace
@@ -305,15 +350,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
     _llk_math_wait_for_dest_available_<DST_SYNC>();
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-        0, formats.math, formats.math);
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(0, formats.math, formats.math);
     _llk_math_eltwise_unary_sfpu_init_once_();
     math::reset_counters(p_setrwc::SET_ABD_F);
-    _llk_math_welfords_sfpu_params_(+[]()
-    {
-        __builtin_rvtt_sfpencc_all_lanes();
-        probe_body();
-    }, 0);
+    _llk_math_welfords_sfpu_params_(
+        +[]()
+        {
+            __builtin_rvtt_sfpencc_all_lanes();
+            probe_body();
+        },
+        0);
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }
 #endif
@@ -321,13 +367,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
     _llk_pack_init_wrapper_<PackMode::Default, false>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
     _llk_packer_wait_for_math_done_();
