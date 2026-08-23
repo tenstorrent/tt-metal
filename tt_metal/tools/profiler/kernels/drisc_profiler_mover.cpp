@@ -320,6 +320,7 @@ void kernel_main() {
     bool egress_dead = false;
     uint32_t credit_timeouts = 0;  // bounded credit wait expired -> frame dropped instead of deadlocking
     uint32_t dropped_frames = 0;
+    // ================================ INSTRUMENTATION START (self-zone + NoC-footprint state and marker path) ====
     // ---- NoC FOOTPRINT state (all compiled out when kNocFootprint == 0). Index order kNfRdW..kNfWrT is
     // shared with the host's out[] report -- wire format, not an implementation detail.
     NocFpState nf{};
@@ -450,6 +451,7 @@ void kernel_main() {
     };
     using SelfMarkNow = decltype(self_mark_now);
     using SelfMarkPhase = decltype(self_mark_phase);
+    // ================================ INSTRUMENTATION END (self-zone + NoC-footprint state and marker path) ====
     // ~50 ms at 1.35 GHz, far above anything healthy: it exists purely to convert "wait forever" into
     // "lose a frame".
     constexpr uint64_t kCreditWaitCycles = 67500000ull;
@@ -581,6 +583,7 @@ void kernel_main() {
     // Barrier AT THE END: after a publish the next marker overwrites a word the in-flight frame is
     // still shipping, so the wait belongs before the NEXT publish, not after the previous one.
     // Phase counters are saved/restored so the self frame does not bill itself.
+    // ================================ INSTRUMENTATION START (self-frame publish, NoC-footprint sampling, window arming) ====
     auto self_publish = [&]() {
         if constexpr (kSelfZones == 0) {
             return;
@@ -706,6 +709,7 @@ void kernel_main() {
             nf_sweep_end(&nf, sweeps, t_sweep0, sweep_cyc, did_work);
         }
     };
+    // ================================ INSTRUMENTATION END (self-frame publish, NoC-footprint sampling, window arming) ====
 
     if constexpr (kNocFootprint != 0) {
         // Seed the mirrors so the first sweep's delta is measured from HERE, not from whatever the counters
@@ -738,6 +742,7 @@ void kernel_main() {
             frames_at_stop_check = frames;
             stop_sweeps++;
         }
+        // ================================ INSTRUMENTATION START (common-trigger sync rendezvous) ====
         // ---- COMMON-TRIGGER SYNC EVENT: the rendezvous ----
         // FIRST in the loop body, before sweeps++ and before t_sweep0, so a barrier wait is billed to no
         // sweep and cannot perturb the phase accounting.
@@ -777,6 +782,7 @@ void kernel_main() {
                 }
             }
         }
+        // ================================ INSTRUMENTATION END (common-trigger sync rendezvous) ====
         sweeps++;
         *hb = sweeps;
         *phase = kPhasePoll;
@@ -1223,6 +1229,7 @@ void kernel_main() {
     const uint64_t t_end = get_timestamp();
 
     const uint64_t cycles = t_end - t_start;
+    // ================================ INSTRUMENTATION START (results block: every counter the host reads) ====
     volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kResultsAddr);
     out[0] = static_cast<uint32_t>(cycles & 0xFFFFFFFFu);
     out[1] = static_cast<uint32_t>(cycles >> 32);
@@ -1415,6 +1422,7 @@ void kernel_main() {
         kernel_profiler::SPSC_DRAIN_RESULT_WORDS >= 182,
         "the results block must hold the self-profiling, NoC-footprint, stop-drain and histogram counters");
 
+    // ================================ INSTRUMENTATION END (results block: every counter the host reads) ====
     *phase = kPhaseExit;
     // Only hand the socket back if the consumer was still alive. update_socket_config() talks to the same
     // host FIFO the credit wait just gave up on, so on a dead consumer it blocks and the kernel never
