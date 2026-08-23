@@ -17,6 +17,14 @@ the per-shard greedy readback — the same machinery bench_decode measures):
    run the reference config with QWEN38_EVAL_DUMP_REF=/path once, then each
    precision rung with QWEN38_EVAL_REF=/path. Teacher forcing keeps the token
    prefix identical across configs, so disagreement measures pure numerics.
+3. test_humaneval_subset — generation-quality gate on a PUBLIC dataset (GPQA
+   is HF-gated; openai_humaneval is not, and agentic coding is the campaign's
+   target workload). Greedy pass@1 over the first N problems (default 24 =
+   3 full B=8 rounds); each generated function runs against the official
+   check() in a subprocess with a timeout. Per-rung A/B on the SAME problems:
+   dump the bf16-stack baseline once with QWEN38_HE_DUMP=/path, then run each
+   precision arm with QWEN38_HE_REF=/path — the arm FAILS if it passes more
+   than QWEN38_HE_MAX_DROP (default 1) fewer problems than the baseline.
 
 Both stages emit one greppable EVAL_JSON line (same record shape as BENCH_JSON;
 run_eval.sbatch appends them to eval_results.jsonl).
@@ -45,6 +53,19 @@ slow, so fetch the tiny subset once on a workstation and rsync it:
     EOF
     rsync gpqa_diamond_10.json <exabox>:/data/ayerofieiev/qwen38/eval_data/
 
+HumanEval data (public, no HF gating or login; fetch once, rsync like GPQA):
+
+    pip install datasets
+    python - <<'EOF'
+    import json
+    from datasets import load_dataset
+    rows = sorted(load_dataset("openai_humaneval", split="test"),
+                  key=lambda r: int(r["task_id"].split("/")[1]))[:24]
+    json.dump([{k: r[k] for k in ("task_id", "prompt", "entry_point", "test")} for r in rows],
+              open("humaneval_24.json", "w"), indent=1)
+    EOF
+    rsync humaneval_24.json <exabox>:/data/ayerofieiev/qwen38/eval_data/
+
 Run (P150x8):
     MESH_DEVICE=P150x8 HF_MODEL=/path/to/qwen38-27b-weights \\
         pytest models/demos/blackhole/qwen36/campaign/eval_gate.py -v -s
@@ -56,6 +77,13 @@ Knobs (env):
     QWEN38_EVAL_TF_STEPS   teacher-forced steps (default 200)
     QWEN38_EVAL_DUMP_REF   write this run's top-1 list to a JSON file (reference config)
     QWEN38_EVAL_REF        compare this run's top-1 list against a dumped reference
+    QWEN38_HUMANEVAL_PATH  HumanEval subset JSON path (see fetch recipe above)
+    QWEN38_HE_N            problems to score (default 24; capped by the file)
+    QWEN38_HE_MAX_NEW      generation cap per problem incl. reasoning (default 1280)
+    QWEN38_HE_TIMEOUT      per-problem execution timeout, seconds (default 15)
+    QWEN38_HE_DUMP         write per-problem pass/fail JSON (bf16-stack baseline run)
+    QWEN38_HE_REF          compare against a dumped baseline; FAIL if passed count
+                           drops by more than QWEN38_HE_MAX_DROP (default 1)
 """
 
 import hashlib
@@ -77,11 +105,17 @@ from models.demos.blackhole.qwen36.campaign.bench_common import (
     snapshot_gdn_tp,
     stage_gdn_tp,
 )
+from models.demos.blackhole.qwen36.campaign.humaneval_common import extract_code, he_user_message, run_candidate
 from models.demos.blackhole.qwen36.demo.text_demo import BLOCK_SIZE, DEVICE_PARAMS, _MESH_SHAPE, _MULTI
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.tt_transformers.tt.common import copy_host_to_device
 
 _GPQA_PATH = os.environ.get("QWEN38_GPQA_PATH", "/data/ayerofieiev/qwen38/eval_data/gpqa_diamond_10.json")
+_HE_PATH = os.environ.get("QWEN38_HUMANEVAL_PATH", "/data/ayerofieiev/qwen38/eval_data/humaneval_24.json")
+_HE_N = int(os.environ.get("QWEN38_HE_N", "24"))
+_HE_MAX_NEW = int(os.environ.get("QWEN38_HE_MAX_NEW", "1280"))
+_HE_TIMEOUT = float(os.environ.get("QWEN38_HE_TIMEOUT", "15"))
+_HE_MAX_DROP = int(os.environ.get("QWEN38_HE_MAX_DROP", "1"))
 _MAX_NEW = int(os.environ.get("QWEN38_EVAL_MAX_NEW", "768"))
 _TF_ISL = int(os.environ.get("QWEN38_EVAL_TF_ISL", "512"))
 _TF_STEPS = int(os.environ.get("QWEN38_EVAL_TF_STEPS", "200"))
@@ -375,3 +409,105 @@ def test_top1_agreement(mesh_device):
     assert rows_identical, "identical forced rows produced different top-1 streams — nondeterminism in the step"
     if agreement is not None:
         logger.info(f"[agreement] {agreement}% over {_TF_STEPS} steps (first divergence: {first_div})")
+
+
+def _he_prompt(doc, tokenizer):
+    ids = tokenizer.apply_chat_template(
+        [{"role": "user", "content": he_user_message(doc["prompt"])}], tokenize=True, add_generation_prompt=True
+    )
+    return torch.tensor(ids, dtype=torch.int32).reshape(1, -1)
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_humaneval_subset(mesh_device):
+    if not _MULTI:
+        pytest.skip("eval gate runs the TP serving path; set MESH_DEVICE=P150x4 or P150x8")
+    if not os.path.isfile(_HE_PATH):
+        pytest.skip(
+            f"HumanEval subset not found at {_HE_PATH} — openai_humaneval is public (no HF gating); "
+            "fetch it once with the module-docstring recipe and rsync it."
+        )
+    docs = json.load(open(_HE_PATH))[:_HE_N]
+    assert len(docs) >= 1 and all({"task_id", "prompt", "entry_point", "test"} <= set(d) for d in docs)
+    n_docs = len(docs)
+    padded = [docs[i % n_docs] for i in range(-(-n_docs // _B) * _B)]
+
+    from transformers import AutoTokenizer
+
+    probe_tok = AutoTokenizer.from_pretrained(os.environ["HF_MODEL"], trust_remote_code=True)
+    max_prompt = max(_he_prompt(d, probe_tok).shape[1] for d in padded)
+    bpu = ((max(8, -(-(max_prompt + _HE_MAX_NEW + 16) // BLOCK_SIZE)) + 7) // 8) * 8
+
+    srv = _ServedDecoder(mesh_device, bpu)
+    tokenizer = AutoTokenizer.from_pretrained(srv.model.args.CKPT_DIR, trust_remote_code=True)
+    stop_ids = {tokenizer.eos_token_id}
+    for t in ("<|im_end|>", "<|endoftext|>"):
+        tid = tokenizer.convert_tokens_to_ids(t)
+        if tid is not None and tid >= 0:
+            stop_ids.add(tid)
+
+    responses = []
+    for r0 in range(0, len(padded), _B):
+        batch = padded[r0 : r0 + _B]
+        rows = [_he_prompt(d, tokenizer) for d in batch]
+        lens = [int(t.shape[1]) for t in rows]
+        first = srv.prefill(rows, lens)
+        gen = srv.decode_loop(first, lens, _HE_MAX_NEW - 1, stop_ids=stop_ids)
+        for u in range(_B):
+            ids = [first[u]] + gen[u]
+            if ids and ids[-1] in stop_ids:
+                ids = ids[:-1]
+            responses.append(tokenizer.decode(ids))
+    responses = responses[:n_docs]
+
+    # Serving-collapse guard BEFORE scoring (fmf autoport lesson).
+    empty = [i for i, t in enumerate(responses) if not t.strip()]
+
+    passed = {}
+    for doc, text in zip(docs, responses):
+        code = extract_code(text, doc["entry_point"], doc["prompt"])
+        ok, detail = run_candidate(code, doc, timeout=_HE_TIMEOUT)
+        passed[doc["task_id"]] = ok
+        logger.info(f"[humaneval] {doc['task_id']} pass={ok} ({detail}) reply_chars={len(text)}")
+    n_passed = sum(passed.values())
+
+    dump = os.environ.get("QWEN38_HE_DUMP")
+    ref_path = os.environ.get("QWEN38_HE_REF")
+    ref_passed = drop = regressions = None
+    if dump:
+        os.makedirs(os.path.dirname(dump) or ".", exist_ok=True)
+        json.dump({"ref": git_ref(), "task_ids": [d["task_id"] for d in docs], "passed": passed}, open(dump, "w"))
+        logger.info(f"[humaneval] baseline pass/fail dumped to {dump}")
+    if ref_path:
+        ref = json.load(open(ref_path))
+        assert ref["task_ids"] == [d["task_id"] for d in docs], "baseline was dumped on a different problem set"
+        ref_passed = sum(ref["passed"].values())
+        drop = ref_passed - n_passed
+        regressions = sorted(t for t, ok in ref["passed"].items() if ok and not passed[t])
+
+    metrics = {
+        "n_docs": n_docs,
+        "n_passed": n_passed,
+        "pass_at_1": round(n_passed / n_docs, 4),
+        "empty_responses": len(empty),
+        "mean_response_chars": round(sum(len(t) for t in responses) / n_docs, 1),
+        "baseline_passed": ref_passed,
+        "drop_vs_baseline": drop,
+        "regressed_tasks": regressions,
+        "ref_file": ref_path,
+        "dumped_ref": dump,
+    }
+    emit_eval_json(
+        "humaneval_subset",
+        {"max_new": _HE_MAX_NEW, "batch": _B, "he_path": _HE_PATH, "max_drop": _HE_MAX_DROP},
+        metrics,
+    )
+    assert not empty, f"EMPTY RESPONSES for problems {empty} — serving collapse, score is not trustworthy"
+    if drop is not None:
+        assert drop <= _HE_MAX_DROP, (
+            f"pass@1 dropped {drop} problems vs baseline ({ref_passed}->{n_passed}; regressed: {regressions}) "
+            f"— precision arm REJECTED (bar: drop <= {_HE_MAX_DROP})"
+        )

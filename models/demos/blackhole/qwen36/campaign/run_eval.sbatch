@@ -5,10 +5,13 @@
 # budget guard) but its own singleton name, so an eval can queue behind a
 # measurement without blocking it.
 #
-# Env passthrough knobs: REF, SKIP_BUILD=1, SKIP_GATE=1, plus every
-# QWEN38_EVAL_* / QWEN38_GPQA_PATH knob from eval_gate.py. Precision-rung flow:
-#   reference:  sbatch --export=ALL,REF=<ref>,QWEN38_EVAL_DUMP_REF=/data/ayerofieiev/qwen38/eval_data/tf_ref.json run_eval.sbatch
-#   candidate:  sbatch --export=ALL,REF=<rung>,QWEN38_EVAL_REF=/data/ayerofieiev/qwen38/eval_data/tf_ref.json run_eval.sbatch
+# Env passthrough knobs: REF, SKIP_BUILD=1, SKIP_GATE=1, EVAL_K=<pytest -k expr>,
+# plus every QWEN38_EVAL_* / QWEN38_GPQA_PATH / QWEN38_HUMANEVAL_PATH / QWEN38_HE_*
+# knob from eval_gate.py, and the precision-arm flags themselves (QWEN_SDPA_BF8,
+# QWEN36_MLP_DOWN_BF4, QWEN36_GDN_BF4, QWEN36_LM_HEAD_BF4 — --export=ALL carries
+# them into the model under test). Precision-rung flow:
+#   reference:  sbatch --export=ALL,REF=<ref>,QWEN38_EVAL_DUMP_REF=/data/ayerofieiev/qwen38/eval_data/tf_ref.json,QWEN38_HE_DUMP=/data/ayerofieiev/qwen38/eval_data/he_ref.json run_eval.sbatch
+#   candidate:  sbatch --export=ALL,REF=<rung>,<ARM_FLAG>=1,QWEN38_EVAL_REF=/data/ayerofieiev/qwen38/eval_data/tf_ref.json,QWEN38_HE_REF=/data/ayerofieiev/qwen38/eval_data/he_ref.json run_eval.sbatch
 #
 #SBATCH --job-name=qwen38-eval
 #SBATCH --dependency=singleton
@@ -83,7 +86,7 @@ EVALLOG="$LOGDIR/eval-${SLURM_JOB_ID:-manual}.log"
 # SIGABRT after a green suite must not fail the job) — but a FAILED assert
 # inside a stage (empty responses / nondeterminism) must: keep pytest's summary.
 set +e
-REF="$SHA" "$QWEN38_PYTHON" -m pytest models/demos/blackhole/qwen36/campaign/eval_gate.py -v -s 2>&1 | tee "$EVALLOG"
+REF="$SHA" "$QWEN38_PYTHON" -m pytest models/demos/blackhole/qwen36/campaign/eval_gate.py -v -s ${EVAL_K:+-k "$EVAL_K"} 2>&1 | tee "$EVALLOG"
 set -e
 grep -q "EVAL_JSON" "$EVALLOG" || { echo "EVAL_PRODUCED_NO_JSON"; exit 1; }
 if grep -qE "[0-9]+ failed" "$EVALLOG"; then
