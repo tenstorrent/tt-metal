@@ -1952,11 +1952,12 @@ bool PerfDebugProfiler::boot_device(
                 my_cores * 32u <= 4u * kernel_profiler::PROFILER_L1_BUFFER_SIZE,
                 "CV-first tails staging ({} cores x 32 B) does not fit the self slot's dead ring space",
                 my_cores);
-            // TT_METAL_PERF_DEBUG_SPLIT_KERNELS=1: per-role kernel files (bring-up; monolith is the default
-            // until the split passes its gates).
+            // Per-role kernel files are the default. TT_METAL_PERF_DEBUG_SPLIT_KERNELS=0 falls back to the
+            // monolith, which is also what a drainer with no role split still builds (it needs kRoleFull,
+            // and only the monolith has it).
             static const bool ksplit = [] {
                 const char* s = std::getenv("TT_METAL_PERF_DEBUG_SPLIT_KERNELS");
-                return s != nullptr && *s != '\0' && *s != '0';
+                return (s == nullptr || *s == '\0') ? true : (*s != '0');
             }();
             const std::string kdrain = !ksplit     ? "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp"
                                        : is_mover  ? "tt_metal/tools/profiler/kernels/drisc_profiler_mover.cpp"
@@ -2627,13 +2628,15 @@ void PerfDebugProfiler::stop() {
                     res[170],
                     res[171]);
             }
-            if (res[174] != 0 || res[175] != 0) {
+            if (res[174] != 0 || res[175] != 0 || res[181] != 0) {
                 log_info(
                     tt::LogMetal,
-                    "[perf-debug profiler] DRISC DMA visibility: {} in-place re-reads, {} deferred sub-batches "
-                    "[stamps still in NoC flight when the mover arrived; both resolve without waiting]",
+                    "[perf-debug profiler] DRISC DMA visibility: {} in-place re-reads, {} deferred sub-batches, "
+                    "{} stamps not yet landed [stamps still in NoC flight when the mover arrived; all resolve "
+                    "without waiting]",
                     res[174],
-                    res[175]);
+                    res[175],
+                    res[181]);
             }
             // proc sub-split. `proc` is the biggest busy-sweep phase, and it is two unrelated things:
             // a LOCAL scan of the staged control vectors, and a per-live-core 20 B NoC head write-back
@@ -2716,9 +2719,27 @@ void PerfDebugProfiler::stop() {
                             "something that cannot be a head, so those visits were skipped. The known cause -- a "
                             "peer NIU back in NOC2AXI mode, which routes the untagged read to GDDR and answers out "
                             "of the profiler's own DRAM region -- is closed by the retire handshake, so a non-zero "
-                            "count here means a NEW way for a peer's L1 to stop being readable.",
+                            "count here means a NEW way for a peer's L1 to stop being readable. First offending "
+                            "word 0x{:08x} against tail {}.",
                             d,
-                            res[57]);
+                            res[57],
+                            res[176],
+                            res[177]);
+                    }
+                    // A SEPARATE failure that used to be counted and reported as an impossible head read: the
+                    // mover's post-DMA seq stamp came back NEWER than the frame it expected, so the filler had
+                    // already overwritten a slot this mover had not consumed. It stops egress, which is why the
+                    // ring behind it fills and its producers stall.
+                    if (res[178] != 0) {
+                        log_warning(
+                            tt::LogMetal,
+                            "[perf-debug profiler] role split DRISC {}: {} SEQ-STAMP CORRUPTIONS -- a ring slot "
+                            "was overwritten before this mover consumed it (stamp {} where {} was expected). "
+                            "Egress stopped, so the ring behind it fills and its producers stall.",
+                            d,
+                            res[178],
+                            res[179],
+                            res[180]);
                     }
                     // The first frame word the mover ever read out of DRAM, PER RING. If this is not the frame
                     // magic the filler writes, the two sides disagree about the ring address and the capture is

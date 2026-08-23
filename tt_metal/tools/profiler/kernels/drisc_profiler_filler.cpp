@@ -529,6 +529,11 @@ void kernel_main() {
     // never fires in normal operation -- it exists purely to convert "wait forever" into "lose a frame".
     constexpr uint64_t kCreditWaitCycles = 67500000ull;
 
+    // Above this payload a frame is written RAW: the gather costs ~10 extra NoC write issues, and past
+    // ~2/3 fill the single burst wins on issues while saving little on bytes. Keeping the mover's old
+    // threshold means a raw frame still ships as one burst from the mover, exactly as it does today.
+    constexpr uint32_t kPackMaxPayload = kCtrlWords + (kLiveWords * 2u) / 3u;
+
     auto stage_run = [&](uint32_t start, uint32_t count) {
         // Guarded as a whole rather than per-statement: kDramFrames is 0 on every non-filler build, and
         // `frames_staged % kDramFrames` would then be a compile-time divide by zero even though nothing
@@ -602,30 +607,72 @@ void kernel_main() {
             // The bulk image carries 0 at kSeqWord; the stamp VALUE rides in kSeqSrcWord (28 = 12 mod 16,
             // the BH src/dst congruence), which doubles as the small write's L1 source and must persist
             // until sent -- the generation reuse gate covers that.
+            // PACK INTO THE RING, rather than leaving the gather to the mover. The two are interchangeable
+            // for the host -- same wire layout either way -- but not for the device: the mover's ~11 gather
+            // issues per frame are what its burst is made of (measured: write 14.2% + wr-barrier 5.3% of a
+            // 750 ms residency against a ~130 ms burst), while a filler's whole write path runs at ~1.3%,
+            // and there are twice as many fillers as movers. A frame that lands contiguous here costs the
+            // mover ONE issue to ship and no control-vector walk at all.
+            const uint32_t slot0 = frames_staged % kDramFrames;
+            uint32_t fpages = 0;
             for (uint32_t f = 0; f < count; f++) {
-                volatile tt_l1_ptr uint32_t* pfx =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase + (start + f) * kSlotBytes);
+                const uint32_t slot = kStageBase + (start + f) * kSlotBytes;
+                const tt_l1_ptr uint32_t* cv = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
+                volatile tt_l1_ptr uint32_t* pfx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot);
+                uint32_t off = kPrefix + kCtrlWords;
+                for (uint32_t r = 0; r < kNumRisc; r++) {
+                    const uint32_t tail = cv[kernel_profiler::SPSC_RING_TAIL_0 + r];
+                    const uint32_t run =
+                        kernel_profiler::spsc_span_live(cv[kernel_profiler::SPSC_RING_HEAD_0 + r], tail, kRingWords);
+                    if (run != 0) {
+                        off += kernel_profiler::spsc_span_pack_pad(tail - run, off) + run;
+                    }
+                }
+                if (off - kPrefix > kPackMaxPayload) {
+                    pfx[0] = kernel_profiler::spsc_span_w0() | kernel_profiler::SPSC_SPAN_RAW_FLAG;
+                    pfx[1] = kSpanWords;
+                    fpages += kPagesPerSlot;
+                } else {
+                    pfx[0] = kernel_profiler::spsc_span_w0();
+                    pfx[1] = off - kPrefix;
+                    fpages += kernel_profiler::spsc_span_frame_words(off - kPrefix) / kPageWords;
+                }
                 pfx[kSeqWord] = 0;
                 pfx[kSeqSrcWord] = frames_staged + f + 1u;
             }
+            // The NIU reads the patched length and stamp words; Blackhole stores can reach SRAM out of order.
             asm volatile("fence" ::: "memory");
-            const uint32_t src = kStageBase + start * kSlotBytes;
-            const uint32_t slot0 = frames_staged % kDramFrames;
-            // The ring is a whole number of frames, so a FRAME never straddles the wrap -- but a RUN of adjacent
-            // frames can, and socket_push_pages' trick of only wrapping a pointer does not apply here. Split it,
-            // exactly as ship_once splits at the FIFO wrap.
-            const uint32_t first = (slot0 + count > kDramFrames) ? (kDramFrames - slot0) : count;
-            noc_async_write(
-                src,
-                get_noc_addr_from_bank_id<true>(kDramBank, kDramAddr + slot0 * kSlotBytes, NOC_INDEX),
-                first * kSlotBytes,
-                NOC_INDEX);
-            if (first < count) {
-                noc_async_write(
-                    src + first * kSlotBytes,
-                    get_noc_addr_from_bank_id<true>(kDramBank, kDramAddr, NOC_INDEX),
-                    (count - first) * kSlotBytes,
-                    NOC_INDEX);
+            for (uint32_t f = 0; f < count; f++) {
+                const uint32_t slot = kStageBase + (start + f) * kSlotBytes;
+                const uint32_t dslot = (slot0 + f < kDramFrames) ? (slot0 + f) : (slot0 + f - kDramFrames);
+                const uint64_t dbase =
+                    get_noc_addr_from_bank_id<true>(kDramBank, kDramAddr + dslot * kSlotBytes, NOC_INDEX);
+                const tt_l1_ptr uint32_t* cv = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
+                if (reinterpret_cast<const tt_l1_ptr uint32_t*>(slot)[0] & kernel_profiler::SPSC_SPAN_RAW_FLAG) {
+                    noc_async_write(slot, dbase, kSlotBytes, NOC_INDEX);
+                    continue;
+                }
+                noc_async_write(slot, dbase, (kPrefix + kCtrlWords) * 4u, NOC_INDEX);
+                uint32_t off = kPrefix + kCtrlWords;
+                for (uint32_t r = 0; r < kNumRisc; r++) {
+                    const uint32_t tail = cv[kernel_profiler::SPSC_RING_TAIL_0 + r];
+                    const uint32_t run =
+                        kernel_profiler::spsc_span_live(cv[kernel_profiler::SPSC_RING_HEAD_0 + r], tail, kRingWords);
+                    if (run == 0) {
+                        continue;
+                    }
+                    off += kernel_profiler::spsc_span_pack_pad(tail - run, off);
+                    // A lane's live window can straddle its own ring wrap; the pad above is what keeps both
+                    // halves congruent with their destination, so each half is a plain write from there.
+                    const uint32_t hm = (tail - run) & (kRingWords - 1u);
+                    const uint32_t ring_l1 = slot + (kPrefix + kCtrlWords + r * kRingWords) * 4u;
+                    const uint32_t chunk = run <= kRingWords - hm ? run : kRingWords - hm;
+                    noc_async_write(ring_l1 + hm * 4u, dbase + off * 4u, chunk * 4u, NOC_INDEX);
+                    if (chunk < run) {
+                        noc_async_write(ring_l1, dbase + (off + chunk) * 4u, (run - chunk) * 4u, NOC_INDEX);
+                    }
+                    off += run;
+                }
             }
             for (uint32_t f = 0; f < count; f++) {
                 const uint32_t dslot = (slot0 + f < kDramFrames) ? (slot0 + f) : (slot0 + f - kDramFrames);
@@ -642,7 +689,7 @@ void kernel_main() {
             c_write += t2 - t1;
             *phase = kPhWrDone;
             frames_staged += count;
-            pages += count * kPagesPerSlot;
+            pages += fpages;
             pushes++;
         }
     };
@@ -1400,6 +1447,13 @@ void kernel_main() {
     // Publish the LAST staged frames. Without this the final batch is written to the ring but never announced,
     // so the mover cannot drain it and the tail of every capture is silently short by up to one sweep.
     publish_head();
+    // Retire the ring HERE, not next to the flip: `done` below releases the host to set stop == 2, which
+    // ends the spin at once, so a retirement published there is only microseconds ahead of the flip and a
+    // mover polling at ~10 us misses it. Published before the drain wait, the mover has that whole wait
+    // plus teardown to see it.
+    if constexpr (kRole == kRoleFiller) {
+        *hs_head = frames_staged | kHsRetireBit;
+    }
     // FILLER: wait until the mover has drained everything we published before reporting anything.
     // Without this the filler exits holding a STALE tail mirror -- observed `tail 2414` against 3089 frames
     // staged -- because the mover is still draining when the filler's results are written. That is not just a
@@ -1613,11 +1667,6 @@ void kernel_main() {
     // happen HERE (by teardown the mesh device can no longer launch a program) and LAST: in NOC2AXI mode an
     // inbound DRAM-range address is forwarded to GDDR, so the flip takes this L1 -- `done`, the results,
     // the socket's bytes_acked -- out of the host's view.
-    // Retire the ring before the flip, not after: the flip re-routes the mover's untagged reads of this
-    // head to GDDR, and the spin below is bounded, so a mover that is still polling gets no other warning.
-    if constexpr (kRole == kRoleFiller) {
-        *hs_head = frames_staged | kHsRetireBit;
-    }
     for (uint32_t spins = 0; spins < 200000000u && *stop != 2u; spins++) {
         invalidate_l1_cache();
     }

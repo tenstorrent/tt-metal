@@ -413,6 +413,12 @@ void kernel_main() {
     uint32_t ring_hi[2] = {0, 0};
     uint32_t ring_blocked = 0;  // FILLER: stage_run calls that had to wait for ring room at all
     uint32_t hs_bad = 0;        // MOVER: head reads that were structurally impossible -- MUST stay 0
+    uint32_t hs_bad_head = 0;  // MOVER: the first such word, verbatim
+    uint32_t hs_bad_tail = 0;  // MOVER: the tail it was differenced against
+    uint32_t seq_corrupt = 0;
+    uint32_t seq_bad_got = 0;
+    uint32_t seq_bad_want = 0;
+    uint32_t seq_unlanded = 0;  // stamps that were neither landed nor a lap behind: not yet visible
     bool peer_retired[2] = {false, false};  // MOVER: peer published its final head and is about to flip
     if constexpr (kRole == kRoleFiller) {
         *hs_head = 0;
@@ -534,7 +540,10 @@ void kernel_main() {
     if constexpr (kSelfZones != 0) {
         volatile tt_l1_ptr uint32_t* pfx =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase + kSelfSlot * kSlotBytes);
-        pfx[0] = kernel_profiler::spsc_span_w0();
+        // A MOVER's self frame is the one frame on that path no filler packed, so it must declare itself
+        // RAW. kRoleFull packs at ship time, so it keeps the packed header.
+        pfx[0] = kernel_profiler::spsc_span_w0() |
+                 (kRole == kRoleMover ? kernel_profiler::SPSC_SPAN_RAW_FLAG : 0u);
         pfx[1] = kSpanWords;  // the full five-ring span: only ring 0 is live, and the host skips the rest
         for (uint32_t k = 2; k < kPrefix; k++) {
             pfx[k] = 0;
@@ -651,6 +660,15 @@ void kernel_main() {
     // Frame geometry, derived from the staged control vector exactly as the host re-derives it
     // (profiler_common.h), and the header patch that publishes the chosen layout. Non-volatile loads
     // on purpose, same argument as process_batch: staging is a landed, barrier-waited snapshot.
+    // A MOVER's frames arrive pre-packed from its filler, so its whole job is to read the length word.
+    // kRoleFull still ships spans it read itself, so pack_frame_words below stays for that role.
+    auto frame_words_of = [&](uint32_t slot) -> uint32_t {
+        const tt_l1_ptr uint32_t* pfx = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot);
+        if (pfx[0] & kernel_profiler::SPSC_SPAN_RAW_FLAG) {
+            return kSlotWords;
+        }
+        return kernel_profiler::spsc_span_frame_words(pfx[1]);
+    };
     auto pack_frame_words = [&](uint32_t slot) -> uint32_t {
         const tt_l1_ptr uint32_t* cv = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
         uint32_t off = kPrefix + kCtrlWords;
@@ -688,7 +706,9 @@ void kernel_main() {
         {
             const uint64_t t_k0 = get_timestamp();
             for (uint32_t f = 0; f < count; f++) {
-                npages += pack_frame_words(kStageBase + (start + f) * kSlotBytes) / kPageWords;
+                npages += (kRole == kRoleMover ? frame_words_of(kStageBase + (start + f) * kSlotBytes)
+                                               : pack_frame_words(kStageBase + (start + f) * kSlotBytes)) /
+                          kPageWords;
             }
             c_pack += get_timestamp() - t_k0;
         }
@@ -752,34 +772,43 @@ void kernel_main() {
                 wr -= fifo_size;
             }
         };
-        for (uint32_t f = 0; f < count; f++) {
-            const uint32_t slot = kStageBase + (start + f) * kSlotBytes;
-            const tt_l1_ptr uint32_t* cv = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
-            if (reinterpret_cast<const tt_l1_ptr uint32_t*>(slot)[0] & kernel_profiler::SPSC_SPAN_RAW_FLAG) {
-                put(slot, kSlotBytes);
-                continue;
+        if constexpr (kRole == kRoleMover) {
+            // ONE push per frame: the filler wrote it packed and contiguous, pads included.
+            (void)skip;
+            for (uint32_t f = 0; f < count; f++) {
+                put(kStageBase + (start + f) * kSlotBytes,
+                    frame_words_of(kStageBase + (start + f) * kSlotBytes) * 4u);
             }
-            put(slot, (kPrefix + kCtrlWords) * 4u);
-            uint32_t off = kPrefix + kCtrlWords;
-            for (uint32_t r = 0; r < kNumRisc; r++) {
-                const uint32_t tail = cv[kernel_profiler::SPSC_RING_TAIL_0 + r];
-                const uint32_t run =
-                    kernel_profiler::spsc_span_live(cv[kernel_profiler::SPSC_RING_HEAD_0 + r], tail, kRingWords);
-                if (run == 0) {
+        } else {
+            for (uint32_t f = 0; f < count; f++) {
+                const uint32_t slot = kStageBase + (start + f) * kSlotBytes;
+                const tt_l1_ptr uint32_t* cv = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
+                if (reinterpret_cast<const tt_l1_ptr uint32_t*>(slot)[0] & kernel_profiler::SPSC_SPAN_RAW_FLAG) {
+                    put(slot, kSlotBytes);
                     continue;
                 }
-                const uint32_t pad = kernel_profiler::spsc_span_pack_pad(tail - run, off);
-                skip(pad * 4u);
-                const uint32_t hm = (tail - run) & (kRingWords - 1u);
-                const uint32_t ring_l1 = slot + (kPrefix + kCtrlWords + r * kRingWords) * 4u;
-                const uint32_t chunk = run <= kRingWords - hm ? run : kRingWords - hm;
-                put(ring_l1 + hm * 4u, chunk * 4u);
-                if (chunk < run) {
-                    put(ring_l1, (run - chunk) * 4u);
+                put(slot, (kPrefix + kCtrlWords) * 4u);
+                uint32_t off = kPrefix + kCtrlWords;
+                for (uint32_t r = 0; r < kNumRisc; r++) {
+                    const uint32_t tail = cv[kernel_profiler::SPSC_RING_TAIL_0 + r];
+                    const uint32_t run =
+                        kernel_profiler::spsc_span_live(cv[kernel_profiler::SPSC_RING_HEAD_0 + r], tail, kRingWords);
+                    if (run == 0) {
+                        continue;
+                    }
+                    const uint32_t pad = kernel_profiler::spsc_span_pack_pad(tail - run, off);
+                    skip(pad * 4u);
+                    const uint32_t hm = (tail - run) & (kRingWords - 1u);
+                    const uint32_t ring_l1 = slot + (kPrefix + kCtrlWords + r * kRingWords) * 4u;
+                    const uint32_t chunk = run <= kRingWords - hm ? run : kRingWords - hm;
+                    put(ring_l1 + hm * 4u, chunk * 4u);
+                    if (chunk < run) {
+                        put(ring_l1, (run - chunk) * 4u);
+                    }
+                    off += pad + run;
                 }
-                off += pad + run;
+                skip((kernel_profiler::spsc_span_frame_words(off - kPrefix) - off) * 4u);
             }
-            skip((kernel_profiler::spsc_span_frame_words(off - kPrefix) - off) * 4u);
         }
         const uint64_t t2 = get_timestamp();
         c_wr_chunk += t2 - t1;
@@ -902,30 +931,65 @@ void kernel_main() {
             // The bulk image carries 0 at kSeqWord; the stamp VALUE rides in kSeqSrcWord (28 = 12 mod 16,
             // the BH src/dst congruence), which doubles as the small write's L1 source and must persist
             // until sent -- the generation reuse gate covers that.
+            // PACK INTO THE RING rather than leaving the gather to the mover: a frame that lands contiguous
+            // here costs the mover ONE issue to ship, and a filler's write path has the headroom to pay for it.
+            const uint32_t slot0 = frames_staged % kDramFrames;
+            uint32_t fpages = 0;
             for (uint32_t f = 0; f < count; f++) {
-                volatile tt_l1_ptr uint32_t* pfx =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase + (start + f) * kSlotBytes);
+                const uint32_t slot = kStageBase + (start + f) * kSlotBytes;
+                const tt_l1_ptr uint32_t* cv = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
+                volatile tt_l1_ptr uint32_t* pfx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot);
+                uint32_t off = kPrefix + kCtrlWords;
+                for (uint32_t r = 0; r < kNumRisc; r++) {
+                    const uint32_t tail = cv[kernel_profiler::SPSC_RING_TAIL_0 + r];
+                    const uint32_t run =
+                        kernel_profiler::spsc_span_live(cv[kernel_profiler::SPSC_RING_HEAD_0 + r], tail, kRingWords);
+                    if (run != 0) {
+                        off += kernel_profiler::spsc_span_pack_pad(tail - run, off) + run;
+                    }
+                }
+                if (off - kPrefix > kPackMaxPayload) {
+                    pfx[0] = kernel_profiler::spsc_span_w0() | kernel_profiler::SPSC_SPAN_RAW_FLAG;
+                    pfx[1] = kSpanWords;
+                    fpages += kPagesPerSlot;
+                } else {
+                    pfx[0] = kernel_profiler::spsc_span_w0();
+                    pfx[1] = off - kPrefix;
+                    fpages += kernel_profiler::spsc_span_frame_words(off - kPrefix) / kPageWords;
+                }
                 pfx[kSeqWord] = 0;
                 pfx[kSeqSrcWord] = frames_staged + f + 1u;
             }
             asm volatile("fence" ::: "memory");
-            const uint32_t src = kStageBase + start * kSlotBytes;
-            const uint32_t slot0 = frames_staged % kDramFrames;
-            // The ring is a whole number of frames, so a FRAME never straddles the wrap -- but a RUN of adjacent
-            // frames can, and socket_push_pages' trick of only wrapping a pointer does not apply here. Split it,
-            // exactly as ship_once splits at the FIFO wrap.
-            const uint32_t first = (slot0 + count > kDramFrames) ? (kDramFrames - slot0) : count;
-            noc_async_write(
-                src,
-                get_noc_addr_from_bank_id<true>(kDramBank, kDramAddr + slot0 * kSlotBytes, NOC_INDEX),
-                first * kSlotBytes,
-                NOC_INDEX);
-            if (first < count) {
-                noc_async_write(
-                    src + first * kSlotBytes,
-                    get_noc_addr_from_bank_id<true>(kDramBank, kDramAddr, NOC_INDEX),
-                    (count - first) * kSlotBytes,
-                    NOC_INDEX);
+            for (uint32_t f = 0; f < count; f++) {
+                const uint32_t slot = kStageBase + (start + f) * kSlotBytes;
+                const uint32_t dslot = (slot0 + f < kDramFrames) ? (slot0 + f) : (slot0 + f - kDramFrames);
+                const uint64_t dbase =
+                    get_noc_addr_from_bank_id<true>(kDramBank, kDramAddr + dslot * kSlotBytes, NOC_INDEX);
+                const tt_l1_ptr uint32_t* cv = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
+                if (reinterpret_cast<const tt_l1_ptr uint32_t*>(slot)[0] & kernel_profiler::SPSC_SPAN_RAW_FLAG) {
+                    noc_async_write(slot, dbase, kSlotBytes, NOC_INDEX);
+                    continue;
+                }
+                noc_async_write(slot, dbase, (kPrefix + kCtrlWords) * 4u, NOC_INDEX);
+                uint32_t off = kPrefix + kCtrlWords;
+                for (uint32_t r = 0; r < kNumRisc; r++) {
+                    const uint32_t tail = cv[kernel_profiler::SPSC_RING_TAIL_0 + r];
+                    const uint32_t run =
+                        kernel_profiler::spsc_span_live(cv[kernel_profiler::SPSC_RING_HEAD_0 + r], tail, kRingWords);
+                    if (run == 0) {
+                        continue;
+                    }
+                    off += kernel_profiler::spsc_span_pack_pad(tail - run, off);
+                    const uint32_t hm = (tail - run) & (kRingWords - 1u);
+                    const uint32_t ring_l1 = slot + (kPrefix + kCtrlWords + r * kRingWords) * 4u;
+                    const uint32_t chunk = run <= kRingWords - hm ? run : kRingWords - hm;
+                    noc_async_write(ring_l1 + hm * 4u, dbase + off * 4u, chunk * 4u, NOC_INDEX);
+                    if (chunk < run) {
+                        noc_async_write(ring_l1, dbase + (off + chunk) * 4u, (run - chunk) * 4u, NOC_INDEX);
+                    }
+                    off += run;
+                }
             }
             for (uint32_t f = 0; f < count; f++) {
                 const uint32_t dslot = (slot0 + f < kDramFrames) ? (slot0 + f) : (slot0 + f - kDramFrames);
@@ -942,7 +1006,7 @@ void kernel_main() {
             c_write += t2 - t1;
             *phase = kPhWrDone;
             frames_staged += count;
-            pages += count * kPagesPerSlot;
+            pages += fpages;
             pushes++;
         }
     };
@@ -1094,10 +1158,14 @@ void kernel_main() {
             noc_async_read_barrier(NOC_INDEX);
             invalidate_l1_cache();
             *mv_probe_f[p] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch);
-            volatile tt_l1_ptr uint32_t* msrc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch + 32u);
+            volatile tt_l1_ptr uint32_t* msrc =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch + 32u + p * 16u);
             *msrc = kProbeMoverMagic + p;  // + slot, so the host can tell peer 0's write from peer 1's
             noc_async_write(
-                kHeadScratch + 32u, get_noc_addr(pxy & 0xFFFFu, pxy >> 16, kPeerHss[p] + kHsProbeM), 4u, NOC_INDEX);
+                kHeadScratch + 32u + p * 16u,
+                get_noc_addr(pxy & 0xFFFFu, pxy >> 16, kPeerHss[p] + kHsProbeM),
+                4u,
+                NOC_INDEX);
             // Barrier per peer: the scratch word is reused by the next peer's write, so it must have landed.
             (void)write_barrier_bounded(get_timestamp() + kCreditWaitCycles);
         }
@@ -1290,13 +1358,13 @@ void kernel_main() {
                         // -- which here would mean reading a head value that has not landed yet.
                         noc_async_read_barrier(NOC_INDEX);
                         invalidate_l1_cache();
-                        head = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch);
+                        const uint32_t raw_head = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch);
                         // The filler sets kHsRetireBit on its FINAL head, before restoring NOC2AXI mode.
                         // Drain to that head, then stop reading this peer for good: past the flip the same
                         // untagged address reads the profiler's DRAM region instead, which returns records
                         // that pass every plausibility test a head has.
-                        const bool retiring = (head & kHsRetireBit) != 0u;
-                        head &= ~kHsRetireBit;
+                        const bool retiring = (raw_head & kHsRetireBit) != 0u;
+                        head = raw_head & ~kHsRetireBit;
                         n = head - mv_tail[peer];
                         if (retiring && n == 0) {
                             peer_retired[peer] = true;
@@ -1310,6 +1378,10 @@ void kernel_main() {
                         // head. kHsRetireBit closes that window, which makes this an invariant again: skip
                         // the visit and count, and let the host's "MUST stay 0" check speak if it ever fires.
                         if (n > kDramFrames) {
+                            if (hs_bad == 0) {
+                                hs_bad_head = raw_head;
+                                hs_bad_tail = mv_tail[peer];
+                            }
                             hs_bad++;
                             n = 0;
                         }
@@ -1406,7 +1478,14 @@ void kernel_main() {
                                             nv++;
                                             continue;
                                         }
-                                        corrupt = got > want;
+                                        // A REAL overrun means the filler lapped us, so this slot would hold
+                                        // a legitimate stamp exactly one ring later. Anything else has simply
+                                        // not landed -- and "not landed" is NOT necessarily 0: the ring lives
+                                        // in the profiler DRAM region, which holds arbitrary prior content.
+                                        corrupt = got == want + kDramFrames;
+                                        if (!corrupt) {
+                                            seq_unlanded++;
+                                        }
                                         break;
                                     }
                                     if (nv == nk || corrupt || attempt == kSeqReReads) {
@@ -1425,7 +1504,12 @@ void kernel_main() {
                                     *mv_probe_frame[peer] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                                         kStageBase + (g * kGenSlots + nv) * kSlotBytes)[kSeqWord];
                                     *mv_probe_f[peer] = mv_tail[peer] + nv + 1u;
-                                    hs_bad++;
+                                    if (seq_corrupt == 0) {
+                                        seq_bad_got = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                            kStageBase + (g * kGenSlots + nv) * kSlotBytes)[kSeqWord];
+                                        seq_bad_want = mv_tail[peer] + nv + 1u;
+                                    }
+                                    seq_corrupt++;
                                     egress_dead = true;
                                     break;
                                 }
@@ -1457,11 +1541,12 @@ void kernel_main() {
                                         kStageBase + g * kGenSlots * kSlotBytes);
                                 }
                                 mv_tail[peer] += nkv;
-                                volatile tt_l1_ptr uint32_t* tsrc =
-                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHeadScratch + 32u);
-                                *tsrc = mv_tail[peer];
+                                // PER-PEER source word: this write is asynchronous and nothing flushes it,
+                                // so a shared source let peer 1's store land in peer 0's hs_tail.
+                                const uint32_t tsrc_addr = kHeadScratch + 32u + peer * 16u;
+                                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tsrc_addr) = mv_tail[peer];
                                 noc_async_write(
-                                    kHeadScratch + 32u,
+                                    tsrc_addr,
                                     get_noc_addr(pxy & 0xFFFFu, pxy >> 16, kPeerHss[peer] + kHsTail),
                                     4u,
                                     NOC_INDEX);
@@ -2002,6 +2087,11 @@ void kernel_main() {
     // Publish the LAST staged frames. Without this the final batch is written to the ring but never announced,
     // so the mover cannot drain it and the tail of every capture is silently short by up to one sweep.
     publish_head();
+    // Retire the ring HERE, not next to the flip: `done` below releases the host to set stop == 2, ending
+    // the spin at once, so a retirement published there is only microseconds ahead of the flip.
+    if constexpr (kRole == kRoleFiller) {
+        *hs_head = frames_staged | kHsRetireBit;
+    }
     // FILLER: wait until the mover has drained everything we published before reporting anything.
     // Without this the filler exits holding a STALE tail mirror -- observed `tail 2414` against 3089 frames
     // staged -- because the mover is still draining when the filler's results are written. That is not just a
@@ -2084,6 +2174,12 @@ void kernel_main() {
     // every frame it shipped from then on is suspect. Summed over both rings -- there is nothing to gain from
     // knowing WHICH ring lied, because the mover declares egress dead either way.
     out[57] = hs_bad;
+    out[176] = hs_bad_head;
+    out[177] = hs_bad_tail;
+    out[178] = seq_corrupt;
+    out[179] = seq_bad_got;
+    out[180] = seq_bad_want;
+    out[181] = seq_unlanded;
     // ---- PEER 1 of a dual-ring mover. Mirrors 49/53/54/55/50 above, so nothing had to be renumbered. ----
     // A per-peer copy of every quantity the verification bar checks: frames staged == frames moved must hold
     // PER RING, and a single summed figure could hide one ring shipping short while the other over-ships.
@@ -2200,7 +2296,7 @@ void kernel_main() {
         out[129] = NOC_WORD_BYTES;         // the byte scale, from the header -- host never hardcodes it
     }
     static_assert(
-        kernel_profiler::SPSC_DRAIN_RESULT_WORDS >= 176,
+        kernel_profiler::SPSC_DRAIN_RESULT_WORDS >= 182,
         "the results block must hold the self-profiling, NoC-footprint, stop-drain and histogram counters");
 
     *phase = kPhaseExit;
@@ -2222,11 +2318,6 @@ void kernel_main() {
     // happen HERE (by teardown the mesh device can no longer launch a program) and LAST: in NOC2AXI mode an
     // inbound DRAM-range address is forwarded to GDDR, so the flip takes this L1 -- `done`, the results,
     // the socket's bytes_acked -- out of the host's view.
-    // Retire the ring before the flip, not after: the flip re-routes the mover's untagged reads of this
-    // head to GDDR, and the spin below is bounded, so a mover that is still polling gets no other warning.
-    if constexpr (kRole == kRoleFiller) {
-        *hs_head = frames_staged | kHsRetireBit;
-    }
     for (uint32_t spins = 0; spins < 200000000u && *stop != 2u; spins++) {
         invalidate_l1_cache();
     }
