@@ -1,0 +1,11 @@
+{
+  "tool_version": "0.3.0-draft",
+  "tier": "light",
+  "host": "bh-glx-110-c01u02",
+  "started_utc": "2026-08-19T03:12:00+00:00",
+  "dry_run": true,
+  "phases": {},
+  "ended_utc": "2026-08-19T03:12:01+00:00",
+  "total_duration_s": 1.0,
+  "overall_status": "PASS"
+}

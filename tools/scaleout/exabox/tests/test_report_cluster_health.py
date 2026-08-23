@@ -22,6 +22,7 @@ if str(EXABOX_DIR) not in sys.path:
 
 from cluster_health_schema import loads_and_validate, validate_record  # noqa: E402
 from report_adapters import status_for  # noqa: E402
+from analyze_host_health_results import main as analyze_main  # noqa: E402
 from report_cluster_health import (  # noqa: E402
     main,
     parse_gsd_hostnames,
@@ -33,6 +34,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 REPORT_SOURCE = EXABOX_DIR / "report_cluster_health.py"
 ADAPTER_SOURCE = EXABOX_DIR / "report_adapters.py"
 BACKFILL_SOURCE = EXABOX_DIR / "report_backfill.py"
+ANALYZE_HOST_SOURCE = EXABOX_DIR / "analyze_host_health_results.py"
 
 HOSTS = "bh-glx-110-c01u02,bh-glx-110-c01u08"
 TS = "2026-08-19T03:12:00Z"
@@ -88,6 +90,14 @@ class TestAdapters(unittest.TestCase):
         self.assertEqual(status_for("recover", None), "passed")
         self.assertEqual(status_for("recover", 0), "passed")
         self.assertEqual(status_for("recover", 1), "failed")
+
+    def test_host_codes(self):
+        self.assertEqual(status_for("host", 0), "passed")
+        self.assertEqual(status_for("host", 1), "failed")
+        self.assertEqual(status_for("host", 2), "degraded")
+        self.assertEqual(status_for("host", 99), "failed")
+        with self.assertRaises(ValueError):
+            status_for("host", None)
 
     def test_unknown_test_type(self):
         with self.assertRaises(ValueError):
@@ -332,9 +342,92 @@ class TestStoreWrite(unittest.TestCase):
             loads_and_validate(out.strip(), file_written=True)
 
 
+class TestFromDiagReport(unittest.TestCase):
+    def test_pass_fills_clocks_and_labels(self):
+        rc, out, err = _run(
+            [
+                "--from-diag-report",
+                str(FIXTURES / "diag_report_pass.json"),
+                "--dry-run",
+            ]
+        )
+        self.assertEqual(rc, 0, err)
+        record = loads_and_validate(out.strip(), file_written=False)
+        self.assertEqual(record["test_type"], "host")
+        self.assertEqual(record["status"], "passed")
+        self.assertEqual(record["analyzer_code"], 0)
+        self.assertEqual(record["hosts"], ["bh-glx-110-c01u02"])
+        self.assertEqual(record["ts"], "2026-08-19T03:12:36Z")
+        self.assertEqual(record["duration_s"], 36.5)
+        self.assertEqual(record["labels"]["tier"], "light")
+        self.assertEqual(record["labels"]["board_rev"], "RevC")
+        self.assertTrue(record["artifact_uri"])
+
+    def test_warn_is_degraded(self):
+        rc, out, err = _run(
+            ["--from-diag-report", str(FIXTURES / "diag_report_warn.json"), "--dry-run"]
+        )
+        self.assertEqual(rc, 0, err)
+        record = json.loads(out.strip())
+        self.assertEqual(record["status"], "degraded")
+        self.assertEqual(record["analyzer_code"], 2)
+
+    def test_fail_is_failed(self):
+        rc, out, err = _run(
+            ["--from-diag-report", str(FIXTURES / "diag_report_fail.json"), "--dry-run"]
+        )
+        self.assertEqual(rc, 0, err)
+        record = json.loads(out.strip())
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(record["analyzer_code"], 1)
+        self.assertEqual(record["hosts"], ["bh-glx-110-c01u08"])
+        self.assertEqual(record["labels"]["tier"], "medium")
+        self.assertNotIn("board_rev", record["labels"])
+
+    def test_refuses_diag_dry_run(self):
+        rc, _out, err = _run(
+            ["--from-diag-report", str(FIXTURES / "diag_report_dry_run.json"), "--dry-run"]
+        )
+        self.assertEqual(rc, 1)
+        self.assertIn("dry-run", err)
+
+    def test_cannot_combine_with_test_type(self):
+        stderr = io.StringIO()
+        with redirect_stderr(stderr), self.assertRaises(SystemExit):
+            main(
+                [
+                    "--from-diag-report",
+                    str(FIXTURES / "diag_report_pass.json"),
+                    "--test-type",
+                    "host",
+                ]
+            )
+        self.assertIn("--from-diag-report cannot be combined", stderr.getvalue())
+
+
+class TestAnalyzeHostHealthCli(unittest.TestCase):
+    def test_prints_analysis_exit_code(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            rc = analyze_main(["--json", str(FIXTURES / "diag_report_warn.json")])
+        self.assertEqual(rc, 2)
+        self.assertIn("Analysis exit code: 2", stdout.getvalue())
+        self.assertIn("ts=2026-08-19T03:12:10Z", stdout.getvalue())
+        self.assertIn("duration_s=10.0", stdout.getvalue())
+
+    def test_refuses_dry_run_report(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            rc = analyze_main(["--json", str(FIXTURES / "diag_report_dry_run.json")])
+        self.assertEqual(rc, 1)
+        self.assertIn("dry-run", stderr.getvalue())
+
+
 class TestNoSiteCoupling(unittest.TestCase):
     def test_report_modules_omit_forbidden_strings(self):
-        for path in (REPORT_SOURCE, ADAPTER_SOURCE, BACKFILL_SOURCE):
+        for path in (REPORT_SOURCE, ADAPTER_SOURCE, BACKFILL_SOURCE, ANALYZE_HOST_SOURCE):
             text = path.read_text(encoding="utf-8")
             self.assertNotIn("topology.yaml", text)
             self.assertNotIn("/data/stackstorm/cluster-health", text)

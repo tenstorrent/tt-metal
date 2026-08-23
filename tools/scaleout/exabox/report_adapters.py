@@ -61,8 +61,18 @@ from cluster_health_schema import TEST_TYPES
 # The health record omits analyzer_code for recover.
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# host — analyze_host_health_results.py (diag_report.json overall_status)
+#  0 PASS → passed
+#  1 FAIL → failed
+#  2 WARN → degraded
+# Any other non-zero → failed.
+# Do not use the diag process RC (0 for both PASS and WARN).
+# ---------------------------------------------------------------------------
+
 _FABRIC_INCONCLUSIVE = 50
 _FABRIC_INPUT_ERROR = 66
+_HOST_WARN = 2
 
 
 def status_for(test_type: str, analyzer_code: int | None) -> str:
@@ -93,6 +103,15 @@ def status_for(test_type: str, analyzer_code: int | None) -> str:
         if analyzer_code is None:
             raise ValueError("analyzer_code: required for dispatch")
         return "passed" if analyzer_code == 0 else "failed"
+
+    if test_type == "host":
+        if analyzer_code is None:
+            raise ValueError("analyzer_code: required for host")
+        if analyzer_code == 0:
+            return "passed"
+        if analyzer_code == _HOST_WARN:
+            return "degraded"
+        return "failed"
 
     # recover
     if analyzer_code is None or analyzer_code == 0:

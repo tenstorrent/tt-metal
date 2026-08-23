@@ -25,6 +25,7 @@ from typing import Any
 from cluster_health_schema import SCHEMA_ID, TEST_TYPES, validate_record
 from report_adapters import status_for
 from report_backfill import Leftover, discover_leftovers, filter_leftovers, leftover_key, parse_window_date
+from analyze_host_health_results import parse_diag_report
 from resolve_host_ring_order import (
     _resolve_leaf_host_ids,
     _safe_read_text,
@@ -518,6 +519,9 @@ def emit_record(record: dict[str, Any], store_root: str | None) -> dict[str, Any
 
 
 def leftover_namespace(leftover: Leftover, args: argparse.Namespace) -> argparse.Namespace:
+    labels = list(args.label or [])
+    for key, value in leftover.labels.items():
+        labels.append(f"{key}={value}")
     return argparse.Namespace(
         test_type=leftover.test_type,
         hosts=leftover.hosts,
@@ -534,8 +538,8 @@ def leftover_namespace(leftover: Leftover, args: argparse.Namespace) -> argparse
         trigger_kind=args.trigger_kind or "backfill",
         orchestrator_id=args.orchestrator_id,
         cluster=args.cluster,
-        label=args.label,
-        duration_s=args.duration_s,
+        label=labels,
+        duration_s=leftover.duration_s,
         ts=leftover.ts,
         incomplete=leftover.incomplete,
         incomplete_reason=leftover.incomplete_reason,
@@ -603,6 +607,62 @@ def run_backfill(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_from_diag_report(args: argparse.Namespace) -> int:
+    path = Path(args.from_diag_report)
+    if not path.is_file():
+        print(f"Error: --from-diag-report is not a file: {path}", file=sys.stderr)
+        return 1
+    try:
+        extract = parse_diag_report(path, artifact_dir=args.artifact_dir)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    if extract.dry_run:
+        print("Error: refusing dry-run diag report", file=sys.stderr)
+        return 1
+    ts = args.ts or extract.ts
+    if not ts:
+        ts = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    duration_s = args.duration_s if args.duration_s is not None else extract.duration_s
+    labels = list(args.label or [])
+    for key, value in extract.labels.items():
+        labels.append(f"{key}={value}")
+    ns = argparse.Namespace(
+        test_type="host",
+        hosts=extract.hosts,
+        analyzer_code=extract.analyzer_code,
+        artifact_dir=extract.artifact_dir,
+        cabling=args.cabling,
+        deployment=args.deployment,
+        fsd=args.fsd,
+        gsd=args.gsd,
+        rankfile=args.rankfile,
+        rank_bindings=args.rank_bindings,
+        source=args.source,
+        triggered_by=args.triggered_by,
+        trigger_kind=args.trigger_kind,
+        orchestrator_id=args.orchestrator_id,
+        cluster=args.cluster,
+        label=labels,
+        duration_s=duration_s,
+        ts=ts,
+        incomplete=extract.incomplete,
+        incomplete_reason=extract.incomplete_reason,
+    )
+    try:
+        record = build_record(ns)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    store_root = resolve_store_root(args)
+    try:
+        emit_record(record, store_root)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Emit a portable cluster health record after analyze (stdout JSON line)."
@@ -613,9 +673,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifact-dir", help="Analyze / MPI dump path as known to the caller")
     parser.add_argument("--from-artifact-dir", dest="from_artifact_dir", help="Backfill leftover runs under this tree")
     parser.add_argument(
+        "--from-diag-report",
+        dest="from_diag_report",
+        help="Emit one host record from an existing diag_report.json",
+    )
+    parser.add_argument(
         "--recursive",
         action="store_true",
-        help="With --from-artifact-dir, discover wrapper logs under every nested logs/ directory",
+        help="With --from-artifact-dir, discover wrapper logs under nested logs/ dirs and diag_report.json files",
     )
     parser.add_argument("--from", dest="from_date", help="Inclusive UTC start date YYYY-MM-DD (artifact mtime)")
     parser.add_argument("--to", dest="to_date", help="Inclusive UTC end date YYYY-MM-DD (artifact mtime)")
@@ -644,12 +709,21 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.topology is not None:
         parser.error("--topology is not accepted")
+    if args.from_artifact_dir and args.from_diag_report:
+        parser.error("--from-artifact-dir cannot be combined with --from-diag-report")
+    if args.from_diag_report:
+        if args.test_type or args.hosts:
+            parser.error("--from-diag-report cannot be combined with --test-type / --hosts")
+        return run_from_diag_report(args)
     if args.from_artifact_dir:
         if args.test_type or args.hosts or args.artifact_dir:
             parser.error("--from-artifact-dir cannot be combined with --test-type / --hosts / --artifact-dir")
         return run_backfill(args)
     if not args.test_type or not args.hosts or not args.artifact_dir:
-        parser.error("--test-type, --hosts, and --artifact-dir are required (or pass --from-artifact-dir)")
+        parser.error(
+            "--test-type, --hosts, and --artifact-dir are required "
+            "(or pass --from-artifact-dir / --from-diag-report)"
+        )
     try:
         record = build_record(args)
     except ValueError as exc:

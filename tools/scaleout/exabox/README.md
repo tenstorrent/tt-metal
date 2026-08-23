@@ -154,9 +154,22 @@ python3 tools/scaleout/exabox/report_cluster_health.py \
 
 `--source` and `--trigger-kind` default to `backfill`. `--from` / `--to` (`YYYY-MM-DD`) filter on leftover **mtime**, not the record timestamp. There is no default window (the store is posterity). If a log shipper only keeps about ten days of data, pass a matching `--from` so you do not publish files that ingest will ignore.
 
-`--recursive` discovers wrapper logs under every nested `logs/` directory (for a tree of StackStorm executions). Truncated wrappers that still have `HOSTS=` emit `status=degraded` with `labels.incomplete=true` instead of inventing an analyzer code. Recover outcomes use the last `Recovery succeeded on attempt` / `Recovery attempt … failed` line; `Recovery completed at` alone is not success.
+`--recursive` discovers wrapper logs under every nested `logs/` directory (for a tree of StackStorm executions) and `diag_report.json` files from single-node diag runs. Truncated wrappers that still have `HOSTS=` emit `status=degraded` with `labels.incomplete=true` instead of inventing an analyzer code. Recover outcomes use the last `Recovery succeeded on attempt` / `Recovery attempt … failed` line (including host-prefixed wrapper lines); `Recovery completed at` alone is not success. `Analysis exit code: N` may have a host/timestamp prefix. Repeatable `--label key=value` applies to every leftover in that invocation.
 
-`--dry-run` prints one JSON line per leftover and never writes.
+Single-node Galaxy diag (`health_check_test_suite/run_diag.sh`) is unchanged: it still writes `diag_report.json`. Map that artifact into the same cluster health record after the fact. Clocks (`ts`, `duration_s`), host, tier, and board rev come from the JSON — do not pass them by hand.
+
+```bash
+python3 tools/scaleout/exabox/analyze_host_health_results.py \
+  --json /path/to/diag_report.json
+
+python3 tools/scaleout/exabox/report_cluster_health.py \
+  --from-diag-report /path/to/diag_report.json \
+  --dry-run
+```
+
+`--from-diag-report` sets `test_type=host`. PASS → `passed` (analyzer 0), WARN → `degraded` (2), FAIL → `failed` (1). Dry-run diag reports are refused. Optional `--label superpod=…` / `quad=…` / `ring=…` are still caller-supplied.
+
+`--dry-run` prints one JSON line per leftover (or one line for `--from-diag-report`) and never writes.
 
 ### Dispatch Tests
 
@@ -379,6 +392,7 @@ A missing cable or bad port/connection will show up as a **consistently missing 
 | `analyze_validation_results.py` | Parse validation logs |
 | `analyze_dispatch_results.py` | Parse dispatch test logs |
 | `analyze_fabric_results.py` | Parse fabric test logs |
+| `analyze_host_health_results.py` | Map `diag_report.json` to a host analyzer code |
 | `report_cluster_health.py` | Emit cluster health JSON after analyze |
 | `mpi-docker` | MPI+Docker wrapper (`--help` for usage) |
 

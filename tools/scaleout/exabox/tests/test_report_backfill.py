@@ -273,6 +273,31 @@ class TestIncompleteAndLargeLogs(unittest.TestCase):
             self.assertEqual(leftover.analyzer_code, 13)
             self.assertFalse(leftover.incomplete)
 
+    def test_analysis_exit_with_host_prefix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            logs = Path(tmp) / "logs"
+            logs.mkdir()
+            dest = logs / "physical_validation-20260819T060200Z.log"
+            dest.write_text(
+                "=== Physical Validation - 20260819T060200Z ===\n"
+                "HOSTS=bh-glx-110-c01u02\n"
+                "[bh-glx-110-c01u02][06:02:00] Analysis exit code: 7\n",
+                encoding="utf-8",
+            )
+            leftover = leftover_from_log("physical", dest, Path(tmp))
+            self.assertIsNotNone(leftover)
+            self.assertEqual(leftover.analyzer_code, 7)
+            self.assertFalse(leftover.incomplete)
+
+    def test_backfill_cli_keeps_caller_labels(self):
+        rc, out, err = _run(_backfill_argv("--label", "superpod=SC16_1", "--label", "ring=SC16"))
+        self.assertEqual(rc, 0, err)
+        records = [json.loads(ln) for ln in out.splitlines() if ln]
+        self.assertTrue(records)
+        for rec in records:
+            self.assertEqual(rec["labels"]["superpod"], "SC16_1")
+            self.assertEqual(rec["labels"]["ring"], "SC16")
+
     def test_footer_across_chunk_boundary(self):
         with tempfile.TemporaryDirectory() as tmp:
             logs = Path(tmp) / "logs"
@@ -343,6 +368,69 @@ class TestRecursiveDedup(unittest.TestCase):
             keys = [leftover_key(item) for item in leftovers]
             self.assertEqual(len(keys), 2)
             self.assertEqual(len(set(keys)), 1)
+
+
+class TestHostDiagLeftover(unittest.TestCase):
+    def test_discover_diag_report_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "diag_report.json"
+            dest.write_text((FIXTURES / "diag_report_pass.json").read_text(encoding="utf-8"), encoding="utf-8")
+            leftovers = discover_leftovers(Path(tmp))
+            self.assertEqual(len(leftovers), 1)
+            leftover = leftovers[0]
+            self.assertEqual(leftover.test_type, "host")
+            self.assertEqual(leftover.hosts, "bh-glx-110-c01u02")
+            self.assertEqual(leftover.analyzer_code, 0)
+            self.assertEqual(leftover.ts, "2026-08-19T03:12:36Z")
+            self.assertEqual(leftover.duration_s, 36.5)
+            self.assertEqual(leftover.labels["tier"], "light")
+            self.assertEqual(leftover.labels["board_rev"], "RevC")
+            rc, out, err = _run(
+                [
+                    "--from-artifact-dir",
+                    tmp,
+                    "--triggered-by",
+                    "operator",
+                    "--dry-run",
+                ]
+            )
+            self.assertEqual(rc, 0, err)
+            record = loads_and_validate(out.splitlines()[0], file_written=False)
+            self.assertEqual(record["test_type"], "host")
+            self.assertEqual(record["status"], "passed")
+            self.assertEqual(record["duration_s"], 36.5)
+            self.assertEqual(record["labels"]["tier"], "light")
+
+    def test_skips_dry_run_diag_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "diag_report.json"
+            dest.write_text((FIXTURES / "diag_report_dry_run.json").read_text(encoding="utf-8"), encoding="utf-8")
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                leftovers = discover_leftovers(Path(tmp))
+            self.assertEqual(leftovers, [])
+            self.assertIn("dry-run", stderr.getvalue())
+
+    def test_cli_duration_s_does_not_stamp_physical(self):
+        rc, out, err = _run(_backfill_argv("--duration-s", "99"))
+        self.assertEqual(rc, 0, err)
+        for line in out.splitlines():
+            if not line:
+                continue
+            rec = json.loads(line)
+            self.assertNotIn("duration_s", rec)
+
+    def test_recursive_nested_diag_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            nested = Path(tmp) / "node-a" / "results"
+            nested.mkdir(parents=True)
+            (nested / "diag_report.json").write_text(
+                (FIXTURES / "diag_report_warn.json").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            leftovers = discover_leftovers(Path(tmp), recursive=True)
+            self.assertEqual(len(leftovers), 1)
+            self.assertEqual(leftovers[0].analyzer_code, 2)
 
 
 if __name__ == "__main__":

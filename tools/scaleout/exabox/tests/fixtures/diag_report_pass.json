@@ -1,0 +1,17 @@
+{
+  "tool_version": "0.3.0-draft",
+  "tier": "light",
+  "host": "bh-glx-110-c01u02",
+  "started_utc": "2026-08-19T03:12:00.000000+00:00",
+  "dry_run": false,
+  "tt_smi_version": "5.1.1",
+  "detected_board_rev": "RevC",
+  "phases": {
+    "snapshot": {"name": "snapshot", "status": "PASS", "duration_s": 1.0, "checks": [], "error": ""},
+    "reset_loop": {"name": "reset_loop", "status": "PASS", "duration_s": 10.0, "checks": [], "error": ""},
+    "tests": {"name": "tests", "status": "PASS", "duration_s": 25.0, "checks": [], "error": ""}
+  },
+  "ended_utc": "2026-08-19T03:12:36.500000+00:00",
+  "total_duration_s": 36.5,
+  "overall_status": "PASS"
+}

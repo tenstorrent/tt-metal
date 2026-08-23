@@ -20,7 +20,7 @@ from typing import Any
 
 SCHEMA_ID = "exabox.cluster_health.v1"
 
-TEST_TYPES: frozenset[str] = frozenset({"physical", "fabric", "recover", "dispatch"})
+TEST_TYPES: frozenset[str] = frozenset({"physical", "fabric", "recover", "dispatch", "host"})
 STATUSES: frozenset[str] = frozenset({"passed", "failed", "skipped", "degraded"})
 
 REQUIRED_FIELDS: tuple[str, ...] = ("schema", "ts", "test_type", "status", "hosts")

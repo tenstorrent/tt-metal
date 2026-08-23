@@ -56,6 +56,13 @@ class TestValidFixtures(unittest.TestCase):
         self.assertNotIn("analyzer_code", record)
         validate_record(record, file_written=False)
 
+    def test_host_from_diag(self):
+        record = _load_fixture("host_from_diag.json")
+        validate_record(record, file_written=False)
+        self.assertEqual(record["test_type"], "host")
+        self.assertEqual(record["status"], "passed")
+        self.assertEqual(record["analyzer_code"], 0)
+
 
 class TestRejects(unittest.TestCase):
     def _dry_run(self) -> dict:
@@ -147,6 +154,7 @@ class TestJsonSchemaDocument(unittest.TestCase):
     def test_documented_schema_forbids_unknown_properties(self):
         self.assertFalse(CLUSTER_HEALTH_JSON_SCHEMA.get("additionalProperties"))
         self.assertEqual(CLUSTER_HEALTH_JSON_SCHEMA["properties"]["schema"]["const"], SCHEMA_ID)
+        self.assertIn("host", CLUSTER_HEALTH_JSON_SCHEMA["properties"]["test_type"]["enum"])
         self.assertFalse(CLUSTER_HEALTH_JSON_SCHEMA["properties"]["topology"]["additionalProperties"])
 
 

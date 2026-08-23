@@ -14,15 +14,18 @@ from __future__ import annotations
 import json
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from analyze_host_health_results import DIAG_REPORT_NAME, parse_diag_report
+
 _HEAD_BYTES = 65536
 _CHUNK_BYTES = 65536
 _CHUNK_OVERLAP = 2048
-_ANALYSIS_RC = re.compile(r"^Analysis exit code:\s*(-?\d+)\s*$", re.MULTILINE)
+# Allow a host/timestamp prefix; keep end-of-line so MPI bodies are not grepped.
+_ANALYSIS_RC = re.compile(r"Analysis exit code:\s*(-?\d+)\s*$", re.MULTILINE)
 _HOSTS_LINE = re.compile(r"^HOSTS=(.*)$", re.MULTILINE)
 _OUTPUT_DIR_LINE = re.compile(r"^OUTPUT_DIR=(.*)$", re.MULTILINE)
 _FILENAME_TS = re.compile(r"(\d{8}T\d{6}Z)")
@@ -32,9 +35,11 @@ _WRAPPER_HEADER = re.compile(
     re.MULTILINE,
 )
 # Last terminal recover event wins. Do not treat "Recovery completed at …" as success.
+# Last terminal recover event wins. Do not treat "Recovery completed at …" as success.
+# Host-prefixed wrapper lines: "[host][ts] Recovery attempt 1 of 1 failed (exit code 1)."
 _RECOVERY_EVENT = re.compile(
     r"Recovery succeeded on attempt"
-    r"|Recovery attempt .+ failed \(exit code (-?\d+)\)"
+    r"|Recovery attempt .+? failed \(exit code (-?\d+)\)"
     r"|Recover completed successfully"
     r"|Recover failed(?:\s|$|\()"
 )
@@ -59,6 +64,8 @@ class Leftover:
     source: Path
     incomplete: bool = False
     incomplete_reason: str = ""
+    duration_s: float | None = None
+    labels: dict[str, str] = field(default_factory=dict)
 
 
 def _warn(message: str) -> None:
@@ -368,6 +375,39 @@ def leftover_from_log(test_type: str, log_path: Path, root: Path) -> Leftover | 
     )
 
 
+def leftover_from_diag_report(path: Path, root: Path) -> Leftover | None:
+    try:
+        extract = parse_diag_report(path)
+    except ValueError as exc:
+        _warn(f"skipping {path}: {exc}")
+        return None
+    if extract.dry_run:
+        _warn(f"skipping {path}: dry-run diag report")
+        return None
+    ts = extract.ts
+    if ts is None:
+        ts = mtime_utc(path).strftime("%Y-%m-%dT%H:%M:%SZ")
+    artifact_dir = extract.artifact_dir
+    artifact_path = Path(artifact_dir)
+    if not artifact_path.is_absolute():
+        artifact_dir = str((root / artifact_dir).resolve())
+    if extract.incomplete:
+        _warn(f"{path}: incomplete diag report (no overall_status); emitting degraded record")
+    return Leftover(
+        test_type="host",
+        hosts=extract.hosts,
+        analyzer_code=extract.analyzer_code,
+        artifact_dir=artifact_dir,
+        ts=ts,
+        mtime=mtime_utc(path),
+        source=path,
+        incomplete=extract.incomplete,
+        incomplete_reason=extract.incomplete_reason,
+        duration_s=extract.duration_s,
+        labels=dict(extract.labels),
+    )
+
+
 def leftover_key(leftover: Leftover) -> tuple[str, str, str, str, int | None]:
     return (
         leftover.test_type,
@@ -402,6 +442,17 @@ def _iter_wrapper_logs(logs_dir: Path, test_type: str, patterns: tuple[str, ...]
             yield log_path
 
 
+def _iter_diag_reports(root: Path, recursive: bool) -> Iterator[Path]:
+    if recursive:
+        for path in sorted(root.rglob(DIAG_REPORT_NAME)):
+            if path.is_file():
+                yield path
+        return
+    direct = root / DIAG_REPORT_NAME
+    if direct.is_file():
+        yield direct
+
+
 def discover_leftovers(root: Path, *, recursive: bool = False) -> list[Leftover]:
     root = root.resolve()
     found: list[Leftover] = []
@@ -420,6 +471,15 @@ def discover_leftovers(root: Path, *, recursive: bool = False) -> list[Leftover]
                     continue
                 seen_sources.add(resolved)
                 found.append(leftover)
+
+    for diag_path in _iter_diag_reports(root, recursive):
+        resolved = diag_path.resolve()
+        if resolved in seen_sources:
+            continue
+        leftover = leftover_from_diag_report(diag_path, root)
+        seen_sources.add(resolved)
+        if leftover is not None:
+            found.append(leftover)
 
     return found
 
