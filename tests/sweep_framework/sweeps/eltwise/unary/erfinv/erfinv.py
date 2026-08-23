@@ -56,7 +56,7 @@ def run(
     torch.manual_seed(0)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float16), input_a_dtype
+        partial(torch_random, low=-0.999, high=0.999, dtype=torch.float16), input_a_dtype
     )(input_shape)
     golden_function = ttnn.get_golden_function(ttnn.erfinv)
     torch_output_tensor = golden_function(torch_input_tensor_a)

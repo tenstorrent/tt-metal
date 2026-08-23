@@ -26,11 +26,11 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void erfinv_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfinv, (APPROX), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfinv, (APPROX, 8, DST_ACCUM_MODE), idst, VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void erfinv_tile_init() { MATH(SFPU_UNARY_INIT_FN(erfinv, sfpu::erfinv_init, (APPROX))); }
+ALWI void erfinv_tile_init() { MATH(SFPU_UNARY_INIT_FN(erfinv, sfpu::erfinv_init, (APPROX, DST_ACCUM_MODE))); }
 }  // namespace ckernel

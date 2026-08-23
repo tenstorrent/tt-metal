@@ -52,23 +52,24 @@ constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
 
 #endif
 
+template <bool APPROXIMATION_MODE>
+sfpi_inline sfpi::vFloat calculate_erf_body(sfpi::vFloat x) {
+    x = sfpi::symmetric_clamp(x, 10.0f);
+    sfpi::vFloat result = piecewise_rational_eval<
+        ERF_NUM_DEGREE,
+        ERF_DEN_DEGREE,
+        ERF_NUM_SEGMENTS,
+        ERF_LUT_SIZE,
+        true,
+        APPROXIMATION_MODE>(ERF_LUT, x);
+    return sfpi::clamp(result, -1.0f, +1.0f);
+}
+
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_erf() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        // Clamp |x| to 10.0 before evaluation (erf is odd, rational is exact at boundary)
-        x = sfpi::symmetric_clamp(x, 10.0f);
-        sfpi::vFloat result = piecewise_rational_eval<
-            ERF_NUM_DEGREE,
-            ERF_DEN_DEGREE,
-            ERF_NUM_SEGMENTS,
-            ERF_LUT_SIZE,
-            true,
-            APPROXIMATION_MODE>(ERF_LUT, x);
-        // Saturate to [-1, 1]: rational fit is not bounded and overshoots by
-        // up to ~3e-8 (FP32) / ~2e-4 (BF16 LUT) in the tail. Persists in FP32
-        // dest register and biases downstream ops (e.g. decomposed GELU in CLIP).
-        result = sfpi::clamp(result, -1.0f, +1.0f);
+        sfpi::vFloat result = calculate_erf_body<APPROXIMATION_MODE>(x);
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
