@@ -11,16 +11,16 @@
 
 namespace ttnn::prim {
 
-using namespace tt::tt_metal;
-
 thread_local std::unordered_map<std::size_t, std::uint32_t>
     HaloDeviceOperation::sliding_window_max_out_nsticks_per_core = {};
 
 // TODO: Look into increasing this to tradeoff some L1 for performance (#19980)
 
 void HaloDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args;
+
+    TT_FATAL(!args.remote_read, "Halo remote_read is not supported");
 
     // validate input data tensor
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
@@ -77,7 +77,7 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
     auto out_mem_config = MemoryConfig(
         input_tensor.memory_config().memory_layout(),
         input_tensor.memory_config().buffer_type(),
-        ShardSpec{
+        tt::tt_metal::ShardSpec{
             input_tensor.memory_config().shard_spec()->grid,
             shard_shape,
             input_tensor.memory_config().shard_spec()->orientation});
@@ -86,8 +86,12 @@ HaloDeviceOperation::spec_return_value_t HaloDeviceOperation::compute_output_spe
     padded_output_shape[-1] = tt::round_up(padded_output_shape[-1], shard_shape[1]);
     return tt::tt_metal::TensorSpec(
         output_shape,
-        TensorLayout::fromPaddedShape(
-            output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config, output_shape, padded_output_shape));
+        tt::tt_metal::TensorLayout::fromPaddedShape(
+            output_dtype,
+            tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
+            out_mem_config,
+            output_shape,
+            padded_output_shape));
 }
 
 HaloDeviceOperation::tensor_return_value_t HaloDeviceOperation::create_output_tensors(
@@ -105,8 +109,6 @@ Tensor halo(
     bool transpose_mcast,
     bool is_out_tiled,
     bool config_tensors_in_dram) {
-    using OperationType = HaloDeviceOperation;
-
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Halo expects sharded input tensor");
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
@@ -117,22 +119,23 @@ Tensor halo(
     //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along
     //       width)
     auto sliding_window_hash = config.get_hash();
-    if (!OperationType::sliding_window_max_out_nsticks_per_core.contains(sliding_window_hash)) {
+    if (!HaloDeviceOperation::sliding_window_max_out_nsticks_per_core.contains(sliding_window_hash)) {
         auto op_trace_metadata = ttnn::operations::sliding_window::generate_op_trace_metadata(config);
         auto shard_boundaries = ttnn::operations::sliding_window::generate_shard_boundaries(config);
-        OperationType::sliding_window_max_out_nsticks_per_core.emplace(
+        HaloDeviceOperation::sliding_window_max_out_nsticks_per_core.emplace(
             sliding_window_hash, ttnn::operations::sliding_window::generate_max_out_nsticks_per_core(shard_boundaries));
     }
 
-    uint32_t max_out_nsticks_per_core = OperationType::sliding_window_max_out_nsticks_per_core.at(sliding_window_hash);
+    uint32_t max_out_nsticks_per_core =
+        HaloDeviceOperation::sliding_window_max_out_nsticks_per_core.at(sliding_window_hash);
     uint32_t in_nsticks_per_core = input_tensor.memory_config().shard_spec()->shape[0];
     ttnn::operations::sliding_window::ParallelConfig p_config;
     p_config.grid = input_tensor.shard_spec().value().grid;
     p_config.shard_scheme = input_tensor.memory_config().memory_layout();
     p_config.shard_orientation = input_tensor.shard_spec().value().orientation;
 
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    return ttnn::device_operation::launch<HaloDeviceOperation>(
+        HaloDeviceOperation::operation_attributes_t{
             .config = config,
             .parallel_config = p_config,
             .pad_val = pad_val,

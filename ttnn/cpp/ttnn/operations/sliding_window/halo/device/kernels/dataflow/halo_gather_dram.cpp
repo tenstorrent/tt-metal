@@ -18,7 +18,7 @@ template <
     uint32_t config_tensor_in_dram,
     uint32_t enable_padding,
     uint32_t use_pad_scratch>
-TT_KERNEL void halo_gather() {
+TT_KERNEL void halo_gather(uint32_t config_read_index) {
     halo::gather<
         pad_val,
         input_npages,
@@ -33,5 +33,5 @@ TT_KERNEL void halo_gather() {
         block_stride,
         config_tensor_in_dram,
         enable_padding,
-        use_pad_scratch>(0);
+        use_pad_scratch>(config_read_index);
 }
