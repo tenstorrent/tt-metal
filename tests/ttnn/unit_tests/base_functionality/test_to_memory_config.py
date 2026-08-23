@@ -11,31 +11,11 @@ import math
 from tests.ttnn.utils_for_testing import (
     assert_equal,
     assert_allclose,
-    make_disjoint_dram_core_range_set,
     make_full_dram_core_range_set,
+    resolve_dram_grid,
 )
 
 pytestmark = pytest.mark.use_module_device
-
-
-# DRAM core grids that can only be built once a device is available are referenced from
-# `@pytest.mark.parametrize` by a stable string key instead of by the factory callable
-# itself, so that every pytest-xdist worker collects an identical set of test IDs.
-DRAM_GRID_FACTORIES = {
-    "disjoint_dram": make_disjoint_dram_core_range_set,
-    "full_dram": make_full_dram_core_range_set,
-}
-
-
-def resolve_dram_grid(grid, device):
-    """Resolve a parametrized `grid` value into a concrete `ttnn.CoreRangeSet`.
-
-    String values are looked up in `DRAM_GRID_FACTORIES` and built for `device`;
-    already-concrete `CoreRangeSet` values are returned unchanged.
-    """
-    if isinstance(grid, str):
-        return DRAM_GRID_FACTORIES[grid](device)
-    return grid
 
 
 # Test for int types

@@ -673,6 +673,19 @@ int main(int argc, char** argv) {
     try {
         log_info(tt::LogFabric, "Generating rank bindings...");
 
+        // Factory System Descriptor (FSD) path comes from RTOptions, populated from the
+        // TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH environment variable (set by tt-run and propagated to this
+        // MPI worker). NOTE: FSD-driven mapping is not yet implemented; today we always fall back to live PSD
+        // discovery below. See issue #52859 for the follow-up that consumes this.
+        const auto& fsd_path = tt::tt_metal::MetalContext::instance().rtoptions().get_factory_system_descriptor_path();
+        if (!fsd_path.empty()) {
+            log_info(
+                tt::LogFabric,
+                "Factory System Descriptor provided via TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH ({}); FSD-driven "
+                "mapping not yet implemented, falling back to live PSD discovery.",
+                fsd_path);
+        }
+
         // Stage: Run PSD discovery
         log_info(tt::LogFabric, "Stage: Running Physical System Descriptor discovery...");
         PhysicalSystemDescriptor psd = run_psd_discovery();

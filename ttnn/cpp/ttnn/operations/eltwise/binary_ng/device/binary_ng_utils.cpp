@@ -404,6 +404,13 @@ OpConfig::OpConfig(
     }
 }
 
+// ADD/SUB/RSUB only reach the SFPU when the caller asked for the accurate path
+// (fast_and_approximate_mode = false), so the bf16 narrowing is always RNE, matching what
+// mul_binary_tile/div_binary_tile do. The LLK guards this on !is_fp32_dest_acc_en, and
+// binary_ng always enables fp32 dest accumulation for FLOAT32 operands, so the fp32 route
+// that already used the SFPU is unaffected.
+constexpr auto kRneDstRoundingMode = "ckernel::DstRoundingMode::NearestEven";
+
 std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu_binary_op, DataType dtype) {
     using enum OpConfig::SfpuBinaryOp;
 
@@ -416,12 +423,12 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             if (int_data_format) {
                 return {"add_int_tile_init();", fmt::format("add_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"add_binary_tile_init();", "add_binary_tile"};
+            return {"add_binary_tile_init();", fmt::format("add_binary_tile<{}>", kRneDstRoundingMode)};
         case SUB:
             if (int_data_format) {
                 return {"sub_int_tile_init();", fmt::format("sub_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"sub_binary_tile_init();", "sub_binary_tile"};
+            return {"sub_binary_tile_init();", fmt::format("sub_binary_tile<{}>", kRneDstRoundingMode)};
         case MUL:
             if (int_data_format) {
                 return {
@@ -456,7 +463,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             if (int_data_format) {
                 return {"rsub_int_tile_init();", fmt::format("rsub_int_tile<DataFormat::{}>", *int_data_format)};
             }
-            return {"rsub_binary_tile_init();", "rsub_binary_tile"};
+            return {"rsub_binary_tile_init();", fmt::format("rsub_binary_tile<{}>", kRneDstRoundingMode)};
         case GCD: return {"gcd_tile_init();", "gcd_tile"};
         case LCM: return {"lcm_tile_init();", "lcm_tile"};
         case LOGADDEXP: return {"logaddexp_binary_tile_init();", "logaddexp_binary_tile"};
