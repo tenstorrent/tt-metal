@@ -78,7 +78,8 @@
 #      UNCHANGED at 25; new flags (list-schedule, lreg-alloc [+dst-layout-32b
 #      harness wiring], pressure-schedule+milp) are Init(0) on-plus knob legs.
 #      First silicon = the pin-15 measurement pass (MEASUREMENT-PLAN-PIN15.md).
-#  25. 1540d13a4054a9263e2d7dc5f8afc58a6a090b161fb3ce3bb30efb70be8100f3 (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 25 = pin 24 + FV X6 face-transpose builtins + surface (2026-08-22)
+#  26. 6781b2063277d87b0898d79bc42bcfe2202bb0bca2244819eb1e38195fc0fe79 (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 26 = pin 25 + FW record-hoist tile-loop generalization (2026-08-23)
+#  25. 1540d13a4054a9263e2d7dc5f8afc58a6a090b161fb3ce3bb30efb70be8100f3 (superseded by 26; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 25 = pin 24 + FV X6 face-transpose builtins + surface (2026-08-22)
 #  24. c944257c78f3b2c27d954f7e9378776215bfe5bd3827e2023f0741483e9b58d3 (superseded by 25; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 24 = pin 23 + FT window-pairing drain tuner + FU IRA dual-bank binding (2026-08-22)
 #  23. 9acd8c1761b5712287c6d45cf49fc5804368b7e41d21351a0ee8fed52bdb7671 (superseded by 24; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 23 = pin 22 + FR FP-2 replay-vision checker + FS FP-3 persistence model (2026-08-22)
 #  22. 1505b01f7b6fde1f2c3d00fc42e9cc1018f7321bb0650324992ce1edd6ffd646 (superseded by 23; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 22 = pin 21 + FP-1 fix (2026-08-22)
