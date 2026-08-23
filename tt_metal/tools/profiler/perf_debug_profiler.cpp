@@ -1286,6 +1286,41 @@ bool PerfDebugProfiler::boot_device(
                     flip_cores[a].y);
             }
         }
+        // DOES A DRAINER SIT ON A dram_barrier TARGET? Cluster::dram_barrier passes no subchannel, so
+        // LocalChip::dram_membar syncs subchannel 0 of EVERY channel -- and every LaunchProgram carries one.
+        // A drainer resident on such a core is in stream mode, where an inbound DRAM-range address no longer
+        // forwards to GDDR, so the barrier is addressing a core whose semantics we changed. N+32 fixed the
+        // ordering for the FLIP's own barrier (one launch, before any core flips); it cannot help the
+        // barrier inside every later program, including weight upload, which runs with all six resident.
+        // Reported rather than fatal: this configuration does usually work, and the point is to know
+        // whether a bring-up or upload MMIO timeout had this available as an explanation.
+        {
+            std::vector<uint32_t> collide;
+            for (int ch = 0; ch < soc.get_num_dram_channels(); ch++) {
+                const CoreCoord bar = soc.get_dram_core_for_channel(ch, 0, CoordSystem::LOGICAL);
+                for (uint32_t d = 0; d < flip_cores.size(); d++) {
+                    if (flip_cores[d] == bar) {
+                        collide.push_back(d);
+                    }
+                }
+            }
+            if (!collide.empty()) {
+                log_warning(
+                    tt::LogMetal,
+                    "[perf-debug profiler] {} of {} drainers sit on a dram_barrier target core (subchannel 0 "
+                    "of their channel). Every LaunchProgram barriers those cores while they are in stream "
+                    "mode; a 60-70 ms MMIO timeout at bring-up or weight upload has this as a candidate.",
+                    collide.size(),
+                    flip_cores.size());
+            } else {
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] no drainer sits on a dram_barrier target core (checked {} channels "
+                    "against {} drainers).",
+                    soc.get_num_dram_channels(),
+                    flip_cores.size());
+            }
+        }
         set_drisc_niu_mode(ctx.device, flip_cores, 1);
 
     for (uint32_t d = 0; d < ctx.n_drisc; d++) {
