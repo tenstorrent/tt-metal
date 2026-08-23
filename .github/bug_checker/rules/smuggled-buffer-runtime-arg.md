@@ -4,11 +4,12 @@
 
 When the program cache hits, TTNN does **not** rebuild the `Program` — it reuses
 the compiled program from the first call and only patches the specific runtime
-args that were registered as dynamic (e.g. via a `BufferBinding` /
-`get_dynamic_runtime_args`-style mechanism in `override_runtime_arguments()`).
-Any buffer address written into a kernel's runtime-arg vector *without* being
-registered that way is frozen at whatever value it had on the call that first
-populated the cache entry.
+args it knows are dynamic. There are three ways an arg becomes known-dynamic: a
+`BufferBinding` auto-registered by `KernelDescriptor::emplace_runtime_args()`,
+the op's `DeviceOperation::get_dynamic_runtime_args()` hook, or an explicit
+hand-written `override_runtime_arguments()`. Any buffer address written into a
+kernel's runtime-arg vector through *none* of those is frozen at whatever value
+it had on the call that first populated the cache entry.
 
 This is easy to introduce because the buggy and correct code look almost
 identical at the call site — `buffer->address()` compiles and runs fine on the
@@ -166,36 +167,51 @@ args.push_back((uint32_t)input_tensor.buffer()->address());  // smuggled-rta-ok:
 ## Good Code Examples
 
 ```cpp
-// GOOD: buffer address registered as a dynamic binding so the program
-// cache knows to patch it on every call, hit or miss
-tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
-shared_variables.buffer_bindings.push_back(
-    BufferBinding{reader_kernel_id, core, /*arg_index=*/0, src_buffer});
-
-void override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t&,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t&) {
-    for (auto& binding : cached_program.shared_variables.buffer_bindings) {
-        auto& rt_args = GetRuntimeArgs(cached_program.program, binding.kernel_id, binding.core);
-        rt_args[binding.arg_index] = tensor_args.input.buffer()->address();
-    }
-}
+// GOOD: the Buffer* overload of KernelDescriptor::emplace_runtime_args()
+// auto-registers a BufferBinding at that arg position, so the framework
+// resolves it to a RuntimeArgsData* on the cache miss and patches it
+// directly on every cache hit — no override_runtime_arguments needed, and
+// no create_descriptor() rebuild.
+KernelDescriptor reader_kernel{...};
+reader_kernel.emplace_runtime_args(core, {src_buffer, num_tiles, start_id});
+//                                        ^^^^^^^^^^ Buffer*, auto-bound
 ```
 
 ```cpp
-// GOOD: optional-output aliasing is re-resolved and re-patched every call,
-// not just baked in once at create() time
+// GOOD: same thing for a dynamically-built arg list — RTArgList accepts
+// uint32_t and Buffer* entries, and Buffer* entries auto-register.
+KernelDescriptor::RTArgList args;
+args.reserve(4);
+args.push_back(src_buffer);          // registers a BufferBinding
+args.push_back(dst_buffer);          // registers a BufferBinding
+args.push_back(num_tiles);           // plain value
+args.append(fused_op_signaler_args); // plain uint32_t range
+reader_kernel.emplace_runtime_args(core, args);
+```
+
+```cpp
+// GOOD: for common (non-per-core) runtime args, the equivalent call is
+// emplace_common_runtime_args(), which registers a CommonBufferBinding.
+writer_kernel.emplace_common_runtime_args({dst_buffer, page_size_u32});
+```
+
+```cpp
+// GOOD: on a legacy ProgramFactoryConcept op (no descriptor, so no
+// framework BufferBinding available), optional-output aliasing is
+// re-resolved and re-patched on every call rather than baked in at
+// create() time. `out_addr_slots` here is a field of this op's own
+// shared_variables_t recording which arg index holds the address — it is
+// NOT the framework's BufferBinding type.
 void override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t&,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto& out_tensor = output.has_value() ? output.value() : tensor_args.input;
-    for (auto& binding : cached_program.shared_variables.output_bindings) {
-        auto& rt_args = GetRuntimeArgs(cached_program.program, binding.kernel_id, binding.core);
-        rt_args[binding.arg_index] = out_tensor.buffer()->address();
+    const auto& shared = cached_program.shared_variables;
+    auto& rt_args = GetRuntimeArgs(cached_program.program, shared.writer_kernel_id);
+    for (const auto& core : shared.cores) {
+        rt_args[core.x][core.y][shared.out_addr_slot] = out_tensor.buffer()->address();
     }
 }
 ```

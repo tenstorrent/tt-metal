@@ -26,7 +26,13 @@ rules:
     suggest_fix: true
     model: null
     paths:
+      # Modern convention (*_device_operation.cpp/hpp) plus the legacy
+      # *_op.cpp/hpp family, which still carries ~9 custom
+      # compute_program_hash() implementations (reshape_op, pool_op,
+      # rs_matmul_op, strided_all_gather_async_op, ...).
       - "ttnn/cpp/ttnn/operations/**/device/*device_operation*"
+      - "ttnn/cpp/ttnn/operations/**/device/*_op.cpp"
+      - "ttnn/cpp/ttnn/operations/**/device/*_op.hpp"
       - "tt-train/sources/**/device/*device*"
 
   smuggled-buffer-runtime-arg:
@@ -35,7 +41,17 @@ rules:
     suggest_fix: true
     model: null
     paths:
-      - "ttnn/cpp/ttnn/operations/**/device/*program_factory*"
+      # Host-side program construction uses several naming families beyond
+      # *program_factory*: *_factory.cpp (all_gather_multicast_factory,
+      # index_fill_multi_core_factory), *_program.cpp (reduce_to_root_program),
+      # *_device_operation.cpp, legacy *_op.cpp, and the *_fusion.cpp helpers.
+      # Kernel sources under device/kernels/ are deliberately not matched.
+      - "ttnn/cpp/ttnn/operations/**/device/*factory*"
+      - "ttnn/cpp/ttnn/operations/**/device/*program*"
+      - "ttnn/cpp/ttnn/operations/**/device/*device_operation*"
+      - "ttnn/cpp/ttnn/operations/**/device/*_op.cpp"
+      - "ttnn/cpp/ttnn/operations/**/device/*_op.hpp"
+      - "ttnn/cpp/ttnn/operations/**/device/*fusion*"
       - "tt_metal/impl/program/**"
       - "tt-train/sources/**/device/*program_factory*"
 
@@ -45,8 +61,14 @@ rules:
     suggest_fix: true
     model: null
     paths:
-      - "ttnn/cpp/ttnn/operations/**/device/*program_factory*"
+      # Same naming families as smuggled-buffer-runtime-arg: an
+      # override_runtime_arguments() lives wherever the factory lives.
+      - "ttnn/cpp/ttnn/operations/**/device/*factory*"
+      - "ttnn/cpp/ttnn/operations/**/device/*program*"
       - "ttnn/cpp/ttnn/operations/**/device/*device_operation*"
+      - "ttnn/cpp/ttnn/operations/**/device/*_op.cpp"
+      - "ttnn/cpp/ttnn/operations/**/device/*_op.hpp"
+      - "ttnn/cpp/ttnn/operations/**/device/*fusion*"
 
   llk-stale-hw-config-state:
     file: llk-stale-hw-config-state.md
