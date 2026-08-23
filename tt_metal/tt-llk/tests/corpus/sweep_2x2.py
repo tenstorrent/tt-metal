@@ -408,7 +408,25 @@ ON_FLAGS = (
     # the where TUs).  Measured (lane CA, 3 fresh procs, BH p150): minmax
     # TILE_LOOP/tile 18.727 -> 16.72 = -5.1% vs hand 17.628 (WIN);
     # where TTNN_WHERE_BODY 167.5 -> 154.5 = -2.9% vs hand 159.17 (WIN).
-    "-mtt-tensix-optimize-init-hoist"
+    "-mtt-tensix-optimize-init-hoist "
+    # PROMOTED 2026-08-23 (owner order "promote the knobs", pin-26 union
+    # 6781b2063277): the three knobs with completed silicon A/B books.
+    #   window-pairing (lane FT): mulint32-fresh KERNEL -11.32%
+    #     (device-golden, knob leg = exactly ONE changed TU corpus-wide);
+    #   replay-record-hoist (lanes EC+FW): blaze sdpa_reduce max/sum x
+    #     t8/t32 all knob-WINS (-0.39/-1.21/-0.52/-0.84), knob leg 38
+    #     adjudicated TUs CRAQ 67/0; FT-composition byte-proven
+    #     (mulint32 .text identical with both flags on);
+    #   lreg-alloc (lanes DP+DS+FU): corpus ZERO-delta with the flag ON
+    #     (unlock-class: engages and reproduces IRA's bytes; opens
+    #     refused-pressure shapes like the top16 lift), DS arsenal 25/25.
+    # Promotion gates: R9 union witnesses added and union-verified on the
+    # installed pin-26 binary; ON-28-vs-ON-25 leg byte-compare adjudicated
+    # (delta = exactly the lane-proven TU sets); KNOB_MODES flipped
+    # on-plus -> drop-one for all three (their tokens are now ON-set).
+    "-mtt-tensix-optimize-window-pairing "
+    "-mtt-tensix-optimize-replay-record-hoist "
+    "-mtt-tensix-optimize-lreg-alloc"
     # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
     # its only engagement channel was the trusted TTREGION source markers in
     # the LLK headers, and trusted source annotation of the consumed library
@@ -669,13 +687,17 @@ KNOB_MODES = {
     # post-ON pipeline's regions), so the booking A/B is (ON + flag) vs
     # plain ON — the same reasoning as the pin-14 on-plus seeds.
     "list-schedule": "on-plus",
-    "lreg-alloc": "on-plus",
+    # lreg-alloc PROMOTED into the ON set 2026-08-23 — drop-one from here
+    # (solo would be structurally weaker; the binder acts on the post-ON
+    # pipeline's pressure shapes).
+    "lreg-alloc": "drop-one",
     "milp": "on-plus",
     # pin-16 booking flags (lane EN): same on-plus reasoning as the
     # pin-15 seeds — the shapes materialize on the reviewed-ON
     # pipeline's regions, so the booking A/B is (ON + flag) vs plain ON.
     "delivery-shape": "on-plus",
-    "record-hoist": "on-plus",
+    # record-hoist PROMOTED into the ON set 2026-08-23 — drop-one.
+    "record-hoist": "drop-one",
     "prera": "on-plus",
     "round-interleave": "on-plus",
     "store-fold": "on-plus",
@@ -686,9 +708,9 @@ KNOB_MODES = {
     # license's own effect.
     "reassoc": "on-plus",
     # FT window-pairing: the tuned inter-row drain exists only where the
-    # ON-set planner emission places one — on-plus is the only leg shape
-    # that can see it.
-    "window-pairing": "on-plus",
+    # ON-set planner emission places one.  PROMOTED into the ON set
+    # 2026-08-23 — drop-one from here (was on-plus while a booking knob).
+    "window-pairing": "drop-one",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
