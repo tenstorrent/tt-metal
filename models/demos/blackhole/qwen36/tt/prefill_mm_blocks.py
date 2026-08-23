@@ -35,6 +35,28 @@ MAX_L1_CB_BYTES = 1_572_864
 
 TILE_BYTES = {"bf16": 2048, "bfp8": 1088, "fp32": 4096}
 
+# Chunk-scaled prefill ACTIVATIONS (not CBs) stay in L1 only up to this M. L1 interleaved
+# buffers allocate top-down against the bottom-up CB region in each bank; the M-tall L1
+# outputs the S<=2048 sweep validated (w2/wo partials [M,5120] bf16 ~= 760 KB/bank at M=8192,
+# GDN qkvzab [M,~2060] ~= 307 KB/bank, qkv slices ~186 KB/bank) collide with program CBs at
+# chunk 8192 ("L1 buffer allocated at 335616, CB region ends at 443392", 8x9 AGMM grid).
+# Chunk 4096 ran clean on silicon (45.13 s / 100k, job after 55142) — keep its L1 placement.
+PREFILL_L1_ACT_MAX_M = 4096
+# Blackhole P150 worker grid banks backing interleaved L1 (11x10).
+L1_BANKS = 110
+
+
+def prefill_act_in_l1(m):
+    """True while the chunk-scaled prefill activations may keep their validated L1 placement;
+    above PREFILL_L1_ACT_MAX_M they move to DRAM (see the constant's comment)."""
+    return m <= PREFILL_L1_ACT_MAX_M
+
+
+def act_bytes_per_bank(rows, width_elems, elem_bytes=2, banks=L1_BANKS):
+    """Per-bank footprint of an interleaved L1 activation [rows, width_elems] (tile-padded)."""
+    tiles = math.ceil(rows / TILE_SIZE) * math.ceil(width_elems / TILE_SIZE)
+    return math.ceil(tiles / banks) * TILE_SIZE * TILE_SIZE * elem_bytes
+
 
 def _find_largest_divisor(n, max_div=8):
     for d in range(max_div, 0, -1):

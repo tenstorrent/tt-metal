@@ -20,6 +20,7 @@ from models.demos.blackhole.qwen36.tt.prefill_mm_blocks import (
     _get_out_subblock_w,
     _widest_prefill_cols,
     capped_out_block_h,
+    prefill_act_in_l1,
     prefill_mm_blocks,
 )
 

@@ -345,7 +345,10 @@ class Qwen36MLP:
             )
         # down-proj OUTPUT in L1 for the tuned prefill path (DRAM input `hidden` + L1 output = the
         # validated sweep outL1 config; tt_all_reduce already consumes an L1 partial).
-        mc_w2_out = ttnn.L1_MEMORY_CONFIG if (x.shape[-2] <= ttnn.TILE_SIZE or _prefill_tuned) else mc
+        # HP3: at chunk > 4096 the [M,5120] down-proj partial (~760 KB/bank at 8192) collides
+        # with program CBs — DRAM above PREFILL_L1_ACT_MAX_M, validated L1 placement below.
+        _w2_l1 = x.shape[-2] <= ttnn.TILE_SIZE or (_prefill_tuned and tpc.prefill_act_in_l1(x.shape[-2]))
+        mc_w2_out = ttnn.L1_MEMORY_CONFIG if _w2_l1 else mc
         partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_w2_out, program_config=w2_pc)
         ttnn.deallocate(hidden)
 

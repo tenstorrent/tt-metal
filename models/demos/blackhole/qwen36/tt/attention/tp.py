@@ -194,7 +194,10 @@ class TPAttention:
         sh = list(qkv.shape)
         # qkv3 short-lived (split by _make_heads then freed) -> L1 in PREFILL only; decode keeps DRAM
         # (L1 qkv3 breaks the decode trace). gate lives across SDPA (post-concat) -> always DRAM.
-        _qkv3_mc = ttnn.L1_MEMORY_CONFIG if sh[2] > tpc.TILE_SIZE else ttnn.DRAM_MEMORY_CONFIG
+        # HP3: chunk > 4096 keeps qkv3 in DRAM too (chunk-scaled L1 activations clash with CBs).
+        _qkv3_mc = (
+            ttnn.L1_MEMORY_CONFIG if tpc.TILE_SIZE < sh[2] and tpc.prefill_act_in_l1(sh[2]) else ttnn.DRAM_MEMORY_CONFIG
+        )
         qkv3 = ttnn.slice(qkv, (0, 0, 0, 0), (sh[0], sh[1], sh[2], qkv3_dim), memory_config=_qkv3_mc)
         gate = ttnn.slice(qkv, (0, 0, 0, qkv3_dim), (sh[0], sh[1], sh[2], qkv3_dim + gate_dim))
         ttnn.deallocate(qkv)
@@ -238,12 +241,15 @@ class TPAttention:
                     max_cols=getattr(self.args, "decode_grid_w", 8),
                     tuning=getattr(self.args, "prefill_tuning", None),
                 )
+                # HP3: the [M,dim] wo partial (~760 KB/bank at chunk 8192) collides with program
+                # CBs above 4096 — DRAM there, validated L1 placement at chunk <= 4096.
+                _wo_mc = ttnn.L1_MEMORY_CONFIG if tpc.prefill_act_in_l1(x.shape[-2]) else ttnn.DRAM_MEMORY_CONFIG
                 return ttnn.linear(
                     x,
                     weight,
                     compute_kernel_config=self.compute_cfg,
                     program_config=pc,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    memory_config=_wo_mc,
                 )
             return ttnn.linear(x, weight, compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return tpc.sharded_decode_matmul(

@@ -26,9 +26,11 @@ import pytest
 
 from models.demos.blackhole.qwen36.tt.prefill_mm_blocks import (
     MAX_L1_CB_BYTES,
+    PREFILL_L1_ACT_MAX_M,
     PREFILL_MM_SWEEP_M,
     TILE_SIZE,
     _widest_prefill_cols,
+    act_bytes_per_bank,
     capped_out_block_h,
     mm2d_scaled_cb_bytes,
     prefill_mm_blocks,
@@ -141,3 +143,32 @@ def test_capped_out_block_h_properties():
                 assert obh == m_tiles_rows, "at or below the sweep M the config must not change"
             else:
                 assert obh <= baseline, "above the sweep M the CB-scaling block must not exceed baseline"
+
+
+def test_prefill_l1_activation_gate():
+    """HP3 option b: chunk-scaled prefill activations (w2/wo partials, GDN qkvzab + qkv slices,
+    attn qkv3) keep their validated L1 placement at chunk <= 4096 and move to DRAM above it —
+    at chunk 8192 the L1 buffers collide with program CBs (measured: 'L1 buffer allocated at
+    335616, CB region ends at 443392' on the 8x9 AGMM grid; chunk 4096 ran the 100k bench clean
+    at 45.13 s). The footprint model shows why 4096 fits and 8192 cannot:
+
+        biggest single activation = the [M, dim] w2/wo partial (bf16):
+          M=2048 ~191 KB/bank, M=4096 ~381 KB/bank, M=8192 ~761 KB/bank
+        vs ~1.37 MB of bank L1 shared with up to ~0.9 MB of program CBs (sweep level).
+    """
+    from models.demos.blackhole.qwen36.tt.prefill_mm_blocks import prefill_act_in_l1
+
+    for m in (32, 128, 1024, 2048, 4096):
+        assert prefill_act_in_l1(m), f"chunk {m} must keep the validated L1 placement"
+    for m in (4096 + 32, 8192, 16384):
+        assert not prefill_act_in_l1(m), f"chunk {m} must spill chunk-scaled activations to DRAM"
+    assert PREFILL_L1_ACT_MAX_M == 4096
+
+    # Evidence the 4096/8192 split is the right boundary for the dominant tensor (w2/wo partial
+    # [M, 5120] bf16): with the sweep-level ~0.9 MB CB budget resident, 8192's ~761 KB/bank
+    # cannot coexist (1.37 MB bank), 4096's ~381 KB/bank can (as silicon confirmed).
+    bank_l1 = 1_400_000  # ~1.37 MB usable per bank
+    sweep_cb = 890_368  # the tuned 2D matmul budget at S=2048 (see test_tuned_2d_prefill_cb_budget)
+    per_bank = {m: act_bytes_per_bank(m, DIM) for m in (2048, 4096, 8192)}
+    assert per_bank[4096] + sweep_cb < bank_l1, "chunk 4096 w2/wo partial must fit beside sweep-level CBs"
+    assert per_bank[8192] + sweep_cb > bank_l1, "chunk 8192 w2/wo partial cannot fit beside sweep-level CBs"

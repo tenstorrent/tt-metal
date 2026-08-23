@@ -565,7 +565,10 @@ class TPGatedDeltaNet:
             self.reset_state()
 
         # Prefill qkvzab in L1: keeps proj + q/k/v/z/a/b resident for conv+gate prep.
-        qkv, z, a, b = self._project_qkvzab(x, T, out_mc=ttnn.L1_MEMORY_CONFIG)
+        # HP3: chunk > 4096 spills them to DRAM (qkvzab ~307 KB/bank + qkv slice ~186 KB/bank at
+        # 8192 collide with program CBs); chunk <= 4096 keeps the validated L1 placement.
+        _act_mc = ttnn.L1_MEMORY_CONFIG if tpc.prefill_act_in_l1(T) else ttnn.DRAM_MEMORY_CONFIG
+        qkv, z, a, b = self._project_qkvzab(x, T, out_mc=_act_mc)
 
         # FIR conv1d; conv_state = previous chunk's last K-1 inputs (None/zero from scratch)
         _cstate = self.conv_carry if carry else None
@@ -579,8 +582,9 @@ class TPGatedDeltaNet:
                 None,
                 self.K,
                 self.mesh,
-                # Conv in L1 (output freed before chunk kernel; new_state lands in DRAM internally)
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                # Conv in L1 (output freed before chunk kernel; new_state lands in DRAM internally).
+                # HP3: DRAM above chunk 4096, like the other chunk-scaled activations.
+                memory_config=_act_mc,
                 conv_state=_cstate,
                 weight_taps=tw["conv_taps"],
                 bias_dev=None,
