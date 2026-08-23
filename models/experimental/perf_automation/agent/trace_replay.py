@@ -28,7 +28,6 @@ FORWARD_WALL_MS.
 from __future__ import annotations
 
 import os
-import sys
 import time
 
 import ttnn
@@ -63,38 +62,6 @@ def _replay_1cq(device, tid, iters):
 # 3,564 of them for a 48-layer gemma-3 prefill. Nothing else about the two paths differs by three
 # orders of magnitude, so the dispatch count is the signal, and anything above this is eager.
 _TRACED_OP_DISPATCH_MAX = int(os.environ.get("TT_TRACE_DISPATCH_MAX", "32"))
-
-
-def _signpost(name: str) -> None:
-    """Emit a tracy signpost. Silent when no capture is running; LOUD when one is and it fails.
-
-    The mark is always attempted -- tracy resolves in the workload's venv on both paths, and
-    `signpost()` goes out through ttnn.tracy_message, so it travels the same channel as the op
-    records rather than being a host-only marker. What differs is whether anything is listening:
-    _run_full_pipeline_ms pops TT_METAL_DEVICE_PROFILER because a full-depth tracy capture overflows
-    the 12000-marker buffer, so those runs are a stopwatch with no capture for a mark to land in.
-
-    SO THE FAILURE IS ONLY A FAILURE WHEN A CAPTURE IS RUNNING, and then it is one worth shouting
-    about: the roofline silently drops to a single math-fidelity peak shared by every stack, and the
-    stacks differ by up to 4x. Swallowing that is the exact pattern that let a dead byte reader, an
-    anchor under an unread key, and this very signpost filter survive -- each fell back quietly and
-    each looked like it was working.
-    """
-    _profiling = bool(str(os.environ.get("TT_METAL_DEVICE_PROFILER") or "").strip())
-    try:
-        from tracy import signpost as _sp
-
-        _sp(name)
-    except Exception as exc:  # noqa: BLE001
-        if _profiling:
-            print(
-                "  [trace_replay] PROFILED RUN COULD NOT EMIT SIGNPOST %r (%s: %s) -- the capture "
-                "will carry no stage marks, so every stack shares one math-fidelity peak instead of "
-                "its own." % (name, type(exc).__name__, str(exc)[:160]),
-                file=sys.stderr,
-                flush=True,
-            )
-        return
 
 
 def _count_op_dispatches(fn):
@@ -228,9 +195,27 @@ def _measure_native(device, stage):
 
 
 def _measure_stage(device, stage):
-    """Capture stage.step as a trace, replay it on a single command queue, return (ms, path)."""
+    """Capture stage.step as a trace, replay it on a single command queue, return (ms, path).
+
+    THE READ SET IS OBSERVED HERE, for every stage. It was measured inside _measure_native, which
+    only a SELF-TRACED pipeline reaches -- voxtral declares no self_traced, so all three of its
+    stages took the capture branch below and the measurement never ran once. The stage doc recorded
+    `bytes: {}` on every run while the roofline reported per-stage figures that were, in fact, the
+    checkpoint estimate.
+
+    One warmup call is spent on it, and it is the call _capture_step_trace was going to make anyway
+    to reach steady state: the hook counts the distinct DEVICE tensors this stage's ops touch, which
+    is the quantity params x width is trying to approximate.
+    """
     if getattr(stage, "self_traced", False):
         return _measure_native(device, stage)
+    _ws_bytes = 0
+    try:
+        _n, _ws_bytes = _count_op_dispatches(stage.step)
+    except Exception:  # noqa: BLE001 -- instrumentation must never cost the measurement
+        _ws_bytes = 0
+    if _ws_bytes > 0:
+        print("TRACE_STAGE_BYTES[%s]=%d" % (stage.name, _ws_bytes), flush=True)
     tid = _capture_step_trace(device, stage.step)
     try:
         per_s = _replay_1cq(device, tid, _REPLAY_ITERS)
@@ -407,24 +392,7 @@ def measure_adapter(adapter, device) -> float:
 
     results = []
     for st in stages:
-        # MARK THE STAGE BOUNDARY IN THE PROFILE. tt-perf-report can already slice a capture between
-        # two signposts -- refine() passes --start-signpost/--end-signpost on every profile -- and
-        # resolve_signposts already scans for them. Nothing ever emitted any: run 18's raw capture
-        # holds 17,786 rows, every one OP TYPE `tt_dnn_device`, and zero signposts. So the slice has
-        # always been the documented no-op ("No signposts found in the file. Using the entire file
-        # for analysis."), every bucket carries regime "na", and no consumer can tell which stage an
-        # op ran in. That is the single missing link behind two separate gaps: the per-stage read set
-        # and the per-stage math fidelity.
-        #
-        # HERE, NOT IN THE GENERATED TEST. The perf test delegates to measure_adapter, so this loop is
-        # where a stage runs alone -- one tool file, every model, no per-model generation.
-        #
-        # OUTSIDE THE TRACE. _measure_stage captures and replays within itself; a marker emitted
-        # around it never enters the captured region, so it cannot raise the "Writes/Reads are not
-        # supported during trace capture" that host work inside a capture does.
-        _signpost("stage:%s" % st.name)
         ms, path = _measure_stage(device, st)
-        _signpost("stage:%s:end" % st.name)
         results.append((st.name, ms, path))
         print("TRACE_STAGE_MS[%s]=%.4f path=%s" % (st.name, ms, path), flush=True)
         # BESIDE THE TIME THAT MEASURED IT. The compute ceiling is 2 x params x items-in-the-unit,

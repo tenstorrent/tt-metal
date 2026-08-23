@@ -255,3 +255,56 @@ def test_a_tensor_that_only_exposes_get_dtype_is_counted():
 
     _n, b = _hooked(lambda op: op(_GetDtypeOnly()))
     assert b == 2_000_000, b
+
+
+# --- and it has to run on the path the model actually takes ---------------------------------------
+
+
+def test_the_measurement_is_on_the_path_every_stage_takes():
+    """WIRED IS NOT FIRED. The hook was placed in _measure_native, which _measure_stage reaches only
+    for a SELF-TRACED pipeline. voxtral declares no self_traced, so all three of its stages took the
+    capture branch and the measurement never ran once -- the stage doc recorded `bytes: {}` on every
+    run while the roofline printed per-stage figures that were the checkpoint estimate.
+
+    Four separate mechanisms were built on top of that measurement -- the pin, the central owner, the
+    registry entry, the bandwidth cell -- before anyone checked whether it executed.
+    """
+    import ast
+
+    src = (_PA / "agent" / "trace_replay.py").read_text()
+    tree = ast.parse(src)
+    fn = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_measure_stage":
+            fn = node
+    assert fn, "_measure_stage is gone"
+    body = ast.unparse(fn)
+    assert "_count_op_dispatches" in body, "the read set is not measured on the general path"
+    assert "TRACE_STAGE_BYTES" in body, "the general path measures it and does not report it"
+    # and it must sit BEFORE the self-traced early return does not apply -- i.e. after that guard,
+    # so a self-traced stage still gets its own measurement inside _measure_native
+    assert body.index("self_traced") < body.index("_count_op_dispatches")
+
+
+def test_a_self_traced_stage_still_measures_its_own():
+    """The two paths are exclusive; neither may lose the measurement."""
+    import ast
+
+    src = (_PA / "agent" / "trace_replay.py").read_text()
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.FunctionDef) and node.name == "_measure_native":
+            assert "_count_op_dispatches" in ast.unparse(node)
+            return
+    raise AssertionError("_measure_native is gone")
+
+
+def test_the_inert_signpost_machinery_is_gone():
+    """Emission sat in measure_adapter, which the perf test skips whenever the profiler is on
+    (`if _PERF_TRACE and not _PROFILING`) -- so it could never mark a capture. The reader, the window
+    slicing, the profile key and the per-stage peak built on top of it were all dead with it."""
+    tr = (_PA / "agent" / "trace_replay.py").read_text()
+    tt = (_PA / "agent" / "tracy_tool.py").read_text()
+    sm = (_PA / "cc_optimize" / "summary.py").read_text()
+    assert "_signpost" not in tr
+    assert "stage_windows" not in tt and "_per_stage_buckets" not in tt and "stage_buckets" not in tt
+    assert "_peak_for_stage" not in sm

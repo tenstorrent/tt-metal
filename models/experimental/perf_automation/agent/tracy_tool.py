@@ -412,54 +412,6 @@ def _neighbours(ordered: list) -> dict:
     return out
 
 
-def stage_windows(raw_csv: str | Path) -> list:
-    """[(stage, start_signpost, end_signpost)] present in this capture, in order. [] when unmarked.
-
-    Read from the capture itself rather than from the stage list the harness believes in: a stage
-    that failed to run leaves no marks, and pricing it from a window that is not there would invent a
-    measurement. tt-perf-report identifies signposts the same way -- rows whose OP TYPE is
-    "signpost" -- so this agrees with the slicer by construction.
-    """
-    names = []
-    try:
-        with open(raw_csv, newline="") as f:
-            for row in csv.DictReader(f):
-                if str(row.get("OP TYPE") or "").strip().lower() != "signpost":
-                    continue
-                nm = str(row.get("OP CODE") or "").strip()
-                if nm and nm not in names:
-                    names.append(nm)
-    except Exception:  # noqa: BLE001
-        return []
-    out = []
-    for nm in names:
-        if nm.startswith("stage:") and not nm.endswith(":end"):
-            end = "%s:end" % nm
-            if end in names:
-                out.append((nm.split(":", 1)[1], nm, end))
-    return out
-
-
-def _per_stage_buckets(raw_csv, profiles_dir, available_cores, arch) -> dict:
-    """{stage: [buckets]} for every stage the capture marked. {} when it marked none.
-
-    Best-effort per stage: one window failing to refine costs that stage its split, not the profile.
-    """
-    out = {}
-    for stage, s0, s1 in stage_windows(raw_csv):
-        try:
-            rep = Path(profiles_dir) / ("iter_baseline_report_%s.csv" % stage)
-            refine(raw_csv, rep, s0, s1, None, arch)
-            bk = build_buckets(rep, raw_csv, available_cores)
-            if bk:
-                for b in bk:
-                    b.setdefault("tags", {})["regime"] = stage
-                out[stage] = bk
-        except Exception:  # noqa: BLE001
-            continue
-    return out
-
-
 def build_buckets(
     report_csv: str | Path,
     raw_csv: str | Path,
@@ -750,33 +702,6 @@ def tracy_tool(
     refine(raw_dest, report_csv, start_signpost, end_signpost, id_range, arch)
 
     buckets = build_buckets(report_csv, raw_dest, available_cores)
-    # PER-STAGE SLICES, from the marks trace_replay now emits around each stage. The whole-file
-    # buckets above stay exactly as they were -- this ADDS the split rather than replacing it, so a
-    # capture with no marks (any older model, any run where the profiler was absent) is byte for byte
-    # what it was before. Each slice is the same refine() over the same raw rows, bounded by that
-    # stage's own two signposts, so a stage's ops are identified rather than apportioned.
-    stage_buckets = _per_stage_buckets(raw_dest, profiles_dir, available_cores, arch)
-    # SAY SO WHEN THE MARKS ARE MISSING. trace_replay emits a signpost around every stage, so a
-    # PROFILED capture with none means something upstream failed -- tracy not importable in the
-    # workload process, or the marks not reaching the log -- and the report silently drops to
-    # whole-profile figures: one shared math-fidelity peak for every stack instead of each stack's
-    # own. The run is unaffected (termination_check picks its target from per-OP gaps and never reads
-    # the per-stage split), so this is not a reason to stop; it is a reason not to let the reader
-    # believe they are looking at per-stage numbers when they are not.
-    #
-    # Silence is how three separate defects survived in this file's neighbourhood: a byte reader that
-    # always returned 0, an anchor filed under a key nothing looked up, and this very signpost filter
-    # asking for a window that was never marked. Each fell back quietly and each looked like it was
-    # working.
-    if not stage_buckets:
-        print(
-            "  [tracy] no stage signposts in the capture -- the roofline falls back to whole-profile "
-            "figures (one math-fidelity peak shared by every stack). Expected marks: stage:<name> / "
-            "stage:<name>:end, emitted by trace_replay. Check that `tracy` imports in the workload "
-            "process.",
-            file=sys.stderr,
-            flush=True,
-        )
     wall_ms = warm_wall_ms(walls)
     device_ms = round(sum(b["device_ms"] for b in buckets), 4)
     host = host_overhead_bucket(buckets, device_ms)
@@ -794,9 +719,6 @@ def tracy_tool(
     return {
         "wall_ms": wall_ms,
         "forward_wall_ms": forward_wall_ms(profiles_dir, runs),
-        # THE PER-STAGE SPLIT, when the capture carried marks. Absent on an unmarked capture, so
-        # every consumer must treat its absence as "no split available" rather than as an empty one.
-        "stage_buckets": stage_buckets,
         "per_token_ms": pt_ms,
         "tokens_per_sec_per_user": tput["tokens_per_sec_per_user"],
         "tokens_per_sec": tput["tokens_per_sec"],

@@ -788,42 +788,6 @@ def _win_set(attempts, baseline_ms=None) -> set:
         return set()
 
 
-def _peak_for_stage(stage, profile, model: str = "", task: str = ""):
-    """(peak FLOP/s, dominant fidelity) for ONE stage, or (0.0, "") when the capture did not mark it.
-
-    Pinned first, for the reason every roof input is pinned: the fidelity rung moves the mode a stage
-    runs at, and a ceiling recomputed from it retreats ahead of the measurement. Keyed per STAGE --
-    the shared model-wide key was only ever a consequence of there being one number to key.
-
-    Zero means "no per-stage evidence", and the caller then keeps the whole-profile figure it already
-    had. An unmarked capture is therefore exactly as it was before stage marks existed.
-    """
-    try:
-        led = _ledger()
-        _p = led.anchor_value(led.KIND_PEAK_FLOPS, depth=str(stage or "").strip().lower(), model=model, task=task)
-        if _p and float(_p) > 0:
-            return float(_p), ""
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        _sb = ((profile or {}).get("stage_buckets") or {}).get(stage)
-        if not _sb:
-            return 0.0, ""
-        _rows, _ = _fidelity_breakdown({"buckets": _sb})
-        if not _rows:
-            return 0.0, ""
-        _top = max(_rows, key=lambda r: r[1])
-        if not _top[1]:
-            return 0.0, ""
-        from agent.environment import ARCH_FACTS
-        from agent.perf_target import chip_peak_flops as _cpf
-
-        _arch = str(os.environ.get("PERF_MCP_ARCH") or "blackhole").strip().lower()
-        return float(_cpf(ARCH_FACTS.get(_arch) or {}, str(_top[0])) or 0.0), str(_top[0])
-    except Exception:  # noqa: BLE001
-        return 0.0, ""
-
-
 def _pinned_peak_flops(unit, model: str = "", task: str = ""):
     """The pinned peak FLOP/s for this (model, task, unit), or None if nothing is pinned.
 
@@ -1593,8 +1557,7 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # carries a HiFi2 lm_head worth 3.299e12 of its 5.907e12 FLOPs, whose true peak is 351.0.
         # Harmless there because decode binds on memory by ~230x, and wrong the moment the fidelity
         # rung lands on a stack that binds on compute.
-        _stage_peak, _stage_dom = _peak_for_stage(name, profile, model, task)
-        _pk_use = _stage_peak or peak_flops
+        _pk_use = peak_flops
         comp_ms = ((flops / _pk_use) * 1000.0) if (flops and _pk_use > 0) else None
         # MEASURED FIRST, APPORTIONED SECOND -- which is what _roofline_stage_share's docstring has
         # always claimed and what the order here contradicted. The profile records what a stage
@@ -1639,7 +1602,7 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
             # What the CURRENT build's mode implies, carried beside the pinned roof so a reader (and
             # the >100% classifier) can tell "the model got faster" from "these numbers are stale".
             "peak_flops_now": _peak_now or None,
-            "fidelity": _stage_dom or _dom,
+            "fidelity": _dom,
             # The binding roof is the SLOWEST one -- the stage cannot beat its tightest floor. Stated
             # per stage because it genuinely differs: prefill's FLOPs scale with the sequence and
             # decode's do not, so the same model can be compute-bound in one stage and not the other.
@@ -1808,15 +1771,6 @@ def _roofline_tables(
         return "\u2500" * W
 
     out.append("Roofline")
-
-    # NAME THE COARSER FOOTING IN THE REPORT, not only on stderr. A reader comparing two stacks
-
-    # needs to know whether each was priced against its own math-fidelity peak or against one
-
-    # shared figure -- the two differ by up to 4x, and nothing else on the page says which.
-
-    if not ((profile or {}).get("stage_buckets") or {}):
-        out.append("  (no stage signposts in this capture -- compute rows share one peak)")
     # SAY WHAT THE NUMBERS BELOW ARE PER. Every figure in this table is per unit -- per request, per
     # token, per pass -- and the batch decides how many of those a single step retires, so the same
     # measurement reads eight ways on an eight-user run. Voxtral serves 8 and the table said nothing,
