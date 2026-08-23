@@ -75,10 +75,10 @@ private:
     //   - TLB windows: nwin=7 per 12 MiB socket into 16 available, so 2x7=14 fits and 3x7=21 does not
     //     (see kHRingWords below; raising it needs SOCKET_WIN_BASE moved)
     static constexpr uint32_t kNSockets = 2;
-    // ---- ROLE SPLIT (TT_METAL_PERF_DEBUG_ROLE_SPLIT, default on) ----
+    // ---- ROLE SPLIT (the only roster) ----
     //
-    // kNSockets stays 2 -- nothing downstream of the socket knows this feature exists. With the knob on
-    // there are SIX DRISCs rather than two:
+    // kNSockets stays 2 -- nothing downstream of the socket knows this feature exists. There are SIX
+    // DRISCs:
     //
     //   index 0..3  FILLER  sweep a QUARTER of the worker grid -> write frames into their own device-DRAM
     //                       ring. No socket, no PCIe, no host MMIO.

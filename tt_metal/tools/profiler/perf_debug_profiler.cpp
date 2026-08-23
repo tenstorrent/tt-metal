@@ -99,15 +99,13 @@ bool no_noc_init() {
     return v;
 }
 
-// ABLATION: strip the drain loop to EGRESS ONLY. TT_METAL_PERF_DEBUG_ABLATE=1 compiles out every worker
-// read and all per-core processing; the drainer re-ships the same pre-staged mock bytes forever. Purpose is to
-// bisect the hang: if DRAM-core -> PCIe egress alone can hang the card, the read side is irrelevant.
-// TT_METAL_PERF_DEBUG_ABLATE_SPIN is a cycle count that stands in for the sweep. IT MUST BE LARGE. A real run
-// is only 1.7% duty (268 busy sweeps of 15,477) and idles ~1.7 ms between bursts, which is what lets the host
-// fully drain the FIFO so the NEXT burst runs at the true ~16 GB/s. Spins of 4k-40k cycles (3-30 us) are ~57x
-// too small: the loop stays permanently credit-bound at ~3.9 GB/s and the spin appears to do nothing, because
-// when you are already blocked on credits a spin only displaces wait time. Use ~2.3M cycles (~1.7 ms) to
-// reproduce real burst behaviour. Pair with NO_DECODE=1 -- the payload is mock.
+// ABLATION: strip the drain loop to EGRESS ONLY -- no worker reads, no per-core processing; the drainer
+// re-ships pre-staged mock bytes forever. Pair with NO_DECODE=1, since the payload is mock.
+//
+// ABLATE_SPIN stands in for the sweep and MUST be ~2.3M cycles (~1.7 ms). A real run idles that long
+// between bursts, and that idle is what lets the host drain the FIFO so the next burst runs at full rate.
+// Spins of 3-30 us leave the loop permanently credit-bound, where a spin only displaces wait time and so
+// appears to do nothing at all (FINDINGS §N+12).
 uint32_t ablate() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_ABLATE");
@@ -124,21 +122,10 @@ uint32_t ablate_spin() {
     return v;
 }
 
-// TT_METAL_PERF_DEBUG_NOC selects which NIU the DRISC drainer EGRESSES on (reads use the other one). Default
-// 0, matching every result recorded so far. Exists to test whether the hang follows the NoC rather than the
-// core: if egress on NoC 1 stops hanging, NoC 0's route from the DRAM endpoint to the PCIe tile is implicated.
-//
-// It IS just a flag flip, and the question it was built to ask is already answered -- see FINDINGS §N+12:
-// egress on NoC 1 hangs identically to NoC 0 (16.0 vs 16.2 GB/s, load matched within 1%, both at run 16), so
-// the route from the DRAM endpoint to the PCIe tile is dead as an explanation.
-//
-// This comment previously claimed the flip needed a mirrored PCIe encoding, because NoC 1 mirrors coordinates
-// (NOC_0_X_PHYS_COORD(noc, size_x, x) = noc == 0 ? x : size_x - 1 - x). That was WRONG: the macro mirrors
-// WORKER coords, while the PCIe tile lives in TRANSLATED space (the kernel is built with PCIE_NOC_X=19,
-// PCIE_NOC_Y=24 -- both outside the 17x12 NOC0 grid), so the socket's NOC0-derived pcie_xy_enc is correct on
-// BOTH NoCs. Measured: with the mirrored override, 0 markers decode from 2.37M pages; without it, 5,501,058
-// Watch for its signature: pages flow while zero markers decode, because socket credits advance on a
-// different path than the payload writes, so a wrong payload destination looks like healthy throughput.
+// TT_METAL_PERF_DEBUG_NOC selects which NIU the drainer EGRESSES on; reads take the other. Default 0.
+// The socket's NOC0-derived PCIe encoding is correct on BOTH NoCs -- the PCIe tile lives in translated
+// space, so the coordinate mirroring that applies to worker coords does not apply to it (FINDINGS §N+12,
+// which also records that egress on NoC 1 hangs identically, retiring the route as an explanation).
 uint32_t drain_noc() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_NOC");
@@ -186,10 +173,8 @@ int drisc_bank_override() {
 
 // ---- ROLE SPLIT knobs (see PerfDebugProfiler::kMaxDrisc in the header for the why) --------------------
 //
-// TT_METAL_PERF_DEBUG_ROLE_SPLIT=1 runs SIX DRISCs -- 4 fillers (a quarter of the worker grid each -> its own
-// device DRAM ring) and 2 movers (TWO DRAM rings each -> the existing D2H socket) -- instead of 2 drainers
-// each doing the whole job. Unset or 0 is today's path, bit for bit: every role-split compile arg is then 0
-// and the kernel's `if constexpr` discards all of it.
+// The roster is SIX DRISCs: 4 fillers (a quarter of the worker grid each -> its own device DRAM ring) and
+// 2 movers (two DRAM rings each -> a D2H socket). It is no longer selectable.
 // Shared truthiness for the perf-debug knobs. Tests the WHOLE value, not just the first character: the old
 // `*s != '0'` idiom made `=false`, `=off` and `=no` all evaluate to ENABLED (any word not starting with '0'),
 // while `=01` and `=0x1` evaluated to DISABLED. That is backwards for knobs whose purpose is keeping an
@@ -216,19 +201,14 @@ bool env_flag(const char* name) {
 
 
 
-// Per-filler DRAM ring size, in MiB. The whole reason to stage in DRAM is that this number is not capped by
-// the TLB window budget the way the 12 MiB host FIFO is, so make it large enough that a host hiccup cannot
-// reach the producers: 64 MiB is ~6,300 frames, roughly 115 busy sweeps of slack against the host FIFO's 21.
+// Per-filler DRAM ring size, in MiB. Staging in DRAM exists because this is NOT capped by the TLB window
+// budget the way the 12 MiB host FIFO is, so the buffer can be large enough that a host hiccup never
+// reaches the producers. 64 MiB is ~6,300 frames.
 //
-// This now sizes the HAL's DRAM PROFILER region too (perf_debug_dram_region_bytes_per_risc above), so it is
-// read before any device is opened. Lowering it lowers DRAM held per bank one-for-one; 12 MiB is enough for a
-// 5,000-zone/RISC capture and 64 MiB buys ~16-17k zones/RISC of runway (FINDINGS §N+39).
-//
-// Default: 64 with the DMA mover (whose 2 co-located rings put 128 MiB in each mover bank -- the same
-// 1 GiB total reservation as the 128 MiB NoC-mover default), 128 without it. The measured stakes: a 64 MiB
-// ring FILLING under the ~6 GB/s NoC mover is what turned a backlog into 71k producer stalls, and the
-// worst measured transient was ~100-130 MiB; the DMA mover's drain headroom is what makes 64 MiB per ring
-// sufficient again.
+// This also sizes the HAL's DRAM PROFILER region (perf_debug_dram_region_bytes_per_risc above), so it is
+// read before any device opens, and it costs DRAM per bank one-for-one. 64 is right for the DMA mover: its
+// two co-located rings put 128 MiB in each mover bank, the same total reservation the 128 MiB NoC-mover
+// default carried (FINDINGS §N+39, §N+67).
 uint32_t role_ring_mb() {
     static const uint32_t v = [] {
         constexpr uint32_t def = 64u;
@@ -426,38 +406,7 @@ uint32_t perf_debug_dram_region_bytes_per_risc() {
 // old TT_METAL_PERF_DEBUG_NO_TRACY.) Drain and decode run EXACTLY the same either way, which also makes
 // the off state the sink-cost ablation: if the relay stops host-waiting with Tracy off, the Tracy push is
 // provably the bottleneck.
-// TT_METAL_PERF_DEBUG_FILL_PCT: target span fill for the drainer's pacing controller, as a percent of a
-// span's live capacity (kNumRisc * ring words). 0 disables the loop and leaves the fixed
-// TT_METAL_PERF_DEBUG_DRISC_GAP behaviour.
-//
-// Why it exists: the drainer ships the WHOLE span per core per frame regardless of how much is live, so
-// host cost is frames x 10,560 B and the fill ratio decides bytes-per-marker. Sweeping continuously
-// against slow producers returns ~37%-full spans, which is why producer stalls got WORSE as producers got
-// SLOWER -- ~2x the host bytes for the same payload. Pacing holds the spans full instead.
-uint32_t fill_target_pct() {
-    static const uint32_t v = [] {
-        const char* s = std::getenv("TT_METAL_PERF_DEBUG_FILL_PCT");
-        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 70u;
-    }();
-    return v;
-}
 
-// Ceiling on the controller's gap, in DRISC cycles. Bounds worst-case capture latency: a core with data
-// waits at most this long between sweeps. ~148 us at 1.35 GHz.
-//
-// MUST be well above the gap the controller actually wants, or it saturates and the loop never closes.
-// Measured at delay 125 (120 cores, 6M markers): with a 20,000 ceiling it pinned at 20,000 and producers
-// still stalled; at 50,000 it pinned at 50,000; at 100,000 it pinned at 100,000; only at 200,000 did it
-// SETTLE, at 108,881 -- i.e. the true operating point is ~109k and every smaller ceiling was clipping it.
-// A gap pinned exactly at this value in the results is the signature of a ceiling that is too low.
-
-uint32_t gap_max_cycles() {
-    static const uint32_t v = [] {
-        const char* s = std::getenv("TT_METAL_PERF_DEBUG_GAP_MAX");
-        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 200000u;
-    }();
-    return v;
-}
 
 // TT_METAL_PERF_DEBUG_SHIP_MIN_PCT: a FILLER defers staging a live core until its span holds at least this
 // percent of live capacity (kNumRisc * ring words), unless a ring is half full (serviced regardless) or the
@@ -1805,8 +1754,8 @@ bool PerfDebugProfiler::boot_device(
                 nstage,
                 is_mover ? 1u : (my_cores + nstage - 1) / nstage,
                 pcie_enc_override,
-                fill_target_pct(),
-                gap_max_cycles(),
+                0u,  // retired: FILL_PCT (the fill-driven pace controller CV-first replaced)
+                0u,  // retired: GAP_MAX (its ceiling)
                 0u,  // retired: READ_SPLIT
                 // ---- role split (arg 20..31). All zero on the default path, and every use of them in the
                 // kernel is behind `if constexpr`, so the emitted code is identical when the knob is off.
