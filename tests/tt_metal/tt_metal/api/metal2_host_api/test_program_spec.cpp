@@ -1254,6 +1254,17 @@ TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBOffsetMisalignedFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must be aligned to entry_size")));
 }
 
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBOffsetNoCMisalignedFails) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/8, /*dfb_num_entries=*/2);
+    spec.dataflow_buffers[0].borrowed_memory_offset = 8;
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("must be aligned to the L1/NoC address alignment")));
+}
+
 TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBOffsetWithoutBackingFails) {
     ProgramSpec spec = MakeBorrowedDFBProgramSpec();
     spec.dataflow_buffers[0].borrowed_from.reset();

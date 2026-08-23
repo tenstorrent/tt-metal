@@ -460,6 +460,7 @@ void AttachBorrowedDFBBuffers(
         // Attach-time legality checks (analogous to dynamic CB's
         // CircularBufferConfig::set_globally_allocated_address_and_total_size validations).
         //   - L1-residency: only L1 buffers may back a DFB.
+        //   - Alignment: the absolute borrowed subrange address must satisfy L1/NoC alignment.
         //   - Sizing: the DFB's total bytes must fit in the buffer's per-bank allocation.
         // ProgramSpec-time validation already enforced the TensorSpec-level analogs; these
         // refine the check now that a concrete Buffer is in hand.
@@ -471,6 +472,17 @@ void AttachBorrowedDFBBuffers(
         auto dfb_impl = program_impl.get_dataflow_buffer(dfb_id);
         const uint64_t dfb_total_bytes =
             static_cast<uint64_t>(dfb_impl->config.entry_size) * dfb_impl->config.num_entries;
+        const auto address = buffer->address() + memory_offset;
+        TT_FATAL(
+            address % buffer->alignment() == 0,
+            "Borrowed-memory DFB id {} (from TensorParameter '{}') has absolute address {} (buffer address {} + "
+            "offset {}), which is not aligned to the L1/NoC address alignment of {} bytes.",
+            dfb_id,
+            tp_name,
+            address,
+            buffer->address(),
+            memory_offset,
+            buffer->alignment());
         TT_FATAL(
             static_cast<uint64_t>(memory_offset) + dfb_total_bytes <= buffer->aligned_size_per_bank(),
             "Borrowed-memory DFB id {} (from TensorParameter '{}') has subrange offset {} + size {} B, which "
@@ -484,7 +496,6 @@ void AttachBorrowedDFBBuffers(
         // Attach the address to the device-side DFB. Per-enqueue update_program_dispatch_commands
         // reads from the cache this populates, so no further dispatch-command invalidation is
         // needed for either first-call or re-entry.
-        const auto address = buffer->address() + memory_offset;
         TT_FATAL(
             address <= std::numeric_limits<uint32_t>::max(),
             "Borrowed Buffer base address {} for DFB id {} (TensorParameter '{}') exceeds uint32_t max.",

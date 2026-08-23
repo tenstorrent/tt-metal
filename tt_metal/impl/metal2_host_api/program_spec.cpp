@@ -1599,6 +1599,13 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             dfb.unique_id,
             dfb.borrowed_memory_offset,
             dfb.entry_size);
+        const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+        TT_FATAL(
+            dfb.borrowed_memory_offset % l1_alignment == 0,
+            "DFB '{}' borrowed_memory_offset={} must be aligned to the L1/NoC address alignment of {} bytes.",
+            dfb.unique_id,
+            dfb.borrowed_memory_offset,
+            l1_alignment);
         const TensorParamName& tp_name = *dfb.borrowed_from;
         auto it = collected.tensor_parameter_by_name.find(tp_name);
         TT_FATAL(
