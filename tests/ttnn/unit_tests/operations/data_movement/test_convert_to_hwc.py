@@ -189,6 +189,34 @@ def test_convert_to_hwc_with_l1_input_uneven_sharding(
     assert passed, message
 
 
+def test_convert_to_hwc_odd_tile_multi_block_output(device):
+    """Exercise two 1056-stick blocks (33 tiles each), split across both writers."""
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    test_convert_to_hwc_with_l1_input(
+        device,
+        B=1,
+        C=1,
+        HW=2112,
+        core_grid=core_grid,
+        padded_sharded_dim=2112,
+        provide_memory_config=True,
+    )
+
+
+def test_convert_to_hwc_large_uneven_raw_dfb_view(device):
+    """Cover a borrowed single-core input whose logical element count exceeds uint16."""
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    test_convert_to_hwc_with_l1_input_uneven_sharding(
+        device,
+        B=1,
+        C=8,
+        HW=8447,
+        core_grid=core_grid,
+        padded_sharded_dim=8448,
+        provide_memory_config=True,
+    )
+
+
 @pytest.mark.parametrize("B", [1, 2, 4])
 @pytest.mark.parametrize("C", [1, 2, 3, 4])
 @pytest.mark.parametrize(
@@ -320,6 +348,44 @@ def test_convert_to_hwc_dram(
     assert passed, message
 
 
+@pytest.mark.parametrize("input_buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
+def test_convert_to_hwc_tensor_binding_cache_miss_and_hit(device, input_buffer_type):
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    host_inputs = [torch.randn([1, 1, 1, 64], dtype=torch.bfloat16) for _ in range(2)]
+    input_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        input_buffer_type,
+        ttnn.ShardSpec(core_grid, (1, 64), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_grid, (64, 8), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    device_inputs = [
+        ttnn.Tensor(host_input, ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, mem_config=input_mem_config)
+        for host_input in host_inputs
+    ]
+
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    try:
+        for invocation in range(2):
+            expected = host_inputs[invocation].transpose(2, 3).reshape(1, 1, 64, 1)
+            actual = ttnn.experimental.convert_to_hwc(
+                device_inputs[invocation], memory_config=output_mem_config, dtype=ttnn.bfloat16
+            )
+            passed, message = assert_equal(expected, ttnn.to_torch(actual)[:, :, :, :1])
+            assert passed, f"invocation {invocation}: {message}"
+            if invocation == 0:
+                entries_after_miss = device.num_program_cache_entries()
+                assert entries_after_miss > 0
+            else:
+                assert device.num_program_cache_entries() == entries_after_miss
+    finally:
+        device.disable_and_clear_program_cache()
+
+
 @pytest.mark.parametrize("C", CHANNEL_TEST_CASES)
 @pytest.mark.parametrize(
     "HW, input_core_grid, output_core_grid, input_padded_sharded_dim, output_padded_sharded_dim",
@@ -381,7 +447,7 @@ def test_convert_to_hwc_dram_uneven_sharding(
     assert passed, message
 
 
-def test_convert_to_hwc_dram_input_without_memory_config_should_fail(device):
+def test_convert_to_hwc_dram_input_without_memory_config_should_fail(device, expect_error):
     C = 4
     HW = 32
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
@@ -396,9 +462,7 @@ def test_convert_to_hwc_dram_input_without_memory_config_should_fail(device):
         input_tensor, ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, mem_config=input_mem_config
     )
 
-    with pytest.raises(
-        RuntimeError, match="When input tensor is in DRAM, output memory_config must be explicitly specified"
-    ):
+    with expect_error(RuntimeError, "When input tensor is in DRAM, output memory_config must be explicitly specified"):
         ttnn.experimental.convert_to_hwc(input_tensor, dtype=ttnn.bfloat16)
 
     # Create an output shard that is not padded up to nearest aligned width
@@ -406,5 +470,5 @@ def test_convert_to_hwc_dram_input_without_memory_config_should_fail(device):
     output_shard_spec = ttnn.ShardSpec(core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "must be rounded up to next multiple of"):
         ttnn.experimental.convert_to_hwc(input_tensor, dtype=ttnn.bfloat16, memory_config=output_mem_config)

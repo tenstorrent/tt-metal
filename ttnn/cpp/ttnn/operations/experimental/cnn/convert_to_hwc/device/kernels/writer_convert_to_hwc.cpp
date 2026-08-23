@@ -3,111 +3,89 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/tensor/tensor_accessor.h"
+#include "experimental/kernel_args.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
-constexpr uint32_t TILE_SIZE = 32;
+#include "convert_to_hwc_writer_impl.hpp"
 
-template <uint32_t StickSize, uint32_t PaddedStickSize, uint32_t NumSticks>
-FORCE_INLINE void copy_padded_sticks(Noc noc, uint32_t l1_read_addr, uint32_t& l1_write_addr) {
-    experimental::set_read_state<StickSize>(noc, l1_read_addr);
-    for (uint32_t row = 0; row < NumSticks; row++) {
-        experimental::read_with_state(noc, l1_write_addr, l1_read_addr);
-        l1_read_addr += PaddedStickSize;
-        l1_write_addr += StickSize;
+template <
+    uint32_t num_output_channels_padded,  // padded output channels (min 8)
+    uint32_t num_full_tiles,
+    uint32_t total_tiles_per_block,
+    uint32_t initial_write_stick_offset,
+    uint32_t element_size_bytes,
+    uint32_t is_input_in_dram,
+    uint32_t input_block_size_sticks_per_core,
+    uint32_t l1_write_output_addr_stride>
+TT_KERNEL void reader_writer() {
+    uint32_t dram_base_read_addr = 0;
+    if constexpr (is_input_in_dram != 0) {
+        const TensorAccessor input(tensor::input);
+        dram_base_read_addr = input.get_bank_base_address();
     }
-}
-
-void kernel_main() {
-    constexpr uint32_t cb_in = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_in_batch = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_in_transpose = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_out = get_compile_time_arg_val(3);
-    constexpr uint32_t num_output_channels_padded = get_compile_time_arg_val(4);  // padded output channels (min 8)
-    constexpr uint32_t num_full_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t initial_l1_write_stick_offset = get_compile_time_arg_val(6);
-    constexpr uint32_t element_size_bytes = get_compile_time_arg_val(7);
-    constexpr bool is_input_in_dram = get_compile_time_arg_val(8);
-    constexpr bool is_reader = get_compile_time_arg_val(9);
-    constexpr uint32_t input_block_size_sticks_per_core = get_compile_time_arg_val(10);
-    constexpr uint32_t input_num_blocks = get_compile_time_arg_val(11);
-    constexpr uint32_t l1_write_output_addr_stride = get_compile_time_arg_val(12);
-    constexpr uint32_t block_size_bytes = get_compile_time_arg_val(13);
-
-    constexpr uint32_t channel_size = num_output_channels_padded * element_size_bytes;
-
-    const uint32_t dram_base_read_addr = is_input_in_dram ? get_arg_val<uint32_t>(0) : 0;
-
-    tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(1));
     uint32_t args_idx = 0;
-
-    const uint32_t num_blocks = args[args_idx++];
-
-    constexpr uint32_t tile_size_stick_bytes = TILE_SIZE * element_size_bytes;
-    constexpr uint32_t initial_l1_write_addr_offset = initial_l1_write_stick_offset * channel_size;
+    const uint32_t num_blocks = get_vararg(args_idx++);
 
     Noc noc;
-    experimental::CB cb_in_obj(cb_in);
-    experimental::CB cb_in_batch_obj(cb_in_batch);
-    experimental::CB cb_in_transpose_obj(cb_in_transpose);
-    experimental::CB cb_out_obj(cb_out);
-
-    const uint32_t base_l1_write_addr = cb_out_obj.get_write_ptr() + initial_l1_write_addr_offset;
-    uint32_t l1_output_write_addr = base_l1_write_addr;
+    uint32_t l1_input_read_addr = 0;
+    if constexpr (is_input_in_dram == 0) {
+        DataflowBuffer input(dfb::input);
+        l1_input_read_addr = input.get_read_ptr();
+    }
+    DataflowBuffer batch(dfb::batch);
+    DataflowBuffer transpose(dfb::transpose);
+    DataflowBuffer output(dfb::output);
+    uint32_t l1_output_write_addr =
+        output.get_write_ptr() + initial_write_stick_offset * num_output_channels_padded * element_size_bytes;
 
     // Process each blocked transfer group
-    for (uint32_t block_id = 0; block_id < num_blocks && block_id < input_num_blocks; block_id++) {
-        if constexpr (is_reader) {
-            cb_in_batch_obj.reserve_back(input_block_size_sticks_per_core);
+    for (uint32_t block_id = 0; block_id < num_blocks; block_id++) {
+        batch.reserve_back(input_block_size_sticks_per_core);
 
-            // Process all transfers in this group
-            const uint32_t group_size = args[args_idx++];
-            for (uint32_t transfer_idx = 0; transfer_idx < group_size; transfer_idx++) {
-                uint32_t src_x = args[args_idx++];
-                uint32_t src_y = args[args_idx++];
-                uint32_t src_offset_bytes = args[args_idx++];
-                uint32_t dst_offset_bytes = args[args_idx++];
-                uint32_t transfer_size_bytes = args[args_idx++];
-                uint32_t bank_id = args[args_idx++];
+        // Process all transfers in this group.
+        const uint32_t group_size = get_vararg(args_idx++);
+        for (uint32_t transfer_idx = 0; transfer_idx < group_size; transfer_idx++) {
+            uint32_t src_x = get_vararg(args_idx++);
+            uint32_t src_y = get_vararg(args_idx++);
+            uint32_t src_offset_bytes = get_vararg(args_idx++);
+            uint32_t dst_offset_bytes = get_vararg(args_idx++);
+            uint32_t transfer_size_bytes = get_vararg(args_idx++);
+            uint32_t bank_id = get_vararg(args_idx++);
 
-                // dst_offset_bytes is already relative to block buffer start (includes channel * block_size + column)
-                if constexpr (is_input_in_dram) {
-                    // DRAM bank-id read via the AllocatorBank<DRAM> endpoint. Folding src_offset_bytes into the
-                    // bank address offset is equivalent to the legacy bank-id addr-gen result plus
-                    // src_offset_bytes: both land the offset in the NOC address's low bits below
-                    // NOC_ADDR_COORD_SHIFT (see the DRAM bank-id addr-gen in dataflow_api_addrgen.h).
-                    AllocatorBank<AllocatorBankType::DRAM> dram_bank;
-                    noc.async_read(
-                        dram_bank,
-                        cb_in_batch_obj,
-                        transfer_size_bytes,
-                        {.bank_id = bank_id, .addr = dram_base_read_addr + src_offset_bytes},
-                        {.offset_bytes = dst_offset_bytes});
-                } else {
-                    UnicastEndpoint src_ep;
-                    noc.async_read(
-                        src_ep,
-                        cb_in_batch_obj,
-                        transfer_size_bytes,
-                        {.noc_x = src_x, .noc_y = src_y, .addr = cb_in_obj.get_read_ptr() + src_offset_bytes},
-                        {.offset_bytes = dst_offset_bytes});
-                }
+            // dst_offset_bytes is already relative to block buffer start (includes channel * block_size + column)
+            if constexpr (is_input_in_dram != 0) {
+                // DRAM bank-id read via the AllocatorBank<DRAM> endpoint. Folding src_offset_bytes into the
+                // bank address offset is equivalent to the legacy bank-id addr-gen result plus
+                // src_offset_bytes: both land the offset in the NOC address's low bits below
+                // NOC_ADDR_COORD_SHIFT (see the DRAM bank-id addr-gen in dataflow_api_addrgen.h).
+                AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+                noc.async_read(
+                    dram_bank,
+                    batch,
+                    transfer_size_bytes,
+                    {.bank_id = bank_id, .addr = dram_base_read_addr + src_offset_bytes},
+                    {.offset_bytes = dst_offset_bytes});
+            } else {
+                UnicastEndpoint src_ep;
+                noc.async_read(
+                    src_ep,
+                    batch,
+                    transfer_size_bytes,
+                    {.noc_x = src_x, .noc_y = src_y, .addr = l1_input_read_addr + src_offset_bytes},
+                    {.offset_bytes = dst_offset_bytes});
             }
-
-            noc.async_read_barrier();
-            cb_in_batch_obj.push_back(input_block_size_sticks_per_core);
         }
 
-        for (uint32_t i = 0; i < num_full_tiles; i++) {
-            cb_in_transpose_obj.wait_front(1);
+        noc.async_read_barrier();
+        batch.push_back(input_block_size_sticks_per_core);
 
-            const uint32_t l1_read_addr = cb_in_transpose_obj.get_read_ptr();
-
-            copy_padded_sticks<channel_size, tile_size_stick_bytes, TILE_SIZE>(noc, l1_read_addr, l1_output_write_addr);
-            noc.async_read_barrier();
-            cb_in_transpose_obj.pop_front(1);
-
-            // Stride by a number of sticks when splitting writers across cores
-            l1_output_write_addr += l1_write_output_addr_stride;
-        }
+        convert_to_hwc::write_transposed_block<
+            num_output_channels_padded,
+            num_full_tiles,
+            total_tiles_per_block,
+            true,
+            element_size_bytes,
+            l1_write_output_addr_stride>(noc, transpose, l1_output_write_addr);
     }
 }
