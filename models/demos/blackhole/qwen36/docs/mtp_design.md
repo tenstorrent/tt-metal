@@ -353,3 +353,104 @@ Binding contract details for any option:
 - Sampling: the verify already computes per-row argmax scores; non-greedy
   (rejection-sampling acceptance) is future work — under B this pins
   greedy-only serving.
+
+## PARKED — traced fused loop (2026-08-24, final per pre-registered rule)
+
+Seven silicon runs; the seventh (56702) failed on an audit-coverable class
+(shape semantics the host oracle modeled at sim fidelity, not op fidelity), so
+the traced loop is parked. This section is the resume record.
+
+### Branch state
+
+- `ayerofieiev/qwen38/mtp @ 65bcb4276cf` — the full spec stack: eager loop
+  (validated), traced drafter windows, traced allocation-free verify,
+  commit-as-pure-data, the device-sim audit suite (87 host tests).
+- `ayerofieiev/qwen38/gdn-decode-fused @ 01e859e08ff` — seq_rows recurrence
+  with anchor-from-stash mode. The mtp head REQUIRES this head (accepts kwarg).
+
+### Validated on silicon (keep; these are the shipping artifacts)
+
+- **Eager fused loop (TT_SPEC_TRACE=0)**: row-equality green (identical
+  prompts decode identically across 8 users), accept 0.52-0.60, 2.56-2.79
+  tok/active-iteration, per-position conditional accept FLAT
+  (~0.71/0.68-0.72/0.76-0.78 — no position die-off; K=3 is width-capped by
+  B·(K+1) ≤ 32, so adaptive-K has no headroom). Iteration cost eager:
+  draft ~460ms / verify ~285ms / commit ~157ms per iter.
+- **seq_rows kernel**: bitwise gates green (per-row golden, W-sequential
+  equivalence, cross-user uniformity, unaligned slice, anchor-from-stash
+  vs mode-A on selected rows).
+- **KV alias-race fix**: paged_update_cache whole-tile RMW race on batch-alias
+  rows, fixed by masked sequential updates; regression gate green.
+- **Capture-hazard forensics — all root-caused with silicon evidence**:
+  1. 49490/51206-class CB clash = whole-row rms_norm programs (static CBs to
+     1520640) dispatching while an L1-pinned [8,32,5120] activation
+     (20,480 B/bank) held the watermark at 1500928 — 19,712 B overlap,
+     deterministic, hence byte-identical addresses across runs. Fixed: DRAM
+     activations + bare-ttnn.rms_norm block norms (56397: hazard defeated,
+     first clash-free capture in seven attempts).
+  2. Eager-ops-while-parked = the same invariant; fixed by the allocation-free
+     armed loop (uploads into persistent buffers + replays + readbacks only;
+     commit rides the verify replay as data via anchor-from-stash + one-hot
+     carry select).
+  3. Retained trace outputs pinned to DRAM (defense in depth; the normed
+     retention arithmetic was necessary but not the binding tenant).
+  4. Multicore untilize of [B,1,Vs] carries padded tile rows into the logical
+     volume (56397); guarded by a shape-driven slice.
+  5. to_memory_config on an already-DRAM tensor returns a distinct handle
+     ALIASING the buffer — "migrate + free original" is a use-after-free
+     (56610); the obsolete migration was removed.
+  6. Trace capture records in dispatch bypass mode without executing
+     (verified in fd_mesh_command_queue.cpp) — capture-time KV/state effects
+     are a non-issue.
+  7. Round-robin prompt fallback collapsed half the desync batch onto prompt 0
+     (measurement taint, fixed with index wrap + per-position accept stats).
+
+### The one remaining known bug (where 56702 stopped)
+
+`mtp.py:579`, the chain-hidden copy warm in `compile_batched_window`:
+`ttnn.copy(normed, bw["h"])` throws `out_tensor.logical_shape() !=
+input_tensor_a.logical_shape()`. All 7 batched window bodies EXECUTED (the
+whole batched graph — norms, attention at B=8, argmax path — ran clean); only
+the final warm copy's operands disagree. Best hypothesis: the same
+padded-vs-logical divergence as class 4 — `normed` exits the batched
+`_step_graph` with logical shape `[8,32,5120]` (padded rows materialized
+somewhere in the [B,1,·] chain) while `bw["h"]` is `[8,1,5120]`. Likely
+one-liner fix, mirroring the l_rm guard, in `_batched_step_body` right after
+`_step_graph`:
+
+    if normed.shape[-2] != 1:
+        n_v = ttnn.slice(normed, (0, 0, 0), (B, 1, normed.shape[-1]))
+        ttnn.deallocate(normed)
+        normed = n_v
+
+(Alternative: log normed.shape on silicon first and size `bw["h"]` to match.)
+
+### Resume protocol
+
+1. Extend the device-sim oracle (test_spec_decode_host.py) with LOGICAL vs
+   PADDED shape fidelity: track both per tensor; `copy` compares logical
+   shapes (the real op contract that 56702 hit); model which ops materialize
+   padded rows as logical from silicon evidence. Falsify against 56702's site,
+   apply the fix, all tests green.
+2. Re-run the ladder: seq_rows kernel gate → kv alias gate → uniform traced
+   leg (TT_SPEC_FUSED=1 TT_SPEC_TIMING=1 QWEN36_PROMPT_INDEX=0, spec_2k_b8)
+   → desync leg. TT_SPEC_TRACE=0 stays the validated fallback throughout.
+3. Known progress floor: seeding, a full eager iteration, all 7 window-body
+   executions, and every capture-hazard class are behind the failure point;
+   the never-executed surface remaining is the warm copy, the window/verify
+   captures themselves, and steady-state replays.
+
+Projection at current accept (2.69 tok/active-iter): traced iteration
+(drafter replays ~15-25ms + verify replay ~25-30ms + host bookkeeping)
+≈ 66-80 t/s/u. Device-only risks the oracle cannot see: CB pacing, allocator
+placement, replay-internal ordering, op validation stricter than the sim,
+untilize semantics beyond the two modeled behaviors, numerics at accept-rate
+level.
+
+### Assessment
+
+The capture hazard was a platform-level failure mode (it predates this work —
+job 49490 hit it from the bench harness with zero spec code) and is now fully
+mapped and defeated; the parked state is one shape fix plus an unknown number
+of device-only-visible steps from the traced target. The eager loop is a
+correct, silicon-validated speculative decoder today.
