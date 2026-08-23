@@ -1219,6 +1219,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     }
 
     const bool create_writer_mcast_receiver = !skip_weights_mcast;
+    const CoreRangeSet reader_compute_cores = height_sharded ? input_cores : all_cores;
+    const CoreRangeSet active_mcast_receiver_cores =
+        height_sharded ? input_cores.subtract(mcast_sender_cores) : mcast_receiver_cores;
+    const CoreRangeSet padding_mcast_receiver_cores = mcast_receiver_cores.subtract(active_mcast_receiver_cores);
+    const bool has_padding_mcast_receivers =
+        create_writer_mcast_receiver && padding_mcast_receiver_cores.num_cores() > 0;
 
     uint32_t reader_arg_act_block_h_datums = (enable_split_reader ? act_block_h_datums_split : act_block_h_datums);
     TT_FATAL(reader_arg_act_block_h_datums % 2 == 0, "2 Indices are packed in one uint32_t word.");
@@ -1322,18 +1328,18 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // WEIGHTS: weights reader/writer -> compute.
     {
         auto dfb = make_dfb(conv2d_sharded_weights_dfb, Conv2dCb::WEIGHTS);
-        dfb.advanced_options.allow_incomplete_endpoint_coverage = true;
+        dfb.advanced_options.allow_incomplete_endpoint_coverage = has_padding_mcast_receivers;
         spec.dataflow_buffers.push_back(std::move(dfb));
     }
     if (has_bias) {
         auto dfb = make_dfb(conv2d_sharded_bias_dfb, Conv2dCb::BIAS);
-        dfb.advanced_options.allow_incomplete_endpoint_coverage = true;
+        dfb.advanced_options.allow_incomplete_endpoint_coverage = has_padding_mcast_receivers;
         spec.dataflow_buffers.push_back(std::move(dfb));
     }
     // ACT_SECOND_READER (split reader, non-shared): writer fills, compute consumes.
     if (enable_split_reader && !split_reader_cb_shared) {
         auto dfb = make_dfb(conv2d_sharded_act_second_reader_dfb, Conv2dCb::ACT_SECOND_READER);
-        dfb.advanced_options.allow_incomplete_endpoint_coverage = true;
+        dfb.advanced_options.allow_incomplete_endpoint_coverage = has_padding_mcast_receivers;
         spec.dataflow_buffers.push_back(std::move(dfb));
     }
     // ACT_ROW_MAJOR + ACT_TILIZED: block-sharded path (reader tilize input / mcast source) and the
@@ -1391,7 +1397,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         if (reader_indices_globally_allocated) {
             dfb.borrowed_from = conv2d_sharded_reader_indices_tensor;
         }
-        dfb.advanced_options.allow_incomplete_endpoint_coverage = enable_split_reader && config_tensors_in_dram;
+        dfb.advanced_options.allow_incomplete_endpoint_coverage =
+            enable_split_reader && config_tensors_in_dram && has_padding_mcast_receivers;
         spec.dataflow_buffers.push_back(std::move(dfb));
     }
 
@@ -2173,10 +2180,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // reader + compute run on input_cores (height-sharded) / all_cores (block-sharded).  The writer
     // sender runs on mcast_sender_cores, the receiver on mcast_receiver_cores.  We emit one work unit per
     // kernel-placement set (the variant adapter realizes them).
-    const CoreRangeSet reader_compute_cores = height_sharded ? input_cores : all_cores;
-    const CoreRangeSet active_mcast_receiver_cores =
-        height_sharded ? input_cores.subtract(mcast_sender_cores) : mcast_receiver_cores;
-    const CoreRangeSet padding_mcast_receiver_cores = mcast_receiver_cores.subtract(active_mcast_receiver_cores);
     // WorkUnitSpecs must have DISJOINT target_nodes; each lists ALL kernels that run on those nodes
     // (a kernel may appear in several WUs — its placement is the union of their nodes). A sender core
     // runs reader+compute+writer_sender; a receiver core runs reader+compute+writer_receiver; any
