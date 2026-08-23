@@ -530,15 +530,14 @@ class Qwen36MTPHead:
         sin = ttnn.to_layout(ttnn.slice(bw["sin"], [0, j, 0], [B, j + 1, rd]), ttnn.TILE_LAYOUT)
         logits, normed = self._step_graph(bw["tok"], bw["h"], cur_pos, cos, sin, page_table=bw["pt"])
         # The traces RETAIN (idx, val, normed) for the process lifetime, one set
-        # per window index — they must live in DRAM. A retained L1 tensor drops
-        # the allocator watermark under a parked trace for every LATER program
-        # dispatch: the batched normed alone is [8,32,5120] bf16 padded = 1280
-        # tiles = 20,480 B of every L1 bank, and the 56147 clash overlap was
-        # exactly that minus the 768 B eager margin (19,712 B).
-        normed_d = ttnn.to_memory_config(normed, ttnn.DRAM_MEMORY_CONFIG)
-        if normed_d is not normed:
-            ttnn.deallocate(normed)
-        normed = normed_d
+        # per window index — all three must live in DRAM (a retained L1 tensor
+        # drops the allocator watermark under a parked trace for every later
+        # program dispatch: the batched normed alone would reserve 20,480 B of
+        # every L1 bank). normed is DRAM at the source (_step_graph); idx/val
+        # get explicit DRAM configs below. No post-hoc migration: ttnn's
+        # to_memory_config on an already-DRAM tensor returns a distinct handle
+        # ALIASING the same buffer, so a same-config "migrate + free the
+        # original" frees the buffer out from under the alias (56610).
         # Per-user greedy scores: rows of ONE 32-row argmax. [B,1,Vs] TILE has
         # per-batch row padding, so the row-merge reshape must go through
         # ROW_MAJOR (a padded-TILE reshape is a host-fallback read — illegal

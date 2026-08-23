@@ -758,3 +758,458 @@ def test_fused_traced_drafter_with_finished_user(monkeypatch):
         for u in done_users:
             assert spec.slots[u].committed[-1] in stop
     assert outs[True] == outs[False]
+
+
+# --------------------------------------------------------------------------- #
+# Device-sim audit of the ENTIRE never-executed traced surface (one-shot rule):
+# a fake ttnn with tensor LIFETIME tracking (storage-sharing aliases; any op
+# touching a freed buffer fails), shape propagation (reshape enforces volume,
+# matmul/concat/copy check dims), and capture discipline (no host readback and
+# no fresh device upload inside a capture). It drives the REAL
+# mtp.ensure/stage/compile/capture/step_batched and the REAL fused
+# _seed_select_state / _ensure_verify_io / _verify_upload / _verify_graph /
+# _verify_read / _capture_verify_trace / _draft_traced / _fused_verify across
+# seeding, one eager iteration, trace setup, and TWO armed iterations.
+#
+# untilize is parametrized over the two behaviors consistent with all silicon
+# evidence: strips padding always, or carries padded rows when the logical row
+# dim is 1 (the 56397 [B,1,Vs] -> [B,32,Vs] case; the GDN sites at [B,3,D] and
+# [B,4,D] returned stripped shapes on the same silicon).
+# --------------------------------------------------------------------------- #
+class _SimTensor:
+    _n = 0
+
+    def __init__(self, shape, layout="TILE", store=None, host=False):
+        self.shape = list(int(s) for s in shape)
+        self.layout = layout
+        self.store = store if store is not None else {"alive": True}
+        self.host = host
+        _SimTensor._n += 1
+        self.name = f"t{_SimTensor._n}"
+
+    def volume(self):
+        import math
+
+        return math.prod(self.shape)
+
+
+def _make_sim(untilize_pads_row1):
+    import math
+    from types import SimpleNamespace
+
+    import torch as _torch
+
+    T = _SimTensor
+    state = {"capturing": False, "traces": set(), "next_trace": 0}
+
+    def chk(*ts):
+        for t in ts:
+            assert isinstance(t, T), f"non-tensor operand {type(t)}"
+            assert t.store["alive"], f"op consumed FREED tensor {t.name} shape {t.shape}"
+
+    def dealloc(t, *a, **k):
+        chk(t)
+        t.store["alive"] = False
+
+    def from_torch(ht, dtype=None, layout="RM", device=None, mesh_mapper=None, **k):
+        if device is not None:
+            assert not state["capturing"], "device allocation (from_torch) inside a trace capture"
+        return T(list(ht.shape), layout, host=(device is None))
+
+    def copy_h2d(src, dst):
+        chk(dst)
+        assert src.host, "copy_host_to_device src must be a host tensor"
+        assert src.shape == dst.shape, f"staging shape {src.shape} != buffer {dst.shape}"
+
+    def reshape(t, shape):
+        chk(t)
+        shape = [int(s) for s in shape]
+        assert math.prod(shape) == t.volume(), f"reshape volume: {t.shape} -> {shape}"
+        return T(shape, t.layout, store=t.store)  # view: shares the buffer
+
+    def t_slice(t, start, end, memory_config=None):
+        chk(t)
+        assert all(0 <= a < b <= d for a, b, d in zip(start, end, t.shape)), f"slice [{start}:{end}] of {t.shape}"
+        return T([b - a for a, b in zip(start, end)], t.layout)
+
+    def untilize(t, use_multicore=False):
+        chk(t)
+        s = list(t.shape)
+        if untilize_pads_row1 and len(s) >= 2 and s[-2] == 1:
+            s[-2] = 32
+        return T(s, "RM")
+
+    def concat(ts, dim, memory_config=None):
+        chk(*ts)
+        base = list(ts[0].shape)
+        for o in ts[1:]:
+            assert all(
+                i == dim or a == b for i, (a, b) in enumerate(zip(base, o.shape))
+            ), f"concat dim mismatch {base} vs {o.shape}"
+        base[dim] = sum(o.shape[dim] for o in ts)
+        return T(base, ts[0].layout)
+
+    def matmul(a, b, memory_config=None, **k):
+        chk(a, b)
+        assert a.shape[-1] == b.shape[-2], f"matmul {a.shape} @ {b.shape}"
+        return T(list(a.shape[:-1]) + [b.shape[-1]], "TILE")
+
+    def linear(a, w, compute_kernel_config=None, memory_config=None, **k):
+        chk(a, w)
+        assert a.shape[-1] == w.shape[-2], f"linear {a.shape} @ {w.shape}"
+        return T(list(a.shape[:-1]) + [w.shape[-1]], "TILE")
+
+    def eltwise2(a, b, memory_config=None, **k):
+        chk(a, b)
+        return T(a.shape, a.layout)
+
+    def to_torch(t, mesh_composer=None, **k):
+        chk(t)
+        assert not state["capturing"], "host readback (to_torch) inside a trace capture"
+        if mesh_composer is not None:
+            return _torch.zeros([8] + t.shape)
+        return _torch.zeros(t.shape)
+
+    def begin_cap(device, cq_id=0):
+        assert not state["capturing"], "nested trace capture"
+        state["capturing"] = True
+        state["next_trace"] += 1
+        return state["next_trace"]
+
+    def end_cap(device, tid, cq_id=0):
+        assert state["capturing"]
+        state["capturing"] = False
+        state["traces"].add(tid)
+
+    def execute(device, tid, cq_id=0, blocking=False):
+        assert tid in state["traces"], f"replay of uncaptured trace {tid}"
+
+    def copy(src, dst):
+        chk(src, dst)
+        assert src.shape == dst.shape, f"copy shape {src.shape} != {dst.shape}"
+
+    fake = SimpleNamespace(
+        _T=T,
+        _state=state,
+        TILE_LAYOUT="TILE",
+        ROW_MAJOR_LAYOUT="RM",
+        DRAM_MEMORY_CONFIG="DRAM",
+        L1_MEMORY_CONFIG="L1",
+        int32="int32",
+        uint32="uint32",
+        bfloat16="bfloat16",
+        float32="float32",
+        deallocate=dealloc,
+        from_torch=from_torch,
+        copy_host_to_device_tensor=copy_h2d,
+        reshape=reshape,
+        slice=t_slice,
+        untilize=untilize,
+        to_layout=lambda t, layout, **k: (chk(t), _SimTensor(t.shape, layout))[1],
+        # Same-config to_memory_config returns a DISTINCT handle sharing the
+        # buffer (the 56610 alias hazard); model every call as an alias.
+        to_memory_config=lambda t, mc: (chk(t), _SimTensor(t.shape, t.layout, store=t.store))[1],
+        pad=lambda t, spec, value: (chk(t), _SimTensor([d + lo + hi for d, (lo, hi) in zip(t.shape, spec)], t.layout))[
+            1
+        ],
+        argmax=lambda t, dim, keepdim=False, memory_config=None: (chk(t), _SimTensor(t.shape[:-1], "RM"))[1],
+        max=lambda t, dim, memory_config=None: (chk(t), _SimTensor(t.shape[:-1], t.layout))[1],
+        rms_norm=lambda t, weight=None, epsilon=None, memory_config=None, **k: (
+            chk(t, weight),
+            _SimTensor(t.shape, t.layout),
+        )[1],
+        concat=concat,
+        matmul=matmul,
+        linear=linear,
+        add=eltwise2,
+        multiply=eltwise2,
+        addcmul=lambda o, a, b, memory_config=None: (chk(o, a, b), _SimTensor(o.shape, o.layout))[1],
+        silu=lambda t, memory_config=None: (chk(t), _SimTensor(t.shape, t.layout))[1],
+        to_torch=to_torch,
+        get_device_tensors=lambda t: [t],
+        ConcatMeshToTensor=lambda device, dim=0: object(),
+        ReplicateTensorToMesh=lambda device: object(),
+        begin_trace_capture=begin_cap,
+        end_trace_capture=end_cap,
+        execute_trace=execute,
+        copy=copy,
+        synchronize_device=lambda device, **k: None,
+    )
+    return fake
+
+
+def _sim_env(monkeypatch, untilize_pads_row1):
+    """Patch every exercised module onto the device sim; return (fake, mods)."""
+    import sys
+    from types import SimpleNamespace
+
+    import models.demos.blackhole.qwen36.tt.mtp as mtp_mod
+    import models.demos.blackhole.qwen36.tt.spec_decode_batched as sb_mod
+    import models.demos.blackhole.qwen36.tt.spec_decode_fused as sf_mod
+
+    fake = _make_sim(untilize_pads_row1)
+    T = fake._T
+    for mod in (mtp_mod, sb_mod, sf_mod):
+        monkeypatch.setattr(mod, "ttnn", fake)
+    monkeypatch.setattr(
+        mtp_mod,
+        "rms_norm_ttnn",
+        lambda x, w, eps=1e-6, memory_config=None: fake.rms_norm(x, weight=w, memory_config=memory_config),
+    )
+    # _gdn_verify_seq imports these INSIDE the function; route them to stubs.
+    tpc_stub = SimpleNamespace(matmul_1d_decode=None)
+
+    def _all_reduce(partial, mesh, ccl, cluster_axis=0, dim=3, topology=None, memory_config=None):
+        assert partial.store["alive"], "tt_all_reduce consumed freed tensor"
+        return T(partial.shape, partial.layout)
+
+    ccl_stub = SimpleNamespace(tt_all_reduce=_all_reduce)
+    monkeypatch.setitem(sys.modules, "models.demos.blackhole.qwen36.tt.tp_common", tpc_stub)
+    monkeypatch.setitem(sys.modules, "models.tt_transformers.tt.ccl", ccl_stub)
+    monkeypatch.setenv("TT_SPEC_FUSED_DEBUG", "0")
+    return fake, (mtp_mod, sb_mod, sf_mod)
+
+
+def _build_traced_rig(fake, mods):
+    """REAL Qwen36MTPHead + Qwen36FusedSpeculativeDecoder over sim tensors."""
+    from types import SimpleNamespace
+
+    import torch
+
+    mtp_mod, sb_mod, sf_mod = mods
+    T = fake._T
+    B, K = 8, 3
+    W = K + 1
+    R = B * W
+    dim, rd, vs, nv, dk, dv, conv_k = 64, 16, 128, 2, 32, 32, 4
+    D = 48  # qkv_dim_tp
+    qkvzab_dim = D + nv * dv + 32
+
+    def new(shape, layout="TILE"):
+        return T(shape, layout)
+
+    def chk(t):
+        assert t.store["alive"], f"stub consumed FREED tensor {t.name} shape {t.shape}"
+
+    dev = object()
+
+    # --- the REAL drafter head over sim tensors ---
+    head = mtp_mod.Qwen36MTPHead.__new__(mtp_mod.Qwen36MTPHead)
+    head.device = dev
+    head.args = SimpleNamespace(dim=dim, vocab_size=vs * 8)
+    head.rope = SimpleNamespace(head_dim=rd, cos_cpu=torch.zeros(4096, rd), sin_cpu=torch.zeros(4096, rd))
+    head._mesh_kwargs = {}
+    head.norm_eps = 1e-6
+    head.num_devices = 8
+    head.lm_head_sharded = True
+    head.embedding = lambda tok: (chk(tok), new([tok.shape[0], tok.shape[1], dim]))[1]
+    head.fc_weight = new([2 * dim, dim])
+    head.lm_head_weight = new([dim, vs])
+    head.pre_fc_norm_embedding = new([dim])
+    head.pre_fc_norm_hidden = new([dim])
+    head.final_norm = new([dim])
+    head.attn_norm_w = new([dim])
+    head.ffn_norm_w = new([dim])
+    head.compute_kernel_config = None
+    head.attention = SimpleNamespace(
+        forward=lambda x, cos, sin, position_tensor=None, page_table=None: (
+            chk(x),
+            chk(cos),
+            chk(sin),
+            chk(position_tensor),
+            chk(page_table),
+            new(x.shape),
+        )[-1]
+    )
+    head.feed_forward = SimpleNamespace(forward=lambda t: (chk(t), new(t.shape))[1])
+    head._page_tables_host = torch.arange(B * 4, dtype=torch.int32).reshape(B, 4)
+    head._page_table_tt = None
+    head._bwin = None
+    head._win = None
+    head._last_normed = None
+
+    # --- the REAL fused decoder over sim tensors ---
+    sf = sf_mod.Qwen36FusedSpeculativeDecoder.__new__(sf_mod.Qwen36FusedSpeculativeDecoder)
+
+    class _Dn:
+        def __init__(self):
+            self.K = conv_k
+            self.Nk = 1
+            self.Nv = nv
+            self.qkv_dim_tp = D
+            self._fuse_ab = True
+            self.rec_state = new([B, nv, dk, dv])
+            self._batched_conv_carry = new([B, conv_k - 1, D])
+            self.tw = {
+                "qkvz": new([dim, qkvzab_dim]),
+                "dt_bias": new([1, 1, nv]),
+                "neg_exp_A": new([1, 1, nv]),
+                "norm_w": new([1, 1, dv]),
+                "out": new([nv * dv, dim]),
+                "conv_taps": [new([1, 1, D]) for _ in range(conv_k)],
+            }
+            self.cfg = None
+            self.tt_ccl = None
+
+        def _col_proj(self, x3, w, progcfg, mc):
+            chk(x3)
+            chk(w)
+            return new([1, x3.shape[1], qkvzab_dim])
+
+        def _row_proj(self, g, w):
+            chk(g)
+            chk(w)
+            return new([1, g.shape[1], dim])
+
+        def _write_index(self, buf, src, idx, dim=0):
+            chk(buf)
+            chk(src)
+            assert 0 <= idx < buf.shape[dim], f"_write_index row {idx} outside {buf.shape}"
+            src.store["alive"] = False  # the real op consumes src
+
+    dns = [_Dn(), _Dn()]
+
+    class _Fop:
+        @staticmethod
+        def recurrence_seq_rows(conv, qkvzab, rec, stash, dtb, nega, w_, out, *, accepts=None, **kw):
+            for t in (conv, qkvzab, rec, stash, dtb, nega, w_, out):
+                chk(t)
+            assert list(out.shape) == [1, R, nv * dv], f"gated {out.shape}"
+            assert list(stash.shape) == [B * W, nv, dk, dv]
+            if accepts is not None:
+                chk(accepts)
+                assert accepts.shape[-1] >= B and (accepts.shape[-1] * 4) % 32 == 0
+
+    def attn_layer():
+        def fwd(x, cos, sin, position_tensor=None, page_table=None, mode=None, kv_update_positions=None):
+            for t in [x, cos, sin, position_tensor, page_table] + list(kv_update_positions or []):
+                chk(t)
+            x.store["alive"] = False  # production decode consumes its input
+            return new([1, 1, R, dim])
+
+        return SimpleNamespace(is_full_attention=True, forward=fwd)
+
+    def gdn_layer(dn):
+        return SimpleNamespace(
+            is_full_attention=False,
+            attention=dn,
+            attention_norm=lambda h, mode=None, norm_config=None: (chk(h), new(h.shape))[1],
+            ffn_norm=lambda h, mode=None, norm_config=None: (chk(h), new(h.shape))[1],
+            feed_forward=SimpleNamespace(forward=lambda t: (chk(t), new(t.shape))[1]),
+        )
+
+    model = SimpleNamespace(
+        device=dev,
+        mesh_device=dev,
+        num_devices=8,
+        args=SimpleNamespace(
+            dim=dim,
+            rope_head_dim=rd,
+            rope_theta=10000.0,
+            vocab_size=vs * 8,
+            get_norm_config=lambda *a, **k: None,
+            gdn_qkvzab_progcfg=None,
+            ccl_topology=lambda: None,
+        ),
+        embd=lambda tok: (chk(tok), new([tok.shape[0], tok.shape[1], dim]))[1],
+        _final_norm_decode=lambda x: (chk(x), new(x.shape))[1],
+        lm_head_weight=new([dim, vs]),
+        layers=[gdn_layer(dns[0]), attn_layer(), gdn_layer(dns[1])],
+        _lmhead_vocab_sharded=True,
+    )
+
+    sf.model = model
+    sf.mtp = head
+    sf.page_table = torch.arange(B * 4, dtype=torch.int32).reshape(B, 4)
+    sf.draft_len = K
+    sf.W = W
+    sf.B = B
+    sf.stop_tokens = set()
+    sf._dns = dns
+    sf._stash = [new([B * W, nv, dk, dv]) for _ in dns]
+    sf._conv_win = [None] * len(dns)
+    sf._win_buf = [None] * len(dns)
+    sf._vio = None
+    sf._win_sel = new([B, W * (conv_k - 1), (conv_k - 1) + W])
+    sf._conv_k = conv_k
+    sf._nv, sf._dk, sf._dv = nv, dk, dv
+    sf._fop = _Fop()
+    sf._use_trace = True
+    sf._last_accepts = [0] * B
+    sf._debug_done = True
+    sf.slots = []
+    for u in range(B):
+        slot = sb_mod.SpecSlot(committed=[(u + i) % 97 for i in range(80)], a=79)
+        c = len(slot.committed) - 1
+        for i in range(3):  # armed catch-up pairs, as after _first_verify + align
+            slot.pending.append((slot.committed[c - 2 + i], torch.zeros(dim), c - 3 + i + 1))
+        sf.slots.append(slot)
+    return sf, head, (B, K, W, R, dim)
+
+
+@pytest.mark.parametrize("untilize_pads_row1", [False, True], ids=["untilize-strips", "untilize-pads-row1"])
+def test_traced_surface_device_sim(monkeypatch, untilize_pads_row1):
+    """Lifetime + shape + capture-discipline audit of the never-executed traced
+    surface: seed select-state, one eager iteration (real fused verify graph),
+    the full trace setup (all drafter windows compiled + captured, verify
+    captured), then TWO armed iterations of traced drafting, verify replay,
+    readback, and accepts re-upload."""
+    import torch
+
+    import models.demos.blackhole.qwen36.tt.spec_decode_fused as sf_mod
+
+    fake, mods = _sim_env(monkeypatch, untilize_pads_row1)
+    sf, head, (B, K, W, R, dim) = _build_traced_rig(fake, mods)
+
+    def accept_and_rearm(results, drafts):
+        accepts = []
+        for u, slot in enumerate(sf.slots):
+            target_ids, hid = results[u]
+            c = len(slot.committed) - 1
+            m, new_tokens = sf_mod.greedy_accept(drafts[u], target_ids[: K + 1])
+            slot.accepts.append(m)
+            accepts.append(m)
+            for j2, tok in enumerate(new_tokens):
+                slot.committed.append(tok)
+                slot.out.append(tok)
+                slot.pending.append((tok, hid[j2], c + j2))
+            slot.a = len(slot.committed) - 1
+        sf._last_accepts = [m if m is not None else 0 for m in accepts]
+        return accepts
+
+    # Pre-loop seeding, then iteration 1 fully eager (the real traced-mode graph).
+    sf._seed_select_state()
+    monkeypatch.setattr(head, "step", lambda tok, hid, pos, user=0: (torch.zeros(128 * 8), torch.zeros(dim)))
+    drafts = sf._draft_eager(64)
+    assert all(len(d) == K for d in drafts)
+    results = sf._fused_verify(drafts)  # eager branch: builds _vio, runs _verify_graph
+    accept_and_rearm(results, drafts)
+
+    # Arm: all drafter windows compile + capture, verify captures last.
+    sf._setup_drafter_traces()
+    assert head._bwin["traces"] and sf._vio["trace"] is not None
+    assert not fake._state["capturing"]
+
+    # TWO armed iterations: traced drafting + verify replay + accepts re-upload.
+    for _ in range(2):
+        width = max(len(sf._sched_pending(s)) for s in sf.slots) + K - 1
+        assert width <= head._bwin["w_max"], f"window {width} overflows"
+        drafts = sf._draft_traced(width, 64)
+        assert all(len(d) == K for d in drafts)
+        results = sf._fused_verify(drafts)  # replay branch
+        accept_and_rearm(results, drafts)
+
+    # Every persistent handle must still be alive.
+    persistents = (
+        list(sf._vio["upd"])
+        + [sf._vio[k] for k in ("tok", "pos", "cos", "sin", "pt", "gated", "acc", "sel")]
+        + [sf._vio["trace"][k] for k in ("xn", "idx", "val")]
+        + sf._win_buf
+        + sf._stash
+        + [dn.rec_state for dn in sf._dns]
+        + [dn._batched_conv_carry for dn in sf._dns]
+        + [head._bwin[k] for k in ("pos", "cos", "sin", "tok", "h", "pt")]
+        + [tr[k] for tr in head._bwin["traces"].values() for k in ("idx", "val", "normed")]
+    )
+    for t in persistents:
+        assert t.store["alive"], f"persistent {t.name} shape {t.shape} was freed"
