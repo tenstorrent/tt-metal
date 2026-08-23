@@ -564,6 +564,20 @@ KNOBS = {
     # slot-liveness proof, profitability prices removed per-trip record
     # delivery (default saturation-calibrated model refuses) —
     # measurement class, promotion needs its own silicon A/B.
+    # Lane FW (agent/record-hoist-loop, 2026-08-23) generalized the
+    # admitted class to the RUNTIME-trip tile-loop shape (the blaze
+    # sdpa_reduce_row RECORD-HOIST loss class): loop replay-preservation
+    # audit over raw LLK sync words / computed FIFO pushes / MopCfg
+    # census, structural trips>=1 + 2-trip break-even pricing,
+    # multi-block (profiler-vehicle) loops via latch dominance,
+    # multi-record calendars, and the doomed-hoist Dst-store mirror
+    # refusal.  Measured (headline-laneFW-rh-20260823b, on-plus legs,
+    # corr device-golden + paired CRAQ PASS): blaze-sdpareducerow
+    # KERNEL max-t8 -0.39% / sum-t8 -1.21% / max-t32 -0.52% /
+    # sum-t32 -0.84% — the only loss class that widened with tile
+    # count now narrows under the knob (vs-hand max +1.61 -> ~+1.08 at
+    # t32); mulint32-fresh window-pairing composition byte-exact and
+    # re-measured -11.32%.
     "record-hoist": "-mtt-tensix-optimize-replay-record-hoist",
     # EH (prera-pressure-schedule): pressure-cost list scheduling at
     # the pre-RA pseudo seam (GCC -fsched-pressure ECC model adapted to
