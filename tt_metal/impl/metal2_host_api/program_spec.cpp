@@ -333,9 +333,12 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                     TT_FATAL(
                         info.dfb_spec_name == dfb_binding.dfb_spec_name,
                         "Kernel '{}' uses accessor_name '{}' for two different DFBs; an accessor name may be reused "
-                        "only by the producer/consumer pair of the same self-loop DFB",
+                        "only by the producer/consumer pair of the same self-loop DFB (first DFB '{}', conflicting "
+                        "DFB '{}')",
                         kernel.unique_id,
-                        accessor_name);
+                        accessor_name,
+                        info.dfb_spec_name,
+                        dfb_binding.dfb_spec_name);
                     TT_FATAL(
                         primary && info.primary,
                         "Kernel '{}' reuses DFB accessor name '{}' across bindings. Accessor aliases must be "
