@@ -246,8 +246,10 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         user_grid.y,
         device_grid.x,
         device_grid.y);
-    const uint32_t sdpa_grid_x = user_grid.x - 1;
-    const uint32_t sdpa_grid_y = user_grid.y;
+    // Mirrors the factory's grid derivation, including the bottom-row MUX experiment.
+    const bool mux_on_bottom_row = exp_sdpa_mux_on_bottom_row();
+    const uint32_t sdpa_grid_x = mux_on_bottom_row ? user_grid.x : user_grid.x - 1;
+    const uint32_t sdpa_grid_y = mux_on_bottom_row ? user_grid.y - 2 : user_grid.y;
     const uint32_t num_sdpa_cores = sdpa_grid_x * sdpa_grid_y;
 
     // Joint sequence must divide evenly (or be zero); last local Q chunk may be padded.
@@ -262,31 +264,14 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const uint32_t num_q_chunks = num_local_q_chunks + num_joint_q_chunks;
     const uint32_t total_q_chunks = B * NQH * num_q_chunks;
 
-    // Heads per row: each core row hosts up to kMaxPasses heads, walked as serial passes.
-    // Keep in lockstep with kMaxPasses in exp_ring_joint_sdpa_program_factory.cpp (L1-bound).
-    constexpr uint32_t kMaxPasses = 2;
-    const uint32_t num_passes = (B * NQH + sdpa_grid_y - 1) / sdpa_grid_y;
-    TT_FATAL(
-        num_passes <= kMaxPasses,
-        "Number of (batch × heads) combinations (B={} × NQH={} = {}) needs {} head-serial passes on "
-        "{} SDPA grid rows (device grid {}×{}), but at most {} are supported. Reduce batch size or "
-        "head count (e.g. via tensor parallelism).",
-        B,
-        NQH,
-        B * NQH,
-        num_passes,
-        sdpa_grid_y,
-        device_grid.x,
-        device_grid.y,
-        kMaxPasses);
-
-    // Exactly one Q chunk per column: a head's Q chunks must fill its row. Fewer would idle the
+    // Every head-segment must fill its row exactly: fewer chunks than columns would idle the
     // trailing columns, and the last two SDPA columns are the fabric MUX clients that drive the
     // K/V all-gather — an idle MUX column means that link never forwards its shard.
     TT_FATAL(
-        num_q_chunks == sdpa_grid_x,
-        "Q chunks per head (num_local={} + num_joint={} = {}) must equal SDPA grid columns ({}) on "
-        "device grid {}×{}. Adjust q_chunk_size so ceil(N_local / q_chunk_size) == {}.",
+        num_q_chunks % sdpa_grid_x == 0,
+        "Q chunks per head (num_local={} + num_joint={} = {}) must be a multiple of the SDPA grid "
+        "columns ({}) on device grid {}×{}. Adjust q_chunk_size so ceil(N_local / q_chunk_size) is "
+        "a multiple of {}.",
         num_local_q_chunks,
         num_joint_q_chunks,
         num_q_chunks,
@@ -294,6 +279,28 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         device_grid.x,
         device_grid.y,
         sdpa_grid_x);
+    const uint32_t segs_per_head = num_q_chunks / sdpa_grid_x;
+    const uint32_t total_segments = B * NQH * segs_per_head;
+
+    // Segments per row: each core row hosts up to kMaxPasses head-segments, walked as serial
+    // passes. Keep in lockstep with kMaxPasses in exp_ring_joint_sdpa_program_factory.cpp
+    // (L1-bound).
+    constexpr uint32_t kMaxPasses = 3;
+    const uint32_t num_passes = (total_segments + sdpa_grid_y - 1) / sdpa_grid_y;
+    TT_FATAL(
+        num_passes <= kMaxPasses,
+        "Number of head-segments (B={} × NQH={} × segs_per_head={} = {}) needs {} serial passes on "
+        "{} SDPA grid rows (device grid {}×{}), but at most {} are supported. Reduce batch size or "
+        "head count (e.g. via tensor parallelism), or use a larger q_chunk_size.",
+        B,
+        NQH,
+        segs_per_head,
+        total_segments,
+        num_passes,
+        sdpa_grid_y,
+        device_grid.x,
+        device_grid.y,
+        kMaxPasses);
 
     // Final sanity: total Q chunks must fit the cores across all passes.
     TT_FATAL(

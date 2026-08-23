@@ -181,11 +181,12 @@ class MiniMaxH3Attention(Module):
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)  # reserve last column for CCL
         self._sdpa_program_configs: dict[tuple[int, bool], ttnn.SDPAProgramConfig] = {}
 
-        # The exp ring op walks ceil(n_local_heads / rows) heads per core row as serial passes, so
-        # unlike the plain ring op it is not limited to one head per row -- which is what makes it
-        # usable here at all, since TP=4 leaves 14 local heads on 10 rows. Only the H3 mesh is
-        # validated for it, matching WanAttention's gate.
-        self.exp_ring_max_passes = 2  # kMaxPasses in exp_ring_joint_sdpa_program_factory.cpp
+        # The exp ring op walks head-SEGMENTS (a head's Q chunks split over segs_per_head rows) as
+        # serial passes, ceil(n_local_heads * segs / rows) passes per row. Segmentation is what
+        # balances 14 local heads over 10 rows: segs=1 gives 2 passes of 10-tile chunks with 6 rows
+        # idle on the second pass, while segs=2 gives 3 passes of 5-tile chunks on every core --
+        # 15 Q tile-rows per core instead of 20 on the bottleneck cores.
+        self.exp_ring_max_passes = 3  # kMaxPasses in exp_ring_joint_sdpa_program_factory.cpp
         self.exp_ring_num_passes = math.ceil(self.n_local_heads / full_grid.y)
         self.exp_ring_max_k_chunk = 512  # largest k worth trying; `_exp_sdpa_l1_bytes` picks down from here
         self.use_exp_ring_sdpa = (
@@ -337,15 +338,15 @@ class MiniMaxH3Attention(Module):
                 return h <= 2 and sk_t % (dst // h) == 0 and sq_t // h > 1
         return False
 
-    def _exp_sdpa_l1_bytes(self, sq_t: int, sk_t: int, resident_q: bool = True) -> int:
-        """L1 the exp op's circular buffers need for a (q, k) chunk shape, in tiles of head_dim.
+    def _exp_sdpa_l1_bytes(self, sq_t: int, sk_t: int, p: int, resident_q: bool = True) -> int:
+        """L1 the exp op's circular buffers need for a (q, k, passes) shape, in tiles of head_dim.
 
-        `resident_q=False` models the op's streamed-Q fallback: when the resident total does not fit,
-        the factory sizes c_0 to a single chunk and the reader re-reads each pass's Q every ring
-        iteration. The op selects the mode itself from this same arithmetic; the model only needs it
-        to know which (q, k) shapes are buildable.
+        `p` is the candidate's pass count (head-segment scheduling makes it per-candidate:
+        ceil(n_local_heads * segs / rows)). `resident_q=False` models the op's streamed-Q fallback:
+        when the resident total does not fit, the factory sizes c_0 to a single chunk and the reader
+        re-reads each pass's Q every ring iteration. The op selects the mode itself from this same
+        arithmetic; the model only needs it to know which (q, k) shapes are buildable.
         """
-        p = self.exp_ring_num_passes
         dh_t = self.head_dim // ttnn.TILE_SIZE
         tiles = (
             (p if resident_q else 1) * sq_t * dh_t  # c_0 Q: one chunk per pass, or one when streamed
@@ -395,25 +396,46 @@ class MiniMaxH3Attention(Module):
         return self._exp_sdpa_program_configs[seq_local]
 
     def _build_exp_sdpa_program_config(self, seq_local: int) -> ttnn.SDPAProgramConfig | None:
+        """Search (cols, segs_per_head, q_chunk, k_chunk) and take the lightest bottleneck load.
+
+        The per-core matmul work per ring iteration is passes * q_chunk Q rows against the full
+        K/V stream, so `passes * q_chunk` is the primary score: at 14 heads on 10 rows, segs=1
+        gives 2 passes x 320 = 640 rows while segs=2 gives 3 passes x 160 = 480. Larger k_chunk
+        is the tie-break (fewer per-chunk overheads), then wider grids.
+        """
         tile = ttnn.TILE_SIZE
+        rows = self.full_grid.y
+        best = None
         for cols in range(self.full_grid.x - 1, 1, -1):
-            q_chunk = math.ceil(math.ceil(seq_local / cols) / tile) * tile
-            if math.ceil(seq_local / q_chunk) != cols:
-                continue
-            for k_chunk in range(self.exp_ring_max_k_chunk, 0, -tile):
-                sq_t, sk_t = q_chunk // tile, k_chunk // tile
-                fits = (
-                    self._exp_sdpa_l1_bytes(sq_t, sk_t) <= self._EXP_USABLE_L1_BYTES
-                    or self._exp_sdpa_l1_bytes(sq_t, sk_t, resident_q=False) <= self._EXP_USABLE_L1_BYTES
-                )
-                if fits and self._exp_streaming_compute_enabled(sq_t, sk_t):
-                    return ttnn.SDPAProgramConfig(
-                        compute_with_storage_grid_size=ttnn.CoreCoord(cols + 1, self.full_grid.y),
-                        q_chunk_size=q_chunk,
-                        k_chunk_size=k_chunk,
-                        exp_approx_mode=False,  # NOTE: False is more correct
+            for segs in (1, 2, 3):
+                chunks = cols * segs
+                q_chunk = math.ceil(math.ceil(seq_local / chunks) / tile) * tile
+                if math.ceil(seq_local / q_chunk) != chunks:
+                    continue  # this (cols, segs) admits no tile-multiple q_chunk
+                passes = math.ceil(self.n_local_heads * segs / rows)
+                if passes > self.exp_ring_max_passes:
+                    continue
+                for k_chunk in range(self.exp_ring_max_k_chunk, 0, -tile):
+                    sq_t, sk_t = q_chunk // tile, k_chunk // tile
+                    fits = (
+                        self._exp_sdpa_l1_bytes(sq_t, sk_t, passes) <= self._EXP_USABLE_L1_BYTES
+                        or self._exp_sdpa_l1_bytes(sq_t, sk_t, passes, resident_q=False)
+                        <= self._EXP_USABLE_L1_BYTES
                     )
-        return None
+                    if fits and self._exp_streaming_compute_enabled(sq_t, sk_t):
+                        score = (passes * q_chunk, -k_chunk, -cols)
+                        if best is None or score < best[0]:
+                            best = (score, cols, q_chunk, k_chunk)
+                        break
+        if best is None:
+            return None
+        _, cols, q_chunk, k_chunk = best
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(cols + 1, self.full_grid.y),
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+            exp_approx_mode=False,  # NOTE: False is more correct
+        )
 
     # ------------------------------------------------------------------ forward
 
