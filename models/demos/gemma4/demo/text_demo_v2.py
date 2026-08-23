@@ -14,8 +14,17 @@ mirroring how Gemma3 / tt_transformers models are run:
 Differences from the Gemma3 demo (Gemma4-specific):
   * Single model instance, no data-parallel submeshes (Gemma4 runs batch=1 per
     submesh today, so the demo focuses on the latency / long-context configs).
-  * Host sampling (greedy argmax / top-p): Gemma4 does not expose on-device
-    sampling through the demo path, so logits are read back and sampled on host.
+  * On-device sampling by default (``GEMMA4_HOST_SAMPLE=0``) whenever the model
+    exposes a sampling module — every mesh from 1x1 up, since the shard-width cap
+    is now ``_MAX_SAMPLING_SHARD_WIDTH`` (256K) rather than 64K-and-TP>1.
+    Host sampling all-gathers the full-vocab logits and reads them to CPU each
+    token, which costs real time per step for token-for-token identical output.
+    Set ``GEMMA4_HOST_SAMPLE=1`` to force the host path.
+  * Decode token reads are pipelined one step deep (``GEMMA4_DECODE_PIPELINE=1``,
+    default): the sampled token's DMA overlaps the next decode submit instead of
+    blocking it. The step is device-bound, so this matters most where the model is
+    small relative to the host round trip.
+    ``GEMMA4_DECODE_PIPELINE=0`` restores the blocking loop.
   * No decode warmup (``warmup_model_decode`` is Gemma3-generator specific); the
     first decode iteration serves as the compile step and is excluded from the
     reported steady-state perf (matching the benchmark warmup convention).
@@ -26,12 +35,16 @@ applied automatically because they live in the shared model code that
 ``Gemma4Generator.from_pretrained`` builds.
 
 Usage:
-    HF_MODEL=google/gemma-4-31B-it pytest \
-        models/demos/gemma4/demo/text_demo_v2.py -k "batch-1" -sv
+    HF_MODEL=google/gemma-4-31B-it MESH_DEVICE=P150x8 pytest \
+        models/demos/gemma4/tests/e2e/test_isl_sweep.py -k "batch-1" -sv
+
+    # Long-context (defaults pick bounded/chunk for coherency):
+    MESH_DEVICE=P150x8 HF_MODEL=google/gemma-4-31B-it pytest \
+        models/demos/gemma4/tests/e2e/test_isl_sweep.py -k "long-context-128k" -s --timeout 1800
 
     # Override prompts / lengths from the CLI:
     HF_MODEL=google/gemma-4-31B-it pytest \
-        models/demos/gemma4/demo/text_demo_v2.py -k "batch-1" -sv \
+        models/demos/gemma4/tests/e2e/test_isl_sweep.py -k "batch-1" -sv \
         --max_generated_tokens 64
 """
 
@@ -47,14 +60,59 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.gemma4.demo.sampling_utils import (
+    build_device_sampling_params,
+    device_tracks_decode_on_device,
+    log_sampling_mode,
+    model_can_sample_on_device,
+)
 from models.demos.gemma4.tt.generator import Gemma4Generator
-from models.demos.gemma4.tt.generator_trace import should_auto_enable_bounded_sliding
+from models.demos.gemma4.tt.generator_trace import resolve_gemma4_demo_long_context
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 from models.tt_transformers.tt.model_config import determine_device_name
 
 _CONTEXT_CACHE_DIR = Path("models/tt_transformers/demo/context_cache")
+
+_MESH_DEVICE_SHAPES = {
+    # Logical SKU names (same mapping as tt_transformers / gemma3 demos).
+    "N150": (1, 1),
+    "N300": (1, 2),
+    "N150x4": (1, 4),
+    "T3K": (1, 8),
+    "TG": (8, 4),
+    "P150": (1, 1),
+    "P300": (1, 2),
+    "P150x4": (1, 4),
+    "P300x2": (1, 4),
+    "P300X2": (1, 4),
+    "P150x8": (1, 8),
+    "BHGLX": (8, 4),
+}
+
+
+def _mesh_device_param():
+    """Resolve mesh shape from ``MESH_DEVICE`` as a hardcoded (rows, cols) tuple.
+
+    Named SKUs map explicitly (so ``2x4`` / ``BHGLX`` stay DP layouts). Unset /
+    unknown → ``(1, N)`` over all visible devices so a LoudBox opens full 1×8
+    TP instead of a 4-chip subset. Set ``MESH_DEVICE`` for non-line meshes.
+    """
+    env = os.environ.get("MESH_DEVICE")
+    if env in _MESH_DEVICE_SHAPES:
+        return _MESH_DEVICE_SHAPES[env]
+    if env and "x" in env.lower():
+        try:
+            rows, cols = env.lower().split("x", 1)
+            return (int(rows), int(cols))
+        except ValueError:
+            pass
+    try:
+        n = len(ttnn.get_device_ids())
+    except Exception:
+        n = 4
+    return (1, max(1, n))
 
 
 def _model_path():
@@ -87,6 +145,12 @@ def load_and_cache_context(context_url, cache_dir, max_length=None):
         context_text = context_text[:max_length]
         logger.info(f"Clipped context to {max_length} chars")
     return context_text
+
+
+# Tokens detokenized for the per-step progress line. The line keeps at most 97
+# characters, and a token averages ~4, so this tail always covers it while making
+# the decode-loop detokenize O(1) per step instead of O(tokens generated).
+_LOG_TAIL_TOKENS = 48
 
 
 def load_inputs(user_input, batch, instruct):
@@ -142,185 +206,72 @@ def _host_sample(logits, temperature, top_p):
     return torch.gather(sorted_idx, -1, choice)
 
 
+def _default_ccl_packet_bytes():
+    """See :func:`models.demos.gemma4.tt.ccl.default_ccl_packet_bytes`."""
+    from models.demos.gemma4.tt.ccl import default_ccl_packet_bytes
+
+    return default_ccl_packet_bytes()
+
+
 def _device_params():
-    """Blackhole needs a larger trace region; keep a single command queue (host sampling).
+    """Blackhole needs a larger trace region; CQ count is env-tunable.
 
-    The batch-32 decode trace is the largest (~228 MB at capture), so the
-    Blackhole trace region is sized above that with margin. ``GEMMA4_TRACE_REGION_SIZE``
-    overrides it for configs that need a different budget.
+    Default ``num_command_queues=1`` (safe with host or on-device sampling).
+    Set ``GEMMA4_NUM_CQS=2`` for serving/H2D-bound workloads once sampling stays
+    on-device (Phase D3); measure batched users, not single-stream 128k TTFT.
+    ``GEMMA4_TRACE_REGION_SIZE`` overrides the BH trace budget.
+
+    CCL residual knobs (set before pytest collection):
+      ``GEMMA4_FABRIC=ring`` → ``FABRIC_1D_RING`` (default ``1d``; ring
+        regressed TTFT ~28.8s→~30.9s on 31B/P150x8 — leave off).
+      ``GEMMA4_CCL_PACKET_BYTES`` → FabricRouterConfig max payload.
+        BH defaults: 5376 (31B) / 3840 (12B) to match CCL page packing.
+        Set ``0`` / ``none`` / ``default`` to keep Fabric's default.
+    ``l1_small_size`` is set so all_gather semaphores land in L1_SMALL (avoids
+    fragmenting the main L1 pool).
     """
-    if is_blackhole():
-        trace_region_size = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", 256_000_000))
-        return {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": trace_region_size,
-            "num_command_queues": 1,
-        }
-    return {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30_000_000, "num_command_queues": 1}
+    num_cqs = max(1, int(os.environ.get("GEMMA4_NUM_CQS", "1")))
+    fabric_env = os.environ.get("GEMMA4_FABRIC", "1d").strip().lower()
+    if fabric_env in ("ring", "1d_ring", "fabric_1d_ring"):
+        fabric_config = ttnn.FabricConfig.FABRIC_1D_RING
+    else:
+        fabric_config = ttnn.FabricConfig.FABRIC_1D
+
+    params = {
+        "fabric_config": fabric_config,
+        "num_command_queues": num_cqs,
+        # CCL all_gather allocates semaphores in L1_SMALL when this is > 0.
+        "l1_small_size": int(os.environ.get("GEMMA4_L1_SMALL_SIZE", 24576)),
+    }
+    # ``trace_region_size`` must cover the CUMULATIVE size of every captured
+    # trace, not the largest one (the limit is hit at the last end_trace_capture,
+    # usually decode). Batched demos add B=2/4 prefill traces plus a larger decode
+    # graph; WH 96 MB is not enough for 31B batch-8/32. BH stays at 256 MB.
+    #
+    # Do NOT lower the WH value back to 30 MB. That was the pre-35e0798bdee
+    # default and it fails at end_trace_capture with "Creating trace buffers of
+    # size N ... but only 30000000B is allocated for trace region" -- 35e0798bdee
+    # raised it to 64 MB, 6473437bb9c to 96 MB for auto traced multi-chunk
+    # prefill, and d5292dd1b31 to 192 MB for batched prefill. 2736fc46354 (a
+    # model-load fix) reverted all three by accident; restored here.
+    default_trace_region = 256_000_000 if is_blackhole() else 192_000_000
+    params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", default_trace_region))
+
+    pkt_env = os.environ.get("GEMMA4_CCL_PACKET_BYTES")
+    if pkt_env is None:
+        pkt_bytes = _default_ccl_packet_bytes() if is_blackhole() else None
+    elif pkt_env.strip().lower() in ("0", "none", "default", ""):
+        pkt_bytes = None
+    else:
+        pkt_bytes = max(4352, int(pkt_env))
+    if pkt_bytes is not None:
+        router = ttnn.FabricRouterConfig()
+        router.max_packet_payload_size_bytes = pkt_bytes
+        params["fabric_router_config"] = router
+    return params
 
 
-# Parameters mirror the Gemma3 demo layout (subset): a latency config, a long-context
-# config, and a CI config. Gemma4 runs batch=1, so throughput/DP rows are omitted.
-@pytest.mark.parametrize(
-    "input_prompts, instruct, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, "
-    "sampling_params, stop_at_eos, ci_only, enable_trace",
-    [
-        (  # batch-1 (latency) — single user, short prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
-            True,
-            1024,
-            1,
-            200,
-            True,
-            {"page_block_size": 32, "page_max_num_blocks": 1024},
-            {"temperature": 0, "top_p": 0.08},
-            True,
-            False,
-            True,
-        ),
-        (  # batch-8 (throughput) — 8 concurrent users, short prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
-            True,
-            1024,
-            8,
-            200,
-            True,
-            {"page_block_size": 32, "page_max_num_blocks": 1024},
-            {"temperature": 0, "top_p": 0.08},
-            True,
-            False,
-            True,
-        ),
-        (  # batch-32 (max throughput) — 32 concurrent users (decode batch ceiling)
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
-            True,
-            4096,
-            32,
-            200,
-            True,
-            {"page_block_size": 32, "page_max_num_blocks": 1024},
-            {"temperature": 0, "top_p": 0.08},
-            True,
-            False,
-            True,
-        ),
-        (  # long-context-4k — single user, long prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",
-            True,
-            4096,
-            1,
-            200,
-            True,
-            {"page_block_size": 64, "page_max_num_blocks": 2048},
-            {"temperature": 0, "top_p": 0.08},
-            True,
-            False,
-            True,
-        ),
-        # NOTE on long-context-32k/64k/128k/256k (see GEMMA4_LONG_CONTEXT_POLICY):
-        #   Per-(model, device) cutovers on QB2 (P150x4 / P300x2):
-        #     31B: bounded @ 64k, chunked @ 256k
-        #     12B/26B-A4B: unbounded through 128k; bounded(+chunked) @ 256k
-        #     E2B/E4B: unbounded through 256k (HF native max_pos is 128k)
-        #   Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK,
-        #   GEMMA4_DEMO_SINGLE_CHUNK.
-        (  # long-context-32k
-            "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",
-            True,
-            32 * 1024,
-            1,
-            200,
-            True,
-            {"page_block_size": 64, "page_max_num_blocks": 512},
-            {"temperature": 0, "top_p": 0.08},
-            True,
-            False,
-            True,
-        ),
-        (  # long-context-64k
-            "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",
-            True,
-            64 * 1024,
-            1,
-            200,
-            True,
-            {"page_block_size": 64, "page_max_num_blocks": 1024},
-            {"temperature": 0, "top_p": 0.08},
-            True,
-            False,
-            True,
-        ),
-        (  # long-context-128k
-            "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
-            True,
-            128 * 1024,
-            1,
-            200,
-            True,
-            {"page_block_size": 64, "page_max_num_blocks": 2048},
-            {"temperature": 0, "top_p": 0.08},
-            True,
-            False,
-            True,
-        ),
-        (  # long-context-256k — 31B policy auto multi-chunk (DRAM)
-            "models/tt_transformers/demo/sample_prompts/input_data_long_256k.json",
-            True,
-            256 * 1024,
-            1,
-            200,
-            True,
-            {"page_block_size": 64, "page_max_num_blocks": 4096},
-            {"temperature": 0, "top_p": 0.08},
-            True,
-            False,
-            True,
-        ),
-        (  # ci-1 — single user, fixed iteration count for perf tracking
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
-            True,
-            8192,
-            1,
-            512,
-            True,
-            {"page_block_size": 32, "page_max_num_blocks": 1024},
-            {"temperature": 0, "top_p": 0.08},
-            False,
-            True,
-            True,
-        ),
-    ],
-    ids=[
-        "batch-1",
-        "batch-8",
-        "batch-32",
-        "long-context-4k",
-        "long-context-32k",
-        "long-context-64k",
-        "long-context-128k",
-        "long-context-256k",
-        "ci-1",
-    ],
-)
-@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {
-            "N150": (1, 1),
-            "N300": (1, 2),
-            "P150": (1, 1),
-            "P300": (1, 2),
-            "P150x4": (1, 4),
-            "P300x2": (1, 4),
-            "P300X2": (1, 4),
-            "P150x8": (1, 8),
-            "T3K": (1, 8),
-        }.get(os.environ.get("MESH_DEVICE"), (1, 4))
-    ],
-    indirect=True,
-)
-def test_demo_text(
+def run_demo_text(
     input_prompts,
     instruct,
     max_seq_len,
@@ -332,68 +283,22 @@ def test_demo_text(
     stop_at_eos,
     mesh_device,
     is_ci_env,
-    ci_only,
     enable_trace,
-    reset_seeds,
-    request,
+    num_layers=None,
 ):
-    """Gemma4 text generation through the Generator interface, modeled on the Gemma3 demo."""
-    if is_ci_env and not ci_only:
-        pytest.skip("CI only runs the CI-only configs")
-
-    # Env overrides (Gemma4's conftest doesn't register the tt_transformers CLI
-    # flags, so we keep overrides env-based). GEMMA4_NUM_LAYERS is a smoke-test
-    # hook to build a few-layer model for a fast end-to-end wiring check.
+    """Run the Generator-based text demo (ISL sweep rows live in tests/e2e/)."""
     import math
 
     max_generated_tokens = int(os.environ.get("GEMMA4_MAX_NEW_TOKENS", max_generated_tokens))
     max_seq_len = int(os.environ.get("GEMMA4_MAX_SEQ_LEN", max_seq_len))
-    num_layers = os.environ.get("GEMMA4_NUM_LAYERS")
-    num_layers = int(num_layers) if num_layers else None
-    # Batch sweep hook: GEMMA4_BATCH overrides the config's batch_size so the
-    # same config can probe batch-1 / 8 / 32 to find the QB2 ceiling.
+    if num_layers is None:
+        _num_layers = os.environ.get("GEMMA4_NUM_LAYERS")
+        num_layers = int(_num_layers) if _num_layers else None
     batch_size = int(os.environ.get("GEMMA4_BATCH", batch_size))
-
-    # ── Speculative-decoding dispatch ────────────────────────────────────────
-    # `--speculative` reroutes the demo through the it-assistant drafter +
-    # target verifier path. Delegated to _run_spec_decode, which builds its own
-    # target+drafter, so we return before this test loads a model.
-    if request.config.getoption("--speculative"):
-        draft_len = request.config.getoption("--spec-draft-len")
-        if draft_len is None:
-            draft_len = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 3))
-        if batch_size != 1:
-            # Batched (B>1) spec-decode: drafts each user at batch=1 and runs ONE
-            # batched packed verify over all users (KV-amortization win). Greedy,
-            # ragged per-user acceptance. Currently UNTRACED (host-dispatch bound).
-            prompts = load_inputs(input_prompts, batch_size, instruct)
-            _run_spec_decode_batched(
-                prompts=prompts,
-                instruct=instruct,
-                max_seq_len=max_seq_len,
-                max_generated_tokens=max_generated_tokens,
-                page_params=page_params,
-                sampling_params=sampling_params,
-                mesh_device=mesh_device,
-                enable_trace=enable_trace,
-                draft_len=draft_len,
-                num_layers=num_layers,
-            )
-            return
-        prompt = load_inputs(input_prompts, 1, instruct)[0]
-        _run_spec_decode(
-            prompt=prompt,
-            instruct=instruct,
-            max_seq_len=max_seq_len,
-            max_generated_tokens=max_generated_tokens,
-            page_params=page_params,
-            sampling_params=sampling_params,
-            mesh_device=mesh_device,
-            enable_trace=enable_trace,
-            draft_len=draft_len,
-            num_layers=num_layers,
-        )
-        return
+    _decode_trace = os.environ.get("GEMMA4_DECODE_TRACE")
+    if _decode_trace is not None:
+        enable_trace = _decode_trace.lower() in ("1", "true", "yes")
+        logger.info(f"GEMMA4_DECODE_TRACE override: enable_trace={enable_trace}")
 
     model_path = _model_path()
     temperature = sampling_params.get("temperature", 0)
@@ -424,20 +329,25 @@ def test_demo_text(
         PagedAttentionConfig(block_size=block_size, max_num_blocks=page_max_num_blocks) if paged_attention else None
     )
 
-    # Sliding-cache mode from GEMMA4_LONG_CONTEXT_POLICY (per model × device).
-    # Override bounded with GEMMA4_BOUNDED_SLIDING=0/1.
-    _bs_env = os.environ.get("GEMMA4_BOUNDED_SLIDING")
-    if _bs_env is None:
-        bounded_sliding = should_auto_enable_bounded_sliding(max_seq_len, mesh_device, model_path)
-    else:
-        bounded_sliding = _bs_env.lower() in ("1", "true", "yes")
-    bounded_sliding = bounded_sliding and paged_attention
+    # Sliding-cache + prefill chunk from GEMMA4_LONG_CONTEXT_POLICY (model × device).
+    # Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK.
+    lc = resolve_gemma4_demo_long_context(max_seq_len, mesh_device, model_path, paged_attention=paged_attention)
+    bounded_sliding = lc["bounded_sliding"]
+    from models.demos.gemma4.tt.generator_trace import (
+        reset_trace_prefill_seq_lens_to_default,
+        trim_demo_prefill_trace_buckets,
+    )
+
+    reset_trace_prefill_seq_lens_to_default()
+    trim_demo_prefill_trace_buckets(input_prompts=input_prompts, max_seq_len=max_seq_len)
 
     # ── Model (all optimizations applied inside create_tt_model) ───────────
     logger.info(
         f"Loading Gemma4 from {model_path} (layers={num_layers or 'all'}, max_seq_len={max_seq_len}, "
-        f"bounded_sliding={bounded_sliding})..."
+        f"bounded_sliding={bounded_sliding}, prefill_chunk={lc['prefill_chunk']}, "
+        f"policy={lc['policy_source']})..."
     )
+    profiler.start("model_load")
     generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
         mesh_device=mesh_device,
         model_path=model_path,
@@ -447,6 +357,7 @@ def test_demo_text(
         paged_attention_config=paged_attention_config,
         bounded_sliding_kv_cache=bounded_sliding,
     )
+    profiler.end("model_load")
     model_args_list = generator.model_args  # preprocess_inputs_prefill iterates this
     model_args = model_args_list[0]
 
@@ -471,25 +382,57 @@ def test_demo_text(
         generator.model[0]._active_page_tables_per_layer = per_layer_pts
         logger.info(f"Bounded sliding: installed {len(per_layer_pts)} per-layer page tables")
 
-    # ── Warmup (prefill compile + optional trace) ──────────────────────────
-    # Prefill tracing buys ~nothing (prefill runs only a handful of times) and its
-    # trace buffers scale with chunk_size×batch, overflowing the trace region at
-    # long context (≥4K) with no perf gain. Gate prefill tracing off above a
-    # threshold (decode stays traced); GEMMA4_PREFILL_TRACE_MAX_SEQ overrides.
+    # Prefill tracing buys ~nothing for single full-ISL runs (trace buffers
+    # scale with chunk×batch). Gate off *above* GEMMA4_PREFILL_TRACE_MAX_SEQ
+    # unless traced multi-chunk is on (GEMMA4_CHUNKED_PREFILL_TRACE=1): then
+    # we still capture the 4k sp0/sp1 buckets used by long-ISL chunk replay.
+    from models.demos.gemma4.tt.generator_trace import (
+        chunked_prefill_trace_enabled,
+        enable_single_chunk_demo_prefill_trace_bucket,
+    )
+
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_trace and max_seq_len < prefill_trace_max
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
     if enable_trace and not prefill_enable_trace:
         logger.info(
             f"Prefill trace disabled (max_seq_len={max_seq_len} >= {prefill_trace_max}); "
-            f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ to override."
+            f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ or "
+            f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
         )
+    if prefill_enable_trace:
+        # 12B long-4k is single-chunk @ 4096; default lenses omit that bucket.
+        enable_single_chunk_demo_prefill_trace_bucket(
+            max_seq_len=max_seq_len,
+            max_prefill_chunk_size=int(getattr(model_args_list[0], "max_prefill_chunk_size", 0) or 0),
+            model_args_list=model_args_list,
+            batch_size=batch_size,
+        )
+    # Sample on device by default, whenever the model exposes a sampling module
+    # (TP>1 and a vocab shard <=64K); models without one fall back to host.
+    #
+    # Host sampling all-gathers the full 262K-vocab logits and reads 16 MB to CPU
+    # every token, which is why the device path is the default. It was NOT the
+    # original default: device sample inside the decode Metal Trace can allocate
+    # mid-trace and corrupt tokens, which is how the shard-truncation collapse
+    # ("lapped" -> "la", then repetition) used to show up at 128K. Both paths are
+    # now verified token-for-token identical on that configuration, so the default
+    # flipped; GEMMA4_HOST_SAMPLE=1 restores the host path if the trace hazard
+    # ever resurfaces on another config.
+    force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "0").lower() in ("1", "true", "yes")
+    can_sample = (not force_host) and model_can_sample_on_device(generator.model[0])
+    device_sampling_params = build_device_sampling_params(sampling_params, can_sample=can_sample)
+    greedy_only = temperature <= 0
+    log_sampling_mode(can_sample, sampling_params)
+
     logger.info("Warming up prefill...")
+    profiler.start("warmup_prefill")
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache,
         enable_trace=prefill_enable_trace,
-        can_sample_on_device=False,
-        greedy_only=True,
+        can_sample_on_device=can_sample,
+        greedy_only=greedy_only,
     )
+    profiler.end("warmup_prefill")
     logger.info("Warmup complete")
 
     # ── Prefill ────────────────────────────────────────────────────────────
@@ -505,15 +448,20 @@ def test_demo_text(
 
     logger.info("Starting prefill...")
     profiler.start("inference_prefill")
-    prefill_logits = generator.prefill_forward_text(
+    prefill_out = generator.prefill_forward_text(
         input_tokens_prefill_pt,
         page_table=page_table,
         kv_cache=tt_kv_cache,
         prompt_lens=decoding_pos,
         warmup_prefill=False,
         enable_trace=prefill_enable_trace,
+        sampling_params=device_sampling_params,
     )
-    prefilled_token = _host_sample(prefill_logits, temperature, top_p)
+    if device_sampling_params is not None:
+        prefill_tokens, _ = prefill_out
+        prefilled_token = prefill_tokens.long()
+    else:
+        prefilled_token = _host_sample(prefill_out, temperature, top_p)
     profiler.end("inference_prefill")
     logger.info("Prefill finished")
 
@@ -529,40 +477,130 @@ def test_demo_text(
     iteration = 0
     users_decoding = True
 
-    logger.info("Starting decode loop...")
-    profiler.start("inference_decode")
-    while users_decoding:
-        profiler.start(f"inference_decode_time_{iteration}")
-        logits, _ = generator.decode_forward(
-            out_tok,
-            current_pos,
-            enable_trace=enable_trace,
-            page_table=page_table,
-            kv_cache=tt_kv_cache,
-            sampling_params=None,  # host sampling
-        )
-        out_tok = _host_sample(logits, temperature, top_p)
-        profiler.end(f"inference_decode_time_{iteration}")
+    # Pipelined token readback: submit step j+1 before syncing step j's token.
+    # Only possible with device sampling, where the sampled token is written
+    # straight into the trace's token input buffer, so the next submit needs
+    # nothing from host (see Generator._decode_forward_trace_text: reset_inputs
+    # is False once decode is steady). The host loop then sits one step behind
+    # and EOS is seen one step late — that extra token is discarded below, so
+    # the emitted text is unchanged. GEMMA4_DECODE_PIPELINE=0 restores the
+    # blocking loop.
+    pipeline_reads = device_sampling_params is not None and os.environ.get("GEMMA4_DECODE_PIPELINE", "1").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    device_tracks_pos = device_tracks_decode_on_device(
+        generator.model[0],
+        device_sampling=device_sampling_params is not None,
+        enable_trace=enable_trace,
+    )
+    pending = []
 
-        current_pos += 1
+    def _fold_tokens(toks, *, log_progress=True):
+        """Fold one step's sampled tokens into the output; True to keep going."""
+        toks = toks.long().view(batch_size, -1)
+        keep_going = True
         for user in range(batch_size):
-            tok = int(out_tok[user, 0].item())
+            tok = int(toks[user, 0])
             if tok not in tokenizer.stop_tokens and not user_done[user]:
                 all_outputs[user].append(tok)
             elif stop_at_eos:
                 user_done[user] = True
                 if all(user_done):
-                    users_decoding = False
-
-        if not is_ci_env:
+                    keep_going = False
+        if log_progress and not is_ci_env:
             for user in range(batch_size):
-                text = "".join(tokenizer.decode(all_outputs[user]))
-                text = ("..." + text[-97:]) if len(text) > 100 else text
+                # Detokenize only the tail that survives the clamp below. Decoding
+                # the whole generated slice is O(generated) host work per token —
+                # quadratic over a run — to print a line that keeps 97 characters.
+                # (Decoding all_outputs whole was worse still: O(prompt) per token,
+                # which at long context dominated the decode step itself.)
+                # Runs inside the timed decode window, so this is measured time.
+                generated = all_outputs[user][prefill_lens[user] :]
+                text = tokenizer.decode(generated[-_LOG_TAIL_TOKENS:])
+                if len(generated) > _LOG_TAIL_TOKENS or len(text) > 100:
+                    text = "..." + text[-97:]
                 logger.info(f"[User {user}] {text.replace(chr(10), ' ')}")
+        return keep_going
 
+    def _log_decode_progress():
+        if is_ci_env:
+            return
+        for user in range(batch_size):
+            generated = all_outputs[user][prefill_lens[user] :]
+            text = tokenizer.decode(generated[-_LOG_TAIL_TOKENS:])
+            if len(generated) > _LOG_TAIL_TOKENS or len(text) > 100:
+                text = "..." + text[-97:]
+            logger.info(f"[User {user}] {text.replace(chr(10), ' ')}")
+
+    def _consume_tokens(host_out, read_events):
+        """Wait for one pipelined read, then fold its tokens into the output."""
+        for event in read_events:
+            ttnn.event_synchronize(event)
+        toks, _ = generator.process_decode_output_host(host_out, is_tokens=True)
+        return _fold_tokens(toks, log_progress=False)
+
+    logger.info(
+        "Starting decode loop... (pipelined token reads: {}, device_pos_on_device: {})",
+        pipeline_reads,
+        device_tracks_pos,
+    )
+    profiler.start("inference_decode")
+    while users_decoding:
+        # One timer per loop pass, closed at the bottom. In the pipelined path a
+        # pass is "submit step j, then sync step j-1", so the window still measures
+        # one token of steady-state wall time. Ending it right after the submit
+        # would time the enqueue only and report a fictitious tok/s.
+        step = iteration
+        profiler.start(f"inference_decode_time_{step}")
+        decode_out = generator.decode_forward(
+            out_tok,
+            current_pos,
+            enable_trace=enable_trace,
+            page_table=page_table,
+            kv_cache=tt_kv_cache,
+            sampling_params=device_sampling_params,
+            read_from_device=not pipeline_reads,
+        )
+
+        if pipeline_reads:
+            # Start the DMA and record an event; do NOT wait on it. The device
+            # already holds the token it needs for the next step.
+            host_out, read_events = generator.read_decode_output(decode_out, async_read=True)
+            pending.append((host_out, read_events))
+        else:
+            decode_out, _ = decode_out
+            if device_sampling_params is not None:
+                out_tok = decode_out.long().view(batch_size, 1)
+            else:
+                out_tok = _host_sample(decode_out, temperature, top_p)
+
+        if not device_tracks_pos:
+            current_pos += 1
         iteration += 1
+
+        consumed = False
+        if pipeline_reads:
+            # One step of slack: the read issued last iteration has had a full
+            # decode submit to land, so this sync is off the critical path.
+            if len(pending) > 1:
+                users_decoding = _consume_tokens(*pending.pop(0))
+                consumed = True
+        else:
+            users_decoding = _fold_tokens(out_tok, log_progress=False)
+            consumed = True
+
+        profiler.end(f"inference_decode_time_{step}")
+        if consumed and not is_ci_env:
+            _log_decode_progress()
         if iteration >= max_generated_tokens:
             users_decoding = False
+
+    # Drain the in-flight reads so the emitted text holds every submitted step.
+    for entry in pending:
+        _consume_tokens(*entry)
+    pending.clear()
     profiler.end("inference_decode")
     profiler.end("run")
 
@@ -602,6 +640,8 @@ def test_demo_text(
         # No steady-state decode timing (e.g. EoS hit on the first token, so only
         # the compile iteration ran) — avoid dividing by zero.
         logger.info("Decode: n/a (no steady-state decode iterations recorded)")
+    logger.info(f"Model load: {profiler.get_duration('model_load'):.1f} s")
+    logger.info(f"Prefill warmup: {profiler.get_duration('warmup_prefill'):.1f} s")
     logger.info(f"Full demo runtime: {profiler.get_duration('run'):.1f} s")
 
     if is_ci_env:
@@ -697,9 +737,23 @@ def _run_spec_decode(
     page_table = create_tt_page_table(batch_size, paged_attention_config)
 
     # Prefill tracing has ~no perf gain and OOMs the trace region at long context
-    # (≥4K); gate it off above a threshold (decode/spec traces stay on).
+    # (≥4K); gate it off above a threshold (decode/spec traces stay on), unless
+    # traced multi-chunk is measuring (GEMMA4_CHUNKED_PREFILL_TRACE=1).
+    from models.demos.gemma4.tt.generator_trace import (
+        chunked_prefill_trace_enabled,
+        enable_single_chunk_demo_prefill_trace_bucket,
+    )
+
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_trace and max_seq_len < prefill_trace_max
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
+    args_list = model_args if isinstance(model_args, (list, tuple)) else [model_args]
+    if prefill_enable_trace:
+        enable_single_chunk_demo_prefill_trace_bucket(
+            max_seq_len=max_seq_len,
+            max_prefill_chunk_size=int(getattr(args_list[0], "max_prefill_chunk_size", 0) or 0),
+            model_args_list=args_list,
+            batch_size=batch_size,
+        )
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache, enable_trace=prefill_enable_trace, can_sample_on_device=False, greedy_only=True
     )
@@ -890,9 +944,23 @@ def _run_spec_decode_batched(
     page_table = create_tt_page_table(B, paged_attention_config)  # [B, blocks_per_user]
 
     # Prefill tracing has ~no perf gain and OOMs the trace region at long context
-    # (≥4K); gate it off above a threshold (the batched decode trace stays on).
+    # (≥4K); gate it off above a threshold (the batched decode trace stays on),
+    # unless traced multi-chunk is measuring (GEMMA4_CHUNKED_PREFILL_TRACE=1).
+    from models.demos.gemma4.tt.generator_trace import (
+        chunked_prefill_trace_enabled,
+        enable_single_chunk_demo_prefill_trace_bucket,
+    )
+
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
-    prefill_enable_trace = enable_trace and max_seq_len < prefill_trace_max
+    prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
+    args_list = model_args if isinstance(model_args, (list, tuple)) else [model_args]
+    if prefill_enable_trace:
+        enable_single_chunk_demo_prefill_trace_bucket(
+            max_seq_len=max_seq_len,
+            max_prefill_chunk_size=int(getattr(args_list[0], "max_prefill_chunk_size", 0) or 0),
+            model_args_list=args_list,
+            batch_size=B,
+        )
     generator.warmup_model_prefill(
         kv_cache=tt_kv_cache, enable_trace=prefill_enable_trace, can_sample_on_device=False, greedy_only=True
     )
@@ -1000,19 +1068,7 @@ def _run_spec_decode_batched(
 @pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {
-            "N150": (1, 1),
-            "N300": (1, 2),
-            "P150": (1, 1),
-            "P300": (1, 2),
-            "P150x4": (1, 4),
-            "P300x2": (1, 4),
-            "P300X2": (1, 4),
-            "P150x8": (1, 8),
-            "T3K": (1, 8),
-        }.get(os.environ.get("MESH_DEVICE"), (1, 4))
-    ],
+    [_mesh_device_param()],
     indirect=True,
 )
 def test_demo_spec_decode(mesh_device, reset_seeds):

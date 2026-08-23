@@ -68,22 +68,27 @@ def create_tt_model(
     num_devices = mesh_device.get_num_devices() if is_mesh else 1
     if is_mesh and num_devices > 1:
         # num_links=None -> arch default (2 on Blackhole) so the per-layer TP
-        # all-reduces (the dominant ~31% of prefill device time) use full
-        # inter-device bandwidth.
-        ccl_manager = CCLManager(mesh_device)
+        # all-reduces (the dominant share of prefill device time) use full
+        # inter-device bandwidth. is_moe selects the topology default: Ring is
+        # faster on a 1x8 WH mesh but tanks MoE PCC — see
+        # ccl.default_ccl_topology.
+        ccl_manager = CCLManager(mesh_device, is_moe=bool(getattr(model_args, "enable_moe_block", False)))
     else:
         ccl_manager = None
 
     if state_dict is None:
         state_dict = Gemma4ModelArgs.load_state_dict(model_path, dummy_weights=False)
 
-    tensor_cache_path = str(model_args.weight_cache_path(dtype))
-
     # Resolve per-module dtype overrides from precision_overrides.json. The
     # mesh shape is the worker grid (rows x cols); a 1x1 mesh on a multi-device
-    # system still gets the 1x1 entry.
+    # system still gets the 1x1 entry. Also qualify the weight tensor cache by
+    # mesh geometry (TP=4 on 1x4 vs 2x4 must not share tensorbins).
     mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
-    precision = Gemma4Precision.load(model_path, mesh_shape)
+    model_args.cluster_shape = mesh_shape
+    tensor_cache_path = str(model_args.weight_cache_path(dtype, mesh_shape=mesh_shape))
+    # ``model_args`` is already the resolved HF config, so hand it over rather
+    # than making the lookup re-read config.json to identify the variant.
+    precision = Gemma4Precision.load(model_path, mesh_shape, hf_config=model_args)
 
     model = Gemma4Model(
         mesh_device=mesh_device,
@@ -149,7 +154,9 @@ def create_assistant_model(
     if state_dict is None:
         state_dict = Gemma4AssistantArgs.load_state_dict(assistant_path, dummy_weights=False)
 
-    tensor_cache_path = str(assistant_args.weight_cache_path(dtype))
+    mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
+    assistant_args.cluster_shape = mesh_shape
+    tensor_cache_path = str(assistant_args.weight_cache_path(dtype, mesh_shape=mesh_shape))
 
     model = Gemma4AssistantModel(
         mesh_device=mesh_device,
@@ -163,3 +170,24 @@ def create_assistant_model(
         max_local_batch_size=max_local_batch_size,
     )
     return assistant_args, model
+
+
+def get_gemma4_padded_prefill_len(seq_len: int) -> int:
+    """Pad prefill ISL to the next kernel bucket (default: tt_transformers policy).
+
+    By default this matches ``get_padded_prefill_len`` so prefill Metal Trace
+    buckets warmed at startup (128, 512, …) replay at runtime. Opt into shorter
+    buckets with ``GEMMA4_SHORT_PREFILL_BUCKETS=96,128`` only when the same
+    lengths are listed in ``GEMMA4_TRACE_PREFILL_SEQ_LENS`` — otherwise prefill
+    pays a cold eager compile on the first request (TTFT seconds, not ms).
+    """
+    seq_len = int(seq_len)
+    override = os.environ.get("GEMMA4_SHORT_PREFILL_BUCKETS")
+    if override:
+        buckets = tuple(int(x.strip()) for x in override.split(",") if x.strip())
+        for bucket in buckets:
+            if seq_len <= bucket:
+                return bucket
+    from models.tt_transformers.tt.common import get_padded_prefill_len
+
+    return get_padded_prefill_len(seq_len)

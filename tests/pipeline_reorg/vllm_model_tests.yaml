@@ -82,16 +82,33 @@
 - name: "Gemma4-12B"
   model: google/gemma-4-12B-it
   coherence-test: true
-  server-timeout: 20
-  benchmark-timeout: 5
+  server-timeout: 30
+  benchmark-timeout: 10
   mesh-device: P150x4
   arch: arch-blackhole
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 400000000}'
-  additional-server-args: "--max_model_len 131072 --max_num_seqs 1 --async-scheduling"
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
   multimodal: false
   skus:
     bh_quietbox_2:
       timeout: 40
+      tier: 1
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: "Gemma4-12B"
+  model: google/gemma-4-12B-it
+  coherence-test: true
+  server-timeout: 30
+  benchmark-timeout: 10
+  mesh-device: P150x8
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
+  multimodal: false
+  skus:
+    bh_loudbox:
+      timeout: 50
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -113,18 +130,22 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
-# KNOWN ERROR — [WH-T3K] Gemma4-31B: device hang (fast-dispatch timeout) during
-# decode on WH-T3K only; the same serving config passes on [BH-QB-2] Gemma4-31B.
-# Not a serving/KV-config issue — a tt-metal dispatch-layer hang. Kept enabled to
-# track. https://github.com/tenstorrent/tt-metal/issues/49494
+# [WH-T3K] Gemma4-31B: Wormhole T3K (LoudBox/QuietBox) has 12 GB GDDR6
+# per ASIC vs BH P150 32 GB — do not mirror BH QB2/LB 256k serve.
+# max_model_len=32768 + full-ISL chunk OOMs prefill scratch after KV
+# fill (run 30291376571); 256k pool OOMs at KV init (30270375854).
+# Serve 16k with chunked prefill=2048; GEMMA4_MAX_TOKENS_ALL_USERS
+# must match max_model_len (Run server step). Decode hang #49494.
+# trace_region_size=80MB: decode-trace warmup needs ~55.7MB; vLLM's
+# 50MB default OOMs EngineCore (run 30333621682).
 - name: "Gemma4-31B"
   model: google/gemma-4-31B-it
   server-timeout: 45
   benchmark-timeout: 5
   mesh-device: T3K
   arch: arch-wormhole_b0
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D"}'
-  additional-server-args: "--max_model_len 32768 --max_num_seqs 1 --async-scheduling"
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 80000000}'
+  additional-server-args: "--max_model_len 16384 --max_num_seqs 1 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling"
   multimodal: false
   skus:
     wh_llmbox:
@@ -135,16 +156,34 @@
 
 - name: "Gemma4-31B"
   model: google/gemma-4-31B-it
-  server-timeout: 20
-  benchmark-timeout: 5
+  coherence-test: true
+  server-timeout: 35
+  benchmark-timeout: 15
   mesh-device: P150x4
   arch: arch-blackhole
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D"}'
-  additional-server-args: "--max_model_len 32768 --max_num_seqs 1 --async-scheduling"
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling"
   multimodal: false
   skus:
     bh_quietbox_2:
-      timeout: 35
+      timeout: 50
+      tier: 1
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+
+- name: "Gemma4-31B"
+  model: google/gemma-4-31B-it
+  coherence-test: true
+  server-timeout: 35
+  benchmark-timeout: 15
+  mesh-device: P150x8
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
+  multimodal: false
+  skus:
+    bh_loudbox:
+      timeout: 60
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models

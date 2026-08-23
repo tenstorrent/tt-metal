@@ -159,9 +159,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self.trace_id_prefill_sampling = defaultdict(lambda: None)
         self.trace_input_prefill_sampling = defaultdict(lambda: None)
         self.trace_output_prefill_sampling = defaultdict(lambda: None)
-        self.trace_ids_decode = defaultdict(lambda: None)  # {device_sampling_bool: {device_id: trace_id}}
+        # Decode traces keyed by (on_device_sampling, batch). Batch-aware keys let
+        # models warm B=1 and B=max separately so vLLM B=1 decode is not forced
+        # through a padded max-batch Metal graph (Gemma4 P150x8: ~27 vs ~20 tok/s).
+        self.trace_ids_decode = defaultdict(lambda: None)  # {(sampling, batch): {device_id: trace_id}}
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
+        self._prev_decode_batch = None
         self.prefill_traces_warmup = False
         self.already_warmed_up_prefill = False
         self.mode = None
@@ -500,9 +504,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             finally:
                 # See _prepare_decode_trace_for_warmup: no switch_mode(Mode.PREFILL) here either.
                 self.mode = previous_mode
-            self.trace_ids_decode[on_device_sampling] = trace_ids
-            self.trace_inputs_decode[on_device_sampling] = device_inputs
-            self.trace_output_decode[on_device_sampling] = tt_out_trace
+            # Same key shape as _decode_forward_trace_text: (on_device_sampling, per-chunk batch).
+            # These dicts are defaultdict(lambda: None), so storing under a bare bool here would not
+            # raise -- the batch-keyed lookup would just miss and silently re-capture, and warming
+            # several buckets (Gemma4 warms B=1 then B=max) would overwrite one entry instead of two.
+            decode_batch = prepared["decode_batch"]
+            decode_trace_key = (on_device_sampling, decode_batch[0] if decode_batch else 1)
+            self.trace_ids_decode[decode_trace_key] = trace_ids
+            self.trace_inputs_decode[decode_trace_key] = device_inputs
+            self.trace_output_decode[decode_trace_key] = tt_out_trace
 
     def _prefill_trace_forward(self, prepared, device_inputs):
         """Run the prefill body for a prepared trace variant.
@@ -950,10 +960,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         ), f"start_pos length {len(num_cached_per_user)} != prompt_lens length {len(prompt_lens)}"
         for i, (seq_len, num_cached) in enumerate(zip(prompt_lens, num_cached_per_user)):
             assert 0 <= num_cached < seq_len, f"user {i}: num_cached={num_cached} must be < seq_len={seq_len}"
-        prefill_seq_lens = [
-            get_padded_prefill_len(seq_len - num_cached)
-            for seq_len, num_cached in zip(prompt_lens, num_cached_per_user)
-        ]
+        prefill_seq_lens = kwargs.pop("prefill_seq_lens", None)
+        if prefill_seq_lens is None:
+            prefill_seq_lens = [
+                get_padded_prefill_len(seq_len - num_cached)
+                for seq_len, num_cached in zip(prompt_lens, num_cached_per_user)
+            ]
         # Row-sharded batched prefill: process 1 user per row per iteration.
         # See _will_row_shard_prefill for when this path is taken.
         if self._will_row_shard_prefill(tokens, sampling_params):
@@ -1059,6 +1071,19 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 and getattr(self.model[model_id], "_supports_on_device_sampling", False)
                 and getattr(self.model[model_id], "sampling", None) is not None
             )
+            # Prefill opt-in: skip vocab AllGather when on-device sampling will
+            # consume TP-sharded logits (Gemma4). Host full-vocab path keeps False.
+            #
+            # Gated on the model declaring it reads this kwarg. The chunked /
+            # prefix-caching branch of ``prefill_forward_single_user_text``
+            # splats ``**kwargs`` straight into ``ttnn_prefill_forward``, and
+            # every implementation except Gemma4's has a strict signature
+            # (tt_transformers Transformer, gpt_oss, qwen3_vl, llama3_70b_galaxy,
+            # llama_vision) -- an unconditional key raises TypeError there for
+            # any prompt longer than ``max_prefill_chunk_size``, which is exactly
+            # when ``can_enable_trace`` is False and that branch is the only path.
+            if getattr(self.model[model_id], "supports_sharded_prefill_logits", False):
+                local_kwargs["allow_sharded_prefill_logits"] = sampling_enabled
 
             if use_batched_prefill:
                 # Galaxy 70B approach: slot-based placement with shape [padded_batch, prefill_seq_len]
@@ -1303,7 +1328,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         for local_idx, slot in enumerate(empty_slots):
                             user_logits = logits[slot : slot + 1, :, :, :]
                             _logits = self.model[model_id].process_logits_after_prefill_trace(
-                                user_logits, last_token_idx[slot]
+                                user_logits, last_token_idx[slot], allow_sharded=False
                             )
                             _logits = ttnn.to_layout(
                                 _logits, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -1333,7 +1358,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     )
                     continue
                 else:
-                    logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx_for_trace)
+                    logits = self.model[model_id].process_logits_after_prefill_trace(
+                        logits, last_token_idx_for_trace, allow_sharded=sampling_enabled
+                    )
             else:
                 if return_hidden_states:
                     raise NotImplementedError("return_hidden_states=True requires enable_trace=True")
@@ -1604,6 +1631,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         on_device_sampling = (sampling_params is not None) or defer_device_sampling
         B = tokens.shape[0]
+        decode_trace_key = (on_device_sampling, B)
 
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
@@ -1619,7 +1647,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             on_device_sampling
             and (reset_batch or mode_switched)
             and enable_trace
-            and self.trace_inputs_decode[on_device_sampling]
+            and self.trace_inputs_decode[decode_trace_key]
         ):
             new_tokens = []
             new_start_pos = []
@@ -1629,7 +1657,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # (overwriting KV / regenerating a position -> duplicate/flipped tokens
             # under concurrency). Pair the device token with the device position.
             for i, tok_chunk in enumerate(tokens):
-                trace_in = self.trace_inputs_decode[on_device_sampling][i]
+                trace_in = self.trace_inputs_decode[decode_trace_key][i]
                 dev_toks = (
                     ttnn.to_torch(ttnn.get_device_tensors(trace_in[0])[0])
                     .reshape(-1)[: tok_chunk.shape[0]]
@@ -1846,6 +1874,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             "device_inputs": device_inputs,
             "kv_cache": kv_cache,
             "on_device_sampling": on_device_sampling,
+            # Per-DP-chunk decode batch. The record phase no longer receives ``tokens``, but it needs
+            # the batch twice: for the sampling-trace guard below, and so _record_pending_traces can
+            # build the same (on_device_sampling, batch) trace key that _decode_forward_trace_text reads.
+            "decode_batch": [int(t.shape[0]) for t in tokens] if tokens is not None else None,
         }
 
     def _record_decode_trace_text(self, prepared):
@@ -1857,6 +1889,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         device_inputs = prepared["device_inputs"]
         kv_cache = prepared["kv_cache"]
         on_device_sampling = prepared["on_device_sampling"]
+        decode_batch = prepared["decode_batch"]
 
         tt_out_trace = []
         trace_ids = {}
@@ -1891,21 +1924,41 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             _mark_trace_buffers_corruptible(self, tt_out_trace[-1])
 
             if sampling_trace_enabled:
-                # NOTE: sampling trace can be keyed depending on sampling params,
-                # this traces only for the current ones.
-                # tt_out_tok feeds the sampled token back into the decode token
-                # buffer (device_inputs[0]) for the next traced step. Only do this
-                # for models that rely on on-device token feedback. Models that
-                # re-stage decode inputs from host every step (e.g. gemma4, via
-                # _tt_vllm_always_refresh_decode_trace_inputs) don't, and their
-                # token buffer is not shaped as a sampling output (gemma4's is
-                # rank-2; ttnn.sampling requires a rank-4 preallocated output) —
-                # pass None so sampling allocates its own output.
-                tt_out_tok = self._decode_token_feedback_buffer(self.model[i], device_inputs[i])
-                # skip_precompile=True in both cases: either _prepare_decode_trace_text pre-compiled the
-                # sampling pipeline (before any trace was live), or the caller passed skip_precompile and
-                # is asserting the program cache is already warm for this variant.
-                sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=tt_out_tok, skip_precompile=True)
+                # Sampling traces bind a specific logits tensor (and its batch).
+                # Only capture when decode batch matches the sampling module's
+                # wired max batch -- smaller decode buckets (e.g. Gemma4 B=1)
+                # must sample eagerly so a prior B=max sampling trace is not
+                # replayed against a different logits allocation. Mirrored by the
+                # eager-sampling guard in :meth:`sample_decode_on_device`.
+                sampling_max = getattr(getattr(sampling_module, "tt_sampling", None), "max_batch_size", None)
+                this_batch = decode_batch[i] if decode_batch is not None else None
+                if sampling_max is not None and this_batch is not None and this_batch != int(sampling_max):
+                    logger.info(
+                        "Skipping sampling-trace capture for decode_batch={} "
+                        "(sampling max_batch_size={}); will sample eagerly",
+                        this_batch,
+                        sampling_max,
+                    )
+                else:
+                    # NOTE: sampling trace can be keyed depending on sampling params,
+                    # this traces only for the current ones.
+                    # tt_out_tok feeds the sampled token back into the decode token
+                    # buffer (device_inputs[0]) for the next traced step. Only do this
+                    # for models that rely on on-device token feedback. Models that
+                    # re-stage decode inputs from host every step (e.g. gemma4, via
+                    # _tt_vllm_always_refresh_decode_trace_inputs) don't, and their
+                    # token buffer is not shaped as a sampling output (gemma4's is
+                    # rank-2; ttnn.sampling requires a rank-4 preallocated output) --
+                    # pass None so sampling allocates its own output.
+                    tt_out_tok = self._decode_token_feedback_buffer(self.model[i], device_inputs[i])
+                    # skip_precompile=True in both cases: either _prepare_decode_trace_text pre-compiled
+                    # the sampling pipeline (before any trace was live), or the caller passed
+                    # skip_precompile and is asserting the program cache is already warm for this variant.
+                    sampling_module.capture_trace(
+                        logits=tt_out_trace[i],
+                        tt_out_tok=tt_out_tok,
+                        skip_precompile=True,
+                    )
         logger.info("Done Capturing Decode Trace")
 
         return trace_ids, tt_out_trace, *device_inputs
@@ -1952,8 +2005,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         """
         Run decode forward text with tracing
         """
-        # The trace is different depending on whether we are doing device sampling or not
-        if not self.trace_ids_decode[on_device_sampling]:
+        # Batch is per-DP chunk size (same across ranks after torch.chunk).
+        batch = int(tokens[0].shape[0]) if tokens else 1
+        decode_trace_key = (on_device_sampling, batch)
+        # The trace is different depending on sampling mode *and* batch size.
+        if not self.trace_ids_decode[decode_trace_key]:
             trace_ids, tt_out_trace, *device_inputs = self._capture_decode_trace_text(
                 tokens,
                 current_pos,
@@ -1962,16 +2018,19 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 on_device_sampling=on_device_sampling,
                 skip_precompile=skip_precompile,
             )
-            self.trace_ids_decode[on_device_sampling] = trace_ids
-            self.trace_inputs_decode[on_device_sampling] = device_inputs
-            self.trace_output_decode[on_device_sampling] = tt_out_trace
+            self.trace_ids_decode[decode_trace_key] = trace_ids
+            self.trace_inputs_decode[decode_trace_key] = device_inputs
+            self.trace_output_decode[decode_trace_key] = tt_out_trace
 
         # reset inputs when mode switches from prefill to decode,
-        # or when sampling mode changes (different trace has stale inputs)
+        # or when sampling mode / batch changes (different trace has stale inputs)
         prev_on_device_sampling = getattr(self, "_prev_on_device_sampling", None)
         self._prev_on_device_sampling = on_device_sampling
+        prev_decode_batch = self._prev_decode_batch
+        self._prev_decode_batch = batch
         sampling_mode_changed = prev_on_device_sampling is not None and prev_on_device_sampling != on_device_sampling
-        reset_inputs = reset_batch or not on_device_sampling or sampling_mode_changed
+        batch_changed = prev_decode_batch is not None and prev_decode_batch != batch
+        reset_inputs = reset_batch or not on_device_sampling or sampling_mode_changed or batch_changed
         page_table_changed = page_table is not None and (
             self.prev_page_table is None
             or any(not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table))
@@ -1990,7 +2049,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
                 copy_host_to_device(
                     host_tensors=host_inputs_i,
-                    device_tensors=self.trace_inputs_decode[on_device_sampling][i],
+                    device_tensors=self.trace_inputs_decode[decode_trace_key][i],
                 )
             elif page_table_changed:
                 # With async device sampling, token/position inputs may
@@ -2000,15 +2059,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # preserve device-produced tokens.
                 host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
                 host_page_table = host_inputs_i[DECODE_PAGE_TABLE_INPUT_IDX]
-                device_page_table = self.trace_inputs_decode[on_device_sampling][i][DECODE_PAGE_TABLE_INPUT_IDX]
+                device_page_table = self.trace_inputs_decode[decode_trace_key][i][DECODE_PAGE_TABLE_INPUT_IDX]
                 if host_page_table is not None:
                     ttnn.copy_host_to_device_tensor(host_page_table, device_page_table)
 
         if page_table_changed:
             self.prev_page_table = tuple(pt.clone() for pt in page_table)
-        for i, trace_id in self.trace_ids_decode[on_device_sampling].items():
+        for i, trace_id in self.trace_ids_decode[decode_trace_key].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
-        return self.trace_output_decode[on_device_sampling]
+        return self.trace_output_decode[decode_trace_key]
 
     def sample_decode_on_device(
         self,
@@ -2129,12 +2188,25 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # semaphore and the gather corrupts from the 2nd decode step (#48037). Running
             # sampling eagerly re-acquires a fresh semaphore each step.
             sampling_enable_trace = enable_trace and not getattr(self.model[i], "_tt_disable_sampling_trace", False)
+            # Eager-sample when decode batch != sampling max (multi-batch decode
+            # traces); sampling traces are only captured at sampling max_batch.
+            sampling_max = getattr(getattr(sampling_module, "tt_sampling", None), "max_batch_size", None)
+            if (
+                sampling_enable_trace
+                and sampling_max is not None
+                and self._prev_decode_batch is not None
+                and int(self._prev_decode_batch) != int(sampling_max)
+            ):
+                sampling_enable_trace = False
             # Must match the capture-time decision in _capture_decode_trace_text:
             # only feed the sampled token back into device_inputs[0] for models
             # that use on-device token feedback (see _decode_token_feedback_buffer).
+            sampling_trace_key = (True, self._prev_decode_batch) if self._prev_decode_batch is not None else None
             tt_out_tok = (
-                self._decode_token_feedback_buffer(self.model[i], self.trace_inputs_decode[True][i])
-                if sampling_enable_trace and self.trace_inputs_decode[True]
+                self._decode_token_feedback_buffer(self.model[i], self.trace_inputs_decode[sampling_trace_key][i])
+                if sampling_enable_trace
+                and sampling_trace_key is not None
+                and self.trace_inputs_decode[sampling_trace_key]
                 else None
             )
             sampled_outputs.append(
