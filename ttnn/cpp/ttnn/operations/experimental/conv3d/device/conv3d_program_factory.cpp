@@ -167,6 +167,8 @@ ttnn::device_operation::ProgramArtifacts Conv3dProgramFactory::create_program_ar
     const uint32_t output_write_bytes_per_transaction = C_out_block * dtype_bytes;
     const bool small_output_write_transactions =
         output_write_bytes_per_transaction <= tt::constants::TILE_WIDTH * dtype_bytes;
+    // Stream one C_out row at a time only when there is no later C_in reduction and several
+    // small writes can overlap the compute tail. Larger writes are more efficient as one drain.
     const bool enable_streaming_output = C_in_num_blocks == 1 && matmul_M_t > 1 && small_output_write_transactions;
 
     uint32_t num_patches_tile_padded = tt::round_up(num_patches, tt::constants::TILE_HEIGHT);
@@ -714,6 +716,8 @@ ttnn::device_operation::ProgramArtifacts Conv3dProgramFactory::create_program_ar
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::TensorBinding> reader_tensor_bindings = {
         tt::tt_metal::experimental::TensorBinding{
             .tensor_parameter_name = input_tensor_parameter, .accessor_name = "input"}};
+    // Keep every accessor name resolvable in all specializations. Disabled halo/mask paths alias
+    // their unused accessor to input; the compile-time mode guarantees it is never dereferenced.
     if (halo_mode) {
         reader_tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{
             .tensor_parameter_name = halo_tensor_parameter, .accessor_name = "halo"});
