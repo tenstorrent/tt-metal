@@ -277,14 +277,14 @@ SliceWriteRMInterleavedProgramFactory::cached_program_t SliceWriteRMInterleavedP
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/slice_write/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/quasar/slice_write/device/kernels/dataflow/"
         "slice_write_reader_interleaved.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args_vec, reader_defines));
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/slice_write/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/quasar/slice_write/device/kernels/dataflow/"
         "slice_write_writer_interleaved_strided.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec, writer_defines));
