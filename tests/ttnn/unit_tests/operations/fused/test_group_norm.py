@@ -2247,15 +2247,12 @@ def test_group_norm_optional_weight_bias(
 @pytest.mark.parametrize("gb_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
 @pytest.mark.parametrize("in_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["row_major", "tile"])
-@pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "legacy"])
+@pytest.mark.parametrize("use_welford", [True, False], ids=["two_pass", "tile_reduction"])
 def test_group_norm_sharded_all_config(
     device, use_welford, layout, in_dtype, gb_dtype, N, C, H, W, num_groups, grid_y, grid_x
 ):
-    # Sharded group_norm across both reduction paths (welford / legacy two-pass) for the fp32/bf16
-    # input x fp32/bf16 gamma-beta matrix. Sharded supports ROW_MAJOR and TILE in both directions
-    # (TILIZE_IN/UNTILIZE_OUT are gated on layout, not on welford). The welford_reciprocal mode is
-    # DRAM-only (the sharded program factory never consumes a reciprocals tensor), so it is not
-    # exercised here.
+    # Cover the two-pass and tile-reduction paths across the fp32/bf16 input x fp32/bf16 gamma-beta
+    # matrix. Sharded GroupNorm supports ROW_MAJOR and TILE layouts on both paths.
     grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
     torch.manual_seed(0)
     x = torch.rand((N, C, H, W), dtype=torch.float32)
