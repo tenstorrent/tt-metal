@@ -1111,10 +1111,6 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
     // Remaining defines configure the existing large-kernel implementation only.
     KernelSpec::CompilerOptions::Defines reader0_defines;
     KernelSpec::CompilerOptions::Defines reader1_defines;
-    if (return_indices && params.is_large_kernel) {
-        reader0_defines.insert({"LARGE_KERNEL", "1"});
-        reader1_defines.insert({"LARGE_KERNEL", "1"});
-    }
 
     KernelSpec reader0{
         .unique_id = READER0_KERNEL,
@@ -1237,7 +1233,11 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_CLEAR_VALUE,
             .accessor_name = "clear_value_cb",
-            .endpoint_type = DFBEndpointType::CONSUMER});
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .accessor_aliases =
+                params.is_large_kernel
+                    ? Group<std::string>{}
+                    : Group<std::string>{"intra_kernel_right_inc_cb", "intra_kernel_down_left_wrap_inc_cb"}});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_IN_IDX, .accessor_name = "in_idx_cb", .endpoint_type = DFBEndpointType::CONSUMER});
         compute_bindings.push_back(DFBBinding{
@@ -1284,9 +1284,6 @@ ttnn::device_operation::ProgramArtifacts Pool2D::MultiCore::create_program_artif
     KernelSpec::CompilerOptions::Defines compute_defines;
     for (const auto& [k, v] : pool_defines_map) {
         compute_defines.insert({k, v});
-    }
-    if (return_indices && params.is_large_kernel) {
-        compute_defines.insert({"LARGE_KERNEL", "1"});
     }
 
     auto device_arch = input.device()->arch();

@@ -69,10 +69,8 @@ TT_KERNEL void compute_mpwi(uint32_t out_nhw_this_core, uint32_t start_row, uint
     constexpr auto right_inc_cb_id = dfb::right_inc_cb;
     constexpr auto down_left_wrap_inc_cb_id = dfb::down_left_wrap_inc_cb;
     constexpr auto up_left_wrap_inc_cb_id = dfb::up_left_wrap_inc_cb;
-#ifdef LARGE_KERNEL
     constexpr auto intra_kernel_right_inc_cb_id = dfb::intra_kernel_right_inc_cb;
     constexpr auto intra_kernel_down_left_wrap_inc_cb_id = dfb::intra_kernel_down_left_wrap_inc_cb;
-#endif
     constexpr auto compute_tmp_idx_cb_id = dfb::compute_tmp_idx_cb;
     constexpr auto clear_value_cb_id = dfb::clear_value_cb;
     // DataflowBuffer wrappers for CB operations
@@ -83,10 +81,8 @@ TT_KERNEL void compute_mpwi(uint32_t out_nhw_this_core, uint32_t start_row, uint
     DataflowBuffer right_inc_cb(right_inc_cb_id);
     DataflowBuffer down_left_wrap_inc_cb(down_left_wrap_inc_cb_id);
     DataflowBuffer up_left_wrap_inc_cb(up_left_wrap_inc_cb_id);
-#ifdef LARGE_KERNEL
     DataflowBuffer intra_kernel_right_inc_cb(intra_kernel_right_inc_cb_id);
     DataflowBuffer intra_kernel_down_left_wrap_inc_cb(intra_kernel_down_left_wrap_inc_cb_id);
-#endif
     DataflowBuffer compute_tmp_idx_cb(compute_tmp_idx_cb_id);
     DataflowBuffer clear_value_cb(clear_value_cb_id);
     DataflowBuffer in_cb_0(in_cb_id_0);
@@ -133,13 +129,11 @@ TT_KERNEL void compute_mpwi(uint32_t out_nhw_this_core, uint32_t start_row, uint
     right_inc_cb.wait_front(1);
     down_left_wrap_inc_cb.wait_front(1);
     up_left_wrap_inc_cb.wait_front(1);
-#ifdef LARGE_KERNEL
     if constexpr (is_large_kernel) {
         intra_kernel_right_inc_cb.wait_front(1);
         intra_kernel_down_left_wrap_inc_cb.wait_front(1);
         clear_value_cb.wait_front(1);
     }
-#endif
 
     unary_op_init_common(in_cb_id_0, in_cb_id_0);
     max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
@@ -212,10 +206,8 @@ TT_KERNEL void compute_mpwi(uint32_t out_nhw_this_core, uint32_t start_row, uint
                         current_idx_col += stride_w;
                         copy_tile(right_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
                     }
-                }
-#ifdef LARGE_KERNEL
-                else if (is_large_kernel) {  // only need to increment within C block if multiple chunks
-                    if (!last_chunk) {       // increment for the next chunk within the same C block
+                } else if (is_large_kernel) {  // only need to increment within C block if multiple chunks
+                    if (!last_chunk) {         // increment for the next chunk within the same C block
                         increment_needed = true;
                         reconfig_data_format_srca(compute_tmp_idx_cb_id);
                         copy_tile_to_dst_init_short(compute_tmp_idx_cb_id);
@@ -229,7 +221,6 @@ TT_KERNEL void compute_mpwi(uint32_t out_nhw_this_core, uint32_t start_row, uint
                         }
                     }
                 }
-#endif
                 if (!increment_needed) {
                     copy_dest_values<copy_format>(index_dst_idx, index_scratch_out_dst_idx);
                 } else {
@@ -295,11 +286,9 @@ TT_KERNEL void compute_mpwi(uint32_t out_nhw_this_core, uint32_t start_row, uint
     right_inc_cb.pop_front(1);
     down_left_wrap_inc_cb.pop_front(1);
     up_left_wrap_inc_cb.pop_front(1);
-#ifdef LARGE_KERNEL
     if constexpr (is_large_kernel) {
         intra_kernel_right_inc_cb.pop_front(1);
         intra_kernel_down_left_wrap_inc_cb.pop_front(1);
         clear_value_cb.pop_front(1);
     }
-#endif
 }
