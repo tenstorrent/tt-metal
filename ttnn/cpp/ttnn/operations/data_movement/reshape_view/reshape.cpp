@@ -116,10 +116,17 @@ MemoryConfig recompute_shard_spec_for_output(
     auto phys_h = output_shape.physical_shape().height();
     auto phys_w = output_shape.physical_shape().width();
 
-    // Reject non-rectangular grids; bounding_box() would silently include extra cores.
-    // TODO: search for a rectangular sub-grid inside the input before falling back.
     auto input_bbox = source_shard_spec.grid.bounding_box();
-    if (input_bbox.size() != source_shard_spec.grid.num_cores()) {
+    const auto start = input_bbox.start_coord;
+    const uint32_t grid_x = input_bbox.grid_size().x;
+    const uint32_t grid_y = input_bbox.grid_size().y;
+    const auto layout = memory_config.memory_layout();
+
+    // Only the BLOCK path derives a new grid from the bounding box; a non-rectangular input
+    // would silently gain the cores the bbox adds. The height/width paths reuse the input
+    // grid verbatim, so they are safe on ragged grids.
+    // TODO: search for a rectangular sub-grid inside the input before falling back.
+    if (layout == TensorMemoryLayout::BLOCK_SHARDED && input_bbox.size() != source_shard_spec.grid.num_cores()) {
         log_warning(
             tt::LogOp,
             "ttnn.reshape: shard grid is non-rectangular "
@@ -128,11 +135,6 @@ MemoryConfig recompute_shard_spec_for_output(
             source_shard_spec.grid.num_cores());
         return MemoryConfig{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
     }
-
-    const auto start = input_bbox.start_coord;
-    const uint32_t grid_x = input_bbox.grid_size().x;
-    const uint32_t grid_y = input_bbox.grid_size().y;
-    const auto layout = memory_config.memory_layout();
 
     // Caller-explicit override: keep the supplied spec when it tile-aligns and its
     // grid covers the output's physical extent. Lets callers preserve a layout their

@@ -46,6 +46,7 @@ from .l1_placement import (
     TILE,
     ZONES,
     WeightPlacement,
+    core_range_set,
     placements_for_layer,
 )
 
@@ -99,13 +100,63 @@ class ShardLayout:
         raise KeyError(f"no region for layer {layer} weight {name!r}")
 
 
-def shard_layout(layer_types: tuple[str, ...] = DEFAULT_LAYER_TYPES) -> ShardLayout:
+def packed_weight_spec(layout: ShardLayout, layer: int, name: str):
+    """The matmul_decode descriptor for one region of a packed tensor."""
+    import ttnn
+
+    region = layout.region(layer, name)
+    spec = region.spec
+    return ttnn._ttnn.operations.experimental.MatmulDecodePackedWeightSpec(
+        tile_offset=region.tile_offset,
+        K=spec.K,
+        N=spec.N,
+        cores=core_range_set(spec.zone),
+        k_blocks=spec.k_blocks or 1,
+        batch=spec.batch or 1,
+        b_blocks=spec.b_blocks or 1,
+    )
+
+
+def placement_weights_from_decoder_layer(weights: dict, layer_type: str) -> dict[str, torch.Tensor]:
+    """Materialize a decoder layer's checkpoint weights under placement names."""
+
+    def get(key):
+        value = weights[key]
+        return value() if callable(value) else value
+
+    out = {
+        "q_a_proj": get("self_attn.q_a_proj.weight"),
+        "q_b_proj": get("self_attn.q_b_proj.weight"),
+        "kv_proj": get("self_attn.kv_proj.weight"),
+        "o_a_proj": get("self_attn.o_a_proj.weight"),
+        "o_b_proj": get("self_attn.o_b_proj.weight"),
+        "shared_gate_proj": get("mlp.shared_experts.gate_proj.weight"),
+        "shared_up_proj": get("mlp.shared_experts.up_proj.weight"),
+        "shared_down_proj": get("mlp.shared_experts.down_proj.weight"),
+        "router_gate": get("mlp.gate.weight"),
+        "attn_hc.fn": get("attn_hc.fn"),
+        "ffn_hc.fn": get("ffn_hc.fn"),
+    }
+    if layer_type != "sliding_attention":
+        out["compressor.gate_proj"] = get("self_attn.compressor.gate_proj.weight")
+        out["compressor.kv_proj"] = get("self_attn.compressor.kv_proj.weight")
+    return out
+
+
+def shard_layout(
+    layer_types: tuple[str, ...] = DEFAULT_LAYER_TYPES,
+    weight_names_by_layer: tuple[frozenset[str], ...] | None = None,
+) -> ShardLayout:
     """Tile offsets of every weight region, plus the common (padded) shard size."""
+    if weight_names_by_layer is not None and len(weight_names_by_layer) != len(layer_types):
+        raise ValueError("weight_names_by_layer must have one name set per layer")
     cursor = {zone: 0 for zone in ZONES}
     regions = []
     for layer, lt in enumerate(layer_types):
         placements = placements_for_layer(lt)
         for name in WEIGHT_ORDER:
+            if weight_names_by_layer is not None and name not in weight_names_by_layer[layer]:
+                continue
             spec = placements.get(name)
             if spec is None:  # e.g. no compressor on a sliding layer
                 continue
@@ -123,7 +174,7 @@ def shard_layout(layer_types: tuple[str, ...] = DEFAULT_LAYER_TYPES) -> ShardLay
 
 def _op_layout(name: str, w: torch.Tensor, spec: WeightPlacement) -> torch.Tensor:
     """Torch ``[out, in]`` checkpoint weight -> the op's ``[K, N]`` (or ``[batch, K, N]``)."""
-    w = w.float().t().contiguous()  # [K, N_total]
+    w = w.t().contiguous()  # [K, N_total]
     if spec.batch is not None:
         # Grouped projection: [K, batch * N] -> [batch, K, N].
         return w.reshape(spec.K, spec.batch, spec.N).permute(1, 0, 2).contiguous()
@@ -161,6 +212,7 @@ def _tile_stream(slab: torch.Tensor) -> torch.Tensor:
 def pack_host_tensor(
     weights_by_layer: list[dict[str, torch.Tensor]],
     layer_types: tuple[str, ...] = DEFAULT_LAYER_TYPES,
+    weight_names_by_layer: tuple[frozenset[str], ...] | None = None,
 ) -> tuple[torch.Tensor, ShardLayout]:
     """Fuse two layers' weights into the ``[120 * shard_rows, 32]`` host tensor.
 
@@ -168,7 +220,7 @@ def pack_host_tensor(
     (``[out, in]``) tensors for layer ``i`` (``o_a_proj`` as its packed
     ``[o_groups * o_lora_rank, hidden]`` GroupedLinear weight).
     """
-    layout = shard_layout(layer_types)
+    layout = shard_layout(layer_types, weight_names_by_layer)
     ops: dict[tuple[int, str], torch.Tensor] = {}
     for region in layout.regions:
         ops[(region.layer, region.name)] = _op_layout(
@@ -176,7 +228,7 @@ def pack_host_tensor(
         )
 
     shard_rows = layout.shard_tiles * TILE
-    fused = torch.zeros(NUM_CORES * shard_rows, TILE, dtype=torch.float32)
+    fused = torch.zeros(NUM_CORES * shard_rows, TILE, dtype=torch.bfloat16)
     for zone, (start, count) in ZONES.items():
         zone_regions = [r for r in layout.regions if r.zone == zone]
         for pos in range(count):
@@ -207,15 +259,22 @@ def l1_memory_config(shard_tiles: int):
 
 
 def build_l1_weight_tensor(
-    weights_by_layer: list[dict[str, torch.Tensor]],
+    weights_by_layer: list[dict[str, torch.Tensor]] | None,
     device,
     layer_types: tuple[str, ...] = DEFAULT_LAYER_TYPES,
     cache_file_name=None,
+    weight_names_by_layer: tuple[frozenset[str], ...] | None = None,
 ):
     """The fused resident weight tensor, on ``device`` in bf4, plus its layout."""
     import ttnn
 
-    fused, layout = pack_host_tensor(weights_by_layer, layer_types)
+    if weights_by_layer is None:
+        if cache_file_name is None:
+            raise ValueError("weights_by_layer may be None only when loading a cached fused tensor")
+        layout = shard_layout(layer_types, weight_names_by_layer)
+        fused = None
+    else:
+        fused, layout = pack_host_tensor(weights_by_layer, layer_types, weight_names_by_layer)
     tensor = ttnn.as_tensor(
         fused,
         dtype=ttnn.bfloat4_b,
