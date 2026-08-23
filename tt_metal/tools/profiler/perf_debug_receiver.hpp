@@ -107,6 +107,7 @@ struct ReceiverDeviceConfig {
     std::unordered_map<uint32_t, uint32_t> core_of_xy;  // incl. DRISC self-zone cores
     bool clock_synced = false;
     double frequency_ghz = 0.0;
+    int numa_node = -1;  // NUMA node holding this device's DMA buffer; -1 = unknown
 };
 
 struct ReceiverConfig {
@@ -184,6 +185,7 @@ private:
         distributed::D2HSocket* sock = nullptr;
         uint32_t dev = 0;
         uint32_t sock_idx = 0;
+        int numa_node = -1;
         std::unique_ptr<BroadcastRing<PerfDebugRawRec>> ring;
         profiler::SpanDecodeState decode;
         StallIdMirror stall_ids;
@@ -217,7 +219,8 @@ private:
         std::thread thread;
     };
 
-    void decode_thread(std::vector<Stream*> streams);
+    void decode_thread(std::vector<Stream*> streams, uint32_t thread_index);
+    void plan_decode_affinity(uint32_t nthreads);
     // One poll+decode+ack pass over a stream. Returns true if it moved data; sets
     // s.retired when the stream is finished.
     bool decode_pass(Stream& s);
@@ -228,6 +231,8 @@ private:
     PerfDebugCaptureContext ctx_;
     std::vector<std::unique_ptr<Stream>> streams_;
     std::vector<std::thread> decode_threads_;
+    std::vector<int> aff_node_;
+    std::unordered_map<int, std::vector<int>> node_cpus_;
 
     std::mutex consumers_mu_;
     std::vector<std::unique_ptr<Consumer>> consumers_;

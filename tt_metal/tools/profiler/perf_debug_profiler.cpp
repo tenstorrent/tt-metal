@@ -784,6 +784,7 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         for (auto& ctx : devices_) {
             auto& rd = rdevs.emplace_back();
             rd.chip_id = ctx.chip_id;
+            rd.numa_node = static_cast<int>(cluster.get_numa_node_for_device(ctx.chip_id));
             rd.num_cores = ctx.nl / kNRisc;
             rd.core_of_xy = ctx.core_of_xy;
             rd.clock_synced = ctx.clock_synced;
