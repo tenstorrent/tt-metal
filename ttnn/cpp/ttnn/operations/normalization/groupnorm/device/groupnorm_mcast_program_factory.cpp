@@ -230,8 +230,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     const bool use_sfpu_local_combine =
         use_welford && device->arch() == tt::ARCH::BLACKHOLE && fp32_dest_acc_en && tile_width == 32;
+    const std::uint32_t global_combine_cores = num_cores_per_batch * num_cores_per_group;
     const bool use_sfpu_global_combine =
-        use_sfpu_local_combine && num_cores_per_batch * num_cores_per_group == 8 && num_groups_per_core <= 4;
+        use_sfpu_local_combine && global_combine_cores > 1 && global_combine_cores <= 32;
 
     // Float32 input requires fp32_dest_acc_en=true on both GroupNorm paths:
     //  - Welford: prerequisite for UnpackToDestFp32 (set below), which bypasses the unpacker's
@@ -432,6 +433,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     }
 
     uint32_t num_cores_per_mcast_group = mcast_groups[0].size();
+    TT_FATAL(
+        !use_sfpu_global_combine || num_cores_per_mcast_group == global_combine_cores,
+        "SFPU global combine expected {} cores but multicast groups contain {} cores",
+        global_combine_cores,
+        num_cores_per_mcast_group);
 
     // ---- Build ProgramDescriptor ----
     ProgramDescriptor desc;
@@ -739,6 +745,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
          std::bit_cast<uint32_t>(
              1.0f / static_cast<float>(
                         std::max(1U, num_channels_per_group * num_rows_per_batch_per_core_group_1 / tile_width)))},
+        {"sfpu_global_combine_reciprocal",
+         std::bit_cast<std::uint32_t>(1.0f / static_cast<float>(num_cores_per_mcast_group))},
     };
 
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_1 = {};
@@ -780,6 +788,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
          std::bit_cast<uint32_t>(
              1.0f / static_cast<float>(
                         std::max(1U, num_channels_per_group * num_rows_per_batch_per_core_group_1 / tile_width)))},
+        {"sfpu_global_combine_reciprocal",
+         std::bit_cast<std::uint32_t>(1.0f / static_cast<float>(num_cores_per_mcast_group))},
     };
 
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";

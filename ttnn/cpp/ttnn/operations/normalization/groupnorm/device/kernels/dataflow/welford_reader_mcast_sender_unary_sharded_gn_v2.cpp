@@ -214,12 +214,7 @@ void kernel_main() {
             }
 
 #ifdef WELFORD_SFPU_GLOBAL_COMBINE
-            static_assert(num_mcast_cores == 8);
-            // Compact into the even columns consumed by one SFPU load.
-            for (uint32_t i = 1; i < num_mcast_cores; ++i) {
-                p_global_means[i << 1] = p_global_means[i * global_stride];
-                p_global_vars[i << 1] = p_global_vars[i * global_stride];
-            }
+            pack_welford_stats_for_sfpu<num_mcast_cores, global_stride>(p_global_means, p_global_vars);
 #else
             auto p_global_means_read = reinterpret_cast<stats_read_t*>(global_means_ptr);
             auto p_global_vars_read = reinterpret_cast<stats_read_t*>(global_vars_ptr);

@@ -173,6 +173,120 @@ def manual_group_norm(input_tensor, num_groups, eps=1e-2):
     return input_tensor
 
 
+@run_for_blackhole("low-variance stable-statistics regression is calibrated on Blackhole")
+@pytest.mark.parametrize("base, amplitude", [(1.0, 0.01), (10.0, 0.05)])
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+def test_group_norm_stable_stats_translation_stability(device, base, amplitude):
+    torch.manual_seed(7)
+    N, C, H, W, num_groups = 1, 1280, 32, 32, 32
+    grid = ttnn.CoreGrid(y=8, x=8)
+
+    torch_input = (base + amplitude * torch.randn((N, C, H, W))).to(torch.bfloat16)
+    reference = torch.nn.functional.group_norm(torch_input.float(), num_groups, eps=1e-12)
+    reference = reference.permute(0, 2, 3, 1).reshape(N, 1, H * W, C)
+    nhwc = torch_input.permute(0, 2, 3, 1).reshape(N, 1, H * W, C)
+    memory_config = ttnn.create_sharded_memory_config(
+        shape=nhwc.shape,
+        core_grid=grid,
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_tensor = ttnn.from_torch(
+        nhwc,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=memory_config,
+        device=device,
+    )
+    input_mask = ttnn.create_group_norm_input_mask(C, num_groups, grid.x, ttnn.bfloat8_b)
+    input_mask = ttnn.to_device(input_mask, device)
+
+    output = ttnn.group_norm(
+        input_tensor,
+        num_groups=num_groups,
+        epsilon=1e-12,
+        input_mask=input_mask,
+        memory_config=memory_config,
+        core_grid=grid,
+        inplace=False,
+        use_welford=True,
+    )
+    output = ttnn.to_torch(ttnn.from_device(output)).float()
+
+    assert torch.isfinite(output).all()
+    rmse = torch.mean((output - reference) ** 2).sqrt().item()
+    pcc = torch.corrcoef(torch.stack((output.flatten(), reference.flatten())))[0, 1].item()
+    assert rmse < 0.06
+    assert pcc > 0.9995
+
+
+@run_for_blackhole("SFPU global GroupNorm combine is enabled on Blackhole")
+@pytest.mark.parametrize(
+    "grid_size, spatial_shape",
+    [
+        (ttnn.CoreGrid(y=1, x=3), (24, 32)),
+        (ttnn.CoreGrid(y=1, x=8), (32, 32)),
+        (ttnn.CoreGrid(y=2, x=8), (32, 32)),
+        (ttnn.CoreGrid(y=4, x=8), (32, 32)),
+    ],
+    ids=["3-cores", "8-cores", "16-cores", "32-cores"],
+)
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+def test_group_norm_sfpu_global_combine_core_counts(device, grid_size, spatial_shape):
+    torch.manual_seed(11)
+    N, C, num_groups = 1, 320, 16
+    H, W = spatial_shape
+    num_cores = grid_size.x * grid_size.y
+
+    torch_input = torch.randn((N, C, H, W), dtype=torch.bfloat16)
+    reference = torch.nn.functional.group_norm(torch_input.float(), num_groups)
+    reference = reference.permute(0, 2, 3, 1).reshape(N, 1, H * W, C)
+    nhwc = torch_input.permute(0, 2, 3, 1).reshape(N, 1, H * W, C)
+
+    shard_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+    )
+    shard_spec = ttnn.ShardSpec(
+        shard_grid,
+        [N * H * W // num_cores, C],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        shard_spec,
+    )
+    input_tensor = ttnn.from_torch(
+        nhwc,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=memory_config,
+        device=device,
+    )
+    input_mask = ttnn.create_group_norm_input_mask(C, num_groups, 1, ttnn.bfloat8_b)
+    input_mask = ttnn.to_device(input_mask, device)
+
+    output = ttnn.group_norm(
+        input_tensor,
+        num_groups=num_groups,
+        input_mask=input_mask,
+        memory_config=memory_config,
+        core_grid=grid_size,
+        use_welford=True,
+    )
+    output = ttnn.to_torch(ttnn.from_device(output)).float()
+
+    assert torch.isfinite(output).all()
+    assert_numeric_metrics(
+        reference,
+        output,
+        pcc_threshold=0.9995,
+        rtol=0.14,
+        atol=0.085,
+        frobenius_threshold=0.04,
+    )
+
+
 @pytest.mark.parametrize("N, C, H, W, num_groups", HEIGHT_SHARDED_SHAPES)
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
 @pytest.mark.parametrize("specify_grid", [True])

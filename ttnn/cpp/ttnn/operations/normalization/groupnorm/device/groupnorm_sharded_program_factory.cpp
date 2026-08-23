@@ -763,7 +763,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     const bool use_sfpu_local_combine =
         use_welford && device->arch() == tt::ARCH::BLACKHOLE && fp32_dest_acc_en && tile_width == 32;
     const bool use_sfpu_global_combine =
-        use_sfpu_local_combine && num_cores_per_mcast_group == 8 && num_groups_per_core <= 4;
+        use_sfpu_local_combine && num_cores_per_mcast_group > 1 && num_cores_per_mcast_group <= 32;
     if (use_sfpu_local_combine) {
         reader_mcast_sender_desc.defines.emplace_back("WELFORD_SFPU_LOCAL_COMBINE", "1");
         if (has_receiver_kernel) {
@@ -849,6 +849,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         compute_named_compile_time_args.push_back({"cb_in_welford", cb_in_welford_arg});
         compute_named_compile_time_args.push_back(
             {"sfpu_two_pass_reciprocal", std::bit_cast<uint32_t>(1.0f / static_cast<float>(local_count))});
+        compute_named_compile_time_args.push_back(
+            {"sfpu_global_combine_reciprocal",
+             std::bit_cast<uint32_t>(1.0f / static_cast<float>(num_cores_per_mcast_group))});
     }
 
     KernelDescriptor compute_sender_desc;

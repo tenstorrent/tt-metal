@@ -61,6 +61,10 @@ void kernel_main() {
     // are then required. All-bf16 compiles them out (no-ops). See program factory.
     constexpr bool enable_fp32_reconfig = get_named_compile_time_arg_val("enable_fp32_reconfig") != 0;
     constexpr std::uint32_t sfpu_two_pass_reciprocal = get_named_compile_time_arg_val("sfpu_two_pass_reciprocal");
+#ifdef WELFORD_SFPU_GLOBAL_COMBINE
+    constexpr std::uint32_t sfpu_global_combine_reciprocal =
+        get_named_compile_time_arg_val("sfpu_global_combine_reciprocal");
+#endif
 
     // dst regs
     constexpr std::uint32_t dst0 = 0;
@@ -352,15 +356,13 @@ void kernel_main() {
         // Wait for final welford values in cb_ex_global_id
         dfb_ex_global.wait_front(2 * num_groups);
 #ifdef WELFORD_SFPU_GLOBAL_COMBINE
-        static_assert(num_cores_per_mcast_group == 8);
-        static_assert(num_groups <= 4);
         copy_tile_to_dst_init_short(dfb_ex_global_id);
         for (std::uint32_t g = 0; g < num_groups; ++g) {
             dfb_stats.reserve_back(2);
             tile_regs_acquire();
             copy_tile(dfb_ex_global_id, g << 1, 0);
             copy_tile(dfb_ex_global_id, 1 + (g << 1), 1);
-            two_pass_stats_combine_global_stats_8(0);
+            two_pass_stats_combine_global_stats<num_cores_per_mcast_group>(0, sfpu_global_combine_reciprocal);
             tile_regs_commit();
             tile_regs_wait();
             pack_block(0, dfb_stats_id, 2);
