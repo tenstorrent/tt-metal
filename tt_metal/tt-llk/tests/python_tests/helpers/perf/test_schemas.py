@@ -164,6 +164,23 @@ PERF_TEST_SCHEMAS = {
         ],
         "aliases": {},
     },
+    "perf_facetranspose_x6": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_math",
+            "marker",
+            "tile_cnt",
+            "unpack_to_dest",
+            "unpack_transpose_faces",
+        ],
+        "aliases": {},
+    },
     "perf_fast_tilize": {
         "version": 2,
         "columns": [
