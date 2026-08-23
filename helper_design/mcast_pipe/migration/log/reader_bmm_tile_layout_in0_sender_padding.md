@@ -1,6 +1,6 @@
 # reader_bmm_tile_layout_in0_sender_padding — v8 (remigration)
 
-> Historical v8 log. Current v9 status: **blocked and at baseline** because the
+> Historical v8/v9 record. At the v9 checkpoint: **blocked and at baseline** because the
 > helper cannot own the `VALID` / `IGNORE_BATCH` control exchange.
 
 `ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp`

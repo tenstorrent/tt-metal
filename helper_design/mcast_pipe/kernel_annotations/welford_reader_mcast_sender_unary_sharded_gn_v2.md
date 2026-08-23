@@ -1,6 +1,6 @@
 # welford_reader_mcast_sender_unary_sharded_gn_v2.cpp (SEND side)
 
-> Current v9 status: **migrated** in `fad21b929d1`; Welford inventory passed
+> Historical v9 checkpoint status: **migrated** in `fad21b929d1`; Welford inventory passed
 > 108 cases with 2 expected skips, and fixed/default-routing nodes passed 19
 > with 6 expected skips.
 

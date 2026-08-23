@@ -1,6 +1,6 @@
 # reader_mcast_sender_unary_sharded_ln_post_allgather.cpp (SEND side) — CLEANEST EXEMPLAR
 
-> Current v9 migration status (2026-07-30): **blocked and restored to
+> Historical v9 migration checkpoint (2026-07-30): **blocked and restored to
 > `llk_helper_library`**, together with its receiver. This annotation describes
 > the historical protocol shape, but its claim that the rectangle always
 > contains the sender is false on the accepted non-mcast-1D host path. It also

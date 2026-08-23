@@ -1,5 +1,5 @@
 # reader_bmm_tile_layout_in1_receiver_writer_padding.cpp — v7
-> Historical v7/v8 log. Current v9 status: **migrated and fully validated** in
+> Historical v7/v8/v9 record. At the v9 checkpoint: **migrated and fully validated** in
 > the 490-case `MM-IN1-ALL` run.
 
 - Group G4 matmul, receiver. Commit 592e92169277b7ae09d83348b3ebb481a4493f20. migrated v7 — PASS.

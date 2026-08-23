@@ -1,6 +1,6 @@
 # reader_mcast_sender_unary_sharded_ln.cpp (SEND side)
 
-> Current v9 status: **blocked and exactly at `llk_helper_library`**. The
+> Historical v9 checkpoint status: **blocked and exactly at `llk_helper_library`**. The
 > protocol requires acknowledged signal-only traffic and one-gate/multi-block
 > mixed flag/counter streaming.
 

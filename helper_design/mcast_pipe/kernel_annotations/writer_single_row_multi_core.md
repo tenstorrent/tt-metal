@@ -1,4 +1,4 @@
-DERIVED FROM: current sort coordinator/reader/writer kernels, `sort_program_factory.cpp`, `mcast_pipe.hpp`/`.inl` API v9, the three prior migration logs, and `archive/reconciliation/reconcile_2026-08-03.md`.
+DERIVED FROM: the 2026-08-03 sort coordinator/reader/writer snapshot, `sort_program_factory.cpp`, `mcast_pipe.hpp`/`.inl` API v9, the three prior migration logs, and `archive/reconciliation/reconcile_2026-08-03.md`.
 
 # writer_single_row_multi_core.cpp (sort) — API-v9 re-audit
 

@@ -5,6 +5,11 @@ DERIVED FROM: migration_audit/{matmul,conv,normalization,transformer_sdpa,data_m
 Consolidated from 6 per-group audits. The inventory is the whole-codebase intra-chip mcast+handshake
 block inventory; this is the **pre-migration blocker view**.
 
+> **Historical snapshot.** This summary preserves the pre-migration audit and
+> dated apply outcomes; it is not current rollout state. As of 2026-08-23 the
+> authoritative ledger contains 108 kernels: 31 migrated at API v14, 2 pending,
+> and 75 deferred.
+
 ## Counts (block-containing kernels; excludes naming false-positives & no-mcast incidental)
 
 | Group | clean | refactor | defer/raw | ref(prior-art) | oos(CCL) | blocks |
@@ -34,7 +39,7 @@ block inventory; this is the **pre-migration blocker view**.
      per send; see hazards_catalog H12 amendment). The earlier "cannot express / confirmed hard, same-core
      sender+receiver hangs" verdict was a **symptom of the Round-6 ctor-once-VALID decision** (the
      receiver turn clobbers the shared cell INVALID, so the once-set source went stale), NOT proof of
-     infeasibility. block_sharded is currently `quarantined`; M12b lifts it. group_attn additionally
+     infeasibility. block_sharded was quarantined at this audit point; M12b later lifted it. group_attn additionally
      carries an F1 barrier-after-flag disagreement (matmul.md #5) — a separate refactor cost, unchanged.
 
 3. **Flag-only sends with no data** — the *entire* data_movement/reduction group, plus ln_pre and
@@ -54,8 +59,8 @@ block inventory; this is the **pre-migration blocker view**.
 6. **Legacy-API prerequisite narrowed to move.** Sort is now on `Noc`/`Semaphore<>`; its upstream
    ready/done split removes the old single-counter ambiguity. A focused 2026-08-03 re-audit finds its
    phase broadcast expressible by API-v9 Counter `send_signal`/`receive_signal`, with both return
-   counters left op-owned. It has since migrated at API v9 in `7337302b564`; move still needs an
-   object-API port first.
+   counters left op-owned. It later migrated at API v9 in `7337302b564`; Move
+   subsequently migrated and is stamped at API v14.
 
 ## Step-C re-entry delta (2026-08-03)
 
@@ -83,8 +88,9 @@ block inventory; this is the **pre-migration blocker view**.
   intended JIT path confirmed. The complete feature inventory passed 48 cases with 16 legitimate
   skips; the DRAM-config route passed at PCC 0.998234911.
 - The result confirms that ACK-fenced real-loopback completion was the missing invariant behind the
-  prior attempt's 25 numerical failures. The current fleet is 13 migrated kernels and 12 migrated
-  host bindings, with 78 deferred and nothing pending or quarantined.
+  prior attempt's 25 numerical failures. At that checkpoint the fleet was 13
+  migrated kernels and 12 migrated host bindings, with 78 deferred and nothing
+  pending or quarantined.
 
 ## Clean set (the easy wins that prove the API)
 Canonical two-sided P1/C1 pairs: matmul in0/in1 sender+receiver (4), conv weights sender+receiver

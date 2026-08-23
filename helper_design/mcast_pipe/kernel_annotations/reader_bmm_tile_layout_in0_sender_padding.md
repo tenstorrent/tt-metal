@@ -1,6 +1,6 @@
 # reader_bmm_tile_layout_in0_sender_padding.cpp — annotation
 
-> Current v9 status: **blocked and exactly at `llk_helper_library`**. The
+> Historical v9 checkpoint status: **blocked and exactly at `llk_helper_library`**. The
 > shared semaphore carries typed `VALID` / `IGNORE_BATCH` control values that
 > `SenderPipe` cannot own.
 

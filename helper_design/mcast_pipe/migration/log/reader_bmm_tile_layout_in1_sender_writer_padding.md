@@ -1,6 +1,6 @@
 # reader_bmm_tile_layout_in1_sender_writer_padding — v8 (remigration)
 
-> Historical v8 log. Current v9 status: **migrated and fully validated**:
+> Historical v8/v9 record. At the v9 checkpoint: **migrated and fully validated**:
 > 302 passed and 188 expected skips.
 
 `ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp`

@@ -59,6 +59,15 @@ applicable, focused validation, and the migration guardrail checks pass.
 | 14 | CONV-004 | Complete | Conv2D/Conv3D dense and divergent ACK populations | 32 source audits; host helper gtests; exact block Conv2D and Conv3D gates |
 | 15 | MCAST-007 | Complete | Object-qualified offset chaining across all migrated kernels | 33 source audits; focused Conv3D, Matmul, Conv2D, Move, GroupNorm, and LayerNorm gates |
 
+## Open review queue
+
+The completed table above covers the feedback execution pass through
+MCAST-007. Two subsequently filed items remain open and are intentionally not
+claimed as tracker completions:
+
+- GROUP-ATTN-MATMUL-001 — use helper role queries for rotating dispatch.
+- SDPA-DECODE-001 — represent replicated-Q K sharing as 1D multicast families.
+
 ## Evidence log
 
 ### MCAST-007 (complete)

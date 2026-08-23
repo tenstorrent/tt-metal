@@ -1,6 +1,6 @@
 # reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp
 
-> Historical v8 log. Current v9 status: **migrated and fully validated**:
+> Historical v8/v9 record. At the v9 checkpoint: **migrated and fully validated**:
 > 49 direct passes, 16 expected skips, and 14 shared DRAM regressions.
 
 Tier 0e (conv weights) — v7 -> v8 re-verify (Round 10, D2 count split).

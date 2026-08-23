@@ -1,6 +1,6 @@
 # reader_mcast_receiver_unary_sharded_ln — v7→v8 re-verify (NO code edit)
 
-> Historical v8 log. Current v9 status: **blocked and restored to baseline**;
+> Historical v8/v9 record. At the v9 checkpoint: **blocked and restored to baseline**;
 > the shared flag/counter two-phase protocol is unsupported.
 
 **Tier:** 0b (layernorm sharded), v7→v8 REMIGRATION run.

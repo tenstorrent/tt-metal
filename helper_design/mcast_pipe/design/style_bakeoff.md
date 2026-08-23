@@ -1,4 +1,8 @@
-DERIVED FROM: current mcast_pipe API v11, design/api_feasibility.md, design/hazards_catalog.md, changelog.md, and the persisted on-device bake-off results below
+DERIVED FROM: the materialized semantic API through v11, design/api_feasibility.md, design/hazards_catalog.md, changelog.md, and the persisted on-device bake-off results below
+
+> **Status (2026-08-23): historical measurement evidence.** API v12-v14 did
+> not change the multicast protocol choices measured here. The v14 headers are
+> authoritative for current signatures and wire layout.
 
 # Step E — Style Bake-off (`mcast_pipe`)
 
@@ -27,7 +31,7 @@ DERIVED FROM: current mcast_pipe API v11, design/api_feasibility.md, design/haza
 > this bake-off; it is now present and the helper suite passes 72/72. No re-measure and no helper
 > API-version change.
 
-> **Current v9 completion correction (2026-07-30):** the F1 result below
+> **API-v9 completion correction at the 2026-07-30 checkpoint:** the F1 result below
 > remains valid for remote-only traffic: the receiver's linked flag wait proves
 > payload arrival, so the sender only needs SENT completion. It does **not**
 > cover a sender consuming its own INCLUDE-source destination because that

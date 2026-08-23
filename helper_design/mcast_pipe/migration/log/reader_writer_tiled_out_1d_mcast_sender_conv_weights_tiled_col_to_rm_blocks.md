@@ -1,6 +1,6 @@
 # reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp
 
-> **Current v9 status: migrated and fully validated.** `SenderPipe` takes the
+> **Historical v9 checkpoint: migrated and fully validated.** `SenderPipe` takes the
 > active acknowledgement count at runtime while `McastRect` derives full
 > fan-out including noop cores. HEIGHT_SHARDED completed 49 passed / 16
 > expected skips; `test_conv_dram` passed 14/14; isolated-cache JIT compiled

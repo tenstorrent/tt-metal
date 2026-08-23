@@ -1,5 +1,5 @@
 # reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp — QUARANTINED
-> Historical v8 log. Current v9 status: **blocked and restored to baseline**;
+> Historical v8/v9 record. At the v9 checkpoint: **blocked and restored to baseline**;
 > data and signal need different loopback modes plus sender-side ready
 > participation.
 

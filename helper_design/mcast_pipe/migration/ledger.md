@@ -2,7 +2,8 @@
 
 Machine source of truth: `ledger.json`. Test dispatch is in `test_map.json`; per-unit evidence is in
 `log/`. The current static audit is archived at
-`../archive/reconciliation/reconcile_2026-08-16-plan-inventory.md`; the preceding rebase audit is
+`../archive/reconciliation/reconcile_2026-08-23-document-audit.md`; the preceding plan-inventory and
+rebase audits are `../archive/reconciliation/reconcile_2026-08-16-plan-inventory.md` and
 `../archive/reconciliation/reconcile_2026-08-14-rebase-dc9282.md`.
 
 - Branch: `sjovic/mcast-migration`; feedback intake head `cea14afbea9`.
@@ -19,10 +20,10 @@ at API v14. It did not change the pending/deferred inventory dispositions.
 |---|---:|---:|
 | migrated at ledger API v14 | 31 | 27 |
 | pending | 2 | 5 |
-| deferred | 71 | 0 |
+| deferred | 75 | 0 |
 | quarantined | 0 | 0 |
 
-All 104 inventoried kernel paths exist. No migrated kernel was removed, renamed, or clobbered. The 12
+All 108 inventoried kernel paths exist. No migrated kernel was removed, renamed, or clobbered. The 12
 post-rebase `needs_recheck` flags were cleared after complete mapped API-v11 verification. The approved
 plan audit added 13 previously omitted call-site/receiver companions: two
 Matmul Decode two-hub readers, three programming/lab example receivers, four Quasar Matmul receivers,
@@ -100,7 +101,8 @@ interleaved GroupNorm is stamped at v14 (original migration commit `40e209daad9`
 SDPA-decode `read_k` in
 `f760425fe06`, Tier 2.14 Argmax control in `5aaaf5b5aa5`, and Tier 2.15 Move overlap in
 `a25603ae2c0`. Their complete correctness, fresh-JIT, helper/source guards, production-LOC, and matched
-performance evidence is recorded in the per-unit logs and `helper_design/tracker.md`.
+performance evidence is recorded in the per-unit logs and
+`../migration_feedback_tracker.md`.
 
 Tier 2.16 reached terminal deferrals without production edits. Routed-expert FFN needs two linked data
 stages under one ACK and one final signal, which API v14 still cannot express. Persistent H2D/D2H target
@@ -136,13 +138,15 @@ design gap and continues to use the established raw primitive path.
 
 ## Deferred backlog
 
-Seventy-one entries remain deferred. Their exact reasons and flags are authoritative in `ledger.json`.
+Seventy-five entries remain deferred. Their exact reasons and flags are authoritative in `ledger.json`.
 The major classes are:
 
 - genuine capability gaps such as chain relay, runtime role/count, and multi-phase protocols;
 - coverage gaps or binary-only routes;
 - helper-neutral or non-multicast entries retained for atomic-unit context;
 - experimental/CCL/Quasar entries intentionally deferred as groups.
+- four TT-Train kernel faces added by repository-wide recall, deferred pending
+  a helper dependency-boundary decision and mapped C++ test execution.
 
 Before changing the helper for any deferred kernel, state the required behavior independently of its
 current implementation and verify that the existing helper cannot express it through a different

@@ -140,6 +140,28 @@ def test_mixed_role_kernels_use_direct_mcast_pipe_aliases():
     assert "if (in1_mcast_args.can_receive())" in group_attention
 
 
+def test_migrated_kernels_use_objects_for_offsets_and_reserve_aliases_for_pipe_types():
+    kernels, _ = _migrated_sources()
+    violations = []
+    alias_pattern = re.compile(r"using\s+(\w+)\s*=\s*(?:dataflow_kernel_lib::\s*)?McastArgs<")
+
+    for path in kernels:
+        source = path.read_text()
+        relative = str(path.relative_to(REPO_ROOT))
+        for alias_match in alias_pattern.finditer(source):
+            alias = alias_match.group(1)
+            if not re.search(rf"\b{alias}::(?:SenderPipe|ReceiverPipe)\b", source):
+                violations.append(f"{relative} retains alias {alias} without a nested pipe-type use")
+            if re.search(rf"\b{alias}::next_(?:compile_time|runtime)_args_offset\(\)", source):
+                violations.append(f"{relative} type-qualifies an offset through {alias}")
+
+    assert (
+        not violations
+    ), "McastArgs aliases must be reserved for pipe types and offsets chained through objects:\n" + (
+        "\n".join(violations)
+    )
+
+
 def test_sort_row_start_readiness_is_pipe_owned():
     kernels, factories = _migrated_sources()
     sort_kernels = [path for path in kernels if "single_row_multi_core.cpp" in path.name]
@@ -207,8 +229,8 @@ def test_matmul_in0_padding_appends_mcast_after_fixed_operation_args():
     operation_end = kernel.index("constexpr uint32_t operation_ct_args_end")
     helper = kernel.index("McastArgs<operation_ct_args_end, 4>")
     assert accessor < operation_end < helper
-    assert "constexpr In0McastArgs in0_mcast_args;" in kernel
-    assert "rt_args_idx = In0McastArgs::next_runtime_args_offset();" in kernel
+    assert "constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, 4> in0_mcast_args;" in kernel
+    assert "rt_args_idx = in0_mcast_args.next_runtime_args_offset();" in kernel
 
     factory_sources = "\n".join(path.read_text() for path in MATMUL_MCAST_SOURCES[:2])
     assert "begin() + 15" not in factory_sources
@@ -305,10 +327,9 @@ def test_conv3d_mcast_precedes_the_dynamic_operation_tail_and_scopes_weight_shar
     factory = (REPO_ROOT / "ttnn/cpp/ttnn/operations/experimental/conv3d/device/conv3d_program_factory.cpp").read_text()
     kernel = (REPO_ROOT / "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp").read_text()
 
-    assert "using WeightMcastArgs = McastArgs<bias_args.next_compile_time_args_offset(), 21>;" in kernel
-    assert "constexpr WeightMcastArgs weights_mcast_args;" in kernel
-    assert "argidx = WeightMcastArgs::next_runtime_args_offset();" in kernel
-    assert kernel.index("const uint32_t mcast_num_iters") < kernel.index("constexpr WeightMcastArgs weights_mcast_args")
+    assert "constexpr McastArgs<bias_args.next_compile_time_args_offset(), 21> weights_mcast_args;" in kernel
+    assert "argidx = weights_mcast_args.next_runtime_args_offset();" in kernel
+    assert kernel.index("const uint32_t mcast_num_iters") < kernel.index("weights_mcast_args;")
     assert "weights_mcast.append_runtime_args_to(writer_args, core);" in factory
     assert factory.index("writer_args.push_back(cw.mcast_num_iters);") < factory.index(
         "weights_mcast.append_runtime_args_to(writer_args, core);"
@@ -347,13 +368,13 @@ def test_interleaved_groupnorm_uses_three_opaque_helper_wires_and_preserves_lega
         assert "num_mcast_cores_mid_group" not in source
 
     for source in (legacy_sender, welford_sender):
-        assert source.count("using ") >= 3
-        assert "MidMcastArgs::next_compile_time_args_offset()" in source
-        assert "MidMcastArgs::next_runtime_args_offset()" in source
-        assert "FirstMcastArgs::next_compile_time_args_offset()" in source
-        assert "FirstMcastArgs::next_runtime_args_offset()" in source
+        assert len(re.findall(r"constexpr\s+dataflow_kernel_lib::\s*McastArgs<", source)) == 3
+        assert "mid_mcast_args.next_compile_time_args_offset()" in source
+        assert "mid_mcast_args.next_runtime_args_offset()" in source
+        assert "first_mcast_args.next_compile_time_args_offset()" in source
+        assert "first_mcast_args.next_runtime_args_offset()" in source
     for source in (legacy_receiver, welford_receiver):
-        assert "using MidMcastArgs" in source
+        assert re.search(r"constexpr\s+dataflow_kernel_lib::\s*McastArgs<", source)
 
     assert legacy_sender.count("_pipe.send_signal();") == 3
     assert legacy_sender.count("_pipe.send(l1_read_addr_ex") == 3
@@ -416,19 +437,19 @@ def test_migrated_kernels_keep_fixed_operation_prefixes_before_helper_decoders()
     violations = []
     optional_compile_time_tails = {
         "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp": (
-            "config_dram_addr_index = ActMcastArgs::next_compile_time_args_offset();"
+            "config_dram_addr_index = act_mcast_args.next_compile_time_args_offset();"
         ),
     }
     variable_runtime_tails = {
-        "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp": "argidx = WeightMcastArgs::next_runtime_args_offset();",
+        "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp": "argidx = weights_mcast_args.next_runtime_args_offset();",
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-        "reader_bmm_tile_layout_in0_sender_padding.cpp": "rt_args_idx = In0McastArgs::next_runtime_args_offset();",
+        "reader_bmm_tile_layout_in0_sender_padding.cpp": "rt_args_idx = in0_mcast_args.next_runtime_args_offset();",
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-        "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp": "operation_rt_args_idx = In0McastArgs::next_runtime_args_offset();",
+        "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp": "operation_rt_args_idx = in0_mcast_args.next_runtime_args_offset();",
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-        "reader_bmm_tile_layout_in1_sender_writer_padding.cpp": "rt_args_idx = In1McastArgs::next_runtime_args_offset();",
+        "reader_bmm_tile_layout_in1_sender_writer_padding.cpp": "rt_args_idx = in1_mcast_args.next_runtime_args_offset();",
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-        "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp": "rt_args_idx = In1McastArgs::next_runtime_args_offset();",
+        "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp": "rt_args_idx = in1_mcast_args.next_runtime_args_offset();",
     }
 
     for path in kernels:
@@ -469,7 +490,7 @@ def test_conv_width_mcast_precedes_the_optional_config_tensor_tail():
     factory = (base / "conv2d_op_width_sharded_program_factory.cpp").read_text()
 
     assert "McastArgs<operation_ct_args_end, 3>" in kernel
-    assert "config_dram_addr_index = ActMcastArgs::next_compile_time_args_offset();" in kernel
+    assert "config_dram_addr_index = act_mcast_args.next_compile_time_args_offset();" in kernel
     assert "TensorAccessorArgs<23>" not in kernel
     helper_append = factory.index("activation_mcast.append_compile_time_args_to(activation_kernel_compile_args);")
     optional_tail = factory.index("if (config_tensors_in_dram) {", helper_append)
@@ -562,6 +583,9 @@ def test_move_overlap_composes_three_release_wires_and_keeps_return_counter():
 
     for kernel in kernels:
         assert kernel.count("McastArgs<") == 3
+        assert "using Release" not in kernel
+        assert "release0_args.next_compile_time_args_offset()" in kernel
+        assert "release1_args.next_compile_time_args_offset()" in kernel
         assert kernel.count("send_signal();") == 3
         assert kernel.count("receive_signal();") == 3
         assert "return_sem.up(" in kernel and "return_sem.wait(num_workers)" in kernel

@@ -24,14 +24,15 @@ Read these in order:
 
 ## Current state
 
-The 2026-08-14 reconciliation found 91 existing call-site paths. The former
-text inventory matched the ledger exactly and has now been folded into it:
+The 2026-08-23 repository-wide recall reconciled 108 call-site paths. It added
+four previously omitted TT-Train kernel faces without changing any existing
+rollout disposition:
 
 | State | Kernels | Host bindings |
 |---|---:|---:|
 | migrated, verified at v14 | 31 | 27 |
 | pending | 2 | 5 |
-| deferred | 71 | 0 |
+| deferred | 75 | 0 |
 | quarantined | 0 | 0 |
 
 The migrated fleet was updated to the v14 template-owned runtime-base ABI during
@@ -43,8 +44,8 @@ synchronization, clarified independent input ownership, and verified dense
 versus divergent ACK-count policy. Kernel offset chaining now uses an existing
 named constexpr helper object wherever one is available, without changing the
 static API or wire. The host build, 36 helper host tests, all 80 helper
-device/wire tests under `--dev`, all 33 source audits, and focused
-sequential Matmul, Conv2D, and Conv3D device gates passed. The inherited v13
+device/wire tests under `--dev`, all 33 source audits, and focused sequential
+Matmul, Conv2D, Conv3D, Move, GroupNorm, and LayerNorm device gates passed. The inherited v13
 gates still cover present, absent, and chained helper blocks.
 Exact evidence is recorded in `migration_feedback_tracker.md`.
 
@@ -53,9 +54,11 @@ the feedback pass did not broaden the approved migration inventory.
 
 ## Current handoff
 
-All items in `migration_feedback.md` are resolved and tracked. The block-sharded
-Conv activation reader and all other deferred/pending units retain their prior
-dispositions; resolving review feedback did not authorize migrating those units.
+The feedback tracker is complete through MCAST-007. Two later review items remain
+open in `migration_feedback.md`: GROUP-ATTN-MATMUL-001 and SDPA-DECODE-001.
+The block-sharded Conv activation reader, newly inventoried TT-Train families,
+and all other deferred/pending units retain their prior dispositions; this
+documentation reconciliation did not authorize migrating them.
 
 Current human views:
 
@@ -73,12 +76,14 @@ execution record for this pass.
 - [`migration/ledger.json`](migration/ledger.json) — both the durable call-site
   inventory and mutable rollout state. `design/primitive_contracts.md` supplies
   the recognition family used by reconciliation.
-- `migration_audit/`, `kernel_annotations/`, and `migration/log/` — detailed
-  classification, implementation, validation, and JIT evidence.
+- `migration_audit/`, `kernel_annotations/`, and `migration/log/` — historical
+  classification, implementation, validation, and JIT evidence. Their local
+  READMEs define how to interpret dated status claims.
 - [`design/`](design/) — still-valid contracts, hazards, feasibility analysis,
   and bake-off evidence; consult when changing the API or investigating a gap.
-- [`proposed_helpers.md`](proposed_helpers.md) — the active helper proposal and
-  migration classifications.
+- `ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp` and
+  `ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp` — the materialized API v14
+  contract; superseded intent and proposal documents are archived.
 - [`archive/`](archive/) — completed plans and superseded reports retained for
   provenance, not as instructions for the next agent.
 

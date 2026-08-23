@@ -1,6 +1,6 @@
 # reader_bmm_tile_layout_in1_sender_writer_padding.cpp — annotation
 
-> Current v9 status: **migrated** in `ab73b1f5c73`; the complete mapped
+> Historical v9 checkpoint status: **migrated** in `ab73b1f5c73`; the complete mapped
 > inventory passed 302 cases with 188 expected skips.
 
 Role: **SENDER half** (reader portion) + an unrelated WRITER portion in the same file. The block appears TWICE in the reader: once for in1 data, once for in3/bias data. Object API.

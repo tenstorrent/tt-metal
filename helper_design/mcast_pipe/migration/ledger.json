@@ -11,9 +11,9 @@
     "scope": "MCAST-005 through MCAST-007 argument-tail and object-qualified offset rules plus completed Conv migration-feedback audit",
     "evidence": "migration_feedback_tracker.md",
     "result": "release host build passed; host helper gtests 36/36; helper device suite 80/80 under --dev; source audit 33/33; sequential focused Matmul, width/height/block Conv2D, Conv3D, tiled/row-major Move, sharded/interleaved legacy and Welford GroupNorm, and pre/post-allgather LayerNorm operation gates passed",
-    "inventory_effect": "31 migrated kernels and 27 migrated host bindings stamped v14; 2 pending kernels, 5 pending bindings, and 71 deferred kernels unchanged"
+    "inventory_effect": "31 migrated kernels and 27 migrated host bindings stamped v14; the 2026-08-23 documentation reconciliation later added four deferred TT-Train inventory rows without changing validation or rollout status"
   },
-  "inventory_contract": "Single source of truth: entries[].kernel/op_family/role/tag/inventory_note are the durable call-site inventory; status/version/commit/validation/flags are mutable rollout state. The former census.txt contained the same 91 paths when it was merged here on 2026-08-14. Where the former text had stale role, tag, status, or note wording, the ledger's newer audited value was retained instead of copying both versions.",
+  "inventory_contract": "Single source of truth: entries[].kernel/op_family/role/tag/inventory_note are the durable call-site inventory; status/version/commit/validation/flags are mutable rollout state. The former census.txt contained 91 paths when it was merged here on 2026-08-14; the approved plan reconciliation added 13 receiver/call-site companions on 2026-08-16, and the repository-wide recall sweep added four TT-Train production kernel faces on 2026-08-23. Where historical text has stale role, tag, status, or note wording, this ledger's audited value wins.",
   "inventory_method": "Recall-converged block inventory grouped by op_family. Discovery covered raw and object API spellings plus full op-family directory sweeps; pure receiver halves with only Semaphore::set/up/wait remain intentional entries even when they contain no multicast token.",
   "inventory_group_notes": {
     "quasar (experimental metal 2.0 port)": "Deferred as a group during the 2026-06-27 reconcile because the port was actively churning. Entries duplicate production matmul/conv/move patterns and add no hazard coverage; several _metal2 forks carried live #47797 hang-debug scaffolding, including one unresolved activation-multicast deadlock. Per-entry tags record the intrinsic target after the port stabilizes and debug code is removed."
@@ -2851,6 +2851,91 @@
         "quasar-metal2-port"
       ],
       "added_by_reconcile": "2026-08-16"
+    },
+    {
+      "kernel": "tt-train/sources/ttml/metal/ops/frobenius_normalize/device/kernels/dataflow/reader_frobenius_normalize.cpp",
+      "op_family": "tt-train",
+      "role": "hybrid",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tt-train/tests/ops/frobenius_normalize_test.cpp"
+      ],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "Origin/non-origin variants share one kernel: the origin gathers partials, loopback-multicasts the normalization scalar and a level flag to the dense active-core bounding box, while non-origin cores wait on that flag. Migration requires a TT-Train-to-TTNN kernel-helper dependency decision and preservation of the operation-owned reduction phase.",
+      "flags": [
+        "repository-recall-addition",
+        "tt-train-dependency-boundary",
+        "gather-then-broadcast"
+      ],
+      "added_by_reconcile": "2026-08-23"
+    },
+    {
+      "kernel": "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/mcast_sender.cpp",
+      "op_family": "tt-train",
+      "role": "hybrid",
+      "tag": "refactor-high",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tt-train/tests/ops/k_split_gram_matmul_op_test.cpp"
+      ],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "Bidirectional row/column sender with independent upper/lower multicast rectangles, four semaphore pairs, repeated CB-wrap sends, and a loopback lower path whose sender also consumes the receive flag. Treat sender plus both receiver binaries and the factory as one atomic protocol unit.",
+      "flags": [
+        "repository-recall-addition",
+        "tt-train-dependency-boundary",
+        "multi-channel",
+        "loopback-role-mix"
+      ],
+      "added_by_reconcile": "2026-08-23"
+    },
+    {
+      "kernel": "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/mcast_receiver.cpp",
+      "op_family": "tt-train",
+      "role": "receiver",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tt-train/tests/ops/k_split_gram_matmul_op_test.cpp"
+      ],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "Pure receiver companion for k_split_gram_matmul. It clears the data-ready level, increments the selected sender's ready counter, waits VALID, and publishes each received block; optional reduction receive remains operation-owned.",
+      "flags": [
+        "repository-recall-addition",
+        "tt-train-dependency-boundary",
+        "atomic-unit:k-split-gram-matmul"
+      ],
+      "added_by_reconcile": "2026-08-23"
+    },
+    {
+      "kernel": "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/mcast_receiver_writer.cpp",
+      "op_family": "tt-train",
+      "role": "receiver",
+      "tag": "refactor",
+      "status": "deferred",
+      "migrated_api_version": null,
+      "commit": null,
+      "validation_set": [
+        "tt-train/tests/ops/k_split_gram_matmul_op_test.cpp"
+      ],
+      "coverage_confidence": "unknown",
+      "last_verified": null,
+      "inventory_note": "Receiver/writer companion for k_split_gram_matmul. The multicast receive handshake matches mcast_receiver.cpp; partner reduction and DRAM/mirror writes are independent operation phases that must stay outside the pipe.",
+      "flags": [
+        "repository-recall-addition",
+        "tt-train-dependency-boundary",
+        "atomic-unit:k-split-gram-matmul"
+      ],
+      "added_by_reconcile": "2026-08-23"
     }
   ],
   "last_apply_verification": {
@@ -2865,7 +2950,7 @@
     "validation": "build passed; exact route probes and complete mapped inventories passed; helper device 80/80, source audit 17/17, host fixture 32/32",
     "claude_review": "PASS: v11 fleet stamp and Tier 0.2 write-back permitted; Tier 0.1 remains pending without separately authorized historical matched baseline"
   },
-  "reconciled": "2026-08-16",
+  "reconciled": "2026-08-23",
   "current_api_version": 14,
   "baseline_ref": "origin/llk_helper_library @ dc9282be7d5e9d5a4b9137c1bf327de8d923e18e",
   "reconcile_history": [
@@ -3095,6 +3180,33 @@
       "approval": "The user approved helper_design/mcast_pipe/plan.md and requested unattended execution. The audit exactly matched Appendix B, with no unapproved removed, renamed, clobbered, or additional candidate row.",
       "claude_review": "REVISE then incorporated: controlled-vocabulary family names, prototype-gated refactor-high tags, production-twin truth for Quasar in0 receivers, existing annotation-family reuse, and report-only deferred host mappings.",
       "follow_up": "Run the approved Tier 0, Tier 1 unit 6, and Tier 2 units 7-9 apply scope. Verify-only the 12 needs_recheck kernels before Tier-0 write-back."
+    },
+    {
+      "date": "2026-08-23",
+      "report": "archive/reconciliation/reconcile_2026-08-23-document-audit.md",
+      "base_from": "dc9282be7d5e9d5a4b9137c1bf327de8d923e18e (recorded rollout baseline)",
+      "base_to": "613b8d017c7 (document-audit starting HEAD)",
+      "api_version": "14 (unchanged)",
+      "buckets": {
+        "unchanged": 104,
+        "added": 4,
+        "removed": 0,
+        "renamed": 0,
+        "clobbered": 0,
+        "rebase_touched": 0
+      },
+      "added_entries": [
+        "tt-train/sources/ttml/metal/ops/frobenius_normalize/device/kernels/dataflow/reader_frobenius_normalize.cpp",
+        "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/mcast_sender.cpp",
+        "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/mcast_receiver.cpp",
+        "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/mcast_receiver_writer.cpp"
+      ],
+      "support_only": [
+        "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
+      ],
+      "host_bindings": "The two TT-Train factories are discovery-only mappings in test_map.json. The ledger host_bindings convention remains migrated or source-integrated pending bindings only.",
+      "approval": "The user approved the exact reconciliation and archival cleanup proposal on 2026-08-23.",
+      "validation": "Static reconciliation only: all recorded paths exist; all migrated kernels retain helper use; JSON, Markdown links, inventory counts, and exact multicast-specific recall were checked. No production migration, build, or device test was performed."
     }
   ]
 }

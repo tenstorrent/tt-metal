@@ -5,6 +5,8 @@ instructions. Start at `../README.md`, use `../migration/ledger.json` for state,
 and consult an archived file only when a live artifact links to it.
 
 - `plans/` — completed or superseded dated execution plans.
+- `design_history/` — the original tune-helper intent and superseded helper
+  proposal retained to explain how the materialized API evolved.
 - `reports/` — prior generated rollout reports and tier views.
 - `reconciliation/` — dated static audits explaining how ledger entries were
   reconciled with changing source trees.

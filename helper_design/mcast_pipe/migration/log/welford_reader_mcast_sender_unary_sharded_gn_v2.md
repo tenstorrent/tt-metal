@@ -1,6 +1,6 @@
 # welford_reader_mcast_sender_unary_sharded_gn_v2.cpp — mcast_pipe migration (Tier 2a)
 
-**Current v9 status:** MIGRATED | **Validation:** Welford inventory 108 passed,
+**Historical v9 checkpoint:** MIGRATED | **Validation:** Welford inventory 108 passed,
 2 expected skips; fixed/default-routing nodes 19 passed, 6 expected skips.
 
 The raw acknowledgement gate executes before remote L1 source reads. The

@@ -1,6 +1,6 @@
 # welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp — remigrate to mcast_pipe v7
 
-> Historical v7/v8 log. Current v9 status: **migrated and fully validated**:
+> Historical v7/v8/v9 record. At the v9 checkpoint: **migrated and fully validated**:
 > 116 passed and 8 expected skips.
 
 - Group: G1 groupnorm

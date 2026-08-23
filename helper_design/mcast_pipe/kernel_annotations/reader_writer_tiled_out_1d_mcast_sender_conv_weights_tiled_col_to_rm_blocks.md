@@ -1,6 +1,6 @@
 # Annotation — `reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp`
 
-> Current v9 status: **migrated** in `fad21b929d1`; HEIGHT_SHARDED passed 49
+> Historical v9 checkpoint status: **migrated** in `fad21b929d1`; HEIGHT_SHARDED passed 49
 > cases with 16 expected skips, plus 14 shared DRAM regressions.
 
 Path: `ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/`

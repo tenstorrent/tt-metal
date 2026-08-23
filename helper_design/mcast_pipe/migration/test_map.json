@@ -1,5 +1,5 @@
 {
-  "_comment": "Coverage and dispatch map for the current production tree. Inventory definitions are durable; status-like fields in entries preserve historical coverage context and are not rollout state. Use ledger.json for current status. Execution results and JIT evidence are maintained in per-unit logs and report.md.",
+  "_comment": "Coverage and dispatch map for the current production tree. Inventory definitions are durable; status-like fields in entries preserve historical coverage context and are not rollout state. Use ledger.json for current status. Execution results and JIT evidence are maintained in per-unit logs and migration_feedback_tracker.md.",
   "helper_version": 14,
   "baseline": "dc9282be7d5e9d5a4b9137c1bf327de8d923e18e",
   "machine": "single-chip Blackhole p100a",
@@ -356,6 +356,31 @@
       "migration_unit": "conv3d-weight-sharing-mcast",
       "inventory": ["CONV3D-WEIGHT-MCAST"],
       "coverage": "complete; exact fresh-cache writer proof, focused and complete correctness, and matched grouped/non-grouped performance passed 2026-08-16"
+    },
+    {
+      "id": "deepseek-b1-sampling:single-device-loop-barrier",
+      "classification": "required",
+      "factory": "models/demos/deepseek_v3_b1/micro_ops/sampling/op.py",
+      "dispatch": "single-device sampling barrier in argmax and top-k modes",
+      "migration_unit": "deepseek-b1-sampling-loop-barrier",
+      "inventory": ["DEEPSEEK-B1-SAMPLING"],
+      "coverage": "device-verified on Blackhole on 2026-08-16; top-k retains its unchanged pre-existing selection mismatch"
+    },
+    {
+      "id": "tt-train:frobenius-normalize:gather-broadcast",
+      "classification": "discovery_only",
+      "factory": "tt-train/sources/ttml/metal/ops/frobenius_normalize/device/frobenius_normalize_program_factory.cpp",
+      "dispatch": "multicore Frobenius normalization with origin gather and dense loopback broadcast",
+      "inventory": ["TT-TRAIN-FROBENIUS-NORMALIZE"],
+      "coverage": "unverified by this static reconciliation; C++ operation test mapped"
+    },
+    {
+      "id": "tt-train:k-split-gram-matmul:row-column-mcast",
+      "classification": "discovery_only",
+      "factory": "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/k_split_gram_matmul_program_factory.cpp",
+      "dispatch": "row and column sender/receiver binaries used by K-split Gram Matmul",
+      "inventory": ["TT-TRAIN-K-SPLIT-GRAM-MATMUL"],
+      "coverage": "unverified by this static reconciliation; C++ operation test mapped"
     }
   ],
   "inventory_definitions": {
@@ -610,6 +635,24 @@
         "nightly pre-existing width-sharded page-alignment xfails": 2
       },
       "result": "focused 12 passed; unit 27 passed / 1 skip; nightly 1606 passed / 5 skips / 2 xfails"
+    },
+    "DEEPSEEK-B1-SAMPLING": {
+      "path": "models/demos/deepseek_v3_b1/tests/unit_tests/test_sampling.py",
+      "tests": [
+        "test_sampling_argmax_single_device_101_cores",
+        "test_sampling_topk_single_device"
+      ],
+      "result": "four 101-core argmax nodes passed through cold and warm JIT paths; top-k completed the migrated barrier and reproduced the raw implementation's pre-existing Blackhole p_scores failure"
+    },
+    "TT-TRAIN-FROBENIUS-NORMALIZE": {
+      "path": "tt-train/tests/ops/frobenius_normalize_test.cpp",
+      "tests": ["complete FrobeniusNormalize operation test binary"],
+      "verification": "discovery-only; no build or device execution in the documentation reconciliation"
+    },
+    "TT-TRAIN-K-SPLIT-GRAM-MATMUL": {
+      "path": "tt-train/tests/ops/k_split_gram_matmul_op_test.cpp",
+      "tests": ["complete KSplitGramMatmul operation test binary"],
+      "verification": "discovery-only; confirm all sender, receiver, and receiver-writer variants before any migration"
     }
   },
   "additional_candidate_routes": [
@@ -647,13 +690,19 @@
       "candidate": "ccl moe_compute tilize_reader.cpp and tilize_writer.cpp",
       "confidence": "discovery-only",
       "route": "tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_compute_single_card.py::test_moe_compute_single_card_gpt_oss"
+    },
+    {
+      "candidate": "TT-Train Frobenius normalization and K-split Gram Matmul multicast families",
+      "confidence": "source-verified inventory; execution not performed",
+      "route": "tt-train/tests/ops/{frobenius_normalize_test.cpp,k_split_gram_matmul_op_test.cpp}"
     }
   ],
   "known_coverage_gaps": [
     "Ring/joint SDPA and ring-all-gather matmul routes require multiple devices.",
     "Most CCL candidates require a mesh or Galaxy system; single-card moe_compute is the documented exception.",
     "The persistent H2D/D2H service Python modules and C++ worker-sync tests require Blackhole Galaxy/UBB; their exact worker GlobalSemaphore routes skip on the current single-chip Blackhole P100a.",
-    "The matmul reuse-mcast and contributed multicast programming-example kernels are exercised by binaries, not pytest."
+    "The matmul reuse-mcast and contributed multicast programming-example kernels are exercised by binaries, not pytest.",
+    "The newly inventoried TT-Train families use C++ operation tests and were not built or run during this static documentation reconciliation."
   ],
   "entries": [
     {
@@ -812,14 +861,14 @@
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln.cpp",
-      "status": "pending",
+      "status": "deferred",
       "inventory": "LN-SHARDED",
       "coverage": "audited",
       "result": "partial migration reverted; acknowledged signal-only and one-gate/multi-block gaps"
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln.cpp",
-      "status": "blocked",
+      "status": "deferred",
       "inventory": "LN-SHARDED",
       "coverage": "audited",
       "result": "partial migration reverted; mixed flag/counter phase gap"
@@ -879,6 +928,55 @@
       "inventory": "MOVE-OVERLAP ROW_MAJOR",
       "coverage": "high; fresh-JIT 0/19-hit route, complete Move inventory, program cache, and matched performance",
       "result": "API v11 at a25603ae2c0; full inventory 136 passed / 128 intentional skips; ROW_MAJOR -0.02%"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/coordinator_single_row_multi_core.cpp",
+      "status": "migrated",
+      "inventory": "SORT-SINGLE-ROW-CONTROL",
+      "coverage": "complete with exact fresh-cache coordinator/reader/writer JIT evidence",
+      "result": "API v14 ledger stamp; 7 long-tensor cases and 2 multi-row deadlock cases passed"
+    },
+    {
+      "kernel": "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp",
+      "status": "migrated",
+      "inventory": "SORT-SINGLE-ROW-CONTROL",
+      "coverage": "complete with exact fresh-cache coordinator/reader/writer JIT evidence",
+      "result": "API v14 ledger stamp; 7 long-tensor cases and 2 multi-row deadlock cases passed"
+    },
+    {
+      "kernel": "models/demos/deepseek_v3_b1/micro_ops/sampling/kernels/sampling_kernel.cpp",
+      "status": "migrated",
+      "inventory": "DEEPSEEK-B1-SAMPLING",
+      "coverage": "device-verified on single-chip Blackhole",
+      "result": "API v14 ledger stamp; four 101-core argmax nodes passed, and the top-k barrier completed with the unchanged raw failure signature"
+    },
+    {
+      "kernel": "tt-train/sources/ttml/metal/ops/frobenius_normalize/device/kernels/dataflow/reader_frobenius_normalize.cpp",
+      "status": "deferred",
+      "inventory": "TT-TRAIN-FROBENIUS-NORMALIZE",
+      "coverage": "discovery-only",
+      "result": "Added by repository-wide recall; migration and TT-Train dependency decision not authorized"
+    },
+    {
+      "kernel": "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/mcast_sender.cpp",
+      "status": "deferred",
+      "inventory": "TT-TRAIN-K-SPLIT-GRAM-MATMUL",
+      "coverage": "discovery-only",
+      "result": "Added by repository-wide recall; sender and both receiver companions form one atomic protocol unit"
+    },
+    {
+      "kernel": "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/mcast_receiver.cpp",
+      "status": "deferred",
+      "inventory": "TT-TRAIN-K-SPLIT-GRAM-MATMUL",
+      "coverage": "discovery-only",
+      "result": "Pure receiver companion added by factory traversal"
+    },
+    {
+      "kernel": "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/mcast_receiver_writer.cpp",
+      "status": "deferred",
+      "inventory": "TT-TRAIN-K-SPLIT-GRAM-MATMUL",
+      "coverage": "discovery-only",
+      "result": "Receiver/writer companion added by factory traversal"
     }
   ],
   "baseline_note": "Baseline moved by the fully automated 2026-08-14 rebase from 4a1d6a97ca9bd4efabd0ad6115fcb30538851c90 to dc9282be7d5e9d5a4b9137c1bf327de8d923e18e. The API-independent inventory map is retained; the 12 migrated kernels touched by the move carry needs_recheck in ledger.json. Focused post-rebase probes passed on single-chip Blackhole p100a; complete mapped verification remains an apply-dm-helper follow-up."

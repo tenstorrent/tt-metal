@@ -1,6 +1,6 @@
 # reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp — annotation
 
-> Current v9 status: **blocked and exactly at `llk_helper_library`**. The
+> Historical v9 checkpoint status: **blocked and exactly at `llk_helper_library`**. The
 > protocol needs independent data/signal loopback behavior and sender-side
 > ready participation; the migrated numeric regression passed after rollback.
 

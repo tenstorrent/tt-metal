@@ -1,6 +1,6 @@
 # reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp (RECEIVE side) — CLEANEST EXEMPLAR
 
-> Current v9 migration status (2026-07-30): **blocked and restored to
+> Historical v9 migration checkpoint (2026-07-30): **blocked and restored to
 > `llk_helper_library`** with its sender. This receiver has no independent
 > helper defect, but migration conventions prohibit a half-raw, half-helper
 > protocol pair. The baseline-restored pair passed all 136 mapped cases; that

@@ -1,6 +1,6 @@
 # reader_mcast_sender_unary_sharded_ln — v7→v8 remigration
 
-> Historical v8 log. Current v9 status: **blocked and restored to baseline**;
+> Historical v8/v9 record. At the v9 checkpoint: **blocked and restored to baseline**;
 > acknowledged signal-only and one-gate/multi-block streaming are unsupported.
 
 **Tier:** 0b (layernorm sharded), v7→v8 REMIGRATION run.

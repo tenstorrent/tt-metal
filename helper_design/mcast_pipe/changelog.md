@@ -6,6 +6,27 @@ feedback round lands.
 
 ---
 
+## Round 37 — helper-design document and inventory reconciliation (2026-08-23)
+
+- Audited every helper-design artifact and separated live guidance from dated
+  provenance. Archived the superseded rollout plan, aborted-rebase conflict
+  record, initial intent, and helper proposal; added directory-level historical
+  status guidance and corrected misleading v9-as-current wording.
+- Repository-wide primitive recall found four omitted TT-Train kernel faces:
+  the Frobenius normalization hybrid reader and the K-split Gram Matmul sender,
+  receiver, and receiver-writer. Added them as deferred rows and classified the
+  shared TT-Train dataflow utility as support-only. Inventory is now 108 kernels:
+  31 migrated at v14, 2 pending, and 75 deferred; host-binding counts remain
+  27 migrated and 5 pending.
+- Repaired the test map with missing Sort and DeepSeek sampling kernel records,
+  the DeepSeek sampling binding, and discovery-only TT-Train factories/tests.
+  Corrected the live feedback handoff: MCAST-007 is complete, while
+  GROUP-ATTN-MATMUL-001 and SDPA-DECODE-001 remain open.
+- Helper API and production source are unchanged at v14. This was a static
+  reconciliation; no build or device test was required or performed.
+
+---
+
 ## Round 36 — object-qualified kernel offset chaining (2026-08-23)
 
 - Kept both `McastArgs::next_*_args_offset()` functions static constexpr while

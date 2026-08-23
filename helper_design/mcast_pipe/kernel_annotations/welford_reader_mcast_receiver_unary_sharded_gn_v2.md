@@ -1,6 +1,6 @@
 # welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp (RECEIVE side)
 
-> Current v9 status: **migrated** in `ab73b1f5c73`; the Welford parameterized
+> Historical v9 checkpoint status: **migrated** in `ab73b1f5c73`; the Welford parameterized
 > inventory passed 116 cases with 8 expected skips.
 
 Path: ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp

@@ -1,5 +1,5 @@
 # reader_bmm_tile_layout_in0_receiver.cpp — v7
-> Historical v7/v8 log. Current v9 status: **blocked and at baseline** because
+> Historical v7/v8/v9 record. At the v9 checkpoint: **blocked and at baseline** because
 > the helper cannot own the `VALID` / `IGNORE_BATCH` control exchange.
 
 - Group G4 matmul, receiver. Commit 85cc48b1373d2f6d0faf48ad3665de9a62ebed5d. migrated v7 — PASS.

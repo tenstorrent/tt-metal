@@ -1,6 +1,6 @@
 # reader_bmm_tile_layout_in1_receiver_writer_padding.cpp — annotation
 
-> Current v9 status: **migrated** in `ab73b1f5c73`; validated by the complete
+> Historical v9 checkpoint status: **migrated** in `ab73b1f5c73`; validated by the complete
 > 302-pass/188-expected-skip shared inventory and exact receiver JIT evidence.
 
 Role: **RECEIVER half** (reader portion) + unrelated WRITER portion. Object API. Pairs with in1_sender_writer_padding.

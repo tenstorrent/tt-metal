@@ -1,4 +1,10 @@
-DERIVED FROM: current mcast_pipe API v11, migration/ledger.json, kernel_annotations/*, migration_audit/*, design/hazards_catalog.md, and changelog.md
+DERIVED FROM: the materialized semantic API through v11, the then-current ledger and inventory evidence, design/hazards_catalog.md, and changelog.md
+
+> **Status (2026-08-23): historical semantic design evidence.** API v12-v14
+> changed wire ownership, optional-block encoding, and argument-offset
+> composition without reopening the topology and protocol conclusions below.
+> Use the v14 helper headers and `migration/ledger.json` for current signatures
+> and rollout state.
 
 # Step ★ — API Feasibility (`mcast_pipe`)
 
@@ -49,7 +55,7 @@ suite passed. The API-v9 feasibility claim is now production-verified.
 
 ---
 
-> **Current v9 addendum (2026-07-30):** `SenderPipe` now selects its completion
+> **API-v9 addendum at the 2026-07-30 checkpoint:** `SenderPipe` selects its completion
 > fence from actual loopback participation: ACKed for a real sender loopback
 > copy and SENT for remote-only traffic. The helper still infers loopback from
 > `sender_in_rect && src != dst` and derives fan-out from
@@ -110,7 +116,7 @@ Only channel 1 is the recurring multicast block. Channels 2 and 3 are sort's sur
 protocol and remain explicit `Semaphore::up` / `wait(N)` / `set(0)` operations. The helper need not
 absorb them to preserve behavior.
 
-### Pattern map onto the current v9 API
+### Pattern map onto the API-v9 snapshot
 
 | Face / binding | Required behavior | API-v9 formulation | Verdict |
 |---|---|---|---|

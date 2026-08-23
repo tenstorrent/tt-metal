@@ -30,7 +30,7 @@ Production diff: kernel **+18 / -19**; atomic unit **+77 / -75**.
 
 ## Historical v8 record
 
-> Historical v8 log. Current v9 status: **blocked and at baseline** because the
+> Historical v8/v9 record. At the v9 checkpoint: **blocked and at baseline** because the
 > paired no-handshake receiver initialization is not race-free.
 
 - Group: G2 topk / Tier 0d

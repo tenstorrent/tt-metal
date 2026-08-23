@@ -1,6 +1,6 @@
 # reader_mcast_receiver_unary_sharded_ln.cpp (RECEIVE side)
 
-> Current v9 status: **blocked and exactly at `llk_helper_library`** with its
+> Historical v9 checkpoint status: **blocked and exactly at `llk_helper_library`** with its
 > sender. The shared flag/counter multi-phase protocol is unsupported.
 
 Path: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln.cpp
