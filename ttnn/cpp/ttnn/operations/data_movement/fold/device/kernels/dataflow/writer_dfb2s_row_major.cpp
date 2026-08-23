@@ -8,21 +8,21 @@
 #include "experimental/kernel_args.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
-void kernel_main() {
+template <
+    uint32_t pixel_size,
+    uint32_t aligned_pixel_size,
+    uint32_t aligned_dst_pixel_size,
+    uint32_t aligned_chunk_size,
+    uint32_t aligned_row_size,
+    uint32_t stride_h,
+    uint32_t stride_w,
+    uint32_t num_dst_rows,
+    uint32_t num_dst_cols,
+    uint32_t dst_row_offset,
+    uint32_t element_size,
+    uint32_t is_reader>
+TT_KERNEL void fold_sharded() {
     // src0 / dst0 are borrowed-memory DFBs.
-    constexpr uint32_t pixel_size = get_arg(args::pixel_size);
-    constexpr uint32_t aligned_pixel_size = get_arg(args::aligned_pixel_size);
-    constexpr uint32_t aligned_dst_pixel_size = get_arg(args::aligned_dst_pixel_size);
-    constexpr uint32_t aligned_chunk_size = get_arg(args::aligned_chunk_size);
-    constexpr uint32_t aligned_row_size = get_arg(args::aligned_row_size);
-    constexpr uint32_t stride_h = get_arg(args::stride_h);
-    constexpr uint32_t stride_w = get_arg(args::stride_w);
-    constexpr uint32_t num_dst_rows = get_arg(args::num_dst_rows);
-    constexpr uint32_t num_dst_cols = get_arg(args::num_dst_cols);
-    constexpr uint32_t dst_row_offset = get_arg(args::dst_row_offset);
-    constexpr uint32_t element_size = get_arg(args::element_size);
-    constexpr uint32_t is_reader = get_arg(args::is_reader);
-
     constexpr uint32_t dst_row_size = num_dst_cols * aligned_dst_pixel_size;
     constexpr uint32_t cols_per_core = num_dst_cols / 2;
     constexpr uint32_t process_cols = cols_per_core + ((num_dst_cols % 2) & is_reader);

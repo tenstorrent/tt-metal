@@ -10,22 +10,20 @@
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
-void kernel_main() {
-    constexpr uint32_t input_width = get_arg(args::input_width);                      // Width of input tensor
-    constexpr uint32_t stride_height = get_arg(args::stride_height);                  // Vertical stride for fold
-    constexpr uint32_t stride_width = get_arg(args::stride_width);                    // Horizontal stride for fold
-    constexpr uint32_t stick_nbytes = get_arg(args::stick_nbytes);                    // Size of each stick in bytes
-    constexpr uint32_t aligned_stick_nbytes = get_arg(args::aligned_stick_nbytes);    // Aligned size of each stick
-    constexpr uint32_t tiles_per_channel_dim = get_arg(args::tiles_per_channel_dim);  // Tiles per channel dimension
-    constexpr uint32_t tiles_per_width_dim = get_arg(args::tiles_per_width_dim);      // Tiles per width dimension
-    constexpr uint32_t element_size = get_arg(args::element_size);                    // Size of each element in bytes
-
+template <
+    uint32_t input_width,            // Width of input tensor
+    uint32_t stride_height,          // Vertical stride for fold
+    uint32_t stride_width,           // Horizontal stride for fold
+    uint32_t stick_nbytes,           // Size of each stick in bytes
+    uint32_t aligned_stick_nbytes,   // Aligned size of each stick
+    uint32_t tiles_per_channel_dim,  // Tiles per channel dimension
+    uint32_t tiles_per_width_dim>    // Tiles per width dimension
+TT_KERNEL void writer(
     // Runtime arguments - Processing parameters
-    const uint32_t start_block_id = get_arg(args::start_block_id);      // Starting block ID for processing
-    const uint32_t num_blocks = get_arg(args::num_blocks);              // Number of blocks to process
-    uint32_t patch_height_offset = get_arg(args::patch_height_offset);  // Current height offset within patch
-    uint32_t output_offset = get_arg(args::output_offset);              // Current output offset
-
+    uint32_t start_block_id,       // Starting block ID for processing
+    uint32_t num_blocks,           // Number of blocks to process
+    uint32_t patch_height_offset,  // Current height offset within patch
+    uint32_t output_offset) {      // Current output offset
     // Calculated constants
     constexpr uint32_t output_width = input_width / stride_width;  // Output tensor width
     constexpr uint32_t patch_size = stride_height * stride_width;  // Total elements per patch

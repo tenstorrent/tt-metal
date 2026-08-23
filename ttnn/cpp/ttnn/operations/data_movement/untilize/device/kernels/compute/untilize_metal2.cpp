@@ -13,10 +13,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "experimental/kernel_args.h"
 
-void kernel_main() {
-    constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
-    constexpr uint32_t per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
-
+template <uint32_t per_core_block_cnt, uint32_t per_core_block_tile_cnt>
+TT_KERNEL void untilize() {
     compute_kernel_hw_startup(dfb::src, dfb::out);
     compute_kernel_lib::untilize<
         per_core_block_tile_cnt,
