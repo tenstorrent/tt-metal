@@ -116,19 +116,11 @@ class GRPOConfig:
     max_completion_length: int
     num_generations: int
     warmup_steps: int
-    # Logging / reporting options. These match TRL's GRPOConfig names where
-    # applicable but the accepted values are intentionally narrower in this
-    # framework — ``report_to`` accepts ONLY the strings ``"none"`` or
-    # ``"wandb"`` (no list form, no other backends). ``log_completions`` gates
-    # whether the built-in GRPOMonitor prints a sample of completions per step;
-    # ``num_completions_to_print`` bounds how many.
     log_completions: bool = False
     num_completions_to_print: int = 0
     report_to: str = "none"
     # Optional wandb run name, mirrored from TRL's ``TrainingArguments.run_name``.
-    # ``None`` lets wandb auto-generate a name. Only consulted when
-    # ``report_to == "wandb"`` and the built-in GRPOMonitor calls ``wandb.init``
-    # itself (i.e. the caller hasn't already called it). Project / entity / mode
+    # ``None`` lets wandb auto-generate a name. Project / entity / mode
     # come from the ``WANDB_PROJECT`` / ``WANDB_ENTITY`` / ``WANDB_MODE`` env
     # vars, matching TRL + transformers conventions.
     run_name: Optional[str] = None
@@ -309,18 +301,8 @@ class GRPOMonitor(TrainerCallback):
     # -- lifecycle -----------------------------------------------------------
 
     def on_train_begin(self, trainer: Any) -> None:
-        # Snapshot the callback class names present at train-begin so the CSV
-        # header lists a ``<ClassName>_time_s`` column per callback. Callbacks
-        # added or removed mid-training won't grow the header.
         callback_time_columns = [f"{type(cb).__name__}_time_s" for cb in trainer.callbacks]
 
-        # Fold in any scalar columns callbacks already wrote to
-        # ``trainer.metrics`` in their own ``on_train_begin`` (e.g. an eval
-        # callback seeding ``eval_similarity``). The trainer inits
-        # ``self.metrics`` to ``{}`` in ``__init__``, so this is a no-op when
-        # no earlier callback populated it. Ordering guarantee: the trainer
-        # calls callbacks in list order and auto-appends the monitor last, so
-        # user callbacks always get first dibs on ``trainer.metrics``.
         preseeded: list[str] = []
         seen = set(_BASE_COLUMNS) | set(callback_time_columns) | _NON_CSV_KEYS
         for key in getattr(trainer, "metrics", {}) or {}:
@@ -339,12 +321,6 @@ class GRPOMonitor(TrainerCallback):
             self._start_wandb(trainer)
 
     def on_step_end(self, trainer: Any, step: int, *args: Any, **kwargs: Any) -> None:
-        # Read the mutable metrics dict the trainer exposes rather than kwargs
-        # so callbacks earlier in the list can inject additional columns (e.g.
-        # an EvalCallback writing ``trainer.metrics["eval_similarity"]``). The
-        # trainer builds ``self.metrics`` immediately before firing callbacks
-        # and populates the base entries from ``kwargs``; the two are the same
-        # dict, but reading from ``trainer.metrics`` documents the contract.
         metrics: dict[str, Any] = getattr(trainer, "metrics", None) or dict(kwargs)
 
         self._log_console(step, metrics)
@@ -354,9 +330,6 @@ class GRPOMonitor(TrainerCallback):
 
     def on_train_end(self, trainer: Any) -> None:
         logging.info("Training complete.")
-        # Only finish runs we opened. If the caller called ``wandb.init``
-        # themselves before constructing the trainer, they own the run's
-        # lifecycle (matching the TRL / transformers WandbCallback contract).
         if self._wandb_active and self._wandb_owned:
             _wandb.finish()
 
@@ -399,9 +372,6 @@ class GRPOMonitor(TrainerCallback):
 
     def _log_console(self, step: int, metrics: dict[str, Any]) -> None:
         nan = float("nan")
-        # ``logging.basicConfig`` in the example scripts already prepends a
-        # timestamp; keep the payload identical to the pre-refactor format so
-        # existing log-parsing tooling doesn't break.
         logging.info(
             "Step %d | Reward: %.4f | Len: %.2f (min %d, max %d) tokens | Step: %.2fs | Gen: %.2fs",
             step,
@@ -447,9 +417,6 @@ class GRPOMonitor(TrainerCallback):
         completions: Iterable[str] = metrics.get("completions", []) or []
         prompts: Iterable[str] = metrics.get("prompts", []) or []
         rewards: Iterable[float] = metrics.get("rewards", []) or []
-        # Zip stops at the shortest, so a short ``rewards`` list quietly limits
-        # the number of rows we print — that's the correct behaviour when a
-        # caller only forwarded a truncated sample.
         for i, (prompt, completion, reward) in enumerate(zip(prompts, completions, rewards)):
             if i >= self._num_completions_to_print:
                 break
@@ -525,8 +492,6 @@ def _as_int(value: Any) -> int:
 
 
 def _format_cell(value: Any) -> Any:
-    # Preserve numeric types where possible; fall back to str() for anything
-    # exotic so the CSV row never blows up on ``csv.writer``.
     if isinstance(value, (int, float, str)) or value is None:
         return value
     return str(value)
@@ -747,21 +712,10 @@ class GRPOTrainer:
         # (notably the built-in ``GRPOMonitor``) read the merged view.
         # Initialised empty; the trainer rebuilds it at the top of each step.
         self.metrics: dict = {}
-        # Per-callback wall-clock time accumulated during the CURRENT optimizer
-        # step, keyed as ``<ClassName>_time_s``. Reset at the top of every step
-        # and updated in place as each hook fires (``on_before_optimizer_step``,
-        # ``on_step_end``, ``on_save``). Because ``GRPOMonitor`` is auto-appended
-        # last, by the time it reads ``trainer.metrics`` in its own
-        # ``on_step_end`` the dict already contains this step's total for every
-        # earlier callback. The monitor's OWN ``on_step_end`` time is measured
-        # after it returns and so cannot appear in the row it just wrote — that
-        # column reflects only what was accumulated for the monitor before its
-        # ``on_step_end`` (typically 0, since the monitor does not override the
-        # earlier hooks).
         self._callback_times: dict = {}
 
         # Auto-append the framework's default GRPOMonitor unless the config
-        # opts out. Placed LAST so any user-supplied callbacks (e.g. eval)
+        # opts out. Placed last so any user-supplied callbacks (e.g. eval)
         # get a chance to populate ``self.metrics`` before the monitor writes
         # a row.
         if not self.config.disable_default_monitor:
