@@ -335,12 +335,16 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
             block_start_offset == 0 ? tt::tt_metal::experimental::ProducerOf(output_dfb_name, "out")
                                     : tt::tt_metal::experimental::ConsumerOf(output_dfb_name, "out"));
         if (block_start_offset == 0) {
+            // Gen1 plain-CB compatibility: reader0 owns reserve/push/wait/pop bookkeeping for the
+            // resident input shard, so it is the declared producer even though gather also reads it.
             auto binding = tt::tt_metal::experimental::ProducerOf(input_dfb_name, "src");
             if (skip_untilize) {
                 binding.accessor_aliases.push_back("untilize_out");
             }
             reader.dfb_bindings.push_back(std::move(binding));
         } else if (skip_untilize) {
+            // Reader1 only reads the resident pointer and deliberately performs no pop; its consumer
+            // role completes the legacy shared-CB topology without adding storage or data movement.
             auto binding = tt::tt_metal::experimental::ConsumerOf(input_dfb_name, "src");
             binding.accessor_aliases.push_back("untilize_out");
             reader.dfb_bindings.push_back(std::move(binding));
