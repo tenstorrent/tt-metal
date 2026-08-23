@@ -321,10 +321,18 @@ void kernel_main() {
             }
         }
         // Finalize the resident last group before loading the others.
+#ifdef WELFORD_SFPU_LOCAL_COMBINE
+        two_pass_stats_finalize_and_combine_to_face<num_groups == 1>(mean_dst, active_group, sfpu_two_pass_reciprocal);
+#else
         two_pass_stats_finalize_to_face<num_groups == 1>(mean_dst, active_group, sfpu_two_pass_reciprocal);
+#endif
         for (std::uint32_t g = 0; g + 1 < num_groups; ++g) {
             welford_restore_state(mean_dst, g);
+#ifdef WELFORD_SFPU_LOCAL_COMBINE
+            two_pass_stats_finalize_and_combine_to_face<false>(mean_dst, g, sfpu_two_pass_reciprocal);
+#else
             two_pass_stats_finalize_to_face<false>(mean_dst, g, sfpu_two_pass_reciprocal);
+#endif
         }
 
         tile_regs_commit();

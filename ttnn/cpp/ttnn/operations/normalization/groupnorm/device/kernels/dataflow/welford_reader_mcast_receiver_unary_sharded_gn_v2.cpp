@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "welford_combine.h"
@@ -13,16 +14,16 @@
 #include "api/core_local_mem.h"
 
 void kernel_main() {
-    constexpr uint32_t reduce_receiver_semaphore_id = get_compile_time_arg_val(0);
-    constexpr uint32_t reduce_sender_semaphore_id = get_compile_time_arg_val(1);
+    constexpr std::uint32_t reduce_receiver_semaphore_id = get_compile_time_arg_val(0);
+    constexpr std::uint32_t reduce_sender_semaphore_id = get_compile_time_arg_val(1);
 
-    constexpr uint32_t num_batches = get_compile_time_arg_val(2);
+    constexpr std::uint32_t num_batches = get_compile_time_arg_val(2);
 
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(3);
-    const uint32_t per_core_N_bytes = get_compile_time_arg_val(4);
-    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(5);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(6);
-    constexpr uint32_t tile_height = get_compile_time_arg_val(7);
+    constexpr std::uint32_t per_core_N = get_compile_time_arg_val(3);
+    const std::uint32_t per_core_N_bytes = get_compile_time_arg_val(4);
+    const std::uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(5);
+    constexpr std::uint32_t per_core_M = get_compile_time_arg_val(6);
+    constexpr std::uint32_t tile_height = get_compile_time_arg_val(7);
 
     // These are numbers in absolute terms, on a per group, per batch without tiling
     constexpr uint32_t block_hw = get_compile_time_arg_val(8);
@@ -31,15 +32,15 @@ void kernel_main() {
     // When set, stats CBs hold fp32; the Welford combine reads/writes them as float not bf16.
     constexpr bool stats_is_fp32 = get_compile_time_arg_val(11) != 0;
 
-    const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(0);
-    const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(1);
+    const std::uint32_t mcast_sender_noc_x = get_arg_val<std::uint32_t>(0);
+    const std::uint32_t mcast_sender_noc_y = get_arg_val<std::uint32_t>(1);
 
-    constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
-    constexpr uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
-    constexpr uint32_t dfb_in0_id = tt::CBIndex::c_0;
-    constexpr uint32_t dfb_repack_id = tt::CBIndex::c_11;
-    constexpr uint32_t dfb_repack_out_id = tt::CBIndex::c_12;
-    constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
+    constexpr std::uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
+    constexpr std::uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
+    constexpr std::uint32_t dfb_in0_id = tt::CBIndex::c_0;
+    constexpr std::uint32_t dfb_repack_id = tt::CBIndex::c_11;
+    constexpr std::uint32_t dfb_repack_out_id = tt::CBIndex::c_12;
+    constexpr std::uint32_t dfb_out0_id = tt::CBIndex::c_16;
 
     Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
@@ -51,7 +52,7 @@ void kernel_main() {
     DataflowBuffer dfb_repack_out(dfb_repack_out_id);
     DataflowBuffer dfb_out0(dfb_out0_id);
 
-    constexpr uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
+    constexpr std::uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
 
     // This is the stride between two consecutive local means/variances in the dfb_ex_partial
     constexpr uint32_t local_stride = 2;
@@ -62,16 +63,16 @@ void kernel_main() {
     using stats_write_t = std::conditional_t<stats_is_fp32, float, uint16_t>;
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
-    uint32_t in0_l1_read_addr = dfb_in0.get_read_ptr();
-    uint32_t src_addr_in0 = in0_l1_read_addr;
+    std::uint32_t in0_l1_read_addr = dfb_in0.get_read_ptr();
+    std::uint32_t src_addr_in0 = in0_l1_read_addr;
     UnicastEndpoint self_ep;
-    for (uint32_t m = 0; m < per_core_M; ++m) {
+    for (std::uint32_t m = 0; m < per_core_M; ++m) {
         dfb_repack.reserve_back(per_core_N);
-        uint32_t l1_write_addr_repack = dfb_repack.get_write_ptr();
-        for (uint32_t i = 0; i < tile_height; ++i) {
+        std::uint32_t l1_write_addr_repack = dfb_repack.get_write_ptr();
+        for (std::uint32_t i = 0; i < tile_height; ++i) {
             noc.async_read(
                 self_ep,
-                CoreLocalMem<uint32_t>(l1_write_addr_repack),
+                CoreLocalMem<std::uint32_t>(l1_write_addr_repack),
                 per_core_N_bytes,
                 {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
                 {});
@@ -83,7 +84,7 @@ void kernel_main() {
     }
 #endif
 
-    for (uint32_t i = 0; i < num_batches; ++i) {
+    for (std::uint32_t i = 0; i < num_batches; ++i) {
         // Read mean and variance arrays from dfb_ex_partial, then combine using Welford
         // wait for local data ready
         dfb_ex_partial.wait_front(2);
@@ -98,8 +99,16 @@ void kernel_main() {
             auto p_local_means = reinterpret_cast<stats_read_t*>(local_means_ptr);
             auto p_local_vars = reinterpret_cast<stats_read_t*>(local_vars_ptr);
 
-            auto local_result =
+#ifdef WELFORD_SFPU_LOCAL_COMBINE
+            const WelfordStats<std::remove_cv_t<stats_read_t>> local_result = {
+                .mean = p_local_means[0],
+                .variance = p_local_vars[0],
+                .count = block_hw * tile_width * tile_width,
+            };
+#else
+            const auto local_result =
                 combine_welford_stats<tile_width, block_hw * tile_width, local_stride>(p_local_means, p_local_vars);
+#endif
 
             // Write this to dfb_ex_global
             auto p_global_means = reinterpret_cast<volatile stats_write_t*>(global_means_ptr);
@@ -125,16 +134,16 @@ void kernel_main() {
     }
 
 #if defined(READER_REPACK) and defined(UNTILIZE_OUT)
-    uint32_t l1_write_addr_repack = dfb_out0.get_write_ptr();
-    for (uint32_t m = 0; m < per_core_M; ++m) {
+    std::uint32_t l1_write_addr_repack = dfb_out0.get_write_ptr();
+    for (std::uint32_t m = 0; m < per_core_M; ++m) {
         dfb_repack_out.wait_front(per_core_N);
-        uint32_t in0_l1_read_addr = dfb_repack_out.get_read_ptr();
-        uint32_t src_addr_in0 = in0_l1_read_addr;
+        std::uint32_t in0_l1_read_addr = dfb_repack_out.get_read_ptr();
+        std::uint32_t src_addr_in0 = in0_l1_read_addr;
         UnicastEndpoint self_ep;
-        for (uint32_t i = 0; i < tile_height; ++i) {
+        for (std::uint32_t i = 0; i < tile_height; ++i) {
             noc.async_read(
                 self_ep,
-                CoreLocalMem<uint32_t>(l1_write_addr_repack),
+                CoreLocalMem<std::uint32_t>(l1_write_addr_repack),
                 per_core_N_bytes,
                 {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
                 {});

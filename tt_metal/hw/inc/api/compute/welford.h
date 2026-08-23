@@ -133,6 +133,14 @@ ALWI void two_pass_stats_finalize_to_face(
     MATH((llk_math_two_pass_sfpu_store_mean_var_to_dst_raw<dual_m2>(mean_dst_idx, group_id, reciprocal_bits)));
 }
 
+#ifdef WELFORD_SFPU_LOCAL_COMBINE
+template <bool dual_m2 = true>
+ALWI void two_pass_stats_finalize_and_combine_to_face(
+    std::uint32_t mean_dst_idx, std::uint32_t group_id, std::uint32_t reciprocal_bits) {
+    MATH((llk_math_two_pass_sfpu_store_combined_mean_var_to_dst_raw<dual_m2>(mean_dst_idx, group_id, reciprocal_bits)));
+}
+#endif
+
 /**
  * @brief Performs a Welford's online algorithm update for mean and m2 on a tile in the DST register
  *

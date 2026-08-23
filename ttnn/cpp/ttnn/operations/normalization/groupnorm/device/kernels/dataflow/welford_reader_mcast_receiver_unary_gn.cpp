@@ -15,52 +15,52 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t reduce_receiver_semaphore_id =
+    constexpr std::uint32_t reduce_receiver_semaphore_id =
         get_named_compile_time_arg_val("reduce_receiver_semaphore_id");
-    constexpr uint32_t reduce_sender_semaphore_id = get_named_compile_time_arg_val("reduce_sender_semaphore_id");
+    constexpr std::uint32_t reduce_sender_semaphore_id = get_named_compile_time_arg_val("reduce_sender_semaphore_id");
 
-    constexpr uint32_t num_batch_group = get_named_compile_time_arg_val("num_batch_group");
-    constexpr uint32_t num_batches = get_named_compile_time_arg_val("num_batches");
-    constexpr uint32_t num_groups = num_batch_group / num_batches;
+    constexpr std::uint32_t num_batch_group = get_named_compile_time_arg_val("num_batch_group");
+    constexpr std::uint32_t num_batches = get_named_compile_time_arg_val("num_batches");
+    constexpr std::uint32_t num_groups = num_batch_group / num_batches;
 
-    constexpr uint32_t per_core_N = get_named_compile_time_arg_val("per_core_N");
-    const uint32_t per_core_N_bytes = get_named_compile_time_arg_val("per_core_N_bytes");
-    const uint32_t per_core_N_bytes_with_stride = get_named_compile_time_arg_val("per_core_N_bytes_with_stride");
-    constexpr uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
-    constexpr uint32_t tile_height = get_named_compile_time_arg_val("TILE_HEIGHT");
-    constexpr uint32_t tile_width = get_named_compile_time_arg_val("TILE_WIDTH");
+    constexpr std::uint32_t per_core_N = get_named_compile_time_arg_val("per_core_N");
+    const std::uint32_t per_core_N_bytes = get_named_compile_time_arg_val("per_core_N_bytes");
+    const std::uint32_t per_core_N_bytes_with_stride = get_named_compile_time_arg_val("per_core_N_bytes_with_stride");
+    constexpr std::uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
+    constexpr std::uint32_t tile_height = get_named_compile_time_arg_val("TILE_HEIGHT");
+    constexpr std::uint32_t tile_width = get_named_compile_time_arg_val("TILE_WIDTH");
 
-    constexpr uint32_t block_h = get_named_compile_time_arg_val("block_h");
-    constexpr uint32_t block_w = get_named_compile_time_arg_val("block_w");
+    constexpr std::uint32_t block_h = get_named_compile_time_arg_val("block_h");
+    constexpr std::uint32_t block_w = get_named_compile_time_arg_val("block_w");
 
-    constexpr uint32_t num_tiles_per_batch = get_named_compile_time_arg_val("num_tiles_per_batch");
+    constexpr std::uint32_t num_tiles_per_batch = get_named_compile_time_arg_val("num_tiles_per_batch");
 
-    constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
+    constexpr std::uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
     // These are numbers in absolute terms, on a per batch, per group, per core basis without tiling
-    constexpr uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
-    constexpr uint32_t num_rows_per_group = get_named_compile_time_arg_val("num_rows_per_group");
+    constexpr std::uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
+    constexpr std::uint32_t num_rows_per_group = get_named_compile_time_arg_val("num_rows_per_group");
 
     constexpr auto src0_args = TensorAccessorArgs<0>();
 
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start_id = get_arg_val<uint32_t>(2);
-    const uint32_t num_channels_tiles = get_arg_val<uint32_t>(4);
+    const std::uint32_t src_addr = get_arg_val<std::uint32_t>(0);
+    const std::uint32_t start_id = get_arg_val<std::uint32_t>(2);
+    const std::uint32_t num_channels_tiles = get_arg_val<std::uint32_t>(4);
 
-    const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(5);
-    const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(6);
+    const std::uint32_t mcast_sender_noc_x = get_arg_val<std::uint32_t>(5);
+    const std::uint32_t mcast_sender_noc_y = get_arg_val<std::uint32_t>(6);
 
-    constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
-    constexpr uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
-    constexpr uint32_t dfb_in0_id = tt::CBIndex::c_0;
-    constexpr uint32_t dfb_repack_id = tt::CBIndex::c_26;
-    constexpr uint32_t dfb_repack_out_id = tt::CBIndex::c_31;
-    constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
+    constexpr std::uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
+    constexpr std::uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
+    constexpr std::uint32_t dfb_in0_id = tt::CBIndex::c_0;
+    constexpr std::uint32_t dfb_repack_id = tt::CBIndex::c_26;
+    constexpr std::uint32_t dfb_repack_out_id = tt::CBIndex::c_31;
+    constexpr std::uint32_t dfb_out0_id = tt::CBIndex::c_16;
     // Welford-fp32 alias for dfb_in0. Shares SRAM with dfb_in0 but has its own buffer index
     // configured with UnpackToDestFp32, plus its own read/write pointers.
     // The Welford section of compute reads the alias to get full fp32 into DEST, while later
     // FPU consumers read dfb_in0 directly. When welford_fp32_alias is false, cb_in0_welford_id
     // == cb_in0_id and the gated pushes below are skipped.
-    constexpr uint32_t dfb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
+    constexpr std::uint32_t dfb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
     // When set, stats CBs hold fp32; the Welford combine reads/writes them as float not bf16.
     constexpr bool stats_is_fp32 = get_named_compile_time_arg_val("stats_is_fp32") != 0;
@@ -77,13 +77,13 @@ void kernel_main() {
     DataflowBuffer dfb_repack_out(dfb_repack_out_id);
     DataflowBuffer dfb_out0(dfb_out0_id);
 
-    constexpr uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
-    constexpr uint32_t src0_tile_bytes = get_tile_size(dfb_in0_id);
+    constexpr std::uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
+    constexpr std::uint32_t src0_tile_bytes = get_tile_size(dfb_in0_id);
 
     // This is the stride between two consecutive local means/variances in the dfb_ex_partial
-    constexpr uint32_t local_stride = 2;
-    constexpr uint32_t single_row_size_bytes = single_tile_size_bytes / tile_height;
-    constexpr uint32_t local_stride_per_group = local_stride * single_row_size_bytes;
+    constexpr std::uint32_t local_stride = 2;
+    constexpr std::uint32_t single_row_size_bytes = single_tile_size_bytes / tile_height;
+    constexpr std::uint32_t local_stride_per_group = local_stride * single_row_size_bytes;
 
     // Combine overload picked by pointer type: const float* -> fp32 combine, volatile uint16_t* -> bf16.
     using stats_read_t = std::conditional_t<stats_is_fp32, const float, volatile uint16_t>;
@@ -92,16 +92,16 @@ void kernel_main() {
     const auto src_a = TensorAccessor(src0_args, src_addr);
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
-    uint32_t in0_l1_read_addr = dfb_in0.get_read_ptr();
-    uint32_t src_addr_in0 = in0_l1_read_addr;
+    std::uint32_t in0_l1_read_addr = dfb_in0.get_read_ptr();
+    std::uint32_t src_addr_in0 = in0_l1_read_addr;
     UnicastEndpoint self_ep;
-    for (uint32_t m = 0; m < per_core_M; ++m) {
+    for (std::uint32_t m = 0; m < per_core_M; ++m) {
         dfb_repack.reserve_back(per_core_N);
-        uint32_t l1_write_addr_repack = dfb_repack.get_write_ptr();
-        for (uint32_t i = 0; i < tile_height; ++i) {
+        std::uint32_t l1_write_addr_repack = dfb_repack.get_write_ptr();
+        for (std::uint32_t i = 0; i < tile_height; ++i) {
             noc.async_read(
                 self_ep,
-                CoreLocalMem<uint32_t>(l1_write_addr_repack),
+                CoreLocalMem<std::uint32_t>(l1_write_addr_repack),
                 per_core_N_bytes,
                 {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
                 {});
@@ -113,24 +113,24 @@ void kernel_main() {
     }
 #endif
 
-    constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
-    uint32_t num_out_blocks_padded = num_out_blocks;
-    uint32_t extra_out_block = false;
-    uint32_t out_block_h_last = out_block_h_normal;
+    constexpr std::uint32_t out_block_h_normal = block_h / num_out_blocks;
+    std::uint32_t num_out_blocks_padded = num_out_blocks;
+    std::uint32_t extra_out_block = false;
+    std::uint32_t out_block_h_last = out_block_h_normal;
     if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
         num_out_blocks_padded++;
         out_block_h_last = block_h % num_out_blocks;
     }
 
-    uint32_t index_b_offset = 0;
-    for (uint32_t b = 0; b < num_batches; ++b) {
-        uint32_t mt_offset = 0;
-        constexpr uint32_t num_stats_passes = sfpu_two_pass_l1_replay ? 1 : 2;
-        for (uint32_t stats_pass = 0; stats_pass < num_stats_passes; ++stats_pass) {
+    std::uint32_t index_b_offset = 0;
+    for (std::uint32_t b = 0; b < num_batches; ++b) {
+        std::uint32_t mt_offset = 0;
+        constexpr std::uint32_t num_stats_passes = sfpu_two_pass_l1_replay ? 1 : 2;
+        for (std::uint32_t stats_pass = 0; stats_pass < num_stats_passes; ++stats_pass) {
             mt_offset = 0;
-            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                uint32_t out_block_h_actual;
+            for (std::uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+                std::uint32_t out_block_h_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
                 } else {
@@ -138,13 +138,13 @@ void kernel_main() {
                 }
 
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
-                for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
-                    for (uint32_t nt = 0; nt < per_core_N; ++nt) {
+                for (std::uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
+                    for (std::uint32_t nt = 0; nt < per_core_N; ++nt) {
                         dfb_in0.reserve_back(1);
-                        const uint32_t l1_write_addr = dfb_in0.get_write_ptr();
+                        const std::uint32_t l1_write_addr = dfb_in0.get_write_ptr();
                         noc.async_read(
                             src_a,
-                            CoreLocalMem<uint32_t>(l1_write_addr),
+                            CoreLocalMem<std::uint32_t>(l1_write_addr),
                             src0_tile_bytes,
                             {.page_id = start_id + index_b_offset + mt_offset + nt},
                             {});
@@ -169,15 +169,23 @@ void kernel_main() {
         auto global_means_ptr = dfb_ex_global.get_write_ptr();
         auto global_vars_ptr = global_means_ptr + single_tile_size_bytes;
 
-        for (uint32_t m = 0; m < num_groups; ++m) {
+        for (std::uint32_t m = 0; m < num_groups; ++m) {
             // Read mean and variance arrays from dfb_ex_partial, then combine using Welford
             auto p_local_means = reinterpret_cast<stats_read_t*>(local_means_ptr);
             auto p_local_vars = reinterpret_cast<stats_read_t*>(local_vars_ptr);
 
-            auto local_result = combine_welford_stats<
+#ifdef WELFORD_SFPU_LOCAL_COMBINE
+            const WelfordStats<std::remove_cv_t<stats_read_t>> local_result = {
+                .mean = p_local_means[0],
+                .variance = p_local_vars[0],
+                .count = num_channels_per_group * num_rows_per_group,
+            };
+#else
+            const auto local_result = combine_welford_stats<
                 tile_width,
                 num_channels_per_group * num_rows_per_group / tile_width,
                 local_stride>(p_local_means, p_local_vars);
+#endif
 
             // Write this to dfb_ex_global
             auto p_global_means = reinterpret_cast<volatile stats_write_t*>(global_means_ptr);
@@ -215,21 +223,21 @@ void kernel_main() {
 
         if constexpr (!sfpu_two_pass_l1_replay) {
             mt_offset = 0;
-            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                uint32_t out_block_h_actual;
+            for (std::uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+                std::uint32_t out_block_h_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
                 } else {
                     out_block_h_actual = out_block_h_normal;
                 }
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
-                for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
-                    for (uint32_t nt = 0; nt < per_core_N; ++nt) {
+                for (std::uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
+                    for (std::uint32_t nt = 0; nt < per_core_N; ++nt) {
                         dfb_in0.reserve_back(1);
-                        const uint32_t l1_write_addr = dfb_in0.get_write_ptr();
+                        const std::uint32_t l1_write_addr = dfb_in0.get_write_ptr();
                         noc.async_read(
                             src_a,
-                            CoreLocalMem<uint32_t>(l1_write_addr),
+                            CoreLocalMem<std::uint32_t>(l1_write_addr),
                             src0_tile_bytes,
                             {.page_id = start_id + index_b_offset + mt_offset + nt},
                             {});
@@ -253,16 +261,16 @@ void kernel_main() {
     }
 
 #if defined(READER_REPACK) and defined(UNTILIZE_OUT)
-    uint32_t l1_write_addr_repack = dfb_out0.get_write_ptr();
-    for (uint32_t m = 0; m < per_core_M; ++m) {
+    std::uint32_t l1_write_addr_repack = dfb_out0.get_write_ptr();
+    for (std::uint32_t m = 0; m < per_core_M; ++m) {
         dfb_repack_out.wait_front(per_core_N);
-        uint32_t in0_l1_read_addr = dfb_repack_out.get_read_ptr();
-        uint32_t src_addr_in0 = in0_l1_read_addr;
+        std::uint32_t in0_l1_read_addr = dfb_repack_out.get_read_ptr();
+        std::uint32_t src_addr_in0 = in0_l1_read_addr;
         UnicastEndpoint self_ep;
-        for (uint32_t i = 0; i < tile_height; ++i) {
+        for (std::uint32_t i = 0; i < tile_height; ++i) {
             noc.async_read(
                 self_ep,
-                CoreLocalMem<uint32_t>(l1_write_addr_repack),
+                CoreLocalMem<std::uint32_t>(l1_write_addr_repack),
                 per_core_N_bytes,
                 {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
                 {});

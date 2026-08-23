@@ -277,6 +277,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    const bool use_sfpu_local_combine =
+        use_welford && device->arch() == tt::ARCH::BLACKHOLE && fp32_dest_acc_en && tile_width == 32;
 
     // Float32 input requires fp32_dest_acc_en=true on both GroupNorm paths:
     //  - Welford: prerequisite for UnpackToDestFp32 (set below), which bypasses the unpacker's
@@ -604,6 +606,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         .initial_value = 0});
 
     std::map<std::string, std::string> reader_mcast_sender_defines;
+    if (use_sfpu_local_combine) {
+        reader_mcast_sender_defines["WELFORD_SFPU_LOCAL_COMBINE"] = "1";
+    }
     if (gamma.has_value()) {
         reader_mcast_sender_defines["FUSE_GAMMA"] = "1";
     }
@@ -893,6 +898,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     }
 
     std::map<std::string, std::string> eltwise_binary_defines;
+    if (use_sfpu_local_combine) {
+        eltwise_binary_defines["WELFORD_SFPU_LOCAL_COMBINE"] = "1";
+    }
     if (reader_repack_output) {
         eltwise_binary_defines["READER_REPACK"] = "1";
     }

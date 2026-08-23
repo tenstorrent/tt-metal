@@ -71,6 +71,16 @@ inline void llk_math_two_pass_sfpu_store_mean_var_to_dst_raw(
         ckernel::sfpu::_two_pass_store_mean_var_to_dst_raw_group_<dual_m2>, mean_dst_idx, group_id, reciprocal_bits);
 }
 
+template <bool dual_m2>
+inline void llk_math_two_pass_sfpu_store_combined_mean_var_to_dst_raw(
+    std::uint32_t mean_dst_idx, std::uint32_t group_id, std::uint32_t reciprocal_bits) {
+    _llk_math_welfords_sfpu_params_(
+        ckernel::sfpu::_two_pass_store_combined_mean_var_to_dst_raw_group_<dual_m2>,
+        mean_dst_idx,
+        group_id,
+        reciprocal_bits);
+}
+
 template <bool is_fp32_dest_acc_en>
 inline void llk_math_welfords_sfpu_reinit(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);

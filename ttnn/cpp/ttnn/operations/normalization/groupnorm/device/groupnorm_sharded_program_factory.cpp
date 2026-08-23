@@ -760,6 +760,15 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
+    const bool use_sfpu_local_combine =
+        use_welford && device->arch() == tt::ARCH::BLACKHOLE && fp32_dest_acc_en && tile_width == 32;
+    if (use_sfpu_local_combine) {
+        reader_mcast_sender_desc.defines.emplace_back("WELFORD_SFPU_LOCAL_COMBINE", "1");
+        if (has_receiver_kernel) {
+            reader_mcast_receiver_desc.defines.emplace_back("WELFORD_SFPU_LOCAL_COMBINE", "1");
+        }
+        eltwise_binary_defines["WELFORD_SFPU_LOCAL_COMBINE"] = "1";
+    }
 
     // Float32 input requires fp32_dest_acc_en=true on both GroupNorm paths:
     //  - Welford: prerequisite for UnpackToDestFp32 (set below), which bypasses the unpacker's

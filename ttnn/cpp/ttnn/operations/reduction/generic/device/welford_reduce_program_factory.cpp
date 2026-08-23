@@ -141,7 +141,12 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     //     Total work units = NC / reduce_batch_size = 96 / 8 = 12
     //     (one per (dim0, dim1) pair: 3 × 4 = 12).
 
-    const uint32_t reduce_batch_size = operation_attributes.reduce_batch_size;
+    const std::uint32_t reduce_batch_size = operation_attributes.reduce_batch_size;
+    const bool use_sfpu_leaf_combine = reduce_hw && device->arch() == tt::ARCH::BLACKHOLE && fp32_dest_acc_en &&
+                                       W % tile_width == 0 && static_cast<std::uint64_t>(W) * reduce_batch_size >= 128;
+    const bool use_full_partial_stats_tiles = reduce_hw && !use_sfpu_leaf_combine &&
+                                              device->arch() == tt::ARCH::BLACKHOLE &&
+                                              Wt * reduce_batch_size == tt::constants::TILE_WIDTH;
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto num_work_units = reduce_w ? (NC * Ht) : (reduce_hw ? (NC / reduce_batch_size) : (NC * Wt));
     uint32_t num_cores;
@@ -307,6 +312,9 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     if (input_cb_data_format == tt::DataFormat::Bfp8_b) {
         reduce_defines["WELFORD_TWO_PASS_BFP8_INPUT"] = "1";
     }
+    if (use_sfpu_leaf_combine) {
+        reduce_defines["WELFORD_SFPU_LEAF_COMBINE"] = "1";
+    }
 
     std::vector<std::pair<std::string, std::uint32_t>> welford_named_args;
     const std::uint32_t two_pass_reduce_size = reduce_w ? W : H;
@@ -317,6 +325,11 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     welford_named_args.push_back(
         {"two_pass_variance_reciprocal",
          std::bit_cast<std::uint32_t>(1.0f / static_cast<float>(two_pass_variance_divisor))});
+    if (use_sfpu_leaf_combine) {
+        welford_named_args.push_back(
+            {"welford_leaf_reciprocal",
+             std::bit_cast<std::uint32_t>(1.0f / static_cast<float>(tt::constants::TILE_WIDTH))});
+    }
 
     // --- Reader kernel ---
     KernelDescriptor reader_desc;
@@ -381,7 +394,12 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "writer_welford_hw.cpp";
         writer_desc.compile_time_args = writer_compile_time_args;
-        // Note: HW writer does not pass reduce_defines (matches original behavior).
+        if (use_full_partial_stats_tiles) {
+            writer_desc.defines.emplace_back("WELFORD_FULL_PARTIAL_TILES", "1");
+        }
+        if (use_sfpu_leaf_combine) {
+            writer_desc.defines.emplace_back("WELFORD_SFPU_LEAF_COMBINE", "1");
+        }
     } else {
         // W-reduce and H-reduce: generic tile writer.
         std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};

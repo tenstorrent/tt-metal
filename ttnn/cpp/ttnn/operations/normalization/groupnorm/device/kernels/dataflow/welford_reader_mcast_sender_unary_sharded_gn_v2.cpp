@@ -173,8 +173,16 @@ void kernel_main() {
             auto p_local_means = reinterpret_cast<stats_read_t*>(local_means_ptr);
             auto p_local_vars = reinterpret_cast<stats_read_t*>(local_vars_ptr);
 
-            auto local_result =
+#ifdef WELFORD_SFPU_LOCAL_COMBINE
+            const WelfordStats<std::remove_cv_t<stats_read_t>> local_result = {
+                .mean = p_local_means[0],
+                .variance = p_local_vars[0],
+                .count = block_hw * tile_width * tile_width,
+            };
+#else
+            const auto local_result =
                 combine_welford_stats<tile_width, block_hw * tile_width, local_stride>(p_local_means, p_local_vars);
+#endif
 
             // Write this to dfb_ex_global
             auto p_global_means = reinterpret_cast<volatile stats_write_t*>(global_means_ptr);

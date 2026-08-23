@@ -728,6 +728,113 @@ sfpi_inline void _two_pass_store_mean_var_to_dst_raw_group_(std::uint32_t group_
     TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
 }
 
+template <bool broadcast_result>
+sfpi_inline void _two_pass_horizontal_sum_pair_()
+{
+    // Reduce the eight columns in each 4x8 lane sub-vector. Interleave the
+    // mean and variance reductions to cover SFPSHFT2 latency.
+#define TWO_PASS_REDUCE_ROTATE_PAIR()                                                                     \
+    TTI_SFPSHFT2(0, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1); \
+    TTI_SFPSHFT2(0, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1)
+#define TWO_PASS_REDUCE_ADD_PAIR()                                                                                    \
+    TTI_SFPADD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG0, 0); \
+    TTI_SFPADD(ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG4, 0)
+
+    TTI_SFPMOV(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, 0);
+    TTI_SFPMOV(0, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG5, 0);
+    TWO_PASS_REDUCE_ROTATE_PAIR();
+    TWO_PASS_REDUCE_ROTATE_PAIR();
+    TWO_PASS_REDUCE_ROTATE_PAIR();
+    TWO_PASS_REDUCE_ROTATE_PAIR();
+    TWO_PASS_REDUCE_ADD_PAIR();
+
+    TTI_SFPMOV(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, 0);
+    TTI_SFPMOV(0, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG5, 0);
+    TWO_PASS_REDUCE_ROTATE_PAIR();
+    TWO_PASS_REDUCE_ROTATE_PAIR();
+    TWO_PASS_REDUCE_ADD_PAIR();
+
+    TTI_SFPMOV(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, 0);
+    TTI_SFPMOV(0, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG5, 0);
+    TWO_PASS_REDUCE_ROTATE_PAIR();
+    TWO_PASS_REDUCE_ADD_PAIR();
+
+#undef TWO_PASS_REDUCE_ADD_PAIR
+#undef TWO_PASS_REDUCE_ROTATE_PAIR
+
+    // Transpose the four sub-vector sums into separate LREGs, then fold them.
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, 0);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    TTI_SFPADD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG0, 0);
+    TTI_SFPADD(ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG4, 0);
+    TTI_SFPADD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG0, 0);
+    TTI_SFPADD(ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG4, 0);
+    TTI_SFPADD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG0, 0);
+    TTI_SFPADD(ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG4, 0);
+
+    if constexpr (broadcast_result)
+    {
+        TTI_SFPMOV(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, 0);
+        TTI_SFPMOV(0, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG5, 0);
+        TTI_SFPMOV(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG2, 0);
+        TTI_SFPMOV(0, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG6, 0);
+        TTI_SFPMOV(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG3, 0);
+        TTI_SFPMOV(0, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG7, 0);
+        TTI_SFPTRANSP(0, 0, 0, 0);
+    }
+}
+
+template <bool dual_m2>
+sfpi_inline void _two_pass_store_combined_mean_var_to_dst_raw_group_(std::uint32_t group_id, std::uint32_t reciprocal_bits)
+{
+    if constexpr (dual_m2)
+    {
+        TTI_SFPADD(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG5, 0);
+    }
+
+    // Convert each lane's M2 to variance and retain its mean in scratch DST.
+    TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, reciprocal_bits >> 16);
+    TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, reciprocal_bits & 0xffff);
+    TTI_SFPMUL(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG5, 0);
+    constexpr std::uint32_t scratch_tile_offset = 128;
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, scratch_tile_offset);
+
+    TTI_SFPMOV(0, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG0, 0);
+    TTI_SFPMOV(0, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG4, 0);
+    _two_pass_horizontal_sum_pair_<true>();
+
+    constexpr std::uint32_t lane_reciprocal_bits = 0x3d000000; // 1/32
+    TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, lane_reciprocal_bits >> 16);
+    TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, lane_reciprocal_bits & 0xffff);
+    TTI_SFPMUL(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG0, 0);
+    TTI_SFPMUL(ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG4, 0);
+
+    constexpr std::uint32_t mean_tile_offset = 0;
+    constexpr std::uint32_t var_tile_offset  = 64;
+    const std::uint32_t group_offset         = group_id << 2;
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, mean_tile_offset + group_offset);
+
+    // Add variance(mean) to the average lane variance.
+    TTI_SFPLOAD(ckernel::p_sfpu::LREG1, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, scratch_tile_offset);
+    TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG1, 0);
+    TTI_SFPNOP;
+    TTI_SFPMAD(ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG0, 0);
+    TTI_SFPNOP;
+    _two_pass_horizontal_sum_pair_<false>();
+
+    TTI_SFPADD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG5, 0);
+    TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, lane_reciprocal_bits >> 16);
+    TT_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, lane_reciprocal_bits & 0xffff);
+    TTI_SFPMUL(ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG5, 0);
+    TTI_SFPNOP;
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, var_tile_offset + group_offset);
+}
+
 /*
  * @brief Calculates the Welford's online algorithm for a tile in the dst reg.
  *

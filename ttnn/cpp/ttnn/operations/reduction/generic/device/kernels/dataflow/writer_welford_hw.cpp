@@ -5,10 +5,11 @@
 // Welford HW-reduction writer kernel.
 //
 // Phase 1 (per output): Reads Wt partial (mean, var) tile pairs from
-// cb_partial (written by the compute kernel using
-// welford_finalize_to_row), combines their equal-sized populations across W,
-// applies Bessel's correction, and writes the combined scalar into cb_combined
-// for the compute kernel to apply
+// cb_partial. The compute kernel either writes 32 per-column statistics or,
+// on the SFPU leaf-combine path, one precombined 32-column leaf per tile.
+// This kernel combines those equal-sized populations across W, applies
+// Bessel's correction, and writes the combined scalar into cb_combined for
+// the compute kernel to apply
 // sqrtf (if std) and re-pack in the output format. cb_combined is
 // normally fp32, but for variance output to bf16 the program
 // factory may declare it as bf16 to save SRAM with no precision loss
@@ -183,6 +184,14 @@ void kernel_main() {
                 auto* means_ptr = reinterpret_cast<volatile float*>(means_addr);
                 auto* vars_ptr = reinterpret_cast<volatile float*>(vars_addr);
 
+#ifdef WELFORD_SFPU_LEAF_COMBINE
+                const WelfordBlockStats block = {
+                    .mean = means_ptr[0],
+                    .variance_sum = vars_ptr[0],
+                };
+                push_full_block(tree, block, completed_blocks);
+                ++completed_blocks;
+#else
                 std::uint32_t num_cols = (wt < Wt - 1) ? tile_width : last_tile_cols;
                 for (std::uint32_t c = 0; c < num_cols; ++c) {
                     // In tile row format, columns 0-15 are in Face 0 and
@@ -215,6 +224,7 @@ void kernel_main() {
                         block_count = 0;
                     }
                 }
+#endif
 
                 dfb_partial_obj.pop_front(2);
             }
