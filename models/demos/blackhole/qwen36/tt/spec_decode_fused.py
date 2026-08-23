@@ -72,6 +72,7 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
             for _ in self._dns
         ]
         self._conv_win = [None] * len(self._dns)
+        self._vio = None  # persistent verify I/O (built at the first fused verify)
         # Constant window-select one-hot: rows t*(K-1)+j pick x_padded row t+1+j —
         # the conv shift register ending at candidate t (x_padded = [carry | qkv rows]).
         conv_k = self._dns[0].K
@@ -85,14 +86,18 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
         self._conv_k = conv_k
 
     # ── the fused decode-width verify ────────────────────────────────────────
-    def _gdn_verify_seq(self, li, dn, attn_in):
+    def _gdn_verify_seq(self, li, dn, attn_in, wins):
         """GDN leg: raw qkvzab projection + per-user causal FIR + seq_rows kernel.
 
         attn_in [1,1,R,full] replicated (post decode norm). Returns the fractured
         attention-output equivalent [1,1,R,dim/tp] (post out-proj all-reduce).
+        Capture-safe: every reshape crossing padded-TILE rows goes through
+        ROW_MAJOR, the FIR is inlined over the conv-window tensor (plain device
+        ops), and the recurrence output rides the persistent _vio buffer. The
+        fresh conv-window handle lands in wins[li] — the CALLER owns swapping
+        self._conv_win (a captured graph must not free pre-existing buffers).
         """
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
-        from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
         from models.tt_transformers.tt.ccl import tt_all_reduce
 
         model = self.model
@@ -111,38 +116,41 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
             qkvzab = dn._col_proj(x3, dn.tw["qkvz"], model.args.gdn_qkvzab_progcfg, ttnn.DRAM_MEMORY_CONFIG)
 
         D = dn.qkv_dim_tp
+        conv_k = dn.K
         qkv = ttnn.slice(qkvzab, (0, 0, 0), (1, R, D), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        qkv_u = ttnn.reshape(qkv, (self.B, self.W, D))
-        conv_u, conv_tail = _causal_conv1d_fir(
-            qkv_u,
-            None,
-            None,
-            dn.K,
-            model.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            conv_state=dn._batched_conv_carry,
-            weight_taps=dn.tw["conv_taps"],
-            bias_dev=None,
-        )
-        ttnn.deallocate(conv_tail)
+        # [1,R,D] -> [B,W,D] splits tile rows: go through ROW_MAJOR (a padded-
+        # TILE reshape is a host-fallback read — illegal under capture).
+        qkv_rm = ttnn.untilize(qkv, use_multicore=True)
+        ttnn.deallocate(qkv)
+        qkv_rm = ttnn.reshape(qkv_rm, (self.B, self.W, D))
+        carry_rm = ttnn.untilize(dn._batched_conv_carry, use_multicore=True)
+        xp_rm = ttnn.concat([carry_rm, qkv_rm], dim=1)  # [B, K-1+W, D]
+        ttnn.deallocate(carry_rm)
+        ttnn.deallocate(qkv_rm)
+        xp = ttnn.to_layout(xp_rm, ttnn.TILE_LAYOUT)
         # Conv-window stash: shift-register contents after every candidate row
         # (the commit-by-select source for _batched_conv_carry).
-        xp = ttnn.concat([dn._batched_conv_carry, qkv_u], dim=1)  # [B, K-1+W, D]
         win = ttnn.matmul(self._win_sel, xp)  # [B, W*(K-1), D]
         ttnn.deallocate(xp)
-        if self._conv_win[li] is not None:
-            ttnn.deallocate(self._conv_win[li])
-        self._conv_win[li] = win
-        ttnn.deallocate(qkv_u)
+        wins[li] = win
+        # Depthwise causal FIR + SiLU inlined over the SAME window tensor:
+        # out = silu(sum_k xp[:, k:k+W] * tap_k). RM slices keep every step a
+        # plain device op.
+        out = None
+        for k in range(conv_k):
+            sl = ttnn.to_layout(ttnn.slice(xp_rm, (0, k, 0), (self.B, k + self.W, D)), ttnn.TILE_LAYOUT)
+            if out is None:
+                out = ttnn.multiply(sl, dn.tw["conv_taps"][k], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                out = ttnn.addcmul(out, sl, dn.tw["conv_taps"][k], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(sl)
+        ttnn.deallocate(xp_rm)
+        conv_u = ttnn.silu(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [B,W,D]
 
-        conv_flat = ttnn.reshape(conv_u, (1, R, D))
-        gated = ttnn.from_torch(
-            torch.zeros(1, R, self._nv * self._dv, dtype=torch.float32),
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            device=model.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
-        )
+        conv_rm = ttnn.untilize(conv_u, use_multicore=True)
+        ttnn.deallocate(conv_u)
+        conv_flat = ttnn.to_layout(ttnn.reshape(conv_rm, (1, R, D)), ttnn.TILE_LAYOUT)
+        gated = self._vio["gated"]  # persistent [1,R,Nv*Dv] fp32 (kernel writes every row)
         self._fop.recurrence_seq_rows(
             conv_flat,
             qkvzab,
@@ -160,9 +168,9 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
             w=self.W,
         )
         ttnn.deallocate(conv_flat)
+        ttnn.deallocate(conv_rm)
         ttnn.deallocate(qkvzab)
         partial = dn._row_proj(gated, dn.tw["out"])
-        ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, R, partial.shape[-1]))
         return tt_all_reduce(
             partial,
@@ -174,90 +182,76 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _fused_verify(self, drafts):
-        """One decode-width forward over every user's [t_c, d_1..d_K] rows.
-
-        Returns per user (target_ids [W], hid [W, dim]) — row u*W+t predicts the
-        token after candidate t.
-        """
+    def _ensure_verify_io(self):
+        """Persistent device buffers for the verify's per-iteration inputs
+        (refreshed via copy_host_to_device between replays), the constant
+        replicated page-table rows, and the shared recurrence output."""
+        if self._vio is not None:
+            return
         model = self.model
         R = self.B * self.W
+        rd = model.args.rope_head_dim
         rep = ttnn.ReplicateTensorToMesh(model.mesh_device)
+        rm, tile = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
 
-        toks, poss, pt_rows = [], [], []
+        def dev(t, dtype, layout):
+            return ttnn.from_torch(t, dtype=dtype, layout=layout, device=model.device, mesh_mapper=rep)
+
+        pt_rows = [u for u in range(self.B) for _ in range(self.W)]
+        self._vio = {
+            "tok": dev(torch.zeros(R, 1, dtype=torch.int64), ttnn.uint32, rm),
+            "pos": dev(torch.zeros(R, dtype=torch.int32), ttnn.int32, rm),
+            "cos": dev(torch.zeros(1, R, 1, rd, dtype=torch.bfloat16), ttnn.bfloat16, tile),
+            "sin": dev(torch.zeros(1, R, 1, rd, dtype=torch.bfloat16), ttnn.bfloat16, tile),
+            # Sequential masked KV updates: the batch-alias rows of one user
+            # target the SAME cache tile, and paged_update_cache read-modify-
+            # writes whole tiles — a single batched call races same-tile
+            # writers. One masked call per candidate index writes at most one
+            # row per tile; -1 skips a row.
+            "upd": [dev(torch.full((R,), -1, dtype=torch.int32), ttnn.int32, rm) for _ in range(self.W)],
+            "pt": dev(self.page_table[pt_rows].to(torch.int32).contiguous(), ttnn.int32, rm),
+            "gated": dev(torch.zeros(1, R, self._nv * self._dv, dtype=torch.float32), ttnn.float32, tile),
+            "trace": None,  # {"id", "xn", "idx", "val"} once captured
+        }
+
+    def _verify_upload(self, drafts):
+        """Stage this iteration's verify inputs into the persistent buffers
+        (tokens, positions, per-row rope, masked KV-update indices)."""
+        model = self.model
+        R = self.B * self.W
+        mk = {"mesh_mapper": ttnn.ReplicateTensorToMesh(model.mesh_device)}
+        toks, poss = [], []
         for u, slot in enumerate(self.slots):
             c = len(slot.committed) - 1
             cands = [slot.committed[-1]] + list(drafts[u]) + [slot.committed[-1]] * (self.W - 1 - len(drafts[u]))
             toks.extend(cands[: self.W])
             poss.extend(range(c, c + self.W))
-            pt_rows.extend([u] * self.W)
-
-        tok = ttnn.from_torch(
-            torch.tensor(toks, dtype=torch.int64).reshape(R, 1),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=model.device,
-            mesh_mapper=rep,
-        )
-        x = model.embd(tok)
-        ttnn.deallocate(tok)
-        x = ttnn.reshape(x, (1, 1, R, x.shape[-1]))
-        cur_pos = ttnn.from_torch(
-            torch.tensor(poss, dtype=torch.int32),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=model.device,
-            mesh_mapper=rep,
-        )
-        pt = ttnn.from_torch(
-            self.page_table[pt_rows].to(torch.int32).contiguous(),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=model.device,
-            mesh_mapper=rep,
-        )
-        # TP decode rope: per-row rotations [1, R, 1, rope_dim].
         rd = model.args.rope_head_dim
         inv_freq = 1.0 / (model.args.rope_theta ** (torch.arange(0, rd, 2).float() / rd))
         freqs = torch.outer(torch.tensor(poss, dtype=torch.float32), inv_freq)
         emb = torch.cat([freqs, freqs], dim=-1)
-        cos = ttnn.from_torch(
-            emb.cos().reshape(1, R, 1, rd).to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=model.device,
-            mesh_mapper=rep,
-        )
-        sin = ttnn.from_torch(
-            emb.sin().reshape(1, R, 1, rd).to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=model.device,
-            mesh_mapper=rep,
-        )
-
-        # Sequential masked KV updates: the batch-alias rows of one user target
-        # the SAME cache tile, and paged_update_cache read-modify-writes whole
-        # tiles — a single batched call races same-tile writers (the 53894
-        # two-family divergence). One masked call per candidate index writes at
-        # most one row per tile; -1 skips a row.
-        upd_positions = []
+        rm, tile = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
+        stage = [
+            (torch.tensor(toks, dtype=torch.int64).reshape(R, 1), ttnn.uint32, rm, self._vio["tok"]),
+            (torch.tensor(poss, dtype=torch.int32), ttnn.int32, rm, self._vio["pos"]),
+            (emb.cos().reshape(1, R, 1, rd).to(torch.bfloat16), ttnn.bfloat16, tile, self._vio["cos"]),
+            (emb.sin().reshape(1, R, 1, rd).to(torch.bfloat16), ttnn.bfloat16, tile, self._vio["sin"]),
+        ]
         for t in range(self.W):
             m = [p if (i % self.W) == t else -1 for i, p in enumerate(poss)]
-            upd_positions.append(
-                ttnn.from_torch(
-                    torch.tensor(m, dtype=torch.int32),
-                    dtype=ttnn.int32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=model.device,
-                    mesh_mapper=rep,
-                )
-            )
+            stage.append((torch.tensor(m, dtype=torch.int32), ttnn.int32, rm, self._vio["upd"][t]))
+        for host_t, dtype, layout, dst in stage:
+            src = ttnn.from_torch(host_t, dtype=dtype, layout=layout, **mk)
+            ttnn.copy_host_to_device_tensor(src, dst)
 
-        # TT_SPEC_FUSED_DEBUG=1: one-run bisect — after the first attention and
-        # first GDN layer, log whether the per-user row blocks are bitwise
-        # uniform (uniform prompts => any split names the diverging layer type).
-        debug = os.environ.get("TT_SPEC_FUSED_DEBUG", "0") == "1" and not getattr(self, "_debug_done", False)
+    def _verify_graph(self, debug=False):
+        """Device-only fused verify over the persistent input buffers. Returns
+        (xn, idx, val, wins) handles; the caller reads them back and owns the
+        _conv_win swap. Capture-safe when debug=False (debug adds mid-graph
+        readbacks for the one-run layer-type bisect)."""
+        model = self.model
+        vio = self._vio
+        R = self.B * self.W
 
         def _row_uniformity(tag, t):
             rows = ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float().reshape(R, -1)
@@ -268,18 +262,21 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
             )
             logger.info(f"spec-fused bisect {tag}: nonuniform_users={bad} max_abs_diff={maxd:.3e}")
 
+        x = model.embd(vio["tok"])
+        x = ttnn.reshape(x, (1, 1, R, x.shape[-1]))
+        wins = [None] * len(self._dns)
         li = 0
         first_attn_logged = False
         for layer in model.layers:
             if layer.is_full_attention:
                 x = layer.forward(
                     x,
-                    cos,
-                    sin,
-                    position_tensor=cur_pos,
-                    page_table=pt,
+                    vio["cos"],
+                    vio["sin"],
+                    position_tensor=vio["pos"],
+                    page_table=vio["pt"],
                     mode="decode",
-                    kv_update_positions=upd_positions,
+                    kv_update_positions=vio["upd"],
                 )
                 if debug and not first_attn_logged:
                     _row_uniformity("post-first-attention", x)
@@ -287,7 +284,7 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
             else:
                 nc = model.args.get_norm_config("attn", Mode.DECODE)
                 attn_in = layer.attention_norm(x, mode=Mode.DECODE, norm_config=nc)
-                attn_out = self._gdn_verify_seq(li, layer.attention, attn_in)
+                attn_out = self._gdn_verify_seq(li, layer.attention, attn_in, wins)
                 ttnn.deallocate(attn_in)
                 h = ttnn.add(x, attn_out)
                 ttnn.deallocate(x)
@@ -301,26 +298,31 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
                 if debug and li == 0:
                     _row_uniformity("post-first-gdn", x)
                 li += 1
-        if debug:
-            self._debug_done = True
-        for t in (cur_pos, pt, cos, sin, *upd_positions):
-            ttnn.deallocate(t)
-
         xn = model._final_norm_decode(x)  # replicated [1,1,R,full]
         ttnn.deallocate(x)
-        hid_all = ttnn.to_torch(ttnn.get_device_tensors(xn)[0]).float().reshape(R, -1)
         shard = ttnn.linear(xn, model.lm_head_weight)  # [1,1,R,Vs] per device
-        ttnn.deallocate(xn)
         rm = ttnn.untilize(shard, use_multicore=True)
         idx = ttnn.argmax(rm, dim=-1, keepdim=False)  # [1,1,32] uint32 (R == 32)
         ttnn.deallocate(rm)
         val = ttnn.max(shard, dim=-1)
         ttnn.deallocate(shard)
+        return xn, idx, val, wins
+
+    def _swap_conv_wins(self, wins):
+        for li, win in enumerate(wins):
+            if self._conv_win[li] is not None and self._conv_win[li] is not win:
+                ttnn.deallocate(self._conv_win[li])
+            self._conv_win[li] = win
+
+    def _verify_read(self, xn, idx, val):
+        """Assemble per-user (target_ids [W], hid [W, dim]) from the graph
+        outputs (post-replay readbacks)."""
+        model = self.model
+        R = self.B * self.W
+        hid_all = ttnn.to_torch(ttnn.get_device_tensors(xn)[0]).float().reshape(R, -1)
         comp = ttnn.ConcatMeshToTensor(model.mesh_device, dim=0)
         idxs = ttnn.to_torch(idx, mesh_composer=comp).reshape(-1, 32)
         vals = ttnn.to_torch(val, mesh_composer=comp).float().reshape(-1, 32)
-        ttnn.deallocate(idx)
-        ttnn.deallocate(val)
         per_shard = model.args.vocab_size // model.num_devices
         results = []
         for u in range(self.B):
@@ -333,6 +335,42 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
                 else:
                     ids.append(int(idxs[0, r]))
             results.append((ids, hid_all[u * self.W : (u + 1) * self.W]))
+        return results
+
+    def _capture_verify_trace(self):
+        """Capture the verify graph over the persistent buffers (iteration 1's
+        inputs are still staged; runs AFTER the drafter captures, and after
+        iteration 1 compiled every program in this graph)."""
+        tid = ttnn.begin_trace_capture(self.model.device, cq_id=0)
+        xn, idx, val, wins = self._verify_graph()
+        ttnn.end_trace_capture(self.model.device, tid, cq_id=0)
+        self._swap_conv_wins(wins)
+        self._vio["trace"] = {"id": tid, "xn": xn, "idx": idx, "val": val}
+
+    def _fused_verify(self, drafts):
+        """One decode-width forward over every user's [t_c, d_1..d_K] rows.
+
+        Returns per user (target_ids [W], hid [W, dim]) — row u*W+t predicts the
+        token after candidate t. Traced once captured; eager before that (and
+        always under TT_SPEC_TRACE=0).
+        """
+        self._ensure_verify_io()
+        self._verify_upload(drafts)
+        tr = self._vio["trace"]
+        if tr is not None:
+            ttnn.execute_trace(self.model.device, tr["id"], cq_id=0, blocking=False)
+            return self._verify_read(tr["xn"], tr["idx"], tr["val"])
+        # TT_SPEC_FUSED_DEBUG=1: one-run bisect — after the first attention and
+        # first GDN layer, log whether the per-user row blocks are bitwise
+        # uniform (uniform prompts => any split names the diverging layer type).
+        debug = os.environ.get("TT_SPEC_FUSED_DEBUG", "0") == "1" and not getattr(self, "_debug_done", False)
+        xn, idx, val, wins = self._verify_graph(debug=debug)
+        if debug:
+            self._debug_done = True
+        self._swap_conv_wins(wins)
+        results = self._verify_read(xn, idx, val)
+        for t in (xn, idx, val):
+            ttnn.deallocate(t)
         return results
 
     # ── commit-by-select ─────────────────────────────────────────────────────
@@ -369,11 +407,12 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
                 ttnn.deallocate(cw)
 
     def _setup_drafter_traces(self):
-        """Compile + capture the batched drafter windows AFTER one full eager
-        iteration: every fused-verify and commit-select program must already
-        exist when the first trace parks. The capture-time KV writes land at
-        each user's head position and are rewritten by the next window's real
-        legs before anything attends to them."""
+        """Compile + capture the batched drafter windows, then the verify trace,
+        AFTER one full eager iteration: every fused-verify and commit-select
+        program must already exist when the first trace parks (all compiles
+        strictly before all captures). The drafter capture-time KV writes land
+        at each user's head position and are rewritten by the next window's
+        real legs before anything attends to them."""
         K = self.draft_len
         w_max = (K + 2) + K - 1  # steady-state legs: pendings (<= K+1, +1 slack) + chain
         self.mtp.ensure_batched_window(w_max, self.B)
@@ -384,6 +423,10 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
         self._warm_commit_programs()
         self.mtp.compile_batched_window()
         self.mtp.capture_batched_window()
+        # TT_SPEC_VERIFY_TRACE=0: drafter-only tracing (verify stays eager) —
+        # the silicon bisection lever if the verify capture misbehaves.
+        if os.environ.get("TT_SPEC_VERIFY_TRACE", "1") == "1":
+            self._capture_verify_trace()
 
     # ── the loop ─────────────────────────────────────────────────────────────
     def _align_anchor_to_head(self):

@@ -498,9 +498,13 @@ def _make_fake_fused_spec(draft_len, prompt_lens, monkeypatch, use_trace=False):
             self.W = draft_len + 1
             self.commit_rows = []  # (iteration, [m_u])
             self.warm_ran_before_capture = None
+            self.verify_captured_after_drafter = None
 
         def _warm_commit_programs(self):  # device slices; here only the order matters
             self.warm_ran_before_capture = not getattr(self.mtp, "captured", True)
+
+        def _capture_verify_trace(self):  # device capture; here only the order matters
+            self.verify_captured_after_drafter = getattr(self.mtp, "captured", False)
 
         def seed(self):
             for u, T in enumerate(prompt_lens):
@@ -653,6 +657,7 @@ def test_fused_traced_drafter_matches_eager(monkeypatch):
         if use_trace:
             assert spec.warm_ran_before_capture, "commit-select programs must warm before the traces park"
             assert mtp.captured
+            assert spec.verify_captured_after_drafter, "verify trace must capture after the drafter captures"
             # One setup staging + one per traced iteration (iteration 1 is eager).
             iters = max(len(s.accepts) for s in spec.slots)
             assert mtp.stage_count == iters, f"{mtp.stage_count} stagings for {iters} iterations"
