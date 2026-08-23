@@ -19,7 +19,6 @@ namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using tt::tt_metal::experimental::AdvancedKernelRunArgs;
 using tt::tt_metal::experimental::ComputeGen1Config;
 using tt::tt_metal::experimental::DataflowBufferSpec;
 using tt::tt_metal::experimental::DFBBinding;
@@ -406,12 +405,7 @@ ttnn::device_operation::ProgramArtifacts ConvertToHWCProgramFactory::create_prog
         .borrowed_from = OUTPUT,
     };
 
-    uint32_t max_transfer_args = 0;
-    for (const auto& transfer_args : per_core_serialized_transfers) {
-        max_transfer_args = std::max(max_transfer_args, static_cast<uint32_t>(transfer_args.size()));
-    }
-
-    const KernelSpec reader_writer{
+    KernelSpec reader_writer{
         .unique_id = READER_WRITER,
         .source = "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/writer_convert_to_hwc.cpp",
         .dfb_bindings =
@@ -438,7 +432,6 @@ ttnn::device_operation::ProgramArtifacts ConvertToHWCProgramFactory::create_prog
              {"input_num_blocks", num_blocks},
              {"l1_write_output_addr_stride", tiling.output_addr_stride}},
         .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
-        .advanced_options = {.num_runtime_varargs = max_transfer_args},
     };
     const KernelSpec secondary_writer{
         .unique_id = SECONDARY_WRITER,
@@ -497,10 +490,11 @@ ttnn::device_operation::ProgramArtifacts ConvertToHWCProgramFactory::create_prog
 
     KernelRunArgs reader_writer_run{.kernel = READER_WRITER};
     for (uint32_t core_idx = 0; core_idx < config.output_cores.size(); ++core_idx) {
-        AdvancedKernelRunArgs::Varargs varargs(max_transfer_args, 0u);
-        const auto& transfer_args = per_core_serialized_transfers.at(core_idx);
-        std::copy(transfer_args.begin(), transfer_args.end(), varargs.begin());
-        reader_writer_run.advanced_options.runtime_varargs.emplace(config.output_cores[core_idx], std::move(varargs));
+        const auto core = config.output_cores[core_idx];
+        auto& transfer_args = per_core_serialized_transfers.at(core_idx);
+        reader_writer.advanced_options.num_runtime_varargs_per_node.emplace(
+            core, static_cast<uint32_t>(transfer_args.size()));
+        reader_writer_run.advanced_options.runtime_varargs.emplace(core, std::move(transfer_args));
     }
 
     ProgramSpec spec{
