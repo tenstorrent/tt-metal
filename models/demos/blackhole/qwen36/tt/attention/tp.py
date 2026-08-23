@@ -498,7 +498,14 @@ class TPAttention:
             self._kv_shard_cfg_cache[B] = cfg
         return cfg
 
-    def forward_decode(self, x, cur_pos_tt, cos_tt, sin_tt, page_table=None):
+    def forward_decode(self, x, cur_pos_tt, cos_tt, sin_tt, page_table=None, kv_update_positions=None):
+        """kv_update_positions: optional list of [B] int32 position tensors (-1 skips
+        a row) run as SEQUENTIAL paged_update_cache calls instead of one batched
+        call. Required when rows ALIAS pages (speculative batch-alias verify:
+        several rows of one user target the same cache tile): the update kernel
+        read-modify-writes the WHOLE destination tile, so concurrent same-tile
+        writers lose all but the last row. Each masked call updates at most one
+        row per tile; the op barrier serializes successive calls."""
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         # Active decode width, taken from the input (x is [1,1,B,dim_frac]). Normally == self.B.
         # BUCKETED decode: a request feeds B<self.B users; every shape/reshape/rope/head-split and
@@ -580,8 +587,9 @@ class TPAttention:
             ttnn.deallocate(k_p)
             ttnn.deallocate(v_p)
             # paged_update_cache takes bf16/fp32 and casts to bf8 cache; decode K/V stay bf16 (prefill fill needs bf8)
-            ttnn.experimental.paged_update_cache(keys, k_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
-            ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
+            for _upd in kv_update_positions if kv_update_positions is not None else (cur_pos_tt,):
+                ttnn.experimental.paged_update_cache(keys, k_sh, update_idxs_tensor=_upd, page_table=page_table)
+                ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=_upd, page_table=page_table)
             ttnn.deallocate(k_sh)
             ttnn.deallocate(v_sh)
             attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(

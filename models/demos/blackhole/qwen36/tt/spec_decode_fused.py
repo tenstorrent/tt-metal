@@ -233,10 +233,54 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
             mesh_mapper=rep,
         )
 
+        # Sequential masked KV updates: the batch-alias rows of one user target
+        # the SAME cache tile, and paged_update_cache read-modify-writes whole
+        # tiles — a single batched call races same-tile writers (the 53894
+        # two-family divergence). One masked call per candidate index writes at
+        # most one row per tile; -1 skips a row.
+        upd_positions = []
+        for t in range(self.W):
+            m = [p if (i % self.W) == t else -1 for i, p in enumerate(poss)]
+            upd_positions.append(
+                ttnn.from_torch(
+                    torch.tensor(m, dtype=torch.int32),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=model.device,
+                    mesh_mapper=rep,
+                )
+            )
+
+        # TT_SPEC_FUSED_DEBUG=1: one-run bisect — after the first attention and
+        # first GDN layer, log whether the per-user row blocks are bitwise
+        # uniform (uniform prompts => any split names the diverging layer type).
+        debug = os.environ.get("TT_SPEC_FUSED_DEBUG", "0") == "1" and not getattr(self, "_debug_done", False)
+
+        def _row_uniformity(tag, t):
+            rows = ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float().reshape(R, -1)
+            base = rows[: self.W]
+            bad = [u for u in range(1, self.B) if not torch.equal(rows[u * self.W : (u + 1) * self.W], base)]
+            maxd = max(
+                ((rows[u * self.W : (u + 1) * self.W] - base).abs().max().item() for u in range(1, self.B)), default=0.0
+            )
+            logger.info(f"spec-fused bisect {tag}: nonuniform_users={bad} max_abs_diff={maxd:.3e}")
+
         li = 0
+        first_attn_logged = False
         for layer in model.layers:
             if layer.is_full_attention:
-                x = layer.forward(x, cos, sin, position_tensor=cur_pos, page_table=pt, mode="decode")
+                x = layer.forward(
+                    x,
+                    cos,
+                    sin,
+                    position_tensor=cur_pos,
+                    page_table=pt,
+                    mode="decode",
+                    kv_update_positions=upd_positions,
+                )
+                if debug and not first_attn_logged:
+                    _row_uniformity("post-first-attention", x)
+                    first_attn_logged = True
             else:
                 nc = model.args.get_norm_config("attn", Mode.DECODE)
                 attn_in = layer.attention_norm(x, mode=Mode.DECODE, norm_config=nc)
@@ -251,8 +295,12 @@ class Qwen36FusedSpeculativeDecoder(Qwen36BatchedSpeculativeDecoder):
                 x = ttnn.add(h, ff_out)
                 ttnn.deallocate(h)
                 ttnn.deallocate(ff_out)
+                if debug and li == 0:
+                    _row_uniformity("post-first-gdn", x)
                 li += 1
-        for t in (cur_pos, pt, cos, sin):
+        if debug:
+            self._debug_done = True
+        for t in (cur_pos, pt, cos, sin, *upd_positions):
             ttnn.deallocate(t)
 
         xn = model._final_norm_decode(x)  # replicated [1,1,R,full]
