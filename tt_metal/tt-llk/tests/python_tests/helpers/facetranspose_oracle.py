@@ -274,3 +274,85 @@ def flush_victims(face):
         for j in range(16)
         if got[i][j] != want[i][j]
     }
+
+
+# --------------------------------------------------------------------------
+# CLOSED-FORM models in SFPU-VALUE space (the datums SFPLOAD/SFPSTORE see).
+#
+# Layer note that dissolves an apparent divergence: Dst32b CELLS store
+# fp32-class datums with a SWIZZLED high half (doc DstDecodeFP32; pinned
+# sim encode_fp32/decode_fp32), so the doc's 19-bit-shuffle low-byte
+# flush test and the sim's fp32-exponent-field flush test are the SAME
+# predicate once expressed on the SFPU-space datum w:
+#     hi16 pass:  flush iff (w & 0x7F800000) == 0   (IEEE exponent field)
+#     lo16 pass:  flush iff (lo16 & 0xFF)     == 0  (the cell's raw low
+#                 half rides the BF16 decode, whose exponent is its low
+#                 byte)
+#
+# X6-F2 (REAL divergence, adjudicated by the hi-stage probe): what the
+# hi16 write-back leaves in Dst bits 15..0 differs -- the doc's explicit
+# SrcAFmt=TF32 arm writes LowMantissa<<13 and zeroes bits 12..0, while
+# the pinned sim PRESERVES the destination low half.  Root cause: the
+# pinned sim gates the MOV-family implied-format override on
+# DISABLE_IMPLIED_SRCB_FMT_Base (tensix.cpp tensix_srca_fmt_from_srcb)
+# where MOVD2B.md specifies DISABLE_IMPLIED_SRCA_FMT_Base -- so with the
+# choreography's SRCA disable set, the sim still runs every MOV at the
+# bank-implied (bf16-class) format.  END-TO-END INVISIBLE: the bf16-class
+# path moves exactly bits 31..16 + preserves 15..0, and pass 3 rewrites
+# 15..0 anyway -- the full transpose is bit-exact on BOTH paths (host
+# theorem + the passing face probes).  Sim-coverage ledger item for the
+# sim owner; the silicon vehicle is insensitive by construction.
+# --------------------------------------------------------------------------
+
+
+def flush_lo16_pred(lo16):
+    return (lo16 & 0xFF) == 0
+
+
+def flush_hi_pred(v):
+    return (v & 0x7F800000) == 0
+
+
+def face_transpose_32b_model(face, zero_flag_disabled=True):
+    """Closed-form full-choreography prediction: exact transpose when the
+    zero-flag arm is set; per-half flush corruption otherwise."""
+    out = [[0] * 16 for _ in range(16)]
+    for i in range(16):
+        for j in range(16):
+            w = face[j][i] & M32
+            hi = w & 0xFFFF0000
+            lo = w & M16
+            if not zero_flag_disabled:
+                if flush_hi_pred(w):
+                    hi = 0
+                if flush_lo16_pred(lo):
+                    lo = 0
+            out[i][j] = hi | lo
+    return out
+
+
+def hi_stage_model(face, dest_face, lo16_mode, srcb_fmt="tf32",
+                   zero_flag_disabled=True):
+    """Closed-form passes-1+2-only prediction.  lo16_mode:
+    'sim-preserve' (Dst bits 15..0 kept -- the pinned sim's bf16-class
+    path) or 'doc' (explicit-TF32 arm: LowMantissa<<13, bits 12..0
+    zeroed, subject to the srcb_fmt mask)."""
+    out = [[0] * 16 for _ in range(16)]
+    for i in range(16):
+        for j in range(16):
+            w = face[j][i] & M32
+            flushed = (not zero_flag_disabled) and flush_hi_pred(w)
+            hi = 0 if flushed else (w & 0xFFFF0000)
+            if lo16_mode == "sim-preserve":
+                lo = dest_face[i][j] & M16
+            else:
+                sb = 0 if flushed else shuffle_tf32((w >> 13) & M19)
+                if srcb_fmt == "fp16":
+                    sb &= 0x7FF1F
+                elif srcb_fmt != "tf32":
+                    sb &= 0x7F8FF
+                lo = (((sb >> 8) & 7) << 13) & M16
+                if flushed:
+                    lo = 0
+            out[i][j] = hi | lo
+    return out

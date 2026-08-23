@@ -283,19 +283,25 @@ def test_dstrow_roundtrip_and_fmt_fact(cal, stim_name_idx):
                 lm = (sb >> 8) & 7
                 want[j].append(((val16 << 16) | (lm << 13)) & M32)
         cands[fmt] = want
-    matches = [
+    # The pinned sim's bf16-class MOV path (X6-F2 note in the oracle)
+    # preserves the destination low half; the destination rows (face 2)
+    # are zero here, so 'sim-preserve' coincides with the doc's masked
+    # candidates whose LowMantissa lands zero -- candidates can therefore
+    # legitimately TIE on weak stimuli and NARROW on strong ones.
+    matches = set(
         fmt
         for fmt, want in cands.items()
         if all(got[j][l] == want[j][l] for j in range(8) for l in range(LANES))
-    ]
-    # 'tf32' and 'other' coincide unless bits 15..13 differ; collapse dups.
+    )
     assert matches, f"dstrow roundtrip matches NO SrcBFmt candidate ({name})"
-    winner = matches[0] if len(matches) == 1 else "+".join(sorted(matches))
     if SRCB_FMT_FACT["winner"] is None:
-        SRCB_FMT_FACT["winner"] = winner
-        print(f"SRCB-FMT-FACT: implied SrcBFmt masking arm = {winner}")
+        SRCB_FMT_FACT["winner"] = matches
+        print(f"SRCB-FMT-FACT: implied SrcBFmt masking arm in {sorted(matches)}")
     else:
-        assert SRCB_FMT_FACT["winner"] == winner, "SrcBFmt fact inconsistent"
+        joint = SRCB_FMT_FACT["winner"] & matches
+        assert joint, "SrcBFmt fact inconsistent across stimuli"
+        SRCB_FMT_FACT["winner"] = joint
+        print(f"SRCB-FMT-FACT (narrowed): {sorted(joint)}")
 
 
 @pytest.mark.parametrize("mode,face_idx", [(4, 0), (5, 1)],
@@ -343,46 +349,57 @@ def test_face_transpose_adversarial(cal):
 
 @pytest.mark.parametrize("stim_name_idx", [0, 1], ids=["sentinel", "varied"])
 def test_hi_stage_truncation(cal, stim_name_idx):
+    """Passes 1+2 only.  Adjudicates the X6-F2 divergence: doc says the
+    MOVB2D TF32 arm zeroes Dst bits 12..0 and writes LowMantissa<<13; the
+    pinned sim's TF32 arm writes the high half only (Dst bits 15..0
+    PRESERVED).  Both are invisible to the full choreography (pass 3
+    rewrites the low half); the winner prints as an arsenal fact."""
     name, rows = stimuli(8, tag=77)[stim_name_idx]
     vec = build_input(cal, rows)
     out = run_probe(7, vec)
     got = read_rows(cal, out, range(8))
     face = rows_to_face({i: rows[i] for i in range(8)}, vrow_base=0)
-    matches = []
-    per_fmt = {}
+    cands = {"sim-preserve": fo.hi_stage_model(face, face, "sim-preserve")}
     for fmt in ("tf32", "fp16", "other"):
-        hface = fo.face_transpose_32b_hi_stage(face, srcb_fmt=fmt)
+        cands[f"doc/{fmt}"] = fo.hi_stage_model(face, face, "doc", srcb_fmt=fmt)
+    matches = []
+    for cname, hface in cands.items():
         want = face_to_rows(hface, vrow_base=0)
-        per_fmt[fmt] = want
         if all(
             got[j][l] == (want[j][l] & M32)
             for j in range(8)
             for l in range(LANES)
         ):
-            matches.append(fmt)
+            matches.append(cname)
     if not matches:
-        check_rows(7, got, per_fmt["other"], f"{name} (shown vs 'other')")
-    winner = matches[0] if len(matches) == 1 else "+".join(sorted(matches))
-    print(f"HI-STAGE SRCB-FMT-FACT: {winner}")
+        check_rows(7, got, face_to_rows(cands["sim-preserve"], vrow_base=0),
+                   f"{name} (shown vs 'sim-preserve')")
+    winner = "+".join(sorted(matches))
+    print(f"HI-STAGE-LO16-FACT (X6-F2): MOVB2D TF32-arm low-half model = "
+          f"{winner}")
 
 
 def test_zeroflag_twin_flush(cal):
+    """Full choreography WITHOUT the zero-flag arm.  Adjudicates the
+    X6-F1 divergence (flush predicate: doc = shuffled-image low byte,
+    sim = fp32-layout exponent field) and proves the surface contract's
+    zero-flag arm is load-bearing (planted victims corrupt)."""
     rows = adversarial_rows(8, seed=4321)
     vec = build_input(cal, rows)
     out = run_probe(8, vec)
     got = read_rows(cal, out, range(8))
     face = rows_to_face({i: rows[i] for i in range(8)}, vrow_base=0)
-    victims = fo.flush_victims(face)
-    assert victims, "adversarial face produced no flush victims (vacuous)"
-    fmt = "other"
-    if SRCB_FMT_FACT["winner"] and "tf32" in SRCB_FMT_FACT["winner"] and \
-       "+" not in SRCB_FMT_FACT["winner"]:
-        fmt = "tf32"
-    fface = fo.face_transpose_32b(face, srcb_fmt=fmt, zero_flag_disabled=False)
+    fface = fo.face_transpose_32b_model(face, zero_flag_disabled=False)
     want = face_to_rows(fface, vrow_base=0)
-    check_rows(8, got, want, "zero-flag OFF twin (flush arm live)")
+    check_rows(8, got, want, "zero-flag OFF twin (flush arms live)")
+    exact = [[face[j][i] & M32 for j in range(16)] for i in range(16)]
+    victims = sum(
+        1 for i in range(16) for j in range(16) if fface[i][j] != exact[i][j]
+    )
+    assert victims, "adversarial face produced no flush victims (vacuous)"
     print(
-        f"ZERO-FLAG-FACT: {len(victims)} of 256 face positions corrupted "
-        "without the cfg block's zero-flag arm -- the surface contract is "
+        f"ZERO-FLAG-FACT: {victims} of 256 face positions corrupted "
+        "without the cfg block's zero-flag arm (flush keys: hi16 = IEEE "
+        "exponent field, lo16 = low byte) -- the surface contract is "
         "load-bearing"
     )

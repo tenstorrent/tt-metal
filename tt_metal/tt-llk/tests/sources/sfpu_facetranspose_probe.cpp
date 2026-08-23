@@ -136,9 +136,24 @@ inline void copy_rows_out(unsigned src_vrow_base, unsigned n)
     }
 }
 
+// Every mode must CONSUME the unpack thread's bank grants before the
+// kernel ends: the harness keeps ONE sim device per pytest session, so an
+// unconsumed dummy dvalid PERSISTS into the next test's kernel and wedges
+// its unpacker (the cross-launch state-persistence class lane FS proved
+// on silicon for replay state; same shape here for bank valids).  The
+// choreography modes consume them naturally; the calibration modes drain
+// them explicitly.
+inline void drain_bank_grants()
+{
+    namespace fi = sfpi::facetranspose_impl_;
+    __builtin_rvtt_ttstallwait(0x40 /* STALL_MATH */, fi::bh_srca_vld | fi::bh_srcb_vld);
+    sfpi::face_transpose_release_banks();
+}
+
 inline void body_identity()
 {
     copy_rows_out(0, 16);
+    drain_bank_grants();
 }
 
 inline void body_rowtag()
@@ -161,6 +176,7 @@ inline void body_rowtag()
     ROWTAG(14);
     ROWTAG(15);
 #undef ROWTAG
+    drain_bank_grants();
 }
 
 inline void body_lanetag()
@@ -170,6 +186,7 @@ inline void body_lanetag()
     {
         STROW(v, i);
     }
+    drain_bank_grants();
 }
 
 // --- mode 3: Dst16-row calibration ------------------------------------
