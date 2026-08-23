@@ -1250,6 +1250,33 @@ def _unit_work_name(unit) -> str:
     return "inference"
 
 
+def _measured_bw_gbps(rf: dict, ms):
+    """Achieved DRAM bandwidth for ONE stage: the bytes IT reads over the time IT took.
+
+    THE ONLY PLACE THIS IS COMPUTED. It stood at two call sites as the same expression twice, each
+    carrying a special case for the recurring stage that substituted the caller's MODEL-LEVEL
+    bandwidth:
+
+        _mb = bw_gbps if (rf["tokens"] == 1 and bw_gbps) else rf["bytes"] / ms
+
+    and its comment explained why -- "the caller already computed this one from the same bytes;
+    recomputing it here differs in the last digit". True while a stage's read set WAS the model-level
+    one. It stopped being true the moment stages got their own measured bytes, and the special case
+    became a second source rather than a rounding nicety: decode printed a 4.59 ms floor (2.350 GB)
+    beside 360.5 GB/s (4.784 GB), two answers to one question, 2.04x apart, in the same three rows.
+    Every other stage was self-consistent because only the recurring one took that branch.
+
+    So the row divides by the bytes THAT ROW is built from, always. One owner, and the arithmetic is
+    the definition of the quantity rather than a choice between two sources.
+    """
+    try:
+        b = float((rf or {}).get("bytes") or 0)
+        t = float(ms or 0)
+        return (b / (t / 1000.0)) / 1e9 if (b > 0 and t > 0) else None
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
 def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stage_ms=None, model="", task=""):
     """Both ceilings for both stages, from the MODEL'S OWN facts rather than from summing annotated ops.
 
@@ -2026,11 +2053,7 @@ def _roofline_tables(
                 # The roof reduces to its own currency, where it does have something to say: 0.69 of
                 # 702.0 TFLOPS, which differs by stage even though the peak does not.
                 if _roof == "memory" and peak_bw_gbps:
-                    _mb0 = (
-                        bw_gbps
-                        if (int((_rf or {}).get("tokens") or 0) == 1 and bw_gbps)
-                        else (((_rf["bytes"] / (_ms / 1000.0)) / 1e9) if _ms else None)
-                    )
+                    _mb0 = _measured_bw_gbps(_rf, _ms)
                     out.append(
                         _row(
                             _lbl,
@@ -2067,13 +2090,7 @@ def _roofline_tables(
                 _meas = "n/a \u2014 not measured"
             out.append(_row(_lbl, _ncell(_n(_c), "ms"), _bandcell(_n(_lo_ms), _n(_hi_ms), "ms"), _meas))
             if _roof == "memory" and peak_bw_gbps:
-                # The caller already computed this one from the same bytes; recomputing it here
-                # differs in the last digit and puts two nearly-equal bandwidths in one report.
-                _mb = (
-                    bw_gbps
-                    if (int((_rf or {}).get("tokens") or 0) == 1 and bw_gbps)
-                    else (((_rf["bytes"] / (_ms / 1000.0)) / 1e9) if _ms else None)
-                )
+                _mb = _measured_bw_gbps(_rf, _ms)
                 out.append(
                     _row(
                         "",

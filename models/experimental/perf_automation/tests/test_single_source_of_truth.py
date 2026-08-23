@@ -134,6 +134,39 @@ _OWNERS = {
             "cc_optimize/summary.py": {"_stage_roofs", "_pinned_peak_flops", "_roofline_tables"},
         },
     ),
+    # THE BYTES ONE UNIT OF WORK READS. Eleven commits have been about this single quantity, and each
+    # fixed the consumer that happened to look wrong: the census total, the anchor's key, the checkpoint
+    # inference, the pinning, the per-stage split. None was preceded by "who else reads this?", so each
+    # fix left the other consumers on a different source, and the twelfth symptom was a DECODE row
+    # quoting 2.350 GB in its floor and 4.784 GB in its bandwidth -- 2.04x apart, three lines apart.
+    #
+    # A stage's read set now has ONE owner. _stage_roofs derives it (pinned -> measured -> estimate)
+    # and puts it in the roof dict; every renderer divides by that, via _measured_bw_gbps. A renderer
+    # reaching for the model-level `active_bytes` instead is the mistake this entry exists to catch --
+    # legitimate only where the question really is model-level (the DRAM capacity panel asks what the
+    # model OCCUPIES, not what a unit reads).
+    "the per-stage read set": (
+        "bytes",
+        {
+            "cc_optimize/summary.py": {
+                # the owner, and the two helpers that read the value it produced
+                "_stage_roofs",
+                "_measured_bw_gbps",
+                "_bytes_for",
+                "_stage_measured_bytes",
+                "_measured_stage_bytes",
+                "_pinned_stage_bytes",
+                "_roofline_tables",
+                "_section_bytes_cached",
+                "_stage_share",
+                "_share_and_basis",
+                "_roofline_lines",
+                "_throughput_from_profile",
+                "_model_facts",
+                "_peak_for_stage",
+            },
+        },
+    ),
     "the modeled floor": (
         "modeled_floor_ms",
         {
