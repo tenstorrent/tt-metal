@@ -71,6 +71,8 @@ ALWI void process_grid_point_nearest(
         }
     }
 
+    // Validate both precomputed and ordinary coordinates. This also rejects padded-shard
+    // coordinates and the precomputed -1 sentinel before forming an input page index.
     const bool h_valid = is_coordinate_valid(nearest_h, input_height);
     const bool w_valid = is_coordinate_valid(nearest_w, input_width);
     if (h_valid && w_valid) {
@@ -223,6 +225,8 @@ ALWI void grid_sample_nearest_impl(
             grid_stick_nbytes,
             grid_hw,
             grid_nsticks_per_core);
+        // Each split reader owns alternating grid points, so skip the point assigned to
+        // the peer after advancing past the one just processed.
         if constexpr (split_reader) {
             advance_grid_index<is_sharded>(
                 in_grid_row_idx,

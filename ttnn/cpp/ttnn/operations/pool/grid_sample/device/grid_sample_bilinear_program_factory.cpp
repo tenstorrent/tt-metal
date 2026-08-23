@@ -100,6 +100,9 @@ ttnn::device_operation::ProgramArtifacts GridSampleBilinearProgramFactory::creat
     (void)resolved_math_fidelity;
     (void)resolved_math_approx;
     (void)resolved_l1_acc;
+    // Half-sync DEST holds four FP32 tiles, while explicit full sync holds eight. Clamp only
+    // the former so FP32 accumulation remains safe without penalizing callers that requested
+    // dst_full_sync_en. The compute kernel receives the same decision as a named argument.
     const bool force_4_tile_chunk = resolved_fp32_acc && !user_dst_full_sync;
     const uint32_t effective_max_tiles_per_reduction = force_4_tile_chunk ? 4U : MAX_TILES_PER_REDUCTION;
     const uint32_t in_ntiles_c =
@@ -113,6 +116,9 @@ ttnn::device_operation::ProgramArtifacts GridSampleBilinearProgramFactory::creat
     const bool last_tile_is_partial = input_shape[-1] % tt::constants::TILE_WIDTH != 0;
     const bool last_chunk_partial =
         in_nblocks_c > 1 && in_ntiles_c % effective_max_tiles_per_reduction != 0 && !last_tile_is_partial;
+    // Wide channel sticks are streamed one reduction chunk at a time to bound per-core L1.
+    // A short final whole-tile chunk uses a tight byte stride so the reader layout matches
+    // compute's tilize-reconfiguration path.
 
     const TensorParamName INPUT{"input"};
     const TensorParamName GRID{"grid"};
