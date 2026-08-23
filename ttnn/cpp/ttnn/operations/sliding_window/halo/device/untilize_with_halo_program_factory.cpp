@@ -314,6 +314,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
                 {{"pad_val", pad_val},
                  {"input_npages", input_npages},
                  {"skip_untilize", static_cast<std::uint32_t>(skip_untilize)},
+                 {"src_producer", static_cast<std::uint32_t>(block_start_offset == 0)},
                  {"aligned_stick_nbytes", aligned_stick_nbytes},
                  {"is_block_sharded", static_cast<std::uint32_t>(is_block_sharded)},
                  {"is_col_major", static_cast<std::uint32_t>(transpose_mcast)},
@@ -367,9 +368,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
         tt::tt_metal::experimental::KernelSpec::CompilerOptions::Defines defines;
         if (config_tensors_in_dram) {
             defines.emplace("CONFIG_TENSOR_IN_DRAM", "1");
-        }
-        if (block_start_offset == 0) {
-            defines.emplace("SRC_PRODUCER", "1");
         }
         if (enable_padding) {
             defines.emplace("ENABLE_PADDING", "1");

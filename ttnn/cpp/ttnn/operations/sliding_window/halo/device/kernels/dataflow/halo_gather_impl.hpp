@@ -181,6 +181,7 @@ template <
     uint32_t PadVal,
     uint32_t InputNPages,
     uint32_t SkipUntilize,
+    uint32_t SrcProducer,
     uint32_t AlignedStickNBytes,
     uint32_t IsBlockSharded,
     uint32_t IsColumnMajor,
@@ -230,13 +231,13 @@ FORCE_INLINE void gather(uint32_t config_read_index) {
 #endif
 #endif
 
-#ifdef SRC_PRODUCER
     DataflowBuffer src(dfb::src);
-    // The input shard is resident and shared by both split readers. Reader 0 alone owns the
-    // reserve/push bookkeeping so the shared received/acked counters stay balanced.
-    src.reserve_back(static_cast<uint16_t>(InputNPages));
-    src.push_back(static_cast<uint16_t>(InputNPages));
-#endif
+    if constexpr (SrcProducer) {
+        // The input shard is resident and shared by both split readers. Reader 0 alone owns the
+        // reserve/push bookkeeping so the shared received/acked counters stay balanced.
+        src.reserve_back(static_cast<uint16_t>(InputNPages));
+        src.push_back(static_cast<uint16_t>(InputNPages));
+    }
 
 #ifdef ENABLE_PADDING
     if constexpr (PadVal == 0) {
@@ -254,15 +255,13 @@ FORCE_INLINE void gather(uint32_t config_read_index) {
     }
 #endif
 
-#ifdef SRC_PRODUCER
-    // The other reader consumes the already-resident shard directly; making it wait/pop would race
-    // this shared read pointer and retire pages while reader 0 may still be using them. Keep this
-    // wait immediately before gather, after padding, to preserve the legacy stream-register and NOC
-    // issue ordering.
-    if constexpr (SkipUntilize) {
+    if constexpr (SrcProducer && SkipUntilize) {
+        // The other reader consumes the already-resident shard directly; making it wait/pop would race
+        // this shared read pointer and retire pages while reader 0 may still be using them. Keep this
+        // wait immediately before gather, after padding, to preserve the legacy stream-register and NOC
+        // issue ordering.
         src.wait_front(static_cast<uint16_t>(InputNPages));
     }
-#endif
 
     const tt_l1_ptr uint16_t* config = reinterpret_cast<const tt_l1_ptr uint16_t*>(gather_config_l1_addr);
     uint16_t config_index = 0;
@@ -327,12 +326,10 @@ FORCE_INLINE void gather(uint32_t config_read_index) {
 
     noc.async_read_barrier();
     noc.async_write_barrier();
-#ifdef SRC_PRODUCER
-    // Balance reader 0's reserve/push/wait only after both its input reads and output writes finish.
-    if constexpr (SkipUntilize) {
+    if constexpr (SrcProducer && SkipUntilize) {
+        // Balance reader 0's reserve/push/wait only after both its input reads and output writes finish.
         src.pop_front(static_cast<uint16_t>(InputNPages));
     }
-#endif
 }
 
 }  // namespace halo
