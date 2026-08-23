@@ -122,14 +122,9 @@ get_padded_slice_runtime_args_rm_sharded_output(
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
 
     const uint32_t num_sticks_per_core = output_shard_spec.shape[0];
-    // Shard height is alignment-rounded and may extend beyond the logical slice. Limit the
-    // per-core reader/writer handshake to real output sticks so the tail never walks off input.
-    // Rows beyond total_output_sticks are outside the TensorSpec's logical extent and remain
-    // unspecified instead of inheriting legacy's out-of-slice input rows.
-    uint32_t total_output_sticks = 1;
-    for (uint32_t d = 0; d + 1 < actual_output_shape.rank(); ++d) {
-        total_output_sticks *= actual_output_shape[d];
-    }
+    // Fill every physical shard row, including the alignment-rounded tail beyond the logical slice.
+    // This preserves the legacy deterministic behavior: tail rows follow the same wrapped source
+    // geometry as real rows instead of retaining allocator-dependent contents.
 
     log_debug(tt::LogOp, "num_stick_per_core: {}", num_sticks_per_core);
 
@@ -162,11 +157,6 @@ get_padded_slice_runtime_args_rm_sharded_output(
         int this_input_row_size_bytes =
             std::max(std::min<int>(output_row_size_bytes, input_page_size - width_offset), 0);
         uint32_t this_core_num_sticks = num_sticks_per_core;
-        if (num_sticks_written >= total_output_sticks) {
-            this_core_num_sticks = 0;
-        } else if (num_sticks_written + this_core_num_sticks > total_output_sticks) {
-            this_core_num_sticks = total_output_sticks - num_sticks_written;
-        }
         if (this_input_row_size_bytes == 0) {
             this_core_num_sticks = 0;
         }
