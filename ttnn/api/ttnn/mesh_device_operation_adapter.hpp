@@ -808,6 +808,10 @@ public:
 
         struct shared_variables_t {
             std::vector<ResolvedTensorBinding> bindings;
+            // Number of reflected input/output tensors at cache-miss time. Stored separately from
+            // op-owned tensors so a cache hit cannot silently reinterpret an op-owned binding as IO
+            // (or vice versa) if reflection produces a different boundary.
+            std::size_t io_tensor_count = 0;
             // Op-owned tensors produced by the factory, parked here so the
             // (move-only) MeshTensors outlive the cache miss and every stamped
             // program can reference the same workload-wide set. Shared ownership
@@ -829,6 +833,15 @@ public:
             ttsl::reflection::visit_object_of_type<ttnn::Tensor>(visit, tensor_args);
             ttsl::reflection::visit_object_of_type<ttnn::Tensor>(visit, tensor_return_value);
             return result;
+        }
+
+        static void validate_io_tensor_count(std::size_t expected, std::size_t actual) {
+            TT_FATAL(
+                actual == expected,
+                "ProgramSpec cache-hit tensor enumeration changed its IO/op-owned boundary: expected {} IO "
+                "tensors from the cache miss, but got {}",
+                expected,
+                actual);
         }
 
         // Match each TensorArgument's MeshTensor reference back to its index in the
@@ -892,6 +905,7 @@ public:
             // op-owned tensors. resolve_bindings maps each TensorArgument to an
             // index in this combined order, which the cache-hit path reproduces.
             auto mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
+            const std::size_t io_tensor_count = mesh_tensors.size();
             for (const auto& op_owned_tensor : artifacts.op_owned_tensors) {
                 mesh_tensors.push_back(std::cref(op_owned_tensor));
             }
@@ -912,7 +926,11 @@ public:
                 auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, artifacts.spec);
                 tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
                 shared_variables.emplace(
-                    range, shared_variables_t{.bindings = bindings, .op_owned_tensors = op_owned_tensors});
+                    range,
+                    shared_variables_t{
+                        .bindings = bindings,
+                        .io_tensor_count = io_tensor_count,
+                        .op_owned_tensors = op_owned_tensors});
                 mesh_workload.add_program(range, std::move(program));
             }
             return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
@@ -932,6 +950,7 @@ public:
             const bool skip_validation = !ttnn::CONFIG.get<"validate_program_args">();
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 const auto& sv = cached_workload.shared_variables.at(coordinate_range);
+                validate_io_tensor_count(sv.io_tensor_count, io_mesh_tensors.size());
 
                 tt::tt_metal::experimental::Table<TensorParamName, TensorArgument> fresh_tensor_args;
                 for (const auto& b : sv.bindings) {

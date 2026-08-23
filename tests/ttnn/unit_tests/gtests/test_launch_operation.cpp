@@ -183,6 +183,17 @@ TEST(LaunchOperationTest, ProgramSpecAdapterCompiles) {
     SUCCEED();
 }
 
+TEST(LaunchOperationTest, ProgramSpecAdapterRejectsChangedIOTensorBoundary) {
+    using Adapter = device_operation::MeshDeviceOperationAdapter<
+        ProgramSpecMinimalOp>::ProgramSpecMeshWorkloadFactoryAdapter<ProgramSpecFactory>;
+
+    EXPECT_NO_THROW(Adapter::validate_io_tensor_count(3, 3));
+    EXPECT_THAT(
+        [] { Adapter::validate_io_tensor_count(3, 2); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("expected 3 IO tensors from the cache miss, but got 2")));
+}
+
 // SupportsPerCoreAllocation gates whether launch() will accept a per-core allocated tensor. No op
 // declares supports_per_core_allocation today, so the accept path is otherwise never exercised --
 // a concept that could never match would look identical at runtime. Pin all three directions here:
