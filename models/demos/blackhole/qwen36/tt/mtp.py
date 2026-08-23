@@ -23,12 +23,10 @@ See docs/mtp_design.md.
 import torch
 
 import ttnn
-from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt.attention import AttentionConfig, Qwen36GatedAttention
 from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
 from models.demos.blackhole.qwen36.tt.rms_norm import rms_norm_ttnn
 from models.demos.blackhole.qwen36.utils.substate import substate
-from models.tt_transformers.tt.common import Mode
 
 
 class _SingleDeviceArgsView:
@@ -114,29 +112,13 @@ class Qwen36MTPHead:
             **self._mesh_kwargs,
         )
 
-        # Decoder block, mirroring Qwen36DecoderLayer's single-device full-attn path.
-        self.attention_norm = RMSNorm(
-            device=mesh_device,
-            dim=args.dim,
-            state_dict=mtp_state_dict,
-            weight_key="input_layernorm",
-            state_dict_prefix="layers.0.",
-            weight_cache_path=cache,
-            weight_dtype=ttnn.bfloat16,
-            add_unit_offset=True,
-            eps=args.norm_eps,
-        )
-        self.ffn_norm = RMSNorm(
-            device=mesh_device,
-            dim=args.dim,
-            state_dict=mtp_state_dict,
-            weight_key="post_attention_layernorm",
-            state_dict_prefix="layers.0.",
-            weight_cache_path=cache,
-            weight_dtype=ttnn.bfloat16,
-            add_unit_offset=True,
-            eps=args.norm_eps,
-        )
+        # Decoder block, mirroring Qwen36DecoderLayer's single-device full-attn
+        # path. The block norms ride the same bare-ttnn.rms_norm helper as the
+        # fc norms: the class RMSNorm's program variant carries a ~20 KB larger
+        # static CB region, which is exactly the margin the batched graph does
+        # not have (56275).
+        self.attn_norm_w = _norm_1p("layers.0.input_layernorm")
+        self.ffn_norm_w = _norm_1p("layers.0.post_attention_layernorm")
         self.attention = Qwen36GatedAttention(
             mesh_device,
             AttentionConfig.from_args(args),
@@ -252,39 +234,45 @@ class Qwen36MTPHead:
         """The drafter-step op graph over device inputs. Returns (logits, normed).
 
         Shared by the eager step() and the trace capture/replay path — everything
-        here is device ops only (trace-capture safe).
+        here is device ops only (trace-capture safe). Activations live in DRAM:
+        a resident L1 activation at batched width ([8,1,5120] pads to
+        [8,32,5120] = 20,480 B reserved in EVERY L1 bank) drops the allocator
+        watermark under the whole-row rms_norm programs' static CB region — the
+        56275 clash fired dispatching a block norm while the fc output sat
+        L1-pinned exactly 19,712 B over the margin. With DRAM activations every
+        norm dispatches at the baseline watermark, which the same run proved
+        sufficient with 20,480 B to spare.
         """
         if page_table is None:
             page_table = self._page_table_tt
-        emb = self.embedding(tok)  # [1,1,dim]
-        e_n = rms_norm_ttnn(emb, self.pre_fc_norm_embedding, eps=self.norm_eps, memory_config=ttnn.L1_MEMORY_CONFIG)
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        emb = self.embedding(tok)  # [B,1,dim]
+        e_n = rms_norm_ttnn(emb, self.pre_fc_norm_embedding, eps=self.norm_eps, memory_config=dram)
         ttnn.deallocate(emb)
-        h_n = rms_norm_ttnn(h_in, self.pre_fc_norm_hidden, eps=self.norm_eps, memory_config=ttnn.L1_MEMORY_CONFIG)
+        h_n = rms_norm_ttnn(h_in, self.pre_fc_norm_hidden, eps=self.norm_eps, memory_config=dram)
 
-        fused = ttnn.concat([e_n, h_n], dim=-1)  # [1,1,2*dim] — embedding first (vLLM order)
+        fused = ttnn.concat([e_n, h_n], dim=-1)  # [B,1,2*dim] — embedding first (vLLM order)
         ttnn.deallocate(e_n)
         ttnn.deallocate(h_n)
-        x = ttnn.linear(
-            fused, self.fc_weight, compute_kernel_config=self.compute_kernel_config, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+        x = ttnn.linear(fused, self.fc_weight, compute_kernel_config=self.compute_kernel_config, memory_config=dram)
         ttnn.deallocate(fused)
 
         # Decoder block (decode-mode residual pattern, as in Qwen36DecoderLayer).
-        attn_in = self.attention_norm(x, mode=Mode.DECODE, norm_config={"output_mem_config": ttnn.L1_MEMORY_CONFIG})
+        attn_in = rms_norm_ttnn(x, self.attn_norm_w, eps=self.norm_eps, memory_config=dram)
         attn_out = self.attention.forward(attn_in, cos, sin, position_tensor=cur_pos, page_table=page_table)
         ttnn.deallocate(attn_in)
-        h1 = ttnn.add(x, attn_out)
+        h1 = ttnn.add(x, attn_out, memory_config=dram)
         ttnn.deallocate(x)
         ttnn.deallocate(attn_out)
 
-        ff_in = self.ffn_norm(h1, mode=Mode.DECODE, norm_config={"output_mem_config": ttnn.L1_MEMORY_CONFIG})
+        ff_in = rms_norm_ttnn(h1, self.ffn_norm_w, eps=self.norm_eps, memory_config=dram)
         ff_out = self.feed_forward.forward(ff_in)
         ttnn.deallocate(ff_in)
-        out = ttnn.add(h1, ff_out)
+        out = ttnn.add(h1, ff_out, memory_config=dram)
         ttnn.deallocate(h1)
         ttnn.deallocate(ff_out)
 
-        normed = rms_norm_ttnn(out, self.final_norm, eps=self.norm_eps, memory_config=ttnn.L1_MEMORY_CONFIG)
+        normed = rms_norm_ttnn(out, self.final_norm, eps=self.norm_eps, memory_config=dram)
         ttnn.deallocate(out)
         logits = ttnn.linear(normed, self.lm_head_weight, compute_kernel_config=self.compute_kernel_config)
         return logits, normed
