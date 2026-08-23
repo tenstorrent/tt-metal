@@ -8,19 +8,29 @@
 
 #include <cmath>
 #include <cstdint>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <optional>
 #include <tt-metalium/work_split.hpp>
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::operations::rotate {
 
 using namespace tt;
 using namespace tt::tt_metal;
+using tt::tt_metal::experimental::DataflowBufferSpec;
+using tt::tt_metal::experimental::DFBSpecName;
+using tt::tt_metal::experimental::KernelRunArgs;
+using tt::tt_metal::experimental::KernelSpec;
+using tt::tt_metal::experimental::KernelSpecName;
+using tt::tt_metal::experimental::ProgramRunArgs;
+using tt::tt_metal::experimental::ProgramSpec;
+using tt::tt_metal::experimental::TensorBinding;
+using tt::tt_metal::experimental::TensorParameter;
+using tt::tt_metal::experimental::TensorParamName;
+using tt::tt_metal::experimental::WorkUnitSpec;
 
 constexpr uint32_t NEAREST_BUFFERING_FACTOR = 2;
 constexpr uint32_t NUM_TILES_DEST = 8;
@@ -32,17 +42,15 @@ static uint16_t nearest_float_to_bfloat16(float value) {
     return std::bit_cast<uint16_t>(bf16_value);
 }
 
-ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts RotateDeviceOperation::NearestProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     const auto& input_tensor = tensor_args.input;
     auto& output_tensor = output;
 
-    ProgramDescriptor desc;
     const bool is_sharded = input_tensor.is_sharded();
 
-    const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::tt_metal::IDevice* const device = output_tensor.device();
 
@@ -144,99 +152,99 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
     // CB total size must be an even multiple of burst_size (required by cb_push_back/cb_pop_front API)
     num_cb_pages = round_down(num_cb_pages, burst_size);
 
-    uint32_t next_cb_index = tt::CBIndex::c_0;
     const uint32_t output_cb_page_size = aligned_input_stick_nbytes;
-
-    const uint32_t fill_cb_index = next_cb_index++;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = output_cb_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(fill_cb_index),
-            .data_format = output_cb_data_format,
-            .page_size = output_cb_page_size,
-        }}},
-    });
-
-    uint32_t input_cb_index = 0;
-    if (any_sharded) {
-        input_cb_index = next_cb_index++;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = input_nsticks_per_core * aligned_input_stick_nbytes,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(input_cb_index),
-                .data_format = input_cb_data_format,
-                .page_size = aligned_input_stick_nbytes,
-            }}},
-            .buffer = input_tensor.buffer(),
-        });
-    }
-
-    const uint32_t output_cb_index = next_cb_index++;
     const uint32_t output_cb_num_pages =
         any_sharded ? output_nsticks_per_core : num_cb_pages * NEAREST_BUFFERING_FACTOR;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = output_cb_num_pages * output_cb_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(output_cb_index),
-            .data_format = output_cb_data_format,
-            .page_size = output_cb_page_size,
-        }}},
-        .buffer = any_sharded ? output_tensor.buffer() : nullptr,
-    });
 
     const bool fill_is_zero = (fill_value_bf16 == 0);
 
     const uint32_t effective_stick_nbytes = any_sharded ? effective_channels * element_size : input_stick_nbytes;
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        output_cb_index,
-        aligned_input_stick_nbytes,
-        input_batch,
-        input_height,
-        input_width,
-        effective_channels,
-        num_cb_pages,
-        fill_cb_index,
-        effective_stick_nbytes,
-        static_cast<uint32_t>(fill_is_zero),
-        burst_size,
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const DFBSpecName FILL{"fill"};
+    const DFBSpecName OUTPUT_DFB{"output"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+
+    const DataflowBufferSpec fill_dfb{
+        .unique_id = FILL,
+        .entry_size = output_cb_page_size,
+        .num_entries = 1,
+        .data_format_metadata = output_cb_data_format,
+    };
+    const DataflowBufferSpec output_dfb{
+        .unique_id = OUTPUT_DFB,
+        .entry_size = output_cb_page_size,
+        .num_entries = output_cb_num_pages,
+        .data_format_metadata = output_cb_data_format,
+        .borrowed_from = any_sharded ? std::optional<TensorParamName>{OUTPUT} : std::nullopt,
     };
 
-    auto* input_buffer = input_tensor.buffer();
-    TT_FATAL(input_buffer != nullptr, "Input tensor must be allocated on device for rotate operation");
-    tt::tt_metal::TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
-
-    std::vector<uint32_t> writer_compile_time_args = {
-        output_cb_index,
-        aligned_output_stick_nbytes,
-        num_cb_pages,
-        burst_size,
+    const KernelSpec reader{
+        .unique_id = READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/dataflow/"
+            "reader_rotate_nearest_interleaved.cpp",
+        // Gen1 compatibility: the reader both produces and consumes FILL. A Gen2 port must use scratchpad storage or
+        // a LocalTensorAccessor instead of this data-movement-kernel self-loop.
+        .dfb_bindings = {ProducerOf(OUTPUT_DFB, "output"), ProducerOf(FILL, "fill"), ConsumerOf(FILL, "fill")},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
+        .compile_time_args =
+            {
+                {"input_stick_nbytes", aligned_input_stick_nbytes},
+                {"input_height", input_height},
+                {"input_width", input_width},
+                {"input_channels", effective_channels},
+                {"input_stick_nbytes_unaligned", effective_stick_nbytes},
+                {"fill_is_zero", static_cast<uint32_t>(fill_is_zero)},
+                {"burst_size", burst_size},
+            },
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"num_sticks",
+                  "start_stick_id",
+                  "cos_angle_bits",
+                  "sin_angle_bits",
+                  "center_x_bits",
+                  "center_y_bits",
+                  "fill_value_bf16"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
+    const KernelSpec writer{
+        .unique_id = WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/dataflow/"
+            "writer_rotate_nearest_interleaved.cpp",
+        .dfb_bindings = {ConsumerOf(OUTPUT_DFB, "output")},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
+        .compile_time_args =
+            {
+                {"output_stick_nbytes", aligned_output_stick_nbytes},
+                {"burst_size", burst_size},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"num_sticks", "start_stick_id"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
-    auto* output_buffer = output_tensor.buffer();
-    TT_FATAL(output_buffer != nullptr, "Output tensor must be allocated on device for rotate operation");
-    tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/dataflow/"
-        "reader_rotate_nearest_interleaved.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/dataflow/"
-        "writer_rotate_nearest_interleaved.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
+    KernelRunArgs reader_run{.kernel = READER};
+    KernelRunArgs writer_run{.kernel = WRITER};
+    const auto add_runtime_args = [&](const CoreCoord& core, uint32_t num_sticks, uint32_t start_stick_id) {
+        AddRuntimeArgsForNode(
+            reader_run.runtime_arg_values,
+            core,
+            {
+                {"num_sticks", num_sticks},
+                {"start_stick_id", start_stick_id},
+                {"cos_angle_bits", static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle))},
+                {"sin_angle_bits", static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle))},
+                {"center_x_bits", static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x))},
+                {"center_y_bits", static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y))},
+                {"fill_value_bf16", static_cast<uint32_t>(fill_value_bf16)},
+            });
+        AddRuntimeArgsForNode(
+            writer_run.runtime_arg_values, core, {{"num_sticks", num_sticks}, {"start_stick_id", start_stick_id}});
+    };
 
     if (any_sharded) {
         for (uint32_t i = 0; i < num_cores; i++) {
@@ -252,26 +260,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
                 start_stick_id = i * input_nsticks_per_core;
             }
 
-            reader_desc.emplace_runtime_args(
-                core,
-                {
-                    input_tensor.buffer(),
-                    input_nsticks_per_core,
-                    start_stick_id,
-                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle)),
-                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle)),
-                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x)),
-                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y)),
-                    static_cast<uint32_t>(fill_value_bf16),
-                });
-
-            writer_desc.emplace_runtime_args(
-                core,
-                {
-                    output_tensor.buffer(),
-                    input_nsticks_per_core,
-                    start_stick_id,
-                });
+            add_runtime_args(core, input_nsticks_per_core, start_stick_id);
         }
     } else {
         uint32_t sticks_processed = 0;
@@ -280,35 +269,28 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
             const uint32_t num_sticks =
                 core_group_1.contains(core) ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
 
-            reader_desc.emplace_runtime_args(
-                core,
-                {
-                    input_tensor.buffer(),
-                    num_sticks,
-                    sticks_processed,
-                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(cos_angle)),
-                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(sin_angle)),
-                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_x)),
-                    static_cast<uint32_t>(fixed_point_arithmetic::float_to_fixed(center_y)),
-                    static_cast<uint32_t>(fill_value_bf16),
-                });
-
-            writer_desc.emplace_runtime_args(
-                core,
-                {
-                    output_tensor.buffer(),
-                    num_sticks,
-                    sticks_processed,
-                });
+            add_runtime_args(core, num_sticks, sticks_processed);
 
             sticks_processed += num_sticks;
         }
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-
-    return desc;
+    ProgramSpec spec{
+        .name = "rotate_nearest",
+        .kernels = {reader, writer},
+        .dataflow_buffers = {fill_dfb, output_dfb},
+        .tensor_parameters =
+            {
+                TensorParameter{.unique_id = INPUT, .spec = input_tensor.tensor_spec()},
+                TensorParameter{.unique_id = OUTPUT, .spec = output_tensor.tensor_spec()},
+            },
+        .work_units = {WorkUnitSpec{.name = "rotate", .kernels = {READER, WRITER}, .target_nodes = all_cores}},
+    };
+    ProgramRunArgs run_args{
+        .kernel_run_args = {std::move(reader_run), std::move(writer_run)},
+        .tensor_args = {{INPUT, input_tensor.mesh_tensor()}, {OUTPUT, output_tensor.mesh_tensor()}},
+    };
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::operations::rotate

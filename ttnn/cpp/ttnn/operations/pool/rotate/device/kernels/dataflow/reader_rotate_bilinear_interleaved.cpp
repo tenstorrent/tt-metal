@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include <api/dataflow/dataflow_api.h>
+#include "experimental/kernel_args.h"
 
 #include "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/grid_sample_reader_common.hpp"
 #include "ttnn/cpp/ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp"
@@ -11,48 +12,39 @@
 
 using namespace fixed_point_arithmetic;
 
-#define ALWI inline __attribute__((always_inline))
-
-void kernel_main() {
-    uint32_t input_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_sticks = get_arg_val<uint32_t>(1);
-    uint32_t start_stick_id = get_arg_val<uint32_t>(2);
-    uint32_t cos_angle_bits = get_arg_val<uint32_t>(3);
-    uint32_t sin_angle_bits = get_arg_val<uint32_t>(4);
-    uint32_t center_x_bits = get_arg_val<uint32_t>(5);
-    uint32_t center_y_bits = get_arg_val<uint32_t>(6);
-    uint32_t fill_value_bits = get_arg_val<uint32_t>(7);
-
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t scalar_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t input_stick_nbytes = get_compile_time_arg_val(2);
-    constexpr uint32_t input_batch = get_compile_time_arg_val(3);
-    constexpr uint32_t input_height = get_compile_time_arg_val(4);
-    constexpr uint32_t input_width = get_compile_time_arg_val(5);
-    constexpr uint32_t fill_cb_id = get_compile_time_arg_val(6);
-    constexpr uint32_t input_channels = get_compile_time_arg_val(7);
-    constexpr bool fill_is_zero = get_compile_time_arg_val(8) != 0;
-    constexpr uint32_t element_size = get_compile_time_arg_val(9);
-
+template <
+    uint32_t input_stick_nbytes,
+    uint32_t input_height,
+    uint32_t input_width,
+    uint32_t input_channels,
+    uint32_t fill_is_zero,
+    uint32_t element_size>
+TT_KERNEL void reader_rotate_bilinear(
+    uint32_t num_sticks,
+    uint32_t start_stick_id,
+    uint32_t cos_angle_bits,
+    uint32_t sin_angle_bits,
+    uint32_t center_x_bits,
+    uint32_t center_y_bits,
+    uint32_t fill_value_bits) {
     const int32_t cos_angle_q16 = static_cast<int32_t>(cos_angle_bits);
     const int32_t sin_angle_q16 = static_cast<int32_t>(sin_angle_bits);
     const int32_t center_x_q16 = static_cast<int32_t>(center_x_bits);
     const int32_t center_y_q16 = static_cast<int32_t>(center_y_bits);
 
-    constexpr auto src_args = TensorAccessorArgs<10>();
-    const auto input_tensor_accessor = TensorAccessor(src_args, input_addr);
+    const auto input_tensor_accessor = TensorAccessor(tensor::input);
 
     constexpr uint32_t hw_size = input_height * input_width;
 
     const uint32_t end_stick_id = start_stick_id + num_sticks;
 
-    DataflowBuffer input_dfb(input_cb_id);
-    DataflowBuffer scalar_dfb(scalar_cb_id);
-    DataflowBuffer fill_dfb(fill_cb_id);
+    DataflowBuffer input_dfb(dfb::input);
+    DataflowBuffer scalar_dfb(dfb::scalar);
+    DataflowBuffer fill_dfb(dfb::fill);
     Noc noc;
 
     uint32_t fill_stick_addr = fill_dfb.get_write_ptr();
-    if constexpr (fill_is_zero) {
+    if constexpr (fill_is_zero != 0) {
         zero_out_page(noc, fill_dfb);
     } else {
         volatile tt_l1_ptr uint32_t* fill_ptr32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fill_stick_addr);

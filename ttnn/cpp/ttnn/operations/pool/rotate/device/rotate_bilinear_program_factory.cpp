@@ -4,48 +4,52 @@
 
 #include <ttnn/operations/pool/rotate/device/rotate_device_operation.hpp>
 #include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
-#include <ttnn/operations/pool/pool_utils.hpp>
-#include <ttnn/operations/pool/grid_sample/device/grid_sample_utils.hpp>
 
 #include <cmath>
 #include <cstdint>
-#include <map>
 #include <optional>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::operations::rotate {
 
 using namespace tt;
 using namespace tt::tt_metal;
+using tt::tt_metal::experimental::ComputeGen1Config;
+using tt::tt_metal::experimental::DataflowBufferSpec;
+using tt::tt_metal::experimental::DFBBinding;
+using tt::tt_metal::experimental::DFBSpecName;
+using tt::tt_metal::experimental::Group;
+using tt::tt_metal::experimental::KernelRunArgs;
+using tt::tt_metal::experimental::KernelSpec;
+using tt::tt_metal::experimental::KernelSpecName;
+using tt::tt_metal::experimental::ProgramRunArgs;
+using tt::tt_metal::experimental::ProgramSpec;
+using tt::tt_metal::experimental::TensorBinding;
+using tt::tt_metal::experimental::TensorParameter;
+using tt::tt_metal::experimental::TensorParamName;
+using tt::tt_metal::experimental::WorkUnitSpec;
 
 constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
 constexpr uint32_t BUFFERING_FACTOR = 2;
 constexpr uint32_t REDUCTION_SIZE = 4;
 constexpr uint32_t MAX_ROWS_FOR_REDUCTION = 16;
 constexpr bool ONE_SCALAR_PER_CORE = false;
-constexpr uint32_t DUMMY_CB_ID = 32;
 
 static uint16_t float_to_bfloat16(float value) {
     bfloat16 bf16_value(value);
     return std::bit_cast<uint16_t>(bf16_value);
 }
 
-ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts RotateDeviceOperation::BilinearProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     const auto& input_tensor = tensor_args.input;
     auto& output_tensor = output;
-
-    ProgramDescriptor desc;
 
     const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
@@ -138,8 +142,6 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
     const uint32_t element_size = input_tensor.element_size();
     const uint32_t input_stick_nbytes = input_channels * element_size;
 
-    uint32_t cb_idx = tt::CBIndex::c_0;
-
     const auto input_face_geometry = FaceGeometry{.face_r_dim = REDUCTION_SIZE, .num_faces = 2};
     const auto scalar_face_geometry = FaceGeometry{.face_r_dim = 1, .num_faces = 2};
     const bool last_output_tile_is_partial = input_channels % tt::constants::TILE_WIDTH != 0;
@@ -147,189 +149,158 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
         last_output_tile_is_partial && input_channels <= tt::constants::FACE_WIDTH;
     const auto output_face_geometry =
         FaceGeometry{.face_r_dim = 1, .num_faces = single_partial_output_fits_in_face ? 1U : 2U};
-    const std::optional<TileDescriptor> output_tile =
-        single_partial_output_fits_in_face ? std::optional{TileDescriptor{1, tt::constants::FACE_WIDTH, false}}
+    const std::optional<tt::tt_metal::Tile> output_tile =
+        single_partial_output_fits_in_face ? std::optional{tt::tt_metal::Tile({1, tt::constants::FACE_WIDTH}, false)}
                                            : std::nullopt;
 
     const uint32_t fill_cb_page_size = input_stick_nbytes;
-    const uint32_t fill_cb_index = cb_idx++;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = fill_cb_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(fill_cb_index),
-            .data_format = input_cb_data_format,
-            .page_size = fill_cb_page_size,
-        }}},
-    });
 
     const uint32_t in_ntiles_c =
         static_cast<uint32_t>(std::ceil(static_cast<float>(input_channels) / tt::constants::TILE_WIDTH));
     const uint32_t input_cb_page_size = in_ntiles_c * tt::constants::TILE_HW * element_size;
-    const uint32_t input_cb_index = cb_idx++;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = BUFFERING_FACTOR * input_cb_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(input_cb_index),
-            .data_format = input_cb_data_format,
-            .page_size = input_cb_page_size,
-            .face_geometry = input_face_geometry,
-        }}},
-    });
-
-    cb_idx++;
 
     const uint32_t scalar_cb_page_size = tt::tile_size(input_cb_data_format);
-    const uint32_t scalar_cb_index = cb_idx++;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = BUFFERING_FACTOR * scalar_cb_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(scalar_cb_index),
-            .data_format = input_cb_data_format,
-            .page_size = scalar_cb_page_size,
-            .face_geometry = scalar_face_geometry,
-        }}},
-    });
-
-    cb_idx++;
 
     const uint32_t out_ntiles_c =
         static_cast<uint32_t>(std::ceil(static_cast<float>(output_shape[-1]) / tt::constants::FACE_WIDTH));
     const uint32_t output_cb_page_size = tt::constants::FACE_WIDTH * element_size;
     const uint32_t output_cb_pages =
         any_sharded ? output_nsticks_per_core * out_ntiles_c : out_ntiles_c * BUFFERING_FACTOR;
-    const uint32_t output_cb_index = cb_idx++;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = output_cb_pages * output_cb_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(output_cb_index),
-            .data_format = output_cb_data_format,
-            .page_size = output_cb_page_size,
-            .tile = output_tile,
-            .face_geometry = output_face_geometry,
-        }}},
-        .buffer = any_sharded ? output_tensor.buffer() : nullptr,
-    });
-
     const bool fill_is_zero = (fill_value_bits == 0);
-
-    std::vector<uint32_t> reader_compile_time_args = {
-        input_cb_index,
-        scalar_cb_index,
-        input_stick_nbytes,
-        input_batch,
-        input_height,
-        input_width,
-        fill_cb_index,
-        input_channels,
-        static_cast<uint32_t>(fill_is_zero),
-        element_size,
-    };
-
-    auto* input_buffer = input_tensor.buffer();
-    TT_FATAL(input_buffer != nullptr, "Input tensor must be allocated on device for rotate operation");
-    tt::tt_metal::TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/dataflow/reader_rotate_bilinear_interleaved.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
 
     const uint32_t in_nblocks_c =
         static_cast<uint32_t>(std::ceil(static_cast<float>(in_ntiles_c) / MAX_TILES_PER_REDUCTION));
 
-    auto make_compute_kernel_descriptor = [&](tt::tt_metal::CoreRangeSet cores, uint32_t total_interpolations) {
-        std::vector<uint32_t> compute_compile_time_args = {
-            in_ntiles_c,                    // ct_arg[0]
-            REDUCTION_SIZE,                 // ct_arg[1]
-            0,                              // ct_arg[2]
-            total_interpolations,           // ct_arg[3]
-            input_channels,                 // ct_arg[4]
-            in_nblocks_c,                   // ct_arg[5]
-            MAX_ROWS_FOR_REDUCTION,         // ct_arg[6]
-            input_cb_index,                 // ct_arg[7]
-            DUMMY_CB_ID,                    // ct_arg[8]
-            scalar_cb_index,                // ct_arg[9]
-            DUMMY_CB_ID,                    // ct_arg[10]
-            output_cb_index,                // ct_arg[11]
-            ONE_SCALAR_PER_CORE ? 1U : 0U,  // ct_arg[12]
-            DUMMY_CB_ID,                    // ct_arg[13]
-            0U,                             // ct_arg[14]
-            0U,                             // ct_arg[15]
-            0U,                             // ct_arg[16]: force_max_tiles_per_reduction_4 (off for rotate)
-            DUMMY_CB_ID,                    // ct_arg[17]
-            DUMMY_CB_ID,                    // ct_arg[18]
-            DUMMY_CB_ID,                    // ct_arg[19]
-            DUMMY_CB_ID,                    // ct_arg[20]
-            DUMMY_CB_ID,                    // ct_arg[21]
-            DUMMY_CB_ID,                    // ct_arg[22]
-            DUMMY_CB_ID,                    // ct_arg[23]
-            1U,                             // ct_arg[24]
-            1U,                             // ct_arg[25]
-            1U,                             // ct_arg[26]
-            1U,                             // ct_arg[27]
-            1U,                             // ct_arg[28]
-            1U,                             // ct_arg[29]
-            0U,                             // ct_arg[30]
-            DUMMY_CB_ID,                    // ct_arg[31]
-            DUMMY_CB_ID,                    // ct_arg[32]
-            DUMMY_CB_ID,                    // ct_arg[33]
-            DUMMY_CB_ID,                    // ct_arg[34]
-            1U,                             // ct_arg[35]
-            1U,                             // ct_arg[36]
-            0U,                             // ct_arg[37]: indexes_32_bit
-            DUMMY_CB_ID};                   // ct_arg[38]: fast_tilize_cb_id (tiled-output only, unused here)
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const DFBSpecName FILL{"fill"};
+    const DFBSpecName INPUT_DFB{"input"};
+    const DFBSpecName SCALAR{"scalar"};
+    const DFBSpecName OUTPUT_DFB{"output"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName COMPUTE_G1{"compute_g1"};
+    const KernelSpecName COMPUTE_G2{"compute_g2"};
+    const KernelSpecName WRITER{"writer"};
 
-        const auto pool_defines_map = pool::get_defines(pool::Pool2DType::AVG_POOL2D);
-        KernelDescriptor::Defines compute_defines(pool_defines_map.begin(), pool_defines_map.end());
-
-        KernelDescriptor compute_desc;
-        compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp";
-        compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        compute_desc.core_ranges = std::move(cores);
-        compute_desc.compile_time_args = std::move(compute_compile_time_args);
-        compute_desc.defines = std::move(compute_defines);
-        compute_desc.config = ComputeConfigDescriptor{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .fp32_dest_acc_en = false,
-            .math_approx_mode = false,
-        };
-        return compute_desc;
+    const DataflowBufferSpec fill_dfb{
+        .unique_id = FILL,
+        .entry_size = fill_cb_page_size,
+        .num_entries = 1,
+        .data_format_metadata = input_cb_data_format,
+    };
+    const DataflowBufferSpec input_dfb{
+        .unique_id = INPUT_DFB,
+        .entry_size = input_cb_page_size,
+        .num_entries = BUFFERING_FACTOR,
+        .data_format_metadata = input_cb_data_format,
+        .unpack_face_geometry_metadata = input_face_geometry,
+    };
+    const DataflowBufferSpec scalar_dfb{
+        .unique_id = SCALAR,
+        .entry_size = scalar_cb_page_size,
+        .num_entries = BUFFERING_FACTOR,
+        .data_format_metadata = input_cb_data_format,
+        .unpack_face_geometry_metadata = scalar_face_geometry,
+    };
+    const DataflowBufferSpec output_dfb{
+        .unique_id = OUTPUT_DFB,
+        .entry_size = output_cb_page_size,
+        .num_entries = output_cb_pages,
+        .data_format_metadata = output_cb_data_format,
+        .tile_format_metadata = output_tile,
+        .unpack_face_geometry_metadata = output_face_geometry,
+        .borrowed_from = any_sharded ? std::optional<TensorParamName>{OUTPUT} : std::nullopt,
     };
 
-    std::optional<KernelDescriptor> compute_desc_group_1;
-    std::optional<KernelDescriptor> compute_desc_group_2;
+    const KernelSpec reader{
+        .unique_id = READER,
+        .source = "ttnn/cpp/ttnn/operations/pool/rotate/device/kernels/dataflow/reader_rotate_bilinear_interleaved.cpp",
+        // Gen1 compatibility: the reader both produces and consumes FILL. A Gen2 port must use scratchpad storage or
+        // a LocalTensorAccessor instead of this data-movement-kernel self-loop.
+        .dfb_bindings =
+            {ProducerOf(INPUT_DFB, "input"),
+             ProducerOf(SCALAR, "scalar"),
+             ProducerOf(FILL, "fill"),
+             ConsumerOf(FILL, "fill")},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
+        .compile_time_args =
+            {
+                {"input_stick_nbytes", input_stick_nbytes},
+                {"input_height", input_height},
+                {"input_width", input_width},
+                {"input_channels", input_channels},
+                {"fill_is_zero", static_cast<uint32_t>(fill_is_zero)},
+                {"element_size", element_size},
+            },
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"num_sticks",
+                  "start_stick_id",
+                  "cos_angle_bits",
+                  "sin_angle_bits",
+                  "center_x_bits",
+                  "center_y_bits",
+                  "fill_value_bits"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
+
+    const auto make_compute_kernel = [&](const KernelSpecName& name, uint32_t total_interpolations) {
+        Group<DFBBinding> bindings{
+            ConsumerOf(INPUT_DFB, "input"), ConsumerOf(SCALAR, "scalar"), ProducerOf(OUTPUT_DFB, "output")};
+        if (any_sharded) {
+            bindings.push_back(ConsumerOf(OUTPUT_DFB, "output"));
+        }
+        return KernelSpec{
+            .unique_id = name,
+            .source = "ttnn/cpp/ttnn/operations/pool/device/kernels/compute/pool_2d_bilinear.cpp",
+            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+            .dfb_bindings = std::move(bindings),
+            .compile_time_args =
+                {
+                    {"in_ntiles_c", in_ntiles_c},
+                    {"window_size_hw", REDUCTION_SIZE},
+                    {"max_out_sticks_per_core", total_interpolations},
+                    {"in_c", input_channels},
+                    {"in_nblocks_c", in_nblocks_c},
+                    {"max_sticks_for_reduction", MAX_ROWS_FOR_REDUCTION},
+                    {"one_scalar_per_core", ONE_SCALAR_PER_CORE ? 1U : 0U},
+                    {"force_max_tiles_per_reduction_4", 0U},
+                },
+            .hw_config =
+                ComputeGen1Config{
+                    .fpu_math_fidelity = MathFidelity::HiFi4,
+                    .sfpu_precision_mode = Precision::Precise,
+                },
+        };
+    };
+
+    std::optional<KernelSpec> compute_g1;
+    std::optional<KernelSpec> compute_g2;
     if (any_sharded || core_group_1.num_cores() > 0) {
-        compute_desc_group_1 = make_compute_kernel_descriptor(
-            any_sharded ? all_cores : core_group_1,
-            any_sharded ? output_nsticks_per_core : num_sticks_per_core_group_1);
+        compute_g1 =
+            make_compute_kernel(COMPUTE_G1, any_sharded ? output_nsticks_per_core : num_sticks_per_core_group_1);
     }
     if (!any_sharded && core_group_2.num_cores() > 0) {
-        compute_desc_group_2 = make_compute_kernel_descriptor(core_group_2, num_sticks_per_core_group_2);
+        compute_g2 = make_compute_kernel(COMPUTE_G2, num_sticks_per_core_group_2);
     }
 
-    std::optional<KernelDescriptor> writer_desc;
+    std::optional<KernelSpec> writer;
     if (!any_sharded) {
-        const uint32_t output_stick_size = input_channels * element_size;
-        std::vector<uint32_t> writer_compile_time_args = {output_cb_index, output_stick_size, out_ntiles_c};
-        auto* output_buffer = output_tensor.buffer();
-        TT_FATAL(output_buffer != nullptr, "Output tensor must be allocated on device for rotate operation");
-        tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
-
-        KernelDescriptor wd;
-        wd.kernel_source =
-            "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/writer_grid_sample_interleaved.cpp";
-        wd.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        wd.core_ranges = all_cores;
-        wd.compile_time_args = std::move(writer_compile_time_args);
-        wd.config = WriterConfigDescriptor{};
-        writer_desc = std::move(wd);
+        writer = KernelSpec{
+            .unique_id = WRITER,
+            .source =
+                "ttnn/cpp/ttnn/operations/pool/device/kernels/dataflow/"
+                "writer_pool_stick_interleaved.cpp",
+            .dfb_bindings = {ConsumerOf(OUTPUT_DFB, "output")},
+            .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
+            .compile_time_args =
+                {
+                    {"output_stick_size", input_channels * element_size},
+                    {"ntiles_c", out_ntiles_c},
+                },
+            .runtime_arg_schema = {.runtime_arg_names = {"num_sticks", "start_stick_id"}},
+            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        };
     }
 
     const int32_t cos_angle_q16 = fixed_point_arithmetic::float_to_fixed(cos_angle);
@@ -337,6 +308,8 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
     const int32_t center_x_q16 = fixed_point_arithmetic::float_to_fixed(center_x);
     const int32_t center_y_q16 = fixed_point_arithmetic::float_to_fixed(center_y);
 
+    KernelRunArgs reader_run{.kernel = READER};
+    KernelRunArgs writer_run{.kernel = WRITER};
     uint32_t sticks_processed = 0;
     for (uint32_t i = 0; i < num_cores; i++) {
         const CoreCoord& core = logical_cores[i];
@@ -361,44 +334,73 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
             start_stick_id = sticks_processed;
         }
 
-        reader_desc.emplace_runtime_args(
+        AddRuntimeArgsForNode(
+            reader_run.runtime_arg_values,
             core,
             {
-                input_tensor.buffer(),
-                num_sticks,
-                start_stick_id,
-                static_cast<uint32_t>(cos_angle_q16),
-                static_cast<uint32_t>(sin_angle_q16),
-                static_cast<uint32_t>(center_x_q16),
-                static_cast<uint32_t>(center_y_q16),
-                static_cast<uint32_t>(fill_value_bits),
+                {"num_sticks", num_sticks},
+                {"start_stick_id", start_stick_id},
+                {"cos_angle_bits", static_cast<uint32_t>(cos_angle_q16)},
+                {"sin_angle_bits", static_cast<uint32_t>(sin_angle_q16)},
+                {"center_x_bits", static_cast<uint32_t>(center_x_q16)},
+                {"center_y_bits", static_cast<uint32_t>(center_y_q16)},
+                {"fill_value_bits", static_cast<uint32_t>(fill_value_bits)},
             });
 
-        if (!any_sharded && writer_desc.has_value()) {
-            writer_desc->emplace_runtime_args(
-                core,
-                {
-                    output_tensor.buffer(),
-                    num_sticks,
-                    start_stick_id,
-                });
+        if (!any_sharded && writer.has_value()) {
+            AddRuntimeArgsForNode(
+                writer_run.runtime_arg_values, core, {{"num_sticks", num_sticks}, {"start_stick_id", start_stick_id}});
         }
 
         sticks_processed += num_sticks;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    if (compute_desc_group_1.has_value()) {
-        desc.kernels.push_back(std::move(*compute_desc_group_1));
+    ProgramSpec spec{
+        .name = "rotate_bilinear",
+        .kernels = {reader},
+        .dataflow_buffers = {fill_dfb, input_dfb, scalar_dfb, output_dfb},
+        .tensor_parameters =
+            {
+                TensorParameter{.unique_id = INPUT, .spec = input_tensor.tensor_spec()},
+                TensorParameter{.unique_id = OUTPUT, .spec = output_tensor.tensor_spec()},
+            },
+    };
+    if (compute_g1.has_value()) {
+        spec.kernels.push_back(*compute_g1);
+        Group<KernelSpecName> kernels{READER, COMPUTE_G1};
+        if (writer.has_value()) {
+            kernels.push_back(WRITER);
+        }
+        spec.work_units.push_back(WorkUnitSpec{
+            .name = "rotate_g1",
+            .kernels = std::move(kernels),
+            .target_nodes = any_sharded ? all_cores : core_group_1,
+        });
     }
-    if (compute_desc_group_2.has_value()) {
-        desc.kernels.push_back(std::move(*compute_desc_group_2));
+    if (compute_g2.has_value()) {
+        spec.kernels.push_back(*compute_g2);
+        Group<KernelSpecName> kernels{READER, COMPUTE_G2};
+        if (writer.has_value()) {
+            kernels.push_back(WRITER);
+        }
+        spec.work_units.push_back(WorkUnitSpec{
+            .name = "rotate_g2",
+            .kernels = std::move(kernels),
+            .target_nodes = core_group_2,
+        });
     }
-    if (writer_desc.has_value()) {
-        desc.kernels.push_back(std::move(*writer_desc));
+    if (writer.has_value()) {
+        spec.kernels.push_back(*writer);
     }
 
-    return desc;
+    ProgramRunArgs run_args{
+        .kernel_run_args = {std::move(reader_run)},
+        .tensor_args = {{INPUT, input_tensor.mesh_tensor()}, {OUTPUT, output_tensor.mesh_tensor()}},
+    };
+    if (writer.has_value()) {
+        run_args.kernel_run_args.push_back(std::move(writer_run));
+    }
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::operations::rotate

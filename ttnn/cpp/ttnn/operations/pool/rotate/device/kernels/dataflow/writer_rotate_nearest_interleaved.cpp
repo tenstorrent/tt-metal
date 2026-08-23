@@ -5,23 +5,14 @@
 #include <stdint.h>
 #include <api/dataflow/dataflow_api.h>
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
-void kernel_main() {
-    // Runtime arguments
-    uint32_t output_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_sticks = get_arg_val<uint32_t>(1);
-    uint32_t start_stick_id = get_arg_val<uint32_t>(2);
+template <uint32_t output_stick_nbytes, uint32_t burst_size>
+TT_KERNEL void writer_rotate_nearest(uint32_t num_sticks, uint32_t start_stick_id) {
+    const auto output_tensor_accessor = TensorAccessor(tensor::output);
 
-    // Compile-time arguments
-    constexpr uint32_t output_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t output_stick_nbytes = get_compile_time_arg_val(1);
-    constexpr uint32_t num_cb_pages = get_compile_time_arg_val(2);
-    constexpr uint32_t burst_size = get_compile_time_arg_val(3);
-    constexpr auto dst_args = TensorAccessorArgs<4>();
-    const auto output_tensor_accessor = TensorAccessor(dst_args, output_addr);
-
-    DataflowBuffer output_dfb(output_cb_id);
+    DataflowBuffer output_dfb(dfb::output);
     Noc noc;
 
     for (uint32_t local_stick_idx = 0; local_stick_idx < num_sticks;) {
