@@ -40,6 +40,8 @@ TT_KERNEL void writer(
     uint32_t src_stick_id = start_id;
     uint32_t sticks_read = 0;
     uint32_t sticks_written = 0;
+    // Batch destination-row reads before each barrier when the last dimension is strided.
+    // Each row is then patched in L1 and written back, preserving elements outside the slice.
     for (uint32_t iter = 0; iter < num_sticks_per_core_read && sticks_written < num_sticks_per_core; ++iter) {
         uint32_t output_offset = 0;
         for (uint32_t i = 0; i < num_read_per_barrier && sticks_read < num_sticks_per_core; ++i) {
@@ -66,6 +68,7 @@ TT_KERNEL void writer(
             volatile tt_l1_ptr uint8_t* in_stick =
                 reinterpret_cast<volatile tt_l1_ptr uint8_t*>(input.get_read_ptr() + src_offset + alignment_offset);
             uint32_t out_index = 0;
+            // Copy element bytes explicitly so this path works for every supported datum width.
             for (uint32_t j = 0; j < input_stick_size / element_size; ++j) {
                 for (uint32_t byte = 0; byte < element_size; ++byte) {
                     out_stick[out_index * element_size + byte] = in_stick[j * element_size + byte];
