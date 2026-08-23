@@ -209,6 +209,10 @@ def recurrence(conv_out, qkvzab, rec_state, dt_bias, neg_exp_a, norm_w, out, *, 
         ("voff_t", voff_t),
         ("zoff_t", zoff_t),
         ("ab_t", ab_t),
+        ("seq_rows", 0),
+        ("anchor_from_stash", 0),
+        ("acc_page_bytes", 32),
+        ("acc_is_dram", 0),
         ("conv_is_dram", _is_dram(conv_out)),
         ("qkvzab_is_dram", _is_dram(qkvzab)),
         ("state_is_dram", _is_dram(rec_state)),
@@ -250,6 +254,7 @@ def recurrence(conv_out, qkvzab, rec_state, dt_bias, neg_exp_a, norm_w, out, *, 
             dt_bias.buffer_address(),
             neg_exp_a.buffer_address(),
             norm_w.buffer_address(),
+            rec_state.buffer_address(),  # accepts slot (unused: anchor_from_stash=0)
         ],
         runtime_args=_runtime_args(cores, unit_args),
         config=_reader_config(),
@@ -320,24 +325,51 @@ def recurrence(conv_out, qkvzab, rec_state, dt_bias, neg_exp_a, norm_w, out, *, 
 
 
 def recurrence_seq_rows(
-    conv_out, qkvzab, rec_state, state_stash, dt_bias, neg_exp_a, norm_w, out, *, nk, nv, dk, dv, users, w, eps=1e-6
+    conv_out,
+    qkvzab,
+    rec_state,
+    state_stash,
+    dt_bias,
+    neg_exp_a,
+    norm_w,
+    out,
+    *,
+    nk,
+    nv,
+    dk,
+    dv,
+    users,
+    w,
+    eps=1e-6,
+    accepts=None,
 ):
     """Speculative-verify GDN recurrence: W candidate rows per user, sequential
     IN-KERNEL, with per-row state stashes and NO writeback of the anchor state.
 
     Row u*w + t of the width-(users*w) activations is user u's candidate t at its
-    own position. One core per (user, v-head) loads rec_state[u, vh] (the user's
-    committed ANCHOR) into L1 once, loops the w rows locally, and writes each
-    step's post-update state to state_stash[u, t, vh] — the host later commits by
-    row-copying state_stash[u, m_u] into rec_state[u] (commit-by-select).
+    own position. One core per (user, v-head) loads the user's committed ANCHOR
+    into L1 once, loops the w rows locally, and writes each step's post-update
+    state to state_stash[u, t, vh].
+
+    Anchor source:
+      accepts=None:  rec_state[u, vh] — the host commits afterwards by row-copying
+                     state_stash[u, m_u] into rec_state[u] (eager commit-by-select).
+      accepts given: state_stash[u, accepts[u], vh] — the PREVIOUS verify's row for
+                     the accepted candidate, so the commit is pure data (upload
+                     accepts, replay) and rec_state is never touched. Safe on the
+                     single stash buffer: each core's anchor read completes before
+                     its first stash write, and cores touch disjoint (u, vh) pages.
 
     conv_out:    [1, users*w, qkv_dim] bf16 TILE (users*w <= 32: one tile row).
     qkvzab:      [1, users*w, qkvzab_dim] bf16 TILE.
-    rec_state:   [users, Nv, Dk, Dv] fp32 TILE — READ ONLY (never written).
+    rec_state:   [users, Nv, Dk, Dv] fp32 TILE — READ ONLY (never written; unused
+                 when accepts is given).
     state_stash: [users*w, Nv, Dk, Dv] fp32 TILE (row u*w+t = user u's state after
                  candidate t), fully overwritten. Rank-4: ttnn tensors cap at 4 dims;
                  the kernel addresses it purely by page index.
     out:         preallocated [1, users*w, Nv*Dv] fp32 TILE.
+    accepts:     optional [1, P] int32 ROW_MAJOR (P >= users, P*4 a multiple of 32);
+                 entry u in [0, w) selects user u's anchor row.
     """
     assert rec_state.dtype == ttnn.float32 and state_stash.dtype == ttnn.float32
     assert out.dtype == ttnn.float32
@@ -347,6 +379,10 @@ def recurrence_seq_rows(
     assert 2 * nv <= _TILE
     assert w >= 1 and users * w <= _TILE, f"users*w rows must fit one tile row (got {users}x{w})"
     assert list(state_stash.shape) == [users * w, nv, dk, dv], f"stash shape {list(state_stash.shape)}"
+    if accepts is not None:
+        assert accepts.dtype == ttnn.int32 and accepts.layout == ttnn.ROW_MAJOR_LAYOUT
+        acc_p = accepts.shape[-1]
+        assert acc_p >= users and (acc_p * 4) % 32 == 0, f"accepts row {acc_p} must cover users, 32B-aligned"
     dkt, dvt = dk // _TILE, dv // _TILE
     rf = nv // nk
     qkv_dim = conv_out.shape[-1]
@@ -364,6 +400,7 @@ def recurrence_seq_rows(
     cores = ttnn.corerange_to_cores(core_ranges, row_wise=True)
     unit_args = [(uidx // nv, uidx % nv) for uidx in range(units)]  # (user, vh)
 
+    anchor_t = rec_state if accepts is None else state_stash
     named_reader = [
         ("nv", nv),
         ("rf", rf),
@@ -373,9 +410,13 @@ def recurrence_seq_rows(
         ("voff_t", voff_t),
         ("zoff_t", zoff_t),
         ("ab_t", ab_t),
+        ("seq_rows", w),
+        ("anchor_from_stash", 0 if accepts is None else 1),
+        ("acc_page_bytes", 32 if accepts is None else accepts.shape[-1] * 4),
+        ("acc_is_dram", 0 if accepts is None else _is_dram(accepts)),
         ("conv_is_dram", _is_dram(conv_out)),
         ("qkvzab_is_dram", _is_dram(qkvzab)),
-        ("state_is_dram", _is_dram(rec_state)),
+        ("state_is_dram", _is_dram(anchor_t)),
         ("params_is_dram", _is_dram(dt_bias)),
     ]
     named_compute = [
@@ -411,10 +452,11 @@ def recurrence_seq_rows(
         common_runtime_args=[
             conv_out.buffer_address(),
             qkvzab.buffer_address(),
-            rec_state.buffer_address(),
+            anchor_t.buffer_address(),
             dt_bias.buffer_address(),
             neg_exp_a.buffer_address(),
             norm_w.buffer_address(),
+            (rec_state if accepts is None else accepts).buffer_address(),
         ],
         runtime_args=_runtime_args(cores, unit_args),
         config=_reader_config(),
@@ -482,4 +524,6 @@ def recurrence_seq_rows(
 
     program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], cbs=cbs)
     io_tensors = [conv_out, qkvzab, rec_state, state_stash, dt_bias, neg_exp_a, norm_w, out]
+    if accepts is not None:
+        io_tensors.append(accepts)
     return ttnn.generic_op(io_tensors, program)

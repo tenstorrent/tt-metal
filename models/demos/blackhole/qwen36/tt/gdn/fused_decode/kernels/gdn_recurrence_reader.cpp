@@ -22,6 +22,14 @@ void kernel_main() {
     constexpr uint32_t VOFF_T = get_named_compile_time_arg_val("voff_t");
     constexpr uint32_t ZOFF_T = get_named_compile_time_arg_val("zoff_t");
     constexpr uint32_t AB_T = get_named_compile_time_arg_val("ab_t");
+    // Anchor-from-stash (commit-by-select as pure data): the state buffer is the
+    // rank-4 stash and the anchor row is (b*SEQ_W + accepts[b]) — the row the
+    // PREVIOUS verify wrote for the accepted candidate. accepts lives in a
+    // device tensor so replays commit with zero host-side device ops.
+    constexpr uint32_t SEQ_W = get_named_compile_time_arg_val("seq_rows");
+    constexpr bool anchor_from_stash = get_named_compile_time_arg_val("anchor_from_stash") == 1;
+    constexpr uint32_t ACC_PAGE = get_named_compile_time_arg_val("acc_page_bytes");
+    constexpr bool acc_is_dram = get_named_compile_time_arg_val("acc_is_dram") == 1;
     constexpr bool conv_is_dram = get_named_compile_time_arg_val("conv_is_dram") == 1;
     constexpr bool qkvzab_is_dram = get_named_compile_time_arg_val("qkvzab_is_dram") == 1;
     constexpr bool state_is_dram = get_named_compile_time_arg_val("state_is_dram") == 1;
@@ -33,6 +41,7 @@ void kernel_main() {
     const uint32_t dtb_addr = get_common_arg_val<uint32_t>(3);
     const uint32_t nega_addr = get_common_arg_val<uint32_t>(4);
     const uint32_t w_addr = get_common_arg_val<uint32_t>(5);
+    const uint32_t acc_addr = get_common_arg_val<uint32_t>(6);
 
     const uint32_t b = get_arg_val<uint32_t>(0);
     const uint32_t vh = get_arg_val<uint32_t>(1);
@@ -49,8 +58,20 @@ void kernel_main() {
 
     // All-ones fp32 tile for row-sum matmuls and row-select broadcast multiplies
     // (fp32 keeps every ones-pairing same-format with the fp32 intermediates, the
-    // combination the chunk_gated_delta_rule kernels already validate).
+    // combination the chunk_gated_delta_rule kernels already validate). The tile's
+    // reserve region doubles as scratch for the accepts read (which completes,
+    // and is consumed into anchor_base, before the ones fill overwrites it).
     cb_reserve_back(cb_ones, 1);
+    uint32_t anchor_base = (b * NV + vh) * DKT * DVT;
+    if constexpr (anchor_from_stash) {
+        const auto acc_acc =
+            TensorAccessor(tensor_accessor::make_interleaved_dspec<acc_is_dram>(), acc_addr, ACC_PAGE);
+        const uint32_t scratch = get_write_ptr(cb_ones);
+        noc_async_read_page(0, acc_acc, scratch);
+        noc_async_read_barrier();
+        const uint32_t m = reinterpret_cast<volatile uint32_t*>(scratch)[b];
+        anchor_base = ((b * SEQ_W + m) * NV + vh) * DKT * DVT;
+    }
     {
         auto* p = reinterpret_cast<uint32_t*>(get_write_ptr(cb_ones));
         for (uint32_t i = 0; i < tf / 4; i++) {
@@ -79,5 +100,5 @@ void kernel_main() {
     read_block(conv_acc, cb_vin, VOFF_T + vh * DVT, DVT, tb);
     read_block(qkvzab_acc, cb_zin, ZOFF_T + vh * DVT, DVT, tb);
     read_block(w_acc, cb_w, 0, DVT, tb);
-    read_block(state_acc, cb_h, (b * NV + vh) * DKT * DVT, DKT * DVT, tf);
+    read_block(state_acc, cb_h, anchor_base, DKT * DVT, tf);
 }

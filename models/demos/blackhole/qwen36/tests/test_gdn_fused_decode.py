@@ -365,6 +365,60 @@ def test_recurrence_seq_rows(device, nk, nv):
             assert ok, f"step {t} user {u}: seq output vs sequential op PCC {pcc}"
 
 
+def test_seq_rows_anchor_from_stash(device):
+    """Commit-as-pure-data probe: with an accepts tensor the anchor comes from
+    the previous stash row (u*w + m_u) instead of rec_state — bitwise equal to
+    a mode-A run whose rec_state holds exactly those selected rows (the in-
+    kernel index read and the single-buffer read-before-write are the only new
+    mechanics)."""
+    nk, nv, users, w = 2, 6, 8, 4
+    conv, qkvzab, h0, dt_bias, neg_exp_a, norm_w = _seq_inputs(nk, nv, users, w, seed=12)
+    accepts = [(u * 5 + 1) % w for u in range(users)]  # mixed m values across users
+
+    torch.manual_seed(13)
+    stash_prev = torch.randn(users * w, nv, DK, DV, dtype=torch.float32) * 0.1
+
+    conv_d = _dev(device, conv)
+    qkvzab_d = _dev(device, qkvzab)
+    state_d = _dev(device, h0, dtype=ttnn.float32)  # ignored in anchor-from-stash mode
+    stash_d = _dev(device, stash_prev, dtype=ttnn.float32)
+    dtb_d = _dev(device, dt_bias)
+    nega_d = _dev(device, neg_exp_a)
+    w_d = _dev(device, norm_w)
+    out_b = _dev(device, torch.zeros(1, users * w, nv * DV), dtype=ttnn.float32)
+    acc_d = ttnn.from_torch(
+        torch.tensor([accepts], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    fused_op.recurrence_seq_rows(
+        conv_d,
+        qkvzab_d,
+        state_d,
+        stash_d,
+        dtb_d,
+        nega_d,
+        w_d,
+        out_b,
+        nk=nk,
+        nv=nv,
+        dk=DK,
+        dv=DV,
+        users=users,
+        w=w,
+        accepts=acc_d,
+    )
+    out_b_t = ttnn.to_torch(out_b).float()
+    stash_b = ttnn.to_torch(stash_d).float()
+    assert torch.equal(ttnn.to_torch(state_d).float(), h0), "rec_state was written in anchor-from-stash mode"
+
+    # Mode-A reference: rec_state holds the selected rows.
+    h_sel = torch.stack([stash_prev[u * w + accepts[u]] for u in range(users)])
+    _state_ref, stash_ref, out_a = _run_seq_rows(
+        device, conv, qkvzab, h_sel, dt_bias, neg_exp_a, norm_w, nk, nv, users, w
+    )
+    assert torch.equal(out_b_t, ttnn.to_torch(out_a).float()), "anchor-from-stash output != mode A on selected rows"
+    assert torch.equal(stash_b, ttnn.to_torch(stash_ref).float()), "anchor-from-stash stash != mode A stash"
+
+
 def test_seq_rows_uniform_users(device):
     """52712 forensics probe: identical per-user inputs/states must produce
     BITWISE-identical stash rows and output rows across users. A 0.999-PCC gate
