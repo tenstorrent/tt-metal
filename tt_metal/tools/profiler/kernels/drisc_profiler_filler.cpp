@@ -48,11 +48,13 @@ void kernel_main() {
     // LIVE capacity = the rings alone; kSpanWords also counts the 64-word control vector.
     constexpr uint32_t kLiveWords = kNumRisc * kRingWords;
     constexpr uint32_t kPrefix = kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
-    constexpr uint32_t kSlotWords = kPrefix + kSpanWords;  // 2,640
+    // Sized for the PACKED worst case, not the raw span -- see spsc_span_slot_words(). This is what makes
+    // packing unconditional: the pads can push a nearly-full span's packed image past the raw span's size.
+    constexpr uint32_t kSlotWords = kernel_profiler::spsc_span_slot_words(kNumRisc);  // 2,656
     constexpr uint32_t kSlotBytes = kSlotWords * 4u;       // 10,560
     constexpr uint32_t kPageWords = kernel_profiler::SPSC_SPAN_PAGE_WORDS;
     constexpr uint32_t kPageBytes = kPageWords * 4u;
-    constexpr uint32_t kPagesPerSlot = kSlotWords / kPageWords;  // 165
+    constexpr uint32_t kPagesPerSlot = kSlotWords / kPageWords;  // 166
     // Reads take the NoC the writes do not; NOC_INDEX (the kernel's configured NoC) carries egress.
     constexpr uint8_t kReadNoc = NOC_INDEX == 0 ? 1 : 0;
     // Two staging generations: one fills while the other drains.
@@ -529,11 +531,6 @@ void kernel_main() {
     // never fires in normal operation -- it exists purely to convert "wait forever" into "lose a frame".
     constexpr uint64_t kCreditWaitCycles = 67500000ull;
 
-    // Above this payload a frame is written RAW: the gather costs ~10 extra NoC write issues, and past
-    // ~2/3 fill the single burst wins on issues while saving little on bytes. Keeping the mover's old
-    // threshold means a raw frame still ships as one burst from the mover, exactly as it does today.
-    constexpr uint32_t kPackMaxPayload = kCtrlWords + (kLiveWords * 2u) / 3u;
-
     auto stage_run = [&](uint32_t start, uint32_t count) {
         // Guarded as a whole rather than per-statement: kDramFrames is 0 on every non-filler build, and
         // `frames_staged % kDramFrames` would then be a compile-time divide by zero even though nothing
@@ -628,15 +625,9 @@ void kernel_main() {
                         off += kernel_profiler::spsc_span_pack_pad(tail - run, off) + run;
                     }
                 }
-                if (off - kPrefix > kPackMaxPayload) {
-                    pfx[0] = kernel_profiler::spsc_span_w0() | kernel_profiler::SPSC_SPAN_RAW_FLAG;
-                    pfx[1] = kSpanWords;
-                    fpages += kPagesPerSlot;
-                } else {
-                    pfx[0] = kernel_profiler::spsc_span_w0();
-                    pfx[1] = off - kPrefix;
-                    fpages += kernel_profiler::spsc_span_frame_words(off - kPrefix) / kPageWords;
-                }
+                pfx[0] = kernel_profiler::spsc_span_w0();
+                pfx[1] = off - kPrefix;
+                fpages += kernel_profiler::spsc_span_frame_words(off - kPrefix) / kPageWords;
                 pfx[kSeqWord] = 0;
                 pfx[kSeqSrcWord] = frames_staged + f + 1u;
             }
@@ -648,10 +639,6 @@ void kernel_main() {
                 const uint64_t dbase =
                     get_noc_addr_from_bank_id<true>(kDramBank, kDramAddr + dslot * kSlotBytes, NOC_INDEX);
                 const tt_l1_ptr uint32_t* cv = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
-                if (reinterpret_cast<const tt_l1_ptr uint32_t*>(slot)[0] & kernel_profiler::SPSC_SPAN_RAW_FLAG) {
-                    noc_async_write(slot, dbase, kSlotBytes, NOC_INDEX);
-                    continue;
-                }
                 noc_async_write(slot, dbase, (kPrefix + kCtrlWords) * 4u, NOC_INDEX);
                 uint32_t off = kPrefix + kCtrlWords;
                 for (uint32_t r = 0; r < kNumRisc; r++) {

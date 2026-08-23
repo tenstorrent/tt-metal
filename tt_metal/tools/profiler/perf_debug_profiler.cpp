@@ -73,20 +73,6 @@ uint32_t drisc_gap_cycles() {
     return v;
 }
 
-// TT_METAL_PERF_DEBUG_SHIP_REPEAT: EGRESS AMPLIFIER for stress testing. N>1 makes the drainer re-send each
-// staged frame N times, so egress bandwidth stops being bounded by producer rate -- the extra sends skip the
-// read and process phases. Written to answer "can PCIe egress alone hang the card?" on the Tensix drainer,
-// whose own ceiling is read/process (saturated at 511/512 ring occupancy while pushing only 5.2 GB/s).
-// The host then receives N duplicate copies of every frame, so this is NOT a valid capture: pair it with
-// TT_METAL_PERF_DEBUG_NO_DECODE=1 and read the page/byte counters, not the markers.
-uint32_t ship_repeat() {
-    static const uint32_t v = [] {
-        const char* s = std::getenv("TT_METAL_PERF_DEBUG_SHIP_REPEAT");
-        const uint32_t n = (s == nullptr || *s == '\0') ? 1u : static_cast<uint32_t>(std::strtoul(s, nullptr, 10));
-        return n == 0 ? 1u : n;
-    }();
-    return v;
-}
 
 // TT_METAL_PERF_DEBUG_NO_STATIC_TLB: skip configuring a static TLB window for the DRISC drainer, leaving the
 // socket's ack write on UMD's dynamic (reconfigure-per-access) path. Exists so static-vs-dynamic can be A/B'd
@@ -151,7 +137,6 @@ uint32_t ablate_spin() {
 // WORKER coords, while the PCIe tile lives in TRANSLATED space (the kernel is built with PCIE_NOC_X=19,
 // PCIE_NOC_Y=24 -- both outside the 17x12 NOC0 grid), so the socket's NOC0-derived pcie_xy_enc is correct on
 // BOTH NoCs. Measured: with the mirrored override, 0 markers decode from 2.37M pages; without it, 5,501,058
-// decode. The override survives only behind TT_METAL_PERF_DEBUG_NOC_MIRROR=1 to keep the dead end documented.
 // Watch for its signature: pages flow while zero markers decode, because socket credits advance on a
 // different path than the payload writes, so a wrong payload destination looks like healthy throughput.
 uint32_t drain_noc() {
@@ -360,14 +345,6 @@ uint32_t drisc_zone_detail() {
         // Detail-1 phases plus the read-split read path overflow the 11,264 B DRISC code region by
         // ~300 B (measured; every other knob combination fits). Degrade loudly rather than let the
         // filler fail to load and produce an empty capture.
-        if (d != 0 && env_flag("TT_METAL_PERF_DEBUG_READ_SPLIT")) {
-            log_warning(
-                tt::LogMetal,
-                "[perf-debug profiler] DRISC_ZONE_DETAIL={} with READ_SPLIT does not fit the DRISC code "
-                "region; forcing detail 0 (SWEEP/PACE zones only)",
-                d);
-            d = 0;
-        }
         return d;
     }();
     return v;
@@ -473,16 +450,6 @@ uint32_t fill_target_pct() {
 // still stalled; at 50,000 it pinned at 50,000; at 100,000 it pinned at 100,000; only at 200,000 did it
 // SETTLE, at 108,881 -- i.e. the true operating point is ~109k and every smaller ceiling was clipping it.
 // A gap pinned exactly at this value in the results is the signature of a ceiling that is too low.
-// TT_METAL_PERF_DEBUG_READ_SPLIT=1: issue the batch's span reads alternately on BOTH NoCs instead of
-// only kReadNoc. The busy sweep is read-latency bound and the batch cannot grow (DRISC L1 holds 7 spans),
-// so splitting is the only way to raise outstanding read transactions.
-uint32_t read_split() {
-    static const uint32_t v = [] {
-        const char* s = std::getenv("TT_METAL_PERF_DEBUG_READ_SPLIT");
-        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 0u;
-    }();
-    return v;
-}
 
 uint32_t gap_max_cycles() {
     static const uint32_t v = [] {
@@ -1227,10 +1194,7 @@ bool PerfDebugProfiler::boot_device(
         ctx.dram_bank[d] = ringbank[d];
     }
 
-    const uint32_t span_bytes_all =
-        (kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE + kNRisc * kernel_profiler::PROFILER_L1_VECTOR_SIZE) *
-        sizeof(uint32_t);
-    const uint32_t slot_bytes_all = kernel_profiler::SPSC_SPAN_PREFIX_WORDS * sizeof(uint32_t) + span_bytes_all;
+    const uint32_t slot_bytes_all = kernel_profiler::spsc_span_slot_words(kNRisc) * sizeof(uint32_t);
     uint32_t nstage_report = 0;  // last drainer's mapped staging-slot count, for the self-profiling log line
 
     // ---- REUSE the old profiler's DRAM region; do NOT allocate a second buffer ----
@@ -1787,34 +1751,11 @@ bool PerfDebugProfiler::boot_device(
             }
 
             // Mirrored PCIe-tile encoding for NoC 1 (see drain_noc()). 0 => kernel uses the socket's NOC0 value.
-            uint32_t pcie_enc_override = 0;
-            // MEASURED WRONG, kept only as a knob: mirroring the PCIe tile for NoC 1 makes the payload land
-            // somewhere else -- pages still flow (socket credits are a separate path) but decode yields ZERO
-            // markers. The PCIe encoding is in TRANSLATED space (the kernel is built with PCIE_NOC_X=19,
-            // PCIE_NOC_Y=24, outside the 17x12 NOC0 grid), and NOC_0_X_PHYS_COORD mirrors WORKER coordinates,
-            // not this. Default is now to use the socket's own encoding on both NoCs.
-            const char* mirror_env = std::getenv("TT_METAL_PERF_DEBUG_NOC_MIRROR");
-            const bool want_mirror = mirror_env != nullptr && *mirror_env != '\0' && *mirror_env != '0';
-            if (drain_noc() == 1 && want_mirror) {
-                const auto& mmio_soc = cluster.get_soc_desc(cluster.get_associated_mmio_device(device_id));
-                const auto pcie_noc0 = mmio_soc.get_cores(CoreType::PCIE, CoordSystem::NOC0).front();
-                const uint32_t mx =
-                    static_cast<uint32_t>(mmio_soc.grid_size.x) - 1 - static_cast<uint32_t>(pcie_noc0.x);
-                const uint32_t my =
-                    static_cast<uint32_t>(mmio_soc.grid_size.y) - 1 - static_cast<uint32_t>(pcie_noc0.y);
-                pcie_enc_override = hal.noc_xy_pcie64_encoding(mx, my);
-                log_info(
-                    tt::LogMetal,
-                    "[perf-debug profiler] NoC 1 egress: PCIe tile NOC0 ({},{}) -> NOC1 ({},{}) on a {}x{} grid, "
-                    "enc 0x{:x}",
-                    pcie_noc0.x,
-                    pcie_noc0.y,
-                    mx,
-                    my,
-                    mmio_soc.grid_size.x,
-                    mmio_soc.grid_size.y,
-                    pcie_enc_override);
-            }
+            // Always the socket's own PCIe encoding, on both NoCs. Mirroring the tile for NoC 1 was
+            // MEASURED WRONG: pages still flow (socket credits are a separate path) but decode yields ZERO
+            // markers, because the encoding is in TRANSLATED space (PCIE_NOC_X=19, PCIE_NOC_Y=24, outside
+            // the 17x12 NOC0 grid) while NOC_0_X_PHYS_COORD mirrors WORKER coordinates.
+            const uint32_t pcie_enc_override = 0;
 
             // A MOVER reads its FILLER's handshake block, so it needs that filler's virtual NoC coords and L1
             // address. Fillers occupy indices [0, kNFillers) and are set up FIRST, which is why these are
@@ -1849,7 +1790,7 @@ bool PerfDebugProfiler::boot_device(
                 0xFFFFFFFFu,
                 128,
                 drisc_gap_cycles(),
-                ship_repeat(),
+                1u,  // retired: SHIP_REPEAT (egress amplifier; needed decode off to be meaningful)
                 no_noc_init() ? 0u : 1u,
                 ablate(),
                 ablate_spin(),
@@ -1858,7 +1799,7 @@ bool PerfDebugProfiler::boot_device(
                 pcie_enc_override,
                 fill_target_pct(),
                 gap_max_cycles(),
-                read_split(),
+                0u,  // retired: READ_SPLIT
                 // ---- role split (arg 20..31). All zero on the default path, and every use of them in the
                 // kernel is behind `if constexpr`, so the emitted code is identical when the knob is off.
                 // Args 21/22 are "the ring at index 0": a filler's OWN ring, or a mover's peer-0 ring.

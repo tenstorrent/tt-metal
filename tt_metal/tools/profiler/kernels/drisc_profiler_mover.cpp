@@ -32,7 +32,8 @@ void kernel_main() {
     constexpr uint32_t kGapCycles = get_compile_time_arg_val(9);
     // EGRESS AMPLIFIER. 1 = normal. >1 re-ships each staged frame that many times (skipping read/proc)
     // to stress PCIe egress alone. Duplicate frames: run with decode OFF. A stress tool, not a capture.
-    constexpr uint32_t kShipRepeat = get_compile_time_arg_val(10);
+    // Arg 10 retired (SHIP_REPEAT egress amplifier). The index stays occupied: arg positions appear
+    // in JIT cache keys and in FINDINGS notes.
     // 1 = resync the software NoC mirrors from hardware at entry (see the wedge note below). 0 = diagnostic.
     constexpr uint32_t kNocInit = get_compile_time_arg_val(11);
     // Args 12..15 are retired (the N+41 ablation knobs). The indices stay occupied: arg positions appear in
@@ -48,11 +49,13 @@ void kernel_main() {
     // LIVE capacity = the rings alone; kSpanWords also counts the 64-word control vector.
     constexpr uint32_t kLiveWords = kNumRisc * kRingWords;
     constexpr uint32_t kPrefix = kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
-    constexpr uint32_t kSlotWords = kPrefix + kSpanWords;  // 2,640
+    // Sized for the PACKED worst case, not the raw span -- see spsc_span_slot_words(). This is what makes
+    // packing unconditional: the pads can push a nearly-full span's packed image past the raw span's size.
+    constexpr uint32_t kSlotWords = kernel_profiler::spsc_span_slot_words(kNumRisc);  // 2,656
     constexpr uint32_t kSlotBytes = kSlotWords * 4u;       // 10,560
     constexpr uint32_t kPageWords = kernel_profiler::SPSC_SPAN_PAGE_WORDS;
     constexpr uint32_t kPageBytes = kPageWords * 4u;
-    constexpr uint32_t kPagesPerSlot = kSlotWords / kPageWords;  // 165
+    constexpr uint32_t kPagesPerSlot = kSlotWords / kPageWords;  // 166
     // Reads take the NoC the writes do not; NOC_INDEX (the kernel's configured NoC) carries egress.
     constexpr uint8_t kReadNoc = NOC_INDEX == 0 ? 1 : 0;
     // Two staging generations: one fills while the other drains.
@@ -342,7 +345,7 @@ void kernel_main() {
     // push_pages is local bookkeeping and notify_receiver is a PCIe write of the producer pointer -- one per
     // push regardless of size, so it is the part that punishes small pushes.
     uint64_t c_ph_head = 0;  // the per-core head write-back inside proc (see process_batch)
-    uint64_t c_pack = 0;     // pack_frame_words geometry scans (mover; previously unaccounted)
+    uint64_t c_pack = 0;     // frame-length reads before the credit reserve
     uint64_t c_wr_chunk = 0;
     uint64_t c_wr_push = 0;
     uint64_t c_wr_notify = 0;
@@ -527,12 +530,11 @@ void kernel_main() {
     // The filler already packed this frame into the ring and patched its length word, so the mover's
     // whole job is to read that length. The control-vector walk and the layout pass that used to live
     // here are gone with the gather they served.
+    // pfx[1] is the payload length whichever layout the frame uses, so the size is one expression. (It used
+    // to special-case RAW as kSlotWords, which was only right while a slot was exactly a raw span.)
     auto frame_words_of = [&](uint32_t slot) -> uint32_t {
-        const tt_l1_ptr uint32_t* pfx = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot);
-        if (pfx[0] & kernel_profiler::SPSC_SPAN_RAW_FLAG) {
-            return kSlotWords;
-        }
-        return kernel_profiler::spsc_span_frame_words(pfx[1]);
+        return kernel_profiler::spsc_span_frame_words(
+            reinterpret_cast<const tt_l1_ptr uint32_t*>(slot)[1]);
     };
 
     // Ship `count` adjacent staged slots as PACKED frames: per frame, the prefix + control vector and then
@@ -637,9 +639,6 @@ void kernel_main() {
         return true;
     };
 
-    // One logical frame = kShipRepeat sends of the same staged bytes. At kShipRepeat == 1 this is exactly the
-    // old ship_run. The drop/dead checks stay OUT here so a dead consumer costs the whole run's worth of
-    // frames once, not once per repeat.
     auto ship_run = [&](uint32_t start, uint32_t count, bool do_notify = true) {
         if (count == 0) {
             return;
@@ -649,11 +648,7 @@ void kernel_main() {
             dropped_frames += count;
             return;
         }
-        for (uint32_t rep = 0; rep < kShipRepeat; rep++) {
-            if (!ship_once(start, count, do_notify) || egress_dead) {
-                break;
-            }
-        }
+        (void)ship_once(start, count, do_notify);
     };
 
     // FILLER egress: the same `count` adjacent, already-framed slots, but written into this filler's DRAM

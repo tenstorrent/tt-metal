@@ -478,6 +478,19 @@ enum SpscNocFpWord {
 };
 
 // Total words a frame occupies on the wire, including the prefix and the pad up to a socket page.
+// Words in a staging/ring slot. A slot must hold the PACKED image of a span, which can be LARGER than the
+// raw span it replaces: the raw layout needs no pads (lane r starts at prefix + ctrl + r*ring, inherently
+// congruent), while the packed layout places extents back to back, so each of `num_risc` lanes can need up
+// to SPSC_SPAN_PACK_ALIGN_WORDS-1 words of pad. Sizing a slot for the raw span alone let a nearly-full
+// span's packed image overrun the slot by 16 words -- into the next slot, or past the last one into the
+// drainer's head scratch -- which is why packing used to be gated behind a fill-fraction fallback. Sized
+// for the worst case, packing needs no gate at all.
+constexpr std::uint32_t spsc_span_slot_words(std::uint32_t num_risc) {
+    const std::uint32_t span = PROFILER_L1_CONTROL_VECTOR_SIZE + num_risc * PROFILER_L1_VECTOR_SIZE;
+    const std::uint32_t worst = SPSC_SPAN_PREFIX_WORDS + span + num_risc * (SPSC_SPAN_PACK_ALIGN_WORDS - 1u);
+    return (worst + SPSC_SPAN_PAGE_WORDS - 1u) & ~(SPSC_SPAN_PAGE_WORDS - 1u);
+}
+
 constexpr std::uint32_t spsc_span_frame_words(std::uint32_t payload_words) {
     const std::uint32_t n = SPSC_SPAN_PREFIX_WORDS + payload_words;
     return (n + SPSC_SPAN_PAGE_WORDS - 1u) & ~(SPSC_SPAN_PAGE_WORDS - 1u);
