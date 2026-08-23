@@ -1315,7 +1315,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         for (const CoreCoord& core : core_range) {
             if (populate_skipped_work_cores && !output_cores.contains(core)) {
                 // Pad-out path uses the exact 2D sender layout: weight/bias, tile offsets,
-                // is_sender_core, skip_work, rectangle. Weight/bias are unused on skipped cores.
+                // has_sharded_input, skip_work, rectangle. Weight/bias are unused on skipped cores.
                 KernelDescriptor::RTArgList args;
                 args.reserve(6);
                 args.push_back(uint32_t{0});  // 0: weight addr (unused for skipped cores)
@@ -1323,7 +1323,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                 for (int i = 2; i < 4; ++i) {
                     args.push_back(uint32_t{0});
                 }
-                args.push_back(uint32_t{1});  // 4: is_sender_core, always true for input_cores
+                args.push_back(uint32_t{1});  // 4: has_sharded_input, always true for input_cores
                 args.push_back(uint32_t{1});  // 5: skip_work
                 writer_mcast_sender_desc.emplace_runtime_args(core, args);
                 continue;
@@ -1351,8 +1351,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             sender_rt_args.push_back(bias_tile_offset);     // 3
 
             if (block_sharded) {
-                const bool is_sender_core = input_cores.contains(core);
-                sender_rt_args.push_back(static_cast<uint32_t>(is_sender_core));
+                const bool has_sharded_input = input_cores.contains(core);
+                sender_rt_args.push_back(static_cast<uint32_t>(has_sharded_input));
                 sender_rt_args.push_back(uint32_t{0});  // skip_work
                 weights_mcast_1d->append_runtime_args_to(sender_rt_args, core);
                 writer_mcast_sender_desc.emplace_runtime_args(core, sender_rt_args);
@@ -1379,8 +1379,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             for (const CoreCoord& core : core_range) {
                 std::vector<uint32_t> receiver_args;
                 if (block_sharded) {
-                    const bool is_sender_core = input_cores.contains(core);
-                    receiver_args.push_back(static_cast<uint32_t>(is_sender_core));
+                    const bool has_sharded_input = input_cores.contains(core);
+                    receiver_args.push_back(static_cast<uint32_t>(has_sharded_input));
                     weights_mcast_1d->append_runtime_args_to(receiver_args, core);
                 } else {
                     bool is_no_op_core = !input_cores.contains(core);

@@ -414,6 +414,11 @@ def test_argmax_multicore_composes_two_counter_wires_and_keeps_done_fanin():
 def test_migrated_kernels_keep_fixed_operation_prefixes_before_helper_decoders():
     kernels, _ = _migrated_sources()
     violations = []
+    optional_compile_time_tails = {
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp": (
+            "config_dram_addr_index = ActMcastArgs::next_compile_time_args_offset();"
+        ),
+    }
     variable_runtime_tails = {
         "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp": "argidx = WeightMcastArgs::next_runtime_args_offset();",
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
@@ -439,7 +444,11 @@ def test_migrated_kernels_keep_fixed_operation_prefixes_before_helper_decoders()
 
         relative = str(path.relative_to(REPO_ROOT))
         if positional_ct and helper < positional_ct[-1]:
-            violations.append(f"{path.relative_to(REPO_ROOT)} declares McastArgs before its last operation CT read")
+            derived_tail = optional_compile_time_tails.get(relative)
+            if derived_tail is None:
+                violations.append(f"{relative} declares McastArgs before an unregistered operation CT tail")
+            elif derived_tail not in source:
+                violations.append(f"{relative} does not derive its optional operation CT tail from McastArgs")
         if positional_rt and helper < positional_rt[-1]:
             derived_tail = variable_runtime_tails.get(relative)
             if derived_tail is None:
@@ -449,7 +458,97 @@ def test_migrated_kernels_keep_fixed_operation_prefixes_before_helper_decoders()
 
     assert (
         not violations
-    ), "Fixed operation prefixes and registered variable RT tails must bound helpers:\n" + "\n".join(violations)
+    ), "Fixed operation prefixes and registered optional CT/variable RT tails must bound helpers:\n" + "\n".join(
+        violations
+    )
+
+
+def test_conv_width_mcast_precedes_the_optional_config_tensor_tail():
+    base = REPO_ROOT / "ttnn/cpp/ttnn/operations/conv/conv2d/device"
+    kernel = (base / "kernels/activation_reader_width_sharded.cpp").read_text()
+    factory = (base / "conv2d_op_width_sharded_program_factory.cpp").read_text()
+
+    assert "McastArgs<operation_ct_args_end, 3>" in kernel
+    assert "config_dram_addr_index = ActMcastArgs::next_compile_time_args_offset();" in kernel
+    assert "TensorAccessorArgs<23>" not in kernel
+    helper_append = factory.index("activation_mcast.append_compile_time_args_to(activation_kernel_compile_args);")
+    optional_tail = factory.index("if (config_tensors_in_dram) {", helper_append)
+    assert helper_append < optional_tail
+    assert "TensorAccessorArgs(static_cast<const Buffer*>(nullptr))" not in factory
+
+
+def test_migrated_conv_weight_kernels_preserve_terminal_write_barriers():
+    kernel_dir = REPO_ROOT / "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels"
+    kernels = [
+        "reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
+        "reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
+        "writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
+        "writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
+    ]
+
+    for kernel in kernels:
+        source = (kernel_dir / kernel).read_text()
+        closing_barrier = source.rindex("noc.async_write_barrier();")
+        assert source[closing_barrier:].strip() == "noc.async_write_barrier();\n}"
+
+
+def test_conv_weight_helpers_do_not_duplicate_or_ambiguously_name_sender_roles():
+    base = REPO_ROOT / "ttnn/cpp/ttnn/operations/conv/conv2d/device"
+    kernels = [
+        (base / "kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp").read_text(),
+        (base / "kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp").read_text(),
+    ]
+    factory = (base / "conv2d_op_sharded_program_factory.cpp").read_text()
+
+    for source in kernels:
+        assert "is_sender_core" not in source
+        assert "has_sharded_input" in source
+    assert factory.count("const bool has_sharded_input = input_cores.contains(core);") == 2
+
+
+def test_conv_weight_sender_preserves_original_source_lifetime_policy():
+    kernel = (
+        REPO_ROOT / "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
+        "reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp"
+    ).read_text()
+
+    assert "weight_sources_are_persistent" not in kernel
+    assert "async_writes_flushed" not in kernel
+    assert kernel.count("SourceL1Guard::CallerManaged") == 2
+    closing_barrier = kernel.rindex("noc.async_write_barrier();")
+    assert kernel[closing_barrier:].strip() == "noc.async_write_barrier();\n}"
+
+
+def test_conv_ack_counts_are_geometry_derived_only_for_dense_families():
+    conv2d_factory = (
+        REPO_ROOT / "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.cpp"
+    ).read_text()
+    width_factory = (
+        REPO_ROOT / "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.cpp"
+    ).read_text()
+    conv3d_factory = (
+        REPO_ROOT / "ttnn/cpp/ttnn/operations/experimental/conv3d/device/conv3d_program_factory.cpp"
+    ).read_text()
+
+    # Dense block-sharded weights use Mcast1D's span-minus-sender default.
+    block_start = conv2d_factory.index("weights_mcast_1d.emplace(")
+    block_end = conv2d_factory.index("    }", block_start)
+    block_binding = conv2d_factory[block_start:block_end]
+    assert "weights_mcast_sender_semaphore_id}});" in block_binding
+
+    # Dense Conv3D rectangles make otherwise-idle members passive participants,
+    # so both the template and per-group Mcast2D bindings use area-minus-sender.
+    assert "CoreCoord{0, 0}, weights_mcast_config);" in conv3d_factory
+    assert "device, group_rect, CoreCoord{sender_x_log, sender_y_log}, weights_mcast_config);" in conv3d_factory
+
+    # These two geometries deliberately have fewer acknowledging participants
+    # than landing cores and must retain their explicit operation-owned counts.
+    assert "total_active_num_cores - 1);" in conv2d_factory
+    assert "std::max(input_num_cores, output_num_cores) - 1);" in width_factory
+
+    # The raw block-sharded activation family remains deferred; do not silently
+    # remove its geometric scalar before that family is migrated as its own unit.
+    assert "act_mcast_num_dests" in conv2d_factory
 
 
 def test_move_overlap_composes_three_release_wires_and_keeps_return_counter():

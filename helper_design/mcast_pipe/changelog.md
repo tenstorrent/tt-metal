@@ -6,6 +6,31 @@ feedback round lands.
 
 ---
 
+## Round 35 — optional CT tail and Conv migration-contract cleanup (2026-08-23)
+
+- Added the compile-time analogue of Round 34's variable-tail exception. The
+  width-sharded Conv2D activation reader now emits its fixed operation prefix,
+  opaque helper block, and only then the DRAM-only config-tensor tail. The
+  non-DRAM binary no longer receives a null accessor or zero filler.
+- Restored the terminal write drains removed from all four migrated Conv2D
+  weights kernels. Removed the migration-added 1D streaming-source persistence
+  classification and mid-loop flush while retaining caller-managed weight and
+  bias sends.
+- Confirmed the block-sharded weights `is_sender_core` scalar is independent
+  input-shard ownership and renamed it `has_sharded_input` in both host and
+  kernel code without changing the ABI.
+- Audited Conv ACK populations. Dense block-sharded Conv2D weights and Conv3D
+  continue deriving counts from helper geometry; divergent width/default
+  families retain explicit overrides, and the deferred raw block-activation
+  family remains unchanged.
+- Helper API stays v14 and inventory dispositions are unchanged. The release
+  build, 36/36 host helper gtests, 32/32 source audits, exact width-, height-,
+  and block-sharded Conv2D routes, and the focused Conv3D route passed. Known
+  Watcher exceptions and the independently reproduced BFLOAT16 block-Conv hang
+  are recorded in the feedback tracker.
+
+---
+
 ## Round 34 — one template-owned runtime base (2026-08-23)
 
 - Bumped the helper to API v14 and removed `McastArgs`' dynamic runtime-base

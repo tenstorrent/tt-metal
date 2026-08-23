@@ -35,12 +35,15 @@ text inventory matched the ledger exactly and has now been folded into it:
 | quarantined | 0 | 0 |
 
 The migrated fleet was updated to the v14 template-owned runtime-base ABI during
-the 2026-08-23 feedback pass. Runtime-sized operation tails now follow the
-opaque helper block and derive their start from it; fixed-width layouts retain
-ordinary helper tails. The host build, 36 helper host tests, all 80 helper
-device/wire tests under `--dev`, all 27 source audits, and focused sequential
-Matmul and Conv3D device gates passed. The inherited v13 gates still cover
-present, absent, and chained helper blocks.
+the 2026-08-23 feedback pass. Runtime-sized and genuinely optional compile-time
+operation tails now follow the opaque helper block and derive their start from
+it; fixed-width layouts retain ordinary helper tails. The final Conv review
+also restored operation terminal drains, removed migration-only source-lifetime
+synchronization, clarified independent input ownership, and verified dense
+versus divergent ACK-count policy. The host build, 36 helper host tests, all 80
+helper device/wire tests under `--dev`, all 32 source audits, and focused
+sequential Matmul, Conv2D, and Conv3D device gates passed. The inherited v13
+gates still cover present, absent, and chained helper blocks.
 Exact evidence is recorded in `migration_feedback_tracker.md`.
 
 Two pending kernels and five pending host bindings retain their existing status;

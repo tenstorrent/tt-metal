@@ -15,6 +15,18 @@ applicable, focused validation, and the migration guardrail checks pass.
 - Derive every post-helper offset; do not encode helper block widths.
 - Keep `McastArgs` runtime bases template-owned; put runtime-sized operation
   tails after the helper and derive their start from its next offset.
+- Put genuinely optional compile-time operation tails after the helper and
+  derive their start from its next compile-time offset; never emit filler just
+  to stabilize the helper base.
+- Preserve operation-owned terminal drains; helper-local send completion does
+  not replace completion of writes issued elsewhere in a kernel.
+- Do not introduce migration-only source-lifetime synchronization. Compare
+  flushes, barriers, and persistence assumptions with the actual pre-migration
+  implementation.
+- Derive a same-family sender/receiver role from `McastArgs`; name independent
+  operation roles by what they own rather than with multicast-looking booleans.
+- Derive ACK populations from dense helper geometry, and retain an explicit
+  override only when landing and acknowledging populations genuinely diverge.
 - Audit TensorAccessor bases, optional tails, fused-operation fields, descriptor
   paths, legacy paths, and cache overrides after ABI changes.
 - Add no migration-only preprocessor branches and keep diffs focused.
@@ -34,8 +46,82 @@ applicable, focused validation, and the migration guardrail checks pass.
 | 7 | MCAST-004 | Complete | Tagged helper ABI, all migrated host/kernel consumers, inactive Matmul operands | Build; 25 source audits; helper 80/80 `--dev`; host gtest 36/36; 1D in0/in1, Sparse, and chained 2D gates |
 | 8 | MATMUL-004 | Complete | 1D and matching 2D legacy/descriptor common in0 tails | Build; 26 source audits; focused 1D and 2D `--dev` gates |
 | 9 | MCAST-005 | Complete | Template-only runtime bases across Matmul and Conv3D variable-tail ABIs | Build; 27 source audits; 36 host gtests; helper 80/80 `--dev`; focused Matmul and Conv3D gates |
+| 10 | MCAST-006 | Complete | Optional CT tails across the migrated fleet; width-sharded Conv2D config tensor changed | Build; 28 source audits; exact non-DRAM `--dev` and DRAM config gates |
+| 11 | CONV-001 | Complete | Four migrated Conv2D weights data-movement kernels | 32 source audits; exact height- and block-sharded `--dev` gates |
+| 12 | CONV-002 | Complete (premise corrected) | All migrated Conv sender-role scalars | Build; 32 source audits; exact block-sharded `--dev` gate |
+| 13 | CONV-003 | Complete | All migrated operations; one Conv2D migration-only source-lifetime policy removed | 31 source audits; exact height-sharded `--dev` gate |
+| 14 | CONV-004 | Complete | Conv2D/Conv3D dense and divergent ACK populations | 32 source audits; host helper gtests; exact block Conv2D and Conv3D gates |
 
 ## Evidence log
+
+### CONV-004 (complete)
+
+- Confirmed block-sharded Conv2D weights use `Mcast1D`'s dense line-derived
+  `span - 1` ACK count and Conv3D uses `Mcast2D`'s dense rectangle-derived
+  `area - 1` count. Conv3D's idle rectangle members remain passive handshake
+  participants.
+- Preserved the explicit width-sharded activation and height/default weights
+  overrides because those landing populations contain non-acknowledging cores.
+  Preserved the raw block-sharded activation count because that family remains
+  deferred and this feedback does not authorize migrating it.
+- All 32 source audits passed. The exact block-sharded Conv2D BFLOAT8_B route
+  passed under `--dev` at PCC 0.999944614. The exact Conv3D node retained its
+  known Watcher skip (#37184) and passed unchanged without Watcher at PCC
+  0.999991419. The host helper geometry gtests passed.
+
+### CONV-003 (complete)
+
+- Removed the migration-added `weight_sources_are_persistent` classification
+  and conditional mid-loop `async_writes_flushed()` from the 1D weights sender.
+  Both helper sends remain caller-managed and the original terminal drain is
+  handled independently by CONV-001.
+- Compared migration history across the migrated fleet. The source-lifetime
+  follow-up commit added production synchronization only at this Conv site;
+  other current barriers and flushes belong to their pre-existing operation or
+  protocol contracts.
+- All 31 source audits at this gate passed. The exact height-sharded route
+  passed under `--dev` at PCC 0.999988205.
+
+### CONV-002 (complete, premise corrected)
+
+- Audited every migrated Conv `is_sender_core`. Width-sharded activation already
+  uses `McastArgs::can_send()`, and Conv3D uses a precise operation role enum.
+  The two block-sharded weights kernels receive `input_cores.contains(core)` to
+  gate split-reader activation work, including on a weights receiver, so this is
+  independent input-shard ownership rather than a duplicate weights sender bit.
+- Renamed the operation role and both host bindings to `has_sharded_input`
+  without changing ABI width or order. The source guard rejects the ambiguous
+  name in the migrated weights kernels.
+- The release build and all 32 source audits passed. The exact block-sharded
+  BFLOAT8_B route passed under `--dev` at PCC 0.999944614.
+
+### CONV-001 (complete)
+
+- Compared the four migrated Conv2D weights kernels against the actual parent
+  revisions of their migration commits. Each original kernel ended with
+  `noc.async_write_barrier()`; restored all four terminal drains. Every early
+  return precedes all issued writes.
+- A source guard now requires the barrier as the final statement in each
+  sender/receiver. The exact height-sharded route passed under `--dev` at PCC
+  0.999988205, and a block-sharded BFLOAT8_B route passed under `--dev` at PCC
+  0.999944614.
+- A BFLOAT16 block-sharded parameter reproducibly hangs in the current branch,
+  but an A/B run with only the two restored 2D barriers removed hung identically;
+  the hang is independent of this feedback change.
+
+### MCAST-006 (complete)
+
+- Moved the width-sharded Conv2D config-tensor CT block after the opaque
+  activation helper. The DRAM variant emits the address, page size, and
+  accessor; the separately compiled non-DRAM variant emits none of them.
+- The kernel derives the optional tail from
+  `ActMcastArgs::next_compile_time_args_offset()`. A ledger-wide audit found no
+  second migration-created filler before a helper, and the source guard now
+  permits only this registered, derived optional CT tail.
+- `./build_metal.sh` and all 28 source audits passed. The exact non-DRAM
+  width-sharded node passed under `--dev` at PCC 0.999956503. The matching DRAM
+  config node encountered the known unrelated Watcher/C++17 `ASSERT` compile
+  incompatibility, then passed unchanged without Watcher at PCC 0.998234911.
 
 ### MCAST-005 (complete)
 

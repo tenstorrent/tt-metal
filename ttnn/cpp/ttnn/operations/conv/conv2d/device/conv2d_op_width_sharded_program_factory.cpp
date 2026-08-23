@@ -545,17 +545,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
         (uint32_t)has_bias};
 
+    activation_mcast.append_compile_time_args_to(activation_kernel_compile_args);
     if (config_tensors_in_dram) {
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
         activation_kernel_compile_args.push_back(conv_reader_indices_buffer->address());  // smuggled-rta-ok
         activation_kernel_compile_args.push_back(conv_reader_indices_buffer->page_size());
         tt::tt_metal::TensorAccessorArgs(conv_reader_indices_buffer).append_to(activation_kernel_compile_args);
-    } else {
-        activation_kernel_compile_args.push_back(0);
-        activation_kernel_compile_args.push_back(0);
-        tt::tt_metal::TensorAccessorArgs(static_cast<const Buffer*>(nullptr)).append_to(activation_kernel_compile_args);
     }
-    activation_mcast.append_compile_time_args_to(activation_kernel_compile_args);
 
     for (uint32_t index = 0; index < activation_kernel_compile_args.size(); index++) {
         log_debug(tt::LogOp, "activation_kernel_compile_args[{}] = {}", index, activation_kernel_compile_args[index]);

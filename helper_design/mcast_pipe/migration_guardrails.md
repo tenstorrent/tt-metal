@@ -92,3 +92,34 @@ constructor/runtime override, store a mutable base, or expose parallel static
 and instance base/end APIs. When a runtime-sized operation prefix prevents a
 constant base, reorder that variable region after the opaque helper block and
 derive its start from `next_runtime_args_offset()`.
+
+## 13. Preserve operation-owned terminal drains
+
+Do not remove a data-movement kernel's terminal write barrier merely because a
+helper send has its own completion policy. The helper owns completion for its
+transaction; the terminal drain covers every outstanding operation write. Check
+all write-producing exits against the actual pre-migration kernel and ensure
+they reach the original drain.
+
+## 14. Add no migration-only source-lifetime synchronization
+
+Preserve the operation's established flush and barrier policy. Do not add an
+`async_writes_flushed()`, write barrier, persistence classification, or similar
+source-lifetime synchronization unless the source buffer's reuse contract
+requires it independently of migration. Compare with the actual pre-migration
+implementation instead of inferring the contract from the helper default.
+
+## 15. Derive helper roles and precisely name independent roles
+
+When a scalar describes the sender or receiver for the same multicast family,
+remove the duplicate wire and use `McastArgs::can_send()` or `can_receive()`.
+When it describes independent operation ownership, retain it only under a name
+that states that ownership, such as `has_sharded_input`; do not leave a second
+ambiguous `is_sender_core` beside a helper role.
+
+## 16. Derive dense ACK populations from geometry
+
+Let `Mcast1D` derive `span - 1` and `Mcast2D` derive `area - 1` when every
+non-sender landing core acknowledges. Pass an explicit ACK override only when
+the landing and acknowledging populations diverge, and record why. Do not
+silently carry raw geometric count ABIs into a future helper migration.

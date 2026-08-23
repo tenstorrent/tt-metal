@@ -32,13 +32,17 @@ report; `host_bindings` retains its convention of migrated or source-integrated 
 
 API-v14 verification removed the dynamic runtime-base constructor and made the
 `RT_BASE` template argument the only source of truth. Five layouts with
-runtime-sized operation data now place that tail after the opaque helper and
-derive its start from `next_runtime_args_offset()`; all matching legacy and
-descriptor producers use the same order. The host build, 36/36 host gtests,
-80/80 helper device tests under `--dev`, 27/27 source audits, and sequential
-focused Matmul and Conv3D gates passed. The API-v13 tagged optional ABI and its
-present/absent/chained coverage remain intact. Detailed evidence and Conv3D's
-known Watcher skip are recorded in
+runtime-sized operation data and one layout with a genuinely optional
+compile-time tail now place those tails after the opaque helper and derive their
+starts from the corresponding next offset; all matching producers use the same
+order. The final Conv feedback pass also restored original terminal drains,
+removed migration-only source-lifetime synchronization, clarified independent
+input ownership, and audited dense versus divergent ACK populations. The host
+build, 36/36 host gtests, 80/80 helper device tests under `--dev`, 32/32 source
+audits, and sequential focused Matmul, Conv2D, and Conv3D gates passed. The
+API-v13 tagged optional ABI and its present/absent/chained coverage remain
+intact. Detailed evidence, known Watcher exceptions, and the isolated unrelated
+BFLOAT16 block-Conv hang are recorded in
 `../migration_feedback_tracker.md`.
 
 ## API-v14 verified migrated units

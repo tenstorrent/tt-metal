@@ -65,7 +65,12 @@ void kernel_main() {
     constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(17);
     constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(19);
     constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(20);
-    constexpr auto config_tensor_args = TensorAccessorArgs<23>();
+    constexpr uint32_t operation_ct_args_end = 21;
+    using ActMcastArgs = dataflow_kernel_lib::McastArgs<operation_ct_args_end, 3>;
+    constexpr ActMcastArgs act_mcast_args;
+    constexpr uint32_t config_dram_addr_index = ActMcastArgs::next_compile_time_args_offset();
+    constexpr uint32_t config_page_size_index = config_dram_addr_index + 1;
+    constexpr uint32_t config_tensor_args_index = config_page_size_index + 1;
 
     constexpr uint32_t num_mcast_cores = num_input_cores > num_output_cores ? num_input_cores : num_output_cores;
     uint32_t i = 0;  // Runtime arg index
@@ -78,9 +83,6 @@ void kernel_main() {
     // Num of cols of compute cores. (Total Cores, not active cores.)
     uint32_t num_cores_x = get_arg_val<uint32_t>(i);
     i += 1;
-
-    using ActMcastArgs = dataflow_kernel_lib::McastArgs<config_tensor_args.next_compile_time_args_offset(), 3>;
-    constexpr ActMcastArgs act_mcast_args;
 
     // Equivalent to Core Index.
     uint32_t this_core_id = this_core_x + (num_cores_x * this_core_y);
@@ -108,7 +110,11 @@ void kernel_main() {
         act_recv_pipe.emplace(act_mcast_args.receiver(noc));
     }
 
-    load_config_tensor_if_in_dram<21, 22, 23, cb_reader_indices>(noc, reader_indices_dfb, 0);
+    load_config_tensor_if_in_dram<
+        config_dram_addr_index,
+        config_page_size_index,
+        config_tensor_args_index,
+        cb_reader_indices>(noc, reader_indices_dfb, 0);
 
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_dfb.get_write_ptr());

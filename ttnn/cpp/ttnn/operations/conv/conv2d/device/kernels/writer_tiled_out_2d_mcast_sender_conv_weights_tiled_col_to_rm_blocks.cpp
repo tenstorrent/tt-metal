@@ -82,7 +82,7 @@ void kernel_main() {
     const uint32_t bias_addr = get_arg_val<uint32_t>(i++);
     const uint32_t out_start_tile_id_w = get_arg_val<uint32_t>(i++);
     const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i++);
-    const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
+    const bool has_sharded_input = get_arg_val<uint32_t>(i++) > 0;
     const bool skip_work = get_arg_val<uint32_t>(i++) > 0;
 
     constexpr uint32_t operation_runtime_args_end = 6;
@@ -111,13 +111,13 @@ void kernel_main() {
     }
 
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
-        (split_reader_enabled && is_sender_core)
+        (split_reader_enabled && has_sharded_input)
             ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb_reader_indices_obj.get_write_ptr())
             : nullptr;
     // Initial setup for second reader (starting from second reader's data)
-    // Only read reader indices on cores that have sharded input (is_sender_core).
+    // Only read reader indices on cores that have sharded input.
     uint32_t start_reader_idx =
-        (split_reader_enabled && is_sender_core) ? (uint32_t)(packed_reader_indices_ptr[0] & 0xffff) + 1 : 0;
+        (split_reader_enabled && has_sharded_input) ? (uint32_t)(packed_reader_indices_ptr[0] & 0xffff) + 1 : 0;
     uint32_t reader_idx = start_reader_idx;
 
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
@@ -165,7 +165,7 @@ void kernel_main() {
                     if constexpr (!split_reader_cb_shared) {
                         dfb_act_second_obj.reserve_back(act_block_num_tiles_split_last);
                     }
-                    if (is_sender_core) {
+                    if (has_sharded_input) {
                         if constexpr (split_reader_cb_shared) {
                             reserve_done_sem.wait(VALID);
                             reserve_done_sem.set(INVALID);
@@ -241,8 +241,8 @@ void kernel_main() {
             }
             if constexpr (split_reader_enabled) {
                 // Update reader index for next iteration (split reader increment)
-                // Only read reader indices on cores that have sharded input (is_sender_core).
-                if (is_sender_core) {
+                // Only read reader indices on cores that have sharded input.
+                if (has_sharded_input) {
                     start_reader_idx =
                         reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
                 }
@@ -285,4 +285,5 @@ void kernel_main() {
         // Increment weight start tile id for next block in width dim
         weight_start_tile_id += weight_next_block_stride_w;
     }  // out_num_blocks_w
+    noc.async_write_barrier();
 }

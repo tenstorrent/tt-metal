@@ -118,14 +118,6 @@ void kernel_main() {
     constexpr uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
     const auto s_weight = TensorAccessor(s_weight_args, weight_addr_dram_base);
 
-    // With multiple output-height blocks, normal height-sharded Conv fully buffers every weight
-    // block because bh==0 loads them once and later bh iterations reuse them. A single weight block
-    // is likewise never overwritten after its send. The remaining streaming case completes the
-    // previous multicast immediately before it reuses the source slot below, rather than serializing
-    // every send at issue time.
-    constexpr bool weight_sources_are_persistent =
-        num_blocks_weight_h == 1 || (out_num_blocks_h > 1 && !activation_reuse_enabled);
-
     // OUTER most loop is looping over out blocks in width dim because blocks from compute are in col major order.
     // Write out col major blocks in row major layout to output
     constexpr uint32_t weight_inner_block_stride_h =
@@ -209,11 +201,6 @@ void kernel_main() {
             // Do weights read + mcast
             dfb_weight_obj.reserve_back(weight_block_num_tiles);
             if (bh == 0) {
-                if constexpr (!weight_sources_are_persistent) {
-                    if (block_weight_h != 0) {
-                        noc.async_writes_flushed();
-                    }
-                }
                 uint32_t weight_row_start_tile_id = weight_current_block_start_tile_id + weight_h_offset;
 
                 uint32_t weight_write_offset = 0;
@@ -287,4 +274,5 @@ void kernel_main() {
             start_reader_idx = reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
         }
     }  // out_num_blocks_h
+    noc.async_write_barrier();
 }

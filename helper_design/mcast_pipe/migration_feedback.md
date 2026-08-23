@@ -226,7 +226,7 @@ Conv3D's known Watcher skip (#37184) passed unchanged without Watcher.
 ### MCAST-006 — Put multicast before a genuinely optional compile-time tail
 
 - Date: 2026-08-23
-- Status: Open
+- Status: Resolved (2026-08-23)
 - Scope: Every migrated operation with an optional compile-time argument block
   after a fixed operation prefix
 
@@ -268,6 +268,21 @@ at the same time as the production layout: it should continue rejecting an
 unexplained operation tail after `McastArgs`, but accept a registered optional
 tail only when its first index is derived from
 `McastArgs::next_compile_time_args_offset()`.
+
+Resolution: the width-sharded Conv2D activation ABI now emits its 21-word
+fixed operation prefix, the opaque activation-multicast block, and then the
+DRAM config-tensor address, page size, and `TensorAccessorArgs` only when
+`CONFIG_TENSOR_IN_DRAM` is compiled. The kernel derives all three tail indices
+from `ActMcastArgs::next_compile_time_args_offset()`; the non-DRAM factory no
+longer emits four filler words. The ledger-wide audit found no other filler
+introduced solely to stabilize a following migrated helper: the similar
+sharded-Conv and SDPA descriptors are operation-owned fixed ABIs rather than
+post-helper optional tails. The source audit registers this single exception
+and rejects an unregistered compile-time tail. The release build, all 28 source
+audits, the exact non-DRAM width-sharded node under Watcher (PCC 0.999956503),
+and the exact DRAM-config node (PCC 0.998234911) passed; the DRAM node retained
+its known unrelated Watcher/C++17 `ASSERT` compile incompatibility and passed
+unchanged without Watcher.
 
 ## Matmul
 
@@ -384,7 +399,7 @@ audits, and focused 1D and 2D Matmul gates under Watcher passed.
 ### CONV-001 — Preserve terminal write barriers in data-movement kernels
 
 - Date: 2026-08-23
-- Status: Open
+- Status: Resolved (2026-08-23)
 - Scope: Conv data-movement kernels migrated to `mcast_pipe`
 
 Do not remove the explicit `noc.async_write_barrier()` or equivalent terminal
@@ -398,10 +413,22 @@ loops and ensure that every exit following an issued write reaches it. Audit
 the 1D and 2D sender and receiver variants rather than relying on the helper's
 per-send synchronization as a substitute for the end-of-kernel barrier.
 
+Resolution: compared all four migrated Conv2D weights kernels with their actual
+pre-migration implementations and restored the terminal
+`noc.async_write_barrier()` in every sender and receiver. Their only early exits
+precede all issued writes, so every write-producing path reaches the drain. A
+source guard requires the terminal barrier to remain the last kernel statement.
+The exact height-sharded route passed under Watcher at PCC 0.999988205 and a
+block-sharded sender/receiver route passed under Watcher at PCC 0.999944614.
+An initially selected BFLOAT16 block-sharded parameter still exhibits an
+independent pre-existing hang; removing only the restored 2D barriers reproduced
+the same hang, while the BFLOAT8_B route proves the migrated 2D kernels compile
+and execute with the barriers present.
+
 ### CONV-002 — Derive a multicast sender role from `McastArgs`
 
 - Date: 2026-08-23
-- Status: Open
+- Status: Resolved (2026-08-23)
 - Scope: Conv data-movement kernels migrated to `mcast_pipe`
 
 Audit every separately passed `is_sender_core` runtime argument. When the flag
@@ -420,10 +447,21 @@ the semantics from the host producer. If it is an independent role, rename it
 to that precise role or derive it from the correct helper metadata; do not
 leave it as an ambiguous multicast-looking `is_sender_core` boolean.
 
+Resolution: audited every `is_sender_core` in migrated Conv code. The
+width-sharded activation family already derives its same-family sender role
+from `act_mcast_args.can_send()`, and Conv3D carries an explicit operation role
+enum. In both block-sharded weights kernels, the scalar comes from
+`input_cores.contains(core)` and gates split-reader activation work even on a
+weights receiver; it is therefore independent input-shard ownership rather
+than a duplicate weights-multicast role. Renamed the kernel and matching host
+binding to `has_sharded_input` without changing ABI width or order. A source
+guard rejects the ambiguous name in these kernels and the exact block-sharded
+route passed under Watcher at PCC 0.999944614.
+
 ### CONV-003 — Remove migration-added streaming-source flushes
 
 - Date: 2026-08-23
-- Status: Open
+- Status: Resolved (2026-08-23)
 - Kernel:
   `ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp`
 - Audit scope: All operations migrated to `mcast_pipe`
@@ -447,10 +485,21 @@ not have, remove that added behavior as well. Compare against each kernel's
 actual pre-migration implementation rather than assuming that every explicit
 flush in the migrated tree was part of the original operation contract.
 
+Resolution: removed `weight_sources_are_persistent` and its conditional
+mid-loop `noc.async_writes_flushed()` from the 1D weights sender. Both weight
+and bias sends remain `SourceL1Guard::CallerManaged`, and the independently
+restored original terminal write barrier remains. The cross-operation history
+audit found this was the only migration follow-up commit that introduced a
+production source-lifetime flush or persistence classification; current
+barriers and flushes in other migrated operations were already part of their
+operation contracts or unrelated protocols. A source guard fixes this policy,
+all 31 audits at this gate passed, and the exact height-sharded route passed
+under Watcher at PCC 0.999988205.
+
 ### CONV-004 — Derive dense ACK populations from multicast geometry
 
 - Date: 2026-08-23
-- Status: Open
+- Status: Resolved (2026-08-23)
 - Scope: Conv2D and Conv3D multicast factories and kernels
 
 Do not explicitly pass or retain an operation-owned count of receiver cores
@@ -475,3 +524,17 @@ handshake, and the height-sharded/default weights rectangle contains noop cores
 that do not acknowledge. Those counts remain behavior-specific unless the
 kernels and semaphore placement are deliberately changed so the extra landing
 cores participate passively.
+
+Resolution: audited every Conv2D and Conv3D helper construction and found the
+reference dense families already use the required form. Block-sharded Conv2D
+weights construct `Mcast1D` without an ACK override after asserting a single
+dense zero-anchored output grid, so the helper derives `span - 1`. Conv3D's
+template and per-group `Mcast2D` objects likewise omit an override, and idle
+rectangle members retain their passive receive loops, so the helper derives
+`area - 1`. The width-sharded activation and height/default weights overrides
+remain because their landing and acknowledging populations diverge. The raw
+block-sharded activation scalar remains unchanged because that family is still
+deferred and was not authorized for migration by this feedback. A source guard
+enforces all five dispositions. All 32 audits passed; the exact block-sharded
+Conv2D route passed under Watcher at PCC 0.999944614, and the focused Conv3D
+route passed at PCC 0.999991419 after its known Watcher skip (#37184).
