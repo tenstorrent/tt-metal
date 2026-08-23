@@ -76,11 +76,20 @@ void kernel_main() {
     constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(16);
 
     constexpr auto out_args = TensorAccessorArgs<17>();
+#ifdef OUT_SHARDED
+    constexpr uint32_t operation_rt_args_end = 11;
+#else
+    constexpr uint32_t operation_rt_args_end = 13;
+#endif
+    using In1McastArgs =
+        dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), operation_rt_args_end>;
+    constexpr In1McastArgs in1_mcast_args;
+    rt_args_idx = In1McastArgs::next_runtime_args_offset();
+
     OpSignaler op_signaler;
     if constexpr (fuse_op_reduce_scatter) {
         op_signaler = OpSignaler(rt_args_idx);
     }
-    const dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), 0> in1_mcast_args(rt_args_idx);
     // WRITER
 
     constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");

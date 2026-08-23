@@ -4,11 +4,11 @@ Start here. This directory records the design and repository-wide rollout of the
 kernel `mcast_pipe` helper and its paired host helper. The rollout was explicitly
 resumed for the 2026-08-22 migration-feedback pass.
 
-- Reviewed: 2026-08-22
+- Reviewed: 2026-08-23
 - Branch/head at feedback intake: `sjovic/mcast-migration` / `cea14afbea9`
 - Recorded branch baseline: `llk_helper_library` at `dc9282be7d5`
-- Materialized helper API: v13
-- Ledger write-back API: v13
+- Materialized helper API: v14
+- Ledger write-back API: v14
 
 ## Four files that matter first
 
@@ -29,16 +29,18 @@ text inventory matched the ledger exactly and has now been folded into it:
 
 | State | Kernels | Host bindings |
 |---|---:|---:|
-| migrated, verified at v13 | 31 | 27 |
+| migrated, verified at v14 | 31 | 27 |
 | pending | 2 | 5 |
 | deferred | 71 | 0 |
 | quarantined | 0 | 0 |
 
-The migrated fleet was updated to the v13 tagged, operation-first ABI and
-append-style host bindings during the 2026-08-22 feedback pass. The host build,
-36 helper host tests, all 80 helper device/wire tests under `--dev`, all 26
-source audits, and focused sequential device gates passed. The v13-specific
-gates cover present, absent, and chained helper blocks.
+The migrated fleet was updated to the v14 template-owned runtime-base ABI during
+the 2026-08-23 feedback pass. Runtime-sized operation tails now follow the
+opaque helper block and derive their start from it; fixed-width layouts retain
+ordinary helper tails. The host build, 36 helper host tests, all 80 helper
+device/wire tests under `--dev`, all 27 source audits, and focused sequential
+Matmul and Conv3D device gates passed. The inherited v13 gates still cover
+present, absent, and chained helper blocks.
 Exact evidence is recorded in `migration_feedback_tracker.md`.
 
 Two pending kernels and five pending host bindings retain their existing status;
@@ -55,7 +57,7 @@ Current human views:
 - [`migration/ledger.md`](migration/ledger.md) — concise ledger explanation.
 
 Generated tier and rollout reports remain intentionally absent. The active
-machine state is the v13 ledger plus test map, while the feedback tracker is the
+machine state is the v14 ledger plus test map, while the feedback tracker is the
 execution record for this pass.
 
 ## Supporting evidence

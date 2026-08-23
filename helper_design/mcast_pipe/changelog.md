@@ -6,6 +6,29 @@ feedback round lands.
 
 ---
 
+## Round 34 — one template-owned runtime base (2026-08-23)
+
+- Bumped the helper to API v14 and removed `McastArgs`' dynamic runtime-base
+  constructor, mutable stored base, and duplicate instance base/end accessors.
+  `RT_BASE` is now the only source of truth for every helper runtime read and
+  chained boundary.
+- Refined the runtime ABI guardrail for operation data whose length is known
+  only at runtime: fixed operation prefix, complete helper block, then variable
+  operation tail. Compile-time ABIs remain operation-first/helper-last, and
+  fixed-width runtime ABIs retain the ordinary helper-tail layout.
+- Applied that order to all five previous dynamic-base consumers: four Matmul
+  layouts and the Conv3D writer, including both Matmul legacy and descriptor
+  producers. The Matmul in1 width-sharded parser now advances across the full
+  variable DRAM bank/stride payload before decoding any fused-operation tail.
+- Validation passed: release host build, 36/36 host helper gtests, 80/80 helper
+  device tests under `--dev`, 27/27 source audits, exact 1D, block-sharded 2D,
+  and DRAM-width-sharded in1 Matmul gates, and the exact Conv3D gate. Conv3D's
+  known Watcher skip (#37184) passed unchanged without Watcher. The existing 31 migrated kernels and 27
+  migrated bindings are stamped v14; pending and deferred inventory is
+  unchanged.
+
+---
+
 ## Round 33 — tagged optional helper ABI and final feedback cleanup (2026-08-22)
 
 - Bumped the helper to API v13. Every present multicast compile-time block now

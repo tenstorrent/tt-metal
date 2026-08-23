@@ -52,7 +52,7 @@
 // re-materialization changes the caller-facing API (renamed/removed type, moved param, changed
 // count/flag semantics — anything that forces a call site rewrite); leave it for internal-only
 // changes.
-#define MCAST_PIPE_API_VERSION 13
+#define MCAST_PIPE_API_VERSION 14
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -360,7 +360,6 @@ struct McastArgsImpl;
 template <uint32_t CT_BASE, uint32_t RT_BASE>
 struct McastArgsImpl<true, CT_BASE, RT_BASE> {
     constexpr McastArgsImpl() = default;
-    explicit constexpr McastArgsImpl(uint32_t runtime_args_base) : runtime_args_base_(runtime_args_base) {}
     static constexpr bool active = true;
 
     // Use `has_receivers` to guard sender work. The per-core role metadata reports which pipe faces
@@ -398,20 +397,16 @@ struct McastArgsImpl<true, CT_BASE, RT_BASE> {
     static constexpr uint32_t topology_runtime_args() { return rotating ? (4u + 2u * rotating_span) : 4u; }
     static constexpr uint32_t num_runtime_args() { return topology_runtime_args() + 2u; }
     static constexpr uint32_t next_runtime_args_offset() { return RT_BASE + num_runtime_args(); }
-    uint32_t runtime_args_base() const { return runtime_args_base_; }
-    uint32_t runtime_args_end() const { return runtime_args_base_ + num_runtime_args(); }
 
     // ---- pipe construction: NO behaviour knobs; everything comes from the wire ----
     // Use these role queries only when one kernel is dispatched across a heterogeneous set of cores
     // (sender-only, receiver-only, both, or neither) and must decide which pipe faces to construct.
     // When every dispatched core has a known role, construct that pipe face directly; sender() and
     // receiver() assert that the runtime role metadata permits it.
-    bool can_send() const { return (get_arg_val<uint32_t>(runtime_args_base_ + topology_runtime_args()) & 0x1u) != 0u; }
-    bool can_receive() const {
-        return (get_arg_val<uint32_t>(runtime_args_base_ + topology_runtime_args()) & 0x2u) != 0u;
-    }
+    bool can_send() const { return (get_arg_val<uint32_t>(RT_BASE + topology_runtime_args()) & 0x1u) != 0u; }
+    bool can_receive() const { return (get_arg_val<uint32_t>(RT_BASE + topology_runtime_args()) & 0x2u) != 0u; }
     // This is a recurring sender phase in [0, num_senders), not an absolute work round.
-    uint32_t sender_round() const { return get_arg_val<uint32_t>(runtime_args_base_ + topology_runtime_args() + 1u); }
+    uint32_t sender_round() const { return get_arg_val<uint32_t>(RT_BASE + topology_runtime_args() + 1u); }
     static constexpr uint32_t sender_index(uint32_t round) { return round % num_senders; }
     bool should_send(uint32_t round) const { return can_send() && sender_index(round) == sender_round(); }
 
@@ -428,8 +423,7 @@ struct McastArgsImpl<true, CT_BASE, RT_BASE> {
     // num_senders rounds.
     ReceiverPipe receiver(const Noc& noc) const {
         ASSERT(can_receive());
-        const uint32_t* coords =
-            reinterpret_cast<const uint32_t*>(get_arg_addr(runtime_args_base_ + (rotating ? 4 : 0)));
+        const uint32_t* coords = reinterpret_cast<const uint32_t*>(get_arg_addr(RT_BASE + (rotating ? 4 : 0)));
         return ReceiverPipe(noc, coords);
     }
 
@@ -440,34 +434,28 @@ struct McastArgsImpl<true, CT_BASE, RT_BASE> {
     template <uint8_t NOC_ID = noc_index>
     McastRect<NOC_ID> rect() const {
         return McastRect<NOC_ID>(
-            get_arg_val<uint32_t>(runtime_args_base_ + 0),
-            get_arg_val<uint32_t>(runtime_args_base_ + 1),
-            get_arg_val<uint32_t>(runtime_args_base_ + 2),
-            get_arg_val<uint32_t>(runtime_args_base_ + 3));
+            get_arg_val<uint32_t>(RT_BASE + 0),
+            get_arg_val<uint32_t>(RT_BASE + 1),
+            get_arg_val<uint32_t>(RT_BASE + 2),
+            get_arg_val<uint32_t>(RT_BASE + 3));
     }
     // Receiver view, FIXED: the sender's coords (the target of this receiver's readiness ack).
-    uint32_t sender_x() const { return get_arg_val<uint32_t>(runtime_args_base_ + 0); }
-    uint32_t sender_y() const { return get_arg_val<uint32_t>(runtime_args_base_ + 1); }
+    uint32_t sender_x() const { return get_arg_val<uint32_t>(RT_BASE + 0); }
+    uint32_t sender_y() const { return get_arg_val<uint32_t>(RT_BASE + 1); }
     // Receiver view, ROTATING: the sender broadcasting on `round`, round in [0, rotating_span).
-    uint32_t sender_x(uint32_t round) const { return get_arg_val<uint32_t>(runtime_args_base_ + 4 + 2 * round + 0); }
-    uint32_t sender_y(uint32_t round) const { return get_arg_val<uint32_t>(runtime_args_base_ + 4 + 2 * round + 1); }
-
-private:
-    uint32_t runtime_args_base_ = RT_BASE;
+    uint32_t sender_x(uint32_t round) const { return get_arg_val<uint32_t>(RT_BASE + 4 + 2 * round + 0); }
+    uint32_t sender_y(uint32_t round) const { return get_arg_val<uint32_t>(RT_BASE + 4 + 2 * round + 1); }
 };
 
 template <uint32_t CT_BASE, uint32_t RT_BASE>
 struct McastArgsImpl<false, CT_BASE, RT_BASE> {
     constexpr McastArgsImpl() = default;
-    explicit constexpr McastArgsImpl(uint32_t runtime_args_base) : runtime_args_base_(runtime_args_base) {}
     static constexpr bool active = false;
     static constexpr uint32_t has_receivers = 0;
     static constexpr uint32_t next_compile_time_args_offset() { return CT_BASE + 1; }
     static constexpr uint32_t topology_runtime_args() { return 0; }
     static constexpr uint32_t num_runtime_args() { return 0; }
     static constexpr uint32_t next_runtime_args_offset() { return RT_BASE; }
-    uint32_t runtime_args_base() const { return runtime_args_base_; }
-    uint32_t runtime_args_end() const { return runtime_args_base_; }
     bool can_send() const { return false; }
     bool can_receive() const { return false; }
     bool should_send(uint32_t) const { return false; }
@@ -481,18 +469,12 @@ struct McastArgsImpl<false, CT_BASE, RT_BASE> {
     void receiver(const Noc&) const {
         static_assert(PRESENT, "McastArgs::receiver() cannot be used when the presence tag is false");
     }
-
-private:
-    uint32_t runtime_args_base_ = RT_BASE;
 };
 
 }  // namespace detail
 
 template <uint32_t CT_BASE, uint32_t RT_BASE>
-struct McastArgs : detail::McastArgsImpl<(get_compile_time_arg_val(CT_BASE) != 0), CT_BASE, RT_BASE> {
-    using Base = detail::McastArgsImpl<(get_compile_time_arg_val(CT_BASE) != 0), CT_BASE, RT_BASE>;
-    using Base::Base;
-};
+struct McastArgs : detail::McastArgsImpl<(get_compile_time_arg_val(CT_BASE) != 0), CT_BASE, RT_BASE> {};
 
 }  // namespace dataflow_kernel_lib
 

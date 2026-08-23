@@ -1112,10 +1112,10 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 (std::uint32_t)in0_tensor_start_tile_id_stride * in0_idx,  // in0_tensor_start_tile_id
                 (std::uint32_t)(in0_idx == in0_end_idx ? last_out_block_h : out_block_h),
                 (std::uint32_t)0};  // sparsity_addr
+            in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
-            in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
 
             {
                 std::vector<std::variant<uint32_t, std::reference_wrapper<const tt::tt_metal::MeshTensor>>> in0_args(
@@ -1204,6 +1204,8 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     }
                 }
 
+                in1_mcast.append_runtime_args_to(mm_in1_sender_writer_args, core);
+
                 if (in1_is_sharded and in1_is_dram) {  // in1 is dram sharded
                     if (in1_is_width_sharded) {
                         uint32_t num_iter_index = mm_in1_sender_writer_args.size() + 1;
@@ -1283,7 +1285,6 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     mm_in1_sender_writer_args.insert(
                         mm_in1_sender_writer_args.end(), fused_op_runtime_args.begin(), fused_op_runtime_args.end());
                 }
-                in1_mcast.append_runtime_args_to(mm_in1_sender_writer_args, core);
                 in1_sender_writer_kernel_desc.emplace_runtime_args(core, mm_in1_sender_writer_args);
 
                 // in1 receiver
@@ -1361,13 +1362,14 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     }
                 }
 
+                in1_mcast.append_runtime_args_to(mm_in1_receiver_writer_args, core);
+
                 if (fuse_op && fused_op_signaler->is_reduce_scatter()) {
                     std::vector<uint32_t> fused_op_runtime_args;
                     fused_op_signaler->push_matmul_fused_op_rt_args(fused_op_runtime_args, in0_idx, in1_idx);
                     mm_in1_receiver_writer_args.insert(
                         mm_in1_receiver_writer_args.end(), fused_op_runtime_args.begin(), fused_op_runtime_args.end());
                 }
-                in1_mcast.append_runtime_args_to(mm_in1_receiver_writer_args, core);
 
                 // left half
                 if ((core.x - start_core_x) <= half_core || (transpose_mcast and core.y == start_core_y)) {
@@ -2472,10 +2474,10 @@ create_program_mcast_in0_in1(
                 (std::uint32_t)in0_tensor_start_tile_id_stride * in0_idx,                  // in0_tensor_start_tile_id
                 (std::uint32_t)(in0_idx == in0_end_idx ? last_out_block_h : out_block_h),  // last_block_h
                 (std::uint32_t)0};                                                         // sparsity_addr
+            in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
-            in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
 
             tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args);  // RISCV_0_default
 
@@ -2558,15 +2560,8 @@ create_program_mcast_in0_in1(
                     }
                 }
 
-                if (fuse_op) {
-                    if (fused_op_signaler->is_all_gather()) {
-                        fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
-                    } else if (fused_op_signaler->is_reduce_scatter()) {
-                        fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, in0_idx, in1_idx);
-                    } else {
-                        TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
-                    }
-                }
+                in1_mcast.append_runtime_args_to(mm_in1_sender_writer_args, core);
+
                 if (in1_is_sharded and in1_is_dram) {  // in1 is dram sharded
                     if (in1_is_width_sharded) {
                         uint32_t num_iter_index = mm_in1_sender_writer_args.size() + 1;
@@ -2634,7 +2629,15 @@ create_program_mcast_in0_in1(
                         // (bank/offset computed from compile-time args + batch index)
                     }
                 }
-                in1_mcast.append_runtime_args_to(mm_in1_sender_writer_args, core);
+                if (fuse_op) {
+                    if (fused_op_signaler->is_all_gather()) {
+                        fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
+                    } else if (fused_op_signaler->is_reduce_scatter()) {
+                        fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, in0_idx, in1_idx);
+                    } else {
+                        TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
+                    }
+                }
                 tt_metal::SetRuntimeArgs(
                     program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_1_default
 
@@ -2712,10 +2715,11 @@ create_program_mcast_in0_in1(
                     }
                 }
 
+                in1_mcast.append_runtime_args_to(mm_in1_receiver_writer_args, core);
+
                 if (fuse_op && fused_op_signaler->is_reduce_scatter()) {
                     fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_receiver_writer_args, in0_idx, in1_idx);
                 }
-                in1_mcast.append_runtime_args_to(mm_in1_receiver_writer_args, core);
 
                 // left half
                 if ((core.x - start_core_x) <= half_core || (transpose_mcast and core.y == start_core_y)) {

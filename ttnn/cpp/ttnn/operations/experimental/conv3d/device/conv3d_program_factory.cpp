@@ -1234,6 +1234,10 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         writer_args.push_back(cw.mcast_num_iters);
         writer_args.push_back(num_workers);
 
+        const auto& weights_mcast =
+            weight_share_mode == WeightShareMode::Mcast ? weights_mcasts.at(cw.mcast_group_id) : weights_mcast_template;
+        weights_mcast.append_runtime_args_to(writer_args, core);
+
         if (num_workers > 0) {
             writer_args.push_back(reducer_core_physical_xs[group_id]);
             writer_args.push_back(reducer_core_physical_ys[group_id]);
@@ -1244,10 +1248,6 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
                 writer_args.push_back(v);
             }
         }
-
-        const auto& weights_mcast =
-            weight_share_mode == WeightShareMode::Mcast ? weights_mcasts.at(cw.mcast_group_id) : weights_mcast_template;
-        weights_mcast.append_runtime_args_to(writer_args, core);
 
         log_debug(
             tt::LogOp,

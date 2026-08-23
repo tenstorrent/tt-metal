@@ -44,6 +44,21 @@ Do not insert new arguments between existing arguments merely to preserve histor
 cleanest ABI boundary—often at the end, as with TensorAccessor arguments—and update the producer and parser together;
 the goal is the clearest final code, not retaining the previous argument order.
 
+For a runtime-sized operation tail, use the one deliberate exception to the
+usual helper-tail layout: fixed operation prefix, complete helper block, then
+the variable operation tail. Derive the tail start from
+`next_runtime_args_offset()`. This keeps the helper's runtime base available as
+a compile-time template argument without duplicating it in mutable decoder
+state.
+
+For fixed-width compile-time ABIs, keep operation arguments first and multicast
+helper blocks last. A genuinely optional operation tail in a separately
+compiled variant is the deliberate exception: emit the fixed operation prefix,
+the complete helper block, then the optional operation tail only in the variant
+that consumes it. Derive that tail from `next_compile_time_args_offset()`.
+Do not emit zero addresses, null accessors, or other dummy operation fields
+solely to preserve a helper-last layout.
+
 ## 8. Do not add preprocessor defines
 
 Do not introduce any new preprocessor defines or `#ifdef` branches as part of a migration. Integrate the helper
@@ -69,3 +84,11 @@ library-wide exception to a zero-width inactive helper: the tag lets ordinary
 one-word/zero-word boundaries, and reject sender or receiver construction at
 compile time. Do not add an operation-owned presence flag, a synthetic multicast
 geometry, or a separate optional decoder type.
+
+## 12. Give `McastArgs` one runtime-base source of truth
+
+Supply the runtime base only through `McastArgs<CT_BASE, RT_BASE>`. Do not add a
+constructor/runtime override, store a mutable base, or expose parallel static
+and instance base/end APIs. When a runtime-sized operation prefix prevents a
+constant base, reorder that variable region after the opaque helper block and
+derive its start from `next_runtime_args_offset()`.

@@ -26,6 +26,23 @@ def test_mcast_args_owns_its_compile_time_presence_tag():
     assert host.count("            1u,\n            has_receivers_ ? 1u : 0u,") == 2
 
 
+def test_mcast_args_has_one_template_owned_runtime_base():
+    helper = (REPO_ROOT / "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp").read_text()
+    assert "runtime_args_base_" not in helper
+    assert "runtime_args_base()" not in helper
+    assert "runtime_args_end()" not in helper
+    assert "McastArgsImpl(uint32_t" not in helper
+
+    kernels, _ = _migrated_sources()
+    dynamic_construction = re.compile(r"\b(?:McastArgs|\w+McastArgs)\s+\w+\s*\(\s*\w+")
+    violations = [
+        str(kernel.relative_to(REPO_ROOT)) for kernel in kernels if dynamic_construction.search(kernel.read_text())
+    ]
+    assert not violations, "McastArgs runtime bases must come only from the RT_BASE template argument:\n" + "\n".join(
+        violations
+    )
+
+
 def _migrated_sources():
     ledger = json.loads(LEDGER_PATH.read_text())
     kernels = [REPO_ROOT / entry["kernel"] for entry in ledger["entries"] if entry["status"] == "migrated"]
@@ -188,9 +205,10 @@ def test_matmul_in0_padding_appends_mcast_after_fixed_operation_args():
     kernel = MATMUL_MCAST_SOURCES[2].read_text()
     accessor = kernel.index("constexpr auto in0_args = TensorAccessorArgs<24>();")
     operation_end = kernel.index("constexpr uint32_t operation_ct_args_end")
-    helper = kernel.index("McastArgs<operation_ct_args_end, 0>")
+    helper = kernel.index("McastArgs<operation_ct_args_end, 4>")
     assert accessor < operation_end < helper
-    assert "const In0McastArgs in0_mcast_args(rt_args_idx);" in kernel
+    assert "constexpr In0McastArgs in0_mcast_args;" in kernel
+    assert "rt_args_idx = In0McastArgs::next_runtime_args_offset();" in kernel
 
     factory_sources = "\n".join(path.read_text() for path in MATMUL_MCAST_SOURCES[:2])
     assert "begin() + 15" not in factory_sources
@@ -208,8 +226,8 @@ def test_matmul_1d_inactive_operands_emit_only_tagged_absent_mcast_blocks():
 
     in0_kernel = MATMUL_MCAST_SOURCES[2].read_text()
     in1_kernel = MATMUL_MCAST_SOURCES[3].read_text()
-    assert "McastArgs<operation_ct_args_end, 0>" in in0_kernel
-    assert "McastArgs<operation_ct_args_end, 0>" in in1_kernel
+    assert "McastArgs<operation_ct_args_end, 4>" in in0_kernel
+    assert "McastArgs<operation_ct_args_end, operation_rt_args_end>" in in1_kernel
     assert "OptionalMcastArgs" not in in0_kernel + in1_kernel
     all_sources = "".join(path.read_text() for path in MATMUL_MCAST_SOURCES)
     assert "mcast_args_present" not in all_sources
@@ -283,16 +301,20 @@ def test_block_sharded_matmul_keeps_receiver_geometry_separate_from_sender_span(
     assert not re.search(r"Mcast[12]D\([^;]+CoreRangeSet\(all_cores\)", factory_2d, re.DOTALL)
 
 
-def test_conv3d_mcast_uses_a_dynamic_operation_prefix_and_scoped_weight_share_modes():
+def test_conv3d_mcast_precedes_the_dynamic_operation_tail_and_scopes_weight_share_modes():
     factory = (REPO_ROOT / "ttnn/cpp/ttnn/operations/experimental/conv3d/device/conv3d_program_factory.cpp").read_text()
     kernel = (REPO_ROOT / "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp").read_text()
 
-    assert "using WeightMcastArgs = McastArgs<bias_args.next_compile_time_args_offset(), 0>;" in kernel
-    assert "const WeightMcastArgs weights_mcast_args(argidx);" in kernel
-    assert kernel.index("const uint32_t mcast_num_iters") < kernel.index("const WeightMcastArgs weights_mcast_args")
+    assert "using WeightMcastArgs = McastArgs<bias_args.next_compile_time_args_offset(), 21>;" in kernel
+    assert "constexpr WeightMcastArgs weights_mcast_args;" in kernel
+    assert "argidx = WeightMcastArgs::next_runtime_args_offset();" in kernel
+    assert kernel.index("const uint32_t mcast_num_iters") < kernel.index("constexpr WeightMcastArgs weights_mcast_args")
     assert "weights_mcast.append_runtime_args_to(writer_args, core);" in factory
     assert factory.index("writer_args.push_back(cw.mcast_num_iters);") < factory.index(
         "weights_mcast.append_runtime_args_to(writer_args, core);"
+    )
+    assert factory.index("weights_mcast.append_runtime_args_to(writer_args, core);") < factory.index(
+        "if (num_workers > 0)"
     )
     assert ": weights_mcast_template;" in factory
     assert "mcast_bbox_start_x" not in factory + kernel
@@ -389,9 +411,20 @@ def test_argmax_multicore_composes_two_counter_wires_and_keeps_done_fanin():
     assert factory.count("group1_start_mcast.append_runtime_args_to(reader_runtime_args, core);") == 2
 
 
-def test_migrated_kernels_read_positional_operation_args_before_declaring_helper_decoders():
+def test_migrated_kernels_keep_fixed_operation_prefixes_before_helper_decoders():
     kernels, _ = _migrated_sources()
     violations = []
+    variable_runtime_tails = {
+        "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp": "argidx = WeightMcastArgs::next_runtime_args_offset();",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+        "reader_bmm_tile_layout_in0_sender_padding.cpp": "rt_args_idx = In0McastArgs::next_runtime_args_offset();",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+        "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp": "operation_rt_args_idx = In0McastArgs::next_runtime_args_offset();",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+        "reader_bmm_tile_layout_in1_sender_writer_padding.cpp": "rt_args_idx = In1McastArgs::next_runtime_args_offset();",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+        "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp": "rt_args_idx = In1McastArgs::next_runtime_args_offset();",
+    }
 
     for path in kernels:
         source = path.read_text()
@@ -404,12 +437,19 @@ def test_migrated_kernels_read_positional_operation_args_before_declaring_helper
         positional_ct = [match.start() for match in re.finditer(r"get_compile_time_arg_val\(", source[:setup_end])]
         positional_rt = [match.start() for match in re.finditer(r"get_arg_(?:val|addr)\(", source[:setup_end])]
 
+        relative = str(path.relative_to(REPO_ROOT))
         if positional_ct and helper < positional_ct[-1]:
             violations.append(f"{path.relative_to(REPO_ROOT)} declares McastArgs before its last operation CT read")
         if positional_rt and helper < positional_rt[-1]:
-            violations.append(f"{path.relative_to(REPO_ROOT)} declares McastArgs before its last operation RT read")
+            derived_tail = variable_runtime_tails.get(relative)
+            if derived_tail is None:
+                violations.append(f"{relative} declares McastArgs before an unregistered operation RT tail")
+            elif derived_tail not in source:
+                violations.append(f"{relative} does not derive its variable operation RT tail from McastArgs")
 
-    assert not violations, "Operation arguments must be read before helper decoders:\n" + "\n".join(violations)
+    assert (
+        not violations
+    ), "Fixed operation prefixes and registered variable RT tails must bound helpers:\n" + "\n".join(violations)
 
 
 def test_move_overlap_composes_three_release_wires_and_keeps_return_counter():

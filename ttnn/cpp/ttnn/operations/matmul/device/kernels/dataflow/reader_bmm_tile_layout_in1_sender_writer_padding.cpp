@@ -119,19 +119,6 @@ void kernel_main() {
     constexpr bool fuse_op_all_gather = (bool)get_compile_time_arg_val(26);
     constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(27);
 
-    MatmulOpReceiver fused_op_receiver;
-    OpSignaler op_signaler;
-    if constexpr (fuse_op_all_gather) {
-        fused_op_receiver = MatmulOpReceiver(
-            false, /* wait_for_op_signal */
-            rt_args_idx,
-            num_blocks_inner_dim,
-            in1_block_h /* tiles_per_block (in the same dimension */
-        );
-    } else if constexpr (fuse_op_reduce_scatter) {
-        op_signaler = OpSignaler(rt_args_idx);
-    }
-
     constexpr auto in1_args = TensorAccessorArgs<28>();
     constexpr auto sparsity_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<sparsity_args.next_compile_time_args_offset()>();
@@ -144,12 +131,6 @@ void kernel_main() {
 
 // RT and COMPILE TIME ARGS for DRAM sharded weights
 #ifdef IN1_DRAM_WIDTH_SHARDED
-    const uint32_t vc = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t num_dram_shards_to_read = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t dram_tensor_start_offset = get_arg_val<uint32_t>(rt_args_idx++);
-    tt_l1_ptr uint32_t* in1_block_w_dram_stride_bytes = (tt_l1_ptr uint32_t*)get_arg_addr(rt_args_idx++);
-    tt_l1_ptr uint32_t* current_dram_bank_id = (tt_l1_ptr uint32_t*)get_arg_addr(rt_args_idx++);
-
     constexpr uint32_t in1_dram_block_num_tiles = get_compile_time_arg_val(after_bias_offset);
     constexpr uint32_t in1_block_w_dram_bytes = get_compile_time_arg_val(after_bias_offset + 1);
 #endif  // IN1_DRAM_WIDTH_SHARDED
@@ -164,8 +145,37 @@ void kernel_main() {
 #else
     constexpr uint32_t operation_ct_args_end = after_bias_offset;
 #endif
-    using In1McastArgs = dataflow_kernel_lib::McastArgs<operation_ct_args_end, 0>;
-    const In1McastArgs in1_mcast_args(rt_args_idx);
+
+#ifdef OUT_SHARDED
+    constexpr uint32_t operation_rt_args_end = 16;
+#else
+    constexpr uint32_t operation_rt_args_end = 17;
+#endif
+    using In1McastArgs = dataflow_kernel_lib::McastArgs<operation_ct_args_end, operation_rt_args_end>;
+    constexpr In1McastArgs in1_mcast_args;
+    rt_args_idx = In1McastArgs::next_runtime_args_offset();
+
+#ifdef IN1_DRAM_WIDTH_SHARDED
+    const uint32_t vc = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t num_dram_shards_to_read = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t dram_tensor_start_offset = get_arg_val<uint32_t>(rt_args_idx++);
+    tt_l1_ptr uint32_t* in1_block_w_dram_stride_bytes = (tt_l1_ptr uint32_t*)get_arg_addr(rt_args_idx);
+    tt_l1_ptr uint32_t* current_dram_bank_id = (tt_l1_ptr uint32_t*)get_arg_addr(rt_args_idx + 1);
+    rt_args_idx += 2 * num_dram_shards_to_read;
+#endif  // IN1_DRAM_WIDTH_SHARDED
+
+    MatmulOpReceiver fused_op_receiver;
+    OpSignaler op_signaler;
+    if constexpr (fuse_op_all_gather) {
+        fused_op_receiver = MatmulOpReceiver(
+            false, /* wait_for_op_signal */
+            rt_args_idx,
+            num_blocks_inner_dim,
+            in1_block_h /* tiles_per_block (in the same dimension */
+        );
+    } else if constexpr (fuse_op_reduce_scatter) {
+        op_signaler = OpSignaler(rt_args_idx);
+    }
 
 #ifdef FUSE_BIAS
 #ifndef BIAS_SHARDED

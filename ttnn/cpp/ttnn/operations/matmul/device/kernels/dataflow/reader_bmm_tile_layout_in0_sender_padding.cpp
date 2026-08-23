@@ -82,6 +82,10 @@ void kernel_main() {
     // sparsity args
     const uint32_t sparsity_addr = get_arg_val<uint32_t>(rt_args_idx++);
 
+    using In0McastArgs = dataflow_kernel_lib::McastArgs<operation_ct_args_end, 4>;
+    constexpr In0McastArgs in0_mcast_args;
+    rt_args_idx = In0McastArgs::next_runtime_args_offset();
+
     // 0 is used to specify "INVALID" state, i.e. when the multicasted data has not been received by the receiver.
     // 0x1 is used to specify "VALID" state, i.e. when the batch is valid.
     // 0x2 is used to specify "IGNORE_BATCH" state, i.e. when the batch is not valid.
@@ -99,9 +103,6 @@ void kernel_main() {
             in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
         );
     }
-    using In0McastArgs = dataflow_kernel_lib::McastArgs<operation_ct_args_end, 0>;
-    const In0McastArgs in0_mcast_args(rt_args_idx);
-
     constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(dfb_id_in0);
     // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
@@ -225,7 +226,7 @@ void kernel_main() {
 #ifndef SKIP_MCAST
                         uint32_t in0_start_address =
                             dfb_in0.get_write_ptr();  // copy start address of block, to be used for mcasting
-#endif                                               // SKIP_MCAST
+#endif                                                // SKIP_MCAST
 
                         // Copy in0 block into CB, as the default kernel
                         uint32_t in0_tensor_row_start_tile_id = in0_tensor_current_inner_dim_block_start_tile_id;

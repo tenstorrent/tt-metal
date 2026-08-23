@@ -13,6 +13,8 @@ applicable, focused validation, and the migration guardrail checks pass.
   semaphore ownership.
 - Keep helper compile-time and runtime blocks opaque and contiguous.
 - Derive every post-helper offset; do not encode helper block widths.
+- Keep `McastArgs` runtime bases template-owned; put runtime-sized operation
+  tails after the helper and derive their start from its next offset.
 - Audit TensorAccessor bases, optional tails, fused-operation fields, descriptor
   paths, legacy paths, and cache overrides after ABI changes.
 - Add no migration-only preprocessor branches and keep diffs focused.
@@ -31,8 +33,26 @@ applicable, focused validation, and the migration guardrail checks pass.
 | 6 | MCAST-002 | Complete | Matmul, Conv2D, Argmax, and cross-operation Group Attention mixed roles | 24 source audits; helper 80/80 `--dev`; four focused operation gates |
 | 7 | MCAST-004 | Complete | Tagged helper ABI, all migrated host/kernel consumers, inactive Matmul operands | Build; 25 source audits; helper 80/80 `--dev`; host gtest 36/36; 1D in0/in1, Sparse, and chained 2D gates |
 | 8 | MATMUL-004 | Complete | 1D and matching 2D legacy/descriptor common in0 tails | Build; 26 source audits; focused 1D and 2D `--dev` gates |
+| 9 | MCAST-005 | Complete | Template-only runtime bases across Matmul and Conv3D variable-tail ABIs | Build; 27 source audits; 36 host gtests; helper 80/80 `--dev`; focused Matmul and Conv3D gates |
 
 ## Evidence log
+
+### MCAST-005 (complete)
+
+- Removed the dynamic `McastArgs` runtime-base constructor, stored base, and
+  instance base/end accessors. All helper reads now use the `RT_BASE` template
+  argument, and a source guard rejects reintroducing a second base.
+- Reordered the five existing dynamic-base consumers and all matching host
+  producers to fixed operation prefix, opaque helper block, variable operation
+  tail. This covers Matmul fused all-gather/reduce-scatter payloads, the
+  block-sharded receiver tail, DRAM width-sharded in1 bank/stride arrays, and
+  Conv3D reducer/worker coordinates in both legacy and descriptor paths.
+- `./build_metal.sh`, 27/27 source audits, 36/36 `McastHostFixture` tests, and
+  all 80 helper device tests under `--dev` passed. Exact 1D uneven-width and
+  block-sharded 2D Matmul nodes passed under `--dev`. A DRAM-width-sharded in1
+  node with bias also passed under `--dev`, covering the variable bank/stride
+  parser. The exact Conv3D node retained its known Watcher skip (#37184) and
+  passed through the safe wrapper without `--dev` at PCC 0.999991419.
 
 ### MCAST-004 (complete)
 

@@ -42,6 +42,13 @@ runtime-base constructor lets `McastArgs` follow genuinely variable operation
 prefixes without splitting the ABI. The ledger-wide source audit now enforces
 natural operation-before-helper declaration order.
 
+Resolution correction (2026-08-23): MCAST-005 refines the runtime ordering for
+operation tails whose length is known only at runtime. Compile-time arguments
+remain operation-first/helper-last. Runtime arguments use a fixed operation
+prefix, then the helper block, then the variable operation tail; this makes the
+helper base compile-time-constant without encoding its wire width in the
+operation. Fixed-width ABIs continue to put the helper at the end.
+
 ### MCAST-002 — Make sender and receiver pipe types directly nameable
 
 - Date: 2026-08-22
@@ -120,6 +127,11 @@ source, compile, cache-reuse, and device tests passed across Matmul, Sparse
 Matmul, Group Attention Matmul, Conv2D/Conv3D, normalization, reduction, sorting,
 movement, and SDPA families.
 
+Resolution correction (2026-08-23): the append remains one opaque operation at
+one contiguous boundary, but MCAST-005 permits a variable-length operation tail
+to be appended after it. The helper is still never indexed, split, or
+interleaved with another block.
+
 ### MCAST-004 — Make presence part of the `McastArgs` wire
 
 - Date: 2026-08-22
@@ -168,6 +180,94 @@ inactive Matmul/Sparse shared-kernel bindings emit the opaque absent block.
 Host build, 25 source audits, 80 helper device tests, 36 host gtests, both 1D
 Matmul directions, Sparse Matmul, and chained 2D Matmul passed; the device gates
 ran sequentially under the safe wrapper with Watcher.
+
+### MCAST-005 — Make the runtime base template-owned
+
+- Date: 2026-08-23
+- Status: Resolved (2026-08-23)
+- Scope: The `McastArgs` kernel API and every migrated operation with a
+  runtime-sized operation argument region
+
+`McastArgs<CT_BASE, RT_BASE>` must have one source of truth for its runtime
+base. Remove the constructor that accepts a second runtime base and the mutable
+stored base/end accessors. Every helper read and every chained boundary must use
+the `RT_BASE` template argument.
+
+For an ABI containing operation data whose length is known only at runtime,
+order its runtime arguments as:
+
+1. the fixed-size operation prefix;
+2. the complete opaque multicast helper block;
+3. the variable-size operation tail.
+
+The kernel derives the tail start with
+`McastArgs::next_runtime_args_offset()`. The host emits the same order. This is
+the deliberate cross-operation exception to MCAST-001's usual helper-tail rule;
+it is preferable to carrying the same base both as a template argument and as a
+constructor value.
+
+Apply this to every existing dynamic-base consumer, not only Matmul. The audit
+must include Matmul fused all-gather/reduce-scatter fields, the block-sharded
+receiver tail, DRAM width-sharded in1 bank/stride arrays, descriptor and legacy
+producers, and Conv3D reducer/worker coordinate arrays.
+
+Resolution: API v14 removes the runtime-base constructor and stores no runtime
+base in `McastArgs`. Five consumers now use compile-time bases: four Matmul
+kernel layouts and the Conv3D writer. Their matching host producers emit fixed
+operation fields, the helper block, then the runtime-sized fused/DRAM/worker
+tail. The in1 DRAM-width-sharded parser now also advances across every emitted
+bank/stride pair before decoding a fused-operation tail. A ledger-wide source
+guard rejects a second runtime base and permits only the five registered,
+derived variable-tail layouts. The release build, 27 source audits, 36 host
+gtests, all 80 helper device tests under Watcher, focused 1D, block-sharded 2D,
+and DRAM-width-sharded in1 Matmul nodes, and the focused Conv3D node passed;
+Conv3D's known Watcher skip (#37184) passed unchanged without Watcher.
+
+### MCAST-006 — Put multicast before a genuinely optional compile-time tail
+
+- Date: 2026-08-23
+- Status: Open
+- Scope: Every migrated operation with an optional compile-time argument block
+  after a fixed operation prefix
+
+Do not emit dummy operation arguments solely to keep a multicast helper at the
+end of a fixed compile-time ABI. When an operation-owned compile-time tail is
+genuinely absent from one separately compiled kernel variant, order the wire as:
+
+1. the fixed operation prefix;
+2. the complete opaque multicast helper block;
+3. the optional operation tail, when that variant uses it.
+
+The kernel should derive the optional tail's first index from
+`McastArgs::next_compile_time_args_offset()`, and the host should emit the same
+order. This is a deliberate compile-time counterpart to MCAST-005's
+variable-runtime-tail exception to MCAST-001. It keeps the helper block opaque
+without requiring operation fields that have no behavior in the compiled
+variant.
+
+The first reviewed occurrence is the width-sharded Conv2D activation reader.
+Its non-DRAM factory path currently emits two explicit zero fields and a null
+two-word `TensorAccessorArgs` block only so the following activation-multicast
+block starts at the same offset as in the DRAM variant. Place the multicast
+block before the optional config-tensor address, page size, and accessor tail;
+emit that tail only for `CONFIG_TENSOR_IN_DRAM`; and derive the config-tensor
+indices from the multicast block's compile-time end.
+
+Audit every other migrated operation for zero placeholders, null
+`TensorAccessorArgs`, or other filler introduced only to stabilize a following
+multicast offset. Apply this layout where the fields are truly absent in a
+separate compile-time variant. Retain fixed optional descriptors when their
+presence is itself part of the operation ABI or when kernel behavior consumes
+the encoded absence; do not remove them merely because their values are zero.
+
+Update the durable argument-ordering guardrail, which currently describes
+multicast as always following operation compile-time arguments, to register
+this optional-tail exception. Update
+`test_migrated_kernels_keep_fixed_operation_prefixes_before_helper_decoders`
+at the same time as the production layout: it should continue rejecting an
+unexplained operation tail after `McastArgs`, but accept a registered optional
+tail only when its first index is derived from
+`McastArgs::next_compile_time_args_offset()`.
 
 ## Matmul
 
@@ -278,3 +378,100 @@ cleanup there; no other migrated producer had a genuinely identical helper tail
 duplicated across branches. A source regression test requires exactly one append
 after each of the four conditionals. The release host build, all 26 source
 audits, and focused 1D and 2D Matmul gates under Watcher passed.
+
+## Conv
+
+### CONV-001 — Preserve terminal write barriers in data-movement kernels
+
+- Date: 2026-08-23
+- Status: Open
+- Scope: Conv data-movement kernels migrated to `mcast_pipe`
+
+Do not remove the explicit `noc.async_write_barrier()` or equivalent terminal
+barrier from a Conv data-movement kernel as part of the multicast migration.
+The completion semantics inside `SenderPipe::send()` cover the transaction
+owned by that helper call; they do not replace the kernel-wide drain of every
+outstanding NoC write, including writes issued outside the multicast helper.
+
+Preserve or reinstate the original barrier after the kernel's data-movement
+loops and ensure that every exit following an issued write reaches it. Audit
+the 1D and 2D sender and receiver variants rather than relying on the helper's
+per-send synchronization as a substitute for the end-of-kernel barrier.
+
+### CONV-002 — Derive a multicast sender role from `McastArgs`
+
+- Date: 2026-08-23
+- Status: Open
+- Scope: Conv data-movement kernels migrated to `mcast_pipe`
+
+Audit every separately passed `is_sender_core` runtime argument. When the flag
+means that the core is the sender for the same multicast family represented by
+an `McastArgs`, remove the duplicate argument and query
+`mcast_args.can_send()` instead. Remove the corresponding host-side argument
+and update the runtime-argument offsets with it.
+
+Do not mechanically replace flags that describe another role. In
+`writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp` and
+`writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp`,
+the current `is_sender_core` flag gates split-reader activation work, including
+in the weights-multicast receiver kernel. That suggests it may describe
+activation ownership rather than the weights multicast sender role. Confirm
+the semantics from the host producer. If it is an independent role, rename it
+to that precise role or derive it from the correct helper metadata; do not
+leave it as an ambiguous multicast-looking `is_sender_core` boolean.
+
+### CONV-003 — Remove migration-added streaming-source flushes
+
+- Date: 2026-08-23
+- Status: Open
+- Kernel:
+  `ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp`
+- Audit scope: All operations migrated to `mcast_pipe`
+
+The migration added `weight_sources_are_persistent` and a conditional
+`noc.async_writes_flushed()` before loading the next weight block. The
+pre-migration kernel did not perform this mid-loop source-lifetime flush; it
+issued the raw weight and ready-signal multicasts and retained only its terminal
+write barrier.
+
+Remove the migration-added persistence classification and conditional flush so
+the migrated kernel retains the original synchronization behavior. Do not
+replace it with the default per-send helper flush. Keep the weight and bias
+sends caller-managed, and handle the original terminal barrier independently as
+required by CONV-001.
+
+Audit the other migrated operations for the same pattern. If a migration added
+an `async_writes_flushed()`, write barrier, persistence classification, or
+equivalent source-lifetime synchronization that the pre-migration kernel did
+not have, remove that added behavior as well. Compare against each kernel's
+actual pre-migration implementation rather than assuming that every explicit
+flush in the migrated tree was part of the original operation contract.
+
+### CONV-004 — Derive dense ACK populations from multicast geometry
+
+- Date: 2026-08-23
+- Status: Open
+- Scope: Conv2D and Conv3D multicast factories and kernels
+
+Do not explicitly pass or retain an operation-owned count of receiver cores
+that send consumer-ready acknowledgements when every non-sender core reached by
+the multicast rectangle or line acknowledges. In that dense case, let
+`Mcast1D` or `Mcast2D` derive the ACK population from the multicast geometry and
+sender placement, and remove any duplicate host/kernel count ABI.
+
+Use the block-sharded Conv2D weights multicast and the Conv3D weights multicast
+as reference cases. The block-sharded weights grid is validated as dense and
+`Mcast1D` derives the per-line `span - 1` count. Conv3D includes otherwise-idle
+rectangle members as passive handshake participants, so `Mcast2D` derives
+`area - 1` without a custom count. Preserve that formulation and remove any
+remaining duplicate count associated with those families. The block-sharded
+Conv2D activation multicast also carries a raw row/column destination count
+that is geometric; when it is migrated to the helper, derive it from the line
+rather than preserving the scalar ABI.
+
+Do not mechanically remove an override from a divergent multicast. The
+width-sharded Conv2D activation rectangle contains cores that return before the
+handshake, and the height-sharded/default weights rectangle contains noop cores
+that do not acknowledge. Those counts remain behavior-specific unless the
+kernels and semaphore placement are deliberately changed so the extra landing
+cores participate passively.

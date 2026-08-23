@@ -931,10 +931,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         if (in0_is_sharded) {
             std::vector<uint32_t> mm_in0_sender_args = {i};
 
+            in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
-            in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
 
             if (i < num_cores_with_work) {
                 tt_metal::SetRuntimeArgs(
@@ -955,10 +955,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                 (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
                 (std::uint32_t)in0_last_out_block_h,                            // last_block_h
                 (std::uint32_t)0};                                              // sparsity_addr
+            in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
-            in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
 
             tt_metal::SetRuntimeArgs(
                 program,
@@ -3745,10 +3745,10 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         if (in0_is_sharded) {
             std::vector<uint32_t> mm_in0_sender_args = {i};
 
+            in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
-            in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
 
             if (i < num_cores_with_work) {
                 in0_sender_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
@@ -3764,10 +3764,10 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
                 (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
                 (std::uint32_t)in0_last_out_block_h,                            // last_block_h
                 (std::uint32_t)0};                                              // sparsity_addr
+            in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
-            in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
 
             {
                 std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> in0_sender_variant(

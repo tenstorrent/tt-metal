@@ -57,6 +57,11 @@ void kernel_main() {
 
     constexpr uint32_t num_remote_senders = (num_blocks_inner_dim + num_blocks_per_shard - 1) / num_blocks_per_shard;
 
+    using In0McastArgs = McastArgs<14, 1>;
+    constexpr In0McastArgs in0_mcast_args;
+    operation_rt_args_idx = In0McastArgs::next_runtime_args_offset();
+    static_assert(num_remote_senders <= in0_mcast_args.num_senders);
+
     MatmulOpReceiver fused_op_receiver;
     if constexpr (fuse_op) {
         fused_op_receiver = MatmulOpReceiver(
@@ -66,10 +71,6 @@ void kernel_main() {
             in0_block_w /* tiles_per_block (in the same dimension as tensor slice) */
         );
     }
-
-    using In0McastArgs = McastArgs<14, 0>;
-    const In0McastArgs in0_mcast_args(operation_rt_args_idx);
-    static_assert(num_remote_senders <= in0_mcast_args.num_senders);
 
     Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);
