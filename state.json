@@ -1,315 +1,333 @@
 {
- "last_run": "2026-08-23",
- "run_id": "32639327728",
- "open_prs": {
-  "52106": {
-   "issue": 51660,
-   "status": "checks green; reviewer-blocked (CodeOwners pending); pinged 2026-08-12 (human blozano-tt), no re-ping needed per Task5 scope"
+  "last_run": "2026-08-23T18:30:00Z",
+  "run_id": "32657926945",
+  "open_prs": {
+    "52106": {
+      "issue": 51660,
+      "status": "checks green; reviewer-blocked (CodeOwners pending); pinged 2026-08-12 (human blozano-tt), no re-ping needed per Task5 scope"
+    },
+    "51868": {
+      "issue": 51866,
+      "status": "author-blocked (branch behind main); per policy no rebase, no action this run"
+    },
+    "53113": {
+      "issue": 53106,
+      "status": "reviewer-blocked (CodeOwners pending, 2 groups: blackhole/wormhole LLK owners); /codeowners ping by blozano-tt 2026-08-14; agentic-threat-detected label is a known tooling-failure false positive, not a real finding"
+    },
+    "53478": {
+      "issue": 53282,
+      "status": "CI checks all passed; mergeable_state=behind but that's just needing a rebase against main, not a real conflict; awaiting maintainer review"
+    },
+    "53655_moe_stallwait": {
+      "issue": 53655,
+      "branch": "repo-assist/fix-issue-53655-blackhole-moe-stallwait-math",
+      "status": "opened this run; adds p_stall::MATH to STALLWAIT masks in 3 confirmed files (4th file from issue text not found in current main, flagged in PR/comment); CI triggered, outcome unknown yet, check next run"
+    },
+    "53690": {
+      "issue": 53655,
+      "status": "CI green (PR Gate Status success); mergeable_state=blocked (review required); awaiting nvelickovicTT's extra Sanity/L2/BH-e2e runs and pmilenkovicTT reply on 4th file path"
+    }
   },
-  "51868": {
-   "issue": 51866,
-   "status": "author-blocked (branch behind main); per policy no rebase, no action this run"
+  "issues_labeled": [
+    "52178:bug",
+    "52174:bug",
+    "52233:bug",
+    "52203:bug",
+    "52390:bug,ci-bug",
+    "52376:bug",
+    "52614:bug,community",
+    "52607:bug",
+    "53046:bug",
+    "53060:performance monitoring",
+    "53389:bug",
+    "53379:bug",
+    "53432:bug",
+    "53435:bug",
+    "53429:feature-request",
+    "53439:feature-request",
+    "53512:bug",
+    "53510:bug",
+    "53604:bug",
+    "53649:bug",
+    "53781:bug",
+    "53763:performance monitoring",
+    "53764:feature-request",
+    "53780:feature-request",
+    "53815:bug",
+    "53823:bug",
+    "53984:bug",
+    "53981:bug",
+    "53978:bug",
+    "53975:bug",
+    "53973:bug",
+    "53971:bug",
+    "53969:bug",
+    "53963:bug",
+    "53908:bug",
+    "54017:bug",
+    "53999:bug",
+    "54016:feature-request"
+  ],
+  "covered_no_duplicate": {
+    "52131": "PR #52136 already closes it",
+    "52233": "fix in open PR #52237",
+    "52612": "fix in open PR #52613",
+    "52614": "fix in open PR #52615",
+    "52607": "fix in open PR #52608",
+    "52901": "fix in open PR #52902",
+    "53046": "fix already in open PR #53047 (lgamma bridge-guard <= fix); overlaps in-flight #51991, needs coordination per PR body -- do not open duplicate",
+    "53078": "fix in draft PR #53103 (AI-assisted LLK triage board)",
+    "53106": "fix opened by repo-assist this run, see new PR (reciprocal Newton seed 0x1.554p0f)",
+    "52671": "TWO maintainer PRs exist (#52789 full fix, #52790 assert-only) superseding repo-assist's own #52673 -- do not act further, just monitor for closure",
+    "53282": "fix opened by repo-assist this run (addcmul composite-fallback multiply association), verified no existing PR via search_pull_requests",
+    "53649": "commented with bisect confirmation citing #53419 diff; labeled bug; already assigned to jmitrovicTT, no PR opened (root cause not independently verified)",
+    "53655": "PR opened this run (repo-assist), no other open PR found",
+    "53786": "fix in open PR #53767 (reporter's own)",
+    "53765": "fix in open PR #53766 (reporter's own)",
+    "53760": "fix in open PR #53761 (reporter's own)",
+    "53782": "fix in open PR #53783 (reporter's own)",
+    "53770": "fix in open PR #53771 (reporter's own)",
+    "53781": "commented with isolation lead (suspect strict-inequality-gated CB credit in sort/select); labeled bug; no PR opened, needs hw access",
+    "53823": "fixed by open PR #53654 (TT-NOP-Injector eltwise_binary race)",
+    "53787": "fixed by open PR #53810 (log_sigmoid fp32 accuracy)",
+    "53846": {
+      "fix_pr": 53858,
+      "date": "2026-08-21",
+      "note": "groupnorm inexact group mean, fixed by PR #53858"
+    },
+    "53803": {
+      "fix_pr": 53858,
+      "date": "2026-08-21",
+      "note": "groupnorm sub-tile group corruption, fixed by PR #53858"
+    },
+    "53874": "fixed by #53899 (not repo-assist); repo-assist's own #53898 closed as superseded",
+    "53890": "fix in open PR #53891 (reporter kinginu, ttnn.where composite fallback)",
+    "53862": "fix in open PR #53863 (reporter kinginu, is_odd 3-dispatch perf)",
+    "53984": "fix in open PR #53985 (reporter kinginu, multiply block-float fast_and_approximate_mode)",
+    "53981": "fix in open PR #53982 (reporter kinginu, complex div_bw single reciprocal)",
+    "53978": "fix in open PR #53980 (reporter kinginu, div output_dtype passthrough)",
+    "53975": "fix in open PR #53976 (reporter kinginu, sqrt/rsqrt -0.0 domain)",
+    "53973": "fix in open PR #53974 (reporter kinginu, rsqrt_bw zero-gradient sign)",
+    "53971": "fix in open PR #53972 (reporter kinginu, tril/triu dtype mask)",
+    "53969": "fix in open PR #53970 (reporter kinginu, backward ops memory_config passthrough)",
+    "53963": "fix in open PR #53965 (reporter kinginu, unary program cache key dtype)",
+    "53908": "fix in open PR #53909 (reporter kinginu, unary SFPU comparisons)",
+    "53699": "fixed by merged PR #53749 (repo-assist); issue closed, no further action"
   },
-  "53113": {
-   "issue": 53106,
-   "status": "reviewer-blocked (CodeOwners pending, 2 groups: blackhole/wormhole LLK owners); /codeowners ping by blozano-tt 2026-08-14; agentic-threat-detected label is a known tooling-failure false positive, not a real finding"
+  "dropped_fix_targets": {
+    "51845": "maintainer jasondavies rejected both proposed remedies 2026-08-05 -- do not attempt fix",
+    "53055": "reporter (maintainer ncvetkovicTT) deliberately deferred fix pending directed test -- filed as documentation, not an action item"
   },
-  "53478": {
-   "issue": 53282,
-   "status": "CI checks all passed; mergeable_state=behind but that's just needing a rebase against main, not a real conflict; awaiting maintainer review"
+  "watch_prs": {
+    "52237": "fixes #52233, watch for merge",
+    "45709": "approved+CodeOwners complete but stuck action_required repo-side gate since 2026-06, needs maintainer manual re-enable",
+    "53047": "fixes #53046 lgamma bridge guards <= fix; overlaps #51991, needs coordination before merge",
+    "53103": "draft PR fixing #53078 matmul unpacker miscompares; AI-generated, needs human review before ready-for-review",
+    "53690": "test-coverage objection from ncvetkovicTT resolved 2026-08-21 by nvelickovicTT (OK if CI passes); awaiting CI re-run results (Sanity/L2/BH e2e triggered by nvelickovicTT)",
+    "51868": "reviewer kanapitsas (2026-08-22) confirmed Ring Joint SDPA logsigmoid_sub shares same bug; repo-assist replied confirming + asked maintainer to add boundary test (no HW access to verify numerics); PR still open, mergeable_state=behind"
   },
-  "53655_moe_stallwait": {
-   "issue": 53655,
-   "branch": "repo-assist/fix-issue-53655-blackhole-moe-stallwait-math",
-   "status": "opened this run; adds p_stall::MATH to STALLWAIT masks in 3 confirmed files (4th file from issue text not found in current main, flagged in PR/comment); CI triggered, outcome unknown yet, check next run"
+  "sfpu_clamp_family": {
+    "note": "Family in #52178 (kinginu). Still open no-PR: erfc #51137, digamma #51128, snake_beta #51116. sin/cos #51845 blocked. softplus #51866 has PR #51868 pending gate. lgamma z=0.75 boundary #53046 has PR #53047 pending, overlaps #51991."
   },
-  "53690": {
-   "issue": 53655,
-   "status": "CI green (PR Gate Status success); mergeable_state=blocked (review required); awaiting nvelickovicTT's extra Sanity/L2/BH-e2e runs and pmilenkovicTT reply on 4th file path"
+  "no_fix_needed_investigated": {
+    "53029": "K3 AttnRes segmented-batch silent correctness bug -- deep hw-specific investigation, root cause unknown, left for owning team (pjosipovic)",
+    "53069": "Quasar perf-test coverage issue, PR-derived tracking issue, not a defect",
+    "53079": "assigned to maintainer ebanerjeeTT, tracked scope item, no repo-assist action needed",
+    "53631": "LLK MOVD2B handoff investigation, reporter self-driving with own follow-up comment, not a confirmed bug",
+    "53600": "covered by existing PR #53601",
+    "53640": "assigned to ndivnicTT, thin perf-test investigation task",
+    "53613": "maintainer KalaivaniMCW test-infra restructuring proposal, not a bug",
+    "53568": "Metal 2.0 port architectural blocker by maintainer gajanan-choudhary, too complex for repo-assist",
+    "53561": "AI-flagged LLK dedup/refactor follow-up, requires careful mutation-testing, not safe for repo-assist",
+    "53769": "argmax multicore correctness gaps, already assigned iwroszTT, 5 distinct sub-issues, too broad for a single surgical repo-assist PR",
+    "53778": "graph tracer timeout for llama pytest, reporter already has own workaround branch + comment, needs graph-tracing expert (dgomezTT/aliaksei-sala already tagged)",
+    "53763": "LLK perf-gate noise/threshold measurement tracking issue (collaborator-authored), labeled performance monitoring, no action needed",
+    "53764": "multi-chip CI sweep follow-up to #38316, already assigned fbuticTT, labeled feature-request",
+    "53802": {
+      "date": "2026-08-21",
+      "note": "vLLM seed salting regression, already assigned/labeled"
+    },
+    "53844": {
+      "date": "2026-08-21",
+      "note": "GDN kernel optimization, already assigned"
+    },
+    "53840": {
+      "date": "2026-08-21",
+      "note": "l2 nightly reduction, assigned, has parent issue"
+    },
+    "53796": {
+      "date": "2026-08-21",
+      "note": "SFPI deprecated features, assigned"
+    },
+    "53849": {
+      "date": "2026-08-21",
+      "note": "operation timeout doesn't cover socket waits, already labeled bug+runtime, assigned"
+    },
+    "53830": {
+      "date": "2026-08-21",
+      "note": "sfpwriteconfig, already labeled sfpi, assigned"
+    },
+    "53962": {
+      "date": "2026-08-22",
+      "note": "Resnet e2e hang via env vars; already assigned to reporter shengxiangjiTT with repro steps"
+    }
+  },
+  "stale_pr_nudges": {
+    "34933": {
+      "last_ping": "2026-08-21",
+      "type": "author_checkin"
+    },
+    "21584": {
+      "last_ping": "2026-08-21",
+      "type": "codeowners"
+    },
+    "45516": "2026-08-12: author nudge (behind main, no reviews yet)",
+    "49658": {
+      "last_ping": "2026-08-21",
+      "type": "codeowners"
+    },
+    "46419": "2026-08-19: author nudge (approved but blocked mergeable_state, stale ~5wk, checked_state)",
+    "50131": "2026-08-19: author nudge (behind main, stale since 2026-07-20, Zero Flags HAL attempt)",
+    "30797": "2026-08-20: author nudge (unresolved reviewer question from philei-tt re: zero-init padding assumptions, ~4mo stale)",
+    "50150": "2026-08-20: author nudge (behind main, small cleanup, ~1mo stale)",
+    "50149": "2026-08-20 nudged (sdpa share_cache=True fix, blocked/no reviews)",
+    "50411": {
+      "date": "2026-08-21",
+      "note": "commented asking author to rebase/confirm status; mergeable_state dirty/behind, no reviews yet or reviewer-blocked pending rebase"
+    },
+    "50443": {
+      "date": "2026-08-21",
+      "note": "commented asking author to rebase/confirm status; mergeable_state dirty/behind, no reviews yet or reviewer-blocked pending rebase"
+    },
+    "49768": {
+      "date": "2026-08-21",
+      "note": "commented asking author to rebase/confirm status; mergeable_state dirty/behind, no reviews yet or reviewer-blocked pending rebase"
+    },
+    "49800": {
+      "date": "2026-08-21",
+      "note": "codeowners ping (reviewer-blocked, approved by mgajewskiTT, several CODEOWNERS still requested, no prior repo-assist ping found)"
+    },
+    "51004": {
+      "last_ping": "2026-08-23",
+      "type": "codeowners"
+    },
+    "51129": {
+      "last_ping": "2026-08-23",
+      "type": "author_checkin"
+    },
+    "51155": {
+      "last_ping": "2026-08-23",
+      "type": "author_checkin"
+    }
+  },
+  "backlog_cursor": {
+    "task1_labeling": "labeled #54110 (perf monitoring) and #54104 (feature-request, CosyVoice2 bounty) this run; other fresh issues (54096,54055,54054,54053,54049,54048,54046,54045,54044,54043,54032) already labeled in prior runs",
+    "task2_commenting": "reviewed newest issues 54110/54104/54103/54102/54101/54096/54095/54094/54093/54092/54087/54086/54085 - CI auto-triage entries and perf/bounty issues with no new insight to add beyond labeling; no new comments this run",
+    "task3_fix": "checked bounty issues 54053(erfc)/54049(erfinv)/54054(exp2)/54055(addcdiv) via search_pull_requests - each already has 1-3 open community-authored fix PRs (54112/54084/54079, 54100/54109/54083, 54088, 54089/54097); no duplicate PRs opened",
+    "task5_maintain": "re-verified tracked PRs 52106/51868/53113/53478/53690 - all unchanged in state (checks green or historically passing, blocked-on-review or behind-main, no new maintainer feedback found); corrected memory: #53699 was an issue number mistracked as a PR - actual fix is merged PR #53749; #53874 now fixed by human PR #53899 (repo-assist own #53898 closed/superseded), both moved from open_prs to covered_no_duplicate",
+    "task6_stale_prs": "used 3/3 nudges this run on #51004/#51129/#51155; resume scanning oldest-updated open PR list from #51084 onward next run",
+    "task1_task2_issues": "scanned #54096 (already labeled/covered); most of the ~30 newest issues already triaged in prior runs; continue scanning older/unlabeled backlog next run"
+  },
+  "notes": "only layernorm workaround, already assigned to fplavecTT with linked merged PR #53419 for one of two workarounds, no action needed). Task8 updated #51865 monthly summary with new run history + refreshed suggested actions (added #53690 review-ready item, added #30797/#50150 nudge items).\n\n[2026-08-20 run_id=32339578615] Re-verified all 5 previously tracked PRs (#52106,#51868,#53113,#52673,#53478,#53690) - no changes, no action needed (all reviewer/author-blocked or already actioned). Reviewed fresh issues #53736 (draft PR #53737 already in progress, no action), #53739/#53715 (already assigned, feature work), #53693 (deep HW/LLK bug, already assigned, too risky). Found and fixed #53699 (model_preprocessing.git_hash() hard-crash when .git unavailable) - small surgical fix mirroring graph_report.py's existing graceful-degradation pattern; opened PR repo-assist/fix-issue-53699-git-hash-fallback (Closes #53699). Did not find new stale-PR-nudge candidates or new-contributor welcome targets this run (time-limited scan). | 2026-08-20 run (32368798856): Task5 - re-verified 6 tracked PRs unchanged; found PR #53749 (fixes #53699, opened last run) with all CI checks passed, added to suggested actions. Task1/2 - reviewed newest issue batch (~12 issues from 2026-08-20 10:00-12:30 UTC): #53786/#53765/#53760/#53782/#53770 all already have reporter-opened fix PRs, no duplicates opened; labeled #53781 bug (reproducible ttnn.sampling device deadlock, Wt=1 all-equal tie) and commented with an isolation-based hypothesis (CB credit gated on strict inequality in sort/select, skipped when all-equal) plus a suggestion for a deterministic repro test -- did not open a fix PR since I lack hardware to trace/verify the exact credit desync; labeled #53763 performance monitoring (LLK perf-gate cost/noise baseline tracking) and #53764 feature-request (multi-chip CI sweep follow-up); reviewed #53769 (argmax multicore gaps, already assigned, 5 distinct sub-issues too broad for one PR) and #53778 (graph tracer timeout, reporter has own workaround + comment) -- no action needed on either. Task8 updated #51865 monthly summary with new run history + refreshed suggested actions (added #53749 review item, added #53781 comment-check item).\n\n2026-08-20 run 32403143848: Re-verified 7 tracked PRs unchanged. Labeled 53780/53815/53823. Confirmed 53823->#53654 and 53787->#53810 already covered, no dup PR. Nudged stale PR #50149. Reviewed #46960 and #50174 (both dirty/active discussion, no nudge needed). Updated monthly summary #51865. || 2026-08-21 (run 32432680615): Corrected stale #53478 CI status (all checks passed, not action_required). Labeled #53866/#53815 bug. Recorded #53846/#53803 as covered by PR #53858 (no duplicate). Nudged 3 stale PRs (#50411, #50443, #49768) for rebase. Updated Monthly Activity Summary issue #51865. Reviewed several already-triaged fresh issues with no action needed (#53802,#53844,#53840,#53796,#53849,#53830). Task3/4/7 skipped this run per round-robin scheduling.\n2026-08-21 (run 32454384814): opened PR for #53874 (addcdiv_bw mem config), replied to #53690 maintainer objection, updated monthly summary.\n2026-08-21 (run 32513261053): Task1 labeled 9 fresh community-reported eltwise bugs (all already have reporter-opened fix PRs from kinginu, no duplicates). Task5: confirmed PR #53690 maintainer objection resolved. Task6: codeowners-pinged #49800 (new candidate, reviewer-blocked). Task8: rewrote monthly summary #51865 body to strictly match canonical format (previous body had drifted with multiple appended sections).\n[2026-08-23 run=32607872885] Labeled bug on 5 fresh community bounty issues (#54055 addcdiv, #54054 exp2, #54053 erfc, #54049 erfinv, #54046 xielu) - all confirmed defects with contributor fix PRs already open (mostly by 1snob) covering them; no duplicate PRs needed. Checked #54017 (fabric router sync timeout, has detailed contributor root-cause comment re gp-relaxation bug, no PR yet - too deep firmware/HW issue for surgical unverified fix), #54044 (BH gp-relaxation eth wedge, already labeled bug prior run, no PR yet, same root cause family as 54017), #54032 (trace-replay hang, already labeled), #53999 (KV-cache OOB, already labeled) - none have PRs; deep HW/firmware issues, left for maintainers. #54048 remainder bug already has open fix PR #54081. Re-verified tracked PRs #53478/#53113/#51868/#52106/#53690/#53749 unchanged.\n\n[2026-08-23 18:30 run 32657926945] Reviewed PR #51155 review comments (empty via get_reviews/get_comments for mateusznowakTT's inline feedback) \u2014 nudge comment references the automated-reviewer's MAD-instruction discrepancy instead since the human review body wasn't retrievable. #51004 has an unresolved technical objection from bbradelTT in addition to CodeOwners pending; noted this nuance in Suggested Actions rather than treating as a routine ping-only case.",
+  "labeled_issues": {
+    "53866": {
+      "label": "bug",
+      "date": "2026-08-21",
+      "note": "Mixtral 8x7B L1 CB overflow on Blackhole; too complex/hardware-specific for surgical fix, no PR attempted"
+    },
+    "53815": {
+      "label": "bug",
+      "date": "2026-08-21",
+      "note": "GPT-OSS prefill LayerAck race condition"
+    },
+    "54032": {
+      "label": "bug",
+      "date": "2026-08-22",
+      "note": "trace-replay silent hang allocating device buffers during active trace"
+    },
+    "53999": {
+      "label": "bug",
+      "date": "2026-08-22",
+      "note": "KV-cache remount final-chunk write exceeds max_seq_len"
+    },
+    "54045": "bug",
+    "54048": "bug",
+    "54047": "ci-bug",
+    "54044": "bug",
+    "54110": "performance monitoring",
+    "54104": "feature-request"
+  },
+  "issues_commented": {
+    "53922": {
+      "commented": "2026-08-21",
+      "labeled": [
+        "bug"
+      ],
+      "note": "confirmed root cause vs current main; fix has open perf tradeoff, left for maintainer"
+    },
+    "54045": "2026-08-22: confirmed div_sfpu double-rounding claim against current ckernel_sfpu_binop_with_unary.h:41-43"
+  },
+  "run_history": [
+    {
+      "run_id": "32657926945",
+      "date": "2026-08-23T18:30:00Z",
+      "summary": "Task 6: codeowners-pinged #51004, author-checkin nudges on #51129 and #51155 (3/3 nudge budget used). Task 1/2: reviewed fresh issue #54096, already labeled/covered, no new action. Task 5: re-verified 5 tracked PRs unchanged. Task 8: updated Monthly Activity issue #51865."
+    },
+    {
+      "run_id": "32622883904",
+      "date": "2026-08-23",
+      "summary": "Labeled #54096 (P150x4 cold-boot fabric bring-up regression, bisected to #53417) bug. Replied on PR #51868 confirming reviewer kanapitsas's report that Ring Joint SDPA's logsigmoid_sub shares the softplus bf16 bug; flagged the boundary regression test request for a maintainer (no HW access). Confirmed PR #53749 merged. Re-verified PRs #53478/#53113/#51868/#52106/#53690 unchanged. Rewrote Monthly Activity issue #51865 body to strictly match canonical format (had drifted with multiple appended run sections)."
+    },
+    {
+      "run_id": "32590634465",
+      "date": "2026-08-22",
+      "summary": "Labeled 54044/54045/54047/54048 (bug/ci-bug); commented on 54045 confirming div_sfpu root cause against current source; re-verified tracked PRs 53478/53113/51868/52106 unchanged; updated Monthly Activity issue 51865."
+    },
+    {
+      "run_id": "32572948806",
+      "date": "2026-08-22",
+      "summary": "Labeled #54032 and #53999 as bug; confirmed #52673 closed by maintainer; reviewed #53962 (no action, already assigned); re-verified PRs #53690/#53749/#53113/#51868/#52106 unchanged; no new fix PRs opened; updated Monthly Activity issue #51865."
+    },
+    {
+      "run_id": "32540359343",
+      "date": "2026-08-22",
+      "summary": "Labeled 3 fresh issues (54017 bug, 53999 bug, 54016 feature-request). Reviewed ~15 fresh community bug issues - all already have linked fix PRs open, no duplicate action needed. Checked CI on tracked PRs 53478/53690/53749 - unchanged, 53690 has newly-requested manual test suites outside pr-gate.yaml visibility. No new fixable/unclaimed issues found this run. Updated monthly summary #51865."
+    },
+    {
+      "run_id": "32513261053",
+      "date": "2026-08-21",
+      "actions": [
+        "labeled 9 fresh community bugs (53984,53981,53978,53975,53973,53971,53969,53963,53908) - bug, all have existing reporter fix PRs, no duplicates opened",
+        "codeowners ping #49800",
+        "confirmed #53690 objection resolved, no action needed",
+        "monthly summary #51865 rewritten to canonical format"
+      ]
+    },
+    {
+      "run_id": "32481846320",
+      "date": "2026-08-21",
+      "actions": [
+        "labeled+commented #53922 (bug)",
+        "codeowners re-ping #21584, #49658",
+        "author check-in #34933",
+        "monthly summary #51865 updated"
+      ]
+    },
+    {
+      "run_id": "32556934732",
+      "date": "2026-08-22",
+      "summary": "Labeled #54016 (Welford two-pass bounty) as feature-request. Verified #53690 still blocked pending nvelickovicTT's manually-triggered Sanity/Nightly-L2/Blackhole-e2e runs (triggered 2026-08-21T16:52Z, no results posted yet). Confirmed all ~9 fresh community eltwise bug reports (#53984,#53981,#53978,#53975,#53973,#53971,#53969,#53963) already have reporter-opened linked fix PRs, no dup action needed (already labeled prior run). No new fixable issues found; #52673 still open/superseded, awaiting maintainer close."
+    }
+  ],
+  "no_action_reviewed": [
+    "54000: API contracts tracking issue, no confirmed defect, unlabeled left as-is (2026-08-22)",
+    "54006/54005: already labeled+assigned (2026-08-22)",
+    "reviewed ~15 fresh community bug issues (53975,53971,53984,53981,53978,53973,53969,53963 etc) 2026-08-22: all already have open linked fix PRs from reporting contributor; no duplicate PR/comment needed"
+  ],
+  "resolved": {
+    "52673": {
+      "date": "2026-08-22",
+      "note": "closed by maintainer blozano-tt; superseded by #52789/#52790"
+    }
   }
- },
- "issues_labeled": [
-  "52178:bug",
-  "52174:bug",
-  "52233:bug",
-  "52203:bug",
-  "52390:bug,ci-bug",
-  "52376:bug",
-  "52614:bug,community",
-  "52607:bug",
-  "53046:bug",
-  "53060:performance monitoring",
-  "53389:bug",
-  "53379:bug",
-  "53432:bug",
-  "53435:bug",
-  "53429:feature-request",
-  "53439:feature-request",
-  "53512:bug",
-  "53510:bug",
-  "53604:bug",
-  "53649:bug",
-  "53781:bug",
-  "53763:performance monitoring",
-  "53764:feature-request",
-  "53780:feature-request",
-  "53815:bug",
-  "53823:bug",
-  "53984:bug",
-  "53981:bug",
-  "53978:bug",
-  "53975:bug",
-  "53973:bug",
-  "53971:bug",
-  "53969:bug",
-  "53963:bug",
-  "53908:bug",
-  "54017:bug",
-  "53999:bug",
-  "54016:feature-request"
- ],
- "covered_no_duplicate": {
-  "52131": "PR #52136 already closes it",
-  "52233": "fix in open PR #52237",
-  "52612": "fix in open PR #52613",
-  "52614": "fix in open PR #52615",
-  "52607": "fix in open PR #52608",
-  "52901": "fix in open PR #52902",
-  "53046": "fix already in open PR #53047 (lgamma bridge-guard <= fix); overlaps in-flight #51991, needs coordination per PR body -- do not open duplicate",
-  "53078": "fix in draft PR #53103 (AI-assisted LLK triage board)",
-  "53106": "fix opened by repo-assist this run, see new PR (reciprocal Newton seed 0x1.554p0f)",
-  "52671": "TWO maintainer PRs exist (#52789 full fix, #52790 assert-only) superseding repo-assist's own #52673 -- do not act further, just monitor for closure",
-  "53282": "fix opened by repo-assist this run (addcmul composite-fallback multiply association), verified no existing PR via search_pull_requests",
-  "53649": "commented with bisect confirmation citing #53419 diff; labeled bug; already assigned to jmitrovicTT, no PR opened (root cause not independently verified)",
-  "53655": "PR opened this run (repo-assist), no other open PR found",
-  "53786": "fix in open PR #53767 (reporter's own)",
-  "53765": "fix in open PR #53766 (reporter's own)",
-  "53760": "fix in open PR #53761 (reporter's own)",
-  "53782": "fix in open PR #53783 (reporter's own)",
-  "53770": "fix in open PR #53771 (reporter's own)",
-  "53781": "commented with isolation lead (suspect strict-inequality-gated CB credit in sort/select); labeled bug; no PR opened, needs hw access",
-  "53823": "fixed by open PR #53654 (TT-NOP-Injector eltwise_binary race)",
-  "53787": "fixed by open PR #53810 (log_sigmoid fp32 accuracy)",
-  "53846": {
-   "fix_pr": 53858,
-   "date": "2026-08-21",
-   "note": "groupnorm inexact group mean, fixed by PR #53858"
-  },
-  "53803": {
-   "fix_pr": 53858,
-   "date": "2026-08-21",
-   "note": "groupnorm sub-tile group corruption, fixed by PR #53858"
-  },
-  "53874": "fixed by #53899 (not repo-assist); repo-assist's own #53898 closed as superseded",
-  "53890": "fix in open PR #53891 (reporter kinginu, ttnn.where composite fallback)",
-  "53862": "fix in open PR #53863 (reporter kinginu, is_odd 3-dispatch perf)",
-  "53984": "fix in open PR #53985 (reporter kinginu, multiply block-float fast_and_approximate_mode)",
-  "53981": "fix in open PR #53982 (reporter kinginu, complex div_bw single reciprocal)",
-  "53978": "fix in open PR #53980 (reporter kinginu, div output_dtype passthrough)",
-  "53975": "fix in open PR #53976 (reporter kinginu, sqrt/rsqrt -0.0 domain)",
-  "53973": "fix in open PR #53974 (reporter kinginu, rsqrt_bw zero-gradient sign)",
-  "53971": "fix in open PR #53972 (reporter kinginu, tril/triu dtype mask)",
-  "53969": "fix in open PR #53970 (reporter kinginu, backward ops memory_config passthrough)",
-  "53963": "fix in open PR #53965 (reporter kinginu, unary program cache key dtype)",
-  "53908": "fix in open PR #53909 (reporter kinginu, unary SFPU comparisons)",
-  "53699": "fixed by merged PR #53749 (repo-assist); issue closed, no further action"
- },
- "dropped_fix_targets": {
-  "51845": "maintainer jasondavies rejected both proposed remedies 2026-08-05 -- do not attempt fix",
-  "53055": "reporter (maintainer ncvetkovicTT) deliberately deferred fix pending directed test -- filed as documentation, not an action item"
- },
- "watch_prs": {
-  "52237": "fixes #52233, watch for merge",
-  "45709": "approved+CodeOwners complete but stuck action_required repo-side gate since 2026-06, needs maintainer manual re-enable",
-  "53047": "fixes #53046 lgamma bridge guards <= fix; overlaps #51991, needs coordination before merge",
-  "53103": "draft PR fixing #53078 matmul unpacker miscompares; AI-generated, needs human review before ready-for-review",
-  "53690": "test-coverage objection from ncvetkovicTT resolved 2026-08-21 by nvelickovicTT (OK if CI passes); awaiting CI re-run results (Sanity/L2/BH e2e triggered by nvelickovicTT)",
-  "51868": "reviewer kanapitsas (2026-08-22) confirmed Ring Joint SDPA logsigmoid_sub shares same bug; repo-assist replied confirming + asked maintainer to add boundary test (no HW access to verify numerics); PR still open, mergeable_state=behind"
- },
- "sfpu_clamp_family": {
-  "note": "Family in #52178 (kinginu). Still open no-PR: erfc #51137, digamma #51128, snake_beta #51116. sin/cos #51845 blocked. softplus #51866 has PR #51868 pending gate. lgamma z=0.75 boundary #53046 has PR #53047 pending, overlaps #51991."
- },
- "no_fix_needed_investigated": {
-  "53029": "K3 AttnRes segmented-batch silent correctness bug -- deep hw-specific investigation, root cause unknown, left for owning team (pjosipovic)",
-  "53069": "Quasar perf-test coverage issue, PR-derived tracking issue, not a defect",
-  "53079": "assigned to maintainer ebanerjeeTT, tracked scope item, no repo-assist action needed",
-  "53631": "LLK MOVD2B handoff investigation, reporter self-driving with own follow-up comment, not a confirmed bug",
-  "53600": "covered by existing PR #53601",
-  "53640": "assigned to ndivnicTT, thin perf-test investigation task",
-  "53613": "maintainer KalaivaniMCW test-infra restructuring proposal, not a bug",
-  "53568": "Metal 2.0 port architectural blocker by maintainer gajanan-choudhary, too complex for repo-assist",
-  "53561": "AI-flagged LLK dedup/refactor follow-up, requires careful mutation-testing, not safe for repo-assist",
-  "53769": "argmax multicore correctness gaps, already assigned iwroszTT, 5 distinct sub-issues, too broad for a single surgical repo-assist PR",
-  "53778": "graph tracer timeout for llama pytest, reporter already has own workaround branch + comment, needs graph-tracing expert (dgomezTT/aliaksei-sala already tagged)",
-  "53763": "LLK perf-gate noise/threshold measurement tracking issue (collaborator-authored), labeled performance monitoring, no action needed",
-  "53764": "multi-chip CI sweep follow-up to #38316, already assigned fbuticTT, labeled feature-request",
-  "53802": {
-   "date": "2026-08-21",
-   "note": "vLLM seed salting regression, already assigned/labeled"
-  },
-  "53844": {
-   "date": "2026-08-21",
-   "note": "GDN kernel optimization, already assigned"
-  },
-  "53840": {
-   "date": "2026-08-21",
-   "note": "l2 nightly reduction, assigned, has parent issue"
-  },
-  "53796": {
-   "date": "2026-08-21",
-   "note": "SFPI deprecated features, assigned"
-  },
-  "53849": {
-   "date": "2026-08-21",
-   "note": "operation timeout doesn't cover socket waits, already labeled bug+runtime, assigned"
-  },
-  "53830": {
-   "date": "2026-08-21",
-   "note": "sfpwriteconfig, already labeled sfpi, assigned"
-  },
-  "53962": {
-   "date": "2026-08-22",
-   "note": "Resnet e2e hang via env vars; already assigned to reporter shengxiangjiTT with repro steps"
-  }
- },
- "stale_pr_nudges": {
-  "34933": {
-   "last_ping": "2026-08-21",
-   "type": "author_checkin"
-  },
-  "21584": {
-   "last_ping": "2026-08-21",
-   "type": "codeowners"
-  },
-  "45516": "2026-08-12: author nudge (behind main, no reviews yet)",
-  "49658": {
-   "last_ping": "2026-08-21",
-   "type": "codeowners"
-  },
-  "46419": "2026-08-19: author nudge (approved but blocked mergeable_state, stale ~5wk, checked_state)",
-  "50131": "2026-08-19: author nudge (behind main, stale since 2026-07-20, Zero Flags HAL attempt)",
-  "30797": "2026-08-20: author nudge (unresolved reviewer question from philei-tt re: zero-init padding assumptions, ~4mo stale)",
-  "50150": "2026-08-20: author nudge (behind main, small cleanup, ~1mo stale)",
-  "50149": "2026-08-20 nudged (sdpa share_cache=True fix, blocked/no reviews)",
-  "50411": {
-   "date": "2026-08-21",
-   "note": "commented asking author to rebase/confirm status; mergeable_state dirty/behind, no reviews yet or reviewer-blocked pending rebase"
-  },
-  "50443": {
-   "date": "2026-08-21",
-   "note": "commented asking author to rebase/confirm status; mergeable_state dirty/behind, no reviews yet or reviewer-blocked pending rebase"
-  },
-  "49768": {
-   "date": "2026-08-21",
-   "note": "commented asking author to rebase/confirm status; mergeable_state dirty/behind, no reviews yet or reviewer-blocked pending rebase"
-  },
-  "49800": {
-   "date": "2026-08-21",
-   "note": "codeowners ping (reviewer-blocked, approved by mgajewskiTT, several CODEOWNERS still requested, no prior repo-assist ping found)"
-  }
- },
- "backlog_cursor": {
-  "task1_labeling": "labeled #54110 (perf monitoring) and #54104 (feature-request, CosyVoice2 bounty) this run; other fresh issues (54096,54055,54054,54053,54049,54048,54046,54045,54044,54043,54032) already labeled in prior runs",
-  "task2_commenting": "reviewed newest issues 54110/54104/54103/54102/54101/54096/54095/54094/54093/54092/54087/54086/54085 - CI auto-triage entries and perf/bounty issues with no new insight to add beyond labeling; no new comments this run",
-  "task3_fix": "checked bounty issues 54053(erfc)/54049(erfinv)/54054(exp2)/54055(addcdiv) via search_pull_requests - each already has 1-3 open community-authored fix PRs (54112/54084/54079, 54100/54109/54083, 54088, 54089/54097); no duplicate PRs opened",
-  "task5_maintain": "re-verified tracked PRs 52106/51868/53113/53478/53690 - all unchanged in state (checks green or historically passing, blocked-on-review or behind-main, no new maintainer feedback found); corrected memory: #53699 was an issue number mistracked as a PR - actual fix is merged PR #53749; #53874 now fixed by human PR #53899 (repo-assist own #53898 closed/superseded), both moved from open_prs to covered_no_duplicate",
-  "task6_stale_prs": "not run this round again; resume next run"
- },
- "notes": "only layernorm workaround, already assigned to fplavecTT with linked merged PR #53419 for one of two workarounds, no action needed). Task8 updated #51865 monthly summary with new run history + refreshed suggested actions (added #53690 review-ready item, added #30797/#50150 nudge items).\n\n[2026-08-20 run_id=32339578615] Re-verified all 5 previously tracked PRs (#52106,#51868,#53113,#52673,#53478,#53690) - no changes, no action needed (all reviewer/author-blocked or already actioned). Reviewed fresh issues #53736 (draft PR #53737 already in progress, no action), #53739/#53715 (already assigned, feature work), #53693 (deep HW/LLK bug, already assigned, too risky). Found and fixed #53699 (model_preprocessing.git_hash() hard-crash when .git unavailable) - small surgical fix mirroring graph_report.py's existing graceful-degradation pattern; opened PR repo-assist/fix-issue-53699-git-hash-fallback (Closes #53699). Did not find new stale-PR-nudge candidates or new-contributor welcome targets this run (time-limited scan). | 2026-08-20 run (32368798856): Task5 - re-verified 6 tracked PRs unchanged; found PR #53749 (fixes #53699, opened last run) with all CI checks passed, added to suggested actions. Task1/2 - reviewed newest issue batch (~12 issues from 2026-08-20 10:00-12:30 UTC): #53786/#53765/#53760/#53782/#53770 all already have reporter-opened fix PRs, no duplicates opened; labeled #53781 bug (reproducible ttnn.sampling device deadlock, Wt=1 all-equal tie) and commented with an isolation-based hypothesis (CB credit gated on strict inequality in sort/select, skipped when all-equal) plus a suggestion for a deterministic repro test -- did not open a fix PR since I lack hardware to trace/verify the exact credit desync; labeled #53763 performance monitoring (LLK perf-gate cost/noise baseline tracking) and #53764 feature-request (multi-chip CI sweep follow-up); reviewed #53769 (argmax multicore gaps, already assigned, 5 distinct sub-issues too broad for one PR) and #53778 (graph tracer timeout, reporter has own workaround + comment) -- no action needed on either. Task8 updated #51865 monthly summary with new run history + refreshed suggested actions (added #53749 review item, added #53781 comment-check item).\n\n2026-08-20 run 32403143848: Re-verified 7 tracked PRs unchanged. Labeled 53780/53815/53823. Confirmed 53823->#53654 and 53787->#53810 already covered, no dup PR. Nudged stale PR #50149. Reviewed #46960 and #50174 (both dirty/active discussion, no nudge needed). Updated monthly summary #51865. || 2026-08-21 (run 32432680615): Corrected stale #53478 CI status (all checks passed, not action_required). Labeled #53866/#53815 bug. Recorded #53846/#53803 as covered by PR #53858 (no duplicate). Nudged 3 stale PRs (#50411, #50443, #49768) for rebase. Updated Monthly Activity Summary issue #51865. Reviewed several already-triaged fresh issues with no action needed (#53802,#53844,#53840,#53796,#53849,#53830). Task3/4/7 skipped this run per round-robin scheduling.\n2026-08-21 (run 32454384814): opened PR for #53874 (addcdiv_bw mem config), replied to #53690 maintainer objection, updated monthly summary.\n2026-08-21 (run 32513261053): Task1 labeled 9 fresh community-reported eltwise bugs (all already have reporter-opened fix PRs from kinginu, no duplicates). Task5: confirmed PR #53690 maintainer objection resolved. Task6: codeowners-pinged #49800 (new candidate, reviewer-blocked). Task8: rewrote monthly summary #51865 body to strictly match canonical format (previous body had drifted with multiple appended sections).\n[2026-08-23 run=32607872885] Labeled bug on 5 fresh community bounty issues (#54055 addcdiv, #54054 exp2, #54053 erfc, #54049 erfinv, #54046 xielu) - all confirmed defects with contributor fix PRs already open (mostly by 1snob) covering them; no duplicate PRs needed. Checked #54017 (fabric router sync timeout, has detailed contributor root-cause comment re gp-relaxation bug, no PR yet - too deep firmware/HW issue for surgical unverified fix), #54044 (BH gp-relaxation eth wedge, already labeled bug prior run, no PR yet, same root cause family as 54017), #54032 (trace-replay hang, already labeled), #53999 (KV-cache OOB, already labeled) - none have PRs; deep HW/firmware issues, left for maintainers. #54048 remainder bug already has open fix PR #54081. Re-verified tracked PRs #53478/#53113/#51868/#52106/#53690/#53749 unchanged.",
- "labeled_issues": {
-  "53866": {
-   "label": "bug",
-   "date": "2026-08-21",
-   "note": "Mixtral 8x7B L1 CB overflow on Blackhole; too complex/hardware-specific for surgical fix, no PR attempted"
-  },
-  "53815": {
-   "label": "bug",
-   "date": "2026-08-21",
-   "note": "GPT-OSS prefill LayerAck race condition"
-  },
-  "54032": {
-   "label": "bug",
-   "date": "2026-08-22",
-   "note": "trace-replay silent hang allocating device buffers during active trace"
-  },
-  "53999": {
-   "label": "bug",
-   "date": "2026-08-22",
-   "note": "KV-cache remount final-chunk write exceeds max_seq_len"
-  },
-  "54045": "bug",
-  "54048": "bug",
-  "54047": "ci-bug",
-  "54044": "bug",
-  "54110": "performance monitoring",
-  "54104": "feature-request"
- },
- "issues_commented": {
-  "53922": {
-   "commented": "2026-08-21",
-   "labeled": [
-    "bug"
-   ],
-   "note": "confirmed root cause vs current main; fix has open perf tradeoff, left for maintainer"
-  },
-  "54045": "2026-08-22: confirmed div_sfpu double-rounding claim against current ckernel_sfpu_binop_with_unary.h:41-43"
- },
- "run_history": [
-  {
-   "run_id": "32622883904",
-   "date": "2026-08-23",
-   "summary": "Labeled #54096 (P150x4 cold-boot fabric bring-up regression, bisected to #53417) bug. Replied on PR #51868 confirming reviewer kanapitsas's report that Ring Joint SDPA's logsigmoid_sub shares the softplus bf16 bug; flagged the boundary regression test request for a maintainer (no HW access). Confirmed PR #53749 merged. Re-verified PRs #53478/#53113/#51868/#52106/#53690 unchanged. Rewrote Monthly Activity issue #51865 body to strictly match canonical format (had drifted with multiple appended run sections)."
-  },
-  {
-   "run_id": "32590634465",
-   "date": "2026-08-22",
-   "summary": "Labeled 54044/54045/54047/54048 (bug/ci-bug); commented on 54045 confirming div_sfpu root cause against current source; re-verified tracked PRs 53478/53113/51868/52106 unchanged; updated Monthly Activity issue 51865."
-  },
-  {
-   "run_id": "32572948806",
-   "date": "2026-08-22",
-   "summary": "Labeled #54032 and #53999 as bug; confirmed #52673 closed by maintainer; reviewed #53962 (no action, already assigned); re-verified PRs #53690/#53749/#53113/#51868/#52106 unchanged; no new fix PRs opened; updated Monthly Activity issue #51865."
-  },
-  {
-   "run_id": "32540359343",
-   "date": "2026-08-22",
-   "summary": "Labeled 3 fresh issues (54017 bug, 53999 bug, 54016 feature-request). Reviewed ~15 fresh community bug issues - all already have linked fix PRs open, no duplicate action needed. Checked CI on tracked PRs 53478/53690/53749 - unchanged, 53690 has newly-requested manual test suites outside pr-gate.yaml visibility. No new fixable/unclaimed issues found this run. Updated monthly summary #51865."
-  },
-  {
-   "run_id": "32513261053",
-   "date": "2026-08-21",
-   "actions": [
-    "labeled 9 fresh community bugs (53984,53981,53978,53975,53973,53971,53969,53963,53908) - bug, all have existing reporter fix PRs, no duplicates opened",
-    "codeowners ping #49800",
-    "confirmed #53690 objection resolved, no action needed",
-    "monthly summary #51865 rewritten to canonical format"
-   ]
-  },
-  {
-   "run_id": "32481846320",
-   "date": "2026-08-21",
-   "actions": [
-    "labeled+commented #53922 (bug)",
-    "codeowners re-ping #21584, #49658",
-    "author check-in #34933",
-    "monthly summary #51865 updated"
-   ]
-  },
-  {
-   "run_id": "32556934732",
-   "date": "2026-08-22",
-   "summary": "Labeled #54016 (Welford two-pass bounty) as feature-request. Verified #53690 still blocked pending nvelickovicTT's manually-triggered Sanity/Nightly-L2/Blackhole-e2e runs (triggered 2026-08-21T16:52Z, no results posted yet). Confirmed all ~9 fresh community eltwise bug reports (#53984,#53981,#53978,#53975,#53973,#53971,#53969,#53963) already have reporter-opened linked fix PRs, no dup action needed (already labeled prior run). No new fixable issues found; #52673 still open/superseded, awaiting maintainer close."
-  }
- ],
- "no_action_reviewed": [
-  "54000: API contracts tracking issue, no confirmed defect, unlabeled left as-is (2026-08-22)",
-  "54006/54005: already labeled+assigned (2026-08-22)",
-  "reviewed ~15 fresh community bug issues (53975,53971,53984,53981,53978,53973,53969,53963 etc) 2026-08-22: all already have open linked fix PRs from reporting contributor; no duplicate PR/comment needed"
- ],
- "resolved": {
-  "52673": {
-   "date": "2026-08-22",
-   "note": "closed by maintainer blozano-tt; superseded by #52789/#52790"
-  }
- }
 }
