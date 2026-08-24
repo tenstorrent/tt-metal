@@ -72,16 +72,48 @@ def align_num_cached_tokens_to_sdpa(num_cached_per_user: list[int]) -> list[int]
     return aligned
 
 
-# Max users in one true-batched prefill forward. Measured on P150x8 / 12B:
-# B∈{1,2,4} OK; B≥8 wedges indefinitely after the first all_gather (eager or
-# traced). Override with GEMMA4_MAX_BATCHED_PREFILL_USERS (0 = no user cap).
+# Max users in one true-batched prefill forward.
+#
+# Historically 4 everywhere: B>=8 was measured to wedge indefinitely after the
+# first all_gather on P150x8 / 12B (eager or traced). That wedge no longer
+# reproduces on Blackhole with the current stack -- B=32 true-batched prefill
+# completes and produces coherent output on both 12B and 31B -- while the cap
+# itself is expensive, forcing 32 users through 11 sequential prefill passes:
+#
+#   12B / P150x8 / batch-32   cap=4: TTFT 3879 ms   no cap: TTFT  850 ms
+#   31B / P150x8 / batch-32   cap=4: TTFT 6578 ms   no cap: TTFT 1361 ms
+#
+# decode unchanged in both cases. The same cap also starved the vLLM server on
+# a 4-chip P300x2 mesh (16 sequential prefills per scheduler step), which hung
+# the 31B QB2 release until it was lifted.
+#
+# Raised on Blackhole only. Wormhole keeps 4: the original wedge has not been
+# re-measured there, and WH carries 12 GB/ASIC vs BH's 32 GB, so a wider
+# batched prefill has far less headroom. Override on any arch with
+# GEMMA4_MAX_BATCHED_PREFILL_USERS (0 = no user cap).
+#
+# NOTE: the virtual-token ceiling (GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN) still
+# applies on top of this, so long prompts stay microbatched regardless.
 _DEFAULT_MAX_BATCHED_PREFILL_USERS = 4
+_BLACKHOLE_MAX_BATCHED_PREFILL_USERS = 32
+
+
+def _default_max_batched_prefill_users() -> int:
+    """Arch-gated cap default; never raises if arch cannot be determined."""
+    try:
+        from models.common.utility_functions import is_blackhole
+
+        if is_blackhole():
+            return _BLACKHOLE_MAX_BATCHED_PREFILL_USERS
+    except Exception:
+        pass
+    return _DEFAULT_MAX_BATCHED_PREFILL_USERS
 
 
 def max_batched_prefill_users() -> int:
     raw = os.environ.get("GEMMA4_MAX_BATCHED_PREFILL_USERS")
     if raw is None:
-        return _DEFAULT_MAX_BATCHED_PREFILL_USERS
+        return _default_max_batched_prefill_users()
     val = int(raw)
     return val if val > 0 else 10**9
 

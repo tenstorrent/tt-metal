@@ -2,7 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """When batch exceeds the batched-prefill user cap, metal must not remap slots."""
 
-from models.demos.gemma4.tt.generator import max_batched_prefill_users, resolve_batched_prefill_chunk_users
+from models.demos.gemma4.tt.generator import (
+    _BLACKHOLE_MAX_BATCHED_PREFILL_USERS,
+    _DEFAULT_MAX_BATCHED_PREFILL_USERS,
+    max_batched_prefill_users,
+    resolve_batched_prefill_chunk_users,
+)
 
 
 def plan_metal_prefill_strategy(
@@ -29,16 +34,23 @@ def plan_metal_prefill_strategy(
     return "true_batched"
 
 
-def test_user_cap_default_is_four():
-    assert max_batched_prefill_users() == 4
+def test_user_cap_default_is_arch_gated():
+    """Blackhole raises the cap (the B>=8 all_gather wedge no longer reproduces
+    there and the cap costs ~4.6x TTFT at batch-32); Wormhole keeps 4."""
+    assert max_batched_prefill_users() in (
+        _DEFAULT_MAX_BATCHED_PREFILL_USERS,
+        _BLACKHOLE_MAX_BATCHED_PREFILL_USERS,
+    )
 
 
-def test_batch_gt_user_cap_uses_microbatch():
+def test_batch_gt_user_cap_uses_microbatch(monkeypatch):
+    monkeypatch.setenv("GEMMA4_MAX_BATCHED_PREFILL_USERS", "4")
     assert plan_metal_prefill_strategy(8) == "microbatch_remapped_slots"
     assert plan_metal_prefill_strategy(32) == "microbatch_remapped_slots"
 
 
-def test_hetero_actual_lens_same_pad_bucket_still_batches():
+def test_hetero_actual_lens_same_pad_bucket_still_batches(monkeypatch):
+    monkeypatch.setenv("GEMMA4_MAX_BATCHED_PREFILL_USERS", "4")
     # Pad-fill fix: hetero actual + same pad bucket stays on batched/microbatch path.
     lens = [87, 82, 80, 66, 100, 91, 83, 78]
     assert plan_metal_prefill_strategy(8, prefill_seq_len=128, actual_lens=lens) == "microbatch_remapped_slots"
