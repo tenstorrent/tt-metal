@@ -1,28 +1,29 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Writer for toy_variance: writes the variance output tiles to DRAM.
-// Output is one tile per row reduced — Ht*NC tiles total.
+// Writer for toy_variance (interleaved output): writes the variance output tiles to DRAM.
+// Output is one tile per row reduced -- Ht*NC tiles total.
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    constexpr uint32_t num_tiles = get_arg(args::num_tiles);
 
-    constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
-    constexpr auto dst_args = TensorAccessorArgs<1>();
-
-    constexpr uint32_t cb_out = 16;
-    uint32_t tile_bytes = get_tile_size(cb_out);
-    const auto accessor = TensorAccessor(dst_args, dst_addr, tile_bytes);
+    Noc noc;
+    DataflowBuffer dfb_out(dfb::out_tiles);
+    const auto acc_out = TensorAccessor(tensor::out);
+    const uint32_t tile_bytes = dfb_out.get_tile_size();
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_wait_front(cb_out, 1);
-        uint32_t l1_read_addr = get_read_ptr(cb_out);
-        noc_async_write_tile(i, accessor, l1_read_addr);
-        noc_async_write_barrier();
-        cb_pop_front(cb_out, 1);
+        dfb_out.wait_front(1);
+        noc.async_write(dfb_out, acc_out, tile_bytes, {.offset_bytes = 0}, {.page_id = i});
+        noc.async_write_barrier();
+        dfb_out.pop_front(1);
     }
 }
