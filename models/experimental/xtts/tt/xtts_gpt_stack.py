@@ -64,12 +64,15 @@ class TtXttsGptStack(LightweightModule):
         ttnn.deallocate(gt)
         add_mask = ttnn.multiply(blocked, NEG_INF, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(blocked)
-        onehot = None
+        pos_idx = None
         if write_idx is None:
-            onehot_row = ttnn.typecast(ttnn.eq(self.arange, pos), ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
-            onehot = ttnn.reshape(onehot_row, (1, 1, self.max_seq, 1), memory_config=ttnn.L1_MEMORY_CONFIG)
+            # paged_fused_update_cache wants the write row as an INT32 ROW_MAJOR device tensor.
+            # Derive it in-graph from pos so a captured trace advances it with pos, once per step.
+            p_tile = ttnn.typecast(ttnn.slice(pos, [0, 0, 0, 0], [1, 1, 1, 1]), ttnn.int32)
+            pos_idx = ttnn.reshape(ttnn.to_layout(p_tile, ttnn.ROW_MAJOR_LAYOUT), (1,))
+            ttnn.deallocate(p_tile)
         for block, (k, v) in zip(self.blocks, kv):
-            x = block.forward_decode(x, k, v, onehot, add_mask, write_idx)
+            x = block.forward_decode(x, k, v, pos_idx, add_mask, write_idx)
         return sharded_decode_ln(x, self.ln_f_weight, self.ln_f_bias, self.device)
 
     def forward(self, x):

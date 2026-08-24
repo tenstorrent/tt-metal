@@ -20,6 +20,28 @@ _BFP4_WEIGHTS: set[str] = set()  # empty: all weights bfloat8_b (bfp4 fails e2e 
 L1 = ttnn.L1_MEMORY_CONFIG
 
 
+_KV_WRITE_CORES = ((0, 0), (1, 0))  # K and V inputs must land on non-overlapping cores
+
+
+def _kv_write_mem(slot):
+    """Height-shard config for a decode K/V write: one user on one core."""
+    x, y = _KV_WRITE_CORES[slot]
+    core = ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y))
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(ttnn.CoreRangeSet({core}), [ttnn.TILE_SIZE, HEAD_DIM], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+def _as_cache_write(t, slot):
+    """Reshape [1, heads, 1, dim] decode K/V into the sharded [1, 1, heads, dim] update_cache wants."""
+    p = ttnn.permute(t, (0, 2, 1, 3), memory_config=L1)
+    out = ttnn.to_memory_config(p, _kv_write_mem(slot))
+    ttnn.deallocate(p)
+    return out
+
+
 def _to_device(torch_tensor, device):
     """Upload a torch tensor to device as tiled bfloat16."""
     return ttnn.from_torch(
@@ -418,7 +440,7 @@ class TtXttsGptBlock(LightweightModule):
         ttnn.deallocate(ao)
         return self._residual_ffn(xa), k, v
 
-    def forward_decode(self, x, k_cache, v_cache, onehot, add_mask, write_idx=None):
+    def forward_decode(self, x, k_cache, v_cache, pos_idx, add_mask, write_idx=None):
         """Run decode attention against KV cache and FFN."""
         h = self._ln(x, self.ln_1_weight, self.ln_1_bias)
         q, k, v = self._qkv(h)
@@ -427,8 +449,12 @@ class TtXttsGptBlock(LightweightModule):
             ttnn.update_cache(k_cache, k, write_idx)
             ttnn.update_cache(v_cache, v, write_idx)
         else:
-            ttnn.where(onehot, k, k_cache, output_tensor=k_cache)
-            ttnn.where(onehot, v, v_cache, output_tensor=v_cache)
+            # Trace-safe row write: the index is a device tensor, so a captured trace can advance
+            # it between replays. The one-hot ttnn.where this replaces rewrote the whole cache.
+            kd, vd = _as_cache_write(k, 0), _as_cache_write(v, 1)
+            ttnn.experimental.paged_fused_update_cache(k_cache, kd, v_cache, vd, update_idxs_tensor=pos_idx)
+            ttnn.deallocate(kd)
+            ttnn.deallocate(vd)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
         attn = ttnn.transformer.scaled_dot_product_attention(
