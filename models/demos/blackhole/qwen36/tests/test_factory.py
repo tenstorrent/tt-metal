@@ -162,6 +162,34 @@ def get_pcc_threshold(request, default=0.99):
 
 
 # --------------------------------------------------------------------------- #
+# Test-side scope gate
+# --------------------------------------------------------------------------- #
+def validated_on_wormhole():
+    """True on any Wormhole device (N150 / N300 / T3K); False on Blackhole.
+
+    Scope for TEST-ORACLE fixes in this suite -- changes to what a test measures or compares
+    against, not to a threshold. Two such fixes live behind this gate:
+
+      * ``test_model.py``'s vision row padding (2048-multiple -> the tower's real 128 alignment).
+        The old form left unmasked pad rows that every real query summed ``exp(0)`` over, an error
+        that compounded over 27 blocks, and it fed row counts the matmul/SDPA grids were never
+        swept at.
+      * ``test_model_tp.py``'s batched decode chain (self-fed -> teacher-forced from the B=1
+        oracle). Self-feeding let a row that flipped one argmax be scored against its OWN
+        continuation, which showed up as PCC ~0.52-0.65 at decode1 against a 0.97 gate -- a harness
+        artifact read as a model bug.
+
+    Both are correctness fixes rather than tuning, so they apply across Wormhole regardless of
+    model or mesh. Blackhole is excluded only because these oracles were not re-measured there and
+    it takes different fused paths; widen once someone does. For scoping a PERFORMANCE change,
+    use ``tp_common.wh_9b_n300`` instead -- that is a much narrower claim.
+    """
+    from models.common.utility_functions import is_blackhole
+
+    return not is_blackhole()
+
+
+# --------------------------------------------------------------------------- #
 # Mesh / device helpers
 # --------------------------------------------------------------------------- #
 def _resolve_mesh_shape(max_tp=8):
