@@ -28,6 +28,8 @@ TILE = 32
 DFB_TILE = "tile"
 K_READER = "reader"
 K_WRITER = "writer"
+# Internal to this module: each factory returns the tensor bindings it built, so these names
+# never have to travel to the entry points.
 TP_IN = "in"
 TP_OUT = "out"
 MCAST_PREFIX = "row"
@@ -40,7 +42,7 @@ def _grid(device, rows: int, cols: int):
     return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cols - 1, rows - 1))])
 
 
-def toy_spec_mcast(inp: ttnn.Tensor, rows: int, cols: int) -> ttnn.Tensor:
+def create_program_artifacts(inp: ttnn.Tensor, rows: int, cols: int):
     """`inp` is (1, 1, 32*rows, 32); returns (1, 1, 32*rows, 32*cols)."""
     if inp.layout != ttnn.TILE_LAYOUT or inp.dtype != ttnn.bfloat16:
         raise NotImplementedError("toy_spec_mcast requires TILE_LAYOUT bfloat16")
@@ -118,10 +120,11 @@ def toy_spec_mcast(inp: ttnn.Tensor, rows: int, cols: int) -> ttnn.Tensor:
 
     mcast.attach(spec, run_args, kernels=[K_READER], cores=cores)
 
-    return ttnn.generic_op([inp, out], spec, run_args, {TP_IN: 0, TP_OUT: 1})
+    # io_tensors is [inp, out].
+    return out, spec, run_args, {TP_IN: 0, TP_OUT: 1}
 
 
-def toy_spec_mcast_2d(inp: ttnn.Tensor, rows: int, cols: int, sender=None) -> ttnn.Tensor:
+def create_2d_program_artifacts(inp: ttnn.Tensor, rows: int, cols: int, sender=None):
     """One 2D mcast of a single tile over a `cols` x `rows` rectangle at the grid origin.
 
     `inp` is (1, 1, 32, 32). `sender` is the one broadcasting core, inside the rectangle or outside
@@ -205,4 +208,28 @@ def toy_spec_mcast_2d(inp: ttnn.Tensor, rows: int, cols: int, sender=None) -> tt
 
     mcast.attach(spec, run_args, kernels=[K_READER], cores=cores)
 
-    return ttnn.generic_op([inp, out], spec, run_args, {TP_IN: 0, TP_OUT: 1})
+    # io_tensors is [inp, out].
+    return out, spec, run_args, {TP_IN: 0, TP_OUT: 1}
+
+
+# ---------------------------------------------------------------------------------------
+# Entry points
+# ---------------------------------------------------------------------------------------
+# Both factories above return FOUR values, not the usual three. The output tensor's shape is
+# derived from the mcast topology -- for the 2D program it is one tile per participating core,
+# which is only known once McastFamily has resolved its node set -- so the factory allocates it
+# rather than making the entry point rebuild the family just to learn the shape. Everything else
+# follows the template: the factory owns every name it declares and hands back the tensor
+# bindings, so nothing below names a TensorParameter.
+
+
+def toy_spec_mcast(inp: ttnn.Tensor, rows: int, cols: int) -> ttnn.Tensor:
+    """`inp` is (1, 1, 32*rows, 32); returns (1, 1, 32*rows, 32*cols)."""
+    out, spec, run_args, tensor_indices = create_program_artifacts(inp, rows, cols)
+    return ttnn.generic_op([inp, out], spec, run_args, tensor_indices)
+
+
+def toy_spec_mcast_2d(inp: ttnn.Tensor, rows: int, cols: int, sender=None) -> ttnn.Tensor:
+    """One 2D mcast of a single tile over a `cols` x `rows` rectangle at the grid origin."""
+    out, spec, run_args, tensor_indices = create_2d_program_artifacts(inp, rows, cols, sender)
+    return ttnn.generic_op([inp, out], spec, run_args, tensor_indices)
