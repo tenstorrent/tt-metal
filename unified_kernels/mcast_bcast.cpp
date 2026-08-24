@@ -63,7 +63,7 @@ void kernel_main() {
     // The whole row, expressed logically. Core (0,0) of the row is the sender.
     const u::LogicalMcast row{u::LogicalCoord::yx(0, 0), u::Extent::hw(1, MC_ROW_W)};
 
-    u::ComputeBlock x = u::noc_load<MC_DM_THREAD>(in_storage, row, in, 0, /*seq=*/0).wait();
+    u::ComputeBlock x = u::noc_load<MC_DM_THREAD>(in_storage, row, in, 0).wait();
 #if defined(MC_BARRIER)
     // Twice, deliberately: back-to-back is the case that fails if the barrier
     // clears its arrival count after releasing rather than before -- a core let go
