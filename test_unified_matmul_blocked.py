@@ -48,6 +48,8 @@ def run(
     hoist=False,
     zones=False,
     wdtype=None,
+    adtype=None,
+    odtype=None,
 ):
     """Extents and block widths all in TILES. a/b let a caller supply the operands."""
     assert mtot % mt == 0 and ktot % kt == 0 and ntot % nt == 0
@@ -71,10 +73,16 @@ def run(
     # The WEIGHT's format is the interesting one: B is much the larger operand, so halving
     # its bytes halves most of the traffic. A, the accumulator and the output stay bfloat16.
     wdtype = wdtype or ttnn.bfloat16
-    ta, tb = to_dev(a), to_dev(b, wdtype)
+    # Activations are the harder call than weights: A is what a previous stage produced and
+    # the output is what the next one consumes, so the format is a pipeline-wide decision
+    # rather than a per-matmul one. The ACCUMULATOR stays bfloat16 regardless -- it carries
+    # the running partial across k-blocks, which is exactly where narrowing compounds.
+    adtype = adtype or ttnn.bfloat16
+    odtype = odtype or ttnn.bfloat16
+    ta, tb = to_dev(a, adtype), to_dev(b, wdtype)
     # NaN-filled: the allocator reuses addresses, so an output block nothing writes would
     # otherwise hold a previous run's values and a missed block would pass.
-    tout = to_dev(torch.full([mtot * TILE, ntot * TILE], float("nan")))
+    tout = to_dev(torch.full([mtot * TILE, ntot * TILE], float("nan")), odtype)
 
     # The unit of work is one OUTPUT BLOCK, an (m, n) tile, indexed flat as m*nb + n. Both
     # dimensions are split across cores and neither needs a reduction -- different m or
@@ -116,9 +124,9 @@ def run(
     # are already deep (every page is issued before the single barrier); this is depth
     # ACROSS blocks. Same idea as the flash kernel's stream_buffering.
     cbs = [
-        make_cb(CB_A, core_ranges, num_pages=depth * mt * kt),
+        make_cb(CB_A, core_ranges, dtype=adtype, num_pages=depth * mt * kt),
         make_cb(CB_B, core_ranges, dtype=wdtype, num_pages=depth * kt * nt),
-        make_cb(CB_OUT, core_ranges, num_pages=mt * nt),
+        make_cb(CB_OUT, core_ranges, dtype=odtype, num_pages=mt * nt),
     ] + ([make_cb(CB_ACC, core_ranges, num_pages=mt * nt)] if kt != ktot else [])
 
     program = unified_program(
@@ -225,22 +233,33 @@ def main(argv=None):
         # from the CB, and pages.page_bytes comes from the CB too, so nothing in the kernel
         # names a format; if either of those were not true this would be quietly wrong
         # rather than broken, which is why it is checked against the same threshold.
+        # The OUTPUT's format is the one that had a bug: the packer is programmed once, for
+        # one buffer, and a blocked matmul packs to two. kt=4 here gives kb=2 so the
+        # accumulator is live and both destinations are exercised; kt=8 gives kb=1 so the
+        # output is the only one. Both matter -- the first is where the packer has to switch
+        # back and forth, and it is the case that was wrong.
+        B8 = ttnn.bfloat8_b
         for mtot, ktot, ntot, mt, kt, nt, mc in (
-            (4, 8, 8, 4, 8, 8, False),
             (4, 8, 8, 2, 4, 8, False),
+            (4, 8, 8, 4, 8, 8, False),
             (4, 16, 8, 2, 8, 4, False),
             (4, 8, 8, 2, 8, 4, True),
             (8, 8, 16, 2, 8, 4, True),
         ):
-            got, want = run(device, mtot, ktot, ntot, mt, kt, nt, mcast=mc, wdtype=ttnn.bfloat8_b)
-            v = pcc(got, want)
-            ok = v >= args.pcc
-            logger.info(
-                f"  bfloat8_b weights {mtot}x{ktot} @ {ktot}x{ntot} mt={mt} kt={kt} nt={nt}"
-                f"{' mcast' if mc else ''}: pcc={v:.6f}  {'ok' if ok else 'FAIL'}"
-            )
-            if not ok:
-                failed.append(f"bf8-{mtot}-{ktot}-{ntot}-{mt}-{kt}-{nt}")
+            for tag, ad, wd, od in (
+                ("W       ", None, B8, None),
+                ("W+out   ", None, B8, B8),
+                ("W+A+out ", B8, B8, B8),
+            ):
+                got, want = run(device, mtot, ktot, ntot, mt, kt, nt, mcast=mc, adtype=ad, wdtype=wd, odtype=od)
+                v = pcc(got, want)
+                ok = v >= args.pcc
+                logger.info(
+                    f"  bfloat8_b {tag} {mtot}x{ktot} @ {ktot}x{ntot} mt={mt} kt={kt} nt={nt}"
+                    f"{' mcast' if mc else ''}: pcc={v:.6f}  {'ok' if ok else 'FAIL'}"
+                )
+                if not ok:
+                    failed.append(f"bf8-{tag.strip()}-{mtot}-{ktot}-{ntot}-{mt}-{kt}-{nt}")
 
         # Partitioned across cores.
         for ncores in (2, 4, 8):
