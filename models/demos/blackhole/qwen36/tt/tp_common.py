@@ -36,16 +36,16 @@ COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
 
 # Same fidelity, fp32 destination accumulation OFF. Used ONLY by the GDN prefill in-projection (see
 # create_prefill_kpass1_matmul_program_config). Turning fp32 dest acc off does two things for that
-# matmul: it halves the intermediate CB, and it raises the output-subblock ceiling from 4 to 8. Both
-# are what make a ONE-K-PASS blocking (out_block_w == per_core_N) fit L1 at all -- with fp32 dest acc
+# matmul: it halves the intermediate CB and raises the output-subblock ceiling
+# from 4 to 8. Both are what make a ONE-K-PASS blocking (out_block_w ==
 # on, every one-pass variant is rejected with "circular buffers grow to 1524288/1615808/1798848 B
 # beyond max L1 size of 1499136 B".
 #
 # MEASURED (N150, M=2048 K=4096, DEVICE KERNEL DURATION; tests/perf/test_gdn_inproj_sweep.py):
 #     N=6912 cols=8 sub_w=3 blk_w=9  fp32_acc ON   3 K-passes  1493us   <- previous config
 #     N=6176 cols=8 sub_w=5 blk_w=25 fp32_acc OFF  1 K-pass    1255us   -16.0%
-# The accuracy cost is small but real: PCC against an fp32 torch reference goes 0.99997 -> 0.99992.
-# Deliberately a SEPARATE constant rather than a change to COMPUTE_HIFI2: that config is shared by the
+# Accuracy cost is small but real: PCC vs fp32 torch 0.99997 -> 0.99992.
+# Deliberately a SEPARATE constant, not a change to COMPUTE_HIFI2, which is
 # MLP down-proj and both attention projections, which were tuned with fp32 dest accumulation on and
 # are not covered by the sweep above.
 COMPUTE_HIFI2_NO_FP32_ACC = ttnn.WormholeComputeKernelConfig(
@@ -56,23 +56,23 @@ COMPUTE_HIFI2_NO_FP32_ACC = ttnn.WormholeComputeKernelConfig(
 )
 
 
-# LoFi + no fp32 dest acc. For the two ATTENTION prefill matmuls (QKV in-proj, wo out-proj) on
+# LoFi + no fp32 dest acc. For the two ATTENTION prefill matmuls (QKV in-proj,
 # Wormhole, paired with create_prefill_kpass1_matmul_program_config exactly like
 # COMPUTE_HIFI2_NO_FP32_ACC is (the one-K-pass blocking still requires fp32_dest_acc_en=False).
 #
-# WHY LoFi IS FREE HERE. HiFi2 costs ~2x LoFi's math passes per tile, and it was buying almost
+# WHY LoFi IS FREE HERE. HiFi2 costs ~2x LoFi's math passes per tile and bought
 # nothing on these two shapes because both take a BFLOAT8_B *weight*, whose 8-bit mantissa already
 # dominates the product's error -- HiFi2 was paying for precision the operands cannot represent.
-# MEASURED (device kernel duration + PCC vs an fp32 torch reference, N300, M=2048, one K pass,
+# MEASURED (kernel duration + PCC vs fp32 torch, N300, M=2048, one K pass,
 # tests/perf/test_all_matmuls_sweep.py):
 #     qkv 2048x4096x5120  HiFi2 1007.8us pcc=0.99992  ->  LoFi 887.3us pcc=0.99985   -12.0%
 #     wo  2048x2048x4096  HiFi2  402.6us pcc=0.99987  ->  LoFi 328.9us pcc=0.99981   -18.3%
-# i.e. ~7e-5 of PCC for 12-18% of the op. The same sweep confirms 8 columns is already the best grid
-# width for both (fewer columns loses more in cores than it gains in subblock), so grid is not a
+# i.e. ~7e-5 PCC for 12-18% of the op. The sweep confirms 8 columns is best
+# grid width for both (fewer loses more in cores than it gains in subblock),
 # further lever here.
 #
 # Kept SEPARATE from COMPUTE_HIFI2_NO_FP32_ACC rather than changing it: that constant is also the
-# GDN in-projection's, whose accuracy budget was tuned at HiFi2 and is NOT covered by this sweep.
+# GDN in-proj's, tuned at HiFi2 and NOT covered by this sweep.
 COMPUTE_LOFI_NO_FP32_ACC = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi,
     math_approx_mode=True,
@@ -192,7 +192,7 @@ def wh_9b_n300_vision(args):
     text_cfg = getattr(hf, "text_config", None) if hf is not None else None
     text_dim = getattr(text_cfg, "hidden_size", None)
     if text_dim is None:
-        # No text_config to check -- refuse rather than guess, so a config shape we have not seen
+        # No text_config to check -- refuse rather than guess, so an unseen shape
         # falls back to shipped behavior instead of silently enabling a 9B-only path.
         return False
     return text_dim <= 4096
