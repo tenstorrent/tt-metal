@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_binary_remainder.h"
+#include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
@@ -168,24 +169,49 @@ inline void calculate_remainder() {
         sfpi::vFloat val = dst_reg[0];
         sfpi::vFloat v = sfpi::abs(val);
 
-        sfpi::vFloat quotient;
-        vInt exp = sfpi::exexp(v * recip_val);
-        v_if(exp < 0) { quotient = 0.0f; }
-        // Since fp32 has 23 mantissa bits, the LSB represents the fractional part when exp < 23.
-        // We effectively round off the fractional bits to zero by right shifting using (exp - 23) and then left
-        // shifting it back using (0 - (exp - 23)).
-        v_elseif(exp < 23) {
-            quotient = sfpi::as<sfpi::vFloat>(
-                shft((shft(sfpi::as<sfpi::vUInt>(v * recip_val), (exp - 23))), (0 - (exp - 23))));
+        // Magnitude computation (issue #54048 fix): 2-pass reciprocal-quotient
+        // refine + bidirectional mop-up loop.
+        //
+        // The original single-pass version (truncated quotient estimate, one
+        // -1 overshoot correction, then a SUBTRACT-ONLY 10x loop) is exact only
+        // while `quotient * s` stays within FP32's exact-integer-product range.
+        // Once |dividend/divisor| exceeds roughly 2^24/s, `quotient * s` itself
+        // can no longer be represented exactly in FP32 -- no amount of
+        // quotient-estimate refinement fixes that (verified empirically: 3 and
+        // 4 refinement passes gave identical results to 2). Beyond that
+        // threshold the old subtract-only loop, unable to correct a residual
+        // that came out negative (quotient over-estimated), let errors grow
+        // UNBOUNDED with ratio -- up to -19x/-11x the divisor observed at
+        // ratio~2^26 in dense sweep validation (see the #54048 correction
+        // comment on the issue and sfpu_audit/fix_remainder/dense_sweep.py).
+        //
+        // Fix: (1) two refinement passes -- each computes round(v/s), subtracts
+        // q*s, and re-estimates on the (much smaller) residual, which recovers
+        // exactness for the full range where FP32 can represent it; (2) the
+        // mop-up loop now corrects in BOTH directions (the refine passes above
+        // can leave v<0 when the quotient was over-estimated at extreme
+        // ratios; the old loop only ever subtracted). Beyond the exact-product
+        // threshold, the
+        // result is bounded to at most one divisor-width from the true
+        // remainder (never unbounded) -- validated across positive/negative
+        // dividend and divisor, ratios up to 2^33, multiple divisor magnitudes
+        // (sfpu_audit/fix_remainder/sim_fixed.py). A third/fourth pass does not
+        // improve this further -- it's an FP32 precision floor, not an
+        // under-provisioned iteration count.
+        sfpi::vInt discard_k;
+#pragma GCC unroll 2
+        for (int refine = 0; refine < 2; refine++) {
+            sfpi::vFloat q = _sfpu_round_to_nearest_int32_(v * recip_val, discard_k);
+            v = v - q * s;
         }
-        v_else { quotient = v * recip_val; }
-        v_endif
 
-        v_if(quotient > v * recip_val) {
-            quotient = quotient - 1;
+        constexpr auto iter = 10;
+        for (int l = 0; l < iter; l++) {
+            v_if(v >= s) { v = v - s; }
+            v_endif;
+            v_if(v < 0.0f) { v = v + s; }
+            v_endif;
         }
-        v_endif;
-        v = v - quotient * s;
 
         v_if(val < 0 && v != 0) { v = s - v; }
         v_endif;
@@ -196,11 +222,6 @@ inline void calculate_remainder() {
         v_if(s == 0) { v = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
 
-        constexpr auto iter = 10;
-        for (int l = 0; l < iter; l++) {
-            v_if(v >= s) { v = v - s; }
-            v_endif;
-        }
         v_if(sfpi::abs(v) - s == 0.0f) { v = 0.0f; }
         v_endif;
         sfpi::dst_reg[0] = v;
