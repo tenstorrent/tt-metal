@@ -1044,3 +1044,101 @@ Run long jobs detached — `setsid nohup … &` — and verify the `TT` column r
 - Per-worker CSVs, which would pair every value with the core that produced it,
   are deleted by the combiner (`helpers/perf/core.py`, `Path(file).unlink()`).
   Capturing them requires copying during the run.
+
+---
+
+## 13. Appendix: every measurement the rule fires on
+
+Wormhole, `L1_TO_L1`, ten runs. All **83** rows, sorted by test and size.
+The complete sweep configuration for each is in
+`results/wormhole-nonsol/data/flagged_l1_to_l1_x10.csv`.
+
+`normal` is the value the majority of runs produced, `alternate` the other
+cluster, and `runs in alt` how many of the ten landed there. `KERNEL` and
+`TILE_LOOP` rows come in pairs — they are two views of the same measurement.
+
+| # | test | marker | normal | alternate | runs in alt | jump | jump % | output fmt | sync | fidelity | tiles |
+|--:|---|---|--:|--:|--:|--:|--:|---|---|---|--:|
+| 1 | perf_math_matmul | TILE_LOOP | 118,381 | 122,436 | 2 | 4,055 | 3.47% | Bfp8_b | Full | HiFi3 | 2 |
+| 2 | perf_math_matmul | TILE_LOOP | 118,388 | 122,436 | 3 | 4,048 | 3.43% | Bfp8_b | Full | HiFi3 | 2 |
+| 3 | perf_math_matmul | TILE_LOOP | 118,482 | 120,895 | 1 | 2,413 | 2.22% | Float16_b | Full | HiFi3 | 2 |
+| 4 | perf_math_matmul | TILE_LOOP | 118,534 | 123,030 | 1 | 4,496 | 3.83% | Float16 | Full | HiFi3 | 2 |
+| 5 | perf_math_matmul | TILE_LOOP | 119,112 | 122,356 | 4 | 3,244 | 2.88% | Float32 | Full | HiFi4 | 1 |
+| 6 | perf_math_matmul | KERNEL | 119,128 | 123,184 | 2 | 4,056 | 3.45% | Bfp8_b | Full | HiFi3 | 2 |
+| 7 | perf_math_matmul | KERNEL | 119,136 | 123,184 | 3 | 4,048 | 3.41% | Bfp8_b | Full | HiFi3 | 2 |
+| 8 | perf_math_matmul | KERNEL | 119,224 | 121,639 | 1 | 2,415 | 2.21% | Float16_b | Full | HiFi3 | 2 |
+| 9 | perf_math_matmul | KERNEL | 119,279 | 123,775 | 1 | 4,496 | 3.81% | Float16 | Full | HiFi3 | 2 |
+| 10 | perf_math_matmul | TILE_LOOP | 119,491 | 122,423 | 4 | 2,933 | 2.77% | Float16_b | Full | HiFi4 | 1 |
+| 11 | perf_math_matmul | TILE_LOOP | 119,493 | 122,299 | 2 | 2,806 | 2.35% | Float16_b | Full | HiFi4 | 1 |
+| 12 | perf_math_matmul | TILE_LOOP | 119,730 | 123,120 | 4 | 3,390 | 2.95% | Float16 | Full | HiFi4 | 1 |
+| 13 | perf_math_matmul | KERNEL | 119,858 | 123,099 | 4 | 3,240 | 2.86% | Float32 | Full | HiFi4 | 1 |
+| 14 | perf_math_matmul | KERNEL | 120,259 | 123,190 | 4 | 2,932 | 2.76% | Float16_b | Full | HiFi4 | 1 |
+| 15 | perf_math_matmul | KERNEL | 120,261 | 123,065 | 2 | 2,804 | 2.33% | Float16_b | Full | HiFi4 | 1 |
+| 16 | perf_math_matmul | KERNEL | 120,490 | 123,885 | 4 | 3,394 | 2.94% | Float16 | Full | HiFi4 | 1 |
+| 17 | perf_math_matmul | TILE_LOOP | 123,287 | 119,610 | 2 | 3,677 | 3.20% | Float16 | Full | HiFi4 | 1 |
+| 18 | perf_math_matmul | TILE_LOOP | 123,383 | 120,936 | 4 | 2,447 | 2.16% | Float16_b | Full | HiFi4 | 1 |
+| 19 | perf_math_matmul | TILE_LOOP | 123,385 | 120,917 | 3 | 2,468 | 2.16% | Float16_b | Full | HiFi4 | 1 |
+| 20 | perf_math_matmul | KERNEL | 124,049 | 120,375 | 2 | 3,674 | 3.18% | Float16 | Full | HiFi4 | 1 |
+| 21 | perf_math_matmul | KERNEL | 124,152 | 121,704 | 4 | 2,447 | 2.14% | Float16_b | Full | HiFi4 | 1 |
+| 22 | perf_math_matmul | KERNEL | 124,153 | 121,685 | 3 | 2,469 | 2.15% | Float16_b | Full | HiFi4 | 1 |
+| 23 | perf_math_matmul | TILE_LOOP | 153,610 | 158,690 | 1 | 5,080 | 3.32% | Bfp8_b | Half | LoFi | 2 |
+| 24 | perf_math_matmul | TILE_LOOP | 153,863 | 158,698 | 1 | 4,835 | 3.14% | Bfp8_b | Half | LoFi | 2 |
+| 25 | perf_math_matmul | KERNEL | 154,384 | 159,466 | 1 | 5,082 | 3.30% | Bfp8_b | Half | LoFi | 2 |
+| 26 | perf_math_matmul | KERNEL | 154,632 | 159,463 | 1 | 4,831 | 3.12% | Bfp8_b | Half | LoFi | 2 |
+| 27 | perf_math_matmul | TILE_LOOP | 165,786 | 158,895 | 2 | 6,891 | 4.33% | Bfp8_b | Half | HiFi2 | 2 |
+| 28 | perf_math_matmul | TILE_LOOP | 165,875 | 158,727 | 1 | 7,148 | 4.31% | Bfp8_b | Half | HiFi2 | 2 |
+| 29 | perf_math_matmul | KERNEL | 166,531 | 159,640 | 2 | 6,891 | 4.31% | Bfp8_b | Half | HiFi2 | 2 |
+| 30 | perf_math_matmul | KERNEL | 166,620 | 159,472 | 1 | 7,148 | 4.29% | Bfp8_b | Half | HiFi2 | 2 |
+| 31 | perf_math_matmul | TILE_LOOP | 168,948 | 158,750 | 1 | 10,198 | 6.04% | Float16_b | Half | LoFi | 3 |
+| 32 | perf_math_matmul | TILE_LOOP | 168,975 | 158,750 | 1 | 10,225 | 6.05% | Float16_b | Half | LoFi | 3 |
+| 33 | perf_math_matmul | KERNEL | 169,696 | 159,502 | 1 | 10,194 | 6.01% | Float16_b | Half | LoFi | 3 |
+| 34 | perf_math_matmul | KERNEL | 169,729 | 159,502 | 1 | 10,227 | 6.03% | Float16_b | Half | LoFi | 3 |
+| 35 | perf_math_matmul | TILE_LOOP | 184,298 | 190,463 | 1 | 6,165 | 3.35% | Float16_b | Half | LoFi | 4 |
+| 36 | perf_math_matmul | TILE_LOOP | 184,323 | 190,471 | 1 | 6,148 | 3.34% | Bfp8_b | Half | LoFi | 4 |
+| 37 | perf_math_matmul | TILE_LOOP | 184,369 | 190,467 | 1 | 6,098 | 3.32% | Bfp8_b | Half | LoFi | 4 |
+| 38 | perf_math_matmul | KERNEL | 185,050 | 191,219 | 1 | 6,169 | 3.33% | Float16_b | Half | LoFi | 4 |
+| 39 | perf_math_matmul | TILE_LOOP | 185,056 | 190,511 | 1 | 5,455 | 3.02% | Bfp8_b | Half | LoFi | 4 |
+| 40 | perf_math_matmul | KERNEL | 185,077 | 191,217 | 1 | 6,140 | 3.32% | Bfp8_b | Half | LoFi | 4 |
+| 41 | perf_math_matmul | KERNEL | 185,123 | 191,219 | 1 | 6,096 | 3.30% | Bfp8_b | Half | LoFi | 4 |
+| 42 | perf_math_matmul | KERNEL | 185,796 | 191,254 | 1 | 5,458 | 3.01% | Bfp8_b | Half | LoFi | 4 |
+| 43 | perf_math_matmul | TILE_LOOP | 193,917 | 184,974 | 1 | 8,943 | 4.61% | Float16_b | Half | LoFi | 4 |
+| 44 | perf_math_matmul | KERNEL | 194,678 | 185,733 | 1 | 8,945 | 4.60% | Float16_b | Half | LoFi | 4 |
+| 45 | perf_math_matmul | TILE_LOOP | 196,684 | 190,523 | 1 | 6,161 | 3.14% | Float16_b | Half | HiFi3 | 4 |
+| 46 | perf_math_matmul | KERNEL | 197,441 | 191,280 | 1 | 6,161 | 3.13% | Float16_b | Half | HiFi3 | 4 |
+| 47 | perf_math_matmul | TILE_LOOP | 210,355 | 218,675 | 2 | 8,320 | 4.42% | Float32 | Half | LoFi | 5 |
+| 48 | perf_math_matmul | TILE_LOOP | 210,823 | 216,797 | 3 | 5,974 | 3.68% | Float32 | Half | LoFi | 5 |
+| 49 | perf_math_matmul | KERNEL | 211,088 | 219,408 | 2 | 8,320 | 4.40% | Float32 | Half | LoFi | 5 |
+| 50 | perf_math_matmul | KERNEL | 211,562 | 217,534 | 3 | 5,972 | 3.67% | Float32 | Half | LoFi | 5 |
+| 51 | perf_math_matmul | TILE_LOOP | 211,586 | 219,247 | 3 | 7,662 | 4.87% | Float32 | Half | LoFi | 5 |
+| 52 | perf_math_matmul | KERNEL | 212,325 | 219,987 | 3 | 7,662 | 4.85% | Float32 | Half | LoFi | 5 |
+| 53 | perf_math_matmul | TILE_LOOP | 212,383 | 217,814 | 4 | 5,431 | 4.50% | Float32 | Half | LoFi | 5 |
+| 54 | perf_math_matmul | KERNEL | 213,116 | 218,547 | 4 | 5,431 | 4.48% | Float32 | Half | LoFi | 5 |
+| 55 | perf_math_matmul | TILE_LOOP | 216,174 | 220,900 | 1 | 4,726 | 2.19% | Float16_b | Half | LoFi | 6 |
+| 56 | perf_math_matmul | TILE_LOOP | 216,175 | 222,287 | 1 | 6,112 | 2.83% | Float16_b | Half | LoFi | 6 |
+| 57 | perf_math_matmul | KERNEL | 216,902 | 221,627 | 1 | 4,725 | 2.18% | Float16_b | Half | LoFi | 6 |
+| 58 | perf_math_matmul | KERNEL | 216,903 | 223,015 | 1 | 6,112 | 2.82% | Float16_b | Half | LoFi | 6 |
+| 59 | perf_math_matmul | TILE_LOOP | 218,444 | 232,287 | 1 | 13,843 | 6.39% | Float16_b | Half | HiFi2 | 5 |
+| 60 | perf_math_matmul | KERNEL | 219,199 | 233,042 | 1 | 13,843 | 6.37% | Float16_b | Half | HiFi2 | 5 |
+| 61 | perf_matmul | TILE_LOOP | 10,711 | 10,956 | 1 | 245 | 2.29% | Float16_b | Half | HiFi2 | 3 |
+| 62 | perf_matmul | TILE_LOOP | 10,711 | 10,957 | 1 | 246 | 2.30% | Float16_b | Half | HiFi2 | 3 |
+| 63 | perf_matmul | KERNEL | 11,304 | 11,545 | 1 | 241 | 2.13% | Float16_b | Half | HiFi2 | 3 |
+| 64 | perf_matmul | KERNEL | 11,304 | 11,540 | 1 | 236 | 2.09% | Float16_b | Half | HiFi2 | 3 |
+| 65 | perf_matmul | TILE_LOOP | 12,594 | 13,706 | 1 | 1,112 | 8.83% | Bfp8_b | Half | HiFi2 | 4 |
+| 66 | perf_matmul | KERNEL | 13,184 | 14,295 | 1 | 1,111 | 8.43% | Bfp8_b | Half | HiFi2 | 4 |
+| 67 | perf_matmul | TILE_LOOP | 14,412 | 14,722 | 1 | 310 | 2.15% | Float16_b | Half | LoFi | 4 |
+| 68 | perf_matmul | TILE_LOOP | 14,731 | 14,368 | 1 | 363 | 2.46% | Float16 | Half | LoFi | 4 |
+| 69 | perf_matmul | KERNEL | 15,007 | 15,322 | 1 | 315 | 2.10% | Float16_b | Half | LoFi | 4 |
+| 70 | perf_matmul | KERNEL | 15,329 | 14,961 | 1 | 368 | 2.40% | Float16 | Half | LoFi | 4 |
+| 71 | perf_matmul | TILE_LOOP | 16,141 | 16,586 | 1 | 445 | 2.76% | Float32 | Half | HiFi2 | 2 |
+| 72 | perf_matmul | TILE_LOOP | 16,153 | 16,540 | 1 | 387 | 2.40% | Float16_b | Half | LoFi | 6 |
+| 73 | perf_matmul | KERNEL | 16,742 | 17,121 | 1 | 379 | 2.26% | Float16_b | Half | LoFi | 6 |
+| 74 | perf_matmul | KERNEL | 16,747 | 17,179 | 1 | 432 | 2.58% | Float32 | Half | HiFi2 | 2 |
+| 75 | perf_matmul | TILE_LOOP | 18,940 | 19,334 | 1 | 394 | 2.08% | Float32 | Half | HiFi3 | 4 |
+| 76 | perf_matmul | TILE_LOOP | 21,532 | 20,790 | 1 | 742 | 3.45% | Float32 | Half | LoFi | 6 |
+| 77 | perf_matmul | KERNEL | 22,120 | 21,377 | 1 | 743 | 3.36% | Float32 | Half | LoFi | 6 |
+| 78 | perf_matmul | TILE_LOOP | 22,978 | 22,234 | 1 | 744 | 3.28% | Float32 | Half | LoFi | 6 |
+| 79 | perf_matmul | KERNEL | 23,566 | 22,825 | 1 | 741 | 3.19% | Float32 | Half | LoFi | 6 |
+| 80 | perf_matmul | TILE_LOOP | 24,105 | 23,098 | 1 | 1,007 | 4.30% | Float16 | Half | LoFi | 8 |
+| 81 | perf_matmul | KERNEL | 24,696 | 23,693 | 1 | 1,003 | 4.19% | Float16 | Half | LoFi | 8 |
+| 82 | perf_matmul | TILE_LOOP | 28,180 | 27,249 | 1 | 931 | 3.41% | Float32 | Half | LoFi | 8 |
+| 83 | perf_matmul | KERNEL | 28,769 | 27,840 | 1 | 929 | 3.34% | Float32 | Half | LoFi | 8 |
