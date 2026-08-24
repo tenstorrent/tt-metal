@@ -504,6 +504,48 @@ def test_topk_indices_tensor_too_narrow_raises(device, expect_error):
         ttnn.topk(ttnn_input, k, dim=-1, indices_tensor=indices_tensor)
 
 
+@pytest.mark.parametrize("tensor_under_test", ("indices_tensor", "output_tensor"))
+def test_topk_row_major_tensor_raises(tensor_under_test, device, expect_error):
+    # topk is tile-only: the compute kernel sorts tiles and compute_output_specs hardcodes TILE.
+    k = 32
+    W = 64
+    shape = [1, 1, 32, W]
+
+    ttnn_input = ttnn.from_torch(
+        torch.randn(shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+
+    if tensor_under_test == "indices_tensor":
+        kwargs = {
+            "indices_tensor": ttnn.from_torch(
+                torch.arange(W, dtype=torch.int32).expand(shape).contiguous(),
+                ttnn.uint16,
+                layout=ttnn.Layout.ROW_MAJOR,
+                device=device,
+            )
+        }
+    else:
+        kwargs = {
+            "output_tensor": (
+                ttnn.from_torch(
+                    torch.zeros([1, 1, 32, k], dtype=torch.bfloat16),
+                    ttnn.bfloat16,
+                    layout=ttnn.Layout.ROW_MAJOR,
+                    device=device,
+                ),
+                ttnn.from_torch(
+                    torch.zeros([1, 1, 32, k], dtype=torch.bfloat16),
+                    ttnn.uint16,
+                    layout=ttnn.Layout.ROW_MAJOR,
+                    device=device,
+                ),
+            )
+        }
+
+    with expect_error(RuntimeError, "must be in tiled format"):
+        ttnn.topk(ttnn_input, k, dim=-1, **kwargs)
+
+
 @pytest.mark.parametrize("largest", [True, False])
 def test_topk_multicore_local_write_correctness(largest, device):
     """

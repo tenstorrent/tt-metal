@@ -219,6 +219,10 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
 
     // Optional indices tensor validation (for pre-allocated indices)
     if (indices_tensor.has_value()) {
+        TT_FATAL(
+            indices_tensor->layout() == Layout::TILE,
+            "Optional indices tensor must be in tiled format, got: {}",
+            indices_tensor->layout());
         const auto indices_tensor_dtype = indices_tensor->dtype();
         TT_FATAL(
             indices_tensor_dtype == DataType::UINT16 || indices_tensor_dtype == DataType::UINT32 ||
@@ -254,8 +258,18 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
 
     // Preallocated output tensor validation
     if (preallocated_outputs.has_value()) {
-        const auto output_tensor0_dtype = std::get<0>(preallocated_outputs.value()).dtype();  // Values tensor
-        const auto output_tensor1_dtype = std::get<1>(preallocated_outputs.value()).dtype();  // Indices tensor
+        const auto& output_tensor0 = std::get<0>(preallocated_outputs.value());  // Values tensor
+        const auto& output_tensor1 = std::get<1>(preallocated_outputs.value());  // Indices tensor
+        TT_FATAL(
+            output_tensor0.layout() == Layout::TILE,
+            "Preallocated output tensor must be in tiled format, got: {}",
+            output_tensor0.layout());
+        TT_FATAL(
+            output_tensor1.layout() == Layout::TILE,
+            "Preallocated indices tensor must be in tiled format, got: {}",
+            output_tensor1.layout());
+        const auto output_tensor0_dtype = output_tensor0.dtype();
+        const auto output_tensor1_dtype = output_tensor1.dtype();
         TT_FATAL(
             output_tensor0_dtype == DataType::BFLOAT16 || output_tensor0_dtype == DataType::BFLOAT8_B ||
                 output_tensor0_dtype == DataType::FLOAT32,
