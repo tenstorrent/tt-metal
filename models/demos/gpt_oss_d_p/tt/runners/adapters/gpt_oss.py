@@ -122,7 +122,6 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
         cache (owns_kv_cache=False): the engine allocated it via allocate_kv_cache and passes it into
         each call."""
         import ttnn
-
         from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
         from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
