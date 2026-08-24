@@ -1720,21 +1720,6 @@ TEST_F(ProgramSpecTestQuasar, CPU_OptionalBindingProbeBuildsWithNullAndReal) {
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, make_spec(/*bind_optional=*/true)));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_EmptyUniqueIdOnTensorParameterFails) {
-    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
-    spec.tensor_parameters = {MakeMinimalTensorParameter("")};
-    BindTensorParameterToKernel(spec.kernels[0], "", "ta");
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("unique_id must be non-empty")));
-}
-
-TEST_F(ProgramSpecTestGen1, CPU_NullTensorBindingSucceeds) {
-    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
-    spec.kernels[0].tensor_bindings.push_back(NullBinding{.accessor_name = "optional_ta"});
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
-}
-
 TEST_F(ProgramSpecTestQuasar, CPU_DifferentScratchpadSizeProducesDifferentKernelHash) {
     // Same kernel source and accessor name; the two scratchpads differ only in size_per_node, which
     // flows into the ScratchpadBindingHandle's size (and the generated scratch:: token), so the
@@ -4016,6 +4001,21 @@ TEST_F(ProgramSpecTestGen1, CPU_UnboundTensorParameterFails) {
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("TensorParameter 'orphan_tensor' is defined but not bound by any kernel")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_EmptyUniqueIdOnTensorParameterFails) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.tensor_parameters = {MakeMinimalTensorParameter("")};
+    BindTensorParameterToKernel(spec.kernels[0], "", "ta");
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("unique_id must be non-empty")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_NullTensorBindingSucceeds) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].tensor_bindings.push_back(NullBinding{.accessor_name = "optional_ta"});
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_DuplicateTensorAccessorNameWithinKernelFails) {
