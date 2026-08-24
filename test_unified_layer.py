@@ -10,7 +10,7 @@ Eleven steps, every one of them a unified kernel:
     q    = xn @ Wq   k = xn @ Wk   v = xn @ Wv      matmul.cpp     x3
     q    = rope(q)   k = rope(k)                    rope.cpp       x2
     a    = flash_attention(q, k, v, mask)           flash_attention.cpp
-    ao   = a @ Wo                                   attention_proj.cpp
+    ao   = a @ Wo                                   matmul_blocked.cpp
     h    = x + ao                                   binary.cpp
     hn   = rmsnorm(h, w_ffn)                        rmsnorm.cpp
     g    = hn @ Wg   u = hn @ Wu                    matmul.cpp     x2
@@ -117,7 +117,11 @@ def rmsnorm(device, x, w, ht, wt):
         (RMS_CB["normed"], ht * wt),
         (RMS_CB["out"], ht * wt),
     ]
-    rt = [x.buffer_address(), w.buffer_address(), out.buffer_address(), bf16_pair(EPS)]
+    # The last two are the row-chunk range. rmsnorm walks the tensor in chunks of its
+    # compile-time ht, and this layer passes the whole height as one chunk -- so one chunk,
+    # starting at zero. Omitting them does not fail to compile; it feeds the loop bound
+    # whatever is in that argument slot, which is how this hung the device once.
+    rt = [x.buffer_address(), w.buffer_address(), out.buffer_address(), bf16_pair(EPS), 0, 1]
     return launch(device, RMSNORM_KERNEL, cbs, [ht, wt], rt, (x, w, out))
 
 

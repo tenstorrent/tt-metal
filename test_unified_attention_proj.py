@@ -8,7 +8,7 @@ The attention kernel writes its heads already concatenated -- head h's query chu
 [sq, dt] rectangle at columns [h*dt, +dt) of one [S_q, d_model] tensor -- so the projection
 is an ordinary [S_q, d_model] @ Wo matmul with no concat and no k-loop over heads. The
 earlier design left the output head-major and recovered the concat as a k-loop, which cost
-30% of the projection; see unified_kernels/attention_proj.cpp.
+30% of the projection; see unified_kernels/matmul_blocked.cpp.
 
 Two things are checked, and the second is the one that matters:
 
@@ -33,7 +33,7 @@ import ttnn
 import test_unified_flash as flash
 from unified_harness import core_block, make_cb, split_evenly, unified_program
 
-KERNEL = "unified_kernels/attention_proj.cpp"
+KERNEL = "unified_kernels/matmul_blocked.cpp"
 CB_IN, CB_WO, CB_OUT, CB_ACC = 0, 1, 16, 24
 TILE = 32
 
@@ -73,7 +73,7 @@ def project(device, attn_torch, wo_torch, sq, dt, num_q, n_heads, cores=1, fidel
     nt = dm if nt is None else nt
     assert dm % kt == 0, "the k-block width must divide d_model"
     assert dm % nt == 0, "the output-column block width must divide d_model"
-    ct_args = [sq, dm, num_q, kt, nt]
+    ct_args = [sq, dm, dm, kt, nt]  # mt, ktot, ntot, kt, nt -- square, K = N = d_model
     for t in (tattn, two, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     addrs = [t.buffer_address() for t in (tattn, two, tout)]
@@ -94,7 +94,7 @@ def project(device, attn_torch, wo_torch, sq, dt, num_q, n_heads, cores=1, fidel
         cbs=cbs,
         compile_time_args=ct_args,
         runtime_args=rt_args,
-        defines=[("PROJ_ACC_DST", "1")] if acc == "dst" else None,
+        defines=[("MMB_ACC_DST", "1")] if acc == "dst" else None,
         **(fidelity or {}),
     )
     logger.info(

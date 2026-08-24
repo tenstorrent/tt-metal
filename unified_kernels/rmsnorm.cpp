@@ -37,6 +37,11 @@ constexpr uint32_t kCbNormed = 7;
 constexpr uint32_t kCbOut = 16;
 
 void kernel_main() {
+    // ht is the ROW-CHUNK height, not the whole tensor's: rows are normalised
+    // independently -- each one's RMS depends on that row alone -- so the tensor is walked
+    // in chunks of ht rows and only ht*wt tiles are ever resident. Which chunks this core
+    // owns comes from runtime args. Without this the whole [S, d_model] block had to fit
+    // L1 at once, which is 1024 tiles at S=512 by d_model 2048.
     constexpr uint32_t ht = get_compile_time_arg_val(0);
     constexpr uint32_t wt = get_compile_time_arg_val(1);
 
@@ -48,6 +53,8 @@ void kernel_main() {
     const uint32_t w_addr = get_arg_val<uint32_t>(1);
     const uint32_t out_addr = get_arg_val<uint32_t>(2);
     const uint32_t eps_bits = get_arg_val<uint32_t>(3);
+    const uint32_t chunk_begin = get_arg_val<uint32_t>(4);
+    const uint32_t chunk_count = get_arg_val<uint32_t>(5);
 
     constexpr auto kAxis = u::Axis::Cols;  // each row is normalised independently
 
@@ -81,22 +88,33 @@ void kernel_main() {
     u::ComputeBlock inv_n = u::fill_reduce_scaler<1>(inv_n_storage, inv_n_bits);
     u::ComputeBlock eps = u::fill_reduce_scaler<1>(eps_storage, eps_bits);
 
-    u::ComputeBlock x = u::noc_load<1>(x_storage, x_acc, 0).wait();
+    // The weights are one row of wt tiles, the same for every chunk, so this is loaded ONCE
+    // and stays resident -- a ComputeBlock declared inside the loop would be popped after a
+    // single use and the next chunk would wait for a refill that never comes.
     u::ComputeBlock w = u::noc_load<1>(w_storage, w_acc, 0).wait();
 
-    // x^2, as an ordinary two-leaf SFPU tree whose leaves happen to be the same buffer.
-    u::ComputeBlock sq = sq_storage.store(x * x);
+    for (uint32_t c = 0; c < chunk_count; ++c) {
+        const uint32_t i = chunk_begin + c;
 
-    u::ComputeBlock mean = mean_storage.store(u::reduce_mean<kAxis>(sq, inv_n));
+        // Chunk i is rows [i*ht, +ht), which in a row-major tile layout is contiguous pages
+        // -- so an ordinary block load, no gather. That is the difference between chunking
+        // the ROWS of a row-major tensor and slicing its columns.
+        u::ComputeBlock x = u::noc_load<1>(x_storage, x_acc, i).wait();
 
-    // (mean + eps)^-1/2, the reciprocal square root riding the broadcast's epilogue so the
-    // epsilon and the rsqrt are one pass.
-    u::ComputeBlock inv_rms = rsqrt_storage.store((mean + u::bcast<u::Axis::Both>(eps)).rsqrt());
+        // x^2, as an ordinary two-leaf SFPU tree whose leaves happen to be the same buffer.
+        u::ComputeBlock sq = sq_storage.store(x * x);
 
-    // Cols: one value per ROW, replicated across that row's columns.
-    u::ComputeBlock normed = normed_storage.store(x * u::bcast<kAxis>(inv_rms));
+        u::ComputeBlock mean = mean_storage.store(u::reduce_mean<kAxis>(sq, inv_n));
 
-    // Rows: one value per COLUMN, replicated down the rows. The other axis, in the same
-    // kernel, which is what makes this more than a second reduction test.
-    u::noc_store<0>(out_storage.store(normed * u::bcast<u::Axis::Rows>(w)), out, 0);
+        // (mean + eps)^-1/2, the reciprocal square root riding the broadcast's epilogue so
+        // the epsilon and the rsqrt are one pass.
+        u::ComputeBlock inv_rms = rsqrt_storage.store((mean + u::bcast<u::Axis::Both>(eps)).rsqrt());
+
+        // Cols: one value per ROW, replicated across that row's columns.
+        u::ComputeBlock normed = normed_storage.store(x * u::bcast<kAxis>(inv_rms));
+
+        // Rows: one value per COLUMN, replicated down the rows. The other axis, in the same
+        // kernel, which is what makes this more than a second reduction test.
+        u::noc_store<0>(out_storage.store(normed * u::bcast<u::Axis::Rows>(w)), out, i);
+    }
 }
