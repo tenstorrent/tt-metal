@@ -465,8 +465,8 @@ Tensor group_norm(
     // Non-tile-aligned H*W: the tile-padding rows are not guaranteed to hold zeros (reshape,
     // slice and exp all leave non-zero bytes there), so both accumulation passes must exclude
     // them via a row-masked variant of the mask on each batch's final row-tile. An empty
-    // optional still means "synthesize". Welford is unaffected: non-tile-aligned H*W already
-    // fell back to the two-pass path above.
+    // optional still means "synthesize". The SFPU path is unaffected: non-tile-aligned H*W
+    // requests already fell back to the tile-reduction path above.
     //
     // A caller-supplied mask is honoured as the column selector (synthesis is bf16-only, while
     // callers commonly supply BFLOAT8_B). A doubled mask built with rows_in_last_tile is

@@ -23,9 +23,9 @@ uint32_t GroupNormPadCorrection::scaler_bits(uint32_t reduce_factor_w) const {
 
 GroupNormPadCorrection make_group_norm_pad_correction(
     uint32_t logical_hw, uint32_t padded_hw, bool use_welford, uint32_t tile_height) {
-    // Welford cannot express this: its kernels transpose H*W into the tile columns and track the
-    // sample count in tile units, so the padding rows cannot be excluded. ttnn::group_norm routes
-    // non-tile-aligned Welford requests to the two-pass path instead.
+    // The SFPU two-pass path cannot express this: its kernels transpose H*W into the tile columns
+    // and track the sample count in tile units, so the padding rows cannot be excluded.
+    // ttnn::group_norm routes non-tile-aligned use_welford requests to the tile-reduction path.
     GroupNormPadCorrection pad;
     pad.active = !use_welford && (logical_hw != padded_hw);
     pad.logical_hw = logical_hw;

@@ -80,14 +80,14 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         a.padded_shape()[2],
         tile_height);
 
-    // ROW_MAJOR (interleaved) input/output is only supported on the legacy (non-Welford) group_norm path.
+    // ROW_MAJOR (interleaved) input/output is only supported on the tile-reduction group_norm path.
     if (args.use_welford && !a.is_sharded()) {
         const Layout output_layout =
             std::visit([](const auto& config) -> Layout { return config.output_layout; }, args.program_config);
         TT_FATAL(
             a.layout() == Layout::TILE && output_layout == Layout::TILE,
-            "group_norm: ROW_MAJOR interleaved input/output is not supported on the two-pass path yet. "
-            "Use TILE layout for both input and output, or use the legacy (non-Welford) path "
+            "group_norm: ROW_MAJOR interleaved input/output is not supported on the SFPU two-pass path yet. "
+            "Use TILE layout for both input and output, or use the tile-reduction path "
             "(use_welford=false).");
     }
 
@@ -204,7 +204,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             input_mask.value().storage_type());
         TT_FATAL(input_mask.value().buffer() != nullptr, "Input mask must be allocated in buffers on device!");
         TT_FATAL(a.device() == input_mask.value().device(), "Input and input mask tensors must be on same device");
-        // For non-tile-aligned H*W on the two-pass path the mask carries a second, row-masked copy
+        // For non-tile-aligned H*W on the tile-reduction path the mask carries a second, row-masked copy
         // of every group; that is the only reason dim1 may be 2 * num_groups.
         const bool row_mask_doubled = !args.use_welford && (a.logical_shape()[2] != a.padded_shape()[2]);
         const uint32_t expected_mask_groups = args.num_groups * (row_mask_doubled ? 2 : 1);

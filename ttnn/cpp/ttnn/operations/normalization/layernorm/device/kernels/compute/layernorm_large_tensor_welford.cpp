@@ -256,7 +256,7 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         // Materialize x = a + b once in L1. Both statistics passes below reread
         // this block locally; they do not add another traversal of a or b.
         reconfig_data_format(dfb_in, dfb_inb);
-        add_tiles_init(dfb_in, dfb_inb);
+        add_init(dfb_in, dfb_inb);
         dfb_in_obj.wait_front(block.full_block_size());
         dfb_inb_obj.wait_front(block.full_block_size());
         tile_regs_acquire();

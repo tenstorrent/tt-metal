@@ -138,10 +138,10 @@ With changes:
 
 <img src="images/error_after.png" style="width:600px;"/>
 
-# Welford's Algorithm For Mean and Variance
-As stated above, the LayerNorm and GroupNorm algorithms require computing the mean and variance per layer (LayerNorm) or per group (GroupNorm). By default, the mean and variance are computed with the two-pass method detailed above, namely compute $\mu$ in one pass then use it to compute $\sigma^2$ in the second pass.
+# Welford-Compatible Mean and Variance Paths
+LayerNorm and GroupNorm require the mean and variance per layer or group. Their `use_welford` option is retained as a compatibility name for requesting the numerically stable statistics backends; it no longer selects one algorithm unconditionally. Depending on the architecture, tensor layout and calibrated performance policy, ordinary LayerNorm and GroupNorm select either shifted two-pass SFPU statistics with FP32 accumulation or a tile/FPU reduction. Distributed LayerNorm continues to use an online Welford merge protocol.
 
-LayerNorm and GroupNorm also have the ability to use Welford's online algorithm for computing the mean and variance. See: https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_online_algorithm. This is a one-pass algorithm where the mean and variance are accumulated in lockstep. Specifically, the sample mean of the first $n$ elements:
+The online Welford algorithm accumulates the mean and variance in lockstep. See: https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_online_algorithm. Specifically, the sample mean of the first $n$ elements:
 
 $$\bar{x}_n = \bar{x}_{n-1} + \frac{x_n - \bar{x}_{n-1}}{n}$$
 
@@ -153,7 +153,7 @@ where $M_{2,n}$ is used to compute the variance of the first $n$ samples $\sigma
 
 $$\sigma^2_n = \frac{M_{2,n}}{n}$$
 
-Computationally, Welford's method has a couple distinct advantages:
+Computationally, online Welford has two distinct advantages:
 
 1. It only requires a single pass through the input data, which cuts down the DRAM/NoC transactions needed to compute $\mu$ and $\sigma^2$.
 2. The two-pass method, even when using sum-then-divide, can still accumulate numerical errors during the first pass (that computes $\mu$) by adding small numbers to a growing sum. Adding numbers of vastly different magnitudes can lose precision if the accumulation data format does not have sufficient bits to resolve the sum. These errors will be amplified in the second pass (that computes $\sigma^2$). This effect is mitigated in the Welford approach by accumulating the _difference_ $x_n - \bar{x}_{n-1}$ in the mean (divided by $n$), which keeps accumulator values smaller than in two-pass, where raw data values are added to a large-and-growing running sum.
@@ -166,9 +166,9 @@ The following plot shows the Frobenious error (%) of a skewed random normal dist
 
 <img src="images/welford_accuracy.png" style="width:600px;"/>
 
-The global error using Welford's method is lower than the two-pass methods. With a large skewed mean, the accumulated sums in the two-pass methods over widths on the order of ~1000 grow large enough to trigger numerical inaccuracies in the summation. Welford's is able to combat this by accumulating the difference $x_n - \bar{x}_{n-1}$, which tends to stay small.
+In this comparison, online Welford has lower global error than the raw-sum two-pass methods. With a large shifted mean, raw sums over widths on the order of ~1000 grow large enough to introduce numerical error. Welford avoids that growing sum by accumulating the difference $x_n - \bar{x}_{n-1}$, which tends to stay small.
 
-The Welford method for each op can be invoked as follows:
+The current shifted two-pass backend achieves the same objective without summing large absolute values. It computes the mean relative to a representative input value, then computes squared deviations from that mean. Eligible inputs are replayed from L1, avoiding a second DRAM traversal. The optimised statistics backends can be requested as follows:
 
 LayerNorm (specified in program configs):
 
@@ -185,7 +185,7 @@ GroupNorm (specified as boolean input to `ttnn.group_norm`):
 output_tensor = ttnn.group_norm(<other inputs>, use_welford=True)
 ```
 
-GroupNorm uses compile-time reciprocal constants in its stable two-pass path and does not require a reciprocals tensor. LayerNorm configurations that use a reciprocal lookup table can create one as follows:
+GroupNorm uses compile-time reciprocal constants in its shifted two-pass path and does not require a reciprocals tensor. LayerNorm's selected SFPU statistics path uses a reciprocal lookup table; the tile-reduction path does not. The lookup table can be created as follows:
 
 LayerNorm:
 
