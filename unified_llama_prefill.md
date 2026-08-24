@@ -2840,10 +2840,36 @@ requests, not synchronisation -- the same bytes moving more slowly. That is wher
 lives, and it is a narrower target than anything earlier in this file: the sender's read
 pattern against DRAM, twelve cores at a time.
 
-Worth noting what this says about the earlier sharding question. ttnn reaches 84GB/s from
-interleaved DRAM, so sharding is not how it gets there -- but a sharded weight would give
-each sender a contiguous run in one bank instead of pages round-robining across banks, and
-contiguity is the one property of the read pattern we have not tried changing.
+### Sharded weights: tried, 10% worse, and the cost moved rather than vanished
+
+The idea was that a sender's whole read set for a column is the strip `[c*nt, +nt)` of B
+across every k-block, so WIDTH-sharding B one strip per column would turn pages
+round-robining across banks into one contiguous run. The kernel needed no change at all --
+`TensorAccessorArgs(t)` carries the layout and `get_noc_addr` resolves it -- so this was a
+harness-only experiment, which is itself the point worth keeping about the accessor design.
+
+| [512,2048]@[2048,2048], multicast, depth 2 | 64 cores | 32 cores |
+|---|---|---|
+| B interleaved | **316.7 us** | **320.3 us** |
+| B DRAM width-sharded | 348.8 us | 355.7 us |
+| B L1 width-sharded | out of L1 | out of L1 |
+
+10% WORSE, at both core counts. L1 sharding does not fit: a strip is 1MB and the kernel needs
+its own circular buffers on those same cores.
+
+**And the zones say the cost moved rather than appeared.** With B sharded, the B sender's own
+read actually got FASTER per page -- 278ns against 366ns, 7.4GB/s against 5.6 -- while the
+program got slower. So the sharded read is not what regressed; something else absorbed more
+than it saved. The likeliest explanation is bank coverage: eight strips occupy eight banks
+where the interleaved layout spreads across all twelve, so peak aggregate bandwidth drops
+even as one reader's slice improves. That is a guess consistent with the numbers, not a
+measurement -- I did not verify which banks the shards landed on.
+
+**What it settles is the hypothesis it was built to test.** Contiguity is not the missing
+property: interleaving is what gives a single reader bank-level parallelism, and taking it
+away concentrates that reader instead of helping it. ttnn's 84GB/s comes from interleaved
+DRAM, and this says that is not an accident of its configuration but the better layout for
+this access pattern. The 56-vs-84GB/s gap is still open, and it is not layout.
 
 Recorded because the sequence matters: the bandwidth ratio suggested a story, the ablation
 narrowed it to the per-k-block movement, and only READING THE OTHER IMPLEMENTATION showed
