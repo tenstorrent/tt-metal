@@ -93,21 +93,46 @@ jobs:
         # Mirrors the filter step in tm-fabric-tests-impl.yaml, but pulls the
         # name list from the compose-time env constant above (fixed cadence)
         # instead of a workflow_dispatch input (user-chosen subset).
+        #
+        # Two distinct correctness properties:
+        #   1. Every name in L2_NIGHTLY_TEST_NAMES must exist in fabric_tests.yaml
+        #      (typo / rename guard — hard error).
+        #   2. Names whose entries have no leg in the current matrix (e.g. WH-only
+        #      entries when run_wormhole=false) are silently filtered out — this
+        #      is the expected behaviour of the arch toggles, not a bug.
+        #
+        # All non-matrix output goes to stderr; only the `matrix=` line lands in
+        # $GITHUB_OUTPUT so GHA's key=value parser doesn't choke on ::error::
+        # annotations.
         run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, sys
+          python3 <<'PY'
+          import json, os, sys, yaml
 
+          def log(msg):
+              print(msg, file=sys.stderr)
+
+          with open(os.environ["TESTS_YAML_PATH"]) as f:
+              all_entry_names = {e["name"] for e in yaml.safe_load(f)}
           matrix = json.loads(r"""${{ steps.build-matrix.outputs.matrix }}""")
-          names = [n.strip() for n in r"""${{ env.L2_NIGHTLY_TEST_NAMES }}""".split(",") if n.strip()]
-          # prepare_test_matrix.py appends " [<sku>]" to each name; match on the base.
+          names = [n.strip() for n in os.environ["L2_NIGHTLY_TEST_NAMES"].split(",") if n.strip()]
+
+          # prepare_test_matrix.py appends " [<sku>]" to each name; match on base.
           base = lambda entry: entry["name"].split(" [")[0]
-          unknown = sorted(set(names) - {base(t) for t in matrix})
-          if unknown:
-              print(f"::error::L2_NIGHTLY_TEST_NAMES entries not present in the matrix: {', '.join(unknown)}")
+
+          typos = sorted(set(names) - all_entry_names)
+          if typos:
+              log(f"::error::L2_NIGHTLY_TEST_NAMES entries not defined in fabric_tests.yaml (typo or rename?): {', '.join(typos)}")
               sys.exit(1)
+
+          sku_filtered_out = sorted(set(names) - {base(t) for t in matrix})
+          if sku_filtered_out:
+              log(f"::notice::L2_NIGHTLY_TEST_NAMES entries with no leg in the current SKU subset (skipped): {', '.join(sku_filtered_out)}")
+
           matrix = [t for t in matrix if base(t) in names]
-          print(f"Restricted matrix to {len(matrix)} legs: {', '.join(t['name'] for t in matrix)}", file=sys.stderr)
-          print("matrix=" + json.dumps(matrix, separators=(",", ":")))
+          log(f"Restricted matrix to {len(matrix)} legs: {', '.join(t['name'] for t in matrix) or '<empty>'}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as gh_out:
+              gh_out.write("matrix=" + json.dumps(matrix, separators=(",", ":")) + "\n")
           PY
 
   fabric-l2-nightly-tests:

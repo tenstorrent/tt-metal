@@ -93,22 +93,47 @@ jobs:
             --event "${{ github.event_name }}"
       - name: Restrict matrix to requested test names
         id: filter-matrix
+        # Two distinct correctness properties:
+        #   1. Every name in `test-names` must exist in fabric_tests.yaml (typo /
+        #      rename guard — hard error).
+        #   2. Names whose entries have no leg in the current matrix (e.g. a
+        #      WH-only test requested when only BH SKU checkboxes are ticked)
+        #      are silently filtered out — this is the expected behaviour of
+        #      the SKU checkboxes, not a bug.
+        #
+        # All non-matrix output goes to stderr; only the `matrix=` line lands
+        # in $GITHUB_OUTPUT so GHA's key=value parser doesn't choke on
+        # ::error:: annotations.
         run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, sys
+          python3 <<'PY'
+          import json, os, sys, yaml
+
+          def log(msg):
+              print(msg, file=sys.stderr)
 
           matrix = json.loads(r"""${{ steps.build-matrix.outputs.matrix }}""")
           names = [n.strip() for n in r"""${{ inputs.test-names }}""".split(",") if n.strip()]
+
           if names:
-              # prepare_test_matrix.py appends " [<sku>]" to each name; match on the base.
+              with open(os.environ["TESTS_YAML_PATH"]) as f:
+                  all_entry_names = {e["name"] for e in yaml.safe_load(f)}
+              # prepare_test_matrix.py appends " [<sku>]" to each name; match on base.
               base = lambda entry: entry["name"].split(" [")[0]
-              unknown = sorted(set(names) - {base(t) for t in matrix})
-              if unknown:
-                  print(f"::error::test-names not present in the matrix: {', '.join(unknown)}")
+
+              typos = sorted(set(names) - all_entry_names)
+              if typos:
+                  log(f"::error::test-names not defined in fabric_tests.yaml (typo or rename?): {', '.join(typos)}")
                   sys.exit(1)
+
+              sku_filtered_out = sorted(set(names) - {base(t) for t in matrix})
+              if sku_filtered_out:
+                  log(f"::notice::test-names with no leg in the current SKU subset (skipped): {', '.join(sku_filtered_out)}")
+
               matrix = [t for t in matrix if base(t) in names]
-              print(f"Restricted matrix to: {', '.join(t['name'] for t in matrix)}", file=sys.stderr)
-          print("matrix=" + json.dumps(matrix, separators=(",", ":")))
+              log(f"Restricted matrix to {len(matrix)} legs: {', '.join(t['name'] for t in matrix) or '<empty>'}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as gh_out:
+              gh_out.write("matrix=" + json.dumps(matrix, separators=(",", ":")) + "\n")
           PY
 
   fabric-tests:
