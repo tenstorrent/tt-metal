@@ -669,9 +669,12 @@ KNOBS = {
     # mulint32-fresh (interrow drain 2 -> 1, the lane-GG banked
     # 2-nop/row + boundary-pair delivery residual halves; the remaining
     # 1 nop = the REAL fixed-VD WAR hazard the model names as
-    # window-pairing-lreg-overlap).  roundingops / lcm-fresh / recip =
-    # expected honest no-fire controls (no macro region / rolled row /
-    # already-interleaved window).
+    # window-pairing-lreg-overlap).  MEASURED (headline-laneGJ-20260824d,
+    # BH p150, 3 reps, corr-before-perf, paired CRAQ PASS pinned sim
+    # 32489dda): KERNEL 38669 -> 35077.7 = -9.29% under the knob;
+    # vs-hand +5.11% -> -4.65% (the row flips LOSS -> WIN; hand anchor
+    # 36788).  roundingops / lcm-fresh / recip = measured honest
+    # no-fire (knob-attribution byte-identical, laneGJ evidence).
     "window-pairing-stride": "-mtt-tensix-optimize-window-pairing-stride",
 }
 # Per-knob leg MODE (see the KNOBS comment).  Every key must be a KNOBS
