@@ -276,12 +276,17 @@ def parse_rank_bindings_yaml(text: str) -> list[dict[str, Any]]:
             continue
         if current is None:
             continue
-        if stripped.endswith(":") and ":" == stripped[-1] and stripped[:-1].strip() not in {
-            "rank",
-            "mesh_id",
-            "mesh_host_rank",
-            "host",
-        }:
+        if (
+            stripped.endswith(":")
+            and ":" == stripped[-1]
+            and stripped[:-1].strip()
+            not in {
+                "rank",
+                "mesh_id",
+                "mesh_host_rank",
+                "host",
+            }
+        ):
             skip_nested = indent
             continue
         if ":" in stripped:
