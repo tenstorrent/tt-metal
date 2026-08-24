@@ -1046,6 +1046,34 @@ def test_situ_glu_sub_core_grids_conflict(device, expect_error):
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+@pytest.mark.parametrize("via", ["memory_config", "input_placement"])
+def test_situ_glu_sub_core_grids_rejects_interleaved_l1(device, expect_error, via):
+    shape = torch.Size([1, 1, 32, 32])
+    cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))])
+
+    # An interleaved-L1 buffer takes L1 on every worker core, including the ones a core restriction
+    # exists to stay off. It reaches the output placement two ways -- asked for, or inherited from an
+    # interleaved-L1 input when memory_config is omitted -- so both have to be rejected.
+    l1 = ttnn.L1_MEMORY_CONFIG
+    gate = ttnn.zeros(
+        shape,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=l1 if via == "input_placement" else ttnn.DRAM_MEMORY_CONFIG,
+    )
+    with expect_error(RuntimeError, "core restriction cannot be combined with an interleaved-L1 output"):
+        ttnn.situ_glu(
+            gate,
+            gate,
+            SITU_GLU_BETA1,
+            SITU_GLU_BETA2,
+            memory_config=l1 if via == "memory_config" else None,
+            sub_core_grids=cores,
+        )
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
 def test_situ_glu_zero_beta_guard(device, expect_error):
     shape = torch.Size([1, 1, 32, 32])
     gate = ttnn.from_torch(

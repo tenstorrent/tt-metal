@@ -953,15 +953,24 @@ Tensor situ_glu(
         cores = gate.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
     }
 
+    // A core restriction means another op is running concurrently on the complementary cores, and an
+    // interleaved-L1 buffer comes from the global allocator: it takes L1 on every worker core, the
+    // other op's included, growing down toward that op's circular buffers. A program only re-checks
+    // its CB region against live L1 buffers when it is enqueued, and the concurrent op is already in
+    // flight by then, so an overlap is silent corruption rather than a throw.
+    //
+    // Declining the L1 fast path below is not enough to rule that out: the intermediates then follow
+    // the output placement, which is interleaved L1 whenever the caller asks for it or hands in an
+    // interleaved-L1 gate with no output_mem_config. Sharded L1 stays safe -- its shard spec confines
+    // it to named cores -- so only the interleaved case is rejected.
+    const MemoryConfig effective_out = output_mem_config.value_or(gate.memory_config());
+    TT_FATAL(
+        !(cores.has_value() && effective_out.is_l1() && !effective_out.is_sharded()),
+        "situ_glu: a core restriction cannot be combined with an interleaved-L1 output, which would "
+        "take L1 on the cores restricted away. Use DRAM or a sharded L1 memory config.");
+
     // Sharded inputs keep the ops' own placement: interleaved-L1 intermediates against a sharded
     // input would add an unshard/reshard round-trip, which is the opposite of the point here.
-    //
-    // A core restriction also rules L1 out. It means another op is running concurrently on the
-    // complementary cores, and an interleaved-L1 buffer comes from the global allocator: it takes
-    // L1 on every worker core, the other op's included, growing down toward that op's circular
-    // buffers. A program only re-checks its CB region against live L1 buffers when it is enqueued,
-    // and the concurrent op is already in flight by then, so an overlap here is silent corruption
-    // rather than a throw.
     const bool use_l1 = !gate.is_sharded() && !cores.has_value() &&
                         gate.logical_shape()[-1] <= SITU_GLU_L1_MAX_HIDDEN && situ_glu_intermediates_fit_l1(gate);
     const std::optional<MemoryConfig> interm_mem =
@@ -984,7 +993,7 @@ Tensor situ_glu(
     }
     // Pin the output placement, or multiply would inherit situ_a's L1 config and make placement
     // depend on the hidden dim.
-    return ttnn::multiply(situ_a, up_half, std::nullopt, output_mem_config.value_or(gate.memory_config()));
+    return ttnn::multiply(situ_a, up_half, std::nullopt, effective_out);
 }
 
 }  // namespace ttnn

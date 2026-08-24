@@ -890,8 +890,12 @@ void bind_situ_glu(nb::module_& mod, const std::string& description, const std::
 
             Implemented for Blackhole only.
 
-            Restricting the cores also forces the intermediates to the output's memory space: the L1
-            placement this picks on a full grid is unsafe next to a concurrently running op.
+            Restricting the cores forces the intermediates to the output's memory space, because the
+            L1 placement this picks on a full grid is unsafe next to a concurrently running op. For
+            the same reason a core restriction rejects an interleaved-L1 output, whether asked for
+            through :attr:`memory_config` or inherited from an interleaved-L1 :attr:`input_tensor_a`:
+            such a buffer takes L1 on the cores restricted away. Sharded L1 is accepted -- its shard
+            spec confines it.
         )doc",
         std::string(Name),
         "ttnn." + std::string(Name),
