@@ -370,9 +370,10 @@ def test_indexer_score_ring4_fused_runtime_kv_len():
 @pytest.mark.parametrize("k_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bfp8"])
 def test_indexer_score_ring4_fused_program_cache_reuse(k_dtype):
     """Two dispatches, identical shapes but different chunk_start/kv_len on the SAME device (2nd is a cache
-    hit). chunk_start/kv_len are hash-excluded, so override_runtime_arguments must re-apply them; if not, the
-    2nd dispatch reuses the 1st's frozen offset -> wrong logits. Regression guard for the program-cache
-    stale-scalar bug (every other test dispatches cold). Both bf16 and production bfp8_b K."""
+    hit). chunk_start/kv_len and fused-AG semaphore identity are hash-excluded, so
+    override_runtime_arguments must re-apply them; if not, the 2nd dispatch reuses the 1st's frozen offset or
+    semaphore addresses. Regression guard for the program-cache stale-runtime-argument bugs (every other test
+    dispatches cold). Both bf16 and production bfp8_b K."""
     heads = 16  # the scalar re-patch is head-independent, so one head count suffices (both dtypes kept)
     t_alloc = 4 * CHUNK_GLOBAL  # room for both chunks' causal windows (global block == CHUNK_GLOBAL)
     submesh, parent, ccl_semaphores, subdevice_id, stall_group = _open_ring4_ccl()
@@ -381,13 +382,19 @@ def test_indexer_score_ring4_fused_program_cache_reuse(k_dtype):
         k_bc = _to_slab(k_nat, RING, CHUNK_GLOBAL)  # block-cyclic physical layout
         q_dev, w_dev, k_local, k_gathered = _fused_dev_inputs(submesh, q_g, w_g, k_bc, k_dtype=k_dtype)
 
-        def _score(chunk_start, kv_len):  # identical shapes each call -> 2nd is a program-cache hit
+        # A physically distinct pair exercises the semaphore-address cache-hit override. This is the same
+        # A/B rotation used by model TT_CCL; changing only the addresses must not create another program.
+        grid = submesh.compute_with_storage_grid_size()
+        ccl_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+        alternate_semaphores = [ttnn.create_global_semaphore(submesh, ccl_crs, 0) for _ in range(2)]
+
+        def _score(chunk_start, kv_len, semaphores):  # identical shapes each call -> 2nd is a program-cache hit
             out = ttnn.experimental.ring_indexer_score_dsa(
                 q_dev,
                 k_gathered,
                 w_dev,
                 k_local,
-                ccl_semaphores,
+                semaphores,
                 cluster_axis=SP_AXIS,
                 topology=ttnn.Topology.Linear,
                 num_links=1,
@@ -402,13 +409,23 @@ def test_indexer_score_ring4_fused_program_cache_reuse(k_dtype):
             return ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=2))
 
         # chunk@0 (cache miss/build) then chunk@CHUNK_GLOBAL (cache HIT -- must re-apply chunk_start + kv_len).
-        out0 = _score(chunk_start=0, kv_len=CHUNK_GLOBAL)
-        out1 = _score(chunk_start=CHUNK_GLOBAL, kv_len=2 * CHUNK_GLOBAL)
+        out0 = _score(chunk_start=0, kv_len=CHUNK_GLOBAL, semaphores=ccl_semaphores)
+        entries_after_first = submesh.num_program_cache_entries()
+        out1 = _score(
+            chunk_start=CHUNK_GLOBAL,
+            kv_len=2 * CHUNK_GLOBAL,
+            semaphores=alternate_semaphores,
+        )
+        assert (
+            submesh.num_program_cache_entries() == entries_after_first
+        ), "alternating fused-AG semaphore addresses must reuse the cached ring-indexer program"
         ref0 = _per_sp_ref(q_g, k_nat[:, :, :CHUNK_GLOBAL, :], w_g, RING, 0)
         ref1 = _per_sp_ref(q_g, k_nat[:, :, : 2 * CHUNK_GLOBAL, :], w_g, RING, CHUNK_GLOBAL)
         assert_indexer_match(out0[:, :, :, :CHUNK_GLOBAL], ref0, CHUNK_GLOBAL, CHUNK_GLOBAL, check_neg=True)
         assert_indexer_match(out1[:, :, :, : 2 * CHUNK_GLOBAL], ref1, CHUNK_GLOBAL, 2 * CHUNK_GLOBAL, check_neg=True)
-        logger.info(f"ring4 fused program-cache reuse (heads={heads}): 2nd chunk_start re-applied on cache hit")
+        logger.info(
+            f"ring4 fused program-cache reuse (heads={heads}): 2nd chunk_start and semaphore pair re-applied on cache hit"
+        )
     finally:
         _close_ring4_ccl(parent, submesh, stall_group)
 

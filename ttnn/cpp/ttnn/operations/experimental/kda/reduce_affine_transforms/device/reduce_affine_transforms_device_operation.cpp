@@ -3,26 +3,15 @@
 
 #include "reduce_affine_transforms_device_operation.hpp"
 
+#include <algorithm>
+#include <array>
+
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
-
-using namespace tt::tt_metal;
+#include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 
 namespace ttnn::experimental::prim {
-namespace {
-void check_affine_tensor(const Tensor& tensor, const char* name) {
-    TT_FATAL(
-        tensor.storage_type() == StorageType::DEVICE && tensor.buffer() != nullptr,
-        "reduce_affine_transforms: {} must be an allocated device tensor",
-        name);
-    TT_FATAL(tensor.layout() == Layout::TILE, "reduce_affine_transforms: {} must use TILE layout", name);
-    TT_FATAL(
-        tensor.dtype() == DataType::FLOAT32 || tensor.dtype() == DataType::BFLOAT16,
-        "reduce_affine_transforms: {} must be FLOAT32 or BFLOAT16",
-        name);
-}
-}  // namespace
 
 ReduceAffineTransformsOperation::program_factory_t ReduceAffineTransformsOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
@@ -30,23 +19,30 @@ ReduceAffineTransformsOperation::program_factory_t ReduceAffineTransformsOperati
 }
 void ReduceAffineTransformsOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
-    check_affine_tensor(in.a, "a");
-    check_affine_tensor(in.b, "b");
-    TT_FATAL(in.a.device() == in.b.device(), "reduce_affine_transforms: all inputs must be on the same device");
-    TT_FATAL(in.a.dtype() == in.b.dtype(), "reduce_affine_transforms: inputs must have matching dtypes");
+    constexpr std::string_view operation_name = "reduce_affine_transforms";
+    constexpr std::array accepted_summary_dtypes = {tt::tt_metal::DataType::FLOAT32, tt::tt_metal::DataType::BFLOAT16};
+    kda_factory_detail::check_allocated_device_tensor(in.a, operation_name, "a");
+    kda_factory_detail::check_layout(in.a, tt::tt_metal::Layout::TILE, operation_name, "a");
+    kda_factory_detail::check_dtype_in(in.a, accepted_summary_dtypes, "FLOAT32 or BFLOAT16", operation_name, "a");
+    kda_factory_detail::check_allocated_device_tensor(in.b, operation_name, "b");
+    kda_factory_detail::check_layout(in.b, tt::tt_metal::Layout::TILE, operation_name, "b");
+    kda_factory_detail::check_dtype_in(in.b, accepted_summary_dtypes, "FLOAT32 or BFLOAT16", operation_name, "b");
+    kda_factory_detail::check_same_device(in.a, in.b, operation_name, "b");
+    kda_factory_detail::check_matching_dtype(in.a, in.b, operation_name, "inputs");
+    const auto check_input_memory_layout = [operation_name](const ttnn::Tensor& tensor, std::string_view name) {
+        const auto memory_layout = tensor.memory_config().memory_layout();
+        TT_FATAL(
+            memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED ||
+                memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+            "{}: {} must use interleaved or height-sharded memory",
+            operation_name,
+            name);
+    };
+    check_input_memory_layout(in.a, "a");
+    check_input_memory_layout(in.b, "b");
     TT_FATAL(attrs.groups_per_head > 0, "reduce_affine_transforms: groups_per_head must be positive");
-    TT_FATAL(
-        !attrs.output_mem_config.is_sharded(),
-        "reduce_affine_transforms: output memory configuration must be interleaved");
-    TT_FATAL(
-        !attrs.compute_kernel_config.packer_l1_acc,
-        "reduce_affine_transforms: packer_l1_acc=true is unsupported because the compute kernel does not "
-        "accumulate through L1");
-    TT_FATAL(
-        attrs.compute_kernel_config.throttle_level ==
-            ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE,
-        "reduce_affine_transforms: compute throttling is unsupported because this kernel does not implement "
-        "throttled math");
+    kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
+    kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
 
     const auto& a_shape = in.a.logical_shape();
     const auto& b_shape = in.b.logical_shape();
@@ -66,11 +62,26 @@ void ReduceAffineTransformsOperation::validate_on_program_cache_miss(
         a_shape[0] == attrs.batch_heads * attrs.groups_per_head && a_shape[1] == attrs.key_dim &&
             b_shape[2] == attrs.value_dim,
         "reduce_affine_transforms: input shapes must match operation attributes");
+
+    constexpr uint32_t max_coordinate_table_workers = 128;
+    const auto grid = in.a.device()->compute_with_storage_grid_size();
+    const uint32_t worker_limit = std::min<uint32_t>(grid.x * grid.y, max_coordinate_table_workers);
+    const uint32_t group_workers = attrs.batch_heads * attrs.groups_per_head;
+    TT_FATAL(
+        group_workers <= worker_limit,
+        "reduce_affine_transforms: supports at most {} group workers on this device, got {}",
+        worker_limit,
+        group_workers);
 }
 ReduceAffineTransformsOperation::spec_return_value_t ReduceAffineTransformsOperation::compute_output_specs(
     const operation_attributes_t& a, const tensor_args_t&) {
     const auto layout = [&](const Shape& shape) {
-        return TensorSpec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), a.output_mem_config));
+        return tt::tt_metal::TensorSpec(
+            shape,
+            tt::tt_metal::TensorLayout(
+                tt::tt_metal::DataType::FLOAT32,
+                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                a.output_mem_config));
     };
     return {
         layout(Shape({a.batch_heads, a.key_dim, a.key_dim})), layout(Shape({a.batch_heads, a.key_dim, a.value_dim}))};
@@ -80,12 +91,14 @@ ReduceAffineTransformsOperation::tensor_return_value_t ReduceAffineTransformsOpe
     auto specs = compute_output_specs(a, in);
     return {create_device_tensor(specs[0], in.a.device()), create_device_tensor(specs[1], in.a.device())};
 }
-std::pair<Tensor, Tensor> reduce_affine_transforms(
-    const Tensor& a,
-    const Tensor& b,
+std::pair<ttnn::Tensor, ttnn::Tensor> reduce_affine_transforms(
+    const ttnn::Tensor& a,
+    const ttnn::Tensor& b,
     uint32_t groups,
     const tt::tt_metal::MemoryConfig& mem,
-    const DeviceComputeKernelConfig& cfg) {
+    const ttnn::DeviceComputeKernelConfig& cfg) {
+    // Cache-miss validation cannot protect attribute construction on cache hits. Keep these guards here because the
+    // launcher divides by groups and indexes both shapes before dispatching validation.
     TT_FATAL(groups > 0, "reduce_affine_transforms: groups_per_head must be positive");
     const auto& shape = a.logical_shape();
     const auto& b_shape = b.logical_shape();

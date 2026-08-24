@@ -333,32 +333,6 @@ grid_12_9_configs = {
     # use_case="to_out" (fused addcmul). Swept 2026-06-17, matmulshapes_new.md Section 4.
     # (1152, 24576, 768): (3, 24, 3, (1, 3)),  # 704.1 μs — SNG_proj_out xc-merged 1024-tok (sweep rank-1, 2026-06-17)
     # (1024, 24576, 768): (6, 24, 3, (1, 3)),  # 647.2 μs — proj_out spatial-only 1024-tok (sweep rank-1, 2026-06-17)
-}
-
-
-_BH_GALAXY_MIN_DEVICES = 32
-_BH_GALAXY_MAX_CORE_GRID = (11, 10)
-
-
-def get_matmul_core_grid(mesh_device):
-    """Return the compute core grid, clamped to 11x10 on Blackhole Galaxy (power constraint)."""
-    core_grid = mesh_device.compute_with_storage_grid_size()
-    if ttnn.device.is_blackhole() and mesh_device.get_num_devices() >= _BH_GALAXY_MIN_DEVICES:
-        core_grid = ttnn.CoreCoord(
-            min(core_grid.x, _BH_GALAXY_MAX_CORE_GRID[0]),
-            min(core_grid.y, _BH_GALAXY_MAX_CORE_GRID[1]),
-        )
-    return core_grid
-
-
-grid_12_9_configs = {
-    (9472, 5120, 1280): (10, 8, 8, (2, 1)),
-    (2368, 5120, 1280): (10, 8, 6, (2, 1)),
-    (128, 5120, 1280): (1, 16, 8, (1, 2)),
-    (9472, 5120, 3456): (9, 5, 12, (1, 2)),
-    (2368, 5120, 3456): (7, 5, 12, (1, 2)),
-    (9472, 5120, 3840): (7, 5, 16, (1, 2)),
-    (2368, 5120, 3840): (7, 5, 16, (1, 2)),
     (1216, 4096, 32): (8, 8, 1, (4, 1)),
     (1216, 4096, 3072): (4, 8, 12, (1, 4)),
     (1216, 4096, 1024): (4, 8, 4, (1, 4)),
@@ -376,7 +350,26 @@ grid_12_9_configs = {
     (32, 2048, 1536): (1, 4, 16, (1, 4)),
     (32, 2048, 512): (1, 8, 2, (1, 2)),
     (32, 2048, 2048): (1, 4, 12, (1, 4)),
+    # H3
+    (3424, 5376, 5376): (4, 7, 14, (2, 2)),  # qkv
+    (3424, 7168, 1344): (9, 8, 5, (3, 1)),  # to_out
+    (3424, 5376, 7168): (6, 7, 12, (2, 2)),  # ff1
 }
+
+
+_BH_GALAXY_MIN_DEVICES = 32
+_BH_GALAXY_MAX_CORE_GRID = (11, 10)
+
+
+def get_matmul_core_grid(mesh_device):
+    """Return the compute core grid, clamped to 11x10 on Blackhole Galaxy (power constraint)."""
+    core_grid = mesh_device.compute_with_storage_grid_size()
+    if ttnn.device.is_blackhole() and mesh_device.get_num_devices() >= _BH_GALAXY_MIN_DEVICES:
+        core_grid = ttnn.CoreCoord(
+            min(core_grid.x, _BH_GALAXY_MAX_CORE_GRID[0]),
+            min(core_grid.y, _BH_GALAXY_MAX_CORE_GRID[1]),
+        )
+    return core_grid
 
 
 def _compute_heuristic_blocking(M: int, K: int, N: int, grid_x: int, grid_y: int, tp_factor: int = -1):

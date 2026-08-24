@@ -332,6 +332,29 @@ inline __attribute__((always_inline)) uint64_t noc_local_xy() {
     return NOC_XY_COORD(my_x, my_y);
 }
 
+// snoop asks the destination NIU to raise a cache snoop on receive. flush, per quasar noc spec,
+// prevents the next packet from committing until all previous packets have committed -- so tagging
+// just the final transfer guarantees the whole payload is committed before any later same-VC packet
+// to that destination.
+//
+// Persistent command-buffer state, not a per-transaction argument: set the tags, issue the transfer
+// that should carry them, then call again with both false. Left set, they tag every subsequent packet
+// on this buffer.
+//
+// Writes the whole register, so a call overwrites the other caller's bit as well as its own.
+template <uint32_t cmd_buf>
+inline __attribute__((always_inline)) void noc_set_packet_tags(bool snoop, bool flush) {
+    static_assert(
+        cmd_buf == OVERLAY_WR_CMD_BUF || cmd_buf == OVERLAY_RD_CMD_BUF,
+        "packet tags are only defined for the full command buffers (0/1)");
+    TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tags;
+    tags.val = 0;
+    tags.f.snoop_bit = snoop;
+    tags.f.flush_bit = flush;
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PACKET_TAGS_REG_OFFSET / 8, tags.val);
+}
+
 inline __attribute__((always_inline)) void init_wr_cmd_buf(uint64_t my_xy) {
     __builtin_riscv_ttrocc_cmdbuf_reset(OVERLAY_WR_CMD_BUF);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(

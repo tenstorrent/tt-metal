@@ -108,6 +108,7 @@
 #include "lltt.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
+#include "sfpu/experimental/ckernel_sfpu_set_dst_write_addr_offset.h"
 
 // SFPLOADMACRO acceleration of the UNFUSED merge / rebuild bodies — see the
 // "SFPLOADMACRO acceleration for the UNFUSED merge / rebuild" section below
@@ -642,14 +643,10 @@ inline void _topk_xl_init_()
 // caller can fold a trailing INCRWC into the last store. See "Address-mod
 // recipe" at the top of the file.
 
-// Rebase the Dst write pointer for subsequent SFPSTOREs. Used by the
-// top-level functions to switch between the even and odd columns of the
-// two-tile DST region (offsets +0 and +2 from the tile base).
-inline void set_dst_write_addr_offset(std::uint32_t addr)
-{
-    std::uint32_t dst_index = addr + get_dest_buffer_base();
-    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index);
-}
+// set_dst_write_addr_offset (defined in ckernel_sfpu_set_dst_write_addr_offset.h,
+// shared with deepseek_top32_rm) rebases the Dst write pointer for subsequent
+// SFPSTOREs; here it switches between the even and odd columns of the two-tile
+// DST region (offsets +0 and +2 from the tile base).
 
 // Load 16 rows × 2 strips into LREG0..LREG7 (fused path).
 //   group 1: LREG0..3 at base+{0,4,8,12}
@@ -1765,6 +1762,10 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
     // to the bottom of each column). The length-64 build lives in the K >= 1024
     // block, so a K=512 instantiation would return before it runs.
     static_assert(!early_exit_K64 || K >= 1024, "early_exit_K64 requires K >= 1024: the length-64 build phase lives in the K >= 1024 block");
+    // The cross-column phases do not converge at row_scale_factor = 4: they leave the
+    // length-64 runs unmerged, so a K=2048 full sort here comes back with each column
+    // sorted but the columns out of order with respect to each other.
+    static_assert(early_exit_K64 || K != 2048, "K = 2048 has no generic full sort: call _topk_xl_local_sort_, which routes it to the K=2048 fast path");
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     bool dir                            = ascending;
     const std::uint32_t tile_offset     = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
