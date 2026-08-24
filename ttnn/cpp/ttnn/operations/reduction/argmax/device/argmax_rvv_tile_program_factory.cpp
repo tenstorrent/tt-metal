@@ -22,7 +22,7 @@ namespace ttnn::prim {
 using namespace tt::tt_metal;
 
 ProgramDescriptor ArgMaxRvvTileProgramFactory::create_descriptor(
-    const ArgmaxParams& /*operation_attributes*/, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value) {
+    const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input.mesh_tensor();
     const auto& output = tensor_return_value.mesh_tensor();
     const bool has_maxval = tensor_args.optional_maxval_tensor.has_value();
@@ -52,7 +52,18 @@ ProgramDescriptor ArgMaxRvvTileProgramFactory::create_descriptor(
     const uint32_t in_cb_pages = 2 * chunk_pages;
 
     ProgramDescriptor desc;
+    // This single-core factory currently runs on core (0,0) only. Honoring an
+    // arbitrary sub_core_grids placement is a documented follow-up; until then
+    // a grid that excludes (0,0) must fail loudly rather than be silently
+    // ignored (the op would run outside the caller's core partition).
     const CoreCoord core{0, 0};
+    if (operation_attributes.sub_core_grids.has_value()) {
+        TT_FATAL(
+            operation_attributes.sub_core_grids->contains(core),
+            "argmax use_rvv=true currently runs on core (0,0) only, but the supplied sub_core_grids {} excludes it. "
+            "Pass a grid containing (0,0) or omit sub_core_grids.",
+            operation_attributes.sub_core_grids.value());
+    }
     const CoreRangeSet all_cores(CoreRange(core, core));
 
     constexpr auto cb_in = tt::CBIndex::c_0;         // input tiles (ring)
@@ -134,8 +145,14 @@ ProgramDescriptor ArgMaxRvvTileProgramFactory::create_descriptor(
     if (has_maxval) {
         TensorAccessorArgs(tensor_args.optional_maxval_tensor->mesh_tensor()).append_to(reader_ct_args);
     } else {
-        // Placeholder so the kernel's third accessor always has args to parse;
-        // it is never used when has_maxval == false.
+        // Placeholder — contract with reader_argmax_rvv_tile.cpp: the kernel
+        // unconditionally parses exactly THREE TensorAccessorArgs blocks at
+        // compile time (src, dst, val), because the constexpr offset chain
+        // (next_compile_time_args_offset) cannot be made conditional. When no
+        // maxval tensor is supplied, this copy of the output's accessor args
+        // fills the third slot so the arg counts line up; the has_maxval
+        // compile-time arg (== false) guards every use of the resulting
+        // accessor, so it is never dereferenced. Keep the two sides in sync.
         TensorAccessorArgs(output).append_to(reader_ct_args);
     }
 

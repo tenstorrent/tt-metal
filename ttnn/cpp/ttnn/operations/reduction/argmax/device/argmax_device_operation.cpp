@@ -4,6 +4,7 @@
 #include "argmax_device_operation.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/device_operation.hpp"
 #include "argmax_utils.hpp"
 
@@ -235,6 +236,13 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
     if (optional_maxval.has_value()) {
         TT_FATAL(args.use_rvv, "argmax max-value output is only produced by the use_rvv=true path");
         const auto& maxval = optional_maxval.value();
+        TT_FATAL(is_device_tensor(maxval), "argmax max-value tensor must be allocated on device");
+        // Device affinity: the program is launched from the input tensor, so a
+        // maxval buffer on a different device/mesh would have its (foreign)
+        // address bound into this device's kernel.
+        TT_FATAL(
+            maxval.device() == input_tensor_a.device(),
+            "argmax max-value tensor must be on the same device/mesh as the input tensor");
         TT_FATAL(
             maxval.dtype() == DataType::BFLOAT16, "argmax max-value tensor must be BFLOAT16, got {}", maxval.dtype());
         TT_FATAL(

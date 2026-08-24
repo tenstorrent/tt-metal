@@ -197,6 +197,22 @@ Tensor argmax(
         }
     }
 
+    // use_rvv / maxval contract checks must precede the zero-volume and rank-0
+    // early returns below: a scalar or empty-tensor call with use_rvv=True (or
+    // with a supplied maxval_tensor) must fail loudly rather than silently
+    // no-op through the host-side fallback, which would bypass the RVV
+    // eligibility checks and leave a supplied maxval_tensor untouched (stale).
+    TT_FATAL(
+        !optional_maxval_tensor.has_value() || use_rvv,
+        "argmax: the max-value output tensor (maxval_tensor) is only supported with use_rvv=True");
+    if (use_rvv) {
+        TT_FATAL(
+            rank > 0 && input_tensor.logical_volume() > 0,
+            "argmax: use_rvv=True supports only non-empty tensors of rank >= 1 (got rank {}, logical volume {})",
+            rank,
+            input_tensor.logical_volume());
+    }
+
     if (input_tensor.logical_volume() == 0) [[unlikely]] {
         return zero_volume_argmax(input_tensor, dim, keepdim, output_memory_config, optional_output_tensor);
     }
@@ -240,6 +256,17 @@ Tensor argmax(
     // untilize hop — and optionally returns the max values alongside the
     // indices. Eligibility is validated by the device op.
     if (use_rvv) {
+        // The reader kernel derives its output paging from the preallocated
+        // tensor, so a wrong logical shape means unwritten results or writes
+        // past the tensor's page count — reject it up front.
+        if (optional_output_tensor.has_value()) {
+            const auto expected_shape = ttnn::Shape(ttnn::prim::get_output_shape(input_tensor, dim, keepdim));
+            TT_FATAL(
+                optional_output_tensor->logical_shape() == expected_shape,
+                "argmax: preallocated output tensor has shape {}, expected the reduction output shape {}",
+                optional_output_tensor->logical_shape(),
+                expected_shape);
+        }
         return prim::argmax(
             input_tensor,
             tt::tt_metal::DataType::UINT32,
@@ -251,8 +278,6 @@ Tensor argmax(
             /*use_rvv=*/true,
             std::move(optional_maxval_tensor));
     }
-    TT_FATAL(
-        !optional_maxval_tensor.has_value(), "argmax: the max-value output tensor is only supported with use_rvv=true");
 
     // Register-based NC path for reductions along any non-HW dimension.
     // Uses DST accumulation (similar to fast_reduce_nc). Supports sub_core_grids.
