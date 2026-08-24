@@ -238,7 +238,9 @@ that was **raised with the invoker before construction and decided by them**:
    and the port preserved it per the scope discipline. The sibling
    `pad_tile_multicore_program_factory.cpp` has the correct case
    (`case DataType::FLOAT32: packed_pad_value = std::bit_cast<uint32_t>(pad_value);`), so the fix is
-   to copy that one line across. No test catches it because no test reaches this factory (item 5).
+   to copy that one line across. **Filed as #54223.** No test caught it because no test reached this
+   factory; the regression test added under item 5 now does, with the FLOAT32 non-zero-pad case
+   `xfail`ed against that issue.
 2. **`reader_pad_dims_rm_interleaved.cpp:52` hardcodes `pad_value_const_buffer_nbytes = 64`** with a
    *"fails on BH when > 64"* comment (issue #21978), while the host computed and passed the real
    value at RTA slot 14. The hardcode is preserved verbatim; the arg it shadowed simply gets no name
@@ -261,9 +263,14 @@ that was **raised with the invoker before construction and decided by them**:
    post-port variants. The port verified this factory with an ad-hoc script instead — TILE input
    with a real tile-dim change and `use_multicore=False`, across bfloat16 / float32 / uint32, plus
    three program-cache-hit iterations; everything passed except the pre-existing FLOAT32 pad-value
-   bug in item 1. **A test that pads a TILE tensor across a tile boundary with `use_multicore=False`
-   (e.g. `[1,1,32,32]` → `[1,1,64,64]`) would close the gap**, and would have caught item 1 years
-   ago.
+   bug in item 1.
+   **Closed:** `test_pad_tile_single_core` in
+   `tests/ttnn/unit_tests/operations/data_movement/test_pad.py` now pads a TILE tensor across a tile
+   boundary with `use_multicore=False` over six dtypes, two memory configs and three shapes, and
+   repeats each case three times so the second and third dispatches land on a program-cache hit.
+   60 passed / 6 skipped / 6 xfailed; the JIT cache confirms it reaches the factory (variants of
+   `writer_unary_pad_dims_interleaved` went from zero to ten). Added in response to the Copilot
+   review on the port PR.
 6. **The op-owned-tensor path is exercised only by the single-core RM factory here.** Its sibling
    (`PadRmReaderWriterMultiCoreProgramFactory`) carries the same allocation but is unreachable, so
    the two factories' op-owned handling has one live test subject between them.
