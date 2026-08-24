@@ -62,6 +62,8 @@ OPS = {
     "max": ("BN_MAX", lambda a, b: torch.maximum(a, b), True, 0.01),
     # ((a + b) - a) * b / a  ==  b*b/a
     "chain": ("BN_CHAIN", lambda a, b: b * b / a, False, 0.05),
+    # SwiGLU's core. silu is x*sigmoid(x), one SFPU op on device.
+    "silu_mul": ("BN_SILU_MUL", lambda a, b: torch.nn.functional.silu(a) * b, False, 0.02),
 }
 
 

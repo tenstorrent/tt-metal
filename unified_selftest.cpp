@@ -227,6 +227,8 @@ inline void exp_tile(uint32_t o) {
 }
 inline void relu_tile_init() {}
 inline void relu_tile(uint32_t o) { T("    relu_tile(dst" + n(o) + ")"); }
+inline void silu_tile_init() {}
+inline void silu_tile(uint32_t o) { T("    silu_tile(dst" + n(o) + ")"); }
 inline void recip_tile_init() {}
 inline void recip_tile(uint32_t o) { T("    recip_tile(dst" + n(o) + ")"); }
 inline void sqrt_tile_init() {}

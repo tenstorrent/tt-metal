@@ -515,6 +515,8 @@ TileSource<S> copy(const ComputeBlock<S>& b);
 template <typename S>
 auto relu(const ComputeBlock<S>& b);
 template <typename S>
+auto silu(const ComputeBlock<S>& b);
+template <typename S>
 auto exp_(const ComputeBlock<S>& b);
 template <typename S>
 auto recip(const ComputeBlock<S>& b);

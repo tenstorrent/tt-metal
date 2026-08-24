@@ -454,6 +454,11 @@ auto relu(const ComputeBlock<S>& b) {
 }
 
 template <typename S>
+auto silu(const ComputeBlock<S>& b) {
+    return expr::Un<SiluOp, TileSource<S>>{{}, as_node(b)};
+}
+
+template <typename S>
 auto exp_(const ComputeBlock<S>& b) {
     return expr::Un<ExpOp, TileSource<S>>{{}, as_node(b)};
 }
