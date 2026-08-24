@@ -214,6 +214,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
     std::vector<uint32_t> reader_compile_time_args;
     std::vector<uint32_t> reader_common_runtime_args;
     if (row_major) {
+        reader_compile_time_args.reserve(9);
         reader_compile_time_args.push_back(ht);
         reader_compile_time_args.push_back(H > TILE_HEIGHT ? TILE_HEIGHT : H % TILE_HEIGHT);
         reader_compile_time_args.push_back(H % TILE_HEIGHT == 0 ? TILE_HEIGHT : H % TILE_HEIGHT);
@@ -268,6 +269,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
 
     std::vector<uint32_t> compute_kernel_args = {};
     if (row_major) {
+        compute_kernel_args.reserve(3);
         compute_kernel_args.push_back(ht);
         compute_kernel_args.push_back(wt);
         compute_kernel_args.push_back(ht * wt);

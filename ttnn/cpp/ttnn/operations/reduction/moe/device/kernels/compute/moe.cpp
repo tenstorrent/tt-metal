@@ -18,6 +18,7 @@
 #include "api/debug/dprint.h"
 #include "ckernel_sfpu.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 using namespace ckernel;
 
@@ -31,7 +32,7 @@ void sub_exp_block_bcast_cols_inplace() {
     DataflowBuffer in0_dfb_obj(in0_dfb);
     DataflowBuffer in1_dfb_obj(in1_dfb);
 
-    sub_bcast_cols_init_short(in0_dfb, in1_dfb);
+    sub_bcast_cols_init(in0_dfb, in1_dfb);
     exp_tile_init<true>();
     in0_dfb_obj.wait_front(rows * cols);
     in1_dfb_obj.wait_front(rows);
@@ -71,10 +72,11 @@ void add_block_bcast_rows_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t r
 
     uint32_t num_tiles = rows * cols;
     if (first_call) {
-        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(in0_dfb, in1_dfb, in0_dfb);
+        compute_kernel_hw_startup(in0_dfb, in1_dfb, in0_dfb);
+        bcast_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(in0_dfb, in1_dfb);
     } else {
         reconfig_data_format(in0_dfb, in1_dfb);
-        add_bcast_rows_init_short(in0_dfb, in1_dfb);
+        add_bcast_rows_init(in0_dfb, in1_dfb);
     }
     in0_dfb_obj.wait_front(num_tiles);
     in1_dfb_obj.wait_front(cols);
@@ -105,7 +107,7 @@ void mul_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     DataflowBuffer in1_dfb_obj(in1_dfb);
 
     reconfig_data_format(in0_dfb, in1_dfb);
-    mul_tiles_init(in0_dfb, in1_dfb);
+    mul_init(in0_dfb, in1_dfb);
     in0_dfb_obj.wait_front(num_tiles);
     in1_dfb_obj.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -134,7 +136,7 @@ void mul_block_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t r
     DataflowBuffer in1_dfb_obj(in1_dfb);
 
     uint32_t num_tiles = rows * cols;
-    mul_bcast_cols_init_short(in0_dfb, in1_dfb);
+    mul_bcast_cols_init(in0_dfb, in1_dfb);
     in0_dfb_obj.wait_front(num_tiles);
     in1_dfb_obj.wait_front(rows);
     for (uint32_t i = 0; i < rows; ++i) {
@@ -285,7 +287,7 @@ void mask_and_topk() {
             // Before transposing, add expert_mask to the two input tiles and store the result in masked_input_dfb.
             tile_regs_acquire();
             reconfig_data_format(input_dfb_index, expert_mask_dfb_index);
-            add_bcast_rows_init_short(input_dfb_index, expert_mask_dfb_index);
+            add_bcast_rows_init(input_dfb_index, expert_mask_dfb_index);
             add_tiles_bcast_rows(input_dfb_index, expert_mask_dfb_index, 0, wt, 0);
             add_tiles_bcast_rows(input_dfb_index, expert_mask_dfb_index, 1, wt + 1, 1);
             masked_input_dfb.reserve_back(2);
@@ -436,31 +438,16 @@ void mask_and_topk() {
 }
 
 void kernel_main() {
-    constexpr uint32_t input_dfb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t topk_mask_dfb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t expert_mask_dfb_index = get_compile_time_arg_val(2);
-    constexpr uint32_t scale_dfb_index = get_compile_time_arg_val(3);
-    constexpr uint32_t index_dfb_index = get_compile_time_arg_val(4);
-    constexpr uint32_t input_transposed_dfb_index = get_compile_time_arg_val(5);
-    constexpr uint32_t index_transposed_dfb_index = get_compile_time_arg_val(6);
-    constexpr uint32_t values_dfb_index = get_compile_time_arg_val(7);
-    constexpr uint32_t output_ind_dfb_index = get_compile_time_arg_val(8);
-    constexpr uint32_t out_dfb_index = get_compile_time_arg_val(9);
-
-    constexpr uint32_t Ht = get_compile_time_arg_val(10);
-    constexpr uint32_t Wt = get_compile_time_arg_val(11);
-    constexpr uint32_t K = get_compile_time_arg_val(12);
-    constexpr uint32_t logk = get_compile_time_arg_val(13);
-    constexpr uint32_t logWt = get_compile_time_arg_val(14);
-
-    constexpr uint32_t dfb_cur_max = get_compile_time_arg_val(15);
-    constexpr uint32_t dfb_cur_sum = get_compile_time_arg_val(16);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(17);
-    constexpr uint32_t masked_input_dfb_index = get_compile_time_arg_val(18);
+    constexpr auto Ht = get_arg(args::Ht);
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto K = get_arg(args::K);
+    constexpr auto logk = get_arg(args::logk);
+    constexpr auto logWt = get_arg(args::logWt);
+    constexpr auto tile_width = get_arg(args::tile_width);
 
     constexpr uint32_t Kt = K % tile_width == 0 ? K / tile_width : K / tile_width + 1;
 
-    compute_kernel_hw_startup(input_dfb_index, input_transposed_dfb_index);
+    compute_kernel_hw_startup(dfb::input, dfb::input_transposed);
 
     // Apply expert_mask to each input tile pair and run top-k on the masked values.
     mask_and_topk<
@@ -469,31 +456,31 @@ void kernel_main() {
         K,
         logWt,
         logk,
-        input_dfb_index,
-        expert_mask_dfb_index,
-        masked_input_dfb_index,
-        index_dfb_index,
-        input_transposed_dfb_index,
-        index_transposed_dfb_index,
-        values_dfb_index,
-        output_ind_dfb_index,
+        dfb::input,
+        dfb::expert_mask,
+        dfb::masked_input,
+        dfb::index,
+        dfb::input_transposed,
+        dfb::index_transposed,
+        dfb::values,
+        dfb::output_ind,
         tile_width,
         true>();
 
     // mask out all experts except the top-k
-    add_block_bcast_rows_inplace(values_dfb_index, topk_mask_dfb_index, Ht, Kt, false);
-    eqz_block_inplace(output_ind_dfb_index, Ht * Kt);
+    add_block_bcast_rows_inplace(dfb::values, dfb::topk_mask, Ht, Kt, false);
+    eqz_block_inplace(dfb::output_ind, Ht * Kt);
 
     // softmax
-    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, values_dfb_index, scale_dfb_index, dfb_cur_max>(Ht, Kt);
-    sub_exp_block_bcast_cols_inplace<values_dfb_index, dfb_cur_max, Ht, Kt>();
-    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_dfb_index, scale_dfb_index, dfb_cur_sum>(Ht, Kt);
-    recip_block_inplace(dfb_cur_sum, Ht);
-    mul_block_bcast_cols_inplace(values_dfb_index, dfb_cur_sum, Ht, Kt);
+    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::values, dfb::scale, dfb::cur_max>(Ht, Kt);
+    sub_exp_block_bcast_cols_inplace<dfb::values, dfb::cur_max, Ht, Kt>();
+    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::values, dfb::scale, dfb::cur_sum>(Ht, Kt);
+    recip_block_inplace(dfb::cur_sum, Ht);
+    mul_block_bcast_cols_inplace(dfb::values, dfb::cur_sum, Ht, Kt);
 
     // select 0th expert
-    mul_block_inplace(values_dfb_index, output_ind_dfb_index, Ht * Kt);
+    mul_block_inplace(dfb::values, dfb::output_ind, Ht * Kt);
 
     // final sum
-    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_dfb_index, scale_dfb_index, out_dfb_index>(Ht, Kt);
+    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::values, dfb::scale, dfb::out>(Ht, Kt);
 }

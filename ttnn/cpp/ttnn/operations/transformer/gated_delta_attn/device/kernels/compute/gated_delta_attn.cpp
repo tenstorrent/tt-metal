@@ -124,7 +124,7 @@ __attribute__((noinline)) static void fwd_sub_row(
         CircularBuffer(cb_nm_P_a).wait_front(Xt);
         CircularBuffer(cb_nm_P_b).wait_front(Xt);
         CircularBuffer(cb_nm_R_a).reserve_back(Xt);
-        sub_tiles_init(cb_nm_P_a, cb_nm_P_b);
+        sub_init(cb_nm_P_a, cb_nm_P_b);
         for (uint32_t xt = 0; xt < Xt; xt++) {
             tile_regs_acquire();
             sub_tiles(cb_nm_P_a, cb_nm_P_b, xt, xt, 0);
@@ -303,7 +303,7 @@ void kernel_main() {
         CircularBuffer(cb_v_cor).wait_front(out_tiles);
         CircularBuffer(cb_v_prime).wait_front(out_tiles);
         CircularBuffer(cb_v_new).reserve_back(out_tiles);
-        sub_tiles_init(cb_v_cor, cb_v_prime);
+        sub_init(cb_v_cor, cb_v_prime);
         for (uint32_t t = 0; t < out_tiles; t++) {
             tile_regs_acquire();
             sub_tiles(cb_v_cor, cb_v_prime, t, t, 0);
@@ -363,7 +363,7 @@ void kernel_main() {
         CircularBuffer(cb_o_inter).wait_front(out_tiles);
         CircularBuffer(cb_intra_v).wait_front(out_tiles);
         CircularBuffer(cb_out).reserve_back(out_tiles);
-        add_tiles_init(cb_o_inter, cb_intra_v);
+        add_init(cb_o_inter, cb_intra_v);
         for (uint32_t t = 0; t < out_tiles; t++) {
             tile_regs_acquire();
             add_tiles(cb_o_inter, cb_intra_v, t, t, 0);
@@ -402,7 +402,7 @@ void kernel_main() {
         // ==================================================================
         CircularBuffer(cb_s_upd).wait_front(state_tiles);
         CircularBuffer(cb_S_tmp).reserve_back(state_tiles);
-        mul_tiles_bcast_scalar_init_short(cb_S, cb_dl_exp);
+        mul_bcast_scalar_init(cb_S, cb_dl_exp);
         for (uint32_t t = 0; t < state_tiles; t++) {
             tile_regs_acquire();
             mul_tiles_bcast_scalar(cb_S, cb_dl_exp, t, 0, 0);
@@ -422,7 +422,7 @@ void kernel_main() {
         const bool is_last_chunk = (c == num_chunks - 1);
         uint32_t dst_cb = is_last_chunk ? cb_final_state : cb_S;
         CircularBuffer(dst_cb).reserve_back(state_tiles);
-        add_tiles_init(cb_S_tmp, cb_s_upd);
+        add_init(cb_S_tmp, cb_s_upd);
         for (uint32_t t = 0; t < state_tiles; t++) {
             tile_regs_acquire();
             add_tiles(cb_S_tmp, cb_s_upd, t, t, 0);

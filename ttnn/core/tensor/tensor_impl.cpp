@@ -9,8 +9,8 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include "tt-metalium/experimental/tensor/host_tensor.hpp"
-#include "tt-metalium/experimental/tensor/tensor_apis.hpp"
+#include "tt-metalium/tensor/host_tensor.hpp"
+#include "tt-metalium/tensor/tensor_apis.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
@@ -54,6 +54,7 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& dtype) 
         case tt::tt_metal::DataType::UINT16: os << "uint16"; break;
         case tt::tt_metal::DataType::UINT32: os << "uint32"; break;
         case tt::tt_metal::DataType::INT32: os << "int32"; break;
+        case tt::tt_metal::DataType::INT8: os << "int8"; break;
         case tt::tt_metal::DataType::FP8_E4M3: os << "fp8_e4m3"; break;
         default: throw std::invalid_argument("Unknown data type");
     }
@@ -118,6 +119,11 @@ inline void print_datum(std::ostream& ss, bfloat16 datum, bool use_scientific) {
 template <>
 inline void print_datum(std::ostream& ss, uint8_t datum, bool use_scientific) {
     print_datum<uint32_t>(ss, datum, use_scientific);
+}
+
+template <>
+inline void print_datum(std::ostream& ss, int8_t datum, bool use_scientific) {
+    print_datum<int32_t>(ss, datum, use_scientific);
 }
 
 // Helper function to determine if scientific notation should be used
@@ -313,19 +319,22 @@ std::string to_string_impl(const ttnn::Tensor& tensor) {
 
     const ttnn::Tensor row_major_tensor = get_row_major_tensor(cpu_tensor);
     const auto strides = row_major_tensor.tensor_spec().compute_strides();
-    const auto coords = storage.get_coords();
-    auto coords_it = coords.begin();
-    const std::vector<tt::tt_metal::HostBuffer> buffers = get_host_buffers(row_major_tensor.host_storage());
+    const auto& dist_buffer = row_major_tensor.host_storage().buffer();
     std::stringstream ss;
-    for (size_t i = 0; i < buffers.size(); i++) {
-        const distributed::MeshCoordinate coord = *coords_it++;
-        if (mesh_device.is_local(coord)) {
-            ss << "device_id: " << mesh_device.get_device(coord)->id() << ", " << coord << std::endl;
-            detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
+    bool first = true;
+    // `shard_coords()` records the requested coordinates, but only shards local to this host are materialized, so
+    // each buffer must be retrieved by its coordinate rather than inferred from position.
+    for (const auto& coord : dist_buffer.shard_coords()) {
+        const std::optional<tt::tt_metal::HostBuffer> shard = dist_buffer.get_shard(coord);
+        if (!shard.has_value() || !mesh_device.is_local(coord)) {
+            continue;
         }
-        if (i + 1 != buffers.size()) {
+        if (!first) {
             ss << std::endl;
         }
+        first = false;
+        ss << "device_id: " << mesh_device.get_device(coord)->id() << ", " << coord << std::endl;
+        detail::to_string(ss, shard->view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
     }
     return ss.str();
 }

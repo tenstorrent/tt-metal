@@ -31,6 +31,7 @@ constexpr auto BFLOAT8_B = "Unsupported type: BFLOAT8_B";
 constexpr auto BFLOAT4_B = "Unsupported type: BFLOAT4_B";
 constexpr auto UINT8 = "Unsupported type: UINT8";
 constexpr auto UINT16 = "Unsupported type: UINT16";
+constexpr auto INT8 = "Unsupported type: INT8";
 constexpr auto INVALID = "Unsupported type: INVALID";
 constexpr auto UNKNOWN = "Unsupported type: unknown";
 constexpr auto COMPLEX = "Unsupported type: Complex";
@@ -53,6 +54,7 @@ constexpr bool is_supported_datatype(tt::tt_metal::DataType dt) {
             NB_THROW(nb::exception_type::type_error, UnsupportedMessages::BFLOAT4_B);
         case tt::tt_metal::DataType::UINT8: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT8);
         case tt::tt_metal::DataType::UINT16: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UINT16);
+        case tt::tt_metal::DataType::INT8: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::INT8);
         case tt::tt_metal::DataType::INVALID: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::INVALID);
         default: NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UNKNOWN);
     }
@@ -489,6 +491,7 @@ ttnn::Tensor make_metal_tensor(
     nb::object shape_obj = numpy_data_obj.attr("shape");
     nb::tuple shape_tuple = nb::cast<nb::tuple>(shape_obj);
     std::vector<size_t> shape_from_python;
+    shape_from_python.reserve(rank);
     for (size_t i = 0; i < rank; ++i) {
         shape_from_python.push_back(nb::cast<size_t>(shape_tuple[i]));
     }

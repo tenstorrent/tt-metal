@@ -548,6 +548,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         fuse_op,                          // fused op
         static_cast<uint32_t>(has_metadata),
         meta_cb_index,
+        num_links,
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_reader_forward_kernel.compile_time_args.push_back(op_config.get_page_size());
@@ -591,6 +592,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         unicast_backward_args[1],                 // unicast route arg1 (dst_chip_id or distance_in_hops)
         static_cast<uint32_t>(has_metadata),
         meta_cb_index,
+        num_links,
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_writer_forward_kernel.compile_time_args.push_back(op_config.get_page_size());
@@ -627,6 +629,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         fuse_op,                          // fused op
         static_cast<uint32_t>(has_metadata),
         meta_cb_index,
+        num_links,
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_reader_backward_kernel.compile_time_args.push_back(op_config.get_page_size());
@@ -670,6 +673,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         unicast_forward_args[1],                   // unicast route arg1 (dst_chip_id or distance_in_hops)
         static_cast<uint32_t>(has_metadata),
         meta_cb_index,
+        num_links,
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_writer_backward_kernel.compile_time_args.push_back(op_config.get_page_size());
@@ -727,14 +731,12 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         const auto build_tensor_descriptor_args = [&]() {
             std::vector<uint32_t> tensor_descriptor_args;
             for (uint32_t i = 0; i < num_inputs; i++) {
-                const auto input_tensor_num_pages = input_tensor[i].buffer()->num_pages();
                 const auto input_tensor_shape = input_tensor[i].padded_shape();
                 const auto output_tensor_shape = output_tensor[i].padded_shape();
                 const uint32_t num_heads = input_tensor_shape[1];
                 // single_batch_head_num_pages is always pages-per-(batch,head); independent of slicing.
                 const uint32_t full_batch_head_size = input_tensor_shape[0] * num_heads;
 
-                uint32_t single_batch_head_num_pages = input_tensor_num_pages / full_batch_head_size;
                 const uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
                 const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_HEIGHT;
                 const uint32_t output_tensor_Wt = output_tensor_shape[3] / tt::constants::TILE_WIDTH;
@@ -742,10 +744,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                 TT_ASSERT(!(input_tensor_shape[3] % tt::constants::TILE_WIDTH));
                 TT_ASSERT(!(output_tensor_shape[3] % tt::constants::TILE_WIDTH));
 
-                const uint32_t base_pages_per_worker = single_batch_head_num_pages / num_links;
-                const uint32_t remainder = single_batch_head_num_pages % num_links;
-                const uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
-                const uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
+                // TensorAccessor page IDs address the logical padded tensor volume. For ND-sharded buffers,
+                // buffer()->num_pages() can additionally include physical padding in the final shard; treating
+                // those pages as tensor data would overrun a selected batch/head slice and can write past the
+                // corresponding logical output band.
+                const uint32_t single_batch_head_num_pages = input_tensor_Ht * input_tensor_Wt;
 
                 // Single-slot gather: read only slot `input_batch_slice_idx`'s `num_heads` blocks (from
                 // `input_batch_base`); the writer emits them to output slot 0. A batch-1 output suffices,
@@ -763,13 +766,15 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                         *input_batch_slice_idx, num_heads, input_tensor_Ht, input_tensor_Wt);
                 }
 
-                tensor_descriptor_args.push_back(input_tensor_Wt);      // 0 == input_tensor_Wt
-                tensor_descriptor_args.push_back(input_tensor_Ht);      // 1 == input_tensor_Ht
-                tensor_descriptor_args.push_back(output_tensor_Wt);     // 2 == output_tensor_Wt
-                tensor_descriptor_args.push_back(output_tensor_Ht);     // 3 == output_tensor_Ht
-                tensor_descriptor_args.push_back(batch_head_size);      // 4 == batch_head_size (bh-loop count)
-                tensor_descriptor_args.push_back(input_tile_id_start);  // 5 == input_tile_id_start
-                tensor_descriptor_args.push_back(input_tile_id_end);    // 6 == input_tile_id_end
+                tensor_descriptor_args.push_back(input_tensor_Wt);   // 0 == input_tensor_Wt
+                tensor_descriptor_args.push_back(input_tensor_Ht);   // 1 == input_tensor_Ht
+                tensor_descriptor_args.push_back(output_tensor_Wt);  // 2 == output_tensor_Wt
+                tensor_descriptor_args.push_back(output_tensor_Ht);  // 3 == output_tensor_Ht
+                tensor_descriptor_args.push_back(batch_head_size);   // 4 == batch_head_size (bh-loop count)
+                // The device derives the actual per-link range from valid_pages. These are retained as
+                // structural placeholders for the descriptor ABI and are overwritten before use.
+                tensor_descriptor_args.push_back(0u);                           // 5 == input_tile_id_start
+                tensor_descriptor_args.push_back(single_batch_head_num_pages);  // 6 == input_tile_id_end
                 tensor_descriptor_args.push_back(
                     input_batch_base);  // 7 == input_batch_base (phase-1 input page offset)
                 // 8 == valid pages per (batch,head) to gather. Default: full input slab (no clamp). When
@@ -781,6 +786,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                     gather_valid_Ht.has_value() ? std::min(*gather_valid_Ht, input_tensor_Ht) * input_tensor_Wt
                                                 : single_batch_head_num_pages;
                 tensor_descriptor_args.push_back(valid_pages_per_batch_head);  // 8 == valid_pages_per_batch_head
+                tensor_descriptor_args.push_back(link);                        // 9 == worker_link
             }
             return tensor_descriptor_args;
         };

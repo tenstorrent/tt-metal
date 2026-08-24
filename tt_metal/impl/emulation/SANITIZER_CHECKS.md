@@ -292,14 +292,27 @@ the actual (row-major / tiled face-aware) pad layout before the test is re-enabl
 **Lives in:** `__emule_asan_check_semaphore` in
 `[emule] include/jit_hw/asan/asan_l1_checks.h`; the reserved range is set by the runner
 (`[metal] emulated_program_runner.cpp`).
-**What it catches:** a kernel doing a raw scalar L1 access into the reserved
-semaphore region (semaphores must go through the semaphore API).
+**What it catches:** a kernel access that strays into the reserved semaphore
+region **without semaphore provenance** — a computed offset, an overrun from an
+adjacent region, or a raw address smuggled through a runtime arg.
 **How it works:** the runner passes the semaphore L1 range
 (`__emule_sem_l1_range_start/end`) to the kernel. It's the **first** test in
 `__emule_local_l1_to_ptr`: if the address is in that range, abort.
+Addresses that provably derive from `get_semaphore()` are exempt by
+provenance: the kernel patch pass's S1/S2 rules (`[emule]
+tt_emule/detail/kernel_patcher.hpp`) and the semaphore API's own local-source
+reads (`noc_semaphore_set_remote` / `_set_multicast*`, reached by
+`Semaphore::relay_unicast`/`relay_multicast`) translate via
+`__emule_sem_l1_to_ptr`, which skips only this check and only inside the
+region — raw access to your own semaphore word is legal on silicon (the mcast
+VALID/INVALID payload read, sdpa_decode's packed-nibble poll) and must not
+false-positive. A sem-derived address that leaves the region falls through to
+the full check chain.
 *Diagnostic:* `Illegal Semaphore Access: Offset 0x… is inside the reserved Semaphore region [start, end)`.
-*Exercised by:* `test_semaphore_write.cpp` (an in-region write death test + an
-outside-region positive control).
+*Exercised by:* `test_semaphore_write.cpp` (an in-region stray-write death test,
+an outside-region positive control, raw-`get_semaphore`-cast and
+`relay_unicast` no-violation controls, and a sem-derived-but-out-of-region
+death test guarding that the exemption stays region-bounded).
 
 ### 7. CB Boundary Violation
 **Lives in:** `__emule_asan_cb_resolve` in

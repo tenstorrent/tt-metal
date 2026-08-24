@@ -105,13 +105,26 @@ def build_mesh_mapper_for_target(target: TensorTarget, device):
     """Reconstruct the runtime mesh_mapper from the declarative config + device."""
     mapper_config = target.mesh_mapper_config
     if isinstance(mapper_config, ReplicateMeshMapper):
-        return ttnn.ReplicateTensorToMesh(device)
-    if isinstance(mapper_config, ShardMeshMapper):
-        return ttnn.ShardTensorToMesh(device, dim=mapper_config.dim)
-    if isinstance(mapper_config, Shard2dMeshMapper):
-        mesh_shape = (device.shape[0], device.shape[1])
-        return ttnn.ShardTensor2dMesh(device, mesh_shape=mesh_shape, dims=mapper_config.dims)
-    raise TypeError(f"Unknown mesh mapper config type: {type(mapper_config)}")
+        placements = [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]
+    elif isinstance(mapper_config, ShardMeshMapper):
+        placements = [ttnn.PlacementShard(mapper_config.dim), ttnn.PlacementReplicate()]
+    elif isinstance(mapper_config, Shard2dMeshMapper):
+        placements = [
+            ttnn.PlacementShard(d) if d is not None else ttnn.PlacementReplicate() for d in mapper_config.dims
+        ]
+    else:
+        raise TypeError(f"Unknown mesh mapper config type: {type(mapper_config)}")
+
+    # Default to the full device mesh at origin; overrides select a SUBMESH region.
+    shape = mapper_config.mesh_shape_override or (device.shape[0], device.shape[1])
+    return ttnn.create_mesh_mapper(
+        device,
+        ttnn.MeshMapperConfig(
+            placements,
+            ttnn.MeshShape(*shape),
+            ttnn.MeshCoordinate(list(mapper_config.mesh_offset_override)),
+        ),
+    )
 
 
 def _create_overlapped_tensor_fused(

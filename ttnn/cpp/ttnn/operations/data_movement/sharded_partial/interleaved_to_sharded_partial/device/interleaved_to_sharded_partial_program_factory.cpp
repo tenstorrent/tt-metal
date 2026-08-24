@@ -431,11 +431,11 @@ ProgramDescriptor InterleavedToShardedPartialProgramFactory::create_descriptor(
     return desc;
 }
 
-void InterleavedToShardedPartialDeviceOperation::override_runtime_arguments(
+void InterleavedToShardedPartialProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
+    const InterleavedToShardedPartialParams& operation_attributes,
     const Tensor& input_tensor,
-    tensor_return_value_t& output,
+    Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     // Cache-hit fast path. Only TILE layout is supported (validate_on_program_cache_miss); the static
     // work-split (shard extents, curr_idx, num_units) is pinned by the hashed shape/shard-spec. The only

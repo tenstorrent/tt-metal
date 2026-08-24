@@ -108,8 +108,7 @@ def should_pad_sampling_logits_to_power_of_2(
 ) -> bool:
     # Enable optional sampling padding for models that regress to single-core TopK. More info at issue #40399
     if sampling_splits < 1:
-        logger.warning(f"Sampling_splits must be >= 1, got {sampling_splits}")
-        return False
+        raise ValueError(f"sampling_splits must be >= 1, got {sampling_splits}")
 
     per_device_vocab = padded_vocab_size // sampling_splits
     return per_device_vocab > 0 and (per_device_vocab & (per_device_vocab - 1)) != 0
@@ -506,10 +505,14 @@ class ModelArgs:
             "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
             "Meta-Llama-3-8B-Instruct": "models/tt_transformers/model_params/Meta-Llama-3-8B",
             "Qwen3.6-27B": "models/tt_transformers/model_params/Qwen3.6-27B",
+            "LFM2.5-VL-1.6B": "models/tt_transformers/model_params/LFM2.5-VL-1.6B",
         }.items()
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
+
+    # Opt-in: False so TP > n_kv_heads stays a hard error unless a subclass implements KV replication.
+    SUPPORTS_KV_REPLICATION = False
 
     def __init__(
         self,
@@ -561,6 +564,19 @@ class ModelArgs:
 
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
+        # Final logit soft-capping (Gemma-2). None => disabled, so no effect on other models.
+        # Attention-score softcapping (HF attn_logit_softcapping=50.0) is intentionally
+        # not stored or applied: ttnn SDPA has no softcap hook, and HF documents that
+        # omitting attn softcap at inference has only minor effect. See final-logit
+        # application in Transformer._apply_final_logit_softcapping.
+        self.final_logit_softcapping = None
+        self.model_type = None
+        # Decode-SDPA tuning. Architecture-specific overrides are applied once in
+        # _set_model_specific_params(); these defaults preserve existing behaviour for
+        # every model (q/k chunk 0 => op auto-selects, forced framework compute config).
+        self.sdpa_decode_q_chunk_size = 0
+        self.sdpa_decode_k_chunk_size = 0
+        self.sdpa_decode_use_default_compute_config = False
         self.use_hf_rope = use_hf_rope
 
         assert not os.getenv(
@@ -690,10 +706,22 @@ class ModelArgs:
                 self.n_heads % self.cluster_shape[1] == 0
             ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
 
-            assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
+            # KV heads normally split one-or-more per device. SUPPORTS_KV_REPLICATION models
+            # instead replicate a head across the devices holding its GQA query group, so they
+            # only need TP to be a whole multiple of n_kv_heads (e.g. 4 KV heads on TP=8 -> each
+            # head shared by a device pair). n_local_kv_heads is then 1, hence the max() below.
+            if self.SUPPORTS_KV_REPLICATION and self.cluster_shape[1] > self.n_kv_heads:
+                assert self.cluster_shape[1] % self.n_kv_heads == 0, (
+                    f"with KV replication, num_devices must be a multiple of n_kv_heads: "
+                    f"{self.cluster_shape[1]} % {self.n_kv_heads}"
+                )
+            else:
+                assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
-            self.min_kv_prefill_shard_seqlen = (ttnn.TILE_SIZE * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
+            self.min_kv_prefill_shard_seqlen = (ttnn.TILE_SIZE * 8 * 8) / max(
+                1, self.n_kv_heads // self.cluster_shape[1]
+            )
 
             # All Gather Matmul for Dense Out (DO) - computed flag stored as instance attribute
             # NOTE: Fused all gather matmul only supports a core grid of size num_devices x 1
@@ -1079,7 +1107,9 @@ class ModelArgs:
                 "rs_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             }
             default_sampling_force_argmax = {
-                "allow_force_argmax": False,
+                # Single-chip only: the argmax fast-path speeds up greedy decode on P150
+                # (~22 -> ~38 t/s/u), but multi-chip meshes are faster on the top-k path.
+                "allow_force_argmax": self.num_devices == 1,
                 "num_links": 1,
                 "chunks_per_sync": 10,
                 "num_workers_per_link": 2,
@@ -1556,7 +1586,16 @@ class ModelArgs:
 
     @lru_cache(maxsize=None)
     def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
-        """Get the SDPA program config for decode mode."""
+        """Get the SDPA program config for decode mode.
+
+        The KV chunk sizes come from self.sdpa_decode_{q,k}_chunk_size (default 0,
+        i.e. the op auto-selects). Architectures that need an explicit small chunk
+        set these in _set_model_specific_params(); e.g. Gemma-2 (head_dim=256), where
+        the auto chunk drives the flash-decode op into a multi-chunk path whose
+        cross-chunk reduction is numerically wrong for head_dim=256, producing a
+        sharp accuracy cliff once the context exceeds one chunk.
+        """
+        q_chunk, k_chunk = self.sdpa_decode_q_chunk_size, self.sdpa_decode_k_chunk_size
         if prefetcher is not None:
             sdpa_grid_size = (8, 8)
             start_core = ttnn.CoreCoord(1, 0)
@@ -1567,15 +1606,15 @@ class ModelArgs:
                     start_core, num_sdpa_cores, prefetcher.all_worker_cores_range_set, row_wise=True
                 ),
                 exp_approx_mode=False,
-                q_chunk_size=0,
-                k_chunk_size=0,
+                q_chunk_size=q_chunk,
+                k_chunk_size=k_chunk,
             )
         else:
             return ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 exp_approx_mode=False,
-                q_chunk_size=0,
-                k_chunk_size=0,
+                q_chunk_size=q_chunk,
+                k_chunk_size=k_chunk,
             )
 
     @lru_cache(maxsize=None)
@@ -1667,16 +1706,12 @@ class ModelArgs:
                     in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                     out_subblock_h=1,  # Must be divisible by per_core_M
                     out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                    per_core_M=1  # workaround for issue #50656
-                    if self.device_name == "P100"
-                    else (
-                        max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
-                            1,
-                            8
-                            if seq_len >= self.MAX_QKV_MM_SEQ_LEN
-                            else math.ceil(seq_len / ttnn.TILE_SIZE / 8),  # 8 rows
-                        )
-                    ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                    # This branch is only reached when use_minimal_qkv_prefill_matmul() is False,
+                    # i.e. seq_len <= 128, so the former `8 if seq_len >= MAX_QKV_MM_SEQ_LEN` arm
+                    # (MAX_QKV_MM_SEQ_LEN == 2048) was unreachable and has been removed. At every
+                    # reachable seq_len the max(1, ...) floor makes this 1.
+                    # NOTE: P100 runs OOM in L1 with a larger per_core_M (workaround for issue #50656).
+                    per_core_M=1 if self.device_name == "P100" else max(1, math.ceil(seq_len / ttnn.TILE_SIZE / 8)),
                     per_core_N=math.ceil(
                         self.qkv_size / self.cluster_shape[1] / 32 / self.dram_shard_grid_width
                     ),  # N / TILE_WIDTH / grid width
@@ -2398,6 +2433,7 @@ class ModelArgs:
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen2.5-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128, "P150x8": 128},
+                "Qwen2.5-Coder-32B": {"N150": None, "N300": None, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128, "P150x8": 128},
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-7B": {"N150": 64, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
@@ -2412,11 +2448,31 @@ class ModelArgs:
                 "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-4": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-2-2b": {
+                    "N150": 32,
+                    "N300": 32,
+                    "T3K": 32,
+                    "TG": 32,
+                    "P100": 32,
+                    "P150": 32,
+                    "P150x4": 32,
+                },
+                "gemma-2-9b": {
+                    # No N150 entry: the full 42-layer model exhausts single-chip DRAM
+                    # during weight caching, so gemma-2-9b is not supported on N150.
+                    "N300": 32,
+                    "T3K": 32,
+                    "TG": 32,
+                    "P100": 32,
+                    "P150": 32,
+                    "P150x4": 32,
+                },
                 "gemma-3-1b": {"N150": 32, "N300": 32, "T3K": 32, "TG": 32, "P150x4": 32},
                 "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "medgemma-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "LFM2.5-VL-1.6B": {"N150": 128, "N300": 128, "T3K": 128, "TG": None, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -2645,7 +2701,21 @@ class ModelArgs:
         return activation_map.get(hidden_activation, ttnn.UnaryOpType.SILU)
 
     def _set_model_specific_params(self):
-        return
+        # Gemma-family text models (gemma, gemma2) store RMSNorm weights as (1 + w)
+        # and scale input embeddings by sqrt(hidden_size). Gemma-3 keeps this in its
+        # own ModelArgs subclass; enabling it here (config-gated) brings up Gemma-2
+        # text models via HF_MODEL without touching any non-Gemma model.
+        if self.model_type is not None and str(self.model_type).lower() in ("gemma", "gemma2"):
+            self.rms_norm_add_unit_offset = True
+            self.embed_scale = self.dim**0.5
+            # head_dim=256 decode-attention fix: pin a small KV chunk and use the
+            # flash-decode op's default compute config. Matches the known-good Gemma-3
+            # decode SDPA (models/demos/gemma4/tt/attention/decode.py); the framework's
+            # auto chunk + forced fp32-accum compute config corrupt the cross-chunk
+            # online-softmax reduction for head_dim=256.
+            self.sdpa_decode_q_chunk_size = 32
+            self.sdpa_decode_k_chunk_size = 64
+            self.sdpa_decode_use_default_compute_config = True
 
     def _set_params_from_dict(self, config):
         eos_token_id = config.get("eos_token_id", None)
@@ -2655,6 +2725,10 @@ class ModelArgs:
         text_config = config.get("text_config", config)
         self.eos_token_id = None if isinstance(eos_token_id, int) else eos_token_id
         layer_types = text_config["layer_types"] if "layer_types" in text_config else None
+
+        # Architecture family (e.g. "gemma2", "gemma3", "llama"). Used to enable
+        # architecture-specific behaviour without affecting other models.
+        self.model_type = text_config.get("model_type", config.get("model_type", None))
 
         # Common params with different names between Meta and HF
         self.dim = text_config.get("dim", text_config.get("hidden_size"))
@@ -2722,15 +2796,14 @@ class ModelArgs:
                 "Qwen2.5-7B and Qwen2.5-VL-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
             )
 
-        if self.num_devices > 0:
-            sampling_splits = self.num_devices if self.cluster_shape != [1, 1] else 2
-            # Only enable this optimization on the non-multi-step sampling path.
-            # The [1, 1] mesh path splits logits before TopK today and would need
-            # matching input padding in `TTSampling.sample()` to safely use it.
-            self.pad_logits_to_power_of_2 = self.cluster_shape != [1, 1] and (
-                should_pad_sampling_logits_to_power_of_2(self.base_model_name, self.padded_vocab_size, sampling_splits)
+        if self.num_devices > 0 and self.cluster_shape != [1, 1]:
+            self.pad_logits_to_power_of_2 = should_pad_sampling_logits_to_power_of_2(
+                self.base_model_name, self.padded_vocab_size, self.num_devices
             )
         else:
+            # Off on [1, 1]: an A/B on the multi-step split path (PR #53167)
+            # measured no end-to-end decode benefit from padding the topk chunks
+            # to a power of two, so the flag stays multi-device only.
             self.pad_logits_to_power_of_2 = False
 
         self.unpadded_hidden_dim = self.hidden_dim
@@ -2765,6 +2838,20 @@ class ModelArgs:
         # Sliding window attention
         self.sliding_window = text_config.get("sliding_window", None)
 
+        # Gemma-2 alternates local (sliding-window) and global attention. Upstream
+        # Gemma2Config.__post_init__ already fills `layer_types` before to_dict(), so
+        # for a real HF checkpoint this block is usually a no-op; keep it as a
+        # defensive fallback for dict-style configs that omit the list.
+        # Pattern: even layers = sliding (matches HF is_sliding = not bool(layer_idx % 2)).
+        if (
+            self.model_type is not None
+            and str(self.model_type).lower().startswith("gemma2")
+            and self.sliding_window is not None
+            and self.layer_types is None
+        ):
+            self.layer_types = ["sliding_attention" if (i % 2 == 0) else "full_attention" for i in range(self.n_layers)]
+            self.sliding_window_pattern = [lt == "sliding_attention" for lt in self.layer_types]
+
         # RoPE params (transformers 5.x nests these under `rope_parameters`)
         self.rope_theta = get_rope_theta(text_config)
         self.rope_theta_local = get_rope_local_base_freq(text_config)
@@ -2785,6 +2872,11 @@ class ModelArgs:
         )
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
+
+        # Final logit soft-capping (Gemma-2): logits -> tanh(logits / cap) * cap.
+        # Attn-score softcapping is not applied (see __init__ comment); only the
+        # final-logit cap is consumed, via Transformer._apply_final_logit_softcapping.
+        self.final_logit_softcapping = text_config.get("final_logit_softcapping", None)
 
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
@@ -3539,6 +3631,7 @@ class ModelArgs:
             "gemma-3-4b": "google/gemma-3-4b-it",
             "gemma-3-27b": "google/gemma-3-27b-it",
             "Qwen3.6-27B": "Qwen/Qwen3.6-27B",
+            "LFM2.5-VL-1.6B": "LiquidAI/LFM2.5-VL-1.6B",
         }
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
@@ -4356,16 +4449,32 @@ class HfModelWrapper:
         position_ids = torch.tensor(
             [list(range(start_pos, start_pos + inputs_embeds.shape[1]))] * inputs_embeds.shape[0]
         )
-        logits, new_cache, hidden_states = self.model.forward(
-            inputs_embeds=inputs_embeds,
-            position_ids=position_ids,
-            use_cache=True,
-            past_key_values=self.past_key_values,
-            return_dict=False,
-            output_hidden_states=True,
-        )
+
+        # In prefill mode the reference must match the TT model, which returns the last decoder
+        # layer's output *before* the final norm. HF's output_hidden_states does not expose that
+        # tensor: the tuple is (embeddings, out_0, ..., out_{N-2}, norm(out_{N-1})), so hidden_states[-2]
+        # is the embeddings for a 1-layer model and the second-to-last layer otherwise. Capture the
+        # input to the final norm via a forward pre-hook to get the true pre-norm last-layer output.
+        captured = {}
+        handle = None
+        if mode != "decode":
+            handle = self.model.model.norm.register_forward_pre_hook(
+                lambda module, args: captured.__setitem__("pre_norm", args[0])
+            )
+        try:
+            logits, new_cache, hidden_states = self.model.forward(
+                inputs_embeds=inputs_embeds,
+                position_ids=position_ids,
+                use_cache=True,
+                past_key_values=self.past_key_values,
+                return_dict=False,
+                output_hidden_states=True,
+            )
+        finally:
+            if handle is not None:
+                handle.remove()
         self.past_key_values = new_cache
-        return logits if mode == "decode" else hidden_states[-2]  # last hidden state is final norm
+        return logits if mode == "decode" else captured["pre_norm"]
 
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)

@@ -10,6 +10,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
@@ -18,6 +19,7 @@
 #include <core_coord.hpp>
 #include <fmt/base.h>
 #include <fmt/ranges.h>
+#include "internal/tt-2xx/quasar/tensix_neo_reg.h"
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -32,7 +34,7 @@
 #include "dispatch_core_common.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "hal_types.hpp"
-#include "api/debug/ring_buffer.h"
+#include "hostdev/debug_ring_buffer_common.h"
 #include "impl/context/metal_context.hpp"
 #include "watcher_device_reader.hpp"
 #include <impl/debug/watcher_server.hpp>
@@ -286,6 +288,8 @@ private:
     HalProgrammableCoreType programmable_core_type_;
     std::string core_str_;
     std::vector<std::byte> l1_read_buf_;
+    // Quasar MPSC head, read at snapshot time
+    uint32_t sem_head_ = 0;
     dev_msgs::mailboxes_t::ConstView mbox_data_;
     dev_msgs::launch_msg_t::ConstView launch_msg_;
     const WatcherDeviceReader& reader_;
@@ -297,12 +301,16 @@ private:
     void DumpPauseStatus() const;
     void DumpEthLinkStatus() const;
     void DumpRingBuffer(bool to_stdout = false) const;
+    void DumpMpscRingBuffer(bool to_stdout = false) const;
+    void EmitRingBuffer(const std::vector<std::string>& lines, bool to_stdout) const;
     void DumpRunState(uint32_t state) const;
     void DumpLaunchMessage() const;
     void DumpWaypoints(bool to_stdout = false) const;
     void DumpSyncRegs() const;
-    void DumpTileCountersBypass() const;
-    void DumpTileCountersWithRemapper() const;
+    // Returns NEO TC keys (neo_id * NUM_TENSIX_TILE_COUNTERS_FOR_DM + tc_id) covered by
+    // programmed remapper pairs so the bypass dump can skip them.
+    std::unordered_set<uint32_t> DumpTileCountersWithRemapper() const;
+    void DumpTileCountersBypass(const std::unordered_set<uint32_t>& skip_tc_keys = {}) const;
     void DumpStackUsage() const;
     void LogRunningKernels() const;
     const std::string& GetKernelName(uint32_t processor_index) const;
@@ -314,6 +322,7 @@ private:
         HalProgrammableCoreType programmable_core_type,
         std::string core_str,
         std::vector<std::byte> l1_read_buf,
+        uint32_t sem_head,
         dev_msgs::Factory dev_msgs_factory,
         const WatcherDeviceReader& reader,
         DumpData& dump_data) :
@@ -321,6 +330,7 @@ private:
         programmable_core_type_(programmable_core_type),
         core_str_(std::move(core_str)),
         l1_read_buf_(std::move(l1_read_buf)),
+        sem_head_(sem_head),
         mbox_data_(dev_msgs_factory.create_view<dev_msgs::mailboxes_t>(l1_read_buf_.data())),
         launch_msg_(get_valid_launch_message(mbox_data_)),
         reader_(reader),
@@ -595,11 +605,24 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     std::vector<std::byte> l1_read_buf(mailbox_read_size);
     reader.env.get_cluster().read_core(
         l1_read_buf.data(), l1_read_buf.size(), {static_cast<size_t>(reader.device_id), virtual_coord}, mailbox_addr);
+
+    // Quasar's MPSC head lives in a semaphore register rather than the mailbox. Read it here with the
+    // rest of the snapshot.
+    uint32_t sem_head = 0;
+    if (hal.get_arch() == tt::ARCH::QUASAR) {
+        reader.env.get_cluster().read_core(
+            &sem_head,
+            sizeof(sem_head),
+            {static_cast<size_t>(reader.device_id), virtual_coord},
+            TENSIX_GLOBAL_REGS_SEMAPHORE_REGS_SEMAPHORE_31__REG_ADDR);
+    }
+
     return Core(
         virtual_coord,
         programmable_core_type,
         std::move(core_str),
         std::move(l1_read_buf),
+        sem_head,
         dev_msgs_factory,
         reader,
         dump_data);
@@ -897,42 +920,60 @@ void WatcherDeviceReader::Core::DumpEthLinkStatus() const {
 }
 
 void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
-    auto ring_buf_data = mbox_data_.watcher().debug_ring_buf();
-    string out;
-    if (ring_buf_data.current_ptr() != DEBUG_RING_BUFFER_STARTING_INDEX) {
-        // Latest written idx is one less than the index read out of L1.
-        out += "\n\tdebug_ring_buffer=\n\t[";
-        int curr_idx = ring_buf_data.current_ptr();
-        size_t ring_buffer_elements = ring_buf_data.data().size();
-        for (int count = 1; count <= ring_buffer_elements; count++) {
-            out += fmt::format("0x{:08x},", ring_buf_data.data()[curr_idx]);
-            if (count % 8 == 0) {
-                out += "\n\t ";
-            }
-            if (curr_idx == 0) {
-                if (ring_buf_data.wrapped() == 0) {
-                    break;  // No wrapping, so no extra data available
-                }
-                curr_idx = ring_buffer_elements - 1;  // Loop
+    const auto& hal = reader_.env.get_hal();
 
-            } else {
-                curr_idx--;
-            }
-        }
-        // Remove the last comma
-        out.pop_back();
-        out += "]";
+    // On Quasar and Blackhole, use MPSC ring buffer format
+    if (hal.has_mpsc_ring_buffer()) {
+        DumpMpscRingBuffer(to_stdout);
+        return;
     }
 
-    // This function can either dump to stdout or the log file.
+    // WH: SPSC ring buffer - cast byte array wrapper to impl struct
+    const auto* ring_buf_data =
+        reinterpret_cast<const debug_spsc_ring_buf_msg_t*>(mbox_data_.watcher().debug_ring_buf().data().data());
+
+    EmitRingBuffer(FormatRingBuffer(*ring_buf_data, programmable_core_type_), to_stdout);
+}
+
+// Either dumps to stdout or to the log file.
+void WatcherDeviceReader::Core::EmitRingBuffer(const std::vector<std::string>& lines, bool to_stdout) const {
+    if (lines.empty()) {
+        return;
+    }
+    string out = "\n\tdebug_ring_buffer=\n\t" + fmt::format("{}", fmt::join(lines, "\n\t"));
     if (to_stdout) {
-        if (!out.empty()) {
-            out = string("Last ring buffer status: ") + out;
-            log_info(tt::LogMetal, "{}", out);
-        }
+        log_info(tt::LogMetal, "Last ring buffer status: {}", out);
     } else {
         fprintf(reader_.f, "%s", out.c_str());
     }
+}
+
+void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
+    const auto& hal = reader_.env.get_hal();
+    const auto* rb =
+        reinterpret_cast<const debug_mpsc_ring_buf_view_t*>(mbox_data_.watcher().debug_ring_buf().data().data());
+
+    uint32_t capacity = hal.get_ring_buffer_capacity();
+    uint32_t mask = capacity - 1;  // capacity is a power of two
+    // Quasar keeps head in a semaphore register, snapshotted alongside the mailbox.
+    uint32_t head = (hal.get_arch() == tt::ARCH::QUASAR) ? sem_head_ : rb->head;
+
+    // Scan every slot rather than min(head, capacity): the semaphore is 16-bit, so head wraps and
+    // cannot bound the live entries.
+    std::vector<uint32_t> data, thread_indices;  // newest first
+    data.reserve(capacity);
+    thread_indices.reserve(capacity);
+    for (uint32_t i = 0; i < capacity; i++) {
+        const auto& slot = rb->slots[(head - 1 - i) & mask];
+        // write_id is thread_idx + 1, so 0 means the slot was never written.
+        if (slot.write_id == 0) {
+            continue;
+        }
+        data.push_back(slot.data);
+        thread_indices.push_back(slot.write_id - 1);
+    }
+
+    EmitRingBuffer(FormatRingBuffer(data, thread_indices, programmable_core_type_), to_stdout);
 }
 
 void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
@@ -1100,6 +1141,7 @@ void WatcherDeviceReader::Core::DumpLaunchMessage() const {
 void WatcherDeviceReader::Core::DumpWaypoints(bool to_stdout) const {
     auto debug_waypoint = mbox_data_.watcher().debug_waypoint();
     std::vector<std::string> risc_status;
+    risc_status.reserve(debug_waypoint.size());
 
     for (auto cpu : debug_waypoint) {
         auto& status = risc_status.emplace_back();
@@ -1152,25 +1194,24 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
         }
     }
 
-    // Reads posted/acked tile counters used in DFB synchronization
-    // Mismatch indicates a stalled producer/consumer relationship
+    // Reads posted/acked tile counters used in DFB synchronization.
+    // Mismatch indicates a stalled producer/consumer relationship.
+    // Remapper may be globally enabled while STRIDED DFBs still use default mirroring, and a core
+    // can mix remapped + plain TCs — dump both, skipping remapper-covered TCs in the bypass path.
     if (hal.has_tile_counter_registers()) {
-        bool remapper_enabled = false;
+        std::unordered_set<uint32_t> remapped_tc_keys;
         if (hal.has_remapper()) {
             auto data = reader_.env.get_cluster().read_core(
                 reader_.device_id, virtual_coord_, hal.get_remapper_global_control_addr(), sizeof(uint32_t));
-            remapper_enabled = (data[0] & 0x1) != 0;
+            if ((data[0] & 0x1) != 0) {
+                remapped_tc_keys = DumpTileCountersWithRemapper();
+            }
         }
-
-        if (remapper_enabled) {
-            DumpTileCountersWithRemapper();
-        } else {
-            DumpTileCountersBypass();
-        }
+        DumpTileCountersBypass(remapped_tc_keys);
     }
 }
 
-void WatcherDeviceReader::Core::DumpTileCountersBypass() const {
+void WatcherDeviceReader::Core::DumpTileCountersBypass(const std::unordered_set<uint32_t>& skip_tc_keys) const {
     const auto& hal = reader_.env.get_hal();
 
     // NEO side for reading tiles_available directly
@@ -1182,6 +1223,9 @@ void WatcherDeviceReader::Core::DumpTileCountersBypass() const {
     uint32_t neo_tc_buffer_capacity_offset = hal.get_neo_tile_counters_buffer_capacity_offset();
 
     for (uint32_t i = 0; i < hal.get_num_tile_counters(); i++) {
+        if (skip_tc_keys.contains(i)) {
+            continue;
+        }
         uint32_t neo_id = i / dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM;
         uint32_t tc_id = i % dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM;
 
@@ -1204,19 +1248,31 @@ void WatcherDeviceReader::Core::DumpTileCountersBypass() const {
     }
 }
 
-// Dump tile counter mismatches when remapper is enabled.
+// Dump tile counter mismatches for programmed remapper pairs.
 // Remapper maps clientL (1 endpoint) <-> clientR (up to 4 endpoints):
 //   - clientL_is_producer=true:  1 producer (clientL) -> 1-4 consumers (clientR)
 //   - clientL_is_producer=false: 1-4 producers (clientR) -> 1 consumer (clientL)
 // tiles_to_consume = posted - acked; non-zero indicates stuck tiles.
-void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
+// Returns NEO TC keys covered by valid pairs so DumpTileCountersBypass can skip them.
+std::unordered_set<uint32_t> WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
     const auto& hal = reader_.env.get_hal();
+    std::unordered_set<uint32_t> remapped_tc_keys;
 
     uint32_t neo_tc_base_addr = hal.get_neo_tile_counters_base_addr();
     uint32_t neo_tc_stride = hal.get_neo_tile_counters_stride();
     uint32_t neo_tc_size = hal.get_neo_tile_counters_size();
     uint32_t neo_tc_tiles_available_offset = hal.get_neo_tile_counters_tiles_available_offset();
     uint32_t neo_tc_buffer_capacity_offset = hal.get_neo_tile_counters_buffer_capacity_offset();
+
+    auto claim_neo_tc = [&](uint32_t client_id, uint32_t tc_id) {
+        // Bypass dump only scans NEO overlay TC banks (tc_id < 16 per Neo). Tensix-only TCs
+        // (>= 16) are not in that scan, so they need no skip entry.
+        if (client_id < overlay::NEO_0 || tc_id >= dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM) {
+            return;
+        }
+        uint32_t neo_id = client_id - overlay::NEO_0;
+        remapped_tc_keys.insert(neo_id * dfb::NUM_TENSIX_TILE_COUNTERS_FOR_DM + tc_id);
+    };
 
     auto read_tiles_to_consume = [&](uint32_t client_id, uint32_t tc_id) -> std::pair<uint32_t, uint32_t> {
         uint32_t neo_id = client_id % overlay::NEO_0;
@@ -1256,6 +1312,7 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
             // 1 producer (clientL) -> 1 to possibly many consumers (clientR)
             uint32_t prod_id = clientL.f.id_L;
             uint32_t prod_tc_id = clientL.f.cnt_sel_L;
+            claim_neo_tc(prod_id, prod_tc_id);
 
             for (uint32_t slot = 0; slot < 4; slot++) {
                 if (!(clientL.f.valid & (1 << slot))) {
@@ -1263,6 +1320,7 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
                 }
                 uint32_t cons_id = id_R[slot];
                 uint32_t cons_tc_id = cnt_sel_R[slot];
+                claim_neo_tc(cons_id, cons_tc_id);
 
                 auto [tiles_to_consume, buffer_capacity] = read_tiles_to_consume(cons_id, cons_tc_id);
                 if (tiles_to_consume != 0 && tiles_to_consume <= buffer_capacity) {
@@ -1277,6 +1335,14 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
             // 1 to possibly many producers (clientR) -> 1 consumer (clientL)
             uint32_t cons_id = clientL.f.id_L;
             uint32_t cons_tc_id = clientL.f.cnt_sel_L;
+            claim_neo_tc(cons_id, cons_tc_id);
+
+            for (uint32_t slot = 0; slot < 4; slot++) {
+                if (!(clientL.f.valid & (1 << slot))) {
+                    continue;
+                }
+                claim_neo_tc(id_R[slot], cnt_sel_R[slot]);
+            }
 
             auto [tiles_to_consume, buffer_capacity] = read_tiles_to_consume(cons_id, cons_tc_id);
             if (tiles_to_consume != 0 && tiles_to_consume <= buffer_capacity) {
@@ -1294,6 +1360,7 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
             }
         }
     }
+    return remapped_tc_keys;
 }
 
 void WatcherDeviceReader::Core::DumpStackUsage() const {

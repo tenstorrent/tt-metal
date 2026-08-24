@@ -11,6 +11,9 @@ target_link_libraries(
     fabric_unit_tests
     PRIVATE
         tt_metal
+        # FSD proto (tt::scaleout_tools::fsd::proto) constructed directly by test_physical_descriptor_builder.cpp;
+        # those symbols are hidden in libtt_metal.so (see tools/scaleout/CMakeLists.txt), so link explicitly.
+        TT::ScaleoutTools
         test_common_libs
         yaml-cpp::yaml-cpp
         protobuf::libprotobuf
@@ -24,6 +27,18 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}/common
+    SYSTEM
+    PRIVATE
+        # physical_descriptor_builder test includes the generated FSD + PSD proto headers
+        ${Metalium_BINARY_DIR}/tools/scaleout # protobuf/factory_system_descriptor.pb.h
+        "$<TARGET_PROPERTY:fabric,BINARY_DIR>" # protobuf/physical_system_descriptor.pb.h
+)
+
+# The physical_descriptor_builder test includes generated FSD/PSD proto headers.
+add_dependencies(
+    fabric_unit_tests
+    scaleout_generated_protos
+    fabric_generated_protos
 )
 
 set_target_properties(
@@ -139,17 +154,25 @@ set(TEST_TT_FABRIC_SOURCES
 
 add_executable(test_tt_fabric ${TEST_TT_FABRIC_SOURCES})
 
+# Previously (#48783) this target deliberately took TT::ScaleoutTools headers WITHOUT linking it,
+# because scaleout_tools' protobuf symbols were exported from libtt_metal.so: linking a second copy
+# meant both copies shared one exported descriptor_table_* object, so whichever module initialised
+# first consumed its call_once flag and registered the file into only its own descriptor pool,
+# tripping a libprotobuf fatal ("CHECK failed: file != nullptr") on the Torus paths. Now that those
+# symbols are hidden (see tools/scaleout/CMakeLists.txt) nothing is shared, each module resolves to
+# its own copy and its own pool, and linking normally is both safe and required -- the symbols are
+# no longer available from libtt_metal.so.
 target_link_libraries(
     test_tt_fabric
     PRIVATE
+        TT::ScaleoutTools
         tt_metal
         test_common_libs
         yaml-cpp::yaml-cpp
 )
 
-# NOTE(#48783): Take only TT::ScaleoutTools headers, do NOT link it. Its protobuf sources
-# are already in libtt_metal.so; linking again duplicates the descriptor pool and trips a
-# libprotobuf fatal on the Torus paths. Symbols resolve from libtt_metal.so at link/run time.
+# Redundant with the link above for the include path itself, but kept so these headers stay marked
+# SYSTEM (link-propagated interface directories are not) and do not raise warnings here.
 target_include_directories(
     test_tt_fabric
     SYSTEM

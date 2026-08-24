@@ -23,12 +23,12 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/profiler/profiler_paths.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "impl/program/program_impl.hpp"
 
 #include <thread>
 #include "impl/context/metal_context.hpp"
@@ -412,7 +412,7 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
     for (size_t i = 0; i < device_helper.devices.size(); i++) {
         const auto& device = device_helper.devices[i];
         try {
-            tt_metal::detail::CompileProgram(device.get(), programs[i]);
+            programs[i].impl().compile(device.get());
         } catch (std::exception& e) {
             log_error(tt::LogTest, "Failed to compile program on device {}: {}", i, e.what());
             throw e;

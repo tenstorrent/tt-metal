@@ -70,6 +70,10 @@ tt::tt_metal::HostBuffer create_host_buffer_from_bytes(
             ttsl::Span<int32_t> typed_span(reinterpret_cast<int32_t*>(data.data()), size_bytes / sizeof(int32_t));
             return tt::tt_metal::HostBuffer(typed_span, memory_pin);
         }
+        case tt::tt_metal::DataType::INT8: {
+            ttsl::Span<int8_t> typed_span(reinterpret_cast<int8_t*>(data.data()), size_bytes / sizeof(int8_t));
+            return tt::tt_metal::HostBuffer(typed_span, memory_pin);
+        }
         case tt::tt_metal::DataType::FP8_E4M3:
             TT_THROW("Flatbuffer load for DataType::FP8_E4M3 is not supported during tensor deserialization.");
         case tt::tt_metal::DataType::UINT8: {
@@ -184,6 +188,7 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     std::vector<uint64_t> dedup_key_to_offset(unique_keys, std::numeric_limits<uint64_t>::max());
 
     std::vector<flatbuffers::Offset<ttnn::flatbuffer::TensorShard>> shards_vector;
+    shards_vector.reserve(mesh_shape.mesh_size());
     // Used to deduplicate buffer addresses for replicated tensor data.
     std::unordered_map<const std::byte*, uint64_t> buffer_to_offset;
 

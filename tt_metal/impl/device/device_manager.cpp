@@ -132,8 +132,10 @@ std::unordered_map<uint32_t, uint32_t> get_device_id_to_core_map(
     ContextId context_id,
     const uint8_t num_hw_cqs,
     std::unordered_map<uint32_t, uint32_t>& completion_queue_reader_to_cpu_core_map) {
+    const auto chip_ids = tt::tt_metal::MetalContext::instance(context_id).get_cluster().all_chip_ids();
     std::vector<ChipId> device_ids;
-    for (ChipId device_id : tt::tt_metal::MetalContext::instance(context_id).get_cluster().all_chip_ids()) {
+    device_ids.reserve(chip_ids.size());
+    for (ChipId device_id : chip_ids) {
         device_ids.emplace_back(device_id);
     }
     bool use_numa_node_based_thread_binding =
@@ -242,6 +244,7 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
     }
 
     std::vector<ChipId> target_mmio_ids;
+    target_mmio_ids.reserve(device_ids_to_open.size());
     for (const auto& device_id : device_ids_to_open) {
         TT_FATAL(
             ctx_.get_cluster().all_chip_ids().contains(device_id),
@@ -409,6 +412,7 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
     }
 
     std::vector<Device*> activated_devices;
+    activated_devices.reserve(devices_to_activate.size());
     for (const auto& device_id : devices_to_activate) {
         if (not this->is_device_active(device_id)) {
             this->activate_device(device_id);
@@ -581,6 +585,7 @@ IDevice* DeviceManager::get_active_device(ChipId device_id) const { return get_a
 
 std::vector<IDevice*> DeviceManager::get_all_active_devices() const {
     std::vector<IDevice*> user_devices;
+    user_devices.reserve(this->devices_.size());
     for (const auto& device : this->devices_) {
         if (device && device->is_initialized()) {
             user_devices.push_back(device.get());
@@ -591,6 +596,7 @@ std::vector<IDevice*> DeviceManager::get_all_active_devices() const {
 
 std::vector<Device*> DeviceManager::get_all_active_devices_impl() const {
     std::vector<Device*> user_devices;
+    user_devices.reserve(this->devices_.size());
     for (const auto& device : this->devices_) {
         if (device && device->is_initialized()) {
             user_devices.push_back(device.get());

@@ -21,15 +21,16 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     calculate_edgecase_dest_indices,
+    generate_perf_input_dimensions,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
     runtime,
+    select_perf_tile_sizes,
 )
-from helpers.perf import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
@@ -39,7 +40,6 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
-    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
@@ -79,32 +79,11 @@ def generate_eltwise_unary_datacopy_combinations(
             (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
         )
         data_copy_types = (DataCopyType.A2D, DataCopyType.B2D)
-
-        if is_perf:
-            tile_dims = (16, 16)
-            tile_shape = construct_tile_shape(tile_dims)
-            dimensions = [32, 32]
-            for dest_acc in dest_acc_modes:
-                if (
-                    in_fmt != DataFormat.Float32
-                    and fmt.output_format == DataFormat.Float32
-                    and dest_acc == DestAccumulation.No
-                ):
-                    continue
-                for dest_sync in dest_sync_modes:
-                    for data_copy_type in data_copy_types:
-                        combinations.append(
-                            (
-                                fmt,
-                                dest_acc,
-                                data_copy_type,
-                                runtime(dimensions),
-                                dest_sync,
-                                runtime(0),
-                                runtime(tile_dims),
-                            )
-                        )
-            continue
+        tile_sizes = (
+            select_perf_tile_sizes(SUPPORTED_TILE_SIZES)
+            if is_perf
+            else SUPPORTED_TILE_SIZES
+        )
 
         for dest_acc in dest_acc_modes:
             if (
@@ -116,34 +95,50 @@ def generate_eltwise_unary_datacopy_combinations(
 
             for dest_sync in dest_sync_modes:
                 for data_copy_type in data_copy_types:
-                    for tile_dims in SUPPORTED_TILE_SIZES:
+                    for tile_dims in tile_sizes:
                         if is_mx_unsupported_tile_dims(
                             in_fmt, fmt.output_format, tile_dims
                         ):
                             continue
                         tile_shape = construct_tile_shape(tile_dims)
-                        for dimensions in generate_unary_input_dimensions(
-                            dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
-                        ):
-                            for (
-                                _,
-                                edgecase_dest_index,
-                            ) in calculate_edgecase_dest_indices(
-                                True if dest_acc == DestAccumulation.Yes else False,
-                                dimensions[0]
-                                // tile_dims[0]
-                                * dimensions[1]
-                                // tile_dims[1],
-                                [dest_sync],
-                            ):
+                        dimensions_list = (
+                            generate_perf_input_dimensions(
+                                dest_acc, dest_sync, tile_shape
+                            )
+                            if is_perf
+                            else generate_unary_input_dimensions(
+                                dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
+                            )
+                        )
+                        for dimensions in dimensions_list:
+                            dest_indices = (
+                                [0]
+                                if is_perf
+                                else [
+                                    edgecase_dest_index
+                                    for _, edgecase_dest_index in calculate_edgecase_dest_indices(
+                                        (
+                                            True
+                                            if dest_acc == DestAccumulation.Yes
+                                            else False
+                                        ),
+                                        dimensions[0]
+                                        // tile_dims[0]
+                                        * dimensions[1]
+                                        // tile_dims[1],
+                                        [dest_sync],
+                                    )
+                                ]
+                            )
+                            for dest_index in dest_indices:
                                 combinations.append(
                                     (
                                         fmt,
                                         dest_acc,
                                         data_copy_type,
-                                        runtime(dimensions),
+                                        dimensions,
                                         dest_sync,
-                                        runtime(edgecase_dest_index),
+                                        runtime(dest_index),
                                         runtime(tile_dims),
                                     )
                                 )
@@ -277,18 +272,15 @@ def test_eltwise_unary_datacopy_quasar(
         ),
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
 
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-        },
-    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(

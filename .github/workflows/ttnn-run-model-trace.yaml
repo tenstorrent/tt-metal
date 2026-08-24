@@ -200,6 +200,7 @@ jobs:
   build-artifact:
     name: Build
     needs: [check-harbor, validate-inputs]
+    if: ${{ !cancelled() && needs.validate-inputs.result == 'success' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -214,6 +215,7 @@ jobs:
   trace-model:
     name: "Trace: ${{ matrix.slug }}"
     needs: [check-harbor, validate-inputs, build-artifact]
+    if: ${{ !cancelled() && needs.validate-inputs.result == 'success' && needs.build-artifact.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:

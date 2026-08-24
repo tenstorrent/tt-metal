@@ -209,6 +209,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
     std::size_t logical_n,
+    std::size_t logical_l,
     ttnn::operations::transformer::SDPAProgramConfig program_config,
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -227,7 +228,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_cache_batch_idx,
     std::optional<uint32_t> kv_actual_isl,
     const std::optional<ttnn::Tensor>& attention_sink,
-    std::optional<uint32_t> sliding_window_size) {
+    std::optional<uint32_t> sliding_window_size,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v) {
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
@@ -243,8 +246,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         joint_v,
         persistent_output_buffer_k,  // AllGather output / RingAttention input
         persistent_output_buffer_v,  // AllGather output / RingAttention input
+        persistent_output_buffer_joint_k,
+        persistent_output_buffer_joint_v,
         joint_strategy,
         logical_n,
+        logical_l,
         std::move(program_config),
         dim,
         multi_device_global_semaphore,
@@ -308,9 +314,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
         std::nullopt,
         std::nullopt,
         persistent_output_buffer_kv,
-        std::nullopt,
+        std::nullopt,  // persistent_output_buffer_v
+        std::nullopt,  // persistent_output_buffer_joint_k
+        std::nullopt,  // persistent_output_buffer_joint_v
         "rear",
         logical_n,
+        /*logical_l=*/static_cast<std::size_t>(0),
         std::move(program_config),
         dim,
         multi_device_global_semaphore,

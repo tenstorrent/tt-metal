@@ -59,19 +59,27 @@ than erroring, so legitimate-but-unsupported keys don't break the load.
 
 ## API
 
+The adapter paths are constructor arguments, so build the config with
+`default_config` (which pins the I2V model type and checkpoint) and construct the
+pipeline directly.
+
 ```python
 from models.tt_dit.experimental.pipelines.pipeline_wan_lora import LoRASpec, WanPipelineI2VLora
 
+config = WanPipelineI2VLora.default_config(mesh_device=mesh_device, height=480, width=832)
+
 # Single-LoRA, both experts
-pipe = WanPipelineI2VLora.create_pipeline(
-    mesh_device=...,
+pipe = WanPipelineI2VLora(
+    device=mesh_device,
+    config=config,
     lora_high="/path/high.safetensors",
     lora_low="/path/low.safetensors",
 )
 
 # Multi-LoRA stack (LightX2V applied first, then SVI on top, half strength)
-pipe = WanPipelineI2VLora.create_pipeline(
-    mesh_device=...,
+pipe = WanPipelineI2VLora(
+    device=mesh_device,
+    config=config,
     lora_high=[
         LoRASpec("/path/lightx2v_high.safetensors", scale=1.0),
         LoRASpec("/path/svi_high.safetensors", scale=0.5),

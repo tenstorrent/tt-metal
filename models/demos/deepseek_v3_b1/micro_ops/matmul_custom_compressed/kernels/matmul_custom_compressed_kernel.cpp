@@ -19,8 +19,8 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/compute_kernel_api.h"
-#include "../../../kernel_includes/tt_metal/include/compute_kernel_api/compressed_custom_mm.h"
-#include "../../../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
+#include "api/compute/experimental/compressed_custom_mm.h"
+#include "api/compute/experimental/custom_mm.h"
 using namespace ckernel;
 #include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/constexpr_args.h"
 #include "../../../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_custom_mm_compressed_constexpr_compact.h"
@@ -56,7 +56,7 @@ void kernel_main() {
     deepseek_compute_kernel_init();
 
     // Initial HW config (in1→srcA bfp8, in0→srcB bf16)
-    reconfig_data_format<SrcOrder::Reverse, true>(cb_in0, cb_in1);
+    reconfig_full_operand<SrcOrder::Reverse>(cb_in0, cb_in1);
     pack_reconfig_data_format<true>(cb_out);
 
     // Wait for inputs

@@ -15,7 +15,6 @@ Mesh: ``[1, 2]`` with axes ``("dp", "tp")``.
 from __future__ import annotations
 
 import os
-from typing import Optional
 
 import numpy as np
 import pytest
@@ -24,79 +23,11 @@ import ttnn
 import ttml
 from ttml.modules import Embedding, VocabParallelEmbedding
 
-
 pytestmark = pytest.mark.requires_device
 
 TP_AXIS_SIZE = 2
-MESH_SHAPE = (1, TP_AXIS_SIZE)
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_MGD_FOR_ARCH_AND_SHAPE = {
-    ("blackhole", MESH_SHAPE): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_1_2_line_line.textproto"),
-    ("wormhole_b0", MESH_SHAPE): os.path.join(_REPO_ROOT, "configs", "mgd", "n300_1_2_line_line.textproto"),
-}
-
-
-# ---------------------------------------------------------------------------
-# Multi-device mesh fixture (same shape/skip conventions as test_fsdp.py)
-# ---------------------------------------------------------------------------
-def _detect_arch() -> Optional[str]:
-    try:
-        name = ttnn.get_arch_name().lower()
-    except Exception:  # noqa: BLE001
-        return None
-    if "blackhole" in name:
-        return "blackhole"
-    if "wormhole_b0" in name:
-        return "wormhole_b0"
-    return None
-
-
-def _close_device_mesh_quietly() -> None:
-    """Reverse ``open_device_mesh`` (close device, disable fabric, clear the global mesh),
-    swallowing errors so it is safe on the pre-open and teardown paths."""
-    try:
-        ttml.close_device_mesh()
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _ensure_mgd_path(shape: tuple[int, ...]) -> Optional[str]:
-    """Point ``TT_MESH_GRAPH_DESC_PATH`` at a bundled MGD if unset; return the old value."""
-    previous = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
-    if previous:
-        return previous
-    arch = _detect_arch()
-    if arch is None:
-        return previous
-    candidate = _MGD_FOR_ARCH_AND_SHAPE.get((arch, shape))
-    if candidate and os.path.isfile(candidate):
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = candidate
-    return previous
-
-
-def _restore_mgd_path(previous: Optional[str]) -> None:
-    if previous is None:
-        os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
-    else:
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = previous
-
-
-@pytest.fixture(scope="module")
-def tp_mesh():
-    """Open a ``[1, TP_AXIS_SIZE]`` mesh with axes ``("dp", "tp")``; skip if unavailable."""
-    previous_mgd = _ensure_mgd_path(MESH_SHAPE)
-    _close_device_mesh_quietly()
-    try:
-        ttml.open_device_mesh(ttml.Mesh(MESH_SHAPE, ("dp", "tp")))
-    except Exception as e:  # noqa: BLE001
-        _restore_mgd_path(previous_mgd)
-        pytest.skip(f"VocabParallelEmbedding tests need {TP_AXIS_SIZE} devices on the 'tp' axis: {e}")
-
-    yield ttml.mesh()
-
-    _close_device_mesh_quietly()
-    _restore_mgd_path(previous_mgd)
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +138,29 @@ class TestVocabParallelEmbedding:
     def test_num_embeddings_must_divide_tp(self, expect_error):
         with expect_error(ValueError, "must be divisible by the tensor-parallel"):
             VocabParallelEmbedding(self.tp * 32 + 1, self.DIM, axis_name="tp")
+
+    def test_rejects_weight_init_that_tile_pads_the_shard(self, expect_error):
+        """A per-device ``weight_init`` may round the shard up to a tile boundary.
+
+        ``num_embeddings`` divisible by ``tp_size`` is not enough — the shard itself
+        has to be a multiple of 32, or the allocated rows outnumber the rows the
+        ownership offsets assume and every rank after the first reads shifted rows.
+        Constructing must fail rather than silently mis-index.
+        """
+        # vocab % 32 == 0 and vocab % tp == 0, but (vocab / tp) % 32 != 0.
+        # 32 * (tp + 1) gives this for every tp that divides 32: tp + 1 is never a
+        # multiple of tp, so vocab / tp = 32 * (tp + 1) / tp is not a multiple of 32.
+        vocab = 32 * (self.tp + 1)
+        if vocab % self.tp or (vocab // self.tp) % 32 == 0:
+            pytest.skip(f"no misaligned vocab constructed for tp={self.tp}")
+
+        def per_device_tile_padded_init(shape, mapper=None):
+            rows = shape[2] // self.tp
+            padded = (1, 1, ((rows + 31) // 32) * 32, shape[3])
+            return ttml.autograd.create_tensor(ttnn.empty(list(padded), ttnn.bfloat16, ttnn.TILE_LAYOUT, _device()))
+
+        with expect_error(ValueError, "rows per device but ownership offsets assume"):
+            VocabParallelEmbedding(vocab, self.DIM, weight_init=per_device_tile_padded_init, axis_name="tp")
 
     def test_forward_rejects_tp_sharded_ids(self, expect_error):
         vpe = VocabParallelEmbedding(128, self.DIM, axis_name="tp")

@@ -66,7 +66,8 @@ ALWI void process_tile(
 
     exp_cb_bcast.wait_front(num_tiles_per_cycle);
     pack_reconfig_data_format(cb_out, cb_llk_post);
-    unary_bcast_init<BroadcastType::COL>(cb_bcast, cb_llk_post);
+    compute_kernel_hw_startup(cb_bcast, cb_llk_post);
+    unary_bcast_init<BroadcastType::COL>(cb_bcast);
     exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
     tile_regs_acquire();
     unary_bcast<BroadcastType::COL>(cb_bcast, 0, 0);

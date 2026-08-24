@@ -4,22 +4,53 @@
 
 #include "memory_utils.hpp"
 
+#include <algorithm>
+#include <ranges>
+#include <string_view>
+
 namespace ttml::utils {
 using namespace ttnn::graph;
 
 namespace MemoryUsageTracker {
+namespace {
 
 constexpr double KB = 1024.0;
 constexpr double MB = KB * KB;
 
+using NamedTrace = std::pair<std::string, nlohmann::json>;
+
 // Global variables for memory usage tracking
-static bool is_capture_active = false;
+bool is_capture_active = false;
+std::shared_ptr<ttnn::graph::GraphProcessor> graph_processor;
+tt::tt_metal::IGraphProcessor::RunMode capture_mode = tt::tt_metal::IGraphProcessor::RunMode::NORMAL;
 
-static std::shared_ptr<ttnn::graph::GraphProcessor> graph_processor;
-static tt::tt_metal::IGraphProcessor::RunMode capture_mode = tt::tt_metal::IGraphProcessor::RunMode::NORMAL;
+std::vector<NamedTrace> traces;
 
-static std::vector<std::string> trace_order;
-static std::unordered_map<std::string, nlohmann::json> traces;
+// Returns the single segment recorded under `name`. Throws if no segment has that name,
+// or if more than one does (an ambiguous lookup - use the *_all() variants for duplicates).
+const nlohmann::json& find_trace(std::string_view name) {
+    const nlohmann::json* match = nullptr;
+    std::size_t count = 0;
+    for (const auto& [trace_name, trace] : traces) {
+        if (trace_name == name) {
+            match = &trace;
+            ++count;
+        }
+    }
+    if (count == 0) {
+        throw std::runtime_error(fmt::format("MemoryUsageTracker: Trace '{}' not found", name));
+    }
+    if (count > 1) {
+        throw std::runtime_error(fmt::format(
+            "MemoryUsageTracker: Trace '{}' is ambiguous ({} segments share this name); "
+            "use get_dram_usage_all()/get_l1_usage_all() instead",
+            name,
+            count));
+    }
+    return *match;
+}
+
+}  // namespace
 
 ttnn::ScopeGuard begin_capture(tt::tt_metal::IGraphProcessor::RunMode mode) {
     if (is_capture_active) {
@@ -37,12 +68,7 @@ ttnn::ScopeGuard begin_capture(tt::tt_metal::IGraphProcessor::RunMode mode) {
 
 void end_capture(const std::string& name) {
     if (is_capture_active) {
-        if (traces.find(name) != traces.end()) {
-            fmt::print("WARNING: Trace '{}' already exists, overwriting\n", name);
-        }
-        auto trace = graph_processor->end_graph_capture();
-        traces[name] = trace;
-        trace_order.push_back(name);
+        traces.emplace_back(name, graph_processor->end_graph_capture());
         is_capture_active = false;
     }
 }
@@ -52,14 +78,7 @@ void snapshot(const std::string& name) {
         throw std::runtime_error("MemoryUsageTracker: Cannot snapshot - capture is not active");
     }
 
-    if (traces.find(name) != traces.end()) {
-        fmt::print("WARNING: Snapshot '{}' already exists, overwriting\n", name);
-    }
-
-    // End current capture and save with the given name
-    auto trace = graph_processor->end_graph_capture();
-    traces[name] = trace;
-    trace_order.push_back(name);
+    traces.emplace_back(name, graph_processor->end_graph_capture());
 
     // Start a new capture
     graph_processor = std::make_shared<ttnn::graph::GraphProcessor>(capture_mode);
@@ -67,43 +86,38 @@ void snapshot(const std::string& name) {
 }
 
 DRAMUsage get_dram_usage(const std::string& name) {
-    auto it = traces.find(name);
-    if (it == traces.end()) {
-        throw std::runtime_error(fmt::format("MemoryUsageTracker: Trace '{}' not found", name));
-    }
-    return ttnn::graph::extract_dram_usage(it->second);
+    return ttnn::graph::extract_dram_usage(find_trace(name));
 }
 
 std::vector<std::pair<std::string, DRAMUsage>> get_dram_usage_all() {
     std::vector<std::pair<std::string, DRAMUsage>> result;
-    for (const auto& name : trace_order) {
-        result.push_back(std::make_pair(name, get_dram_usage(name)));
+    result.reserve(traces.size());
+    for (const auto& [name, trace] : traces) {
+        result.emplace_back(name, ttnn::graph::extract_dram_usage(trace));
     }
     return result;
 }
 
 L1UsagePerCore get_l1_usage(const std::string& name) {
-    auto it = traces.find(name);
-    if (it == traces.end()) {
-        throw std::runtime_error(fmt::format("MemoryUsageTracker: Trace '{}' not found", name));
-    }
-    return ttnn::graph::extract_resource_usage_per_core(it->second);
+    return ttnn::graph::extract_resource_usage_per_core(find_trace(name));
 }
 
 std::vector<std::pair<std::string, L1UsagePerCore>> get_l1_usage_all() {
     std::vector<std::pair<std::string, L1UsagePerCore>> result;
-    for (const auto& name : trace_order) {
-        result.push_back(std::make_pair(name, get_l1_usage(name)));
+    result.reserve(traces.size());
+    for (const auto& [name, trace] : traces) {
+        result.emplace_back(name, ttnn::graph::extract_resource_usage_per_core(trace));
     }
     return result;
 }
 
 std::vector<std::string> get_trace_names() {
-    return trace_order;
+    auto names = traces | std::views::keys;
+    return {names.begin(), names.end()};
 }
 
 void print_memory_usage() {
-    if (trace_order.empty()) {
+    if (traces.empty()) {
         fmt::print("WARNING: No traces captured\n");
         return;
     }
@@ -116,9 +130,9 @@ void print_memory_usage() {
     long long cumulative_current = 0;
     long long cumulative_peak = 0;
 
-    for (const auto& name : trace_order) {
-        auto dram_usage = get_dram_usage(name);
-        auto l1_usage = get_l1_usage(name);
+    for (const auto& [name, trace] : traces) {
+        auto dram_usage = ttnn::graph::extract_dram_usage(trace);
+        auto l1_usage = ttnn::graph::extract_resource_usage_per_core(trace);
 
         // Calculate cumulative values for this checkpoint
         // The segment's peak is relative to start of segment, so real peak during this segment
@@ -154,7 +168,6 @@ void print_memory_usage() {
 
 void clear() {
     traces.clear();
-    trace_order.clear();
     is_capture_active = false;
     graph_processor.reset();
 }

@@ -99,6 +99,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     // cb_out_stage exists only on the ht>8 path (compute -> writer staging).
     // ------------------------------------------------------------------------
     std::vector<DataflowBufferSpec> dfbs;
+    dfbs.reserve(3);
     // cb_in0 is gone: the reader reads the resident input shard via tensor::input (local TensorAccessor),
     // not a borrowed self-loop fake-CB.
     dfbs.push_back(DataflowBufferSpec{
@@ -221,7 +222,9 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     };
 
     std::vector<KernelSpec> kernels;
+    kernels.reserve(3);
     std::vector<KernelSpecName> wu_kernels;
+    wu_kernels.reserve(3);
     kernels.push_back(std::move(reader_spec));
     kernels.push_back(std::move(compute_spec));
     wu_kernels.push_back(READER_KERNEL);

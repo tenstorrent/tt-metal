@@ -143,6 +143,7 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id, direction);
 
     std::vector<uint32_t> link_indices;
+    link_indices.reserve(forwarding_channels.size());
     for (uint32_t i = 0; i < fabric_channels.size(); i++) {
         if (std::find(forwarding_channels.begin(), forwarding_channels.end(), fabric_channels[i]) !=
             forwarding_channels.end()) {
@@ -348,6 +349,7 @@ std::vector<std::filesystem::path> build_physical_grouping_descriptor_search_pat
     const std::string tt_metal_home = tt_metal_home_env != nullptr ? tt_metal_home_env : ".";
 
     std::vector<std::filesystem::path> search_paths;
+    search_paths.reserve(3);
     if (!cluster_name.empty()) {
         search_paths.push_back(
             std::filesystem::path("/data/scaleout_configs") / cluster_name /

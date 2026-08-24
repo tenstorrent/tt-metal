@@ -34,24 +34,37 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     using namespace sharded_layernorm_helpers;
 
     // For sharded layernorm, core ranges are derived from tensor shard spec.
-    // If core_range_set is provided, validate that shard spec cores are within it.
+    // If core_range_set is provided, validate that every core this program will touch is within it.
     const auto& input_shard_spec = tensor_args.input.shard_spec();
     TT_FATAL(input_shard_spec.has_value(), "Sharded layernorm requires input tensor to have a shard spec");
 
     if (core_range_set.has_value()) {
         const auto& shard_grid = input_shard_spec.value().grid;
-        // Verify that all cores in the shard spec are within the provided core_range_set
-        for (const auto& shard_core_range : shard_grid.ranges()) {
-            for (auto x = shard_core_range.start_coord.x; x <= shard_core_range.end_coord.x; ++x) {
-                for (auto y = shard_core_range.start_coord.y; y <= shard_core_range.end_coord.y; ++y) {
-                    CoreCoord core = {x, y};
-                    TT_FATAL(
-                        core_range_set.value().contains(core),
-                        "Sharded tensor shard spec core ({}, {}) is not within the provided core_range_set. "
-                        "The sharded tensor must lie entirely within the input core range.",
-                        x,
-                        y);
+        // Multicast destinations span the whole bounding box of the shard grid, so a non-rectangular
+        // shard grid also places idle kernels, CBs and semaphores on the holes inside that box.
+        // Validate the bounding box rather than just the active shard cores, otherwise the program
+        // would run on cores the caller excluded and can collide with other programs.
+        const CoreRange mcast_bbox = shard_grid.bounding_box();
+        for (auto x = mcast_bbox.start_coord.x; x <= mcast_bbox.end_coord.x; ++x) {
+            for (auto y = mcast_bbox.start_coord.y; y <= mcast_bbox.end_coord.y; ++y) {
+                CoreCoord core = {x, y};
+                if (core_range_set.value().contains(core)) {
+                    continue;
                 }
+                TT_FATAL(
+                    !shard_grid.contains(core),
+                    "Sharded tensor shard spec core ({}, {}) is not within the provided core_range_set. "
+                    "The sharded tensor must lie entirely within the input core range.",
+                    x,
+                    y);
+                TT_THROW(
+                    "Core ({}, {}) is a hole in the non-rectangular shard grid {} and is not within the provided "
+                    "core_range_set. Sharded layernorm multicasts over the bounding box {} of the shard grid, so "
+                    "every core in that bounding box must be included in core_range_set.",
+                    x,
+                    y,
+                    shard_grid.str(),
+                    mcast_bbox.str());
             }
         }
     }
@@ -219,17 +232,17 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     program_descriptor.semaphores.push_back(SemaphoreDescriptor{
         .id = reduce_sender_semaphore_id,
         .core_type = tt::CoreType::WORKER,
-        .core_ranges = core_ranges.all_cores,
+        .core_ranges = core_ranges.mcast_dest_cores,
         .initial_value = 0});
     program_descriptor.semaphores.push_back(SemaphoreDescriptor{
         .id = reduce_receiver_semaphore_id,
         .core_type = tt::CoreType::WORKER,
-        .core_ranges = core_ranges.all_cores,
+        .core_ranges = core_ranges.mcast_dest_cores,
         .initial_value = 0});
     program_descriptor.semaphores.push_back(SemaphoreDescriptor{
         .id = reduce_second_stage_semaphore_id,
         .core_type = tt::CoreType::WORKER,
-        .core_ranges = core_ranges.all_cores,
+        .core_ranges = core_ranges.mcast_dest_cores,
         .initial_value = 0});
 
     // Get kernel defines using helper
@@ -299,8 +312,13 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     // Pack eps for later use
     uint32_t eps_u = std::bit_cast<uint32_t>(eps);
 
-    // Build runtime args using helper
-    const auto& cores = corerange_to_cores(core_ranges.all_cores, core_ranges.all_cores.num_cores(), grid.row_wise);
+    // Build runtime args using helper.
+    // Enumerate the shard grid as given, not core_ranges.all_cores: that is merge_ranges()'d, and merging
+    // can re-partition a non-rectangular grid into different rectangles whose traversal order no longer
+    // matches the tensor's shard order. Per-core index drives the gamma/beta offset, so a mismatch feeds
+    // cores the wrong weight slice.
+    const auto& shard_grid = grid.shard_spec.grid;
+    const auto& cores = corerange_to_cores(shard_grid, shard_grid.num_cores(), grid.row_wise);
 
     uint32_t last_core_width_index =
         grid.mcast_1d ? (cores.size() - 1) : (grid.row_wise ? (grid.grid_size.x - 1) : (grid.grid_size.y - 1));

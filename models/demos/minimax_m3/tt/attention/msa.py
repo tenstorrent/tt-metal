@@ -24,8 +24,8 @@ uniform across SP devices (no per-device offset needed). Causality is encoded en
 selection; sparse_sdpa_msa applies no token mask.
 """
 
-
 import ttnn
+from models.demos.minimax_m3.utils.profiler_utils import zone
 
 from .operations import apply_qk_norm_per_head, apply_rope
 
@@ -128,42 +128,44 @@ def msa_indexer_sparse(
     -> out  [1, Hq, Sq, head_dim]
     """
     # Block scores: scaled dot, causal -inf for future, group-sum, block-max-pool. bf16 row-major out.
-    block_scores = ttnn.experimental.indexer_score_msa(
-        index_q,
-        index_k,
-        chunk_start_idx=chunk_start_idx,
-        scale=scale,
-        num_groups=num_groups,
-        block_size=block_size,
-        program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0),
-        seq_shard_axes=[cluster_axis] if cluster_axis is not None else [],
-        block_cyclic_sp_axis=block_cyclic_sp_axis,
-        block_cyclic_chunk_local=block_cyclic_chunk_local,
-    )
+    with zone("indexer"):
+        block_scores = ttnn.experimental.indexer_score_msa(
+            index_q,
+            index_k,
+            chunk_start_idx=chunk_start_idx,
+            scale=scale,
+            num_groups=num_groups,
+            block_size=block_size,
+            program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0),
+            seq_shard_axes=[cluster_axis] if cluster_axis is not None else [],
+            block_cyclic_sp_axis=block_cyclic_sp_axis,
+            block_cyclic_chunk_local=block_cyclic_chunk_local,
+        )
 
-    # Top-k block ids (uint32 row-major) — the block selection that encodes causality. The op already
-    # force-locals the current (diagonal) block; upstream minimax_m3_vl forces ONLY the local block.
-    block_ids = ttnn.experimental.topk_large_indices(block_scores, k=topk_blocks)
+        # Top-k block ids (uint32 row-major) — the block selection that encodes causality. The op already
+        # force-locals the current (diagonal) block; upstream minimax_m3_vl forces ONLY the local block.
+        block_ids = ttnn.experimental.topk_large_indices(block_scores, k=topk_blocks)
 
     # sparse_sdpa_msa (#48700): q + block-ids row-major, K/V tiled; expands blocks->tokens internally.
     # chunk_start_idx + cluster_axis drive the token-level diagonal-block causal mask with the per-device
     # SP start (chunk_start = chunk_start_idx + rank*Sq); q must be bf16 (the op rejects fp8 q under causal).
-    out = ttnn.transformer.sparse_sdpa_msa(
-        ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT),
-        k,
-        v,
-        block_ids,
-        scale=scale,
-        block_size=block_size,
-        chunk_start_idx=chunk_start_idx,
-        cluster_axis=cluster_axis,
-        block_cyclic_sp_axis=block_cyclic_sp_axis,
-        block_cyclic_chunk_local=block_cyclic_chunk_local,
-    )
+    with zone("sparse_sdpa"):
+        out = ttnn.transformer.sparse_sdpa_msa(
+            ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT),
+            k,
+            v,
+            block_ids,
+            scale=scale,
+            block_size=block_size,
+            chunk_start_idx=chunk_start_idx,
+            cluster_axis=cluster_axis,
+            block_cyclic_sp_axis=block_cyclic_sp_axis,
+            block_cyclic_chunk_local=block_cyclic_chunk_local,
+        )
 
-    # sparse_sdpa_msa returns ROW_MAJOR; the model's concat_heads (prefill.py) needs TILE — match the
-    # dense (ring_joint) output so the shared post-attention path works for MSA layers too.
-    out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+        # sparse_sdpa_msa returns ROW_MAJOR; the model's concat_heads (prefill.py) needs TILE — match the
+        # dense (ring_joint) output so the shared post-attention path works for MSA layers too.
+        out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
     return (out, block_ids) if return_block_ids else out
 
 
@@ -194,9 +196,13 @@ def msa_sp_attention_nocache(
     """
     sp_axis = mesh_config.sp_axis
     device = ccl_manager.mesh_device
-    k_full = mesh_config.allgather(k, ccl_manager, axis=sp_axis, dim=2)
-    v_full = mesh_config.allgather(v, ccl_manager, axis=sp_axis, dim=2)
-    index_k_full = mesh_config.allgather(index_k, ccl_manager, axis=sp_axis, dim=2)
+    # ag_kv feeds sparse_sdpa_msa; ag_index_k feeds the indexer — split so the two AG costs are
+    # attributable to their consumer (see tests/perf/profile_prefill.py).
+    with zone("ag_kv"):
+        k_full = mesh_config.allgather(k, ccl_manager, axis=sp_axis, dim=2)
+        v_full = mesh_config.allgather(v, ccl_manager, axis=sp_axis, dim=2)
+    with zone("ag_index_k"):
+        index_k_full = mesh_config.allgather(index_k, ccl_manager, axis=sp_axis, dim=2)
     # Per-device causality via the merged op's native mesh-coord chunk_start (#47939): device r derives
     # chunk_start = cached_len + r*Sq (Sq = q's s_local rows) from its coordinate along cluster_axis=sp_axis.
     return msa_indexer_sparse(
@@ -267,9 +273,13 @@ def msa_sp_attention(
             full_bc = ttnn.typecast(full_bc, ttnn.bfloat16)
         return full_bc
 
-    k_full = gather(k_acc)
-    v_full = gather(v_acc)
-    index_k_full = gather(index_k_acc)
+    # ag_kv feeds sparse_sdpa_msa; ag_index_k feeds the indexer — split so the two AG costs are
+    # attributable to their consumer (see tests/perf/profile_prefill.py).
+    with zone("ag_kv"):
+        k_full = gather(k_acc)
+        v_full = gather(v_acc)
+    with zone("ag_index_k"):
+        index_k_full = gather(index_k_acc)
     # Per-device causality via the merged op's native mesh-coord chunk_start (#47939): device r derives
     # chunk_start = cached_len + r*Sq (Sq = q's s_local rows) from its coordinate along cluster_axis=sp_axis.
     # block_cyclic_sp_axis/chunk_local: the gathered context is still block-cyclic across the SP rows, so

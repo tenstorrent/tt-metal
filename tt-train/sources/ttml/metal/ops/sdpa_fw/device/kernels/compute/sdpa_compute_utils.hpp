@@ -162,7 +162,7 @@ void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t 
     cb_wait_front(cb_cur_max, onetile);
 
     reconfig_data_format(cb_attention_weights, cb_cur_max);
-    sub_bcast_cols_init_short(cb_attention_weights, cb_cur_max);
+    sub_bcast_cols_init(cb_attention_weights, cb_cur_max);
 
     // Fused scale+exp: compute exp(scale * (score - max)) in a single SFPU pass.
     // sdpa_exp_tile_scaled dispatches to the arch-appropriate path (WH sfpi mul or BH LREG12 fold).
@@ -275,7 +275,7 @@ void update_exp_max_diff(uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, 
     const uint32_t exp_max_diff_dst_idx = 0;
     reconfig_data_format(cb_prev_max_value, cb_cur_max_value);
     tile_regs_acquire();
-    sub_tiles_init(cb_prev_max_value, cb_cur_max_value);
+    sub_init(cb_prev_max_value, cb_cur_max_value);
     sub_tiles(
         cb_prev_max_value,
         cb_cur_max_value,
@@ -303,7 +303,7 @@ void update_cur_exp_sum_inplace(uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_ex
 
     const uint32_t exp_sum_dst_idx = 0;
     reconfig_data_format(cb_prev_sum_exp, cb_exp_max_diff);  // reconfig data format to precise
-    mul_bcast_cols_init_short(cb_prev_sum_exp, cb_exp_max_diff);
+    mul_bcast_cols_init(cb_prev_sum_exp, cb_exp_max_diff);
     tile_regs_acquire();
     // multiply previous exp sum with exp_max_diff
     mul_tiles_bcast_cols(cb_prev_sum_exp, cb_exp_max_diff, 0, 0, exp_sum_dst_idx);

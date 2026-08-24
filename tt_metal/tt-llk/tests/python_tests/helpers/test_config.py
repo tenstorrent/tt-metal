@@ -7,6 +7,7 @@ import os
 import shutil
 import struct
 import subprocess
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, fields
@@ -80,6 +81,8 @@ from .test_variant_parameters import (
 )
 from .utils import create_directories, run_shell_command
 
+TEMP_DIR = Path(tempfile.gettempdir())
+
 
 class ProfilerBuild(Enum):
     Yes = "true"
@@ -125,9 +128,10 @@ class TestConfig:
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
 
-    # Artefact directories. Prefer GHA RUNNER_TEMP (disk) over /tmp (often tmpfs)
-    # so compile artefacts do not accumulate in RAM and OOM the runner (exit 137).
-    DEFAULT_ARTEFACTS_PATH: ClassVar[Path] = Path("/tmp/tt-llk-build")
+    # Artefact directories. Prefer GHA RUNNER_TEMP (disk) over the system temp
+    # directory (often tmpfs) so compile artefacts do not accumulate in RAM and
+    # OOM the runner (exit 137).
+    DEFAULT_ARTEFACTS_PATH: ClassVar[Path] = TEMP_DIR / "tt-llk-build"
     ARTEFACTS_DIR: ClassVar[Path]
     SHARED_DIR: ClassVar[str]
     SHARED_OBJ_DIR: ClassVar[str]
@@ -184,6 +188,9 @@ class TestConfig:
 
     WORKER_ID: ClassVar[str] = "master"
     TENSIX_LOCATION: ClassVar[str] = "0,0"
+    # xdist worker index waiting for Exalens. setup_mode cannot ask the card yet:
+    # silicon init_ttexalens and the RTL remote connect both happen after it.
+    _PENDING_WORKER_INDEX: ClassVar[int | None] = None
     STIMULI_ADDRESS_MAP: ClassVar[dict[str, int]] = {}
     SIMULATOR_TIMEOUT: ClassVar[int] = 600
 
@@ -371,7 +378,7 @@ class TestConfig:
 
     @staticmethod
     def resolve_artefacts_path() -> Path:
-        """Build artefact root: $RUNNER_TEMP/tt-llk-build in GHA, else /tmp/tt-llk-build."""
+        """Use $RUNNER_TEMP/tt-llk-build in GHA, else tempfile.gettempdir()/tt-llk-build."""
         runner_temp = os.environ.get("RUNNER_TEMP")
         if runner_temp:
             return Path(runner_temp) / "tt-llk-build"
@@ -452,7 +459,9 @@ class TestConfig:
         TestConfig.OPTIONS_ALL = (
             f"{debug_flag}-O3 "
             "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
-            "-ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit "
+            "-ffast-math "
+            "-fno-finite-math-only -fsigned-zeros -fno-associative-math "
+            "-fno-exceptions -fno-rtti -fno-use-cxa-atexit "
         )
         TestConfig.WITH_COVERAGE = with_coverage
         StimuliConfig.WITH_COVERAGE = with_coverage
@@ -464,16 +473,23 @@ class TestConfig:
                 "-I../../hw/inc/internal/tt-1xx/wormhole",
                 "-I../../hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines",
                 "-I../../hw/ckernels/wormhole_b0/metal/llk_api",
+                "-I../../hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu",
             ]
         if TestConfig.ARCH == ChipArchitecture.BLACKHOLE:
             hw_specific_includes = [
                 "-I../../hw/inc/internal/tt-1xx/blackhole",
                 "-I../../hw/ckernels/blackhole/metal/llk_api",
+                # Some SFPU kernels include their neighbours unqualified
+                # ("ckernel_sfpu_exp.h") rather than as "llk_sfpu/<name>.h", which only
+                # resolves with this on the path. Listed last so the tt-llk copy still
+                # wins the basenames that exist in both trees.
+                "-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu",
             ]
         if TestConfig.ARCH == ChipArchitecture.QUASAR:
             hw_specific_includes = [
                 "-I../../hw/inc/internal/tt-2xx/quasar",
                 "-I../../hw/ckernels/quasar/metal/llk_api",
+                "-I../../hw/ckernels/quasar/metal/llk_api/llk_sfpu",
             ]
 
         if detailed_artefacts:
@@ -511,17 +527,24 @@ class TestConfig:
             f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD {llk_assert_define}{TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
-        TestConfig.INCLUDES = [
-            "-Isfpi/include",
-            f"-I../{TestConfig.ARCH_LLK_ROOT}/llk_lib",
-            f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc",
-            f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc/sfpu",
-            "-I../common",
-            "-I../../hw/inc",
-            "-Ifirmware/riscv/common",
-            "-Ihelpers/include",
-            "-I../../hostdevcommon/api",
-        ] + hw_specific_includes
+        TestConfig.INCLUDES = (
+            [
+                "-Isfpi/include",
+                f"-I../{TestConfig.ARCH_LLK_ROOT}/llk_lib",
+                f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc",
+                f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc/sfpu",
+                "-I../common",
+                "-I../../hw/inc",
+                "-Ifirmware/riscv/common",
+                "-Ihelpers/include",
+                "-I../../hostdevcommon/api",
+            ]
+            + hw_specific_includes
+            + [
+                # TODO: remove this after kernels get moved into Metal experimental (#52837)
+                "-I../../../ttnn/cpp/ttnn/operations/experimental",
+            ]
+        )
 
     @staticmethod
     def setup_build(
@@ -552,11 +575,19 @@ class TestConfig:
     ):
         TestConfig.WORKER_ID = worker_id
 
-        if worker_id != "master":
+        TestConfig._PENDING_WORKER_INDEX = None
+        if worker_id == "master":
+            TestConfig.TENSIX_LOCATION = "0,0"
+        elif compile_producer:
+            # Builds ELFs on the CPU and never reads the device, so it is not worth
+            # opening a context per worker to answer a question it does not ask.
             row, col = divmod(int(worker_id[2:]), 8)
             TestConfig.TENSIX_LOCATION = f"{row},{col}"
         else:
-            TestConfig.TENSIX_LOCATION = "0,0"
+            # Silicon and RTL do not have an Exalens context until later in
+            # pytest_configure / pytest_runtest_setup. Asking now would miss,
+            # and a cached miss used to pin the session to the 8-wide fallback.
+            TestConfig._PENDING_WORKER_INDEX = int(worker_id[2:])
 
         if compile_consumer and compile_producer:
             raise RuntimeError(
@@ -599,9 +630,23 @@ class TestConfig:
             )
             golden_generators_module.get_golden_generator = get_golden_proxied
 
-        # Always have a fresh build when compiling
-        if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
+        # Always have a fresh build when compiling. Under xdist, only the
+        # controller may remove the shared artifact tree; workers can already
+        # be compiling variants under it.
+        if (
+            TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]
+            and worker_id == "master"
+        ):
             shutil.rmtree(TestConfig.ARTEFACTS_DIR.absolute(), ignore_errors=True)
+
+    @staticmethod
+    def resolve_worker_tensix_location():
+        """Bind TENSIX_LOCATION from the card once Exalens has a context."""
+        index = TestConfig._PENDING_WORKER_INDEX
+        if index is None:
+            return
+        TestConfig.TENSIX_LOCATION = device_module.tensix_location_for_worker(index)
+        TestConfig._PENDING_WORKER_INDEX = None
 
     # === Instance fields and methods ===
     def __init__(
@@ -622,6 +667,7 @@ class TestConfig:
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
         requires_device_print: bool = False,
+        expected_nondeterministic: bool = False,
     ):
         self.coverage_build = (
             CoverageBuild.Yes if TestConfig.WITH_COVERAGE else CoverageBuild.No
@@ -654,6 +700,7 @@ class TestConfig:
         self.compile_time_formats = compile_time_formats
         self.dest_acc = dest_acc
         self.requires_device_print = requires_device_print
+        self.expected_nondeterministic = expected_nondeterministic
 
         TILE_SIZES = {
             DataFormat.Bfp8_b: 68,
@@ -762,15 +809,15 @@ class TestConfig:
 
         if not self.compile_time_formats:
             # Append struct.pack format for each FormatConfig to L1. Each "I" encodes one
-            # uint32_t DataFormat enum. Twelve I's = twelve fields appended in
+            # uint32_t DataFormat enum. Thirteen I's = thirteen fields appended in
             # write_runtimes_to_L1 (same order as argument_data). struct.pack encodes
             # those values using runtime_format into bytes for RuntimeParams on device.
             if self.L1_to_L1_iterations == 1:
                 lines.append("FormatConfig formats;")
-                self.runtime_format += "IIIIIIIIIIII"
+                self.runtime_format += "IIIIIIIIIIIII"
             else:
                 lines.append(f"FormatConfig formats[{self.L1_to_L1_iterations}];")
-                self.runtime_format += self.L1_to_L1_iterations * "IIIIIIIIIIII"
+                self.runtime_format += self.L1_to_L1_iterations * "IIIIIIIIIIIII"
 
         if self.variant_stimuli:
             stimuli_fields, stimuli_pack_format = (
@@ -809,7 +856,8 @@ class TestConfig:
                         TestConfig.DATA_FORMAT_ENUM[format_tuple.unpack_B_dst],
                         TestConfig.DATA_FORMAT_ENUM[format_tuple.unpack_S_dst],
                         TestConfig.DATA_FORMAT_ENUM[format_tuple.math],
-                        TestConfig.DATA_FORMAT_ENUM[format_tuple.sfpu_math],
+                        TestConfig.DATA_FORMAT_ENUM[format_tuple.sfpu_src],
+                        TestConfig.DATA_FORMAT_ENUM[format_tuple.sfpu_dst],
                         TestConfig.DATA_FORMAT_ENUM[format_tuple.pack_src],
                         TestConfig.DATA_FORMAT_ENUM[format_tuple.pack_dst],
                         TestConfig.DATA_FORMAT_ENUM[format_tuple.pack_S_src],
@@ -851,7 +899,7 @@ class TestConfig:
                 )
 
     def collect_hash(self):
-        lock_file = Path("/tmp/tt-llk-build-print.lock")
+        lock_file = TEMP_DIR / "tt-llk-build-print.lock"
         lock_file.touch(exist_ok=True)
 
         with open(lock_file, "w") as lock:
@@ -873,6 +921,8 @@ class TestConfig:
             "passed_runtimes",
             "current_run_type",
             "temp_elfs",
+            # Host-side determinism-check opt-out; does not affect the compiled kernel.
+            "expected_nondeterministic",
         ]
 
         if not TestConfig.SPEED_OF_LIGHT:
@@ -944,7 +994,7 @@ class TestConfig:
 
         shared_obj_dir = TestConfig.SHARED_OBJ_DIR
         shared_elf_dir = TestConfig.SHARED_ELF_DIR
-        lock_file = "/tmp/tt-llk-build-shared.lock"
+        lock_file = TEMP_DIR / "tt-llk-build-shared.lock"
 
         done_marker = shared_obj_dir / ".shared_complete"
 
@@ -1045,8 +1095,12 @@ class TestConfig:
                 f"ckernel::to_underlying(DataFormat::{fmt.math.name})"
                 for fmt in self.formats_config
             ]
-            sfpu_math_values = [
-                f"ckernel::to_underlying(DataFormat::{fmt.sfpu_math.name})"
+            sfpu_src_values = [
+                f"ckernel::to_underlying(DataFormat::{fmt.sfpu_src.name})"
+                for fmt in self.formats_config
+            ]
+            sfpu_dst_values = [
+                f"ckernel::to_underlying(DataFormat::{fmt.sfpu_dst.name})"
                 for fmt in self.formats_config
             ]
             pack_in_values = [
@@ -1075,15 +1129,16 @@ class TestConfig:
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> UNPACK_B_OUT_LIST = {{{', '.join(unpack_b_out_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> UNPACK_S_OUT_LIST = {{{', '.join(unpack_s_out_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> MATH_FORMAT_LIST = {{{', '.join(math_values)}}};",
-                    f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> SFPU_MATH_FORMAT_LIST = {{{', '.join(sfpu_math_values)}}};",
+                    f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> SFPU_IN_LIST = {{{', '.join(sfpu_src_values)}}};",
+                    f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> SFPU_OUT_LIST = {{{', '.join(sfpu_dst_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> PACK_IN_LIST = {{{', '.join(pack_in_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> PACK_OUT_LIST = {{{', '.join(pack_out_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> PACK_S_IN_LIST = {{{', '.join(pack_s_in_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> PACK_S_OUT_LIST = {{{', '.join(pack_s_out_values)}}};",
                     "constexpr std::array<FormatConfig, L1_to_L1_ITERATIONS> formats_array = {",
-                    "{FormatConfig(UNPACK_A_IN_LIST[0], UNPACK_B_IN_LIST[0], UNPACK_S_IN_LIST[0], UNPACK_A_OUT_LIST[0], UNPACK_B_OUT_LIST[0], UNPACK_S_OUT_LIST[0], MATH_FORMAT_LIST[0], SFPU_MATH_FORMAT_LIST[0], PACK_IN_LIST[0], PACK_OUT_LIST[0], PACK_S_IN_LIST[0], PACK_S_OUT_LIST[0]),",
+                    "{FormatConfig(UNPACK_A_IN_LIST[0], UNPACK_B_IN_LIST[0], UNPACK_S_IN_LIST[0], UNPACK_A_OUT_LIST[0], UNPACK_B_OUT_LIST[0], UNPACK_S_OUT_LIST[0], MATH_FORMAT_LIST[0], SFPU_IN_LIST[0], SFPU_OUT_LIST[0], PACK_IN_LIST[0], PACK_OUT_LIST[0], PACK_S_IN_LIST[0], PACK_S_OUT_LIST[0]),",
                     "FormatConfig(",
-                    "UNPACK_A_IN_LIST[1], UNPACK_B_IN_LIST[1], UNPACK_S_IN_LIST[1], UNPACK_A_OUT_LIST[1], UNPACK_B_OUT_LIST[1], UNPACK_S_OUT_LIST[1], MATH_FORMAT_LIST[1], SFPU_MATH_FORMAT_LIST[1], PACK_IN_LIST[1], PACK_OUT_LIST[1], PACK_S_IN_LIST[1], PACK_S_OUT_LIST[1])}};",
+                    "UNPACK_A_IN_LIST[1], UNPACK_B_IN_LIST[1], UNPACK_S_IN_LIST[1], UNPACK_A_OUT_LIST[1], UNPACK_B_OUT_LIST[1], UNPACK_S_OUT_LIST[1], MATH_FORMAT_LIST[1], SFPU_IN_LIST[1], SFPU_OUT_LIST[1], PACK_IN_LIST[1], PACK_OUT_LIST[1], PACK_S_IN_LIST[1], PACK_S_OUT_LIST[1])}};",
                 ]
             )
 
@@ -1101,12 +1156,13 @@ class TestConfig:
                     f"constexpr auto UNPACK_B_OUT = ckernel::to_underlying(DataFormat::{formats_config.unpack_B_dst.name});",
                     f"constexpr auto UNPACK_S_OUT = ckernel::to_underlying(DataFormat::{formats_config.unpack_S_dst.name});",
                     f"constexpr auto MATH_FORMAT = ckernel::to_underlying(DataFormat::{formats_config.math.name});",
-                    f"constexpr auto SFPU_MATH_FORMAT = ckernel::to_underlying(DataFormat::{formats_config.sfpu_math.name});",
+                    f"constexpr auto SFPU_IN = ckernel::to_underlying(DataFormat::{formats_config.sfpu_src.name});",
+                    f"constexpr auto SFPU_OUT = ckernel::to_underlying(DataFormat::{formats_config.sfpu_dst.name});",
                     f"constexpr auto PACK_IN = ckernel::to_underlying(DataFormat::{formats_config.pack_src.name});",
                     f"constexpr auto PACK_OUT = ckernel::to_underlying(DataFormat::{formats_config.pack_dst.name});",
                     f"constexpr auto PACK_S_IN = ckernel::to_underlying(DataFormat::{formats_config.pack_S_src.name});",
                     f"constexpr auto PACK_S_OUT = ckernel::to_underlying(DataFormat::{formats_config.pack_S_dst.name});",
-                    "constexpr FormatConfig formats = FormatConfig(UNPACK_A_IN, UNPACK_B_IN, UNPACK_S_IN, UNPACK_A_OUT, UNPACK_B_OUT, UNPACK_S_OUT, MATH_FORMAT, SFPU_MATH_FORMAT, PACK_IN, PACK_OUT, PACK_S_IN, PACK_S_OUT);",
+                    "constexpr FormatConfig formats = FormatConfig(UNPACK_A_IN, UNPACK_B_IN, UNPACK_S_IN, UNPACK_A_OUT, UNPACK_B_OUT, UNPACK_S_OUT, MATH_FORMAT, SFPU_IN, SFPU_OUT, PACK_IN, PACK_OUT, PACK_S_IN, PACK_S_OUT);",
                 ]
             )
 
@@ -1707,6 +1763,13 @@ class TestConfig:
             # accumulates onto the previous one. Re-runs are legitimately
             # expected to differ and comparing them would be meaningless.
             return "L1 accumulation makes every run add onto the previous result"
+        if self.expected_nondeterministic:
+            # Negative controls that deliberately run with a corrupt HW config
+            # (e.g. a zeroed addrmod) leave DEST addressing undefined, so the
+            # result is not bit-reproducible by contract. The functional check
+            # (expect_mismatch) still validates the single run; only the
+            # bit-exact re-run comparison is meaningless here.
+            return "variant intentionally exercises undefined hardware state"
         return None
 
     def _bit_exact_check_applies(self) -> bool:

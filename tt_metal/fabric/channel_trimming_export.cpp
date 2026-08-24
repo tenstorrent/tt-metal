@@ -95,6 +95,8 @@ void emit_sender_channels(
             << fmt::format("0x{:04X}", used_bitfield);
 
     emitter << YAML::Key << "sender_channels" << YAML::Value << YAML::BeginSeq;
+    std::vector<size_t> forwarded_from_vcs;
+    forwarded_from_vcs.reserve(builder_config::MAX_NUM_VCS);
     for (size_t ch = 0; ch < builder_config::num_max_sender_channels; ch++) {
         if (!(used_bitfield & (1u << ch))) {
             continue;
@@ -107,7 +109,7 @@ void emit_sender_channels(
                 << capture.sender_channel_max_packet_size_seen_bytes_by_vc[ch];
 
         // Collect VCs that forward to this sender channel
-        std::vector<size_t> forwarded_from_vcs;
+        forwarded_from_vcs.clear();
         for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; vc++) {
             if (capture.sender_channel_forwarded_to_bitfield_by_vc[vc] & (1u << ch)) {
                 forwarded_from_vcs.push_back(vc);

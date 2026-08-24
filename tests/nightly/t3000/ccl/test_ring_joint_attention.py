@@ -9,10 +9,10 @@ from itertools import product
 import ttnn
 from loguru import logger
 import pytest
-from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 from models.tt_dit.tests.unit.test_ring_joint_attention import (
     run_ring_joint_sdpa,
     run_ring_joint_sdpa_model_config,
+    run_ring_joint_sdpa_sharded_prompt,
     run_test_ring_joint_sdpa,
     create_ring_joint_sdpa_submesh,
     wh_t3k_unit_test_params,
@@ -20,6 +20,8 @@ from models.tt_dit.tests.unit.test_ring_joint_attention import (
     benchmark_model_input_shapes,
     parallel_config_map,
 )
+from models.tt_dit.utils.padding import get_padded_vision_seq_len
+from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 
 
 @wh_t3k_unit_test_params
@@ -193,6 +195,44 @@ def test_ring_joint_sdpa(
         skip_check,
         pcc_threshold,
         fp32_dest_acc_en=fp32_dest_acc_en,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 200000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["line"],
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+def test_ring_joint_sdpa_multi_batch_wh_t3k(mesh_device, all_gather_topology, reset_seeds):
+    """Non-sliding RingJointSDPA supports B>1 without cross-batch K/V chaining."""
+    submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis=0, rp_factor=2, up_axis=1, up_factor=2)
+
+    run_ring_joint_sdpa(
+        submesh,
+        b=2,
+        nh=8,
+        base_seq_len=1024,
+        padded_seq_len=1024,
+        joint_seq_len=0,
+        d=64,
+        q_chunk_size=128,
+        k_chunk_size=128,
+        dtype=ttnn.bfloat16,
+        n_iters=1,
+        trace_enabled=False,
+        num_links=1,
+        rp_axis=0,
+        up_axis=1,
+        all_gather_topology=all_gather_topology,
+        skip_check=False,
+        pcc_threshold=0.994,
     )
 
 
@@ -598,3 +638,62 @@ def test_ring_joint_sdpa_create_perf_table(model_id):
             f"{best['cores_used']} cores, {best['iters_per_core']} iters/core"
         )
     print(f"{'='*140}\n")
+
+
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["line"],
+)
+@pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["wh_t3k"]], ids=["2x4"], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "sp_axis, b, nh, base_seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size",
+    [
+        # sp_factor=2 on axis 0 of 2x4 mesh (matches unit-test wh_sp2 shape family)
+        (0, 1, 24, 64, 128, 64, 64, 64),
+    ],
+    ids=["sp2"],
+)
+def test_ring_joint_sdpa_sharded_prompt(
+    mesh_device,
+    num_links,
+    sp_axis,
+    b,
+    nh,
+    base_seq_len,
+    joint_seq_len,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    all_gather_topology,
+    reset_seeds,
+):
+    """Sharded-joint path: joint Q/K/V are L/P per device; logical_l gathers joint K/V internally."""
+    sp_factor = mesh_device.shape[sp_axis]
+    up_axis = 1 - sp_axis
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*mesh_device.shape))
+    submesh.cache_entries_counter = CacheEntriesCounter(submesh)
+    padded_seq_len = get_padded_vision_seq_len(base_seq_len, sp_factor)
+    assert joint_seq_len % sp_factor == 0, "joint_seq_len must be divisible by sp_factor"
+    run_ring_joint_sdpa_sharded_prompt(
+        submesh,
+        b=b,
+        nh=nh,
+        base_seq_len=base_seq_len,
+        padded_seq_len=padded_seq_len,
+        padded_joint_seq_len=joint_seq_len,
+        d=d,
+        rp_axis=sp_axis,
+        rp_factor=sp_factor,
+        up_axis=up_axis,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        num_links=num_links,
+        topology=all_gather_topology,
+    )

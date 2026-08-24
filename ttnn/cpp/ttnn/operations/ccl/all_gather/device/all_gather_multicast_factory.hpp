@@ -42,7 +42,8 @@ private:
         const ttnn::MeshCoordinate& sender_device_coord,
         const AllGatherInputs& tensor_args,
         const Tensor& output_tensor,
-        const tt::tt_metal::GlobalSemaphore& barrier_sem);
+        const tt::tt_metal::GlobalSemaphore& barrier_sem,
+        uint32_t num_available_cores);
 };
 
 }  // namespace ttnn::operations::ccl

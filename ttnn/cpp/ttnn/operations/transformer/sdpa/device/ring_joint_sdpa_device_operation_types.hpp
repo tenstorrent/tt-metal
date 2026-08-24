@@ -25,6 +25,7 @@ struct RingJointSDPAParams {
     bool is_balanced = false;
     bool is_cross = false;
     std::size_t logical_n = 0;
+    std::size_t logical_l = 0;
     std::size_t ring_size = 0;
     tt::tt_metal::MemoryConfig output_memory_config;
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config;
@@ -47,6 +48,7 @@ struct RingJointSDPAParams {
         bool is_balanced,
         bool is_cross,
         std::size_t logical_n,
+        std::size_t logical_l,
         std::size_t ring_size,
         tt::tt_metal::MemoryConfig output_memory_config,
         std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
@@ -66,6 +68,7 @@ struct RingJointSDPAParams {
         is_balanced(is_balanced),
         is_cross(is_cross),
         logical_n(logical_n),
+        logical_l(logical_l),
         ring_size(ring_size),
         output_memory_config(std::move(output_memory_config)),
         program_config(std::move(program_config)),
@@ -97,6 +100,7 @@ struct RingJointSDPAParams {
         "is_balanced",
         "is_cross",
         "cache_key_logical_n",
+        "logical_l",
         "ring_size",
         "compute_kernel_config",
         "program_config",
@@ -115,6 +119,7 @@ struct RingJointSDPAParams {
             std::cref(is_balanced),
             std::cref(is_cross),
             has_kv_pad_rotation() ? std::size_t{0} : logical_n,
+            std::cref(logical_l),
             std::cref(ring_size),
             std::cref(compute_kernel_config),
             std::cref(program_config),
@@ -138,6 +143,19 @@ struct RingJointSDPAInputs {
     Tensor gathered_k;
     std::optional<Tensor> gathered_v;
     std::optional<Tensor> attention_sink;
+
+    // Populated on the sharded-joint path only; nullopt on the replicated path.
+    // Invariant: joint_is_sharded() <=> gathered_joint_k.has_value()
+    std::optional<Tensor> gathered_joint_k;
+    std::optional<Tensor> gathered_joint_v;
+
+    // Trace-safe metadata path (opt-in): two 1-element uint32 DRAM tensors holding the per-chunk
+    // scalars that would otherwise be host-computed and frozen by a ttnn trace. slot_id holds the
+    // cache-user slot (was metadata[0]); kv_actual_isl holds the prior valid global KV length (was
+    // metadata[1]). When present (both together), the readers/writer compute
+    // kv_cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx and derive
+    // logical_nt / q-mapping / ring masks on-device from kv_actual_isl, so one captured program
+    // replays across chunks. std::nullopt => classic host-scalar path (unchanged).
     std::optional<Tensor> slot_id;
     std::optional<Tensor> kv_actual_isl;
 
@@ -161,6 +179,10 @@ struct RingJointSDPAInputs {
     uint32_t v_head_dim(uint32_t latent_v_head_dim) const {
         return input_v.has_value() ? static_cast<uint32_t>(input_v->logical_shape()[3]) : latent_v_head_dim;
     }
+
+    // True iff the joint/prompt set is sequence-sharded (L/P per device).
+    // Derived from buffer presence so the flag and the buffer cannot drift out of sync.
+    bool joint_is_sharded() const { return gathered_joint_k.has_value(); }
 };
 
 // Index constants for RingJointSDPAResult vector

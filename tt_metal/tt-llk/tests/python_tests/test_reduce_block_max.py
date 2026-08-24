@@ -102,12 +102,19 @@ def _run_reduce_block_max(
     respect_trigger=False,
     overlap_first_half=False,
     expect_mismatch=False,
+    expected_nondeterministic=False,
 ):
     """Run one reduce_block_max_row variant and validate column [0] against golden.
 
     ``expect_mismatch`` inverts the verdict: the run must diverge from golden. Used by
     the negative controls, which pin that a clobber left un-repaired really does corrupt
     the reduce (so the reinit cases are not passing for free).
+
+    ``expected_nondeterministic`` exempts the variant from the --bit-exact-runs
+    determinism check: a run with a deliberately corrupt HW config leaves DEST
+    addressing undefined, so its output is not bit-reproducible by contract (and is
+    arch-dependent: stable on Wormhole, a coin-flip on Blackhole). The single-run
+    functional check above still applies.
     """
     dest_acc = _dest_acc(formats.output_format)
 
@@ -166,6 +173,7 @@ def _run_reduce_block_max(
             sfpu=False,
         ),
         dest_acc=dest_acc,
+        expected_nondeterministic=expected_nondeterministic,
     )
 
     res_from_L1 = configuration.run().result
@@ -312,6 +320,7 @@ def test_reduce_block_max_reinit_negative_control(block_ct_dim, reinit):
         reinit=reinit,
         clobber="addrmod_all",
         expect_mismatch=True,
+        expected_nondeterministic=True,
     )
 
 

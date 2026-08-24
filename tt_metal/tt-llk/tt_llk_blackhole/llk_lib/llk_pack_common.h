@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_mutex_guard.h"
 #include "ckernel_ops.h"
 #include "cpack_common.h"
 #include "llk_defs.h"
@@ -23,7 +24,12 @@ using namespace ckernel::packer;
 // wait until math is done and has produced something to pack
 inline void _llk_packer_wait_for_math_done_()
 {
-    TTI_SEMWAIT(p_stall::STALL_TDMA, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO);
+    // The mask must cover STALL_SYNC as well as STALL_TDMA: the Wait Gate only blocks classes named in it, so with a
+    // TDMA-only mask the Sync-class ATGETM of a mutexed _llk_pack_ slips past this unmet wait and takes
+    // mutex::THREAD2_ADC, the SETADC behind it blocks head-of-line, and the ATRELM is stranded behind that. The packer
+    // then waits on MATH_PACK holding the mutex the unpack thread needs every iteration: deadlock. Naming the Sync
+    // class costs nothing when unmutexed.
+    TTI_SEMWAIT(p_stall::STALL_TDMA | p_stall::STALL_SYNC, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO);
 }
 
 /**
@@ -125,10 +131,14 @@ inline void _llk_pack_dest_init_()
  * Sets the packer CH0 W counter to tile_index, which addresses the tile within the destination
  * register that subsequent PACR instructions pack out.
  *
+ * @tparam mutex_ADC: When true, serialize the SETADC issue against mutex::THREAD2_ADC. Needed only when
+ *         another thread borrows the pack thread's ADCs; forwarded from @ref _llk_pack_.
  * @param tile_index: Index of the source tile in the destination register.
  */
+template <bool mutex_ADC = false>
 inline void set_dst_write_addr(const std::uint32_t tile_index)
 {
+    T6MutexLockGuard<mutex_ADC> guard(mutex::THREAD2_ADC);
     TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_index);
 }
 

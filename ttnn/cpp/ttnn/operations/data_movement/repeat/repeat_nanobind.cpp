@@ -5,8 +5,10 @@
 #include "repeat_nanobind.hpp"
 
 #include <optional>
+#include <string>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"  // for ttsl::SmallVector<uint32_t>
@@ -26,6 +28,8 @@ void bind_repeat(nb::module_& mod) {
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            implementation (str, optional): "auto" (default), "native", or "codegen".
+            optional_output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -34,12 +38,18 @@ void bind_repeat(nb::module_& mod) {
     ttnn::bind_function<"repeat">(
         mod,
         doc,
-        nb::overload_cast<const ttnn::Tensor&, const ttsl::SmallVector<uint32_t>&, const std::optional<MemoryConfig>&>(
-            &ttnn::repeat),
+        nb::overload_cast<
+            const ttnn::Tensor&,
+            const ttsl::SmallVector<uint32_t>&,
+            const std::optional<MemoryConfig>&,
+            const std::string&,
+            const std::optional<Tensor>&>(&ttnn::repeat),
         nb::arg("input_tensor"),
         nb::arg("repeat_dims"),
         nb::kw_only(),
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("implementation") = "auto",
+        nb::arg("optional_output_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement

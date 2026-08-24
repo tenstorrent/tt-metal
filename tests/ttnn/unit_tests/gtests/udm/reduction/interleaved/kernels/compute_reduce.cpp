@@ -62,7 +62,7 @@ void kernel_main() {
     constexpr uint32_t scaler0 = 0;
 
     // ==================== Initialize reduction ====================
-    binary_op_init_common(cb_in0, cb_in0, cb_out);
+    compute_kernel_hw_startup(cb_in0, cb_in0, cb_out);
     constexpr bool swap_operands = (REDUCE_DIM == ReduceDim::REDUCE_ROW) && (REDUCE_OP != PoolType::MAX);
     if constexpr (swap_operands) {
         reconfig_data_format(cb_scaler, cb_in0);

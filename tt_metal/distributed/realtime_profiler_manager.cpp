@@ -53,6 +53,7 @@
 #include "dispatch/dispatch_mem_map.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "llrt/hal.hpp"
+#include "program/program_impl.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/data_collector.hpp"
@@ -739,7 +740,7 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
             CreateKernel(
                 realtime_profiler_program, realtime_profiler_push_kernel_path, realtime_profiler_core, ncrisc_config);
 
-            tt::tt_metal::detail::CompileProgram(device, realtime_profiler_program, /*force_slow_dispatch=*/true);
+            realtime_profiler_program.impl().compile(device, /*force_slow_dispatch=*/true);
             ::tt::tt_metal::detail::WriteRuntimeArgsToDevice(
                 device, realtime_profiler_program, /*force_slow_dispatch=*/true);
             ::tt::tt_metal::detail::LaunchProgram(
@@ -1260,6 +1261,7 @@ void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samp
         uint64_t device_time;  // Device wall clock cycles
     };
     std::vector<SyncSample> samples;
+    samples.reserve(num_samples);
 
     // Discard pre-existing pages before sync (their PCIe-mapped bytes can be undefined on a fresh MeshDevice);
     // discard_pending_pages rebases bytes_acked and notifies the device.
@@ -1387,7 +1389,7 @@ void RealtimeProfilerManager::run_sync(DeviceState& dev_state, uint32_t num_samp
         dev_state.first_timestamp = static_cast<uint64_t>(intercept);
         dev_state.sync_host_start = host_start_time;
 
-        log_info(
+        log_debug(
             tt::LogMetal,
             "[Real-time profiler] Device {} sync complete: {} samples, frequency={:.6f} GHz, "
             "device_time_at_sync={} cycles",

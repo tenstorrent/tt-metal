@@ -33,6 +33,7 @@ struct OpSignaler {
     Semaphore<> signal_op_sem{0};
     bool mcast_signal_op_cores = true;
     uint32_t curr_worker_is_master = 0;
+    uint32_t curr_worker_index = 0;  // this worker's row-major core id (selects its per-core counter slot)
 
     bool initialized = false;
 
@@ -41,7 +42,8 @@ struct OpSignaler {
     OpSignaler(uint32_t& rt_args_idx) {
         // Runtime args
         this->num_workers_to_sync = get_arg_val<uint32_t>(rt_args_idx++);
-        uint32_t curr_worker_index = get_arg_val<uint32_t>(rt_args_idx++);
+        this->curr_worker_index = get_arg_val<uint32_t>(rt_args_idx++);
+        const uint32_t curr_worker_index = this->curr_worker_index;
         this->worker_sync_sem = Semaphore<>(get_arg_val<uint32_t>(rt_args_idx++));
         this->workers_noc_coords = (uint32_t*)get_arg_addr(
             increment_arg_idx(rt_args_idx, this->num_workers_to_sync * 2));  // Skip over the number of workers
@@ -107,6 +109,20 @@ struct OpSignaler {
 
             // Clear the slave semaphore, so that it can be used again
             this->worker_sync_sem.set(0);
+        }
+    }
+
+    // Per-core fused-op signaling (NO worker barrier)
+    void signal_op_per_core(uint32_t counter_base_l1) {
+        ASSERT(this->initialized);
+        const uint32_t counter_addr = counter_base_l1 + this->curr_worker_index * sizeof(uint32_t);
+        for (uint32_t i = 0; i < this->num_fused_op_cores_to_signal; i++) {
+            const uint64_t dst_noc_addr = ::get_noc_addr(
+                this->signal_op_cores_noc_coords[i * 2],
+                this->signal_op_cores_noc_coords[i * 2 + 1],
+                counter_addr,
+                this->noc.get_noc_id());
+            noc_semaphore_inc(dst_noc_addr, 1, this->noc.get_noc_id());
         }
     }
 };
