@@ -458,10 +458,11 @@ def run_group_norm_non_tile_aligned_DRAM(
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", GROUP_NORM_NON_TILE_ALIGNED_DRAM_SHAPES)
-@pytest.mark.parametrize("use_welford", [False, True], ids=["tile_reduction", "two_pass"])
+@pytest.mark.parametrize("use_welford", [False, True], ids=["tile_reduction", "two_pass_tile_fallback"])
 def test_group_norm_non_tile_aligned_DRAM(device, N, C, H, W, num_groups, use_welford):
     # Fused interleaved group_norm must match torch even when N*H*W is not a multiple of the tile
-    # height. use_welford=True is routed to the two-pass path; auto grid selection.
+    # height. use_welford=True requests stable statistics but falls back to tile reduction so the
+    # padding rows can be masked; auto grid selection is used.
     if device.core_grid.y == 7:
         pytest.skip()
 
@@ -988,20 +989,20 @@ GN_INTERLEAVED_SHAPES = [
         ("tile_reduction", ttnn.bfloat16, ttnn.float32),
         ("tile_reduction", ttnn.float32, ttnn.float32),
         ("tile_reduction", ttnn.float32, ttnn.bfloat16),
-        ("online_welford", ttnn.bfloat16, ttnn.float32),
-        ("online_welford", ttnn.float32, ttnn.bfloat16),
-        ("online_welford_reciprocal_lut", ttnn.bfloat16, ttnn.bfloat16),
-        ("online_welford_reciprocal_lut", ttnn.float32, ttnn.float32),
+        ("two_pass", ttnn.bfloat16, ttnn.float32),
+        ("two_pass", ttnn.float32, ttnn.bfloat16),
+        ("two_pass", ttnn.bfloat16, ttnn.bfloat16),
+        ("two_pass", ttnn.float32, ttnn.float32),
     ],
     ids=[
         "tile_reduction-bf16-gb_bf16",
         "tile_reduction-bf16-gb_fp32",
         "tile_reduction-fp32-gb_fp32",
         "tile_reduction-fp32-gb_bf16",
-        "online_welford-bf16-gb_fp32",
-        "online_welford-fp32-gb_bf16",
-        "online_welford_reciprocal_lut-bf16-gb_bf16",
-        "online_welford_reciprocal_lut-fp32-gb_fp32",
+        "two_pass-bf16-gb_fp32",
+        "two_pass-fp32-gb_bf16",
+        "two_pass-bf16-gb_bf16",
+        "two_pass-fp32-gb_fp32",
     ],
 )
 def test_group_norm_interleaved_all_config(
