@@ -23,6 +23,11 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
     constexpr std::string_view operation_name = "affine_exclusive_scan";
     constexpr std::array accepted_summary_dtypes = {tt::tt_metal::DataType::FLOAT32, tt::tt_metal::DataType::BFLOAT16};
     kda_factory_detail::check_allocated_device_tensor(in.a, operation_name, "a");
+    TT_FATAL(
+        in.a.device()->arch() == tt::ARCH::BLACKHOLE,
+        "{} is only supported on Blackhole architecture, got {}",
+        operation_name,
+        in.a.device()->arch());
     kda_factory_detail::check_layout(in.a, tt::tt_metal::Layout::TILE, operation_name, "a");
     kda_factory_detail::check_dtype_in(in.a, accepted_summary_dtypes, "FLOAT32 or BFLOAT16", operation_name, "a");
     kda_factory_detail::check_allocated_device_tensor(in.b, operation_name, "b");
