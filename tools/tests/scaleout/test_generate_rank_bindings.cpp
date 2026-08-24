@@ -267,7 +267,7 @@ TEST(GenerateRankBindingsHelpersTest, AllWritersProduceThreeFilesInTempDir) {
 }
 
 // ---------------------------------------------------------------------------
-// Mesh pinning file (optional Phase 1 host pinning input)
+// Mesh pinning file (optional Phase 1 mesh-host-rank placement input)
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -282,39 +282,60 @@ std::filesystem::path write_pinning_file(const std::filesystem::path& dir, const
 
 }  // namespace
 
-TEST(MeshPinningFileTest, ParsesMeshToHostMappings) {
+TEST(MeshPinningFileTest, ParsesManyToManyPlacementGroup) {
     const auto dir = make_temp_dir("pin_global");
-    const auto path = write_pinning_file(dir, R"(mesh_pinnings:
-  - mesh_id: 0
-    host: host-A
-    TT_VISIBLE_DEVICES: "0,1,2,3"
-  - mesh_id: 3
-    host: host-B
+    const auto path = write_pinning_file(dir, R"(mesh_host_pinnings:
+  - mesh_host_ranks:
+      - mesh_id: 0
+        mesh_host_rank: 0
+      - mesh_id: 0
+        mesh_host_rank: 1
+    host_placements:
+      - hostname: host-A
+        TT_VISIBLE_DEVICES: "3,1"
+      - hostname: host-B
+        TT_VISIBLE_DEVICES: "1,3"
+      - hostname: host-C
+        TT_VISIBLE_DEVICES: "1,3"
 )");
 
-    const auto pinnings = parse_mesh_pinning_file(path.string());
-    ASSERT_EQ(pinnings.size(), 2u);
-    EXPECT_EQ(pinnings[0].mesh_id, 0);
-    EXPECT_EQ(pinnings[0].host, "host-A");
-    ASSERT_TRUE(pinnings[0].tt_visible_devices.has_value());
-    EXPECT_EQ(pinnings[0].tt_visible_devices.value(), "0,1,2,3");
-    EXPECT_EQ(pinnings[1].mesh_id, 3);
-    EXPECT_EQ(pinnings[1].host, "host-B");
-    EXPECT_FALSE(pinnings[1].tt_visible_devices.has_value());
+    const auto groups = parse_mesh_pinning_file(path.string());
+    ASSERT_EQ(groups.size(), 1u);
+    ASSERT_EQ(groups[0].mesh_host_ranks.size(), 2u);
+    EXPECT_EQ(*groups[0].mesh_host_ranks[1].first, 0u);
+    EXPECT_EQ(*groups[0].mesh_host_ranks[1].second, 1u);
+    ASSERT_EQ(groups[0].host_placements.size(), 3u);
+    EXPECT_EQ(groups[0].host_placements[0].hostname, "host-A");
+    EXPECT_EQ(groups[0].host_placements[0].tt_visible_devices, std::vector<int>({1, 3}));
 
-    const auto empty_path = write_pinning_file(dir, "mesh_pinnings: []\n");
+    const auto empty_path = write_pinning_file(dir, "mesh_host_pinnings: []\n");
     EXPECT_TRUE(parse_mesh_pinning_file(empty_path.string()).empty());
 }
 
 TEST(MeshPinningFileTest, RejectsInvalidDocuments) {
     const std::vector<std::string> invalid_documents = {
-        "pinnings:\n  - mesh_id: 0\n    host: host-A\n",
-        "mesh_pinnings: {}\n",
-        "mesh_pinnings:\n  - mesh_id: 0\n    host: host-A\n    slot: 1\n",
-        "mesh_pinnings:\n  - mesh_id: 0\n",
-        "mesh_pinnings:\n  - host: h\n",
-        "mesh_pinnings:\n  - mesh_id: -1\n    host: h\n",
-        "mesh_pinnings:\n  - mesh_id: 1\n    host: hA\n  - mesh_id: 1\n    host: hB\n",
+        "mesh_pinnings:\n  - mesh_id: 0\n    host: host-A\n",
+        "mesh_host_pinnings: {}\n",
+        R"(mesh_host_pinnings:
+  - mesh_host_ranks: [{mesh_id: 0, mesh_host_rank: 0}, {mesh_id: 0, mesh_host_rank: 1}]
+    host_placements: [{hostname: h, TT_VISIBLE_DEVICES: "0"}]
+)",
+        R"(mesh_host_pinnings:
+  - mesh_host_ranks: [{mesh_id: 0, mesh_host_rank: 0}, {mesh_id: 0, mesh_host_rank: 0}]
+    host_placements: [{hostname: h0, TT_VISIBLE_DEVICES: "0"}, {hostname: h1, TT_VISIBLE_DEVICES: "0"}]
+)",
+        R"(mesh_host_pinnings:
+  - mesh_host_ranks: [{mesh_id: 0, mesh_host_rank: 0}]
+    host_placements: [{hostname: h, TT_VISIBLE_DEVICES: "0"}, {hostname: h, TT_VISIBLE_DEVICES: "0,1"}]
+)",
+        R"(mesh_host_pinnings:
+  - mesh_host_ranks: [{mesh_id: 0, mesh_host_rank: 0}]
+    host_placements: [{hostname: h}]
+)",
+        R"(mesh_host_pinnings:
+  - mesh_host_ranks: [{mesh_id: 0, mesh_host_rank: 0}]
+    host_placements: [{hostname: h, TT_VISIBLE_DEVICES: "0,nope"}]
+)",
     };
 
     for (std::size_t i = 0; i < invalid_documents.size(); ++i) {

@@ -2676,7 +2676,7 @@ def new_mode_flow(
         bare: If True, disable tt-run defaults
         tcp_interface: Network interface for MPI TCP communication
         force_rediscovery: If True, always run Phase 1 and refresh cache (skip cache hit)
-        mesh_pinning_file: Optional pinning YAML mapping a subset of mesh IDs to specific hosts
+        mesh_pinning_file: Optional YAML constraining mesh host ranks to hostname + TT_VISIBLE_DEVICES placements
     """
     program = ctx.args
 
@@ -2945,8 +2945,8 @@ def new_mode_flow(
     "--mesh-pinning-file",
     type=click.Path(path_type=Path),
     required=False,
-    help="New mode only: optional YAML pinning specific mesh IDs to hosts. Meshes not listed are placed "
-    "automatically by the auto-mapper. Requires --mesh-graph-descriptor.",
+    help="New mode only: optional YAML constraining mesh host ranks to hostname + TT_VISIBLE_DEVICES placements. "
+    "Unlisted mesh host ranks are placed automatically. Requires --mesh-graph-descriptor.",
 )
 @click.option(
     "--hosts",

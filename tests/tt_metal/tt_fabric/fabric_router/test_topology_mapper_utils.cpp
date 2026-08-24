@@ -1160,20 +1160,26 @@ TEST_F(TopologyMapperUtilsTest, Pinning_MapMultiMeshToPhysical_MeshLevelPinnings
     }
 }
 
-TEST_F(TopologyMapperUtilsTest, MeshHostPinning_RequiresPhysicalMeshWhollyOnPinnedHost) {
+TEST_F(TopologyMapperUtilsTest, MeshHostRankPinningRequiresPhysicalMeshContainingExactAsicPool) {
     using namespace ::tt::tt_fabric;
 
     const MeshId logical_mesh{0};
     const MeshId mixed_physical_mesh{0};
     const MeshId local_physical_mesh{1};
-    const std::vector<FabricNodeId> logical_nodes = {FabricNodeId(logical_mesh, 0), FabricNodeId(logical_mesh, 1)};
+    const std::vector<FabricNodeId> logical_nodes = {
+        FabricNodeId(logical_mesh, 0),
+        FabricNodeId(logical_mesh, 1),
+        FabricNodeId(logical_mesh, 2),
+        FabricNodeId(logical_mesh, 3)};
 
     LogicalMultiMeshGraph logical;
     logical.mesh_adjacency_graphs_[logical_mesh] = AdjacencyGraph<FabricNodeId>(build_chain_adjacency(logical_nodes));
     logical.mesh_level_graph_ = AdjacencyGraph<MeshId>({{logical_mesh, {}}});
 
-    const std::vector<tt::tt_metal::AsicID> mixed_asics = {make_asic(100), make_asic(101)};
-    const std::vector<tt::tt_metal::AsicID> local_asics = {make_asic(200), make_asic(201)};
+    const std::vector<tt::tt_metal::AsicID> mixed_asics = {
+        make_asic(100), make_asic(101), make_asic(102), make_asic(103)};
+    const std::vector<tt::tt_metal::AsicID> local_asics = {
+        make_asic(200), make_asic(201), make_asic(202), make_asic(203)};
     PhysicalMultiMeshGraph physical;
     physical.mesh_adjacency_graphs_[mixed_physical_mesh] =
         AdjacencyGraph<tt::tt_metal::AsicID>(build_chain_adjacency(mixed_asics));
@@ -1182,16 +1188,15 @@ TEST_F(TopologyMapperUtilsTest, MeshHostPinning_RequiresPhysicalMeshWhollyOnPinn
     physical.mesh_level_graph_ = AdjacencyGraph<MeshId>({{mixed_physical_mesh, {}}, {local_physical_mesh, {}}});
 
     std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
-    for (const auto& node : logical_nodes) {
-        fabric_node_id_to_mesh_rank[logical_mesh][node] = rank0_;
-    }
+    fabric_node_id_to_mesh_rank[logical_mesh][logical_nodes[0]] = rank0_;
+    fabric_node_id_to_mesh_rank[logical_mesh][logical_nodes[1]] = rank0_;
+    fabric_node_id_to_mesh_rank[logical_mesh][logical_nodes[2]] = rank1_;
+    fabric_node_id_to_mesh_rank[logical_mesh][logical_nodes[3]] = rank1_;
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
 
     TopologyMappingConfig config;
     config.inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;
-    config.hostname_to_asics["host-A"] = {mixed_asics[0], local_asics[0], local_asics[1]};
-    config.hostname_to_asics["host-B"] = {mixed_asics[1]};
-    config.mesh_host_pinnings[logical_mesh] = "host-A";
+    config.mesh_host_rank_pinnings[{logical_mesh, rank0_}] = {local_asics[0], local_asics[1]};
 
     const auto result =
         map_multi_mesh_to_physical(logical, physical, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
@@ -1200,7 +1205,7 @@ TEST_F(TopologyMapperUtilsTest, MeshHostPinning_RequiresPhysicalMeshWhollyOnPinn
     EXPECT_THAT(
         std::set<tt::tt_metal::AsicID>(
             {result.fabric_node_to_asic.at(logical_nodes[0]), result.fabric_node_to_asic.at(logical_nodes[1])}),
-        ::testing::ContainerEq(std::set<tt::tt_metal::AsicID>(local_asics.begin(), local_asics.end())));
+        ::testing::ContainerEq(std::set<tt::tt_metal::AsicID>({local_asics[0], local_asics[1]})));
 }
 
 // =============================================================================

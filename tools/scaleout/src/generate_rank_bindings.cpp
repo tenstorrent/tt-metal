@@ -3,18 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <cctype>
 #include <climits>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <map>
-#include <set>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <tuple>
 #include <utility>
 #include <unordered_map>
@@ -51,6 +50,8 @@ using namespace tt::tt_metal::experimental::tt_fabric;
 using namespace tt::tt_fabric;
 
 namespace {
+using MeshHostRankKey = std::pair<MeshId, MeshHostRankId>;
+
 struct MeshGraphAndLocalMeshId {
     const MeshGraph* graph = nullptr;
     MeshId local_mesh_id{0};
@@ -59,6 +60,18 @@ struct MeshGraphAndLocalMeshId {
 struct TopologyMappingWithLocalMaps {
     TopologyMappingResult mapping;
     std::vector<std::map<MeshId, MeshId>> per_part_local_to_global_mesh_ids;
+    std::map<MeshHostRankKey, HostPlacement> selected_mesh_host_rank_pinnings;
+};
+
+struct ResolvedHostPlacement {
+    HostPlacement host_placement;
+    std::set<AsicID> asics;
+};
+
+struct ResolvedMeshHostRankPinningGroup {
+    // Each element is (MGD-local key, merged-global key).
+    std::vector<std::pair<MeshHostRankKey, MeshHostRankKey>> mesh_host_ranks;
+    std::vector<ResolvedHostPlacement> host_placements;
 };
 
 // Resolves a logical global MeshId (after merge) to the owning MeshGraph and MGD-local mesh id using the same
@@ -116,18 +129,15 @@ bool mesh_graph_includes_intermesh_links(const MeshGraph& g) {
     return !g.get_requested_intermesh_connections().empty() || !g.get_requested_intermesh_ports().empty();
 }
 
-std::size_t count_visible_device_tokens(std::string_view value) {
-    std::size_t count = 0;
-    bool has_non_whitespace = false;
-    for (const char c : value) {
-        if (c == ',') {
-            count += has_non_whitespace ? 1 : 0;
-            has_non_whitespace = false;
-        } else if (!std::isspace(static_cast<unsigned char>(c))) {
-            has_non_whitespace = true;
+std::string format_visible_devices(const std::vector<int>& devices) {
+    std::string value;
+    for (const int device : devices) {
+        if (!value.empty()) {
+            value += ',';
         }
+        value += std::to_string(device);
     }
-    return count + (has_non_whitespace ? 1 : 0);
+    return value;
 }
 }  // namespace
 
@@ -149,6 +159,103 @@ PhysicalSystemDescriptor run_psd_discovery() {
     return tt::tt_metal::run_physical_system_discovery(*driver_ref.get_cluster_description(), distributed_context, rtoptions.get_target_device());
 }
 
+namespace {
+std::vector<ResolvedMeshHostRankPinningGroup> resolve_mesh_host_rank_pinnings(
+    const PhysicalSystemDescriptor& psd,
+    const MeshGraph& mesh_graph,
+    const std::map<MeshId, MeshId>& local_to_global_mesh_ids,
+    const std::map<std::string, std::set<AsicID>>& hostname_to_asics,
+    const std::vector<MeshHostRankPinningGroup>& pinning_groups) {
+    const auto& cluster = MetalContext::instance().get_cluster();
+    std::vector<ResolvedMeshHostRankPinningGroup> resolved_groups;
+    resolved_groups.reserve(pinning_groups.size());
+
+    for (const MeshHostRankPinningGroup& group : pinning_groups) {
+        ResolvedMeshHostRankPinningGroup resolved_group;
+        std::vector<std::size_t> logical_node_counts;
+        for (const MeshHostRankKey& local_key : group.mesh_host_ranks) {
+            const auto global_mesh_it = local_to_global_mesh_ids.find(local_key.first);
+            if (global_mesh_it == local_to_global_mesh_ids.end()) {
+                throw std::runtime_error(fmt::format(
+                    "Mesh pinning file references mesh_id {}, which the MGD does not define", *local_key.first));
+            }
+
+            std::size_t logical_node_count = 0;
+            for (const auto& [_, chip_id] : mesh_graph.get_chip_ids(local_key.first)) {
+                const auto host_rank = mesh_graph.get_host_rank_for_chip(local_key.first, chip_id);
+                if (host_rank.has_value() && host_rank.value() == local_key.second) {
+                    ++logical_node_count;
+                }
+            }
+            if (logical_node_count == 0) {
+                throw std::runtime_error(fmt::format(
+                    "Mesh pinning file references mesh_id {} mesh_host_rank {}, which the MGD does not define",
+                    *local_key.first,
+                    *local_key.second));
+            }
+            logical_node_counts.push_back(logical_node_count);
+            resolved_group.mesh_host_ranks.push_back(
+                {local_key, MeshHostRankKey{global_mesh_it->second, local_key.second}});
+        }
+
+        for (const HostPlacement& placement : group.host_placements) {
+            const auto host_it = hostname_to_asics.find(placement.hostname);
+            if (host_it == hostname_to_asics.end()) {
+                std::string discovered_hosts;
+                for (const auto& [hostname, _] : hostname_to_asics) {
+                    if (!discovered_hosts.empty()) {
+                        discovered_hosts += ", ";
+                    }
+                    discovered_hosts += hostname;
+                }
+                throw std::runtime_error(fmt::format(
+                    "Mesh pinning file references host '{}', which physical discovery did not find. Discovered "
+                    "hosts: [{}]",
+                    placement.hostname,
+                    discovered_hosts));
+            }
+
+            const std::set<int> requested_devices(
+                placement.tt_visible_devices.begin(), placement.tt_visible_devices.end());
+            std::set<int> discovered_devices;
+            ResolvedHostPlacement resolved_placement{placement, {}};
+            for (const AsicID asic_id : host_it->second) {
+                const tt::ChipId chip_id = psd.get_umd_unique_id(asic_id);
+                const int mmio_device = static_cast<int>(cluster.get_associated_mmio_device(chip_id));
+                discovered_devices.insert(mmio_device);
+                if (requested_devices.contains(mmio_device)) {
+                    resolved_placement.asics.insert(asic_id);
+                }
+            }
+            for (const int requested_device : requested_devices) {
+                if (!discovered_devices.contains(requested_device)) {
+                    throw std::runtime_error(fmt::format(
+                        "Mesh pinning file requests TT_VISIBLE_DEVICES={} on host '{}', but device {} was not "
+                        "found there",
+                        format_visible_devices(placement.tt_visible_devices),
+                        placement.hostname,
+                        requested_device));
+                }
+            }
+            for (std::size_t logical_node_count : logical_node_counts) {
+                if (resolved_placement.asics.size() != logical_node_count) {
+                    throw std::runtime_error(fmt::format(
+                        "Host placement {} with TT_VISIBLE_DEVICES={} exposes {} ASICs, but every logical "
+                        "mesh-host-rank in its many-to-many group must contain exactly {} nodes",
+                        placement.hostname,
+                        format_visible_devices(placement.tt_visible_devices),
+                        resolved_placement.asics.size(),
+                        logical_node_count));
+                }
+            }
+            resolved_group.host_placements.push_back(std::move(resolved_placement));
+        }
+        resolved_groups.push_back(std::move(resolved_group));
+    }
+    return resolved_groups;
+}
+}  // namespace
+
 /**
  * @brief Run topology mapper to map logical meshes to physical ASICs
  *
@@ -164,7 +271,7 @@ TopologyMappingWithLocalMaps run_topology_mapping(
     const PhysicalGroupingDescriptor& pgd,
     const std::vector<MeshGraphDescriptor>& mesh_graph_descriptors,
     const std::vector<std::filesystem::path>& mgd_paths_in_order,
-    const std::vector<MeshPinning>& mesh_pinnings) {
+    const std::vector<MeshHostRankPinningGroup>& mesh_pinning_groups) {
     if (mesh_graph_descriptors.size() != mgd_paths_in_order.size() || mesh_graph_descriptors.empty()) {
         throw std::invalid_argument(
             "run_topology_mapping: mesh_graph_descriptors and mgd_paths_in_order size must match and be non-empty");
@@ -267,37 +374,6 @@ TopologyMappingWithLocalMaps run_topology_mapping(
     log_logical_multi_mesh_adjacency_histograms(logical_graph);
     log_physical_multi_mesh_adjacency_histograms(physical_graph);
 
-    if (!mesh_pinnings.empty()) {
-        const MeshGraph& mesh_graph = mesh_graphs.front();
-        const auto& local_to_global = per_part_local_to_global_mesh_ids.front();
-        for (const MeshPinning& pinning : mesh_pinnings) {
-            const MeshId local_mesh_id{static_cast<uint32_t>(pinning.mesh_id)};
-            const auto global_it = local_to_global.find(local_mesh_id);
-            if (global_it == local_to_global.end()) {
-                throw std::runtime_error(fmt::format(
-                    "Mesh pinning file pins mesh_id {}, which the mesh graph descriptor does not define",
-                    pinning.mesh_id));
-            }
-
-            const auto& mesh_host_ranks = mesh_graph.get_host_ranks(local_mesh_id).values();
-            if (mesh_host_ranks.size() != 1) {
-                throw std::runtime_error(fmt::format(
-                    "Mesh pinning file pins mesh_id {}, which spans {} host ranks. Pinning is currently supported "
-                    "only for meshes that occupy a single host",
-                    pinning.mesh_id,
-                    mesh_host_ranks.size()));
-            }
-
-            config.mesh_host_pinnings[global_it->second] = pinning.host;
-            log_info(
-                tt::LogFabric,
-                "Mesh pinning: mesh {} (derived host rank {}) pinned to host {}",
-                pinning.mesh_id,
-                *mesh_host_ranks.front(),
-                pinning.host);
-        }
-    }
-
     for (std::size_t gi = 0; gi < mesh_graphs.size(); ++gi) {
         const auto& mesh_graph = mesh_graphs[gi];
         for (const auto& mid_local : mesh_graph.get_all_mesh_ids()) {
@@ -351,58 +427,142 @@ TopologyMappingWithLocalMaps run_topology_mapping(
 
     std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank = {};
 
+    std::vector<ResolvedMeshHostRankPinningGroup> resolved_pinning_groups;
+    if (!mesh_pinning_groups.empty()) {
+        if (mesh_graphs.size() != 1) {
+            throw std::runtime_error("Mesh-host-rank pinning currently supports exactly one MGD");
+        }
+        resolved_pinning_groups = resolve_mesh_host_rank_pinnings(
+            psd,
+            mesh_graphs.front(),
+            per_part_local_to_global_mesh_ids.front(),
+            config.hostname_to_asics,
+            mesh_pinning_groups);
+    }
+
     log_info(tt::LogFabric, "Running topology mapping with mesh graph rank bindings...");
     TopologyMappingWithLocalMaps out;
-    out.mapping = map_multi_mesh_to_physical(
-        logical_graph, physical_graph, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
+    std::map<MeshHostRankKey, std::set<AsicID>> candidate_constraints;
+    std::map<MeshHostRankKey, HostPlacement> candidate_selections;
+    std::size_t attempted_assignments = 0;
+
+    std::function<bool(std::size_t)> try_group;
+    try_group = [&](std::size_t group_index) -> bool {
+        if (group_index == resolved_pinning_groups.size()) {
+            config.mesh_host_rank_pinnings = candidate_constraints;
+            ++attempted_assignments;
+            if (resolved_pinning_groups.empty()) {
+                out.mapping = map_multi_mesh_to_physical(
+                    logical_graph, physical_graph, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
+            } else {
+                try {
+                    out.mapping = map_multi_mesh_to_physical(
+                        logical_graph, physical_graph, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
+                } catch (const std::exception& e) {
+                    out.mapping = {};
+                    out.mapping.error_message = e.what();
+                }
+            }
+            if (out.mapping.success) {
+                out.selected_mesh_host_rank_pinnings = candidate_selections;
+                return true;
+            }
+            return false;
+        }
+
+        const ResolvedMeshHostRankPinningGroup& group = resolved_pinning_groups[group_index];
+        std::vector<bool> used_placements(group.host_placements.size(), false);
+        std::function<bool(std::size_t)> assign_pair;
+        assign_pair = [&](std::size_t pair_index) -> bool {
+            if (pair_index == group.mesh_host_ranks.size()) {
+                return try_group(group_index + 1);
+            }
+            const auto& [local_key, global_key] = group.mesh_host_ranks[pair_index];
+            for (std::size_t placement_index = 0; placement_index < group.host_placements.size(); ++placement_index) {
+                if (used_placements[placement_index]) {
+                    continue;
+                }
+                const ResolvedHostPlacement& placement = group.host_placements[placement_index];
+                used_placements[placement_index] = true;
+                candidate_constraints[global_key] = placement.asics;
+                candidate_selections[local_key] = placement.host_placement;
+                if (assign_pair(pair_index + 1)) {
+                    return true;
+                }
+                candidate_selections.erase(local_key);
+                candidate_constraints.erase(global_key);
+                used_placements[placement_index] = false;
+            }
+            return false;
+        };
+        return assign_pair(0);
+    };
+
+    const bool mapping_found = try_group(0);
+    if (!mapping_found && !resolved_pinning_groups.empty()) {
+        out.mapping.error_message = fmt::format(
+            "No valid topology mapping satisfied the mesh-host-rank pinning groups after {} assignment(s). Last "
+            "solver error: {}",
+            attempted_assignments,
+            out.mapping.error_message);
+    }
+    if (mapping_found && !resolved_pinning_groups.empty()) {
+        log_info(
+            tt::LogFabric,
+            "Selected a valid mesh-host-rank placement after {} candidate assignment(s)",
+            attempted_assignments);
+        for (const auto& [mesh_host_rank, placement] : out.selected_mesh_host_rank_pinnings) {
+            log_info(
+                tt::LogFabric,
+                "Mesh {} host rank {} -> {} with TT_VISIBLE_DEVICES={}",
+                *mesh_host_rank.first,
+                *mesh_host_rank.second,
+                placement.hostname,
+                format_visible_devices(placement.tt_visible_devices));
+        }
+    }
     out.per_part_local_to_global_mesh_ids = std::move(per_part_local_to_global_mesh_ids);
     return out;
 }
 
-// Post-solve check that pinned hosts landed correctly; apply optional TT_VISIBLE_DEVICES.
-void validate_mesh_pinnings_and_apply_env_overrides(
-    const PhysicalSystemDescriptor& psd,
-    const std::vector<MeshPinning>& mesh_pinnings,
-    std::vector<RankBindingConfig>& rank_bindings) {
-    for (const auto& pinning : mesh_pinnings) {
-        auto binding_it =
-            std::find_if(rank_bindings.begin(), rank_bindings.end(), [&pinning](const RankBindingConfig& binding) {
-                return binding.mesh_id == pinning.mesh_id;
+// Post-solve verification also makes the selected placement explicit in rank_bindings.yaml.
+void validate_selected_mesh_host_rank_pinnings(
+    const std::map<MeshHostRankKey, HostPlacement>& selected_pinnings, std::vector<RankBindingConfig>& rank_bindings) {
+    for (const auto& [mesh_host_rank, placement] : selected_pinnings) {
+        auto binding_it = std::find_if(
+            rank_bindings.begin(), rank_bindings.end(), [&mesh_host_rank](const RankBindingConfig& binding) {
+                return binding.mesh_id == static_cast<int>(*mesh_host_rank.first) &&
+                       binding.mesh_host_rank == static_cast<int>(*mesh_host_rank.second);
             });
         if (binding_it == rank_bindings.end()) {
             throw std::runtime_error(fmt::format(
-                "Constraint validation failed: no rank binding was produced for mesh {}.", pinning.mesh_id));
+                "Constraint validation failed: no rank binding was produced for mesh {} host rank {}",
+                *mesh_host_rank.first,
+                *mesh_host_rank.second));
         }
-        if (binding_it->hostname != pinning.host) {
+        if (binding_it->hostname != placement.hostname) {
             throw std::runtime_error(fmt::format(
-                "Constraint validation failed: cannot pin mesh {} to host '{}'. Topology mapping placed it on "
-                "'{}' instead.",
-                pinning.mesh_id,
-                pinning.host,
+                "Constraint validation failed: mesh {} host rank {} selected host '{}', but topology mapping "
+                "placed it on '{}'",
+                *mesh_host_rank.first,
+                *mesh_host_rank.second,
+                placement.hostname,
                 binding_it->hostname));
         }
-
-        if (pinning.tt_visible_devices.has_value()) {
-            const std::string& value = pinning.tt_visible_devices.value();
-            const std::size_t requested = count_visible_device_tokens(value);
-            const auto& cluster = MetalContext::instance().get_cluster();
-            std::set<tt::ChipId> available_mmio_devices;
-            for (const AsicID asic_id : psd.get_asics_connected_to_host(pinning.host)) {
-                const tt::ChipId chip_id = psd.get_umd_unique_id(asic_id);
-                available_mmio_devices.insert(cluster.get_associated_mmio_device(chip_id));
-            }
-            const std::size_t available = available_mmio_devices.size();
-            if (requested > available) {
-                throw std::runtime_error(fmt::format(
-                    "Constraint validation failed: mesh {} pinned to host '{}' requests {} visible devices, but "
-                    "physical discovery found only {} MMIO devices on that host.",
-                    pinning.mesh_id,
-                    pinning.host,
-                    requested,
-                    available));
-            }
-            binding_it->env_overrides["TT_VISIBLE_DEVICES"] = value;
+        const std::string expected_visible_devices = format_visible_devices(placement.tt_visible_devices);
+        const auto visible_it = binding_it->env_overrides.find("TT_VISIBLE_DEVICES");
+        const std::string actual_visible_devices =
+            visible_it == binding_it->env_overrides.end() ? std::string{} : visible_it->second;
+        if (actual_visible_devices != expected_visible_devices) {
+            throw std::runtime_error(fmt::format(
+                "Constraint validation failed: mesh {} host rank {} selected TT_VISIBLE_DEVICES={}, but mapped "
+                "ASICs produced TT_VISIBLE_DEVICES={}",
+                *mesh_host_rank.first,
+                *mesh_host_rank.second,
+                expected_visible_devices,
+                actual_visible_devices));
         }
+        binding_it->env_overrides["TT_VISIBLE_DEVICES"] = expected_visible_devices;
     }
 }
 
@@ -434,7 +594,7 @@ std::vector<RankBindingConfig> extract_rank_bindings(
     const std::vector<MeshGraph>& mesh_graphs,
     const std::vector<std::map<MeshId, MeshId>>& per_part_local_to_global_mesh_ids,
     bool emit_local_mesh_ids_for_mgd_partition = true,
-    const std::vector<MeshPinning>& mesh_pinnings = {}) {
+    const std::map<MeshHostRankKey, HostPlacement>& selected_pinnings = {}) {
     if (mesh_graphs.empty()) {
         throw std::invalid_argument("extract_rank_bindings: at least one MeshGraph is required");
     }
@@ -598,7 +758,7 @@ std::vector<RankBindingConfig> extract_rank_bindings(
         rank_bindings.push_back(binding);
     }
 
-    validate_mesh_pinnings_and_apply_env_overrides(psd, mesh_pinnings, rank_bindings);
+    validate_selected_mesh_host_rank_pinnings(selected_pinnings, rank_bindings);
 
     return rank_bindings;
 }
@@ -720,7 +880,7 @@ ProgramArgs parse_arguments(int argc, char** argv) {
         "Output directory for rank_bindings.yaml, rankfile, etc. (default: generated/ttrun)",
         cxxopts::value<std::string>())(
         "mesh-pinning-file",
-        "Path to optional YAML pinning specific mesh IDs to hosts - OPTIONAL",
+        "Path to optional YAML pinning mesh host ranks to hostname + TT_VISIBLE_DEVICES placements - OPTIONAL",
         cxxopts::value<std::string>())("h,help", "Print usage information");
 
     try {
@@ -813,7 +973,7 @@ int main(int argc, char** argv) {
                 : std::nullopt,
             &psd);
 
-        std::vector<MeshPinning> mesh_pinnings;
+        std::vector<MeshHostRankPinningGroup> mesh_pinning_groups;
         if (args.mesh_pinning_file_path.has_value()) {
             if (mgds.size() != 1) {
                 throw std::runtime_error(
@@ -821,8 +981,8 @@ int main(int argc, char** argv) {
                     "mapping (-M)");
             }
             log_info(tt::LogFabric, "Stage: Loading mesh pinning file from: {}", *args.mesh_pinning_file_path);
-            mesh_pinnings = parse_mesh_pinning_file(*args.mesh_pinning_file_path);
-            log_info(tt::LogFabric, "Loaded {} mesh pinning(s)", mesh_pinnings.size());
+            mesh_pinning_groups = parse_mesh_pinning_file(*args.mesh_pinning_file_path);
+            log_info(tt::LogFabric, "Loaded {} mesh-host-rank pinning group(s)", mesh_pinning_groups.size());
         }
 
         // Get current rank - only rank 0 performs topology mapping and file generation
@@ -831,7 +991,7 @@ int main(int argc, char** argv) {
             // Stage: Run topology mapping
             log_info(tt::LogFabric, "Stage: Running topology mapping...");
             TopologyMappingWithLocalMaps topology =
-                run_topology_mapping(psd, pgd, mgds, mgd_paths_in_order, mesh_pinnings);
+                run_topology_mapping(psd, pgd, mgds, mgd_paths_in_order, mesh_pinning_groups);
 
             if (!topology.mapping.success) {
                 log_error(tt::LogFabric, "Topology mapping failed: {}", topology.mapping.error_message);
@@ -879,8 +1039,8 @@ int main(int argc, char** argv) {
                 const int subctx_id = subcontext_ids_in_order[mgi];
                 std::vector<MeshGraph> one_graph = {mesh_graphs_for_extract[mgi]};
                 std::vector<std::map<MeshId, MeshId>> one_map = {topology.per_part_local_to_global_mesh_ids[mgi]};
-                std::vector<RankBindingConfig> rank_bindings =
-                    extract_rank_bindings(psd, topology.mapping, one_graph, one_map, true, mesh_pinnings);
+                std::vector<RankBindingConfig> rank_bindings = extract_rank_bindings(
+                    psd, topology.mapping, one_graph, one_map, true, topology.selected_mesh_host_rank_pinnings);
 
                 if (rank_bindings.empty()) {
                     if (multi_mgd) {

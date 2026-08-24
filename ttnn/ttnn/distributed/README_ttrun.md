@@ -54,17 +54,22 @@ tt-run -m path/to/mgd.textproto \
 
 ### Pinning meshes to hosts (optional)
 
-By default the auto-mapper picks which host backs each mesh. Pass `--mesh-pinning-file` to pin **a subset**
-of meshes to named hosts; unlisted meshes stay fully auto-placed, and omitting the option changes nothing.
+By default the auto-mapper places every logical mesh host rank automatically. Pass `--mesh-pinning-file` to
+constrain selected `(mesh_id, mesh_host_rank)` pairs to exact `(hostname, TT_VISIBLE_DEVICES)` placements.
 
 ```yaml
 # pinned_meshes.yaml
-mesh_pinnings:
-  - mesh_id: 0                           # logical mesh
-    host: nodeA                          # physical host
-    TT_VISIBLE_DEVICES: "0,1,2,3"        # optional process device visibility
-  - mesh_id: 1
-    host: nodeB
+mesh_host_pinnings:
+  - mesh_host_ranks:
+      - mesh_id: 0
+        mesh_host_rank: 0
+      - mesh_id: 0
+        mesh_host_rank: 1
+    host_placements:
+      - hostname: nodeA
+        TT_VISIBLE_DEVICES: "0,1,2,3"
+      - hostname: nodeB
+        TT_VISIBLE_DEVICES: "0,1,2,3"
 ```
 
 ```bash
@@ -74,10 +79,9 @@ tt-run --mesh-graph-descriptor path/to/mgd.textproto \
   ./my_app
 ```
 
-Pins are hard constraints: if one cannot be satisfied, Phase 1 halts before launch with an explicit error
-(unknown hostname, more visible devices requested than the host has, a mesh the MGD does not define, or a
-conflict with MGD pinnings). Pinning is currently supported only for logical meshes occupying a single host
-rank and a single MGD (`-m`) — see
+Within a group, any logical pair may use any listed placement, but assignments are injective. Pins are hard
+constraints: `TT_VISIBLE_DEVICES` defines the exact ASIC pool, and Phase 1 halts before launch when no allowed
+assignment satisfies the topology. Pinning currently supports a single MGD (`-m`) — see
 [`README_generate_rank_bindings.md`](../../../tools/scaleout/README_generate_rank_bindings.md) for details.
 
 The pinning file's contents feed the Phase 1 cache fingerprint, so editing it forces a fresh Phase 1 run; a
@@ -255,7 +259,7 @@ Both modes support:
 - `--tcp-interface` – NIC for MPI TCP (e.g., `cnx1`)
 - `--bare` – Disable default multi-host MPI settings
 - `--mock-cluster-rank-binding` – Mock cluster descriptor mapping file (rank → descriptor path). When used with auto allocation mode, `--hosts` is not required; processes run locally with one rank per mapping entry, each rank getting its corresponding descriptor via `TT_METAL_MOCK_CLUSTER_DESC_PATH`.
-- `--mesh-pinning-file` – **New mode only.** Optional YAML pinning specific mesh IDs to hosts (see [Pinning meshes to hosts](#pinning-meshes-to-hosts-optional)). Rejected with `--rank-binding` / `--rank-bindings-mapping`.
+- `--mesh-pinning-file` – **New mode only.** Optional YAML constraining mesh host ranks to hostname + `TT_VISIBLE_DEVICES` placements (see [Pinning meshes to hosts](#pinning-meshes-to-hosts-optional)). Rejected with `--rank-binding` / `--rank-bindings-mapping`.
 - `--force-rediscovery` – **New mode only.** Always run Phase 1 and refresh the Phase 1 cache even when a cache hit would otherwise skip `generate_rank_bindings`. Ignored with `--rank-binding` (legacy mode). When new mode continues to **Phase 2**, failures there (config, mpirun, non-zero program exit, or Ctrl+C during a hang) log a hint to try **`--force-rediscovery`**.
 
 Run `tt-run --help` for the full list.

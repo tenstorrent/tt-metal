@@ -2666,39 +2666,32 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
         }
     }
 
-    // Restrict each pinned logical mesh to physical meshes wholly backed by the named host.
-    for (const auto& [logical_mesh_id, hostname] : config.mesh_host_pinnings) {
-        const auto host_it = config.hostname_to_asics.find(hostname);
-        if (host_it == config.hostname_to_asics.end()) {
-            TT_THROW("Mesh pinning: host '{}' was not found by physical system discovery.", hostname);
-        }
-        const auto& host_asics = host_it->second;
-
+    // A selected host placement is an exact ASIC pool. Restrict the logical mesh to physical meshes that
+    // contain every selected pool for its pinned mesh-host-ranks; the intra-mesh solve below then pins each
+    // individual host-rank to its pool.
+    std::map<MeshId, std::set<tt::tt_metal::AsicID>> pinned_asics_per_mesh;
+    for (const auto& [mesh_host_rank, asics] : config.mesh_host_rank_pinnings) {
+        pinned_asics_per_mesh[mesh_host_rank.first].insert(asics.begin(), asics.end());
+    }
+    for (const auto& [logical_mesh_id, pinned_asics] : pinned_asics_per_mesh) {
         std::set<MeshId> allowed_physical_meshes;
         for (const auto& [physical_mesh_id, physical_mesh_graph] : physical_graph.mesh_adjacency_graphs_) {
             const auto& asic_ids = physical_mesh_graph.get_nodes();
-            const bool entirely_on_pinned_host =
-                !asic_ids.empty() &&
-                std::all_of(asic_ids.begin(), asic_ids.end(), [&host_asics](const tt::tt_metal::AsicID asic_id) {
-                    return host_asics.contains(asic_id);
-                });
-            if (entirely_on_pinned_host) {
+            const std::set<tt::tt_metal::AsicID> physical_mesh_asics(asic_ids.begin(), asic_ids.end());
+            if (std::includes(
+                    physical_mesh_asics.begin(), physical_mesh_asics.end(), pinned_asics.begin(), pinned_asics.end())) {
                 allowed_physical_meshes.insert(physical_mesh_id);
             }
         }
         if (allowed_physical_meshes.empty()) {
             TT_THROW(
-                "Mesh pinning: no physical mesh is wholly backed by the host pinned to logical mesh {}. "
-                "Check the pinned hostname and physical grouping descriptor.",
+                "Mesh-host-rank pinning: no physical mesh contains all selected ASIC pools for logical mesh {}.",
                 *logical_mesh_id);
         }
         if (!inter_mesh_constraints.add_required_constraint(logical_mesh_id, allowed_physical_meshes)) {
             TT_THROW(
-                "Mesh pinning: pinning logical mesh {} to host '{}' conflicts with the other required "
-                "constraints (MGD pinnings or galaxy corner pinnings). Relax the pinning file or the MGD "
-                "pinnings.",
-                *logical_mesh_id,
-                hostname);
+                "Mesh-host-rank pinning for logical mesh {} conflicts with other required inter-mesh constraints.",
+                *logical_mesh_id);
         }
     }
 
@@ -2930,6 +2923,59 @@ void add_rank_binding_constraints(
             }
         }
     }
+}
+
+std::optional<std::string> add_mesh_host_rank_pinning_constraints(
+    ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
+    const TopologyMappingConfig& config,
+    MeshId logical_mesh_id,
+    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank,
+    const std::set<tt::tt_metal::AsicID>& physical_mesh_asics) {
+    const auto mesh_ranks_it = fabric_node_id_to_mesh_rank.find(logical_mesh_id);
+    for (const auto& [mesh_host_rank, allowed_asics] : config.mesh_host_rank_pinnings) {
+        if (mesh_host_rank.first != logical_mesh_id) {
+            continue;
+        }
+        if (mesh_ranks_it == fabric_node_id_to_mesh_rank.end()) {
+            return fmt::format("Mesh-host-rank pinning: logical mesh {} has no host-rank metadata", *logical_mesh_id);
+        }
+
+        std::set<FabricNodeId> fabric_nodes;
+        for (const auto& [fabric_node, rank] : mesh_ranks_it->second) {
+            if (rank == mesh_host_rank.second) {
+                fabric_nodes.insert(fabric_node);
+            }
+        }
+        if (fabric_nodes.empty()) {
+            return fmt::format(
+                "Mesh-host-rank pinning: logical mesh {} has no host rank {}",
+                *logical_mesh_id,
+                *mesh_host_rank.second);
+        }
+        if (fabric_nodes.size() != allowed_asics.size()) {
+            return fmt::format(
+                "Mesh-host-rank pinning: mesh {} host rank {} has {} logical nodes but its selected placement "
+                "contains {} ASICs",
+                *logical_mesh_id,
+                *mesh_host_rank.second,
+                fabric_nodes.size(),
+                allowed_asics.size());
+        }
+        if (!std::includes(
+                physical_mesh_asics.begin(), physical_mesh_asics.end(), allowed_asics.begin(), allowed_asics.end())) {
+            return fmt::format(
+                "Mesh-host-rank pinning: the selected ASIC pool for mesh {} host rank {} is outside physical mesh",
+                *logical_mesh_id,
+                *mesh_host_rank.second);
+        }
+        if (!intra_mesh_constraints.add_required_constraint(fabric_nodes, allowed_asics)) {
+            return fmt::format(
+                "Mesh-host-rank pinning: exact placement for mesh {} host rank {} conflicts with other constraints",
+                *logical_mesh_id,
+                *mesh_host_rank.second);
+        }
+    }
+    return std::nullopt;
 }
 
 // Helper function to build pinning constraints.
@@ -3574,6 +3620,21 @@ TopologyMappingResult map_multi_mesh_to_physical(
                     intra_mesh_constraints, config, logical_mesh_id, fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank);
             }
 
+            const auto& physical_mesh_nodes = physical_graph.get_nodes();
+            const std::set<tt::tt_metal::AsicID> physical_mesh_asics(
+                physical_mesh_nodes.begin(), physical_mesh_nodes.end());
+            if (auto pinning_error = add_mesh_host_rank_pinning_constraints(
+                    intra_mesh_constraints,
+                    config,
+                    logical_mesh_id,
+                    fabric_node_id_to_mesh_rank,
+                    physical_mesh_asics)) {
+                if (!reject_mesh_pair_mapping(logical_mesh_id, physical_mesh_id, *pinning_error)) {
+                    return result;
+                }
+                continue;
+            }
+
             // Add exit node constraints (only if exit node graphs are not empty)
             // Since we initialize empty graphs for all meshes, we check if they have nodes before adding constraints
             if (!logical_exit_node_graph.get_nodes().empty() && !physical_exit_node_graph.get_nodes().empty()) {
@@ -3614,7 +3675,6 @@ TopologyMappingResult map_multi_mesh_to_physical(
             // PGD-chosen layout via PREFERRED (soft) constraints. Added AFTER the hard rank/exit/MGD-pin
             // constraints above so they only influence ASIC choice where the hard constraints leave freedom.
             if (!adjacency_map_physical.mesh_pgd_pinnings_.empty()) {
-                const auto& physical_mesh_nodes = physical_graph.get_nodes();
                 const std::unordered_set<tt::tt_metal::AsicID> physical_mesh_node_set(
                     physical_mesh_nodes.begin(), physical_mesh_nodes.end());
                 add_pgd_pinning_preferred_constraints(

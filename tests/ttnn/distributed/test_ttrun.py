@@ -132,7 +132,7 @@ class TestCommandLineArguments:
     def test_mesh_pinning_file_rejected_in_legacy_mode(self, runner, sample_rank_binding_yaml, tmp_path):
         """--mesh-pinning-file only applies to new mode."""
         pins = tmp_path / "pinned_meshes.yaml"
-        pins.write_text("mesh_pinnings: []\n")
+        pins.write_text("mesh_host_pinnings: []\n")
         result = runner.invoke(
             main,
             [
@@ -152,7 +152,7 @@ class TestCommandLineArguments:
         mapping = tmp_path / "mgd_mapping.yaml"
         mapping.write_text("subcontext_id_to_mesh_graph_descriptor:\n  0: mesh.textproto\n")
         pins = tmp_path / "pinned_meshes.yaml"
-        pins.write_text("mesh_pinnings: []\n")
+        pins.write_text("mesh_host_pinnings: []\n")
 
         result = runner.invoke(
             main,
@@ -323,7 +323,7 @@ class TestPhase2Helpers:
         mgd_path = temp_dir / "mesh.textproto"
         mgd_path.touch()
         pinning_file = temp_dir / "pinned_meshes.yaml"
-        pinning_file.write_text("mesh_pinnings:\n  - mesh_id: 0\n    host: node1\n")
+        pinning_file.write_text("mesh_host_pinnings: []\n")
         output_dir = temp_dir / "output"
 
         cmd = build_generate_rank_bindings_mpi_cmd(
@@ -340,7 +340,7 @@ class TestPhase2Helpers:
         mgd_path = temp_dir / "mesh.textproto"
         mgd_path.touch()
         pinning_file = temp_dir / "pinned_meshes.yaml"
-        pinning_file.write_text("mesh_pinnings: []\n")
+        pinning_file.write_text("mesh_host_pinnings: []\n")
         mock_desc = temp_dir / "mock0.yaml"
         mock_desc.touch()
 
@@ -768,11 +768,11 @@ class TestPhase1CacheId:
 
         without_file = compute_phase1_cache_fingerprint_full(mgd, sorted(["h1"]), None)
 
-        pins.write_text("mesh_pinnings:\n  - mesh_id: 0\n    host: h1\n")
+        pins.write_text("mesh_host_pinnings: []\n# h1\n")
         with_file = compute_phase1_cache_fingerprint_full(mgd, sorted(["h1"]), None, pins)
         assert with_file != without_file
 
-        pins.write_text("mesh_pinnings:\n  - mesh_id: 0\n    host: h2\n")
+        pins.write_text("mesh_host_pinnings: []\n# h2\n")
         edited = compute_phase1_cache_fingerprint_full(mgd, sorted(["h1"]), None, pins)
         assert edited != with_file
 

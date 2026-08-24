@@ -99,8 +99,9 @@ struct TopologyMappingConfig {
     // Used even when some ASICs have UNSET rank. Default empty.
     std::map<std::string, std::set<tt::tt_metal::AsicID>> hostname_to_asics;
 
-    // Optional logical mesh -> physical hostname hard constraints. Requires hostname_to_asics.
-    std::map<MeshId, std::string> mesh_host_pinnings;
+    // Optional exact logical (mesh, host-rank) -> physical ASIC-pool hard constraints.
+    // Each pool is the ASIC set exposed by one selected hostname + TT_VISIBLE_DEVICES placement.
+    std::map<std::pair<MeshId, MeshHostRankId>, std::set<tt::tt_metal::AsicID>> mesh_host_rank_pinnings;
 };
 
 /**
