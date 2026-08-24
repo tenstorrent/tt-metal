@@ -56,13 +56,16 @@ static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring
 // length from expert_offsets, so this only has to bound the region's TOTAL — which is why it does not grow
 // when a chunk count grows.
 //
-// A chunk carries the destination chip's tokens routed to experts on the origin chip. Each of the
-// destination's seq_len_per_chip tokens picks num_experts_per_tok DISTINCT experts, so at most
-// min(num_experts_per_tok, experts_per_chip) of its copies can land on any one chip. The two chips split
-// each run num_links ways, or stream_count ways for the diametrically opposite chip.
+// A destination's whole return volume is seq_len_per_chip tokens x min(num_experts_per_tok,
+// experts_per_chip) copies, however the router spread those copies across origins, because that is just the
+// destination's output buffer. Chunks heading to the same destination therefore SHARE that volume rather
+// than each reaching it. A stream relays half_extent - 1 distinct destinations: the nearer ones can have
+// their whole volume on an origin that splits the run num_links ways, while the farthest is reachable only
+// from the diametrically opposite chip, whose run is split across every stream.
 uint32_t fwd_pages_per_quarter(const CombineFabric2dParams& args, uint32_t experts_per_chip) {
-    const uint32_t per_chunk = args.seq_len_per_chip * std::min(args.num_experts_per_tok, experts_per_chip);
-    return relay_chunks_per_stream(ring_extent(args)) * (per_chunk / args.num_links + 1);
+    const uint32_t per_destination = args.seq_len_per_chip * std::min(args.num_experts_per_tok, experts_per_chip);
+    const uint32_t half_extent = ring_extent(args) / 2;
+    return (half_extent - 2) * (per_destination / args.num_links) + per_destination / stream_count(args.num_links);
 }
 
 L1Layout compute_l1_layout(
