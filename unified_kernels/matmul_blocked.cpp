@@ -64,6 +64,16 @@
 //   3        first output BLOCK this core owns, as a flat (m, n) index
 //   4        how many output blocks this core owns
 
+// A DM thread is bound to a NOC by its index, so choosing the thread chooses the NOC, and
+// the two are NOT interchangeable for DRAM reads. B is the big operand and wants NOC 0; A
+// then wants the other one so the two streams overlap. See unified_llama_prefill.md.
+#ifndef MMB_IN0_THREAD
+#define MMB_IN0_THREAD 1
+#endif
+#ifndef MMB_IN1_THREAD
+#define MMB_IN1_THREAD 0
+#endif
+
 #include <tt/unified/core>
 
 namespace u = tt::unified;
@@ -170,7 +180,7 @@ void kernel_main() {
         // operand movement costs, which is the question once fidelity has shown the math is
         // not on the critical path at all.
         u::ComputeBlock a_h =
-            u::noc_load<0, 0>(a_storage, row, [&](u::L1Pages pages) {
+            u::noc_load<MMB_IN0_THREAD, 0>(a_storage, row, [&](u::L1Pages pages) {
                 for (uint32_t p = 0; p < pages.count; ++p) {
                     const uint32_t rr = i * mt + p / kt;
                     const uint32_t cc = p % kt;
@@ -265,7 +275,7 @@ void kernel_main() {
                 // A's (m, k) tile: rows [i*mt, +mt) by columns [b*kt, +kt). Strided, because A's
                 // rows are what is contiguous.
                 u::ComputeBlock a =
-                    u::noc_load<1>(a_storage, [&](u::L1Pages pages) {
+                    u::noc_load<MMB_IN0_THREAD>(a_storage, [&](u::L1Pages pages) {
                         for (uint32_t p = 0; p < pages.count; ++p) {
                             // Row-major in L1: page p is tile (p / kt, p % kt).
                             const uint32_t row = i * mt + p / kt;
@@ -276,7 +286,7 @@ void kernel_main() {
 
                 // B's (k, n) tile: rows [b*kt, +kt) by columns [n*nt, +nt).
                 u::ComputeBlock w =
-                    u::noc_load<1>(w_storage, [&](u::L1Pages pages) {
+                    u::noc_load<MMB_IN1_THREAD>(w_storage, [&](u::L1Pages pages) {
                         for (uint32_t p = 0; p < pages.count; ++p) {
                             const uint32_t row = b * kt + p / nt;
                             const uint32_t col = n * nt + p % nt;
