@@ -5,7 +5,7 @@
 One runtime built for {SMALL, LARGE} (env VARCHUNK_SMALL/LARGE, default 1k/8k) prefills the same
 SMALL real tokens twice — as a native SMALL chunk vs padded into a LARGE chunk — and reports both.
 
-GALAXY-GATED; needs the torus descriptor + FABRIC_1D_RING (chunk 0 is cache-backed ring since #53153).
+GALAXY-GATED; needs the torus descriptor + FABRIC_1D_RING (chunk 0 is cache-backed ring).
 Env: HF_MODEL, GPT_OSS_WEIGHTS_FROM_CACHE=1, EXPERT_DTYPE=bf8, PREFILL_NUM_LAYERS (optional).
 """
 
@@ -44,8 +44,8 @@ def main():
     from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
     from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
-    # Since #53153 chunk 0 uses cache-backed RingJointSDPA whenever max_seq_len > chunk (i.e. the small
-    # size here) -> needs FABRIC_1D_RING + the torus descriptor + a fresh node without tt-smi -r.
+    # Chunk 0 uses the cache-backed ring path whenever max_seq_len > chunk (true for the small size
+    # here) -> needs FABRIC_1D_RING + the torus descriptor + a fresh node without tt-smi -r.
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(ROWS, COLS))
     print(f"[varchunk] mesh {tuple(mesh.shape)} ndev={mesh.get_num_devices()}", flush=True)
