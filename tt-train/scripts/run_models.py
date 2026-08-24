@@ -36,6 +36,14 @@ def _verify_path(path: str, allowed_root: str) -> str:
     return path
 
 
+def _resolve_output_path(path: str, allowed_root: str) -> str:
+    """Resolve an output path. Relative paths land under allowed_root, absolute paths are taken as
+    given so runs can write to storage outside the source tree (e.g. CI shared NFS)."""
+    if os.path.isabs(path):
+        return os.path.abspath(path)
+    return _verify_path(path, allowed_root)
+
+
 def get_env(name: str, required=False) -> str | None:
     """Get an environment variable. Exit with error if missing and required is True."""
     value = os.environ.get(name)
@@ -98,6 +106,25 @@ def process_args(args: list[str]):
     return result
 
 
+def write_summary(markdown: str, summary_file: str) -> None:
+    """Append the summary markdown to summary_file, falling back to $GITHUB_STEP_SUMMARY."""
+    if summary_file:
+        summary_path = Path(summary_file)
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+    elif "GITHUB_STEP_SUMMARY" in os.environ:
+        summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+    else:
+        return
+
+    try:
+        with open(summary_path, "a") as fh:
+            print(markdown, file=fh)
+    except OSError as err:
+        # $GITHUB_STEP_SUMMARY names a path on the Github runner, which an mpirun rank running on
+        # another host cannot reach. Losing the summary must not fail the run.
+        print(f"Could not write summary to {summary_path}: {err}")
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments"""
     tt_metal_runtime_root = get_env("TT_METAL_RUNTIME_ROOT", required=True)
@@ -115,6 +142,14 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="generated/tt-train-metrics",
         help="Directory for generated logs and JSON (default: generated/tt-train-metrics)",
+    )
+    parser.add_argument(
+        "--summary-file",
+        type=str,
+        default="",
+        help="File to append the run summary markdown to. Defaults to $GITHUB_STEP_SUMMARY. Under mpirun this "
+        "process can land on a host that cannot see the runner's $GITHUB_STEP_SUMMARY, so point this at shared "
+        "storage and append it to $GITHUB_STEP_SUMMARY from the launcher once the run finishes.",
     )
     parser.add_argument(
         "--filter-filenames",
@@ -154,7 +189,7 @@ def main() -> int:
     card_type = machine_info["device_series"]
 
     # Create output directory to store metrics
-    output_dir = Path(_verify_path(parsed_args.output_dir, tt_metal_runtime_root))
+    output_dir = Path(_resolve_output_path(parsed_args.output_dir, tt_metal_runtime_root))
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Collect model status
@@ -328,18 +363,12 @@ def main() -> int:
             ]
         )
 
-    # Show summary and display to Github if environment variable exists
+    # Show summary and write it out for the Github job summary
     df = pd.DataFrame(model_status)
     df_md = df.to_markdown(index=False)
     print("Summary:")
     print(df_md)
-    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary_path:
-        if os.path.exists(summary_path):
-            with open(summary_path, "a") as fh:
-                print(df_md, file=fh)
-        else:
-            print(f"GITHUB_STEP_SUMMARY file not found: {summary_path}")
+    write_summary(df_md, parsed_args.summary_file)
 
     # Return error code 1 if any tests have failed
     return 1 if any(s["run status"] == "❌" for s in model_status) else 0

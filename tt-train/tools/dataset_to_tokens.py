@@ -111,7 +111,8 @@ def main():
         "--hf_tokenizer",
         type=str,
         required=True,
-        help="Hugging Face tokenizer identifier (e.g., gpt2, distilgpt2, meta-llama/Llama-3.2-1B).",
+        help="Tokenizer directory, tokenizer.json file (e.g., data/tinyllama-tokenizer.json, which "
+        "needs no Hub access), or Hugging Face hub id (e.g., gpt2, meta-llama/Llama-3.2-1B).",
     )
     parser.add_argument(
         "--output_file",

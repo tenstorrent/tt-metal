@@ -7,6 +7,11 @@
 #   filename: Prefix for output files. Unique identifier. Changing this might affect dashboard.
 #   binary:   Absolute path to the executable or Python script to run
 #   args:     List of arguments passed to the configured executable or script
+#   tokenize: Optional pre-tokenization of text_file into output_file before the run.
+#             hf_tokenizer points at a local tokenizer.json that CMake downloads into data/ at build
+#             time, so no Hugging Face access (or token for the gated Llama repos) is needed here.
+#             Any tokenizer works as long as its ids fit the model config's vocab_size, so the 32k
+#             TinyLlama vocab is reused for the larger models; their embedding shapes are unchanged.
 
 models:
   - name: "TinyLlama 1.1B DDP=32 Shakespeare"
@@ -16,11 +21,11 @@ models:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama_ddp.yaml"
       - "--track_memory"
       - "--batch_size=160"
-      - "--max_steps=1000"
+      - "--max_steps=10"
     mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_32_1_ring_ring.textproto"
     tokenize:
       text_file: "data/shakespeare.txt"
-      hf_tokenizer: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+      hf_tokenizer: "data/tinyllama-tokenizer.json"
       output_file: "data/tokenized_shakespeare_tinyllama"
 
   - name: "Llama 8B TP=8 DDP=4 Shakespeare"
@@ -34,7 +39,7 @@ models:
     mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_4_8_ring_ring.textproto"
     tokenize:
       text_file: "data/shakespeare.txt"
-      hf_tokenizer: "meta-llama/Llama-3.1-8B-Instruct"
+      hf_tokenizer: "data/tinyllama-tokenizer.json"
       output_file: "data/tokenized_shakespeare_llama8b"
 
   - name: "Llama 8B TP=4 DDP=8 Shakespeare"
@@ -47,7 +52,7 @@ models:
     mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_8_4_ring_ring.textproto"
     tokenize:
       text_file: "data/shakespeare.txt"
-      hf_tokenizer: "meta-llama/Llama-3.1-8B-Instruct"
+      hf_tokenizer: "data/tinyllama-tokenizer.json"
       output_file: "data/tokenized_shakespeare_llama8b"
 
   - name: "Qwen 3 1.7B DDP=32 Shakespeare"
@@ -61,7 +66,7 @@ models:
     mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_32_1_ring_ring.textproto"
     tokenize:
       text_file: "data/shakespeare.txt"
-      hf_tokenizer: "Qwen/Qwen3-1.7B"
+      hf_tokenizer: "data/tinyllama-tokenizer.json"
       output_file: "data/tokenized_shakespeare_qwen3"
 
   - name: "Tiny Deepseek v3 DDP=32 (Char) Shakespeare"
@@ -84,5 +89,5 @@ models:
     mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_4_8_ring_ring.textproto"
     tokenize:
       text_file: "data/shakespeare.txt"
-      hf_tokenizer: "meta-llama/Llama-3.1-70B-Instruct"
+      hf_tokenizer: "data/tinyllama-tokenizer.json"
       output_file: "data/tokenized_shakespeare_llama70b"

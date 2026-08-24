@@ -157,7 +157,7 @@ train:
     bh_p100: 160
     bh_p150b_civ2: 400
   e2e_tier3:
-    bh_sc1: 260
+    bh_sc1: 305
 
 ttsim:
   unit:
