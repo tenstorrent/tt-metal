@@ -101,6 +101,7 @@
 // a NoC master), the cb_interface shim (Tensix firmware defines it) and the NIU-restore tail.
 #ifndef DRAIN_ON_TENSIX
 #include "experimental/drisc_mode.h"
+#include "experimental/gddr_dma.h"
 
 // DRISC firmware doesn't define cb_interface (no CB infra on DRAM cores).
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
@@ -213,6 +214,23 @@ inline bool write_barrier_bounded(
     }
     return true;
 }
+
+#ifndef DRAIN_ON_TENSIX
+// Bounded drain of the GDDR DMA write queue -- the stage_run analogue of write_barrier_bounded, needed at
+// exactly the same points. Staging-slot reuse and publish_head both require the frame bytes to have LANDED
+// in the ring, and a real filler's stage_run now moves them with the tile's own DMA engine, so the NIU
+// flush predicate no longer covers them. Same two-way bound, same contract: false means egress is dead.
+inline bool dma_write_barrier_bounded(uint64_t deadline) {
+    constexpr uint32_t kMaxSpins = 4u << 20;
+    uint32_t spins = 0;
+    while (experimental::dma_get_writes_outstanding(/*stream=*/0) != 0) {
+        if (++spins >= kMaxSpins || get_timestamp() >= deadline) {
+            return false;
+        }
+    }
+    return true;
+}
+#endif
 
 // ---- NoC FOOTPRINT: state and the two single-copy helpers --------------------------------------------
 //
@@ -1275,6 +1293,8 @@ void kernel_main() {
             // frames can, and socket_push_pages' trick of only wrapping a pointer does not apply here. Split it,
             // exactly as ship_once splits at the FIFO wrap.
             const uint32_t first = (slot0 + count > kDramFrames) ? (kDramFrames - slot0) : count;
+#ifdef DRAIN_ON_TENSIX
+            // A Tensix control build has no GDDR engine and its ring is a remote bank anyway.
             noc_async_write(
                 src,
                 get_noc_addr_from_bank_id<true>(kDramBank, kDramAddr + slot0 * kSlotBytes, NOC_INDEX),
@@ -1287,6 +1307,36 @@ void kernel_main() {
                     (count - first) * kSlotBytes,
                     NOC_INDEX);
             }
+#else
+            // The filler LIVES on the DRAM tile fronting this ring's GDDR channel, so the L1 -> ring hop uses
+            // the tile's own DMA engine (gddr_dma.h, tensor_prefetcher's path) instead of looping the payload
+            // out through the NoC port and straight back. That keeps the NIU for what actually needs it --
+            // span reads from workers and posted head write-backs. The DMA takes the CHANNEL-LOCAL byte
+            // address: the same bank-relative kDramAddr the NoC helper took, plus the same per-bank offset
+            // get_noc_addr_from_bank_id<true> adds. One descriptor moves at most 262,128 B (14-bit size field
+            // in 16 B words), so chunk at the largest whole-frame multiple: a run can exceed it in the
+            // 4-filler shape (30 slots x 10,560 B). dma_async_write itself spins for a free queue slot (15
+            // outstanding max), unbounded -- acceptable for the same reason write_barrier_bounded's iteration
+            // cap documents: no software bound frees a wedged engine, and the barrier every generation keeps
+            // the queue depth at a handful.
+            static_assert(kSlotBytes % 16u == 0, "GDDR DMA moves 16 B multiples");
+            static_assert(kStageBase % 16u == 0, "GDDR DMA source must be 16 B aligned");
+            constexpr uint32_t kDmaChunkBytes = (262128u / kSlotBytes) * kSlotBytes;
+            const uint64_t ring_base = static_cast<uint64_t>(kDramAddr) + bank_to_dram_offset[kDramBank];
+            auto dma_push = [](uint32_t src_l1, uint64_t dst_gddr, uint32_t bytes) {
+                while (bytes != 0) {
+                    const uint32_t n = bytes > kDmaChunkBytes ? kDmaChunkBytes : bytes;
+                    experimental::dma_async_write(/*stream=*/0, src_l1, dst_gddr, n);
+                    src_l1 += n;
+                    dst_gddr += n;
+                    bytes -= n;
+                }
+            };
+            dma_push(src, ring_base + slot0 * kSlotBytes, first * kSlotBytes);
+            if (first < count) {
+                dma_push(src + first * kSlotBytes, ring_base, (count - first) * kSlotBytes);
+            }
+#endif
             const uint64_t t2 = get_timestamp();
             c_wr_chunk += t2 - t1;
             c_write += t2 - t1;
@@ -1308,6 +1358,19 @@ void kernel_main() {
                 *hs_head = frames_flushed;
             }
         }
+    };
+
+    // One bounded barrier for "the frames this role issued have LANDED": the NIU flush covers NoC writes
+    // (mover socket pushes, Tensix-control staging writes), and a real filler additionally drains the GDDR
+    // DMA queue its stage_run now writes through -- invisible to the NIU predicate.
+    auto egress_barrier = [&](uint64_t deadline) -> bool {
+        bool ok = write_barrier_bounded(deadline, dbg_hw_ack, dbg_sw_ack);
+#ifndef DRAIN_ON_TENSIX
+        if constexpr (kRole == kRoleFiller) {
+            ok = ok && dma_write_barrier_bounded(deadline);
+        }
+#endif
+        return ok;
     };
 
     // What process_batch calls. One name, so the sweep body is byte-identical across roles.
@@ -1356,7 +1419,7 @@ void kernel_main() {
             pages = s_pages;
             pushes = s_pushes;
             max_reserve = s_maxr;
-            if (write_barrier_bounded(get_timestamp() + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack)) {
+            if (egress_barrier(get_timestamp() + kCreditWaitCycles)) {
                 publish_head();  // a filler's self frame is flushed, so the mover may be told about it
                 self_words_shipped += self_tail - self_head;
                 self_head = self_tail;
@@ -1991,7 +2054,7 @@ void kernel_main() {
                             kernel_profiler::
                                 SpscZoneScope<kernel_profiler::DRISC_ZONE_WR_BARRIER, SelfNowPhase, SelfClose>
                                     z_bar(self_now_phase, self_zone_close);
-                            flushed = write_barrier_bounded(t_b0 + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack);
+                            flushed = egress_barrier(t_b0 + kCreditWaitCycles);
                         }
                         c_barrier += get_timestamp() - t_b0;
                         if (!flushed) {
@@ -2095,7 +2158,7 @@ void kernel_main() {
                     {
                         kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_WR_BARRIER, SelfNowPhase, SelfClose>
                             z_bar(self_now_phase, self_zone_close);
-                        flushed = write_barrier_bounded(t_b0 + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack);
+                        flushed = egress_barrier(t_b0 + kCreditWaitCycles);
                     }
                     if (!flushed) {
                         egress_dead = true;
@@ -2320,7 +2383,7 @@ void kernel_main() {
     }
     *phase = kPhBarTail;
     *phase = kPhTailBar;  // distinct from kPhBar1: the tail barrier used to run while phase still read 11
-    (void)write_barrier_bounded(get_timestamp() + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack);
+    (void)egress_barrier(get_timestamp() + kCreditWaitCycles);
     // The posted head write-backs are not in the barrier above; drain their SENT counter (bounded spin --
     // 20 B packets stream out in ns) so no scratch slot or unstreamed head is left behind at report time.
     if constexpr (kRole != kRoleMover) {

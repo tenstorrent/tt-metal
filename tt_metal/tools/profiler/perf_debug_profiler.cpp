@@ -317,17 +317,19 @@ const std::vector<uint32_t>& role_filler_banks() {
     return v;
 }
 
-// ALLOCATOR bank ids the RINGS live in. Rings 0 and 1 stay on banks 1 and 2, exactly where they were measured;
-// rings 2 and 3 take banks 4 and 5.
+// ALLOCATOR bank ids the RINGS live in. Since stage_run pushes frames with the DRAM tile's own GDDR DMA
+// engine (gddr_dma.h), a filler's ring MUST live in its OWN bank: the DMA reaches only the channel its tile
+// fronts, and allocator bank ids are DRAM view ids one-for-one (l1_banking_allocator sizes the DRAM
+// allocator off get_num_dram_views() with identity bank<->channel maps). So the default is rb[i] == fb[i],
+// and boot_device FATALs on any override that breaks it -- a non-local ring does not fail loudly, it makes
+// the DMA write a well-formed ring into the WRONG bank's HAL profiler region while the mover replays stale
+// laps from the configured one (measured 2026-08-24: 6.4M resync words, 79,580 order regressions, a
+// 45-minute "zone window" of mixed-boot timestamps).
 //
-// The old invariant -- a ring shares a DRAM channel with NO drainer -- is now UNREACHABLE and has been
-// deliberately relaxed: 6 drainer channels plus 4 rings is 10 against 7 allocator banks. What is kept is the
-// part with evidence behind it: a ring is never placed on a MOVER bank (0, 3), because host-facing duty is
-// where the N+29 hazard was measured. Ring traffic terminates at the channel's PREFERRED WORKER endpoint while
-// a drainer sits on that channel's unused subchannel, so even a shared channel means different cores and
-// different NIUs -- and the per-ring load (~1.4 GB/s written, ~1.4 GB/s read) is a rounding error against a
-// GDDR channel. Measured with the overlap in place: 0 ring-room waits, 0 hs_bad, staged == moved on all four
-// rings, and the knee moved the right way. Overridable with TT_METAL_PERF_DEBUG_ROLE_RING_BANKS.
+// This replaces the NoC-era stagger (fb[i] != rb[i] pairwise, rings {1,2,3,4,5,6}), whose own justification
+// had already been relaxed to "never on a MOVER bank" -- still satisfied: fillers never sit on mover banks.
+// Ring traffic now terminates at the filler's own channel, which also takes the ~1.4 GB/s ring write off
+// the NoC entirely. Overridable with TT_METAL_PERF_DEBUG_ROLE_RING_BANKS (validated, see above).
 const std::vector<uint32_t>& role_ring_banks() {
     static const std::vector<uint32_t> v = [] {
         std::vector<uint32_t> out;
@@ -345,9 +347,7 @@ const std::vector<uint32_t>& role_ring_banks() {
             }
         }
         if (out.empty()) {
-            // Staggered so no filler's ring shares its own core's GDDR channel (fb[i] != rb[i] pairwise).
-            out = n_fillers() == 6 ? std::vector<uint32_t>{1u, 2u, 3u, 4u, 5u, 6u}
-                                   : std::vector<uint32_t>{1u, 2u, 4u, 5u};
+            out = role_filler_banks();  // rb[i] == fb[i]: the ring must be DMA-reachable from its filler
         }
         return out;
     }();
@@ -1297,6 +1297,16 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             ctx.role[f] = kRoleFiller;
             ctx.sock_of[f] = kNoSocket;
             ctx.n_peer[f] = 0;
+            // A filler pushes frames with its tile's GDDR DMA engine, which reaches ONLY its own channel --
+            // and allocator bank ids are view ids one-for-one. A non-local ring here is not slow, it is
+            // silent stale-lap corruption (see role_ring_banks), so refuse it outright.
+            TT_FATAL(
+                rb[f] == fb[f],
+                "perf-debug role split: filler {} on view {} but its ring is on bank {} -- the GDDR DMA push "
+                "reaches only the filler's own channel. Fix TT_METAL_PERF_DEBUG_ROLE_RING_BANKS (or unset it).",
+                f,
+                fb[f],
+                rb[f]);
             banks.push_back(fb[f]);
             ringbank.push_back(rb[f]);
         }
