@@ -1474,6 +1474,8 @@ struct Strategy<FPUFusion> {
         // Neither of these touches DST, so they program once for every subblock.
         ckernel::reconfig_data_format(acc_cb, node.bias_cb);
         ckernel::add_bcast_rows_init_short(acc_cb, node.bias_cb);
+        // This drains the accumulator into the output, so the packer follows it there.
+        ckernel::pack_reconfig_data_format(acc_cb, out_cb);
 
         for (uint32_t r0 = 0; r0 < G::rt_dim; r0 += kSub.rows) {
             for (uint32_t c0 = 0; c0 < G::ct_dim; c0 += kSub.cols) {
@@ -1793,6 +1795,19 @@ struct Strategy<FPUFusion> {
 
                 if constexpr (Mode == AccumulatorMode::Dst) {
                     const uint32_t dest = (finish && !via_bias) ? out_cb : acc_cb;
+                    // The packer's output format is programmed ONCE, by
+                    // compute_kernel_hw_startup inside matmul_init, for a single buffer. A
+                    // blocked matmul packs to two -- the accumulator carrying partials and
+                    // the output -- so if those carry different data formats the second is
+                    // written with the first one's packer. Nothing catches it: the bytes
+                    // land, and bfloat16 read back as bfloat8_b is 1e36 rather than a hang.
+                    // ttnn reconfigures at exactly these transitions
+                    // (bmm_large_block_zm_fused_bias_activation.cpp).
+                    //
+                    // The two-argument form is guarded in the LLK on
+                    // pack_dst_format[old] != pack_dst_format[new], so when every buffer
+                    // is one format -- the usual case -- this is a lookup and a compare.
+                    ckernel::pack_reconfig_data_format(dest == out_cb ? acc_cb : out_cb, dest);
                     cb_reserve_back(dest, kSubTiles);
                     ckernel::tile_regs_wait();
                     ckernel::pack_block(0, dest, kSubTiles);
@@ -1810,6 +1825,10 @@ struct Strategy<FPUFusion> {
                     // on top of the previous one. Pushing every subblock and then popping
                     // the whole block wraps both pointers back to the base address -- which
                     // still holds the partials, since a pop does not erase.
+                    // Same reason as above. The accumulator must NOT be a block format:
+                    // the packer's L1 accumulate reads back what is already there and adds
+                    // to it, which a shared-exponent format cannot do in place.
+                    ckernel::pack_reconfig_data_format(out_cb, acc_cb);
                     cb_reserve_back(acc_cb, kSubTiles);
                     ckernel::tile_regs_wait();
                     ckernel::pack_reconfig_l1_acc(reload ? 1 : 0);
@@ -1844,6 +1863,7 @@ struct Strategy<FPUFusion> {
                 // A flat walk is enough here: no operand indexing is involved, and the
                 // subblocks are consumed in the order they were written.
                 ckernel::copy_tile_to_dst_init_short_with_dt(node.in1_cb, acc_cb);
+                ckernel::pack_reconfig_data_format(acc_cb, out_cb);  // packing to the output now
                 for (uint32_t sb = 0; sb < kAccTiles; sb += kSubTiles) {
                     ckernel::tile_regs_acquire();
                     cb_wait_front(acc_cb, kSubTiles);

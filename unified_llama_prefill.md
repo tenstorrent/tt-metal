@@ -3186,6 +3186,66 @@ change rather than a weight-format one, so it changes what the next stage consum
 be done one matmul at a time -- but the FFN's intermediate is exactly the kind of value that
 does not need bf16, and it is 8MB written and 8MB read back.
 
+### bfloat8_b activations, and a packer bug that was waiting for them
+
+Weights were the easy half. Activations mean the OUTPUT is bfloat8_b, and that is where the
+library had a real bug: **the packer's output format is programmed once**, by
+`compute_kernel_hw_startup` inside `matmul_init`, for ONE circular buffer -- while a blocked
+matmul packs to two, the accumulator carrying partials and the output. With both bfloat16 that
+never showed. With an output in a different format the second buffer is written using the
+first one's packer, and there is no assert and no hang: the bytes land, and bfloat16 read back
+as bfloat8_b comes out as 1.33e36.
+
+ttnn reconfigures at exactly these transitions -- `PACK((pack_reconfig_data_format(...)))`
+around its partials and output buffers in `bmm_large_block_zm_fused_bias_activation.cpp` --
+and the fix is the same call at our four: the Dst-mode pack whose destination alternates, the
+L1-mode pack into the accumulator, the L1 copy-out, and `bias_finish`. The two-argument form
+is guarded inside the LLK on `pack_dst_format[old] != pack_dst_format[new]`, so in the uniform
+case, which is every other kernel here, it costs a table lookup and a compare.
+
+Worth stating plainly: this was latent in the library, not in the new code. Any kernel that
+packed to two buffers of different formats was silently wrong, and only a test that varied the
+output format could have found it -- which is why the suite now varies it rather than only
+varying the weights.
+
+**The accumulator stays bfloat16 and must.** The packer's L1 accumulate reads back what is
+already at the destination and adds to it, which a shared-exponent block format cannot do in
+place.
+
+| [512, ...] on the 8x8 grid, at each format | all bf16 | W bf8 | W+out bf8 | W+A+out bf8 |
+|---|---|---|---|---|
+| projection @[2048,2048] | 152.8 | 113.3 | 93.6 | **93.7** |
+| FFN gate/up @[2048,8192] | 605.9 | 423.0 | 345.4 | **346.7** |
+| FFN down @[8192,2048] | 474.4 | 299.2 | 280.4 | **277.6** |
+
+1.63x to 1.75x over bf16. **Almost all of the second step is the OUTPUT, not A**: 93.6 against
+93.7 on the projection, and the same everywhere. That is what multicast implies -- A is read
+from DRAM once for a whole grid row, so its format hardly matters, while the output is written
+in full by every core. pcc holds at 0.999863 to 1.000000 on the real shapes.
+
+The layer's measured part, against ttnn at the SAME formats (weights and output both
+bfloat8_b, A bfloat8_b):
+
+| stage | bf16 | W bf8 | all bf8 | ttnn, same formats | ours/ttnn |
+|---|---|---|---|---|---|
+| FFN gate + up x2 | 1179.8 | 844.3 | **692.8** | 834.0 | **0.83x** |
+| FFN down | 470.1 | 299.9 | **277.5** | 229.9 | 1.21x |
+| flash attention, 32 heads | 336.1 | 336.6 | 337.5 | -- | |
+| Q + output projections | 309.4 | 227.2 | **186.8** | 142.6 | 1.31x |
+| K and V projections x2 | 104.8 | 100.1 | **70.6** | 56.4 | 1.25x |
+| rmsnorm x2 | 122.0 | 121.1 | 121.9 | -- | |
+| **subtotal** | **2522.2** | **1929.1** | **1687.0** | | |
+
+**1.50x over bf16 for the whole measured part**, and it now sits under ttnn's 1820us whole
+layer -- which still is not like for like, because that 1820 includes RoPE, two residuals and
+silu*up and this does not. The per-shape column is the honest comparison: 1.21x to 1.31x on
+the three ordinary shapes and 0.83x on FFN gate/up, where the wide-N output plays to the
+gather-store.
+
+Attention and rmsnorm do not move at all across three format changes, which is the correct
+result and a useful check that the harness is changing what it says it is: neither reads a
+weight matrix, and their activations were left bfloat16.
+
 ## Phase 11 -- Full block orchestration
 
 Host-side and kernel-loop work, not model gaps.
