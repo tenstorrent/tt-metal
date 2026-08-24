@@ -792,6 +792,14 @@ NocAsyncReadTx<thread, S> noc_load(
             // The three zones below split the sender's k-block into the only parts that can
             // be separately slow. Note that `fn` above merely ISSUES the reads: they are
             // asynchronous, so their cost lands in the barrier, not in the issue.
+            // TIMING ABLATION -- WRONG ANSWER on purpose. Skips the whole broadcast: no
+            // ready-wait, no payload multicast, no flag. Receivers below skip their wait to
+            // match, so they consume whatever is in their buffer. What it measures is the
+            // sender with ONLY its reads left, which bounds what perfectly overlapping the
+            // broadcast with the next block's read could ever be worth.
+#if defined(TT_UNIFIED_MCAST_NOSEND)
+            noc_async_read_barrier();
+#else
             {
                 TT_U_ZONE("MCAST-READY");  // waiting for receivers to free their buffers
                 receivers_ready.wait(num_dests);
@@ -839,10 +847,16 @@ NocAsyncReadTx<thread, S> noc_load(
                 noc_async_writes_flushed();
                 data_sent.set(0);
             }
+#endif
         } else {
+#if defined(TT_UNIFIED_MCAST_NOSEND)
+            (void)receivers_ready;
+            (void)data_sent;
+#else
             receivers_ready.inc_remote(mcast.start);
             data_sent.wait(1);
             data_sent.set(0);  // rearm for the next block
+#endif
         }
     });
 }
