@@ -22,9 +22,9 @@
 // All work goes through the kernel-lib helpers (no raw tile_regs / copy_tile / pack_tile loops in
 // this kernel) -- reducing the surface for buffer-sync, DST, and reconfig bugs.
 //
-// Metal 2.0: the helper library is Gen1 and takes raw buffer ids. DFBBindingToken's conversion to
-// uint32_t is constexpr precisely so a ProgramSpec kernel can keep calling it; the aliases below are
-// the whole adaptation.
+// Metal 2.0: the helper library is Gen1 and takes raw buffer ids, but the `dfb::` names are passed
+// to it directly -- DFBBindingToken's conversion to uint32_t is constexpr, so a binding token is a
+// valid non-type template argument. There is no second name for any buffer in this kernel.
 
 #include <cstdint>
 
@@ -36,15 +36,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
-namespace {
-constexpr uint32_t cb_in = dfb::in_tiles;
-constexpr uint32_t cb_centered = dfb::centered_sq;
-constexpr uint32_t cb_scaler = dfb::scaler;
-constexpr uint32_t cb_mean = dfb::mean;
-constexpr uint32_t cb_variance = dfb::variance;
-constexpr uint32_t cb_out = dfb::out_tiles;
-}  // namespace
-
 namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
@@ -54,7 +45,7 @@ void kernel_main() {
     constexpr bool COMPUTE_STD_DEV = get_arg(args::compute_std_dev) != 0;
     constexpr bool HAS_PARTIAL_W = get_arg(args::has_partial_w) != 0;
 
-    compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
+    compute_kernel_hw_startup(dfb::in_tiles, dfb::scaler, dfb::out_tiles);
 
     constexpr auto reduce_block_shape = ckl::ReduceInputBlockShape::of(Ht, BLOCK_SIZE, /*NC=*/1);
     constexpr auto bin_block_shape = ckl::IterationShape::of(Ht, BLOCK_SIZE);
@@ -70,10 +61,10 @@ void kernel_main() {
     // accumulating reduce<> per block into dfb::mean.
     for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
         const bool is_last = (b + 1 == NUM_BLOCKS);
-        ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_in, cb_scaler, cb_mean>(
+        ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, dfb::in_tiles, dfb::scaler, dfb::mean>(
             reduce_block_shape,
             ckl::ReduceInputMemoryLayout::contiguous(),
-            ckl::Accumulate::at(cb_mean, b),
+            ckl::Accumulate::at(dfb::mean, b),
             ckl::NoOp{},
             is_last ? partial_scaler : ckl::ReducePartialScaler::none());
     }
@@ -88,36 +79,49 @@ void kernel_main() {
     // dfb::in_tiles is per-tile streamed by the reader -> A waits and pops per tile.
     for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
         ckl::sub<
-            ckl::input(cb_in, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::OperandKind::Scalar),
+            ckl::input(dfb::in_tiles, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::OperandKind::Scalar),
             ckl::input(
-                cb_mean, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Col),
-            ckl::output(cb_centered)>(bin_block_shape);
+                dfb::mean,
+                ckl::BroadcastDim::Col,
+                ckl::WaitPolicy::Upfront,
+                ckl::PopPolicy::None,
+                ckl::OperandKind::Col),
+            ckl::output(dfb::centered_sq)>(bin_block_shape);
 
-        ckl::square<ckl::input(cb_centered), ckl::output(cb_centered)>(bin_block_shape);
+        ckl::square<ckl::input(dfb::centered_sq), ckl::output(dfb::centered_sq)>(bin_block_shape);
 
         const bool is_last = (b + 1 == NUM_BLOCKS);
         const auto block_scaler = is_last ? partial_scaler : ckl::ReducePartialScaler::none();
 
         if constexpr (COMPUTE_STD_DEV) {
             if (is_last) {
-                ckl::
-                    reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_centered, cb_scaler, cb_variance>(
-                        reduce_block_shape,
-                        ckl::ReduceInputMemoryLayout::contiguous(),
-                        ckl::Accumulate::at(cb_variance, b),
-                        [](uint32_t dst) {
-                            sqrt_tile_init();
-                            sqrt_tile(dst);
-                        },
-                        block_scaler);
+                ckl::reduce<
+                    ckernel::PoolType::SUM,
+                    ckernel::ReduceDim::REDUCE_ROW,
+                    dfb::centered_sq,
+                    dfb::scaler,
+                    dfb::variance>(
+                    reduce_block_shape,
+                    ckl::ReduceInputMemoryLayout::contiguous(),
+                    ckl::Accumulate::at(dfb::variance, b),
+                    [](uint32_t dst) {
+                        sqrt_tile_init();
+                        sqrt_tile(dst);
+                    },
+                    block_scaler);
                 continue;
             }
         }
 
-        ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_centered, cb_scaler, cb_variance>(
+        ckl::reduce<
+            ckernel::PoolType::SUM,
+            ckernel::ReduceDim::REDUCE_ROW,
+            dfb::centered_sq,
+            dfb::scaler,
+            dfb::variance>(
             reduce_block_shape,
             ckl::ReduceInputMemoryLayout::contiguous(),
-            ckl::Accumulate::at(cb_variance, b),
+            ckl::Accumulate::at(dfb::variance, b),
             ckl::NoOp{},
             block_scaler);
     }
@@ -131,7 +135,7 @@ void kernel_main() {
     // ---------- Drain variance -> out_tiles ----------
     // Per-tile streaming copy with input + output format reconfig (chain owns wait/pop on
     // dfb::variance and reserve/push on dfb::out_tiles).
-    ckl::copy<ckl::input(cb_variance), ckl::output(cb_out)>(ckl::IterationShape::tiles(Ht));
+    ckl::copy<ckl::input(dfb::variance), ckl::output(dfb::out_tiles)>(ckl::IterationShape::tiles(Ht));
 
     dfb_scaler.pop_front(HAS_PARTIAL_W ? 2 : 1);
 }
