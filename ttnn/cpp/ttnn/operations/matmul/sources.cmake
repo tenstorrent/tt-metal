@@ -3,6 +3,7 @@
 
 set(TTNN_OP_MATMUL_SRCS
     matmul.cpp
+    device/config/matmul_config_registry.cpp
     device/config/matmul_program_config.cpp
     device/matmul_device_operation.cpp
     device/utilities/matmul_utilities.cpp

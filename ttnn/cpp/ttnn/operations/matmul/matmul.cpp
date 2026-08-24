@@ -16,6 +16,7 @@
 #include "ttnn/operations/creation/creation.hpp"
 
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_config_registry.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.hpp"
@@ -218,6 +219,7 @@ static ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
+    const registry::CallOrigin call_origin,
     ttnn::prim::MatmulParams& parameters,
     std::optional<ttnn::Tensor>& optional_output_tensor) {
     if (input_tensor_a.logical_shape().rank() == 0 || input_tensor_b.logical_shape().rank() == 0) [[unlikely]] {
@@ -225,6 +227,36 @@ static ttnn::Tensor bound_matmul(
             "ttnn.matmul: Both arguments to matmul need to be at least 1D, but got shapes {} and {}",
             input_tensor_a.logical_shape(),
             input_tensor_b.logical_shape());
+    }
+
+    if constexpr (registry::current_mode() != registry::Mode::Off) {
+        const auto registry_resolution = registry::resolve(
+            registry::current_mode(),
+            registry::Eligibility{
+                .call_origin = call_origin,
+                .has_program_config = parameters.program_config.has_value(),
+                .has_compute_kernel_config = parameters.compute_kernel_config.has_value(),
+                .has_user_core_grid = parameters.user_core_coord.has_value(),
+                .has_bias = bias.has_value(),
+                .has_activation = parameters.user_fused_activation.has_value(),
+                .has_optional_output = optional_output_tensor.has_value(),
+                .has_output_tile = parameters.output_tile.has_value(),
+                .has_global_cb = parameters.global_cb.has_value(),
+                .has_sub_device = parameters.sub_device_id.has_value(),
+                .input_a_sharded = input_tensor_a.is_sharded(),
+                .input_b_sharded = input_tensor_b.is_sharded(),
+                .input_b_batched = parameters.user_run_batched,
+                .transpose_a = parameters.transpose_a,
+                .transpose_b = parameters.transpose_b,
+            });
+        if (registry_resolution.recipe.has_value()) {
+            parameters.program_config = registry_resolution.recipe->program_config;
+            parameters.compute_kernel_config = registry_resolution.recipe->compute_kernel_config;
+            parameters.untilize_out =
+                std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(
+                    parameters.program_config.value()) &&
+                std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(parameters.program_config.value()).untilize_out;
+        }
     }
 
     if (input_tensor_a.is_sharded() || input_tensor_b.is_sharded()) {
@@ -407,6 +439,7 @@ Tensor matmul(
         input_tensor_a,
         input_tensor_b,
         /*bias=*/std::nullopt,
+        registry::CallOrigin::PublicMatmul,
         matmul_params,
         optional_output_tensor);
 }
@@ -448,7 +481,13 @@ Tensor linear(
         output_tile,
         global_cb,
         sub_device_id};
-    return bound_matmul(input_tensor_a, input_tensor_b, bias, matmul_params, optional_output_tensor);
+    return bound_matmul(
+        input_tensor_a,
+        input_tensor_b,
+        bias,
+        registry::CallOrigin::IneligibleSharedCaller,
+        matmul_params,
+        optional_output_tensor);
 }
 
 std::vector<Tensor> matmul_batched_weights(
@@ -569,7 +608,13 @@ Tensor addmm(
         output_tile,
         /*global_cb=*/std::nullopt,
         /*sub_device_id=*/std::nullopt};
-    auto out_tensor = bound_matmul(mat1_tensor, mat2_tensor, std::nullopt, matmul_params, optional_output_tensor);
+    auto out_tensor = bound_matmul(
+        mat1_tensor,
+        mat2_tensor,
+        std::nullopt,
+        registry::CallOrigin::IneligibleSharedCaller,
+        matmul_params,
+        optional_output_tensor);
 
     if (alpha != 1.0) {
         multiply_(out_tensor, alpha);
