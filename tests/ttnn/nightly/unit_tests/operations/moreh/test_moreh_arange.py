@@ -21,6 +21,12 @@ def run_moreh_arange(start_end_step, optional_output, dtype, tilized, device):
     start, end, step = start_end_step
     if (dtype == "int32") and (start != int(start) or end != int(end) or step != int(step)):
         pytest.skip(f"start, end, and step must be integers when using int32 dtype")
+    if dtype == "bfloat8_b" and not tilized:
+        pytest.skip(f"bfloat8_b requires TILE_LAYOUT")
+
+    # TODO @mrshaw01: Support bfloat8_b in kernel
+    if dtype == "bfloat8_b":
+        pytest.skip(f"bfloat8_b is not supported in the kernel")
 
     # Compute using torch
     torch_dtype = get_lib_dtype(torch, dtype)
@@ -81,7 +87,7 @@ def run_moreh_arange(start_end_step, optional_output, dtype, tilized, device):
 )
 @pytest.mark.parametrize(
     "dtype",
-    [None, "bfloat16", "int32", "float32"],
+    [None, "bfloat8_b", "bfloat16", "int32", "float32"],
 )
 @pytest.mark.parametrize(
     "tilized",
@@ -104,7 +110,7 @@ def test_arange(start_end_step, optional_output, dtype, tilized, device):
 )
 @pytest.mark.parametrize(
     "dtype",
-    [None, "bfloat16", "int32", "float32"],
+    [None, "bfloat8_b", "bfloat16", "int32", "float32"],
 )
 def test_arange_callback(start_end_step, optional_output, dtype, device):
     """Test arange functionality with callback and program cache validation."""

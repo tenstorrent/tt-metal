@@ -163,8 +163,11 @@ def run_moreh_nll_loss_unreduced(
 @pytest.mark.parametrize("ignore_index", [1])
 @pytest.mark.parametrize("none_weight", [True, False])
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_moreh_nll_loss_unreduced(shape, ignore_index, none_weight, compute_kernel_options, ttnn_dtype, device):
+    if ttnn_dtype == ttnn.bfloat8_b:
+        pytest.skip("Support for bfloat8_b is currently unavailable.")
+
     torch.manual_seed(0)
     run_moreh_nll_loss_unreduced(
         shape, ignore_index, none_weight, device, compute_kernel_options=compute_kernel_options
@@ -216,10 +219,13 @@ def test_moreh_nll_loss_unreduced_callback(shape, device):
 @pytest.mark.parametrize("ignore_index", [1])
 @pytest.mark.parametrize("none_weight", [True, False])
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_moreh_nll_loss_unreduced_backward(
     shape, ignore_index, none_weight, compute_kernel_options, ttnn_dtype, device
 ):
+    if ttnn_dtype == ttnn.bfloat8_b:
+        pytest.skip("Support for bfloat8_b is currently unavailable.")
+
     torch.manual_seed(0)
     run_moreh_nll_loss_unreduced_backward(
         shape, ignore_index, none_weight, device, compute_kernel_options=compute_kernel_options

@@ -203,8 +203,10 @@ def run_moreh_adamw(
 @pytest.mark.parametrize("weight_decay", [0.3])
 @pytest.mark.parametrize("amsgrad", [True, False])
 @pytest.mark.parametrize("step", [8])
-@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, ttnn_dtype, device):
+    if ttnn_dtype == ttnn.bfloat8_b:
+        pytest.skip("Bfloat8_b is only supported with fp32_dest_acc set to True")
     torch.manual_seed(0)
     run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device, ttnn_dtype=ttnn_dtype)
 

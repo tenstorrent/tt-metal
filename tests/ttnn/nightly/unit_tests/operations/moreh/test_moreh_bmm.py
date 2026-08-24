@@ -234,11 +234,14 @@ def test_moreh_bmm_compute_kernel_options(compute_kernel_options, device):
     run_moreh_bmm([10, 191, 447, 159], True, compute_kernel_options, device)
 
 
-@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 def test_moreh_bmm_ttnn_dtype(ttnn_dtype, device):
     """
     PyTest wrapper for running BMM tests with multiple configurations.
     """
+    # TODO @mrshaw01: Support bfloat8_b in kernel
+    if ttnn_dtype == ttnn.bfloat8_b:
+        pytest.skip(f"bfloat8_b is not supported in the kernel")
     torch.manual_seed(2024)
     run_moreh_bmm([10, 191, 447, 159], True, True, device, ttnn_dtype=ttnn_dtype)
 
@@ -306,11 +309,14 @@ def test_moreh_bmm_backward_compute_kernel_options(compute_kernel_options, devic
     run_moreh_bmm_backward([7, 511, 313, 765], [True, True], compute_kernel_options, device)
 
 
-@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 def test_moreh_bmm_backward_ttnn_dtype(ttnn_dtype, device):
     """
     PyTest wrapper for running BMM backward tests with multiple configurations.
     """
+    # TODO @mrshaw01: Support bfloat8_b in kernel
+    if ttnn_dtype == ttnn.bfloat8_b:
+        pytest.skip(f"bfloat8_b is not supported in the kernel")
     torch.manual_seed(2024)
     run_moreh_bmm_backward([7, 511, 313, 765], [True, True], True, device, ttnn_dtype=ttnn_dtype)
 
