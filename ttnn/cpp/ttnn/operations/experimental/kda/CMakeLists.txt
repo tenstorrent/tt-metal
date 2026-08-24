@@ -41,5 +41,5 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::QkvCausalConv1dSilu>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::ReduceAffineTransforms>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::AffineExclusiveScan>
-        TTNN::Ops::Experimental::KDA::PrepareChunkRecurrence
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::PrepareChunkRecurrence>
 )
