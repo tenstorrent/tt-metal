@@ -247,9 +247,8 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         const uint64_t out_page = args.output_spec.compute_page_size_bytes();
         const uint64_t txn = std::min(in_page, out_page);  // NOC transaction size
         // Bytes crossing one link of the gathered axis (the same axis and links the unicast factory uses).
-        // Both rules below are in bytes per link, so they carry to link counts other than the ones they
-        // were tuned on. Both were also fitted to tile, the common layout, whose crossover sits a little
-        // above row-major's.
+        // The rules below are in bytes per link, so they carry to link counts other than the ones they
+        // were tuned on.
         const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
         const uint64_t per_link_bytes =
             input_tensor.physical_volume() * input_tensor.element_size() * args.num_devices / num_links;
@@ -264,19 +263,18 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                 break;
             }
             case tt::ARCH::BLACKHOLE: {
-                // Coefficients below are from a factory-vs-factory sweep, not first principles. Multicast
-                // wins only at small volumes and its edge there is much smaller than unicast's at scale, so
-                // the boundary errs toward unicast. The ceiling grows with page size for the same reason as
-                // on Wormhole, and sits higher on a line, whose unicast relay moves more data per link than
-                // a ring's.
-                uint64_t mcast_ceiling;
+                // Factory-vs-factory sweep. How long unicast's extra store-and-forward hop takes to pay for
+                // itself is what sets both boundaries, so a ring -- which halves that hop count by pulling
+                // from both sides -- switches far earlier than a line.
                 if (is_ring) {
-                    mcast_ceiling = std::min<uint64_t>(650'000, 300 * txn);
+                    // Unicast wins almost everywhere. Multicast only holds on where the op is pure overhead
+                    // rather than transfer: a small volume moved as small pages.
+                    use_unicast = per_link_bytes > 64 * 1024 || txn > 1024;
                 } else {
-                    const double sqrt_page = std::sqrt(static_cast<double>(txn));
-                    mcast_ceiling = std::min<uint64_t>(1'700'000, static_cast<uint64_t>(27'000 * sqrt_page));
+                    // One inbound link, so unicast trails until the volume is large enough for its
+                    // bandwidth edge to cover the hops. Page size does not move this boundary.
+                    use_unicast = per_link_bytes >= 512 * 1024;
                 }
-                use_unicast = per_link_bytes >= mcast_ceiling;
                 break;
             }
             default: break;  // uncalibrated arch
