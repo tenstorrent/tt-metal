@@ -46,7 +46,6 @@ def run(
     depth=None,
     hoist=False,
     zones=False,
-    nosend=False,
 ):
     """Extents and block widths all in TILES. a/b let a caller supply the operands."""
     assert mtot % mt == 0 and ktot % kt == 0 and ntot % nt == 0
@@ -138,7 +137,6 @@ def run(
             )
             + ([("MMB_ABL_HOIST", "1")] if hoist else [])
             + ([("TT_UNIFIED_MCAST_ZONES", "1")] if zones else [])
-            + ([("TT_UNIFIED_MCAST_NOSEND", "1")] if nosend else [])
         )
         or None,
         **(fidelity or {}),
