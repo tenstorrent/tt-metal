@@ -61,6 +61,18 @@ void bind_repeat(nb::module_& mod) {
         R"doc(
             Verification only: runs the native repeat implementation unconditionally. Not part of the
             ttnn API; use ttnn.repeat, which selects an implementation on its own.
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+                repeat_dims (SmallVector): the number of repetitions for each dimension.
+
+            Keyword Args:
+                memory_config (ttnn.MemoryConfig, optional): memory configuration for the output.
+                    Defaults to `None`, which derives it from the input.
+
+            Returns:
+                ttnn.Tensor: the output tensor. Takes no preallocated output -- a forced leg is a
+                reference for comparison, not a call path with the full public surface.
         )doc");
 
     mod.def(
@@ -75,6 +87,21 @@ void bind_repeat(nb::module_& mod) {
             Verification only: runs the codegen repeat implementation unconditionally, raising for a
             case outside its support scope rather than falling back to native. Not part of the ttnn
             API; use ttnn.repeat, which selects an implementation on its own.
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+                repeat_dims (SmallVector): the number of repetitions for each dimension.
+
+            Keyword Args:
+                memory_config (ttnn.MemoryConfig, optional): memory configuration for the output.
+                    Defaults to `None`, which derives it from the input.
+
+            Returns:
+                ttnn.Tensor: the output tensor. Takes no preallocated output -- a forced leg is a
+                reference for comparison, not a call path with the full public surface.
+
+            Raises:
+                RuntimeError: the codegen path does not support this case.
         )doc");
 }
 

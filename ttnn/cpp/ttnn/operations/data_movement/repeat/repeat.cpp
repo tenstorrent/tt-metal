@@ -300,8 +300,6 @@ ttnn::Tensor repeat_via_codegen(
     return working_tensor;
 }
 
-// Internal to this file. `detail` is shared across the whole data_movement library and this is
-// a unity-build target, so unprefixed helper names must not have external linkage.
 namespace {
 
 // Strips shard_spec off a sharded input's memory config; the device op re-derives one for the
