@@ -231,7 +231,7 @@ void kernel_main() {
     // belongs to it -- its queries, its state, its tail.
     u::ComputeBlock one = u::fill_reduce_scaler<1>(one_storage, u::kReduceScalerOne);
     // reduce_max keeps the scaler above: a maximum has no matmul form.
-    u::ComputeBlock col_ones = u::noc_load<1>(colones_storage, colones_acc, 0).wait();
+    u::ComputeBlock col_ones = u::noc_load<0>(colones_storage, colones_acc, 0).wait();
 
     // One launch covers this core's whole slice of the heads, so everything above --
     // matmul_init's hardware startup, the reduce scaler, the column of ones -- is paid once
@@ -268,7 +268,7 @@ void kernel_main() {
         const uint32_t chunks = (k_offset + (i + 1) * sq) / sk;
 #endif
 
-        u::ComputeBlock q = u::noc_load<1>(q_storage, q_acc, q_base + i).wait();
+        u::ComputeBlock q = u::noc_load<0>(q_storage, q_acc, q_base + i).wait();
 
         // The running state, per query chunk: fresh here, drained by the tail below.
         // ~RetainedBlock asserts on a slot that was pushed and never waited on, so a
@@ -278,9 +278,9 @@ void kernel_main() {
         u::RetainedBlock<Out> o_slot;
 
         for (uint32_t j = 0; j < chunks; ++j) {
-            u::ComputeBlock k = u::noc_load<1>(k_storage, k_acc, kv_base + j).wait();
-            u::ComputeBlock v = u::noc_load<1>(v_storage, v_acc, kv_base + j).wait();
-            u::ComputeBlock mask = u::noc_load<1>(mask_storage, mask_acc, mask_idx++).wait();
+            u::ComputeBlock k = u::noc_load<0>(k_storage, k_acc, kv_base + j).wait();
+            u::ComputeBlock v = u::noc_load<0>(v_storage, v_acc, kv_base + j).wait();
+            u::ComputeBlock mask = u::noc_load<0>(mask_storage, mask_acc, mask_idx++).wait();
 
             // The mask rides along in the matmul: `add` puts it into the product while that is
             // still in DST, so what used to be a separate 8x8-tile pass over the scores -- read
@@ -345,7 +345,7 @@ void kernel_main() {
         // This costs NO extra NOC traffic. The built-in store already issues one write
         // per page, since consecutive pages of an interleaved tensor sit on different
         // banks, so all that changes is the destination page index each write is given.
-        u::noc_store<0>(out_storage.store(o_done * u::bcast<u::Axis::Cols>(rl)), [&](u::L1Pages pages) {
+        u::noc_store<1>(out_storage.store(o_done * u::bcast<u::Axis::Cols>(rl)), [&](u::L1Pages pages) {
             for (uint32_t p = 0; p < pages.count; ++p) {
                 // The block is row-major in L1: page p is its tile (p / dt, p % dt).
                 const uint32_t row = i * sq + p / dt;

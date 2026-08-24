@@ -910,6 +910,17 @@ struct NocAsyncWriteCoreTx {
 // ---------------------------------------------------------------------------
 // Data movement. Each is pinned to a DM thread by its `thread` argument and
 // compiles away entirely on every other thread.
+//
+// `thread` ALSO picks the NOC, since a DM thread is bound to one by its index,
+// and the two NOCs are not interchangeable: for DRAM reads NOC 0 is much the
+// faster of them. Measured on the blocked matmul, where flipping which NOC
+// carries the large operand is worth 1.4x on its own and the whole arrangement
+// spans 2.6x; rmsnorm 2.4x; flash attention 1.18x, it being latency-bound
+// rather than bandwidth-bound. So the rule these kernels follow is READS ON
+// THREAD 0, writes on 1 -- and where there are two read streams, the BIG one
+// takes thread 0 and the other takes 1 so they still overlap. Getting this
+// backwards costs more than any other single choice in these kernels; see
+// unified_llama_prefill.md.
 // ---------------------------------------------------------------------------
 
 // Reads `storage.num_pages` pages into the buffer, starting at page

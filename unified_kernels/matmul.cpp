@@ -104,7 +104,7 @@ void kernel_main() {
     // below is the only one it ever gets.
     u::Storage<u::Shape<1, MM_CT_DIM>> bias_storage(kCbBias);
     const auto bias_acc = TensorAccessor(bias_args, bias_addr);
-    u::ComputeBlock bias = u::noc_load<1>(bias_storage, bias_acc, 0).wait();
+    u::ComputeBlock bias = u::noc_load<0>(bias_storage, bias_acc, 0).wait();
 #endif
 
 #if defined(MM_SINGLE_SHOT)
@@ -126,13 +126,13 @@ void kernel_main() {
     for (uint32_t k = 0; k < MM_K_BLOCKS; ++k) {
         const bool finish = (k == MM_K_BLOCKS - 1);
 
-        u::ComputeBlock a = u::noc_load<1>(in0_storage, in0, k).wait();
-        u::ComputeBlock b = u::noc_load<1>(in1_storage, in1, k).wait();
+        u::ComputeBlock a = u::noc_load<0>(in0_storage, in0, k).wait();
+        u::ComputeBlock b = u::noc_load<0>(in1_storage, in1, k).wait();
 
 #if defined(MM_SINGLE_SHOT)
         (void)finish;
         u::Block result = out_storage.store(MM_FUSION(a, b));
-        u::noc_store<0>(std::move(result), out, 0);
+        u::noc_store<1>(std::move(result), out, 0);
 #else
 
 #if defined(MM_RELU_EPILOGUE)
@@ -152,7 +152,7 @@ void kernel_main() {
 #endif
 
         if (finish) {
-            u::noc_store<0>(std::move(result), out, 0);
+            u::noc_store<1>(std::move(result), out, 0);
         }
 #endif
     }

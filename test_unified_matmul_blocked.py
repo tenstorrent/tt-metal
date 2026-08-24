@@ -126,17 +126,8 @@ def run(
         runtime_args=rt_args,
         defines=(
             ([("MMB_ACC_DST", "1")] if acc == "dst" else [])
-            + (
-                [
-                    ("MMB_MCAST", "1"),
-                    ("MMB_GRID_H", str(mb)),
-                    ("MMB_GRID_W", str(nb)),
-                    ("MMB_IN0_THREAD", str(in0_thread)),
-                    ("MMB_IN1_THREAD", str(in1_thread)),
-                ]
-                if mcast
-                else []
-            )
+            + [("MMB_IN0_THREAD", str(in0_thread)), ("MMB_IN1_THREAD", str(in1_thread))]
+            + ([("MMB_MCAST", "1"), ("MMB_GRID_H", str(mb)), ("MMB_GRID_W", str(nb))] if mcast else [])
             + ([("MMB_ABL_HOIST", "1")] if hoist else [])
             + ([("TT_UNIFIED_MCAST_ZONES", "1")] if zones else [])
         )
