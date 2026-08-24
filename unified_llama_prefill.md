@@ -2886,6 +2886,53 @@ the current one is being broadcast and consumed. That is the prefetch-depth find
 matmul k-block work, arrived at a third time and now the single thing standing between this
 and ttnn's number.
 
+### Digging into the sender: 95% accounted, three hypotheses dead, one lever left
+
+**The sender's time, per sender over eight k-blocks, against a 273.9us span.** The zones
+NEST -- `LOAD-ISSUE` wraps the whole multicast handshake -- so the leaf costs come from
+subtracting, and they close to 95%:
+
+| | us | share | |
+|---|---|---|---|
+| LOAD-RESERVE | 0.3 | 0% | backpressure; depth 2 is enough |
+| issue (leaf) | 31.3 | 11% | 512 `noc_async_read` calls at ~60ns each |
+| MCAST-READY | 0.3 | 0% | waiting on receivers |
+| **MCAST-DRAM** | **168.1** | **61%** | the barrier: reads landing |
+| MCAST-SEND | 60.6 | 22% | broadcast, flag, flush |
+
+**Three hypotheses died cheaply, which is the point of having the zones.**
+
+*Bank aliasing.* With `nt=8` and twelve banks, the eight senders' addresses stride by 8 and
+land on only 3 distinct banks; at `nt=7` they land on 8. Predicted a large win. Measured 370
+vs 359 ns/page -- **nothing**. Bank spread is not the constraint.
+
+*Block size.* Per-page cost is flat as the block grows -- 304ns at kt=2, 312 at kt=4, 361 at
+kt=8, 389 at kt=16 -- so it is a steady-state rate, not a per-block startup cost that bigger
+reads would amortise.
+
+*A per-core read ceiling.* A concurrency sweep looked like it showed one sender reading at
+89.4GB/s and eight at 5.6 each. **That reading was wrong and is worth recording as a trap:**
+the zone measures the BARRIER, which is read time minus whatever already overlapped. At low
+concurrency the reads were hidden behind other work, not fast. The zone tells you what is
+EXPOSED, not what a wire can do.
+
+**What is left is one structural thing, and it is ours rather than a mystery.** Per block the
+sender spends 22.42us at the DRAM barrier and 7.55us broadcasting, strictly in that order,
+because both live inside one `noc_load` call on one thread. Nothing overlaps them: the reads
+for block b+1 cannot be issued until block b's broadcast has flushed. Overlapping them would
+cost max(22.42, 7.55) instead of the sum -- about 25%, or ~310us down to ~235.
+
+That was proposed once and withdrawn on the grounds that ttnn's sender serialises identically
+(verified again here in its in1 sender, which is the one that carries the weights). **That was
+a reasoning error worth naming: "ttnn shares this defect" means it does not explain the gap,
+not that fixing it is worthless.** The two are different claims and conflating them cost a
+lever.
+
+It needs the primitive split into begin/finish so a sender can issue block b+1's reads while
+block b's flag is still going out. That is an API change of the kind that was just reverted
+for buying nothing -- the difference is that this one has a number attached before it is
+built, so it can be judged the same way.
+
 ## Phase 11 -- Full block orchestration
 
 Host-side and kernel-loop work, not model gaps.

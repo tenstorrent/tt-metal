@@ -705,8 +705,18 @@ template <int thread, typename S, typename Fn>
 NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, Fn fn) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        cb_reserve_back(storage.cb_id, storage.num_pages);
-        fn(L1Pages{get_write_ptr(storage.cb_id), cb_page_bytes(storage.cb_id), storage.num_pages});
+        {
+            // Blocking here means the consumer has not freed a slot yet -- backpressure,
+            // not work. Deeper CBs are what buy it down.
+            TT_U_ZONE("LOAD-RESERVE");
+            cb_reserve_back(storage.cb_id, storage.num_pages);
+        }
+        {
+            // ISSUING the reads, not waiting for them: they are asynchronous and their
+            // cost lands at the barrier.
+            TT_U_ZONE("LOAD-ISSUE");
+            fn(L1Pages{get_write_ptr(storage.cb_id), cb_page_bytes(storage.cb_id), storage.num_pages});
+        }
     }
 #else
     (void)fn;
