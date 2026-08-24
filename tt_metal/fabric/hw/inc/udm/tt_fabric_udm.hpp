@@ -446,6 +446,15 @@ FORCE_INLINE bool forward_to_downstream_mux_or_local_router(
 
     bool can_forward = true;
     if (Direction != mux_dir) {
+        // ⚠ direction_to_mux_index_map is declared [COUNT][COUNT] (5x5) but only its cardinal 4x4 is
+        // initialised, so the Z row and column are zero-filled. An express mesh's first hop can
+        // legitimately be a chord -- calculate_initial_direction() returns Z for it -- and that would
+        // index the zero-filled column and forward to mux 0, i.e. the wrong mux, silently.
+        //
+        // Fail loudly instead. A Z initial direction on the UDM path is unsupported: giving it a real
+        // mapping needs the builder's mux allocation for the Z peer, which is not modelled here.
+        ASSERT(mux_dir < static_cast<uint32_t>(eth_chan_directions::Z));
+        ASSERT(Direction < static_cast<uint32_t>(eth_chan_directions::Z));
         // Forward to the correct downstream mux
         uint32_t mux_index = direction_to_mux_index_map[Direction][mux_dir];
         can_forward = downstream_mux_connections[mux_index].edm_has_space_for_packet();
@@ -479,15 +488,10 @@ FORCE_INLINE uint32_t select_relay_to_mux_connection(uint16_t dst_chip_id) {
         auto* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
         uint16_t my_chip_id = routing_table->my_device_id;
 
-#if defined(FABRIC_EXPRESS_ENABLED)
-        // On an express mesh the 2D union slot holds the indexed vectors, not per-destination hop
+        // The 2D union slot holds the indexed vectors, not per-destination hop
         // counts. NS travel is exactly "destination row differs from ours" (dimension order runs
         // NS first), which the coordinates give directly.
-        const bool needs_ns = (dst_chip_id / FABRIC_EXPRESS_MESH_X_SIZE) != routing_table->my_mesh_coord_y;
-#else
-        auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
-        const bool needs_ns = routing_info->paths[dst_chip_id].get_ns_hops() > 0;
-#endif
+        const bool needs_ns = (dst_chip_id / FABRIC_2D_MESH_X_SIZE) != routing_table->my_mesh_coord_y;
         if (needs_ns) {
             // is there another way to know whether it's north or south hops?
             if (dst_chip_id < my_chip_id) {

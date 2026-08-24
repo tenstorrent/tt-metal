@@ -36,7 +36,11 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
 #include "hostdev/fabric_telemetry_msgs.h"
 #ifdef FABRIC_2D
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edge_node_router.hpp"
+// The router re-encodes an intermesh packet's route when it lands, via
+// fabric_set_indexed_intermesh_landing_route(). That declaration used to arrive transitively through
+// fabric_edge_node_router.hpp, which included tt_fabric_api.h; deleting that header in 4.2 took the
+// router's only path to it. Included directly and 2D-gated, matching the sole call site.
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #endif
 
 #include <array>
@@ -47,7 +51,6 @@
 using namespace tt::tt_fabric;
 
 // Type alias for cleaner access to 2D mesh routing constants
-using MeshRoutingFields = tt::tt_fabric::RoutingFieldsConstants::Mesh;
 using LowLatencyFields = tt::tt_fabric::RoutingFieldsConstants::LowLatency;
 
 /*
@@ -303,10 +306,6 @@ using PerfTelemetryRecorder = std::conditional_t<
 template <uint8_t SENDER_NUM_BUFFERS>
 using RouterToRouterSender = tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>;
 
-constexpr bool is_spine_direction(eth_chan_directions direction) {
-    return direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH;
-}
-
 static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids = {
     sender_channel_0_free_slots_stream_id,
     sender_channel_1_free_slots_stream_id,
@@ -438,80 +437,6 @@ FORCE_INLINE constexpr eth_chan_directions map_compact_index_to_direction(size_t
 #endif
 }
 
-// Determine which sender channels are "turn" channels (i.e., north/south for east/west routers)
-// Channel 0 is always for local workers, so it's never a turn channel
-// For 2D fabric, channels 1-N correspond to compact indices 0-(N-1), which map to actual directions.
-// The array must be large enough for both VC0 direct lookups and VC1 mapped lookups
-// (VC1 channel k maps to index k+1).
-constexpr size_t TURN_STATUS_ARRAY_SIZE = (MAX_NUM_SENDER_CHANNELS_VC0 > MAX_NUM_SENDER_CHANNELS_VC1 + 1)
-                                              ? MAX_NUM_SENDER_CHANNELS_VC0
-                                              : MAX_NUM_SENDER_CHANNELS_VC1 + 1;
-
-constexpr auto get_sender_channel_turn_statuses() -> std::array<bool, TURN_STATUS_ARRAY_SIZE> {
-    std::array<bool, TURN_STATUS_ARRAY_SIZE> turn_statuses = {};
-
-    // Turn channels only exist on E/W routers, where an N/S sender channel means a packet turning off
-    // the E/W spine. A Z router has no turn semantics -- every send it makes is a linear hop -- so its
-    // N/S entries stay clear rather than being mis-flagged as turns.
-    if constexpr (
-        !is_spine_direction(static_cast<eth_chan_directions>(my_direction)) &&
-        static_cast<eth_chan_directions>(my_direction) != eth_chan_directions::Z) {
-        for (size_t sender_channel = 1; sender_channel < TURN_STATUS_ARRAY_SIZE; sender_channel++) {
-            size_t compact_index = sender_channel - 1;
-            eth_chan_directions actual_direction = map_compact_index_to_direction(compact_index);
-            turn_statuses[sender_channel] = is_spine_direction(actual_direction);
-        }
-    }
-
-    return turn_statuses;
-}
-
-// Map downstream direction to compact array index [0-2], excluding my_direction
-// This function assumes 2D fabric where routers don't forward to themselves
-// Examples:
-// - EAST router  (my_direction=0): WEST(1)→0, NORTH(2)→1, SOUTH(3)→2, Z(4)->3
-// - WEST router  (my_direction=1): EAST(0)→0, NORTH(2)→1, SOUTH(3)→2, Z(4)->3
-// - NORTH router (my_direction=2): EAST(0)→0, WEST(1)→1,  SOUTH(3)→2, Z(4)->3
-// - SOUTH router (my_direction=3): EAST(0)→0, WEST(1)→1,  NORTH(2)→2, Z(4)->3
-// - Z router     (my_direction=4): EAST(0)→0, WEST(1)→1,  NORTH(2)→2, SOUTH(3)→3
-constexpr size_t direction_to_compact_index_map[eth_chan_directions::COUNT][eth_chan_directions::COUNT] = {
-    {0, 0, 1, 2, 3},  // EAST router -> WEST, NORTH, SOUTH, Z
-    {0, 0, 1, 2, 3},  // WEST router -> EAST, NORTH, SOUTH, Z
-    {0, 1, 0, 2, 3},  // NORTH router -> EAST, WEST, SOUTH, Z
-    {0, 1, 2, 0, 3},  // SOUTH router -> EAST, WEST, NORTH, Z
-    {0, 1, 2, 3, 0},  // Z router -> EAST, WEST, NORTH, SOUTH
-};
-
-template <eth_chan_directions downstream_direction>
-FORCE_INLINE constexpr size_t map_downstream_direction_to_compact_index() {
-    return direction_to_compact_index_map[my_direction][downstream_direction];
-}
-
-FORCE_INLINE constexpr size_t map_downstream_direction_to_compact_index(eth_chan_directions downstream_direction) {
-    return direction_to_compact_index_map[my_direction][downstream_direction];
-}
-
-// Convert a hop_cmd direction bitmask into a sender channel bitmask using dense channel packing.
-// Each direction bit maps to a compact_index via map_downstream_direction_to_compact_index,
-// and the corresponding sender channel is compact_index + 1 (channel 0 is always worker).
-// my_direction is masked out since it represents a local write, not a forwarding channel.
-FORCE_INLINE uint16_t hop_cmd_to_sender_channel_mask(uint32_t hop_cmd) {
-    uint32_t fwd_directions = hop_cmd & ~(1u << my_direction);
-    uint16_t fwd_mask = 0;
-    // Legacy hop commands are cardinal-only (4-bit FIELD_MASK), so Z is never set here.
-    constexpr size_t num_directions = eth_chan_directions::COUNT - 1;
-    for (uint32_t dir = 0; dir < num_directions && fwd_directions; dir++) {
-        if (fwd_directions & (1u << dir)) {
-            size_t compact_idx = map_downstream_direction_to_compact_index(static_cast<eth_chan_directions>(dir));
-            fwd_mask |= static_cast<uint16_t>(1u << (compact_idx + 1));
-        }
-    }
-    return fwd_mask;
-}
-
-static constexpr std::array<bool, TURN_STATUS_ARRAY_SIZE> sender_channels_turn_status =
-    get_sender_channel_turn_statuses();
-
 static constexpr std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS> vc_0_free_slots_stream_ids = {
     vc_0_free_slots_from_downstream_edge_1_stream_id,
     vc_0_free_slots_from_downstream_edge_2_stream_id,
@@ -536,50 +461,14 @@ enum PacketLocalForwardType : uint8_t {
 // the link is down
 bool did_something;
 
-// This router's logical coordinates, cached at setup so express decode does no divide/mod on the hot
-// path. Populated in kernel_main when express_enabled.
-uint8_t express_local_y = 0;
-uint8_t express_local_x = 0;
+// This router's logical coordinates, cached at setup so indexed decode does no divide/mod on the hot
+// path. Populated in kernel_main; every 2D router indexes by coordinate.
+uint8_t local_y = 0;
+uint8_t local_x = 0;
 
 /////////////////////////////////////////////
 //   SENDER SIDE HELPERS
 /////////////////////////////////////////////
-
-// Add helper function
-template <uint8_t SENDER_CHANNEL_INDEX>
-FORCE_INLINE void update_packet_header_before_eth_send(volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
-#if defined(FABRIC_2D)
-    constexpr bool IS_FORWARDED_TRAFFIC_FROM_ROUTER = SENDER_CHANNEL_INDEX != 0;
-    // For VC1 sender channels, we need to adjust the index to map the channel index back to corresponding VC0 channel
-    // index for turn status checking.
-    constexpr bool IS_TURN = SENDER_CHANNEL_INDEX < MAX_NUM_SENDER_CHANNELS_VC0
-                                 ? sender_channels_turn_status[SENDER_CHANNEL_INDEX]
-                                 : sender_channels_turn_status[SENDER_CHANNEL_INDEX - MAX_NUM_SENDER_CHANNELS_VC0 + 1];
-    static_assert(
-        my_direction == eth_chan_directions::EAST || my_direction == eth_chan_directions::WEST ||
-        my_direction == eth_chan_directions::NORTH || my_direction == eth_chan_directions::SOUTH ||
-        my_direction == eth_chan_directions::Z);
-    static_assert(
-        is_spine_direction(eth_chan_directions::NORTH) || is_spine_direction(eth_chan_directions::SOUTH),
-        "Only spine direction of NORTH and SOUTH is supported with this code. If additional spine directions are being "
-        "added, please update the code below to support them.");
-    if constexpr (IS_FORWARDED_TRAFFIC_FROM_ROUTER) {
-        ROUTING_FIELDS_TYPE cached_routing_fields;
-        cached_routing_fields.value = packet_header->routing_fields.value;
-
-        if constexpr (IS_TURN) {
-            if constexpr (my_direction == eth_chan_directions::EAST) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            } else {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            }
-        } else {
-            cached_routing_fields.value = cached_routing_fields.value + 1;
-        }
-        packet_header->routing_fields.value = cached_routing_fields.value;
-    }
-#endif
-}
 
 template <
     uint8_t sender_channel_index,
@@ -656,6 +545,31 @@ FORCE_INLINE bool can_forward_packet_completely(
     return deliver_locally_only || downstream_edm_interface.template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
 }
 
+// Map downstream direction to compact array index [0-3], excluding my_direction.
+// Routers never forward back out their own facing, so that slot is unused and the remaining four
+// directions pack densely.
+// - EAST router  (my_direction=0): WEST(1)->0, NORTH(2)->1, SOUTH(3)->2, Z(4)->3
+// - WEST router  (my_direction=1): EAST(0)->0, NORTH(2)->1, SOUTH(3)->2, Z(4)->3
+// - NORTH router (my_direction=2): EAST(0)->0, WEST(1)->1,  SOUTH(3)->2, Z(4)->3
+// - SOUTH router (my_direction=3): EAST(0)->0, WEST(1)->1,  NORTH(2)->2, Z(4)->3
+// - Z router     (my_direction=4): EAST(0)->0, WEST(1)->1,  NORTH(2)->2, SOUTH(3)->3
+constexpr size_t direction_to_compact_index_map[eth_chan_directions::COUNT][eth_chan_directions::COUNT] = {
+    {0, 0, 1, 2, 3},  // EAST router -> WEST, NORTH, SOUTH, Z
+    {0, 0, 1, 2, 3},  // WEST router -> EAST, NORTH, SOUTH, Z
+    {0, 1, 0, 2, 3},  // NORTH router -> EAST, WEST, SOUTH, Z
+    {0, 1, 2, 0, 3},  // SOUTH router -> EAST, WEST, NORTH, Z
+    {0, 1, 2, 3, 0},  // Z router -> EAST, WEST, NORTH, SOUTH
+};
+
+template <eth_chan_directions downstream_direction>
+FORCE_INLINE constexpr size_t map_downstream_direction_to_compact_index() {
+    return direction_to_compact_index_map[my_direction][downstream_direction];
+}
+
+FORCE_INLINE constexpr size_t map_downstream_direction_to_compact_index(eth_chan_directions downstream_direction) {
+    return direction_to_compact_index_map[my_direction][downstream_direction];
+}
+
 template <eth_chan_directions downstream_direction>
 FORCE_INLINE constexpr size_t get_downstream_edm_interface_index() {
     // Map downstream direction to compact array index (excluding router's own direction)
@@ -672,8 +586,16 @@ FORCE_INLINE constexpr size_t get_downstream_edm_interface_index(eth_chan_direct
 // Whether this router actually instantiates the downstream slot a direction maps to. A compact index
 // is fixed by the direction pair alone, so a narrow router simply leaves the higher slots absent --
 // X_RING_ONLY gives an E/W-facing router only its opposite, so slots 1 and 2 do not exist there.
+// NOTE (Z-arm invariant): a router with no Z downstream must never index past its downstream array,
+// and that is already guaranteed structurally rather than by an assertion. fwd_dirs<MY_DIR>() always
+// lists Z, so pack_fwd_key() can set the Z bit, but every dispatch arm forms its array index only
+// inside `if constexpr (dispatch_arm_is_realizable<...>())` and takes an ASSERT(false)/fail-closed
+// branch otherwise. Wormhole, which has no Z sender at all, therefore compiles the Z arm away
+// entirely. There is no non-tautological static_assert to add here: the condition an assertion would
+// test is the same `if constexpr` that already enforces it, and num_z_ports is not visible to the
+// kernel to cross-check against.
 template <size_t DOWNSTREAM_EDM_SIZE, eth_chan_directions DIRECTION>
-constexpr bool express_arm_is_realizable() {
+constexpr bool dispatch_arm_is_realizable() {
     return get_downstream_edm_interface_index<DIRECTION>() < DOWNSTREAM_EDM_SIZE;
 }
 
@@ -721,149 +643,7 @@ FORCE_INLINE bool downstreams_have_space(
                    downstream_edm_interfaces, local_relay_interface));
 }
 
-#ifdef FABRIC_2D
-template <typename DownstreamSenderT, typename LocalRelayInterfaceT, size_t DOWNSTREAM_EDM_SIZE>
-FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_completely(
-    uint32_t hop_cmd,
-    std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
-    LocalRelayInterfaceT& local_relay_interface) {
-#if defined(ARCH_WORMHOLE) && defined(FABRIC_2D_VC1_ACTIVE)
-    bool ret_val = true;
-    if (hop_cmd & MeshRoutingFields::FORWARD_EAST) {
-        ret_val = ret_val && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST>(
-                                 downstream_edm_interfaces, local_relay_interface);
-    }
-    if (hop_cmd & MeshRoutingFields::FORWARD_WEST) {
-        ret_val = ret_val && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, WEST>(
-                                 downstream_edm_interfaces, local_relay_interface);
-    }
-    if (hop_cmd & MeshRoutingFields::FORWARD_SOUTH) {
-        ret_val =
-            ret_val && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, SOUTH>(
-                           downstream_edm_interfaces, local_relay_interface);
-    }
-    if (hop_cmd & MeshRoutingFields::FORWARD_NORTH) {
-        ret_val =
-            ret_val && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, NORTH>(
-                           downstream_edm_interfaces, local_relay_interface);
-    }
-    return ret_val;
-#else
-    bool ret_val = false;
-
-    using eth_chan_directions::EAST;
-    using eth_chan_directions::NORTH;
-    using eth_chan_directions::SOUTH;
-    using eth_chan_directions::WEST;
-
-    switch (hop_cmd) {
-        case MeshRoutingFields::NOOP: break;
-        case MeshRoutingFields::FORWARD_EAST:
-            ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST>(
-                downstream_edm_interfaces, local_relay_interface);
-            break;
-        case MeshRoutingFields::FORWARD_WEST:
-            ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, WEST>(
-                downstream_edm_interfaces, local_relay_interface);
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_EW:
-            // Line Mcast East<->West
-            ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST, WEST>(
-                downstream_edm_interfaces, local_relay_interface);
-            break;
-        case MeshRoutingFields::FORWARD_NORTH:
-            ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, NORTH>(
-                downstream_edm_interfaces, local_relay_interface);
-            break;
-        case MeshRoutingFields::FORWARD_SOUTH:
-            ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, SOUTH>(
-                downstream_edm_interfaces, local_relay_interface);
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NS:
-            // Line Mcast North<->South
-            ret_val =
-                downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, NORTH, SOUTH>(
-                    downstream_edm_interfaces, local_relay_interface);
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NSEW:
-            // 2D Mcast Trunk: North<->South
-            // 2D Mcast Branch: East and West
-            ret_val = downstreams_have_space<
-                DownstreamSenderT,
-                LocalRelayInterfaceT,
-                DOWNSTREAM_EDM_SIZE,
-                EAST,
-                WEST,
-                NORTH,
-                SOUTH>(downstream_edm_interfaces, local_relay_interface);
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NSE:
-            // 2D Mcast Trunk: North<->South
-            // 2D Mcast Branch: East
-            ret_val = downstreams_have_space<
-                DownstreamSenderT,
-                LocalRelayInterfaceT,
-                DOWNSTREAM_EDM_SIZE,
-                EAST,
-                NORTH,
-                SOUTH>(downstream_edm_interfaces, local_relay_interface);
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NSW:
-            // 2D Mcast Trunk: North<->South
-            // 2D Mcast Branch: West
-            ret_val = downstreams_have_space<
-                DownstreamSenderT,
-                LocalRelayInterfaceT,
-                DOWNSTREAM_EDM_SIZE,
-                WEST,
-                NORTH,
-                SOUTH>(downstream_edm_interfaces, local_relay_interface);
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_SEW:
-            // 2D Mcast Trunk: Last hop North
-            // 2D Mcast Branch: East and West
-            ret_val =
-                downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST, WEST, SOUTH>(
-                    downstream_edm_interfaces, local_relay_interface);
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NEW:
-            // 2D Mcast Trunk: Last hop South
-            // 2D Mcast Branch: East and West
-            ret_val =
-                downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST, WEST, NORTH>(
-                    downstream_edm_interfaces, local_relay_interface);
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_SE:
-            // 2D Mcast Trunk: Last hop North
-            // 2D Mcast Branch: East
-            ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST, SOUTH>(
-                downstream_edm_interfaces, local_relay_interface);
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_SW:
-            // 2D Mcast Trunk: Last hop North
-            // 2D Mcast Branch: West
-            ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, WEST, SOUTH>(
-                downstream_edm_interfaces, local_relay_interface);
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NE:
-            // 2D Mcast Trunk: Last hop South
-            // 2D Mcast Branch: East
-            ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST, NORTH>(
-                downstream_edm_interfaces, local_relay_interface);
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NW:
-            // 2D Mcast Trunk: Last hop South
-            // 2D Mcast Branch: West
-            ret_val = downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, WEST, NORTH>(
-                downstream_edm_interfaces, local_relay_interface);
-            break;
-        default: __builtin_unreachable();
-    }
-    return ret_val;
-#endif
-}
-
-#else
+#ifndef FABRIC_2D
 
 // !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
 template <uint8_t rx_channel_id, typename DownstreamSenderT>
@@ -953,7 +733,7 @@ FORCE_INLINE void receiver_forward_packet(
     }
 }
 
-#endif
+#endif  // !FABRIC_2D
 
 #if defined(FABRIC_2D)
 
@@ -974,19 +754,19 @@ FORCE_INLINE void forward_to_local_destination(
 }
 
 // ============================================================================
-// Skip-link routing — admit/forward dispatch
+// Indexed 2D routing — admit/forward dispatch
 // ============================================================================
 // Decodes a packet action byte through a dense packed key: the four non-self eth outputs
 // (IndexedMeshRoutingFields::fwd_dirs<MY_DIR>) pack into 4 bits, with LOCAL_DELIVER kept outside the
 // key. Admission must succeed for every selected output before any copy is committed, and each
 // selected output then receives an identical packet image, local delivery last.
 //
-// Reachable only when express_enabled; the legacy hop-program header updates never run here.
+// Indexed transit consumes no hop program, so no header update runs here.
 
 // Checks local relay capacity when ld, plus the downstream queue for every eth output KEY selects.
 // Only UDM mode queues local delivery through a relay interface.
 template <uint8_t KEY, typename DownstreamSenderT, typename LocalRelayInterfaceT, size_t DOWNSTREAM_EDM_SIZE>
-FORCE_INLINE bool admit_express_combo(
+FORCE_INLINE bool admit_indexed_combo(
     bool ld,
     std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
     LocalRelayInterfaceT& local_relay_interface) {
@@ -996,7 +776,7 @@ FORCE_INLINE bool admit_express_combo(
         ok = !ld || local_relay_interface.template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
     }
     if constexpr ((KEY >> 0) & 1) {
-        if constexpr (express_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[0]>()) {
+        if constexpr (dispatch_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[0]>()) {
             ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[0]>(
                            downstream_edm_interfaces, local_relay_interface);
         } else {
@@ -1005,7 +785,7 @@ FORCE_INLINE bool admit_express_combo(
         }
     }
     if constexpr ((KEY >> 1) & 1) {
-        if constexpr (express_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[1]>()) {
+        if constexpr (dispatch_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[1]>()) {
             ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[1]>(
                            downstream_edm_interfaces, local_relay_interface);
         } else {
@@ -1014,7 +794,7 @@ FORCE_INLINE bool admit_express_combo(
         }
     }
     if constexpr ((KEY >> 2) & 1) {
-        if constexpr (express_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[2]>()) {
+        if constexpr (dispatch_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[2]>()) {
             ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[2]>(
                            downstream_edm_interfaces, local_relay_interface);
         } else {
@@ -1023,7 +803,7 @@ FORCE_INLINE bool admit_express_combo(
         }
     }
     if constexpr ((KEY >> 3) & 1) {
-        if constexpr (express_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[3]>()) {
+        if constexpr (dispatch_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[3]>()) {
             ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[3]>(
                            downstream_edm_interfaces, local_relay_interface);
         } else {
@@ -1039,7 +819,7 @@ FORCE_INLINE bool admit_express_combo(
 // One unmodified full-packet copy per eth output KEY selects, and nothing else: remote receiver
 // credit is left to the sender step's bubble flow control, and local delivery to the caller.
 template <uint8_t KEY, typename DownstreamSenderT, size_t DOWNSTREAM_EDM_SIZE>
-FORCE_INLINE void forward_express_combo(
+FORCE_INLINE void forward_indexed_combo(
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     uint16_t payload_size_bytes,
     ROUTING_FIELDS_TYPE cached_routing_fields,
@@ -1047,7 +827,7 @@ FORCE_INLINE void forward_express_combo(
     uint8_t transaction_id) {
     constexpr auto dirs = IndexedMeshRoutingFields::fwd_dirs<static_cast<eth_chan_directions>(my_direction)>();
     if constexpr ((KEY >> 0) & 1) {
-        if constexpr (express_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[0]>()) {
+        if constexpr (dispatch_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[0]>()) {
             constexpr auto edm_index = get_downstream_edm_interface_index<dirs[0]>();
             forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                 packet_start,
@@ -1060,7 +840,7 @@ FORCE_INLINE void forward_express_combo(
         }
     }
     if constexpr ((KEY >> 1) & 1) {
-        if constexpr (express_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[1]>()) {
+        if constexpr (dispatch_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[1]>()) {
             constexpr auto edm_index = get_downstream_edm_interface_index<dirs[1]>();
             forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                 packet_start,
@@ -1073,7 +853,7 @@ FORCE_INLINE void forward_express_combo(
         }
     }
     if constexpr ((KEY >> 2) & 1) {
-        if constexpr (express_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[2]>()) {
+        if constexpr (dispatch_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[2]>()) {
             constexpr auto edm_index = get_downstream_edm_interface_index<dirs[2]>();
             forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                 packet_start,
@@ -1086,7 +866,7 @@ FORCE_INLINE void forward_express_combo(
         }
     }
     if constexpr ((KEY >> 3) & 1) {
-        if constexpr (express_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[3]>()) {
+        if constexpr (dispatch_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[3]>()) {
             constexpr auto edm_index = get_downstream_edm_interface_index<dirs[3]>();
             forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                 packet_start,
@@ -1105,28 +885,28 @@ FORCE_INLINE void forward_express_combo(
 // Hand-written 16-arm admit dispatch over the dense key: a compile-time KEY drops the queue checks
 // for unselected outputs.
 template <typename DownstreamSenderT, typename LocalRelayInterfaceT, size_t DOWNSTREAM_EDM_SIZE>
-FORCE_INLINE __attribute__((optimize("jump-tables"))) bool admit_express_dispatch(
+FORCE_INLINE __attribute__((optimize("jump-tables"))) bool admit_indexed_dispatch(
     uint8_t key,
     bool ld,
     std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
     LocalRelayInterfaceT& local_relay_interface) {
     switch (key) {
-        case 0: return admit_express_combo<0>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 1: return admit_express_combo<1>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 2: return admit_express_combo<2>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 3: return admit_express_combo<3>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 4: return admit_express_combo<4>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 5: return admit_express_combo<5>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 6: return admit_express_combo<6>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 7: return admit_express_combo<7>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 8: return admit_express_combo<8>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 9: return admit_express_combo<9>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 10: return admit_express_combo<10>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 11: return admit_express_combo<11>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 12: return admit_express_combo<12>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 13: return admit_express_combo<13>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 14: return admit_express_combo<14>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 15: return admit_express_combo<15>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 0: return admit_indexed_combo<0>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 1: return admit_indexed_combo<1>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 2: return admit_indexed_combo<2>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 3: return admit_indexed_combo<3>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 4: return admit_indexed_combo<4>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 5: return admit_indexed_combo<5>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 6: return admit_indexed_combo<6>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 7: return admit_indexed_combo<7>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 8: return admit_indexed_combo<8>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 9: return admit_indexed_combo<9>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 10: return admit_indexed_combo<10>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 11: return admit_indexed_combo<11>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 12: return admit_indexed_combo<12>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 13: return admit_indexed_combo<13>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 14: return admit_indexed_combo<14>(ld, downstream_edm_interfaces, local_relay_interface);
+        case 15: return admit_indexed_combo<15>(ld, downstream_edm_interfaces, local_relay_interface);
         default: return false;
     }
 }
@@ -1134,7 +914,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool admit_express_dispatc
 // Hand-written 16-arm forward dispatch over the same dense key. Every arm is straight-line code, so
 // the switch lowers to a jump table.
 template <typename DownstreamSenderT, size_t DOWNSTREAM_EDM_SIZE>
-FORCE_INLINE __attribute__((optimize("jump-tables"))) void forward_express_dispatch(
+FORCE_INLINE __attribute__((optimize("jump-tables"))) void forward_indexed_dispatch(
     uint8_t key,
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     ROUTING_FIELDS_TYPE cached_routing_fields,
@@ -1143,519 +923,73 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void forward_express_dispa
     const uint16_t payload_size_bytes = packet_start->payload_size_bytes;
     switch (key) {
         case 0:
-            forward_express_combo<0>(
+            forward_indexed_combo<0>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 1:
-            forward_express_combo<1>(
+            forward_indexed_combo<1>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 2:
-            forward_express_combo<2>(
+            forward_indexed_combo<2>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 3:
-            forward_express_combo<3>(
+            forward_indexed_combo<3>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 4:
-            forward_express_combo<4>(
+            forward_indexed_combo<4>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 5:
-            forward_express_combo<5>(
+            forward_indexed_combo<5>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 6:
-            forward_express_combo<6>(
+            forward_indexed_combo<6>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 7:
-            forward_express_combo<7>(
+            forward_indexed_combo<7>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 8:
-            forward_express_combo<8>(
+            forward_indexed_combo<8>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 9:
-            forward_express_combo<9>(
+            forward_indexed_combo<9>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 10:
-            forward_express_combo<10>(
+            forward_indexed_combo<10>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 11:
-            forward_express_combo<11>(
+            forward_indexed_combo<11>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 12:
-            forward_express_combo<12>(
+            forward_indexed_combo<12>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 13:
-            forward_express_combo<13>(
+            forward_indexed_combo<13>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 14:
-            forward_express_combo<14>(
+            forward_indexed_combo<14>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         case 15:
-            forward_express_combo<15>(
+            forward_indexed_combo<15>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
             break;
         default: break;
     }
 }
 
-// !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
-template <uint8_t rx_channel_id, size_t DOWNSTREAM_EDM_SIZE, typename DownstreamSenderT, typename LocalRelayInterfaceT>
-#if !defined(FABRIC_2D_VC1_ACTIVE)
-FORCE_INLINE
-#endif
-    __attribute__((optimize("jump-tables"))) void
-    receiver_forward_packet(
-        tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
-        ROUTING_FIELDS_TYPE cached_routing_fields,
-        std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
-        LocalRelayInterfaceT& local_relay_interface,
-        uint8_t transaction_id,
-        uint32_t hop_cmd) {
-    uint16_t payload_size_bytes = packet_start->payload_size_bytes;
-
-    using eth_chan_directions::EAST;
-    using eth_chan_directions::NORTH;
-    using eth_chan_directions::SOUTH;
-    using eth_chan_directions::WEST;
-
-    switch (hop_cmd) {
-        case MeshRoutingFields::NOOP: break;
-        case MeshRoutingFields::FORWARD_EAST:
-            if constexpr (my_direction == EAST) {
-                forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            break;
-        case MeshRoutingFields::FORWARD_WEST:
-            if constexpr (my_direction == WEST) {
-                forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_EW:
-            if constexpr (my_direction == WEST) {
-                constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            forward_to_local_destination<rx_channel_id>(
-                local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            break;
-        case MeshRoutingFields::FORWARD_NORTH:
-            if constexpr (my_direction == NORTH) {
-                forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            break;
-        case MeshRoutingFields::FORWARD_SOUTH:
-            if constexpr (my_direction == SOUTH) {
-                forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NS:
-            if constexpr (my_direction == SOUTH) {
-                constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            forward_to_local_destination<rx_channel_id>(
-                local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NSEW:
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.value++;
-            }
-            if constexpr (my_direction == SOUTH) {
-                constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            forward_to_local_destination<rx_channel_id>(
-                local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NSE:
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.value++;
-            }
-            if constexpr (my_direction == SOUTH) {
-                constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            forward_to_local_destination<rx_channel_id>(
-                local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NSW:
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.value++;
-            }
-            if constexpr (my_direction == SOUTH) {
-                constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
-                constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            forward_to_local_destination<rx_channel_id>(
-                local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NEW:
-            if constexpr (my_direction == SOUTH) {
-                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                    cached_routing_fields.value++;
-                }
-                constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
-                forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_SEW:
-            if constexpr (my_direction == NORTH) {
-                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                    cached_routing_fields.value++;
-                }
-                constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
-                forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NE:
-            if constexpr (my_direction == SOUTH) {
-                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                    cached_routing_fields.value++;
-                }
-                constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
-                forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_NW:
-            if constexpr (my_direction == SOUTH) {
-                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                    cached_routing_fields.value++;
-                }
-                constexpr auto edm_index = get_downstream_edm_interface_index<NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
-                forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_SE:
-            if constexpr (my_direction == NORTH) {
-                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                    cached_routing_fields.value++;
-                }
-                constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
-                forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            break;
-        case MeshRoutingFields::WRITE_AND_FORWARD_SW:
-            if constexpr (my_direction == NORTH) {
-                if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                    cached_routing_fields.value++;
-                }
-                constexpr auto edm_index = get_downstream_edm_interface_index<SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            } else {
-                forward_to_local_destination<rx_channel_id>(
-                    local_relay_interface, packet_start, payload_size_bytes, transaction_id);
-            }
-            if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-                cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
-            }
-            {
-                constexpr auto edm_index = get_downstream_edm_interface_index<WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, !UPDATE_PKT_HDR_ON_RX_CH>(
-                    packet_start,
-                    payload_size_bytes,
-                    cached_routing_fields,
-                    downstream_edm_interfaces[edm_index],
-                    transaction_id);
-            }
-            break;
-        default: __builtin_unreachable();
-    }
-
-    if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
-        channel_trimming_usage_recorder.merge_sender_channel_forwarded_to(
-            rx_channel_id, hop_cmd_to_sender_channel_mask(hop_cmd));
-    }
-}
 #endif
 
 template <typename EdmChannelWorkerIFs>
@@ -1950,11 +1284,6 @@ FORCE_INLINE
 
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             local_sender_channel.get_cached_next_buffer_slot_addr());
-        // Express transit consumes no hop program, so the legacy 2D header update (hop_index advance,
-        // branch-offset jump) must not run.
-        if constexpr (!UPDATE_PKT_HDR_ON_RX_CH && !express_enabled) {
-            update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
-        }
         send_next_data<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
             local_sender_channel,
             local_sender_channel_worker_interface,
@@ -2135,29 +1464,27 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         if constexpr (!skip_src_ch_id_update && !enable_first_level_ack) {
             receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
         }
-        uint32_t hop_cmd;
-        uint8_t express_fwd_key = 0;
-        bool express_local_deliver = false;
+        uint8_t fwd_key = 0;
+        bool local_deliver = false;
         // Set only when this chip is the mesh's exit for the packet; carries the resolved INTERMESH
         // downstream slot from admission to the forward phase.
-        bool express_egress = false;
-        uint8_t express_egress_index = 0;
+        bool intermesh_egress = false;
+        uint8_t intermesh_egress_index = 0;
         bool can_send_to_all_local_chip_receivers;
         if constexpr (is_2d_fabric) {
 #if defined(FABRIC_2D)
             // need the FABRIC_2D ifdef since the packet header for 1D does not have route_buffer field in it.
-            if constexpr (express_enabled) {
-                // Express RX path: landing intercept (boundary receivers only) -> decode -> validate
+            {
+                // Indexed RX path: landing intercept (boundary receivers only) -> decode -> validate
                 // -> intermesh-exit intercept -> admit. No hop program and no header mutation.
                 if constexpr (receiver_channel_is_intermesh_ingress[receiver_channel]) {
                     // Runs before decode, which would otherwise consume stale source-mesh maps. The
                     // landing encode replaces them from this mesh's own vector table.
-                    fabric_set_indexed_intermesh_landing_route(
-                        packet_header, routing_table, EXPRESS_MESH_Y_SIZE, EXPRESS_MESH_X_SIZE);
+                    fabric_set_indexed_intermesh_landing_route(packet_header, routing_table, MESH_Y_SIZE, MESH_X_SIZE);
                 }
                 const std::uint8_t action =
                     IndexedMeshRoutingFields::decode_action<static_cast<eth_chan_directions>(my_direction)>(
-                        packet_header->route_buffer, express_local_y, express_local_x, EXPRESS_MESH_Y_SIZE);
+                        packet_header->route_buffer, local_y, local_x, MESH_Y_SIZE);
                 if (!IndexedMeshRoutingFields::action_is_valid<static_cast<eth_chan_directions>(my_direction)>(
                         action)) {
                     // Fail-stop: commit no copy and stall the parent RX packet. There is no
@@ -2189,41 +1516,22 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                             ASSERT(false);
                             can_send_to_all_local_chip_receivers = false;
                         } else {
-                            express_egress = true;
-                            express_egress_index =
+                            intermesh_egress = true;
+                            intermesh_egress_index =
                                 static_cast<uint8_t>(get_downstream_edm_interface_index(boundary_dir));
                             can_send_to_all_local_chip_receivers =
-                                downstream_edm_interfaces[express_egress_index]
+                                downstream_edm_interfaces[intermesh_egress_index]
                                     .template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
                         }
                     } else {
-                        express_local_deliver = (action & IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER) != 0;
-                        express_fwd_key =
+                        local_deliver = (action & IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER) != 0;
+                        fwd_key =
                             IndexedMeshRoutingFields::pack_fwd_key<static_cast<eth_chan_directions>(my_direction)>(
                                 action);
-                        can_send_to_all_local_chip_receivers = admit_express_dispatch(
-                            express_fwd_key, express_local_deliver, downstream_edm_interfaces, local_relay_interface);
+                        can_send_to_all_local_chip_receivers = admit_indexed_dispatch(
+                            fwd_key, local_deliver, downstream_edm_interfaces, local_relay_interface);
                     }
                 }
-            } else {
-                // read in the hop command from route buffer.
-                // Hop command is 4 bits. Each of the 4 bits signal one of the 4 possible outcomes for a packet.
-                // [0]->Forward East
-                // [1]->Forward West
-                // [2]->Forward North
-                // [3]->Forward South
-                // The hop command (4-bits) gets decoded as a local write and/or forward to the "other" 3
-                // directions. Other 3 directions depend on the direction of fabric router.
-                // For example, a router that is connected West can write locally or forard East, North or South.
-                // A local write is encoded by setting the bit corresponding to fabric router's own direction to 1.
-                // For a West facing fabric router:
-                //  - Hop command of [0010] instructs fabric router to write the packet locally.
-                //  - Hop command of [0011] instructs fabric router to write the packet locally AND forward East (a
-                //  line mcast)
-                hop_cmd = get_cmd_with_mesh_boundary_adjustment(packet_header, cached_routing_fields, routing_table);
-                can_send_to_all_local_chip_receivers =
-                    can_forward_packet_completely<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE>(
-                        hop_cmd, downstream_edm_interfaces, local_relay_interface);
             }
 #endif
         } else {
@@ -2249,33 +1557,25 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                     receiver_buffer_index);
                 if constexpr (is_2d_fabric) {
 #if defined(FABRIC_2D)
-                    if constexpr (express_enabled) {
-                        if (express_egress) {
+                    {
+                        if (intermesh_egress) {
                             // The exit chip's only output is the INTERMESH egress, sent as-is.
                             forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
                                 packet_header,
                                 packet_header->payload_size_bytes,
                                 cached_routing_fields,
-                                downstream_edm_interfaces[express_egress_index],
+                                downstream_edm_interfaces[intermesh_egress_index],
                                 trid);
                         } else {
                             // Same dense key as admission. Local delivery stays outside the dispatch
                             // so every arm is straight-line code.
-                            forward_express_dispatch(
-                                express_fwd_key, packet_header, cached_routing_fields, downstream_edm_interfaces, trid);
-                            if (express_local_deliver) {
+                            forward_indexed_dispatch(
+                                fwd_key, packet_header, cached_routing_fields, downstream_edm_interfaces, trid);
+                            if (local_deliver) {
                                 forward_to_local_destination<receiver_channel>(
                                     local_relay_interface, packet_header, packet_header->payload_size_bytes, trid);
                             }
                         }
-                    } else {
-                        receiver_forward_packet<receiver_channel, DOWNSTREAM_EDM_SIZE>(
-                            packet_header,
-                            cached_routing_fields,
-                            downstream_edm_interfaces,
-                            local_relay_interface,
-                            trid,
-                            hop_cmd);
                     }
 #endif
                 } else {
@@ -2547,10 +1847,10 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
     tt::tt_fabric::routing_l1_info_t routing_table = *routing_table_l1;
 
-    if constexpr (express_enabled) {
+    {
         // Cached once here so the hot path reads no table fields and does no divide/mod.
-        express_local_y = routing_table.my_mesh_coord_y;
-        express_local_x = routing_table.my_mesh_coord_x;
+        local_y = routing_table.my_mesh_coord_y;
+        local_x = routing_table.my_mesh_coord_x;
     }
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way

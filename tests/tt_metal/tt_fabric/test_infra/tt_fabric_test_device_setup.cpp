@@ -9,28 +9,36 @@
 #include <tt-logger/tt-logger.hpp>
 #include "tt_fabric_test_device_setup.hpp"
 #include "tt_metal/fabric/fabric_vc2_connection.hpp"
-#include "tt_metal/fabric/express_ring_topology.hpp"
+#include "tt_metal/fabric/axis_route_topology.hpp"
 #include "tt_metal/fabric/mcast_reverse_tree.hpp"
 
 namespace tt::tt_fabric::fabric_tests {
 
 namespace {
 
-// The directions an express multicast leaves the source on. They come from the canonical routing
-// map, not from the requested extents: a "north 8" range leaves on Z when the route to its far end
-// takes a chord.
+// The directions a 2D multicast leaves the source on. They come from the canonical routing map, not
+// from the requested extents: a "north 8" range leaves on Z when the route to its far end takes a
+// chord, and on a RING it can leave on BOTH N and S when the requested arc passes the point where
+// the shortest path flips direction.
 //
 // A root can have several outputs, each covering a disjoint part of the range. The caller opens one
-// connection per returned direction and injects one copy into each. Returns empty when the source
-// mesh does not use express routing, where the ordinary hop-map rule applies instead.
-std::vector<RoutingDirection> express_mcast_outgoing_directions(
+// connection per returned direction and injects one copy into each.
+//
+// NOT gated on express_routing_enabled, and this is load-bearing. It used to be: a non-express mesh
+// returned empty and fell back to a single direction, which was correct only while non-express 2D
+// used the legacy hop-map codec, where one packet carrying n/s/e/w hop counts fanned out inside the
+// router. Since the codec unification every 2D mesh encodes multicast as a reverse tree, so a plain
+// ring root has the same multi-output shape an express root does. Leaving the gate here injected one
+// copy into a two-branch tree: half the ring never received, and any sync waiting on the whole ring
+// hung with every endpoint at zero packets.
+//
+// Uses axis_topology() rather than ring_for_direction(): the latter is null on a non-express Y axis
+// and on a non-closing X dimension, which would reintroduce the same empty-result fallback.
+std::vector<RoutingDirection> mcast_outgoing_directions(
     const FabricNodeId& src_node_id, const std::unordered_map<RoutingDirection, uint32_t>& hops) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    if (!control_plane.express_routing_enabled(src_node_id.mesh_id)) {
-        return {};
-    }
-    const auto* y_rings = control_plane.ring_for_direction(src_node_id.mesh_id, RoutingDirection::N);
-    const auto* x_rings = control_plane.ring_for_direction(src_node_id.mesh_id, RoutingDirection::E);
+    const auto* y_rings = control_plane.axis_topology(src_node_id.mesh_id, 0);
+    const auto* x_rings = control_plane.axis_topology(src_node_id.mesh_id, 1);
     if (y_rings == nullptr || x_rings == nullptr) {
         return {};
     }
@@ -56,11 +64,11 @@ std::vector<RoutingDirection> express_mcast_outgoing_directions(
         hop_count(RoutingDirection::W),
         &failure);
 
-    TT_FATAL(failure.empty(), "express multicast from {} could not be encoded: {}", src_node_id, failure);
-    TT_FATAL(!directions.empty(), "express multicast from {} reaches nothing outside its own chip", src_node_id);
+    TT_FATAL(failure.empty(), "2D multicast from {} could not be encoded: {}", src_node_id, failure);
+    TT_FATAL(!directions.empty(), "2D multicast from {} reaches nothing outside its own chip", src_node_id);
     TT_FATAL(
         directions.size() <= MAX_MCAST_INJECTIONS,
-        "express multicast from {} has a canonical root action with {} outputs, more than the {} the "
+        "2D multicast from {} has a canonical root action with {} outputs, more than the {} the "
         "sender kernel can inject into. A root cannot have more outputs than the mesh has ports, so this "
         "means the encoder produced an action the codec forbids.",
         src_node_id,
@@ -461,7 +469,7 @@ void TestWorker::create_kernel(
     tt::tt_metal::NOC noc_id) const {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto mesh_id = this->test_device_ptr_->get_node_id().mesh_id;
-    const auto defines = control_plane.get_fabric_context().get_express_kernel_defines(control_plane, mesh_id);
+    const auto defines = control_plane.get_fabric_context().get_2d_kernel_defines(control_plane, mesh_id);
 
     auto kernel_handle = tt::tt_metal::CreateKernel(
         this->test_device_ptr_->get_program_handle(),
@@ -528,17 +536,16 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
     const bool hops_are_single_z = config.hops.has_value() && config.hops->contains(RoutingDirection::Z) &&
                                    config.hops->at(RoutingDirection::Z) > 0;
 
-    // An express multicast root with several canonical outputs gets one connection per output, in the
+    // A 2D multicast root with several canonical outputs gets one connection per output, in the
     // encoder's order, and the kernel injects a copy into each. Every other flow has exactly one.
     std::vector<RoutingDirection> outgoing_directions;
     if (config.hops.has_value() && config.parameters.chip_send_type == ChipSendType::CHIP_MULTICAST &&
         config.parameters.is_2D_routing_enabled) {
-        outgoing_directions =
-            express_mcast_outgoing_directions(this->test_device_ptr_->get_node_id(), config.hops.value());
+        outgoing_directions = mcast_outgoing_directions(this->test_device_ptr_->get_node_id(), config.hops.value());
     }
-    const bool is_express_mcast = !outgoing_directions.empty();
+    const bool is_tree_mcast = !outgoing_directions.empty();
 
-    if (!is_express_mcast) {
+    if (!is_tree_mcast) {
         if (config.hops.has_value() && (!is_torus_2d_unicast || hops_are_single_z)) {
             // Use hops to determine direction (for static routing with explicit hops)
             // However, NeighborExchange topology does not support multi-hop.
@@ -556,7 +563,7 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
     std::vector<ConnectionKey> fabric_connection_keys;
     fabric_connection_keys.reserve(outgoing_directions.size());
     for (const auto direction : outgoing_directions) {
-        if (is_express_mcast) {
+        if (is_tree_mcast) {
             assert_direction_reaches_one_peer(this->test_device_ptr_->get_node_id(), direction);
         }
         fabric_connection_keys.push_back(this->test_device_ptr_->register_fabric_connection(
@@ -680,11 +687,11 @@ void TestSync::add_config(TestTrafficSyncConfig sync_config) {
     if (sender_config.parameters.chip_send_type == ChipSendType::CHIP_MULTICAST &&
         sender_config.parameters.is_2D_routing_enabled) {
         outgoing_directions =
-            express_mcast_outgoing_directions(this->test_device_ptr_->get_node_id(), sender_config.hops.value());
+            mcast_outgoing_directions(this->test_device_ptr_->get_node_id(), sender_config.hops.value());
     }
-    const bool is_express_mcast = !outgoing_directions.empty();
+    const bool is_tree_mcast = !outgoing_directions.empty();
 
-    if (!is_express_mcast) {
+    if (!is_tree_mcast) {
         outgoing_directions.push_back(this->test_device_ptr_->get_forwarding_direction(sender_config.hops.value()));
     }
 
@@ -692,7 +699,7 @@ void TestSync::add_config(TestTrafficSyncConfig sync_config) {
     std::vector<ConnectionKey> fabric_connection_keys;
     fabric_connection_keys.reserve(outgoing_directions.size());
     for (const auto direction : outgoing_directions) {
-        if (is_express_mcast) {
+        if (is_tree_mcast) {
             assert_direction_reaches_one_peer(this->test_device_ptr_->get_node_id(), direction);
         }
         fabric_connection_keys.push_back(this->test_device_ptr_->register_fabric_connection(

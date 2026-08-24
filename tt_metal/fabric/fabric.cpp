@@ -393,7 +393,7 @@ void inject_fabric_kernel_defines(
         // the only writer of intramesh Z edges, and express_routing_enabled is its validated
         // echo -- so encode, L1 layout, and decode agree with route generation by construction.
         for (const auto& [name, value] :
-             fabric_context.get_express_kernel_defines(control_plane, src_fabric_node_id.mesh_id)) {
+             fabric_context.get_2d_kernel_defines(control_plane, src_fabric_node_id.mesh_id)) {
             add_kernel_defines({{name, value}});
         }
     }
@@ -701,18 +701,15 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::t
         default: TT_FATAL(false, "Unsupported FabricApiType: {}", static_cast<int>(api_type));
     }
     if (fabric_context.is_2D_routing_enabled()) {
+        // `api_type` selects the API *surface* -- Linear (1D) versus Mesh (2D). It is not an ABI
+        // choice: there is one 2D codec, so express is a flavour of mesh routing rather than a third
+        // api_type. This overload therefore needs no FabricNodeId.
+        //
+        // Kernels that actually encode 2D routes get the mesh shape elsewhere: from the node-aware
+        // overload below, or, for the dispatch relays, from their own lookup (dispatch.cpp,
+        // prefetch.cpp). A compile with no single mesh shape falls back to zero in tt_fabric_api.h and
+        // trips that header's runtime shape assert if it ever tries to encode.
         defines.push_back({"FABRIC_2D", "1"});
-        // The 2D ABI is selected per mesh, so it cannot be resolved without knowing which mesh the
-        // kernel runs on. Refuse rather than return a set that silently encodes hop programs for a
-        // mesh whose L1 holds indexed vectors.
-        bool any_mesh_uses_express = false;
-        for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
-            any_mesh_uses_express = any_mesh_uses_express || control_plane.express_routing_enabled(mesh_id);
-        }
-        TT_FATAL(
-            !any_mesh_uses_express,
-            "get_fabric_kernel_defines() cannot select the 2D routing ABI on a fabric that has express "
-            "links; call the overload taking the kernel's FabricNodeId");
     }
     return defines;
 }
@@ -731,7 +728,7 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(
     if (fabric_context.is_2D_routing_enabled()) {
         defines.push_back({"FABRIC_2D", "1"});
         for (const auto& [name, value] :
-             fabric_context.get_express_kernel_defines(control_plane, src_fabric_node_id.mesh_id)) {
+             fabric_context.get_2d_kernel_defines(control_plane, src_fabric_node_id.mesh_id)) {
             defines.push_back({name, value});
         }
     }

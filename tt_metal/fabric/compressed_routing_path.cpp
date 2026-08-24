@@ -44,122 +44,6 @@ void intra_mesh_routing_path_t<1, true>::calculate_chip_to_all_routing_fields(
     const FabricNodeId& /*src_fabric_node_id*/, uint16_t /*num_chips*/) {
     // No-op
 }
-
-// 2D compressed routing specialization: ControlPlane singleton-based implementation
-template <>
-void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
-    const FabricNodeId& src_fabric_node_id, uint16_t num_chips) {
-    const auto& src_chip_id = src_fabric_node_id.chip_id;
-    const auto& mesh_id = src_fabric_node_id.mesh_id;
-
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-
-    std::vector<chan_id_t> candidate_src_chan_ids;
-    for (auto dir : {RoutingDirection::E, RoutingDirection::W, RoutingDirection::N, RoutingDirection::S}) {
-        auto chans = control_plane.get_active_fabric_eth_routing_planes_in_direction(src_fabric_node_id, dir);
-        candidate_src_chan_ids.insert(candidate_src_chan_ids.end(), chans.begin(), chans.end());
-    }
-
-    for (uint16_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
-        if (dst_chip_id == src_chip_id) {
-            paths[dst_chip_id].set(0, 0, 0, 0, 0);
-            continue;
-        }
-
-        tt::tt_fabric::FabricNodeId dst_fabric_node_id(mesh_id, dst_chip_id);
-        std::vector<uint16_t> best_chip_sequence;
-        for (chan_id_t start_chan : candidate_src_chan_ids) {
-            auto candidate_route = control_plane.get_fabric_route(src_fabric_node_id, dst_fabric_node_id, start_chan);
-            if (candidate_route.empty()) {
-                continue;
-            }
-            // Build chip sequence ("intra"-mesh only)
-            std::vector<uint16_t> seq;
-            seq.reserve(candidate_route.size());
-            tt::tt_fabric::FabricNodeId last_added = src_fabric_node_id;
-            for (const auto& step : candidate_route) {
-                const tt::tt_fabric::FabricNodeId& node = step.first;
-                if (node.mesh_id != mesh_id) {
-                    break;  // ignore inter-mesh tail
-                }
-                if (node == last_added) {
-                    continue;  // skip intra-chip channel change
-                }
-                seq.push_back(static_cast<uint16_t>(node.chip_id));
-                last_added = node;
-            }
-            // pick up shortest path
-            if (!seq.empty() && (best_chip_sequence.empty() || seq.size() < best_chip_sequence.size())) {
-                best_chip_sequence.swap(seq);
-            }
-        }
-
-        TT_ASSERT(
-            !best_chip_sequence.empty(),
-            "Failed to find intra-mesh route from chip {} to chip {} in mesh {}",
-            src_chip_id,
-            dst_chip_id,
-            *mesh_id);
-
-        uint8_t ns_hops = 0;
-        uint8_t ew_hops = 0;
-        uint8_t ns_direction = 0;
-        uint8_t ew_direction = 0;
-
-        auto make_node = [mesh_id](uint16_t chip) { return tt::tt_fabric::FabricNodeId(mesh_id, chip); };
-        auto next_dir = [&](uint16_t from_chip, uint16_t to_chip) {
-            return control_plane.get_forwarding_direction(make_node(from_chip), make_node(to_chip));
-        };
-
-        bool seen_ns = false;
-        bool seen_ew = false;
-        uint16_t prev_chip = src_chip_id;
-        for (uint16_t curr_chip : best_chip_sequence) {
-            auto dir_opt = next_dir(prev_chip, curr_chip);
-            TT_ASSERT(
-                dir_opt.has_value() && dir_opt.value() != RoutingDirection::NONE,
-                "Invalid direction between chips {} and {}",
-                prev_chip,
-                curr_chip);
-            const RoutingDirection d = dir_opt.value();
-            if (d == RoutingDirection::N || d == RoutingDirection::S) {
-                const uint8_t bit = (uint8_t)(d == RoutingDirection::S);
-                if (!seen_ns) {
-                    ns_direction = bit;
-                    seen_ns = true;
-                } else {
-                    TT_ASSERT(
-                        ns_direction == bit,
-                        "Non-monotone NS traversal is not supported: chip {} -> {}",
-                        prev_chip,
-                        curr_chip);
-                }
-                ++ns_hops;
-            } else if (d == RoutingDirection::E || d == RoutingDirection::W) {
-                const uint8_t bit = (uint8_t)(d == RoutingDirection::E);
-                if (!seen_ew) {
-                    ew_direction = bit;
-                    seen_ew = true;
-                } else {
-                    TT_ASSERT(
-                        ew_direction == bit,
-                        "Non-monotone EW traversal is not supported: chip {} -> {}",
-                        prev_chip,
-                        curr_chip);
-                }
-                ++ew_hops;
-            } else {
-                TT_ASSERT(false, "Unexpected routing direction between chips {} and {}", prev_chip, curr_chip);
-            }
-            prev_chip = curr_chip;
-        }
-
-        // turn_point marks the NS->EW turn position in the emitted route.
-        const uint8_t turn_point = ns_hops;
-        paths[dst_chip_id].set(ns_hops, ew_hops, ns_direction, ew_direction, turn_point);
-    }
-}
-
 // Builds the destination-indexed 2D routing table from first-hop directions. Axis decomposition
 // follows DOR: while rows differ the first hop is a Y move (N/S/Z) probed same-column, and once rows
 // match it is an X move (E/W) probed same-row.
@@ -173,7 +57,7 @@ void indexed_route_vectors_t::calculate_chip_to_all_routing_fields(
     const MeshShape mesh_shape = control_plane.get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
     const uint32_t y_size = mesh_shape[0];
     const uint32_t x_size = mesh_shape[1];
-    TT_ASSERT(
+    TT_FATAL(
         y_size * x_size == num_chips && num_chips > 0,
         "Indexed route vectors: mesh {} shape {}x{} does not match {} chips",
         *mesh_id,
@@ -188,7 +72,10 @@ void indexed_route_vectors_t::calculate_chip_to_all_routing_fields(
     auto probe = [&control_plane, mesh_id](uint32_t src_chip, uint32_t dst_chip) {
         const auto dir =
             control_plane.get_forwarding_direction(FabricNodeId(mesh_id, src_chip), FabricNodeId(mesh_id, dst_chip));
-        TT_ASSERT(
+        // TT_FATAL, not TT_ASSERT: TT_ASSERT compiles to a no-op in Release, and dir.value() on an
+        // empty optional is then undefined behaviour that yields a garbage direction, which packs a
+        // wrong-but-plausible routing table instead of failing.
+        TT_FATAL(
             dir.has_value() && dir.value() != RoutingDirection::NONE,
             "Indexed route vectors: no first-hop direction from chip {} to chip {}",
             src_chip,
@@ -200,7 +87,12 @@ void indexed_route_vectors_t::calculate_chip_to_all_routing_fields(
     auto x_action = [&](uint32_t cur_x, uint32_t dst_x) { return probe(cur_x, dst_x); };
 
     const bool ok = IndexedMeshRoutingFields::pack_indexed_route_vectors(data, y_size, x_size, y_action, x_action);
-    TT_ASSERT(
+    // TT_FATAL, not TT_ASSERT. This is the load-bearing one: TT_ASSERT is a no-op in Release, `data`
+    // is memset to zero above, and a failed pack therefore embeds an ALL-ZERO routing table. Every
+    // route buffer then widens to zeros, every router decodes action 0, action_is_valid() rejects it,
+    // and nothing forwards -- a silent cluster-wide hang with senders stuck at 0 packets, rather than
+    // a diagnosable error. Same fail-loud reasoning as the multicast one-feeder gate (D9.1).
+    TT_FATAL(
         ok,
         "Indexed route vectors: mesh {} shape {}x{} is not representable in the [64,4] indexed ABI "
         "(an axis probe returned an off-axis direction, or the shape exceeds the bound)",

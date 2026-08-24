@@ -9,53 +9,6 @@
 
 namespace tt::tt_fabric {
 
-// Device-side compressed decoder function for 2D routing
-template <>
-inline bool intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
-    uint16_t dst_chip_id, volatile uint8_t* out_route_buffer, bool prepend_one_hop) const {
-    if (dst_chip_id >= MAX_CHIPS_LOWLAT) {
-        // invalid chip
-        out_route_buffer[0] = 0;
-        ASSERT(false);  // caught only when watcher enabled. Otherwise make behavior consistent as returning false.
-        return false;
-    }
-
-    // Get compressed route data (ns/ew hops, directions, turn_point)
-    const auto& compressed_route = paths[dst_chip_id];
-    uint8_t ns_hops = compressed_route.get_ns_hops();
-    uint8_t ew_hops = compressed_route.get_ew_hops();
-    uint8_t ns_dir = compressed_route.get_ns_direction();
-    uint8_t ew_dir = compressed_route.get_ew_direction();
-
-    if (ns_hops == 0 && ew_hops == 0) {
-        // Noop to self
-        out_route_buffer[0] = 0;
-        out_route_buffer[1] = 0;
-        return false;
-    }
-
-    // Use canonical 2D encoder to generate route buffer
-    // Note: Buffer size is determined by packet header template
-    constexpr uint32_t max_buffer_size = FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE;
-    uint8_t temp_buffer[max_buffer_size];
-
-    routing_encoding::encode_2d_unicast(
-        ns_hops,
-        ew_hops,
-        ns_dir,
-        ew_dir,
-        temp_buffer,
-        max_buffer_size,
-        prepend_one_hop);  // CRITICAL: Pass through prepend_one_hop for router usage
-
-    // Copy to volatile output
-    for (uint32_t i = 0; i < max_buffer_size; i++) {
-        out_route_buffer[i] = temp_buffer[i];
-    }
-
-    return true;
-}
-
 // Device-side decoder function for 1D routing (packed paths)
 template <>
 inline bool intra_mesh_routing_path_t<1, false>::decode_route_to_buffer(
