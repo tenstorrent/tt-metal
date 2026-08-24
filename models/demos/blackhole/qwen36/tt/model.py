@@ -2130,7 +2130,7 @@ class Qwen36Model:
     # 1024 and not smaller: each distinct GDN sequence length compiles its own program, and 256
     # multiplied the variants 8x, stalling trace capture for 30+ min at 100% host CPU (the
     # bounded-program-set design in prefill_masked_bucket's docstring exists to prevent exactly that).
-    # Applied ONLY to the non-traced prefill paths for the same reason — the traced path keeps its
+    # Applied ONLY to non-traced prefill paths: the traced path keeps its
     # single program per chunk.
     _GDN_MASKED_SEG = 1024
 
@@ -3072,17 +3072,17 @@ class Qwen36Model:
         assert all(v <= bucket for v in vlens), "every valid_len must fit the single-pass bucket"
 
         # The fused chunk_gated_delta_rule op caps the group by its SCAN, which maps one (head,
-        # v-block) row per core: BH = B*Nv_tp must stay <= the compute grid. Unlike the old
+        # v-block) row per core: BH = B*Nv_tp must stay <= the grid. Unlike the
         # gated_delta_attn_seq kernel this is bucket-independent (SCAN L1 is state-sized, not
         # chunk-count-sized). Validated bit-exact vs per-user at B=8 for bucket 128 and 256
         # (test_gdn_fused_batch: ceiling + large-group). Buckets >256 aren't produced here (callers
         # route T>256 to per-user), so cap them at 1 defensively.
         #
-        # Derive the ceiling from the ACTUAL grid and Nv_tp instead of hardcoding 8. A P150 at TP=4
-        # has Nv_tp=8 against ~140 cores, so 8 was always safe there; an N300 at TP=2 has Nv_tp=16
-        # against a 64-core (8x8) grid, where a group of 8 means BH=128 and the kernel aborts with
+        # Derive the ceiling from the ACTUAL grid and Nv_tp, not a hardcoded 8.
+        # A P150 at TP=4 has Nv_tp=8 against ~140 cores, so 8 was always safe;
+        # an N300 at TP=2 has Nv_tp=16 against 64 cores (8x8), where a group of 8
         # "num_heads 128 exceeds compute cores 64" (chunk_gdn_phased_program_factory.cpp:137). 8 stays
-        # the validated ceiling -- this only lowers it where the grid actually demands it (N300 -> 4).
+        # the validated ceiling; this only lowers it where the grid demands it.
         _g = self.device.compute_with_storage_grid_size()
         _bh_max_bg = max(1, (_g.x * _g.y) // max(1, self.args.gdn_nv_tp))
         gdn_max_bg = min(8, _bh_max_bg) if bucket <= 2 * gdn_chunk else 1
@@ -3391,8 +3391,8 @@ class Qwen36Model:
         rope_pos_vec = pos_vec + self.rope.rope_delta
         # The rope slot carries the per-user POSITION INDEX, not host-computed cos/sin: the trig is
         # done on device in _rope_from_idx() by gathering the resident tables. Same tuple arity and
-        # the same copy_host_to_device path as before, but what crosses the bus per step is a [B]
-        # int32 index instead of a [2,B,1,rope_dim] bf16 cos+sin blob, and no host trig runs at all.
+        # the same copy_host_to_device path, but per step the bus carries a [B]
+        # int32 index, not a [2,B,1,rope_dim] bf16 cos+sin blob, and no host trig.
         # Build the tables here (host side, outside any trace): materialising them lazily inside the
         # traced forward would be a host write during capture, which TT_FATALs.
         # Size to max_seq_len, the SAME row count _rope_from_idx() asks for. Sizing to

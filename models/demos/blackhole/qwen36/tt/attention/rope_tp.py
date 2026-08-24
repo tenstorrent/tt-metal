@@ -42,7 +42,7 @@ def rope_channel_perm(head_dim, rope_dim):
         perm[j] = j  # rope first half stays put
         perm[half + j] = rh + j  # rope second half moves to the far half
     # Pass-through channels fill the remaining slots in order. The leftover slots are
-    # [rh, half) and [half+rh, head_dim) -- the same count in each half, so they too land in
+    # [rh, half) and [half+rh, head_dim) -- equal counts, so they also land in
     # matched (p, p+half) pairs and get cos=1/sin=0 together.
     free = [i for i in range(rh, half)] + [i for i in range(half + rh, head_dim)]
     for slot, src in zip(free, range(rope_dim, head_dim)):
@@ -128,8 +128,8 @@ def permute_rope_channels(w, head_dim, rope_dim, device, stride=None):
 
     idx = _rope_perm_row_index(device, out_rows, head_dim, rope_dim, stride)
     # device may be a multi-device mesh (e.g. N300's 2 devices): replicate the identical gather onto
-    # every device, then read back ONE device's shard -- a replicated tensor holds identical data on
-    # each, so any one is the answer (same pattern as this file's other mesh-aware table builders).
+    # every device, then read back ONE shard: a replicated tensor is identical on
+    # each device (same pattern as the other mesh-aware table builders here).
     table = ttnn.from_torch(
         w,
         dtype=ttnn.bfloat16,
@@ -565,7 +565,7 @@ def rot_mats_prefill(
     W = full_head_dim or rope_dim
     if position_ids is None and not is_blackhole():
         # Text-only on Wormhole: positions are exactly arange(seq_len), i.e. a contiguous prefix of
-        # the RoPE table, so slice it on device instead of recomputing the trig on host and DMAing
+        # the RoPE table, so slice on device instead of recomputing trig on host
         # a [1,1,seq_len,rope_dim] cos+sin pair across. (t==h==w here, so interleaved-mrope
         # collapses to ordinary 1D RoPE and mrope_section is irrelevant -- same values.)
         # Blackhole falls through to the original host path below: unchanged flow.
@@ -702,18 +702,18 @@ def apply_partial_rope_prefill(x, cos_tt, sin_tt, n_heads, rope_dim):
     # forward_prefill_paged's chunked_scaled_dot_product_attention still clashes with this at S=2048
     # even with q_chunk_size capped to 64 (see `cap` in attention/tp.py) -- MEASURED via
     # ttnn.dump_device_memory_state right before the SDPA call: the ONLY persistent >100KB L1
-    # allocation at that point is this function's roped Q output (196608 B at address 85696), and
-    # SDPA's static CBs are laid out starting at L1 address 0 regardless of chunk size, so ANY
-    # persistent buffer at a low allocator address clashes regardless of its own size or the CB
-    # region's size. TRIED moving this to DRAM at S>=2048 to sidestep that -- does NOT help even
+    # allocation there is this function's roped Q (196608 B at 85696), and
+    # SDPA's static CBs start at L1 address 0 whatever the chunk size, so ANY
+    # persistent buffer at a low address clashes regardless of its size or the
+    # CB region's. TRIED moving this to DRAM at S>=2048: does NOT help even
     # combined with the `cap`=64 fix (MEASURED: CB region stays exactly 1393856 whether q_chunk_size
-    # is 64 or 128 once the source is DRAM, vs 454080 when L1 -- DRAM-source SDPA apparently pays a
-    # large fixed CB cost independent of chunk size, so there is no chunk size where DRAM wins here).
+    # is 64 or 128 once the source is DRAM vs 454080 when L1: DRAM-source SDPA
+    # pays a large fixed CB cost, so no chunk size makes DRAM win here).
     # This is a genuine conflict between the L1 allocator's first-come placement of Q and where
     # SDPA's CBs are laid out, not a simple memory-config choice -- needs a program-factory-level fix
-    # (e.g. don't assume L1 address 0 for CBs, or force Q's allocation to a high address) to fully
+    # (don't assume L1 address 0 for CBs, or force Q high) to fully
     # resolve at S=2048 for the paged/chunked SDPA path specifically. Left at unconditional L1 (only
-    # lever that helped at all was `cap`, which shrank but did not eliminate the S=2048 overflow).
+    # lever that helped was `cap`, which shrank but kept the S=2048 overflow).
     _L1 = ttnn.L1_MEMORY_CONFIG
     hd = x.shape[-1]
     seq_len = x.shape[-2]
