@@ -1587,139 +1587,6 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBindingAffectsKernelHash) {
         << "A kernel that binds a scratchpad must not share a JIT cache slot with one that doesn't.";
 }
 
-// ============================================================================
-// NullBinding / optional resource bindings
-// ============================================================================
-
-TEST_F(ProgramSpecTestQuasar, CPU_NullBindingSucceedsWithoutMatchingResource) {
-    // NullBinding (and empty-spec-name structs) declare an accessor without a program-scope resource.
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].dfb_bindings.push_back(NullBinding{.accessor_name = "gamma"});
-    spec.kernels[0].tensor_bindings.push_back(NullBinding{.accessor_name = "gamma_src"});
-    spec.kernels[0].scratchpad_bindings.push_back(NullBinding{.accessor_name = "tmp"});
-    // Explicit empty-id form is equivalent:
-    spec.kernels[1].scratchpad_bindings.push_back(
-        ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{""}, .accessor_name = "tmp2"});
-
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_MultipleNullScratchpadBindingsSucceed) {
-    // Two null scratchpad bindings share spec name "" — must not trip "bind at most once".
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].scratchpad_bindings = {
-        NullBinding{.accessor_name = "tmp_a"},
-        NullBinding{.accessor_name = "tmp_b"},
-    };
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_NullBindingRequiresValidAccessorName) {
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.kernels[0].dfb_bindings.push_back(NullBinding{.accessor_name = ""});
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("DFB accessor_name '' must be a valid C++ identifier")));
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_DuplicateAccessorNameNullAndRealFails) {
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
-    // kernels[0] already has a DFB producer binding; add a null with the same accessor name.
-    const std::string existing = spec.kernels[0].dfb_bindings[0].accessor_name;
-    spec.kernels[0].dfb_bindings.push_back(NullBinding{.accessor_name = existing});
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("two different DFBs")));
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_NullBindingDoesNotSatisfyUnusedDeclaration) {
-    // A null binding must not count as a use of a declared resource.
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"orphan"}, .size_per_node = 64}};
-    spec.kernels[0].scratchpad_bindings.push_back(NullBinding{.accessor_name = "tmp"});
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("declared but not bound")));
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_EmptyUniqueIdOnDeclaredResourceFails) {
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
-    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{""}, .size_per_node = 64}};
-    spec.kernels[0].scratchpad_bindings.push_back(
-        ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{""}, .accessor_name = "s"});
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("unique_id must be non-empty")));
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_NullBindingAffectsKernelHash) {
-    // Same accessor name: null vs real must not share a JIT cache slot (zeroed offsets collide otherwise).
-    auto make_null_spec = [] {
-        ProgramSpec spec;
-        spec.name = "null_binding_hash";
-        auto dm = MakeMinimalGen2DMKernel("dm_kernel");
-        dm.scratchpad_bindings.push_back(NullBinding{.accessor_name = "pad"});
-        spec.kernels = {dm};
-        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("wu", NodeCoord{0, 0}, {"dm_kernel"})};
-        return spec;
-    };
-    auto make_real_spec = [] {
-        ProgramSpec spec;
-        spec.name = "real_binding_hash";
-        auto dm = MakeMinimalGen2DMKernel("dm_kernel");
-        dm.scratchpad_bindings.push_back(
-            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
-        spec.kernels = {dm};
-        spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 64}};
-        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("wu", NodeCoord{0, 0}, {"dm_kernel"})};
-        return spec;
-    };
-
-    Program prog_null = MakeProgramFromSpec(*mesh_device_, make_null_spec());
-    Program prog_real = MakeProgramFromSpec(*mesh_device_, make_real_spec());
-    EXPECT_NE(
-        prog_null.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
-        prog_real.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash());
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_OptionalBindingProbeBuildsWithNullAndReal) {
-    // Host-side: both ProgramSpecs validate and lower. Device JIT is covered by the Gen1 smoke below.
-    const std::filesystem::path kernel_src = "tests/tt_metal/tt_metal/test_kernels/dataflow/optional_binding_probe.cpp";
-
-    auto make_spec = [&](bool bind_optional) {
-        ProgramSpec spec;
-        spec.name = bind_optional ? "optional_bound" : "optional_null";
-        auto dm = MakeMinimalGen2DMKernel("dm_kernel");
-        dm.source = kernel_src;
-        dm.dfb_bindings = {
-            ProducerOf(DFBSpecName{"always_dfb"}, "always"),
-            ConsumerOf(DFBSpecName{"always_dfb"}, "always"),
-        };
-        if (bind_optional) {
-            dm.dfb_bindings.push_back(ProducerOf(DFBSpecName{"opt_dfb"}, "optional_dfb"));
-            dm.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"opt_dfb"}, "optional_dfb"));
-            dm.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
-                .scratchpad_spec_name = ScratchpadSpecName{"opt_pad"}, .accessor_name = "optional_pad"});
-            spec.dataflow_buffers = {
-                MakeMinimalDFB("always_dfb"),
-                MakeMinimalDFB("opt_dfb"),
-            };
-            spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"opt_pad"}, .size_per_node = 64}};
-        } else {
-            dm.dfb_bindings.push_back(NullBinding{.accessor_name = "optional_dfb"});
-            dm.scratchpad_bindings.push_back(NullBinding{.accessor_name = "optional_pad"});
-            spec.dataflow_buffers = {MakeMinimalDFB("always_dfb")};
-        }
-        spec.kernels = {dm};
-        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("wu", NodeCoord{0, 0}, {"dm_kernel"})};
-        return spec;
-    };
-
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, make_spec(/*bind_optional=*/false)));
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, make_spec(/*bind_optional=*/true)));
-}
-
 TEST_F(ProgramSpecTestQuasar, CPU_DifferentScratchpadSizeProducesDifferentKernelHash) {
     // Same kernel source and accessor name; the two scratchpads differ only in size_per_node, which
     // flows into the ScratchpadBindingHandle's size (and the generated scratch:: token), so the
@@ -4016,6 +3883,141 @@ TEST_F(ProgramSpecTestGen1, CPU_NullTensorBindingSucceeds) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     spec.kernels[0].tensor_bindings.push_back(NullBinding{.accessor_name = "optional_ta"});
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+// ============================================================================
+// NullBinding / optional resource bindings
+// ============================================================================
+// CollectSpecData / lowering checks are arch-agnostic. Hosted on Gen1 (WH mock) because the Quasar
+// mock fixture currently fails MeshDevice::create in this environment (empty dispatch cores).
+
+TEST_F(ProgramSpecTestGen1, CPU_NullBindingSucceedsWithoutMatchingResource) {
+    // NullBinding (and empty-spec-name structs) declare an accessor without a program-scope resource.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].dfb_bindings.push_back(NullBinding{.accessor_name = "gamma"});
+    spec.kernels[0].tensor_bindings.push_back(NullBinding{.accessor_name = "gamma_src"});
+    spec.kernels[0].scratchpad_bindings.push_back(NullBinding{.accessor_name = "tmp"});
+    // Explicit empty-id form is equivalent:
+    spec.kernels[1].scratchpad_bindings.push_back(
+        ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{""}, .accessor_name = "tmp2"});
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_MultipleNullScratchpadBindingsSucceed) {
+    // Two null scratchpad bindings share spec name "" — must not trip "bind at most once".
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].scratchpad_bindings = {
+        NullBinding{.accessor_name = "tmp_a"},
+        NullBinding{.accessor_name = "tmp_b"},
+    };
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_NullBindingRequiresValidAccessorName) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].dfb_bindings.push_back(NullBinding{.accessor_name = ""});
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("DFB accessor_name '' must be a valid C++ identifier")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_DuplicateAccessorNameNullAndRealFails) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    // kernels[0] already has a DFB producer binding; add a null with the same accessor name.
+    const std::string existing = spec.kernels[0].dfb_bindings[0].accessor_name;
+    spec.kernels[0].dfb_bindings.push_back(NullBinding{.accessor_name = existing});
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("two different DFBs")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_NullBindingDoesNotSatisfyUnusedDeclaration) {
+    // A null binding must not count as a use of a declared resource.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"orphan"}, .size_per_node = 64}};
+    spec.kernels[0].scratchpad_bindings.push_back(NullBinding{.accessor_name = "tmp"});
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("declared but not bound")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_EmptyUniqueIdOnDeclaredScratchpadFails) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{""}, .size_per_node = 64}};
+    spec.kernels[0].scratchpad_bindings.push_back(
+        ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{""}, .accessor_name = "s"});
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("unique_id must be non-empty")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_NullBindingAffectsKernelHash) {
+    // Same accessor name: null vs real must not share a JIT cache slot (zeroed offsets collide otherwise).
+    auto make_null_spec = [] {
+        ProgramSpec spec;
+        spec.name = "null_binding_hash";
+        auto dm = MakeMinimalGen1DMKernel("dm_kernel");
+        dm.scratchpad_bindings.push_back(NullBinding{.accessor_name = "pad"});
+        spec.kernels = {dm};
+        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("wu", NodeCoord{0, 0}, {"dm_kernel"})};
+        return spec;
+    };
+    auto make_real_spec = [] {
+        ProgramSpec spec;
+        spec.name = "real_binding_hash";
+        auto dm = MakeMinimalGen1DMKernel("dm_kernel");
+        dm.scratchpad_bindings.push_back(
+            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+        spec.kernels = {dm};
+        spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 64}};
+        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("wu", NodeCoord{0, 0}, {"dm_kernel"})};
+        return spec;
+    };
+
+    Program prog_null = MakeProgramFromSpec(*mesh_device_, make_null_spec());
+    Program prog_real = MakeProgramFromSpec(*mesh_device_, make_real_spec());
+    EXPECT_NE(
+        prog_null.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
+        prog_real.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash());
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_OptionalBindingProbeBuildsWithNullAndReal) {
+    // Host-side: both ProgramSpecs validate and lower. Device JIT is covered by the JIT smoke below.
+    const std::filesystem::path kernel_src = "tests/tt_metal/tt_metal/test_kernels/dataflow/optional_binding_probe.cpp";
+
+    auto make_spec = [&](bool bind_optional) {
+        ProgramSpec spec;
+        spec.name = bind_optional ? "optional_bound" : "optional_null";
+        auto dm = MakeMinimalGen1DMKernel("dm_kernel");
+        dm.source = kernel_src;
+        dm.dfb_bindings = {
+            ProducerOf(DFBSpecName{"always_dfb"}, "always"),
+            ConsumerOf(DFBSpecName{"always_dfb"}, "always"),
+        };
+        if (bind_optional) {
+            dm.dfb_bindings.push_back(ProducerOf(DFBSpecName{"opt_dfb"}, "optional_dfb"));
+            dm.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"opt_dfb"}, "optional_dfb"));
+            dm.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+                .scratchpad_spec_name = ScratchpadSpecName{"opt_pad"}, .accessor_name = "optional_pad"});
+            spec.dataflow_buffers = {
+                MakeMinimalDFB("always_dfb"),
+                MakeMinimalDFB("opt_dfb"),
+            };
+            spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"opt_pad"}, .size_per_node = 64}};
+        } else {
+            dm.dfb_bindings.push_back(NullBinding{.accessor_name = "optional_dfb"});
+            dm.scratchpad_bindings.push_back(NullBinding{.accessor_name = "optional_pad"});
+            spec.dataflow_buffers = {MakeMinimalDFB("always_dfb")};
+        }
+        spec.kernels = {dm};
+        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("wu", NodeCoord{0, 0}, {"dm_kernel"})};
+        return spec;
+    };
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, make_spec(/*bind_optional=*/false)));
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, make_spec(/*bind_optional=*/true)));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_DuplicateTensorAccessorNameWithinKernelFails) {
