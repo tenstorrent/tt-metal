@@ -312,10 +312,7 @@ class TestRecoverRealFooters(unittest.TestCase):
         self.assertFalse(leftover.incomplete)
 
     def test_recovery_completed_alone_is_not_success(self):
-        text = (
-            "=== Recover - x ===\nHOSTS=h1\n"
-            "Recovery completed at Wed Aug 19 05:04:23 UTC 2026\n"
-        )
+        text = "=== Recover - x ===\nHOSTS=h1\n" "Recovery completed at Wed Aug 19 05:04:23 UTC 2026\n"
         self.assertIsNone(parse_recover_code_from_text(text))
 
     def test_incomplete_recover_is_degraded(self):
@@ -343,11 +340,7 @@ class TestIncompleteAndLargeLogs(unittest.TestCase):
 
     def test_large_log_footer_beyond_64k(self):
         name = "physical_validation-20260819T060000Z.log"
-        header = (
-            "=== Physical Validation - 20260819T060000Z ===\n"
-            "HOSTS=bh-glx-110-c01u02\n"
-            "OUTPUT_DIR=/tmp/huge\n"
-        )
+        header = "=== Physical Validation - 20260819T060000Z ===\n" "HOSTS=bh-glx-110-c01u02\n" "OUTPUT_DIR=/tmp/huge\n"
         padding = "x" * 100_000
         tree = fixtures.log_tree(self, name, header + padding + "\nAnalysis exit code: 13\n")
         leftover = leftover_from_log("physical", tree / "logs" / name, tree)
@@ -371,9 +364,7 @@ class TestIncompleteAndLargeLogs(unittest.TestCase):
 
     def test_backfill_cli_keeps_caller_labels(self):
         rc, out, err = _run(
-            _backfill_argv(
-                fixtures.artifact_tree(self), "--label", "superpod=SC16_1", "--label", "ring=SC16"
-            )
+            _backfill_argv(fixtures.artifact_tree(self), "--label", "superpod=SC16_1", "--label", "ring=SC16")
         )
         self.assertEqual(rc, 0, err)
         records = [json.loads(ln) for ln in out.splitlines() if ln]
@@ -386,10 +377,7 @@ class TestIncompleteAndLargeLogs(unittest.TestCase):
         name = "physical_validation-20260819T060100Z.log"
         tree = fixtures.log_tree(self, name, "")
         dest = tree / "logs" / name
-        header = (
-            "=== Physical Validation - 20260819T060100Z ===\n"
-            "HOSTS=bh-glx-110-c01u02\n"
-        ).encode("utf-8")
+        header = ("=== Physical Validation - 20260819T060100Z ===\n" "HOSTS=bh-glx-110-c01u02\n").encode("utf-8")
         # Split "Analysis" across the last 64KiB reverse-chunk start.
         prefix = 65536 - 8
         dest.write_bytes(header + (b"y" * prefix) + b"\nAnalysis exit code: 4\n")
@@ -430,9 +418,7 @@ class TestRecursiveDedup(unittest.TestCase):
         self.assertIn("emitted=2", err)
 
     def test_duplicate_leftovers_counted_once(self):
-        tree = fixtures.log_tree(
-            self, fixtures.DISPATCH_LOG, fixtures.ARTIFACT_TREE_LOGS[fixtures.DISPATCH_LOG]
-        )
+        tree = fixtures.log_tree(self, fixtures.DISPATCH_LOG, fixtures.ARTIFACT_TREE_LOGS[fixtures.DISPATCH_LOG])
         leftovers = discover_leftovers(tree)
         leftovers = leftovers + leftovers
         from report_backfill import leftover_key

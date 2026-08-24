@@ -127,6 +127,15 @@ class TestRejects(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"^record_uri:"):
             validate_record(record, file_written=True)
 
+    def test_duration_s_rejects_nan_and_infinity(self):
+        record = self._dry_run()
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                bad = copy.deepcopy(record)
+                bad["duration_s"] = value
+                with self.assertRaisesRegex(ValueError, r"^duration_s:"):
+                    validate_record(bad)
+
     def test_rank_binding_missing_mesh_id(self):
         record = self._dry_run()
         record["topology"] = {"rank_bindings": [{"rank": 0}]}

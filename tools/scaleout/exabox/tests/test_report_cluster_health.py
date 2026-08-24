@@ -128,9 +128,7 @@ class TestDryRunCli(unittest.TestCase):
         self.assertNotIn("topology", record)
 
     def test_labels_only_under_labels(self):
-        rc, out, err = _run(
-            _base_argv("--label", "quad=110-C-Q1", "--label", "superpod=SC36_3")
-        )
+        rc, out, err = _run(_base_argv("--label", "quad=110-C-Q1", "--label", "superpod=SC36_3"))
         self.assertEqual(rc, 0, err)
         record = json.loads(out.strip())
         self.assertEqual(record["labels"]["quad"], "110-C-Q1")
@@ -203,9 +201,7 @@ class TestPortableTopology(unittest.TestCase):
         validate_record(record, file_written=False)
 
     def test_gsd_host_keys(self):
-        rc, out, err = _run(
-            _base_argv("--gsd", self._descriptor("gsd.yaml", fixtures.GSD_TWO_HOST))
-        )
+        rc, out, err = _run(_base_argv("--gsd", self._descriptor("gsd.yaml", fixtures.GSD_TWO_HOST)))
         self.assertEqual(rc, 0, err)
         record = json.loads(out.strip())
         hosts = {item["hostname"] for item in record["topology"]["physical"]}
@@ -280,9 +276,7 @@ rank_bindings:
         self.assertNotIn("deep_key", result[0])
 
     def test_fsd_physical(self):
-        rc, out, err = _run(
-            _base_argv("--fsd", self._descriptor("fsd.textproto", fixtures.FSD_TWO_HOST))
-        )
+        rc, out, err = _run(_base_argv("--fsd", self._descriptor("fsd.textproto", fixtures.FSD_TWO_HOST)))
         self.assertEqual(rc, 0, err)
         record = json.loads(out.strip())
         self.assertEqual(record["topology"]["physical"][1]["shelf_u"], 8)
@@ -430,18 +424,14 @@ class TestFromDiagReport(unittest.TestCase):
         self.assertTrue(record["artifact_uri"])
 
     def test_warn_is_degraded(self):
-        rc, out, err = _run(
-            ["--from-diag-report", self._diag(fixtures.DIAG_REPORT_WARN), "--dry-run"]
-        )
+        rc, out, err = _run(["--from-diag-report", self._diag(fixtures.DIAG_REPORT_WARN), "--dry-run"])
         self.assertEqual(rc, 0, err)
         record = json.loads(out.strip())
         self.assertEqual(record["status"], "degraded")
         self.assertEqual(record["analyzer_code"], 2)
 
     def test_fail_is_failed(self):
-        rc, out, err = _run(
-            ["--from-diag-report", self._diag(fixtures.DIAG_REPORT_FAIL), "--dry-run"]
-        )
+        rc, out, err = _run(["--from-diag-report", self._diag(fixtures.DIAG_REPORT_FAIL), "--dry-run"])
         self.assertEqual(rc, 0, err)
         record = json.loads(out.strip())
         self.assertEqual(record["status"], "failed")
@@ -451,9 +441,7 @@ class TestFromDiagReport(unittest.TestCase):
         self.assertNotIn("board_rev", record["labels"])
 
     def test_refuses_diag_dry_run(self):
-        rc, _out, err = _run(
-            ["--from-diag-report", self._diag(fixtures.DIAG_REPORT_DRY_RUN), "--dry-run"]
-        )
+        rc, _out, err = _run(["--from-diag-report", self._diag(fixtures.DIAG_REPORT_DRY_RUN), "--dry-run"])
         self.assertEqual(rc, 1)
         self.assertIn("dry-run", err)
 

@@ -15,6 +15,7 @@ Status values are a closed enum. Physical analyzer exit code 0 maps to
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime
 from typing import Any
 
@@ -117,7 +118,11 @@ CLUSTER_HEALTH_JSON_SCHEMA: dict[str, Any] = {
         "artifact_uri": {"type": "string"},
         "record_uri": {"type": "string", "description": "Absolute path after file write"},
         "record_id": {"type": "string"},
-        "duration_s": {"type": "number", "minimum": 0},
+        "duration_s": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Finite non-negative seconds; NaN and Infinity are rejected.",
+        },
         "labels": {
             "type": "object",
             "additionalProperties": {"type": "string"},
@@ -290,8 +295,8 @@ def validate_record(record: Any, *, file_written: bool = False) -> None:
 
     if "duration_s" in obj:
         duration = obj["duration_s"]
-        if not _is_number(duration) or duration < 0:
-            _fail("duration_s", "must be a number >= 0")
+        if not _is_number(duration) or duration < 0 or not math.isfinite(duration):
+            _fail("duration_s", "must be a finite number >= 0")
 
     if "labels" in obj:
         _validate_labels(obj["labels"])
