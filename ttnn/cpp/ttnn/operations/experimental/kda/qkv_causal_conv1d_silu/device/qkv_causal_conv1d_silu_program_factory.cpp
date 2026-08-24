@@ -3,6 +3,7 @@
 
 #include "ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/qkv_causal_conv1d_silu_program_factory.hpp"
 
+#include <limits>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
@@ -16,12 +17,14 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 
-using namespace tt::tt_metal;
-using namespace tt::constants;
-
 namespace ttnn::experimental::prim {
 
-namespace m2 = tt::tt_metal::experimental;
+namespace {
+
+// Kimi-K3 supplies four learned causal-convolution taps; one channel block of weights is queued per tap.
+constexpr uint32_t tap_count = 4;
+
+}  // namespace
 
 ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::create_program_artifacts(
     const QkvCausalConv1dSiluParams& attrs, const QkvCausalConv1dSiluInputs& in, std::vector<Tensor>& outputs) {
@@ -37,178 +40,185 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
     const auto& device = input.device();
     const auto arch = device.arch();
 
-    const uint32_t Mt = attrs.sequence / TILE_HEIGHT;
-    const uint32_t Qt = attrs.q_width / TILE_WIDTH;
-    const uint32_t Kt = attrs.k_width / TILE_WIDTH;
-    const uint32_t Vt = attrs.v_width / TILE_WIDTH;
+    const uint32_t Mt = attrs.sequence / tt::constants::TILE_HEIGHT;
+    const uint32_t Qt = attrs.q_width / tt::constants::TILE_WIDTH;
+    const uint32_t Kt = attrs.k_width / tt::constants::TILE_WIDTH;
+    const uint32_t Vt = attrs.v_width / tt::constants::TILE_WIDTH;
     const uint32_t Ct = Qt + Kt + Vt;
-    const uint32_t channels = attrs.q_width + attrs.k_width + attrs.v_width;
-    const uint32_t row_bytes = channels * sizeof(uint16_t);
-    uint32_t block_ct = Ct <= 48 ? Ct : 24u;
-    while (Ct % block_ct != 0) {
-        --block_ct;
-    }
+    const uint32_t block_ct = attrs.channel_chunk_size / tt::constants::TILE_WIDTH;
     const uint32_t num_blocks = Ct / block_ct;
-    auto dist = kda_factory_detail::distribute_prep(device.compute_with_storage_grid_size(), Mt * num_blocks, ~0u);
+    auto dist = kda_factory_detail::distribute_prep(
+        device.compute_with_storage_grid_size(), Mt * num_blocks, std::numeric_limits<uint32_t>::max());
     const auto& cores = dist.core_set;
 
-    const m2::KernelSpecName READER{"reader"};
-    const m2::KernelSpecName WRITER{"writer"};
-    const m2::KernelSpecName COMPUTE{"compute"};
+    const tt::tt_metal::experimental::KernelSpecName reader_kernel_name{"reader"};
+    const tt::tt_metal::experimental::KernelSpecName writer_kernel_name{"writer"};
+    const tt::tt_metal::experimental::KernelSpecName compute_kernel_name{"compute"};
 
-    const m2::DFBSpecName ACT_RM_DFB{"act_rm"};
-    const m2::DFBSpecName ACT_TILE_DFB{"act_tile"};
-    const m2::DFBSpecName WEIGHTS_DFB{"weights"};
-    const m2::DFBSpecName PARTIAL_A_DFB{"partial_a"};
-    const m2::DFBSpecName PARTIAL_B_DFB{"partial_b"};
-    const m2::DFBSpecName OUTPUT_DFB{"output"};
+    const tt::tt_metal::experimental::DFBSpecName act_rm_dfb_name{"act_rm"};
+    const tt::tt_metal::experimental::DFBSpecName act_tile_dfb_name{"act_tile"};
+    const tt::tt_metal::experimental::DFBSpecName weights_dfb_name{"weights"};
+    const tt::tt_metal::experimental::DFBSpecName partial_dfb_name{"partial"};
+    const tt::tt_metal::experimental::DFBSpecName output_dfb_name{"output"};
 
-    const m2::TensorParamName INPUT{"input"};
-    const m2::TensorParamName HISTORY{"history"};
-    const m2::TensorParamName TAP0{"tap0"};
-    const m2::TensorParamName TAP1{"tap1"};
-    const m2::TensorParamName TAP2{"tap2"};
-    const m2::TensorParamName TAP3{"tap3"};
-    const m2::TensorParamName Q{"q"};
-    const m2::TensorParamName K{"k"};
-    const m2::TensorParamName V{"v"};
+    const tt::tt_metal::experimental::TensorParamName input_tensor_name{"input"};
+    const tt::tt_metal::experimental::TensorParamName history_tensor_name{"history"};
+    const tt::tt_metal::experimental::TensorParamName tap0_tensor_name{"tap0"};
+    const tt::tt_metal::experimental::TensorParamName tap1_tensor_name{"tap1"};
+    const tt::tt_metal::experimental::TensorParamName tap2_tensor_name{"tap2"};
+    const tt::tt_metal::experimental::TensorParamName tap3_tensor_name{"tap3"};
+    const tt::tt_metal::experimental::TensorParamName q_tensor_name{"q"};
+    const tt::tt_metal::experimental::TensorParamName k_tensor_name{"k"};
+    const tt::tt_metal::experimental::TensorParamName v_tensor_name{"v"};
 
-    auto make_dfb = [](const m2::DFBSpecName& name, uint32_t tiles) {
-        return m2::DataflowBufferSpec{
+    const auto input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const uint32_t tile_size = tt::tile_size(input_data_format);
+    auto make_dfb = [input_data_format, tile_size](
+                        const tt::tt_metal::experimental::DFBSpecName& name, uint32_t tiles) {
+        return tt::tt_metal::experimental::DataflowBufferSpec{
             .unique_id = name,
-            .entry_size = tt::tile_size(tt::DataFormat::Float16_b),
+            .entry_size = tile_size,
             .num_entries = tiles,
-            .data_format_metadata = tt::DataFormat::Float16_b,
+            .data_format_metadata = input_data_format,
         };
     };
 
-    m2::Group<m2::DataflowBufferSpec> dfbs = {
-        make_dfb(ACT_RM_DFB, block_ct),
-        make_dfb(ACT_TILE_DFB, block_ct),
-        make_dfb(WEIGHTS_DFB, 4 * block_ct),
-        make_dfb(PARTIAL_A_DFB, block_ct),
-        make_dfb(PARTIAL_B_DFB, block_ct),
-        make_dfb(OUTPUT_DFB, block_ct),
+    tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
+        make_dfb(act_rm_dfb_name, 2 * block_ct),
+        make_dfb(act_tile_dfb_name, block_ct),
+        make_dfb(weights_dfb_name, tap_count * block_ct),
+        make_dfb(partial_dfb_name, 2 * block_ct),
+        make_dfb(output_dfb_name, 2 * block_ct),
     };
 
-    m2::KernelSpec reader{
-        .unique_id = READER,
+    tt::tt_metal::experimental::KernelSpec reader{
+        .unique_id = reader_kernel_name,
         .source =
             "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/dataflow/"
             "reader_qkv_causal_conv1d_silu.cpp",
         .dfb_bindings =
             {
-                m2::DFBBinding{ACT_RM_DFB, "act_rm", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{WEIGHTS_DFB, "weights", m2::DFBEndpointType::PRODUCER},
+                tt::tt_metal::experimental::DFBBinding{
+                    act_rm_dfb_name, "act_rm", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                tt::tt_metal::experimental::DFBBinding{
+                    weights_dfb_name, "weights", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
             },
         .tensor_bindings =
             {
-                m2::TensorBinding{INPUT, "input"},
-                m2::TensorBinding{HISTORY, "history"},
-                m2::TensorBinding{TAP0, "tap0"},
-                m2::TensorBinding{TAP1, "tap1"},
-                m2::TensorBinding{TAP2, "tap2"},
-                m2::TensorBinding{TAP3, "tap3"},
+                tt::tt_metal::experimental::TensorBinding{input_tensor_name, "input"},
+                tt::tt_metal::experimental::TensorBinding{history_tensor_name, "history"},
+                tt::tt_metal::experimental::TensorBinding{tap0_tensor_name, "tap0"},
+                tt::tt_metal::experimental::TensorBinding{tap1_tensor_name, "tap1"},
+                tt::tt_metal::experimental::TensorBinding{tap2_tensor_name, "tap2"},
+                tt::tt_metal::experimental::TensorBinding{tap3_tensor_name, "tap3"},
             },
-        .compile_time_args =
-            {{"block_ct", block_ct}, {"channels", channels}, {"row_bytes", row_bytes}, {"num_blocks", num_blocks}},
+        .compile_time_args = {{"block_ct", block_ct}, {"num_blocks", num_blocks}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
 
-    m2::KernelSpec writer{
-        .unique_id = WRITER,
+    tt::tt_metal::experimental::KernelSpec writer{
+        .unique_id = writer_kernel_name,
         .source =
             "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/dataflow/"
             "writer_qkv_causal_conv1d_silu.cpp",
-        .dfb_bindings = {m2::DFBBinding{OUTPUT_DFB, "output", m2::DFBEndpointType::CONSUMER}},
+        .dfb_bindings = {tt::tt_metal::experimental::DFBBinding{
+            output_dfb_name, "output", tt::tt_metal::experimental::DFBEndpointType::CONSUMER}},
         .tensor_bindings =
             {
-                m2::TensorBinding{Q, "q"},
-                m2::TensorBinding{K, "k"},
-                m2::TensorBinding{V, "v"},
+                tt::tt_metal::experimental::TensorBinding{q_tensor_name, "q"},
+                tt::tt_metal::experimental::TensorBinding{k_tensor_name, "k"},
+                tt::tt_metal::experimental::TensorBinding{v_tensor_name, "v"},
             },
         .compile_time_args = {{"Qt", Qt}, {"Kt", Kt}, {"Vt", Vt}, {"block_ct", block_ct}, {"num_blocks", num_blocks}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
     };
 
-    m2::KernelSpec compute{
-        .unique_id = COMPUTE,
+    tt::tt_metal::experimental::KernelSpec compute{
+        .unique_id = compute_kernel_name,
         .source =
             "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/compute/"
             "qkv_causal_conv1d_silu.cpp",
-        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
-                m2::DFBBinding{ACT_RM_DFB, "act_rm", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{ACT_TILE_DFB, "act_tile", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{ACT_TILE_DFB, "act_tile", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{WEIGHTS_DFB, "weights", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{PARTIAL_A_DFB, "partial_a", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{PARTIAL_A_DFB, "partial_a", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{PARTIAL_B_DFB, "partial_b", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{PARTIAL_B_DFB, "partial_b", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{OUTPUT_DFB, "output", m2::DFBEndpointType::PRODUCER},
+                tt::tt_metal::experimental::DFBBinding{
+                    act_rm_dfb_name, "act_rm", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                tt::tt_metal::experimental::DFBBinding{
+                    act_tile_dfb_name, "act_tile", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                tt::tt_metal::experimental::DFBBinding{
+                    act_tile_dfb_name, "act_tile", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                tt::tt_metal::experimental::DFBBinding{
+                    weights_dfb_name, "weights", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                tt::tt_metal::experimental::DFBBinding{
+                    partial_dfb_name, "partial", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                tt::tt_metal::experimental::DFBBinding{
+                    partial_dfb_name, "partial", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                tt::tt_metal::experimental::DFBBinding{
+                    output_dfb_name, "output", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
             },
         .compile_time_args = {{"block_ct", block_ct}, {"num_blocks", num_blocks}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_count"}},
         .hw_config = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config),
     };
 
-    m2::KernelRunArgs reader_run_args{.kernel = READER};
-    m2::KernelRunArgs writer_run_args{.kernel = WRITER};
-    m2::KernelRunArgs compute_run_args{.kernel = COMPUTE};
+    tt::tt_metal::experimental::KernelRunArgs reader_run_args{.kernel = reader_kernel_name};
+    tt::tt_metal::experimental::KernelRunArgs writer_run_args{.kernel = writer_kernel_name};
+    tt::tt_metal::experimental::KernelRunArgs compute_run_args{.kernel = compute_kernel_name};
     for (uint32_t i = 0; i < dist.cores.size(); ++i) {
         const auto& core = dist.cores[i];
-        m2::AddRuntimeArgsForNode(
+        tt::tt_metal::experimental::AddRuntimeArgsForNode(
             reader_run_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
-        m2::AddRuntimeArgsForNode(
+        tt::tt_metal::experimental::AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
-        m2::AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"wi_count", dist.wi_count[i]}});
+        tt::tt_metal::experimental::AddRuntimeArgsForNode(
+            compute_run_args.runtime_arg_values, core, {{"wi_count", dist.wi_count[i]}});
     }
 
-    m2::ProgramSpec spec{
+    tt::tt_metal::experimental::ProgramSpec spec{
         .name = "qkv_causal_conv1d_silu",
         .kernels = {std::move(reader), std::move(writer), std::move(compute)},
         .dataflow_buffers = std::move(dfbs),
         .tensor_parameters =
             {
-                m2::TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},
-                m2::TensorParameter{.unique_id = HISTORY, .spec = history.tensor_spec()},
-                m2::TensorParameter{.unique_id = TAP0, .spec = tap0.tensor_spec()},
-                m2::TensorParameter{.unique_id = TAP1, .spec = tap1.tensor_spec()},
-                m2::TensorParameter{.unique_id = TAP2, .spec = tap2.tensor_spec()},
-                m2::TensorParameter{.unique_id = TAP3, .spec = tap3.tensor_spec()},
-                m2::TensorParameter{.unique_id = Q, .spec = q.tensor_spec()},
-                m2::TensorParameter{.unique_id = K, .spec = k.tensor_spec()},
-                m2::TensorParameter{.unique_id = V, .spec = v.tensor_spec()},
+                tt::tt_metal::experimental::TensorParameter{
+                    .unique_id = input_tensor_name, .spec = input.tensor_spec()},
+                tt::tt_metal::experimental::TensorParameter{
+                    .unique_id = history_tensor_name, .spec = history.tensor_spec()},
+                tt::tt_metal::experimental::TensorParameter{.unique_id = tap0_tensor_name, .spec = tap0.tensor_spec()},
+                tt::tt_metal::experimental::TensorParameter{.unique_id = tap1_tensor_name, .spec = tap1.tensor_spec()},
+                tt::tt_metal::experimental::TensorParameter{.unique_id = tap2_tensor_name, .spec = tap2.tensor_spec()},
+                tt::tt_metal::experimental::TensorParameter{.unique_id = tap3_tensor_name, .spec = tap3.tensor_spec()},
+                tt::tt_metal::experimental::TensorParameter{.unique_id = q_tensor_name, .spec = q.tensor_spec()},
+                tt::tt_metal::experimental::TensorParameter{.unique_id = k_tensor_name, .spec = k.tensor_spec()},
+                tt::tt_metal::experimental::TensorParameter{.unique_id = v_tensor_name, .spec = v.tensor_spec()},
             },
         .work_units =
             {
-                m2::WorkUnitSpec{
+                tt::tt_metal::experimental::WorkUnitSpec{
                     .name = "main",
-                    .kernels = {READER, WRITER, COMPUTE},
+                    .kernels = {reader_kernel_name, writer_kernel_name, compute_kernel_name},
                     .target_nodes = cores,
                 },
             },
     };
 
-    m2::ProgramRunArgs run_args;
+    tt::tt_metal::experimental::ProgramRunArgs run_args;
     run_args.kernel_run_args.reserve(3);
     run_args.kernel_run_args.push_back(std::move(reader_run_args));
     run_args.kernel_run_args.push_back(std::move(writer_run_args));
     run_args.kernel_run_args.push_back(std::move(compute_run_args));
     run_args.tensor_args = {
-        {INPUT, input},
-        {HISTORY, history},
-        {TAP0, tap0},
-        {TAP1, tap1},
-        {TAP2, tap2},
-        {TAP3, tap3},
-        {Q, q},
-        {K, k},
-        {V, v},
+        {input_tensor_name, input},
+        {history_tensor_name, history},
+        {tap0_tensor_name, tap0},
+        {tap1_tensor_name, tap1},
+        {tap2_tensor_name, tap2},
+        {tap3_tensor_name, tap3},
+        {q_tensor_name, q},
+        {k_tensor_name, k},
+        {v_tensor_name, v},
     };
 
     return ttnn::device_operation::ProgramArtifacts{

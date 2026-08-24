@@ -645,6 +645,8 @@ from ttnn.operations.transformer import SDPAProgramConfig, PagedCacheGeometryOve
 
 transformer.SparseKVFormat = SparseKVFormat
 
+QkvCausalConv1dSiluProgramConfig = ttnn._ttnn.operations.experimental.kda.QkvCausalConv1dSiluProgramConfig
+
 IndexerScoreProgramConfig = ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig
 
 import ttnn.graph
