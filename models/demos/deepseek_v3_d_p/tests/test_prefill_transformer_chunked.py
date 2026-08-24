@@ -40,7 +40,7 @@ from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
     get_fused_ring_host_timing,
@@ -1798,15 +1798,26 @@ def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_i
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),
+        pytest.param(
+            (8, 4),
+            fabric2d_device_params(
+                fabric_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE,
+                l1_small_size=768,
+                trace_region_size=256 * 1024 * 1024,
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="fabric2d-mesh-8x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi_k2_6"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
-@pytest.mark.skipif(
-    not is_high_power(),
-    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
-)
+# @pytest.mark.skipif(
+#     not is_high_power(),
+#     reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
+# )
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer_chunked_perf(
     variant,
