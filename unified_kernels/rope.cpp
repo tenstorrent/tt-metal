@@ -78,17 +78,17 @@ void kernel_main() {
 
     // KERNEL SCOPE: every chunk's matmul re-reads the same rotation tile, so it must not be
     // popped until the kernel ends -- the same rule the reduce scaler and a fused bias obey.
-    u::ComputeBlock m = u::noc_load<1>(m_storage, m_acc, 0).wait();
+    u::ComputeBlock m = u::noc_load<0>(m_storage, m_acc, 0).wait();
 
     for (uint32_t c = 0; c < num_chunks; ++c) {
-        u::ComputeBlock x = u::noc_load<1>(x_storage, x_acc, c).wait();
-        u::ComputeBlock cos = u::noc_load<1>(cos_storage, cos_acc, c).wait();
-        u::ComputeBlock sin = u::noc_load<1>(sin_storage, sin_acc, c).wait();
+        u::ComputeBlock x = u::noc_load<0>(x_storage, x_acc, c).wait();
+        u::ComputeBlock cos = u::noc_load<0>(cos_storage, cos_acc, c).wait();
+        u::ComputeBlock sin = u::noc_load<0>(sin_storage, sin_acc, c).wait();
 
         // The rotation. kt_dim is 1, so this is per-tile rather than a sum over k.
         u::ComputeBlock rot = rot_storage.store(u::matmul(x, m));
 
         // x * cos + rot * sin, in ONE pass: four leaves, three DST slots.
-        u::noc_store<0>(out_storage.store(x * cos + rot * sin), out, c);
+        u::noc_store<1>(out_storage.store(x * cos + rot * sin), out, c);
     }
 }

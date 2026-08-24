@@ -108,10 +108,10 @@ void kernel_main() {
     // 1/sqrt(head dim), packed by the host.
     u::ComputeBlock scale = u::fill_reduce_scaler<1>(scale_storage, scale_bits);
 
-    u::ComputeBlock q = u::noc_load<1>(q_storage, q_acc, 0).wait();
-    u::ComputeBlock k = u::noc_load<1>(k_storage, k_acc, 0).wait();
-    u::ComputeBlock v = u::noc_load<1>(v_storage, v_acc, 0).wait();
-    u::ComputeBlock mask = u::noc_load<1>(mask_storage, mask_acc, 0).wait();
+    u::ComputeBlock q = u::noc_load<0>(q_storage, q_acc, 0).wait();
+    u::ComputeBlock k = u::noc_load<0>(k_storage, k_acc, 0).wait();
+    u::ComputeBlock v = u::noc_load<0>(v_storage, v_acc, 0).wait();
+    u::ComputeBlock mask = u::noc_load<0>(mask_storage, mask_acc, 0).wait();
 
     // Q @ Kt. Single-shot: one k-block, so no Accumulator.
     u::ComputeBlock scores = scores_storage.store(u::matmul<u::TransposeB::Yes>(q, k));
@@ -135,5 +135,5 @@ void kernel_main() {
 
     u::ComputeBlock prob = prob_storage.store(e * u::bcast<u::Axis::Cols>(recip));
 
-    u::noc_store<0>(out_storage.store(u::matmul(prob, v)), out, 0);
+    u::noc_store<1>(out_storage.store(u::matmul(prob, v)), out, 0);
 }
