@@ -67,26 +67,26 @@ _L1_PER_CORE = 1499136  # MEM_L1_SIZE, wormhole/dev_mem_map.h
 #   - slack for interleaved-buffer page rounding (a buffer's pages are dealt round-robin over the
 #     banks, so a bank can hold ceil(pages/banks), not the average).
 #
-# 32 KB covers only the first item, over-claiming ~44 KB/core -- 2.7 MB across 64 banks.
+# 32 KB covers only the first item, over-claiming ~44 KB/core (2.7 MB / 64 banks).
 _L1_RESERVE = 32 * 1024
 
 # Per-device override, same keying as `_VISION_MM_TUNING_BY_DEVICE` (`ModelArgs.device_name`).
 #
-# N300: 128 KB. The 32 KB default is invisible at the 11008-row demo grid this table was swept on
-# (mlp_fc2's L1 output wants 387 KiB/core there, against ~1200 available) and fatal at 3x the rows:
-# at 33024 rows the same plan still took L1 for a 1161 KiB/core output, the allocator placed the
+# N300: 128 KB. The 32 KB default is invisible at the 11008-row demo grid this
+# table was swept on (mlp_fc2's L1 output wants 387 KiB/core vs ~1200 available)
+# and fatal at 3x the rows: at 33024 the plan still took L1 for 1161
 # buffer at 244608, and mlp_fc2's own CB region ends at 301248 --
 #   "Statically allocated circular buffers in program N clash with L1 buffers on core range
-#    [0-0 - 5-6]. L1 buffer allocated at 244608 and static circular buffer region ends at 301248"
+#    [0-0 - 5-6]. L1 buffer allocated at 244608, CB region ends at 301248"
 # which is the 300dpi (206x160 patches) cases of test_model.py::test_vision_model_inference. 128 KB
 # restores the invariant with margin and keeps every 11008-row L1 placement the sweep chose --
-# verified on Qwen3.5-9B / N300: mlp_fc2 still takes L1 at 11008 rows and falls back to DRAM at
+# verified on Qwen3.5-9B / N300: mlp_fc2 still takes L1 at 11008 rows, DRAM at
 # 33024/34816, with no other family's placement changed, and all 6 vision cases pass.
 #
-# NOT applied to the other Wormhole meshes even though the accounting bug is general: the widest
-# image any of them was measured at is this same 11008-row grid, where the bug cannot bite, and
+# NOT applied to the other Wormhole meshes though the bug is general: the widest
+# image measured on any of them is this same 11008-row grid, where it cannot
 # T3K's overrides below put FOUR families' outputs in L1 -- derived (not measured) numbers put
-# merger_fc2 only ~4 MiB inside its budget there, too little margin to move blind on hardware this
+# merger_fc2 only ~4 MiB inside budget there, too little margin to move blind
 # was not verified against. Extend per mesh, with a large-image run to back it up.
 _L1_RESERVE_BY_DEVICE = {"N300": 128 * 1024}
 

@@ -48,7 +48,7 @@ class Qwen36DecoderLayer:
         # decode gathers pre-norm). Gates must match the module-side _fuse_agmm gates.
         # BH-only: the fused all_gather_minimal_matmul_async grid assumes BH's taller (9-10 row)
         # compute grid (see tp_common.py all_gather_matmul_prefill); WH tops out at 8 rows, so this
-        # fusion is unvalidated there. Falls back to the general (unfused) AG + matmul path on WH.
+        # fusion is unvalidated there. Falls back to unfused AG + matmul on WH.
         self._fuse_norm_agmm = (
             self.num_devices > 1
             and is_blackhole()
@@ -57,81 +57,40 @@ class Qwen36DecoderLayer:
                 or (self.is_full_attention and getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None)
             )
         )
-        # ATTEMPTED AND REJECTED (2026-08-17): narrowing attention_norm's prefill all-gather to bf8,
-        # the same trick that is worth -43% on ff_norm's gather below. It is the largest single op in
-        # the layer (1,142us at seq 2048, T3K TP=8) so the prize was ~-450us, but the activation it
-        # produces is consumed by ops with dtype CONTRACTS that bf16 happens to satisfy and bf8 does
-        # not. Two hard failures, one per layer type:
+        # bf8 attention_norm prefill all-gather. DONE for GDN layers (see _attn_gather_dtype in
+        # forward()); NOT DONE for full-attention layers.
         #
-        #   full_attention: attention_norm -> QKV -> K/V are written to the paged KV cache, and
-        #     paged_fill_cache_device_operation.cpp:36 requires a fp32/bf16 input against a bf16
-        #     cache. Crashes at trace capture.
-        #   linear_attention: the GDN depthwise FIR (gdn/conv_fir_wh.py:251) does
-        #     ttnn.addcmul(out, x_slice, weight_taps[k]), and ternary.cpp:268 requires all three
-        #     operands to share a dtype -- bf16 taps vs a bf8 slice.
+        # Two blockers were found (2026-08-17), one since dissolved:
+        #   1. KV cache -- paged_fill_cache rejects bf8 K/V against a bf16 cache,
+        #      impossible with today's paged_update_cache (see the contract note in attention/tp.py).
+        #      Needs a C++ change. Still open, so full-attention layers keep bf16.
+        #   2. GDN depthwise FIR -- ternary.cpp:268 needs all addcmul operands to
+        #      share a dtype. NOT a property of the layer but of the CALL: the FIR
+        #      runs only on masked/tail chunks; a full chunk takes native conv1d
+        #      call on the GDN native-conv predicate; FIR chunks keep bf16.
         #
-        # Each is fixable with a cast back to bf16, but those casts are full passes over the largest
-        # tensors in the layer and give the win straight back. And even fixed, bf8 here feeds the
-        # RECURRENT chunk scan, where error compounds across chunks -- unlike ff_norm's gather, whose
-        # error dies with the token. That needed test_demo_text[traced_64k] to settle and never got
-        # far enough to be asked.
+        # The real reason (2) looked unfixable: ttnn.linear defaults its out dtype to in0's
+        # (matmul.cpp:72), so a bf8 in0 silently made the whole qkvzab in-proj bf8. The bf8 slice
+        # ternary.cpp rejected came from THAT, not the gather. In-proj is now pinned to bf16
+        # (gdn/tp.py _project_qkvzab), keeping the recurrent path bit-for-bit on its old dtypes.
         #
-        # THE RIGHT UNLOCK IS A bf8 KV CACHE, not casts: it removes the full_attention blocker at
-        # source, and it is independently the top lever at long context (KV bytes exceed all weight
-        # bytes past ~32k ctx). Revisit this only after that lands.
-        # NOT DONE ON FULL-ATTENTION LAYERS (the GDN half IS now done -- see the 2026-08-20 note
-        # below, which also corrects blocker 2's diagnosis). bf8 attention_norm gather is the single
-        # largest op in a full-attention layer (1,142us at seq 2048, T3K TP=8, ~33% of the block) and
-        # narrowing it to bf8 was MEASURED at -443us, plus -149us on the qkv matmul whose in0 then
-        # inherits bf8 -- i.e. -702us/layer, the largest single win identified. It was blocked twice
-        # over:
-        #   1. It requires a bf8 KV CACHE (paged_fill_cache rejects a bf8 K/V input against a bf16
-        #      cache), and a bf8 KV cache is impossible with today's paged_update_cache -- see the
-        #      contract contradiction documented at that call site in attention/tp.py. Needs a C++
-        #      change.
-        #   2. Even then it is FULL-ATTENTION LAYERS ONLY: on a linear_attention layer the gathered
-        #      activation reaches the GDN depthwise MAC FIR, and gdn/conv_fir_wh.py's
-        #      ttnn.addcmul(out, x_slice, weight_taps) requires all three operands to share a dtype
-        #      (ternary.cpp:268). That blocker is independent of the KV cache.
-        # NOTE the single-layer profiler does NOT catch (2) -- it takes the native conv1d path; only
-        # the demo's masked tail chunks take the FIR path. test_demo_text is the gate that matters.
-        #
-        # DONE (2026-08-20) FOR GDN LAYERS -- see _attn_gather_dtype in forward(). Blocker (2) turned
-        # out not to be a property of the LAYER but of the CALL: the MAC FIR only runs on masked/tail
-        # chunks (valid_len set), and a full chunk takes the native ttnn.conv1d, which has no
-        # addcmul. At 64k that is 31 of 32 chunks. So the narrowing is taken per call, gated on the
-        # GDN module's own native-conv predicate, and the FIR chunks keep bf16.
-        #
-        # A SECOND, LESS OBVIOUS HALF WAS NEEDED, and it is the real reason blocker (2) looked
-        # unfixable: ttnn.linear defaults its output dtype to in0's (matmul.cpp:72,
-        # `dtype.value_or(input_tensor_a.dtype())`), so a bf8 in0 silently made the whole qkvzab
-        # in-projection bf8 as well. The bf8 slice ternary.cpp rejected came from THAT, not from the
-        # gather -- the FIR reads `qkv`, which is a matmul output, never the gathered activation. The
-        # in-proj result is now pinned to bf16 (gdn/tp.py _project_qkvzab), which keeps the whole
-        # recurrent path bit-for-bit on its old dtypes.
-        #
-        # MEASURED (T3K TP=8, 27B, GDN layer, seq 2048, device kernel duration, this-vs-stashed):
+        # MEASURED (T3K TP=8, 27B, GDN layer, seq 2048, device kernel duration):
         #     attention_norm all-gather   1,144 -> 698 us   -446   (BF16 -> BFP8, 10 cores both)
-        #     LayerNormPostAllGather         48 ->  39 us     -9   (writes half the bytes)
+        #     LayerNormPostAllGather         48 ->  39 us     -9
         #     qkvzab in-proj 2048x5120x2112 567 -> 553 us    -14   (BF16xBFP8 -> BFP8xBFP8)
         #     attention block             4,806 -> 4,336 us -470
         #     whole layer                 7,353 -> 6,889 us -464   (-6.3%)
         #     MLP block (control)         2,464 -> 2,470 us    +6   (noise)
-        # = -21.4ms per 2048-token chunk over 48 GDN layers x 31/32 chunks, taking the model-level
-        # attn_norm-gather line from 73.1ms (16.7% of prefill) to ~51.8ms.
-        # Cost: test_gdn_tp_prefill PCC 0.9992650 (in_bf16) -> 0.9991681 (in_bf8), i.e. -1e-4, the
-        # same order as the MLP's when ff_norm was narrowed and smaller than the gap between the two
-        # chunk kernels already shipping (fused vs seq adapter = 0.99915).
+        # = -21.4ms per 2048-token chunk over 48 GDN layers x 31/32 chunks; model-level attn_norm
+        # gather 73.1ms (16.7% of prefill) -> ~51.8ms.
+        # Cost: test_gdn_tp_prefill PCC 0.9992650 -> 0.9991681 (-1e-4), same order as ff_norm's.
         #
-        # NOTE the in-proj won only 14us, not the -149us the full-attention qkv matmul showed: at
-        # 59% FPU it is compute-bound, not bandwidth-bound (DRAM 71 -> 54 GB/s and the FLOPs are
-        # unchanged). That -149us must have been the output narrowing cascading downstream, which is
-        # exactly what the pin above declines. Unpinning is a real remaining lever, but it lands on
-        # a/b -> sigmoid/softplus -> the recurrent decay, so it needs a demo-level accuracy gate
-        # rather than a layer profile.
+        # The in-proj won only 14us, not the qkv matmul's -149us: at 59% FPU it
+        # is compute-bound (DRAM 71 -> 54 GB/s, FLOPs unchanged). That -149us was the output narrowing
+        # cascading downstream, which the pin declines. Unpinning is a real lever but lands on
+        # a/b -> sigmoid/softplus -> the recurrent decay, so it needs a demo-level accuracy gate.
         #
-        # Blocker (1) (the KV cache) is untouched, so full-attention layers still gather bf16 in
-        # every chunk -- 16 layers x 1,144us = 18.3ms/chunk still on the table behind a bf8 KV cache.
+        # Blocker (1) leaves 16 full-attention layers x 1,144us = 18.3ms/chunk on the table.
         self.attention_norm = self._make_norm(
             mesh_device,
             args,
@@ -147,47 +106,37 @@ class Qwen36DecoderLayer:
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
         self._fuse_ff_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices)
-        # MODEL-GATED, MLP-SCOPED. ff_norm's output is consumed by the MLP alone (forward() below
-        # deallocates it straight after feed_forward.forward), so narrowing it to bf8 cannot touch
-        # attention -- and it only takes effect on the POST-norm gather, which on a 1D mesh is
-        # is_distributed_norm == (dim > 4096 and prefill), i.e. the 27B and never the 9B. The dim
-        # test below is belt-and-braces for that (and keeps this greppable next to the other
-        # dim-gated tunings in this file); Blackhole never gathers here at all because
-        # mlp_gateup_agmm_enabled fuses the gather into the matmul there.
-        # WHY: at TP=8 that gather moves 2.62MB/device over ONE ETH link and is the single largest op
-        # in the 27B MLP block; bytes are the only lever that moves it (see prefill_norm_tuned.py).
-        # bf8 halves what the ring carries, and costs nothing: rms_norm_post_all_gather takes a
-        # dtype, so the narrowing happens inside the norm (which also got FASTER, 49 -> 39us,
-        # writing half the bytes). See prefill_norm_tuned.py for the numbers.
-        # The accuracy trade is the same one the down-proj already takes (mlp.py: in0 bf8, PCC
-        # 0.99978) and lands on the loosest matmuls in the layer -- gate/up are LoFi with bfp4 weights.
-        # TRIED bf8 -> bfp4 AND REJECTED (2026-08-20). One dtype value through this same plumbing,
-        # on the reasoning that the gather is bytes-bound on one ETH link and this activation's only
-        # consumer is gate/up, whose weights are already bfp4 at LoFi. The reasoning about PRECISION
-        # held up; the reasoning about BYTES did not. MEASURED (T3K TP=8, 27B, seq 2048):
+        # MODEL-GATED, MLP-SCOPED. ff_norm's output is consumed by the MLP alone (forward() deallocates
+        # it right after feed_forward.forward), so narrowing to bf8 cannot touch attention. It only
+        # takes effect on the POST-norm gather, which on a 1D mesh is is_distributed_norm ==
+        # (dim > 4096 and prefill) -- the 27B, never the 9B. The dim test is
+        # never gathers here (mlp_gateup_agmm_enabled fuses the gather into the matmul).
         #
+        # WHY: at TP=8 that gather moves 2.62MB/device over ONE ETH link, the
+        # block. bf8 halves the payload and costs nothing -- rms_norm_post_all_gather takes a dtype, so
+        # the norm itself also got faster (49 -> 39us). Accuracy trade matches the down-proj's
+        # (mlp.py in0 bf8, PCC 0.99978) and lands on the loosest matmuls in the layer.
+        #
+        # TRIED bf8 -> bfp4 AND REJECTED (2026-08-20). MEASURED (T3K TP=8, 27B, seq 2048):
         #     ff_norm gather   bf16 2.62MB/dev 1,144us | bf8 1.31MB 693us | bfp4 0.66MB 680us
+        # The second halving bought 13us, not the ~280 a bytes model predicts. Same capture:
+        # attention_norm (bf8, 692us) and ff_norm (bfp4, 680us) sit 12us apart carrying 2x different
+        # payloads -- both on a ~660-690us FLOOR. At 0.66MB over 7 hops in 680us
+        # of ~12.5, so what remains is per-hop latency and 7 sequential hops at get_num_links()==1 --
+        # not payload, and not chunks_per_sync (swept; tp_common.prefill_ccl_tuning). Whole change was
+        # -78us/layer = -5.0ms per 2048-token chunk (1.1% of prefill) against a projected -19ms.
         #
-        # i.e. the second halving bought 13us, not the ~280 a bytes model predicts. Corroborated in
-        # the SAME capture: attention_norm's gather (bf8, 692us) and ff_norm's (bfp4, 680us) sit 12us
-        # apart while carrying 2x different payloads. Both are on a ~660-690us FLOOR. At 0.66MB over
-        # 7 ring hops in 680us the link runs at ~7 GB/s of ~12.5, so what is left is per-hop latency
-        # and the 7 sequential hops on get_num_links()==1 -- NOT payload, and not chunks_per_sync
-        # either (swept; see tp_common.prefill_ccl_tuning). Whole change was -78us/layer = -5.0ms per
-        # 2048-token chunk (1.1% of prefill), against a projected -19ms.
+        # And the precision step is NOT free the way bf8 was. test_mlp_tp_prefill vs fp32 torch:
+        # bf16 0.9989521, bf8 0.9989442 (-8e-6), bfp4 0.9979378 (-1.0e-3) -- 130x the bf8 step, a
+        # 3rd-decimal move on the MLP block alone before compounding over 64 layers. If you re-try
+        # this, note mlp.py FLOORS gate/up's output at bf8 so the 4-bit mantissa cannot reach the
+        # SwiGLU accumulation; without that floor ttnn.linear propagates in0's dtype and you measure a
+        # different, worse trade.
         #
-        # And the precision step is NOT free the way the bf8 one was. test_mlp_tp_prefill vs an fp32
-        # torch reference: bf16 0.9989521, bf8 0.9989442 (-8e-6), bfp4 0.9979378 (-1.0e-3) -- 130x
-        # the bf8 step, a 3rd-decimal move, on the MLP block alone before compounding over 64 layers.
-        # 1.1% of prefill does not buy that. If you re-try this, note that mlp.py FLOORS gate/up's
-        # output at bf8 so the 4-bit mantissa cannot reach the SwiGLU accumulation -- without that
-        # floor ttnn.linear propagates in0's dtype and you are measuring a different, worse trade.
-        #
-        # THE LEVER THAT IS LEFT on these gathers is links/topology, not dtype: fewer hops, more
-        # links, or hiding the gather inside the matmul (all_gather_minimal_matmul_async, which is
-        # the Blackhole path and needs the C++ NOC-assignment fix for 8-row grids -- see
-        # tp_common.mlp_gateup_agmm_enabled). The same conclusion applies to attention_norm's gather:
-        # same op, same shape, same floor.
+        # THE LEVER LEFT is links/topology, not dtype: fewer hops, more links, or
+        # the matmul (all_gather_minimal_matmul_async -- Blackhole's path, needs the C++ NOC-assignment
+        # fix for 8-row grids, see tp_common.mlp_gateup_agmm_enabled). Same conclusion for
+        # attention_norm's gather: same op, same shape, same floor.
         _ff_gather_dtype = ttnn.bfloat8_b if (args.dim > 4096 and not is_blackhole()) else None
         self.ffn_norm = self._make_norm(
             mesh_device,

@@ -78,11 +78,11 @@ class VisionBlock(LightweightModule):
             ccl_kwargs=args.vision_ccl_kwargs,
             # fp32 dest accumulation on the norm's SHARDED path, SCOPED TO WORMHOLE 9B ON N300
             # (tp_common.wh_9b_n300_vision -- the vision-args variant, since VisionModelArgs.dim is
-            # the 1152 vision hidden size and cannot tell the 9B from the 27B). Off everywhere else.
+            # the 1152 vision hidden size, blind to 9B vs 27B). Off elsewhere.
             # Currently latent: nothing in qwen36 passes in_sharded=True, so this changes no live op
             # today. It exists so that enabling the sharded path later cannot silently drop the
             # fp32 accumulation that the interleaved path documents as non-optional for this tower
-            # (absmax 354 vs rms 0.65 swamps a bf16 running sum; worth +0.005 PCC at full depth).
+            # (absmax 354 vs rms 0.65 swamps a bf16 sum; +0.005 PCC at depth).
             sharded_fp32_acc=tpc.wh_9b_n300_vision(args),
         )
         self.attention_norm = DistributedLayerNorm(
