@@ -486,6 +486,24 @@ def test_topk_indices_tensor_dtype(W, index_dtype, device):
     assert_equal(torch.gather(torch_input, -1, indices), ttnn.to_torch(values))
 
 
+def test_topk_indices_tensor_labels_above_uint16_max(device):
+    k, W = 32, 16384
+    offset = 100_000
+    shape = [1, 1, 32, W]
+
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    labels = (torch.arange(W, dtype=torch.int64) + offset).expand(shape).contiguous()
+
+    ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    indices_tensor = ttnn.from_torch(labels, ttnn.uint32, layout=ttnn.Layout.TILE, device=device)
+
+    values, indices = ttnn.topk(ttnn_input, k, dim=-1, indices_tensor=indices_tensor)
+    indices = ttnn.to_torch(indices).to(torch.int64)
+
+    assert torch.all(indices > UINT16_MAX), "labels were truncated to 16 bits"
+    assert_equal(torch.gather(torch_input, -1, indices - offset), ttnn.to_torch(values))
+
+
 def test_topk_indices_tensor_too_narrow_raises(device, expect_error):
     # W is past 65535, so the op resolves the index dtype to UINT32 and sizes the index CB 32-bit,
     # but the payload here is UINT16. Reject rather than read a 16-bit tensor at a 32-bit stride.
