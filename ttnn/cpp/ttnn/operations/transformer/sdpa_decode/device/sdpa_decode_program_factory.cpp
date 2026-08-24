@@ -8,25 +8,33 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
-#include <map>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn/operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
-ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
+SdpaDecodeDeviceOperation::program_factory_t SdpaDecodeDeviceOperation::select_program_factory(
+    const operation_attributes_t&, const tensor_args_t&) {
+    return SdpaDecodeProgramFactory{};
+}
+
+ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodeProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
@@ -215,12 +223,8 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
                                      : true;
 
     // ========== Buffer Pointers & Metadata ==========
-    auto* q_buffer = input_tensor_q.buffer();
-    auto* k_buffer = input_tensor_k.buffer();
-    auto* v_buffer = input_tensor_v.buffer();
-    auto* out_buffer = output_tensor.buffer();
-
-    // Optional tensor buffers and metadata
+    // (Buffer* pointers no longer flow through runtime args — every tensor address is delivered by a
+    // TensorParameter binding. We still read the tensors' page-size / data-format metadata below.)
     Buffer* cur_pos_buffer = use_cur_pos_tensor ? cur_pos_tensor.value().buffer() : nullptr;
     Buffer* page_table_buffer = is_paged_attention ? page_table_tensor.value().buffer() : nullptr;
     const bool is_cur_pos_tensor_sharded = use_cur_pos_tensor && cur_pos_tensor.value().is_sharded();
@@ -386,7 +390,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // ========== Compute Configuration ==========
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
     const uint32_t max_dynamic_chunk_size = dst_size;
-    const uint32_t Sk_chunk_t_cb_size = Sk_chunk_t == 0 ? max_dynamic_chunk_size : Sk_chunk_t;
+    const uint32_t Sk_chunk_t_dfb_size = Sk_chunk_t == 0 ? max_dynamic_chunk_size : Sk_chunk_t;
 
     // Matmul block/subblock configuration for QK
     const uint32_t qk_in0_block_w = DHt;
@@ -418,9 +422,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
 
     // ========== Tile Counts for Circular Buffers ==========
     const uint32_t q_tiles = PNHt * DHt;
-    const uint32_t k_tiles = Sk_chunk_t_cb_size * DHt * 2;   // double buffer
-    const uint32_t v_tiles = Sk_chunk_t_cb_size * vDHt * 2;  // double buffer
-    const uint32_t qk_tiles = PNHt * Sk_chunk_t_cb_size;
+    const uint32_t k_tiles = Sk_chunk_t_dfb_size * DHt * 2;   // double buffer
+    const uint32_t v_tiles = Sk_chunk_t_dfb_size * vDHt * 2;  // double buffer
+    const uint32_t qk_tiles = PNHt * Sk_chunk_t_dfb_size;
     const uint32_t out_tiles = PNHt * vDHt;
     const uint32_t scale_tiles = 1;
     const uint32_t statistics_tiles = PNHt;
@@ -459,6 +463,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t scalar_tile_size = scalar_tile.get_tile_size(scalar_df);
     const uint32_t im_tile_size = im_tile.get_tile_size(im_df);
     const uint32_t stats_tile_size = stats_tile.get_tile_size(stats_df);
+    const uint32_t col_identity_tile_size = full_tile.get_tile_size(scalar_df);
 
     // ========== Debug Logging ==========
     log_debug(tt::LogOp, "Dimensions: B={}, PNH={}, S={}, DH={}, vDH={}, Bkv={}", B, PNH, S, DH, vDH, Bkv);
@@ -485,157 +490,13 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         use_attention_sink,
         use_half_tile);
 
-    // Print reducer core coordinates
-    log_debug(tt::LogOp, "Reducer cores ({}):", num_reducer_cores);
-    for (uint32_t i = 0; i < num_reducer_cores; ++i) {
-        log_debug(
-            tt::LogOp, "  reducer[{}]: physical=({}, {})", i, reduce_core_physical_xs[i], reduce_core_physical_ys[i]);
-    }
-
-    // Print output core coordinates
-    log_debug(tt::LogOp, "Output cores ({}):", num_output_cores);
-    for (uint32_t i = 0; i < num_output_cores; ++i) {
-        log_debug(
-            tt::LogOp, "  output[{}]: physical=({}, {})", i, output_core_physical_xs[i], output_core_physical_ys[i]);
-    }
-
-    // Print reduction group core coordinates
-    log_debug(tt::LogOp, "Reduction group cores ({}):", num_active_cores);
-    for (uint32_t i = 0; i < num_active_cores; ++i) {
-        log_debug(
-            tt::LogOp, "  group[{}]: physical=({}, {})", i, reduction_group_core_xs[i], reduction_group_core_ys[i]);
-    }
-
-    // ========== Program Descriptor ==========
-    ProgramDescriptor desc;
-
-    // ========== Circular Buffer Creation ==========
-    // Unified helper: tile!=nullptr sets tile_dims, buffer!=nullptr sets globally allocated address
-    auto add_cb = [&](CBIndex idx,
-                      uint32_t total_size,
-                      tt::DataFormat df,
-                      uint32_t page_size,
-                      const tt::tt_metal::Tile* tile = nullptr,
-                      Buffer* buffer = nullptr) {
-        CBFormatDescriptor format{
-            .buffer_index = static_cast<uint8_t>(idx),
-            .data_format = df,
-            .page_size = page_size,
-        };
-        if (tile != nullptr) {
-            format.tile = TileDescriptor{*tile};
-        }
-        CBDescriptor cb{
-            .total_size = total_size,
-            .core_ranges = core_grid,
-            .format_descriptors = {format},
-        };
-        if (buffer != nullptr) {
-            cb.buffer = buffer;
-        }
-        desc.cbs.push_back(std::move(cb));
-    };
-
-    // Input CBs
-    add_cb(CBIndex::c_0, q_tiles * q_tile_size, q_df, q_tile_size, &q_tile, q_locally_available ? q_buffer : nullptr);
-    add_cb(CBIndex::c_1, k_tiles * k_tile_size, k_df, k_tile_size);                        // K input
-    add_cb(CBIndex::c_2, v_tiles * v_tile_size, v_df, v_tile_size);                        // V input
-    add_cb(CBIndex::c_3, qk_tiles * mask_tile_size, mask_df, mask_tile_size, &mask_tile);  // attn_mask
-    if (use_attention_sink) {
-        add_cb(CBIndex::c_4, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    }
-    add_cb(CBIndex::c_5, scale_tiles * scalar_tile_size, scalar_df, scalar_tile_size, &scalar_tile);   // scale
-    add_cb(CBIndex::c_6, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);  // m_in
-    add_cb(CBIndex::c_7, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);  // l_in
-
-    // Optional input CBs (cur_pos and page_table - raw data, no tile dims)
-    if (use_cur_pos_tensor) {
-        // #44366: cur_pos is consumed by both the writer and compute kernels.
-        // A single shared CB races: whichever consumer pops first drains the
-        // count and the other hangs waiting for tiles. Use one CB per consumer
-        // — c_8 for the writer, c_15 for compute — each with capacity 1. The
-        // reader fills c_8 (from DRAM, or via the aliased sharded buffer)
-        // then does an L1->L1 copy into c_15.
-        add_cb(
-            CBIndex::c_8,
-            cur_pos_stick_size,
-            cur_pos_df,
-            cur_pos_stick_size,
-            nullptr,
-            is_cur_pos_tensor_sharded ? cur_pos_buffer : nullptr);
-        add_cb(CBIndex::c_15, cur_pos_stick_size, cur_pos_df, cur_pos_stick_size);
-    }
-    if (is_paged_attention) {
-        uint32_t page_table_cb_size = is_page_table_sharded ? B * page_table_stick_size : page_table_stick_size;
-        add_cb(
-            CBIndex::c_9,
-            page_table_cb_size,
-            page_table_df,
-            page_table_stick_size,
-            nullptr,
-            is_page_table_sharded ? page_table_buffer : nullptr);
-    }
-    add_cb(CBIndex::c_10, q_tiles * q_tile_size, q_df, q_tile_size, &q_tile);  // tilized Q
-
-    // Scalar/identity CBs
-    const uint32_t col_identity_tile_size = full_tile.get_tile_size(scalar_df);
-    add_cb(CBIndex::c_11, scale_tiles * col_identity_tile_size, scalar_df, col_identity_tile_size, &full_tile);
-    add_cb(CBIndex::c_12, scale_tiles * scalar_tile_size, scalar_df, scalar_tile_size, &scalar_tile);
-    if (sliding_window_size > 0) {
-        add_cb(CBIndex::c_13, qk_tiles * mask_tile_size, mask_df, mask_tile_size, &mask_tile);
-    }
-    // Block padding mask (when block_size < TILE_HEIGHT, masks zero-padded rows in each K tile)
-    if (has_block_padding) {
-        add_cb(CBIndex::c_14, qk_tiles * mask_tile_size, mask_df, mask_tile_size, &mask_tile);
-    }
-
-    // Intermediate CBs
-    add_cb(CBIndex::c_24, qk_tiles * im_tile_size, im_df, im_tile_size, &im_tile);
-    add_cb(CBIndex::c_25, out_tiles * im_tile_size, im_df, im_tile_size, &im_tile);
-    add_cb(CBIndex::c_26, out_tiles * im_tile_size, im_df, im_tile_size, &im_tile);
-    add_cb(CBIndex::c_27, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    add_cb(CBIndex::c_28, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    add_cb(CBIndex::c_29, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    add_cb(CBIndex::c_30, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    add_cb(CBIndex::c_31, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    add_cb(CBIndex::c_21, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    add_cb(CBIndex::c_22, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    add_cb(CBIndex::c_23, out_tiles * im_tile_size, im_df, im_tile_size, &im_tile);
-
-    // Output CBs
-    add_cb(CBIndex::c_16, out_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    add_cb(CBIndex::c_17, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    add_cb(CBIndex::c_18, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    if (intermed_output_tiles > 0) {
-        add_cb(CBIndex::c_19, intermed_output_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
-    }
-    add_cb(
-        CBIndex::c_20,
-        out_tiles * out_tile_size,
-        out_df,
-        out_tile_size,
-        &out_tile,
-        is_output_sharded ? out_buffer : nullptr);
-
     // ========== Kernel Scalars ==========
     const bfloat16 bfloat_identity_scalar(1.0f);
     const bfloat16 bfloat_zero_scalar(0.0f);
     const uint32_t packed_identity_scalar =
         pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
     const uint32_t packed_zero_scalar = pack_two_bfloat16_into_uint32({bfloat_zero_scalar, bfloat_zero_scalar});
-
     const uint32_t scale_packed = std::bit_cast<uint32_t>(scale);
-
-    // ========== Semaphores ==========
-    const uint32_t reducer_semaphore_id = 0;
-    const uint32_t output_semaphore_id = 1;
-    const uint32_t k_mcast_semaphore_id = 2;
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = reducer_semaphore_id, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = output_semaphore_id, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = k_mcast_semaphore_id, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
 
     // If q is sharded, directly read in q_chunk_size_bytes if q is row major or tilized but with full tiles
     // If q is tilized and want to use tiny tiles, this is ignored since we need to skip bottom half of tiles
@@ -643,194 +504,619 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         q_tiles * (tilize_q ? num_q_heads * TILE_WIDTH * input_tensor_q.element_size() : q_tile_size);
     const uint32_t reuse_k = (tensor_args.v.has_value() ? 0 : 1);
 
-    // ========== Compile Time Arguments ==========
-    std::vector<uint32_t> reader_compile_time_args_common = {
-        B,
-        PNHt,
-        St,
-        DHt,
-        vDHt,
-        Sk_chunk_t,
-        num_active_cores,
-        static_cast<uint32_t>(is_q_sharded),
-        num_cores_per_batch,
-        k_chunk_size,
-        cur_pos_stick_size,
-        static_cast<uint32_t>(is_paged_attention),
-        num_kv_heads,
-        page_block_size_t,
-        Bkv,
-        q_heads_parallel_factor,
-        num_cores_per_head,
-        num_heads_per_core,
-        num_output_cores,
-        static_cast<uint32_t>(is_causal),
-        static_cast<uint32_t>(use_attention_mask),
-        static_cast<uint32_t>(use_attention_sink),
-        max_dynamic_chunk_size,
-        static_cast<uint32_t>(tilize_q),
-        reuse_k,
-        static_cast<uint32_t>(use_half_tile),
-        q_chunk_size_bytes,
-        static_cast<uint32_t>(is_cur_pos_tensor_sharded),
-        static_cast<uint32_t>(is_page_table_sharded),
-        full_tile.get_tile_size(q_df),
-        sliding_window_size,
-        original_block_size,
-        k_mcast_semaphore_id,
-        static_cast<uint32_t>(q_locally_available),
-        static_cast<uint32_t>(use_col_major_group_indexing),  // use_k_mcast
-        Bmask,
-        capacity_t,
+    // ======================================================================================
+    //  Metal 2.0 spec construction
+    // ======================================================================================
+
+    // ---- Kernel / resource names ----
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+
+    const TensorParamName Q{"q"};
+    const TensorParamName K{"k"};
+    const TensorParamName VP{"v"};
+    const TensorParamName CUR_POS{"cur_pos"};
+    const TensorParamName PAGE_TABLE{"page_table"};
+    const TensorParamName ATTN_MASK{"attn_mask"};
+    const TensorParamName ATTN_SINK{"attn_sink"};
+    const TensorParamName OUT_T{"out"};
+
+    const SemaphoreSpecName SEM_REDUCER{"reducer"};
+    const SemaphoreSpecName SEM_OUTPUT{"output"};
+    const SemaphoreSpecName SEM_K_MCAST{"k_mcast"};
+
+    const DFBSpecName DFB_Q_IN{"q_in"};
+    const DFBSpecName DFB_K_IN{"k_in"};
+    const DFBSpecName DFB_V_IN{"v_in"};
+    const DFBSpecName DFB_MASK_IN{"mask_in"};
+    const DFBSpecName DFB_ATTN_SINK{"attention_sink"};
+    const DFBSpecName DFB_IDENTITY_SCALE{"identity_scale_in"};
+    const DFBSpecName DFB_M_IN{"m_in"};
+    const DFBSpecName DFB_L_IN{"l_in"};
+    const DFBSpecName DFB_WRITER_CUR_POS{"writer_cur_pos"};
+    const DFBSpecName DFB_PAGE_TABLE{"page_table"};
+    const DFBSpecName DFB_Q_RM{"q_rm"};
+    const DFBSpecName DFB_COL_IDENTITY{"col_identity"};
+    const DFBSpecName DFB_ZERO_IN{"zero_in"};
+    const DFBSpecName DFB_SLIDING_MASK{"sliding_window_mask_in"};
+    const DFBSpecName DFB_BLOCK_PAD_MASK{"block_pad_mask"};
+    const DFBSpecName DFB_COMPUTE_CUR_POS{"compute_cur_pos"};
+    const DFBSpecName DFB_OUT_O{"out_o"};
+    const DFBSpecName DFB_OUT_M{"out_m"};
+    const DFBSpecName DFB_OUT_L{"out_l"};
+    const DFBSpecName DFB_INTERMED_OUT{"intermed_out"};
+    const DFBSpecName DFB_OUT{"out"};
+    const DFBSpecName DFB_QK_IM{"qk_im"};
+    const DFBSpecName DFB_OUT_IM{"out_im"};
+    const DFBSpecName DFB_OUT_ACC_IM{"out_accumulate_im"};
+    const DFBSpecName DFB_MAX_1{"max_1"};
+    const DFBSpecName DFB_MAX_2{"max_2"};
+    const DFBSpecName DFB_SUM_1{"sum_1"};
+    const DFBSpecName DFB_SUM_2{"sum_2"};
+    const DFBSpecName DFB_EXP_MAX_DIFF{"exp_max_diff"};
+    const DFBSpecName DFB_PREV_SUM_2{"prev_sum_2"};
+    const DFBSpecName DFB_EXP_MAX_DIFF_2{"exp_max_diff_2"};
+    const DFBSpecName DFB_OUT_ACC_IM_2{"out_accumulate_im_2"};
+
+    // ---- DFB specs + per-kernel endpoint bindings ----
+    Group<DataflowBufferSpec> dfbs;
+    Group<DFBBinding> reader_dfb;
+    Group<DFBBinding> writer_dfb;
+    Group<DFBBinding> compute_dfb;
+
+    auto add_dfb = [&](const DFBSpecName& name,
+                       uint32_t entry_size,
+                       uint32_t num_entries,
+                       tt::DataFormat df,
+                       const tt::tt_metal::Tile* tile,
+                       std::optional<TensorParamName> borrowed = std::nullopt,
+                       bool multi = false) {
+        DataflowBufferSpec s{
+            .unique_id = name,
+            .entry_size = entry_size,
+            .num_entries = num_entries,
+            .data_format_metadata = df,
+        };
+        if (tile != nullptr) {
+            s.tile_format_metadata = *tile;
+        }
+        if (borrowed.has_value()) {
+            s.borrowed_from = borrowed;
+        }
+        if (multi) {
+            s.advanced_options.allow_instance_multi_binding = true;
+        }
+        dfbs.push_back(std::move(s));
     };
-    tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
-    tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
-    tt_metal::TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args_common);
-    tt_metal::TensorAccessorArgs(attn_mask ? attn_mask->buffer() : nullptr).append_to(reader_compile_time_args_common);
-    tt_metal::TensorAccessorArgs(cur_pos_tensor ? cur_pos_tensor->buffer() : nullptr)
-        .append_to(reader_compile_time_args_common);
-    tt_metal::TensorAccessorArgs(page_table_tensor ? page_table_tensor->buffer() : nullptr)
-        .append_to(reader_compile_time_args_common);
-    if (use_attention_sink) {
-        tt_metal::TensorAccessorArgs(*attention_sink->buffer()).append_to(reader_compile_time_args_common);
+    auto bind = [](Group<DFBBinding>& g, const DFBSpecName& name, std::string accessor, DFBEndpointType role) {
+        g.push_back(DFBBinding{
+            .dfb_spec_name = name,
+            .accessor_name = std::move(accessor),
+            .endpoint_type = role,
+        });
+    };
+
+    // c_0 q_in / c_10 q_rm — config-flip.
+    //   tilize_q  : reader fills q_rm (P); compute tilizes q_rm->q_in (q_in self-loop), consumes q_rm.
+    //   !tilize_q : reader fills q_in (P); compute consumes q_in. q_rm not used (dropped).
+    add_dfb(
+        DFB_Q_IN,
+        q_tile_size,
+        q_tiles,
+        q_df,
+        &q_tile,
+        q_locally_available ? std::optional<TensorParamName>(Q) : std::nullopt);
+    if (tilize_q) {
+        add_dfb(
+            DFB_Q_RM,
+            q_tile_size,
+            q_tiles,
+            q_df,
+            &q_tile,
+            q_locally_available ? std::optional<TensorParamName>(Q) : std::nullopt);
+        bind(reader_dfb, DFB_Q_RM, "q_rm", DFBEndpointType::PRODUCER);
+        bind(compute_dfb, DFB_Q_RM, "q_rm", DFBEndpointType::CONSUMER);
+        bind(compute_dfb, DFB_Q_IN, "q_in", DFBEndpointType::PRODUCER);
+        bind(compute_dfb, DFB_Q_IN, "q_in", DFBEndpointType::CONSUMER);
     } else {
-        tt_metal::TensorAccessorArgs(static_cast<const Buffer*>(nullptr)).append_to(reader_compile_time_args_common);
+        bind(reader_dfb, DFB_Q_IN, "q_in", DFBEndpointType::PRODUCER);
+        bind(compute_dfb, DFB_Q_IN, "q_in", DFBEndpointType::CONSUMER);
     }
 
-    std::vector<uint32_t> writer_compile_time_args_common = {
-        B,
-        PNHt,
-        St,
-        DHt,
-        vDHt,
-        Sk_chunk_t,
-        packed_identity_scalar,
-        packed_zero_scalar,
-        scale_packed,
-        num_cores_per_batch,
-        num_active_cores,
-        reducer_semaphore_id,
-        output_semaphore_id,
-        static_cast<uint32_t>(is_output_sharded),
-        k_chunk_size,
-        num_q_heads,
-        num_kv_heads,
-        num_cores_per_head,
-        num_heads_per_core,
-        num_reducer_cores,
-        num_output_cores,
-        output_tensor.element_size(),
-        static_cast<uint32_t>(is_causal),
-        max_dynamic_chunk_size,
-        q_heads_parallel_factor,
-        sliding_window_size,
-        num_tree_reduction_rounds,
-        original_block_size,
+    // c_1 k_in / c_2 v_in — reader produces, compute consumes.
+    add_dfb(DFB_K_IN, k_tile_size, k_tiles, k_df, nullptr);
+    bind(reader_dfb, DFB_K_IN, "k_in", DFBEndpointType::PRODUCER);
+    bind(compute_dfb, DFB_K_IN, "k_in", DFBEndpointType::CONSUMER);
+    add_dfb(DFB_V_IN, v_tile_size, v_tiles, v_df, nullptr);
+    bind(reader_dfb, DFB_V_IN, "v_in", DFBEndpointType::PRODUCER);
+    bind(compute_dfb, DFB_V_IN, "v_in", DFBEndpointType::CONSUMER);
+
+    // c_3 mask_in — producer depends on config; compute always references it (matmul mask arg).
+    add_dfb(DFB_MASK_IN, mask_tile_size, qk_tiles, mask_df, &mask_tile);
+    if (is_causal) {
+        bind(writer_dfb, DFB_MASK_IN, "mask_in", DFBEndpointType::PRODUCER);
+        bind(compute_dfb, DFB_MASK_IN, "mask_in", DFBEndpointType::CONSUMER);
+    } else if (use_attention_mask) {
+        bind(reader_dfb, DFB_MASK_IN, "mask_in", DFBEndpointType::PRODUCER);
+        bind(compute_dfb, DFB_MASK_IN, "mask_in", DFBEndpointType::CONSUMER);
+    } else {
+        // No mask produced/consumed via FIFO; compute only references the handle. Self-loop on compute.
+        bind(compute_dfb, DFB_MASK_IN, "mask_in", DFBEndpointType::PRODUCER);
+        bind(compute_dfb, DFB_MASK_IN, "mask_in", DFBEndpointType::CONSUMER);
+    }
+
+    // c_4 attention_sink — reader produces, compute consumes (conditional).
+    if (use_attention_sink) {
+        add_dfb(DFB_ATTN_SINK, stats_tile_size, statistics_tiles, stats_df, &stats_tile);
+        bind(reader_dfb, DFB_ATTN_SINK, "attention_sink", DFBEndpointType::PRODUCER);
+        bind(compute_dfb, DFB_ATTN_SINK, "attention_sink", DFBEndpointType::CONSUMER);
+    }
+
+    // c_5 identity_scale — writer produces, compute consumes.
+    add_dfb(DFB_IDENTITY_SCALE, scalar_tile_size, scale_tiles, scalar_df, &scalar_tile);
+    bind(writer_dfb, DFB_IDENTITY_SCALE, "identity_scale_in", DFBEndpointType::PRODUCER);
+    bind(compute_dfb, DFB_IDENTITY_SCALE, "identity_scale_in", DFBEndpointType::CONSUMER);
+
+    // c_6 m_in / c_7 l_in — writer produces (receives child stats), compute consumes.
+    add_dfb(DFB_M_IN, stats_tile_size, statistics_tiles, stats_df, &stats_tile);
+    bind(writer_dfb, DFB_M_IN, "m_in", DFBEndpointType::PRODUCER);
+    bind(compute_dfb, DFB_M_IN, "m_in", DFBEndpointType::CONSUMER);
+    add_dfb(DFB_L_IN, stats_tile_size, statistics_tiles, stats_df, &stats_tile);
+    bind(writer_dfb, DFB_L_IN, "l_in", DFBEndpointType::PRODUCER);
+    bind(compute_dfb, DFB_L_IN, "l_in", DFBEndpointType::CONSUMER);
+
+    // c_8 writer_cur_pos / c_15 compute_cur_pos — reader produces, writer/compute consume (conditional).
+    if (use_cur_pos_tensor) {
+        add_dfb(
+            DFB_WRITER_CUR_POS,
+            cur_pos_stick_size,
+            1,
+            cur_pos_df,
+            nullptr,
+            is_cur_pos_tensor_sharded ? std::optional<TensorParamName>(CUR_POS) : std::nullopt);
+        bind(reader_dfb, DFB_WRITER_CUR_POS, "writer_cur_pos", DFBEndpointType::PRODUCER);
+        bind(writer_dfb, DFB_WRITER_CUR_POS, "cur_pos", DFBEndpointType::CONSUMER);
+        add_dfb(DFB_COMPUTE_CUR_POS, cur_pos_stick_size, 1, cur_pos_df, nullptr);
+        bind(reader_dfb, DFB_COMPUTE_CUR_POS, "compute_cur_pos", DFBEndpointType::PRODUCER);
+        bind(compute_dfb, DFB_COMPUTE_CUR_POS, "cur_pos", DFBEndpointType::CONSUMER);
+    }
+
+    // c_9 page_table — reader fills + raw-reads its own buffer (self-loop) (conditional).
+    if (is_paged_attention) {
+        uint32_t page_table_num_entries = is_page_table_sharded ? B : 1;
+        add_dfb(
+            DFB_PAGE_TABLE,
+            page_table_stick_size,
+            page_table_num_entries,
+            page_table_df,
+            nullptr,
+            is_page_table_sharded ? std::optional<TensorParamName>(PAGE_TABLE) : std::nullopt);
+        bind(reader_dfb, DFB_PAGE_TABLE, "page_table", DFBEndpointType::PRODUCER);
+        bind(reader_dfb, DFB_PAGE_TABLE, "page_table", DFBEndpointType::CONSUMER);
+    }
+
+    // c_11 col_identity — writer produces; no consumer in sdpa_decode's compute (dead-but-kept).
+    // (It is consumed by sdpa *prefill*'s matmul_reduce, so this reads as carried-over dead code from a
+    // matmul-based reduce path. Removing it is an ops-team cleanup, not a port drop, so it is preserved
+    // here as a single-toucher self-loop with zero functional effect.)
+    add_dfb(DFB_COL_IDENTITY, col_identity_tile_size, scale_tiles, scalar_df, &full_tile);
+    bind(writer_dfb, DFB_COL_IDENTITY, "col_identity", DFBEndpointType::PRODUCER);
+    bind(writer_dfb, DFB_COL_IDENTITY, "col_identity", DFBEndpointType::CONSUMER);
+
+    // c_12 zero_in — writer produces, compute consumes.
+    add_dfb(DFB_ZERO_IN, scalar_tile_size, scale_tiles, scalar_df, &scalar_tile);
+    bind(writer_dfb, DFB_ZERO_IN, "zero_in", DFBEndpointType::PRODUCER);
+    bind(compute_dfb, DFB_ZERO_IN, "zero_in", DFBEndpointType::CONSUMER);
+
+    // c_13 sliding_window_mask — writer produces, compute consumes (conditional).
+    if (sliding_window_size > 0) {
+        add_dfb(DFB_SLIDING_MASK, mask_tile_size, qk_tiles, mask_df, &mask_tile);
+        bind(writer_dfb, DFB_SLIDING_MASK, "sliding_window_mask_in", DFBEndpointType::PRODUCER);
+        bind(compute_dfb, DFB_SLIDING_MASK, "sliding_window_mask_in", DFBEndpointType::CONSUMER);
+    }
+
+    // c_14 block_pad_mask — writer produces, compute consumes (conditional).
+    if (has_block_padding) {
+        add_dfb(DFB_BLOCK_PAD_MASK, mask_tile_size, qk_tiles, mask_df, &mask_tile);
+        bind(writer_dfb, DFB_BLOCK_PAD_MASK, "block_pad_mask", DFBEndpointType::PRODUCER);
+        bind(compute_dfb, DFB_BLOCK_PAD_MASK, "block_pad_mask", DFBEndpointType::CONSUMER);
+    }
+
+    // c_16 out_o/out_worker — tree-reduction multi-binding (writer P+C, compute P+C).
+    add_dfb(DFB_OUT_O, stats_tile_size, out_tiles, stats_df, &stats_tile, std::nullopt, /*multi=*/true);
+    bind(writer_dfb, DFB_OUT_O, "out_o", DFBEndpointType::PRODUCER);
+    bind(writer_dfb, DFB_OUT_O, "out_worker", DFBEndpointType::CONSUMER);
+    bind(compute_dfb, DFB_OUT_O, "out_o", DFBEndpointType::PRODUCER);
+    bind(compute_dfb, DFB_OUT_O, "out_o", DFBEndpointType::CONSUMER);
+
+    // c_17 out_m / c_18 out_l — compute produces, writer consumes.
+    add_dfb(DFB_OUT_M, stats_tile_size, statistics_tiles, stats_df, &stats_tile);
+    bind(compute_dfb, DFB_OUT_M, "out_m", DFBEndpointType::PRODUCER);
+    bind(writer_dfb, DFB_OUT_M, "out_m", DFBEndpointType::CONSUMER);
+    add_dfb(DFB_OUT_L, stats_tile_size, statistics_tiles, stats_df, &stats_tile);
+    bind(compute_dfb, DFB_OUT_L, "out_l", DFBEndpointType::PRODUCER);
+    bind(writer_dfb, DFB_OUT_L, "out_l", DFBEndpointType::CONSUMER);
+
+    // c_19 intermed_out — writer raw cross-core read/write (self-loop) (conditional).
+    if (intermed_output_tiles > 0) {
+        add_dfb(DFB_INTERMED_OUT, stats_tile_size, intermed_output_tiles, stats_df, &stats_tile);
+        bind(writer_dfb, DFB_INTERMED_OUT, "intermed_out", DFBEndpointType::PRODUCER);
+        bind(writer_dfb, DFB_INTERMED_OUT, "intermed_out", DFBEndpointType::CONSUMER);
+    }
+
+    // c_20 out — compute produces, writer consumes (final output shard).
+    add_dfb(
+        DFB_OUT,
+        out_tile_size,
+        out_tiles,
+        out_df,
+        &out_tile,
+        is_output_sharded ? std::optional<TensorParamName>(OUT_T) : std::nullopt);
+    bind(compute_dfb, DFB_OUT, "out", DFBEndpointType::PRODUCER);
+    bind(writer_dfb, DFB_OUT, "out", DFBEndpointType::CONSUMER);
+
+    // c_21..c_31 compute intermediates — compute self-loop.
+    auto add_compute_intermediate = [&](const DFBSpecName& name,
+                                        std::string accessor,
+                                        uint32_t entry,
+                                        uint32_t n,
+                                        tt::DataFormat df,
+                                        const tt::tt_metal::Tile* tile) {
+        add_dfb(name, entry, n, df, tile);
+        bind(compute_dfb, name, accessor, DFBEndpointType::PRODUCER);
+        bind(compute_dfb, name, std::move(accessor), DFBEndpointType::CONSUMER);
     };
-    tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
+    add_compute_intermediate(DFB_QK_IM, "qk_im", im_tile_size, qk_tiles, im_df, &im_tile);
+    add_compute_intermediate(DFB_OUT_IM, "out_im", im_tile_size, out_tiles, im_df, &im_tile);
+    add_compute_intermediate(DFB_OUT_ACC_IM, "out_accumulate_im", im_tile_size, out_tiles, im_df, &im_tile);
+    add_compute_intermediate(DFB_MAX_1, "max_1", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
+    add_compute_intermediate(DFB_MAX_2, "max_2", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
+    add_compute_intermediate(DFB_SUM_1, "sum_1", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
+    add_compute_intermediate(DFB_SUM_2, "sum_2", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
+    add_compute_intermediate(
+        DFB_EXP_MAX_DIFF, "exp_max_diff", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
+    add_compute_intermediate(DFB_PREV_SUM_2, "prev_sum_2", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
+    add_compute_intermediate(
+        DFB_EXP_MAX_DIFF_2, "exp_max_diff_2", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
+    add_compute_intermediate(DFB_OUT_ACC_IM_2, "out_accumulate_im_2", im_tile_size, out_tiles, im_df, &im_tile);
 
-    std::vector<uint32_t> compute_compile_time_args_common = {
-        St,
-        DHt,
-        vDHt,
-        PNHt,
-        Sk_chunk_t,
-        qk_in0_block_w,
-        qk_out_subblock_w,
-        qk_out_subblock_h,
-        qk_in0_num_subblocks,
-        qk_in1_num_subblocks,
-        qk_num_blocks,
-        out_in0_block_w,
-        out_out_subblock_w,
-        out_out_subblock_h,
-        out_in0_num_subblocks,
-        out_in1_num_subblocks,
-        out_num_blocks,
-        num_cores_per_batch,
-        k_chunk_size,
-        num_cores_per_head,
-        num_heads_per_core,
-        static_cast<uint32_t>(is_causal),
-        static_cast<uint32_t>(use_attention_mask),
-        static_cast<uint32_t>(use_attention_sink),
-        max_dynamic_chunk_size,
-        static_cast<uint32_t>(tilize_q),
-        q_heads_parallel_factor,
-        static_cast<uint32_t>(use_half_tile),
-        scale_packed,
-        sliding_window_size,
-        num_tree_reduction_rounds,
-        original_block_size,
+    // ---- Tensor parameters + bindings ----
+    Group<TensorParameter> tensor_params;
+    Group<TensorBinding> reader_tensors;
+    Group<TensorBinding> writer_tensors;
+    auto add_tensor = [&](const TensorParamName& name, const ttnn::Tensor& t) {
+        tensor_params.push_back(TensorParameter{.unique_id = name, .spec = t.tensor_spec()});
+    };
+    // Q — reader binds via TensorAccessor except when locally available (borrowed into q_in/q_rm).
+    add_tensor(Q, input_tensor_q);
+    if (!q_locally_available) {
+        reader_tensors.push_back(TensorBinding{.tensor_parameter_name = Q, .accessor_name = "q"});
+    }
+    add_tensor(K, input_tensor_k);
+    reader_tensors.push_back(TensorBinding{.tensor_parameter_name = K, .accessor_name = "k"});
+    // V — only an independent tensor read when !reuse_k. Under reuse_k (MLA) V rides on K's L1.
+    if (!reuse_k) {
+        add_tensor(VP, tensor_args.v.value());
+        reader_tensors.push_back(TensorBinding{.tensor_parameter_name = VP, .accessor_name = "v"});
+    }
+    if (use_cur_pos_tensor && !is_cur_pos_tensor_sharded) {
+        add_tensor(CUR_POS, cur_pos_tensor.value());
+        reader_tensors.push_back(TensorBinding{.tensor_parameter_name = CUR_POS, .accessor_name = "cur_pos"});
+    } else if (use_cur_pos_tensor) {
+        // sharded: borrowed into c_8; borrow keeps the parameter "used" with no TensorBinding.
+        add_tensor(CUR_POS, cur_pos_tensor.value());
+    }
+    if (is_paged_attention && !is_page_table_sharded) {
+        add_tensor(PAGE_TABLE, page_table_tensor.value());
+        reader_tensors.push_back(TensorBinding{.tensor_parameter_name = PAGE_TABLE, .accessor_name = "page_table"});
+    } else if (is_paged_attention) {
+        // sharded: borrowed into c_9.
+        add_tensor(PAGE_TABLE, page_table_tensor.value());
+    }
+    if (use_attention_mask) {
+        add_tensor(ATTN_MASK, attn_mask.value());
+        reader_tensors.push_back(TensorBinding{.tensor_parameter_name = ATTN_MASK, .accessor_name = "attn_mask"});
+    }
+    if (use_attention_sink) {
+        add_tensor(ATTN_SINK, attention_sink.value());
+        reader_tensors.push_back(TensorBinding{.tensor_parameter_name = ATTN_SINK, .accessor_name = "attention_sink"});
+    }
+    add_tensor(OUT_T, output_tensor);
+    if (!is_output_sharded) {
+        writer_tensors.push_back(TensorBinding{.tensor_parameter_name = OUT_T, .accessor_name = "out"});
+    }
+    // Note: when output is sharded, c_20 borrows from OUT_T; the writer still writes the shard via the
+    // borrowed DFB / peer reads. The writer's out_writer TensorAccessor is only used on the !sharded path,
+    // so it is bound only there. On the sharded path OUT_T stays "used" via the borrow.
+
+    // ---- Semaphores + bindings ----
+    Group<SemaphoreSpec> semaphores;
+    Group<SemaphoreBinding> reader_sems;
+    Group<SemaphoreBinding> writer_sems;
+    NodeRangeSet active_node_set = [&] {
+        std::vector<CoreRange> ranges;
+        ranges.reserve(core_group.size());
+        for (const auto& c : core_group) {
+            ranges.emplace_back(c, c);
+        }
+        return CoreRangeSet(ranges);
+    }();
+    semaphores.push_back(SemaphoreSpec{.unique_id = SEM_REDUCER, .target_nodes = active_node_set});
+    semaphores.push_back(SemaphoreSpec{.unique_id = SEM_OUTPUT, .target_nodes = active_node_set});
+    semaphores.push_back(SemaphoreSpec{.unique_id = SEM_K_MCAST, .target_nodes = active_node_set});
+    reader_sems.push_back(SemaphoreBinding{.semaphore_spec_name = SEM_K_MCAST, .accessor_name = "k_mcast"});
+    writer_sems.push_back(SemaphoreBinding{.semaphore_spec_name = SEM_REDUCER, .accessor_name = "reducer"});
+    writer_sems.push_back(SemaphoreBinding{.semaphore_spec_name = SEM_OUTPUT, .accessor_name = "output"});
+
+    // ---- Named compile-time args ----
+    KernelSpec::CompileTimeArgs reader_cta{
+        {"B", B},
+        {"PNHt", PNHt},
+        {"St", St},
+        {"DHt", DHt},
+        {"vDHt", vDHt},
+        {"Sk_chunk_t", Sk_chunk_t},
+        {"num_cores", num_active_cores},
+        {"is_q_sharded", static_cast<uint32_t>(is_q_sharded)},
+        {"num_cores_per_batch", num_cores_per_batch},
+        {"k_chunk_size", k_chunk_size},
+        {"index_stick_size_B", cur_pos_stick_size},
+        {"num_kv_heads", num_kv_heads},
+        {"block_size_t", page_block_size_t},
+        {"Bkv", Bkv},
+        {"q_heads_parallel_factor", q_heads_parallel_factor},
+        {"num_cores_per_head", num_cores_per_head},
+        {"num_heads_per_core", num_heads_per_core},
+        {"num_output_cores", num_output_cores},
+        {"max_dynamic_chunk_size", max_dynamic_chunk_size},
+        {"reuse_k", reuse_k},
+        {"use_half_tile", static_cast<uint32_t>(use_half_tile)},
+        {"q_chunk_size_bytes", q_chunk_size_bytes},
+        {"sliding_window_size", sliding_window_size},
+        {"original_block_size", original_block_size},
+        {"Bmask", Bmask},
+        {"capacity_t", capacity_t},
+        {"use_k_mcast", static_cast<uint32_t>(use_col_major_group_indexing)},
+    };
+    KernelSpec::CompileTimeArgs writer_cta{
+        {"B", B},
+        {"PNHt", PNHt},
+        {"St", St},
+        {"DHt", DHt},
+        {"vDHt", vDHt},
+        {"Sk_chunk_t", Sk_chunk_t},
+        {"identity_scalar_packed", packed_identity_scalar},
+        {"zero_scalar_packed", packed_zero_scalar},
+        {"scale_val", scale_packed},
+        {"num_cores_per_batch", num_cores_per_batch},
+        {"num_cores", num_active_cores},
+        {"k_chunk_size", k_chunk_size},
+        {"num_q_heads", num_q_heads},
+        {"num_kv_heads", num_kv_heads},
+        {"num_cores_per_head", num_cores_per_head},
+        {"num_heads_per_core", num_heads_per_core},
+        {"num_reducer_cores", num_reducer_cores},
+        {"num_output_cores", num_output_cores},
+        {"ELEMENT_SIZE", static_cast<uint32_t>(output_tensor.element_size())},
+        {"max_dynamic_chunk_size", max_dynamic_chunk_size},
+        {"q_heads_parallel_factor", q_heads_parallel_factor},
+        {"sliding_window_size", sliding_window_size},
+        {"num_tree_reduction_rounds", num_tree_reduction_rounds},
+        {"original_block_size", original_block_size},
+    };
+    KernelSpec::CompileTimeArgs compute_cta{
+        {"St", St},
+        {"DHt", DHt},
+        {"vDHt", vDHt},
+        {"Sq_chunk_t", PNHt},
+        {"Sk_chunk_t", Sk_chunk_t},
+        {"qk_in0_block_w", qk_in0_block_w},
+        {"qk_subblock_w", qk_out_subblock_w},
+        {"qk_subblock_h", qk_out_subblock_h},
+        {"qk_in0_num_subblocks", qk_in0_num_subblocks},
+        {"qk_in1_num_subblocks", qk_in1_num_subblocks},
+        {"qk_num_blocks", qk_num_blocks},
+        {"out_in0_block_w", out_in0_block_w},
+        {"out_subblock_w", out_out_subblock_w},
+        {"out_subblock_h", out_out_subblock_h},
+        {"out_in0_num_subblocks", out_in0_num_subblocks},
+        {"out_in1_num_subblocks", out_in1_num_subblocks},
+        {"out_num_blocks", out_num_blocks},
+        {"num_cores_per_head", num_cores_per_head},
+        {"num_heads_per_core", num_heads_per_core},
+        {"max_dynamic_chunk_size", max_dynamic_chunk_size},
+        {"q_heads_parallel_factor", q_heads_parallel_factor},
+        {"use_half_tile", static_cast<uint32_t>(use_half_tile)},
+        {"scale_fp32", scale_packed},
+        {"sliding_window_size", sliding_window_size},
+        {"num_tree_reduction_rounds", num_tree_reduction_rounds},
+        {"original_block_size", original_block_size},
     };
 
-    // ========== Compute Defines ==========
-    std::map<std::string, std::string> compute_defines;
-    compute_defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    compute_defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
-    compute_defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
-
+    // ---- Preprocessor defines (config-gated resource references) ----
+    KernelSpec::CompilerOptions::Defines reader_defines;
+    KernelSpec::CompilerOptions::Defines writer_defines;
+    KernelSpec::CompilerOptions::Defines compute_defines;
+    auto set_flag = [](KernelSpec::CompilerOptions::Defines& d, const char* name, bool on) {
+        if (on) {
+            d.insert({name, "1"});
+        }
+    };
+    // Reader
+    set_flag(reader_defines, "IS_CAUSAL", is_causal);
+    set_flag(reader_defines, "USE_ATTENTION_MASK", use_attention_mask);
+    set_flag(reader_defines, "USE_ATTENTION_SINK", use_attention_sink);
+    set_flag(reader_defines, "IS_PAGED_ATTENTION", is_paged_attention);
+    set_flag(reader_defines, "USE_CUR_POS_TENSOR", use_cur_pos_tensor);
+    set_flag(reader_defines, "TILIZE_Q", tilize_q);
+    set_flag(reader_defines, "Q_LOCALLY_AVAILABLE", q_locally_available);
+    set_flag(reader_defines, "IS_CUR_POS_TENSOR_SHARDED", is_cur_pos_tensor_sharded);
+    set_flag(reader_defines, "IS_PAGE_TABLE_SHARDED", is_page_table_sharded);
+    set_flag(reader_defines, "REUSE_K", reuse_k != 0);
+    // Writer
+    set_flag(writer_defines, "IS_CAUSAL", is_causal);
+    set_flag(writer_defines, "IS_OUT_SHARDED", is_output_sharded);
+    set_flag(writer_defines, "USE_CUR_POS_TENSOR", use_cur_pos_tensor);
+    set_flag(writer_defines, "SLIDING_WINDOW", sliding_window_size > 0);
+    set_flag(writer_defines, "HAS_INTERMED_OUT", intermed_output_tiles > 0);
+    // Compute
+    compute_defines.insert({"EXP_APPROX_MODE", std::to_string(exp_approx_mode)});
+    compute_defines.insert({"DHT_GRANULARITY", std::to_string(dht_granularity)});
+    compute_defines.insert({"LOG2_DHT_GRANULARITY", std::to_string(log2_dht_granularity)});
     if (Sk_chunk_t > 0) {
         auto add_granularity = [&](const char* name, uint32_t value) {
             uint32_t log2_val = static_cast<uint32_t>(std::log2(value));
             TT_FATAL(value == (1u << log2_val), "{} ({}) must be power of 2", name, value);
-            compute_defines[name] = std::to_string(value);
-            compute_defines[std::string("LOG2_") + name] = std::to_string(log2_val);
+            compute_defines.insert({name, std::to_string(value)});
+            compute_defines.insert({std::string("LOG2_") + name, std::to_string(log2_val)});
         };
         add_granularity("SUB_EXP_GRANULARITY", std::min(Sk_chunk_t, dst_size));
         add_granularity("MUL_BCAST_GRANULARITY", std::min(PNHt * Sk_chunk_t, dst_size));
         add_granularity("STATS_GRANULARITY", std::min(Sk_chunk_t, dst_size));
     } else {
-        compute_defines["DYNAMIC_CHUNK_SIZE"] = "1";
+        compute_defines.insert({"DYNAMIC_CHUNK_SIZE", "1"});
     }
+    set_flag(compute_defines, "IS_CAUSAL", is_causal);
+    set_flag(compute_defines, "USE_ATTENTION_MASK", use_attention_mask);
+    set_flag(compute_defines, "USE_ATTENTION_SINK", use_attention_sink);
+    set_flag(compute_defines, "TILIZE_Q", tilize_q);
+    set_flag(compute_defines, "SLIDING_WINDOW", sliding_window_size > 0);
+    set_flag(compute_defines, "HAS_BLOCK_PADDING", has_block_padding);
+    set_flag(compute_defines, "USE_CUR_POS_TENSOR", use_cur_pos_tensor);
 
-    KernelDescriptor::Defines compute_defines_vec;
-    compute_defines_vec.reserve(compute_defines.size());
-    for (auto& [k, v] : compute_defines) {
-        compute_defines_vec.emplace_back(k, v);
-    }
+    // HAS_BLOCK_PADDING is derived kernel-side from IS_PAGED_ATTENTION + original_block_size on reader/writer;
+    // emit it directly on the writer too (it gates c_14 there).
+    set_flag(writer_defines, "HAS_BLOCK_PADDING", has_block_padding);
 
-    // ========== Kernel Creation ==========
-    const std::string kernel_path = "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/";
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = kernel_path + "dataflow/reader_decode_all.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = core_grid;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args_common);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = kernel_path + "dataflow/writer_decode_all.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = core_grid;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args_common);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = kernel_path + "compute/sdpa_flash_decode.cpp";
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = core_grid;
-    compute_desc.compile_time_args = std::move(compute_compile_time_args_common);
-    compute_desc.defines = std::move(compute_defines_vec);
-    compute_desc.config = ComputeConfigDescriptor{
+    // ---- Compute hardware config (Style A: resolve the op's ComputeKernelConfig, translate) ----
+    ttnn::ComputeKernelConfig resolved_config{
         .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .packer_l1_acc = packer_l1_acc,
+        .dst_full_sync_en = dst_full_sync_en,
+    };
+    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), resolved_config);
+    // unpack_modes: Metal 2.0 requires an explicit entry for each Float32-format DFB a compute kernel
+    // consumes when enable_32_bit_dest is set. Legacy set no unpack_to_dest_mode (all Default = UnpackToSrc),
+    // so every required entry is UnpackToSrc. The trigger is the DFB's format, not the tensor dtype.
+    if (fp32_dest_acc_en) {
+        auto& modes = unpack_modes(compute_hw);
+        auto maybe_unpack = [&](const DFBSpecName& name, tt::DataFormat df, bool bound) {
+            if (bound && df == tt::DataFormat::Float32) {
+                modes.insert({name, tt::tt_metal::UnpackMode::UnpackToSrc});
+            }
+        };
+        maybe_unpack(DFB_Q_IN, q_df, true);
+        maybe_unpack(DFB_K_IN, k_df, true);
+        maybe_unpack(DFB_V_IN, v_df, true);
+        maybe_unpack(DFB_MASK_IN, mask_df, true);
+        maybe_unpack(DFB_IDENTITY_SCALE, scalar_df, true);
+        maybe_unpack(DFB_ZERO_IN, scalar_df, true);
+        maybe_unpack(DFB_Q_RM, q_df, tilize_q);
+        maybe_unpack(DFB_SLIDING_MASK, mask_df, sliding_window_size > 0);
+        maybe_unpack(DFB_BLOCK_PAD_MASK, mask_df, has_block_padding);
+    }
+
+    // ---- Kernel specs ----
+    const std::string kernel_path = "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/";
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = std::filesystem::path(kernel_path + "dataflow/reader_decode_all.cpp"),
+        .compiler_options = {.defines = std::move(reader_defines)},
+        .dfb_bindings = std::move(reader_dfb),
+        .semaphore_bindings = std::move(reader_sems),
+        .tensor_bindings = std::move(reader_tensors),
+        .compile_time_args = std::move(reader_cta),
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"page_table_page_size",
+                  "do_reduce",
+                  "do_output",
+                  "cur_head_group",
+                  "cur_batch",
+                  "core_num_in_reduce",
+                  "core_num_in_output",
+                  "cur_pos_arg",
+                  "do_k_mcast",
+                  "mcast_x",
+                  "mcast_y0",
+                  "mcast_y1",
+                  "num_dests"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .advanced_options = {.num_runtime_varargs = 2 * num_output_cores},
+    };
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source = std::filesystem::path(kernel_path + "dataflow/writer_decode_all.cpp"),
+        .compiler_options = {.defines = std::move(writer_defines)},
+        .dfb_bindings = std::move(writer_dfb),
+        .semaphore_bindings = std::move(writer_sems),
+        .tensor_bindings = std::move(writer_tensors),
+        .compile_time_args = std::move(writer_cta),
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"worker_id_for_reduce",
+                  "worker_id_for_output",
+                  "do_reduce",
+                  "do_output",
+                  "cur_head_group",
+                  "cur_batch",
+                  "core_num_in_reduce",
+                  "core_num_in_output",
+                  "cur_pos_arg",
+                  "is_tree_root",
+                  "parent_core_in_group",
+                  "send_at_round",
+                  "num_children",
+                  "my_active_rounds",
+                  "reduction_group_base_idx",
+                  "children_per_round_0",
+                  "children_per_round_1",
+                  "children_per_round_2",
+                  "children_per_round_3",
+                  "children_per_round_4",
+                  "children_per_round_5"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .advanced_options =
+            {.num_runtime_varargs = 2 * num_cores_per_head + 2 * num_reducer_cores + 2 * num_output_cores},
+    };
+    KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source = std::filesystem::path(kernel_path + "compute/sdpa_flash_decode.cpp"),
+        .compiler_options = {.defines = std::move(compute_defines), .opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings = std::move(compute_dfb),
+        .compile_time_args = std::move(compute_cta),
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"do_reduce",
+                  "do_output",
+                  "cur_head",
+                  "cur_batch",
+                  "core_num_in_reduce",
+                  "core_num_in_output",
+                  "cur_pos_arg",
+                  "is_tree_root",
+                  "parent_core_in_group",
+                  "send_at_round",
+                  "num_children",
+                  "my_active_rounds",
+                  "children_per_round_0",
+                  "children_per_round_1",
+                  "children_per_round_2",
+                  "children_per_round_3",
+                  "children_per_round_4",
+                  "children_per_round_5"}},
+        .hw_config = std::move(compute_hw),
     };
 
-    // ========== Buffer Bindings for Runtime Args ==========
-    // Every buffer address is passed as a Buffer* so it is auto-registered as a BufferBinding and
-    // re-patched on the fast cache-hit path (apply_resolved_bindings) instead of being baked as a
-    // raw uint32 that goes stale.  Optional buffers pass a nullptr Buffer* when absent, which
-    // emplace_runtime_args() emits as 0u with no binding — keeping the arg slot stable without
-    // invalidating the fast path.  cur_pos_buffer / page_table_buffer are already the right
-    // nullptr-when-absent Buffer* pointers computed above.
-    Buffer* attn_mask_buffer = use_attention_mask ? attn_mask.value().buffer() : nullptr;
-    Buffer* attention_sink_buffer = use_attention_sink ? attention_sink.value().buffer() : nullptr;
+    // ---- Per-node runtime arg values (name-first) + varargs ----
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_ra{.kernel = READER};
+    KernelRunArgs writer_ra{.kernel = WRITER};
+    KernelRunArgs compute_ra{.kernel = COMPUTE};
 
-    // ========== Runtime Arguments ==========
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         CoreCoord core = core_group[i];
         bool do_k_mcast = false;
@@ -871,168 +1157,145 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         // Compute tree reduction parameters for this core
         TreeReductionParams tree_params = get_tree_reduction_params(core_num_in_reduce, num_cores_per_head);
 
-        log_debug(tt::LogOp, "---- core_id: {}, coord: {} ----", i, core);
-        log_debug(tt::LogOp, "worker_id_for_reduce: {}", worker_id_for_reduce);
-        log_debug(tt::LogOp, "worker_id_for_output: {}", worker_id_for_output);
-        log_debug(tt::LogOp, "do_reduce: {}", do_reduce);
-        log_debug(tt::LogOp, "do_output: {}", do_output);
-        log_debug(tt::LogOp, "cur_head: {}", cur_head);
-        log_debug(tt::LogOp, "cur_batch: {}", cur_batch);
-        log_debug(tt::LogOp, "core_num_in_reduce: {}", core_num_in_reduce);
-        log_debug(tt::LogOp, "core_num_in_output: {}", core_num_in_output);
-        log_debug(tt::LogOp, "cur_pos: {}", cur_pos);
-        log_debug(tt::LogOp, "tree_params.is_root: {}", tree_params.is_root);
-        log_debug(tt::LogOp, "tree_params.parent_core_in_group: {}", tree_params.parent_core_in_group);
-        log_debug(tt::LogOp, "tree_params.send_at_round: {}", tree_params.send_at_round);
-        log_debug(tt::LogOp, "tree_params.num_children: {}", tree_params.num_children);
-        log_debug(tt::LogOp, "tree_params.my_active_rounds: {}", tree_params.my_active_rounds);
-        log_debug(tt::LogOp, "do_k_mcast: {}", do_k_mcast);
-        log_debug(tt::LogOp, "mcast_x: {}", mcast_x);
-        log_debug(tt::LogOp, "mcast_y0: {}", mcast_y0);
-        log_debug(tt::LogOp, "mcast_y1: {}", mcast_y1);
-        log_debug(tt::LogOp, "num_dests: {}", num_dests);
-
-        // Calculate base index for this reduction group's cores in the physical coordinate arrays
-        // reduction_group_core_xs/ys are populated in row-major order (by linear index i)
-        // So we use 'i' directly to find the start of this core's reduction group
         uint32_t reduction_group_base_idx = 0;
         if (use_col_major_group_indexing) {
-            // For column-major indexing: the group starts at (i / num_cores_per_head) * num_cores_per_head
             reduction_group_base_idx = (i / num_cores_per_head) * num_cores_per_head;
         } else {
             reduction_group_base_idx = (cur_batch * num_cores_per_batch) + (cur_head * num_cores_per_head);
         }
-        log_debug(tt::LogOp, "reduction_group_base_idx: {}", reduction_group_base_idx);
-        // reader runtime args
-        // All buffer addresses (mandatory q/k/v and optional pos/page_table/attn_mask/sink) are
-        // passed as Buffer* so every one is re-patched on the fast cache-hit path.  An earlier
-        // revision bound only the mandatory buffers and left the optional addresses as raw uint32;
-        // that triggered the fast path (which skips create_descriptor()) while leaving the optional
-        // addresses stale — test_sdpa_decode_paged_attention exposed this.  Binding ALL of them
-        // keeps every address live.  The remaining scalar args (cur_pos, core/head assignment, tree
-        // params) are all functions of hashed attributes, so none can go stale on a hit: when
-        // cur_pos comes from cur_pos_tensor the scalar is a constant UINT32_MAX and the position is
-        // read on-device; when it comes from the cur_pos vector that vector is hashed, so a new
-        // position is a cache miss that rebuilds the descriptor.  An absent optional passes a
-        // nullptr Buffer* (emitted as 0u, no binding).
-        KernelDescriptor::RTArgList reader_rt_args;
-        reader_rt_args.push_back(q_buffer);
-        reader_rt_args.push_back(k_buffer);
-        reader_rt_args.push_back(v_buffer);
-        reader_rt_args.push_back(cur_pos_buffer);
-        reader_rt_args.push_back(page_table_buffer);
-        reader_rt_args.push_back(attn_mask_buffer);
-        reader_rt_args.push_back(attention_sink_buffer);
-        reader_rt_args.push_back(page_table_stick_size);
-        reader_rt_args.push_back(static_cast<uint32_t>(do_reduce));
-        reader_rt_args.push_back(static_cast<uint32_t>(do_output));
-        reader_rt_args.push_back(cur_head);
-        reader_rt_args.push_back(cur_batch);
-        reader_rt_args.push_back(core_num_in_reduce);
-        reader_rt_args.push_back(core_num_in_output);
-        reader_rt_args.push_back(cur_pos);
-        reader_rt_args.push_back(static_cast<uint32_t>(do_k_mcast));
-        reader_rt_args.push_back(mcast_x);
-        reader_rt_args.push_back(mcast_y0);
-        reader_rt_args.push_back(mcast_y1);
-        reader_rt_args.push_back(num_dests);
-        reader_rt_args.append(output_core_physical_xs);
-        reader_rt_args.append(output_core_physical_ys);
 
-        // writer runtime args (do_reduce is NOT included — writer doesn't use it)
-        // The output address is passed as Buffer* (BufferBinding) so it is re-patched on the fast
-        // cache-hit path.  cur_pos and tree_params are functions of hashed attributes (see the
-        // reader note above), so they never go stale on a hit.
-        KernelDescriptor::RTArgList writer_rt_args;
-        writer_rt_args.push_back(out_buffer);
-        writer_rt_args.push_back(worker_id_for_reduce);
-        writer_rt_args.push_back(worker_id_for_output);
-        writer_rt_args.push_back(static_cast<uint32_t>(do_reduce));
-        writer_rt_args.push_back(static_cast<uint32_t>(do_output));
-        writer_rt_args.push_back(cur_head);
-        writer_rt_args.push_back(cur_batch);
-        writer_rt_args.push_back(core_num_in_reduce);
-        writer_rt_args.push_back(core_num_in_output);
-        writer_rt_args.push_back(cur_pos);
-        // Tree reduction parameters
-        writer_rt_args.push_back(tree_params.is_root ? 1u : 0u);
-        writer_rt_args.push_back(tree_params.parent_core_in_group);
-        writer_rt_args.push_back(tree_params.send_at_round);
-        writer_rt_args.push_back(tree_params.num_children);
-        writer_rt_args.push_back(tree_params.my_active_rounds);
-        writer_rt_args.push_back(reduction_group_base_idx);
-        // Add children_per_round array (MAX_TREE_REDUCTION_ROUNDS elements)
-        for (uint32_t children : tree_params.children_per_round) {
-            writer_rt_args.push_back(children);
+        // Reader named RTAs
+        AddRuntimeArgsForNode(
+            reader_ra.runtime_arg_values,
+            core,
+            {{"page_table_page_size", page_table_stick_size},
+             {"do_reduce", static_cast<uint32_t>(do_reduce)},
+             {"do_output", static_cast<uint32_t>(do_output)},
+             {"cur_head_group", cur_head},
+             {"cur_batch", cur_batch},
+             {"core_num_in_reduce", core_num_in_reduce},
+             {"core_num_in_output", core_num_in_output},
+             {"cur_pos_arg", cur_pos},
+             {"do_k_mcast", static_cast<uint32_t>(do_k_mcast)},
+             {"mcast_x", mcast_x},
+             {"mcast_y0", mcast_y0},
+             {"mcast_y1", mcast_y1},
+             {"num_dests", num_dests}});
+        // Reader varargs: all_output_noc_x[num_output_cores] ++ all_output_noc_y[num_output_cores]
+        {
+            std::vector<uint32_t> va;
+            va.reserve(2 * num_output_cores);
+            va.insert(va.end(), output_core_physical_xs.begin(), output_core_physical_xs.end());
+            va.insert(va.end(), output_core_physical_ys.begin(), output_core_physical_ys.end());
+            reader_ra.advanced_options.runtime_varargs[core] = std::move(va);
         }
-        for (uint32_t c = 0; c < num_cores_per_head; ++c) {
-            writer_rt_args.push_back(reduction_group_core_xs[reduction_group_base_idx + c]);
-        }
-        // Then add the y coordinates for all cores in this reduction group
-        for (uint32_t c = 0; c < num_cores_per_head; ++c) {
-            writer_rt_args.push_back(reduction_group_core_ys[reduction_group_base_idx + c]);
-        }
-        writer_rt_args.append(reduce_core_physical_xs);
-        writer_rt_args.append(reduce_core_physical_ys);
-        writer_rt_args.append(output_core_physical_xs);
-        writer_rt_args.append(output_core_physical_ys);
 
-        // compute runtime args
-        KernelDescriptor::RTArgList compute_rt_args;
-        compute_rt_args.push_back(static_cast<uint32_t>(do_reduce));
-        compute_rt_args.push_back(static_cast<uint32_t>(do_output));
-        compute_rt_args.push_back(cur_head);
-        compute_rt_args.push_back(cur_batch);
-        compute_rt_args.push_back(core_num_in_reduce);
-        compute_rt_args.push_back(core_num_in_output);
-        compute_rt_args.push_back(cur_pos);
-        // Tree reduction parameters for compute
-        compute_rt_args.push_back(tree_params.is_root ? 1u : 0u);
-        compute_rt_args.push_back(tree_params.parent_core_in_group);
-        compute_rt_args.push_back(tree_params.send_at_round);
-        compute_rt_args.push_back(tree_params.num_children);
-        compute_rt_args.push_back(tree_params.my_active_rounds);
-        // Add children_per_round array for compute
-        for (uint32_t children : tree_params.children_per_round) {
-            compute_rt_args.push_back(children);
+        // Writer named RTAs
+        AddRuntimeArgsForNode(
+            writer_ra.runtime_arg_values,
+            core,
+            {{"worker_id_for_reduce", worker_id_for_reduce},
+             {"worker_id_for_output", worker_id_for_output},
+             {"do_reduce", static_cast<uint32_t>(do_reduce)},
+             {"do_output", static_cast<uint32_t>(do_output)},
+             {"cur_head_group", cur_head},
+             {"cur_batch", cur_batch},
+             {"core_num_in_reduce", core_num_in_reduce},
+             {"core_num_in_output", core_num_in_output},
+             {"cur_pos_arg", cur_pos},
+             {"is_tree_root", tree_params.is_root ? 1u : 0u},
+             {"parent_core_in_group", tree_params.parent_core_in_group},
+             {"send_at_round", tree_params.send_at_round},
+             {"num_children", tree_params.num_children},
+             {"my_active_rounds", tree_params.my_active_rounds},
+             {"reduction_group_base_idx", reduction_group_base_idx},
+             {"children_per_round_0", tree_params.children_per_round[0]},
+             {"children_per_round_1", tree_params.children_per_round[1]},
+             {"children_per_round_2", tree_params.children_per_round[2]},
+             {"children_per_round_3", tree_params.children_per_round[3]},
+             {"children_per_round_4", tree_params.children_per_round[4]},
+             {"children_per_round_5", tree_params.children_per_round[5]}});
+        // Writer varargs: reduction_group_core_xs/ys (num_cores_per_head each) ++ all_reducer x/y ++ all_output x/y
+        {
+            std::vector<uint32_t> va;
+            va.reserve(2 * num_cores_per_head + 2 * num_reducer_cores + 2 * num_output_cores);
+            for (uint32_t c = 0; c < num_cores_per_head; ++c) {
+                va.push_back(reduction_group_core_xs[reduction_group_base_idx + c]);
+            }
+            for (uint32_t c = 0; c < num_cores_per_head; ++c) {
+                va.push_back(reduction_group_core_ys[reduction_group_base_idx + c]);
+            }
+            va.insert(va.end(), reduce_core_physical_xs.begin(), reduce_core_physical_xs.end());
+            va.insert(va.end(), reduce_core_physical_ys.begin(), reduce_core_physical_ys.end());
+            va.insert(va.end(), output_core_physical_xs.begin(), output_core_physical_xs.end());
+            va.insert(va.end(), output_core_physical_ys.begin(), output_core_physical_ys.end());
+            writer_ra.advanced_options.runtime_varargs[core] = std::move(va);
         }
-        reader_desc.emplace_runtime_args(core, reader_rt_args);
-        writer_desc.emplace_runtime_args(core, writer_rt_args);
-        compute_desc.emplace_runtime_args(core, compute_rt_args);
+
+        // Compute named RTAs
+        AddRuntimeArgsForNode(
+            compute_ra.runtime_arg_values,
+            core,
+            {{"do_reduce", static_cast<uint32_t>(do_reduce)},
+             {"do_output", static_cast<uint32_t>(do_output)},
+             {"cur_head", cur_head},
+             {"cur_batch", cur_batch},
+             {"core_num_in_reduce", core_num_in_reduce},
+             {"core_num_in_output", core_num_in_output},
+             {"cur_pos_arg", cur_pos},
+             {"is_tree_root", tree_params.is_root ? 1u : 0u},
+             {"parent_core_in_group", tree_params.parent_core_in_group},
+             {"send_at_round", tree_params.send_at_round},
+             {"num_children", tree_params.num_children},
+             {"my_active_rounds", tree_params.my_active_rounds},
+             {"children_per_round_0", tree_params.children_per_round[0]},
+             {"children_per_round_1", tree_params.children_per_round[1]},
+             {"children_per_round_2", tree_params.children_per_round[2]},
+             {"children_per_round_3", tree_params.children_per_round[3]},
+             {"children_per_round_4", tree_params.children_per_round[4]},
+             {"children_per_round_5", tree_params.children_per_round[5]}});
     }
-    if (num_active_cores < num_cores_available) {
-        log_debug(tt::LogOp, "idle cores {}", core_group_idle.size());
-        // Set the rest of the cores to idle
-        for (auto core : core_group_idle) {
-            log_debug(tt::LogOp, "Setting core {} to idle", core);
+    run_args.kernel_run_args = {std::move(reader_ra), std::move(writer_ra), std::move(compute_ra)};
 
-            // Reader runtime args
-            // Base args (20): includes K-mcast args [do_k_mcast, mcast_x, mcast_y0, mcast_y1, num_dests]
-            KernelDescriptor::CoreRuntimeArgs reader_rt_args(20, 0);
-
-            // Writer runtime args - need to match the size with tree reduction params
-            // Base args (10) + tree params (6) + children_per_round (MAX_TREE_REDUCTION_ROUNDS) + group coords
-            // (2*num_cores_per_head)
-            // + reducer coords + output coords
-            KernelDescriptor::CoreRuntimeArgs writer_rt_args(
-                10 + 6 + MAX_TREE_REDUCTION_ROUNDS + (2 * num_cores_per_head), 0);
-
-            // Compute runtime args - 65 indicates idle core
-            // Base args (7) + tree params (5) + children_per_round (MAX_TREE_REDUCTION_ROUNDS)
-            KernelDescriptor::CoreRuntimeArgs compute_rt_args(7 + 5 + MAX_TREE_REDUCTION_ROUNDS, 0);
-            compute_rt_args[0] = 65;  // Idle marker
-
-            reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
-            writer_desc.runtime_args.emplace_back(core, std::move(writer_rt_args));
-            compute_desc.runtime_args.emplace_back(core, std::move(compute_rt_args));
-        }
+    // ---- Tensor args (one per declared TensorParameter) ----
+    run_args.tensor_args.insert({Q, TensorArgument{input_tensor_q.mesh_tensor()}});
+    run_args.tensor_args.insert({K, TensorArgument{input_tensor_k.mesh_tensor()}});
+    if (!reuse_k) {
+        // Bind the ORIGINAL V (not the value_or copy) so the framework matches it by MeshTensor identity.
+        run_args.tensor_args.insert({VP, TensorArgument{tensor_args.v.value().mesh_tensor()}});
     }
+    if (use_cur_pos_tensor) {
+        run_args.tensor_args.insert({CUR_POS, TensorArgument{cur_pos_tensor.value().mesh_tensor()}});
+    }
+    if (is_paged_attention) {
+        run_args.tensor_args.insert({PAGE_TABLE, TensorArgument{page_table_tensor.value().mesh_tensor()}});
+    }
+    if (use_attention_mask) {
+        run_args.tensor_args.insert({ATTN_MASK, TensorArgument{attn_mask.value().mesh_tensor()}});
+    }
+    if (use_attention_sink) {
+        run_args.tensor_args.insert({ATTN_SINK, TensorArgument{attention_sink.value().mesh_tensor()}});
+    }
+    run_args.tensor_args.insert({OUT_T, TensorArgument{output_tensor.mesh_tensor()}});
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    // ---- Assemble ----
+    ProgramSpec spec{
+        .name = "sdpa_decode",
+        .kernels = {std::move(reader), std::move(writer), std::move(compute)},
+        .dataflow_buffers = std::move(dfbs),
+        .semaphores = std::move(semaphores),
+        .tensor_parameters = std::move(tensor_params),
+        .work_units = {WorkUnitSpec{
+            .name = "main",
+            .kernels = {READER, WRITER, COMPUTE},
+            .target_nodes = active_node_set,
+        }},
+    };
 
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::prim

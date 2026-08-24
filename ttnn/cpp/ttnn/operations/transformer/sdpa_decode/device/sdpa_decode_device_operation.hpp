@@ -8,10 +8,12 @@
 #include <climits>
 #include <cstdint>
 #include <optional>
+#include <variant>
 
 #include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include "sdpa_decode_device_operation_types.hpp"
@@ -92,10 +94,18 @@ struct SdpaDecodeDeviceOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
+    // Single Metal 2.0 program factory. paged / MLA / sharded are internal branches of
+    // create_program_artifacts, not separate factories.
+    struct SdpaDecodeProgramFactory {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    using program_factory_t = std::variant<SdpaDecodeProgramFactory>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
