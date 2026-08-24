@@ -4,7 +4,7 @@
 set -euo pipefail
 
 CCACHE_VERSION="${CCACHE_VERSION:-4.14}"
-# SHA256 for ccache-4.13.6-linux-x86_64-glibc.tar.xz
+# SHA256 for ccache-4.14-linux-x86_64-glibc.tar.xz
 # Note: starting v4.11, upstream renamed the tarball to include -glibc suffix
 # Verified by downloading and computing hash with compute-hashes.sh
 CCACHE_SHA256="${CCACHE_SHA256:-45a91165db7092e67c6208ada03f54700e684c4cd3735f9031de95669ed9272c}"

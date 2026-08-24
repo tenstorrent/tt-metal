@@ -4,11 +4,11 @@
 # to /install, which can then be used as a source for COPY --from.
 #
 # Usage:
-#   docker build -f dockerfile/Dockerfile.tools --target ccache -t ghcr.io/.../tool-ccache:v4.13.6 .
+#   docker build -f dockerfile/Dockerfile.tools --target ccache -t ghcr.io/.../tool-ccache:v4.14 .
 #   docker build -f dockerfile/Dockerfile.tools --target mold -t ghcr.io/.../tool-mold:v2.42.0 .
 #
 # The main Dockerfile can then use:
-#   FROM ghcr.io/.../tool-ccache:v4.13.6 AS ccache-layer
+#   FROM ghcr.io/.../tool-ccache:v4.14 AS ccache-layer
 
 #############################################################
 # Version and hash configuration
