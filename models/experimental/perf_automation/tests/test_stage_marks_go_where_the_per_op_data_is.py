@@ -164,27 +164,22 @@ def test_injection_is_idempotent():
 
 
 def test_it_refuses_rather_than_guesses():
-    """A test that does not define the helpers the block leans on, or has no bare _eager_forward()
-    call, gets no marks and a stated reason -- never a NameError shipped into the one run that
-    measures per-op time."""
+    """No marks and a STATED reason, never a NameError shipped into the one run that measures per-op
+    time. The refusal is no longer about helper NAMES: this used to require six identifiers the
+    generator was free not to use, and refused a perfectly good regenerated test because it had
+    called them _build_for_perf and _prompt_ids. What it needs is the adapter the test already
+    builds, and somewhere to put the block."""
     from agent.stage_marks import inject_stage_marks
 
     _, why = inject_stage_marks("def test_x():\n    pass\n")
-    assert "does not define" in why, why
-    names = "".join(
-        "%s=1\n" % n
-        for n in (
-            "_stage_inputs_from_demo",
-            "_get_pipe",
-            "prompt_ids_for_isl",
-            "get_tokenizer",
-            "PERF_ISL_TOKENS",
-            "PERF_BATCH",
-        )
-    )
-    _, why2 = inject_stage_marks(names)
-    assert "no bare _eager_forward()" in why2, why2
+    assert "no PipelineStageAdapter" in why, why
 
+    has_adapter = (
+        "def test_x(device):\n"
+        "    measure_adapter(PipelineStageAdapter(_b, _p, batch=8), device)\n"
+    )
+    _, why2 = inject_stage_marks(has_adapter)
+    assert "no bare _eager_forward()" in why2, why2
 
 def test_the_measured_call_stays_inside_the_pair():
     """The marked pass adds ops to the capture. Without start/stop around the measured region the

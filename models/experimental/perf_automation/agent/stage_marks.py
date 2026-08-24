@@ -32,6 +32,7 @@ refine() already slices on, so the main report sees exactly what it saw before.
 """
 from __future__ import annotations
 
+import ast
 import sys
 
 
@@ -139,14 +140,22 @@ def mark_stages(adapter, device) -> int:
 # locals, some module-level -- and all come from the skeleton the generator works from. They are
 # CHECKED before injecting rather than assumed: a test that names things differently gets no marks
 # and says so, instead of shipping a NameError into the one run that measures per-op time.
-_REQUIRED_NAMES = (
-    "_stage_inputs_from_demo",
-    "_get_pipe",
-    "prompt_ids_for_isl",
-    "get_tokenizer",
-    "PERF_ISL_TOKENS",
-    "PERF_BATCH",
-)
+# NOTHING IS REQUIRED BY NAME ANY MORE.
+#
+# This listed six identifiers the block used to rebuild an adapter -- _stage_inputs_from_demo,
+# _get_pipe, prompt_ids_for_isl, get_tokenizer, PERF_ISL_TOKENS, PERF_BATCH -- and refused when the
+# test did not define them. But the test is written by an LLM from an advisory skeleton, so those are
+# ITS naming choices, not a contract. Run 27, with the model reset to pristine and the test therefore
+# regenerated: it named the same things _build_for_perf and _prompt_ids, the check failed on the two
+# private helpers, and the marks were refused -- so the roofline shared one peak across every stack
+# for a tenth run, because the injector was coupled to how the generator spells things.
+#
+# Swapping in _build_for_perf would only move the hardcoded name. The test already CONSTRUCTS the
+# adapter the marks need -- measure_adapter(PipelineStageAdapter(...), device) -- so the block copies
+# that call's arguments verbatim and reuses them, whatever they are called. The single fixed token is
+# PipelineStageAdapter, which is the tool's own API -- an anchor of the same kind as any other ttnn
+# entry point the harness names, and nothing about how a generated test spells its own helpers.
+_ADAPTER_CALL = "PipelineStageAdapter("
 
 _INJECT_TEMPLATE = """{i}# --- stage marks (injected by perf_test_gen) -------------------------------------
 {i}# The measured region is bracketed by the conventional start/stop pair so the main report
@@ -163,17 +172,52 @@ _INJECT_TEMPLATE = """{i}# --- stage marks (injected by perf_test_gen) ---------
 {body}{i}if _tt_sm is not None:
 {i}    _tt_sm.signpost("stop")
 {i}    try:
-{i}        _tt_sm.mark_stages(
-{i}            _TtPSA(
-{i}                lambda _d: _stage_inputs_from_demo(_get_pipe(_d)),
-{i}                prompt_ids_for_isl(get_tokenizer(), PERF_ISL_TOKENS),
-{i}                batch=PERF_BATCH,
-{i}            ),
-{i}            device,
-{i}        )
+{i}        _tt_sm.mark_stages(_TtPSA({adapter_args}), device)
 {i}    except Exception as _tt_e:  # noqa: BLE001
 {i}        print("STAGE_MARKS_SKIPPED=%r" % (_tt_e,), flush=True)
 """
+
+
+
+def _adapter_args(text: str) -> str:
+    """The argument text of the test's own PipelineStageAdapter(...) call, or "".
+
+    The test already builds the adapter the marks need, for measure_adapter. Copying its arguments
+    means the block works whatever the generator named the builder and the prompt ids -- which is the
+    whole point: those names are the LLM's choice, and requiring particular ones is what refused the
+    injection on a freshly generated test.
+
+    PARSED, NOT SCANNED. A balanced-paren walk over the text reads past a call whose parens do not
+    close and swallows whatever follows -- on the real file it returned `..., batch=PERF_BATCH, device`
+    by closing on the enclosing measure_adapter(. The file is Python that has to run, so ast can find
+    the call properly; a file that will not parse is refused, which is the honest answer.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return ""
+    name = _ADAPTER_CALL.rstrip("(")
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        ident = getattr(f, "id", None) or getattr(f, "attr", None)
+        if ident != name:
+            continue
+        parts = []
+        for a in node.args:
+            seg = ast.get_source_segment(text, a)
+            if not seg:
+                return ""
+            parts.append(" ".join(seg.split()))
+        for kw in node.keywords:
+            seg = ast.get_source_segment(text, kw.value)
+            if not seg:
+                return ""
+            star = "**" if kw.arg is None else "%s=" % kw.arg
+            parts.append("%s%s" % (star, " ".join(seg.split())))
+        return ", ".join(parts)
+    return ""
 
 
 def inject_stage_marks(text: str) -> tuple:
@@ -190,9 +234,9 @@ def inject_stage_marks(text: str) -> tuple:
 
     if "_tt_sm" in text:
         return text, "already injected"
-    missing = [n for n in _REQUIRED_NAMES if n not in text]
-    if missing:
-        return text, "generated test does not define %s" % ", ".join(missing)
+    args = _adapter_args(text)
+    if not args:
+        return text, "no PipelineStageAdapter(...) call to copy the adapter from"
     lines = text.splitlines(keepends=True)
     at = [k for k, l in enumerate(lines) if re.match(r"^(\s*)_eager_forward\(\)\s*$", l)]
     if not at:
@@ -200,5 +244,5 @@ def inject_stage_marks(text: str) -> tuple:
     # The LAST one is the profiled branch; an earlier one is the trace-replay fallback.
     k = at[-1]
     ind = re.match(r"^(\s*)", lines[k]).group(1)
-    lines[k] = _INJECT_TEMPLATE.format(i=ind, body=lines[k])
+    lines[k] = _INJECT_TEMPLATE.format(i=ind, body=lines[k], adapter_args=args)
     return "".join(lines), "injected at line %d" % (k + 1)
