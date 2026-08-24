@@ -476,6 +476,24 @@ static uint32_t dfb_effective_block_entries(const DataflowBufferImpl& dfb, bool 
         is_producer && dfb_uses_region_mesh(config));
 }
 
+// One transaction from a batching BLOCKED side spans every one of its tile counters, so its credits
+// are split across them. Serialized as run_length == 0; the device's split arm advances every slot
+// by its share of the block.
+static bool dfb_dm_side_credits_split(const DataflowBufferImpl& dfb, bool is_producer) {
+    const DataflowBufferConfig& config = dfb.config;
+    const ::dfb::AccessPattern side_pattern = is_producer ? config.pap : config.cap;
+    if (side_pattern != ::dfb::AccessPattern::BLOCKED || dfb.stride_in_entries == 1) {
+        return false;
+    }
+    const uint32_t block =
+        std::max<uint32_t>(is_producer ? config.producer_block_size : config.consumer_block_size, 1u);
+    return dfb_side_batches_interleaved(
+        is_producer ? config.num_producers : config.num_consumers,
+        calculate_num_tile_counters(config, is_producer),
+        block,
+        is_producer && dfb_uses_region_mesh(config));
+}
+
 // Reject a block too big for one NoC packet: it would split into several, each acking separately, and
 // the ISR would fire early. Only applies to a side that batches.
 static void validate_implicit_burst_fits_one_packet(const DataflowBufferImpl& dfb) {
@@ -748,6 +766,16 @@ size_t serialize_dfb_config_for_core(
                 dfb_effective_block_entries(*dfb, rc.is_producer),
                 dfb->id,
                 "block_size");
+            // Run walk: every side today rotates each op with a single stride, so stride2 equals the
+            // stride and run_length is 1 (DM) — except a split side (run_length 0, one transaction
+            // spans every TC) and TRISC harts (0 = rotate every call).
+            if (h < ::dfb::TENSIX_RISC_OFFSET) {
+                entry.run_length = dfb_dm_side_credits_split(*dfb, rc.is_producer) ? 0u : 1u;
+                entry.stride2_precomp = dfb->config.entry_size * dfb->stride_in_entries;
+            } else {
+                entry.run_length = 0u;
+                entry.stride2_precomp = dfb->stride_in_entries;  // entries
+            }
             entry.capacity = rc.is_producer ? dfb_narrow_field<uint16_t>(dfb->capacity, dfb->id, "capacity")
                                             : static_cast<uint16_t>(0);
             entry.entry_size = dfb->config.entry_size;
@@ -776,7 +804,7 @@ size_t serialize_dfb_config_for_core(
                              ? DFB_HART_FLAG_REMAPPER_SELF_PROG
                              : DFB_HART_FLAG_REMAPPER_WAIT_DM1;
             }
-            if (rc.config.tc_credit_mode) {
+            if (rc.config.broadcast_tc) {
                 flags |= DFB_HART_FLAG_BROADCAST_TC;
             }
             flags |= static_cast<uint8_t>(dfb->tensix_trisc_mask & DFB_HART_FLAG_TRISC_MASK);
@@ -821,7 +849,7 @@ size_t serialize_dfb_config_for_core(
                     entry.num_entries_per_txn_id,
                     entry.num_entries_per_txn_id_per_tc,
                     entry.num_txn_ids,
-                    rc.config.tc_credit_mode,
+                    rc.config.broadcast_tc ? 1u : 0u,
                     entry.remapper_pair_index);
             }
 
@@ -2209,7 +2237,7 @@ void ProgramImpl::finalize_single_dfb_config(
                 }
                 const auto& ca = a[i].config;
                 const auto& cb = b[i].config;
-                if (ca.num_tcs_to_rr != cb.num_tcs_to_rr || ca.tc_credit_mode != cb.tc_credit_mode ||
+                if (ca.num_tcs_to_rr != cb.num_tcs_to_rr || ca.broadcast_tc != cb.broadcast_tc ||
                     ca.remapper_pair_index != cb.remapper_pair_index || ca.consumer_tcs != cb.consumer_tcs ||
                     ca.remapper_consumer_ids_mask != cb.remapper_consumer_ids_mask ||
                     ca.producer_client_type != cb.producer_client_type ||
@@ -2357,7 +2385,7 @@ void ProgramImpl::finalize_single_dfb_config(
             risc_config.is_producer = true;
             risc_config.config.packed_tile_counter[0] = t6_only_tc;
             risc_config.config.num_tcs_to_rr = 1;
-            risc_config.config.tc_credit_mode = false;
+            risc_config.config.broadcast_tc = false;
             risc_config.config.remapper_pair_index = pair_index;
             risc_config.config.intra_shadow_tc_id = ::dfb::get_counter_id(shadow_tc);
             new_hw_risc_configs.push_back(risc_config);
@@ -2592,17 +2620,9 @@ void ProgramImpl::finalize_single_dfb_config(
                 (uint32_t)dfb::get_counter_id(risc_config.config.packed_tile_counter[tc]));
         }
         risc_config.config.num_tcs_to_rr = num_producer_tcs;
-        // A batched BLOCKED producer covers all its TCs in one transaction, so its credits are
-        // split across them.
-        const uint32_t producer_block =
-            std::max<uint32_t>(config.producer_block_size, 1u);
-        const bool producer_batches_interleaved =
-            config.pap == ::dfb::AccessPattern::BLOCKED && dfb->stride_in_entries != 1 &&
-            dfb_side_batches_interleaved(
-                config.num_producers, num_producer_tcs, producer_block, dfb_uses_region_mesh(config));
-        risc_config.config.tc_credit_mode = dm_dm_all ? ::dfb::kTcCreditBroadcast
-                                         : producer_batches_interleaved ? ::dfb::kTcCreditSplit
-                                                                        : ::dfb::kTcCreditRoundRobin;
+        // A DM<->DM ALL producer posts every transaction's credits to all consumer TCs. (A batched
+        // BLOCKED producer's split credits are derived at serialization — dfb_dm_side_credits_split.)
+        risc_config.config.broadcast_tc = dm_dm_all;
 
         if (use_remapper) {
             risc_config.config.producer_client_type = producer_client_types[producer_idx];

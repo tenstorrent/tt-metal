@@ -72,17 +72,19 @@ struct dfb_init_entry_hdr_t {
     uint8_t num_entries_per_txn_id_per_tc;
     uint8_t producer_signal_bit;  // bit position in dfb_signal[dfb_id]; 0xFF if consumer
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
-    uint8_t tc_credit_mode;       // DM pack byte 22 → iface.tc_credit_mode (DM unpack only)
+    uint8_t broadcast_tc;         // DM pack byte 22 → iface.broadcast_tc (DM unpack only)
     uint8_t remapper_pair_index;  // TRISC byte 22; DM pack byte 23
     uint8_t intra_shadow_tc_id;   // TRISC byte 23: intra-tensix ClientR shadow TC; 0xFF / unused on DM
     uint16_t block_size;          // bytes 28-29: how many entries this hart moves in one NoC
                                   // transaction. 1 unless this hart is BLOCKED and its entries are
                                   // adjacent, in which case block_size. Always 1 on TRISC.
+    uint16_t run_length;          // bytes 30-31: ops per tile-counter run (see dfb_hart_init_entry_t)
+    uint32_t stride2_precomp;     // bytes 32-35: run-completion cursor jump (DM: bytes; TRISC: entries)
 };
-static_assert(sizeof(dfb_init_entry_hdr_t) == 32, "dfb_init_entry_hdr_t must match the 32B wire header");
+static_assert(sizeof(dfb_init_entry_hdr_t) == 36, "dfb_init_entry_hdr_t must match the 36B wire header");
 static_assert(alignof(dfb_init_entry_hdr_t) == 4, "dfb_init_entry_hdr_t alignment should follow uint32_t");
 
-// Read the entire 32B dfb_hart_init_entry_t (__attribute__((packed))) as 8 u32s.
+// Read the entire 36B dfb_hart_init_entry_t (__attribute__((packed))) as 9 u32s.
 // Two variants with identical unpack logic; only the pointer type differs:
 //   - dfb_read_init_entry_header        — uncached alias (TRISC path, no L2 coherency)
 //   - dfb_read_init_entry_header_cached — cached TL1 pointer (DM path, after L2 invalidate)
@@ -96,12 +98,14 @@ static_assert(alignof(dfb_init_entry_hdr_t) == 4, "dfb_init_entry_hdr_t alignmen
 //   w5 [7:0]=txn_ids[2]  [15:8]=txn_ids[3]  [23:16]=remapper_pair_index
 //      [31:24]=intra_shadow_tc_id (TRISC) / remapper_pair_index (DM pack)
 //   w6 [15:0]=num_entries  [31:16]=capacity
-//   w7 [15:0]=dm_block_size  [31:16]=_pad3
+//   w7 [15:0]=dm_block_size  [31:16]=run_length
+//   w8 = stride2_precomp (u32): run-completion cursor jump — DM=raw bytes, TRISC=entries
 
 // Shared unpack helper: TRISC blob w3–w6 (legacy SoA byte layout).
 template <typename PtrT>
 FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
-    const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5], w6 = s[6];
+    const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5], w6 = s[6], w7 = s[7],
+                   w8 = s[8];
     dfb_init_entry_hdr_t h;
     h.logical_dfb_id             = static_cast<uint8_t>(w0);
     h.num_tcs                    = static_cast<uint8_t>(w0 >> 8);
@@ -119,11 +123,13 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
     h.txn_ids[1]                 = static_cast<uint8_t>(w4 >> 24);
     h.txn_ids[2]                 = static_cast<uint8_t>(w5);
     h.txn_ids[3]                 = static_cast<uint8_t>(w5 >> 8);
-    h.tc_credit_mode             = 0;
+    h.broadcast_tc               = 0;
     h.remapper_pair_index        = static_cast<uint8_t>(w5 >> 16);
     h.intra_shadow_tc_id = static_cast<uint8_t>(w5 >> 24);
     h.num_entries                = static_cast<uint16_t>(w6);
     h.capacity = static_cast<uint16_t>(w6 >> 16);
+    h.run_length                 = static_cast<uint16_t>(w7 >> 16);
+    h.stride2_precomp            = w8;
     return h;
 }
 
@@ -131,7 +137,8 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
 // See dfb_write_dm_scalar_pack_to_blob.
 template <typename PtrT>
 FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header_dm(PtrT s) {
-    const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5], w6 = s[6], w7 = s[7];
+    const uint32_t w0 = s[0], w1 = s[1], w2 = s[2], w3 = s[3], w4 = s[4], w5 = s[5], w6 = s[6], w7 = s[7],
+                   w8 = s[8];
     dfb_init_entry_hdr_t h;
     h.logical_dfb_id             = static_cast<uint8_t>(w0);
     h.num_tcs                    = static_cast<uint8_t>(w0 >> 8);
@@ -149,11 +156,13 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header_dm(PtrT s) {
     h.num_entries_per_txn_id     = static_cast<uint8_t>(w4 >> 24);
     h.num_entries_per_txn_id_per_tc = static_cast<uint8_t>(w5);
     h.num_txn_ids                = static_cast<uint8_t>(w5 >> 8);
-    h.tc_credit_mode             = static_cast<uint8_t>(w5 >> 16);
+    h.broadcast_tc               = static_cast<uint8_t>(w5 >> 16);
     h.remapper_pair_index        = static_cast<uint8_t>(w5 >> 24);
     h.intra_shadow_tc_id = 0xFFu;  // intra-tensix never targets a DM hart
     h.num_entries                = static_cast<uint16_t>(w6);
     h.capacity = static_cast<uint16_t>(w6 >> 16);
+    h.run_length                 = static_cast<uint16_t>(w7 >> 16);
+    h.stride2_precomp            = w8;
     return h;
 }
 
@@ -168,14 +177,17 @@ FORCE_INLINE void dfb_write_dm_iface_scalars_from_hdr(LocalDFBInterface& iface, 
                              (static_cast<uint32_t>(eh.num_entries_per_txn_id) << 24);
     const uint32_t pack_w2 = static_cast<uint32_t>(eh.num_entries_per_txn_id_per_tc) |
                              (static_cast<uint32_t>(eh.num_txn_ids) << 8) |
-                             (static_cast<uint32_t>(eh.tc_credit_mode) << 16) |
+                             (static_cast<uint32_t>(eh.broadcast_tc) << 16) |
                              (static_cast<uint32_t>(eh.remapper_pair_index) << 24);
     uint32_t* const dm_scalar = reinterpret_cast<uint32_t*>(&iface.num_tcs_to_rr);
     dm_scalar[0] = pack_w0;
     dm_scalar[1] = pack_w1;
     dm_scalar[2] = pack_w2;
-    // block_size is uint16 and lives outside the 12B [8,20) scalar span, so it needs its own store.
+    // These live outside the 12B [8,20) scalar span, so they need their own stores.
     iface.block_size = eh.block_size;
+    iface.run_length = eh.run_length;
+    iface.run_pos = 0;
+    iface.stride2 = eh.stride2_precomp;
     iface.tc_idx = 0;
 }
 #endif
@@ -719,7 +731,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
     uint32_t total_hw_reg_writes = 0;
     // Sub-breakdown metrics (g–j):
     //   g: pre-loop fixed overhead (3 uncached header reads before the loop)
-    //   h: time in dfb_read_init_entry_header (6 u32 reads × N entries)
+    //   h: time in dfb_read_init_entry_header (9 u32 reads × N entries)
     //   i: time in TC-slot read+write loop (all entries)
     //   j: sig_slot address compute + uncached store (producers only)
     uint32_t total_entry_hdr = 0;
@@ -773,11 +785,11 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
 
         const uint32_t num_tcs = eh.num_tcs;
 
-        // Advance to the next entry: 32B header + ((num_tcs*9 + 3) & ~3).
+        // Advance to the next entry: 36B header + ((num_tcs*9 + 3) & ~3).
         const uint32_t entry_bytes = dfb_hart_init_entry_byte_size(num_tcs);
         p = reinterpret_cast<const volatile uint8_t*>(e_addr + entry_bytes);
 
-        // AoP TC tail starts right after the 32B header: pairs first, ptc bytes after all pairs.
+        // AoP TC tail starts right after the 36B header: pairs first, ptc bytes after all pairs.
         const uintptr_t tc_base_addr = e_addr + sizeof(dfb_hart_init_entry_t);
 
         WAYPOINT("L1");
@@ -806,6 +818,9 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
         // Host precomputes stride in tile units: (entry_size >> shift) * stride_in_entries.
         iface.stride_size       = static_cast<uint16_t>(eh.stride_size_precomp);
         iface.stride_size_tiles = eh.stride_size_tiles;
+        iface.run_length        = eh.run_length;
+        iface.run_pos           = 0;
+        iface.jump              = static_cast<uint16_t>(eh.stride2_precomp);  // entries; bounded by num_entries (u16)
 #if defined(UCK_CHLKC_PACK)
         iface.wr_entry_ptr = 0;
 #else  // unpack TRISC
@@ -825,7 +840,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
 
         // --- TC slot population ---
         // AoP TC tail: dfb_blob_tc_pair_t[num_tcs] (8B each, base+limit adjacent per slot)
-        // immediately after the 32B header, then uint8_t ptc[num_tcs] padded to 4B.
+        // immediately after the 36B header, then uint8_t ptc[num_tcs] padded to 4B.
         // Preload ptc as 1–2 word reads before the loop; in-loop ptc is a register bit-extract.
         // Running pair pointer advances 8B per slot. DM uses a cached pointer (blob already
         // invalidated into L2); TRISC uses the uncached alias.
@@ -983,7 +998,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
         start_time,
         end_time,
         pre_loop,                            // METRIC_G: pre_loop overhead (3 uncached header loads)
-        total_entry_hdr,                     // METRIC_H: entry_hdr (6 u32 bulk reads × N entries)
+        total_entry_hdr,                     // METRIC_H: entry_hdr (9 u32 bulk reads × N entries)
         total_tc_slots,                      // METRIC_I: tc_slots (base/limit/ptc reads + iface writes)
         total_sig_write);                    // METRIC_J: sig_write (uncached store to signal region)
     return packer_rmp;

@@ -27,17 +27,6 @@ enum AccessPattern : uint8_t {
     UNKNOWN,
 };
 
-// The credit mode determines how many credits are posted to each consumer's tile counter(s) for
-// a given producer transaction.
-enum TcCreditMode : uint8_t {
-    // `count` credits go to the current counter, then rotate to the next.
-    kTcCreditRoundRobin = 0,
-    // `count` credits go to every counter.
-    kTcCreditBroadcast = 1,
-    // `count / num_tcs` credits go to every counter.
-    kTcCreditSplit = 2,
-};
-
 constexpr uint8_t NUM_DFBS = 32;
 // Pack TRISC stores only active logical DFBs in a compact local array to reduce local-memory pressure.
 constexpr uint8_t MAX_ACTIVE_DFBS_PACK = 16;
@@ -182,6 +171,8 @@ inline uint8_t dfb_hart_participation_count(uint32_t participation_mask) {
 constexpr uint8_t DFB_HART_FLAG_IS_PRODUCER  = (1u << 7);
 // DM1 owns this producer's remapper pair; the producer must wait for it before touching its TCs.
 constexpr uint8_t DFB_HART_FLAG_REMAPPER_WAIT_DM1 = (1u << 6);
+// Set only for a broadcasting producer (DM<->DM ALL). Nothing on the device reads this bit today;
+// the device keys off the scalar-pack broadcast_tc byte.
 constexpr uint8_t DFB_HART_FLAG_BROADCAST_TC = (1u << 5);
 // This Neo's packer programs its own remapper pair (intra-tensix alias). DM1 cannot do it: the
 // Tensix-only TC pool is invisible to DM, and one Neo cannot see another Neo's TCs.
@@ -189,7 +180,7 @@ constexpr uint8_t DFB_HART_FLAG_BROADCAST_TC = (1u << 5);
 constexpr uint8_t DFB_HART_FLAG_REMAPPER_SELF_PROG = (1u << 4);
 constexpr uint8_t DFB_HART_FLAG_TRISC_MASK   = 0x0Fu;  // bits 3:0 = tensix_trisc_mask (which TRISC(s) run DFB ops)
 
-// Layout: dfb_blob_tc_pair_t[num_tcs] immediately after the 32B header, followed by
+// Layout: dfb_blob_tc_pair_t[num_tcs] immediately after the 36B header, followed by
 // uint8_t packed_tile_counter[num_tcs] padded to the next 4B boundary.
 // This keeps base_addr and limit for the same slot adjacent (8B apart, same cache line).
 // Total TC section = num_tcs*9B rounded up to 4B.
@@ -200,9 +191,9 @@ struct dfb_blob_tc_pair_t {
 static_assert(sizeof(dfb_blob_tc_pair_t) == 8, "dfb_blob_tc_pair_t must be 8B");
 
 // Per-(hart, DFB) init entry in this hart's sequential blob.
-// Fixed 32B header, followed by dfb_blob_tc_pair_t[num_tcs] (8B each), then
+// Fixed 36B header, followed by dfb_blob_tc_pair_t[num_tcs] (8B each), then
 // uint8_t packed_tile_counter[num_tcs] padded to 4B.
-// Total entry size = 32 + ceil9(num_tcs) where ceil9(n) = (n*9 + 3) & ~3.
+// Total entry size = 36 + ceil9(num_tcs) where ceil9(n) = (n*9 + 3) & ~3.
 struct dfb_hart_init_entry_t {
     uint8_t  logical_dfb_id;
     uint8_t  num_tcs;
@@ -229,10 +220,18 @@ struct dfb_hart_init_entry_t {
     uint16_t dm_block_size;                  // bytes 28-29: how many entries this DM hart moves in one NoC
                                              // transaction. 1 unless this hart is BLOCKED and its entries
                                              // are adjacent, in which case block_size.
-    uint8_t  _pad3[2];                       // bytes 30-31: pad the header to 32B so the TC arrays
-                                             // after it start 4B-aligned
+    uint16_t run_length;                     // bytes 30-31: ops on one tile counter before the cursor takes
+                                             // the stride2 jump and rotates to the next counter.
+                                             // DM harts: 1 = rotate every op; 0 selects the split-credit arm
+                                             // (one transaction spans every counter). TRISC harts: 0 = rotate
+                                             // every call (single-stride walk).
+    uint32_t stride2_precomp;                // bytes 32-35: cursor jump taken by the op that completes a run.
+                                             // DM harts: raw bytes; TRISC harts: entries. Equal to the stride
+                                             // for any side that rotates every op.
 } __attribute__((packed));
-static_assert(sizeof(dfb_hart_init_entry_t) == 32, "dfb_hart_init_entry_t must be 32B");
+static_assert(sizeof(dfb_hart_init_entry_t) == 36, "dfb_hart_init_entry_t must be 36B");
+static_assert(offsetof(dfb_hart_init_entry_t, run_length) == 30, "run_length must occupy former pad bytes 30-31");
+static_assert(offsetof(dfb_hart_init_entry_t, stride2_precomp) == 32, "stride2_precomp must sit at bytes 32-35");
 static_assert(offsetof(dfb_hart_init_entry_t, capacity) == 26, "capacity must occupy former pad bytes 26-27");
 static_assert(offsetof(dfb_hart_init_entry_t, num_entries) == 24, "num_entries must stay at bytes 24-25");
 
@@ -253,7 +252,7 @@ inline void dfb_write_dm_scalar_pack_to_blob(
     uint8_t num_entries_per_txn_id,
     uint8_t num_entries_per_txn_id_per_tc,
     uint8_t num_txn_ids,
-    uint8_t tc_credit_mode,
+    uint8_t broadcast_tc,
     uint8_t remapper_pair_index) {
     uint8_t* const p = entry_bytes + DFB_INIT_ENTRY_DM_SCALAR_PACK_BYTE_OFF;
     p[0] = num_tcs;
@@ -266,7 +265,7 @@ inline void dfb_write_dm_scalar_pack_to_blob(
     p[7] = num_entries_per_txn_id;
     p[8] = num_entries_per_txn_id_per_tc;
     p[9] = num_txn_ids;
-    p[10] = tc_credit_mode;
+    p[10] = broadcast_tc;
     p[11] = remapper_pair_index;
 }
 
@@ -278,7 +277,7 @@ inline uint8_t dfb_read_init_entry_producer_signal_bit(const uint8_t* entry_byte
 }
 
 // Returns total serialized bytes for one dfb_hart_init_entry_t with num_tcs TC slots.
-// num_tcs pairs (8B each) + num_tcs ptc bytes, rounded up to 4B.
+// num_tcs pairs (8B each) + num_tcs ptc bytes, rounded up to 4B (sizeof(header) is already 4B-aligned).
 // = sizeof(header) + ((num_tcs * 9 + 3) & ~3).
 inline constexpr uint32_t dfb_hart_init_entry_byte_size(uint32_t num_tcs) {
     const uint32_t tc_bytes = num_tcs * 9u;
@@ -407,7 +406,7 @@ inline uint32_t dm0_isr_blob_byte_size(uint32_t producer_txn_id_mask, uint32_t c
 static_assert(sizeof(dfb_global_header_t) == 96, "dfb_global_header_t size changed — check field alignment");
 static_assert(sizeof(dfb_dm1_remapper_core_header_t) == 4, "dfb_dm1_remapper_core_header_t must be 4 bytes");
 static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size is incorrect");
-static_assert(sizeof(dfb_hart_init_entry_t) == 32, "dfb_hart_init_entry_t must be 32B");
+static_assert(sizeof(dfb_hart_init_entry_t) == 36, "dfb_hart_init_entry_t must be 36B");
 
 namespace dfb {
 

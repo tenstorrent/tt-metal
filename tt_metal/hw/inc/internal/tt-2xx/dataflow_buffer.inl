@@ -106,6 +106,38 @@ namespace {
 
 #if !DFB_IS_COMPUTE_MATH
 
+#ifndef COMPILE_FOR_TRISC
+// Advance the current slot's cursor for one op of n entries, rotating at run boundaries.
+// run_length == 1: every op completes a run — advance n * stride_size and rotate (stride2 ==
+// stride_size). run_length > 1: run_length single-entry ops sit stride_size apart; the op that
+// completes the run takes the stride2 jump to this slot's next run. Ops never span a run
+// boundary: multi-entry ops only occur on sides serialized with run_length == 1.
+template <bool is_write>
+inline void dfb_dm_advance_slot(LocalDFBInterface& intf, uint32_t n) {
+    ASSERT(n == 1 || intf.run_length <= 1);
+    auto& slot = intf.tc_slots[intf.tc_idx];
+    const bool completing = static_cast<uint16_t>(intf.run_pos + 1u) >= intf.run_length;
+    const uint32_t advance = (n - 1u) * intf.stride_size + (completing ? intf.stride2 : intf.stride_size);
+    if constexpr (is_write) {
+        slot.wr_ptr += advance;
+        if (slot.wr_ptr >= slot.limit) {
+            slot.wr_ptr = slot.base_addr;
+        }
+    } else {
+        slot.rd_ptr += advance;
+        if (slot.rd_ptr >= slot.limit) {
+            slot.rd_ptr = slot.base_addr;
+        }
+    }
+    if (completing) {
+        intf.run_pos = 0;
+        intf.tc_idx = (intf.tc_idx + 1) % intf.num_tcs_to_rr;
+    } else {
+        intf.run_pos++;
+    }
+}
+#endif  // !COMPILE_FOR_TRISC
+
 inline uint32_t dfb_ring_span_address_units(const LocalDFBInterface& intf) {
     const uint8_t last = static_cast<uint8_t>(intf.num_tcs_to_rr - 1);
 #if defined(COMPILE_FOR_TRISC)
@@ -147,11 +179,11 @@ inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= num_entries);
     llk_wait_for_free_tiles(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
-    if (__builtin_expect(local_dfb_interface_.tc_credit_mode != dfb::kTcCreditRoundRobin, 0)) {
+    if (__builtin_expect(local_dfb_interface_.broadcast_tc || local_dfb_interface_.run_length == 0, 0)) {
         // BROADCAST: every TC receives the full count, so each needs that much room.
-        // SPLIT: each TC receives count/num_tcs, so each only needs room for its share, but a
-        // count that doesn't divide evenly can't be split, so wait for the full count instead.
-        const bool split = (local_dfb_interface_.tc_credit_mode == dfb::kTcCreditSplit) &&
+        // SPLIT (run_length == 0): each TC receives count/num_tcs, so each only needs room for its
+        // share, but a count that doesn't divide evenly can't be split, so wait for the full count.
+        const bool split = (local_dfb_interface_.run_length == 0) &&
                            (num_entries % local_dfb_interface_.num_tcs_to_rr == 0);
         const uint16_t per_tc =
             split ? static_cast<uint16_t>(num_entries / local_dfb_interface_.num_tcs_to_rr) : num_entries;
@@ -185,11 +217,11 @@ inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= num_entries);
     llk_push_tiles(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
-    if (__builtin_expect(local_dfb_interface_.tc_credit_mode != dfb::kTcCreditRoundRobin, 0)) {
+    if (__builtin_expect(local_dfb_interface_.broadcast_tc || local_dfb_interface_.run_length == 0, 0)) {
         // BROADCAST: post the full count to every TC (every consumer reads every entry).
-        // SPLIT: post each TC its share, count/num_tcs, but a count that doesn't divide evenly
-        // can't be split, so post the full count instead of rounding down to zero.
-        const bool split = (local_dfb_interface_.tc_credit_mode == dfb::kTcCreditSplit) &&
+        // SPLIT (run_length == 0): post each TC its share, count/num_tcs, but a count that doesn't
+        // divide evenly can't be split, so post the full count instead of rounding down to zero.
+        const bool split = (local_dfb_interface_.run_length == 0) &&
                            (num_entries % local_dfb_interface_.num_tcs_to_rr == 0);
         const uint16_t per_tc =
             split ? static_cast<uint16_t>(num_entries / local_dfb_interface_.num_tcs_to_rr) : num_entries;
@@ -221,12 +253,7 @@ inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
         uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
         ASSERT(overlay::llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
         overlay::llk_intf_inc_posted(tensix_id, tc_id, num_entries);
-        local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr += (num_entries * local_dfb_interface_.stride_size);
-        if (local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr >= local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].limit) {
-            local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
-        }
-
-        local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
+        dfb_dm_advance_slot</*is_write=*/true>(local_dfb_interface_, num_entries);
     }
 #endif
 #endif
@@ -266,11 +293,7 @@ inline void DataflowBuffer::pop_front_impl(uint16_t num_entries) {
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
     ASSERT(overlay::llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
     overlay::llk_intf_inc_acked(tensix_id, tc_id, num_entries);
-    local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr += (num_entries * local_dfb_interface_.stride_size);
-    if (local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr >= local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].limit) {
-        local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
-    }
-    local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
+    dfb_dm_advance_slot</*is_write=*/false>(local_dfb_interface_, num_entries);
 #endif
 #endif
 }
@@ -556,9 +579,9 @@ inline uint32_t DataflowBuffer::prepare_implicit_read() {
         static_cast<uint16_t>(overlay::fast_llk_intf_read_posted(tensix_id, tc_id)) -
         static_cast<uint16_t>(ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc)) < 0);
     // A transaction fills `block_size` entries, so wait for room for all of them.
-    // This is 1 by default in the non-blocked case. 
-    // Under SPLIT the block spans every TC, so wait for each TC's share on each TC.
-    if (__builtin_expect(local_dfb_interface_.tc_credit_mode == dfb::kTcCreditSplit, 0)) {
+    // This is 1 by default in the non-blocked case.
+    // Under SPLIT (run_length == 0) the block spans every TC, so wait for each TC's share on each TC.
+    if (__builtin_expect(local_dfb_interface_.run_length == 0, 0)) {
         const uint32_t per_tc = local_dfb_interface_.block_size / local_dfb_interface_.num_tcs_to_rr;
         bool ready = false;
         while (!ready) {
@@ -584,9 +607,10 @@ inline void DataflowBuffer::commit_implicit_read() {
     // Runs once per transaction, which carries `block` entries, so advance by that much.
     // This is 1 by default in the non-blocked case.
     const uint32_t block = local_dfb_interface_.block_size;
-    if (__builtin_expect(local_dfb_interface_.tc_credit_mode == dfb::kTcCreditSplit, 0)) {
-        // The transaction spanned every TC at once: advance each slot by its share of the block and
-        // leave tc_idx alone (the ISR posts the credits, equally to every counter in the descriptor).
+    if (__builtin_expect(local_dfb_interface_.run_length == 0, 0)) {
+        // SPLIT: the transaction spanned every TC at once: advance each slot by its share of the
+        // block and leave tc_idx alone (the ISR posts the credits, equally to every counter in the
+        // descriptor).
         const uint32_t per_tc_step =
             (block / local_dfb_interface_.num_tcs_to_rr) * local_dfb_interface_.stride_size;
         for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
@@ -596,14 +620,7 @@ inline void DataflowBuffer::commit_implicit_read() {
             }
         }
     } else {
-        local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr +=
-            local_dfb_interface_.stride_size * block;
-        if (local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr >=
-            local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].limit) {
-            local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr =
-                local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
-        }
-        local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
+        dfb_dm_advance_slot</*is_write=*/true>(local_dfb_interface_, block);
     }
     ptiles_read_ += block;
     if (ptiles_read_ % local_dfb_interface_.num_entries_per_txn_id == 0) {
@@ -637,19 +654,12 @@ inline void DataflowBuffer::commit_implicit_write() {
     // Runs once per transaction, which drains `block` entries, so advance by that much.
     // This is 1 by default in the non-blocked case.
     const uint32_t block = local_dfb_interface_.block_size;
-    local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr +=
-        local_dfb_interface_.stride_size * block;
-    if (local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr >=
-        local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].limit) {
-        local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr =
-            local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
-    }
+    dfb_dm_advance_slot</*is_write=*/false>(local_dfb_interface_, block);
     ctiles_written_ += block;
     if (ctiles_written_ % local_dfb_interface_.num_entries_per_txn_id == 0) {
         ctxn_id_index_ = (ctxn_id_index_ + 1) % local_dfb_interface_.num_txn_ids;
         ctxn_id_loop_cnt_++;
     }
-    local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
 }
 
 // Out-of-line definitions of Noc DFB-specific implicit-sync overloads.

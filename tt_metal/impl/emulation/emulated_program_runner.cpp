@@ -3237,7 +3237,7 @@ static void populate_dfb_interface_slots(
     iface.stride_size = stride_size;
     iface.num_entries = cfg.num_entries;
     iface.tc_idx = 0;
-    iface.tc_credit_mode = ::dfb::kTcCreditRoundRobin;
+    iface.broadcast_tc = false;
     iface.rd_entry_idx = 0;
     iface.wr_entry_idx = 0;
 
@@ -3245,7 +3245,7 @@ static void populate_dfb_interface_slots(
         uint8_t p = static_cast<uint8_t>(std::popcount(cfg.producer_risc_mask & (proc_bit - 1u)));
         if (is_all) {
             // ALL DM-DM: producer broadcasts to all consumer TCs.
-            iface.tc_credit_mode = ::dfb::kTcCreditBroadcast;
+            iface.broadcast_tc = true;
             iface.num_tcs_to_rr = static_cast<uint8_t>(cfg.num_consumers);
             iface.stride_size = cfg.entry_size;
             uint32_t capacity_per_p = cfg.num_entries / cfg.num_producers;

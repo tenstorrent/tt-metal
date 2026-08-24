@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 
+#include "api/debug/assert.h"
 #include "internal/circular_buffer_interface.h"
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h"
 
@@ -13,6 +14,12 @@
 //
 // Pack updates wr_entry_idx (cursor byte-offset derived via dfb_slot_cursor_offset_units)
 // Unpack updates rd_entry_idx
+//
+// run_length == 0: single-stride walk — advance num_tiles * stride_size_tiles and rotate to the
+// next tile counter every call.
+// run_length > 0: run walk — a slot owns run_length tiles stride_size_tiles apart; the tile that
+// completes the run takes the `jump` (entries) to this slot's next run and rotates. Calls never
+// span a run boundary: they either stay inside the run or complete it exactly.
 inline void dfb_advance_slot(LocalDFBInterface& intf, DFBTCSlot& slot, std::uint32_t num_tiles) {
     std::uint32_t entry_idx;
 #if defined(UCK_CHLKC_PACK)
@@ -21,7 +28,22 @@ inline void dfb_advance_slot(LocalDFBInterface& intf, DFBTCSlot& slot, std::uint
     entry_idx = slot.rd_entry_idx;
 #endif
 
-    entry_idx += num_tiles * static_cast<std::uint32_t>(intf.stride_size_tiles);
+    bool rotate = true;
+    if (intf.run_length == 0) {
+        entry_idx += num_tiles * static_cast<std::uint32_t>(intf.stride_size_tiles);
+    } else {
+        const std::uint32_t new_pos = static_cast<std::uint32_t>(intf.run_pos) + num_tiles;
+        ASSERT(new_pos <= intf.run_length);
+        if (new_pos >= intf.run_length) {
+            entry_idx += (num_tiles - 1u) * static_cast<std::uint32_t>(intf.stride_size_tiles) +
+                         static_cast<std::uint32_t>(intf.jump);
+            intf.run_pos = 0;
+        } else {
+            entry_idx += num_tiles * static_cast<std::uint32_t>(intf.stride_size_tiles);
+            intf.run_pos = static_cast<std::uint16_t>(new_pos);
+            rotate = false;
+        }
+    }
     const std::uint32_t offset = dfb_slot_cursor_offset_units(intf, slot, entry_idx);
     if (offset >= slot.ring_size) {
         entry_idx = slot.base_entry_idx;
@@ -33,7 +55,9 @@ inline void dfb_advance_slot(LocalDFBInterface& intf, DFBTCSlot& slot, std::uint
     slot.rd_entry_idx = static_cast<std::uint16_t>(entry_idx);
 #endif
 
-    intf.tc_idx = (intf.tc_idx + 1) % intf.num_tcs_to_rr;
+    if (rotate) {
+        intf.tc_idx = (intf.tc_idx + 1) % intf.num_tcs_to_rr;
+    }
 }
 
 #endif

@@ -127,7 +127,7 @@ void validate_dfb_tile_counters(
     }
 
     // ALL mode engages the remapper ONLY when a Tensix endpoint is involved. Pure DM->DM ALL
-    // broadcasts via kTcCreditBroadcast, so remapper_pair_index / consumer_tcs are intentionally left
+    // broadcasts via broadcast_tc, so remapper_pair_index / consumer_tcs are intentionally left
     // at 0 (in dataflow_buffer.cpp they are populated only inside `if (use_remapper)`, and
     // use_remapper == ALL && !dm_dm_all). Tensix RISCs occupy mask bits 0x0F00.
     const bool dm_dm_all = config.cap == dfb::AccessPattern::ALL &&
@@ -233,11 +233,11 @@ void validate_dfb_tile_counters(
                 producer_risc_id,
                 actual_consumer_tcs);
         } else if (dm_dm_all) {
-            // DM->DM ALL broadcasts via kTcCreditBroadcast; the remapper-only fields must stay unset.
+            // DM->DM ALL broadcasts via broadcast_tc; the remapper-only fields must stay unset.
             EXPECT_EQ(producer_rc->config.consumer_tcs, 0u)
                 << "DM->DM ALL: Producer " << (int)producer_risc_id
                 << " must not populate consumer_tcs (broadcast credit path, remapper unused)";
-            EXPECT_EQ(producer_rc->config.tc_credit_mode, ::dfb::kTcCreditBroadcast)
+            EXPECT_TRUE(producer_rc->config.broadcast_tc)
                 << "DM->DM ALL: Producer " << (int)producer_risc_id << " must use broadcast credits";
             EXPECT_EQ(producer_rc->config.remapper_pair_index, 0)
                 << "DM->DM ALL: Producer " << (int)producer_risc_id << " must not allocate a remapper pair index";

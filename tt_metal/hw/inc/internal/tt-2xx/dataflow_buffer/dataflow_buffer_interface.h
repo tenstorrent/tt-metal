@@ -35,7 +35,7 @@ extern overlay::RemapperAPI g_remapper_configurator;
 
 // ring_size is uint32 L1-aligned units so a DFB can span full Quasar L1 (~4 MB).
 // Cursor byte-offset is not stored: it is derived from wr_entry_idx (advances in lockstep
-// with stride_size / stride_size_tiles). That keeps sizeof(LocalDFBInterface)==89 so
+// with stride_size / stride_size_tiles). That keeps sizeof(LocalDFBInterface)==95 so
 // g_dfb_interface[16] + logical map fit in pack TLS (2048) with the required 256B stack.
 struct DFBTCSlot {
     uint32_t base_addr;
@@ -53,11 +53,15 @@ struct LocalDFBInterface {
     uint8_t stride_size_tiles;
     uint8_t num_tcs_to_rr;
     uint8_t tc_idx;
+    uint16_t run_length;  // tiles per tile-counter run; 0 = rotate every call (single-stride walk)
+    uint16_t run_pos;     // tiles into the current run; one per interface — rotation only leaves a
+                          // slot at a run boundary, so slots never hold a partial run
+    uint16_t jump;        // entries the cursor jumps on the tile that completes a run
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (pack TRISC) size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 89, "LocalDFBInterface (pack TRISC) size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 95, "LocalDFBInterface (pack TRISC) size is incorrect");
 
 #elif defined(COMPILE_FOR_TRISC)
 
@@ -78,11 +82,15 @@ struct LocalDFBInterface {
     uint8_t num_tcs_to_rr;
     uint8_t tc_idx;
     uint8_t tensix_trisc_mask;
+    uint16_t run_length;  // tiles per tile-counter run; 0 = rotate every call (single-stride walk)
+    uint16_t run_pos;     // tiles into the current run; one per interface — rotation only leaves a
+                          // slot at a run boundary, so slots never hold a partial run
+    uint16_t jump;        // entries the cursor jumps on the tile that completes a run
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (unpack TRISC) size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 88, "LocalDFBInterface (unpack TRISC) size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 94, "LocalDFBInterface (unpack TRISC) size is incorrect");
 
 #else
 
@@ -111,19 +119,26 @@ struct LocalDFBInterface {
     uint8_t num_entries_per_txn_id;
     uint8_t num_entries_per_txn_id_per_tc;
     uint8_t num_txn_ids;
-    uint8_t tc_credit_mode;  // dfb::TcCreditMode: all credits to the current TC (round-robin), all credits
-                             // to all TCs in full (broadcast), or a share of the credits to each TC (split)
+    uint8_t broadcast_tc;   // one credit op posts the full count to every TC (DM<->DM ALL producer);
+                            // otherwise credits follow the run walk (see run_length)
     uint8_t _tc_align_pad;  // pad bytes [8,20) → 20B so tc_slots[] stays 4B-aligned
 
     uint16_t num_entries;
     uint16_t block_size;   // how many entries this RISC moves in one NoC transaction: a whole block
                            // when this side is BLOCKED and its entries are adjacent, otherwise 1.
+    uint16_t run_length;   // ops on one tile counter before the cursor takes stride2 and rotates.
+                           // 1 = rotate every op; 0 selects the split-credit arm (one transaction
+                           // spans every counter).
+    uint16_t run_pos;      // ops into the current run; one per interface — rotation only leaves a
+                           // slot at a run boundary, so slots never hold a partial run
+    uint32_t stride2;      // raw-byte cursor jump on the op that completes a run; equals stride_size
+                           // for any side that rotates every op
 
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 };
 
 static_assert(sizeof(DFBTCSlot) == 20, "DFBTCSlot size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 144, "LocalDFBInterface size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 152, "LocalDFBInterface size is incorrect");
 
 #endif
 
