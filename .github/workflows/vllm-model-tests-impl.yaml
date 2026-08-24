@@ -507,7 +507,7 @@ jobs:
 
       - name: 📐 Run structured output benchmark
         if: ${{ matrix.test-group.structured-output }}
-        timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
+        timeout-minutes: ${{ matrix.test-group.structured-output-timeout || matrix.test-group.benchmark-timeout }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
           log-file: ${{ env.FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG }}
