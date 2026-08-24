@@ -3062,10 +3062,9 @@ void PerfDebugProfiler::verify_completeness(DeviceCtx& ctx, uint32_t device_inde
     uint64_t total = 0, worst = 0, cores_hit = 0;
     uint64_t stranded_words = 0, stranded_lanes = 0, checked_lanes = 0;
     uint32_t worst_lane = 0, worst_lane_words = 0;
-    uint32_t earliest_iter = 0;
     uint64_t risc_total[kNRisc] = {};
     struct CoreStall {
-        uint32_t count, vx, vy, first_iter;
+        uint32_t count, vx, vy;
     };
     std::vector<CoreStall> stalled_cores;
     // WORKER cores only. With DRISC self-profiling on, core_virt also holds the drainer cores, and a DRAM
@@ -3089,12 +3088,8 @@ void PerfDebugProfiler::verify_completeness(DeviceCtx& ctx, uint32_t device_inde
         total += core_total;
         worst = std::max(worst, core_total);
         cores_hit += (core_total != 0) ? 1 : 0;
-        const uint32_t first = cv[kernel_profiler::SPSC_STALL_FIRST_ITER];
-        if (first != 0 && (earliest_iter == 0 || first < earliest_iter)) {
-            earliest_iter = first;
-        }
         if (core_total != 0) {
-            stalled_cores.push_back({static_cast<uint32_t>(core_total), vx, vy, first});
+            stalled_cores.push_back({static_cast<uint32_t>(core_total), vx, vy});
         }
         if (heads.empty()) {
             continue;
@@ -3114,28 +3109,15 @@ void PerfDebugProfiler::verify_completeness(DeviceCtx& ctx, uint32_t device_inde
             }
         }
     }
-    if (earliest_iter == 0) {
-        log_info(
-            tt::LogMetal,
-            "[perf-debug profiler] Device {}: L1 STALL COUNTERS -- {} producer stalls across {} of {} cores "
-            "(worst core {}) ; first this-kernel stall: none [0 stall-count = capture did not perturb]",
-            ctx.chip_id,
-            total,
-            cores_hit,
-            n_stall_cores,
-            worst);
-    } else {
-        log_info(
-            tt::LogMetal,
-            "[perf-debug profiler] Device {}: L1 STALL COUNTERS -- {} producer stalls across {} of {} cores "
-            "(worst core {}) ; first this-kernel stall at on-device loop iteration {} (1-based)",
-            ctx.chip_id,
-            total,
-            cores_hit,
-            n_stall_cores,
-            worst,
-            earliest_iter);
-    }
+    log_info(
+        tt::LogMetal,
+        "[perf-debug profiler] Device {}: L1 STALL COUNTERS -- {} producer stalls across {} of {} cores "
+        "(worst core {}) [0 stall-count = capture did not perturb]",
+        ctx.chip_id,
+        total,
+        cores_hit,
+        n_stall_cores,
+        worst);
     if (total != 0) {
         std::sort(stalled_cores.begin(), stalled_cores.end(), [](const CoreStall& a, const CoreStall& b) {
             return a.count > b.count;
@@ -3143,12 +3125,12 @@ void PerfDebugProfiler::verify_completeness(DeviceCtx& ctx, uint32_t device_inde
         std::string top;
         for (size_t i = 0; i < std::min<size_t>(8, stalled_cores.size()); i++) {
             const auto& c = stalled_cores[i];
-            top += fmt::format("{}({},{})={}@it{}", i != 0 ? " " : "", c.vx, c.vy, c.count, c.first_iter);
+            top += fmt::format("{}({},{})={}", i != 0 ? " " : "", c.vx, c.vy, c.count);
         }
         log_info(
             tt::LogMetal,
             "[perf-debug profiler] Device {}: stall breakdown by RISC -- BR {} | NC {} | T0 {} | T1 {} | T2 {}; "
-            "top cores (virt x,y)=count@first-iter: {}",
+            "top cores (virt x,y)=count: {}",
             ctx.chip_id,
             risc_total[0],
             risc_total[1],

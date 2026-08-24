@@ -189,12 +189,7 @@ enum SpscControlBuffer {
     // SPSC_CONTROL_END past the 64-word control vector.
     SPSC_STALL_COUNT_0 = 2 * PROFILER_SPSC_MAX_RISC + 2,
     SPSC_STALL_COUNT_MAX = 8,
-    // Blaze fused-op on-device loop index, written each iteration by the generated kernel. 0 until then.
-    SPSC_LOOP_ITER = SPSC_STALL_COUNT_0 + SPSC_STALL_COUNT_MAX,
-    // First full-ring stall after the producing kernel cleared this word: stored as loop-index + 1 so 0
-    // still means "no stall in this kernel". Host converts back.
-    SPSC_STALL_FIRST_ITER = SPSC_LOOP_ITER + 1,
-    SPSC_CONTROL_END = SPSC_STALL_FIRST_ITER + 1,  // first unused word; grow the layout here
+    SPSC_CONTROL_END = SPSC_STALL_COUNT_0 + SPSC_STALL_COUNT_MAX,  // first unused word; grow the layout here
 };
 
 // Size of the drain kernel's results block, in words. Shared because the host both ZEROES and READS it and
