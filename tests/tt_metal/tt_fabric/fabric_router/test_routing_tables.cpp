@@ -29,7 +29,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
-#include <tt-metalium/experimental/internal/blitz_decode_pipeline.hpp>
+#include <internal/blitz_decode_pipeline.hpp>
 
 namespace {
 

@@ -33,6 +33,11 @@ on:
         description: >
           Prepend the installed wheel's ttnn/build/lib onto LD_LIBRARY_PATH.
           True for a manylinux wheel (P&R); false for an inplace wheel (T1).
+      summary-scope:
+        required: false
+        type: string
+        default: ""
+        description: "Discriminator for the AI summaries when the calling workflow is invoked more than once per run"
 
 # Multihost-ci runner chart may need OIDC. Callers must grant id-token: write on the job that
 # `uses` this workflow (job-level permissions replace inherited defaults) and pass `secrets: inherit`.
@@ -147,7 +152,8 @@ jobs:
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
               "workspace": "/home/user/tt-metal",
               "input_dirs": ["generated/test_logs"],
-              "output_dir": "generated/ai_summaries"
+              "output_dir": "generated/ai_summaries",
+              "scope": "${{ inputs.summary-scope }}"
             }
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}

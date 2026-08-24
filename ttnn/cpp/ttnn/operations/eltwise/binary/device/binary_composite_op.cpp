@@ -481,8 +481,10 @@ Tensor remainder(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    if (!output_dtype.has_value() && !sub_device_id.has_value() && post_activations.empty() &&
-        lhs_activations.empty() && rhs_activations.empty()) {
+    // TODO: add INT32 support for unary SFPU fast path. Until then int32 must route through
+    // binary_ng, since the float kernel would reinterpret the tile.
+    if (input.dtype() != DataType::INT32 && !output_dtype.has_value() && !sub_device_id.has_value() &&
+        post_activations.empty() && lhs_activations.empty() && rhs_activations.empty()) {
         return ttnn::unary_remainder(input, scalar, output_mem_config, output_tensor, sub_core_grids);
     }
     return ttnn::detail::invoke_binary_ng(
@@ -526,10 +528,28 @@ Tensor fmod(
     const Tensor& input,
     unary::ScalarVariant scalar,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& /*sub_core_grids*/,
-    const std::optional<tt::tt_metal::SubDeviceId>& /*sub_device_id*/) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    // TODO: add INT32 support for unary SFPU fast path. Until then int32 must route through
+    // binary_ng, since the float kernel would reinterpret the tile. The fast path also cannot
+    // honor sub_device_id.
+    if (input.dtype() == DataType::INT32 || sub_device_id.has_value()) {
+        return ttnn::detail::invoke_binary_ng(
+            input,
+            scalar,
+            binary::BinaryOpType::FMOD,
+            std::nullopt,
+            output_mem_config,
+            std::nullopt,
+            {},
+            {},
+            {},
+            std::nullopt,
+            sub_core_grids,
+            sub_device_id);
+    }
     float scalar_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, scalar);
-    return ttnn::unary_fmod(input, scalar_f, output_mem_config);
+    return ttnn::unary_fmod(input, scalar_f, output_mem_config, std::nullopt, sub_core_grids);
 }
 
 Tensor floor_div(
@@ -790,7 +810,8 @@ Tensor rsub(
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations) {
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<bool>& fast_and_approximate_mode) {
     return ttnn::detail::invoke_binary_ng(
         input_tensor_a,
         input_tensor_b,
@@ -800,7 +821,8 @@ Tensor rsub(
         optional_output_tensor,
         post_activations,
         lhs_activations,
-        rhs_activations);
+        rhs_activations,
+        ttnn::detail::resolve_fast_and_approximate_mode(fast_and_approximate_mode));
 }
 
 Tensor rsub(
@@ -811,7 +833,8 @@ Tensor rsub(
     const std::optional<Tensor>& optional_output_tensor,
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations) {
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<bool>& fast_and_approximate_mode) {
     return ttnn::detail::invoke_binary_ng(
         input_tensor_a,
         input_b,
@@ -821,7 +844,8 @@ Tensor rsub(
         optional_output_tensor,
         post_activations,
         lhs_activations,
-        rhs_activations);
+        rhs_activations,
+        ttnn::detail::resolve_fast_and_approximate_mode(fast_and_approximate_mode));
 }
 
 Tensor bias_gelu(
@@ -879,6 +903,7 @@ Tensor bias_gelu(
             {},
             {},
             {},
+            /*fast_and_approximate_mode*/ std::nullopt,
             resolved_sub_core_grids),
         true,
         memory_config,

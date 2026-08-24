@@ -114,72 +114,88 @@ void kernel_main() {
         bool has_rows = (num_rows + padding_rows) > 0;
 
         cb_in0.reserve_back(single_block_size * has_rows);
-        uint32_t l1_write_addr = cb_in0.get_write_ptr();
+        {
+            // One write lock over the whole reserved block, covering every NOC read into it (the direct
+            // DRAM reads and the tt_memmove self-copy) and every CPU pad fill. The loop walks
+            // l1_write_addr itself, so the addressing is unchanged -- get_ptr() only exposes the start
+            // of the run.
+            const auto in0_lock = cb_in0.scoped_write_lock(single_block_size * has_rows);
+            uint32_t l1_write_addr = static_cast<uint32_t>(in0_lock.get_ptr().get_address());
 
-        for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
-            uint64_t src_noc_addr = s.get_noc_addr(size_2d + k);
-            if (((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset) ==
-                ((uint64_t)l1_write_addr & dram_align_offset)) {
-                // Read from DRAM to tmp buffer
-                CoreLocalMem<uint32_t> dst(l1_write_addr);
-                noc.async_read(
-                    s, dst, width_size, {.page_id = size_2d + k, .offset_bytes = start_column_id}, {.offset_bytes = 0});
+            for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
+                uint64_t src_noc_addr = s.get_noc_addr(size_2d + k);
+                if (((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset) ==
+                    ((uint64_t)l1_write_addr & dram_align_offset)) {
+                    // Read from DRAM to tmp buffer
+                    CoreLocalMem<uint32_t> dst(l1_write_addr);
+                    noc.async_read(
+                        s,
+                        dst,
+                        width_size,
+                        {.page_id = size_2d + k, .offset_bytes = start_column_id},
+                        {.offset_bytes = 0});
 
-                // Block before copying data from tmp to cb buffer
-                noc.async_read_barrier();
+                    // Block before copying data from tmp to cb buffer
+                    noc.async_read_barrier();
 
-                uint32_t prev_size = start_column_id;
-                uint32_t this_block_size = unpadded_X_size - prev_size;
-                if (this_block_size < width_size) {
-                    uint32_t to_pad = width_size - this_block_size;
-                    fill_with_val<element_size>(l1_write_addr + this_block_size, to_pad, pad_value);
+                    uint32_t prev_size = start_column_id;
+                    uint32_t this_block_size = unpadded_X_size - prev_size;
+                    if (this_block_size < width_size) {
+                        uint32_t to_pad = width_size - this_block_size;
+                        fill_with_val<element_size>(l1_write_addr + this_block_size, to_pad, pad_value);
+                    }
+                } else {
+                    // If there is a mis-alignment, we first load the data to a middle L1 cb, then copy to the final cb
+                    // buffer. The aligned-down source is a full NoC address, so it is supplied directly via
+                    // UnicastEndpoint (decomposed into x/y/local addr; NOC_XY_ADDR repacks it unchanged).
+                    const uint64_t aligned_src_noc_addr = (src_noc_addr + (uint64_t)start_column_id) & dram_align_mask;
+                    {
+                        // Separate lock for the staging DFB: it covers the NOC read that fills the scratch and
+                        // the CPU pad fill that patches its tail. Released before the tt_memmove, which only
+                        // reads the scratch (reads are not reported) and writes cb_in0, already covered by
+                        // in0_lock. Addresses still come from temp_addr, which is captured once outside this
+                        // loop and rounded up to dram_alignment.
+                        const auto stage_lock = cb_in1.scoped_write_lock(1);
+                        CoreLocalMem<uint32_t> temp_dst(temp_addr);
+                        noc.async_read(
+                            UnicastEndpoint{},
+                            temp_dst,
+                            width_size + dram_alignment,
+                            {.noc_x = (uint32_t)NOC_UNICAST_ADDR_X(aligned_src_noc_addr),
+                             .noc_y = (uint32_t)NOC_UNICAST_ADDR_Y(aligned_src_noc_addr),
+                             .addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(aligned_src_noc_addr)},
+                            {.offset_bytes = 0});
+
+                        // Block before copying data from tmp to cb buffer
+                        noc.async_read_barrier();
+
+                        uint32_t prev_size = start_column_id;
+                        uint32_t this_block_size = unpadded_X_size - prev_size;
+                        if (this_block_size < width_size) {
+                            uint32_t to_pad = width_size - this_block_size;
+                            fill_with_val<element_size>(
+                                temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset) +
+                                    this_block_size,
+                                to_pad,
+                                pad_value);
+                        }
+                    }
+
+                    tt_memmove<false, false, true, 0>(
+                        noc,
+                        l1_write_addr,
+                        temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset),
+                        width_size);
                 }
-            } else {
-                // If there is a mis-alignment, we first load the data to a middle L1 cb, then copy to the final cb
-                // buffer. The aligned-down source is a full NoC address, so it is supplied directly via
-                // UnicastEndpoint (decomposed into x/y/local addr; NOC_XY_ADDR repacks it unchanged).
-                const uint64_t aligned_src_noc_addr = (src_noc_addr + (uint64_t)start_column_id) & dram_align_mask;
-                CoreLocalMem<uint32_t> temp_dst(temp_addr);
-                noc.async_read(
-                    UnicastEndpoint{},
-                    temp_dst,
-                    width_size + dram_alignment,
-                    {.noc_x = (uint32_t)NOC_UNICAST_ADDR_X(aligned_src_noc_addr),
-                     .noc_y = (uint32_t)NOC_UNICAST_ADDR_Y(aligned_src_noc_addr),
-                     .addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(aligned_src_noc_addr)},
-                    {.offset_bytes = 0});
 
-                // Block before copying data from tmp to cb buffer
-                noc.async_read_barrier();
-                // [#48552] invalidate_l1_cache() is a no-op on Quasar DM; the tt_memmove below CPU-reads
-                // temp_addr (a reused single-slot scratch just NOC-written) -> discard the stale L2 line so the
-                // copy re-fetches fresh data from TL1. Placed before fill_with_val (which writes the pad tail).
-                invalidate_l2_cache_range(temp_addr, width_size + dram_alignment);
-
-                uint32_t prev_size = start_column_id;
-                uint32_t this_block_size = unpadded_X_size - prev_size;
-                if (this_block_size < width_size) {
-                    uint32_t to_pad = width_size - this_block_size;
-                    fill_with_val<element_size>(
-                        temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset) + this_block_size,
-                        to_pad,
-                        pad_value);
-                }
-
-                tt_memmove<false, false, true, 0>(
-                    noc,
-                    l1_write_addr,
-                    temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset),
-                    width_size);
+                l1_write_addr += width_size;
             }
 
-            l1_write_addr += width_size;
-        }
-
-        for (uint32_t pad_row = 0; pad_row < padding_rows; pad_row++) {
-            fill_with_val<element_size>(l1_write_addr, width_size, pad_value);
-            l1_write_addr += width_size;
-        }
+            for (uint32_t pad_row = 0; pad_row < padding_rows; pad_row++) {
+                fill_with_val<element_size>(l1_write_addr, width_size, pad_value);
+                l1_write_addr += width_size;
+            }
+        }  // in0_lock released before the credit post
 
         cb_in0.push_back(single_block_size * has_rows);
     };

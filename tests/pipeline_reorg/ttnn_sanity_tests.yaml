@@ -228,10 +228,10 @@
   owner_id: U085GDCAZTN # Pavle Josipovic
 
 # indexer_score is Blackhole-only (the nightly suite has the full coverage); this reuses the accuracy
-# test's sp_rank-7 GLM5.1/DSv32 deployment cases (8h/16h, bf16 + bfp8 q, deployed bfp8 k) so post-commit/
+# test's sp_rank-7 GLM5.1 deployment cases (8h, bf16 + bfp8 q, deployed bfp8 k) so post-commit/
 # sanity catches deployment regressions and the op gets watcher coverage, without re-running them nightly.
 - name: "ttnn indexer_score group"
-  cmd: 'pytest --timeout 300 tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py -k "accuracy and rank7" -xv'
+  cmd: 'pytest --timeout 300 tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py -k "accuracy and rank7" -xv'
   skus:
     wh_n300_civ2:
       timeout: 10
@@ -279,5 +279,18 @@
       timeout: 40
     sim_bh_p150:
       timeout: 40
+  team: ttnn
+  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+
+- name: "trace allocation tracker"
+  cmd: |
+    pytest --timeout 300 tests/ttnn/unit_tests/test_trace_allocation_config.py -xv
+    TT_METAL_TRACE_ALLOC_TRACKING=1 pytest --timeout 300 tests/ttnn/unit_tests/base_functionality/test_single_device_trace.py -k 'trace_allocation_tracking' -xv
+    TT_METAL_TRACE_ALLOC_TRACKING=1 TT_METAL_TRACE_ALLOC_TRACEBACKS=1 pytest --timeout 300 tests/ttnn/unit_tests/base_functionality/test_single_device_trace.py -k 'trace_allocation_tracking_acknowledgments_and_lifetime' -xv
+  skus:
+    wh_n300_civ2:
+      timeout: 10
+    sim_wh_n150:
+      timeout: 15
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev

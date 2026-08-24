@@ -126,7 +126,6 @@ void kernel_main() {
     // equals the tile size, so this is a no-op. Mirrors how in0/in1 readers walk at the
     // aligned stride.
     const uint32_t bias_single_tile_size_bytes = get_local_cb_interface(dfb_id_in3).fifo_page_size;
-    constexpr const uint32_t in3_tile_hw = get_tile_hw(dfb_id_in3);
 
 #ifndef BIAS_SHARDED
     uint32_t l1_write_addr_in3;
@@ -190,7 +189,6 @@ void kernel_main() {
 
     constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(dfb_id_in1);
-    constexpr const uint32_t in1_tile_hw = get_tile_hw(dfb_id_in1);
     // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
     // interleaved in1 CB pages are sized to match (see the program factory). On the plain interleaved
     // path the NOC reads the unpadded tile of data into each padded slot and tiles are laid out /
@@ -207,7 +205,6 @@ void kernel_main() {
 
     constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t output_single_tile_size_bytes = get_tile_size(dfb_id_out0);
-    constexpr const uint32_t output_tile_hw = get_tile_hw(dfb_id_out0);
 
     Noc noc;
     DataflowBuffer dfb_in1(dfb_id_in1);

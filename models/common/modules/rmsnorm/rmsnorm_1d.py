@@ -7,7 +7,7 @@ RMSNorm1D: RMSNorm for 1D mesh topologies (single-chip, n150, n300, T3K row/colu
 Execution paths:
   - Path 1: _decode_local - Local decode (sharded or interleaved) - always for 1D decode
   - Path 2: _prefill_local - Local prefill (interleaved) - single-device or prefill_distributed=False
-  - Path 3: _prefill_1d_distributed - 1D distributed prefill - multi-device, Ring topology
+  - Path 3: _prefill_1d_distributed - 1D distributed prefill - multi-device CCL
 
 Key design:
   - decode_forward always uses local sharded path (no 1D distributed decode)
@@ -23,7 +23,7 @@ from typing import Optional
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
-from models.common.modules.tt_ccl import get_tt_ccl
+from models.common.modules.tt_ccl import default_topology, get_tt_ccl
 from models.common.tensor_utils import TILE_SIZE
 
 # =============================================================================
@@ -268,14 +268,12 @@ class RMSNorm1D(LightweightModule):
         )
 
     # =========================================================================
-    # Path 3: 1D distributed prefill (Ring topology, no cluster_axis)
+    # Path 3: 1D distributed prefill
     # =========================================================================
 
     def _prefill_1d_distributed(self, x: ttnn.Tensor | LazyWeight) -> ttnn.Tensor:
         """
         1D distributed prefill - when prefill_distributed=True.
-
-        Uses Ring topology, no cluster_axis.
 
         Execution:
           rms_norm_pre_all_gather -> all_gather(stats) -> rms_norm_post_all_gather
@@ -287,14 +285,14 @@ class RMSNorm1D(LightweightModule):
         # Run distributed rmsnorm part 1
         tt_stats = ttnn.rms_norm_pre_all_gather(x, compute_kernel_config=cfg.compute_kernel_config, dtype=ttnn.bfloat16)
 
-        # AllGather stats (Ring topology, no cluster_axis)
+        # AllGather stats
         tt_stats = ttnn.experimental.all_gather_async(
             tt_stats,
             persistent_output_buffer=None,
             dim=3,
             multi_device_global_semaphore=cfg.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=1,
-            topology=ttnn.Topology.Ring,
+            topology=default_topology(cfg.mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             barrier_semaphore=cfg.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
             chunks_per_sync=10,

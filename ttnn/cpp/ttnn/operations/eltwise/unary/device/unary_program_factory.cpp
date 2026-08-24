@@ -46,6 +46,7 @@ void pack_first_op_scalars(
     }
     switch (op.type()) {
         case UnaryOpType::WHERE_TSS:
+        case UnaryOpType::MAC_TSS:
             packed_scalar1 = pack_scalar_runtime_arg(op, 0, input_dtype);
             packed_scalar2 = pack_scalar_runtime_arg(op, 1, input_dtype);
             break;
