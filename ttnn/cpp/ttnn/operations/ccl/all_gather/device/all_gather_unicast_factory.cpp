@@ -246,10 +246,13 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     uint32_t num_links = operation_attributes.axis_num_links[axis];
 
     // --- Size class ---
-    // Bytes/link at the *requested* link count, so if the core grid later forces links down (which warns)
-    // the choices below stay the ones for the wider config.
-    const uint64_t bytes_per_link =
-        (static_cast<uint64_t>(num_output_chunks) * output_chunk_size) / std::max(1u, num_links);
+    // Bytes of the gathered output crossing one link, at the *requested* link count, so if the core grid
+    // later forces links down (which warns) the choices below stay the ones for the wider config. Same
+    // quantity the factory-selection heuristic uses, so the thresholds there and here are comparable.
+    // Scaled by device count because a link carries more devices' data as the axis grows; every sweep ran
+    // at 8 devices, so that scaling is a model, not a measurement.
+    const uint64_t per_link_bytes =
+        (static_cast<uint64_t>(num_output_chunks) * output_chunk_size * num_devices) / std::max(1u, num_links);
     // A long stripe outlasts a transfer many times over, so a worker's runs stay inside one row and its
     // writes land sequentially at the destination. Short stripes straddle a row edge on every transfer.
     constexpr uint32_t long_stripe_chunks = 64;
@@ -258,17 +261,30 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // Num worker cores per direction per link. >1 requires an additional fabric mux core to own the fabric
     // connection and multiplex traffic. Values below are per-arch sweep results.
     uint32_t workers_per_dir = 1;
+    // Whether the walk should cap its run length; see max_run_bytes below.
+    bool cap_runs = false;
     if (arch == tt::ARCH::WORMHOLE_B0) {
         // A second worker needs a fabric mux: 6 cores per link instead of 2, and an extra hop per packet. So
-        // take one wherever it is not slower (T3000 sweep, 8 KB..200 MB) -- while the op is latency-bound, and
-        // with a long stripe, which holds at every ring size measured but on a line only up to ~512 KB/link.
-        const bool small = bytes_per_link <= 64 * 1024;
-        const bool long_stripe_wins = long_stripe && (is_ring || bytes_per_link <= 512 * 1024);
+        // take one wherever it is not slower (T3000 sweep, 64 KB..1.6 GB per link) -- while the op is
+        // latency-bound, and with a long stripe, which holds at every ring size measured but on a line only
+        // up to ~4 MB/link.
+        const bool small = per_link_bytes <= 512 * 1024;
+        const bool long_stripe_wins = long_stripe && (is_ring || per_link_bytes <= 4 * 1024 * 1024);
         workers_per_dir = (small || long_stripe_wins) ? 1 : 2;
     } else if (arch == tt::ARCH::BLACKHOLE) {
-        // One worker (no mux) is far worse, and past three they only contend on the NOC. Swept over
-        // page sizes 64 B..8 KB on ring and line; three wins everywhere.
-        workers_per_dir = 3;
+        // Fabric-bound: the link runs short of payload, so it wants more workers feeding it and whole-packet
+        // runs rather than short DRAM-friendly ones. Two ways to get there -- a line, whose inbound traffic
+        // all arrives over one link where a ring's splits over two, and a chunk big enough that only one fits
+        // a packet, leaving the rest of the packet empty.
+        const bool bulk_line = !is_ring && per_link_bytes >= 1024u * 1024u;
+        const bool half_empty_packets = 2 * output_chunk_size > packet_size;
+        const bool fabric_bound = bulk_line || half_empty_packets;
+        // A mux plus its workers only pays off once each slice has real work; below that the extra cores
+        // are pure launch cost. A line relays far more stripes per device than a ring, so its per-slice
+        // overhead is amortized much later.
+        const uint64_t mux_floor = is_ring ? 16u * 1024u : 192u * 1024u;
+        workers_per_dir = per_link_bytes < mux_floor ? 1u : (fabric_bound ? 3u : 2u);
+        cap_runs = !fabric_bound;
     }
 
     // Shrink core usage to fit available core grid. Shrink workers_per_link first, and then shrink num_links.
@@ -349,11 +365,12 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // Two entries: one filling while the other drains. Deeper is perf-neutral -- the writer's fabric flush,
     // not CB turnaround, paces the loop -- so keep the L1 instead.
     uint32_t cb_depth = 2;
-    // Perf hack: pack multiple packets into a single CB page to reduce CB sync frequency between reader and
-    // writer. Note this increases effective CB depth. An integer multiplier preserves the whole-packet and
-    // whole-page properties above.
-    // Empirically determined heuristic, works well for all tensor sizes
-    const uint32_t ideal_multiplier = (arch == tt::ARCH::BLACKHOLE) ? 4 : 3;
+    // Pack several packets into one CB page to reduce reader/writer sync frequency (this also raises the
+    // effective CB depth). An integer multiplier preserves the whole-packet and whole-page properties above.
+    // Blackhole prefers no packing: a packet-sized entry keeps the writer closer behind the reader, which
+    // matters more there than the saved syncs. Multicast wants the opposite value on each arch -- every cell
+    // was swept on its own, so the mismatch is deliberate.
+    const uint32_t ideal_multiplier = (arch == tt::ARCH::BLACKHOLE) ? 1 : 3;
     const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
     const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * cb_page_size), 1u, ideal_multiplier);
     if (multiplier < ideal_multiplier) {
@@ -384,6 +401,15 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     constexpr uint32_t signals_per_stripe = 2;
     const uint32_t data_valid_granularity = std::max(1u, tt::div_up(cb_pages_per_stripe, signals_per_stripe));
 
+    // Longest run the walk may emit, in chunks. Capping it costs packet payload but spreads the transfer
+    // over more DRAM banks, which is the better trade wherever DRAM is the limit (see cap_runs above).
+    // Hardware already caps a transfer at min(fabric packet, NOC_MAX_BURST_SIZE): 7616 B on Wormhole and
+    // 15232 B on Blackhole. The sweeps put the best run length near Wormhole's figure, so only Blackhole
+    // needs a cap -- any value settable on Wormhole is already above its ceiling. The cap is a byte budget,
+    // so it holds across page sizes.
+    constexpr uint32_t max_run_bytes = 4096;
+    const uint32_t xfer_cap = cap_runs ? std::max(1u, max_run_bytes / output_chunk_size) : 0xFFFFFFFFu;
+
     // KERNEL CREATION
     // Reader
     std::vector<uint32_t> reader_compile_args = {
@@ -396,6 +422,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         cb_page_size,              // cb entry size
         do_init_barrier,           // wait for remote output allocation before relaying
         packet_size,               // packet_size (sets the transfer size, hence the walk order)
+        xfer_cap,                  // max run length in chunks
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
@@ -411,6 +438,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         packet_size,               // packet_size
         do_init_barrier,           // send init handshake before relaying
         data_valid_granularity,    // signal data_valid once per this many CB pages
+        xfer_cap,                  // max run length in chunks
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
@@ -435,7 +463,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // Mux slots per worker channel. Two lets a worker stage its next packet while the mux forwards the last.
     // On a ring at scale that only interleaves the two workers' packets more finely at the receiver, scattering
     // its DRAM writes, so one slot wins there; a line, whose per-hop relay is already serialised, keeps two.
-    const bool ring_at_scale = is_ring && bytes_per_link >= 256 * 1024;
+    const bool ring_at_scale = is_ring && per_link_bytes >= 2 * 1024 * 1024;
     const uint8_t num_buffers_per_channel = (arch == tt::ARCH::WORMHOLE_B0 && ring_at_scale) ? 1 : 2;
     // The fabric maximum is also the smallest safe value here: our payload is the max payload, and an
     // undersized slot silently overruns the next one.

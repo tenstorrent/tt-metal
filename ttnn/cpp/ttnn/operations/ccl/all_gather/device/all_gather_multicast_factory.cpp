@@ -327,6 +327,16 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
 
     CreateCircularBuffer(program, worker_core_range, cb_src0_config);
 
+    // Longest run the walk may emit, in chunks. Hardware already caps a transfer at min(fabric packet,
+    // NOC_MAX_BURST_SIZE): 7616 B on Wormhole and 15232 B on Blackhole. The sweeps put the best run length
+    // near Wormhole's figure, so only Blackhole needs a cap -- any value settable on Wormhole is already
+    // above its ceiling. Past ~8 KB a run gains little packet fill but makes the walk revisit the same DRAM
+    // bank for longer. Only capping pages large enough to still span a few chunks pays off; with small pages
+    // the longest run the packet allows is what wins.
+    constexpr uint32_t max_run_bytes = 8192;
+    const bool cap_runs = arch == tt::ARCH::BLACKHOLE && output_chunk_size >= 1024;
+    const uint32_t xfer_cap = cap_runs ? std::max(1u, max_run_bytes / output_chunk_size) : 0xFFFFFFFFu;
+
     // KERNEL CREATION
     // Reader (covers forward directions E-line + S-rect)
     std::vector<uint32_t> reader_compile_args = {
@@ -342,6 +352,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         load_balance_across_alt_routes,  // load_balance_across_alt_routes
         (e_hops > 0) + (s_hops > 0),     // num_connections
         do_init_barrier,                 // do_init_barrier
+        xfer_cap,                        // max run length in chunks
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
@@ -358,6 +369,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         load_balance_across_alt_routes,  // load_balance_across_alt_routes
         (w_hops > 0) + (n_hops > 0),     // num_connections
         do_init_barrier,                 // do_init_barrier
+        xfer_cap,                        // max run length in chunks
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 

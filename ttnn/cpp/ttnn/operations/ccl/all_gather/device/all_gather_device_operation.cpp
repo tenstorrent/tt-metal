@@ -15,7 +15,6 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <algorithm>
-#include <cmath>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -246,12 +245,10 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         const uint64_t in_page = input_tensor.tensor_spec().compute_page_size_bytes();
         const uint64_t out_page = args.output_spec.compute_page_size_bytes();
         const uint64_t txn = std::min(in_page, out_page);  // NOC transaction size
-        // Bytes crossing one link: the whole gathered output, not just this device's share -- so these
-        // thresholds are NOT comparable with the factories', which count one device's share. Traffic on a
-        // link really does grow with both counts, so dividing by links and scaling by devices is the right
-        // shape; what is untested is whether the crossover stays at a fixed number of bytes as the device
-        // count changes, since every sweep ran on 8 devices. Blackhole was fitted on tile only, Wormhole
-        // on tile and row-major.
+        // Bytes of the gathered output crossing one link -- the same quantity both factories compute, so
+        // the thresholds here and there are comparable. Scaled by device count because a link carries more
+        // devices' data as the axis grows; every sweep ran at 8 devices, so that scaling is a model, not a
+        // measurement. Blackhole was fitted on tile only, Wormhole on tile and row-major.
         const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
         const uint64_t per_link_bytes =
             input_tensor.physical_volume() * input_tensor.element_size() * args.num_devices / num_links;
@@ -300,19 +297,18 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                 break;
             }
             case tt::ARCH::BLACKHOLE: {
-                // Coefficients from a factory-vs-factory sweep, not first principles. Multicast wins only
-                // at small volumes, and by less than unicast wins at scale, so the boundary errs toward
-                // unicast. The ceiling grows with page size -- a bigger page fills a fabric packet, which is
-                // what unicast needs to pay off -- and sits higher on a line, whose unicast relay moves more
-                // data per link than a ring's.
-                uint64_t mcast_ceiling;
+                // Factory-vs-factory sweep. How long unicast's extra store-and-forward hop takes to pay for
+                // itself is what sets both boundaries, so a ring -- which halves that hop count by pulling
+                // from both sides -- switches far earlier than a line.
                 if (is_ring) {
-                    mcast_ceiling = std::min<uint64_t>(650'000, 300 * txn);
+                    // Unicast wins almost everywhere. Multicast only holds on where the op is pure overhead
+                    // rather than transfer: a small volume moved as small pages.
+                    use_unicast = per_link_bytes > 64 * 1024 || txn > 1024;
                 } else {
-                    const double sqrt_page = std::sqrt(static_cast<double>(txn));
-                    mcast_ceiling = std::min<uint64_t>(1'700'000, static_cast<uint64_t>(27'000 * sqrt_page));
+                    // One inbound link, so unicast trails until the volume is large enough for its
+                    // bandwidth edge to cover the hops. Page size does not move this boundary.
+                    use_unicast = per_link_bytes >= 512 * 1024;
                 }
-                use_unicast = per_link_bytes >= mcast_ceiling;
                 break;
             }
             default: break;  // uncalibrated arch
