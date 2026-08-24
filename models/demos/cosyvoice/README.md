@@ -292,7 +292,7 @@ models/demos/cosyvoice/
 ├── requirements-reference.txt   reference-environment pins (CPU)
 ├── docs/
 │   ├── security.md              dependency and input-handling review
-│   └── diagrams/                .d2 sources + rendered .png; ./render.sh rebuilds them
+│   └── diagrams/                .d2 sources + rendered .svg/.png; ./render.sh rebuilds them
 ├── scripts/
 │   ├── download_model.py        stdlib-only, resumable checkpoint fetch
 │   ├── gen_golden.py            capture per-module goldens from the reference
