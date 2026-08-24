@@ -447,6 +447,24 @@ void kernel_main() {
     // MOVER TRAFFIC SHAPING (arg 40; 0 = off): cycles of deliberate pace per frame moved, applied only to
     // a productive sweep that KEPT UP (no peer backlog beyond one batch). See the controller below.
     constexpr uint32_t kMoverFrameGap = get_compile_time_arg_val(40);
+    // MOVER peer slots 2..5 (args 41-56): the 6-filler shape's single mover drains six rings. Zero on the
+    // default 4+2 shape and for fillers.
+    constexpr uint32_t kPeerXY2 = get_compile_time_arg_val(41);
+    constexpr uint32_t kPeerHsAddr2 = get_compile_time_arg_val(42);
+    constexpr uint32_t kDramBank2 = get_compile_time_arg_val(43);
+    constexpr uint32_t kDramAddr2 = get_compile_time_arg_val(44);
+    constexpr uint32_t kPeerXY3 = get_compile_time_arg_val(45);
+    constexpr uint32_t kPeerHsAddr3 = get_compile_time_arg_val(46);
+    constexpr uint32_t kDramBank3 = get_compile_time_arg_val(47);
+    constexpr uint32_t kDramAddr3 = get_compile_time_arg_val(48);
+    constexpr uint32_t kPeerXY4 = get_compile_time_arg_val(49);
+    constexpr uint32_t kPeerHsAddr4 = get_compile_time_arg_val(50);
+    constexpr uint32_t kDramBank4 = get_compile_time_arg_val(51);
+    constexpr uint32_t kDramAddr4 = get_compile_time_arg_val(52);
+    constexpr uint32_t kPeerXY5 = get_compile_time_arg_val(53);
+    constexpr uint32_t kPeerHsAddr5 = get_compile_time_arg_val(54);
+    constexpr uint32_t kDramBank5 = get_compile_time_arg_val(55);
+    constexpr uint32_t kDramAddr5 = get_compile_time_arg_val(56);
     constexpr uint32_t kGateForceMask = 7;  // force-ship every 8th sweep
     constexpr uint32_t kStageMinWords = (kNumRisc * kernel_profiler::PROFILER_L1_VECTOR_SIZE * kStageMinFillPct) / 100u;
     // ---- ROLE SPLIT (see the header). 0 = today's full-job drainer, and every arg below is then 0. ----
@@ -549,11 +567,12 @@ void kernel_main() {
     constexpr uint32_t kSelfSlot = kNStage;
     // Indexed by peer slot. constexpr arrays of compile-time args, so nothing is loaded from memory to reach
     // them; the loop over kNPeer is a fully-known trip count.
-    constexpr uint32_t kPeerXYs[2] = {kPeerXY, kPeerXY1};
-    constexpr uint32_t kPeerHss[2] = {kPeerHsAddr, kPeerHsAddr1};
-    constexpr uint32_t kPeerBanks[2] = {kDramBank, kDramBank1};
-    constexpr uint32_t kPeerAddrs[2] = {kDramAddr, kDramAddr1};
-    static_assert(kNPeer <= 2, "a mover drains at most two rings (see kNPeerMax on the host)");
+    constexpr uint32_t kPeerXYs[6] = {kPeerXY, kPeerXY1, kPeerXY2, kPeerXY3, kPeerXY4, kPeerXY5};
+    constexpr uint32_t kPeerHss[6] = {
+        kPeerHsAddr, kPeerHsAddr1, kPeerHsAddr2, kPeerHsAddr3, kPeerHsAddr4, kPeerHsAddr5};
+    constexpr uint32_t kPeerBanks[6] = {kDramBank, kDramBank1, kDramBank2, kDramBank3, kDramBank4, kDramBank5};
+    constexpr uint32_t kPeerAddrs[6] = {kDramAddr, kDramAddr1, kDramAddr2, kDramAddr3, kDramAddr4, kDramAddr5};
+    static_assert(kNPeer <= 6, "a mover drains at most six rings (see kNPeerMax on the host)");
     static_assert(kRole != kRoleMover || kNPeer >= 1, "a mover with no ring would spin forever doing nothing");
     // Handshake block: four words, 16 B apart so each is independently addressable by a 4 B NoC write
     // without a read-modify-write on its neighbours.
@@ -707,18 +726,40 @@ void kernel_main() {
     // PER PEER, 16 B apart: probe_f echo | first frame word | live head | live tail. Peer 0 keeps the
     // addresses it always had (+20..+32) so nothing that reads them had to move; peer 1's block is +36..+48.
     // 13 words = 52 B of the 64 B pad, so it still fits behind `done` with room to spare.
-    volatile tt_l1_ptr uint32_t* mv_probe_f[2] = {
+    // Peers 0/1 keep their historical done-pad addresses; peers 2-5 (6-filler shape) live in the
+    // RESULTS region at out[92 + (p-2)*4 .. +3] = {probe_f echo, first frame word, live head, live tail}
+    // -- the pad has no room for six 16 B blocks, and out[88..107] was free. Written live; the host
+    // probe check and exit report both know this layout.
+#define MV_LIVE_W(p, k) (kResultsAddr + (92u + ((p) - 2u) * 4u + (k)) * 4u)
+    volatile tt_l1_ptr uint32_t* mv_probe_f[6] = {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 20),
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 36)};
-    volatile tt_l1_ptr uint32_t* mv_probe_frame[2] = {
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 36),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MV_LIVE_W(2, 0)),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MV_LIVE_W(3, 0)),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MV_LIVE_W(4, 0)),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MV_LIVE_W(5, 0))};
+    volatile tt_l1_ptr uint32_t* mv_probe_frame[6] = {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 24),
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 40)};
-    volatile tt_l1_ptr uint32_t* mv_live_head[2] = {
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 40),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MV_LIVE_W(2, 1)),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MV_LIVE_W(3, 1)),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MV_LIVE_W(4, 1)),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MV_LIVE_W(5, 1))};
+    volatile tt_l1_ptr uint32_t* mv_live_head[6] = {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 28),
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 44)};
-    volatile tt_l1_ptr uint32_t* mv_live_tail[2] = {
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 44),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MV_LIVE_W(2, 2)),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MV_LIVE_W(3, 2)),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MV_LIVE_W(4, 2)),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MV_LIVE_W(5, 2))};
+    volatile tt_l1_ptr uint32_t* mv_live_tail[6] = {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 32),
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 48)};
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kDoneAddr + 48),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MV_LIVE_W(2, 3)),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MV_LIVE_W(3, 3)),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MV_LIVE_W(4, 3)),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MV_LIVE_W(5, 3))};
+#undef MV_LIVE_W
     // FILLER: its own handshake block. head is stored locally and read over the NoC by its mover; tail is
     // written over the NoC by that mover and read locally here.
     volatile tt_l1_ptr uint32_t* hs_head = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kHsAddr + kHsHead);
@@ -727,12 +768,12 @@ void kernel_main() {
     uint32_t frames_flushed = 0;  // FILLER: of those, how many are barrier-flushed and safe to publish
     // MOVER, per peer ring. Nothing here may be shared between peers: one `mv_tail` for two rings would ack
     // frames on one ring that were only read from the other, i.e. hand the filler room it does not have.
-    uint32_t mv_tail[2] = {0, 0};   // frames consumed out of peer p's ring (monotonic)
-    uint32_t mv_moved[2] = {0, 0};  // frames shipped to the host out of peer p's ring
-    uint32_t mv_max_n[2] = {0, 0};  // largest batch moved in one visit to peer p
+    uint32_t mv_tail[6] = {};   // frames consumed out of peer p's ring (monotonic)
+    uint32_t mv_moved[6] = {};  // frames shipped to the host out of peer p's ring
+    uint32_t mv_max_n[6] = {};  // largest batch moved in one visit to peer p
     // head - tail high-water per ring: how much elastic buffer is REALLY used. A FILLER has one ring and
     // uses slot 0 only.
-    uint32_t ring_hi[2] = {0, 0};
+    uint32_t ring_hi[6] = {};
     uint32_t ring_blocked = 0;  // FILLER: stage_run calls that had to wait for ring room at all
     uint32_t hs_bad = 0;        // MOVER: head reads that were structurally impossible -- MUST stay 0
     if constexpr (kRole == kRoleFiller) {
@@ -2381,7 +2422,16 @@ void kernel_main() {
     out[61] = (kRole == kRoleMover) ? *mv_probe_frame[1] : 0u;
     out[62] = (kRole == kRoleMover) ? *mv_probe_f[1] : 0u;
     out[63] = ring_hi[1];
-    static_assert(kNPeer <= 2, "the results block only carries two peers (out[58..63])");
+    // Peers 2-5 (6-filler shape): out[108 + (p-2)*5] = {moved, ring_hi, tail, max_batch, first frame}.
+    for (uint32_t p = 2; p < 6; p++) {
+        const uint32_t w = 108u + (p - 2u) * 5u;
+        out[w + 0] = mv_moved[p];
+        out[w + 1] = ring_hi[p];
+        out[w + 2] = mv_tail[p];
+        out[w + 3] = mv_max_n[p];
+        out[w + 4] = (kRole == kRoleMover && kNPeer > p) ? *mv_probe_frame[p] : 0u;
+    }
+    static_assert(kNPeer <= 6, "the results block carries six peers (out[58..63] + out[108..127])");
     // ---- DRISC SELF-PROFILING counters (0 on the default path) ----
     //
     // Shipped WITH the feature for the same reason the role split's were: a sampled, capped instrument that

@@ -73,7 +73,7 @@ private:
     //   - exactly two DRAM cores measure safe to host a drainer (row y == 0: `0-0` and `9-0`, N+29)
     //   - TLB windows: nwin=7 per 12 MiB socket into 16 available, so 2x7=14 fits and 3x7=21 does not
     //     (see kHRingWords below; raising it needs SOCKET_WIN_BASE moved)
-    static constexpr uint32_t kNSockets = 2;
+    static constexpr uint32_t kNSocketsMax = 2;
     // ---- ROLE SPLIT (TT_METAL_PERF_DEBUG_ROLE_SPLIT, default on) ----
     //
     // kNSockets stays 2 -- nothing downstream of the socket knows this feature exists. With the knob on
@@ -87,14 +87,16 @@ private:
     // The knee is the FILLER's scan over its share of the grid (FINDINGS N+28/N+34/N+40), and the DRAM ring
     // is the elastic buffer the TLB-capped 12 MiB host FIFO cannot be: a DRISC writes DRAM natively over
     // the NoC with no window at all, so the buffer moves to DRAM and can be hundreds of MB.
-    static constexpr uint32_t kMaxDrisc = 6;
-    // kNFillers must stay a whole multiple of kNSockets: mover m takes fillers m, m + kNSockets, ... and
-    // kNPeerMax bounds the per-mover peer state (device compile args and L1 telemetry words are per-peer).
-    static constexpr uint32_t kNFillers = 4;
-    static constexpr uint32_t kNPeerMax = 2;
-    static_assert(kNFillers % kNSockets == 0, "each mover must drain a whole number of fillers");
-    static_assert(kNFillers / kNSockets <= kNPeerMax, "a mover cannot drain more than kNPeerMax rings");
-    static_assert(kNFillers + kNSockets <= kMaxDrisc, "kMaxDrisc must cover every filler and mover");
+    static constexpr uint32_t kMaxDrisc = 7;  // max roster: 6 fillers + 1 mover, or 4 + 2
+    // The filler/mover SHAPE is runtime-selectable (TT_METAL_PERF_DEBUG_FILLERS = 4 or 6): 4 fillers ->
+    // 2 movers (the sustained-optimized default), 6 fillers -> 1 mover (the onset-optimized shape: every
+    // DRAM view drains workers, cores/filler drops 30 -> 20, and the single mover owns all six rings --
+    // halving the sustained evacuation ceiling, which the ring runway and the fill gate absorb in the
+    // regimes that shape is for). kNFillersMax/kNPeerMax bound the arrays and the device compile args;
+    // divisibility (fillers % movers == 0) is enforced at boot.
+    static constexpr uint32_t kNFillersMax = 6;
+    static constexpr uint32_t kNPeerMax = 6;
+    static_assert(kNFillersMax + 1 <= kMaxDrisc, "kMaxDrisc must cover every filler and mover");
     // 12 MiB / socket, and the CEILING: NOC_2M_WINDOW_COUNT=224 with SOCKET_WIN_BASE=208 leaves 16 TLB
     // windows and the FW maps nwin=ceil((in_off+bytes+64)/2MiB) consecutive windows per socket, so
     // kNSockets * nwin <= 16 (12 MiB -> nwin=7 -> 14). Raising further needs SOCKET_WIN_BASE moved too.
@@ -105,7 +107,7 @@ private:
 
     struct DeviceCtx {
         uint32_t chip_id = 0;
-        std::unique_ptr<distributed::D2HSocket> sockets[kNSockets];  // moved into the receiver at start()
+        std::unique_ptr<distributed::D2HSocket> sockets[kNSocketsMax];  // moved into the receiver at start()
         uint32_t nl = 0;  // lanes = num_cores * NRISC (+ n_drisc * NRISC with self-profiling on)
         // Worker cores only, i.e. where the DRISC self-profiling lane block starts inside core_virt. 0 when
         // self-profiling is off, in which case core_virt holds nothing but workers.
@@ -128,7 +130,7 @@ private:
         uint32_t done_addr[kMaxDrisc] = {};  // drainer publishes 0xD09E**** once its last page is out
         uint32_t results_addr[kMaxDrisc] = {};
         // ---- role split (all zero / kRoleFull when the knob is off) ----
-        uint32_t n_drisc = kNSockets;      // 2 normally, kNFillers + kNSockets with the role split on
+        uint32_t n_drisc = kNSocketsMax;   // 2 normally, n_fillers + n_sockets with the role split on
         uint32_t role[kMaxDrisc] = {};     // 0 = full job, 1 = filler, 2 = mover
         uint32_t sock_of[kMaxDrisc] = {};  // socket index this DRISC owns, or kNoSocket
         uint32_t hs_addr[kMaxDrisc] = {};  // filler's handshake block (head/tail/probes) in its L1
