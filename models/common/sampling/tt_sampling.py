@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
+import os
 import sys
 
 import torch
@@ -39,6 +40,16 @@ TIEBREAK_DELTA_FLOOR = 1e-30
 # holds it exactly; larger than any padded vocabulary size, which __init__ asserts; and small enough
 # that sentinel + index cannot overflow the int32 the min reduce runs in.
 TIEBREAK_INDEX_SENTINEL = 2**24
+
+# Deterministic Python-side sampler (TT_PY_SAMPLER=1). Replaces ttnn.sampling, whose internal
+# top-k orders EXACT TIES unstably (#33492); _adjust_values_for_tiebreak only covers k==1, so
+# every k>1 row (seeded requests reach k=32) has no tie protection today. The de-tie below gives
+# the candidates a TOTAL ORDER -- value desc, then token id asc -- so no tie is ever left for an
+# unstable network to resolve. Validated standalone: greedy picks the lowest-id tied maximum,
+# identical inputs give identical tokens, results are slot-permutation invariant, and it matches
+# a float32/float64 host reference exactly, including a stress case with 8081/8192 tied values.
+PY_DETIE_SHIFT = 16.0     # perturb by a monotone function of (token_id >> 4)
+PY_DETIE_SCALE = 2.0**-21 # range 0..2**-8 : under one bf16 ULP (2**-7), far above fp32 ULP (2**-24)
 
 # Widest input ttnn.topk accepts in one call; vocabs beyond it must be cut into chunks.
 TOPK_MAX_WIDTH = 64 * 1024
@@ -115,6 +126,21 @@ class TTSampling(LightweightModule):
         raise ValueError(
             f"cannot cut an untilize row of width {width} into tile-aligned chunks of at most {TOPK_MAX_WIDTH}"
         )
+
+    @property
+    def _py_sampler(self):
+        """True when the Python sampler should run for THIS call.
+
+        With TT_PY_SAMPLER_TOGGLE=<path>, the file's first character selects the arm
+        ('1' = python sampler, anything else = stock ttnn.sampling), re-read every call.
+        """
+        if getattr(self, "_py_sampler_toggle", None):
+            try:
+                with open(self._py_sampler_toggle) as fh:
+                    return fh.read().strip().startswith("1")
+            except OSError:
+                return getattr(self, "_py_sampler_default", False)
+        return getattr(self, "_py_sampler_default", False)
 
     def _is_force_argmax_sampling(self, k, p, temp):
         """Detect whether all users request deterministic greedy decoding.
@@ -214,13 +240,6 @@ class TTSampling(LightweightModule):
             if self.sub_core_grids is not None
             else None
         )
-        # Blackhole galaxy prefetcher (unfused-CCL) keeps a split senders/worker sub-device manager
-        # loaded during prefill sampling (prefill samples in decode mode). Auto-multicore ops grab the
-        # full 12-wide compute grid, which includes the dispatch column that no loaded sub-device covers
-        # ("kernel group cores do not match sub device cores"). Pin the force-argmax untilize/argmax to
-        # the worker sub-core grids so they stay inside the worker sub-device. Left None elsewhere so no
-        # other arch's behaviour changes.
-        self._force_argmax_sub_core_grids = self.sub_core_grids if getattr(args, "use_unfused_ccl", False) else None
 
         # sampling_dp > 1 when multiple mesh groups each sample users independently
         # (e.g. GPT-OSS on [4,8]: 4 rows × 32 users; Llama Galaxy on [8,4]: 4 cols × 8 users)
@@ -323,6 +342,23 @@ class TTSampling(LightweightModule):
                 self.mesh_device, dims=self._greedy_col_dims(), mesh_shape=self.cluster_shape
             ),
         )
+
+        # Read at CALL time, not init, so ONE server instance can alternate py-sampler on/off
+        # in paired blocks. Failure rate for this class varies ~10x between server instances on
+        # identical code (0/80 vs 5/54), so any A/B across restarts is confounded -- paired
+        # within-instance toggling is the only valid comparison. The usual caveat (a toggle
+        # cannot reach traced replays) does not apply while sampling runs eagerly.
+        self._py_sampler_default = bool(os.environ.get("TT_PY_SAMPLER"))
+        self._py_sampler_toggle = os.environ.get("TT_PY_SAMPLER_TOGGLE") or None
+        self._py_sampler_possible = self._py_sampler_default or bool(self._py_sampler_toggle)
+        self._py_dbg_left = int(os.environ.get("TT_PY_SAMPLER_DEBUG", "0"))
+        self._py_trap_left = int(os.environ.get("TT_PY_SAMPLER_TRAP", "0"))
+        self._ramp = None
+        self._scan_idx = self._scan_mask = None
+        self._scan_key = None
+        self._k_col = self._p_col = self._temp_col = self._rand_col = None
+        if self._py_sampler_possible:
+            self._build_py_sampler_columns(k, p, temp)
 
         # Create device offset indices for global indexing
         self._create_indices_tensors()
@@ -541,6 +577,22 @@ class TTSampling(LightweightModule):
             sub_core_grids=self.sub_core_grids,
         )
 
+    def _no_persist_gather(self):
+        """Drop persistent buffers for the sampling gathers (so the CCL barrier engages).
+
+        TT_SAMPLING_NO_PERSIST=1 forces it on; TT_SAMPLING_NO_PERSIST_TOGGLE=<path> reads the
+        arm from a file each call, so ONE server instance can alternate barrier-on/barrier-off.
+        Cross-restart A/Bs are worthless here -- failure rate varies ~10x between instances.
+        """
+        path = os.environ.get("TT_SAMPLING_NO_PERSIST_TOGGLE")
+        if path:
+            try:
+                with open(path) as fh:
+                    return fh.read().strip().startswith("1")
+            except OSError:
+                pass
+        return bool(os.environ.get("TT_SAMPLING_NO_PERSIST"))
+
     def _perform_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None):
         """
         Flexible all-gather that works across different CCL implementations.
@@ -556,8 +608,19 @@ class TTSampling(LightweightModule):
                 "memory_config": memory_config,
                 "num_links": num_links,
             }
+            # TT_SAMPLING_NO_PERSIST=1: drop the persistent buffer for the sampling gathers.
+            # llama_ccl.line_all_gather allocates the barrier semaphore ONLY when
+            # persistent_buffer is None (llama_ccl.py:1297), and both all-gather program
+            # factories gate the barrier on `barrier_semaphore.has_value() && !using_persistent
+            # _buffers`. SAMPLING_VALUES/SAMPLING_INDICES are always preallocated, so these two
+            # gathers always run WITHOUT the barrier -- and the barrier is what stops a remote
+            # device from STARTING to write a buffer a peer is still reading (out_ready_sem only
+            # covers completion). An earlier attempt to force the barrier while KEEPING the
+            # persistent buffer was inert on device for exactly that gating reason; dropping the
+            # buffer is the inverse, and the only way to make the barrier engage from Python.
             if self._line_all_gather_supports_buffer_key and buffer_key is not None:
-                line_all_gather_kwargs["buffer_key"] = buffer_key
+                if not self._no_persist_gather():
+                    line_all_gather_kwargs["buffer_key"] = buffer_key
             return self._line_all_gather(tensor, **line_all_gather_kwargs)
 
         return ttnn.all_gather(
@@ -652,6 +715,17 @@ class TTSampling(LightweightModule):
                 ),
             )
             ttnn.copy_host_to_device_tensor(self._greedy_col_new, self._greedy_col)
+
+
+
+        if self._py_sampler_possible:
+            # OUTSIDE the force_argmax guard on purpose. The stock path handles an all-greedy
+            # batch with ttnn.sampling's argmax and skips the k/p/temp upload entirely, but this
+            # sampler always draws from k/p/temp -- so skipping the upload leaves it running
+            # greedy requests on whatever parameters warmup last wrote (k=10, p=0.9). The
+            # visible symptom is greedy generating one or two plausible tokens and then
+            # stopping.
+            self._build_py_sampler_columns(k, p, temp)
 
         self.log_probs_calculator.set_log_probs_mode(
             enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots
@@ -759,6 +833,346 @@ class TTSampling(LightweightModule):
         ttnn.deallocate(boost)
         return adjusted
 
+
+    def _param_col_host(self, values, dtype=ttnn.float32):
+        """Host-side [1,1,N,1] column, mesh-mapped exactly like k_tensor/_greedy_col."""
+        return ttnn.from_torch(
+            torch.as_tensor(values, dtype=torch.float32).reshape(1, 1, -1, 1),
+            device=None,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=(
+                ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=self._greedy_col_dims(), mesh_shape=self.cluster_shape
+                )
+                if self._sampling_dp > 1
+                else None
+            ),
+        )
+
+    def _set_param_col(self, name, values, dtype=ttnn.float32):
+        """Update a persistent param column IN PLACE.
+
+        These columns are read by the captured decode trace. Reallocating one at runtime --
+        which is what a plain _param_col assignment does on every sampling-params change --
+        leaves the trace replaying against the ORIGINAL, now-freed address, so the sampler
+        reads whatever later took that memory. That is exactly how _greedy_col is handled a
+        few lines up, and for the same reason.
+        """
+        existing = getattr(self, name, None)
+        if existing is None:
+            setattr(self, name, self._param_col(values, dtype=dtype))
+            return
+        ttnn.copy_host_to_device_tensor(self._param_col_host(values, dtype=dtype), existing)
+
+    def _param_col(self, values, dtype=ttnn.float32):
+        """[1,1,N,1] column distributed exactly like k_tensor/_greedy_col."""
+        return ttnn.from_torch(
+            torch.as_tensor(values, dtype=torch.float32).reshape(1, 1, -1, 1),
+            device=self.mesh_device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=(
+                ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=self._greedy_col_dims(), mesh_shape=self.cluster_shape
+                )
+                if self._sampling_dp > 1
+                else None
+            ),
+        )
+
+    def _build_py_sampler_columns(self, k, p, temp):
+        """k/p/temp as broadcastable columns, plus the rank ramp.
+
+        Every buffer here is allocated ONCE and thereafter written in place: this is called
+        again whenever sampling params change, which for a served request happens long after
+        the decode trace was captured.
+        """
+        self._set_param_col("_k_col", k)
+        self._set_param_col("_p_col", p)
+        self._set_param_col("_temp_col", temp)
+        if self._rand_col is None:
+            self._rand_col = self._param_col([0.0] * (self.max_batch_size * self._sampling_dp))
+        width = self.max_top_k * self._get_num_sampling_shards()
+        if self._ramp is None:
+            self._ramp = ttnn.from_torch(
+                torch.arange(width, dtype=torch.float32).reshape(1, 1, 1, width),
+                device=self.mesh_device,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+            )
+        self._build_scan_constants(width, self.max_batch_size)
+
+    def _build_scan_constants(self, width, rows):
+        """Per-step gather indices + masks for the Hillis-Steele scan in _prefix_sum.
+
+        Built once at init, never inside the trace-capture window (allocating there is a
+        device write and trace capture rejects it). ttnn.gather does not broadcast rows --
+        a [1,1,1,W] index silently yields a [1,1,1,W] result -- so these are materialised
+        at the full row count. Replicated across the mesh: the shift is identical per row
+        and per device.
+        """
+        if self._scan_key == (width, rows):
+            return
+        ar = torch.arange(width)
+        idx, mask, step = [], [], 1
+        while step < width:
+            idx.append(
+                ttnn.from_torch(
+                    (ar - step).clamp(0, width - 1).reshape(1, 1, 1, width).expand(1, 1, rows, width).contiguous(),
+                    device=self.mesh_device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.TILE_LAYOUT,
+                )
+            )
+            mask.append(
+                ttnn.from_torch(
+                    (ar >= step).to(torch.float32).reshape(1, 1, 1, width).expand(1, 1, rows, width).contiguous(),
+                    device=self.mesh_device,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                )
+            )
+            step *= 2
+        self._scan_idx, self._scan_mask, self._scan_key = idx, mask, (width, rows)
+
+    def set_rand_column(self, uniforms):
+        """Per-user uniform in [0,1) for the draw, derived on host from the SeedManager's
+        existing device seeds -- see uniform_from_device_seed in generator.py. Keeps the
+        reproducibility contract (slot-independent, salt-separated) without depending on the
+        per-core PRNG that ttnn.sampling draws from and that we cannot reach from here."""
+        if not self._py_sampler or self._rand_col is None:
+            return
+        # In-place: allocating here would be a device WRITE, and capture_trace runs
+        # _run_sampling inside the capture window -> "Writes are not supported during trace
+        # capture". A persistent buffer updated from outside is what the seed and k/p/temp
+        # tensors already do, and trace replay re-reads it each step.
+        host = ttnn.from_torch(
+            torch.as_tensor(uniforms, dtype=torch.float32).reshape(1, 1, -1, 1),
+            device=None,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=(
+                ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=self._greedy_col_dims(), mesh_shape=self.cluster_shape
+                )
+                if self._sampling_dp > 1
+                else None
+            ),
+        )
+        ttnn.copy_host_to_device_tensor(host, self._rand_col)
+
+
+    def _prefix_sum(self, x, width):
+        """Inclusive prefix sum along the last dim, built from gather/multiply/add.
+
+        Every op here must accept sub_core_grids, or it is placed on the full Tensix grid
+        and dies with "Kernel group cores do not match sub device cores". That rules out
+        ttnn.cumsum (no such kwarg) and ttnn.roll and ttnn.clip (both reject it).
+
+        It also rules out the obvious shift, concat([zeros, head]): ttnn.concat SILENTLY
+        returns wrong data (leading elements zeroed) whenever sub_core_grids is passed --
+        contiguous or disjoint grid, fp32 or bf16 -- which made this scan a bit-for-bit
+        no-op (cur = cur + 0), leaving the row total at 0, every probability inf, and every
+        draw pinned to rank 0. Without the kwarg concat is bit-exact, but then it escapes
+        the sub-device. So the shift is a gather against precomputed clamped indices, with
+        a precomputed mask zeroing the first `step` lanes that the clamp duplicates.
+        See the matching GitHub issue; this can go back to concat once that op is fixed.
+        """
+        scg = self.sub_core_grids
+        rows = x.shape[-2]
+        if self._scan_key != (width, rows):
+            raise RuntimeError(
+                f"scan constants built for {self._scan_key}, got (width={width}, rows={rows}); "
+                "they must be built at init -- allocating here would be a write inside the "
+                "trace-capture window"
+            )
+        cur = x
+        for idx, mask in zip(self._scan_idx, self._scan_mask):
+            shifted = ttnn.gather(cur, dim=-1, index=idx, sub_core_grids=scg)
+            cur = ttnn.add(cur, ttnn.multiply(shifted, mask, sub_core_grids=scg), sub_core_grids=scg)
+        return cur
+
+    def _py_dbg(self, tag, tensor, n=4):
+        """One-line dump of a device tensor, gated by TT_PY_SAMPLER_DEBUG=<count>."""
+        if not self._py_dbg_left:
+            return
+        try:
+            import torch as _t
+            _full = ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
+            _W = _full.shape[-1]
+            _row0 = _full.reshape(-1, _W)[0]
+            v = _row0[:n]
+            _tail = _row0[max(0, _W - 3):]
+            print(f"[pysamp] {tag:14s} shape={list(tensor.shape)} dtype={tensor.dtype} "
+                  f"first={v.tolist()} last3={_tail.tolist()}", flush=True)
+        except Exception as e:
+            print(f"[pysamp] {tag:14s} shape={list(tensor.shape)} dtype={tensor.dtype} <read failed: {e}>", flush=True)
+
+    def _sample_deterministic(self, values, global_indices, tt_out_tok):
+        """Total-order top-k/top-p sampling. No float32 reduction anywhere: fp32 reductions go to
+        the FPU and truncate to a 10-bit mantissa, so the row max is taken as element 0 of the
+        descending sort and the total as the last cumsum element, both by slice."""
+        # TRACE COMPATIBILITY IS BLOCKED, both directions measured:
+        #  * full grid (scg = None): "Kernel group cores do not match sub device cores"
+        #    (program.cpp:2374) -- the sampling sub-device is active, ops outside it fatal.
+        #  * grid-scoped (below): the final write into tt_out_tok cannot be scoped (ROW_MAJOR
+        #    destination; no op takes both output_tensor and sub_core_grids for one), so the
+        #    trace spans two sub-devices, which have no implicit ordering on replay -- and a
+        #    barrier is illegal inside trace capture.
+        # Hence sampling runs EAGERLY (TT_PY_SAMPLER_EAGER). Fixing this needs an op that can
+        # write a row-major preallocated output on a restricted grid, or a TILE token buffer.
+        scg = self.sub_core_grids
+        v32 = ttnn.typecast(values, ttnn.float32, sub_core_grids=scg)
+        # ttnn.floor_div on an INT32 tensor silently returns 0 (measured 8188/8192 elements
+        # wrong, no error), which would leave those candidates unperturbed and still tied.
+        # Token ids are < 2**24, so do the shift exactly in float32.
+        idx32 = ttnn.typecast(global_indices, ttnn.float32, sub_core_grids=scg)
+        block = ttnn.floor(ttnn.multiply(idx32, 1.0 / PY_DETIE_SHIFT, sub_core_grids=scg), sub_core_grids=scg)
+        perturb = ttnn.multiply(
+            ttnn.multiply(ttnn.abs(v32, sub_core_grids=scg), PY_DETIE_SCALE, sub_core_grids=scg),
+            block,
+            sub_core_grids=scg,
+        )
+        key = ttnn.subtract(v32, perturb, sub_core_grids=scg)
+        self._py_dbg("values", values); self._py_dbg("global_idx", global_indices)
+        self._py_dbg("idx32", idx32); self._py_dbg("block", block); self._py_dbg("key", key)
+
+        # ttnn.sort takes no sub_core_grids; ttnn.topk does (forward() already uses it), and
+        # topk(k=width) is a full descending sort -- verified equal to torch.sort.
+        width = key.shape[-1]
+        sorted_key, sorted_pos = ttnn.topk(
+            key, k=width, dim=-1, largest=True, sorted=True, sub_core_grids=self.sub_core_grid_topk
+        )
+        sorted_idx = ttnn.gather(global_indices, dim=-1, index=sorted_pos, sub_core_grids=scg)
+        self._py_dbg("sorted_key", sorted_key); self._py_dbg("sorted_pos", sorted_pos)
+        self._py_dbg("sorted_idx", sorted_idx)
+
+        rows = sorted_key.shape[-2]
+        keep_k = ttnn.lt(self._ramp, self._k_col, sub_core_grids=scg)
+        logits = ttnn.multiply(sorted_key, self._temp_col, sub_core_grids=scg)
+        # NOT pooled: ttnn.slice rejects a preallocated output whose padded (tile) shape
+        # differs from the required one, which a 1-wide slice always hits.
+        row_max = ttnn.slice(logits, [0, 0, 0, 0], [1, 1, rows, 1], sub_core_grids=scg)
+        self._py_dbg("logits", logits); self._py_dbg("row_max", row_max)
+        shifted = ttnn.subtract(logits, row_max, sub_core_grids=scg)
+        self._py_dbg("shifted", shifted)
+        weights = ttnn.exp(shifted, sub_core_grids=scg)
+        self._py_dbg("exp_raw", weights)
+        exp_raw = weights
+        weights = ttnn.multiply(weights, keep_k, sub_core_grids=scg)
+
+        cum = self._prefix_sum(weights, width)
+        cum1 = cum
+        self._py_dbg("w_prekeep", weights); self._py_dbg("cum1", cum)
+        total1 = ttnn.slice(cum, [0, 0, 0, width - 1], [1, 1, rows, width], sub_core_grids=scg)
+        total = total1
+        self._py_dbg("total1", total1)
+        probs = ttnn.divide(weights, total1, sub_core_grids=scg)
+        self._py_dbg("probs", probs)
+        cum = ttnn.divide(cum, total1, sub_core_grids=scg)
+        self._py_dbg("cum_norm1", cum)
+        # NOTE: <= not <. The mask keeps rank i when the mass STRICTLY BEFORE it is <= p, which
+        # always keeps rank 0 (mass before it is 0). ttnn.sampling's writer does the same by
+        # adding then testing (`cum_prob_f += v; if (cum_prob_f > p_f) break`). With `<`, a
+        # request with p == 0 -- which is EVERY greedy request here, since format_sampling_params
+        # maps temperature==0 to top_k=1/top_p=0.0 -- has 0 < 0 fail at rank 0 and the entire row
+        # is masked to zero, giving nan cumulative mass and a constant token.
+        excl = ttnn.subtract(cum, probs, sub_core_grids=scg)
+        self._py_dbg("excl", excl)
+        keep_p = ttnn.le(excl, self._p_col, sub_core_grids=scg)
+        self._py_dbg("keep_p", keep_p)
+        weights = ttnn.multiply(weights, keep_p, sub_core_grids=scg)
+        self._py_dbg("w_masked", weights)
+
+        cum = self._prefix_sum(weights, width)
+        self._py_dbg("cum2", cum)
+        total2 = ttnn.slice(cum, [0, 0, 0, width - 1], [1, 1, rows, width], sub_core_grids=scg)
+        total = total2
+        self._py_dbg("total2", total2)
+        cum = ttnn.divide(cum, total2, sub_core_grids=scg)
+        self._py_dbg("cum_norm2", cum)
+
+        self._py_dbg("temp_col", self._temp_col); self._py_dbg("keep_k", keep_k); self._py_dbg("weights", weights); self._py_dbg("cum", cum)
+        self._py_dbg("k_col", self._k_col); self._py_dbg("rand_col", self._rand_col)
+        below = ttnn.typecast(ttnn.le(cum, self._rand_col, sub_core_grids=scg), ttnn.int32, sub_core_grids=scg)
+        sel = ttnn.sum(below, dim=-1, keepdim=True, sub_core_grids=scg)   # int32 => SFPU reduce, exact
+        # ttnn.clip does NOT take sub_core_grids, and any op placed off the sampling sub-core
+        # grid is not ordered against the ops that produce its input. sel is a count, so it is
+        # never negative; the only clamp that matters is sel == width (every cum <= rand), and
+        # ge/subtract both honour the grid.
+        sel = ttnn.subtract(sel, ttnn.ge(sel, float(width), sub_core_grids=scg), sub_core_grids=scg)
+        token = ttnn.gather(
+            sorted_idx, dim=-1, index=ttnn.typecast(sel, ttnn.uint32, sub_core_grids=scg), sub_core_grids=scg
+        )
+
+        # tt_out_tok is [1,1,1,N] uint32 ROW_MAJOR; the result is [1,1,N,1] int32 TILE.
+        if os.environ.get("TT_PY_SAMPLER_TRAP"):
+            try:
+                import torch as _t
+                _tok = ttnn.to_torch(ttnn.get_device_tensors(token)[0]).reshape(-1)
+                _bad = int((_tok == 0).sum()) > 0 or int(_tok.unique().numel()) == 1
+                if _bad and self._py_trap_left:
+                    self._py_trap_left -= 1
+                    self._py_dbg_left = 1          # unlock one full dump
+                    print(f"[pysamp-trap] token={_tok[:8].tolist()} uniq={int(_tok.unique().numel())}", flush=True)
+                    for _n, _t_ in (("values", values), ("sorted_key", sorted_key), ("sorted_idx", sorted_idx),
+                                    ("keep_k", keep_k), ("k_col", self._k_col), ("p_col", self._p_col),
+                                    ("temp_col", self._temp_col), ("rand_col", self._rand_col),
+                                    ("row_max", row_max), ("shifted", shifted), ("exp_raw", exp_raw),
+                                    ("cum1", cum1), ("width", None),
+                                    ("probs", probs), ("total", total), ("keep_p", keep_p),
+                                    ("weights", weights), ("cum", cum), ("sel", sel)):
+                        if _t_ is None:
+                            print(f"[pysamp] width={width} rows={rows}", flush=True); continue
+                        self._py_dbg(_n, _t_, n=6)
+                    self._py_dbg_left = 0
+            except Exception as _e:
+                print(f"[pysamp-trap] failed: {_e}", flush=True)
+        self._py_dbg("sel", sel); self._py_dbg("token", token)
+        # Keep the tail ON the sampling sub-core grid. ttnn.transpose does not accept
+        # sub_core_grids; reshape does, and [1,1,N,1] -> [1,1,1,N] is the same N elements in
+        # the same order. Ops split across sub-devices are not implicitly ordered, so a tail
+        # on the full Tensix grid can read `token` before the grid ops finish producing it --
+        # which is what made every sampled token read back as 0.
+        wide = ttnn.to_layout(
+            ttnn.typecast(
+                ttnn.reshape(token, [1, 1, 1, rows], sub_core_grids=scg), ttnn.uint32, sub_core_grids=scg
+            ),
+            ttnn.ROW_MAJOR_LAYOUT,
+            sub_core_grids=scg,
+        )
+        self._py_dbg("wide", wide)
+        if self._py_dbg_left:
+            self._py_dbg_left -= 1
+        if tt_out_tok is not None:
+            if self._py_dbg_left:
+                print(f"[pysamp] tt_out_tok BEFORE copy: shape={list(tt_out_tok.shape)} "
+                      f"dtype={tt_out_tok.dtype} layout={tt_out_tok.layout} "
+                      f"memcfg={tt_out_tok.memory_config()}", flush=True)
+                print(f"[pysamp] wide             : shape={list(wide.shape)} dtype={wide.dtype} "
+                      f"layout={wide.layout} memcfg={wide.memory_config()}", flush=True)
+                self._py_dbg("out_tok_pre", tt_out_tok, n=6)
+            # This is the ONE op that cannot be placed on the sampling sub-core grid, and it
+            # is why sampling must run eagerly (TT_PY_SAMPLER_EAGER) rather than as a trace.
+            # tt_out_tok is ROW_MAJOR and owned by the model, and no available op both writes a
+            # preallocated output AND honours sub_core_grids for a row-major destination:
+            #   typecast  -- takes both, but rejects sub_core_grids on ROW_MAJOR input
+            #   to_layout -- takes sub_core_grids, no output_tensor
+            #   untilize  -- takes sub_core_grids, no output_tensor
+            #   copy      -- takes neither
+            # A trace holding work on two sub-devices has no implicit ordering between them on
+            # replay, and a barrier cannot fix it because synchronization is illegal inside
+            # trace capture. Eager sampling orders this host-side. See the matching GitHub
+            # issue; once an op can write a row-major output on a restricted grid, this becomes
+            # single-sub-device and the sampling trace can come back.
+            ttnn.copy(wide, tt_out_tok)
+            if self._py_dbg_left:
+                self._py_dbg("out_tok_post", tt_out_tok, n=6)
+                self._py_dbg("wide_post", wide, n=6)
+            return tt_out_tok
+        return wide
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -780,16 +1194,7 @@ class TTSampling(LightweightModule):
         """
         if self._force_argmax_sampling:
             logger.info("Forcing argmax sampling")
-            # BH galaxy prefetcher (unfused-CCL) keeps a split senders/worker sub-device manager
-            # loaded during decode. The vocab-trim ttnn.slice auto-grids a 32-core block from origin
-            # (0,0) on the DRAM-interleaved path (it does not honor sub_core_grids there) and spills
-            # into the uncovered senders-column tail -> "kernel group cores do not match sub device
-            # cores". Skip that slice here. Still apply the full-width additive invalid-vocab mask
-            # (already selected whenever sub_core_grids is set; one elementwise add, no slice/concat)
-            # so a 0-padded logit cannot win argmax when every valid logit is negative. untilize/
-            # argmax stay pinned to the worker sub-core grid via _force_argmax_sub_core_grids.
-            force_argmax_skip_vocab_trim = self._force_argmax_sub_core_grids is not None
-            slice_valid_vocab = self._can_slice_valid_vocab_for_argmax() and not force_argmax_skip_vocab_trim
+            slice_valid_vocab = self._can_slice_valid_vocab_for_argmax()
             if not slice_valid_vocab:
                 x = self._mask_invalid_vocab_logits(x)
             # Gather the output across all devices and untilize the tensor (for argmax)
@@ -801,31 +1206,6 @@ class TTSampling(LightweightModule):
                     f"Force argmax sampling all-gather: cluster_axis={cluster_axis}, "
                     f"num_links={num_links}, topology={topology}"
                 )
-                # NOTE: do NOT pass a persistent_output_buffer here. The all_gather_async factory
-                # disables its barrier semaphore when persistent buffers are used, and the barrier
-                # is what bounds cross-invocation skew: without it a fast device's next-invocation
-                # writes/increments can reach a peer before that peer's reader has reset its
-                # out_ready semaphore, leaving residual counts that make later waits pass early
-                # (argmax then reads the previous step's logits). Under trace the fresh output
-                # allocation is frozen at capture, so the address is stable anyway.
-                barrier_accessor = getattr(
-                    self.tt_ccl,
-                    "get_sampling_barrier_semaphore_handle",
-                    self.tt_ccl.get_and_cycle_barrier_semaphore_handle,
-                )
-                # Pin the gather to the worker sub-device only on the BH unfused path, where the
-                # downstream untilize/argmax are themselves confined via _force_argmax_sub_core_grids.
-                # Without this, all_gather_async defaults to sub-device 0 (prefetcher/senders under
-                # the galaxy decode manager). Dispatch only serializes within a sub-device, so a
-                # gather on 0 races the worker-grid untilize and under trace replay returns the
-                # previous step's tokens. Eager mode masks this via host dispatch latency.
-                # Left unpinned on Wormhole: untilize/argmax are not sub-core-grid confined there
-                # and still use the default sub-device 0, matching pre-existing WH behaviour.
-                ag_sub_device_id = (
-                    getattr(self.tt_ccl, "worker_sub_device_id", None)
-                    if self._force_argmax_sub_core_grids is not None
-                    else None
-                )
                 x = ttnn.experimental.all_gather_async(
                     x,
                     persistent_output_buffer=None,
@@ -835,23 +1215,15 @@ class TTSampling(LightweightModule):
                     memory_config=x.memory_config(),
                     cluster_axis=cluster_axis,
                     topology=topology,
-                    barrier_semaphore=barrier_accessor(cluster_axis),
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
                     chunks_per_sync=self.argmax_chunks_per_sync,
                     num_workers_per_link=self.argmax_num_workers_per_link,
                     num_buffers_per_channel=2,
-                    subdevice_id=ag_sub_device_id,
                 )
             if slice_valid_vocab:
                 x = self._slice_valid_vocab_for_argmax(x)
             num_untilize_chunks = self._untilize_chunk_count(x.shape[-1])
-            # DRAM-interleaved ttnn.split/slice does not honor sub_core_grids (same
-            # senders-column spill as the vocab-trim slice above). Qwen3-32B Galaxy
-            # pads to 155648, which _untilize_chunk_count cuts into 4 chunks, so the
-            # post-main-rebase chunked path hits that fatal on the BH prefetcher
-            # worker sub-device. A single untilize of that width compiles there
-            # (Gemma-2's 256000-wide clash is the reason the chunked path exists;
-            # it stays for unpinned Wormhole grids).
-            if num_untilize_chunks > 1 and self._force_argmax_sub_core_grids is None:
+            if num_untilize_chunks > 1:
                 # Untilizing the full row in one program needs a static circular-buffer
                 # region proportional to the row width; past ~150K elements it clashes
                 # with the model's resident L1 buffers at compile (Gemma-2's 256000-wide
@@ -866,29 +1238,18 @@ class TTSampling(LightweightModule):
                     # so peak memory holds ~1 full-vocab buffer less than freeing
                     # after the loop (this runs inside the captured decode trace,
                     # so the peak is baked into the trace region size).
-                    untilized_chunks.append(
-                        ttnn.untilize(
-                            chunk,
-                            use_multicore=True,
-                            sub_core_grids=self._force_argmax_sub_core_grids,
-                        )
-                    )
+                    untilized_chunks.append(ttnn.untilize(chunk, use_multicore=True))
                     chunk.deallocate()
-                x_untilized = ttnn.concat(
-                    untilized_chunks,
-                    dim=3,
-                    sub_core_grids=self._force_argmax_sub_core_grids,
-                )
+                x_untilized = ttnn.concat(untilized_chunks, dim=3)
                 for chunk in untilized_chunks:
                     ttnn.deallocate(chunk)
             else:
-                x_untilized = ttnn.untilize(x, use_multicore=True, sub_core_grids=self._force_argmax_sub_core_grids)
+                x_untilized = ttnn.untilize(x, use_multicore=True)
             tt_out_tok = ttnn.argmax(
                 x_untilized,
                 dim=-1,
                 output_tensor=tt_out_tok,
                 keepdim=False,
-                sub_core_grids=self._force_argmax_sub_core_grids,
             )
             # Argmax fast-path does not compute logprobs (it never runs a softmax over
             # the vocab). On single-chip, on-device logprobs are unsupported anyway
@@ -1051,11 +1412,6 @@ class TTSampling(LightweightModule):
         topk_global_indices_interleaved_untilised = ttnn.untilize(
             topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self.sub_core_grids
         )
-        ttnn.manual_seed(
-            seeds=self.seeds_tt_tensor,
-            user_ids=self.user_ids_tt_tensor,
-            sub_core_grids=self._sampling_sub_core_grids,
-        )
         # Perform the actual sampling with top-k, top-p, and temperature.
         # WORKAROUND for tenstorrent/tt-metal#33492 (stable top-k unreliable), to be removed with it:
         # for argmax users (k==1) only, boost the single lowest-GLOBAL-INDEX tied maximum in the
@@ -1067,15 +1423,30 @@ class TTSampling(LightweightModule):
         sampling_values = self._adjust_values_for_tiebreak(
             topk_values_gathered_bf16_interleaved, topk_global_indices_interleaved
         )
-        tt_out_tok = ttnn.sampling(
-            sampling_values,
-            topk_global_indices_interleaved_untilised,
-            k=self.k_tensor,
-            p=self.p_tensor,
-            temp=self.temp_tensor,
+        # E4: seed immediately before the draw. The tie-break's int32 ops run on the
+        # SFPU (use_sfpu_reduce_path admits INT32 MIN/MAX/SUM) on the same sub-core grid,
+        # and rand_tile's PRNG/LREG state is programmed by manual_seed -- so any SFPU work
+        # between seeding and drawing can perturb the draw. The original's fp32 tie-break
+        # took the FPU path and never disturbed it.
+        ttnn.manual_seed(
+            seeds=self.seeds_tt_tensor,
+            user_ids=self.user_ids_tt_tensor,
             sub_core_grids=self._sampling_sub_core_grids,
-            output_tensor=tt_out_tok,
         )
+        if self._py_sampler:
+            tt_out_tok = self._sample_deterministic(
+                sampling_values, topk_global_indices_interleaved, tt_out_tok
+            )
+        else:
+            tt_out_tok = ttnn.sampling(
+                sampling_values,
+                topk_global_indices_interleaved_untilised,
+                k=self.k_tensor,
+                p=self.p_tensor,
+                temp=self.temp_tensor,
+                sub_core_grids=self._sampling_sub_core_grids,
+                output_tensor=tt_out_tok,
+            )
 
         # Compute logprobs if enabled
         if self.log_probs_calculator.enable_log_probs and self.log_probs_calculator._use_topk_logprobs:
