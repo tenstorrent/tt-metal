@@ -312,16 +312,21 @@ def run_combine(
     # launch, so `perf_iterations` samples cost a launch each rather than a process each. When the output is
     # checked, it is the LAST launch that gets checked, which is also what proves a launch leaves the op's
     # counters fit for the next one.
-    ttnn.synchronize_device(mesh_device)
-    ttnn.deallocate(tt_output)
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    tt_output = tt_combine(*combine_inputs)
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    for _ in range(perf_iterations()):
+    #
+    # Gated on > 1 so the default really is one launch: capture does not execute, so the block below costs
+    # 1 eager + perf_iterations replays. Ungated it would double the device time of every PCC case in the
+    # matrix — 2240 collected — to sample a number nobody asked for.
+    if perf_iterations() > 1:
         ttnn.synchronize_device(mesh_device)
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-    ttnn.synchronize_device(mesh_device)
-    ttnn.release_trace(mesh_device, trace_id)
+        ttnn.deallocate(tt_output)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        tt_output = tt_combine(*combine_inputs)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        for _ in range(perf_iterations()):
+            ttnn.synchronize_device(mesh_device)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        ttnn.release_trace(mesh_device, trace_id)
 
     if not run_pcc_check:
         ttnn.synchronize_device(mesh_device)
@@ -461,39 +466,48 @@ def _cross_product_conflated_cmb_test_dimensions():
     params = []
     for model_name, model_config_class, is_extended_model, test_meshes in COMBINE_MODELS:
         for target_mesh, fabric_cfg in test_meshes.target_meshes.items():
-            device_params = fabric_to_device_params(fabric_cfg)
-            topo_marker = _topo_marker(target_mesh, fabric_cfg)
-            mesh_requirements_marker = pytest.mark.requires_mesh_topology(mesh_shape=target_mesh, topology=topo_marker)
-            marks = (
-                (pytest.mark.extended_model, mesh_requirements_marker)
-                if is_extended_model
-                else (mesh_requirements_marker)
-            )
-            test_scenarios = [
-                ("pcc", 128, 4, True),
-                ("perf_no_pcc", 640, 8, False),
-            ]
-            for test_scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in test_scenarios:
-                model_config = _model_scaledown_for_combine(
-                    model_config_class(), test_meshes.full_model_mesh, target_mesh, run_pcc
+            # cmb_version selects the transport: 1 is `combine`, 2 is `combine_fabric2d`. It is a
+            # dimension of this conflated axis rather than its own parametrize because device_params
+            # depends on it — combine_fabric2d needs a wider fabric payload.
+            for cmb_version in [1, 2]:
+                device_params = fabric_to_device_params(fabric_cfg, cmb_version)
+                topo_marker = _topo_marker(target_mesh, fabric_cfg)
+                mesh_requirements_marker = pytest.mark.requires_mesh_topology(
+                    mesh_shape=target_mesh, topology=topo_marker
                 )
+                marks = (
+                    (pytest.mark.extended_model, mesh_requirements_marker)
+                    if is_extended_model
+                    else (mesh_requirements_marker)
+                )
+                test_scenarios = [
+                    ("pcc", 128, 4, True),
+                    ("perf_no_pcc", 640, 8, False),
+                ]
+                for test_scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in test_scenarios:
+                    model_config = _model_scaledown_for_combine(
+                        model_config_class(), test_meshes.full_model_mesh, target_mesh, run_pcc
+                    )
 
-                num_experts = model_config.NUM_ROUTED_EXPERTS
-                topk = model_config.NUM_EXPERTS_PER_TOKEN
-                shape = target_mesh
+                    num_experts = model_config.NUM_ROUTED_EXPERTS
+                    topk = model_config.NUM_EXPERTS_PER_TOKEN
+                    shape = target_mesh
 
-                params.append(
-                    pytest.param(
-                        shape,
-                        device_params,
-                        seq_len_per_chip,
-                        model_config.EMB_SIZE,
-                        num_experts,
-                        topk,
-                        dispatch_buffer_capacity_factor,
-                        run_pcc,
-                        marks=marks,
-                        id=f"{model_name}-{_mesh_id(target_mesh, fabric_cfg)}-{test_scenario_id}",
+                    params.append(
+                        pytest.param(
+                            shape,
+                            device_params,
+                            seq_len_per_chip,
+                            model_config.EMB_SIZE,
+                            num_experts,
+                            topk,
+                            dispatch_buffer_capacity_factor,
+                            run_pcc,
+                            cmb_version,
+                            marks=marks,
+                            id=f"{model_name}-{_mesh_id(target_mesh, fabric_cfg)}-{test_scenario_id}"
+                            f"-cmb_v{cmb_version}",
+                        )
                     )
 
     return params
@@ -524,7 +538,7 @@ def _cross_product_conflated_cmb_test_dimensions():
 #    test-code cross product calculation, or are skipped in the body of the test, depending on where it was less cumbersome to implement it.
 #
 @pytest.mark.parametrize(
-    "mesh_device, device_params, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    "mesh_device, device_params, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check, cmb_version",
     _cross_product_conflated_cmb_test_dimensions(),
     indirect=["mesh_device", "device_params"],
 )
