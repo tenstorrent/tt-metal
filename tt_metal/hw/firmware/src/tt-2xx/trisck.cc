@@ -111,8 +111,7 @@ uint32_t _start() {
     EARLY_RETURN_FOR_DEBUG
 
 #ifdef ARCH_QUASAR
-    // Raise the compute MOP timeout so a slow-reader MOP (e.g. the avg-pool / reduce datacopy that
-    // stalls on a lagging reader) does not trip a 0x19/0x119 (MOP timeout) on the emulator.
+    // Raise the Memory Access Hang timeout so that it does not falsely trip a 0x19/0x119 hw trap.
 #ifndef CSR_TIMEOUT_COUNT
 #define CSR_TIMEOUT_COUNT 0xBD0
 #endif
