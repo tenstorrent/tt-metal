@@ -356,6 +356,25 @@ constexpr std::uint32_t bfp_exp_section_size(const std::uint32_t idx, const std:
     return 1 + effective_num_faces + idx * datum_bytes - (idx + 1);
 }
 
+/**
+ * @brief Packer 0's BFP Exp_section_size: the tile's exponent-section size, in 16-byte chunks.
+ *
+ * A BFP tile carries one exponent byte per packed face row (num_faces * face_r_dim bytes total), and the
+ * exponent section is padded to a whole 16-byte chunk. This matches both the host tile layout
+ * (Tile::get_tile_size / pack_as_bfp_tiles round the exponent section up to L1 alignment) and the
+ * unpacker's ceil(NumExponents/16) addressing (UNPACR_Regular.md). Full 16-row faces give the familiar
+ * one-chunk-per-face num_faces value; partial faces (face_r_dim < 16) share chunks, e.g. an 8x32 tile
+ * (2 faces x 8 rows) has 16 exponent bytes = 1 chunk, and a 4x32 tile has 8 bytes, padded to 1 chunk.
+ *
+ * @note Packers 1..3 (see @ref bfp_exp_section_size) only ever fire on full 16-row faces: partial-face
+ *       BFP packs run with PACKCNT == 1 (packer 0 only, see _llk_pack_mop_config_), so their values do
+ *       not need a face_r_dim term.
+ */
+constexpr std::uint32_t bfp_exp_section_chunks(const std::uint32_t num_faces, const std::uint32_t face_r_dim)
+{
+    return (num_faces * face_r_dim + 15) >> 4;
+}
+
 // Mantissa bytes for one face row (16 datums = FACE_C_DIM) of each BFP format, i.e. the `datum_bytes`
 // @ref bfp_exp_section_size expects: 16 datums * per-datum mantissa size (Bfp8 = 1 B, Bfp4 = 1/2 B,
 // Bfp2 = 1/4 B). Named once here so the packer exp-section-size call sites carry no bare 16/8/4.
@@ -368,10 +387,11 @@ constexpr std::uint32_t bfp2_row_bytes = 4;
 // operation, thus we do not need to use a semaphore to wait for the packer to finish before
 // performing these MMIOs.
 template <bool reconfiguring>
-inline void cache_exponential_section_sizes_in_gprs(const std::uint32_t num_faces = 4, const bool partial_face = false)
+inline void cache_exponential_section_sizes_in_gprs(
+    const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = FACE_R_DIM, const bool partial_face = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP]  = (partial_face ? 1 : num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+    regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP]  = bfp_exp_section_chunks(num_faces, face_r_dim) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
     regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP8] = bfp_exp_section_size(1 /* index */, bfp8_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
 
     if constexpr (!reconfiguring)
@@ -423,7 +443,11 @@ inline void set_packer_strides(const std::uint32_t pack_src_format)
 
 template <bool is_fp32_dest_acc_en>
 inline void set_packer_config(
-    const std::uint32_t pack_src_format, const std::uint32_t pack_dst_format, const std::uint32_t num_faces = 4, const bool partial_face = false)
+    const std::uint32_t pack_src_format,
+    const std::uint32_t pack_dst_format,
+    const std::uint32_t face_r_dim = FACE_R_DIM,
+    const std::uint32_t num_faces  = 4,
+    const bool partial_face        = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     // Get pointer to registers for current state ID
@@ -437,9 +461,11 @@ inline void set_packer_config(
     }
 
     config.f.exp_section_size =
-        ((pack_dst_format == to_underlying(DataFormat::Lf8)) || (masked_data_format(pack_dst_format) == to_underlying(DataFormat::Int8)))
-            ? 0
-            : (partial_face ? 1 : num_faces); // set to num_faces as exp section size is not used for non-bfp formats except for lf8/int8
+        ((pack_dst_format == to_underlying(DataFormat::Lf8)) || (masked_data_format(pack_dst_format) == to_underlying(DataFormat::Int8))) ? 0
+        : IS_BFP_FORMAT(pack_dst_format)
+            ? bfp_exp_section_chunks(num_faces, face_r_dim) // one exponent byte per packed face row, padded to a 16 B chunk; matches
+                                                            // the host pack/unpack layout for both full and partial (face_r_dim < 16) faces.
+            : num_faces;
 
     config.f.uncompress      = 1;
     config.f.out_data_format = pack_dst_format;
@@ -555,7 +581,7 @@ inline void set_packer_config(
         }
     }
 
-    cache_exponential_section_sizes_in_gprs<false>(num_faces, partial_face);
+    cache_exponential_section_sizes_in_gprs<false>(num_faces, face_r_dim, partial_face);
 }
 
 inline void set_packer_l1_offset(const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM)
@@ -693,7 +719,7 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
 
     if (IS_BFP_FORMAT(pack_dst_format))
     {
-        cache_exponential_section_sizes_in_gprs<true>(num_faces, partial_face);
+        cache_exponential_section_sizes_in_gprs<true>(num_faces, face_r_dim, partial_face);
 
         // Wait till the MMIO is finished
         TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::TRISC_CFG);
@@ -797,7 +823,7 @@ inline void configure_pack(
 
     t6_mutex_release(mutex::REG_RMW);
 
-    set_packer_config<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, num_faces, partial_face);
+    set_packer_config<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, face_r_dim, num_faces, partial_face);
 
     set_packer_l1_offset(pack_dst_format, face_r_dim);
 
