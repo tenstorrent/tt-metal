@@ -28,9 +28,13 @@ FORCE_INLINE void issue_tensor_block_read(
 
 template <uint32_t Kt, uint32_t Vt>
 FORCE_INLINE void issue_affine_pair_send(
-    Noc& noc, uint32_t target, DataflowBuffer& send_a, DataflowBuffer& send_b, DataflowBuffer& remote_affine) {
-    const uint32_t target_x = worker_x(target);
-    const uint32_t target_y = worker_y(target);
+    Noc& noc,
+    uint32_t destination_worker,
+    DataflowBuffer& send_a,
+    DataflowBuffer& send_b,
+    DataflowBuffer& remote_affine) {
+    const uint32_t target_x = worker_x(destination_worker);
+    const uint32_t target_y = worker_y(destination_worker);
     const uint32_t tile_bytes = remote_affine.get_entry_size();
     for (uint32_t row = 0; row < Kt; ++row) {
         const uint32_t remote_row = remote_affine.get_write_ptr() + row * (Kt + Vt) * tile_bytes;
@@ -49,9 +53,9 @@ FORCE_INLINE void issue_affine_pair_send(
     }
 }
 
-FORCE_INLINE void complete_affine_pair_send(Noc& noc, Semaphore<>& ready, uint32_t target) {
+FORCE_INLINE void complete_affine_pair_send(Noc& noc, Semaphore<>& ready, uint32_t destination_worker) {
     noc.async_write_barrier();
-    ready.up(noc, worker_x(target), worker_y(target), 1);
+    ready.up(noc, worker_x(destination_worker), worker_y(destination_worker), 1);
 }
 
 FORCE_INLINE void issue_affine_pair_loopback(
@@ -106,8 +110,8 @@ FORCE_INLINE void synchronize_head_stage(
 
 template <uint32_t Kt, uint32_t Vt, uint32_t BH, uint32_t G>
 TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
-    constexpr uint32_t kk = Kt * Kt;
-    constexpr uint32_t kv = Kt * Vt;
+    constexpr uint32_t affine_a_tiles = Kt * Kt;
+    constexpr uint32_t affine_b_tiles = Kt * Vt;
     constexpr uint32_t worker_count = BH * G;
     static_assert(worker_count <= 128, "affine prefix coordinate table exceeds runtime-arg budget");
 
@@ -129,30 +133,32 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     Semaphore<> arrival(sem::arrival);
     Semaphore<> release(sem::release);
 
-    initial_a.reserve_back(kk);
-    initial_b.reserve_back(kv);
-    initial_state.reserve_back(kv);
-    issue_tensor_block_read(noc, a_accessor, initial_a, worker_index * kk, kk);
-    issue_tensor_block_read(noc, b_accessor, initial_b, worker_index * kv, kv);
-    issue_tensor_block_read(noc, initial_state_accessor, initial_state, (worker_index / G) * kv, kv);
+    initial_a.reserve_back(affine_a_tiles);
+    initial_b.reserve_back(affine_b_tiles);
+    initial_state.reserve_back(affine_b_tiles);
+    issue_tensor_block_read(noc, a_accessor, initial_a, worker_index * affine_a_tiles, affine_a_tiles);
+    issue_tensor_block_read(noc, b_accessor, initial_b, worker_index * affine_b_tiles, affine_b_tiles);
+    issue_tensor_block_read(
+        noc, initial_state_accessor, initial_state, (worker_index / G) * affine_b_tiles, affine_b_tiles);
     noc.async_read_barrier();
-    initial_a.push_back(kk);
-    initial_b.push_back(kv);
-    initial_state.push_back(kv);
+    initial_a.push_back(affine_a_tiles);
+    initial_b.push_back(affine_b_tiles);
+    initial_state.push_back(affine_b_tiles);
 
     uint32_t completed_stages = 0;
 
-    uint32_t ready_target = 0;
+    uint32_t expected_ready_events = 0;
     for (uint32_t distance = 1; distance < G; distance *= 2) {
-        to_remote_a.wait_front(kk);
-        to_remote_b.wait_front(kv);
+        to_remote_a.wait_front(affine_a_tiles);
+        to_remote_b.wait_front(affine_b_tiles);
         const bool sends = group + distance < G;
         const bool receives = group >= distance;
         if (sends) {
             issue_affine_pair_send<Kt, Vt>(noc, worker_index + distance, to_remote_a, to_remote_b, from_remote_affine);
         }
         if (receives) {
-            issue_affine_pair_loopback(noc, worker_index, to_remote_a, to_remote_b, local_a, local_b, kk, kv);
+            issue_affine_pair_loopback(
+                noc, worker_index, to_remote_a, to_remote_b, local_a, local_b, affine_a_tiles, affine_b_tiles);
         }
         if (sends) {
             // This retires both the remote send and a same-core loopback when this worker does both. Readiness is
@@ -162,22 +168,20 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
             noc.async_write_barrier();
         }
         if (receives) {
-            local_a.push_back(kk);
-            local_b.push_back(kv);
-        }
-        if (receives) {
-            from_remote_affine.reserve_back(kk + kv);
+            local_a.push_back(affine_a_tiles);
+            local_b.push_back(affine_b_tiles);
+            from_remote_affine.reserve_back(affine_a_tiles + affine_b_tiles);
             // All NoC writes complete before this receiver frees the old outbound block.
-            to_remote_a.pop_front(kk);
-            to_remote_b.pop_front(kv);
+            to_remote_a.pop_front(affine_a_tiles);
+            to_remote_b.pop_front(affine_b_tiles);
 
-            ready_target++;
-            ready.wait_min(ready_target);
-            from_remote_affine.push_back(kk + kv);
+            expected_ready_events++;
+            ready.wait_min(expected_ready_events);
+            from_remote_affine.push_back(affine_a_tiles + affine_b_tiles);
 
             // Compute must publish the replacement before any worker starts the next distance.
-            to_remote_a.wait_front(kk);
-            to_remote_b.wait_front(kv);
+            to_remote_a.wait_front(affine_a_tiles);
+            to_remote_b.wait_front(affine_b_tiles);
         }
         // Each head is an independent G-worker scan. Do not release its next NoC stage until all G workers have
         // consumed their remote buffers and produced the next prefix; otherwise that head can overwrite a mailbox
@@ -185,32 +189,32 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
         synchronize_head_stage<G>(worker_index, group, completed_stages, noc, arrival, release);
     }
 
-    to_remote_a.wait_front(kk);
-    to_remote_b.wait_front(kv);
+    to_remote_a.wait_front(affine_a_tiles);
+    to_remote_b.wait_front(affine_b_tiles);
     if (group + 1 < G) {
-        const uint32_t target = worker_index + 1;
-        issue_affine_pair_send<Kt, Vt>(noc, target, to_remote_a, to_remote_b, from_remote_affine);
-        complete_affine_pair_send(noc, ready, target);
+        const uint32_t destination_worker = worker_index + 1;
+        issue_affine_pair_send<Kt, Vt>(noc, destination_worker, to_remote_a, to_remote_b, from_remote_affine);
+        complete_affine_pair_send(noc, ready, destination_worker);
     }
     // The final inclusive prefix is never reused after the exclusive neighbor shift.
-    to_remote_a.pop_front(kk);
-    to_remote_b.pop_front(kv);
+    to_remote_a.pop_front(affine_a_tiles);
+    to_remote_b.pop_front(affine_b_tiles);
     if (group > 0) {
-        from_remote_affine.reserve_back(kk + kv);
-        ready_target++;
-        ready.wait_min(ready_target);
-        from_remote_affine.push_back(kk + kv);
+        from_remote_affine.reserve_back(affine_a_tiles + affine_b_tiles);
+        expected_ready_events++;
+        ready.wait_min(expected_ready_events);
+        from_remote_affine.push_back(affine_a_tiles + affine_b_tiles);
     }
 
-    final.wait_front(kv);
-    for (uint32_t tile = 0; tile < kv; tile++) {
+    final.wait_front(affine_b_tiles);
+    for (uint32_t tile = 0; tile < affine_b_tiles; tile++) {
         noc.async_write(
             final,
             output_accessor,
             final.get_entry_size(),
             {.offset_bytes = tile * final.get_entry_size()},
-            {.page_id = worker_index * kv + tile});
+            {.page_id = worker_index * affine_b_tiles + tile});
     }
     noc.async_write_barrier();
-    final.pop_front(kv);
+    final.pop_front(affine_b_tiles);
 }
