@@ -2,71 +2,54 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""WER test: does the device say the words, and say them as well as the CPU does?
+"""WER test: does the device actually say the words?
 
 Every other gate compares numbers, so none of them can see whether the audio is intelligible — the
-605-code cap cutting a sentence short, degeneration on repeated input, and audio running past the
+audio code cap cutting a sentence short, degeneration on repeated input, and audio running past the
 last word are invisible to all of them.
 
-Both sides free-run, so they sample different code sequences and say the same sentence in different
-ways. Comparing their transcripts to EACH OTHER would measure that divergence, not correctness. WER
-is a metric on (audio, source text), so each side is scored against the text it was given and the
-two SCORES are compared — invariant to how either one realised the sentence.
+The model free-runs, so every draw realises the sentence differently and there is no canonical
+transcript to diff against. WER is a metric on (audio, source text), so each run is scored against
+the text it was given — invariant to how that particular draw happened to say it.
 
-Sampling variance is larger than any regression worth catching, so scores are averaged over
-sentences AND seeds, and the sentences run long. Short utterances are not merely noisier but
-unusable as a gate: a six-word sentence measured 0.000, 0.667 and 0.000 across three seeds — a
-healthy device wandering, because short text with a synthetic reference leaves the model too little
-to hold on to. A ceiling loose enough to survive that would sit above every regression this exists
-to catch.
+The voice comes from the checkpoint's own speakers_xtts.pth, one entry per built-in studio speaker,
+rather than from a reference clip. That is not just convenience: conditioning on a synthetic
+waveform puts the speaker encoder outside its training distribution, and the decoder can answer by
+emitting non-speech for a whole utterance, or by running on past the end of the sentence. Built-in
+latents avoid both. It also means this test does no DSP and no Block 1 or 2 work: the voice arrives
+as tensors, so a failure here is prefill, decode or the vocoder.
 
-So the absolute ceiling is the gate that bites. The CPU score sits beside it as a diagnostic,
-separating "the model got worse" from "the device got worse"; it is not a stable measure of what a
-sentence is worth, because the CPU free-runs too.
+Every speaker is swept, because the speaker embedding is the axis that produced that failure and
+nothing else covered it. It also makes the mean robust — with this many samples one catastrophic
+draw barely moves it, so the ceiling can stay tight enough to catch a rising failure RATE, which a
+median would hide.
 
-Needs Whisper weights (cached or downloadable). The CPU pipeline dominates the runtime.
+The slowest test in the suite. Needs the Whisper weights (cached or downloadable).
 
 Run:
     pytest -svv models/experimental/xtts_v2/tests/test_wer.py
 """
 import torch
-from transformers import GPT2Model, WhisperForConditionalGeneration, WhisperProcessor  # noqa: F401
+from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
-from models.experimental.xtts_v2.frontend import (
-    assemble_prompt,
-    conditioning_mels,
-    sinc_resample,
-    speaker_logmel,
-)
-from models.experimental.xtts_v2.reference.xtts_cond_ref import CondReference
-from models.experimental.xtts_v2.reference.xtts_gpt_ref import build_reference
-from models.experimental.xtts_v2.reference.xtts_hifigan_ref import HifiganReference
-from models.experimental.xtts_v2.reference.xtts_speaker_ref import SpeakerReference
-from models.experimental.xtts_v2.tests.reference_helpers import synthetic_speech
-from models.experimental.xtts_v2.tt.ttnn_xtts_model import (
-    GPT_MAX_AUDIO,
-    HOP,
-    OUTPUT_SR,
-    START_AUDIO_TOKEN,
-    STOP_AUDIO_TOKEN,
-    XttsV2,
-    _fade_out,
-    _sample_token,
-    _voc_bucket,
-    _voc_input,
-    _voc_pad,
-)
+from models.experimental.xtts_v2.frontend import sinc_resample
+from models.experimental.xtts_v2.tt.ttnn_xtts_model import OUTPUT_SR, Voice, XttsV2
 
-ASR_MODEL = "openai/whisper-small"  # multilingual, so the same rig extends past English
+ASR_MODEL = "openai/whisper-large-v3"  # small hallucinates on short audio and is weak outside en
 ASR_SR = 16000
-TOLERANCE = 0.05  # how much worse than the CPU the device may score, averaged over the corpus
-MAX_WER = 0.10  # the gate that bites: several times the corpus baseline, well under a real fault
-SEEDS = (0, 1, 2)  # each draws a different code path; the gate averages over them
+SEED = 0  # one seed: every speaker/sentence pair is already a distinct draw
+SPEAKERS_FILE = "speakers_xtts.pth"  # ships beside model.pth, the way vocab.json does
+MAX_WER = 0.02  # several times the corpus baseline; the spread is in the bringup docs
+# A third of the words wrong is far past anything mishearing explains -- ordinary ASR error costs a
+# word or two. A run this bad did not say the sentence: non-speech, repetition, or babble running
+# past the end.
+DEGENERATE_WER = 0.3
+# A mean over this many runs barely moves when a few collapse, so the collapse count is asserted
+# directly rather than left to the average to reveal.
+MAX_DEGENERATE = 2
 
-# 22 to 42 words: the regime where the model is dependable (see the module docstring). Two further
-# constraints, both learned by measuring: nothing Whisper respells or renumbers ("harbour" ->
-# "harbor", "nine" -> "9") scores as an error without being one, and gendered pronouns come out
-# ambiguous from the synthetic reference voice.
+# Long sentences, where the model is dependable, and nothing Whisper respells or renumbers
+# ("harbour" -> "harbor", "nine" -> "9"), since that scores as an error without being one.
 SENTENCES = (
     "The old map showed three islands that no sailor had ever found, and nobody wanted to be the "
     "first to erase them.",
@@ -88,7 +71,7 @@ def _words(s):
 
     WER on raw text is dominated by commas and capitals. An ASCII-only filter looks equivalent and
     is not: it empties Arabic, Cyrillic and Devanagari completely, so both sides normalise to
-    nothing and every comparison scores a perfect 0.000."""
+    nothing and every comparison scores a free zero."""
     flat = s.casefold().replace("\u2019", "'").replace("\u02bc", "'")  # ASR emits curly apostrophes
     return "".join(c if c.isalnum() or c.isspace() or c == "'" else " " for c in flat).split()
 
@@ -111,11 +94,12 @@ class _Asr:
 
     def __init__(self):
         self.proc = WhisperProcessor.from_pretrained(ASR_MODEL)
-        self.model = WhisperForConditionalGeneration.from_pretrained(ASR_MODEL).eval()
+        # the large checkpoints ship fp16, which cannot run against fp32 features on CPU
+        self.model = WhisperForConditionalGeneration.from_pretrained(ASR_MODEL, torch_dtype=torch.float32).eval()
 
     def __call__(self, wav):
-        # The model's own resampler rather than a new dependency: a fault in it would move both
-        # sides equally, and the absolute ceiling still catches it.
+        # The model's own resampler rather than a new dependency: a fault in it would raise the
+        # score, which the ceiling catches.
         audio = sinc_resample(wav.reshape(1, -1), OUTPUT_SR, ASR_SR)
         feats = self.proc(audio[0].numpy(), sampling_rate=ASR_SR, return_tensors="pt").input_features
         with torch.no_grad():
@@ -123,75 +107,42 @@ class _Asr:
         return self.proc.batch_decode(ids, skip_special_tokens=True)[0].strip()
 
 
-def _cpu_generate(host, gpt, final_norm, voc, cond, spk, text, seed):
-    """XttsV2.generate on CPU: prompt, sampled decode with a KV cache, then the reference vocoder.
-    `host` is (tokenizer, tables, heads) — the pieces the shipped path also keeps off device."""
-    tokenizer, tables, h = host
-    prefix = assemble_prompt(tokenizer.encode(text, "en"), cond, tables)
-    gen = torch.Generator().manual_seed(seed)
-    step = (h["mel_emb"][START_AUDIO_TOKEN] + h["mel_pos"][0]).view(1, 1, -1)
-    with torch.no_grad():
-        out = gpt(inputs_embeds=torch.cat([prefix, step], dim=1), use_cache=True)
-        past, last = out.past_key_values, final_norm(out.last_hidden_state[:, -1:])
-        seen, codes, latents = {1, START_AUDIO_TOKEN}, [], []
-        while len(codes) < GPT_MAX_AUDIO:
-            nxt = _sample_token(last, seen, gen, h["mel_head_w"], h["mel_head_b"])
-            if nxt == STOP_AUDIO_TOKEN:
-                break
-            codes.append(nxt)
-            latents.append(last)
-            seen.add(nxt)
-            step = (h["mel_emb"][nxt] + h["mel_pos"][len(codes)]).view(1, 1, -1)
-            out = gpt(inputs_embeds=step, past_key_values=past, use_cache=True)
-            past, last = out.past_key_values, final_norm(out.last_hidden_state[:, -1:])
-    if not codes:  # generate's empty-audio contract
-        return torch.zeros(1, 1, 0)
-    z = _voc_input(torch.cat(latents, dim=1))
-    L = z.shape[-1]
-    return _fade_out(voc(_voc_pad(z, _voc_bucket(L)), spk)[:, :, : L * HOP])
+def _speakers(ckpt_path):
+    """The checkpoint's built-in studio speakers -> {name: Voice}. Latents, so no DSP is involved."""
+    import os
+
+    raw = torch.load(os.path.join(os.path.dirname(ckpt_path), SPEAKERS_FILE), weights_only=False)
+    return {
+        name: Voice(gpt_cond_latent=d["gpt_cond_latent"], speaker_embedding=d["speaker_embedding"])
+        for name, d in raw.items()
+    }
 
 
 def run_wer(verbose=True):
-    ref_wav, ref_sr = synthetic_speech(), 22050  # a clip's content only has to be voiced
     asr = _Asr()
     tts = XttsV2()
     try:
+        voices = _speakers(tts.ckpt_path)
         tts.warmup()
-        voice = tts.compute_voice(ref_wav, ref_sr)
-        device = {(t, s): asr(tts.generate(t, voice, seed=s)) for t in SENTENCES for s in SEEDS}
-        host = (tts.tokenizer, tts.tables, tts.heads)  # host-side pieces, kept past close()
+        device = {}
+        for name, voice in voices.items():
+            for text in SENTENCES:
+                device[(name, text)] = asr(tts.generate(text, voice, seed=SEED))
+            if verbose:  # per speaker, so a long run shows progress and a failure names the speaker
+                row = [_wer(t, device[(name, t)]) for t in SENTENCES]
+                print(f"  {name:24s} " + " ".join(f"{w:.3f}" for w in row) + f"  mean {sum(row) / len(row):.3f}")
     finally:
         tts.close()
 
-    # The CPU baseline computes its own conditioning and speaker embedding, so it is a whole
-    # pipeline rather than a device run with the tail replaced.
-    gpt, final_norm = build_reference()
-    mel = conditioning_mels(ref_wav, ref_sr, host[1].mel_stats)[0]
-    _, cond = CondReference().get_style_emb(mel)
-    spk = SpeakerReference().core(speaker_logmel(ref_wav, ref_sr), l2_norm=True).unsqueeze(-1)
-    voc = HifiganReference()
-    cpu = {(t, s): asr(_cpu_generate(host, gpt, final_norm, voc, cond, spk, t, s)) for t in SENTENCES for s in SEEDS}
-
-    dev_scores = {k: _wer(k[0], v) for k, v in device.items()}
-    cpu_scores = {k: _wer(k[0], v) for k, v in cpu.items()}
-    if verbose:
-        for i, text in enumerate(SENTENCES):
-            d = [dev_scores[(text, s)] for s in SEEDS]
-            c = [cpu_scores[(text, s)] for s in SEEDS]
-            dev_col = " ".join(f"{w:.3f}" for w in d)
-            cpu_col = " ".join(f"{w:.3f}" for w in c)
-            print(f"  sentence {i} ({len(text.split()):2d} words)  device {dev_col}   cpu {cpu_col}")
-            for s in SEEDS:  # only the misses are worth reading
-                if dev_scores[(text, s)]:
-                    print(f"      device seed{s}: {device[(text, s)]}")
+    dev_scores = {k: _wer(k[1], t) for k, t in device.items()}
     dev_wer = sum(dev_scores.values()) / len(dev_scores)
-    cpu_wer = sum(cpu_scores.values()) / len(cpu_scores)
-    worst = max(dev_scores.values())
+    degenerate = [f"{n}/{t[:24]}" for (n, t), w in dev_scores.items() if w >= DEGENERATE_WER]
     msg = (
-        f"{len(SENTENCES)} sentences x {len(SEEDS)} seeds: device WER {dev_wer:.3f} "
-        f"(worst single {worst:.3f}) vs cpu {cpu_wer:.3f}, ceiling {MAX_WER}"
+        f"{len(voices)} speakers x {len(SENTENCES)} sentences: device WER {dev_wer:.4f} "
+        f"(worst single {max(dev_scores.values()):.3f}, degenerate {len(degenerate)}) "
+        f"ceiling {MAX_WER}, degenerate limit {MAX_DEGENERATE} at WER {DEGENERATE_WER}"
     )
-    return dev_wer <= cpu_wer + TOLERANCE and dev_wer <= MAX_WER, msg
+    return (dev_wer <= MAX_WER and len(degenerate) <= MAX_DEGENERATE), msg
 
 
 def test_wer_metric():
@@ -205,7 +156,7 @@ def test_wer_metric():
         ("the cat sat down", "", 1.0),  # nothing transcribed
         ("The cat, sat down!", "the cat sat down", 0.0),  # punctuation and case ignored
         ("the cat", "the dog ran fast today", 2.0),
-        # non-Latin scripts must survive normalisation rather than emptying to a free 0.000
+        # non-Latin scripts must survive normalisation rather than emptying to a free zero
         ("привет мир", "привет мир", 0.0),
         ("привет мир", "привет луна", 0.5),
         ("привет мир", "", 1.0),
@@ -219,7 +170,7 @@ def test_wer_metric():
 
 def test_wer():
     passed, msg = run_wer()
-    assert passed, f"the device is less intelligible than the CPU, or past the ceiling: {msg}"
+    assert passed, f"the device is past the WER ceiling or produced degenerate audio: {msg}"
 
 
 if __name__ == "__main__":
