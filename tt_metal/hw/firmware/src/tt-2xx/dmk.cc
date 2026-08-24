@@ -85,9 +85,6 @@ uint32_t _start() {
     while ((*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[thread_0_hartid] != SHARED_GLOBALS_READY_GO) {
     }
 
-    if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
-        overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-    }
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
