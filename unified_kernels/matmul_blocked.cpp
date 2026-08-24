@@ -167,7 +167,7 @@ void kernel_main() {
         // operand movement costs, which is the question once fidelity has shown the math is
         // not on the critical path at all.
         u::ComputeBlock a_h =
-            u::noc_load<0, 0>(a_storage, row, [&](u::L1Pages pages) {
+            u::noc_load<0, 0>(a_storage, row, /*seq=*/0, [&](u::L1Pages pages) {
                 for (uint32_t p = 0; p < pages.count; ++p) {
                     const uint32_t rr = i * mt + p / kt;
                     const uint32_t cc = p % kt;
@@ -175,7 +175,7 @@ void kernel_main() {
                 }
             }).wait();
         u::ComputeBlock w_h =
-            u::noc_load<MMB_IN1_THREAD, 1>(w_storage, col, [&](u::L1Pages pages) {
+            u::noc_load<MMB_IN1_THREAD, 1>(w_storage, col, /*seq=*/0, [&](u::L1Pages pages) {
                 for (uint32_t p = 0; p < pages.count; ++p) {
                     const uint32_t rr = p / nt;
                     const uint32_t cc = n * nt + p % nt;
@@ -197,7 +197,7 @@ void kernel_main() {
             const u::ComputeBlock<W>& w = w_h;
 #else
             u::ComputeBlock a =
-                u::noc_load<0, /*pair=*/0>(a_storage, row, [&](u::L1Pages pages) {
+                u::noc_load<0, /*pair=*/0>(a_storage, row, /*seq=*/b, [&](u::L1Pages pages) {
                     for (uint32_t p = 0; p < pages.count; ++p) {
                         const uint32_t rr = i * mt + p / kt;
                         const uint32_t cc = b * kt + p % kt;
@@ -205,7 +205,7 @@ void kernel_main() {
                     }
                 }).wait();
             u::ComputeBlock w =
-                u::noc_load<MMB_IN1_THREAD, /*pair=*/1>(w_storage, col, [&](u::L1Pages pages) {
+                u::noc_load<MMB_IN1_THREAD, /*pair=*/1>(w_storage, col, /*seq=*/b, [&](u::L1Pages pages) {
                     for (uint32_t p = 0; p < pages.count; ++p) {
                         const uint32_t rr = b * kt + p / nt;
                         const uint32_t cc = n * nt + p % nt;

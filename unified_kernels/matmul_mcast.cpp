@@ -120,9 +120,11 @@ void kernel_main() {
         // column; each takes its own reserved handshake pair, so the two never
         // collide. Both re-run every k step, feeding the next block while the
         // previous one is still being folded in.
-        u::ComputeBlock a = u::noc_load<0, /*pair=*/0>(in0_storage, row, in0, me.y * MM_K_BLOCKS + k).wait();
+        // `k` is the handshake sequence number: both semaphores are running counts that are
+        // never reset, so each call has to say which block it is.
+        u::ComputeBlock a = u::noc_load<0, /*pair=*/0>(in0_storage, row, in0, me.y * MM_K_BLOCKS + k, k).wait();
         u::ComputeBlock b =
-            u::noc_load<MM_IN1_THREAD, /*pair=*/1>(in1_storage, col, in1, me.x * MM_K_BLOCKS + k).wait();
+            u::noc_load<MM_IN1_THREAD, /*pair=*/1>(in1_storage, col, in1, me.x * MM_K_BLOCKS + k, k).wait();
 
         u::Block result = acc.accumulate(u::matmul(a, b), finish);
         if (finish) {
