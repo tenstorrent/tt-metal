@@ -8,6 +8,7 @@
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
 #include <algorithm>
+#include <numeric>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -55,12 +56,15 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreRetileProgramFactory::cr
 
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
+    // The intermediate is row-major, so it cannot be a block-float format. If the input is
+    // already block-float, unpack it to bfloat16; otherwise keep the input dtype. Conversion
+    // to the output dtype happens on the final pack (see retile.cpp).
+    const auto intermediate_dtype = is_block_float(a.dtype()) ? DataType::BFLOAT16 : a.dtype();
+    tt::DataFormat mid_data_format = datatype_to_dataformat_converter(intermediate_dtype);
     uint32_t input_single_tile_size = input_tile.get_tile_size(input_data_format);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
-    const uint32_t mid_page_size = input_single_tile_size;
-    // The intermediate stays in the input data format (conversion happens on the final pack), so
-    // the consumer view sizes an output tile in the input format, not the output format.
-    const uint32_t out_tile_size_input_fmt = output_tile.get_tile_size(input_data_format);
+    const uint32_t mid_input_page_size = input_tile.get_tile_size(mid_data_format);
+    const uint32_t mid_output_page_size = output_tile.get_tile_size(mid_data_format);
 
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
@@ -107,8 +111,18 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreRetileProgramFactory::cr
     const uint32_t src_dfb_tiles = dfb_num_pages_per_block * dfb_factor;
     const uint32_t out_dfb_tiles = dfb_num_pages_per_block * dfb_factor;
 
-    // One output block occupies `ratio` input tile-rows of RM in the grow case, one otherwise.
-    const uint32_t mid_pages_per_out_block = (shrink ? 1u : ratio) * tiles_per_block;
+    // The compute kernel untilizes the whole per-core assignment into mid, then tilizes it.
+    // Size mid for the busiest core's input tile-rows. Aliased mid/mid_view page sizes can differ
+    // (e.g. bf16→bfp8 with different tile heights), so the allocation must be a multiple of both.
+    // The interleaved factory does not width-chunk (chunk_tiles == tiles_per_block).
+    const uint32_t max_blocks = std::max(nblocks_per_core, nblocks_per_core_cliff);
+    const uint32_t max_input_rows_per_core = shrink ? max_blocks : max_blocks * ratio;
+    const uint32_t mid_input_pages = max_input_rows_per_core * tiles_per_block;
+    const uint32_t mid_size_align = std::lcm(mid_input_page_size, mid_output_page_size);
+    const uint32_t mid_total_size =
+        ((mid_input_pages * mid_input_page_size + mid_size_align - 1) / mid_size_align) * mid_size_align;
+    const uint32_t chunk_tiles = tiles_per_block;  // no width chunking on the interleaved path
+    const uint32_t num_width_chunks = 1;
 
     // ---- Metal 2.0 spec resource names (function-local) ----
     const DFBSpecName INPUT_DFB{"input"};
@@ -136,30 +150,24 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreRetileProgramFactory::cr
     // program-creation time: MID carries the input tile shape for pack_untilize to write into,
     // MID_VIEW the output tile shape so llk_unpack_tilize reads the correct number of RM rows. The
     // two share one allocation via advanced_options.alias_with, which requires equal total size.
-    const uint32_t mid_total_size = 2 * mid_pages_per_out_block * mid_page_size;
-    // MID_VIEW's num_entries divides the shared allocation by the output-shaped tile size; this is
-    // exact for every dtype the op admits (tile size scales with tile height), but a block-float
-    // input would break it (fixed exponent header). Block-float inputs are rejected upstream
-    // (validate_on_program_cache_miss dtype whitelist), so this cannot fire today; the guard makes
-    // the assumption explicit for anyone widening the dtype list later.
     TT_FATAL(
-        mid_total_size % out_tile_size_input_fmt == 0,
+        mid_total_size % mid_output_page_size == 0,
         "retile intermediate ({} B) must hold a whole number of {}-byte output-shaped tiles",
         mid_total_size,
-        out_tile_size_input_fmt);
+        mid_output_page_size);
     DataflowBufferSpec mid_dfb{
         .unique_id = MID_DFB,
-        .entry_size = mid_page_size,
-        .num_entries = 2 * mid_pages_per_out_block,
-        .data_format_metadata = input_data_format,
+        .entry_size = mid_input_page_size,
+        .num_entries = mid_total_size / mid_input_page_size,
+        .data_format_metadata = mid_data_format,
         .tile_format_metadata = input_tile,
         .advanced_options = {.alias_with = {MID_VIEW_DFB}},
     };
     DataflowBufferSpec mid_view_dfb{
         .unique_id = MID_VIEW_DFB,
-        .entry_size = out_tile_size_input_fmt,
-        .num_entries = mid_total_size / out_tile_size_input_fmt,
-        .data_format_metadata = input_data_format,
+        .entry_size = mid_output_page_size,
+        .num_entries = mid_total_size / mid_output_page_size,
+        .data_format_metadata = mid_data_format,
         .tile_format_metadata = output_tile,
         .advanced_options = {.alias_with = {MID_DFB}},
     };
@@ -264,8 +272,12 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreRetileProgramFactory::cr
                 {{"tiles_per_block", tiles_per_block},
                  {"in_tile_height", in_tile_height},
                  {"out_tile_height", out_tile_height},
-                 {"out_tile_size", out_tile_size_input_fmt},
-                 {"mid_page_size", mid_page_size}},
+                 {"out_tile_size", mid_output_page_size},
+                 {"mid_page_size", mid_input_page_size},
+                 {"chunk_tiles", chunk_tiles},
+                 {"num_width_chunks", num_width_chunks},
+                 {"input_tile_bytes", input_single_tile_size},
+                 {"output_tile_bytes", output_single_tile_size}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"num_input_blocks", "num_real_input_rows", "num_real_output_rows"}},
             .hw_config = ComputeHardwareConfig{compute_cfg},

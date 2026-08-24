@@ -470,13 +470,16 @@ HostTensor unpad_from_tile(const HostTensor& tensor, const tt::tt_metal::Shape& 
             tensor.logical_shape()[index] == output_tensor_shape[index],
             "Input shape must match output shape apart from last 2 dims");
     }
+    auto tile = tensor.tensor_spec().tile();
     TT_FATAL(
-        tensor.padded_shape()[-2] % constants::TILE_HEIGHT == 0 &&
-            tensor.padded_shape()[-1] % constants::TILE_WIDTH == 0,
-        "Last 2 dims of input shape must be multiples of 32");
+        tensor.padded_shape()[-2] % tile.get_height() == 0 && tensor.padded_shape()[-1] % tile.get_width() == 0,
+        "Last 2 dims of padded input shape {} must be multiples of tile height {} and width {} respectively",
+        tensor.padded_shape(),
+        tile.get_height(),
+        tile.get_width());
     TT_FATAL(
-        tensor.padded_shape()[-2] < output_tensor_shape[-2] + constants::TILE_HEIGHT &&
-            tensor.padded_shape()[-1] < output_tensor_shape[-1] + constants::TILE_WIDTH,
+        tensor.padded_shape()[-2] < output_tensor_shape[-2] + tile.get_height() &&
+            tensor.padded_shape()[-1] < output_tensor_shape[-1] + tile.get_width(),
         "Last 2 dims of output must be within range to have been padded to input");
     Shape output_tensor_start(ttsl::SmallVector<uint32_t>(tensor.padded_shape().rank(), 0));
     Shape output_tensor_end(ttsl::SmallVector<uint32_t>(tensor.padded_shape().rank(), 1));

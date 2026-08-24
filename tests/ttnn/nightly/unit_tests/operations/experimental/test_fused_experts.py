@@ -188,7 +188,14 @@ def test_fused_experts_gate_up(
         intermediate, hidden, hidden // FUSED_EXPERTS_NUM_CORES, dram_core_range_set
     )
 
-    x_tt = to_tt(x_flat, ttnn.TILE_LAYOUT)
+    x_tt = ttnn.from_torch(
+        x_flat,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((1, 32)),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
     ids_tt = to_tt(ids.to(torch.int32).reshape(1, 1, tokens, top_k), ttnn.TILE_LAYOUT, dtype=ttnn.uint16)
     scores_tt = to_tt(scores.reshape(1, 1, tokens, num_experts), ttnn.TILE_LAYOUT)
     gate_up_tt = [
@@ -265,6 +272,7 @@ def test_fused_experts_sparse_routing(device, hidden, intermediate, num_experts,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((1, 32)),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 

@@ -158,8 +158,13 @@ void kernel_main() {
     constexpr uint32_t scratch_l1_offset = get_compile_time_arg_val(36);
     constexpr uint32_t bitmap_bytes = get_compile_time_arg_val(37);
     constexpr uint32_t rank_bytes = get_compile_time_arg_val(38);
+    // Routing-scalar tile geometry (bf16 tile matching the input's height; width fixed at 32).
+    constexpr uint32_t rscalar_tile_h = get_compile_time_arg_val(39);
+    constexpr uint32_t rscalar_face_r_dim = get_compile_time_arg_val(40);
+    constexpr uint32_t rscalar_num_face_rows = get_compile_time_arg_val(41);
+    constexpr uint32_t rscalar_tile_bytes = get_compile_time_arg_val(42);
 
-    constexpr auto routing_args = TensorAccessorArgs<39>();
+    constexpr auto routing_args = TensorAccessorArgs<43>();
     constexpr auto score_args = TensorAccessorArgs<routing_args.next_compile_time_args_offset()>();
     constexpr auto gate_up_args = TensorAccessorArgs<score_args.next_compile_time_args_offset()>();
     constexpr auto down_args = TensorAccessorArgs<gate_up_args.next_compile_time_args_offset()>();
@@ -394,5 +399,9 @@ void kernel_main() {
         down_reserve_tiles,
         // The leader gathers into its own L1, so it never sends itself a slot-free ack.
         /*leader_noc_x=*/0,
-        /*leader_noc_y=*/0);
+        /*leader_noc_y=*/0,
+        rscalar_tile_h,
+        rscalar_face_r_dim,
+        rscalar_num_face_rows,
+        rscalar_tile_bytes);
 }

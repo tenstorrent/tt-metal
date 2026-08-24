@@ -443,15 +443,19 @@ def test_decoder_layer_decode_pcc(
         packed_cache = cache.sub("packed_decoder_test") if cache else WeightCache()
         cache_name = f"layer_{layer_idx}_{layer_type}"
         cache_file = packed_cache.file(cache_name)
+        # One layer only, and within it only the weights this layer actually materializes:
+        # the shard is sized to the largest zone's regions, so packing the placement's full
+        # name set would reserve L1 on every core for slabs no op here ever reads.
+        placement_weights = placement_weights_from_decoder_layer(weights, layer_type)
+        packed_kwargs = dict(
+            layer_types=(layer_type,),
+            weight_names_by_layer=(frozenset(placement_weights),),
+            cache_file_name=cache_file,
+        )
         if packed_cache.hit(cache_name, ttnn.bfloat4_b):
-            bundle_packed = build_l1_weight_tensor(None, device, layer_types=(layer_type,), cache_file_name=cache_file)
+            bundle_packed = build_l1_weight_tensor(None, device, **packed_kwargs)
         else:
-            bundle_packed = build_l1_weight_tensor(
-                [placement_weights_from_decoder_layer(weights, layer_type)],
-                device,
-                layer_types=(layer_type,),
-                cache_file_name=cache_file,
-            )
+            bundle_packed = build_l1_weight_tensor([placement_weights], device, **packed_kwargs)
         packed_weights = (bundle_packed, 0)
     experts = DeepSeekV4PreloadedExperts(
         cfg,
