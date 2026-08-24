@@ -192,7 +192,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
                 N=6144,
                 dim=3,
                 mm_block_m=96,  # 3 tiles
-                mm_block_k=96,  # 3 tiles
+                mm_block_k=192,  # 6 tiles
                 mm_block_n=256,  # 8 tiles
                 mm_core_grid=ttnn.CoreCoord(12, 8),
                 chunk_width_in_mm_blocks=1,
@@ -201,7 +201,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
                 num_workers_per_link=5,
                 mm_window_blocks=2,
             ),
-            id="flux2_projout_1152_3072_6144_x12y8_b338_window2",
+            id="flux2_projout_1152_3072_6144_x12y8_b368_window2",
         ),
         pytest.param(
             MinimalMatmulStridedReduceScatterTestConfig(
@@ -230,8 +230,8 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
                 N=4096,
                 dim=3,
                 mm_block_m=128,  # 4 tiles
-                mm_block_k=256,  # 8 tiles
-                mm_block_n=256,  # 8 tiles
+                mm_block_k=128,  # 4 tiles
+                mm_block_n=448,  # 14 tiles
                 mm_core_grid=ttnn.CoreCoord(12, 8),
                 chunk_width_in_mm_blocks=1,
                 subblock_h=2,
@@ -239,7 +239,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
                 num_workers_per_link=5,
                 mm_window_blocks=2,
             ),
-            id="ltx_stage1_ff2_1216_4096_4096_x12y8_b488_window2",
+            id="ltx_stage1_ff2_1216_4096_4096_x12y8_b4414_window2",
         ),
         pytest.param(
             MinimalMatmulStridedReduceScatterTestConfig(
@@ -248,8 +248,8 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
                 N=4096,
                 dim=3,
                 mm_block_m=128,  # 4 tiles
-                mm_block_k=256,  # 8 tiles
-                mm_block_n=192,  # 6 tiles
+                mm_block_k=128,  # 4 tiles
+                mm_block_n=384,  # 12 tiles
                 mm_core_grid=ttnn.CoreCoord(12, 8),
                 chunk_width_in_mm_blocks=1,
                 subblock_h=2,
@@ -257,11 +257,49 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
                 num_workers_per_link=5,
                 mm_window_blocks=2,
             ),
-            id="ltx_stage2_ff2_4864_4096_4096_x12y8_b486_window2",
+            id="ltx_stage2_ff2_4864_4096_4096_x12y8_b4412_window2",
         ),
         pytest.param(
             MinimalMatmulStridedReduceScatterTestConfig(
                 M=2368,
+                K=3456,
+                N=5120,
+                dim=3,
+                mm_block_m=192,  # 6 tiles
+                mm_block_k=96,  # 3 tiles
+                mm_block_n=256,  # 8 tiles
+                mm_core_grid=ttnn.CoreCoord(12, 8),
+                chunk_width_in_mm_blocks=1,
+                subblock_h=2,
+                subblock_w=2,
+                num_workers_per_link=5,
+                mm_window_blocks=2,
+            ),
+            id="wan720p_quad_ff2_2368_3456_5120_x12y8_b638_window2",
+        ),
+        # Aang ff2 shapes (a2v and SR), at the 2026-08-24 windowed-handoff sweep winners
+        # (see fused_mmrs_configs; windowed beats the DRAM-swept best on both).
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=2656,
+                K=3456,
+                N=5120,
+                dim=3,
+                mm_block_m=192,  # 6 tiles
+                mm_block_k=96,  # 3 tiles
+                mm_block_n=256,  # 8 tiles
+                mm_core_grid=ttnn.CoreCoord(12, 8),
+                chunk_width_in_mm_blocks=1,
+                subblock_h=2,
+                subblock_w=2,
+                num_workers_per_link=5,
+                mm_window_blocks=2,
+            ),
+            id="aang_a2v_ff2_2656_3456_5120_x12y8_b638_window2",
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=11520,
                 K=3456,
                 N=5120,
                 dim=3,
@@ -275,7 +313,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
                 num_workers_per_link=5,
                 mm_window_blocks=2,
             ),
-            id="wan720p_quad_ff2_2368_3456_5120_x12y8_b648_window2",
+            id="aang_sr_ff2_11520_3456_5120_x12y8_b648_window2",
         ),
         # LTX video FFN ff2 (RowParallel reduce-scatter): per-device [4864,4096]@[4096,4096]
         pytest.param(
