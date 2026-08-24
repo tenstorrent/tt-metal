@@ -779,6 +779,9 @@ private:
         ASSERT(size_bytes <= this->buffer_size_bytes);
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
+        ASSERT(tt::tt_fabric::is_valid_payload_size(
+            *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address)),
+            size_bytes));
         send_chunk_from_address<blocking_mode, posted>(source_address, 1, size_bytes, buffer_address, noc);
         post_send_payload_increment_pointers(noc);
     }
