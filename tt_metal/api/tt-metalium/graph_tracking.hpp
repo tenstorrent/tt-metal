@@ -149,8 +149,7 @@ public:
 
     // Whether any processor is registered, i.e. whether the track_* calls below do anything.
     // Unlike is_enabled() this also counts non-capture (background) processors, so it matches
-    // exactly the condition each track_* call tests before fanning out. ScopedTrackedFunction
-    // snapshots it so that a capture starting mid-scope never receives an unpaired end.
+    // exactly the condition each track_* call tests before fanning out.
     bool has_processors() const;
 
     void push_processor(const std::shared_ptr<IGraphProcessor>& processor);
@@ -277,38 +276,44 @@ public:
     template <class... Args>
     explicit ScopedTrackedFunction(std::string_view function_name, Args&&... args) :
         entry_uncaught_exceptions_(std::uncaught_exceptions()),
-        // Snapshot before the start so that a capture pushed inside this scope, which never saw
-        // the start, does not receive the matching end either.
-        started_(GraphTracker::instance().has_processors()) {
+        // Snapshot the processors that will receive the start. Holding the shared_ptrs
+        // keeps that set alive if it is popped before this guard ends.
+        started_processors_(GraphTracker::instance().get_processors()) {
         GraphTracker::instance().track_function_start(function_name, std::forward<Args>(args)...);
     }
 
     template <class ReturnType>
     void end(ReturnType& output_tensors) {
-        if (std::exchange(ended_, true) || !started_) {
+        if (std::exchange(ended_, true) || started_processors_.empty()) {
             return;
         }
-        GraphTracker::instance().track_function_end(output_tensors);
+        for (auto& processor : started_processors_) {
+            processor->track_function_end(std::ref(output_tensors));
+        }
     }
 
     void end() {
-        if (std::exchange(ended_, true) || !started_) {
+        if (std::exchange(ended_, true) || started_processors_.empty()) {
             return;
         }
-        GraphTracker::instance().track_function_end();
+        for (auto& processor : started_processors_) {
+            processor->track_function_end();
+        }
     }
 
     // Closes the scope as failed. Call from a catch block, where the message is in reach; the
     // destructor cannot supply one (see below).
     void abort(std::string_view reason) {
-        if (std::exchange(ended_, true) || !started_) {
+        if (std::exchange(ended_, true) || started_processors_.empty()) {
             return;
         }
-        GraphTracker::instance().track_function_abort(reason);
+        for (auto& processor : started_processors_) {
+            processor->track_function_abort(reason);
+        }
     }
 
     ~ScopedTrackedFunction() {
-        if (ended_ || !started_) {
+        if (ended_ || started_processors_.empty()) {
             return;
         }
         // Destructors must not let an exception escape, least of all while one is already unwinding.
@@ -318,9 +323,13 @@ public:
                 // begun handling, and stack unwinding runs destructors before any handler is
                 // entered, so there is nothing to read here. Callers that want the text must use
                 // abort() from a catch block.
-                GraphTracker::instance().track_function_abort({});
+                for (auto& processor : started_processors_) {
+                    processor->track_function_abort({});
+                }
             } else {
-                GraphTracker::instance().track_function_end();
+                for (auto& processor : started_processors_) {
+                    processor->track_function_end();
+                }
             }
         } catch (...) {  // NOLINT(bugprone-empty-catch)
         }
@@ -333,7 +342,7 @@ public:
 
 private:
     int entry_uncaught_exceptions_;
-    bool started_;
+    std::vector<std::shared_ptr<IGraphProcessor>> started_processors_;
     bool ended_ = false;
 };
 }  // namespace tt::tt_metal
