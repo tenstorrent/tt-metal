@@ -9,6 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.blackhole.qwen36.tests.test_factory import validated_on_wormhole
 from models.demos.blackhole.qwen36.tt.vision.functional import qwen3_5_vision_transformer_preprocess
 from models.demos.blackhole.qwen36.tt.vision.model import VisionTransformer
 from models.demos.blackhole.qwen36.tt.vision.vision_model_config import VisionModelArgs
@@ -87,7 +88,14 @@ def test_vision_model_inference(
     # block over block -- and the row count itself feeds the SDPA/matmul chunk and grid selection
     # in vision_model_config, which was swept at the 128-aligned count. The `(n // m) + 1` form
     # also over-padded exact multiples (11008 -> 12288 for nothing).
-    seq_len = -(-ref_seq_len // 128) * 128
+    # SCOPED to Wormhole (test_factory.validated_on_wormhole) -- every WH mesh and both models, since
+    # this is a correctness fix rather than tuning. It CHANGES THE MEASURED PCC (it removes the
+    # unmasked pad-key error the 2048 form silently carried), so Blackhole keeps the previously
+    # shipped 2048 rounding until someone re-measures it there.
+    if validated_on_wormhole():
+        seq_len = -(-ref_seq_len // 128) * 128
+    else:
+        seq_len = ((ref_seq_len // 2048) + 1) * 2048
 
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=seq_len)
     if num_layers:
