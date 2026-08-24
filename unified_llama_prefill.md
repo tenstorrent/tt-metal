@@ -2316,6 +2316,53 @@ the host-side `grid_transpose` entirely, which has been a wart since the first f
 
 **Still open:** the strided loads above, and fusing the attention and projection launches.
 
+### The ttnn equivalent, and what its op breakdown says about where to spend effort
+
+There is a direct counterpart: `models/tt_transformers/tt/decoder.py`, class `TransformerBlock`
+-- one llama decoder layer -- with `tests/test_decoder_prefill.py` running it in prefill
+against an HF reference. That is the same thing test_unified_layer.py does. It normally needs
+a checkpoint, but `ModelArgs(..., dummy_weights=True)` reads the config from
+`models/tt_transformers/model_params/<name>` and generates the weights, so it runs with no
+download: `HF_MODEL=meta-llama/Llama-3.2-1B-Instruct` is enough.
+
+Run at the real Llama-3.2-1B shape (d_model 2048, 32 heads, 8 KV heads, head_dim 64, FFN
+8192), S=512, one N150, bfloat8_b weights: **1.98-2.13ms wall, 1820us of summed device time
+over 22 ops.** Where that goes:
+
+| us | share | op |
+|---|---|---|
+| 730.3 | 40% | `bmm_large_block_zm_fused_bias_activation` -- the big matmuls |
+| 388.4 | 21% | a multicast matmul (`dm_in0_sender` / `dm_in1_sender_out`) |
+| 186.4 | 10% | eltwise binary SFPU |
+| 135.8 | **7.5%** | `sdpa` -- the attention itself |
+| 94.3 | 5% | layernorm, twice |
+| 72.5 | 4% | rotary embedding |
+| 65.5 | 3.6% | `nlp_create_qkv_heads` -- the head split |
+| 63.8 | 3.5% | eltwise binary |
+
+Three things worth taking from that, and they re-rank the remaining work:
+
+- **Matmuls are 61% of a layer and attention is 7.5%.** Our matmul sits at a 1.14x median
+  against ttnn (1.04x for the output projection), and our flash attention is around 1.5x off
+  SDPA. Weighted by this breakdown, the matmul gap is worth several times more than the
+  attention gap -- and the attention work is where nearly all the effort has gone. A 1.5x on
+  7.5% is about 4% of a layer.
+- **ttnn spends 3.6% of a layer on `nlp_create_qkv_heads`**, which is exactly the head
+  split/concat problem. The strided store does that for free, and the strided loads would do
+  the same for Q, K and V. That is a real structural advantage of writing the whole pipeline
+  as one kernel rather than a sequence of ops, and it is now quantified rather than asserted.
+- **A matched-shape head-to-head is not possible yet**, so no ratio is quoted here. ttnn's
+  block only runs at real model dims; ours cannot reach d_model 2048 because the projection
+  holds all of Wo in L1. Ours measures 411.8us at S=64/d_model=256 and 757.1us at
+  S=128/d_model=256 (15 programs, summed device time, one core, bf16). Against ttnn's number
+  that is 800x less work, on 1/64 of the cores, at higher fidelity -- too many confounds to
+  divide. The per-op comparisons stay the honest ones until the projection can be k-blocked.
+
+Method note: `bench()`'s `median_us` is the median of ONE program's duration, which is what
+every measurement here has wanted -- but for a 22-op layer it is not the layer's time. Summing
+the rows and dividing by iterations is. Reading it the first way gave 41.3us for a layer whose
+arithmetic cannot be done in under a millisecond, which is what caught it.
+
 ## Phase 11 -- Full block orchestration
 
 Host-side and kernel-loop work, not model gaps.
