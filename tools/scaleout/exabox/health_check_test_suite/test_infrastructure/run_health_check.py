@@ -207,6 +207,7 @@ def run_csv_analysis(
     telemetry: dict | None = None,
     discard: int | None = None,
     discard_reason: str | None = None,
+    run_id_suffix: str = "",
 ) -> str | None:
     """Translate the diag_report.json into the runs/checks CSVs for Superset.
 
@@ -243,6 +244,7 @@ def run_csv_analysis(
             telemetry=telemetry,
             discard=discard,
             discard_reason=discard_reason,
+            run_id_suffix=run_id_suffix,
         )
     except Exception as exc:
         log.warning("CSV analysis failed: %s", exc)
@@ -406,6 +408,23 @@ def main() -> int:
             restart_count,
             REBOOT_CAP,
         )
+        # Upload the failing run as discard=1 (visible but out of fleet stats)
+        # before rebooting; suffix avoids colliding with the post-reboot row.
+        pre_reboot_csv = run_csv_analysis(
+            json_report=json_report,
+            node=node,
+            slurm_job_id=slurm_job_id,
+            ticket_key=None,
+            versions=versions,
+            telemetry=telemetry_summary,
+            discard=1,
+            discard_reason="reboot_pending",
+            run_id_suffix="-pre-reboot",
+        )
+        if pre_reboot_csv and args.upload_sftp and sftp_user and sftp_host:
+            upload_csv_sftp(pre_reboot_csv, sftp_user, sftp_host, log_dir=log_dir, launch_mode=launch_mode)
+        if args.cleanup and pre_reboot_csv:
+            remove_path(tempfile.gettempdir(), pre_reboot_csv)
         if reboot_and_requeue(node, slurm_job_id):
             log.info("Reboot armed and job requeued; exiting so the node reboots and reruns")
             return effective_code

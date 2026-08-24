@@ -156,7 +156,8 @@ train:
   perf:
     bh_p100: 160
     bh_p150b_civ2: 400
-    bh_galaxy_perf: 180
+  e2e_tier3:
+    bh_sc1: 260
 
 ttsim:
   unit:
@@ -324,7 +325,6 @@ models:
   stress:
     wh_galaxy_perf: 500
   e2e:
-    wh_llmbox: 198
     bh_p150b_civ2: 8
     bh_p300: 20
     bh_loudbox: 193
@@ -354,10 +354,10 @@ models:
     bh_p300: 8
     bh_quietbox_2: 42
   unit:
-    wh_llmbox: 70
+    wh_llmbox: 45
     wh_galaxy_perf: 10
   unit_tier1:
-    wh_llmbox: 61
+    wh_llmbox: 86
     wh_n150: 110
     wh_galaxy: 235
     wh_galaxy_perf: 45
@@ -409,6 +409,7 @@ models:
     bh_loudbox: 1200
     bh_p300: 800
   sweep_tier1:
+    wh_llmbox: 131
     wh_n150: 30
     wh_galaxy: 40
     bh_p150: 30
