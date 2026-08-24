@@ -6143,3 +6143,50 @@ flat-out, and at a 0.2-us-graze onset the added DRAM/NoC/L1-port contention agai
 stage-writes manufactures grazes; decode-paced acks spread mover traffic. NOT yet confirmed —
 resolve via filler sweep-time deltas across host arms (NO_DECODE vs decode-no-consumer vs
 decode+Tracy). Until resolved: NO_DECODE is the CONSERVATIVE onset count, not the gentlest host.
+
+## §N+66 — RESOLVED: the NO_DECODE onset inversion is MOVER BURST DENSITY; decode-paced acks are an accidental traffic-shaper (bh-05, 2026-08-24)
+
+§N+65's OPEN item, closed by a three-arm host matrix at the sensitive point (slow, d15, RING=448,
+pure zonescopes, iters 10k; producer stalls from L1 counters, host-independent):
+
+| arm | acks | producer stalls |
+|---|---|---|
+| A: NO_DECODE (pop+ack only) | instant | 2,183 / 2,340 / 2,367 / 2,413 / 2,470 / 2,633 |
+| B: decode, NO consumer | decode-paced | **164 / 180 / 212** |
+| C: decode + Tracy consumer + tracy-capture | decode-paced | 262 |
+
+**B == C, so Tracy is irrelevant — the whole 9-14x inversion is ack pacing.** The phase reports
+locate the mechanism on the MOVERS: identical frames moved and ~identical busy-sweep counts in all
+arms, but arm A compresses the work into HALF the time per sweep (busy 10.6-12.6 us, credit-wait
+0.1 us) where arm B/C spread it (busy 26.7-30.5 us of which ~30 us IS the credit wait). Same bytes,
+2.4x the instantaneous burst density on the DRAM banks (ring reads), the NoC (socket pushes), and
+the filler-L1 handshake.
+
+The FILLERS' own counters barely move (busy mean +0.3 us ~ 2%, worst sweep flat at 17.6-19.7 us in
+both arms) -- which is the tell. The one leg no filler-side counter can see is the per-core HEAD
+WRITE-BACK: a POSTED NoC write whose ISSUE the filler's clock records, but whose LANDING is what
+releases a blocked producer. At the d15 onset the graze margin is fractions of a us (mean stall
+0.2 us, §N+65 §4), so a mover-burst-inflated landing-latency tail converts directly into grazes
+without any filler phase changing. Every other channel is excluded by measurement: host credit-wait
+0.1 us (A) cannot touch producers, filler cadence flat, rings <=44% with 0 ring-room waits.
+
+Consequences:
+1. **The host is not the bottleneck in ANY arm** — worst mover credit-wait is 0.1 us (A) / ~30-54 us
+   (B/C, absorbed entirely by the DRAM-ring runway). The onset bottleneck is the pipeline's own
+   internal traffic: filler revisit cadence vs the 512-word worker ring, with the margin eroded by
+   mover burst density.
+2. **NO_DECODE is the conservative (higher) onset count, not the gentlest host.** Quote onset
+   numbers with the host arm. Sub-knee/deep-saturation counts are unaffected (§N+65: NO_DECODE ==
+   full pipeline from delay 40 down).
+3. **Deliberate mover pacing is protective at onset.** The mover controller's "never pace a
+   productive consumer" rule (gap=0 the instant frames exist) is exactly what maximizes burst
+   density; decode-paced acks accidentally provided the shaping. A small fixed mover gap (or credit
+   budget) at high ring runway would give arm-A capture modes arm-B onset behavior — code change,
+   measured motivation here.
+4. The +2% filler busy-sweep inflation under bursts is real but secondary; the landing-latency tail
+   is the scaling term (2% cadence cannot explain 14x stalls; a us-scale tail on release latency at
+   a 0.2-us margin can).
+
+Direct confirmation would need a device-side probe that timestamps head-writeback LANDING (e.g. a
+worker-side release-latency counter) — not in the current instrumentation, deliberately left as the
+follow-up.
