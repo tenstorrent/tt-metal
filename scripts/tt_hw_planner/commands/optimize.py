@@ -820,6 +820,27 @@ def cmd_optimize(args) -> int:
                     model_dir=run_demo,
                 )
                 print("  [optimize/cc] --fresh: %s" % _fresh_describe(_removed))
+                # AND THE MODEL, back to the state it was published in. The wins are committed to the
+                # model tree and survive a restart; the baseline and the ceiling they are measured
+                # against live in the state just cleared above. Keeping the first while resetting the
+                # other two is the combination that lies: the run re-derives its ceiling from a model
+                # that already carries the optimizations, so the target moves with the work.
+                #
+                # voxtral, measured: a fidelity lever took the pinned peak from 175.5 TFLOPS (HiFi4,
+                # pre-campaign) to 702.0 (LoFi) and prefill's ceiling from 203.82 ms to 50.95 -- a 4x
+                # change in the yardstick caused by a win, while the report presented the mid-campaign
+                # checkpoint as the model's starting point and said nothing about the 38 commits
+                # already in the tree.
+                #
+                # Skipped, loudly, for a model with no published commit: there is no origin to return
+                # to and inventing one would discard work nobody agreed to lose.
+                from agent.fresh_start import reset_model_to_published as _fresh_reset
+
+                _mr = _fresh_reset(run_demo)
+                if _mr.get("changed"):
+                    print("  [optimize/cc] --fresh: model %s (baseline and ceiling now describe the same tree)" % _mr["why"])
+                else:
+                    print("  [optimize/cc] --fresh: model NOT reset -- %s" % _mr.get("why"))
             except Exception as _fe:  # noqa: BLE001 -- a clear that cannot run must not take the run down
                 print("  [optimize/cc] --fresh skipped: %s" % str(_fe)[:160])
         result = run_cc(

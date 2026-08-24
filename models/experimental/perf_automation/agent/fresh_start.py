@@ -33,6 +33,8 @@ undo; this removes only generated state, so a mistake here costs a slow run and 
 from __future__ import annotations
 
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 # Run memory: keyed by model+task, rebuilt by the next run at the cost of device time.
@@ -169,3 +171,81 @@ def describe(removed) -> str:
         len(removed),
         "\n".join("      - %s" % p for p in removed),
     )
+
+
+def published_origin(model_dir) -> str:
+    """The newest model-dir commit that exists on a REMOTE, or "" when the model was never published.
+
+    THE CAMPAIGN'S STARTING POINT, DERIVED RATHER THAN REMEMBERED. --fresh forgets the run's memory,
+    so anything it could have stored about "where this campaign began" is the first thing it deletes.
+    Publication is the one record that survives it: what is on a remote is the model as it was before
+    this campaign touched it, and every commit after that is the campaign's own work.
+
+    That makes the boundary a fact about the repository rather than a guess about intent, and it
+    needs no flag, no config key and no per-model list. Voxtral resolves to the last bring-up commit
+    (2026-08-11) with the 38 optimization commits after it excluded, which is exactly the state whose
+    baseline and ceiling belong together.
+
+    "" when nothing is published -- a model that lives only locally has no origin to return to, and
+    inventing one would reset work nobody agreed to lose.
+    """
+    d = Path(model_dir or "")
+    if not d.is_dir():
+        return ""
+    try:
+        # "." and not the repo-root prefix: a git pathspec resolves against the CWD, so handing it
+        # `models/.../voxtral_mini_3b_2507/` while standing in that directory matches nothing and
+        # returns "no published origin" for a model that has one.
+        r = subprocess.run(
+            ["git", "rev-list", "-1", "--remotes", "--", "."],
+            cwd=str(d),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        return (r.stdout or "").strip()
+    except (NameError, AttributeError, TypeError) as bug:  # a programming error, not a git failure
+        print("  [fresh-start] BUG resolving the published origin: %r" % (bug,), file=sys.stderr, flush=True)
+        return ""
+    except Exception:  # noqa: BLE001 -- git said no; that is an answer, not a defect
+        return ""
+
+
+def reset_model_to_published(model_dir, dry_run: bool = False) -> dict:
+    """Return the model dir to its published state. {"origin", "changed", "why"}.
+
+    THE ONE OPERATION HERE THAT TOUCHES TRACKED FILES, and it is separate from wipe() for that
+    reason: wipe promises never to, and that promise is worth keeping intact.
+
+    Why it belongs to --fresh at all: the wins are committed to the model tree and survive a restart,
+    while the baseline and the ceiling they are measured against live in the state that --fresh
+    deletes. Keeping the first and resetting the other two is the combination that lies -- the run
+    re-derives its ceiling from a model that already carries the optimizations, so the target moves
+    with the work. Measured on voxtral: a fidelity lever took the pinned peak from 175.5 TFLOPS
+    (HiFi4, pre-campaign) to 702.0 (LoFi), and prefill's roofline ceiling from 203.82 ms to 50.95 --
+    a 4x change in the yardstick caused by a win rather than by hardware, with the report presenting
+    the mid-campaign checkpoint as the model's starting point.
+
+    Resetting all three together is what makes the numbers mean one thing. The discarded commits stay
+    in history and on the branch; only the working tree returns.
+    """
+    d = Path(model_dir or "")
+    origin = published_origin(d)
+    if not origin:
+        return {"origin": "", "changed": False, "why": "model has no published commit to return to"}
+    try:
+        diff = subprocess.run(
+            ["git", "diff", "--quiet", origin, "--", "."], cwd=str(d), capture_output=True, timeout=120
+        )
+        if diff.returncode == 0:
+            return {"origin": origin, "changed": False, "why": "already at the published state"}
+        if dry_run:
+            return {"origin": origin, "changed": True, "why": "would reset to %s" % origin[:9]}
+        co = subprocess.run(
+            ["git", "checkout", origin, "--", "."], cwd=str(d), capture_output=True, text=True, timeout=300
+        )
+        if co.returncode != 0:
+            return {"origin": origin, "changed": False, "why": "checkout failed: %s" % (co.stderr or "").strip()[:140]}
+        return {"origin": origin, "changed": True, "why": "reset to published %s" % origin[:9]}
+    except Exception as exc:  # noqa: BLE001
+        return {"origin": origin, "changed": False, "why": "%s: %s" % (type(exc).__name__, str(exc)[:120])}
