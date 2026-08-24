@@ -259,9 +259,77 @@ DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
     return this->dtype.value_or(this->input_dtype);
 }
 
+namespace {
+// The tensor shape in pages a sharded operand's TensorAccessor decomposes page ids with, or nullopt when
+// the operand is not sharded (interleaved operands build no sharded accessor, and hashing their shape would cost
+// the by-design shape-blind cache reuse that differently-shaped interleaved calls rely on).
+//
+// tensor_shape_in_pages is the accessor's radix: get_bank_and_offset decomposes a flat page id as
+// page_coord[i] = page_id % tensor_shape[i], and at rank >= 2 it also feeds shard_grid_strides. It is a
+// common runtime arg (binary_ng requests ArgConfig::RuntimeTensorShape) that override_runtime_arguments
+// never refreshes -- it does not call GetCommonRuntimeArgs -- while rank, num_banks, shard_shape and
+// bank_coords are compile-time and could not be re-applied even in principle. The shard volumes on
+// operation_attributes_t do not cover this: they encode the SHARD's extent, not the tensor's, so they are
+// identical across shapes that share one ShardSpec. Without this entry two such shapes collide on a single
+// cache entry and the second decomposes its page ids with the first's radix, silently returning a wrong
+// tensor. The output is keyed separately, via c_tensor_shape_in_pages (issue #54138).
+//
+// Hashing the tensor shape in pages rather than the padded shape is what keeps this from over-discriminating:
+// BufferDistributionSpec squeezes adjacent dimensions at construction, so shapes that squeeze together
+// produce an identical accessor, genuinely can share a program, and still share a cache entry here.
+//
+// Read off the Buffer rather than recomputed from the TensorSpec, deliberately: Buffer::set_page_size
+// and set_shard_spec reset buffer_distribution_spec_ while the spec keeps it, so the Buffer is the
+// faithful record of what the accessor was actually built from.
+std::optional<tt::tt_metal::Shape> sharded_tensor_shape_in_pages(const Tensor& tensor) {
+    // to_hash() runs before validate_on_program_cache_miss, so neither device storage nor allocation can be
+    // assumed: Tensor::buffer() goes through device_storage(), which TT_FATALs on host storage, and
+    // get_mesh_buffer(), which throws on a deallocated device tensor. Neither returns nullptr, so this
+    // guard -- not a null check on the result -- is what covers those two cases. The sharded test comes
+    // first: it is a plain accessor and skips the rest for the interleaved majority.
+    if (!tensor.memory_config().is_sharded() || !tensor.is_allocated() ||
+        tensor.storage_type() != StorageType::DEVICE) {
+        return std::nullopt;
+    }
+    const auto& distribution_spec = tensor.buffer()->buffer_distribution_spec();
+    if (!distribution_spec.has_value()) {
+        return std::nullopt;
+    }
+    return distribution_spec->tensor_shape_in_pages();
+}
+
+// Same key material for the OUTPUT, which normally has no Tensor yet when the key is built and so is
+// resolved from its TensorSpec instead. The writer builds a TensorAccessor over the output buffer with
+// the same unrefreshed RuntimeTensorShape common arg the readers use, so a sharded output on the
+// accessor path needs its extent in the key exactly as the inputs do.
+std::optional<tt::tt_metal::Shape> sharded_tensor_shape_in_pages(const tt::tt_metal::TensorSpec& spec) {
+    if (!spec.memory_config().is_sharded()) {
+        return std::nullopt;
+    }
+    // Hold the args by value: compute_buffer_sharding_args() returns a temporary, and
+    // buffer_distribution_spec() hands back a reference INTO it, which lifetime extension does not
+    // cover. Binding that reference directly dangles and silently reads as empty.
+    const auto sharding_args = spec.compute_buffer_sharding_args();
+    const auto& distribution_spec = sharding_args.buffer_distribution_spec();
+    if (!distribution_spec.has_value()) {
+        return std::nullopt;
+    }
+    return distribution_spec->tensor_shape_in_pages();
+}
+}  // namespace
+
+ttsl::hash::hash_t BinaryNgDeviceOperation::tensor_args_t::to_hash() const {
+    return ttsl::hash::hash_objects_with_default_seed(
+        input_tensor_a.dtype(),
+        input_tensor_a.memory_config(),
+        input_tensor_b.has_value() ? std::optional<DataType>{input_tensor_b->dtype()} : std::nullopt,
+        input_tensor_b.has_value() ? std::optional<MemoryConfig>{input_tensor_b->memory_config()} : std::nullopt,
+        sharded_tensor_shape_in_pages(input_tensor_a),
+        input_tensor_b.has_value() ? sharded_tensor_shape_in_pages(*input_tensor_b) : std::nullopt);
+}
+
 void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    // We don't support sharding for now
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     const auto& output_tensor = tensor_args.output_tensor;
@@ -685,14 +753,23 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         std::nullopt};
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, output_tensor};
+    const auto output_spec = OperationType::compute_output_specs(operation_attributes, tensor_args);
     const auto shard_volumes = ttnn::operations::binary_ng::get_shard_volumes(
-        input_tensor_a.tensor_spec(),
-        input_tensor_b.tensor_spec(),
-        OperationType::compute_output_specs(operation_attributes, tensor_args));
+        input_tensor_a.tensor_spec(), input_tensor_b.tensor_spec(), output_spec);
     if (shard_volumes.has_value()) {
         operation_attributes.a_shard_volume = shard_volumes->a_shard_volume;
         operation_attributes.b_shard_volume = shard_volumes->b_shard_volume;
         operation_attributes.c_shard_volume = shard_volumes->c_shard_volume;
+    } else {
+        // Accessor regime. A sharded output is reached through the writer's TensorAccessor, whose shape in
+        // pages is baked at build time and never refreshed, so it must enter the key. Nothing else in the
+        // key varies with it: the inputs may be interleaved (their shapes in pages are then absent), and
+        // attributes.memory_config carries the output's shard spec but not its shape. Prefer a supplied
+        // output's Buffer -- the faithful record of what the accessor was built from, and cheaper than
+        // rebuilding a BufferDistributionSpec from the spec.
+        operation_attributes.c_tensor_shape_in_pages =
+            output_tensor.has_value() ? operations::binary_ng::sharded_tensor_shape_in_pages(*output_tensor)
+                                      : operations::binary_ng::sharded_tensor_shape_in_pages(output_spec);
     }
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
@@ -777,6 +854,34 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         std::nullopt};
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, std::nullopt, output_tensor};
+    // Only a sharded operand or output needs the extra key material below, and ttnn.add(t, scalar) is
+    // overwhelmingly interleaved, so skip the output-spec computation entirely on that path rather than
+    // paying it on every dispatch. Mirrors get_shard_specs' own early-out (issue #54138).
+    // output_tensor is tested separately: mem_config_actual only falls back to it when no explicit
+    // memory_config was given, but compute_output_specs returns a supplied output's spec verbatim, so an
+    // interleaved memory_config alongside a sharded output would otherwise skip this block.
+    if (input_tensor_a.memory_config().is_sharded() || mem_config_actual.is_sharded() ||
+        (output_tensor.has_value() && output_tensor->memory_config().is_sharded())) {
+        const auto output_spec = OperationType::compute_output_specs(operation_attributes, tensor_args);
+        const auto shard_volumes =
+            ttnn::operations::binary_ng::get_shard_volumes(input_tensor_a.tensor_spec(), std::nullopt, output_spec);
+        if (shard_volumes.has_value()) {
+            // Native regime. This overload used to leave the volumes unset while the tensor-tensor
+            // overload patched them in. On this path they are in fact redundant with the input's shape in
+            // pages in tensor_args_t::to_hash() -- evenness and shape in pages move together, since the
+            // shard height is a whole number of tiles -- but they are kept so the two overloads stay
+            // symmetric and a reader need not re-derive that.
+            operation_attributes.a_shard_volume = shard_volumes->a_shard_volume;
+            operation_attributes.b_shard_volume = shard_volumes->b_shard_volume;
+            operation_attributes.c_shard_volume = shard_volumes->c_shard_volume;
+        } else {
+            // Accessor regime: the writer reaches a sharded output through a TensorAccessor whose shape in
+            // pages is baked at build time and never refreshed, so it must enter the key.
+            operation_attributes.c_tensor_shape_in_pages =
+                output_tensor.has_value() ? operations::binary_ng::sharded_tensor_shape_in_pages(*output_tensor)
+                                          : operations::binary_ng::sharded_tensor_shape_in_pages(output_spec);
+        }
+    }
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 

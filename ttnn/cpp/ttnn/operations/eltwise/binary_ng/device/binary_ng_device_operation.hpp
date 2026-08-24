@@ -61,6 +61,11 @@ struct BinaryNgDeviceOperation {
         std::optional<std::uint32_t> a_shard_volume;
         std::optional<std::uint32_t> b_shard_volume;
         std::optional<std::uint32_t> c_shard_volume;
+        // Tensor shape in pages of a sharded OUTPUT on the accessor path. The inputs' shapes in pages
+        // ride in tensor_args_t::to_hash(), but an op-created output has no Tensor at hash time, so it
+        // is resolved from its TensorSpec at invoke and carried here instead. Set only when the native
+        // path declines and the output is sharded, so interleaved outputs are unaffected.
+        std::optional<tt::tt_metal::Shape> c_tensor_shape_in_pages;
 
         DataType get_dtype() const;
 
@@ -74,6 +79,13 @@ struct BinaryNgDeviceOperation {
             "dtype",
             "compute_kernel_config",
             "sub_core_grids",
+            // worker_grid is the core_ranges of every CB and every kernel descriptor. In the branches
+            // where it varies it is a function of already-hashed memory configs PLUS one thing nothing
+            // else in this key carries: the device's current sub-device layout. Swapping sub-device
+            // managers does not clear the program cache, so a cached program's baked core ranges can go
+            // stale with nothing to notice. With one sub-device every get_worker_grid branch yields the
+            // same set, so this costs no extra cache entries there (issue #54138).
+            "worker_grid",
             "subtile_broadcast_type",
             "is_sfpu",
             "is_quant_op",
@@ -84,7 +96,8 @@ struct BinaryNgDeviceOperation {
             "equal_nan",
             "a_shard_volume",
             "b_shard_volume",
-            "c_shard_volume");
+            "c_shard_volume",
+            "c_tensor_shape_in_pages");
 
         auto attribute_values() const {
             return std::make_tuple(
@@ -96,6 +109,7 @@ struct BinaryNgDeviceOperation {
                 get_dtype(),
                 compute_kernel_config,
                 sub_core_grids,
+                worker_grid,
                 subtile_broadcast_type,
                 is_sfpu,
                 is_quant_op,
@@ -106,7 +120,8 @@ struct BinaryNgDeviceOperation {
                 binary_op_type == BinaryOpType::ISCLOSE ? equal_nan : false,
                 a_shard_volume,
                 b_shard_volume,
-                c_shard_volume);
+                c_shard_volume,
+                c_tensor_shape_in_pages);
         }
     };
 
@@ -115,14 +130,10 @@ struct BinaryNgDeviceOperation {
         std::optional<Tensor> input_tensor_b;
         std::optional<Tensor> output_tensor;
 
-        ttsl::hash::hash_t to_hash() const {
-            return ttsl::hash::hash_objects_with_default_seed(
-                input_tensor_a.dtype(),
-                input_tensor_a.memory_config(),
-                input_tensor_b.has_value() ? std::optional<DataType>{input_tensor_b->dtype()} : std::nullopt,
-                input_tensor_b.has_value() ? std::optional<MemoryConfig>{input_tensor_b->memory_config()}
-                                           : std::nullopt);
-        }
+        // Hashes the operands' dtypes and memory configs, plus -- for sharded operands -- the
+        // tensor shape in pages the TensorAccessor decomposes page ids with. Deliberately omits logical shape, so
+        // differently-shaped interleaved calls keep sharing one cache entry. Defined in the .cpp.
+        ttsl::hash::hash_t to_hash() const;
     };
 
     struct ProgramFactory {

@@ -769,9 +769,19 @@ bool is_native_L1_sharding(
         return false;
     }
 
+    // Native sharding aliases the operands' own buffers as circular buffers, which Metal permits only for
+    // L1: a DRAM-backed buffer that reaches this path dies on "Only L1 buffers can have an associated
+    // circular buffer!", a message naming neither the op nor sharding nor the unsupported combination.
+    // The identical-shape branch below rejects DRAM explicitly, but the scalar and subtile-broadcast
+    // branches did not, so they accepted DRAM-sharded tensors as "native L1" (issue #54138). This
+    // predicate is a router, not a validator -- declining sends the op down the TensorAccessor path,
+    // which already serves DRAM-sharded tensors.
+    const bool a_is_l1 = a.memory_config().buffer_type() == BufferType::L1;
+    const bool c_is_l1 = c.buffer_type() == BufferType::L1;
+
     // Scalar value path (b is not a tensor)
     if (!b.has_value() && a.memory_config().is_sharded()) {
-        return !is_uneven(a);
+        return a_is_l1 && c_is_l1 && !is_uneven(a);
     }
 
     if (!b.has_value()) {
@@ -783,10 +793,14 @@ bool is_native_L1_sharding(
     bool a_is_sharded = a.memory_config().is_sharded();
     bool b_is_sharded = b->memory_config().is_sharded();
     bool a_not_broadcast = (output_shape == a.logical_shape());
-    bool a_sharded_ok = a_is_sharded && a_not_broadcast && !is_uneven(a);
+    // Named for what it now gates: `a` is sharded, unbroadcast and even, AND both it and the output are
+    // L1-resident so the subtile-broadcast branch below may alias them as circular buffers. That branch
+    // is its only consumer, and was the second of the two that used to reach the globally-allocated-CB
+    // path without a buffer-type test (issue #54138).
+    bool a_native_cb_eligible = a_is_sharded && a_not_broadcast && !is_uneven(a) && a_is_l1 && c_is_l1;
 
     // avoid complex case when a and b are both sharded
-    if (a_sharded_ok && !b_is_sharded) {
+    if (a_native_cb_eligible && !b_is_sharded) {
         auto subtile_bcast = get_subtile_broadcast_type(
             a.logical_shape()[-2], a.logical_shape()[-1], b->logical_shape()[-2], b->logical_shape()[-1]);
         [[maybe_unused]] bool is_height = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
