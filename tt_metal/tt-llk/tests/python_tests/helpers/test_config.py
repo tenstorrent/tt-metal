@@ -163,6 +163,12 @@ class TestConfig:
     OPTIONS_LINK: ClassVar[str] = None
     INITIAL_OPTIONS_COMPILE: ClassVar[str] = None
     INCLUDES: ClassVar[List[str]] = []
+    # Out-of-tree -I header dirs registered via add_include_dirs(). Prepended
+    # onto INCLUDES in setup_compilation_options so they win over in-tree copies.
+    EXTRA_INCLUDE_FLAGS: ClassVar[List[str]] = []
+    # Extra -I dirs for #include <foo.cpp> (tests/helpers/src style).
+    # Prepended onto the kernel compile line ahead of RISCV_SOURCES.
+    EXTRA_SRC_INCLUDE_FLAGS: ClassVar[List[str]] = []
     WITH_COVERAGE: ClassVar[bool] = False
 
     OPTIONS_COMPILE: ClassVar[str] = None
@@ -530,9 +536,13 @@ class TestConfig:
         TestConfig.INCLUDES = (
             [
                 "-Isfpi/include",
-                f"-I../{TestConfig.ARCH_LLK_ROOT}/llk_lib",
-                f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc",
-                f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc/sfpu",
+                # Relative to tests/ (compile cwd), not pytest's cwd.
+                *[
+                    f"-I{p}"
+                    for p in TestConfig.llk_tree_include_roots(
+                        Path("..") / TestConfig.ARCH_LLK_ROOT
+                    )
+                ],
                 "-I../common",
                 "-I../../hw/inc",
                 "-Ifirmware/riscv/common",
@@ -545,6 +555,108 @@ class TestConfig:
                 "-I../../../ttnn/cpp/ttnn/operations/experimental",
             ]
         )
+        TestConfig._apply_extra_includes()
+
+    @staticmethod
+    def _as_include_flags(roots) -> List[str]:
+        flags: List[str] = []
+        for root in roots:
+            text = str(root)
+            flags.append(text if text.startswith("-I") else f"-I{Path(text).resolve()}")
+        return flags
+
+    @staticmethod
+    def _resolve_flag_roots(roots) -> list:
+        resolved = []
+        for root in roots:
+            if str(root).startswith("-I"):
+                resolved.append(str(root))
+            else:
+                resolved.append(Path(root).expanduser().resolve())
+        return resolved
+
+    def _extra_src_include_flags(self) -> str:
+        flags = TestConfig._as_include_flags(self.src_include_dirs)
+        existing = [f for f in TestConfig.EXTRA_SRC_INCLUDE_FLAGS if f not in flags]
+        ordered = flags + existing
+        return (" ".join(ordered) + " ") if ordered else ""
+
+    @staticmethod
+    def _apply_extra_includes() -> None:
+        extras = list(TestConfig.EXTRA_INCLUDE_FLAGS)
+        if not extras:
+            return
+        rest = [flag for flag in TestConfig.INCLUDES if flag not in extras]
+        TestConfig.INCLUDES = extras + rest
+
+    @staticmethod
+    def llk_tree_include_roots(arch_root) -> List[Path]:
+        """``-I`` dirs for one ``tt_llk_<arch>`` tree. ``-I`` is not recursive.
+
+        Headers are spelled ``"ckernel.h"``, ``"experimental/foo.h"``,
+        ``"sfpu/..."`` — the same three roots ``setup_compilation_options``
+        already adds for the in-tree copy.
+        """
+        root = Path(arch_root)
+        return [
+            root / "llk_lib",
+            root / "common" / "inc",
+            root / "common" / "inc" / "sfpu",
+        ]
+
+    @staticmethod
+    def add_include_dirs(*dirs, prepend: bool = True) -> None:
+        """Add header search dirs (``-I``) for this process.
+
+        Use for ``#include "foo.h"`` / ``"experimental/foo.h"``. Safe before or
+        after ``setup_build``. Dirs are stored on ``EXTRA_INCLUDE_FLAGS`` and
+        prepended (default) onto ``INCLUDES`` so an out-of-tree suite can
+        shadow in-tree copies. Call from the external ``conftest`` after
+        ``helpers`` is on ``sys.path``.
+
+        For one variant only, pass ``include_dirs=[...]`` to the constructor.
+        """
+        flags = TestConfig._as_include_flags(dirs)
+        existing = [f for f in TestConfig.EXTRA_INCLUDE_FLAGS if f not in flags]
+        TestConfig.EXTRA_INCLUDE_FLAGS = (
+            flags + existing if prepend else existing + flags
+        )
+        if TestConfig.INCLUDES:
+            TestConfig._apply_extra_includes()
+
+    @staticmethod
+    def add_src_include_dirs(*dirs, prepend: bool = True) -> None:
+        """Add search dirs for ``#include <foo.cpp>`` on the kernel compile.
+
+        This is the ``tests/helpers/src`` role — not where the test driver
+        lives (that is ``test_name`` / an absolute path). Extra dirs are
+        prepended (default) ahead of in-tree ``helpers/src`` so an out-of-tree
+        ``trisc.cpp`` can shadow it. Safe before or after ``setup_build``.
+
+        For one variant only, pass ``src_include_dirs=[...]`` to the constructor.
+        """
+        flags = TestConfig._as_include_flags(dirs)
+        existing = [f for f in TestConfig.EXTRA_SRC_INCLUDE_FLAGS if f not in flags]
+        TestConfig.EXTRA_SRC_INCLUDE_FLAGS = (
+            flags + existing if prepend else existing + flags
+        )
+
+    @staticmethod
+    def add_helpers_tree(*trees, prepend: bool = True) -> None:
+        """Add a ``tests/helpers``-layout tree: ``<tree>/include`` + ``<tree>/src``.
+
+        Shorthand for ``add_include_dirs(<tree>/include)`` plus
+        ``add_src_include_dirs(<tree>/src)``. For one variant only, pass
+        ``helpers_trees=[...]`` to the constructor.
+        """
+        includes = []
+        sources = []
+        for tree in trees:
+            tree = Path(tree)
+            includes.append(tree / "include")
+            sources.append(tree / "src")
+        TestConfig.add_include_dirs(*includes, prepend=prepend)
+        TestConfig.add_src_include_dirs(*sources, prepend=prepend)
 
     @staticmethod
     def setup_build(
@@ -668,6 +780,9 @@ class TestConfig:
         compile_time_formats: bool = False,
         requires_device_print: bool = False,
         expected_nondeterministic: bool = False,
+        include_dirs: list = None,
+        src_include_dirs: list = None,
+        helpers_trees: list = None,
     ):
         self.coverage_build = (
             CoverageBuild.Yes if TestConfig.WITH_COVERAGE else CoverageBuild.No
@@ -685,7 +800,15 @@ class TestConfig:
             runtimes = []
             compile_time_formats = True
 
-        self.test_name = test_name
+        # Artefact directory is always relative to ARTEFACTS_DIR. An absolute
+        # test_name is the C++ driver path; keep a sources/<basename> artefact
+        # key so we don't mkdir through a .cpp file.
+        if os.path.isabs(test_name):
+            self.test_source_path = test_name
+            self.test_name = f"sources/{Path(test_name).name}"
+        else:
+            self.test_source_path = test_name
+            self.test_name = test_name
         self.templates = templates
         self.runtimes = runtimes
         self.variant_stimuli = variant_stimuli
@@ -701,6 +824,17 @@ class TestConfig:
         self.dest_acc = dest_acc
         self.requires_device_print = requires_device_print
         self.expected_nondeterministic = expected_nondeterministic
+        # Per-variant ``-I`` dirs. Prepended onto the compile line so they win
+        # over process-wide ``add_include_dirs`` / ``add_src_include_dirs`` and
+        # in-tree copies. Use the class methods for suite-wide dirs.
+        include_list = list(include_dirs or [])
+        src_include_list = list(src_include_dirs or [])
+        for helpers_tree in helpers_trees or []:
+            helpers_tree = Path(helpers_tree)
+            include_list.append(helpers_tree / "include")
+            src_include_list.append(helpers_tree / "src")
+        self.include_dirs = TestConfig._resolve_flag_roots(include_list)
+        self.src_include_dirs = TestConfig._resolve_flag_roots(src_include_list)
 
         TILE_SIZES = {
             DataFormat.Bfp8_b: 68,
@@ -911,6 +1045,17 @@ class TestConfig:
 
         pytest.skip()
 
+    def _kernel_source_include(self) -> str:
+        """C++ snippet that pulls in this variant's driver.
+
+        Relative names keep the historical ``#include <sources/foo.cpp>`` form
+        (resolved from ``tests/``). Absolute paths are quote-included so an
+        out-of-tree driver does not have to live under ``tests/sources/``.
+        """
+        if os.path.isabs(self.test_source_path):
+            return f'#include "{self.test_source_path}"\n'
+        return f"#include  <{self.test_source_path}>\n"
+
     def generate_variant_hash(self):
         NON_COMPILATION_ARGUMENTS = [
             "run_configs",
@@ -959,9 +1104,13 @@ class TestConfig:
         MEMORY_LAYOUT_LD_SCRIPT = (
             f"{TestConfig.LINKER_SCRIPTS}/memory.{TestConfig.ARCH.value}.ld"
         )
-        OPTIONS_COMPILE = (
-            f"{' '.join(TestConfig.INCLUDES)} {TestConfig.INITIAL_OPTIONS_COMPILE} "
+        extra_includes = " ".join(TestConfig._as_include_flags(self.include_dirs))
+        include_flags = (
+            f"{extra_includes} {' '.join(TestConfig.INCLUDES)}"
+            if extra_includes
+            else " ".join(TestConfig.INCLUDES)
         )
+        OPTIONS_COMPILE = f"{include_flags} {TestConfig.INITIAL_OPTIONS_COMPILE} "
 
         OPTIONS_COMPILE += (
             "-DLLK_BOOT_MODE_TRISC "
@@ -1363,7 +1512,7 @@ class TestConfig:
                     )
                 compile_command = (
                     f"{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.ARCH_SPECIFIC_OPTIONS} {TestConfig.OPTIONS_ALL} -I{TestConfig.TESTS_WORKING_DIR} "
-                    f"-I{TestConfig.RISCV_SOURCES} -I{VARIANT_DIR} {local_options_compile} {optional_kernel_flags} "
+                    f"{self._extra_src_include_flags()}-I{TestConfig.RISCV_SOURCES} -I{VARIANT_DIR} {local_options_compile} {optional_kernel_flags} "
                     f"-DLLK_TRISC_{trisc_define} {device_print_flags}{TestConfig.OPTIONS_LINK} {COVERAGES_DEPS} "
                     f"-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / name}.ld -T{TestConfig.LINKER_SCRIPTS}/sections.ld "
                     # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3) that
@@ -1376,7 +1525,7 @@ class TestConfig:
                 run_shell_command(  # %.elf : path/to/kernel/test.cpp trisc.cpp [coverage.o libgcov.a]
                     compile_command,
                     TestConfig.TESTS_WORKING_DIR,
-                    (f"#include  <{self.test_name}>\n" "#include  <trisc.cpp>\n"),
+                    (f"{self._kernel_source_include()}#include  <trisc.cpp>\n"),
                 )
 
             with ThreadPoolExecutor(
