@@ -90,8 +90,11 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const DramConfig& config);
 
-// Metal 2.0: DFB accessor names -> logical DFB ids
-using DataflowBufferBindingHandleMap = std::unordered_map<std::string, uint16_t>;
+// Metal 2.0: DFB accessor names -> optional device slot (nullopt = null binding)
+struct DataflowBufferBindingHandle {
+    std::optional<uint16_t> device_slot;  // nullopt when this is a null binding
+};
+using DataflowBufferBindingHandleMap = std::unordered_map<std::string, DataflowBufferBindingHandle>;
 // Metal 2.0: semaphore accessor names -> semaphore ids
 using SemaphoreBindingHandleMap = std::unordered_map<std::string, uint16_t>;
 
@@ -99,11 +102,13 @@ using SemaphoreBindingHandleMap = std::unordered_map<std::string, uint16_t>;
 // Carries the offsets the kernel-side codegen needs to emit a token, plus the program-level
 // TensorParameter name so SetProgramRunArgs can fill the binding's base-address slot
 // (and any runtime accessor fields) from the corresponding TensorArgument at enqueue time.
+// Null bindings (is_null) emit a device symbol but consume no CTA/CRTA slots and have no
+// tensor_parameter_name.
 struct TensorBindingHandle {
     std::string accessor_name;          // user-facing identifier (kernel symbol in `tensor::`)
-    std::string tensor_parameter_name;  // refers back to the program-level TensorParameter
-    uint32_t cta_offset;                // first word index of this binding's payload in the kernel's compile-time args
-    uint32_t addr_crta_offset;          // byte offset of this binding's base-address slot within the kernel's CRTA buffer
+    std::string tensor_parameter_name;  // refers back to the program-level TensorParameter (empty if null)
+    uint32_t cta_offset = 0;            // first word index of this binding's payload in the kernel's compile-time args
+    uint32_t addr_crta_offset = 0;  // byte offset of this binding's base-address slot within the kernel's CRTA buffer
     // Count of runtime accessor field words that immediately follow the address slot
     // in this binding's CRTA section.
     // Non-zero when the TensorParameter opts into a CRTA-resident dynamic field.
@@ -117,6 +122,7 @@ struct TensorBindingHandle {
     // distinguish them with a boolean.
     // (We'll need to extend this to something more flexible if additional possibilities are added.)
     bool runtime_field_is_page_size = false;
+    bool is_null = false;  // true when host binding used an empty resource id
 };
 
 // Metal 2.0: per-kernel resolved scratchpad binding.
@@ -131,11 +137,13 @@ struct TensorBindingHandle {
 //  - The allocated address is 0 until allocate_scratchpads runs.
 //  - Unlike ScratchpadBindingHandle, TensorBindingHandle does NOT store the address, as for bound
 //    tensors the base address is strictly a user enqueue-time argument.
+//  - Null bindings (is_null) emit a device symbol but reserve no L1 and take no CRTA word.
 struct ScratchpadBindingHandle {
     std::string accessor_name;       // user-facing identifier (kernel symbol in `scratch::`)
     uint32_t size_bytes = 0;         // per-node size; emitted as the accessor's compile-time size
     uint32_t addr_crta_word = 0;     // word index of the base-address slot within the kernel's CRTA buffer
     uint32_t allocated_address = 0;  // L1 base address; filled by allocate_scratchpads (0 until allocated)
+    bool is_null = false;            // true when host binding used an empty resource id
 };
 
 // Metal 2.0: ordered TensorBinding tokens (KernelAdvancedOptions::tensor_binding_sequences).
@@ -225,17 +233,19 @@ public:
     void process_named_compile_time_args(
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
     void process_dataflow_buffer_binding_handles(
-        std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const override;
+        std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id, bool is_null)>) const override;
     void process_semaphore_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const override;
     void process_tensor_binding_handles(std::function<void(
                                             const std::string& accessor_name,
                                             uint32_t cta_offset,
                                             uint32_t addr_crta_offset,
-                                            uint32_t num_runtime_field_crta_words)>) const override;
+                                            uint32_t num_runtime_field_crta_words,
+                                            bool is_null)>) const override;
     const std::vector<TensorBindingHandle>& tensor_binding_handles() const { return tensor_binding_handles_; }
     void process_scratchpad_binding_handles(
-        std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)>)
+        std::function<
+            void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word, bool is_null)>)
         const override;
     // Scratchpad binding handles are set post-construction.
     // Non-const accessor lets allocate_scratchpads fill each handle's allocated_address after L1 allocation.

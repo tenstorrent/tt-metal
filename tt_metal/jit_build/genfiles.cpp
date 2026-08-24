@@ -132,10 +132,15 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Get the DFB bindings from the settings callback
     // Sort them to ensure the file output is deterministic for the JIT build cache
     // (aka the on-disk per-object dephash cache)
-    vector<pair<string, uint16_t>> dfb_entries;
+    struct DfbEntry {
+        string name;
+        uint16_t id = 0;
+        bool is_null = false;
+    };
+    vector<DfbEntry> dfb_entries;
     settings.process_dataflow_buffer_binding_handles(
-        [&dfb_entries](const string& name, uint16_t id) { dfb_entries.emplace_back(name, id); });
-    sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        [&dfb_entries](const string& name, uint16_t id, bool is_null) { dfb_entries.push_back({name, id, is_null}); });
+    sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
     // Get the semaphore bindings from the settings callback
     // Sort them to ensure the file output is deterministic, as explained above
@@ -151,12 +156,16 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         string name;
         uint32_t cta_offset;
         uint32_t addr_crta_offset;
+        bool is_null;
     };
     vector<TaEntry> ta_entries;
     settings.process_tensor_binding_handles(
-        [&ta_entries](const string& name, uint32_t cta_offset, uint32_t addr_crta_offset, uint32_t /*num_rt_words*/) {
-            ta_entries.push_back({name, cta_offset, addr_crta_offset});
-        });
+        [&ta_entries](
+            const string& name,
+            uint32_t cta_offset,
+            uint32_t addr_crta_offset,
+            uint32_t /*num_rt_words*/,
+            bool is_null) { ta_entries.push_back({name, cta_offset, addr_crta_offset, is_null}); });
 
     // Get the scratchpad bindings from the settings callback.
     // Like tensor bindings, these come from a std::vector in user-specified order, so no sort is needed
@@ -165,11 +174,12 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         string name;
         uint32_t size_bytes;
         uint32_t addr_crta_word;
+        bool is_null;
     };
     vector<ScratchEntry> scratch_entries;
     settings.process_scratchpad_binding_handles(
-        [&scratch_entries](const string& name, uint32_t size_bytes, uint32_t addr_crta_word) {
-            scratch_entries.push_back({name, size_bytes, addr_crta_word});
+        [&scratch_entries](const string& name, uint32_t size_bytes, uint32_t addr_crta_word, bool is_null) {
+            scratch_entries.push_back({name, size_bytes, addr_crta_word, is_null});
         });
 
     // Tensor binding sequences: user order (matches Kernel::compute_hash); no sort.
@@ -231,8 +241,12 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 
         if (!dfb_entries.empty()) {
             content << "namespace dfb {\n";
-            for (const auto& [name, id] : dfb_entries) {
-                content << "constexpr DFBBindingToken " << name << "{" << id << "};\n";
+            for (const auto& entry : dfb_entries) {
+                if (entry.is_null) {
+                    content << "constexpr DFBBindingToken<Null> " << entry.name << "{};\n";
+                } else {
+                    content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << "};\n";
+                }
             }
             content << "}  // namespace dfb\n";
         }
@@ -246,10 +260,11 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
 
         if (!ta_entries.empty() || !tensor_binding_sequence_entries.empty()) {
-            // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
+            // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET[, NullState]>: pairs the binding's
             // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
-            // its implicit base-address CRTA.
-            // The kernel-side TensorAccessor (or LocalTensorAccessor) constructor unpacks both pieces.
+            // its implicit base-address CRTA. Null bindings omit the payload (NullState::Null).
+            // The kernel-side TensorAccessor (or LocalTensorAccessor) constructor unpacks both pieces
+            // for NonNull tokens only.
             //
             // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
             // template with extra metadata in the future without touching kernel source.
@@ -257,9 +272,14 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             // Tensor binding sequences are constexpr std::tuple of those member tokens (members order).
             content << "namespace tensor {\n";
             for (const auto& entry : ta_entries) {
-                content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset
-                        << "u, " << entry.addr_crta_offset << "u>;\n";
-                content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
+                if (entry.is_null) {
+                    content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<0u, 0u, Null>;\n";
+                    content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
+                } else {
+                    content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<"
+                            << entry.cta_offset << "u, " << entry.addr_crta_offset << "u>;\n";
+                    content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
+                }
             }
             for (const auto& sequence : tensor_binding_sequence_entries) {
                 content << fmt::format(
@@ -273,12 +293,17 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             // Carries the word index of the scratchpad's (framework-allocated) base-address CRTA
             // and the scratchpad's compile-time per-node size.
             // The kernel-side Scratchpad(token) constructor unpacks both.
+            // Null bindings emit ScratchpadBindingToken<Null> with no payload.
             // The token's members are opaque, so the framework can extend it later without touching
             // kernel source.
             content << "namespace scratch {\n";
             for (const auto& entry : scratch_entries) {
-                content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
-                        << entry.size_bytes << "u};\n";
+                if (entry.is_null) {
+                    content << "constexpr ScratchpadBindingToken<Null> " << entry.name << "{};\n";
+                } else {
+                    content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
+                            << entry.size_bytes << "u};\n";
+                }
             }
             content << "}  // namespace scratch\n";
         }

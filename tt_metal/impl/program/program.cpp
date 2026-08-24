@@ -1578,6 +1578,9 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
             const CoreRangeSet& kernel_cores = kernel->core_range_set();
 
             for (auto& handle : scratchpad_handles) {
+                if (handle.is_null) {
+                    continue;  // null bindings reserve no L1 and have no CRTA word
+                }
                 // A scratchpad bumps onto the program-scope L1 region, stacking on top of any DFBs.
                 // (DFBs and CBs are mutually exclusive, so dfb_allocators_ own the whole region.)
                 // Ensure a CircularBufferAllocator exists for each of the kernel's core ranges:

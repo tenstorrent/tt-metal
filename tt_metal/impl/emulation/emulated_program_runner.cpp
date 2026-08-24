@@ -555,18 +555,24 @@ struct Metal2BindingsSnapshot {
         std::string name;
         uint32_t cta_offset;
         uint32_t addr_crta_offset;
+        bool is_null = false;
     };
     // Scratchpad bindings, in insertion order (matches genfiles.cpp's vector).
     struct ScratchEntry {
         std::string name;
         uint32_t size_bytes;
         uint32_t addr_crta_word;
+        bool is_null = false;
+    };
+    struct DfbEntry {
+        uint16_t id = 0;
+        bool is_null = false;
     };
 
     bool is_metal2 = false;
     std::vector<std::string> runtime_arg_names;
     std::vector<std::string> common_runtime_arg_names;
-    std::map<std::string, uint32_t> dfb_accessors;
+    std::map<std::string, DfbEntry> dfb_accessors;
     std::map<std::string, uint16_t> sem_accessors;
     std::vector<TaEntry> ta_accessors;
     std::vector<ScratchEntry> scratch_accessors;
@@ -576,18 +582,28 @@ struct Metal2BindingsSnapshot {
     // reuses the first's .so.
     std::string cache_key_suffix() const {
         std::string s;
-        for (const auto& [name, id] : dfb_accessors) {
-            s += ":dfb:" + name + "=" + std::to_string(id);
+        for (const auto& [name, entry] : dfb_accessors) {
+            s += ":dfb:" + name + "=";
+            s += entry.is_null ? "null" : std::to_string(entry.id);
         }
         for (const auto& [name, id] : sem_accessors) {
             s += ":sem:" + name + "=" + std::to_string(id);
         }
         for (const auto& ta : ta_accessors) {
-            s += ":ta:" + ta.name + "=" + std::to_string(ta.cta_offset) + "," +
-                 std::to_string(ta.addr_crta_offset);
+            s += ":ta:" + ta.name + "=";
+            if (ta.is_null) {
+                s += "null";
+            } else {
+                s += std::to_string(ta.cta_offset) + "," + std::to_string(ta.addr_crta_offset);
+            }
         }
         for (const auto& sp : scratch_accessors) {
-            s += ":scratch:" + sp.name + "=" + std::to_string(sp.size_bytes) + "," + std::to_string(sp.addr_crta_word);
+            s += ":scratch:" + sp.name + "=";
+            if (sp.is_null) {
+                s += "null";
+            } else {
+                s += std::to_string(sp.size_bytes) + "," + std::to_string(sp.addr_crta_word);
+            }
         }
         for (const auto& name : runtime_arg_names) {
             s += ":rta:" + name;
@@ -795,8 +811,9 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
     s.is_metal2 = kernel.is_metal2_kernel();
     s.runtime_arg_names = kernel.get_runtime_arg_names();
     s.common_runtime_arg_names = kernel.get_common_runtime_arg_names();
-    kernel.process_dataflow_buffer_binding_handles(
-        [&s](const std::string& name, uint16_t id) { s.dfb_accessors[name] = id; });
+    kernel.process_dataflow_buffer_binding_handles([&s](const std::string& name, uint16_t id, bool is_null) {
+        s.dfb_accessors[name] = Metal2BindingsSnapshot::DfbEntry{id, is_null};
+    });
     kernel.process_semaphore_binding_handles(
         [&s](const std::string& name, uint16_t id) { s.sem_accessors[name] = id; });
     kernel.process_tensor_binding_handles(
@@ -808,9 +825,9 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
         // num_rt_words == 0 and are unaffected. Fail loudly on dynamic-shape until
         // snapshot + cache key + get_common_vararg offset math are wired up to
         // consume the per-binding count.
-        [&s](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off, uint32_t num_rt_words) {
+        [&s](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off, uint32_t num_rt_words, bool is_null) {
             TT_FATAL(
-                num_rt_words == 0,
+                is_null || num_rt_words == 0,
                 "Emule does not yet support dynamic-shape Metal 2.0 tensor bindings "
                 "(binding '{}' has num_runtime_field_crta_words={}). Wire the per-"
                 "binding word count through Metal2BindingsSnapshot::TaEntry, the "
@@ -818,11 +835,11 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
                 "before enabling this path.",
                 name,
                 num_rt_words);
-            s.ta_accessors.push_back({name, cta_off, addr_crta_off});
+            s.ta_accessors.push_back({name, cta_off, addr_crta_off, is_null});
         });
     kernel.process_scratchpad_binding_handles(
-        [&s](const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word) {
-            s.scratch_accessors.push_back({name, size_bytes, addr_crta_word});
+        [&s](const std::string& name, uint32_t size_bytes, uint32_t addr_crta_word, bool is_null) {
+            s.scratch_accessors.push_back({name, size_bytes, addr_crta_word, is_null});
         });
     return s;
 }
@@ -888,8 +905,12 @@ static void emit_metal2_namespaces(
     }
     if (!s.dfb_accessors.empty()) {
         f << "namespace dfb {\n";
-        for (const auto& [name, id] : s.dfb_accessors) {
-            f << "constexpr DFBBindingToken " << name << "{" << id << "};\n";
+        for (const auto& [name, entry] : s.dfb_accessors) {
+            if (entry.is_null) {
+                f << "constexpr DFBBindingToken<Null> " << name << "{};\n";
+            } else {
+                f << "constexpr DFBBindingToken " << name << "{" << entry.id << "};\n";
+            }
         }
         f << "}  // namespace dfb\n";
     }
@@ -903,8 +924,12 @@ static void emit_metal2_namespaces(
     if (!s.ta_accessors.empty()) {
         f << "namespace tensor {\n";
         for (const auto& ta : s.ta_accessors) {
-            f << "using " << ta.name << "_t = ::tensor_accessor::TensorBindingToken<" << ta.cta_offset << "u, "
-              << ta.addr_crta_offset << "u>;\n";
+            if (ta.is_null) {
+                f << "using " << ta.name << "_t = ::tensor_accessor::TensorBindingToken<0u, 0u, Null>;\n";
+            } else {
+                f << "using " << ta.name << "_t = ::tensor_accessor::TensorBindingToken<" << ta.cta_offset << "u, "
+                  << ta.addr_crta_offset << "u>;\n";
+            }
             f << "constexpr " << ta.name << "_t " << ta.name << "{};\n";
         }
         f << "}  // namespace tensor\n";
@@ -912,8 +937,12 @@ static void emit_metal2_namespaces(
     if (!s.scratch_accessors.empty()) {
         f << "namespace scratch {\n";
         for (const auto& sp : s.scratch_accessors) {
-            f << "constexpr ScratchpadBindingToken " << sp.name << "{" << sp.addr_crta_word << "u, " << sp.size_bytes
-              << "u};\n";
+            if (sp.is_null) {
+                f << "constexpr ScratchpadBindingToken<Null> " << sp.name << "{};\n";
+            } else {
+                f << "constexpr ScratchpadBindingToken " << sp.name << "{" << sp.addr_crta_word << "u, "
+                  << sp.size_bytes << "u};\n";
+            }
         }
         f << "}  // namespace scratch\n";
     }
@@ -922,11 +951,23 @@ static void emit_metal2_namespaces(
     // genfiles.cpp). The CRTA buffer layout is [user-named CRTAs,
     // TensorBinding addresses, scratchpad addresses, varargs], so
     // get_common_vararg's base skips past the named CRTAs, the binding
-    // section, and the scratchpad section.
+    // section, and the scratchpad section. Null bindings consume no CRTA words.
     if (s.is_metal2) {
         const uint32_t named_rta_words = static_cast<uint32_t>(s.runtime_arg_names.size());
-        const uint32_t named_crta_words = static_cast<uint32_t>(
-            s.common_runtime_arg_names.size() + s.ta_accessors.size() + s.scratch_accessors.size());
+        uint32_t non_null_ta = 0;
+        for (const auto& ta : s.ta_accessors) {
+            if (!ta.is_null) {
+                ++non_null_ta;
+            }
+        }
+        uint32_t non_null_scratch = 0;
+        for (const auto& sp : s.scratch_accessors) {
+            if (!sp.is_null) {
+                ++non_null_scratch;
+            }
+        }
+        const uint32_t named_crta_words =
+            static_cast<uint32_t>(s.common_runtime_arg_names.size() + non_null_ta + non_null_scratch);
         f << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { "
           << "return get_arg_val<uint32_t>(" << named_rta_words << " + idx); }\n";
         f << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { "

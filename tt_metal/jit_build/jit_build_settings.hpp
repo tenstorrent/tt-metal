@@ -100,35 +100,43 @@ public:
     //  - DFB bindings
     //  - Semaphore bindings
     //  - Tensor bindings
+    // is_null is true when the host declared a null binding (empty resource id): codegen emits a
+    // NullState::Null token and the slot/offset arguments are unused.
     virtual void process_dataflow_buffer_binding_handles(
-        std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
+        std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id, bool is_null)>) const {}
     virtual void process_semaphore_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const {}
 
     // TensorBinding callback emits the codegen-relevant fields only:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `tensor::` namespace
     //  - cta_offset: starting word index of this binding's CTA payload in the kernel's
-    //    positional compile-time-args buffer
+    //    positional compile-time-args buffer (unused when is_null)
     //  - addr_crta_offset: byte offset of the implicit base-address CRTA within the kernel's
-    //    common-runtime-args section
+    //    common-runtime-args section (unused when is_null)
     //  - num_runtime_field_crta_words: number of CRTA words that immediately follow the address
     //    slot for runtime accessor fields (currently: shape, for sharded TensorParameters with
     //    dynamic_tensor_shape=true). The binding occupies (1 + num_runtime_field_crta_words)
-    //    CRTA words in total.
+    //    CRTA words in total. Zero when is_null.
+    //  - is_null: true for a null binding (no CTA/CRTA payload)
     // (The tensor_parameter_name is also part of TensorBindingHandle, but we don't need it for codegen.)
     virtual void process_tensor_binding_handles(std::function<void(
                                                     const std::string& accessor_name,
                                                     uint32_t cta_offset,
                                                     uint32_t addr_crta_offset,
-                                                    uint32_t num_runtime_field_crta_words)>) const {}
+                                                    uint32_t num_runtime_field_crta_words,
+                                                    bool is_null)>) const {}
 
     // Scratchpad binding callback emits the codegen-relevant fields:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `scratch::` namespace
     //  - size_bytes: the scratchpad's per-node size, emitted as the binding token's compile-time size
+    //    (unused when is_null)
     //  - addr_crta_word: word index, within the kernel's CRTA buffer, of the word holding the
-    //    scratchpad's (framework-allocated) L1 base address
+    //    scratchpad's (framework-allocated) L1 base address (unused when is_null)
+    //  - is_null: true for a null binding (no CRTA word / no L1 allocation)
     virtual void process_scratchpad_binding_handles(
-        std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)>) const {}
+        std::function<
+            void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word, bool is_null)>) const {
+    }
 
     // Tensor binding sequence callback: sequence_name + ordered member TensorBinding accessor names.
     // Emitted as constexpr std::tuple tokens in the `tensor::` namespace (user order; no sort).

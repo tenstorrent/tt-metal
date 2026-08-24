@@ -315,9 +315,10 @@ void Kernel::process_named_compile_time_args(
 }
 
 void Kernel::process_dataflow_buffer_binding_handles(
-    const std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)> callback) const {
-    for (const auto& [accessor_name, logical_dfb_id] : this->dataflow_buffer_binding_handles_) {
-        callback(accessor_name, logical_dfb_id);
+    const std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id, bool is_null)> callback) const {
+    for (const auto& [accessor_name, handle] : this->dataflow_buffer_binding_handles_) {
+        const bool is_null = !handle.device_slot.has_value();
+        callback(accessor_name, is_null ? uint16_t{0} : *handle.device_slot, is_null);
     }
 }
 
@@ -332,17 +333,23 @@ void Kernel::process_tensor_binding_handles(const std::function<void(
                                                 const std::string& accessor_name,
                                                 uint32_t cta_offset,
                                                 uint32_t addr_crta_offset,
-                                                uint32_t num_runtime_field_crta_words)> callback) const {
+                                                uint32_t num_runtime_field_crta_words,
+                                                bool is_null)> callback) const {
     for (const auto& handle : this->tensor_binding_handles_) {
-        callback(handle.accessor_name, handle.cta_offset, handle.addr_crta_offset, handle.num_runtime_field_crta_words);
+        callback(
+            handle.accessor_name,
+            handle.cta_offset,
+            handle.addr_crta_offset,
+            handle.num_runtime_field_crta_words,
+            handle.is_null);
     }
 }
 
 void Kernel::process_scratchpad_binding_handles(
-    const std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)> callback)
-    const {
+    const std::function<void(
+        const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word, bool is_null)> callback) const {
     for (const auto& handle : this->scratchpad_binding_handles_) {
-        callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word);
+        callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word, handle.is_null);
     }
 }
 
@@ -571,7 +578,9 @@ uint64_t Kernel::compute_hash() const {
     }
     for (const auto& it : sorted_iters(this->dataflow_buffer_binding_handles_)) {
         hasher.update(it->first);
-        hasher.update(static_cast<uint64_t>(it->second));
+        // Distinguish null (no slot) from a real slot 0 — both would otherwise hash identically.
+        hasher.update(static_cast<uint64_t>(it->second.device_slot.has_value()));
+        hasher.update(static_cast<uint64_t>(it->second.device_slot.value_or(0)));
     }
     for (const auto& it : sorted_iters(this->semaphore_binding_handles_)) {
         hasher.update(it->first);
@@ -583,20 +592,24 @@ uint64_t Kernel::compute_hash() const {
     //  - hash the size first to avoid the [a, b] vs [ab] collision noted below.
     //  - tensor_parameter_name is intentionally omitted, as it doesn't appear in
     //    the generated headers
+    //  - is_null must be hashed: a null handle has zeroed offsets that can collide with a
+    //    real first binding at CTA/CRTA index 0
     hasher.update(static_cast<uint64_t>(this->tensor_binding_handles_.size()));
     for (const auto& handle : this->tensor_binding_handles_) {
         hasher.update(handle.accessor_name);
+        hasher.update(static_cast<uint64_t>(handle.is_null));
         hasher.update(static_cast<uint64_t>(handle.cta_offset));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_offset));
         hasher.update(static_cast<uint64_t>(handle.num_runtime_field_crta_words));
     }
     // Scratchpad binding handles: like tensor bindings, stored in order and emitted by genfiles in
-    // the same order. Hash accessor_name + size_bytes + addr_crta_word — the accessor's compile-time
-    // inputs (size_bytes is baked into the generated header, so it MUST be in the cache key).
-    // allocated_address is a per-execution allocation, not part of the binary, so it is omitted.
+    // the same order. Hash accessor_name + is_null + size_bytes + addr_crta_word — the accessor's
+    // compile-time inputs (size_bytes is baked into the generated header, so it MUST be in the cache
+    // key). allocated_address is a per-execution allocation, not part of the binary, so it is omitted.
     hasher.update(static_cast<uint64_t>(this->scratchpad_binding_handles_.size()));
     for (const auto& handle : this->scratchpad_binding_handles_) {
         hasher.update(handle.accessor_name);
+        hasher.update(static_cast<uint64_t>(handle.is_null));
         hasher.update(static_cast<uint64_t>(handle.size_bytes));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
     }

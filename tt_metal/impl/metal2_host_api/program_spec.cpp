@@ -7,6 +7,7 @@
 #include <functional>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <set>
 #include <string_view>
 #include <unordered_map>
@@ -277,6 +278,9 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 
     // Collect DataflowBufferSpecs (local DFBs)
     for (const auto& dfb : spec.dataflow_buffers) {
+        TT_FATAL(
+            !dfb.unique_id.get().empty(),
+            "DataflowBufferSpec unique_id must be non-empty (empty string is reserved for null bindings)");
         auto [it, inserted] = collected.dfb_by_name.try_emplace(dfb.unique_id, &dfb);
         TT_FATAL(inserted, "Duplicate DataflowBufferSpec name '{}'", dfb.unique_id);
     }
@@ -286,6 +290,9 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
     // refer to either kind by the same DFBSpecName.
     for (const auto& cross_node_dfb : spec.cross_node_dataflow_buffers) {
         const DFBSpecName& name = cross_node_dfb.dfb_spec.unique_id;
+        TT_FATAL(
+            !name.get().empty(),
+            "CrossNodeDataflowBufferSpec unique_id must be non-empty (empty string is reserved for null bindings)");
         auto [it1, inserted1] = collected.dfb_by_name.try_emplace(name, &cross_node_dfb.dfb_spec);
         TT_FATAL(inserted1, "Duplicate DataflowBufferSpec name '{}' (across local and cross-node DFBs)", name);
         auto [it2, inserted2] = collected.cross_node_dfb_by_name.try_emplace(name, &cross_node_dfb);
@@ -346,6 +353,12 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 is_producer ? "PRODUCER" : "CONSUMER",
                 dfb_binding.accessor_name);
             seen_this_type = true;
+
+            // Null bindings declare an accessor symbol without attaching to a program-scope DFB.
+            // Skip referential integrity, endpoint registration, and same-role tracking.
+            if (IsNullBinding(dfb_binding)) {
+                continue;
+            }
 
             // Forbid binding the same DFB twice in the same role within this kernel (e.g. two CONSUMER
             // bindings under different accessor names). The legitimate multi-binding form is the
@@ -440,6 +453,9 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 
     // Collect ScratchpadSpecs
     for (const auto& scratchpad : spec.scratchpads) {
+        TT_FATAL(
+            !scratchpad.unique_id.get().empty(),
+            "ScratchpadSpec unique_id must be non-empty (empty string is reserved for null bindings)");
         auto [it, inserted] = collected.scratchpad_by_name.try_emplace(scratchpad.unique_id, &scratchpad);
         TT_FATAL(inserted, "Duplicate ScratchpadSpec name '{}'", scratchpad.unique_id);
         TT_FATAL(
@@ -470,6 +486,12 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 "Kernel '{}' scratchpad accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 binding.accessor_name);
+            // Null bindings declare an accessor symbol without attaching to a ScratchpadSpec.
+            // Skip referential integrity and "bind this spec at most once" (keyed on ""; multiple
+            // null scratchpad bindings with distinct accessor names are legal).
+            if (IsNullBinding(binding)) {
+                continue;
+            }
             TT_FATAL(
                 collected.scratchpad_by_name.contains(binding.scratchpad_spec_name),
                 "Kernel '{}' references unknown scratchpad '{}'",
@@ -501,6 +523,9 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 
     // Collect TensorParameters
     for (const auto& tensor_parameter : spec.tensor_parameters) {
+        TT_FATAL(
+            !tensor_parameter.unique_id.get().empty(),
+            "TensorParameter unique_id must be non-empty (empty string is reserved for null bindings)");
         auto [it, inserted] =
             collected.tensor_parameter_by_name.try_emplace(tensor_parameter.unique_id, &tensor_parameter);
         TT_FATAL(inserted, "Duplicate TensorParameter name '{}'", tensor_parameter.unique_id);
@@ -525,6 +550,10 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 "Kernel '{}' tensor accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 binding.accessor_name);
+            // Null bindings declare an accessor symbol without attaching to a TensorParameter.
+            if (IsNullBinding(binding)) {
+                continue;
+            }
             TT_FATAL(
                 collected.tensor_parameter_by_name.contains(binding.tensor_parameter_name),
                 "Kernel '{}' references unknown TensorParameter '{}'",
@@ -1032,6 +1061,9 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         std::unordered_set<DFBSpecName> bound_dfbs;
         std::unordered_set<DFBSpecName> consumed_dfbs;
         for (const auto& binding : kernel.dfb_bindings) {
+            if (IsNullBinding(binding)) {
+                continue;
+            }
             bound_dfbs.insert(binding.dfb_spec_name);
             if (binding.endpoint_type == DFBEndpointType::CONSUMER) {
                 consumed_dfbs.insert(binding.dfb_spec_name);
@@ -1104,7 +1136,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         //       This check should be extended to int32/uint32. (TODO: Issue #49936)
         if (enable_32_bit_dest) {
             for (const auto& binding : kernel.dfb_bindings) {
-                if (binding.endpoint_type != DFBEndpointType::CONSUMER) {
+                if (IsNullBinding(binding) || binding.endpoint_type != DFBEndpointType::CONSUMER) {
                     continue;
                 }
                 const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(binding.dfb_spec_name);
@@ -1163,6 +1195,9 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             }
             std::unordered_set<DFBSpecName> bound_dfbs;
             for (const auto& binding : kernel.dfb_bindings) {
+                if (IsNullBinding(binding)) {
+                    continue;
+                }
                 bound_dfbs.insert(binding.dfb_spec_name);
             }
             for (const auto& dfb_name : std::get<DataMovementGen2Config>(dm_config).disable_dfb_implicit_sync_for) {
@@ -2470,11 +2505,19 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
     size_t crta_word_index = base_named_crta_count;
     uint32_t binding_section_words = 0;
     for (const auto& binding : kernel.tensor_bindings) {
+        TensorBindingHandle handle;
+        handle.accessor_name = binding.accessor_name;
+
+        if (IsNullBinding(binding)) {
+            handle.is_null = true;
+            // No CTA/CRTA payload for null bindings — offsets remain 0 and are unused by codegen.
+            out.handles.push_back(std::move(handle));
+            continue;
+        }
+
         const ResolvedTensorParameter& resolved = resolved_tensor_parameters.at(binding.tensor_parameter_name);
         const std::vector<uint32_t>& binding_ctas = resolved.cta_payload;
 
-        TensorBindingHandle handle;
-        handle.accessor_name = binding.accessor_name;
         handle.tensor_parameter_name = binding.tensor_parameter_name.get();
         handle.cta_offset = cta_word_offset;
         handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
@@ -2505,7 +2548,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
 // The allocated_address is left 0 here; allocate_scratchpads fills it once L1 is allocated.
 struct ScratchpadBindingsForKernel {
     std::vector<ScratchpadBindingHandle> handles;
-    uint32_t section_words = 0;  // == number of scratchpad bindings
+    uint32_t section_words = 0;  // number of non-null scratchpad bindings (each takes one CRTA word)
 };
 
 ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
@@ -2516,29 +2559,45 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
     out.handles.reserve(kernel.scratchpad_bindings.size());
 
     size_t crta_word_index = scratchpad_base_crta_word;
+    uint32_t section_words = 0;
     for (const auto& binding : kernel.scratchpad_bindings) {
-        const ScratchpadSpec* scratchpad_spec = scratchpad_by_name.at(binding.scratchpad_spec_name);
-
         ScratchpadBindingHandle handle;
         handle.accessor_name = binding.accessor_name;
+
+        if (IsNullBinding(binding)) {
+            handle.is_null = true;
+            // No CRTA address word for null bindings.
+            out.handles.push_back(std::move(handle));
+            continue;
+        }
+
+        const ScratchpadSpec* scratchpad_spec = scratchpad_by_name.at(binding.scratchpad_spec_name);
+
         handle.size_bytes = scratchpad_spec->size_per_node;
         handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
         // handle.allocated_address stays 0 until allocate_scratchpads runs.
         out.handles.push_back(std::move(handle));
-        crta_word_index += 1;  // one address word per scratchpad binding
+        crta_word_index += 1;  // one address word per non-null scratchpad binding
+        section_words += 1;
     }
 
-    out.section_words = static_cast<uint32_t>(kernel.scratchpad_bindings.size());
+    out.section_words = section_words;
     return out;
 }
 
-// Create map of local accessor name -> DFB device slot. This is the value baked into the kernel's
-// dfb::<name> accessor, so it must be the device slot rather than the program-wide id.
+// Create map of local accessor name -> DFB device slot (or nullopt for a null binding).
+// Non-null values are baked into the kernel's dfb::<name> accessor, so they must be the device
+// slot rather than the program-wide id.
 tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot) {
     tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
+        if (IsNullBinding(dfb_binding)) {
+            out.emplace(
+                dfb_binding.accessor_name, tt::tt_metal::DataflowBufferBindingHandle{.device_slot = std::nullopt});
+            continue;
+        }
         const uint32_t slot = dfb_name_to_slot.at(dfb_binding.dfb_spec_name);
         TT_FATAL(
             slot <= std::numeric_limits<uint16_t>::max(),
@@ -2546,7 +2605,9 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
             kernel_spec.unique_id,
             dfb_binding.dfb_spec_name,
             slot);
-        out.emplace(dfb_binding.accessor_name, static_cast<uint16_t>(slot));
+        out.emplace(
+            dfb_binding.accessor_name,
+            tt::tt_metal::DataflowBufferBindingHandle{.device_slot = static_cast<uint16_t>(slot)});
     }
     return out;
 }
