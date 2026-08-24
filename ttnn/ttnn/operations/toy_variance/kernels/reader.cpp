@@ -16,7 +16,9 @@
 // never pops, so the same tile serves both passes.
 //
 // Metal 2.0: every name below (`dfb::`, `args::`, `tensor::`) is generated from the ProgramSpec, so
-// this kernel spells no buffer index and no argument offset.
+// this kernel spells no buffer index and no argument offset. The `dfb::` tokens go straight into the
+// Gen1 helper library's buffer-id template parameters -- DFBBindingToken's conversion to uint32_t is
+// constexpr, so no local alias is needed to bridge the two.
 
 #include <stdint.h>
 
@@ -36,10 +38,6 @@ void kernel_main() {
     constexpr bool HAS_PARTIAL_W = get_arg(args::has_partial_w) != 0;
     constexpr uint32_t partial_w = get_arg(args::partial_w);  // valid positions in last W-tile
 
-    // The reduce helpers take a raw buffer id; DFBBindingToken converts to uint32_t constexpr,
-    // which is what lets a ProgramSpec kernel keep using the Gen1 compute/dataflow helper library.
-    constexpr uint32_t cb_scaler = dfb::scaler;
-
     Noc noc;
     DataflowBuffer dfb_in(dfb::in_tiles);
     const auto acc_in = TensorAccessor(tensor::in);
@@ -51,12 +49,12 @@ void kernel_main() {
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
     if constexpr (HAS_PARTIAL_W) {
         dataflow_kernel_lib::prepare_partial_reduce_scalers<
-            cb_scaler,
+            dfb::scaler,
             ckernel::PoolType::SUM,
             ckernel::ReduceDim::REDUCE_ROW,
             partial_w>(scaler_f);
     } else {
-        dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+        dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
             scaler_f);
     }
 

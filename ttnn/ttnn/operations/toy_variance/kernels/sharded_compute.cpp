@@ -37,16 +37,6 @@ namespace ckl = compute_kernel_lib;
 
 namespace {
 
-constexpr uint32_t cb_in_shard = dfb::in_shard;
-constexpr uint32_t cb_scaler = dfb::scaler;
-constexpr uint32_t cb_centered = dfb::centered_sq;
-constexpr uint32_t cb_partial = dfb::partial;
-constexpr uint32_t cb_gather_mean = dfb::gather_mean;
-constexpr uint32_t cb_gather_var = dfb::gather_var;
-constexpr uint32_t cb_mean_src = dfb::mean_src;
-constexpr uint32_t cb_mean = dfb::mean;
-constexpr uint32_t cb_out = dfb::out_tiles;
-
 // Add `num_blocks` contiguous blocks of `num_tiles` tiles waiting in `in_dfb` into a single
 // `num_tiles` block pushed to `out_dfb`, then apply `post_op` to each output tile in DST before the
 // pack. Contributors are paired with FPU add_tiles accumulating in DST. This is the reducer from
@@ -112,7 +102,7 @@ void kernel_main() {
     constexpr bool COMPUTE_STD_DEV = get_arg(args::compute_std_dev) != 0;
     const uint32_t is_root = get_arg(args::is_root);
 
-    compute_kernel_hw_startup(cb_in_shard, cb_scaler, cb_partial);
+    compute_kernel_hw_startup(dfb::in_shard, dfb::scaler, dfb::partial);
 
     constexpr auto reduce_shape = ckl::ReduceInputBlockShape::of(Ht, Wt_local, /*NC=*/1);
     constexpr auto block_shape = ckl::IterationShape::of(Ht, Wt_local);
@@ -123,39 +113,39 @@ void kernel_main() {
     ckl::reduce<
         ckernel::PoolType::SUM,
         ckernel::ReduceDim::REDUCE_ROW,
-        cb_in_shard,
-        cb_scaler,
-        cb_partial,
+        dfb::in_shard,
+        dfb::scaler,
+        dfb::partial,
         ckl::ReduceInputPolicy::WaitUpfrontNoPop>(reduce_shape);
 
     if (is_root) {
-        combine_blocks<cb_gather_mean, cb_mean_src>(num_cores, Ht, [](uint32_t) {});
+        combine_blocks<dfb::gather_mean, dfb::mean_src>(num_cores, Ht, [](uint32_t) {});
     }
 
     // ---------- round 2: this core's share of the variance ----------
     // dfb::mean is the broadcast result, one tile per output row, re-read for every column (Col).
     // dfb::in_shard is the resident block, indexed by the walk and never popped (Block).
     ckl::sub<
-        ckl::input(cb_in_shard, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Block),
+        ckl::input(dfb::in_shard, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Block),
         ckl::input(
-            cb_mean, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Col),
-        ckl::output(cb_centered)>(block_shape);
+            dfb::mean, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Col),
+        ckl::output(dfb::centered_sq)>(block_shape);
 
-    ckl::square<ckl::input(cb_centered), ckl::output(cb_centered)>(block_shape);
+    ckl::square<ckl::input(dfb::centered_sq), ckl::output(dfb::centered_sq)>(block_shape);
 
-    ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_centered, cb_scaler, cb_partial>(
+    ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, dfb::centered_sq, dfb::scaler, dfb::partial>(
         reduce_shape);
 
     if (is_root) {
         if constexpr (COMPUTE_STD_DEV) {
             // sqrt runs in DST on the combined variance, before the pack -- the only place it is
             // correct, since every partial is a variance contribution and not yet a variance.
-            combine_blocks<cb_gather_var, cb_out>(num_cores, Ht, [](uint32_t dst) {
+            combine_blocks<dfb::gather_var, dfb::out_tiles>(num_cores, Ht, [](uint32_t dst) {
                 sqrt_tile_init();
                 sqrt_tile(dst);
             });
         } else {
-            combine_blocks<cb_gather_var, cb_out>(num_cores, Ht, [](uint32_t) {});
+            combine_blocks<dfb::gather_var, dfb::out_tiles>(num_cores, Ht, [](uint32_t) {});
         }
     }
 
