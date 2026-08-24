@@ -24,7 +24,6 @@ from tracy import signpost
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
-from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
@@ -2188,17 +2187,26 @@ def _apply_gemma4_single_untilize_override(tt_sampling) -> None:
     shared ``models/common/sampling/tt_sampling.py`` untouched for every other
     model.
 
-    Blackhole only: the single-untilize path is measured good there (12B
-    P150x8, batch-1 and batch-32, coherent output). Wormhole keeps upstream
-    behaviour because it has not been validated on real WH silicon here, and
-    the chunking exists to fix a wide-row clash that may still apply. Override
-    with ``GEMMA4_SAMPLING_SINGLE_UNTILIZE`` (1 = force on, 0 = force off).
+    Measured good on Blackhole (12B P150x8, batch-1 and batch-32, coherent
+    output) and now on Wormhole too: on a real WH T3K the upstream chunk+concat
+    path *hard-fails* rather than degrading, because Gemma4's 262144-vocab row
+    needs the same ~4MB CB page against WH's ~1.33MB per-core L1::
+
+        TT_FATAL: ttnn.concat: required CB page size (4194304 B)
+                  exceeds per-core L1 capacity (1393472 B)
+
+    That aborts prefill warmup, so text_demo_v2 batch-1 / batch-8 / batch-32 all
+    fail outright on WH. With the single-untilize override the same three cases
+    pass with coherent per-user output at 24.9 / 20.5 / 16.2 tok/s (12B, T3K), so
+    the wide-row clash the chunking guards against does not reproduce here.
+    Enabled on both arches; override with ``GEMMA4_SAMPLING_SINGLE_UNTILIZE``
+    (1 = force on, 0 = force off) to fall back to upstream chunking.
     """
     env = os.environ.get("GEMMA4_SAMPLING_SINGLE_UNTILIZE")
     if env is not None:
         enable = env.lower() in ("1", "true", "yes")
     else:
-        enable = is_blackhole()
+        enable = True
     if not enable or tt_sampling is None:
         return
     if not hasattr(type(tt_sampling), "_untilize_chunk_count"):
