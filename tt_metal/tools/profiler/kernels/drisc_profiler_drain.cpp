@@ -431,6 +431,21 @@ void kernel_main() {
     // What is left is issuing those reads on BOTH NoCs, which doubles outstanding transactions without
     // needing more L1. Writes are only ~0.9% of the sweep, so sharing NOC_INDEX with them costs little.
     constexpr uint32_t kReadSplit = get_compile_time_arg_val(19);
+    // STAGING FILL GATE (arg 39; 0 = off). Skip shipping a core whose live words are under this fraction
+    // of its span's live capacity, so its words accumulate in the worker rings and the frame that finally
+    // ships is FULL. Attacks the sustained ceiling at its actual currency -- frames-per-word: the mover
+    // cost is per fixed-size FRAME (~1.16 us each), so at 46% fill half the mover's work moves padding
+    // (FINDINGS N+65). Three overrides ship a below-threshold core anyway, each protecting an invariant:
+    //   occupancy  -- any RISC past kPaceHighWater ships regardless (the valves keep seeing true occupancy:
+    //                 the gate sits AFTER the peak bookkeeping, so pacing safety is untouched);
+    //   latency    -- every 8th sweep is a force-ship sweep, bounding capture latency at ~8 sweeps and
+    //                 batching sparse traffic (a near-idle grid ships once per 8 sweeps with 8x the fill);
+    //   teardown   -- the stop-word drain ships everything (the completeness check counts every word).
+    // The gate does NOT save the span read (the bulk read lands before fill is known); it saves FRAMES:
+    // DRAM-ring reserves/writes on the filler and per-frame evacuation on the mover.
+    constexpr uint32_t kStageMinFillPct = get_compile_time_arg_val(39);
+    constexpr uint32_t kGateForceMask = 7;  // force-ship every 8th sweep
+    constexpr uint32_t kStageMinWords = (kNumRisc * kernel_profiler::PROFILER_L1_VECTOR_SIZE * kStageMinFillPct) / 100u;
     // ---- ROLE SPLIT (see the header). 0 = today's full-job drainer, and every arg below is then 0. ----
     constexpr uint32_t kRoleFull = 0, kRoleFiller = 1, kRoleMover = 2;
     constexpr uint32_t kRole = get_compile_time_arg_val(20);
@@ -1719,6 +1734,11 @@ void kernel_main() {
                 bool have_pend = false;
                 bool gen_shipped[2] = {false, false};
 
+                // Fill-gate override for THIS sweep: force-ship period, or the stop-word drain (stop_seen_at
+                // is the sweep loop's own latch -- no extra L1 read). Folds to `true` when the gate is off.
+                [[maybe_unused]] const bool gate_ship_all =
+                    kStageMinFillPct == 0 || (sweeps & kGateForceMask) == 0 || stop_seen_at != 0;
+
                 auto process_batch = [&](uint32_t base_c, uint32_t n, uint32_t g) {
                     const uint64_t t_p0 = get_timestamp();
                     // c_self joins the nested term because self_publish RESTORES c_reserve/c_write (see there), so
@@ -1818,6 +1838,16 @@ void kernel_main() {
                             emit_run(run_start, run_len);
                             run_len = 0;
                             continue;
+                        }
+                        // The staging fill gate (see kStageMinFillPct above). AFTER the peak bookkeeping, so the
+                        // pacing valves always see true occupancy; mirrors and head stay untouched, so the words
+                        // remain the producer's until a sweep that ships them.
+                        if constexpr (kStageMinFillPct != 0) {
+                            if (live < kStageMinWords && peak < kPaceHighWater && !gate_ship_all) {
+                                emit_run(run_start, run_len);
+                                run_len = 0;
+                                continue;
+                            }
                         }
                         if (run_len == 0) {
                             run_start = sl;

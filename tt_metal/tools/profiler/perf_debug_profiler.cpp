@@ -497,6 +497,26 @@ uint32_t perf_debug_dram_region_bytes_per_risc() {
 // host cost is frames x 10,560 B and the fill ratio decides bytes-per-marker. Sweeping continuously
 // against slow producers returns ~37%-full spans, which is why producer stalls got WORSE as producers got
 // SLOWER -- ~2x the host bytes for the same payload. Pacing holds the spans full instead.
+// TT_METAL_PERF_DEBUG_STAGE_MIN_FILL_PCT: per-core staging fill gate, as a percent of a core's live
+// span capacity (kNumRisc * ring words). A filler SKIPS shipping a core whose live words are below this
+// (leaving them in the worker's ring to accumulate) unless (a) any of the core's RISCs is past the
+// pace high-water valve -- occupancy safety always wins, (b) this is a force-ship sweep (every 8th, the
+// latency bound and the sparse-traffic batcher), or (c) the stop-word drain is in progress (teardown
+// completeness). 0 disables the gate. Why it exists: frames are fixed 10,560 B regardless of fill, and
+// the SUSTAINED word ceiling is mover-frames/us x fill x span words -- skipping half-empty cores is the
+// direct way to raise fill without touching the mover (FINDINGS N+65). MEASURED: full-pipeline
+// sustained stalls -45% (delay 100: 193k -> 107k), frame bytes -63% (fill 33% -> ~79%); NO_DECODE
+// sustained -12-17%. KNOWN TRADE: at high offered rates WITH large ring runway (the
+// ROLE_RING_MB=448 onset-hunting config) deferral erodes the worker-ring margin -- delay-25 went
+// clean -> 38k stalls -- so pair large-runway onset hunts with STAGE_MIN_FILL_PCT=0.
+uint32_t stage_min_fill_pct() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_STAGE_MIN_FILL_PCT");
+        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 50u;
+    }();
+    return v;
+}
+
 uint32_t fill_target_pct() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_FILL_PCT");
@@ -1976,7 +1996,9 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 noc_footprint(),
                 // arg 38: the sync event. Gated on zones being on as well, because it rides the self-zone ring
                 // and the kernel static_asserts that pairing -- passing 1 with zones off would not build.
-                (sync_event_count() != 0 && self_frames_base != 0) ? 1u : 0u};
+                (sync_event_count() != 0 && self_frames_base != 0) ? 1u : 0u,
+                // arg 39: the per-core staging fill gate (percent of live span capacity; 0 = off).
+                stage_min_fill_pct()};
             const std::string kdrain = "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp";
             auto drain_id =
                 tensix_drain
