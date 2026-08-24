@@ -48,8 +48,6 @@ of silently running stale code.
 """
 import inspect
 
-import torch
-
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
@@ -208,29 +206,49 @@ def _causal_conv1d_fir_wh(
         # only the one-hot VALUES depend on valid_len.
         # valid_len may be a scalar (all B rows) or a per-row list/tuple of
         # B (batched prefill: each user's own real length picks that user's decode conv window).
-        sel = torch.zeros(B, kernel_size - 1, total_len, dtype=torch.float32)
-        if isinstance(valid_len, (list, tuple)):
-            for bi in range(B):
-                for j in range(kernel_size - 1):
-                    sel[bi, j, int(valid_len[bi]) + j] = 1.0
+        # Built ENTIRELY ON DEVICE: row j of the one-hot is (arange(total_len) == valid_len + j),
+        # so no host tensor is constructed or uploaded. That also makes this trace-safe -- a
+        # host->device write inside begin_trace_capture raises "Writes are not supported during
+        # trace capture" (see wh_compat.py). Verified bit-exact vs the torch.zeros fill.
+        _ar = ttnn.arange(start=0, end=total_len, step=1, dtype=ttnn.float32, device=device)
+        _ar = ttnn.reshape(ttnn.to_layout(_ar, ttnn.TILE_LAYOUT), [1, 1, total_len])
+
+        def _one_hot(vl):
+            rows = [ttnn.eq(_ar, float(int(vl) + j)) for j in range(kernel_size - 1)]
+            out = rows[0] if len(rows) == 1 else ttnn.concat(rows, dim=1)
+            if len(rows) != 1:
+                for r in rows:
+                    ttnn.deallocate(r)
+            return out  # [1, K-1, total_len]
+
+        if isinstance(valid_len, (list, tuple)) and len(set(int(v) for v in valid_len)) > 1:
+            blocks = [_one_hot(valid_len[bi]) for bi in range(B)]
+            sel_tt = ttnn.concat(blocks, dim=0)
+            for b in blocks:
+                ttnn.deallocate(b)
         else:
-            for j in range(kernel_size - 1):
-                sel[:, j, valid_len + j] = 1.0
-        sel_tt = ttnn.from_torch(sel, dtype=x_padded.dtype, layout=ttnn.TILE_LAYOUT, device=device)
+            _vl = valid_len[0] if isinstance(valid_len, (list, tuple)) else valid_len
+            _one = _one_hot(_vl)
+            sel_tt = _one if B == 1 else ttnn.repeat(_one, ttnn.Shape([B, 1, 1]))
+            if B != 1:
+                ttnn.deallocate(_one)
+        ttnn.deallocate(_ar)
+        if sel_tt.dtype != x_padded.dtype:
+            sel_tt = ttnn.typecast(sel_tt, x_padded.dtype)
         xp = ttnn.to_layout(x_padded, ttnn.TILE_LAYOUT)
         # cross-chunk carry -> DRAM
         new_state = ttnn.matmul(sel_tt, xp, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(sel_tt)
 
-    # Precompute weight taps if not provided
-    if weight_taps is None:
-        weight_torch = ttnn.to_torch(weight)
-        weight_taps = []
-        for k in range(kernel_size):
-            w_k = weight_torch[:, 0, k].reshape(1, 1, D).contiguous()
-            weight_taps.append(
-                ttnn.from_torch(w_k, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
-            )
+    # Taps must be precomputed at load time (gdn/weights.py::_precompute_weight_taps populates
+    # q/k/v_weight_taps and fused_conv_weight_taps). The old fallback here did
+    # ttnn.to_torch(weight) + K from_torch calls INSIDE the forward pass -- a device->host->device
+    # round trip on static data, and illegal inside a trace capture. Fail loudly instead.
+    assert weight_taps is not None, (
+        "weight_taps is required: pass the precomputed per-tap device tensors from GDN weights "
+        "(see gdn/weights.py::_precompute_weight_taps). Deriving them here would read the weight "
+        "back to host mid-forward."
+    )
 
     total_len = (kernel_size - 1) + T
     _dram = ttnn.DRAM_MEMORY_CONFIG
@@ -270,11 +288,10 @@ def _causal_conv1d_fir_wh(
     _silu = [ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)]
     if bias_dev is not None:
         return ttnn.add(out, bias_dev, activations=_silu, memory_config=_dram), new_state
-    if bias is not None:
-        bias_torch = ttnn.to_torch(bias).reshape(1, 1, D).contiguous()
-        bias_dev_tmp = ttnn.from_torch(
-            bias_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc
-        )
-        return ttnn.add(out, bias_dev_tmp, activations=_silu, memory_config=_dram), new_state
+    assert bias is None, (
+        "bias_dev is required when bias is present: pass the precomputed [1,1,D] device tensor "
+        "from GDN weights (see gdn/weights.py::_precompute_bias_dev). The old fallback here read "
+        "the bias back to host mid-forward, which is also illegal inside a trace capture."
+    )
     # Conv output in DRAM (feeds gated_delta_attn_seq; MAC still ran in L1 when mc=L1)
     return ttnn.silu(out, memory_config=_dram), new_state
