@@ -21,6 +21,7 @@
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 
 #include "tt_metal/common/broadcast_ring.hpp"
+#include "impl/threading/thread_pool.hpp"
 #include "llrt/zone_meta.hpp"
 #include "tools/profiler/perf_debug_env.hpp"
 #include "tools/profiler/spsc_packet.h"
@@ -152,18 +153,41 @@ PerfDebugReceiver::PerfDebugReceiver(ReceiverConfig config, std::vector<Receiver
             s->sock = dev.sockets[sk].get();
             s->dev = d;
             s->sock_idx = sk;
-            // Slots are constructed by the DECODE THREAD, not here -- see construct_slots().
+            // Slots are faulted by prefault_rings() below, not by the decode thread.
             s->ring = std::make_unique<BroadcastRing<PerfDebugRawRec>>(
                 ring_recs, BroadcastRing<PerfDebugRawRec>::DeferSlotInit{});
+            s->ring_node = dev.numa_node;
             s->decode.reset(dev.num_cores);
             s->decode.core_of_xy = dev.core_of_xy;
             s->last_zone_ts.assign(nl, 0);
             streams_.push_back(std::move(s));
         }
     }
+    prefault_rings();
 }
 
 PerfDebugReceiver::~PerfDebugReceiver() { shutdown(); }
+
+// Pin each ring's pages to its device's node and fault them HERE, before the workload can produce. The
+// fault is ~400 MB per stream: left on the decode thread it lands after the producers are already running
+// (invisible on a model, where setup hides it; a burst of first-iteration producer stalls on a synthetic
+// that starts immediately). numa_tonode_memory makes placement independent of the touching thread, so the
+// prefault can run anywhere -- one thread per stream, bound to that node so the zeroing is local.
+void PerfDebugReceiver::prefault_rings() {
+    std::vector<std::thread> pf;
+    pf.reserve(streams_.size());
+    for (auto& s : streams_) {
+        pf.emplace_back([st = s.get()]() {
+            const auto [base, bytes] = st->ring->raw_mapping();
+            bind_memory_to_numa_node(base, bytes, st->ring_node);
+            bind_current_thread_to_numa_node(st->ring_node);
+            st->ring->construct_slots();
+        });
+    }
+    for (auto& t : pf) {
+        t.join();
+    }
+}
 
 void PerfDebugReceiver::start() {
     TT_FATAL(!started_, "receiver already started");
@@ -510,6 +534,7 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
     s.passes++;
     return true;
 }
+#pragma clang attribute pop
 
 void PerfDebugReceiver::decode_thread(std::vector<Stream*> streams) {
     // FIRST-TOUCH OUR OWN RING. First touch fixes a page's NUMA node for the life of the mapping, and this
@@ -519,8 +544,10 @@ void PerfDebugReceiver::decode_thread(std::vector<Stream*> streams) {
     // measured as one stream taking 172 ms of frame time against a peer's 111 ms for the same work, and
     // that slowest stream is what gates the pipeline: its mover blocks on credit, its ring fills, its
     // producers stall. Faulting here makes the memory follow the thread, with no affinity policy at all.
-    for (Stream* st : streams) {
-        st->ring->construct_slots();
+    // Bound to the node FIRST, or first touch pins the ring wherever the scheduler happened to start us and
+    // a later migration turns every ring store into an interconnect crossing.
+    if (!streams.empty() && streams.front()->ring_node >= 0) {
+        bind_current_thread_to_numa_node(streams.front()->ring_node);
     }
     std::string name = "pd-dec:";
     for (Stream* s : streams) {

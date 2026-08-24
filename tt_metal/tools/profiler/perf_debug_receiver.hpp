@@ -107,6 +107,7 @@ struct ReceiverDeviceConfig {
     std::unordered_map<uint32_t, uint32_t> core_of_xy;  // incl. DRISC self-zone cores
     bool clock_synced = false;
     double frequency_ghz = 0.0;
+    int numa_node = -1;  // host node closest to this device; -1 leaves ring and thread unbound
 };
 
 struct ReceiverConfig {
@@ -184,6 +185,7 @@ private:
         distributed::D2HSocket* sock = nullptr;
         uint32_t dev = 0;
         uint32_t sock_idx = 0;
+        int ring_node = -1;  // node this stream's ring is bound to, and that its decode thread runs on
         std::unique_ptr<BroadcastRing<PerfDebugRawRec>> ring;
         profiler::SpanDecodeState decode;
         StallIdMirror stall_ids;
@@ -221,6 +223,7 @@ private:
         std::thread thread;
     };
 
+    void prefault_rings();
     void decode_thread(std::vector<Stream*> streams);
     // One poll+decode+ack pass over a stream. Returns true if it moved data; sets
     // s.retired when the stream is finished.

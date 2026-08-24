@@ -90,7 +90,15 @@ public:
         storage_(allocate_slots(capacity_, /*construct_slots=*/false)),
         writer_(&shared_state_, view()) {}
 
-    /** @brief Constructs the deferred slots. Call ONCE, from the thread that will write the ring. */
+    /**
+     * @brief The anonymous mapping backing the slots, or {nullptr, 0} when the slots are heap-backed.
+     *
+     * Exposed so a caller can set a NUMA policy on the pages BEFORE construct_slots() faults them, which
+     * makes placement independent of which thread touches them first.
+     */
+    std::pair<void*, size_t> raw_mapping() const noexcept { return {storage_.map_base, storage_.map_bytes}; }
+
+    /** @brief Constructs the deferred slots. Call ONCE, before any reader or writer runs. */
     void construct_slots() noexcept {
         for (size_t i = 0; i < capacity_; i++) {
             new (storage_.slots + i) Slot();
