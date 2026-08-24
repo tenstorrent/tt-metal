@@ -2641,6 +2641,22 @@ handshakes desynchronise -- which the flat unit range cannot promise, since `spl
 hands different cores different counts. It also caps nb at the grid width: nt=4 gives nb=16,
 wider than the 8-column device, and the program fails to build.
 
+**It is not sharding, which was the obvious suspicion.** The ttnn baseline throughout this
+file was built with a plain `ttnn.from_torch(..., device=d)`, and its memory config reads
+`TensorMemoryLayout::INTERLEAVED, BufferType::DRAM` -- the same interleaved DRAM ours uses.
+ttnn reaches 118.6us from the same layout we read at 353.2, so the difference is in how the
+reads are issued, not where the data sits.
+
+**And we would support sharding if we wanted it, with no kernel changes.** `TensorAccessor`
+handles sharded layouts (`is_sharded`, `shard_pages_address_iterator.h`), and the harness
+passes `TensorAccessorArgs(t)`, which encodes whatever layout the tensor actually has -- so
+`acc.get_noc_addr(page)` resolves a shard exactly as it resolves an interleaved page.
+Verified: the blocked matmul reads a HEIGHT_SHARDED L1 operand at pcc 0.999967 with nothing
+in the kernel mentioning sharding. Where it would earn its keep is weights RESIDENT in L1
+across the grid -- 8MB of Wo is 128KB a core on 64 cores -- which removes the DRAM read
+entirely rather than making it faster. That only pays when a weight is reused across many
+matmuls, which prefill does not do within one layer.
+
 **What is left is bandwidth per read, not traffic.** With multicast the traffic is A once plus
 B once, 5120 tiles or 10MB, and we move it in 353.2us -- 28.4GB/s. ttnn moves the same 10MB in
 118.6us, 84GB/s. So the remaining 3x is not extra data, it is that our reads are slower: the
