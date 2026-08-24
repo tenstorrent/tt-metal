@@ -229,14 +229,15 @@ def test_perf_eltwise_unary_sfpu(
 # ---------------------------------------------------------------------------
 # Extra slices that used to live in their own perf_*.py modules.
 # Same C++ dispatch (eltwise_unary_sfpu_perf.cpp); narrower format matrices for
-# conversion A/Bs and the Int32 path the main sweep does not cover.
+# paths the main sweep does not cover: Int32 unary, UInt16/UInt32 comparisons,
+# and Float32 Erfinv (the main sweep only drives Erfinv at Float16_b).
 #
 # They must share ALL_PERF_RUN_TYPES with the main sweep: this module writes one
 # CSV, and combine_perf_reports refuses worker files with different column
 # schemas (MATH_ISOLATE-only would omit mean(L1_TO_L1)/TEXT_SIZE(PACK_ISOLATE)/...).
 # ---------------------------------------------------------------------------
 
-_UNARY_SFPU_MATH_ISOLATE_DIMS = [[128, 64]]  # tile_cnt: 8
+_EXTRA_SLICE_DIMS = [[128, 64]]  # tile_cnt: 8
 
 # int32 unary ops share the eltwise_unary_sfpu_perf.cpp dispatch but need an
 # Int32 format, so they run through a dedicated extra-slice test below.
@@ -257,16 +258,6 @@ _INT32_UNARY_OPS = [
     MathOperation.Fill,
 ]
 
-# Float calculate_comp covers all six comparison-to-zero modes.
-_FLOAT_COMP_OPS = [
-    MathOperation.EqualZero,
-    MathOperation.NotEqualZero,
-    MathOperation.LessThanZero,
-    MathOperation.GreaterThanZero,
-    MathOperation.LessThanEqualZero,
-    MathOperation.GreaterThanEqualZero,
-]
-
 # uint16 (calculate_comp_uint16) and uint32 (calculate_eqz/nez_uint32) only support
 # equality against zero.
 _UINT_COMP_OPS = [
@@ -275,7 +266,7 @@ _UINT_COMP_OPS = [
 ]
 
 
-def _math_isolate_config(formats, mathop, dest_acc, unpack_to_dest, input_dimensions):
+def _extra_slice_config(formats, mathop, dest_acc, unpack_to_dest, input_dimensions):
     tile_count_A, tile_count_B, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
@@ -317,10 +308,10 @@ def _math_isolate_config(formats, mathop, dest_acc, unpack_to_dest, input_dimens
 @parametrize(
     formats=input_output_formats([DataFormat.Int32], same=True),
     mathop=_INT32_UNARY_OPS,
-    input_dimensions=_UNARY_SFPU_MATH_ISOLATE_DIMS,
+    input_dimensions=_EXTRA_SLICE_DIMS,
 )
 def test_perf_eltwise_unary_sfpu_int32(perf_report, formats, mathop, input_dimensions):
-    _math_isolate_config(
+    _extra_slice_config(
         formats,
         mathop,
         DestAccumulation.No,
@@ -332,7 +323,7 @@ def test_perf_eltwise_unary_sfpu_int32(perf_report, formats, mathop, input_dimen
 def _comp_dest_acc(formats):
     # 32-bit inputs (UInt32) are unpacked straight into DEST and the uint32 kernels do
     # full-word DataLayout::U32 accesses, so they require a 32-bit DEST. Mirror the
-    # correctness test (test_eltwise_unary_sfpu_comp_uint) and constraints.py, which force
+    # correctness test (test_eltwise_unary_sfpu_int) and constraints.py, which force
     # dest_acc=Yes for 32-bit formats; hardcoding No here would measure an unsupported config.
     if formats.input_format.is_32_bit():
         return DestAccumulation.Yes
@@ -342,35 +333,15 @@ def _comp_dest_acc(formats):
 @skip_for_blackhole
 @pytest.mark.perf
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
-    mathop=_FLOAT_COMP_OPS,
-    input_dimensions=_UNARY_SFPU_MATH_ISOLATE_DIMS,
-)
-def test_perf_eltwise_unary_sfpu_comp_float(
-    perf_report, formats, mathop, input_dimensions
-):
-    dest_acc = _comp_dest_acc(formats)
-    _math_isolate_config(
-        formats,
-        mathop,
-        dest_acc,
-        formats.input_format.is_32_bit(),
-        input_dimensions,
-    ).run(perf_report)
-
-
-@skip_for_blackhole
-@pytest.mark.perf
-@parametrize(
     formats=input_output_formats([DataFormat.UInt16], same=True),
     mathop=_UINT_COMP_OPS,
-    input_dimensions=_UNARY_SFPU_MATH_ISOLATE_DIMS,
+    input_dimensions=_EXTRA_SLICE_DIMS,
 )
 def test_perf_eltwise_unary_sfpu_comp_uint16(
     perf_report, formats, mathop, input_dimensions
 ):
     dest_acc = _comp_dest_acc(formats)
-    _math_isolate_config(
+    _extra_slice_config(
         formats,
         mathop,
         dest_acc,
@@ -384,13 +355,13 @@ def test_perf_eltwise_unary_sfpu_comp_uint16(
 @parametrize(
     formats=input_output_formats([DataFormat.UInt32], same=True),
     mathop=_UINT_COMP_OPS,
-    input_dimensions=_UNARY_SFPU_MATH_ISOLATE_DIMS,
+    input_dimensions=_EXTRA_SLICE_DIMS,
 )
 def test_perf_eltwise_unary_sfpu_comp_uint32(
     perf_report, formats, mathop, input_dimensions
 ):
     dest_acc = _comp_dest_acc(formats)
-    _math_isolate_config(
+    _extra_slice_config(
         formats,
         mathop,
         dest_acc,
@@ -399,39 +370,19 @@ def test_perf_eltwise_unary_sfpu_comp_uint32(
     ).run(perf_report)
 
 
-@skip_for_blackhole
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
-    mathop=[MathOperation.Erfinv],
-    input_dimensions=_UNARY_SFPU_MATH_ISOLATE_DIMS,
-)
-def test_perf_eltwise_unary_sfpu_erfinv_bf16(
-    perf_report, formats, mathop, input_dimensions
-):
-    dest_acc = DestAccumulation.No
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
-    )
-    _math_isolate_config(
-        formats, mathop, dest_acc, unpack_to_dest, input_dimensions
-    ).run(perf_report)
-
-
-@skip_for_blackhole
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Float32]),
     mathop=[MathOperation.Erfinv],
-    input_dimensions=_UNARY_SFPU_MATH_ISOLATE_DIMS,
+    input_dimensions=_EXTRA_SLICE_DIMS,
 )
 def test_perf_eltwise_unary_sfpu_erfinv_fp32(
     perf_report, formats, mathop, input_dimensions
 ):
     dest_acc = DestAccumulation.Yes
     unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
+        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
-    _math_isolate_config(
+    _extra_slice_config(
         formats, mathop, dest_acc, unpack_to_dest, input_dimensions
     ).run(perf_report)

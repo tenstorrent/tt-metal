@@ -87,7 +87,6 @@ jobs:
     uses: ./.github/workflows/build-quasar-perf.yml
     with:
       docker_image: ${{ needs.build-images.outputs.llk-ci-tag }}
-      speed_of_light: ${{ inputs.speed-of-light }}
 
   llk-perf-exec:
     needs: [load-test-matrix, build-images]
