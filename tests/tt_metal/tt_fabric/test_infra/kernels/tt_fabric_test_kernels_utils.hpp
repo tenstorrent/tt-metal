@@ -1538,6 +1538,29 @@ struct SenderKernelTrafficConfig {
             noc_async_read_barrier(rnoc);
             invalidate_l1_cache();
             if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc) != 0u) {
+                // [#45872 DRAIN-WATCH] Stop sending, but keep EXACT_FREE_LIVE (router word[8]) ALIVE so the
+                // ERISC sees the buffer drain to its EXACT final occupancy. We send nothing, but the router
+                // keeps advancing the read pointer as it forwards the backlog, so get_num_free_write_slots()
+                // (= num_buffers - (write_counter - read_counter), counter-based/EXACT for a worker) rises
+                // toward num_buffers as the buffer empties. Spin (writing w8 every 256 iters, breaking once
+                // fully drained) so the SLOT dump reads the true post-drain free-slot count -- no TX proxy,
+                // residual = num_buffers - w8 is exact and never negative.
+                auto* sc2 = static_cast<EdmSenderT*>(connection_ptr_);
+                const uint32_t nb = sc2->num_buffers_per_channel;
+                const uint64_t w8_addr = get_noc_addr(sc2->edm_noc_x, sc2->edm_noc_y, 0x6F1F8u + 32u);
+                uint32_t ef = 0;
+                for (uint32_t k = 0; k < 10000000u; ++k) {
+                    ef = sc2->get_num_free_write_slots();
+                    if ((k & 0xFFu) == 0u) {
+                        noc_inline_dw_write(w8_addr, ef);
+                        noc_async_writes_flushed();
+                    }
+                    if (ef >= nb) {
+                        break;  // fully drained
+                    }
+                }
+                noc_inline_dw_write(w8_addr, ef);  // final exact free-slot count (post-drain or at cap)
+                noc_async_writes_flushed();
                 num_packets_processed = metadata.num_packets;  // mark done -> outer send loop exits
                 return false;
             }
@@ -1589,22 +1612,69 @@ struct SenderKernelTrafficConfig {
             credit_manager_.consume_credit();
         }
 
-        // [#45872 SENT vs RECEIVED] num_packets_processed is this sender's cumulative SENT doorbell count.
-        // Shadow-increment the router's ground-truth RECV_CUM counter (immune to the stale read / reset)
-        // at RESUME_PHASE_BASE+32 == 0x6F220 on the eth core this connection targets, so the ERISC can
-        // compare arrivals (cumulative + while-link-down) against what was sent. SENT is surfaced to the
-        // watcher ring throttled (tag 0x99, value = count>>16 so 16 bits span up to 4B).
+        // [#45872 EXACT OCCUPANCY] Snapshot the router's TRUE channel-0 free-slot count from the worker's
+        // counter-based flow-control view. get_num_free_write_slots() == num_buffers - (write_counter -
+        // read_counter) here (IS_WORKER, i.e. I_USE_STREAM_REG_FOR_CREDIT_RECEIVE=false), so it is EXACT: it
+        // counts EVERY channel-0 packet (payload + sync + control) on the SAME side -- no payload-shadow vs
+        // global-TX mismatch, no cross-core skew (the two sources of the old +/-1). Write it live to router
+        // word[8] EXACT_FREE_LIVE; the ERISC tracks its MIN across the link-down (peak occupancy = 32 - min)
+        // and compares it against the stream-register read (FS22). Occupancy = num_buffers - EXACT_FREE.
         {
-            auto* dbg_conn = static_cast<EdmSenderT*>(connection_ptr_);
-            // RECV_CUM = MEM_AERISC_RESUME_PHASE_BASE (== host kDbgSlotBase 0x6F1F8) + 32 (word[8]).
-            // MUST track that base -- changing MEM_AERISC_RESUME_PHASE_SIZE moves it.
-            constexpr uint32_t DBELL_RECV_CUM_ADDR = 0x6F1F8u + 32u;  // = 0x6F218
-            noc_semaphore_inc(get_noc_addr(dbg_conn->edm_noc_x, dbg_conn->edm_noc_y, DBELL_RECV_CUM_ADDR), 1);
-            if ((num_packets_processed & 0xFFFFFu) == 0u) {
-                sync_dbg_push(0x99, 0, (num_packets_processed >> 16) & 0xFFFF);
-            }
+            auto* sc = static_cast<EdmSenderT*>(connection_ptr_);
+            const uint32_t exact_free = sc->get_num_free_write_slots();  // counter-based, EXACT
+            noc_inline_dw_write(get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F1F8u + 32u), exact_free);  // word[8]
+            noc_async_writes_flushed();
+        }
+        if ((num_packets_processed & 0xFFFFFu) == 0u) {
+            sync_dbg_push(0x99, 0, (num_packets_processed >> 16) & 0xFFFF);
         }
         num_packets_processed += 1;  // Always increment by 1
+
+        // [#45872 RECONCILE] On the FINAL data packet, once our own pipeline has drained to quiescent (all healthy
+        // in-flight packets completed; only the register-hidden residual remains), correct the router's stream-22
+        // free-slots register to our EXACT counter value. At this quiescent point completion-based occupancy ==
+        // forward-based occupancy, so delta = (exact_free - register_free) is precisely the lost-decrement deficit
+        // (cumulative over ALL retrains this run). Atomic increment on the router's UPDATE reg; no-op if delta==0.
+        if constexpr (!BENCHMARK_MODE) {
+            if (num_packets_processed == metadata.num_packets && payload_buffer_ != nullptr) {
+                auto* sc = static_cast<EdmSenderT*>(connection_ptr_);
+                const uint8_t rnoc = get_fabric_worker_noc();
+                const uint32_t scratch = payload_buffer_->get_physical_address();
+                const uint32_t upd_addr = sc->edm_buffer_remote_free_slots_update_addr;  // stream-22 UPDATE reg (270)
+                const uint64_t upd_noc = get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, upd_addr, rnoc);
+                const uint64_t rd_noc =
+                    get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, upd_addr + 0x6Cu, rnoc);  // read reg 297
+                // SETTLE: spin until our exact free stops changing (healthy in-flight completed; residual stuck).
+                uint32_t prev = 0xFFFFFFFFu, stable_run = 0, ef = 0;
+                for (uint32_t k = 0; k < 10000000u && stable_run < 20000u; ++k) {
+                    ef = sc->get_num_free_write_slots();
+                    if (ef == prev) {
+                        stable_run++;
+                    } else {
+                        stable_run = 0;
+                        prev = ef;
+                    }
+                }
+                // READ the router's actual stream-22 free slots (17-bit free-slots field, like get_ptr_val).
+                noc_async_read(rd_noc, scratch, sizeof(uint32_t));
+                noc_async_read_barrier(rnoc);
+                invalidate_l1_cache();
+                const uint32_t actual = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch) & 0x1FFFFu;
+                const int32_t delta = static_cast<int32_t>(ef) - static_cast<int32_t>(actual);
+                // OBSERVE: word[15]=exact_free, word[16]=register_free, word[17]=delta.
+                noc_inline_dw_write(get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F1F8u + 60u, rnoc), ef);
+                noc_inline_dw_write(get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F1F8u + 64u, rnoc), actual);
+                noc_inline_dw_write(
+                    get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F1F8u + 68u, rnoc), static_cast<uint32_t>(delta));
+                noc_async_writes_flushed();
+                // CORRECT: inject the deficit into stream 22 (atomic increment on the router's UPDATE reg).
+                if (delta != 0) {
+                    noc_inline_dw_write<InlineWriteDst::REG>(
+                        upd_noc, pack_value_for_inc_on_write_stream_reg_write(delta), 0xf, rnoc);
+                    noc_async_writes_flushed();
+                }
+            }
+        }
 
         return true;  // Packet sent successfully
     }
