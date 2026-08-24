@@ -12,8 +12,8 @@ trajectory at production resolution with the real trained checkpoint — i.e. tr
 replay is numerically transparent.
 
 The noise stream is re-seeded before each forward (DD-5) so the two DDIM draws
-match. Skips cleanly if the checkpoint or plan-anchor asset is absent (set
-``DD_CHECKPOINT_PATH`` / ``DD_ANCHOR_PATH``).
+match. Assets resolve through the shared ``checkpoint_path`` fixture; a missing one
+skips locally but fails under ``DD_REQUIRE_ASSETS=1`` (see conftest).
 """
 
 from __future__ import annotations
