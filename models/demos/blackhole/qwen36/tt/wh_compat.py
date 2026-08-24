@@ -44,7 +44,7 @@ from models.demos.blackhole.qwen36.tt.chunk_seq_wh import chunk_gated_delta_rule
 _FLAG = "_qwen36_wh_compat_applied"
 
 # chunk_seq_wh.py is a verbatim copy of this upstream function with one dtype change. If
-# upstream edits it, the copy is stale -- fail loudly rather than silently running old kernel code.
+# upstream edits it, the copy is stale -- fail loudly, not run old kernels.
 _UPSTREAM_ANCHOR = "ttnn.typecast(out_4d, ttnn.float32, memory_config=_out_l1)"
 
 
