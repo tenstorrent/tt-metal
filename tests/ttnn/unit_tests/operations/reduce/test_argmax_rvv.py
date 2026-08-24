@@ -101,7 +101,10 @@ CASES = [
 ]
 
 
-@pytest.mark.parametrize("v", [2048, 8192])
+# v boundaries: 32 = single tile (chunk_pages = min(64, w_tiles) = 1);
+# 2016 = 63 tiles, exercising the w_tiles - tiles_done < chunk_pages remainder
+# branch; 2048/8192 = exact multiples of the 64-tile chunk.
+@pytest.mark.parametrize("v", [32, 2016, 2048, 8192])
 @pytest.mark.parametrize("b", [1, 5, 32])
 @pytest.mark.parametrize("keepdim", [True, False])
 @pytest.mark.parametrize("with_maxval", [True, False])
@@ -135,17 +138,23 @@ def test_argmax_rvv_battery(device, v, b, keepdim, with_maxval):
                 assert int(got_val[r]) == ref_val, f"case {name} row {r}: val {int(got_val[r]):#06x} != {ref_val:#06x}"
 
 
-@pytest.mark.parametrize("v", [4096])
+@pytest.mark.parametrize("name", CASES)
+@pytest.mark.parametrize("v", [32, 2016, 4096])
 @pytest.mark.parametrize("b", [1, 32])
-def test_argmax_rvv_matches_upstream_tile_path(device, v, b):
-    """Index cross-check against the incumbent ttnn.argmax on the same TILE tensor."""
-    torch.manual_seed(v + b)
-    x = torch.randn(1, 1, b, v).bfloat16()
+def test_argmax_rvv_matches_upstream_tile_path(device, name, v, b):
+    """Index cross-check against the incumbent ttnn.argmax on the same TILE
+    tensor — not just random data: every planted-max / tie / special-value
+    case from CASES runs through both paths."""
+    rng = np.random.default_rng(42 + v + 100 * b)
+    bits = _make_case(name, v, b, rng)
+    x = torch.from_numpy(bits.astype(np.int16)).view(torch.bfloat16).reshape(1, 1, b, v)
     t_tile = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     idx_rvv = ttnn.to_torch(ttnn.argmax(t_tile, dim=3, keepdim=True, use_rvv=True))
     idx_ref = ttnn.to_torch(ttnn.argmax(t_tile, dim=3, keepdim=True))
-    assert torch.equal(idx_rvv.to(torch.int64), idx_ref.to(torch.int64))
+    assert torch.equal(
+        idx_rvv.to(torch.int64), idx_ref.to(torch.int64)
+    ), f"RVV/incumbent index mismatch on case {name!r} (v={v}, b={b})"
 
 
 def test_argmax_rvv_rejects_row_major_input(device, expect_error):
