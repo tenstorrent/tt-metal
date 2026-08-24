@@ -1,0 +1,102 @@
+[full-pipeline-gate] status=crash end_to_end_ms=None via=n/a error=no TRACE_PER_TOKEN_MS or FORWARD_WALL_MS in output (workload did not run full-pipeline)
+  workload output:
+    ImportError while loading con
+[full-pipeline-gate] status=crash end_to_end_ms=None via=n/a error=no TRACE_PER_TOKEN_MS or FORWARD_WALL_MS in output (workload did not run full-pipeline)
+  workload output:
+    ImportError while loading con
+[full-pipeline-gate] status=crash end_to_end_ms=None via=n/a error=no TRACE_PER_TOKEN_MS or FORWARD_WALL_MS in output (workload did not run full-pipeline)
+  workload output:
+    ImportError while loading con
+[full-pipeline-gate] status=ok end_to_end_ms=28.8804 via=trace_replay
+[full-pipeline-gate] status=ok end_to_end_ms=28.8783 via=trace_replay best_ms=28.8804 delta_pct=-0.01
+[full-pipeline-gate] status=regressed end_to_end_ms=28.88 via=trace_replay best_ms=28.8783 delta_pct=0.01
+[full-pipeline-gate] status=regressed end_to_end_ms=29.6672 via=trace_replay best_ms=28.8783 delta_pct=2.73
+[full-pipeline-gate] status=ok end_to_end_ms=28.0409 via=trace_replay best_ms=28.8783 delta_pct=-2.9
+[full-pipeline-gate] status=ok end_to_end_ms=27.7476 via=trace_replay best_ms=28.0409 delta_pct=-1.05
+[full-pipeline-gate] status=regressed end_to_end_ms=27.9529 via=trace_replay best_ms=27.7476 delta_pct=0.74
+[full-pipeline-gate] status=regressed end_to_end_ms=27.7491 via=trace_replay best_ms=27.7476 delta_pct=0.01
+[full-pipeline-gate] status=ok end_to_end_ms=27.7328 via=trace_replay best_ms=27.7476 delta_pct=-0.05
+[full-pipeline-gate] status=regressed end_to_end_ms=27.7335 via=trace_replay best_ms=27.7328 delta_pct=0.0
+[full-pipeline-gate] status=regressed end_to_end_ms=27.7513 via=trace_replay best_ms=27.7328 delta_pct=0.07
+[full-pipeline-gate] status=ok end_to_end_ms=25.6185 via=trace_replay best_ms=27.7328 delta_pct=-7.62
+[full-pipeline-gate] status=ok end_to_end_ms=24.1757 via=trace_replay best_ms=25.6185 delta_pct=-5.63
+[full-pipeline-gate] status=ok end_to_end_ms=24.1739 via=trace_replay best_ms=24.1757 delta_pct=-0.01
+[full-pipeline-gate] status=ok end_to_end_ms=24.175 via=trace_replay best_ms=24.1757 delta_pct=-0.0
+[full-pipeline-gate] status=ok end_to_end_ms=23.748 via=trace_replay best_ms=24.1757 delta_pct=-1.77
+[full-pipeline-gate] status=regressed end_to_end_ms=24.1006 via=trace_replay best_ms=23.748 delta_pct=1.48
+[full-pipeline-gate] status=regressed end_to_end_ms=23.7511 via=trace_replay best_ms=23.748 delta_pct=0.01
+[full-pipeline-gate] status=regressed end_to_end_ms=23.7488 via=trace_replay best_ms=23.748 delta_pct=0.0
+[full-pipeline-gate] status=ok end_to_end_ms=23.6112 via=trace_replay best_ms=23.748 delta_pct=-0.58
+[full-pipeline-gate] status=ok end_to_end_ms=23.3961 via=trace_replay best_ms=23.6112 delta_pct=-0.91
+[full-pipeline-gate] status=ok end_to_end_ms=23.2954 via=trace_replay best_ms=23.3961 delta_pct=-0.43
+[full-pipeline-gate] status=ok end_to_end_ms=23.2946 via=trace_replay best_ms=23.2954 delta_pct=-0.0
+[full-pipeline-gate] status=ok end_to_end_ms=23.1785 via=trace_replay best_ms=23.2954 delta_pct=-0.5
+[full-pipeline-gate] status=regressed end_to_end_ms=24.5015 via=trace_replay best_ms=23.1785 delta_pct=5.71
+[full-pipeline-gate] status=ok end_to_end_ms=23.1676 via=trace_replay best_ms=23.1785 delta_pct=-0.05
+[full-pipeline-gate] status=ok end_to_end_ms=20.1303 via=trace_replay best_ms=23.1676 delta_pct=-13.11
+[full-pipeline-gate] status=ok end_to_end_ms=20.0668 via=trace_replay best_ms=20.1303 delta_pct=-0.32
+[full-pipeline-gate] status=ok end_to_end_ms=18.2816 via=trace_replay best_ms=20.0668 delta_pct=-8.9
+[full-pipeline-gate] status=regressed end_to_end_ms=18.3385 via=trace_replay best_ms=18.2816 delta_pct=0.31
+[full-pipeline-gate] status=regressed end_to_end_ms=18.3376 via=trace_replay best_ms=18.2816 delta_pct=0.31
+[full-pipeline-gate] status=ok end_to_end_ms=18.2642 via=trace_replay best_ms=18.2816 delta_pct=-0.1
+[full-pipeline-gate] status=ok end_to_end_ms=17.6382 via=trace_replay best_ms=18.2816 delta_pct=-3.52
+[full-pipeline-gate] status=ok end_to_end_ms=17.7693 via=trace_replay best_ms=18.2816 delta_pct=-2.8
+[full-pipeline-gate] status=ok end_to_end_ms=17.7672 via=trace_replay best_ms=18.2816 delta_pct=-2.81
+[full-pipeline-gate] status=ok end_to_end_ms=17.7663 via=trace_replay best_ms=18.2816 delta_pct=-2.82
+[full-pipeline-gate] status=ok end_to_end_ms=18.0504 via=trace_replay best_ms=18.2816 delta_pct=-1.26
+[full-pipeline-gate] status=ok end_to_end_ms=16.7644 via=trace_replay best_ms=18.2816 delta_pct=-8.3
+[full-pipeline-gate] status=ok end_to_end_ms=16.1353 via=trace_replay best_ms=16.7644 delta_pct=-3.75
+[full-pipeline-gate] status=regressed end_to_end_ms=16.1937 via=trace_replay best_ms=16.1353 delta_pct=0.36
+[full-pipeline-gate] status=regressed end_to_end_ms=16.2848 via=trace_replay best_ms=16.1353 delta_pct=0.93
+[full-pipeline-gate] status=regressed end_to_end_ms=16.2892 via=trace_replay best_ms=16.1353 delta_pct=0.95
+[full-pipeline-gate] status=regressed end_to_end_ms=16.2833 via=trace_replay best_ms=16.1353 delta_pct=0.92
+[full-pipeline-gate] status=ok end_to_end_ms=15.9763 via=trace_replay best_ms=16.1353 delta_pct=-0.99
+[full-pipeline-gate] status=regressed end_to_end_ms=16.4854 via=trace_replay best_ms=15.9763 delta_pct=3.19
+[full-pipeline-gate] status=regressed end_to_end_ms=16.0493 via=trace_replay best_ms=15.9763 delta_pct=0.46
+[full-pipeline-gate] status=regressed end_to_end_ms=16.1543 via=trace_replay best_ms=15.9763 delta_pct=1.11
+[full-pipeline-gate] status=ok end_to_end_ms=15.6396 via=trace_replay best_ms=15.9763 delta_pct=-2.11
+[full-pipeline-gate] status=ok end_to_end_ms=15.8374 via=trace_replay best_ms=15.9763 delta_pct=-0.87
+[full-pipeline-gate] status=regressed end_to_end_ms=15.9926 via=trace_replay best_ms=15.9763 delta_pct=0.1
+[full-pipeline-gate] status=ok end_to_end_ms=15.2117 via=trace_replay best_ms=15.9763 delta_pct=-4.79
+[full-pipeline-gate] status=regressed end_to_end_ms=16.1921 via=trace_replay best_ms=15.2117 delta_pct=6.45
+[full-pipeline-gate] status=diverged end_to_end_ms=16.6569 via=trace_replay best_ms=15.2117 delta_pct=9.5
+[full-pipeline-gate] status=regressed end_to_end_ms=16.3415 via=trace_replay best_ms=15.2117 delta_pct=7.43
+[full-pipeline-gate] status=regressed end_to_end_ms=15.2148 via=trace_replay best_ms=15.2117 delta_pct=0.02
+[full-pipeline-gate] status=ok end_to_end_ms=14.909 via=trace_replay best_ms=15.2117 delta_pct=-1.99
+[full-pipeline-gate] status=regressed end_to_end_ms=15.0473 via=trace_replay best_ms=14.909 delta_pct=0.93
+[full-pipeline-gate] status=ok end_to_end_ms=14.9067 via=trace_replay best_ms=14.909 delta_pct=-0.02
+[full-pipeline-gate] status=ok end_to_end_ms=14.9049 via=trace_replay best_ms=14.909 delta_pct=-0.03
+[full-pipeline-gate] status=ok end_to_end_ms=13.9754 via=trace_replay best_ms=14.909 delta_pct=-6.26
+[full-pipeline-gate] status=ok end_to_end_ms=13.2766 via=trace_replay best_ms=13.9754 delta_pct=-5.0
+[full-pipeline-gate] status=regressed end_to_end_ms=13.2808 via=trace_replay best_ms=13.2766 delta_pct=0.03
+[full-pipeline-gate] status=ok end_to_end_ms=13.228 via=trace_replay best_ms=13.2766 delta_pct=-0.37
+[full-pipeline-gate] status=ok end_to_end_ms=13.1447 via=trace_replay best_ms=13.228 delta_pct=-0.63
+[full-pipeline-gate] status=ok end_to_end_ms=13.1394 via=trace_replay best_ms=13.228 delta_pct=-0.67
+[full-pipeline-gate] status=regressed end_to_end_ms=13.3333 via=trace_replay best_ms=13.1394 delta_pct=1.48
+[full-pipeline-gate] status=ok end_to_end_ms=12.8895 via=trace_replay best_ms=13.1394 delta_pct=-1.9
+[full-pipeline-gate] status=ok end_to_end_ms=12.6331 via=trace_replay best_ms=12.8895 delta_pct=-1.99
+[full-pipeline-gate] status=regressed end_to_end_ms=12.6352 via=trace_replay best_ms=12.6331 delta_pct=0.02
+[full-pipeline-gate] status=ok end_to_end_ms=12.42 via=trace_replay best_ms=12.6331 delta_pct=-1.69
+[full-pipeline-gate] status=ok end_to_end_ms=12.352 via=trace_replay best_ms=12.42 delta_pct=-0.55
+[full-pipeline-gate] status=ok end_to_end_ms=12.0053 via=trace_replay best_ms=12.352 delta_pct=-2.81
+[full-pipeline-gate] status=ok end_to_end_ms=12.2991 via=trace_replay best_ms=12.352 delta_pct=-0.43
+[full-pipeline-gate] status=ok end_to_end_ms=12.295 via=trace_replay best_ms=12.2991 delta_pct=-0.03
+[full-pipeline-gate] status=ok end_to_end_ms=12.2974 via=trace_replay best_ms=12.2991 delta_pct=-0.01
+[full-pipeline-gate] status=ok end_to_end_ms=12.0374 via=trace_replay best_ms=12.2991 delta_pct=-2.13
+[full-pipeline-gate] status=ok end_to_end_ms=12.0375 via=trace_replay best_ms=12.2991 delta_pct=-2.13
+[full-pipeline-gate] status=ok end_to_end_ms=11.9284 via=trace_replay best_ms=12.0375 delta_pct=-0.91
+[full-pipeline-gate] status=ok end_to_end_ms=11.8385 via=trace_replay best_ms=11.9284 delta_pct=-0.75
+[full-pipeline-gate] status=regressed end_to_end_ms=11.841 via=trace_replay best_ms=11.8385 delta_pct=0.02
+[full-pipeline-gate] status=regressed end_to_end_ms=11.8846 via=trace_replay best_ms=11.8385 delta_pct=0.39
+[full-pipeline-gate] status=regressed end_to_end_ms=11.8834 via=trace_replay best_ms=11.8385 delta_pct=0.38
+[full-pipeline-gate] status=regressed end_to_end_ms=11.9268 via=trace_replay best_ms=11.8385 delta_pct=0.75
+[full-pipeline-gate] status=ok end_to_end_ms=11.8378 via=trace_replay best_ms=11.8385 delta_pct=-0.01
+[full-pipeline-gate] status=ok end_to_end_ms=11.8372 via=trace_replay best_ms=11.8385 delta_pct=-0.01
+[full-pipeline-gate] status=regressed end_to_end_ms=11.9642 via=trace_replay best_ms=11.8385 delta_pct=1.06
+[full-pipeline-gate] status=ok end_to_end_ms=11.8265 via=trace_replay best_ms=11.8385 delta_pct=-0.1
+[full-pipeline-gate] status=regressed end_to_end_ms=11.9797 via=trace_replay best_ms=11.8265 delta_pct=1.3
+[full-pipeline-gate] status=regressed end_to_end_ms=11.9794 via=trace_replay best_ms=11.8265 delta_pct=1.29
+[full-pipeline-gate] status=regressed end_to_end_ms=12.291 via=trace_replay best_ms=11.8265 delta_pct=3.93
+[full-pipeline-gate] status=regressed end_to_end_ms=12.1518 via=trace_replay best_ms=11.8265 delta_pct=2.75
+[full-pipeline-gate] status=ok end_to_end_ms=11.826 via=trace_replay best_ms=11.8265 delta_pct=-0.0
+[full-pipeline-gate] status=ok end_to_end_ms=83.679 via=trace_replay

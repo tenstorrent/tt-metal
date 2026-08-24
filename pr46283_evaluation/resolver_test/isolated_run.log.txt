@@ -1,0 +1,57 @@
+=== BEFORE: git status, hand-port repo ===
+M  models/experimental/voxtral_tts/tt/ttnn_voxtral_gpt.py
+ M models/experimental/voxtral_tts/tt/ttnn_voxtral_pipeline.py
+?? models/demos/voxtral_tts_backbone/
+?? models/experimental/voxtral_tts/tt/tool_backbone_adapter.py
+
+=== HIDING every PyTorch implementation and architecture-revealing copy ===
+  hidden: /localdev/lserbedzija/repos/tt-metal/models/experimental/voxtral_tts/reference/voxtral_common_ref.py
+  hidden: /localdev/lserbedzija/repos/tt-metal/models/experimental/voxtral_tts/reference/voxtral_backbone_ref.py
+  hidden: /localdev/lserbedzija/repos/tt-metal/models/experimental/voxtral_tts/reference/voxtral_flow_ref.py
+  hidden: /localdev/lserbedzija/repos/tt-metal/models/experimental/voxtral_tts/reference/voxtral_codec_ref.py
+  hidden: /localdev/lserbedzija/repos/tt-metal/models/experimental/voxtral_tts/reference/voxtral_pipeline_ref.py
+  hidden: /localdev/lserbedzija/repos/tt-metal/models/experimental/voxtral_tts/reference/voxtral_tokenizer_ref.py
+  hidden: /localdev/lserbedzija/repos/tt-metal/models/experimental/voxtral_tts/tt
+  hidden: /localdev/lserbedzija/repos/tt-metal/models/demos/voxtral_tts_backbone
+  hidden: /localdev/lserbedzija/repos/tt-metal-latest/models/experimental/voxtral_tts
+  hidden: /localdev/lserbedzija/hf_models/voxtral-tts-full
+  hidden: /localdev/lserbedzija/repos/tt-metal-pr46283/models/demos/voxtral_tts_full
+  hidden: /localdev/lserbedzija/repos/tt-metal-pr46283/TOOL_FINDINGS.md
+  hidden: /localdev/lserbedzija/pr46283_evidence/prior_run_state/overlay_store
+  hidden: /localdev/lserbedzija/resolver_test/demo_dir
+  hidden: /localdev/lserbedzija/resolver_test/voxtral-tts-native
+
+=== VERIFY nothing is findable ===
+  voxtral_common_ref.py anywhere readable: 0
+  modeling_voxtral_tts.py anywhere readable: 0
+
+=== RUNNING the resolver against the isolated native checkpoint ===
+RESULT: {
+ "resolved": true,
+ "path": "/localdev/lserbedzija/resolver_test/demo_dir_iso/tests/pcc/_reference_loader.py",
+ "reason": "loader written"
+}
+=== resolver exit: 0 ===
+
+=== RESTORING ===
+  restored: /localdev/lserbedzija/resolver_test/voxtral-tts-native
+  restored: /localdev/lserbedzija/resolver_test/demo_dir
+  restored: /localdev/lserbedzija/pr46283_evidence/prior_run_state/overlay_store
+  restored: /localdev/lserbedzija/repos/tt-metal-pr46283/TOOL_FINDINGS.md
+  restored: /localdev/lserbedzija/repos/tt-metal-pr46283/models/demos/voxtral_tts_full
+  restored: /localdev/lserbedzija/hf_models/voxtral-tts-full
+  restored: /localdev/lserbedzija/repos/tt-metal-latest/models/experimental/voxtral_tts
+  restored: /localdev/lserbedzija/repos/tt-metal/models/demos/voxtral_tts_backbone
+  restored: /localdev/lserbedzija/repos/tt-metal/models/experimental/voxtral_tts/tt
+  restored: /localdev/lserbedzija/repos/tt-metal/models/experimental/voxtral_tts/reference/voxtral_tokenizer_ref.py
+  restored: /localdev/lserbedzija/repos/tt-metal/models/experimental/voxtral_tts/reference/voxtral_pipeline_ref.py
+  restored: /localdev/lserbedzija/repos/tt-metal/models/experimental/voxtral_tts/reference/voxtral_codec_ref.py
+  restored: /localdev/lserbedzija/repos/tt-metal/models/experimental/voxtral_tts/reference/voxtral_flow_ref.py
+  restored: /localdev/lserbedzija/repos/tt-metal/models/experimental/voxtral_tts/reference/voxtral_backbone_ref.py
+  restored: /localdev/lserbedzija/repos/tt-metal/models/experimental/voxtral_tts/reference/voxtral_common_ref.py
+=== git status, hand-port repo (must match the 'before' snapshot) ===
+M  models/experimental/voxtral_tts/tt/ttnn_voxtral_gpt.py
+ M models/experimental/voxtral_tts/tt/ttnn_voxtral_pipeline.py
+?? models/demos/voxtral_tts_backbone/
+?? models/experimental/voxtral_tts/tt/tool_backbone_adapter.py
+=== git status, PR repo ===

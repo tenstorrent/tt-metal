@@ -1,0 +1,248 @@
+diff --git a/models/demos/voxtral_tts_full/tests/pcc/conftest.py b/models/demos/voxtral_tts_full/tests/pcc/conftest.py
+new file mode 100644
+index 0000000000..0d16569f32
+--- /dev/null
++++ b/models/demos/voxtral_tts_full/tests/pcc/conftest.py
+@@ -0,0 +1,242 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++#
++# SPDX-License-Identifier: Apache-2.0
++
++"""Shared shims for the generated per-component PCC tests.
++
++Two harness defects are repaired here, once, for all seven generated tests:
++
++1. `_captured_submodule_path()` is CALLED by every `test_<component>.py` and DEFINED by
++   none of them -- the template emits the call site without the helper, so every test
++   dies with `NameError` before it can build its torch reference.
++
++2. `_make_arg_for()` synthesises forward-args from HF naming conventions, and this
++   checkpoint is Mistral-native: the layer forwards take `(h, cis, bias, cache, cache_key)`,
++   the codec takes int64 codebook indices, and the flow block takes a 2-D hidden plus its
++   own noise. The convention-based builder hands `cis` a `randn(1, 64, 3072)` where the
++   reference wants a COMPLEX rope table, and the HF forward raises -- reported as
++   "shape '[1, 1, 64, 64]' is invalid for input of size 196608" and SKIPped.
++
++Both are published through `builtins` / module patching rather than edited into the seven
++generated files, so a re-emitted test still picks the repairs up.
++
++The synthetic inputs below are built from the reference's OWN primitives
++(`voxtral_common_ref.rope_cis` / `.causal_bias`), read out of the checkpoint directory, so
++the golden the test compares against is the reference's real arithmetic, not a lookalike.
++
++WHY PREFILL AND NOT THE CAPTURED DECODE STEP. `_captured/attention/args.pt` holds a real
++deployment step: h=[1,1,3072] with a 208-deep KV cache. It is not usable as-is for a unit
++test. The cache dict is MUTATED by `VoxtralAttention.forward` (`cache[cache_key] = (k, v)`),
++and the harness hands the same object to the torch reference and then to the ttnn stub -- so
++the stub would attend over a cache one position longer than the golden did. Dropping the
++cache instead makes the test vacuous: at S=1 with no cache the softmax is over a single key,
++so it returns 1.0 whatever q and k are, and RoPE -- the thing most likely to be wrong in a
++port -- stops affecting the output at all. A S=64 causal prefill is the same arithmetic the
++backbone runs (`VoxtralTtsBackbone.forward`), exercises RoPE, GQA and the mask, and carries
++no shared mutable state.
++"""
++
++from __future__ import annotations
++
++import builtins
++import importlib.util
++import json
++from pathlib import Path
++
++import pytest
++import torch
++import ttnn
++
++_DEMO_ROOT = Path(__file__).resolve().parents[2]
++_CAPTURED = _DEMO_ROOT / "_captured"
++
++# Sequence length for the synthetic prefill. 64 is two full 32-row tiles, so nothing the
++# port does is hidden by tile padding, and it is cheap enough for a per-component test.
++_SEQ = 64
++
++
++def _captured_manifest(component: str) -> dict:
++    """The capture-inputs manifest for `component`, or {} when nothing was captured."""
++    try:
++        with open(_CAPTURED / component / "manifest.json") as fh:
++            return json.load(fh)
++    except (OSError, ValueError):
++        return {}
++
++
++def _captured_submodule_path(component: str):
++    """The dotted path capture-inputs actually resolved for `component`.
++
++    The test tries this before `_CANDIDATE_SUBMODULE_PATHS` so the golden and the captured
++    args come from the same submodule. Returns None when unavailable, which is what the
++    caller's `if _captured_path:` guard expects.
++    """
++    return _captured_manifest(component).get("submodule_path") or None
++
++
++def _captured_args(component: str):
++    """The real positional args capture-inputs recorded, or () if absent."""
++    try:
++        return tuple(torch.load(_CAPTURED / component / "args.pt", map_location="cpu", weights_only=False))
++    except Exception:
++        return ()
++
++
++builtins._captured_manifest = _captured_manifest
++builtins._captured_submodule_path = _captured_submodule_path
++builtins._captured_args = _captured_args
++
++
++def _reference_common(model_id: str):
++    """`voxtral_common_ref` loaded straight from the checkpoint directory.
++
++    It is the module the model itself calls, so `rope_cis` / `causal_bias` here are the
++    exact tables the reference forward would have built. Imported by path because the
++    package's own imports are relative (`from .voxtral_common_ref import ...`) and this
++    file is not part of that package; the module itself imports only torch and stdlib.
++    """
++    path = Path(model_id) / "voxtral_common_ref.py"
++    if not path.is_file():
++        return None
++    spec = importlib.util.spec_from_file_location("_voxtral_common_ref", path)
++    mod = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(mod)
++    return mod
++
++
++class _MistralNativeArgs:
++    """Model-aware replacement for the test module's `_make_arg_for`.
++
++    Handles the arg names this checkpoint actually uses and delegates everything else to
++    the generated builder, so the HF-convention cases it does get right are untouched.
++    """
++
++    # Args the template would skip because they carry a default and are not "well known",
++    # but that this model needs a real value for.
++    EXTRA_WELL_KNOWN = ("h", "cis", "bias", "codes", "llm_hidden", "x_0")
++
++    def __init__(self, component, fallback, model_id):
++        self._component = component
++        self._fallback = fallback
++        self._common = _reference_common(model_id)
++        self._seq = _SEQ
++        self._batch = 1
++
++    def _hidden(self, model, torch_module):
++        cfg = getattr(model, "config", None)
++        dim = getattr(cfg, "hidden_size", 3072) if cfg is not None else 3072
++        return torch.randn(1, self._seq, int(dim))
++
++    def __call__(self, arg_name, *, model, torch_module):
++        cfg = getattr(model, "config", None)
++
++        # The activation every backbone submodule takes. `x` / `hidden_states` /
++        # `inputs_embeds` already resolve correctly in the generated builder, but route
++        # them here too so `self._seq` describes whatever the rope table must match.
++        if arg_name in ("h", "x", "hidden_states", "inputs_embeds", "embeddings"):
++            return self._hidden(model, torch_module)
++
++        # Mistral-native RoPE: a COMPLEX [S, head_dim/2] table, interleaved-pair
++        # convention (see voxtral_common_ref.rope_cis). The generated builder has no
++        # concept of it and hands over a real-valued activation instead.
++        if arg_name == "cis":
++            if self._common is None:
++                return self._fallback(arg_name, model=model, torch_module=torch_module)
++            head_dim = getattr(cfg, "head_dim", self._common.HEAD_DIM) if cfg is not None else self._common.HEAD_DIM
++            theta = getattr(cfg, "rope_theta", self._common.ROPE_THETA) if cfg is not None else self._common.ROPE_THETA
++            return self._common.rope_cis(self._seq, int(head_dim), float(theta))
++
++        # Additive pre-softmax mask. Optional in the signature, but the backbone's own
++        # prefill always passes it, so the unit test should exercise it.
++        if arg_name == "bias":
++            if self._common is None:
++                return self._fallback(arg_name, model=model, torch_module=torch_module)
++            return self._common.causal_bias(self._seq)
++
++        # Integer codebook indices -- unsynthesisable from the name, and out-of-range
++        # values would index past the embedding tables. Use what the real pipeline emitted.
++        if arg_name == "codes":
++            captured = _captured_args(self._component)
++            if captured and torch.is_tensor(captured[0]):
++                return captured[0]
++
++        # Block 2 reads a 2-D [B, dim] hidden, not the 3-D activation the builder assumes.
++        if arg_name == "llm_hidden":
++            captured = _captured_args(self._component)
++            if captured and torch.is_tensor(captured[0]):
++                value = captured[0].float()
++            else:
++                dim = getattr(cfg, "hidden_size", 3072) if cfg is not None else 3072
++                value = torch.randn(1, int(dim))
++            self._batch = int(value.shape[0])
++            return value
++
++        # The flow block's ODE starts from a Gaussian draw, so `decode_frame(x_0=None)` is
++        # NOT reproducible -- the reference takes an explicit x_0 for exactly this reason
++        # ("so PCC tests stay deterministic"). Left unset, the golden would be integrated from
++        # noise no port could match. Zero is the one initial condition both sides can agree on
++        # without shipping a tensor between them.
++        if arg_name == "x_0":
++            n_acoustic = getattr(self._common, "N_ACOUSTIC_CODEBOOK", 36) if self._common else 36
++            return torch.zeros(self._batch, int(n_acoustic))
++
++        return self._fallback(arg_name, model=model, torch_module=torch_module)
++
++
++def _stage_input(original):
++    """Wrap the test's input marshaller so INTEGER inputs survive the trip to device.
++
++    The generated helper stages every primary input as bfloat16. For an activation that is
++    the right call; for the codec's `codes` it is silently destructive -- bf16 carries 8
++    mantissa bits, so it represents integers exactly only up to 256, and this model's
++    semantic codebook indices run to 8191 (8191 -> 8192, 5000 -> 4992). The port would then
++    look up the wrong embedding rows and no amount of work on the stub could recover the
++    golden. Integer tensors are indices, never activations, so they go as uint32 in row-major
++    -- which is also the layout `ttnn.embedding` wants.
++    """
++
++    def staged(tensor, device, **kwargs):
++        if torch.is_tensor(tensor) and not tensor.is_floating_point():
++            return ttnn.from_torch(
++                tensor.to(torch.int32),
++                dtype=ttnn.uint32,
++                layout=ttnn.ROW_MAJOR_LAYOUT,
++                device=device,
++            )
++        return original(tensor, device, **kwargs)
++
++    return staged
++
++
++@pytest.fixture(autouse=True)
++def _mistral_native_inputs(request):
++    """Point the test module's input builder at this checkpoint's real forward signatures.
++
++    Autouse so it lands before the test body calls `_build_torch_reference()`, and scoped
++    to the module so nothing leaks between components.
++    """
++    mod = request.module
++    original = getattr(mod, "_make_arg_for", None)
++    if original is None:
++        yield
++        return
++
++    component = getattr(mod, "COMPONENT_NAME", "")
++    model_id = getattr(mod, "HF_MODEL_ID", "")
++    patched = _MistralNativeArgs(component, original, model_id)
++
++    original_well_known = getattr(mod, "_WELL_KNOWN_INPUTS", ())
++    original_stage = getattr(mod, "_ttnn_from_torch_mesh_safe", None)
++    mod._make_arg_for = patched
++    mod._WELL_KNOWN_INPUTS = tuple(original_well_known) + tuple(
++        n for n in _MistralNativeArgs.EXTRA_WELL_KNOWN if n not in original_well_known
++    )
++    if original_stage is not None:
++        mod._ttnn_from_torch_mesh_safe = _stage_input(original_stage)
++    try:
++        yield
++    finally:
++        mod._make_arg_for = original
++        mod._WELL_KNOWN_INPUTS = original_well_known
++        if original_stage is not None:
++            mod._ttnn_from_torch_mesh_safe = original_stage

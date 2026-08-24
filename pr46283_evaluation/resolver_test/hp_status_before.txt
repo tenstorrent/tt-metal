@@ -1,0 +1,4 @@
+M  models/experimental/voxtral_tts/tt/ttnn_voxtral_gpt.py
+ M models/experimental/voxtral_tts/tt/ttnn_voxtral_pipeline.py
+?? models/demos/voxtral_tts_backbone/
+?? models/experimental/voxtral_tts/tt/tool_backbone_adapter.py

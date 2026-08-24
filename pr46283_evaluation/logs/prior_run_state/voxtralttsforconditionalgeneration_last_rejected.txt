@@ -1,0 +1,253 @@
+# Rejected LLM draft(s) for VoxtralTtsForConditionalGeneration (/localdev/lserbedzija/hf_models/voxtral-tts-full)
+# Reason: all 3 attempts failed: AST validation: LLM invocation failed: RuntimeError: LLM timed out after 360s; consider a higher --timeout-s or a smaller prompt
+# Uncaptured components: ['codec_decoder', 'flow_matching']
+
+
+===== ATTEMPT 1 (raw response) =====
+def driver(model, sample_input=None):
+    try:
+        import torch
+
+        try:
+            model.eval()
+        except Exception:
+            pass
+
+        param = None
+        try:
+            for p in model.parameters():
+                param = p
+                if p.is_floating_point():
+                    break
+        except Exception:
+            pass
+        device = param.device if param is not None else torch.device("cpu")
+        dtype = param.dtype if (param is not None and param.is_floating_point()) else torch.float32
+
+        cfg = getattr(model, "config", None)
+
+        def _cfg_dict(c):
+            try:
+                return c.to_dict()
+            except Exception:
+                try:
+                    return dict(vars(c))
+                except Exception:
+                    return {}
+
+        cfg_flat = {}
+
+        def _flatten(d, prefix=""):
+            if not isinstance(d, dict):
+                return
+            for k, v in d.items():
+                key = prefix + k
+                if isinstance(v, dict):
+                    cfg_flat[key] = v
+                    _flatten(v, key + ".")
+                else:
+                    cfg_flat[key] = v
+
+        try:
+            _flatten(_cfg_dict(cfg))
+        except Exception:
+            pass
+
+        vocab_size = None
+        for key in ("vocab_size", "backbone_config.vocab_size", "text_config.vocab_size", "decoder_config.vocab_size"):
+            v = cfg_flat.get(key)
+            if isinstance(v, int) and v > 1:
+                vocab_size = v
+                break
+        if vocab_size is None:
+            try:
+                emb = model.get_input_embeddings()
+                vocab_size = int(getattr(emb, "num_embeddings", 0)) or None
+            except Exception:
+                pass
+        if not vocab_size:
+            vocab_size = 32000
+
+        bos_id = cfg_flat.get("bos_token_id")
+        if not isinstance(bos_id, int):
+            bos_id = None
+        eos_id = cfg_flat.get("eos_token_id")
+        if isinstance(eos_id, list) and eos_id and isinstance(eos_id[0], int):
+            eos_id = eos_id[0]
+        if not isinstance(eos_id, int):
+            eos_id = None
+
+        placeholder_id = None
+        for key, v in cfg_flat.items():
+            lk = key.lower()
+            if isinstance(v, int) and ("audio" in lk or "voice" in lk) and (
+                "token" in lk or "placeholder" in lk or "pad" in lk
+            ):
+                placeholder_id = v
+                break
+
+        presets = {}
+
+        search_roots = [model]
+        for attr_name in ("backbone", "model"):
+            try:
+                obj = getattr(model, attr_name, None)
+                if obj is not None:
+                    search_roots.append(obj)
+            except Exception:
+                pass
+        try:
+            dec = model.get_decoder()
+            if dec is not None:
+                search_roots.append(dec)
+        except Exception:
+            pass
+
+        seen_ids = set()
+        for root in search_roots:
+            if id(root) in seen_ids:
+                continue
+            seen_ids.add(id(root))
+            try:
+                for name in dir(root):
+                    if name.startswith("__"):
+                        continue
+                    lname = name.lower()
+                    if "voice" not in lname and "preset" not in lname:
+                        continue
+                    try:
+                        val = getattr(root, name)
+                    except Exception:
+                        continue
+                    try:
+                        if isinstance(val, dict):
+                            for k, v in val.items():
+                                if hasattr(v, "shape") and len(v.shape) > 0:
+                                    presets[str(k)] = int(v.shape[0])
+                                elif isinstance(v, dict):
+                                    for cand in ("num_frames", "num_rows", "rows", "frames", "length", "n_frames"):
+                                        if isinstance(v.get(cand), int):
+                                            presets[str(k)] = v[cand]
+                                            break
+                                elif isinstance(v, int):
+                                    presets[str(k)] = v
+                        elif hasattr(val, "shape") and len(getattr(val, "shape", [])) >= 2:
+                            presets.setdefault("_bank", int(val.shape[1]))
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+            if presets:
+                break
+
+        if not presets:
+            try:
+                for name, buf in model.named_buffers():
+                    lname = name.lower()
+                    if ("voice" in lname or "preset" in lname) and hasattr(buf, "shape") and len(buf.shape) >= 1:
+                        presets.setdefault(name, int(buf.shape[0]))
+            except Exception:
+                pass
+        if not presets:
+            try:
+                for name, p2 in model.named_parameters():
+                    lname = name.lower()
+                    if ("voice" in lname or "preset" in lname) and hasattr(p2, "shape") and len(p2.shape) >= 1:
+                        presets.setdefault(name, int(p2.shape[0]))
+            except Exception:
+                pass
+
+        if not presets:
+            for key, v in cfg_flat.items():
+                lk = key.lower()
+                if "voice" in lk and isinstance(v, dict):
+                    for k, sub in v.items():
+                        if isinstance(sub, dict):
+                            for cand in ("num_frames", "num_rows", "rows", "frames", "length"):
+                                if isinstance(sub.get(cand), int):
+                                    presets[str(k)] = sub[cand]
+                                    break
+                        elif isinstance(sub, int):
+                            presets[str(k)] = sub
+                    if presets:
+                        break
+
+        attempts = []
+
+        def _mk_ids(seq):
+            if not seq:
+                seq = [1]
+            return torch.tensor([seq], dtype=torch.long, device=device)
+
+        if isinstance(sample_input, dict):
+            def _attempt_hint():
+                kw = dict(sample_input)
+                kw.setdefault("max_frames", 8)
+                kw.setdefault("decode_audio", True)
+                with torch.no_grad():
+                    model(**kw)
+
+            attempts.append(_attempt_hint)
+
+        if presets:
+            voice_name, count = next(iter(presets.items()))
+            try:
+                count = max(int(count), 0)
+            except Exception:
+                count = 0
+            ph = placeholder_id if isinstance(placeholder_id, int) else max(int(vocab_size) - 1, 1)
+            seq = []
+            if bos_id is not None:
+                seq.append(bos_id)
+            seq.extend([ph] * count)
+            if eos_id is not None:
+                seq.append(eos_id)
+
+            def _attempt_preset():
+                ids = _mk_ids(seq)
+                with torch.no_grad():
+                    model(input_ids=ids, voice=voice_name, max_frames=8, decode_audio=True)
+
+            attempts.append(_attempt_preset)
+
+        def _attempt_embeds():
+            embed = model.get_input_embeddings()
+            hi = max(min(int(vocab_size), 1000), 2)
+            ids = torch.randint(low=1, high=hi, size=(1, 16), device=device)
+            with torch.no_grad():
+                embeds = embed(ids)
+                try:
+                    embeds = embeds.to(dtype)
+                except Exception:
+                    pass
+                model(inputs_embeds=embeds, voice=None, max_frames=8, decode_audio=True)
+
+        attempts.append(_attempt_embeds)
+
+        def _attempt_naive():
+            hi = max(min(int(vocab_size), 1000), 2)
+            ids = torch.randint(low=1, high=hi, size=(1, 32), device=device)
+            with torch.no_grad():
+                model(input_ids=ids, voice=None, max_frames=8, decode_audio=True)
+
+        attempts.append(_attempt_naive)
+
+        for attempt in attempts:
+            try:
+                attempt()
+                return None
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
+===== END ATTEMPT =====
+
+===== ATTEMPT 2 (raw response) =====
+
+===== END ATTEMPT =====
+
+===== ATTEMPT 3 (raw response) =====
+
+===== END ATTEMPT =====

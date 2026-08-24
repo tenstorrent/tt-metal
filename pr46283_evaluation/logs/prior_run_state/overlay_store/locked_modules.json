@@ -1,0 +1,6 @@
+{
+  "decoder_layer": {
+    "locked_ts": 1786786489.8046036,
+    "reason": "children all on device; recomposed as whole-module target"
+  }
+}

@@ -1,0 +1,899 @@
+diff --git a/models/tt_dit/models/audio_vae/minimax_h3/.gitkeep b/models/tt_dit/models/audio_vae/minimax_h3/.gitkeep
+new file mode 100644
+index 0000000000..e69de29bb2
+diff --git a/models/tt_dit/models/audio_vae/minimax_h3/blockings_minimax_h3_audio.py b/models/tt_dit/models/audio_vae/minimax_h3/blockings_minimax_h3_audio.py
+new file mode 100644
+index 0000000000..44e57a113a
+--- /dev/null
++++ b/models/tt_dit/models/audio_vae/minimax_h3/blockings_minimax_h3_audio.py
+@@ -0,0 +1,117 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
++
++# SPDX-License-Identifier: Apache-2.0
++
++"""conv3d blocking stubs for the MiniMax-H3 audio VAE.
++
++``_FP32_BLOCKINGS`` in ``utils/conv3d.py`` is tuned for the **LTX** vocoder's channel
++schedule (1536 -> 768 -> ... -> 24). H3's is different at both ends -- the decoder runs
++1024 -> 512 -> ... -> **8** and the encoder 64 -> ... -> 2048 -- so every H3 audio conv
++misses the table and falls back to ``(32, 32, 1, 1, 1)``. For a 1-D conv over a long time
++axis (a 10 s clip decodes to 324000 samples) a ``T_out_block`` of 1 means one output frame
++per work unit, and the conv3d DRAM slicer cannot find a workable configuration at all.
++
++These are **stubs**, shaped after the LTX audio entries which have the same ``(k, 1, 1)``
++form: ``C_out_block`` 32, ``H``/``W`` 1, and a ``T_out_block`` in the range LTX's tuned
++values occupy (4-64). ``bruteforce_conv3d_sweep.py`` is the tool for real tuning, and that
++is a performance-pass job -- these exist only so the correctness gates can run.
++"""
++
++from __future__ import annotations
++
++from ....layers.audio_ops import DEFAULT_MAX_C_IN_BLOCK
++from ....utils.conv3d import _FP32_BLOCKINGS, aligned_channels
++
++# 16 overshoots L1 by 1.26x (1979264 B against 1572864 B) at the widest audio convs.
++T_OUT_BLOCK = 8
++C_OUT_BLOCK = 32
++
++# ``C_in_block`` is not only a performance knob: conv3d accumulates one partial sum per block over the
++# reduction and those partials are rounded, so a narrower block is measurably less accurate *in isolation*
++# -- on `conv_pre` (Cin 2048 x k 7) the error falls monotonically, 2.40e-03 at 32, 1.86e-03 at 128,
++# 1.63e-03 at 512, and with operand splitting on, 512 is 1.48x better than 128.
++#
++# **That does not transfer end to end, so 128 stays.** Measured with every other lever on: 128 gives
++# 3.20 % chain RMSE, 256 gives 3.31 % (no better), and 512 fails outright
++# (`program.cpp:1706`). The reason is structural -- the chain is dominated by the 126 AMP convs at
++# Cin 8-512, where the block cannot widen anyway, so only `conv_pre` and `dec_in_proj` would gain and
++# there are two of them against 126. Pass ``max_c_in_block`` to re-sweep. A non-default cap changes
++# the prepared weight *bytes* (`prepare_conv3d_weight_state` blocks by ``C_in_block``) with an
++# unchanged file set, which is why `weights_variant` folds it into the device-weight cache key.
++
++
++def _c_in_block(in_channels: int, max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK) -> int:
++    """Largest 32-multiple <= ``max_c_in_block`` that divides ``in_channels`` evenly.
++
++    The kernel requires ``C_in_block`` to be a multiple of the tile width and to divide the
++    padded input channel count.
++    """
++    aligned = aligned_channels(in_channels)
++    for block in range(min(max_c_in_block, aligned) // 32 * 32, 0, -32):
++        if aligned % block == 0:
++            return block
++    return 32
++
++
++def h3_audio_channel_widths(
++    *,
++    encoder_dim: int = 64,
++    encoder_rates: tuple[int, ...] = (2, 4, 4, 5, 5),
++    latent_dim: int = 2048,
++    latent_channels: int = 32,
++    decoder_dim: int = 1024,
++    decoder_rates: tuple[int, ...] = (5, 5, 2, 2, 2, 2, 2),
++) -> set[tuple[int, int]]:
++    """Every ``(in_channels, out_channels)`` pair the audio VAE's convolutions use."""
++    pairs: set[tuple[int, int]] = set()
++
++    # Encoder: conv_in, then per stage three residual units at dim//2 plus a strided
++    # channel-doubling conv.
++    pairs.add((aligned_channels(1), encoder_dim))
++    dim = encoder_dim
++    for stride in encoder_rates:
++        inner = dim
++        dim *= 2
++        pairs.add((inner, inner))  # residual unit k7 and k1
++        pairs.add((inner, dim))  # strided conv
++    pairs.add((dim, latent_dim))
++
++    # Decoder: conv_pre, the transposed upsamplers' inner convs, the AMP blocks, conv_post.
++    pairs.add((latent_channels, latent_dim))  # dec_in_proj
++    pairs.add((latent_dim, decoder_dim))  # conv_pre
++    channels = decoder_dim
++    for _ in decoder_rates:
++        nxt = channels // 2
++        pairs.add((channels, nxt))  # upsampler inner conv
++        pairs.add((aligned_channels(nxt), aligned_channels(nxt)))  # AMP convs
++        channels = nxt
++    pairs.add((aligned_channels(channels), aligned_channels(1)))  # conv_post -> mono
++    return pairs
++
++
++def register_h3_audio_blockings(*, max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK, **config) -> int:
++    """Seed ``_FP32_BLOCKINGS`` for every H3 audio conv shape. Returns the number added.
++
++    ``setdefault``, so a swept value that later lands in ``conv3d.py`` wins over these.
++    Kernels cover every size the model uses: 1 and 3 (projections), 4/7/8/9/10/11 (AMP
++    blocks, strided encoder convs and transposed upsamplers).
++    """
++    kernels = (1, 3, 4, 7, 8, 9, 10, 11)
++    added = 0
++    for in_channels, out_channels in h3_audio_channel_widths(**config):
++        for kernel in kernels:
++            key = (aligned_channels(in_channels), max(32, out_channels), (kernel, 1, 1))
++            blocking = (_c_in_block(in_channels, max_c_in_block), C_OUT_BLOCK, T_OUT_BLOCK, 1, 1)
++            existing = _FP32_BLOCKINGS.get(key)
++            if existing is None:
++                _FP32_BLOCKINGS[key] = blocking
++                added += 1
++            elif existing[2] > T_OUT_BLOCK:
++                # A few of H3's (C_in, C_out, kernel) triples coincide with LTX's -- e.g.
++                # (128, 64, (4,1,1)) is LTX's ups[3] -- and LTX's tuned T_out_block of 32 is
++                # sized for its tensors, not H3's: at H3's widths it overshoots L1 (1979264 B
++                # against 1572864 B). Cap the temporal block for the shapes H3 actually uses
++                # rather than deferring to an entry tuned for a different model.
++                _FP32_BLOCKINGS[key] = (existing[0], existing[1], T_OUT_BLOCK, existing[3], existing[4])
++                added += 1
++    return added
+diff --git a/models/tt_dit/models/audio_vae/minimax_h3/convert_minimax_h3_audio.py b/models/tt_dit/models/audio_vae/minimax_h3/convert_minimax_h3_audio.py
+new file mode 100644
+index 0000000000..65fb911df5
+--- /dev/null
++++ b/models/tt_dit/models/audio_vae/minimax_h3/convert_minimax_h3_audio.py
+@@ -0,0 +1,160 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
++
++# SPDX-License-Identifier: Apache-2.0
++
++"""Torch-side conversion of the MiniMax-H3 audio VAE checkpoint. No ``ttnn`` here.
++
++``tt_dit`` has no weight-norm support anywhere -- ``git grep weight_g`` over
++``models/tt_dit`` returns nothing -- because the contract is that weight norm is removed
++before a state dict reaches it. The H3 audio checkpoint stores ``weight_g``/``weight_v``
++for all ~172 of its convolutions, so that fusion has to happen somewhere, and a single
++torch-side conversion boundary is the right place: it is orthogonal to every conv class,
++it would otherwise be duplicated across four of them, and it is testable with **zero
++device time**.
++
++The fusion rule is uniform because ``torch.nn.utils.weight_norm`` is used at its default
++``dim=0`` everywhere::
++
++    weight = weight_g * weight_v / ||weight_v||   (L2 over all axes but axis 0)
++
++The trap is that for ``ConvTranspose1d`` axis 0 is **``in_channels``**, not
++``out_channels``, because its weight is stored ``(in, out, k)``. Fusing over the wrong
++axis yields a well-formed decoder that sounds subtly wrong, which is the kind of bug that
++gets misattributed to precision for days -- hence
++:func:`assert_weight_norm_axes_consistent`.
++
++Also folded here, so the device side stays simple:
++
++* ``attn.q_bias`` / ``attn.zero_k_bias`` / ``attn.v_bias`` -> one ``attn.qkv.bias``. The
++  reference passes ``cat(q_bias, zero_k_bias, v_bias)`` to a single ``F.linear``; the k
++  third is a frozen zero, which is asserted before being discarded.
++* ``activations.{2i}`` -> ``acts1.{i}`` and ``activations.{2i+1}`` -> ``acts2.{i}``, which
++  is the layout ``vocoder_ltx.AMPBlock1`` already expects.
++* ``ups.{i}.0`` -> ``ups.{i}`` and ``activation_post`` -> ``act_post``.
++"""
++
++from __future__ import annotations
++
++import re
++
++import torch
++
++
++def fuse_weight_norm(weight_g: torch.Tensor, weight_v: torch.Tensor) -> torch.Tensor:
++    """``weight_g * weight_v / ||weight_v||``, L2-reduced over every axis but axis 0.
++
++    Matches ``torch.nn.utils.weight_norm`` at its default ``dim=0`` for both ``Conv1d``
++    (axis 0 = out_channels) and ``ConvTranspose1d`` (axis 0 = **in_channels**). The result
++    keeps the checkpoint's own layout; transposing is the conv class's job, not ours.
++    """
++    norm = weight_v.flatten(1).norm(dim=1).view(-1, *([1] * (weight_v.dim() - 1)))
++    return weight_g * weight_v / norm
++
++
++def assert_weight_norm_axes_consistent(state: dict[str, torch.Tensor]) -> None:
++    """Guard the axis-0 assumption on every weight-normed conv in the checkpoint.
++
++    For each ``weight_g``/``weight_v`` pair, ``weight_g`` must be a per-axis-0 scalar --
++    shape ``(axis0, 1, 1)`` -- and any sibling ``bias`` must be length ``out_channels``.
++    For a ``Conv1d`` that is ``weight_v.shape[0]``; for a ``ConvTranspose1d`` it is
++    ``weight_v.shape[1]``. A bias that matches neither means the layout is not what this
++    converter assumes.
++    """
++    for key in sorted(k for k in state if k.endswith(".weight_g")):
++        prefix = key[: -len(".weight_g")]
++        weight_g = state[key]
++        weight_v = state[f"{prefix}.weight_v"]
++        assert (
++            weight_g.shape[0] == weight_v.shape[0]
++        ), f"{prefix}: weight_g axis 0 is {weight_g.shape[0]} but weight_v axis 0 is {weight_v.shape[0]}"
++        assert all(
++            size == 1 for size in weight_g.shape[1:]
++        ), f"{prefix}: weight_g {tuple(weight_g.shape)} is not a per-axis-0 scalar, so dim=0 is the wrong axis"
++        bias = state.get(f"{prefix}.bias")
++        if bias is not None:
++            assert bias.shape[0] in (weight_v.shape[0], weight_v.shape[1]), (
++                f"{prefix}: bias {bias.shape[0]} matches neither weight_v axis "
++                f"({weight_v.shape[0]}, {weight_v.shape[1]})"
++            )
++
++
++def fuse_all_weight_norms(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
++    """Replace every ``weight_g``/``weight_v`` pair with a single fused ``weight``."""
++    assert_weight_norm_axes_consistent(state)
++    fused = {}
++    for key, value in state.items():
++        if key.endswith(".weight_v"):
++            prefix = key[: -len(".weight_v")]
++            fused[f"{prefix}.weight"] = fuse_weight_norm(state[f"{prefix}.weight_g"], value)
++        elif key.endswith(".weight_g"):
++            continue
++        else:
++            fused[key] = value
++    return fused
++
++
++def fuse_attention_biases(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
++    """Fold ``q_bias`` / ``zero_k_bias`` / ``v_bias`` into one ``qkv.bias``.
++
++    The reference builds ``cat(q_bias, zero_k_bias, v_bias)`` for a single fused
++    projection. ``zero_k_bias`` is a frozen zero buffer; that is asserted rather than
++    assumed, so a future checkpoint that unfreezes it fails loudly instead of silently
++    losing a bias term.
++    """
++    out = dict(state)
++    prefixes = {k[: -len(".q_bias")] for k in state if k.endswith(".q_bias")}
++    for prefix in sorted(prefixes):
++        q_bias = out.pop(f"{prefix}.q_bias")
++        k_bias = out.pop(f"{prefix}.zero_k_bias", None)
++        v_bias = out.pop(f"{prefix}.v_bias")
++        if k_bias is None:
++            k_bias = torch.zeros_like(q_bias)
++        else:
++            assert (
++                torch.count_nonzero(k_bias) == 0
++            ), f"{prefix}.zero_k_bias is not all zero -- it is a real parameter and cannot be dropped"
++        out[f"{prefix}.qkv.bias"] = torch.cat([q_bias, k_bias, v_bias], dim=0)
++    return out
++
++
++_ACTIVATION_RE = re.compile(r"^(?P<prefix>.*?)activations\.(?P<index>\d+)\.(?P<rest>.*)$")
++
++
++def remap_amp_activations(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
++    """``activations.{2i}`` -> ``acts1.{i}``, ``activations.{2i+1}`` -> ``acts2.{i}``.
++
++    H3 stores one flat list of six activations per AMP block; ``vocoder_ltx.AMPBlock1``
++    holds them as two lists of three, interleaved. Getting this backwards produces a
++    plausible-looking decoder, so it is worth doing in one obvious place.
++    """
++    out = {}
++    for key, value in state.items():
++        match = _ACTIVATION_RE.match(key)
++        if match is None:
++            out[key] = value
++            continue
++        index = int(match["index"])
++        target = "acts1" if index % 2 == 0 else "acts2"
++        out[f"{match['prefix']}{target}.{index // 2}.{match['rest']}"] = value
++    return out
++
++
++def remap_decoder_names(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
++    """``ups.{i}.0`` -> ``ups.{i}``, ``activation_post`` -> ``act_post``."""
++    out = {}
++    for key, value in state.items():
++        key = re.sub(r"(^|\.)ups\.(\d+)\.0\.", r"\1ups.\2.", key)
++        key = key.replace("activation_post.", "act_post.")
++        out[key] = value
++    return out
++
++
++def convert_minimax_h3_audio_state_dict(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
++    """The whole conversion, in the order the steps depend on each other.
++
++    Weight norm is fused first so the later renames only ever move plain ``weight`` keys.
++    """
++    converted = fuse_all_weight_norms(state)
++    converted = fuse_attention_biases(converted)
++    converted = remap_amp_activations(converted)
++    return remap_decoder_names(converted)
+diff --git a/models/tt_dit/models/audio_vae/minimax_h3/decoder_minimax_h3_audio.py b/models/tt_dit/models/audio_vae/minimax_h3/decoder_minimax_h3_audio.py
+new file mode 100644
+index 0000000000..001c9524a7
+--- /dev/null
++++ b/models/tt_dit/models/audio_vae/minimax_h3/decoder_minimax_h3_audio.py
+@@ -0,0 +1,179 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
++
++# SPDX-License-Identifier: Apache-2.0
++
++"""MiniMax-H3 audio VAE decode: a 1x1 latent projection into a BigVGAN vocoder.
++
++Almost all of this already exists. ``audio_vae/vocoder_ltx.py``'s ``Vocoder`` is a
++BigVGAN-v2 AMP1 stack whose ``forward`` is *identical* to H3's reference
++``MiniMaxH3AudioBigVGANDecoder.forward`` -- ``conv_pre``, then per stage
++``ups[i]`` followed by the mean of three parallel AMP blocks, then ``act_post``,
++``conv_post`` and ``clamp(-1, 1)`` -- including the row-major
++``resblocks[i * num_kernels + j]`` ordering. Every loop in it is generic over
++``len(upsample_rates)``, so H3's **seven** stages need only configuration, not code.
++
++The channel schedule falls out of the same ``upsample_initial_channel // 2**i`` rule:
++1024 -> 512, 256, 128, 64, 32, 16, **8**, and ``conv_post`` takes that 8 to 1 mono
++channel. Stereo is carried as batch 2, so nothing here is stereo-aware.
++
++What this module adds is only:
++
++* ``dec_in_proj``, the 1x1 conv from 32 latent channels to the vocoder's 2048;
++* the wiring that keeps its output on device instead of round-tripping to host between
++  the projection and the vocoder.
++
++Naming is chosen so the converted checkpoint loads with no fixups: the vocoder is held as
++a child called ``decoder``, matching ``decoder.conv_pre`` / ``decoder.ups.N`` /
++``decoder.resblocks.N`` / ``decoder.act_post`` / ``decoder.conv_post``, and the projection
++is ``dec_in_proj``. The ``ups.{i}.0 -> ups.{i}`` and ``activations -> acts1/acts2`` remaps,
++and the weight-norm fusion, all happen in ``convert_minimax_h3_audio.py``.
++
++fp32 throughout: ``vocoder_ltx``'s docstring records that bf16 accumulation measurably
++degrades spectral metrics through its 108-conv chain, and H3's is longer still.
++"""
++
++from __future__ import annotations
++
++import torch
++
++import ttnn
++
++from ....layers.audio_ops import DEFAULT_MAX_C_IN_BLOCK, _AlignedOutConv1d
++from ....layers.module import Module
++from ....parallel.config import ParallelFactor
++from ....parallel.manager import CCLManager
++from ....utils.tensor import local_device_to_torch
++from ..vocoder_ltx import Vocoder
++from .blockings_minimax_h3_audio import register_h3_audio_blockings
++
++TILE_HEIGHT = 32
++
++
++class MiniMaxH3AudioDecoder(Module):
++    """``(B, 32, T)`` latents to ``(B, 1, T * 800)`` mono waveform at 32 kHz."""
++
++    def __init__(
++        self,
++        *,
++        latent_channels: int = 32,
++        latent_dim: int = 2048,
++        decoder_dim: int = 1024,
++        decoder_rates: tuple[int, ...] = (5, 5, 2, 2, 2, 2, 2),
++        decoder_kernel_sizes: tuple[int, ...] = (9, 9, 4, 4, 4, 4, 4),
++        resblock_kernel_sizes: tuple[int, ...] = (3, 7, 11),
++        resblock_dilation_sizes: tuple[tuple[int, ...], ...] = ((1, 3, 5), (1, 3, 5), (1, 3, 5)),
++        mesh_device: ttnn.MeshDevice,
++        dtype: ttnn.DataType = ttnn.float32,
++        parallel_config: ParallelFactor | None = None,
++        ccl_manager: CCLManager | None = None,
++        split_mode: str = "full",
++        tap_matmul: bool = True,
++        prefer_mac: bool = True,
++        max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
++    ) -> None:
++        super().__init__()
++        self.mesh_device = mesh_device
++        self.dtype = dtype
++        self.parallel_config = parallel_config
++        self.latent_channels = latent_channels
++        self.latent_dim = latent_dim
++        self.hop_length = 1
++        for rate in decoder_rates:
++            self.hop_length *= rate
++
++        # The precision levers default to accurate: all three on measures 0.0045 rel RMSE /
++        # 99.9990 % PCC / 67.53 dB at 5 s stereo against 0.1046 / 99.5451 % / 40.29 dB all-fast --
++        # 23x less error for ~3x on the stage. H3-only: LTX constructs the same conv classes with
++        # its own fast defaults. Kept as attributes so the pipeline's device-weight cache key
++        # (`weights_variant`) reads the exact values this module was built with.
++        self.split_mode = split_mode
++        self.tap_matmul = tap_matmul
++        self.prefer_mac = prefer_mac
++        self.max_c_in_block = max_c_in_block
++
++        # H3's audio channel schedule differs from LTX's at both ends, so every conv misses
++        # _FP32_BLOCKINGS. Seed stubs before any conv is built; see that module for why stubs.
++        register_h3_audio_blockings(max_c_in_block=max_c_in_block)
++
++        # k1 conv, so no padding mode to get wrong. _AlignedOutConv1d rather than the base
++        # class per its own docstring: a non-32-multiple out count reaches conv3d and
++        # produces a buffer whose page size does not divide its length.
++        self.dec_in_proj = _AlignedOutConv1d(
++            latent_channels,
++            latent_dim,
++            kernel_size=1,
++            bias=True,
++            mesh_device=mesh_device,
++            dtype=dtype,
++            parallel_config=parallel_config,
++            ccl_manager=ccl_manager,
++            split_mode=split_mode,
++            tap_matmul=tap_matmul,
++        )
++        self.decoder = Vocoder(
++            resblock_kernel_sizes=list(resblock_kernel_sizes),
++            upsample_rates=list(decoder_rates),
++            upsample_kernel_sizes=list(decoder_kernel_sizes),
++            resblock_dilation_sizes=[list(d) for d in resblock_dilation_sizes],
++            upsample_initial_channel=decoder_dim,
++            in_channels=latent_dim,
++            out_channels=1,
++            use_tanh_at_final=False,
++            apply_final_activation=True,
++            use_bias_at_final=False,  # H3's conv_post has no bias
++            mesh_device=mesh_device,
++            dtype=dtype,
++            parallel_config=parallel_config,
++            ccl_manager=ccl_manager,
++            # H3-only opt-in: LTX's vocoder keeps the default fast conv1d filters and
++            # single-conv weights.
++            prefer_mac=prefer_mac,
++            split_mode=split_mode,
++            tap_matmul=tap_matmul,
++        )
++
++    def _project_latents_device(self, latents_BCT: torch.Tensor) -> torch.Tensor:
++        """``(B, 32, T)`` -> ``(B, 2048, T)`` through ``dec_in_proj`` on device.
++
++        Torch in, torch out, matching the stage convention ``bwe_ltx.VocoderWithBWE``
++        uses (``_compute_mel_device``, ``_resample_device``): each stage owns its own
++        upload and readback, which keeps the stages independently testable.
++        """
++        x = latents_BCT.transpose(1, 2).float().contiguous()  # (B, T, C)
++        t_pad = self._t_padding(x.shape[1])
++        if t_pad:
++            x = torch.nn.functional.pad(x, (0, 0, 0, t_pad))
++
++        x_device = ttnn.from_torch(x, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
++        projected_device = self.dec_in_proj(x_device)
++        projected = local_device_to_torch(projected_device).float()
++        if t_pad:
++            # Crop the alignment padding back off before handing T to the vocoder, which
++            # applies its own padding for its own sharding.
++            projected = projected[:, : x.shape[1] - t_pad]
++        return projected.transpose(1, 2).contiguous()  # (B, 2048, T)
++
++    def forward(self, latents_BCT: torch.Tensor, *, traced: bool = False) -> torch.Tensor:
++        """``(B, latent_channels, T)`` torch in, ``(B, 1, T * hop_length)`` torch out.
++
++        ``traced`` replays a captured device graph for the vocoder instead of dispatching it
++        op by op. The vocoder is ~70 % host-bound, so this is its dominant lever -- unlike the
++        *visual* halves, which measure 1.00x traced because they are device-bound. Needs a
++        ``trace_region_size`` on the mesh device; the first call at a shape captures, later
++        calls replay.
++        """
++        _, channels, _ = latents_BCT.shape
++        assert channels == self.latent_channels, f"expected {self.latent_channels} latent channels, got {channels}"
++        projected = self._project_latents_device(latents_BCT)
++        return self.decoder.forward_BCT_traced(projected) if traced else self.decoder.forward_BCT(projected)
++
++    def _t_padding(self, num_frames: int) -> int:
++        """T padding needed for tile-aligned per-chip shards; zero when unsharded."""
++        if self.parallel_config is None or self.parallel_config.factor <= 1:
++            return 0
++        align = TILE_HEIGHT * self.parallel_config.factor
++        return (-num_frames) % align
++
++    def release_trace(self) -> None:
++        """Free the vocoder's captured traces; safe when none is active."""
++        self.decoder.release_trace()
+diff --git a/models/tt_dit/models/audio_vae/minimax_h3/encoder_minimax_h3_audio.py b/models/tt_dit/models/audio_vae/minimax_h3/encoder_minimax_h3_audio.py
+new file mode 100644
+index 0000000000..176eae5e0c
+--- /dev/null
++++ b/models/tt_dit/models/audio_vae/minimax_h3/encoder_minimax_h3_audio.py
+@@ -0,0 +1,416 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
++
++# SPDX-License-Identifier: Apache-2.0
++
++"""MiniMax-H3 audio VAE encode: a DAC waveform encoder plus a causal-attention projection.
++
++``(B, 1, samples)`` at 32 kHz to a 40 Hz, 32-channel posterior -- a hop of
++``prod(encoder_rates) = 800``. Mono; stereo is batch 2.
++
++Structure mirrors the reference one-for-one so the converted checkpoint loads with no
++fixups. Everything nests under ``block`` ModuleLists because the reference uses
++``nn.Sequential``, which is why the checkpoint keys read
++``encoder.block.1.block.0.block.1.weight``.
++
++Reused rather than rewritten, all from ``layers/audio_ops.py``:
++
++* ``Snake`` with ``alpha_logscale=False`` -- the DAC activation stores ``alpha`` linearly,
++  unlike the decoder's ``SnakeBeta`` which is log-scale;
++* ``DilatedConv1d`` for the residual units' k=7 convs, whose ``eff_k // 2`` same-padding
++  already equals the reference's ``((7-1)*d)//2``;
++* ``_AlignedOutConv1d`` everywhere else, per its own docstring: a non-32-multiple channel
++  count reaching ``conv3d`` produces a buffer whose page size does not divide its length.
++
++The five strided channel-doubling convs pair ``kernel = 2 * stride`` with
++``padding = ceil(stride / 2)``, passed through ``Conv1dViaConv3d``'s optional ``padding``
++argument: the derived default ``eff_k // 2`` gives ``L/stride + 1`` instead of ``L/stride``.
++The default stands, so LTX call sites are unaffected.
++
++The reference's residual-unit shortcut crop is a no-op here -- the dilated conv's padding is
++exact-same, so the crop width is zero -- but the lengths are asserted rather than assumed.
++"""
++
++from __future__ import annotations
++
++import math
++
++import torch
++
++import ttnn
++
++from ....layers.audio_ops import DEFAULT_MAX_C_IN_BLOCK, Snake, _AlignedOutConv1d
++from ....layers.module import Module, ModuleList
++from ....layers.normalization import LayerNorm
++from ....parallel.config import ParallelFactor
++from ....parallel.manager import CCLManager
++from ....utils.tensor import local_device_to_torch
++from ..vocoder_ltx import DilatedConv1d
++from .blockings_minimax_h3_audio import register_h3_audio_blockings
++
++
++def _snake_row_major(snake: Snake, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
++    """Apply ``Snake`` and hand back ROW_MAJOR, which is what the next conv requires.
++
++    LTX only ever uses ``Snake``/``SnakeBeta`` inside ``Activation1d``, whose resamplers own
++    the layout. H3's DAC encoder applies a **bare** Snake between convolutions, and the
++    elementwise chain inside it returns TILE, so ``Conv1dViaConv3d``'s ROW_MAJOR assertion
++    fires without this.
++    """
++    return ttnn.to_layout(snake(x_BTC), ttnn.ROW_MAJOR_LAYOUT)
++
++
++class MiniMaxH3AudioResidualUnit(Module):
++    """``Snake -> dilated Conv1d(k=7) -> Snake -> Conv1d(k=1)``, plus a residual add."""
++
++    def __init__(
++        self,
++        dim: int,
++        dilation: int,
++        *,
++        mesh_device: ttnn.MeshDevice,
++        dtype: ttnn.DataType = ttnn.float32,
++        parallel_config: ParallelFactor | None = None,
++        ccl_manager: CCLManager | None = None,
++        split_mode: str = "off",
++        tap_matmul: bool = False,
++    ) -> None:
++        super().__init__()
++        shared = dict(mesh_device=mesh_device, dtype=dtype, parallel_config=parallel_config, ccl_manager=ccl_manager)
++        # Conv-only levers: Snake takes neither, so they ride a separate dict from `shared`.
++        levers = dict(split_mode=split_mode, tap_matmul=tap_matmul)
++        self.block = ModuleList(
++            [
++                Snake(dim, alpha_logscale=False, **{k: v for k, v in shared.items() if k != "ccl_manager"}),
++                DilatedConv1d(dim, dim, kernel_size=7, dilation=dilation, **shared, **levers),
++                Snake(dim, alpha_logscale=False, **{k: v for k, v in shared.items() if k != "ccl_manager"}),
++                _AlignedOutConv1d(dim, dim, kernel_size=1, **shared, **levers),
++            ]
++        )
++
++    def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
++        residual = x_BTC
++        for layer in self.block:
++            x_BTC = _snake_row_major(layer, x_BTC) if isinstance(layer, Snake) else layer(x_BTC)
++        assert x_BTC.shape[1] == residual.shape[1], (
++            f"residual unit changed T from {residual.shape[1]} to {x_BTC.shape[1]}; "
++            "the reference's centre crop is only a no-op when the dilated conv is exact-same"
++        )
++        return ttnn.add(residual, x_BTC)
++
++
++class MiniMaxH3AudioEncoderBlock(Module):
++    """Three residual units at dilations 1/3/9, then a strided channel-doubling conv."""
++
++    def __init__(
++        self,
++        dim: int,
++        stride: int,
++        *,
++        mesh_device: ttnn.MeshDevice,
++        dtype: ttnn.DataType = ttnn.float32,
++        parallel_config: ParallelFactor | None = None,
++        ccl_manager: CCLManager | None = None,
++        split_mode: str = "off",
++        tap_matmul: bool = False,
++    ) -> None:
++        super().__init__()
++        shared = dict(mesh_device=mesh_device, dtype=dtype, parallel_config=parallel_config, ccl_manager=ccl_manager)
++        levers = dict(split_mode=split_mode, tap_matmul=tap_matmul)
++        inner = dim // 2
++        self.stride = stride
++        self.block = ModuleList(
++            [
++                MiniMaxH3AudioResidualUnit(inner, 1, **shared, **levers),
++                MiniMaxH3AudioResidualUnit(inner, 3, **shared, **levers),
++                MiniMaxH3AudioResidualUnit(inner, 9, **shared, **levers),
++                Snake(inner, alpha_logscale=False, **{k: v for k, v in shared.items() if k != "ccl_manager"}),
++                # kernel = 2 * stride with padding = ceil(stride / 2) is what makes the output
++                # exactly L / stride; the class's default eff_k // 2 would give one extra frame.
++                _AlignedOutConv1d(
++                    inner,
++                    dim,
++                    kernel_size=2 * stride,
++                    stride=stride,
++                    padding=math.ceil(stride / 2),
++                    **shared,
++                    **levers,
++                ),
++            ]
++        )
++
++    def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
++        expected_out = x_BTC.shape[1] // self.stride
++        for layer in self.block:
++            x_BTC = _snake_row_major(layer, x_BTC) if isinstance(layer, Snake) else layer(x_BTC)
++        assert (
++            x_BTC.shape[1] == expected_out
++        ), f"strided conv produced T={x_BTC.shape[1]}, expected {expected_out} -- check the padding override"
++        return x_BTC
++
++
++class MiniMaxH3AudioDACEncoder(Module):
++    """``conv(1 -> encoder_dim, k7) -> 5 encoder blocks -> Snake -> conv(k3)``."""
++
++    def __init__(
++        self,
++        *,
++        encoder_dim: int = 64,
++        encoder_rates: tuple[int, ...] = (2, 4, 4, 5, 5),
++        latent_dim: int = 2048,
++        mesh_device: ttnn.MeshDevice,
++        dtype: ttnn.DataType = ttnn.float32,
++        parallel_config: ParallelFactor | None = None,
++        ccl_manager: CCLManager | None = None,
++        split_mode: str = "off",
++        tap_matmul: bool = False,
++    ) -> None:
++        super().__init__()
++        shared = dict(mesh_device=mesh_device, dtype=dtype, parallel_config=parallel_config, ccl_manager=ccl_manager)
++        no_ccl = {k: v for k, v in shared.items() if k != "ccl_manager"}
++        levers = dict(split_mode=split_mode, tap_matmul=tap_matmul)
++
++        layers: list[Module] = [_AlignedOutConv1d(1, encoder_dim, kernel_size=7, **shared, **levers)]
++        dim = encoder_dim
++        for stride in encoder_rates:
++            dim *= 2
++            layers.append(MiniMaxH3AudioEncoderBlock(dim, stride, **shared, **levers))
++        layers.append(Snake(dim, alpha_logscale=False, **no_ccl))
++        layers.append(_AlignedOutConv1d(dim, latent_dim, kernel_size=3, **shared, **levers))
++        self.block = ModuleList(layers)
++        self.hop_length = math.prod(encoder_rates)
++
++    def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
++        for layer in self.block:
++            x_BTC = _snake_row_major(layer, x_BTC) if isinstance(layer, Snake) else layer(x_BTC)
++        return x_BTC
++
++
++class MiniMaxH3AudioCausalAttention(Module):
++    """Causal attention that narrows ``in_dim`` to ``out_dim`` by pooling, not concatenating.
++
++    The heads are **mean-pooled away** rather than concatenated, and the surviving head
++    dimension is average-pooled from ``in_dim // num_heads`` down to ``out_dim``. Since
++    ``256 % 32 == 0``, that pool is exactly a mean over contiguous groups of 8, so it is a
++    reshape and a mean rather than anything adaptive.
++
++    The checkpoint stores one fused biasless ``qkv`` plus separate ``q_bias``/``v_bias`` and
++    a frozen-zero ``zero_k_bias``; the converter folds all three into ``qkv.bias``.
++    """
++
++    def __init__(
++        self,
++        in_dim: int,
++        out_dim: int,
++        num_heads: int,
++        *,
++        mesh_device: ttnn.MeshDevice,
++        dtype: ttnn.DataType = ttnn.float32,
++    ) -> None:
++        super().__init__()
++        from ....layers.linear import Linear
++
++        self.in_dim = in_dim
++        self.out_dim = out_dim
++        self.num_heads = num_heads
++        self.head_dim = in_dim // num_heads
++        assert (
++            self.head_dim % out_dim == 0
++        ), f"head_dim {self.head_dim} must be a whole multiple of out_dim {out_dim} for the pool to be a plain mean"
++        self.pool_group = self.head_dim // out_dim
++        self.mesh_device = mesh_device
++        self.dtype = dtype
++
++        self.qkv = Linear(in_dim, 3 * in_dim, bias=True, mesh_device=mesh_device, dtype=dtype)
++        self.proj = Linear(out_dim, out_dim, bias=True, mesh_device=mesh_device, dtype=dtype)
++
++    def forward(self, x_BSC: ttnn.Tensor) -> ttnn.Tensor:
++        batch, seq_len, _ = x_BSC.shape
++        # The qkv projection is 2048 -> 6144 over the whole latent sequence, and at a 10 s
++        # clip (405 frames, batch 2 for stereo) the default matmul blocking overshoots L1
++        # (1979264 B against 1572864 B). A smaller block trades a little throughput for a
++        # working shape; the real fix is a tuned config, which is a performance-pass job.
++        qkv = self.qkv(x_BSC, default_block_size=(4, 4, 4))
++        query, key, value = (
++            ttnn.permute(ttnn.reshape(part, (batch, seq_len, self.num_heads, self.head_dim)), (0, 2, 1, 3))
++            for part in ttnn.chunk(qkv, 3, dim=-1)
++        )
++        # SDPA is bf16-only (`sdpa_device_operation.cpp:43`), so this one op is a bf16 island
++        # inside the otherwise-fp32 audio path -- the same shape of compromise the visual
++        # encoder makes for GroupNorm.
++        query, key, value = (
++            ttnn.typecast(t, ttnn.bfloat16) if t.get_dtype() != ttnn.bfloat16 else t for t in (query, key, value)
++        )
++        attended = ttnn.transformer.scaled_dot_product_attention(query, key, value, is_causal=True)
++        if attended.get_dtype() != self.dtype:
++            attended = ttnn.typecast(attended, self.dtype)
++
++        # (B, heads, S, head_dim) -> mean over heads -> (B, S, head_dim)
++        pooled = ttnn.mean(ttnn.permute(attended, (0, 2, 1, 3)), dim=2)
++        pooled = ttnn.reshape(pooled, (batch, seq_len, self.out_dim, self.pool_group))
++        pooled = ttnn.mean(pooled, dim=3)
++        return self.proj(pooled)
++
++
++class MiniMaxH3AudioGeGluMlp(Module):
++    """Pre-norm GeGLU: ``w2(gelu_tanh(w0(norm(x))) * w1(norm(x)))``."""
++
++    def __init__(
++        self,
++        in_features: int,
++        hidden_features: int,
++        *,
++        mesh_device: ttnn.MeshDevice,
++        dtype: ttnn.DataType = ttnn.float32,
++    ) -> None:
++        super().__init__()
++        from ....layers.linear import Linear
++
++        self.norm = LayerNorm(in_features, norm_eps=1e-5, bias=True, mesh_device=mesh_device)
++        self.w0 = Linear(in_features, hidden_features, bias=True, mesh_device=mesh_device, dtype=dtype)
++        self.w1 = Linear(in_features, hidden_features, bias=True, mesh_device=mesh_device, dtype=dtype)
++        self.w2 = Linear(hidden_features, in_features, bias=True, mesh_device=mesh_device, dtype=dtype)
++
++    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
++        normed = self.norm(x)
++        # nn.GELU(approximate="tanh")
++        gated = ttnn.gelu(self.w0(normed), fast_and_approximate_mode=True)
++        return self.w2(ttnn.mul(gated, self.w1(normed)))
++
++
++class MiniMaxH3AudioAttnProjection(Module):
++    """``pre_block``: ``proj(norm3(x)) + attn(norm1(x))``, then ``+ mlp(norm2(.))``.
++
++    Note the residual is a **projected** bypass, not ``x`` itself -- the block changes width
++    from ``latent_dim`` to ``latent_channels`` inside the residual, which is unusual and
++    easy to get wrong.
++    """
++
++    def __init__(
++        self,
++        in_dim: int,
++        out_dim: int,
++        num_heads: int,
++        *,
++        mlp_ratio: int = 2,
++        mesh_device: ttnn.MeshDevice,
++        dtype: ttnn.DataType = ttnn.float32,
++    ) -> None:
++        super().__init__()
++        from ....layers.linear import Linear
++
++        self.norm1 = LayerNorm(in_dim, norm_eps=1e-5, bias=True, mesh_device=mesh_device)
++        self.attn = MiniMaxH3AudioCausalAttention(in_dim, out_dim, num_heads, mesh_device=mesh_device, dtype=dtype)
++        self.proj = Linear(in_dim, out_dim, bias=True, mesh_device=mesh_device, dtype=dtype)
++        self.norm3 = LayerNorm(in_dim, norm_eps=1e-5, bias=True, mesh_device=mesh_device)
++        self.norm2 = LayerNorm(out_dim, norm_eps=1e-5, bias=True, mesh_device=mesh_device)
++        self.mlp = MiniMaxH3AudioGeGluMlp(out_dim, out_dim * mlp_ratio, mesh_device=mesh_device, dtype=dtype)
++
++    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
++        hidden = ttnn.add(self.proj(self.norm3(x)), self.attn(self.norm1(x)))
++        return ttnn.add(hidden, self.mlp(self.norm2(hidden)))
++
++
++class MiniMaxH3AudioEncoder(Module):
++    """Waveform to posterior: DAC trunk, ``pre_block``, then ``mean_proj`` / ``logs_proj``.
++
++    Returns ``(mean, logs)`` as torch tensors. Sampling stays on host, matching how the
++    visual encoder leaves its posterior draw to the caller.
++    """
++
++    def __init__(
++        self,
++        *,
++        encoder_dim: int = 64,
++        encoder_rates: tuple[int, ...] = (2, 4, 4, 5, 5),
++        latent_dim: int = 2048,
++        latent_channels: int = 32,
++        num_attention_heads: int = 8,
++        mesh_device: ttnn.MeshDevice,
++        dtype: ttnn.DataType = ttnn.float32,
++        parallel_config: ParallelFactor | None = None,
++        ccl_manager: CCLManager | None = None,
++        split_mode: str = "full",
++        tap_matmul: bool = True,
++        prefer_mac: bool = True,
++        max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
++    ) -> None:
++        super().__init__()
++        self.mesh_device = mesh_device
++        self.dtype = dtype
++        self.latent_channels = latent_channels
++        self.hop_length = math.prod(encoder_rates)
++
++        # The precision levers default to accurate, same rationale as the decoder. H3-only: LTX
++        # constructs the same conv classes with its own fast defaults. Kept as attributes so the
++        # pipeline's device-weight cache key (`weights_variant`) reads the exact values this module
++        # was built with. `prefer_mac` is accepted for symmetry with the decoder; the DAC trunk has
++        # no depthwise resamplers, so nothing here consumes it.
++        self.split_mode = split_mode
++        self.tap_matmul = tap_matmul
++        self.prefer_mac = prefer_mac
++        self.max_c_in_block = max_c_in_block
++
++        # Every H3 audio conv shape misses _FP32_BLOCKINGS; seed stubs before any conv is built.
++        register_h3_audio_blockings(max_c_in_block=max_c_in_block)
++
++        self.encoder = MiniMaxH3AudioDACEncoder(
++            encoder_dim=encoder_dim,
++            encoder_rates=encoder_rates,
++            latent_dim=latent_dim,
++            mesh_device=mesh_device,
++            dtype=dtype,
++            parallel_config=parallel_config,
++            ccl_manager=ccl_manager,
++            split_mode=split_mode,
++            tap_matmul=tap_matmul,
++        )
++        self.pre_block = MiniMaxH3AudioAttnProjection(
++            latent_dim, latent_channels, num_attention_heads, mesh_device=mesh_device, dtype=dtype
++        )
++        self.mean_proj = _AlignedOutConv1d(
++            latent_channels,
++            latent_channels,
++            kernel_size=1,
++            mesh_device=mesh_device,
++            dtype=dtype,
++            split_mode=split_mode,
++            tap_matmul=tap_matmul,
++        )
++        self.logs_proj = _AlignedOutConv1d(
++            latent_channels,
++            latent_channels,
++            kernel_size=1,
++            mesh_device=mesh_device,
++            dtype=dtype,
++            split_mode=split_mode,
++            tap_matmul=tap_matmul,
++        )
++
++    def forward(self, waveform_BCT: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
++        """``(B, 1, samples)`` torch in, ``(mean, logs)`` each ``(B, 32, samples/800)`` torch."""
++        _, channels, num_samples = waveform_BCT.shape
++        assert channels == 1, f"the audio VAE is mono; stereo is batch 2. Got {channels} channels"
++        assert (
++            num_samples % self.hop_length == 0
++        ), f"{num_samples} samples is not a whole number of {self.hop_length}-sample hops"
++
++        x = waveform_BCT.transpose(1, 2).float().contiguous()  # (B, T, 1)
++        x_device = ttnn.from_torch(x, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
++
++        trunk = self.encoder(x_device)
++        # pre_block is a transformer block, so it wants TILE; the convs want ROW_MAJOR.
++        projected = self.pre_block(ttnn.to_layout(trunk, ttnn.TILE_LAYOUT))
++        projected = ttnn.to_layout(projected, ttnn.ROW_MAJOR_LAYOUT)
++
++        # The upload replicates and nothing here is fractured, so every device holds the same
++        # result: read back one. A bare ``ttnn.to_torch`` asserts ``buffers.size() == 1`` and so
++        # only works on a single-device mesh. Same fix as ``MiniMaxH3AudioDecoder.__call__``.
++        def read(tensor: ttnn.Tensor) -> torch.Tensor:
++            # See `MiniMaxH3AudioDecoder.__call__`: a storage slice keeps the parent's distribution
++            # metadata and the converter rejects it on a multi-host mesh. The helper reads a shard this
++            # host owns instead, which for a replicated tensor is the whole answer.
++            return local_device_to_torch(tensor).float()
++
++        mean = read(self.mean_proj(projected))
++        logs = read(self.logs_proj(projected))
++        return mean.transpose(1, 2).contiguous(), logs.transpose(1, 2).contiguous()

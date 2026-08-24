@@ -1,0 +1,7 @@
+enabled: True
+is_load_failure: True
+RESULT: {
+ "resolved": true,
+ "path": "/localdev/lserbedzija/resolver_test/demo_dir/tests/pcc/_reference_loader.py",
+ "reason": "loader written"
+}

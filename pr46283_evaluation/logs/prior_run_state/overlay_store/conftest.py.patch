@@ -1,0 +1,40 @@
+diff --git a/conftest.py b/conftest.py
+index aa5dd5c3c3..964dc19ab1 100644
+--- a/conftest.py
++++ b/conftest.py
+@@ -21,14 +21,31 @@ def _bootstrap_ttnn_import_paths() -> None:
+     Doing it here fixes every pytest entry point at once, whatever PYTHONPATH the caller
+     set. It is a no-op when the install is present: the entries are already importable, and
+     an already-correct `ttnn` keeps its binding.
++
++    The tree holding this file is not always the tree that was built: the hw-planner copies
++    the checkout into a scratch root and runs pytest from there, and that copy carries the
++    `ttnn` *sources* with no `_ttnn*.so`. Publishing the copy's `ttnn` puts a source-only
++    regular package ahead of the real one on sys.path, and the import dies at
++    `ModuleNotFoundError: No module named 'ttnn._ttnn'`. So pick the entries from whichever
++    tree actually holds the built extension -- while keeping THIS tree first, so `models`
++    and `tests` still resolve to the copy the caller is testing.
+     """
++    import os
+     import sys
+     from pathlib import Path
+ 
+-    repo = Path(__file__).resolve().parent
+-    if not (repo / "ttnn" / "ttnn" / "__init__.py").is_file():
+-        return  # not an in-place checkout; leave the installed layout alone
+-    for entry in (repo / "tools", repo / "ttnn", repo):
++    def _built(tree: Path) -> bool:
++        pkg = tree / "ttnn" / "ttnn"
++        return (pkg / "__init__.py").is_file() and any(pkg.glob("_ttnn*.so"))
++
++    here = Path(__file__).resolve().parent
++    built = here
++    if not _built(here):
++        home = os.environ.get("TT_METAL_HOME")
++        built = Path(home).resolve() if home else here
++        if not _built(built):
++            return  # nothing built in place; leave the installed layout alone
++    for entry in (built / "tools", built / "ttnn", here):
+         text = str(entry)
+         if text in sys.path:
+             sys.path.remove(text)

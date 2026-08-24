@@ -1,0 +1,78 @@
+diff --git a/models/demos/voxtral_tts_full/_stubs/tts_backbone.py b/models/demos/voxtral_tts_full/_stubs/tts_backbone.py
+new file mode 100644
+index 0000000000..307a67ca2c
+--- /dev/null
++++ b/models/demos/voxtral_tts_full/_stubs/tts_backbone.py
+@@ -0,0 +1,72 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++# SPDX-License-Identifier: Apache-2.0
++"""Native TT-NN port of `VoxtralTtsBackbone` (Voxtral-TTS Block 1): the 3.4B AR backbone.
++
++Reference: `modeling_voxtral_tts.VoxtralTtsBackbone.forward` -- a causal prefill with no cache:
++
++    cis  = rope_cis(S, HEAD_DIM, ROPE_THETA)
++    bias = causal_bias(S)
++    x    = inputs_embeds;  for layer in layers: x = layer(x, cis, bias)
++    return norm(x)
++
++so the whole block is 26 stacked `_stubs/decoder_layer.py` ports plus the final RMSNorm. The
++layers are imported, not re-expressed: this is the same `VoxtralDecoderLayer` the decoder_layer
++component already graduated, and the backbone's contribution is the stacking and the final
++norm.
++
++The rope table and the causal mask that the reference builds per call are staged inside each
++attention port at build time (see `_stubs/attention.py`), which is why the layers are invoked
++here with `rope=True, causal=True` rather than with host tensors: the backbone knows both
++apply at every layer, and saying so costs no host work on the compute path.
++
++EMBEDDINGS ARE NOT PART OF THIS BLOCK'S FORWARD. The module owns `tok_embeddings` and
++`audio_embeddings`, but `forward` takes `inputs_embeds` -- the lookup happens in the pipeline
++(`voxtral_pipeline_ref.build_inputs_embeds`), which mixes text embeddings with a voice
++preset's audio rows. Staging ~430M embedding parameters this port never reads would cost
++~0.9 GB of device memory for nothing, so only the 26 layers and the final norm are staged.
++
++WEIGHT FOOTPRINT. 26 layers x ~116M parameters in bfloat16 is ~6 GB of device DRAM. The build
++is therefore the expensive part of this component, not the forward.
++"""
++from __future__ import annotations
++
++import torch
++import ttnn
++
++from models.demos.voxtral_tts_full._stubs.attention import COMPUTE_CONFIG
++from models.demos.voxtral_tts_full._stubs.decoder_layer import TtVoxtralDecoderLayer
++
++_NORM_EPS = 1e-5
++
++
++class TtVoxtralTtsBackbone:
++    def __init__(self, layers, final_norm, eps):
++        self.layers = layers
++        self.final_norm = final_norm
++        self.eps = eps
++
++    @classmethod
++    def build(cls, device, torch_module):
++        layers = [TtVoxtralDecoderLayer.build(device, layer) for layer in torch_module.layers]
++        norm = torch_module.norm
++        final_norm = ttnn.from_torch(
++            norm.weight.detach().float().contiguous().to(torch.bfloat16),
++            dtype=ttnn.bfloat16,
++            layout=ttnn.TILE_LAYOUT,
++            device=device,
++        )
++        return cls(layers, final_norm, float(getattr(norm, "eps", _NORM_EPS)))
++
++    def __call__(self, inputs_embeds, *args, **kwargs):
++        x = inputs_embeds
++        for layer in self.layers:
++            x = layer(x, rope=True, causal=True)
++        return ttnn.rms_norm(x, weight=self.final_norm, epsilon=self.eps, compute_kernel_config=COMPUTE_CONFIG)
++
++
++def build(device, torch_module=None):
++    return TtVoxtralTtsBackbone.build(device, torch_module)
++
++
++def tts_backbone(device, torch_module=None):
++    return TtVoxtralTtsBackbone.build(device, torch_module)

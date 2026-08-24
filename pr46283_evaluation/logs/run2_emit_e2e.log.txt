@@ -1,0 +1,131 @@
+==============================================================================
+  EMIT-E2E (LLM agent)  /localdev/lserbedzija/hf_models/voxtral-tts-full
+  demo_dir=/localdev/lserbedzija/repos/tt-metal-pr46283/models/demos/voxtral_tts_full  pcc>=0.99  model=opus
+  full log (complete transcript) → generated/emit_e2e__localdev_lserbedzija_hf_models_voxtral-tts-full_full.log
+==============================================================================
+
+  ===== PHASE 1+2: BUILDER agent (plan → build → iterate) =====
+
+  · builder working… 45s, 16 tool calls
+  · builder working… 93s, 25 tool calls
+  · builder working… 139s, 26 tool calls
+  · builder working… 184s, 26 tool calls
+  · builder working… 229s, 26 tool calls
+  · builder working… 275s, 26 tool calls
+  · builder working… 320s, 29 tool calls
+  · builder working… 366s, 29 tool calls
+  · builder working… 412s, 29 tool calls
+  · builder working… 534s, 31 tool calls
+  · builder working… 581s, 35 tool calls
+  · builder working… 657s, 37 tool calls
+  · builder working… 713s, 40 tool calls
+  · builder working… 759s, 41 tool calls
+  · builder working… 805s, 43 tool calls
+  · builder working… 851s, 44 tool calls
+  · builder working… 896s, 45 tool calls
+  · builder working… 1072s, 46 tool calls
+  · builder working… 1118s, 47 tool calls
+  · builder working… 1174s, 49 tool calls
+  · builder working… 1221s, 49 tool calls
+  · builder working… 1275s, 54 tool calls
+  · builder working… 1320s, 54 tool calls
+  · builder working… 1365s, 55 tool calls
+  · builder working… 1418s, 57 tool calls
+  · builder working… 1482s, 58 tool calls
+  · builder working… 1527s, 58 tool calls
+  · builder working… 1574s, 59 tool calls
+  · builder working… 1629s, 59 tool calls
+  · builder working… 1696s, 60 tool calls
+  · builder working… 1741s, 60 tool calls
+  · builder working… 1787s, 61 tool calls
+  · builder working… 1840s, 66 tool calls
+  · builder working… 1892s, 67 tool calls
+  · builder working… 1962s, 68 tool calls
+  · builder working… 2007s, 68 tool calls
+  · builder working… 2062s, 69 tool calls
+  · builder working… 2131s, 71 tool calls
+  · builder working… 2177s, 72 tool calls
+  · builder working… 2223s, 72 tool calls
+  · builder working… 2269s, 73 tool calls
+  · builder working… 2332s, 76 tool calls
+  · builder working… 2392s, 76 tool calls
+  · builder working… 2461s, 77 tool calls
+  · builder working… 2511s, 82 tool calls
+  · builder working… 2578s, 83 tool calls
+  · builder working… 2625s, 83 tool calls
+  · builder working… 2679s, 86 tool calls
+  · builder working… 2740s, 87 tool calls
+  · builder working… 2801s, 88 tool calls
+  · builder working… 2856s, 89 tool calls
+  · builder working… 2937s, 94 tool calls
+  · builder working… 2983s, 102 tool calls
+  · builder working… 3040s, 102 tool calls
+  · builder working… 3086s, 102 tool calls
+  · builder working… 3148s, 103 tool calls
+  · builder working… 3218s, 107 tool calls
+  · builder working… 3289s, 108 tool calls
+  · builder working… 3338s, 112 tool calls
+  ✓ builder finished (exit 0)
+
+  ===== PHASE 3 (cc engine): harness fix-loop on the e2e gate =====
+
+  · round 1 working… 67s, 2 tool calls
+  · round 1 working… 113s, 8 tool calls
+  · round 1 working… 159s, 16 tool calls
+  · round 1 working… 205s, 23 tool calls
+  · round 1 working… 251s, 27 tool calls
+  · round 1 working… 298s, 29 tool calls
+  · round 1 working… 343s, 31 tool calls
+  · round 1 working… 388s, 34 tool calls
+  · round 1 working… 433s, 35 tool calls
+  · round 1 working… 478s, 36 tool calls
+  · round 1 working… 524s, 38 tool calls
+  · round 1 working… 570s, 42 tool calls
+  · round 1 working… 618s, 46 tool calls
+  · round 1 working… 664s, 51 tool calls
+  · round 1 working… 712s, 53 tool calls
+  · round 1 working… 759s, 53 tool calls
+  · round 1 working… 816s, 58 tool calls
+  · round 1 working… 872s, 60 tool calls
+  · round 1 working… 929s, 64 tool calls
+  · round 1 working… 988s, 66 tool calls
+  · round 1 working… 1038s, 67 tool calls
+  · round 1 working… 1100s, 68 tool calls
+  · round 1 working… 1148s, 69 tool calls
+  · round 1 working… 1202s, 70 tool calls
+  · round 1 working… 1262s, 70 tool calls
+  · round 1 working… 1322s, 70 tool calls
+  · round 1 working… 1382s, 70 tool calls
+  · round 1 working… 1428s, 70 tool calls
+  · round 1 working… 1474s, 79 tool calls
+  · round 1 working… 1536s, 80 tool calls
+  · round 1 working… 1596s, 80 tool calls
+  · round 1 working… 1656s, 80 tool calls
+  · round 1 working… 1708s, 82 tool calls
+
+==============================================================================
+  cc engine: rounds=1 can_stop=True halted=False
+==============================================================================
+
+==============================================================================
+  E2E REPORT — /localdev/lserbedzija/hf_models/voxtral-tts-full
+  Verdict: PASS
+==============================================================================
+  PIPELINE PLACEMENT (on-device vs CPU fallback):
+  components: 7/7 on device (100%), 0/7 on CPU (0%)
+    Graduated (ON_DEVICE) : 4/7 (57%) actually graduated (native stub, PCC-verified)
+    on device : REUSE-wired=3  ADAPT-wired=0  NEW-native=4  NEW-partial-CPU=0
+    on CPU    : NEW-fallback=0  REUSE/ADAPT-not-wired=0
+  operations: 114/114 on device (100%), 0/114 on CPU (0%)
+    CPU-fallback modules: (none — fully on device)
+  --------------------------------------------------------------------------
+    task         e2e PCC   demo (real I/O)            trace perf test
+    tts          n/a       demo/demo_tts.py           test_tts_perf.py
+  --------------------------------------------------------------------------
+  REPRODUCE (per task):
+    tts:
+      demo   → python models/demos/voxtral_tts_full/demo/demo_tts.py
+      pcc    → pytest models/demos/voxtral_tts_full/tests/e2e/test_tts_e2e.py -svv
+      trace  → pytest models/demos/voxtral_tts_full/tests/e2e/test_tts_perf.py -svv
+  full report → models/demos/voxtral_tts_full/RUN_REPORT.md
+==============================================================================

@@ -1,0 +1,224 @@
+
+==============================================================================
+  BRINGUP (brain-orchestrated): /localdev/lserbedzija/hf_models/voxtral-tts-full
+==============================================================================
+  Locked defaults: --auto --auto-agent=claude --auto-model-tiered --auto-max-iters=24 --auto-max-attempts-per-component=5 --isolation=worktree
+  Brain G8 will orchestrate: budget-extend, cap-extend, phantom-cleanup, sync, demo-emit, demo-recovery
+
+[registry] transformers pin from upstream tt-metal: transformers==5.12.1
+[registry] synced to tenstorrent/tt-metal@50a82f835593
+[registry] 26 mapped registry path(s) are stale on this checkout — run `tt_hw_planner sync-registry` for detail.
+STALE registry paths (26) — these no longer exist in the checkout:
+  [MISSING] family_backends[hf_eager universal (STT)].demo_path
+            -> models/demos/hf_eager/demo.py
+  [MISSING] family_backends[hf_eager universal (TTS)].demo_path
+            -> models/demos/hf_eager/demo.py
+  [MISSING] family_backends[hf_eager universal (AudioGen / music)].demo_path
+            -> models/demos/hf_eager/demo.py
+  [MISSING] family_backends[hf_eager universal (Image / diffusion)].demo_path
+            -> models/demos/hf_eager/demo.py
+  [MISSING] family_backends[hf_eager universal (vision)].demo_path
+            -> models/demos/hf_eager/demo.py
+  [MISSING] family_backends[hf_eager universal (embeddings)].demo_path
+            -> models/demos/hf_eager/demo.py
+  [MISSING] family_backends[hf_eager universal (NLP)].demo_path
+            -> models/demos/hf_eager/demo.py
+  [MISSING] family_backends[hf_eager universal (Video)].demo_path
+            -> models/demos/hf_eager/demo.py
+  [MISSING] family_backends[hf_eager universal (catch-all)].demo_path
+            -> models/demos/hf_eager/demo.py
+  [MISSING] family_backends[Qwen3-Embedding (qwen3 decoder)].demo_path
+            -> models/demos/qwen3_embedding
+  [MISSING] family_backends[Qwen3-Embedding-8B (qwen3 decoder, 8B)].demo_path
+            -> models/demos/qwen3_embedding_8b
+  [MISSING] family_backends[XTTS-v2 (multilingual TTS)].demo_path
+            -> models/demos/xtts_v2
+  [MISSING] family_backends[tt_dit/minimax_h3 (auto-upstream)].demo_path
+            -> models/tt_dit/pipelines/minimax_h3
+  [MISSING] reuse_registry[vision_qwen3vl].tt_path
+            -> models/tt_dit/encoders/qwen3vl/vision_qwen3vl.py
+  [MISSING] reuse_registry[decoder_minimax_h3_audio].tt_path
+            -> models/tt_dit/models/audio_vae/minimax_h3/decoder_minimax_h3_audio.py
+  [MISSING] reuse_registry[encoder_minimax_h3_audio].tt_path
+            -> models/tt_dit/models/audio_vae/minimax_h3/encoder_minimax_h3_audio.py
+  [MISSING] reuse_registry[adaln_cache_minimax_h3].tt_path
+            -> models/tt_dit/models/transformers/minimax_h3/adaln_cache_minimax_h3.py
+  [MISSING] reuse_registry[attention_minimax_h3].tt_path
+            -> models/tt_dit/models/transformers/minimax_h3/attention_minimax_h3.py
+  [MISSING] reuse_registry[token_refiner_minimax_h3].tt_path
+            -> models/tt_dit/models/transformers/minimax_h3/token_refiner_minimax_h3.py
+  [MISSING] reuse_registry[transformer_block_minimax_h3].tt_path
+            -> models/tt_dit/models/transformers/minimax_h3/transformer_block_minimax_h3.py
+  [MISSING] reuse_registry[transformer_minimax_h3].tt_path
+            -> models/tt_dit/models/transformers/minimax_h3/transformer_minimax_h3.py
+  [MISSING] reuse_registry[conv_minimax_h3].tt_path
+            -> models/tt_dit/models/vae/minimax_h3/conv_minimax_h3.py
+  [MISSING] reuse_registry[decoder_minimax_h3].tt_path
+            -> models/tt_dit/models/vae/minimax_h3/decoder_minimax_h3.py
+  [MISSING] reuse_registry[encoder_minimax_h3].tt_path
+            -> models/tt_dit/models/vae/minimax_h3/encoder_minimax_h3.py
+  [MISSING] reuse_registry[stitch_device_minimax_h3].tt_path
+            -> models/tt_dit/models/vae/minimax_h3/stitch_device_minimax_h3.py
+  [MISSING] reuse_registry[vae_minimax_h3].tt_path
+            -> models/tt_dit/models/vae/minimax_h3/vae_minimax_h3.py
+  [isolation] worktree: /tmp/tt_hw_planner__localdev_lserbedzija_hf_models_voxtral-tts-full_1786816038
+  [isolation] hydrated 69 NEW upstream file(s) from remote:50a82f835593 into the worktree (add-only: fresh reuse/adapt siblings, existing modules untouched)
+[overlay] apply_for(_shared): no index.json at /localdev/lserbedzija/repos/tt-metal-pr46283/scripts/tt_hw_planner/overlays/_shared/index.json — scope appears uninitialized OR the index was deleted from disk. No patches will apply.
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped .tt_hw_planner_session.json — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: .tt_hw_planner_session.json: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped conftest.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: conftest.py: patch does not apply
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/demos/voxtral_tts_full/_stubs/attention.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/demos/voxtral_tts_full/_stubs/attention.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/demos/voxtral_tts_full/_stubs/codec_decoder.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/demos/voxtral_tts_full/_stubs/codec_decoder.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/demos/voxtral_tts_full/_stubs/decoder_layer.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/demos/voxtral_tts_full/_stubs/decoder_layer.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/demos/voxtral_tts_full/_stubs/flow_matching.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/demos/voxtral_tts_full/_stubs/flow_matching.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/demos/voxtral_tts_full/_stubs/m_l_p.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/demos/voxtral_tts_full/_stubs/m_l_p.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/demos/voxtral_tts_full/_stubs/r_m_s_norm.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/demos/voxtral_tts_full/_stubs/r_m_s_norm.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/demos/voxtral_tts_full/_stubs/tts_backbone.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/demos/voxtral_tts_full/_stubs/tts_backbone.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/demos/voxtral_tts_full/demo/__init__.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/demos/voxtral_tts_full/demo/__init__.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/demos/voxtral_tts_full/demo/demo.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/demos/voxtral_tts_full/demo/demo.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/demos/voxtral_tts_full/tests/pcc/conftest.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/demos/voxtral_tts_full/tests/pcc/conftest.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/demos/voxtral_tts_full/tests/pcc/test_attention.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/demos/voxtral_tts_full/tests/pcc/test_attention.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/demos/voxtral_tts_full/tests/pcc/test_codec_decoder.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/demos/voxtral_tts_full/tests/pcc/test_codec_decoder.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/demos/voxtral_tts_full/tests/pcc/test_decoder_layer.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/demos/voxtral_tts_full/tests/pcc/test_decoder_layer.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/demos/voxtral_tts_full/tests/pcc/test_flow_matching.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/demos/voxtral_tts_full/tests/pcc/test_flow_matching.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/demos/voxtral_tts_full/tests/pcc/test_m_l_p.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/demos/voxtral_tts_full/tests/pcc/test_m_l_p.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/demos/voxtral_tts_full/tests/pcc/test_r_m_s_norm.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/demos/voxtral_tts_full/tests/pcc/test_r_m_s_norm.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/demos/voxtral_tts_full/tests/pcc/test_tts_backbone.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/demos/voxtral_tts_full/tests/pcc/test_tts_backbone.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/tt_dit/encoders/qwen3vl/loader_minimax_h3.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/tt_dit/encoders/qwen3vl/loader_minimax_h3.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/tt_dit/encoders/qwen3vl/vision_qwen3vl.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/tt_dit/encoders/qwen3vl/vision_qwen3vl.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/tt_dit/models/MiniMaxH3.md — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/tt_dit/models/MiniMaxH3.md: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/tt_dit/models/audio_vae/minimax_h3/ — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/tt_dit/models/audio_vae/minimax_h3/encoder_minimax_h3_audio.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/tt_dit/models/transformers/minimax_h3/ — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/tt_dit/models/transformers/minimax_h3/transformer_minimax_h3.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/tt_dit/models/vae/minimax_h3/ — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/tt_dit/models/vae/minimax_h3/vae_minimax_h3.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/tt_dit/pipelines/minimax_h3/ — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/tt_dit/pipelines/minimax_h3/scheduler.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/tt_dit/tests/encoders/qwen3vl/common.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/tt_dit/tests/encoders/qwen3vl/common.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/tt_dit/tests/encoders/qwen3vl/test_qwen3vl_decoder_block.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/tt_dit/tests/encoders/qwen3vl/test_qwen3vl_decoder_block.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/tt_dit/tests/encoders/qwen3vl/test_qwen3vl_mrope.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/tt_dit/tests/encoders/qwen3vl/test_qwen3vl_mrope.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/tt_dit/tests/encoders/qwen3vl/test_qwen3vl_vision_block.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/tt_dit/tests/encoders/qwen3vl/test_qwen3vl_vision_block.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/tt_dit/tests/encoders/qwen3vl/test_qwen3vl_vision_injection.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/tt_dit/tests/encoders/qwen3vl/test_qwen3vl_vision_injection.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/tt_dit/tests/encoders/qwen3vl/test_qwen3vl_vision_tower.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/tt_dit/tests/encoders/qwen3vl/test_qwen3vl_vision_tower.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/tt_dit/tests/models/minimax_h3/ — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/tt_dit/tests/models/minimax_h3/tools/vbench_runner.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/tt_dit/tests/unit/test_planar_concat.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/tt_dit/tests/unit/test_planar_concat.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/tt_dit/utils/cpp/ — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/tt_dit/utils/cpp/transpose_avx2.hpp: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/tt_dit/utils/planar_concat.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/tt_dit/utils/planar_concat.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/tt_dit/utils/yuv_d2h.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/tt_dit/utils/yuv_d2h.py: already exists in working directory
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): skipped models/tt_transformers/tests/test_batched_prefill_slots.py — git apply --check returned rc=1. The target file has drifted since the patch was captured. Tail: error: models/tt_transformers/tests/test_batched_prefill_slots.py: already exists in working directory
+  [isolation] applied 0 _shared + 1 model overlay(s)
+  [auto:claude] tiered model switching enabled for repair loops: light=haiku, heavy=sonnet → super_heavy=opus
+
+==============================================================================
+  Step 0/6  Pre-flight checks for /localdev/lserbedzija/hf_models/voxtral-tts-full
+==============================================================================
+  transformers can load `/localdev/lserbedzija/hf_models/voxtral-tts-full` locally   [ok]
+
+==============================================================================
+  Step 1/6  Static analysis (plan + compat)
+==============================================================================
+==============================================================================
+  Model:        /localdev/lserbedzija/hf_models/voxtral-tts-full
+  Category:     TTS     (pipeline_tag=None, library=transformers)
+==============================================================================
+
+  On-disk weights:  16.02 GB  (saved as fp32)
+  Total parameters: 4.00 B (exact)
+
+  Probe knobs:  batch=1  seq/horizon=8192  KV dtype=bf16
+
+  ------------------------------------------------------------------------
+  BOX       DTYPE      PER-CHIP     USABLE    HEADROOM  VERDICT
+  ------------------------------------------------------------------------
+  P150      bf16           9.01G    29.20G     20.19G  FITS (comfortable)
+  ------------------------------------------------------------------------
+
+  RECOMMENDATION: P150 with bf16 weights
+                  per-chip=9.0 GB, headroom=20.2 GB
+                  verdict: FITS (comfortable)
+                  Single Blackhole (p150).
+                  Runtime mesh is selected in `prepare` after TP/divisibility and demo constraints.
+
+  Category guidance (TTS):
+    Text-to-speech. Closest template: models/demos/qwen3_tts/.
+
+  CONFIDENCE: LOW
+              Category-level estimates only. Smoke-test before deciding.
+============================================================================================
+HF model:          /localdev/lserbedzija/hf_models/voxtral-tts-full
+Architecture:      Llama-family causal LM (INFERRED from config fields, model_type='voxtral_tts' is not a known name; config declares 3 stacks: backbone, flow, codec)
+Overall verdict:   READY
+                   All required blocks already exist in models/tt_transformers/. Likely drop-in via the existing porting checklist.
+============================================================================================
+
+REPO DISCOVERY -- where the model lives in tt-metal source:
+  Repo discovery: UNKNOWN
+    No references found in models/ — not yet ported.
+  --> This model is not yet referenced anywhere in models/. See the
+      block-by-block analysis below for what a port would entail.
+
+SECTION 1 -- Building-block availability (does TT have a module for each HF concept?)
+--------------------------------------------------------------------------------------------
+STATUS  BLOCK                            EFFORT                   TT IMPLEMENTATION
+--------------------------------------------------------------------------------------------
+[ ok ]  Token embedding                  drop-in                  models/tt_transformers/tt/embedding.py
+[ ok ]  GQA attention                    drop-in                  models/tt_transformers/tt/attention.py
+[ ok ]  Standard RoPE                    drop-in                  models/tt_transformers/tt/rope.py
+[ ok ]  RMSNorm (text)                   drop-in                  models/tt_transformers/tt/distributed_norm.py (wraps models/common/rmsnorm.py)
+[ ok ]  SwiGLU MLP                       drop-in                  models/tt_transformers/tt/mlp.py
+[ ok ]  LM head                          drop-in                  models/tt_transformers/tt/lm_head.py
+[ ok ]  Checkpoint key remap             drop-in                  models/tt_transformers/tt/load_checkpoints.py
+[ ok ]  Tokenizer                        drop-in                  HF AutoTokenizer.from_pretrained(HF_MODEL)
+[ ok ]  Generator / inference loop       drop-in                  models/tt_transformers/tt/generator.py
+[ ok ]  Top-k / sampling                 drop-in                  ttnn.argmax / ttnn.topk + on-device sampling helpers
+
+--------------------------------------------------------------------------------------------
+Summary: 10 ready  /  0 partial  /  0 missing
+
+
+SECTION 2 -- Kernel-level constraints (do the model's shapes/dtypes satisfy TTNN ops?)
+--------------------------------------------------------------------------------------------
+STATUS  OP                                               FIELD                    CONSTRAINT
+--------------------------------------------------------------------------------------------
+[warn]  ttnn.topk (sampling)                             vocab_size=131072        multi-core top-k requires vocab to be a power of 2 AND < 65536; else falls back to single-core
+        fix: No action needed - kernel will use the single-core path. Decode
+        throughput will be lower.
+
+Per-TP divisibility:
+  TP=1   [ ok ]  all divisibility constraints satisfied
+  TP=2   [ ok ]  all divisibility constraints satisfied
+  TP=4   [ ok ]  all divisibility constraints satisfied
+  TP=8   [ ok ]  all divisibility constraints satisfied
+  TP=32  [FAIL]  num_key_value_heads=8
+
+  Note: TP failures rule out that mesh shape, not the model overall.
+        Pick a TP from the rows marked [ ok ] above.
+  Memory fit gate SKIPPED: no LLM-style memory model produced — typically a vision / multi-modal model whose memory budget is dominated by per-op scratch, not weights. Compat gate already covered architectural support.
+  Sibling candidates (top 2, exact first):
+    1. hf_eager universal (TTS)  [score=40; category 'TTS' default (generic runner)]
+    2. XTTS-v2 (multilingual TTS)  [score=30; category 'TTS' default]
+  Backend match: LLM-RESOLVED  (hf_eager universal (TTS))  (deterministic keys did not exact-match model_type='voxtral_tts'; the registry-constrained LLM ranker chose this as the closest architectural sibling)
+  NOT routing to the generic LLM demo: family was INFERRED from config structure, not a known model_type; config declares 3 stacks (backbone, flow, codec) and the block checklist covers the decoder stack only. Scaffolding this model's own stubs instead.
+
+========================================================================
+  META-PLAN  feasibility = MEDIUM
+========================================================================
+  This is very likely the same Voxtral-TTS model this repo has already spent significant effort on: prior work (see commit history and 'clean slate for the 0.99 three-block re-run') got the three top-level blocks -- tts_backbone, codec_decoder, flow_matching -- to an e2e PCC of 0.99988 fully on device, after discovering that an earlier 'cannot be driven to 0.99' verdict was actually a port bug (reduction/matmul precision), not an architectural dead end. That precedent raises confidence above what the architecture alone would justify (flow-matching + FSQ-style quantization would normally be LOW). But this is a 'clean slate' re-run, and the discovery here shows codec_decoder and flow_matching as single opaque leaf=1 modules -- the auto-loop's op_emitter has no submodules to target and no REUSE/ADAPT/NEW bucket that cleanly fits an iterative flow-matching sampler or FSQ quantizer, so the loop must rediscover the same fp32/precision fixes from scratch or it risks repeating the earlier false-negative misdiagnosis. The 26-layer decoder backbone itself (RMSNorm/Attention/MLP) is standard, well-understood territory.
+
+  risks (7):
+    - flow_matching (occ=1, leaves=1) is an opaque black-box module with no discovered submodules -- it almost certainly implements an iterative ODE/Euler sampling loop with time-conditioning, which doesn't map to any REUSE/ADAPT/NEW bucket op_emitter knows; the loop has nothing to decompose automatically.
+    - codec_decoder (occ=1, leaves=1) is likewise opaque and very likely implements FSQ (finite scalar quantization); quantization code assignment is a discontinuous op where small precision errors flip discrete codes and can crater e2e PCC even when the underlying arithmetic is 'close enough' -- this already produced one false 'cannot be driven to 0.99' verdict before it was traced to a matmul/reduction precision bug.
+    - This is a clean-slate re-run, so the previously-found precision fixes (hand-composed reductions instead of fused rms_norm/softmax, fp32_dest_acc_en on RMSNorm, matmul splitting) are not guaranteed to be rediscovered by the loop and may need to be reapplied manually before PCC gates pass.
+    - 53 RMSNorm instances default to ttnn.rms_norm's fused kernel, which loses ~2% magnitude without fp32_dest_acc_en enabled -- a scale error too small for per-component PCC to catch until it compounds across 26 layers.
+    - Backend match is 'category-default' (hf_eager universal (TTS)), not a voxtral_tts-specific profile -- initial RoPE/attention config for VoxtralAttention may not match the model's actual conventions on the first pass.
+    - Target is P150 (Blackhole), where fp32 reductions (ttnn.sum) lose ~3.2e-4 vs ~6e-8 for ttnn.mean -- fused ops that inherit this will show up in flow_matching's normalization/attention and in codec_decoder's quantization path, exactly the class of error that previously masqueraded as a structural failure.
+
+  recommendations (6):
+    - Graduate tts_backbone (decoder_layer/attention/mlp/r_m_s_norm) first in isolation -- it's solid REUSE/ADAPT territory and shouldn't be blocked waiting on the two custom blocks.
+    - Before trusting any 'cannot reach PCC 0.99' verdict on codec_decoder or flow_matching, check whether the failure is a code-flip/precision issue (fp32 reductions, matmul splitting) rather than a structural NEW-op gap, since that exact misdiagnosis happened on this model before.
+    - For codec_decoder and flow_matching, adapt conftest to call the model's own reference functions directly instead of relying on discovered submodules, since both are leaf=1 functional checkpoints with nothing for the loop to resolve automatically.
+    - Explicitly set fp32_dest_acc_en on all RMSNorm ops and hand-compose any fused reduction/softmax/rms_norm ops rather than using the fused kernel, given Blackhole's known reduction precision floor.
+    - Request or configure a voxtral_tts-specific backend profile rather than relying on the hf_eager universal (TTS) category default, to reduce first-pass RoPE/attention config mismatches.
+    - If prior three-block artifacts or configs still exist in the repo, diff the clean-slate re-run's op choices against them before spending iterate budget re-deriving the same fixes.
+
+  (advisory only; proceeding with auto-iterate loop. Disable via --no-meta-plan.)
+
+==============================================================================
+  Step 2/6  Scaffold the demo folder for /localdev/lserbedzija/hf_models/voxtral-tts-full
+==============================================================================

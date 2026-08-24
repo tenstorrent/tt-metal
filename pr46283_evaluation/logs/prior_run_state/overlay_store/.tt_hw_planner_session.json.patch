@@ -1,0 +1,13 @@
+diff --git a/.tt_hw_planner_session.json b/.tt_hw_planner_session.json
+new file mode 100644
+index 0000000000..b99d998b95
+--- /dev/null
++++ b/.tt_hw_planner_session.json
+@@ -0,0 +1,6 @@
++{
++  "model_id": "/localdev/lserbedzija/hf_models/voxtral-tts-full",
++  "created_ts": 1786788368.8274336,
++  "creator_pid": 1812738,
++  "source_repo": "/localdev/lserbedzija/repos/tt-metal-pr46283"
++}
+\ No newline at end of file

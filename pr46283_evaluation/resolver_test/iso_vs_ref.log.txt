@@ -1,0 +1,40 @@
+=== loading ground truth (adapter -> our reference) ===
+  VoxtralTTSReferenceModel  children=['layers', 'mm_audio_embeddings', 'norm', 'acoustic_transformer', 'audio_tokenizer']
+  public attrs: ['acoustic_transformer', 'audio_tokenizer', 'config', 'dtype_', 'embed_frame', 'embed_frames', 'embed_text', 'incremental', 'layers', 'mm_audio_embeddings', 'model_id', 'model_type', 'norm', 'params', 'text_logits', 'training']
+=== loading model under test (from scratch) ===
+  VoxtralTTSReferenceModel  children=['layers', 'norm', 'mm_audio_embeddings', 'acoustic_transformer', 'audio_tokenizer']
+  cast to fp32 for comparison (param dtype torch.float32)
+
+=== 1. text embedding ===
+  PASS  embed_tokens                       PCC 1.00000000  max|d| 0.000e+00  
+
+=== 2. backbone, 26 layers (RoPE / GQA / RMSNorm / SwiGLU) ===
+  iso (1, 10, 3072) mean +0.0183 std 2.2606
+  ref (1, 10, 3072) mean +0.0183 std 2.2606
+  PASS  forward_backbone                   PCC 0.99999988  max|d| 1.526e-05  
+
+=== 3. from-scratch KV cache: prefill + steps vs full recompute ===
+  PASS  cached == recomputed               PCC 1.00000000  max|d| 3.910e-05  
+
+=== 4. audio codec decoder (codes -> 24 kHz waveform) ===
+  iso wav (1, 1, 46080)  1.92s  peak 0.8077
+  ref wav (1, 1, 46080)  peak 0.8077
+  PASS  codec decode (matched conv.)       PCC 1.00000000  max|d| 5.037e-06  
+  PASS  decode_audio (model-emitted)       PCC 1.00000000  max|d| 5.037e-06  
+
+=== 5. flow matching (fixed x_0) -> 37 audio codes ===
+  ground-truth flow attribute: ref.acoustic_transformer
+  iso codes (1, 37) semantic=2287 acoustic[:6]=[12, 11, 13, 5, 13, 20]
+  ref codes (1, 37) semantic=2287 acoustic[:6]=[12, 11, 13, 5, 13, 20]
+  PASS  exact code match 37/37
+
+=== SUMMARY ===
+  PASS  embedding
+  PASS  backbone
+  PASS  kv_cache
+  PASS  codec
+  PASS  codec_emitted
+  PASS  flow_codes_exact
+  PASS  flow_semantic
+
+7/7 checks passed

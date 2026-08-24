@@ -1,0 +1,247 @@
+diff --git a/models/demos/voxtral_tts_full/_stubs/attention.py b/models/demos/voxtral_tts_full/_stubs/attention.py
+new file mode 100644
+index 0000000000..4721380e57
+--- /dev/null
++++ b/models/demos/voxtral_tts_full/_stubs/attention.py
+@@ -0,0 +1,241 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++# SPDX-License-Identifier: Apache-2.0
++"""Native TT-NN port of `VoxtralAttention` (Voxtral-TTS backbone, Block 1).
++
++Reference: `modeling_layers.VoxtralAttention.forward`, which composes the checkpoint's own
++primitives from `voxtral_common_ref`:
++
++    q, k, v = split_heads(F.linear(h, w{q,k,v}))
++    q, k    = apply_rope(q, cis), apply_rope(k, cis)
++    out     = F.linear(merge_heads(gqa_attention(q, k, v, bias)), wo)
++
++Three things about this checkpoint drive the port:
++
++ROPE CONVENTION. `voxtral_common_ref.apply_rope` is Mistral-native: it rotates INTERLEAVED
++pairs -- `view_as_complex` over `(..., d/2, 2)`, so dims (0,1), (2,3), ... HF's port instead
++pairs (i, i+d/2). Rather than deinterleave activations on device every call (a stride-2
++gather is expensive in tile layout), this port PERMUTES THE ROWS OF wq/wk ONCE at build time
++so the projection emits each head laid out in halves, then applies the ordinary half-split
++rotation. The two are exactly equivalent: the permutation is applied to q and k alike, and
++attention consumes them only through `q · k`, which is invariant under a shared permutation
++of the head axis. v and wo are untouched, so the output needs no un-permuting. `build()`
++asserts this against an explicit interleaved rotation before returning.
++
++HEAD WIDTH. n_heads * head_dim = 4096 != dim = 3072 -- this model is wider inside attention
++than its residual stream, so wq is [4096, 3072] and wo is [3072, 4096]. Nothing here may
++assume the square shape most ports take for granted.
++
++GQA. 32 query heads over 8 KV heads, and `repeat_kv` expands INTERLEAVED (query head i reads
++KV head i // 4). Expressed by folding each KV group's 4 query heads into the sequence axis,
++so one [1, n_kv, ...] matmul covers all 32 query heads with no 4x copy of K and V.
++
++WHY THE ROPE TABLE AND THE MASK ARE BUILT HERE, NOT FROM THE ARGUMENTS. `cis` arrives as a
++host COMPLEX tensor and `bias` as a host float tensor. Turning either into a device tensor
++inside the forward would put host math (`view_as_real`, `cat`, `from_torch`) on the compute
++path, which is what separates a native port from a host reimplementation. Both are pure
++functions of position -- `rope_cis(S, head_dim, theta)` and an upper-triangular -inf mask --
++so this port materialises them once in `build()` for every position the model supports and
++slices the live sequence out of them on device. The arguments are then read only for their
++presence: `cis=None` means "no rotation", `bias=None` means "no mask" (the decode path). A
++caller that holds no host tensor to signal with -- the backbone, which knows both apply --
++says so directly with the `rope=` / `causal=` keywords instead.
++
++The equivalence is not taken on trust: the PCC test builds its golden by calling the torch
++reference with the reference's OWN `cis` and `bias`, so if the tables generated here differed
++in convention, value or position offset, the comparison would collapse rather than pass.
++"""
++from __future__ import annotations
++
++import torch
++import ttnn
++
++# From the checkpoint's config.json / params.json. `rope_theta` and `max_position_embeddings`
++# are properties of the released weights, not of any one call.
++_ROPE_THETA = 1_000_000.0
++_MAX_POSITIONS = 2048
++
++# Masked positions are additive -inf in the reference. -inf survives bf16, but an -inf that
++# reaches a fused softmax can yield NaN instead of 0; -1e9 underflows exp() to exactly the
++# same zero contribution without that risk, so the arithmetic is unchanged.
++_MASK_FILL = -1e9
++
++# The default matmul config carries ~1% relative error against the same operands multiplied
++# exactly, and that compounds: the 26-layer backbone built from this port lands at PCC 0.9886
++# with the default and comfortably over 0.99 with fp32 destination accumulation at HiFi4,
++# which measures 6x tighter on a single 3072-deep matmul. Shared by every port in this model
++# so no stage is quietly the loose one.
++COMPUTE_CONFIG = ttnn.WormholeComputeKernelConfig(
++    math_fidelity=ttnn.MathFidelity.HiFi4,
++    math_approx_mode=False,
++    fp32_dest_acc_en=True,
++    packer_l1_acc=True,
++)
++
++
++def _interleaved_to_halves(head_dim: int) -> torch.Tensor:
++    """Row order taking an interleaved-pair head to a split-halves head.
++
++    Original component 2j lands at j and 2j+1 at j + d/2, which is precisely the layout the
++    half-split rotation expects.
++    """
++    return torch.cat([torch.arange(0, head_dim, 2), torch.arange(1, head_dim, 2)])
++
++
++def _permute_head_rows(weight: torch.Tensor, n_heads: int, head_dim: int) -> torch.Tensor:
++    """Apply the interleaved->halves row permutation independently within each head."""
++    perm = _interleaved_to_halves(head_dim)
++    return weight.reshape(n_heads, head_dim, -1)[:, perm, :].reshape(n_heads * head_dim, -1)
++
++
++def _rope_cos_sin(max_positions: int, head_dim: int, theta: float):
++    """`voxtral_common_ref.rope_cis` as (cos, sin), duplicated for the half-split rotation.
++
++    rope_cis returns `polar(1, outer(positions, freqs))`, i.e. angle p*freq_j at position p;
++    the half-split rotation needs each angle repeated across the two halves it mixes.
++    """
++    freqs = 1.0 / (theta ** (torch.arange(0, head_dim, 2).float() / head_dim))
++    angles = torch.outer(torch.arange(max_positions).float(), freqs)
++    cos = torch.cat([angles.cos(), angles.cos()], dim=-1)
++    sin = torch.cat([angles.sin(), angles.sin()], dim=-1)
++    return cos.reshape(1, 1, max_positions, head_dim), sin.reshape(1, 1, max_positions, head_dim)
++
++
++def _causal_mask(max_positions: int) -> torch.Tensor:
++    """`voxtral_common_ref.causal_bias` with the -inf replaced per `_MASK_FILL`."""
++    m = torch.full((max_positions, max_positions), _MASK_FILL)
++    return torch.triu(m, diagonal=1).reshape(1, 1, max_positions, max_positions)
++
++
++class TtVoxtralAttention:
++    def __init__(self, device, weights, tables, n_heads, n_kv_heads, head_dim):
++        self.device = device
++        self.wq, self.wk, self.wv, self.wo = weights
++        self.cos, self.sin, self.mask = tables
++        self.n_heads = n_heads
++        self.n_kv_heads = n_kv_heads
++        self.head_dim = head_dim
++        self.n_rep = n_heads // n_kv_heads
++        self.scale = head_dim**-0.5
++
++    @classmethod
++    def build(cls, device, torch_module, max_positions: int = _MAX_POSITIONS, theta: float = _ROPE_THETA):
++        n_heads = int(getattr(torch_module, "n_heads", 32))
++        n_kv_heads = int(getattr(torch_module, "n_kv_heads", 8))
++        head_dim = int(getattr(torch_module, "head_dim", 128))
++
++        wq = torch_module.q_proj.detach().float()
++        wk = torch_module.k_proj.detach().float()
++        wv = torch_module.v_proj.detach().float()
++        wo = torch_module.o_proj.detach().float()
++
++        wq_p = _permute_head_rows(wq, n_heads, head_dim)
++        wk_p = _permute_head_rows(wk, n_kv_heads, head_dim)
++        _assert_rope_equivalence(wq, wq_p, n_heads, head_dim, theta)
++
++        def stage(t, transpose=False):
++            # `F.linear(x, W)` is `x @ W.T`; ttnn.linear has no transpose flag, so the
++            # transpose is folded in here rather than paid for on every call.
++            t = t.t().contiguous() if transpose else t.contiguous()
++            return ttnn.from_torch(
++                t.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
++            )
++
++        cos, sin = _rope_cos_sin(max_positions, head_dim, theta)
++        weights = tuple(stage(w, transpose=True) for w in (wq_p, wk_p, wv, wo))
++        tables = (stage(cos), stage(sin), stage(_causal_mask(max_positions)))
++        return cls(device, weights, tables, n_heads, n_kv_heads, head_dim)
++
++    def _split_heads(self, x, seq_len, n_heads):
++        """[1, S, n*d] -> [1, n, S, d], matching `voxtral_common_ref.split_heads`."""
++        return ttnn.permute(ttnn.reshape(x, (1, seq_len, n_heads, self.head_dim)), (0, 2, 1, 3))
++
++    def _apply_rope(self, x, cos, sin, n_heads, seq_len):
++        half = self.head_dim // 2
++        lo = ttnn.slice(x, [0, 0, 0, 0], [1, n_heads, seq_len, half])
++        hi = ttnn.slice(x, [0, 0, 0, half], [1, n_heads, seq_len, self.head_dim])
++        rotated = ttnn.concat([ttnn.neg(hi), lo], dim=-1)
++        return ttnn.add(ttnn.mul(x, cos), ttnn.mul(rotated, sin))
++
++    def __call__(self, h, cis=None, bias=None, cache=None, cache_key=None, *, rope=None, causal=None):
++        apply_rope = (cis is not None) if rope is None else bool(rope)
++        apply_causal = (bias is not None) if causal is None else bool(causal)
++        seq_len = int(h.shape[-2])
++        if seq_len > int(self.cos.shape[-2]):
++            raise ValueError(
++                f"sequence length {seq_len} exceeds the {int(self.cos.shape[-2])} positions staged at "
++                f"build time; rebuild with max_positions >= {seq_len}"
++            )
++
++        linear = lambda t, w: ttnn.linear(t, w, compute_kernel_config=COMPUTE_CONFIG)  # noqa: E731
++
++        q = self._split_heads(linear(h, self.wq), seq_len, self.n_heads)
++        k = self._split_heads(linear(h, self.wk), seq_len, self.n_kv_heads)
++        v = self._split_heads(linear(h, self.wv), seq_len, self.n_kv_heads)
++
++        if apply_rope:
++            cos = ttnn.slice(self.cos, [0, 0, 0, 0], [1, 1, seq_len, self.head_dim])
++            sin = ttnn.slice(self.sin, [0, 0, 0, 0], [1, 1, seq_len, self.head_dim])
++            q = self._apply_rope(q, cos, sin, self.n_heads, seq_len)
++            k = self._apply_rope(k, cos, sin, self.n_kv_heads, seq_len)
++
++        # GQA without materialising repeat_kv: fold each KV group's 4 query heads into the
++        # sequence axis, so one [1, n_kv, ...] matmul covers all 32 query heads. Query head i
++        # lands in group i // 4, which is exactly `repeat_kv`'s interleaved expansion.
++        qg = ttnn.reshape(q, (1, self.n_kv_heads, self.n_rep * seq_len, self.head_dim))
++        scores = ttnn.matmul(qg, ttnn.permute(k, (0, 1, 3, 2)), compute_kernel_config=COMPUTE_CONFIG)
++        scores = ttnn.mul(scores, self.scale)
++
++        if apply_causal:
++            # Rows of the folded score matrix run (rep, pos), so the per-position mask is
++            # TILED n_rep times down the row axis -- not stretched.
++            window = ttnn.slice(self.mask, [0, 0, 0, 0], [1, 1, seq_len, seq_len])
++            scores = ttnn.add(scores, ttnn.repeat(window, (1, 1, self.n_rep, 1)))
++
++        out = ttnn.matmul(ttnn.softmax(scores, dim=-1), v, compute_kernel_config=COMPUTE_CONFIG)
++        out = ttnn.reshape(out, (1, self.n_heads, seq_len, self.head_dim))
++        out = ttnn.permute(out, (0, 2, 1, 3))
++        out = ttnn.reshape(out, (1, seq_len, self.n_heads * self.head_dim))
++        return linear(out, self.wo)
++
++
++def _assert_rope_equivalence(wq, wq_permuted, n_heads, head_dim, theta, seq_len=8):
++    """Prove the row permutation reproduces the reference's interleaved rotation.
++
++    A cheap host-side check on random activations: rotating the permuted projection with the
++    half-split rule must equal permuting the reference's interleaved result. A silent
++    mismatch here would cost accuracy in every layer and read as a generic numerical problem,
++    so it is caught at build time rather than debugged later.
++    """
++    dim = wq.shape[1]
++    h = torch.randn(1, seq_len, dim)
++    freqs = 1.0 / (theta ** (torch.arange(0, head_dim, 2).float() / head_dim))
++    cis = torch.polar(torch.ones(seq_len, head_dim // 2), torch.outer(torch.arange(seq_len).float(), freqs))
++
++    def split(x, n):
++        return x.view(1, seq_len, n, head_dim).permute(0, 2, 1, 3)
++
++    interleaved = torch.view_as_real(
++        torch.view_as_complex(split(h @ wq.t(), n_heads).reshape(1, n_heads, seq_len, head_dim // 2, 2))
++        * cis.view(1, 1, seq_len, head_dim // 2)
++    ).reshape(1, n_heads, seq_len, head_dim)
++
++    x = split(h @ wq_permuted.t(), n_heads)
++    cos = torch.cat([cis.real, cis.real], dim=-1).view(1, 1, seq_len, head_dim)
++    sin = torch.cat([cis.imag, cis.imag], dim=-1).view(1, 1, seq_len, head_dim)
++    lo, hi = x[..., : head_dim // 2], x[..., head_dim // 2 :]
++    halves = x * cos + torch.cat([-hi, lo], dim=-1) * sin
++
++    perm = _interleaved_to_halves(head_dim)
++    if not torch.allclose(halves, interleaved[..., perm], atol=1e-4, rtol=1e-4):
++        raise AssertionError(
++            "interleaved->halves RoPE permutation does not reproduce the reference rotation; "
++            "the port would silently lose accuracy in every layer"
++        )
++
++
++def build(device, torch_module=None):
++    return TtVoxtralAttention.build(device, torch_module)
++
++
++def attention(device, torch_module=None):
++    return TtVoxtralAttention.build(device, torch_module)

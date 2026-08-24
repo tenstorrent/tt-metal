@@ -1,0 +1,3 @@
+[iso] loader imported
+[iso] LOADED VoxtralTTSReferenceModel params=4.000B training=False
+[iso] top-level children: ['layers', 'norm', 'mm_audio_embeddings', 'acoustic_transformer', 'audio_tokenizer']

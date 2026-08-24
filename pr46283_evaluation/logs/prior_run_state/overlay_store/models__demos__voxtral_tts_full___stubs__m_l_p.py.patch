@@ -1,0 +1,58 @@
+diff --git a/models/demos/voxtral_tts_full/_stubs/m_l_p.py b/models/demos/voxtral_tts_full/_stubs/m_l_p.py
+new file mode 100644
+index 0000000000..1e3d22560e
+--- /dev/null
++++ b/models/demos/voxtral_tts_full/_stubs/m_l_p.py
+@@ -0,0 +1,52 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++# SPDX-License-Identifier: Apache-2.0
++"""Native TT-NN port of `VoxtralMLP` (Voxtral-TTS backbone, Block 1).
++
++Reference: `modeling_layers.VoxtralMLP.forward` -> `voxtral_common_ref.swiglu`:
++
++    swiglu(h, w1, w2, w3) = w2(silu(w1 h) * w3 h)
++
++The module names those three `gate_proj` (w1), `down_proj` (w2) and `up_proj` (w3), so the
++gated branch is gate/w1 and the passthrough is up/w3 -- a naming that is easy to swap by
++accident, and swapping it still produces plausible-looking numbers.
++
++The projections are bare `nn.Parameter`s, not `nn.Linear`s. `F.linear(x, W)` is `x @ W.T`, so
++the transpose is folded into the staged weights instead of being paid per call. All three are
++bias-free; the inner width is 9216 against a 3072 residual stream.
++"""
++from __future__ import annotations
++
++import torch
++import ttnn
++
++from models.demos.voxtral_tts_full._stubs.attention import COMPUTE_CONFIG
++
++
++class TtVoxtralMLP:
++    def __init__(self, gate, down, up):
++        self.gate, self.down, self.up = gate, down, up
++
++    @classmethod
++    def build(cls, device, torch_module):
++        def stage(t):
++            return ttnn.from_torch(
++                t.detach().float().t().contiguous().to(torch.bfloat16),
++                dtype=ttnn.bfloat16,
++                layout=ttnn.TILE_LAYOUT,
++                device=device,
++            )
++
++        return cls(stage(torch_module.gate_proj), stage(torch_module.down_proj), stage(torch_module.up_proj))
++
++    def __call__(self, h, *args, **kwargs):
++        linear = lambda t, w: ttnn.linear(t, w, compute_kernel_config=COMPUTE_CONFIG)  # noqa: E731
++        gated = ttnn.mul(ttnn.silu(linear(h, self.gate)), linear(h, self.up))
++        return linear(gated, self.down)
++
++
++def build(device, torch_module=None):
++    return TtVoxtralMLP.build(device, torch_module)
++
++
++def m_l_p(device, torch_module=None):
++    return TtVoxtralMLP.build(device, torch_module)

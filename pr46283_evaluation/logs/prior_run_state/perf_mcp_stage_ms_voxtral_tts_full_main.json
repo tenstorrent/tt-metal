@@ -1,0 +1,1 @@
+{"run": "1786781989_1763882", "stages": {"prefill": 67.4818, "decode": 83.679, "vocode": 4.285}, "paths": {"prefill": "trace+1cq", "decode": "trace+1cq", "vocode": "trace+1cq"}, "isl": {"prefill": 128}, "ops": {}}

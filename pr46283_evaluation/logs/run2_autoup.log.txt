@@ -1,0 +1,467 @@
+
+==============================================================================
+  BRINGUP (brain-orchestrated): /localdev/lserbedzija/hf_models/voxtral-tts-full
+==============================================================================
+  Locked defaults: --auto --auto-agent=claude --auto-model-tiered --auto-max-iters=24 --auto-max-attempts-per-component=5 --isolation=worktree
+  Brain G8 will orchestrate: budget-extend, cap-extend, phantom-cleanup, sync, demo-emit, demo-recovery
+
+[registry] transformers pin from upstream tt-metal: transformers==5.12.1
+[registry] synced to tenstorrent/tt-metal@50a82f835593
+[registry] 26 mapped registry path(s) are stale on this checkout — run `tt_hw_planner sync-registry` for detail.
+STALE registry paths (26) — these no longer exist in the checkout:
+  [MISSING] family_backends[hf_eager universal (STT)].demo_path
+            -> models/demos/hf_eager/demo.py
+  [MISSING] family_backends[hf_eager universal (TTS)].demo_path
+            -> models/demos/hf_eager/demo.py
+  [MISSING] family_backends[hf_eager universal (AudioGen / music)].demo_path
+            -> models/demos/hf_eager/demo.py
+  [MISSING] family_backends[hf_eager universal (Image / diffusion)].demo_path
+            -> models/demos/hf_eager/demo.py
+  [MISSING] family_backends[hf_eager universal (vision)].demo_path
+            -> models/demos/hf_eager/demo.py
+  [MISSING] family_backends[hf_eager universal (embeddings)].demo_path
+            -> models/demos/hf_eager/demo.py
+  [MISSING] family_backends[hf_eager universal (NLP)].demo_path
+            -> models/demos/hf_eager/demo.py
+  [MISSING] family_backends[hf_eager universal (Video)].demo_path
+            -> models/demos/hf_eager/demo.py
+  [MISSING] family_backends[hf_eager universal (catch-all)].demo_path
+            -> models/demos/hf_eager/demo.py
+  [MISSING] family_backends[Qwen3-Embedding (qwen3 decoder)].demo_path
+            -> models/demos/qwen3_embedding
+  [MISSING] family_backends[Qwen3-Embedding-8B (qwen3 decoder, 8B)].demo_path
+            -> models/demos/qwen3_embedding_8b
+  [MISSING] family_backends[XTTS-v2 (multilingual TTS)].demo_path
+            -> models/demos/xtts_v2
+  [MISSING] family_backends[tt_dit/minimax_h3 (auto-upstream)].demo_path
+            -> models/tt_dit/pipelines/minimax_h3
+  [MISSING] reuse_registry[vision_qwen3vl].tt_path
+            -> models/tt_dit/encoders/qwen3vl/vision_qwen3vl.py
+  [MISSING] reuse_registry[decoder_minimax_h3_audio].tt_path
+            -> models/tt_dit/models/audio_vae/minimax_h3/decoder_minimax_h3_audio.py
+  [MISSING] reuse_registry[encoder_minimax_h3_audio].tt_path
+            -> models/tt_dit/models/audio_vae/minimax_h3/encoder_minimax_h3_audio.py
+  [MISSING] reuse_registry[adaln_cache_minimax_h3].tt_path
+            -> models/tt_dit/models/transformers/minimax_h3/adaln_cache_minimax_h3.py
+  [MISSING] reuse_registry[attention_minimax_h3].tt_path
+            -> models/tt_dit/models/transformers/minimax_h3/attention_minimax_h3.py
+  [MISSING] reuse_registry[token_refiner_minimax_h3].tt_path
+            -> models/tt_dit/models/transformers/minimax_h3/token_refiner_minimax_h3.py
+  [MISSING] reuse_registry[transformer_block_minimax_h3].tt_path
+            -> models/tt_dit/models/transformers/minimax_h3/transformer_block_minimax_h3.py
+  [MISSING] reuse_registry[transformer_minimax_h3].tt_path
+            -> models/tt_dit/models/transformers/minimax_h3/transformer_minimax_h3.py
+  [MISSING] reuse_registry[conv_minimax_h3].tt_path
+            -> models/tt_dit/models/vae/minimax_h3/conv_minimax_h3.py
+  [MISSING] reuse_registry[decoder_minimax_h3].tt_path
+            -> models/tt_dit/models/vae/minimax_h3/decoder_minimax_h3.py
+  [MISSING] reuse_registry[encoder_minimax_h3].tt_path
+            -> models/tt_dit/models/vae/minimax_h3/encoder_minimax_h3.py
+  [MISSING] reuse_registry[stitch_device_minimax_h3].tt_path
+            -> models/tt_dit/models/vae/minimax_h3/stitch_device_minimax_h3.py
+  [MISSING] reuse_registry[vae_minimax_h3].tt_path
+            -> models/tt_dit/models/vae/minimax_h3/vae_minimax_h3.py
+  [isolation] worktree: /tmp/tt_hw_planner__localdev_lserbedzija_hf_models_voxtral-tts-full_1786816283
+  [isolation] hydrated 69 NEW upstream file(s) from remote:50a82f835593 into the worktree (add-only: fresh reuse/adapt siblings, existing modules untouched)
+[overlay] apply_for(_shared): no index.json at /localdev/lserbedzija/repos/tt-metal-pr46283/scripts/tt_hw_planner/overlays/_shared/index.json — scope appears uninitialized OR the index was deleted from disk. No patches will apply.
+[overlay] apply_for(/localdev/lserbedzija/hf_models/voxtral-tts-full): no index.json at /localdev/lserbedzija/repos/tt-metal-pr46283/scripts/tt_hw_planner/overlays/_localdev_lserbedzija_hf_models_voxtral-tts-full/index.json — scope appears uninitialized OR the index was deleted from disk. No patches will apply.
+  [auto:claude] tiered model switching enabled for repair loops: light=haiku, heavy=sonnet → super_heavy=opus
+
+==============================================================================
+  Step 0/6  Pre-flight checks for /localdev/lserbedzija/hf_models/voxtral-tts-full
+==============================================================================
+  transformers can load `/localdev/lserbedzija/hf_models/voxtral-tts-full` locally   [ok]
+
+==============================================================================
+  Step 1/6  Static analysis (plan + compat)
+==============================================================================
+==============================================================================
+  Model:        /localdev/lserbedzija/hf_models/voxtral-tts-full
+  Category:     TTS     (pipeline_tag=None, library=transformers)
+==============================================================================
+
+  On-disk weights:  16.02 GB  (saved as fp32)
+  Total parameters: 4.00 B (exact)
+
+  Probe knobs:  batch=1  seq/horizon=8192  KV dtype=bf16
+
+  ------------------------------------------------------------------------
+  BOX       DTYPE      PER-CHIP     USABLE    HEADROOM  VERDICT
+  ------------------------------------------------------------------------
+  P150      bf16           9.01G    29.20G     20.19G  FITS (comfortable)
+  ------------------------------------------------------------------------
+
+  RECOMMENDATION: P150 with bf16 weights
+                  per-chip=9.0 GB, headroom=20.2 GB
+                  verdict: FITS (comfortable)
+                  Single Blackhole (p150).
+                  Runtime mesh is selected in `prepare` after TP/divisibility and demo constraints.
+
+  Category guidance (TTS):
+    Text-to-speech. Closest template: models/demos/qwen3_tts/.
+
+  CONFIDENCE: LOW
+              Category-level estimates only. Smoke-test before deciding.
+============================================================================================
+HF model:          /localdev/lserbedzija/hf_models/voxtral-tts-full
+Architecture:      Llama-family causal LM (INFERRED from config fields, model_type='voxtral_tts' is not a known name; config declares 3 stacks: backbone, flow, codec)
+Overall verdict:   READY
+                   All required blocks already exist in models/tt_transformers/. Likely drop-in via the existing porting checklist.
+============================================================================================
+
+REPO DISCOVERY -- where the model lives in tt-metal source:
+  Repo discovery: UNKNOWN
+    No references found in models/ — not yet ported.
+  --> This model is not yet referenced anywhere in models/. See the
+      block-by-block analysis below for what a port would entail.
+
+SECTION 1 -- Building-block availability (does TT have a module for each HF concept?)
+--------------------------------------------------------------------------------------------
+STATUS  BLOCK                            EFFORT                   TT IMPLEMENTATION
+--------------------------------------------------------------------------------------------
+[ ok ]  Token embedding                  drop-in                  models/tt_transformers/tt/embedding.py
+[ ok ]  GQA attention                    drop-in                  models/tt_transformers/tt/attention.py
+[ ok ]  Standard RoPE                    drop-in                  models/tt_transformers/tt/rope.py
+[ ok ]  RMSNorm (text)                   drop-in                  models/tt_transformers/tt/distributed_norm.py (wraps models/common/rmsnorm.py)
+[ ok ]  SwiGLU MLP                       drop-in                  models/tt_transformers/tt/mlp.py
+[ ok ]  LM head                          drop-in                  models/tt_transformers/tt/lm_head.py
+[ ok ]  Checkpoint key remap             drop-in                  models/tt_transformers/tt/load_checkpoints.py
+[ ok ]  Tokenizer                        drop-in                  HF AutoTokenizer.from_pretrained(HF_MODEL)
+[ ok ]  Generator / inference loop       drop-in                  models/tt_transformers/tt/generator.py
+[ ok ]  Top-k / sampling                 drop-in                  ttnn.argmax / ttnn.topk + on-device sampling helpers
+
+--------------------------------------------------------------------------------------------
+Summary: 10 ready  /  0 partial  /  0 missing
+
+
+SECTION 2 -- Kernel-level constraints (do the model's shapes/dtypes satisfy TTNN ops?)
+--------------------------------------------------------------------------------------------
+STATUS  OP                                               FIELD                    CONSTRAINT
+--------------------------------------------------------------------------------------------
+[warn]  ttnn.topk (sampling)                             vocab_size=131072        multi-core top-k requires vocab to be a power of 2 AND < 65536; else falls back to single-core
+        fix: No action needed - kernel will use the single-core path. Decode
+        throughput will be lower.
+
+Per-TP divisibility:
+  TP=1   [ ok ]  all divisibility constraints satisfied
+  TP=2   [ ok ]  all divisibility constraints satisfied
+  TP=4   [ ok ]  all divisibility constraints satisfied
+  TP=8   [ ok ]  all divisibility constraints satisfied
+  TP=32  [FAIL]  num_key_value_heads=8
+
+  Note: TP failures rule out that mesh shape, not the model overall.
+        Pick a TP from the rows marked [ ok ] above.
+  Memory fit gate SKIPPED: no LLM-style memory model produced — typically a vision / multi-modal model whose memory budget is dominated by per-op scratch, not weights. Compat gate already covered architectural support.
+  Sibling candidates (top 2, exact first):
+    1. hf_eager universal (TTS)  [score=40; category 'TTS' default (generic runner)]
+    2. XTTS-v2 (multilingual TTS)  [score=30; category 'TTS' default]
+  Backend match: LLM-RESOLVED  (XTTS-v2 (multilingual TTS))  (deterministic keys did not exact-match model_type='voxtral_tts'; the registry-constrained LLM ranker chose this as the closest architectural sibling)
+  NOT routing to the generic LLM demo: family was INFERRED from config structure, not a known model_type; config declares 3 stacks (backbone, flow, codec) and the block checklist covers the decoder stack only. Scaffolding this model's own stubs instead.
+
+========================================================================
+  META-PLAN  feasibility = MEDIUM
+========================================================================
+  The tts_backbone (26x VoxtralDecoderLayer with RMSNorm/Attention/MLP) is a standard Llama-style transformer stack that maps cleanly onto REUSE/ADAPT ops, so that portion should converge normally. The risk is concentrated in codec_decoder and flow_matching, which both discovered as single opaque leaves (occ=1, leaves=1) rather than decomposed submodules -- meaning op_emitter has no per-op target list for them and will need bespoke porting. Prior work in this repo on this exact model (see commit history and the FSQ/reductions findings) already drove full e2e PCC to 0.9986-0.99988 fully on device, so a working path is known, but it required non-default fixes (decomposed reductions, split matmuls, fp32_dest_acc_en on rms_norm) that the auto-iterate loop will not discover on its own.
+
+  risks (5):
+    - codec_decoder (VoxtralCodecDecoder) and flow_matching (VoxtralFlowMatching) both report leaves=1 -- discovery didn't decompose them, so the loop has no granular op targets and may try to treat each as one REUSE/ADAPT unit instead of the dozens of ops actually inside
+    - Conv1d is absent from both the REUSE and ADAPT lists (only Conv2d/ConvTranspose2d are listed); audio codec/vocoder stacks almost always use Conv1d, so it can silently fall through as unsupported rather than being flagged NEW
+    - Audio codecs of this shape typically use RVQ/FSQ-style codebook quantization (argmin/nearest-code lookup), which is not a standard NN op and is exactly the block previously implicated in this repo's Voxtral-TTS code-flip PCC issue
+    - flow_matching implies iterative ODE/CFG sampling (repeated timestep-conditioned forward passes), a control-flow pattern the single-leaf discovery doesn't capture and that the emitter's static-graph assumption may mishandle
+    - 53x RMSNorm and dozens of matmuls across 26 layers are precision-sensitive on this hardware -- known to need fp32_dest_acc_en and decomposed (not summed) reductions to avoid the ~1% PCC bleed already documented for this model
+
+  recommendations (6):
+    - Graduate tts_backbone first via the normal REUSE/ADAPT path -- it's the highest-confidence, lowest-risk component and validates the loop mechanics before spending budget on the two custom blocks
+    - Before iterating on codec_decoder/flow_matching, run a targeted trace/submodule dump to get real leaf ops -- don't trust the emitter's single-node view for either
+    - Proactively apply the fixes already proven for this model: decompose fp32 reductions as mean (not sum) and split precision-critical matmuls, per the prior finding that got e2e PCC to 0.99988; don't let the loop rediscover this from scratch
+    - Enable fp32_dest_acc_en on every rms_norm call in tts_backbone up front rather than waiting for a PCC failure to surface it
+    - If codec_decoder uses Conv1d or an RVQ/FSQ codebook lookup, classify it as NEW explicitly and hand-port it rather than letting the loop attempt an ADAPT match against Conv2d/GroupNorm
+    - If flow_matching uses iterative sampling, unroll a fixed small step count in the emitted graph rather than relying on the loop to infer dynamic control flow
+
+  (advisory only; proceeding with auto-iterate loop. Disable via --no-meta-plan.)
+
+==============================================================================
+  Step 2/6  Scaffold the demo folder for /localdev/lserbedzija/hf_models/voxtral-tts-full
+==============================================================================
+==============================================================================
+  SCAFFOLDING /localdev/lserbedzija/hf_models/voxtral-tts-full  (compat=FAMILY TEMPLATE (TTS))
+==============================================================================
+
+  Sibling:        /local/ttuser/apande/models/XTTS-v2-hf
+  Sibling base:   xtts_v2  (XTTS-v2-hf)
+  New base:       voxtral-tts-full  (voxtral-tts-full)
+  Compat note:    Scaffolded from `XTTS-v2 (multilingual TTS)` (models/demos/xtts_v2). Component plan: 3 REUSE / 4 NEW — see BRING_UP_PLAN.md.
+
+  Proposed changes:
+    A  models/demos/voxtral_tts_full/demo/demo.py
+          copied from (skeleton — no sibling source)
+    A  models/demos/voxtral_tts_full/demo/__init__.py
+          copied from (skeleton — no sibling source)
+    A  models/demos/voxtral_tts_full/__init__.py
+          copied from (skeleton — no sibling source)
+    A  models/demos/voxtral_tts_full/BRING_UP_PLAN.md
+    A  models/demos/voxtral_tts_full/bringup_status.json
+    A  models/demos/voxtral_tts_full/kernel_findings.json
+    A  models/demos/voxtral_tts_full/_stubs/tts_backbone.py
+    A  models/demos/voxtral_tts_full/_stubs/decoder_layer.py
+    A  models/demos/voxtral_tts_full/_stubs/codec_decoder.py
+    A  models/demos/voxtral_tts_full/_stubs/flow_matching.py
+
+  Component status (REUSE/ADAPT/NEW):
+    Summary: 3 REUSE, 0 ADAPT, 4 NEW
+
+    [NEW  ]  tts_backbone   transformers/src/transformers/models/voxtral_tts/modeling_voxtral_tts.py
+    [NEW  ]  decoder_layer  transformers/src/transformers/models/voxtral_tts/modeling_voxtral_tts.py
+    [REUSE]  r_m_s_norm     models/common/rmsnorm.py
+    [REUSE]  attention      models/tt_transformers/tt/attention.py
+    [REUSE]  m_l_p          models/tt_transformers/tt/mlp.py
+    [NEW  ]  codec_decoder  transformers/src/transformers/models/voxtral_tts/modeling_voxtral_tts.py
+    [NEW  ]  flow_matching  transformers/src/transformers/models/voxtral_tts/modeling_voxtral_tts.py
+
+  Missing components — 4 stub(s) generated under `_stubs/` (replace `NotImplementedError` with a real TTNN port):
+    !  tts_backbone  ->  ref: transformers/src/transformers/models/voxtral_tts/modeling_voxtral_tts.py
+    !  decoder_layer  ->  ref: transformers/src/transformers/models/voxtral_tts/modeling_voxtral_tts.py
+    !  codec_decoder  ->  ref: transformers/src/transformers/models/voxtral_tts/modeling_voxtral_tts.py
+    !  flow_matching  ->  ref: transformers/src/transformers/models/voxtral_tts/modeling_voxtral_tts.py
+
+  Warnings (review before applying):
+    [warn] no sibling source at `models/demos/xtts_v2`; emitted skeleton demo for category `TTS` (marker===ASR 0 - OUTPUT). Use the iterate loop to graduate components from CPU to TT.
+
+  Next steps:
+    python -m scripts.tt_hw_planner scaffold /localdev/lserbedzija/hf_models/voxtral-tts-full --apply
+    python -m scripts.tt_hw_planner prepare  /localdev/lserbedzija/hf_models/voxtral-tts-full --execute
+
+==============================================================================
+
+==============================================================================
+  APPLIED scaffold for /localdev/lserbedzija/hf_models/voxtral-tts-full
+==============================================================================
+
+    A  models/demos/voxtral_tts_full/demo/demo.py
+    A  models/demos/voxtral_tts_full/demo/__init__.py
+    A  models/demos/voxtral_tts_full/__init__.py
+    A  models/demos/voxtral_tts_full/BRING_UP_PLAN.md
+    A  models/demos/voxtral_tts_full/bringup_status.json
+    A  models/demos/voxtral_tts_full/kernel_findings.json
+    A  models/demos/voxtral_tts_full/_stubs/tts_backbone.py
+    A  models/demos/voxtral_tts_full/_stubs/decoder_layer.py
+    A  models/demos/voxtral_tts_full/_stubs/codec_decoder.py
+    A  models/demos/voxtral_tts_full/_stubs/flow_matching.py
+
+  Now run:
+    python -m scripts.tt_hw_planner prepare /localdev/lserbedzija/hf_models/voxtral-tts-full --execute
+
+  To undo:
+    rm -rf models/demos/voxtral_tts_full
+
+  Component-level bring-up plan written to:
+    models/demos/voxtral_tts_full/BRING_UP_PLAN.md
+    models/demos/voxtral_tts_full/bringup_status.json
+
+  Component status (REUSE/ADAPT/NEW):
+    Summary: 3 REUSE, 0 ADAPT, 4 NEW
+
+    [NEW  ]  tts_backbone   transformers/src/transformers/models/voxtral_tts/modeling_voxtral_tts.py
+    [NEW  ]  decoder_layer  transformers/src/transformers/models/voxtral_tts/modeling_voxtral_tts.py
+    [REUSE]  r_m_s_norm     models/common/rmsnorm.py
+    [REUSE]  attention      models/tt_transformers/tt/attention.py
+    [REUSE]  m_l_p          models/tt_transformers/tt/mlp.py
+    [NEW  ]  codec_decoder  transformers/src/transformers/models/voxtral_tts/modeling_voxtral_tts.py
+    [NEW  ]  flow_matching  transformers/src/transformers/models/voxtral_tts/modeling_voxtral_tts.py
+
+  Missing components — 4 stub(s) generated under `_stubs/` (replace `NotImplementedError` with a real TTNN port):
+    !  tts_backbone  ->  ref: transformers/src/transformers/models/voxtral_tts/modeling_voxtral_tts.py
+    !  decoder_layer  ->  ref: transformers/src/transformers/models/voxtral_tts/modeling_voxtral_tts.py
+    !  codec_decoder  ->  ref: transformers/src/transformers/models/voxtral_tts/modeling_voxtral_tts.py
+    !  flow_matching  ->  ref: transformers/src/transformers/models/voxtral_tts/modeling_voxtral_tts.py
+
+  Workflow:
+    1. Read BRING_UP_PLAN.md.  REUSE rows = import the sibling tt-module unchanged.
+    2. NEW rows = replace the matching `_stubs/*.py` with a real TTNN port.
+    3. Once every NEW stub is implemented, re-run `prepare --execute`.
+
+==============================================================================
+
+==============================================================================
+  Step 3/6  LLM gate — does this model need an LLM to finish bring-up?
+==============================================================================
+  ============================================================
+  >>>  VERDICT: LLM REQUIRED                                <<<
+  >>>  (4/7 components need LLM: 4 NEW + 0 ADAPT)  <<<
+  ============================================================
+
+  Component classification: 3 REUSE, 0 ADAPT, 4 NEW (total 7)
+
+  Anthropic (Claude) credentials confirmed — LLM loop will run after Phase-1.
+
+==============================================================================
+  Step 4/6  Phase-1 unblock: autofill NEW stubs with torch fallback
+==============================================================================
+Phase-1 torch-fallback autofill:
+  [op-synth:reuse=0,adapt=0,new=105]  tts_backbone
+  [op-synth:reuse=0,adapt=0,new=4]  decoder_layer
+  [canonical-wrapper:models/common/rmsnorm.py]  r_m_s_norm
+  [canonical-wrapper:models/tt_transformers/tt/attention.py]  attention
+  [canonical-wrapper:models/tt_transformers/tt/mlp.py]  m_l_p
+  [op-synth:reuse=0,adapt=0,new=1]  codec_decoder
+  [op-synth:reuse=0,adapt=0,new=1]  flow_matching
+
+The demo now runs the HF reference module on host CPU for these components; the TT device path is exercised end-to-end. Replace each `_stubs/<component>.py` body with TTNN ops to move that component onto TT hardware (Phase 2).
+
+==============================================================================
+  Step 5/6  Build the runnable pytest invocation (prepare)
+==============================================================================
+==============================================================================
+  BRING-UP READY — /localdev/lserbedzija/hf_models/voxtral-tts-full on P150 mesh [1,1]
+  Backend: scaffolded stubs (7 component(s)) for /localdev/lserbedzija/hf_models/voxtral-tts-full
+==============================================================================
+
+  Planner verdict:  n/a (non-LLM family backend) on P150, bf16, headroom 0.0 GB
+  Compat verdict:   READY
+                    All required blocks already exist in models/tt_transformers/. Likely drop-in via the existing porting checklist.
+
+  Notes:
+    - SCAFFOLDED RUN: targeting models/demos/voxtral_tts_full/tests/pcc/ — exercises the 7 TTNN stub(s) under models/demos/voxtral_tts_full/_stubs/ on TT hardware (one PCC test per NEW component). This is the model's OWN code, not a sibling template.
+    - Coqui XTTS-v2: multilingual zero-shot text-to-speech model. GPT-2 autoregressive backbone generates prosodic audio tokens from text; a HiFi-GAN vocoder decodes tokens to waveforms; a ResNet-based speaker encoder enables voice cloning. Supports 17 languages. Architecture is all-NEW (no existing tt-metal demo to clone).
+
+  Tuning tables: not applicable (external demo).
+
+  Copy-paste to run from repo root:
+
+    export HF_MODEL="/localdev/lserbedzija/hf_models/voxtral-tts-full"
+    export PLANNER_TARGET_HF_MODEL="/localdev/lserbedzija/hf_models/voxtral-tts-full"
+
+    cd /tmp/tt_hw_planner__localdev_lserbedzija_hf_models_voxtral-tts-full_1786816283
+    pytest \
+        -p scripts.tt_hw_planner.instrumentation \
+        -p scripts.tt_hw_planner.cpu_compat_pytest_plugin \
+        models/demos/voxtral_tts_full/tests/pcc/test_tts_backbone.py \
+        models/demos/voxtral_tts_full/tests/pcc/test_codec_decoder.py \
+        models/demos/voxtral_tts_full/tests/pcc/test_attention.py \
+        models/demos/voxtral_tts_full/tests/pcc/test_m_l_p.py \
+        models/demos/voxtral_tts_full/tests/pcc/test_r_m_s_norm.py \
+        models/demos/voxtral_tts_full/tests/pcc/test_decoder_layer.py \
+        models/demos/voxtral_tts_full/tests/pcc/test_flow_matching.py \
+        -svv \
+        -k 'not test_perf_device and not test_e2e_performant and not benchmark and not test_perf and not stress' \
+        --timeout=1800
+
+==============================================================================
+  [auto:claude] tiered model switching enabled: light=haiku, heavy=sonnet → super_heavy=opus
+
+==============================================================================
+  Step 6/6  Bring-up (cc engine) — harness loop on the per-component gate
+==============================================================================
+  [reverify] cleared 0 restored graduation snapshot(s) — every component re-verifies (PCC re-run) this run; stubs kept, markers re-earned
+  [topology] graduated split recorded → parallelism_manifest.json (chips=1 TP=1 DP=1)
+
+==============================================================================
+  Step 6/6  Bring-up (cc engine) — harness loop on the per-component gate for /localdev/lserbedzija/hf_models/voxtral-tts-full
+==============================================================================
+  [recompose-link] synthesized 1 parent->on-device-children linkage(s):
+     · [recompose-link] `decoder_layer` (backbone.layers.0) -> 3 on-device child component(s): r_m_s_norm, attention, m_l_p
+  [recompose] `decoder_layer` ready — all children on device; restored as whole-module target, locked against re-decomposition (live stub kept)
+  [preflight] running HF model once to capture REAL IO tensors for 7 pending component(s) (skips graduated ones)
+  [capture] loading /localdev/lserbedzija/hf_models/voxtral-tts-full (seed=0) ...
+  [hf-variants] /localdev/lserbedzija/hf_models/voxtral-tts-full via AutoModelForCausalLM -> VoxtralTtsForConditionalGeneration
+  [capture] selected AutoModelForCausalLM (VoxtralTtsForConditionalGeneration) resolving 7/7 component(s)
+  [capture] running drivers with pixel_values shape (1, 3, 224, 224) on 7 hook(s) ...
+The OrderedVocab you are attempting to save contains holes for indices [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289, 290, 291, 292, 293, 294, 295, 296, 297, 298, 299, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346, 347, 348, 349, 350, 351, 352, 353, 354, 355, 356, 357, 358, 359, 360, 361, 362, 363, 364, 365, 366, 367, 368, 369, 370, 371, 372, 373, 374, 375, 376, 377, 378, 379, 380, 381, 382, 383, 384, 385, 386, 387, 388, 389, 390, 391, 392, 393, 394, 395, 396, 397, 398, 399, 400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410, 411, 412, 413, 414, 415, 416, 417, 418, 419, 420, 421, 422, 423, 424, 425, 426, 427, 428, 429, 430, 431, 432, 433, 434, 435, 436, 437, 438, 439, 440, 441, 442, 443, 444, 445, 446, 447, 448, 449, 450, 451, 452, 453, 454, 455, 456, 457, 458, 459, 460, 461, 462, 463, 464, 465, 466, 467, 468, 469, 470, 471, 472, 473, 474, 475, 476, 477, 478, 479, 480, 481, 482, 483, 484, 485, 486, 487, 488, 489, 490, 491, 492, 493, 494, 495, 496, 497, 498, 499, 500, 501, 502, 503, 504, 505, 506, 507, 508, 509, 510, 511, 512, 513, 514, 515, 516, 517, 518, 519, 520, 521, 522, 523, 524, 525, 526, 527, 528, 529, 530, 531, 532, 533, 534, 535, 536, 537, 538, 539, 540, 541, 542, 543, 544, 545, 546, 547, 548, 549, 550, 551, 552, 553, 554, 555, 556, 557, 558, 559, 560, 561, 562, 563, 564, 565, 566, 567, 568, 569, 570, 571, 572, 573, 574, 575, 576, 577, 578, 579, 580, 581, 582, 583, 584, 585, 586, 587, 588, 589, 590, 591, 592, 593, 594, 595, 596, 597, 598, 599, 600, 601, 602, 603, 604, 605, 606, 607, 608, 609, 610, 611, 612, 613, 614, 615, 616, 617, 618, 619, 620, 621, 622, 623, 624, 625, 626, 627, 628, 629, 630, 631, 632, 633, 634, 635, 636, 637, 638, 639, 640, 641, 642, 643, 644, 645, 646, 647, 648, 649, 650, 651, 652, 653, 654, 655, 656, 657, 658, 659, 660, 661, 662, 663, 664, 665, 666, 667, 668, 669, 670, 671, 672, 673, 674, 675, 676, 677, 678, 679, 680, 681, 682, 683, 684, 685, 686, 687, 688, 689, 690, 691, 692, 693, 694, 695, 696, 697, 698, 699, 700, 701, 702, 703, 704, 705, 706, 707, 708, 709, 710, 711, 712, 713, 714, 715, 716, 717, 718, 719, 720, 721, 722, 723, 724, 725, 726, 727, 728, 729, 730, 731, 732, 733, 734, 735, 736, 737, 738, 739, 740, 741, 742, 743, 744, 745, 746, 747, 748, 749, 750, 751, 752, 753, 754, 755, 756, 757, 758, 759, 760, 761, 762, 763, 764, 765, 766, 767, 768, 769, 770, 771, 772, 773, 774, 775, 776, 777, 778, 779, 780, 781, 782, 783, 784, 785, 786, 787, 788, 789, 790, 791, 792, 793, 794, 795, 796, 797, 798, 799, 800, 801, 802, 803, 804, 805, 806, 807, 808, 809, 810, 811, 812, 813, 814, 815, 816, 817, 818, 819, 820, 821, 822, 823, 824, 825, 826, 827, 828, 829, 830, 831, 832, 833, 834, 835, 836, 837, 838, 839, 840, 841, 842, 843, 844, 845, 846, 847, 848, 849, 850, 851, 852, 853, 854, 855, 856, 857, 858, 859, 860, 861, 862, 863, 864, 865, 866, 867, 868, 869, 870, 871, 872, 873, 874, 875, 876, 877, 878, 879, 880, 881, 882, 883, 884, 885, 886, 887, 888, 889, 890, 891, 892, 893, 894, 895, 896, 897, 898, 899, 900, 901, 902, 903, 904, 905, 906, 907, 908, 909, 910, 911, 912, 913, 914, 915, 916, 917, 918, 919, 920, 921, 922, 923, 924, 925, 926, 927, 928, 929, 930, 931, 932, 933, 934, 935, 936, 937, 938, 939, 940, 941, 942, 943, 944, 945, 946, 947, 948, 949, 950, 951, 952, 953, 954, 955, 956, 957, 958, 959, 960, 961, 962, 963, 964, 965, 966, 967, 968, 969, 970, 971, 972, 973, 974, 975, 976, 977, 978, 979, 980, 981, 982, 983, 984, 985, 986, 987, 988, 989, 990, 991, 992, 993, 994, 995, 996, 997, 998, 999], your vocabulary could be corrupted!
+  [capture] driver `model(input_ids=..., attention_mask=...) [10 tokens]`: AssertionError: prompt has 0 audio placeholders but the preset has 169 rows. The count is voice-specific — re-dump the prompt for THIS voice:
+    <venv>/bin/python models/experimental/voxtral_tts/scripts/dump_prompt_ids.py --text '...' --voice <name>
+  [capture] driver `model(pixel_values=...)`: ok
+  [capture] loaded 2 learned driver(s)
+  [capture] generic-driver: introspected_forward: forward raised: AssertionError: prompt has 0 audio placeholders but the preset has 169 rows. The count is voice-specific — re-dump the prompt for THIS voice:
+    <venv>/bin/python models/experimental/voxtral_tts/scripts/dump_prompt_ids.py --text '...' --voice <name>
+  [capture] tts_backbone: captured args=1 kwargs=0 output=tensor
+  [capture] decoder_layer: captured args=4 kwargs=0 output=tensor
+  [capture] r_m_s_norm: captured args=1 kwargs=0 output=tensor
+  [capture] attention: captured args=5 kwargs=0 output=tensor
+  [capture] m_l_p: captured args=1 kwargs=0 output=tensor
+  [capture] codec_decoder: captured args=1 kwargs=0 output=tensor
+  [capture] flow_matching: captured args=1 kwargs=1 output=tensor
+  [preflight] captured 7/7 components; per-component PCC tests will use real inputs
+
+==============================================================================
+  BRING-UP (cc) round 1 for /localdev/lserbedzija/hf_models/voxtral-tts-full: target=`attention` rung=emit (graduated 0) → invoke claude → gate
+==============================================================================
+  · round 1 working… 56s, 7 tool calls
+  · round 1 working… 103s, 14 tool calls
+  · round 1 working… 149s, 18 tool calls
+  · round 1 working… 194s, 20 tool calls
+  · round 1 working… 240s, 23 tool calls
+  · round 1 working… 285s, 25 tool calls
+  · round 1 working… 331s, 25 tool calls
+  · round 1 working… 377s, 25 tool calls
+  · round 1 working… 445s, 27 tool calls
+  · round 1 working… 491s, 28 tool calls
+  · round 1 working… 538s, 29 tool calls
+  · round 1 working… 621s, 30 tool calls
+  · round 1 working… 684s, 32 tool calls
+  · round 1 working… 729s, 34 tool calls
+  · round 1 working… 793s, 43 tool calls
+  | time  | event         | module                                             | graduated | left |
+  |-------|---------------|----------------------------------------------------|-----------|------|
+  | 00:00 | ✓ GRADUATED   | attention                                          | 1/7       | 6    |
+  · round 1 working… 839s, 43 tool calls
+  · round 1 working… 885s, 43 tool calls
+  · round 1 working… 930s, 45 tool calls
+  · round 1 working… 976s, 45 tool calls
+  · round 1 working… 1022s, 48 tool calls
+  · round 1 working… 1121s, 49 tool calls
+  · round 1 working… 1177s, 50 tool calls
+  · round 1 working… 1227s, 52 tool calls
+  · round 1 working… 1279s, 53 tool calls
+  · round 1 working… 1333s, 56 tool calls
+  | 08:59 | ✓ GRADUATED   | codec_decoder                                      | 2/7       | 5    |
+  · round 1 working… 1386s, 62 tool calls
+  · round 1 working… 1442s, 64 tool calls
+  · round 1 working… 1488s, 66 tool calls
+  | 11:35 | ✓ GRADUATED   | decoder_layer                                      | 3/7       | 4    |
+  · round 1 working… 1535s, 66 tool calls
+  · round 1 working… 1581s, 68 tool calls
+  · round 1 working… 1627s, 70 tool calls
+  · round 1 working… 1680s, 72 tool calls
+  · round 1 working… 1735s, 74 tool calls
+  · round 1 working… 1787s, 75 tool calls
+  · round 1 working… 1832s, 77 tool calls
+  · round 1 working… 1878s, 79 tool calls
+  · round 1 working… 1925s, 83 tool calls
+  | 18:51 | ✓ GRADUATED   | flow_matching                                      | 4/7       | 3    |
+  · round 1 working… 1987s, 87 tool calls
+  · round 1 working… 2043s, 92 tool calls
+  | 20:50 | ✓ GRADUATED   | m_l_p                                              | 5/7       | 2    |
+  · round 1 working… 2089s, 95 tool calls
+  | 21:35 | ✓ GRADUATED   | r_m_s_norm                                         | 6/7       | 1    |
+  · round 1 working… 2141s, 99 tool calls
+  · round 1 working… 2201s, 99 tool calls
+  · round 1 working… 2252s, 100 tool calls
+  · round 1 working… 2299s, 104 tool calls
+  | 25:05 | ✓ GRADUATED   | tts_backbone                                       | 7/7       | 0    |
+  · round 1 working… 2359s, 104 tool calls
+  · round 1 working… 2421s, 107 tool calls
+  · round 1 working… 2474s, 110 tool calls
+  · round 1 working… 2532s, 113 tool calls
+
+==============================================================================
+  BRING-UP (cc) DONE for /localdev/lserbedzija/hf_models/voxtral-tts-full
+==============================================================================
+  rounds=1  graduated=7: attention, codec_decoder, decoder_layer, flow_matching, m_l_p, r_m_s_norm, tts_backbone
+  compute split (TT device vs CPU): 7/7 on device (100%), 0/7 on CPU (0%)
+    Graduated (ON_DEVICE) : 4/7 (57%) actually graduated (native stub, PCC-verified)
+    on device : REUSE-wired=3  ADAPT-wired=0  NEW-native=4  NEW-partial-CPU=0
+    on CPU    : NEW-fallback=0  REUSE/ADAPT-not-wired=0
+  operations: 114/114 on device (100%), 0/114 on CPU (0%)
+==============================================================================
+
+==============================================================================
+  BRING-UP REPORT — /localdev/lserbedzija/hf_models/voxtral-tts-full
+  RUN ENDED: bring-up complete — gate can_stop (all components graduated or fell back)
+  on device: 7   kernel-missing: 0   pending: 0
+  NEXT STEP: wire the pipeline:
+    python -m scripts.tt_hw_planner emit-e2e /localdev/lserbedzija/hf_models/voxtral-tts-full
+  full report + per-module pytest → /tmp/tt_hw_planner__localdev_lserbedzija_hf_models_voxtral-tts-full_1786816283/models/demos/voxtral_tts_full/RUN_REPORT.md
+==============================================================================
+  [isolation] full success — capturing LLM deltas as overlay for /localdev/lserbedzija/hf_models/voxtral-tts-full
+  [isolation] persisted graduated demo (stubs+snapshots+status+report) -> models/demos/voxtral_tts_full
+  [isolation] captured 38 LLM delta(s); destroying worktree

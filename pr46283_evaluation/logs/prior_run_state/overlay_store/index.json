@@ -1,0 +1,314 @@
+{
+  ".tt_hw_planner_session.json": {
+    "captured_ts": 1786792068.8995876,
+    "classification": "other",
+    "line_count": 13,
+    "patch_file": ".tt_hw_planner_session.json.patch",
+    "sha256": "f150d0ff533e11b1f2af2fbbbc276abd2e7f0ce38154635b66305e1aef5055e1",
+    "source": "captured_from_bringup"
+  },
+  "conftest.py": {
+    "captured_ts": 1786792068.868152,
+    "classification": "other",
+    "line_count": 40,
+    "patch_file": "conftest.py.patch",
+    "sha256": "7289012de333902f044ad5c1a4584e9f007a67a1ccc138c7c42aa3c3c8edab13",
+    "source": "captured_from_bringup"
+  },
+  "models/demos/voxtral_tts_full/": {
+    "captured_ts": 1786792068.949603,
+    "classification": "other",
+    "line_count": 12111,
+    "patch_file": "models__demos__voxtral_tts_full__.patch",
+    "sha256": "ef74f1c97f874ac7cf7cadbddbc9009a4c4164526ba89b4b468f40c9c6b75c5b",
+    "source": "captured_from_bringup"
+  },
+  "models/demos/voxtral_tts_full/_stubs/attention.py": {
+    "captured_ts": 1786792069.6301148,
+    "classification": "other",
+    "line_count": 247,
+    "patch_file": "models__demos__voxtral_tts_full___stubs__attention.py.patch",
+    "sha256": "3366806a10ce1c65be559bd4381cfa6a853dc17c5ecba474abb42c48e1d3f887",
+    "source": "captured_from_bringup"
+  },
+  "models/demos/voxtral_tts_full/_stubs/codec_decoder.py": {
+    "captured_ts": 1786792069.6107132,
+    "classification": "other",
+    "line_count": 306,
+    "patch_file": "models__demos__voxtral_tts_full___stubs__codec_decoder.py.patch",
+    "sha256": "7145ee2c39af9f4ff9a82ced8e922f573ef806eb037c4d4a5b373f3f005f2819",
+    "source": "captured_from_bringup"
+  },
+  "models/demos/voxtral_tts_full/_stubs/decoder_layer.py": {
+    "captured_ts": 1786792069.686985,
+    "classification": "other",
+    "line_count": 94,
+    "patch_file": "models__demos__voxtral_tts_full___stubs__decoder_layer.py.patch",
+    "sha256": "3c4e8b71846e27b0f62ea1848c6c5f608d4f7dcd16f027da4c843ea8ffaebe99",
+    "source": "captured_from_bringup"
+  },
+  "models/demos/voxtral_tts_full/_stubs/flow_matching.py": {
+    "captured_ts": 1786792069.7061622,
+    "classification": "other",
+    "line_count": 244,
+    "patch_file": "models__demos__voxtral_tts_full___stubs__flow_matching.py.patch",
+    "sha256": "e496faae51b34bc7538bffc646c0a05e9715d080d58206028beed0adc913a018",
+    "source": "captured_from_bringup"
+  },
+  "models/demos/voxtral_tts_full/_stubs/m_l_p.py": {
+    "captured_ts": 1786792069.6491067,
+    "classification": "other",
+    "line_count": 58,
+    "patch_file": "models__demos__voxtral_tts_full___stubs__m_l_p.py.patch",
+    "sha256": "8e57944ed15234b739e097e0f76aafa9ccd3cfebffb57b86e0fa90ad7a8286be",
+    "source": "captured_from_bringup"
+  },
+  "models/demos/voxtral_tts_full/_stubs/r_m_s_norm.py": {
+    "captured_ts": 1786792069.667928,
+    "classification": "other",
+    "line_count": 67,
+    "patch_file": "models__demos__voxtral_tts_full___stubs__r_m_s_norm.py.patch",
+    "sha256": "8695125f73d04ebe9e3775fbbd8e35f48e23b38fce8efd3fd24c2d5d3dc96380",
+    "source": "captured_from_bringup"
+  },
+  "models/demos/voxtral_tts_full/_stubs/tts_backbone.py": {
+    "captured_ts": 1786792069.5919921,
+    "classification": "other",
+    "line_count": 78,
+    "patch_file": "models__demos__voxtral_tts_full___stubs__tts_backbone.py.patch",
+    "sha256": "6e8963e9b9d5502460abb9f045c810dd959a47b390d2aa6c9ac0c109d7ef0cb5",
+    "source": "captured_from_bringup"
+  },
+  "models/demos/voxtral_tts_full/demo/__init__.py": {
+    "captured_ts": 1786792069.9070766,
+    "classification": "shared",
+    "line_count": 8,
+    "patch_file": "models__demos__voxtral_tts_full__demo____init__.py.patch",
+    "sha256": "bbe871323e9ef50170805cff74ef77e6699bb7e38ffb0b1634ec645596076e14",
+    "source": "captured_from_bringup"
+  },
+  "models/demos/voxtral_tts_full/demo/demo.py": {
+    "captured_ts": 1786792069.8888683,
+    "classification": "shared",
+    "line_count": 96,
+    "patch_file": "models__demos__voxtral_tts_full__demo__demo.py.patch",
+    "sha256": "063da3682a4e3c7624474a143f70d2ab5d7bd67348bdb6c89a3a0dd8ae2842ed",
+    "source": "captured_from_bringup"
+  },
+  "models/demos/voxtral_tts_full/tests/pcc/conftest.py": {
+    "captured_ts": 1786792069.7249131,
+    "classification": "shared",
+    "line_count": 248,
+    "patch_file": "models__demos__voxtral_tts_full__tests__pcc__conftest.py.patch",
+    "sha256": "d47bb596ea6e8577f433af75c64a0cacc91f81c9181d74757bb1862a5d8a5acc",
+    "source": "captured_from_bringup"
+  },
+  "models/demos/voxtral_tts_full/tests/pcc/test_attention.py": {
+    "captured_ts": 1786792069.8123584,
+    "classification": "shared",
+    "line_count": 752,
+    "patch_file": "models__demos__voxtral_tts_full__tests__pcc__test_attention.py.patch",
+    "sha256": "c541fb1ef6bc0e3379fa0d3be4d588d4d230cab2adbe731b7fad9eabb352fc59",
+    "source": "captured_from_bringup"
+  },
+  "models/demos/voxtral_tts_full/tests/pcc/test_codec_decoder.py": {
+    "captured_ts": 1786792069.8698926,
+    "classification": "shared",
+    "line_count": 752,
+    "patch_file": "models__demos__voxtral_tts_full__tests__pcc__test_codec_decoder.py.patch",
+    "sha256": "770260810b00db05acdc1fffc539bc3c10603bed5ea6a8b724c26d3ea75f2ba6",
+    "source": "captured_from_bringup"
+  },
+  "models/demos/voxtral_tts_full/tests/pcc/test_decoder_layer.py": {
+    "captured_ts": 1786792069.8510277,
+    "classification": "shared",
+    "line_count": 752,
+    "patch_file": "models__demos__voxtral_tts_full__tests__pcc__test_decoder_layer.py.patch",
+    "sha256": "5e97d036cc71421b8290ec983f55634d633ef7e88fd9df9846906c1a25e2d0d1",
+    "source": "captured_from_bringup"
+  },
+  "models/demos/voxtral_tts_full/tests/pcc/test_flow_matching.py": {
+    "captured_ts": 1786792069.783191,
+    "classification": "shared",
+    "line_count": 752,
+    "patch_file": "models__demos__voxtral_tts_full__tests__pcc__test_flow_matching.py.patch",
+    "sha256": "8efb2e88fc1635458f4f6ad0fe9857c5b94fb73a5ca2f1f1242aa3834431eaae",
+    "source": "captured_from_bringup"
+  },
+  "models/demos/voxtral_tts_full/tests/pcc/test_m_l_p.py": {
+    "captured_ts": 1786792069.7637029,
+    "classification": "shared",
+    "line_count": 752,
+    "patch_file": "models__demos__voxtral_tts_full__tests__pcc__test_m_l_p.py.patch",
+    "sha256": "5bbc774650a01729eec7049c6a2c865c7b4aea3ffdec1cbbd494bdb58a710885",
+    "source": "captured_from_bringup"
+  },
+  "models/demos/voxtral_tts_full/tests/pcc/test_r_m_s_norm.py": {
+    "captured_ts": 1786792069.8314652,
+    "classification": "shared",
+    "line_count": 752,
+    "patch_file": "models__demos__voxtral_tts_full__tests__pcc__test_r_m_s_norm.py.patch",
+    "sha256": "fc63ba1c8bafc02beb7481f281c063fc56392e6bfaa5e4e249c4e95f8d254c90",
+    "source": "captured_from_bringup"
+  },
+  "models/demos/voxtral_tts_full/tests/pcc/test_tts_backbone.py": {
+    "captured_ts": 1786792069.7445118,
+    "classification": "shared",
+    "line_count": 752,
+    "patch_file": "models__demos__voxtral_tts_full__tests__pcc__test_tts_backbone.py.patch",
+    "sha256": "e463a451e7bd7b50e4d384b6583ada8beba4b5845fedde102f1ace95d582cdeb",
+    "source": "captured_from_bringup"
+  },
+  "models/tt_dit/encoders/qwen3vl/loader_minimax_h3.py": {
+    "captured_ts": 1786792068.980722,
+    "classification": "other",
+    "line_count": 259,
+    "patch_file": "models__tt_dit__encoders__qwen3vl__loader_minimax_h3.py.patch",
+    "sha256": "5d6bdfba620e029093f49751ebc91b967f35a83f32eccd1c7fc173a2e083bb79",
+    "source": "captured_from_bringup"
+  },
+  "models/tt_dit/encoders/qwen3vl/vision_qwen3vl.py": {
+    "captured_ts": 1786792069.0115962,
+    "classification": "other",
+    "line_count": 881,
+    "patch_file": "models__tt_dit__encoders__qwen3vl__vision_qwen3vl.py.patch",
+    "sha256": "fd4f23ecb01996192d1e7ae8b4b82d40bfc3057ce4081951e99267745faaac0e",
+    "source": "captured_from_bringup"
+  },
+  "models/tt_dit/models/MiniMaxH3.md": {
+    "captured_ts": 1786792069.0431516,
+    "classification": "other",
+    "line_count": 459,
+    "patch_file": "models__tt_dit__models__MiniMaxH3.md.patch",
+    "sha256": "4c83dbc19b829d76da1da2fca93c43d5cbadff11e994cf55d76c93c8ec7252d6",
+    "source": "captured_from_bringup"
+  },
+  "models/tt_dit/models/audio_vae/minimax_h3/": {
+    "captured_ts": 1786792069.074743,
+    "classification": "other",
+    "line_count": 899,
+    "patch_file": "models__tt_dit__models__audio_vae__minimax_h3__.patch",
+    "sha256": "d857c69d336261d638f95e494c028bd0bcb9c39c891d8951f937734dd2462fcb",
+    "source": "captured_from_bringup"
+  },
+  "models/tt_dit/models/transformers/minimax_h3/": {
+    "captured_ts": 1786792069.1076052,
+    "classification": "other",
+    "line_count": 1886,
+    "patch_file": "models__tt_dit__models__transformers__minimax_h3__.patch",
+    "sha256": "3351d9d31aa07e23edd68a51cb35aad7f7783fd0d041652fb8966db6ef9d0785",
+    "source": "captured_from_bringup"
+  },
+  "models/tt_dit/models/vae/minimax_h3/": {
+    "captured_ts": 1786792069.1420226,
+    "classification": "other",
+    "line_count": 2844,
+    "patch_file": "models__tt_dit__models__vae__minimax_h3__.patch",
+    "sha256": "ad915dc1face58624f5b36426f4aaa77ef9e2e48ae3feffc316f7dc316bdf5ed",
+    "source": "captured_from_bringup"
+  },
+  "models/tt_dit/pipelines/minimax_h3/": {
+    "captured_ts": 1786792069.1768298,
+    "classification": "other",
+    "line_count": 4056,
+    "patch_file": "models__tt_dit__pipelines__minimax_h3__.patch",
+    "sha256": "96d7774ad5d29ab7907750d59d7dba522dafafad201f4069f0c4c183cecae4b8",
+    "source": "captured_from_bringup"
+  },
+  "models/tt_dit/tests/encoders/qwen3vl/common.py": {
+    "captured_ts": 1786792069.207513,
+    "classification": "other",
+    "line_count": 140,
+    "patch_file": "models__tt_dit__tests__encoders__qwen3vl__common.py.patch",
+    "sha256": "f906fb889401758befe80cee9a4653729c78779d8cda6ae6c16af091e5950fd1",
+    "source": "captured_from_bringup"
+  },
+  "models/tt_dit/tests/encoders/qwen3vl/test_qwen3vl_decoder_block.py": {
+    "captured_ts": 1786792069.2384636,
+    "classification": "other",
+    "line_count": 197,
+    "patch_file": "models__tt_dit__tests__encoders__qwen3vl__test_qwen3vl_decoder_block.py.patch",
+    "sha256": "71ce106e900919228ae6cc157859b3fdd7b2d4d61a7025fae1074cd1377ae004",
+    "source": "captured_from_bringup"
+  },
+  "models/tt_dit/tests/encoders/qwen3vl/test_qwen3vl_mrope.py": {
+    "captured_ts": 1786792069.2692375,
+    "classification": "other",
+    "line_count": 201,
+    "patch_file": "models__tt_dit__tests__encoders__qwen3vl__test_qwen3vl_mrope.py.patch",
+    "sha256": "68029b82990f52b02ed89f2f8ba1a66e3a4404f9f98bb73d143861a021dcc462",
+    "source": "captured_from_bringup"
+  },
+  "models/tt_dit/tests/encoders/qwen3vl/test_qwen3vl_vision_block.py": {
+    "captured_ts": 1786792069.2999227,
+    "classification": "other",
+    "line_count": 121,
+    "patch_file": "models__tt_dit__tests__encoders__qwen3vl__test_qwen3vl_vision_block.py.patch",
+    "sha256": "9611bd3e1a19bf676e108a60de43292473b38389958821e9fecdf12c3493308c",
+    "source": "captured_from_bringup"
+  },
+  "models/tt_dit/tests/encoders/qwen3vl/test_qwen3vl_vision_injection.py": {
+    "captured_ts": 1786792069.3307657,
+    "classification": "other",
+    "line_count": 248,
+    "patch_file": "models__tt_dit__tests__encoders__qwen3vl__test_qwen3vl_vision_injection.py.patch",
+    "sha256": "3ce80c3ccc3e14a9b1710b4347587a4513d8acc4cbdc4ba039bd7a855e1ef4cf",
+    "source": "captured_from_bringup"
+  },
+  "models/tt_dit/tests/encoders/qwen3vl/test_qwen3vl_vision_tower.py": {
+    "captured_ts": 1786792069.3613906,
+    "classification": "other",
+    "line_count": 164,
+    "patch_file": "models__tt_dit__tests__encoders__qwen3vl__test_qwen3vl_vision_tower.py.patch",
+    "sha256": "507d690b8db42ea235ba801c3e373d6c9cc1559462dc1f1fa16f0553c6892128",
+    "source": "captured_from_bringup"
+  },
+  "models/tt_dit/tests/models/minimax_h3/": {
+    "captured_ts": 1786792069.3998754,
+    "classification": "other",
+    "line_count": 7431,
+    "patch_file": "models__tt_dit__tests__models__minimax_h3__.patch",
+    "sha256": "14f441755c57039ba3b3414a490174f6efc954e3c3b09a4d405438422d48f9ca",
+    "source": "captured_from_bringup"
+  },
+  "models/tt_dit/tests/unit/test_planar_concat.py": {
+    "captured_ts": 1786792069.4307652,
+    "classification": "other",
+    "line_count": 145,
+    "patch_file": "models__tt_dit__tests__unit__test_planar_concat.py.patch",
+    "sha256": "9f4b11e249a6af86e37c31cf17c304460df9e6bc06acdcfdbceed91bf7e73521",
+    "source": "captured_from_bringup"
+  },
+  "models/tt_dit/utils/cpp/": {
+    "captured_ts": 1786792069.4622226,
+    "classification": "other",
+    "line_count": 846,
+    "patch_file": "models__tt_dit__utils__cpp__.patch",
+    "sha256": "a84c435cd13d6db1d7cd439c612796d7171e4401e984eda75964b7e14b12ea31",
+    "source": "captured_from_bringup"
+  },
+  "models/tt_dit/utils/planar_concat.py": {
+    "captured_ts": 1786792069.492882,
+    "classification": "other",
+    "line_count": 151,
+    "patch_file": "models__tt_dit__utils__planar_concat.py.patch",
+    "sha256": "d373baf139f3470f8f9de3d35f715357a96fd0054f4e2122771a04789d35259d",
+    "source": "captured_from_bringup"
+  },
+  "models/tt_dit/utils/yuv_d2h.py": {
+    "captured_ts": 1786792069.523842,
+    "classification": "other",
+    "line_count": 434,
+    "patch_file": "models__tt_dit__utils__yuv_d2h.py.patch",
+    "sha256": "358ca299d7728d8bc369666a728d147235c26803cff325dfd827815f979ab1bd",
+    "source": "captured_from_bringup"
+  },
+  "models/tt_transformers/tests/test_batched_prefill_slots.py": {
+    "captured_ts": 1786792069.5543969,
+    "classification": "shared",
+    "line_count": 128,
+    "patch_file": "models__tt_transformers__tests__test_batched_prefill_slots.py.patch",
+    "sha256": "2e346f0c26bc53a7019545727e3c85edecfd53eebcbc9653ee965a8d9170165e",
+    "source": "captured_from_bringup"
+  }
+}

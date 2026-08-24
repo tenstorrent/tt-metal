@@ -1,0 +1,94 @@
+diff --git a/models/demos/voxtral_tts_full/_stubs/decoder_layer.py b/models/demos/voxtral_tts_full/_stubs/decoder_layer.py
+new file mode 100644
+index 0000000000..9f9b1f363c
+--- /dev/null
++++ b/models/demos/voxtral_tts_full/_stubs/decoder_layer.py
+@@ -0,0 +1,88 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++# SPDX-License-Identifier: Apache-2.0
++"""Native TT-NN port of `VoxtralDecoderLayer` (Voxtral-TTS backbone, Block 1).
++
++Reference: `modeling_layers.VoxtralDecoderLayer.forward` -- one pre-norm GQA + SwiGLU block:
++
++    h = input_layernorm(x)
++    x = x + self_attn(h, cis, bias, cache, prefix)
++    h = post_attention_layernorm(x)
++    x = x + mlp(h)
++
++The attention half is the graduated `_stubs/attention.py` port, imported rather than copied:
++its RoPE handling (an interleaved-to-halves weight permutation, see that module) is the one
++subtle piece in this block, and a second transcription of it is a second thing to keep in
++step. The norms and the SwiGLU are inlined -- both are a single line of ttnn and carry no
++convention to get wrong.
++
++CACHE. `VoxtralAttention` appends to a KV cache when the layer is given one, which is how the
++backbone's decode path reuses prefill work. That is host-owned mutable state (the reference
++mutates the caller's dict in place), so it stays with the host-side generation loop; this port
++implements the prefill/full-sequence path, which is what `VoxtralTtsBackbone.forward` runs and
++what the PCC test exercises.
++"""
++from __future__ import annotations
++
++import torch
++import ttnn
++
++from models.demos.voxtral_tts_full._stubs.attention import COMPUTE_CONFIG, TtVoxtralAttention
++
++# `voxtral_common_ref.NORM_EPS` -- the backbone's RMSNorm epsilon. Read off the module when
++# it is present so a re-tuned checkpoint cannot silently disagree with this default.
++_NORM_EPS = 1e-5
++
++
++class TtVoxtralDecoderLayer:
++    def __init__(self, attn, weights, eps):
++        self.attn = attn
++        self.__dict__.update(weights)
++        self.eps = eps
++
++    @classmethod
++    def build(cls, device, torch_module):
++        def stage(t):
++            return ttnn.from_torch(
++                t.detach().float().t().contiguous().to(torch.bfloat16),
++                dtype=ttnn.bfloat16,
++                layout=ttnn.TILE_LAYOUT,
++                device=device,
++            )
++
++        def stage_vector(t):
++            return ttnn.from_torch(
++                t.detach().float().contiguous().to(torch.bfloat16),
++                dtype=ttnn.bfloat16,
++                layout=ttnn.TILE_LAYOUT,
++                device=device,
++            )
++
++        mlp = torch_module.mlp
++        weights = {
++            "attn_norm": stage_vector(torch_module.input_layernorm.weight),
++            "ffn_norm": stage_vector(torch_module.post_attention_layernorm.weight),
++            # `swiglu(h, w1, w2, w3)` is `w2(silu(w1 h) * w3 h)`; the module names them
++            # gate/down/up in that order.
++            "gate": stage(mlp.gate_proj),
++            "down": stage(mlp.down_proj),
++            "up": stage(mlp.up_proj),
++        }
++        eps = float(getattr(torch_module.input_layernorm, "eps", _NORM_EPS))
++        return cls(TtVoxtralAttention.build(device, torch_module.self_attn), weights, eps)
++
++    def __call__(self, x, cis=None, bias=None, cache=None, *, rope=None, causal=None, **kwargs):
++        h = ttnn.rms_norm(x, weight=self.attn_norm, epsilon=self.eps, compute_kernel_config=COMPUTE_CONFIG)
++        x = ttnn.add(x, self.attn(h, cis=cis, bias=bias, rope=rope, causal=causal))
++
++        h = ttnn.rms_norm(x, weight=self.ffn_norm, epsilon=self.eps, compute_kernel_config=COMPUTE_CONFIG)
++        linear = lambda t, w: ttnn.linear(t, w, compute_kernel_config=COMPUTE_CONFIG)  # noqa: E731
++        gated = ttnn.mul(ttnn.silu(linear(h, self.gate)), linear(h, self.up))
++        return ttnn.add(x, linear(gated, self.down))
++
++
++def build(device, torch_module=None):
++    return TtVoxtralDecoderLayer.build(device, torch_module)
++
++
++def decoder_layer(device, torch_module=None):
++    return TtVoxtralDecoderLayer.build(device, torch_module)

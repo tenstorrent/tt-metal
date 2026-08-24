@@ -1,0 +1,306 @@
+diff --git a/models/demos/voxtral_tts_full/_stubs/codec_decoder.py b/models/demos/voxtral_tts_full/_stubs/codec_decoder.py
+new file mode 100644
+index 0000000000..5be6dc8c18
+--- /dev/null
++++ b/models/demos/voxtral_tts_full/_stubs/codec_decoder.py
+@@ -0,0 +1,300 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++# SPDX-License-Identifier: Apache-2.0
++"""Native TT-NN port of `VoxtralCodecDecoder` (Voxtral-TTS Block 3): audio codes -> waveform.
++
++Reference: `voxtral_codec_ref.reference_decode`.
++
++    codes [B, 37, T]
++      -> quantizer_decode   semantic embedding lookup (256) ++ FSQ rescale (36)  = [B, 292, T]
++      -> decoder_blocks.0   CausalConv1d(292 -> 1024, k3, s1, replicate)
++      -> blocks 1/3/5/7     Transformer(2 layers) at sliding windows 2 / 4 / 8 / 16
++      -> blocks 2/4/6       CausalConvTranspose1d(1024, k4, s2)  = 8x upsample
++      -> output_proj        CausalConv1d(1024 -> 240, k7, reflect)
++      -> unpatch            [B, 240, T'] -> [B, 1, T'*240]                       = 24 kHz audio
++
++The reference flips layout between conv blocks ([B, C, L]) and transformer blocks ([B, L, C])
++and notes that a port can stay channels-last and skip the transposes. This one does: every
++tensor here is [B, L, C].
++
++CONVOLUTIONS AS SHIFTED MATMULS. `ttnn.conv1d` brings its own weight-prep and sharded
++layouts; at these sizes (L runs 8 -> 64, C is 292/1024/240) a k-tap conv is just k matmuls
++over k shifted views, which is simpler and easier to prove right:
++
++    y[l] = sum_j x_pad[l + j] @ W[:, :, j].T          (stride 1)
++
++The stride-2 transposed conv is the same identity read backwards. With k=4, s=2, after the
++trim of (k - stride) samples off the right, for every m in [0, L):
++
++    y[2m]     = x[m] @ W[:, :, 0] + x[m-1] @ W[:, :, 2]
++    y[2m+1]   = x[m] @ W[:, :, 1] + x[m-1] @ W[:, :, 3]
++
++so an upsample is 4 matmuls, one shift and an interleave -- and the interleave is free:
++concatenating the two half-results on the CHANNEL axis and reshaping in row-major lays them
++down as alternating rows, which is what interleaving means.
++
++THE OFFSET IS FOLDED INTO THE EMBEDDING TABLE. `strip_offset_and_trim` subtracts
++N_AUDIO_SPECIAL from every code before the lookup. Doing that on device would mean integer
++arithmetic on the index tensor; prepending two dead rows to the semantic table gives the same
++lookup from the raw code, and the acoustic FSQ rescale is affine, so the same subtraction
++folds into its constant term.
++
++WHAT THIS PORT DOES NOT DO. `strip_offset_and_trim` also cuts the sequence at the first
++[END_AUDIO] code. That is data-dependent control flow -- the OUTPUT LENGTH would depend on
++the VALUES of the input -- which no static device graph can express, and it belongs to the
++host-side generation loop that already decides when to stop emitting frames. This port
++decodes every frame it is handed; for the frames the pipeline actually produces (the capture
++records 8, none of them [END_AUDIO]) the two agree exactly.
++
++NORM EPSILONS ARE NOT THE USUAL ONES. The codec's RMSNorms use eps 1e-2 -- three orders off
++the 1e-5 used everywhere else in this model, and load-bearing -- while q_norm/k_norm use
++1e-6. q_norm/k_norm also normalise the FULL 1024-wide projection BEFORE the head split, not
++per head.
++"""
++from __future__ import annotations
++
++import math
++
++import torch
++import ttnn
++
++# One compute config for the whole model port; see `_stubs/attention.py` for the measurement.
++# fp32 destination accumulation is not optional here: without it `ttnn.rms_norm` returns an
++# output ~2% SHORT of the reference -- a scale error, which PCC cannot see per-component but
++# which compounds through a stack, and this block stacks 8 transformer layers behind 4 norms
++# each.
++from models.demos.voxtral_tts_full._stubs.attention import COMPUTE_CONFIG
++
++# From the checkpoint's params.json, via voxtral_common_ref.
++_N_AUDIO_SPECIAL = 2
++_ACOUSTIC_LEVELS = 21
++_ACOUSTIC_DIM = 36
++_DIM = 1024
++_N_HEADS = 8
++_HEAD_DIM = 128
++_NORM_EPS = 1e-2
++_QK_NORM_EPS = 1e-6
++_PATCH_SIZE = 240
++_PATCH_PROJ_KERNEL = 7
++_IN_KERNEL = 3
++_TF_BLOCKS = (1, 3, 5, 7)
++_TF_LAYERS = (2, 2, 2, 2)
++_UP_BLOCKS = (2, 4, 6)
++_WINDOWS = (2, 4, 8, 16)
++
++# FSQ dequantisation with the special-token offset folded in:
++#   (code - N_AUDIO_SPECIAL) * 2/(levels-1) - 1  ==  code * _FSQ_SCALE + _FSQ_SHIFT
++_FSQ_SCALE = 2.0 / (_ACOUSTIC_LEVELS - 1)
++_FSQ_SHIFT = -1.0 - _N_AUDIO_SPECIAL * _FSQ_SCALE
++
++# As in the attention port: -1e9 underflows exp() to the same zero as -inf, without risking a
++# NaN out of a fused softmax.
++_MASK_FILL = -1e9
++
++# Longest input the staged ALiBi/window bias tables cover, in 12.5 Hz frames; the last stage
++# runs at 8x this. 64 frames is ~5 s of audio. `build(max_frames=...)` raises the ceiling.
++_MAX_FRAMES = 64
++
++
++def _alibi_slopes(n_heads: int) -> torch.Tensor:
++    """`voxtral_codec_ref.alibi_slopes`: geometric ratio 2^(-8/n); n=8 -> [1, 1/2, ..., 1/128]."""
++    if math.log2(n_heads).is_integer():
++        r = 2.0 ** (-8.0 / n_heads)
++        return torch.tensor([r**i for i in range(n_heads)])
++    m = 2 ** math.floor(math.log2(n_heads))
++    r1, r2 = 2.0 ** (-8.0 / m), 2.0 ** (-8.0 / (2 * m))
++    return torch.tensor([r1**i for i in range(m)] + [r2**i for i in range(0, 2 * m, 2)][: n_heads - m])
++
++
++def _attention_bias(max_len: int, window: int, n_heads: int) -> torch.Tensor:
++    """`voxtral_codec_ref.attention_bias` at `max_len`, as [1, H, L, L].
++
++    ALiBi + causal + sliding window collapse into one additive pre-softmax term. Every entry
++    depends only on rel = j - i, so a shorter sequence's bias is this table's top-left corner
++    -- which is why one build-time table serves every length a stage can see.
++    """
++    pos = torch.arange(max_len)
++    rel = (pos.unsqueeze(0) - pos.unsqueeze(1)).float()
++    bias = _alibi_slopes(n_heads).view(n_heads, 1, 1) * rel.unsqueeze(0)
++    outside = (rel > 0) | (rel < -window)
++    return bias.masked_fill(outside.unsqueeze(0), _MASK_FILL).unsqueeze(0)
++
++
++class TtVoxtralCodecDecoder:
++    def __init__(self, device, tensors):
++        self.device = device
++        self.__dict__.update(tensors)
++
++    @classmethod
++    def build(cls, device, torch_module, max_frames: int = _MAX_FRAMES):
++        w = {k: v.detach().float() for k, v in torch_module._as_dict().items()}
++
++        def stage(t, layout=ttnn.TILE_LAYOUT):
++            return ttnn.from_torch(
++                t.contiguous().to(torch.bfloat16), dtype=ttnn.bfloat16, layout=layout, device=device
++            )
++
++        # Two dead rows so a RAW code (which still carries the +N_AUDIO_SPECIAL offset) reads
++        # row `code - N_AUDIO_SPECIAL` of the real table.
++        table = w["semantic_embedding"]
++        table = torch.cat([torch.zeros(_N_AUDIO_SPECIAL, table.shape[1]), table], dim=0)
++
++        def taps(weight, transpose):
++            """A [.., .., k] conv weight as its k per-tap matrices, oriented for matmul."""
++            return [stage(weight[:, :, j].t() if transpose else weight[:, :, j]) for j in range(weight.shape[2])]
++
++        def layer(prefix):
++            return {
++                "attn_norm": stage(w[prefix + "attention_norm.weight"]),
++                "wq": stage(w[prefix + "attention.wq.weight"].t()),
++                "wk": stage(w[prefix + "attention.wk.weight"].t()),
++                "wv": stage(w[prefix + "attention.wv.weight"].t()),
++                "wo": stage(w[prefix + "attention.wo.weight"].t()),
++                "q_norm": stage(w[prefix + "attention.q_norm.weight"]),
++                "k_norm": stage(w[prefix + "attention.k_norm.weight"]),
++                "attn_scale": stage(w[prefix + "attention_scale"].reshape(1, 1, -1)),
++                "ffn_norm": stage(w[prefix + "ffn_norm.weight"]),
++                "w1": stage(w[prefix + "feed_forward.w1.weight"].t()),
++                "w2": stage(w[prefix + "feed_forward.w2.weight"].t()),
++                "w3": stage(w[prefix + "feed_forward.w3.weight"].t()),
++                "ffn_scale": stage(w[prefix + "ffn_scale"].reshape(1, 1, -1)),
++            }
++
++        tensors = {
++            "sem_table": stage(table),
++            "in_taps": taps(w["decoder_blocks.0.conv.weight"], transpose=True),
++            "out_taps": taps(w["output_proj.conv.weight"], transpose=True),
++            # ConvTranspose1d weights are stored [in, out, k] -- already the matmul orientation.
++            "up_taps": [taps(w[f"decoder_blocks.{b}.conv.weight"], transpose=False) for b in _UP_BLOCKS],
++            "stages": [
++                [layer(f"decoder_blocks.{b}.layers.{li}.") for li in range(n)]
++                for b, n in zip(_TF_BLOCKS, _TF_LAYERS)
++            ],
++            "biases": [
++                stage(_attention_bias(max_frames * (2**s), _WINDOWS[s], _N_HEADS)) for s in range(len(_WINDOWS))
++            ],
++            "zero_row": stage(torch.zeros(1, 1, _DIM), layout=ttnn.ROW_MAJOR_LAYOUT),
++            "max_frames": max_frames,
++        }
++        return cls(device, tensors)
++
++    # ---- layout helpers -------------------------------------------------------------
++    @staticmethod
++    def _rm(x):
++        return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
++
++    @staticmethod
++    def _tile(x):
++        return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
++
++    @staticmethod
++    def _rows(x, start, end):
++        """Rows [start, end) of a [1, L, C] tensor."""
++        return ttnn.slice(x, [0, start, 0], [1, end, int(x.shape[-1])])
++
++    @staticmethod
++    def _matmul(a, b):
++        return ttnn.matmul(a, b, compute_kernel_config=COMPUTE_CONFIG)
++
++    @staticmethod
++    def _linear(x, w):
++        return ttnn.linear(x, w, compute_kernel_config=COMPUTE_CONFIG)
++
++    @staticmethod
++    def _norm(x, weight, eps):
++        return ttnn.rms_norm(x, weight=weight, epsilon=eps, compute_kernel_config=COMPUTE_CONFIG)
++
++    # ---- pieces ---------------------------------------------------------------------
++    def _quantizer_decode(self, codes, n_frames):
++        """codes [T, 37] uint32 -> latents [1, T, 292] row-major, channels-last."""
++        semantic = ttnn.reshape(ttnn.slice(codes, [0, 0], [n_frames, 1]), (1, n_frames))
++        semantic = self._rm(ttnn.embedding(semantic, self.sem_table))
++
++        acoustic = ttnn.typecast(ttnn.slice(codes, [0, 1], [n_frames, 1 + _ACOUSTIC_DIM]), ttnn.bfloat16)
++        acoustic = self._tile(ttnn.reshape(acoustic, (1, n_frames, _ACOUSTIC_DIM)))
++        acoustic = self._rm(ttnn.add(ttnn.mul(acoustic, _FSQ_SCALE), _FSQ_SHIFT))
++
++        return ttnn.concat([semantic, acoustic], dim=-1)
++
++    def _causal_conv(self, x_rm, taps, pad):
++        """Left-padded stride-1 conv over row-major [1, L, C_in] -> tiled [1, L, C_out].
++
++        `pad` is the already-built [1, k-1, C_in] prefix (replicate or reflect); the reference
++        pads by exactly (kernel - stride) on the left and nothing on the right.
++        """
++        length = int(x_rm.shape[-2])
++        padded = ttnn.concat([pad, x_rm], dim=1)
++        out = None
++        for j, tap in enumerate(taps):
++            term = self._matmul(self._tile(self._rows(padded, j, j + length)), tap)
++            out = term if out is None else ttnn.add(out, term)
++        return out
++
++    def _replicate_pad(self, x_rm, width):
++        return ttnn.concat([self._rows(x_rm, 0, 1)] * width, dim=1)
++
++    def _reflect_pad(self, x_rm, width):
++        """`F.pad(mode="reflect")`: the prefix is x[width], x[width-1], ..., x[1]."""
++        return ttnn.concat([self._rows(x_rm, i, i + 1) for i in range(width, 0, -1)], dim=1)
++
++    def _block(self, x, layer, bias):
++        seq_len = int(x.shape[-2])
++
++        h = self._norm(x, layer["attn_norm"], _NORM_EPS)
++        q = self._norm(self._linear(h, layer["wq"]), layer["q_norm"], _QK_NORM_EPS)
++        k = self._norm(self._linear(h, layer["wk"]), layer["k_norm"], _QK_NORM_EPS)
++        v = self._linear(h, layer["wv"])
++
++        def heads(t):
++            return ttnn.permute(ttnn.reshape(t, (1, seq_len, _N_HEADS, _HEAD_DIM)), (0, 2, 1, 3))
++
++        q, k, v = heads(q), heads(k), heads(v)
++        scores = ttnn.mul(self._matmul(q, ttnn.permute(k, (0, 1, 3, 2))), _HEAD_DIM**-0.5)
++        scores = ttnn.add(scores, ttnn.slice(bias, [0, 0, 0, 0], [1, _N_HEADS, seq_len, seq_len]))
++
++        attn = self._matmul(ttnn.softmax(scores, dim=-1), v)
++        attn = ttnn.reshape(ttnn.permute(attn, (0, 2, 1, 3)), (1, seq_len, _N_HEADS * _HEAD_DIM))
++        x = ttnn.add(x, ttnn.mul(self._linear(attn, layer["wo"]), layer["attn_scale"]))
++
++        h = self._norm(x, layer["ffn_norm"], _NORM_EPS)
++        gated = ttnn.mul(ttnn.silu(self._linear(h, layer["w1"])), self._linear(h, layer["w3"]))
++        return ttnn.add(x, ttnn.mul(self._linear(gated, layer["w2"]), layer["ffn_scale"]))
++
++    def _upsample(self, x, taps):
++        """CausalConvTranspose1d(k=4, s=2) with the right-hand trim already applied."""
++        length = int(x.shape[-2])
++        shifted = self._tile(ttnn.concat([self.zero_row, self._rows(self._rm(x), 0, length - 1)], dim=1))
++        even = ttnn.add(self._matmul(x, taps[0]), self._matmul(shifted, taps[2]))
++        odd = ttnn.add(self._matmul(x, taps[1]), self._matmul(shifted, taps[3]))
++        # Row-major [1, L, 2C] -> [1, 2L, C] lays even and odd down alternately: the interleave.
++        pairs = ttnn.concat([self._rm(even), self._rm(odd)], dim=-1)
++        return self._tile(ttnn.reshape(pairs, (1, 2 * length, _DIM)))
++
++    def __call__(self, codes, *args, **kwargs):
++        n_frames = int(codes.shape[0])
++        if n_frames > self.max_frames:
++            raise ValueError(
++                f"{n_frames} frames exceeds the {self.max_frames} staged at build time; "
++                f"rebuild with max_frames >= {n_frames}"
++            )
++
++        latents = self._quantizer_decode(codes, n_frames)
++        x = self._causal_conv(latents, self.in_taps, self._replicate_pad(latents, _IN_KERNEL - 1))
++
++        for stage, layers in enumerate(self.stages):
++            for layer in layers:
++                x = self._block(x, layer, self.biases[stage])
++            if stage < len(self.up_taps):
++                x = self._upsample(x, self.up_taps[stage])
++
++        x_rm = self._rm(x)
++        x = self._causal_conv(x_rm, self.out_taps, self._reflect_pad(x_rm, _PATCH_PROJ_KERNEL - 1))
++        # Unpatch: each of the 240 channels is one audio sample within that frame's patch.
++        return ttnn.reshape(self._rm(x), (1, 1, int(x.shape[-2]) * _PATCH_SIZE))
++
++
++def build(device, torch_module=None):
++    return TtVoxtralCodecDecoder.build(device, torch_module)
++
++
++def codec_decoder(device, torch_module=None):
++    return TtVoxtralCodecDecoder.build(device, torch_module)

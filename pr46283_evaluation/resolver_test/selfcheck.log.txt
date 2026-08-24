@@ -1,0 +1,17 @@
+[loader] VoxtralTTSReferenceModel  model_type=voxtral_tts  training=False  params=4.000B
+[loader]   layers.0.attention.wq                                      -> Linear in_features=3072, out_features=4096, bias=False
+[loader]   layers.25.feed_forward.w3                                  -> Linear in_features=3072, out_features=9216, bias=False
+[loader]   norm                                                       -> _RMSNorm (3072,), eps=1e-05
+[loader]   mm_audio_embeddings.tok_embeddings                         -> Embedding 131072, 3072
+[loader]   acoustic_transformer.layers.2.attention_norm               -> _RMSNorm (3072,), eps=1e-05
+[loader]   acoustic_transformer.semantic_codebook_output              -> Linear in_features=3072, out_features=8320, bias=False
+[loader]   audio_tokenizer.decoder_blocks.0.conv                      -> _CausalConv1d 292, 1024, kernel_size=3, stride=1, pad_mode=replica
+[loader]   audio_tokenizer.decoder_blocks.7.layers.1.attention.q_norm -> _RMSNorm (1024,), eps=1e-06
+[loader]   audio_tokenizer.output_proj.conv                           -> _CausalConv1d 1024, 240, kernel_size=7, stride=1, pad_mode=reflect
+[loader] backbone (1, 10, 3072) -> (1, 10, 3072)  mean +0.0043 std 2.5234
+[loader] kv-cache PCC: prefill 1.000000  steps 1.000000
+[loader] flow h(1, 3072) -> codes (1, 37)  semantic=855 acoustic[:6]=[11, 5, 11, 7, 13, 18]
+[loader] codec (1, 37, 24) -> wav (1, 1, 46080) (1.92s @ 24000 Hz) peak 0.9984
+[loader] wrapper vs raw reference_forward: PCC 1.00000000, max|d| 0.000e+00
+[loader] OK
+SELFCHECK RC: 0

@@ -1,0 +1,2844 @@
+diff --git a/models/tt_dit/models/vae/minimax_h3/.gitkeep b/models/tt_dit/models/vae/minimax_h3/.gitkeep
+new file mode 100644
+index 0000000000..e69de29bb2
+diff --git a/models/tt_dit/models/vae/minimax_h3/conv_minimax_h3.py b/models/tt_dit/models/vae/minimax_h3/conv_minimax_h3.py
+new file mode 100644
+index 0000000000..9cc265616f
+--- /dev/null
++++ b/models/tt_dit/models/vae/minimax_h3/conv_minimax_h3.py
+@@ -0,0 +1,457 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
++
++# SPDX-License-Identifier: Apache-2.0
++
++"""The convolution used throughout the MiniMax-H3 video VAE encoder.
++
++Mirrors the reference ``MiniMaxH3VideoCausalConv3d``: spatial padding is **symmetric
++reflect**, temporal padding is **causal zeros** of ``kernel_t - 1`` frames prepended
++and nothing appended, and the convolution itself carries no padding.
++
++Runs either unsharded (one 256x256 tile per device, which is what the reference's own
++tiling makes natural) or H/W-sharded via ``VaeHWParallelConfig``. The spatial pad follows
++the axis: a **sharded** axis gets it from a halo exchange, a **replicated** one keeps it as
++a local slice-and-concat, and never both. T is never sharded, so the causal front-pad is
++always a local concat of zeros.
++
++The halo pads ``replicate`` because ``neighbor_pad_async`` has no ``reflect`` mode. That is
++exact at every interior boundary -- the halo there is the neighbour's real data, so the mode
++never enters -- and :func:`reflect_edge_correction` repairs the two global edges per axis.
++
++``temporal_taps=1`` selects the keyframe fast path. That is **exact**, not an
++approximation: the causal front-pad is zeros, so a 3-tap temporal conv on a lone
++frame sees ``[0, 0, x]`` and every tap but the last is multiplied by zero. The weight
++is sliced to ``weight[:, :, -1:]`` at load time.
++"""
++
++from __future__ import annotations
++
++import math
++from typing import Sequence
++
++import torch
++from loguru import logger
++
++import ttnn
++
++from ....layers.module import Module, Parameter
++from ....utils.conv3d import _FP32_BLOCKINGS, _ntuple, aligned_channels, get_conv3d_config, register_conv3d_configs
++from ....utils.tensor import local_device_to_torch
++
++# Every conv shape in this encoder misses the fp32 blocking table and falls back to
++# (32, 32, 1, 1, 1). As the LTX audio entries in conv3d.py note, an ``H_out=W_out=1``
++# blocking "forces one output pixel per work-unit". Measured on the shipping tile, that
++# fallback is slow but not fatal -- conv_in is 9 ms at (1,256,256) and 305 ms at
++# (17,256,256) -- so it is a performance problem, not a correctness blocker.
++#
++# **Swept**, not stubs: measured per shape with `wan2_2/bruteforce_conv3d_sweep.py`, which
++# brute-forces every legal blocking and times it on hardware under a trace. Against the
++# conv3d.py table baseline the winners are 2.5x-25.6x per layer and 9.5x summed; on the
++# fallback the encoder runs at ~2.3 TFLOP/s against the ViT decoder's 14.0 purely because
++# every one of its shapes misses the table.
++#
++# Keyed by (C_in, C_out), which a level's res and downsample convs share. Where they share a
++# key the blocking must be legal for **both**: a strided downsample has a different input
++# footprint than the res conv at the same channel pair, so one swept on the res conv alone
++# can overflow L1 on the downsample (measured 1753984 B against a 1572864 B L1). Each entry
++# is therefore the blocking minimising *total* time over every layer that shares the key,
++# restricted to those every one of them measured OK.
++#
++# Constraint the kernel enforces: C_out_block must be a multiple of 32 *and* divide the
++# **tile-aligned** output channel count -- so conv_out's 48 out-channels align to 64, which
++# is why a C_out_block of 64 is legal there and 32 would not divide 48.
++
++_H3_ENCODER_BLOCKINGS = {
++    (32, 128): (32, 128, 3, 2, 16),  # conv_in: 5358 us
++    (128, 128): (64, 128, 1, 16, 2),  # b0_res+b0_down: 32731 us
++    (128, 256): (32, 256, 3, 16, 2),  # b1_res0: 5533 us
++    (256, 256): (64, 128, 1, 16, 2),  # b1_res1+b1_down+b2_res+b2_down: 29478 us
++    (256, 512): (64, 128, 1, 16, 2),  # b3_res0: 710 us
++    (512, 512): (64, 128, 1, 16, 2),  # b3_res1+b3_down+b4_res: 2983 us
++    (512, 1024): (64, 128, 1, 8, 4),  # b5_res0: 851 us
++    (1024, 1024): (64, 64, 5, 16, 2),  # b5_res1: 2025 us
++    (1024, 48): (128, 32, 1, 16, 2),  # conv_out: 197 us
++}
++_H3_BLOCKING_ENTRIES = {
++    (in_c, out_c, kernel): blocking
++    for (in_c, out_c), blocking in _H3_ENCODER_BLOCKINGS.items()
++    # The k1 shortcuts keep the fallback: a 1x1x1 conv is a matmul and cheap either way.
++    for kernel in ((3, 3, 3), (1, 3, 3))
++}
++register_conv3d_configs(_H3_BLOCKING_ENTRIES)
++# register_conv3d_configs only updates the bf16 fallback table, but get_conv3d_config
++# short-circuits to _FP32_BLOCKINGS when the weights are fp32 -- so for an fp32 encoder the
++# registration above is silently ignored. Seed the fp32 table as well. `setdefault`, so a
++# swept value that lands in conv3d.py itself wins over these entries.
++for _key, _blocking in _H3_BLOCKING_ENTRIES.items():
++    _FP32_BLOCKINGS.setdefault(_key, _blocking)
++
++
++class MiniMaxH3CausalConv3d(Module):
++    """``ttnn.experimental.conv3d`` with H3's reflect-spatial / causal-temporal padding.
++
++    Args:
++        spatial_padding: symmetric reflect pad applied to H and W before the conv.
++            The reference passes 1 for every 3x3 conv and **0** for the strided
++            downsample convs, which instead get an asymmetric bottom/right pad from
++            :class:`~.encoder_minimax_h3.MiniMaxH3Downsample3d`.
++        temporal_taps: 3 for the general causal conv, 1 for the T=1 keyframe path.
++            A ``kernel_size`` of 1 is temporally trivial either way.
++    """
++
++    def __init__(
++        self,
++        in_channels: int,
++        out_channels: int,
++        *,
++        kernel_size: int | Sequence[int] = 3,
++        stride: int | Sequence[int] = 1,
++        spatial_padding: int = 1,
++        trailing_spatial_padding: int = 0,
++        temporal_taps: int = 3,
++        mesh_device: ttnn.MeshDevice,
++        dtype: ttnn.DataType = ttnn.float32,
++        parallel_config=None,
++        ccl_manager=None,
++    ) -> None:
++        super().__init__()
++
++        if temporal_taps not in (1, 3):
++            raise ValueError(f"temporal_taps must be 1 or 3, got {temporal_taps}")
++
++        # H/W sharding: the spatial pad becomes a halo exchange on the sharded axes and stays
++        # a local slice-and-concat on the replicated ones. Same external/internal split as
++        # LTXCausalConv3d, which is the clearer of the two in-tree versions -- it zeroes
++        # `internal` where sharded and `external` where not, so neither is ambiguous.
++        self.parallel_config = parallel_config
++        self.ccl_manager = ccl_manager
++        self.height_factor = 1 if parallel_config is None else parallel_config.height_parallel.factor
++        self.width_factor = 1 if parallel_config is None else parallel_config.width_parallel.factor
++        self.is_sharded = self.height_factor > 1 or self.width_factor > 1
++        if self.is_sharded and ccl_manager is None:
++            raise ValueError("a sharded parallel_config needs a ccl_manager for the halo exchange")
++
++        kernel = list(_ntuple(kernel_size, 3))
++        # A k1 conv (nin_shortcut / quant_conv) has no temporal extent to collapse.
++        self.collapse_temporal = temporal_taps == 1 and kernel[0] > 1
++        if self.collapse_temporal:
++            kernel[0] = 1
++
++        self.unpadded_in_channels = in_channels
++        self.unpadded_out_channels = out_channels
++        self.in_channels = aligned_channels(in_channels)
++        self.out_channels = max(32, out_channels)
++        if self.out_channels != self.unpadded_out_channels:
++            logger.warning(f"Padding out_channels from {self.unpadded_out_channels} to {self.out_channels}")
++
++        self.kernel_size = tuple(kernel)
++        self.stride = tuple(_ntuple(stride, 3))
++        self.spatial_padding = spatial_padding
++        self.mesh_device = mesh_device
++        self.dtype = dtype
++
++        # Causal front-pad, applied locally in forward. Zero once collapsed. T is never
++        # sharded, so this stays a local concat of zeros.
++        self.time_pad = 0 if self.collapse_temporal else self.kernel_size[0] - 1
++
++        # Padding is asymmetric in general: H3's downsamplers pre-pad ``(0,1,0,1)`` reflect
++        # (one extra row at the bottom, one column at the right) so a stride-2 conv lands on
++        # exactly ceil(size/2). Carrying that here rather than in the model means one code
++        # path covers it sharded and unsharded -- and under sharding it *has* to be here,
++        # because only the device owning the global bottom/right edge may add that row, and
++        # the interior devices need a real halo row from their neighbour instead.
++        self.trailing_spatial_padding = trailing_spatial_padding
++        pad_before = spatial_padding
++        pad_after = spatial_padding + trailing_spatial_padding
++
++        # A sharded axis gets its pad from the halo (external); a replicated one keeps it
++        # local (internal). Never both, or the pad is applied twice.
++        self.external_pad_h = (pad_before, pad_after) if self.height_factor > 1 else (0, 0)
++        self.external_pad_w = (pad_before, pad_after) if self.width_factor > 1 else (0, 0)
++        self.local_pad_h = (0, 0) if self.height_factor > 1 else (pad_before, pad_after)
++        self.local_pad_w = (0, 0) if self.width_factor > 1 else (pad_before, pad_after)
++
++        self._edge_masks: dict[int, tuple] = {}
++        if self.is_sharded and pad_after > 0:
++            if self.height_factor > 1:
++                self._edge_masks[2] = edge_mask_pair(
++                    mesh_device, self.height_factor, parallel_config.height_parallel.mesh_axis, dtype
++                )
++            if self.width_factor > 1:
++                self._edge_masks[3] = edge_mask_pair(
++                    mesh_device, self.width_factor, parallel_config.width_parallel.mesh_axis, dtype
++                )
++
++        self.conv_config = get_conv3d_config(
++            self.in_channels,
++            self.out_channels,
++            self.kernel_size,
++            dtype,
++            grid_size=self.mesh_device.compute_with_storage_grid_size(),
++            h_factor=self.height_factor,
++            w_factor=self.width_factor,
++        )
++
++        from models.common.utility_functions import is_blackhole
++
++        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
++            self.mesh_device.arch(),
++            math_fidelity=ttnn.MathFidelity.HiFi4
++            if (is_blackhole() and dtype == ttnn.float32)
++            else ttnn.MathFidelity.HiFi2,
++            math_approx_mode=False,
++            fp32_dest_acc_en=True,
++            packer_l1_acc=False,
++        )
++
++        d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
++        self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
++        self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
++        # Persistent zero block for the causal front-pad; see causal_pad_t.
++        self._causal_zeros: dict = {}
++
++    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
++        """Slice the temporal tap if collapsed, pad both channel axes, then prepare.
++
++        Padding **input** channels is the step ``Conv2dViaConv3d`` omits, which makes
++        it unable to load a 3-channel ``conv_in`` at all: it sizes the weight from the
++        aligned in-channel count but prepares an unpadded weight.
++        """
++        if "weight" not in state:
++            return
++
++        weight = state["weight"]
++        bias = state.get("bias")
++
++        if self.collapse_temporal:
++            # Only the final temporal tap survives a single frame.
++            weight = weight[:, :, -1:].contiguous()
++
++        # torch conv3d weight is (out, in, kt, kh, kw); dim 1 is the in-channel axis.
++        if self.in_channels != self.unpadded_in_channels:
++            weight = torch.nn.functional.pad(
++                weight, (0, 0, 0, 0, 0, 0, 0, self.in_channels - self.unpadded_in_channels)
++            )
++        if self.out_channels != self.unpadded_out_channels:
++            weight = torch.nn.functional.pad(
++                weight, (0, 0, 0, 0, 0, 0, 0, 0, 0, self.out_channels - self.unpadded_out_channels)
++            )
++            if bias is not None:
++                bias = torch.nn.functional.pad(bias, (0, self.out_channels - self.unpadded_out_channels))
++
++        weight_tt = ttnn.from_torch(weight, dtype=self.dtype, pad_value=0)
++        prepared = ttnn.experimental.prepare_conv3d_weights(
++            weight_tensor=weight_tt, C_in_block=self.conv_config.C_in_block, device=self.mesh_device
++        )
++        state["weight"] = local_device_to_torch(prepared)
++        if bias is not None:
++            state["bias"] = bias.reshape(1, -1)
++
++    def _halo_pad(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
++        """Exchange the spatial halo on the sharded axes, then fix the global edges.
++
++        ``neighbor_pad_async`` has no ``reflect`` mode, so this pads ``replicate`` -- exact at
++        every interior boundary, where the halo is the neighbour's real data -- and then
++        :func:`reflect_edge_correction` repairs the two global edges per axis. Both axes go in
++        one fused call when both are sharded, following ``WanCausalConv3d``.
++        """
++        dims, pad_left, pad_right, axes, semaphores, links = [], [], [], [], [], []
++        for dim, (before, after), factor, factor_config in (
++            (2, self.external_pad_h, self.height_factor, "height_parallel"),
++            (3, self.external_pad_w, self.width_factor, "width_parallel"),
++        ):
++            if (before <= 0 and after <= 0) or factor <= 1:
++                continue
++            mesh_axis = getattr(self.parallel_config, factor_config).mesh_axis
++            dims.append(dim)
++            pad_left.append(before)
++            pad_right.append(after)
++            axes.append(mesh_axis)
++            semaphores.append(self.ccl_manager.get_np_ping_pong_semaphore(mesh_axis))
++            # list(): ttnn.Shape supports integer indexing only, not slicing.
++            links.append(max(1, min(math.prod(list(x_BTHWC.shape)[:dim]), self.ccl_manager.num_links)))
++
++        if not dims:
++            return x_BTHWC
++
++        x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
++            x_BTHWC,
++            dims=dims,
++            pad_left=pad_left,
++            pad_right=pad_right,
++            padding_mode="replicate",
++            axes=axes,
++            neighbor_sems=semaphores,
++            num_links=links,
++        )
++        for dim, before, after in zip(dims, pad_left, pad_right):
++            x_BTHWC = reflect_edge_correction(x_BTHWC, dim, before, after, edge_masks=self._edge_masks.get(dim))
++        return x_BTHWC
++
++    def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
++        """``x_BTHWC``: ``(B, T, H, W, C)`` ROW_MAJOR, C already tile-aligned."""
++        assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"conv3d needs ROW_MAJOR, got {x_BTHWC.layout}"
++
++        if any(self.local_pad_h) or any(self.local_pad_w):
++            x_BTHWC = reflect_pad_hw(x_BTHWC, self.local_pad_h, self.local_pad_w)
++        if any(self.external_pad_h) or any(self.external_pad_w):
++            x_BTHWC = self._halo_pad(x_BTHWC)
++        if self.time_pad > 0:
++            x_BTHWC = causal_pad_t(x_BTHWC, self.time_pad, self.mesh_device, self._causal_zeros)
++
++        out = ttnn.experimental.conv3d(
++            input_tensor=x_BTHWC,
++            weight_tensor=self.weight.data,
++            bias_tensor=self.bias.data,
++            config=self.conv_config,
++            output_channels=self.out_channels,
++            kernel_size=self.kernel_size,
++            stride=self.stride,
++            padding=(0, 0, 0),
++            padding_mode="zeros",
++            dtype=self.dtype,
++            compute_kernel_config=self.compute_kernel_config,
++        )
++        return out
++
++
++def causal_pad_t(
++    x_BTHWC: ttnn.Tensor, pad: int, mesh_device: ttnn.MeshDevice, cache: dict | None = None
++) -> ttnn.Tensor:
++    """Prepend ``pad`` zero frames on T. Nothing is appended -- that is the causality.
++
++    ``cache`` holds the zero block across calls. Without it this allocates and **writes**
++    a fresh zero tensor on every convolution -- 34 MB at block 0, thirteen times per unit --
++    and `ttnn.zeros(device=...)` is a host-to-device write, which both costs PCIe time on
++    the critical path and makes the encoder impossible to capture into a trace
++    ("Writes are not supported during trace capture"). The block is constant, so one
++    allocation serves every call.
++    """
++    B, _, H, W, C = x_BTHWC.shape
++    key = (B, pad, H, W, C, x_BTHWC.get_dtype())
++    zeros = None if cache is None else cache.get(key)
++    if zeros is None:
++        zeros = ttnn.zeros(
++            (B, pad, H, W, C), dtype=x_BTHWC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
++        )
++        if cache is not None:
++            cache[key] = zeros
++    return ttnn.concat([zeros, x_BTHWC], dim=1)
++
++
++def reflect_edge_correction(
++    padded_BTHWC: ttnn.Tensor,
++    dim: int,
++    pad_before: int,
++    pad_after: int | None = None,
++    *,
++    edge_masks: tuple[ttnn.Tensor, ttnn.Tensor] | None,
++) -> ttnn.Tensor:
++    """Turn a ``replicate`` halo pad into a ``reflect`` one at the **global** edges only.
++
++    ``neighbor_pad_async`` offers ``zeros`` and ``replicate`` but not ``reflect``, and H3 pads
++    reflect. That gap is narrower than it looks: at an interior shard boundary the halo *is*
++    the neighbour's real data, so the padding mode never enters and ``replicate`` is already
++    exact. The two differ only in the outermost pixel at the two global image edges -- after
++    a replicate pad of 1 the layout is ``[x0, x0, x1, ...]`` where reflect wants
++    ``[x1, x0, x1, ...]``.
++
++    So the fix is local and data-driven. With a pad of ``p``, ``padded[p]`` is ``x[0]`` and
++    ``padded[p + k]`` is ``x[k]``, so the reflect value for ``padded[p - 1 - j]`` is
++    ``padded[p + 1 + j]``. Blending with a per-device 0/1 mask keeps every device running the
++    **same ops** -- the mask is sharded data, not a branch -- which is what keeps the program
++    SPMD-uniform. ``edge_masks`` is ``(leading, trailing)``; ``None`` means unsharded, where
++    every device owns both global edges.
++
++    A one-pixel border error passes PCC and reads as a faint vignette, so this needs its own
++    gate rather than riding on a whole-encoder PCC number.
++    """
++    if pad_after is None:
++        pad_after = pad_before
++    if pad_before <= 0 and pad_after <= 0:
++        return padded_BTHWC
++    size = padded_BTHWC.shape[dim]
++    # Each edge is corrected against its own pad width, so an asymmetric halo -- the
++    # downsamplers' (0, 1) -- corrects only the trailing edge and leaves the leading one
++    # alone, which is what having no leading pad means.
++    for leading, pad in ((True, pad_before), (False, pad_after)):
++        for j in range(pad):
++            target = pad - 1 - j if leading else size - pad + j
++            source = pad + 1 + j if leading else size - pad - 2 - j
++            mask = None if edge_masks is None else edge_masks[0 if leading else 1]
++            target_slice = slice_dim(padded_BTHWC, dim, target, target + 1)
++            source_slice = slice_dim(padded_BTHWC, dim, source, source + 1)
++            if mask is None:
++                corrected = source_slice
++            else:
++                # corrected = target + mask * (source - target); mask is 1 only on the device
++                # that owns this global edge, so interior devices are untouched.
++                corrected = ttnn.add(target_slice, ttnn.mul(ttnn.sub(source_slice, target_slice), mask))
++            before = slice_dim(padded_BTHWC, dim, 0, target) if target > 0 else None
++            after = slice_dim(padded_BTHWC, dim, target + 1, size) if target + 1 < size else None
++            parts = [p for p in (before, corrected, after) if p is not None]
++            padded_BTHWC = ttnn.concat(parts, dim=dim)
++    return padded_BTHWC
++
++
++def edge_mask_pair(
++    mesh_device: ttnn.MeshDevice, factor: int, mesh_axis: int, dtype: ttnn.DataType
++) -> tuple[ttnn.Tensor, ttnn.Tensor]:
++    """Per-device 0/1 scalars marking which shard owns the leading / trailing global edge.
++
++    Sharded *data*, so :func:`reflect_edge_correction` stays branch-free and every device
++    issues an identical program.
++
++    The mask has to be placed along **the same mesh axis the activation is sharded on**.
++    ``ShardTensorToMesh(dim=0)`` distributes linearly over all 32 devices and ignores which
++    axis a shard belongs to, so on a 4x8 mesh it lands correctly only for the
++    fastest-varying axis: with width on axis 1 the device at ``(i, j)`` happens to receive
++    mask row ``j``, which is right, while with height on axis 0 it receives row ``j`` when it
++    needs row ``i``, putting the edge corrections on the wrong devices (measured worst-element
++    error 7.117 for ``h4`` against 2.4e-07 for ``w8``). ``ShardTensor2dMesh`` with the other
++    axis ``None`` replicates along it and is correct for either.
++    """
++    leading = torch.zeros(factor, 1, 1, 1, 1)
++    trailing = torch.zeros(factor, 1, 1, 1, 1)
++    leading[0] = 1.0
++    trailing[-1] = 1.0
++    dims: list[int | None] = [None, None]
++    dims[mesh_axis] = 0
++    return tuple(
++        ttnn.from_torch(
++            mask,
++            dtype=dtype,
++            device=mesh_device,
++            layout=ttnn.ROW_MAJOR_LAYOUT,
++            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(dims), mesh_shape=tuple(mesh_device.shape)),
++        )
++        for mask in (leading, trailing)
++    )
++
++
++def reflect_pad_hw(x_BTHWC: ttnn.Tensor, pad_h: int | tuple[int, int], pad_w: int | tuple[int, int]) -> ttnn.Tensor:
++    """Reflect pad on H (dim 2) and W (dim 3); each may be ``(before, after)``.
++
++    Reflect excludes the edge itself, so a pad of 1 takes row 1 rather than row 0 --
++    which is exactly where it differs from ``replicate``, and the reason this is done
++    locally rather than through ``neighbor_pad_async``. An asymmetric ``(0, 1)`` is the
++    downsamplers' bottom/right pre-pad.
++    """
++    for pad, dim in ((pad_h, 2), (pad_w, 3)):
++        before, after = (pad, pad) if isinstance(pad, int) else pad
++        if before <= 0 and after <= 0:
++            continue
++        size = x_BTHWC.shape[dim]
++        if size < max(before, after) + 1:
++            raise ValueError(f"cannot reflect-pad dim {dim} of size {size} by {(before, after)}")
++        leading = [slice_dim(x_BTHWC, dim, i, i + 1) for i in range(before, 0, -1)]
++        trailing = [slice_dim(x_BTHWC, dim, size - 1 - i, size - i) for i in range(1, after + 1)]
++        x_BTHWC = ttnn.concat([*leading, x_BTHWC, *trailing], dim=dim)
++    return x_BTHWC
++
++
++def slice_dim(x: ttnn.Tensor, dim: int, start: int, stop: int) -> ttnn.Tensor:
++    starts = [0] * len(x.shape)
++    stops = list(x.shape)
++    starts[dim], stops[dim] = start, stop
++    return ttnn.slice(x, starts, stops)
+diff --git a/models/tt_dit/models/vae/minimax_h3/decoder_minimax_h3.py b/models/tt_dit/models/vae/minimax_h3/decoder_minimax_h3.py
+new file mode 100644
+index 0000000000..17125d44f4
+--- /dev/null
++++ b/models/tt_dit/models/vae/minimax_h3/decoder_minimax_h3.py
+@@ -0,0 +1,412 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
++
++# SPDX-License-Identifier: Apache-2.0
++
++"""The MiniMax-H3 visual VAE decoder: a 36-layer non-causal ViT, inner dim 2048.
++
++Unlike ``vae_ltx.py`` / ``vae_wan2_1.py``, which are CNN decoders, this one is a plain
++transformer, so it reuses ``layers/linear.py`` and the attention machinery rather than
++needing new conv primitives. Every latent voxel becomes one token; with tiling on, one
++decode call is always a ``(1, 24, 7, 16, 16)`` latent, i.e. ``7*16*16 = 1792`` patches
++plus a 5-token suffix, and ``proj_out`` expands each token into a
++``4 x 16 x 16`` block of 3-channel pixels.
++
++Four easily-missed details, all verified against the pinned reference:
++
++* **``scale1`` / ``scale2`` are per-channel LayerScale multipliers**, not norms:
++  ``h = h + attn(norm1(h)) * scale1`` then ``h = h + ff(norm2(h)) * scale2``.
++* **The cls token is ``torch.zeros_like``, not a parameter.** The sequence is
++  ``[patches, register_tokens(4), zero_cls(1)]`` and all five suffix rows take position
++  id 0 on every axis, so their RoPE is the identity.
++* The reference computes ``norm1``/``norm2`` and the q/k norms **in fp32** whatever the
++  compute dtype.
++* ``norm1``/``norm2`` are RMSNorm eps 1e-5, **weight-only**, so tt_dit's ``RMSNorm``
++  needs ``bias=False``; the q/k norms have ``elementwise_affine=False`` and therefore no
++  parameters at all.
++
++RoPE rotates only 48 of each head's 64 lanes and pairs lane *i* with *i + 24*. See
++``rope_minimax_h3.py``: the q/k weight rows are permuted once at load time so
++``ttnn.alt_complex_rotate90`` computes exactly the reference rotation with no slicing.
++
++The 1792 patches are tile-aligned but 1797 is not, so the suffix is padded out to a full
++tile and the pad columns are masked in attention. Without the mask those rows are not
++neutral -- they would corrupt every softmax.
++"""
++
++from __future__ import annotations
++
++import torch
++
++import ttnn
++
++from ....layers.linear import Linear
++from ....layers.module import Module, ModuleList, Parameter
++from ....layers.normalization import LayerNorm, RMSNorm
++from .rope_minimax_h3 import head_lane_permutation, rope_tables
++
++TILE = 32
++
++
++def padded_sequence_length(num_patches: int, num_suffix_tokens: int) -> int:
++    """Round ``num_patches + num_suffix_tokens`` up to a whole tile."""
++    total = num_patches + num_suffix_tokens
++    return ((total + TILE - 1) // TILE) * TILE
++
++
++class MiniMaxH3ViTAttention(Module):
++    """Self-attention over all tokens, with per-head parameter-free q/k RMS and partial RoPE.
++
++    The checkpoint stores ``to_q`` / ``to_k`` / ``to_v`` separately; they are fused into a
++    single projection at load time, and the q/k halves carry the RoPE lane permute.
++    """
++
++    def __init__(
++        self,
++        dim: int,
++        *,
++        num_heads: int,
++        head_dim: int,
++        eps: float = 1e-5,
++        mesh_device: ttnn.MeshDevice,
++        dtype: ttnn.DataType = ttnn.bfloat16,
++    ) -> None:
++        super().__init__()
++        self.dim = dim
++        self.num_heads = num_heads
++        self.head_dim = head_dim
++        self.eps = eps
++        self.mesh_device = mesh_device
++
++        inner = num_heads * head_dim
++        self.to_qkv = Linear(dim, 3 * inner, bias=True, mesh_device=mesh_device, dtype=dtype)
++        self.to_out = Linear(inner, dim, bias=True, mesh_device=mesh_device, dtype=dtype)
++
++        # Both `attention_wan.py:120` and `attention_ltx.py:158` configure their SDPA; this
++        # follows them -- HiFi2 with fp32 accumulation off is the standard SDPA setting
++        # there, and it roughly doubles matmul throughput against the HiFi4 default.
++        # Swept at the decoder's exact SDPA shape ([1, 32, 1824, 64] bf16) with a single-op
++        # Chosen by a min-of-20 op benchmark; whole-decoder wall clock jitters too much to
++        # resolve it. q=k=192 with HiFi2 is ~2.95x the default blocking, 128 is slightly worse,
++        # and 256 and above hang the sweep. SDPA is ~40 % of layer device time.
++        self.sdpa_program_config = ttnn.SDPAProgramConfig(
++            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
++            q_chunk_size=192,
++            k_chunk_size=192,
++            exp_approx_mode=False,  # False is more correct, matching wan/ltx
++        )
++        self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
++            mesh_device.arch(),
++            math_fidelity=ttnn.MathFidelity.HiFi2,
++            math_approx_mode=False,
++            fp32_dest_acc_en=False,
++        )
++
++        # The elementwise and norm ops all default to HiFi4, which the profile shows costs
++        # 21.5 % of layer device time (BinaryNg 13.2 %, LayerNorm 5.1 %, Typecast 3.2 %,
++        # Unary 1.6 %). None of them is a matmul; HiFi4 buys nothing here. fp32 accumulation
++        # stays on for the q/k RMS, which the reference computes in fp32.
++        self.elementwise_compute_kernel_config = ttnn.init_device_compute_kernel_config(
++            mesh_device.arch(),
++            math_fidelity=ttnn.MathFidelity.HiFi2,
++            math_approx_mode=False,
++            fp32_dest_acc_en=True,
++        )
++
++    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
++        """Fuse q/k/v, permute the q/k lanes for RoPE, and flatten ``to_out.0``."""
++        if "to_q.weight" in state:
++            permutation = head_lane_permutation(self.head_dim, 0.75)
++
++            def permute_heads(tensor: torch.Tensor) -> torch.Tensor:
++                # Rows are (head, lane); permute lanes within each head.
++                if tensor.dim() == 2:
++                    reshaped = tensor.view(self.num_heads, self.head_dim, tensor.shape[-1])
++                    return reshaped.index_select(1, permutation).reshape_as(tensor)
++                reshaped = tensor.view(self.num_heads, self.head_dim)
++                return reshaped.index_select(1, permutation).reshape_as(tensor)
++
++            state["to_qkv.weight"] = torch.cat(
++                [
++                    permute_heads(state.pop("to_q.weight")),
++                    permute_heads(state.pop("to_k.weight")),
++                    state.pop("to_v.weight"),
++                ],
++                dim=0,
++            )
++            state["to_qkv.bias"] = torch.cat(
++                [permute_heads(state.pop("to_q.bias")), permute_heads(state.pop("to_k.bias")), state.pop("to_v.bias")],
++                dim=0,
++            )
++        for suffix in ("weight", "bias"):
++            key = f"to_out.0.{suffix}"
++            if key in state:
++                state[f"to_out.{suffix}"] = state.pop(key)
++
++    def _rms(self, x: ttnn.Tensor) -> ttnn.Tensor:
++        """Parameter-free RMS over the head dim, computed in fp32 like the reference."""
++        original = x.get_dtype()
++        if original != ttnn.float32:
++            x = ttnn.typecast(x, ttnn.float32)
++        x = ttnn.rms_norm(x, epsilon=self.eps, compute_kernel_config=self.elementwise_compute_kernel_config)
++        return ttnn.typecast(x, original) if original != ttnn.float32 else x
++
++    def forward(
++        self,
++        x: ttnn.Tensor,
++        rope_cos: ttnn.Tensor,
++        rope_sin: ttnn.Tensor,
++        attention_mask: ttnn.Tensor | None = None,
++    ) -> ttnn.Tensor:
++        batch, seq_len, _ = x.shape
++        qkv = self.to_qkv(x)
++
++        # One fused op rather than chunk + 3 reshapes + 3 permutes: profiled per layer, that
++        # hand-rolled head plumbing costs 25.8 % of device time in ReshapeView (800 us mean)
++        # and 10.1 % in Transpose -- 36 % on data movement, more than every matmul combined.
++        # wan (attention_wan.py:401) and ltx (attention_ltx.py:463)
++        # both use this op. transpose_k_heads=False because SDPA wants K as [B,H,S,D], and
++        # the layout it expects, [Q all heads | K all heads | V all heads], is exactly what
++        # _prepare_torch_state's cat([q, k, v], dim=0) already produces.
++        query, key, value = ttnn.experimental.nlp_create_qkv_heads(
++            ttnn.reshape(qkv, (batch, 1, seq_len, qkv.shape[-1])),
++            num_heads=self.num_heads,
++            num_kv_heads=self.num_heads,
++            transpose_k_heads=False,
++        )
++
++        query = self._rms(query)
++        key = self._rms(key)
++
++        # Partial RoPE: the lane permute at load time makes this a full-width op.
++        query = ttnn.add(ttnn.mul(query, rope_cos), ttnn.mul(ttnn.alt_complex_rotate90(query), rope_sin))
++        key = ttnn.add(ttnn.mul(key, rope_cos), ttnn.mul(ttnn.alt_complex_rotate90(key), rope_sin))
++
++        attended = ttnn.transformer.scaled_dot_product_attention(
++            query,
++            key,
++            value,
++            attn_mask=attention_mask,
++            is_causal=False,
++            program_config=self.sdpa_program_config,
++            compute_kernel_config=self.sdpa_compute_kernel_config,
++        )
++        attended = ttnn.reshape(
++            ttnn.experimental.nlp_concat_heads(attended), (batch, seq_len, self.num_heads * self.head_dim)
++        )
++        return self.to_out(attended)
++
++
++class MiniMaxH3TransformerBlock(Module):
++    """``h += attn(norm1(h)) * scale1``; ``h += ff(norm2(h)) * scale2``."""
++
++    def __init__(
++        self,
++        dim: int,
++        *,
++        num_heads: int,
++        head_dim: int,
++        ffn_mult: int = 4,
++        eps: float = 1e-5,
++        mesh_device: ttnn.MeshDevice,
++        dtype: ttnn.DataType = ttnn.bfloat16,
++    ) -> None:
++        super().__init__()
++        # Weight-only RMSNorm: tt_dit defaults bias=True and every H3 norm has no bias.
++        self.norm1 = RMSNorm(dim, norm_eps=eps, bias=False, mesh_device=mesh_device, dtype=dtype)
++        self.attn = MiniMaxH3ViTAttention(
++            dim, num_heads=num_heads, head_dim=head_dim, eps=eps, mesh_device=mesh_device, dtype=dtype
++        )
++        self.norm2 = RMSNorm(dim, norm_eps=eps, bias=False, mesh_device=mesh_device, dtype=dtype)
++        inner = dim * ffn_mult
++        # The checkpoint's ``ff.net.0.proj`` packs ``[value; gate]``, which is exactly
++        # tt_dit's swiglu convention, so the halves load as-is. This is unlike the H3
++        # *DiT*, whose ``fc1`` halves must be swapped -- that swap came from the raw
++        # MiniMax layout, not the diffusers-converted one, and applying it here would
++        # silently corrupt every FFN. Verified against ``diffusers.FeedForward``: the
++        # first half is the value (out = W2(first * silu(second))), and the swapped
++        # order does not reproduce the reference, so exactly one order is right.
++        self.ff1 = Linear(dim, inner, bias=True, activation_fn="swiglu", mesh_device=mesh_device, dtype=dtype)
++        self.ff2 = Linear(inner, dim, bias=True, mesh_device=mesh_device, dtype=dtype)
++        # LayerScale, initialised to zeros in the reference and trained.
++        # No scale1/scale2 Parameters: LayerScale is folded into to_out / ff2 at load time
++        # (see _prepare_torch_state), which is exact and saves two multiplies per layer.
++
++    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
++        for index, name in ((0, "ff1"), (2, "ff2")):
++            source = f"ff.net.{index}.proj" if index == 0 else f"ff.net.{index}"
++            for suffix in ("weight", "bias"):
++                key = f"{source}.{suffix}"
++                if key in state:
++                    state[f"{name}.{suffix}"] = state.pop(key)
++        # Fold LayerScale into the preceding projection. `to_out(x) * scale1` is
++        # `x @ (W_out * scale1) + b_out * scale1` because scale is per *output* channel, so
++        # this is exact, not an approximation. Same for scale2 into ff2. Removes two
++        # elementwise multiplies per layer from BinaryNg, which is 22 calls and 13.2 % of
++        # layer device time.
++        #
++        # Torch layout here is [out, in], so scale multiplies rows; the Linear's own
++        # _prepare_torch_state transposes afterwards.
++        for scale_name, target in (("scale1", "attn.to_out.0"), ("scale2", "ff2")):
++            scale = state.pop(scale_name, None)
++            if scale is None:
++                continue
++            flat = scale.reshape(-1)
++            weight_key, bias_key = f"{target}.weight", f"{target}.bias"
++            if weight_key in state:
++                state[weight_key] = state[weight_key] * flat.unsqueeze(1)
++            if bias_key in state:
++                state[bias_key] = state[bias_key] * flat
++
++    def forward(
++        self,
++        x: ttnn.Tensor,
++        rope_cos: ttnn.Tensor,
++        rope_sin: ttnn.Tensor,
++        attention_mask: ttnn.Tensor | None = None,
++    ) -> ttnn.Tensor:
++        x = ttnn.add(x, self.attn(self.norm1(x), rope_cos, rope_sin, attention_mask))
++        return ttnn.add(x, self.ff2(self.ff1(self.norm2(x))))
++
++
++class MiniMaxH3ViTDecoder3d(Module):
++    """Latent voxels to pixels: ``proj_in -> 36 blocks -> norm_out -> proj_out -> unpatchify``.
++
++    Shape-specialised on ``(num_frames, height, width)`` of the *latent* tile, because the
++    RoPE tables, the padded suffix and the attention mask are all constants for a given
++    shape -- and with tiling on there is only ever one shape.
++    """
++
++    def __init__(
++        self,
++        *,
++        num_frames: int,
++        height: int,
++        width: int,
++        in_channels: int = 24,
++        out_channels: int = 3,
++        patch_size: int = 16,
++        patch_size_t: int = 4,
++        num_layers: int = 36,
++        num_heads: int = 32,
++        head_dim: int = 64,
++        num_register_tokens: int = 4,
++        ffn_mult: int = 4,
++        rope_theta: float = 100.0,
++        rope_dim_ratio: float = 0.75,
++        eps: float = 1e-5,
++        mesh_device: ttnn.MeshDevice,
++        dtype: ttnn.DataType = ttnn.bfloat16,
++    ) -> None:
++        super().__init__()
++        dim = num_heads * head_dim
++        self.dim = dim
++        self.latent_shape = (num_frames, height, width)
++        self.in_channels = in_channels
++        self.out_channels = out_channels
++        self.patch_size = patch_size
++        self.patch_size_t = patch_size_t
++        self.num_register_tokens = num_register_tokens
++        self.mesh_device = mesh_device
++        self.dtype = dtype
++
++        self.num_patches = num_frames * height * width
++        # +1 for the zero cls token the reference appends after the register tokens.
++        self.num_suffix_tokens = num_register_tokens + 1
++        self.seq_len = padded_sequence_length(self.num_patches, self.num_suffix_tokens)
++
++        self.proj_in = Linear(in_channels, dim, bias=True, mesh_device=mesh_device, dtype=dtype)
++        self.transformer_blocks = ModuleList(
++            [
++                MiniMaxH3TransformerBlock(
++                    dim,
++                    num_heads=num_heads,
++                    head_dim=head_dim,
++                    ffn_mult=ffn_mult,
++                    eps=eps,
++                    mesh_device=mesh_device,
++                    dtype=dtype,
++                )
++                for _ in range(num_layers)
++            ]
++        )
++        self.norm_out = LayerNorm(dim, norm_eps=eps, bias=True, mesh_device=mesh_device)
++        self.proj_out = Linear(
++            dim, out_channels * patch_size_t * patch_size * patch_size, bias=True, mesh_device=mesh_device, dtype=dtype
++        )
++
++        # One constant covering the register tokens, the zero cls token, and the tile pad.
++        self.suffix = Parameter(total_shape=[1, self.seq_len - self.num_patches, dim], device=mesh_device, dtype=dtype)
++
++        cos, sin = rope_tables(
++            num_frames,
++            height,
++            width,
++            num_suffix_tokens=self.seq_len - self.num_patches,
++            attention_head_dim=head_dim,
++            rope_dim_ratio=rope_dim_ratio,
++            theta=rope_theta,
++            permuted=True,
++        )
++        self.rope_cos = Parameter(total_shape=[1, 1, self.seq_len, head_dim], device=mesh_device, dtype=dtype)
++        self.rope_sin = Parameter(total_shape=[1, 1, self.seq_len, head_dim], device=mesh_device, dtype=dtype)
++        self._rope_host = (cos.reshape(1, 1, self.seq_len, head_dim), sin.reshape(1, 1, self.seq_len, head_dim))
++
++        # Mask the tile-pad columns: they are not neutral in a softmax.
++        mask = torch.zeros(1, 1, self.seq_len, self.seq_len)
++        valid = self.num_patches + self.num_suffix_tokens
++        if valid < self.seq_len:
++            mask[..., valid:] = float("-inf")
++        self.attention_mask = Parameter(total_shape=[1, 1, self.seq_len, self.seq_len], device=mesh_device, dtype=dtype)
++        self._mask_host = mask
++
++    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
++        """Build the fused suffix constant, and the RoPE / mask constants.
++
++        ``register_tokens`` is ``(1, 4, dim)``; the cls token is a runtime zero in the
++        reference, and the remaining rows are tile padding, so all three fold into one
++        parameter.
++        """
++        register = state.pop("register_tokens", None)
++        suffix_rows = self.seq_len - self.num_patches
++        if register is not None:
++            pad_rows = suffix_rows - register.shape[1]
++            state["suffix"] = torch.cat([register, register.new_zeros((1, pad_rows, register.shape[2]))], dim=1)
++        cos, sin = self._rope_host
++        state["rope_cos"] = cos
++        state["rope_sin"] = sin
++        state["attention_mask"] = self._mask_host
++
++    def forward(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
++        """``(1, num_patches, in_channels)`` latent tokens to ``(1, seq_len, C*pt*p*p)``.
++
++        The caller flattens the latent voxel grid to tokens and unpatchifies the result;
++        it already owns the tiling, hence the host-side reshapes. :func:`unpatchify` is the
++        tail, and it crops the suffix rows off before reshaping.
++        """
++        assert (
++            tokens.shape[1] == self.num_patches
++        ), f"expected {self.num_patches} patch tokens for latent {self.latent_shape}, got {tokens.shape[1]}"
++        hidden = self.proj_in(tokens)
++        # One concat covers the register tokens, the zero cls token and the tile pad.
++        hidden = ttnn.concat([hidden, self.suffix.data], dim=1)
++        for block in self.transformer_blocks:
++            hidden = block(hidden, self.rope_cos.data, self.rope_sin.data, self.attention_mask.data)
++        return self.proj_out(self.norm_out(hidden))
++
++
++def unpatchify(
++    tokens: torch.Tensor,
++    *,
++    num_frames: int,
++    height: int,
++    width: int,
++    out_channels: int = 3,
++    patch_size: int = 16,
++    patch_size_t: int = 4,
++) -> torch.Tensor:
++    """``(1, num_patches, C*pt*p*p)`` to ``(1, C, T*pt, H*p, W*p)`` -- the reference's tail."""
++    batch = tokens.shape[0]
++    tokens = tokens[:, : num_frames * height * width, :]
++    tokens = tokens.view(batch, num_frames, height, width, out_channels, patch_size_t, patch_size, patch_size)
++    tokens = tokens.permute(0, 4, 1, 5, 2, 6, 3, 7).contiguous()
++    return tokens.reshape(batch, out_channels, num_frames * patch_size_t, height * patch_size, width * patch_size)
+diff --git a/models/tt_dit/models/vae/minimax_h3/encoder_minimax_h3.py b/models/tt_dit/models/vae/minimax_h3/encoder_minimax_h3.py
+new file mode 100644
+index 0000000000..ac88f1f264
+--- /dev/null
++++ b/models/tt_dit/models/vae/minimax_h3/encoder_minimax_h3.py
+@@ -0,0 +1,559 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
++
++# SPDX-License-Identifier: Apache-2.0
++
++"""MiniMax-H3 video VAE encoder: a causal 3D CNN, 6 levels, 16x spatial / 4x temporal.
++
++The module tree **mirrors the diffusers key names one-for-one**
++(``encoder.down_blocks.<L>.resnets.<i>.conv1``, ``...downsamplers.0.conv``,
++``...resnets.0.conv_shortcut``), so almost nothing needs a ``_prepare_torch_state``
++override. That is deliberate: the available checkpoint at
++``/data/cglagovich/MiniMax-H3-diffusers/vae`` is diffusers-converted, not the raw
++MiniMax layout.
++
++Two facts drive the plumbing:
++
++* ``ttnn.experimental.conv3d`` requires **ROW_MAJOR** input.
++* Every norm is per *frame*: ``MiniMaxH3VideoGroupNorm`` in the reference folds T into
++  the batch axis so no statistic ever mixes across frames.
++
++The norm is :class:`MiniMaxH3DistributedFrameGroupNorm`, which computes the per-(frame,
++group) statistics itself. Three alternatives were tried and all lose, so do not re-derive
++them: ``ttnn.group_norm`` with T as batch is 2.7x slower and bf16-only, making every norm a
++bf16 island in an otherwise fp32 encoder; a fused distributed GroupNorm device op is 1.6x
++slower per frame; carrying the resnet chain in TILE to avoid the round trip is a wash.
++
++Each norm is still specialised to its ``(T, H, W)`` at construction, because the divisor is
++the *global* element count per (frame, group) and only the constructor knows the mesh factor.
++That costs nothing: the encoder has exactly one activation shape per level, since the
++reference always encodes a 256x256 tile over a 17-frame clip.
++"""
++
++from __future__ import annotations
++
++import torch
++
++import ttnn
++
++from ....layers.module import Module, ModuleList, Parameter
++from .conv_minimax_h3 import MiniMaxH3CausalConv3d
++
++MINIMAX_H3_VAE_NUM_GROUPS = 32
++MINIMAX_H3_VAE_NORM_EPS = 1e-6
++
++# ``ttnn.add(..., activations=[...])`` takes EltwiseUnaryWithParam, not a string.
++_SILU_ACTIVATION = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
++
++# Compute the group variance as E[x^2] - E[x]^2 rather than centring first. Saves one full
++# pass over the activation per norm site (four -> three). The class docstring explains why
++# the two-pass form is kept: the group means are not near zero, so this is exactly the
++# cancellation Welford exists to avoid. Contained here by doing the subtraction on the
++# per-(frame, group) stats in fp32 -- 32 scalars per frame -- so only the *sums* are bf16.
++MINIMAX_H3_ONE_PASS_VARIANCE = True
++
++
++class MiniMaxH3DistributedFrameGroupNorm(Module):
++    """Per-frame GroupNorm whose spatial extent is sharded across a mesh axis.
++
++    Takes and returns ``(1, T, H, W, C)`` ROW_MAJOR, with ``H`` the **local** height.
++
++    No existing primitive does this job:
++
++    * ``ttnn.group_norm`` has no notion of the mesh, so a sharded ``H`` gives each device a
++      statistic over its own strip only.
++    * A fused distributed GroupNorm device op does not fit: it hard-rejects ``N > 1``, and
++      here ``N`` is ``T`` (17/9/5) because the statistic is per frame. It also takes a
++      single ``cluster_axis``, so it cannot reduce over both mesh axes -- and it measures
++      1.6x slower than this anyway.
++
++    So the statistics are computed directly: per ``(frame, group)`` local sums, an
++    all-reduce of **only those** -- ``T x 32`` scalars, against a full-activation gather --
++    then an elementwise normalise. Channel-to-group contraction is a matmul with a 0/1
++    matrix, and its transpose spreads the result back over channels.
++
++    The default form is one pass on ``E[x^2] - E[x]^2``
++    (:data:`MINIMAX_H3_ONE_PASS_VARIANCE`). The two-pass centred form is kept behind that
++    flag because the group means here are *not* near zero -- exactly the cancellation
++    ``GroupNorm3D`` uses Welford to avoid. What contains it is that the subtraction happens
++    on the ``(T,1,1,G)`` stats tensor in fp32, never on the activation; PCC gates the
++    difference at 0.02 pp.
++
++    Runs in the activation dtype, so fp32 activations stay fp32 -- unlike
++    ``ttnn.group_norm``, which is bf16-only and would floor the encoder's precision.
++    """
++
++    def __init__(
++        self,
++        num_channels: int,
++        *,
++        num_frames: int,
++        height: int,
++        width: int,
++        mesh_device: ttnn.MeshDevice,
++        spatial_factor: int = 1,
++        cluster_axis: int = 0,
++        ccl_manager=None,
++        dtype: ttnn.DataType = ttnn.bfloat16,
++    ) -> None:
++        super().__init__()
++        assert num_channels % MINIMAX_H3_VAE_NUM_GROUPS == 0
++        self.num_channels = num_channels
++        self.num_groups = MINIMAX_H3_VAE_NUM_GROUPS
++        self.eps = MINIMAX_H3_VAE_NORM_EPS
++        self.num_frames = num_frames
++        self.local_height = height
++        self.width = width
++        self.spatial_factor = spatial_factor
++        self.cluster_axis = cluster_axis
++        self.mesh_device = mesh_device
++        self.ccl_manager = ccl_manager
++
++        # The divisor is the GLOBAL element count per (frame, group), so a device normalises by
++        # more elements than it holds.
++        self.height = height
++        self.elements_per_group = (num_channels // self.num_groups) * height * spatial_factor * width
++
++        self.weight = Parameter(total_shape=[1, 1, 1, num_channels], device=mesh_device)
++        self.bias = Parameter(total_shape=[1, 1, 1, num_channels], device=mesh_device)
++        self.to_groups = Parameter(total_shape=[1, 1, num_channels, self.num_groups], device=mesh_device)
++        self.from_groups = Parameter(total_shape=[1, 1, self.num_groups, num_channels], device=mesh_device)
++
++    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
++        state["weight"] = state["weight"].reshape(1, 1, 1, self.num_channels)
++        state["bias"] = state["bias"].reshape(1, 1, 1, self.num_channels)
++        per_group = self.num_channels // self.num_groups
++        selector = torch.zeros(self.num_channels, self.num_groups)
++        for group in range(self.num_groups):
++            selector[group * per_group : (group + 1) * per_group, group] = 1.0
++        state["to_groups"] = selector.reshape(1, 1, self.num_channels, self.num_groups)
++        state["from_groups"] = selector.t().contiguous().reshape(1, 1, self.num_groups, self.num_channels)
++
++    def _group_sums(self, x_flat: ttnn.Tensor) -> ttnn.Tensor:
++        """``(T,1,HW_local,C)`` -> global per-``(frame, group)`` sums, shaped ``(T,1,1,G)``."""
++        channel_sums = ttnn.sum(x_flat, dim=2, keepdim=True)
++        group_sums = ttnn.matmul(channel_sums, self.to_groups.data)
++        if self.spatial_factor <= 1:
++            # Unsharded: the local sum is already the global one, and there is no ccl_manager.
++            return group_sums
++        # tt_dit exposes no all-reduce (not one call anywhere in the tree), so gather on the
++        # singleton dim and sum locally. At T x 32 scalars the distinction is immaterial.
++        gathered = self.ccl_manager.all_gather(group_sums, dim=1, mesh_axis=self.cluster_axis, use_hyperparams=False)
++        return ttnn.sum(gathered, dim=1, keepdim=True)
++
++    def _spread(self, per_group: ttnn.Tensor) -> ttnn.Tensor:
++        """``(T,1,1,G)`` -> ``(T,1,1,C)``, each channel taking its own group's value."""
++        return ttnn.matmul(per_group, self.from_groups.data)
++
++    def forward(self, x_BTHWC: ttnn.Tensor, *, fuse_silu: bool = False) -> ttnn.Tensor:
++        """``(1,T,H,W,C)`` ROW_MAJOR in and out.
++
++        ``fuse_silu`` folds the SiLU into the final broadcast add. Run separately on the ROW_MAJOR
++        output it is a 285 MB unary costing 3.7 ms; fused onto an op that already runs, it is free.
++        """
++        T, H, W, C = self.num_frames, self.local_height, self.width, self.num_channels
++        B, xt, xh, xw, xc = x_BTHWC.shape
++        assert B == 1, f"one unit per device, got B={B}"
++        assert (xt, xh, xw) == (T, H, W), f"norm built for local (T,H,W)=({T},{H},{W}), got ({xt},{xh},{xw})"
++        x = ttnn.reshape(x_BTHWC, (T, 1, H * W, C))
++        if x.layout != ttnn.TILE_LAYOUT:
++            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
++
++        scale = 1.0 / self.elements_per_group
++        if MINIMAX_H3_ONE_PASS_VARIANCE:
++            # E[x^2] - E[x]^2, which never materialises ``x - mean``: three full passes over
++            # the activation (x*x, x*gamma, +beta) instead of four. The cancellation this
++            # form is known for is contained by doing the subtraction on the (T,1,1,G) stats
++            # tensor in fp32 -- 32 scalars per frame, so the cast is free -- rather than on
++            # the activation. Gated by PCC, not assumed: see the class docstring on the
++            # two-pass form.
++            sum_x = ttnn.typecast(self._group_sums(x), ttnn.float32)
++            sum_xx = ttnn.typecast(self._group_sums(ttnn.multiply(x, x)), ttnn.float32)
++            mean_g = ttnn.multiply(sum_x, scale)
++            var_g = ttnn.subtract(ttnn.multiply(sum_xx, scale), ttnn.multiply(mean_g, mean_g))
++            inv_g = ttnn.typecast(ttnn.rsqrt(ttnn.add(var_g, self.eps)), x.get_dtype())
++            gamma = ttnn.multiply(self._spread(inv_g), self.weight.data)
++            beta = ttnn.subtract(
++                self.bias.data, ttnn.multiply(self._spread(ttnn.typecast(mean_g, x.get_dtype())), gamma)
++            )
++            scaled = ttnn.multiply(x, gamma)
++        else:
++            mean = self._spread(ttnn.multiply(self._group_sums(x), scale))
++            centred = ttnn.subtract(x, mean)
++            variance = self._spread(ttnn.multiply(self._group_sums(ttnn.multiply(centred, centred)), scale))
++            # Fold ``weight`` into the inverse standard deviation on the (T,1,1,C) stats
++            # tensor. ``normed * weight + bias`` costs three full passes over the activation;
++            # ``centred * gamma + bias`` costs two, and the extra work lands on a tensor
++            # 65536x smaller.
++            gamma = ttnn.multiply(ttnn.rsqrt(ttnn.add(variance, self.eps)), self.weight.data)
++            beta = self.bias.data
++            scaled = ttnn.multiply(centred, gamma)
++        out = ttnn.add(scaled, beta, activations=[_SILU_ACTIVATION]) if fuse_silu else ttnn.add(scaled, beta)
++
++        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
++        return ttnn.reshape(out, (1, T, H, W, C))
++
++
++def _gn_hw_sharded(
++    norm: MiniMaxH3DistributedFrameGroupNorm, x_BTHWC: ttnn.Tensor, parallel_config, ccl_manager
++) -> ttnn.Tensor:
++    """Per-frame GroupNorm on an H/W-sharded tensor: gather the spatial extent, norm, re-shard.
++
++    The shape of ``upsampler/latent_upsampler_ltx.py:_gn_hw_sharded``, which is the only
++    in-tree solution to this problem, so the norms stay built at the **global** H/W while the
++    convs are built at the local shard.
++
++    Minus that function's crop/re-pad branch: it exists for mesh-factor
++    padding, and H3 never has any. Its spatial extents are dyadic (256/128/64/32/16), so at
++    factor 2/4/8 every one of the eight norm sites divides its mesh factor exactly *and*
++    every local ``H*W`` is a multiple of 32. The assertion below is what keeps that true --
++    if it ever fires, port the crop branch rather than relaxing it, because normalising over
++    padding zeros is silently wrong (it is the live TODO at ``vae_mochi.py:270``).
++    """
++    if parallel_config is None:
++        return norm(x_BTHWC)
++    h_parallel, w_parallel = parallel_config.height_parallel, parallel_config.width_parallel
++    if h_parallel.factor <= 1 and w_parallel.factor <= 1:
++        return norm(x_BTHWC)
++
++    if x_BTHWC.layout != ttnn.ROW_MAJOR_LAYOUT:
++        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
++    for dim, spatial in ((2, h_parallel), (3, w_parallel)):
++        if spatial.factor > 1:
++            assert x_BTHWC.shape[dim] * spatial.factor == (norm.height if dim == 2 else norm.width), (
++                f"dim {dim} shard {x_BTHWC.shape[dim]} x factor {spatial.factor} != "
++                f"global {norm.height if dim == 2 else norm.width}; mesh-factor padding is "
++                "unsupported here and normalising over pad zeros is silently wrong"
++            )
++            x_BTHWC = ccl_manager.all_gather(x_BTHWC, dim=dim, mesh_axis=spatial.mesh_axis, use_hyperparams=False)
++
++    x_BTHWC = norm(x_BTHWC)
++
++    for dim, spatial in ((2, h_parallel), (3, w_parallel)):
++        if spatial.factor > 1:
++            # ROW_MAJOR is required: a sub-tile-wide shard cannot be sliced out of a tilized
++            # tensor, so tilize-then-partition fails.
++            x_BTHWC = ttnn.mesh_partition(x_BTHWC, dim=dim, cluster_axis=spatial.mesh_axis)
++    return x_BTHWC
++
++
++def _hw_sharded(parallel_config) -> bool:
++    if parallel_config is None:
++        return False
++    return parallel_config.height_parallel.factor > 1 or parallel_config.width_parallel.factor > 1
++
++
++def _norm_silu(
++    norm: MiniMaxH3DistributedFrameGroupNorm,
++    x_BTHWC: ttnn.Tensor,
++    dtype: ttnn.DataType = ttnn.bfloat16,
++    *,
++    parallel_config=None,
++    ccl_manager=None,
++) -> ttnn.Tensor:
++    """``silu(norm(x))``, returned ROW_MAJOR in ``dtype``, ready for the next conv.
++
++    The norm runs in the activation dtype, so this is not a precision boundary; the cast is
++    kept explicit because ``conv3d`` requires input and weight dtypes to match exactly.
++    """
++    if not _hw_sharded(parallel_config):
++        # The norm folds the SiLU into its own final add. _gn_hw_sharded is bypassed only
++        # when there is no sharding to gather for, so the sharded path is untouched.
++        h = norm(x_BTHWC, fuse_silu=True)
++        if h.get_dtype() != dtype:
++            h = ttnn.typecast(h, dtype)
++        return h
++    h = ttnn.silu(_gn_hw_sharded(norm, x_BTHWC, parallel_config, ccl_manager))
++    if h.get_dtype() != dtype:
++        h = ttnn.typecast(h, dtype)
++    if h.layout != ttnn.ROW_MAJOR_LAYOUT:
++        h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
++    return h
++
++
++class MiniMaxH3ResnetBlock3d(Module):
++    """``norm1 -> silu -> conv1 -> norm2 -> silu -> conv2``, plus a k1 ``conv_shortcut``.
++
++    Only three blocks in the checkpoint carry ``conv_shortcut`` (``down_blocks.{1,3,5}
++    .resnets.0``), so it is constructed conditionally to keep a strict load exact.
++    """
++
++    def __init__(
++        self,
++        in_channels: int,
++        out_channels: int,
++        *,
++        num_frames: int,
++        height: int,
++        width: int,
++        temporal_taps: int = 3,
++        mesh_device: ttnn.MeshDevice,
++        dtype: ttnn.DataType = ttnn.bfloat16,
++        parallel_config=None,
++        ccl_manager=None,
++    ) -> None:
++        super().__init__()
++        self.in_channels = in_channels
++        self.out_channels = out_channels
++
++        self.dtype = dtype
++        self.parallel_config = parallel_config
++        self.ccl_manager = ccl_manager
++        self.num_frames = num_frames
++        self.height = height
++        self.width = width
++        conv_kwargs = dict(
++            temporal_taps=temporal_taps,
++            mesh_device=mesh_device,
++            dtype=dtype,
++            parallel_config=parallel_config,
++            ccl_manager=ccl_manager,
++        )
++        # Norms are built at the GLOBAL H/W: _gn_hw_sharded gathers the spatial extent
++        # before calling them. Only the convs see the per-device shard.
++        norm_kwargs = dict(num_frames=num_frames, height=height, width=width, mesh_device=mesh_device)
++        # A resnet never changes T/H/W, so both norms share one shape.
++        self.norm1 = MiniMaxH3DistributedFrameGroupNorm(in_channels, **norm_kwargs)
++        self.conv1 = MiniMaxH3CausalConv3d(in_channels, out_channels, kernel_size=3, spatial_padding=1, **conv_kwargs)
++        self.norm2 = MiniMaxH3DistributedFrameGroupNorm(out_channels, **norm_kwargs)
++        self.conv2 = MiniMaxH3CausalConv3d(out_channels, out_channels, kernel_size=3, spatial_padding=1, **conv_kwargs)
++        if in_channels != out_channels:
++            self.conv_shortcut = MiniMaxH3CausalConv3d(
++                in_channels, out_channels, kernel_size=1, spatial_padding=0, **conv_kwargs
++            )
++
++    def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
++        """``(1,T,H,W,C)`` ROW_MAJOR in and out -- what ``conv3d`` requires on both sides.
++
++        Carrying the chain in TILE instead, to make the residual add cheaper, measures as a
++        wash: it moves the cost into Tilize rather than removing it.
++        """
++        norm_kwargs = dict(parallel_config=self.parallel_config, ccl_manager=self.ccl_manager)
++        h = self.conv1(_norm_silu(self.norm1, x_BTHWC, self.dtype, **norm_kwargs))
++        h = self.conv2(_norm_silu(self.norm2, h, self.dtype, **norm_kwargs))
++        # The residual carries the caller's dtype, which need not be ours: `_norm_silu` casts the
++        # main path but nothing casts this one. An fp32 input then either reaches conv_shortcut,
++        # which rejects a dtype mismatch against its weights, or reaches the add as an fp32 term
++        # against a bf16 one, which does not fail -- it returns garbage that varies run to run.
++        residual = x_BTHWC
++        if residual.get_dtype() != self.dtype:
++            residual = ttnn.typecast(residual, self.dtype)
++        if self.in_channels != self.out_channels:
++            residual = self.conv_shortcut(residual)
++        return ttnn.add(residual, h)
++
++
++class MiniMaxH3Downsample3d(Module):
++    """Strided conv with H3's asymmetric bottom/right reflect pre-pad.
++
++    The conv itself carries no spatial padding, so the pre-pad is what makes the
++    output exactly ``ceil(size / 2)``.
++    """
++
++    def __init__(
++        self,
++        in_channels: int,
++        out_channels: int,
++        *,
++        temporal_stride: int = 1,
++        spatial_stride: int = 2,
++        temporal_taps: int = 3,
++        mesh_device: ttnn.MeshDevice,
++        dtype: ttnn.DataType = ttnn.bfloat16,
++        parallel_config=None,
++        ccl_manager=None,
++    ) -> None:
++        super().__init__()
++        self.spatial_stride = spatial_stride
++        # A collapsed temporal axis cannot be strided: one real frame stays one frame.
++        effective_temporal_stride = 1 if temporal_taps == 1 else temporal_stride
++        self.conv = MiniMaxH3CausalConv3d(
++            in_channels,
++            out_channels,
++            kernel_size=3,
++            stride=(effective_temporal_stride, spatial_stride, spatial_stride),
++            spatial_padding=0,
++            # H3's asymmetric bottom/right reflect pre-pad, which is what makes the strided
++            # conv land on exactly ceil(size/2). Expressed as the conv's trailing pad rather
++            # than a separate pre-pad so one path covers sharded and unsharded: under H/W
++            # sharding only the device owning the global bottom/right edge may reflect, while
++            # the interior devices need a real halo row from their neighbour.
++            trailing_spatial_padding=1 if spatial_stride == 2 else 0,
++            temporal_taps=temporal_taps,
++            mesh_device=mesh_device,
++            dtype=dtype,
++            parallel_config=parallel_config,
++            ccl_manager=ccl_manager,
++        )
++
++    def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
++        return self.conv(x_BTHWC)
++
++
++class MiniMaxH3DownBlock3d(Module):
++    """``layers_per_block`` resnets, then an optional downsampler."""
++
++    def __init__(
++        self,
++        in_channels: int,
++        out_channels: int,
++        *,
++        num_layers: int,
++        num_frames: int,
++        height: int,
++        width: int,
++        temporal_downsample_factor: int,
++        spatial_downsample_factor: int,
++        temporal_taps: int = 3,
++        mesh_device: ttnn.MeshDevice,
++        dtype: ttnn.DataType = ttnn.bfloat16,
++        parallel_config=None,
++        ccl_manager=None,
++    ) -> None:
++        super().__init__()
++        self.num_frames = num_frames
++        self.height = height
++        self.width = width
++        self.out_channels = out_channels
++        self.resnets = ModuleList(
++            [
++                MiniMaxH3ResnetBlock3d(
++                    in_channels if i == 0 else out_channels,
++                    out_channels,
++                    num_frames=num_frames,
++                    height=height,
++                    width=width,
++                    temporal_taps=temporal_taps,
++                    mesh_device=mesh_device,
++                    dtype=dtype,
++                    parallel_config=parallel_config,
++                    ccl_manager=ccl_manager,
++                )
++                for i in range(num_layers)
++            ]
++        )
++        self.has_downsamplers = temporal_downsample_factor * spatial_downsample_factor > 1
++        if self.has_downsamplers:
++            self.downsamplers = ModuleList(
++                [
++                    MiniMaxH3Downsample3d(
++                        out_channels,
++                        out_channels,
++                        temporal_stride=temporal_downsample_factor,
++                        spatial_stride=spatial_downsample_factor,
++                        temporal_taps=temporal_taps,
++                        mesh_device=mesh_device,
++                        dtype=dtype,
++                        parallel_config=parallel_config,
++                        ccl_manager=ccl_manager,
++                    )
++                ]
++            )
++
++    def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
++        for resnet in self.resnets:
++            x_BTHWC = resnet(x_BTHWC)
++        if self.has_downsamplers:
++            for downsampler in self.downsamplers:
++                x_BTHWC = downsampler(x_BTHWC)
++        return x_BTHWC
++
++
++class MiniMaxH3Encoder3d(Module):
++    """``conv_in -> 6 down_blocks -> norm_out + silu -> conv_out``.
++
++    Returns the ``2 * latent_channels`` moments **before** ``quant_conv``, matching the
++    reference ``MiniMaxH3VideoEncoder3d``. Sampling stays on host so the seed-42
++    posterior draw the released model conditions on stays reproducible; see
++    ``pipelines/minimax_h3/conditioning.py``.
++    """
++
++    def __init__(
++        self,
++        *,
++        num_frames: int,
++        height: int,
++        width: int,
++        in_channels: int = 3,
++        out_channels: int = 48,
++        block_out_channels: tuple[int, ...] = (128, 256, 256, 512, 512, 1024),
++        layers_per_block: int = 2,
++        spatial_downsample_factors: tuple[int, ...] = (2, 2, 2, 2, 1, 1),
++        temporal_downsample_factors: tuple[int, ...] = (1, 2, 2, 1, 1, 1),
++        temporal_taps: int = 3,
++        mesh_device: ttnn.MeshDevice,
++        dtype: ttnn.DataType = ttnn.bfloat16,
++        parallel_config=None,
++        ccl_manager=None,
++    ) -> None:
++        super().__init__()
++        self.temporal_taps = temporal_taps
++        # height/width here are the GLOBAL extents. Norms are built at them and gather to
++        # them; the convs derive their per-device shard from parallel_config.
++        self.parallel_config = parallel_config
++        self.ccl_manager = ccl_manager
++        self.in_channels = in_channels
++        self.dtype = dtype
++        self.input_shape = (num_frames, height, width)
++
++        conv_kwargs = dict(
++            temporal_taps=temporal_taps,
++            mesh_device=mesh_device,
++            dtype=dtype,
++            parallel_config=parallel_config,
++            ccl_manager=ccl_manager,
++        )
++        self.conv_in = MiniMaxH3CausalConv3d(
++            in_channels, block_out_channels[0], kernel_size=3, spatial_padding=1, **conv_kwargs
++        )
++
++        block_in_channels = (block_out_channels[0],) + tuple(block_out_channels[:-1])
++        blocks = []
++        t, h, w = num_frames, height, width
++        for i in range(len(block_out_channels)):
++            # Resnets at level i see the shape *entering* the level; the downsampler at
++            # the end of the level is what shrinks it.
++            blocks.append(
++                MiniMaxH3DownBlock3d(
++                    block_in_channels[i],
++                    block_out_channels[i],
++                    num_layers=layers_per_block,
++                    num_frames=t,
++                    height=h,
++                    width=w,
++                    temporal_downsample_factor=temporal_downsample_factors[i],
++                    spatial_downsample_factor=spatial_downsample_factors[i],
++                    temporal_taps=temporal_taps,
++                    mesh_device=mesh_device,
++                    dtype=dtype,
++                    parallel_config=parallel_config,
++                    ccl_manager=ccl_manager,
++                )
++            )
++            if temporal_downsample_factors[i] * spatial_downsample_factors[i] > 1:
++                # A collapsed temporal axis cannot shrink: one real frame stays one.
++                if temporal_taps > 1:
++                    t = -(-t // temporal_downsample_factors[i])
++                h = -(-h // spatial_downsample_factors[i])
++                w = -(-w // spatial_downsample_factors[i])
++        self.down_blocks = ModuleList(blocks)
++        self.latent_shape = (t, h, w)
++
++        self.norm_out = MiniMaxH3DistributedFrameGroupNorm(
++            block_out_channels[-1], num_frames=t, height=h, width=w, mesh_device=mesh_device
++        )
++        self.conv_out = MiniMaxH3CausalConv3d(
++            block_out_channels[-1], out_channels, kernel_size=3, spatial_padding=1, **conv_kwargs
++        )
++
++    def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
++        # conv3d requires input and weight dtypes to match exactly, so accept whatever the
++        # caller has and cast once here rather than making every call site know the
++        # encoder's compute dtype.
++        if x_BTHWC.get_dtype() != self.dtype:
++            x_BTHWC = ttnn.typecast(x_BTHWC, self.dtype)
++        h = self.conv_in(x_BTHWC)
++        for down_block in self.down_blocks:
++            h = down_block(h)
++        return self.conv_out(
++            _norm_silu(self.norm_out, h, self.dtype, parallel_config=self.parallel_config, ccl_manager=self.ccl_manager)
++        )
+diff --git a/models/tt_dit/models/vae/minimax_h3/rope_minimax_h3.py b/models/tt_dit/models/vae/minimax_h3/rope_minimax_h3.py
+new file mode 100644
+index 0000000000..86ebaf8eed
+--- /dev/null
++++ b/models/tt_dit/models/vae/minimax_h3/rope_minimax_h3.py
+@@ -0,0 +1,143 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
++
++# SPDX-License-Identifier: Apache-2.0
++
++"""3-axis RoPE for the MiniMax-H3 visual VAE's ViT decoder.
++
++Two things make this unlike every other RoPE in ``tt_dit``:
++
++* ``rope_theta`` is **100.0**, not 10000.
++* Only ``rope_dim_ratio * attention_head_dim = 48`` of each 64-wide head is rotated;
++  the last 16 lanes pass through untouched.
++
++And the rotation pairs lane *i* with lane *i + 24*, because the reference builds 24
++angles (3 axes x 8 frequencies) and then ``.tile(2)`` duplicates them to 48 before a
++half-split ``chunk(2)``. That pairing is the reason
++``ttnn.experimental.rotary_embedding_llama`` cannot be used: on a 64-wide head it pairs
++*i* with *i + 32*, which is both the wrong partner and would rotate the pass-through
++lanes into the rotary ones.
++
++The fix avoids any slicing. Permute the q/k weight rows **once at load time** so the
++partners become adjacent -- ``[0, 24, 1, 25, ..., 23, 47] + [48..63]`` -- and then
++``ttnn.alt_complex_rotate90``, whose pairing is ``(2j, 2j+1)``, computes exactly the
++reference rotation. Build ``cos``/``sin`` in the same permuted basis, with **cos=1 and
++sin=0 on lanes 48..63**, and the pass-through falls out of ``x*cos + rot90(x)*sin``
++with no slice at all. 48 is not tile-aligned (48 % 32 = 16), so avoiding the slice is
++what makes this cheap.
++
++Q and K take the same permute, so ``Q K^T`` is unchanged; V is never permuted, so the
++attention output is already in the normal basis and needs no inverse permute. The
++``q_norm``/``k_norm`` are RMS over all 64 lanes with no learnable scale, hence
++permutation-invariant -- nothing to fix up there either.
++"""
++
++from __future__ import annotations
++
++import math
++
++import torch
++
++
++def rope_dim(attention_head_dim: int, rope_dim_ratio: float) -> int:
++    return int(attention_head_dim * rope_dim_ratio)
++
++
++def head_lane_permutation(attention_head_dim: int = 64, rope_dim_ratio: float = 0.75) -> torch.Tensor:
++    """``[0, half, 1, half+1, ...]`` over the rotary lanes, then the pass-through lanes.
++
++    Applied to the q/k weight rows within each head at load time, this turns the
++    reference's ``(i, i + half)`` half-split pairing into the adjacent ``(2j, 2j+1)``
++    pairing that ``alt_complex_rotate90`` implements.
++    """
++    rotary = rope_dim(attention_head_dim, rope_dim_ratio)
++    half = rotary // 2
++    interleaved = [index for j in range(half) for index in (j, j + half)]
++    return torch.tensor(interleaved + list(range(rotary, attention_head_dim)), dtype=torch.long)
++
++
++def position_grid(num_frames: int, height: int, width: int) -> torch.Tensor:
++    """``(T*H*W, 3)`` coordinates, each axis length-normalised to ``[-1, 1)``.
++
++    Matches the reference exactly: ``2 * (arange(0.5, size) / size) - 1`` per axis, then
++    ``meshgrid(indexing="ij")`` so T is the slowest-varying axis.
++    """
++    grids = [2.0 * (torch.arange(0.5, size, dtype=torch.float32) / size) - 1.0 for size in (num_frames, height, width)]
++    return torch.stack(torch.meshgrid(*grids, indexing="ij"), dim=-1).flatten(0, 2)
++
++
++def inverse_frequencies(rotary_dim: int, theta: float = 100.0, num_axes: int = 3) -> torch.Tensor:
++    """``1 / theta ** arange(0, 1, 2 * num_axes / rotary_dim)`` -- 8 values at 48/3."""
++    if rotary_dim % (2 * num_axes) != 0:
++        raise ValueError(f"rotary_dim {rotary_dim} must be divisible by 2 * num_axes {2 * num_axes}")
++    step = 2 * num_axes / rotary_dim
++    return 1.0 / theta ** torch.arange(0, 1, step, dtype=torch.float32)
++
++
++def rope_tables(
++    num_frames: int,
++    height: int,
++    width: int,
++    *,
++    num_suffix_tokens: int,
++    attention_head_dim: int = 64,
++    rope_dim_ratio: float = 0.75,
++    theta: float = 100.0,
++    permuted: bool = True,
++) -> tuple[torch.Tensor, torch.Tensor]:
++    """``(cos, sin)`` of shape ``(num_patches + num_suffix_tokens, attention_head_dim)``.
++
++    The suffix rows -- the learned register tokens plus the zero cls token -- get
++    position id 0 on every axis, exactly as the reference does, which makes their
++    ``cos = 1`` and ``sin = 0``.
++
++    With ``permuted=True`` the tables are emitted in the interleaved basis that pairs
++    with :func:`head_lane_permutation` and ``alt_complex_rotate90``, and the
++    pass-through lanes carry ``cos = 1, sin = 0`` so they survive the rotation
++    untouched. With ``permuted=False`` they are the reference's own layout, which is
++    what the host-side equivalence check compares against.
++    """
++    rotary = rope_dim(attention_head_dim, rope_dim_ratio)
++    inv_freq = inverse_frequencies(rotary, theta)
++
++    positions = position_grid(num_frames, height, width)
++    suffix = positions.new_zeros((num_suffix_tokens, 3))
++    positions = torch.cat([positions, suffix], dim=0)
++
++    # (N, 3, F) -> (N, 3F) -> tile to (N, 2*3F) == (N, rotary)
++    angles = 2.0 * math.pi * positions[:, :, None] * inv_freq[None, None, :]
++    angles = angles.flatten(1, 2).tile(2)
++
++    if permuted:
++        # Duplicate each angle adjacently so lanes (2j, 2j+1) share one angle, then pad
++        # the pass-through lanes with 0 -- cos 0 = 1, sin 0 = 0.
++        half = rotary // 2
++        angles = angles[:, :half].repeat_interleave(2, dim=1)
++        pad = attention_head_dim - rotary
++        if pad:
++            angles = torch.cat([angles, angles.new_zeros((angles.shape[0], pad))], dim=1)
++
++    return angles.cos(), angles.sin()
++
++
++def reference_rotate(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
++    """The reference's rotation, for use as a host-side oracle.
++
++    ``x`` is ``(..., attention_head_dim)``; ``cos``/``sin`` are ``(..., rotary_dim)``.
++    """
++    rotary_dim = cos.shape[-1]
++    x_rotary, x_pass = x[..., :rotary_dim], x[..., rotary_dim:]
++    first, second = x_rotary.chunk(2, dim=-1)
++    rotated = torch.cat([-second, first], dim=-1)
++    return torch.cat([x_rotary * cos + rotated * sin, x_pass], dim=-1)
++
++
++def permuted_rotate(x_permuted: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
++    """The device form, in torch: ``x * cos + rot90(x) * sin`` over the full head.
++
++    ``rot90`` here is ``ttnn.alt_complex_rotate90``'s golden: pairs ``(2j, 2j+1)`` map to
++    ``(-x[2j+1], x[2j])``. No slicing, because the pass-through lanes carry cos=1, sin=0.
++    """
++    pairs = x_permuted.reshape(*x_permuted.shape[:-1], -1, 2)
++    real, imag = pairs[..., 0:1], pairs[..., 1:2]
++    rotated = torch.cat([-imag, real], dim=-1).flatten(-2)
++    return x_permuted * cos + rotated * sin
+diff --git a/models/tt_dit/models/vae/minimax_h3/stitch_device_minimax_h3.py b/models/tt_dit/models/vae/minimax_h3/stitch_device_minimax_h3.py
+new file mode 100644
+index 0000000000..78218abfa2
+--- /dev/null
++++ b/models/tt_dit/models/vae/minimax_h3/stitch_device_minimax_h3.py
+@@ -0,0 +1,148 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
++
++# SPDX-License-Identifier: Apache-2.0
++
++"""The video VAE's tile blend and unpatchify, on device.
++
++Why this exists: the host path reads *overlapping* pixel tiles back and blends them on host. The
++assembled canvas is far smaller than the tiles that produce it, so most of that transfer is overlap
++that gets averaged away.
++
++Why it is not simply a weighted accumulation: the reference `stitch_tiles` is **sequential and
++asymmetric**. For an interior tile the corner region is `b*L + (1-b)*(a*A + (1-a)*T)` where `L` is the
++*unblended* left tile and the diagonal tile never appears. A separable ramp formulation gives an
++O(1) error over roughly a ninth of every frame, which surfaces as visible seams. So this mirrors the
++reference order exactly, tile by tile, rather than reformulating it.
++
++The blend runs in **float32** on device even though the decoder emits bfloat16, because the host path
++it replaces blends in float32 (`.float()` before `stitch_tiles`). Keeping the same precision is what
++lets the existing PCC and roundtrip-PSNR gates carry over unchanged.
++"""
++
++from __future__ import annotations
++
++import torch
++
++import ttnn
++
++
++class DeviceTileStitcher:
++    """Blends a grid of decoded tiles into one clip, on device, caching its ramp weights.
++
++    The weights depend only on `(extent, axis, shape)`, and a decode reuses the same geometry for
++    every chunk, so they are built once and reused for the whole video.
++
++    Everything here stays ROW_MAJOR. This grid's derived overlaps are [96, 80, 80] by height and
++    [80, 80, 80, 80, 64, 64] by width, so the blend slices begin at 176 and 80 -- neither a multiple
++    of 32 -- and `ttnn.slice` drops to untilize -> row-major -> retilize for exactly that case. The
++    trims then hand `ttnn.concat` extents of 80 and 176, which is tile padding on the concat dim and
++    triggers the same fallback again. `binary_ng` takes ROW_MAJOR operands and keeps the layout on
++    output, so the arithmetic is unaffected and the blend stays float32.
++    """
++
++    def __init__(self, mesh_device: ttnn.MeshDevice) -> None:
++        self.mesh_device = mesh_device
++        self._ramps: dict[tuple, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
++
++    def _ramp_pair(self, shape: tuple[int, ...], extent: int, dim: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
++        """`(weight_a, weight_b)` broadcast to `shape`, where `weight_a = 1 - i/extent` along `dim`.
++
++        Materialized at full tile shape rather than relying on ttnn broadcast semantics: a few MB,
++        built once, and it removes any question of which operand broadcasts.
++        """
++        key = (shape, extent, dim)
++        if key not in self._ramps:
++            positions = torch.arange(extent, dtype=torch.float32)
++            view = [1] * len(shape)
++            view[dim] = extent
++            slab = list(shape)
++            slab[dim] = extent
++            weight_a = (1 - positions / extent).view(view).expand(slab).contiguous()
++            weight_b = (positions / extent).view(view).expand(slab).contiguous()
++            self._ramps[key] = tuple(
++                ttnn.from_torch(w, dtype=ttnn.float32, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
++                for w in (weight_a, weight_b)
++            )
++        return self._ramps[key]
++
++    @staticmethod
++    def _slice(tensor: ttnn.Tensor, dim: int, start: int, stop: int) -> ttnn.Tensor:
++        rank = len(tensor.shape)
++        dim = dim % rank
++        starts = [0] * rank
++        stops = list(tensor.shape)
++        starts[dim], stops[dim] = start, stop
++        return ttnn.slice(tensor, starts, stops)
++
++    def blend(self, a: ttnn.Tensor, b: ttnn.Tensor, blend_extent: int, dim: int) -> ttnn.Tensor:
++        """Cross-fade `a`'s tail into `b`'s head along `dim`; result is shaped like `b`.
++
++        Mirrors the host `blend` in `vae_minimax_h3.py`, including its early return when the extent
++        covers all of `b`.
++        """
++        rank = len(b.shape)
++        axis = dim % rank
++        blend_extent = min(a.shape[axis], b.shape[axis], blend_extent)
++
++        tail_a = self._slice(a, axis, a.shape[axis] - blend_extent, a.shape[axis])
++        head_b = self._slice(b, axis, 0, blend_extent)
++        weight_a, weight_b = self._ramp_pair(tuple(head_b.shape), blend_extent, axis)
++        blended = ttnn.add(ttnn.multiply(tail_a, weight_a), ttnn.multiply(head_b, weight_b))
++
++        if blend_extent == b.shape[axis]:
++            return blended
++        rest = self._slice(b, axis, blend_extent, b.shape[axis])
++        return ttnn.concat([blended, rest], dim=axis)
++
++    def stitch(
++        self,
++        tiles: list[list[ttnn.Tensor]],
++        height_overlaps: list[int],
++        width_overlaps: list[int],
++    ) -> ttnn.Tensor:
++        """Device mirror of `stitch_tiles`, in the same order and with the same trims.
++
++        Note `tiles[i - 1][j]` and `row[j - 1]` are the **original** tiles, not previously blended
++        ones. That asymmetry is the reference's and is reproduced here.
++        """
++        result_rows = []
++        for i, row in enumerate(tiles):
++            result_row = []
++            for j, tile in enumerate(row):
++                if i > 0:
++                    tile = self.blend(tiles[i - 1][j], tile, height_overlaps[i - 1], dim=-2)
++                if j > 0:
++                    tile = self.blend(row[j - 1], tile, width_overlaps[j - 1], dim=-1)
++                if i < len(tiles) - 1:
++                    tile = self._slice(tile, -2, 0, tile.shape[-2] - height_overlaps[i])
++                if j < len(row) - 1:
++                    tile = self._slice(tile, -1, 0, tile.shape[-1] - width_overlaps[j])
++                result_row.append(tile)
++            result_rows.append(ttnn.concat(result_row, dim=-1))
++        return ttnn.concat(result_rows, dim=-2)
++
++
++def unpatchify_device(
++    tokens: ttnn.Tensor,
++    *,
++    num_frames: int,
++    height: int,
++    width: int,
++    out_channels: int = 3,
++    patch_size: int = 16,
++    patch_size_t: int = 4,
++) -> ttnn.Tensor:
++    """Device mirror of `decoder_minimax_h3.unpatchify`: tokens to `(1, C, T*pt, H*p, W*p)`.
++
++    `ttnn.permute` handles the 8-dimensional `(B,T,H,W,C,pt,p,p) -> (B,C,T,pt,H,p,W,p)` permutation
++    directly, which is what makes keeping the tiles on device possible at all.
++    """
++    batch = tokens.shape[0]
++    tokens = ttnn.slice(tokens, [0, 0, 0], [batch, num_frames * height * width, tokens.shape[-1]])
++    tokens = ttnn.reshape(
++        tokens, (batch, num_frames, height, width, out_channels, patch_size_t, patch_size, patch_size)
++    )
++    tokens = ttnn.permute(tokens, (0, 4, 1, 5, 2, 6, 3, 7))
++    return ttnn.reshape(
++        tokens, (batch, out_channels, num_frames * patch_size_t, height * patch_size, width * patch_size)
++    )
+diff --git a/models/tt_dit/models/vae/minimax_h3/vae_minimax_h3.py b/models/tt_dit/models/vae/minimax_h3/vae_minimax_h3.py
+new file mode 100644
+index 0000000000..fc287c396d
+--- /dev/null
++++ b/models/tt_dit/models/vae/minimax_h3/vae_minimax_h3.py
+@@ -0,0 +1,1086 @@
++# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
++
++# SPDX-License-Identifier: Apache-2.0
++
++"""Top-level MiniMax-H3 visual VAE: spatial tiling, temporal chunking, encode.
++
++MiniMax-H3 ships with **tiling enabled** (``use_tiling = True``,
++``tile_sample_min_{height,width} = 256``, overlap 64). Both ``_encode_clip`` and
++``_decode_clip`` split the frame into 256x256 **pixel** tiles, run the model
++independently per tile, and linearly cross-fade the overlaps. That is not an optional
++memory optimisation -- reproducing the released model requires it -- and it is what
++bounds every work unit:
++
++* the encoder always sees ``(1, 3, 17, 256, 256)`` and emits ``(1, 48, 5, 16, 16)``;
++* the decoder always sees ``(1, 24, 7, 16, 16)``.
++
++Because the tiles are independent, the mesh is used **data-parallel over (tile, chunk)
++work units with the weights replicated**, rather than by sharding one tile's H/W. Two
++consequences simplify this port considerably: reflect padding stays a local
++slice-and-concat (``neighbor_pad_async`` has no reflect mode), and GroupNorm statistics
++never need a cross-device reduction.
++
++The tiling and blending stay on host. They are cheap, exactly specified, and porting
++them to device buys nothing until a measurement says otherwise.
++
++The encoder lives in ``encoder_minimax_h3.py`` on a ``LTXCausalConv3d``-shaped conv,
++parameterised by ``temporal_taps`` so the keyframe path and the clip path are one
++implementation. ``Conv2dViaConv3d`` cannot serve as ``conv_in``: it sizes the weight
++from the *aligned* input-channel count but prepares an unpadded weight, so a 3-channel
++conv fails its ``Parameter`` shape check.
++"""
++
++from __future__ import annotations
++
++import json
++import math
++import os
++import time
++from collections.abc import Sequence
++from pathlib import Path
++
++import numpy as np
++import torch
++from loguru import logger
++
++import ttnn
++
++from ....layers.module import Module
++from ....utils.tensor import fast_device_to_host, float_to_uint8, local_device_to_torch
++from ....utils.yuv_d2h import fast_device_to_host_yuv
++from .encoder_minimax_h3 import MiniMaxH3Encoder3d
++
++DEFAULT_TILE_SIZE = 256
++DEFAULT_TILE_OVERLAP = 64
++
++
++class MiniMaxH3VaeConfig:
++    """The subset of ``vae/config.json`` this port needs, plus the derived geometry.
++
++    ``clip_length`` (17) is not a multiple of ``temporal_compression_ratio`` (4), which
++    is why the four derived fields exist rather than plain constants: the decoder has to
++    re-derive the implicit leading pad and the overlap that ``token_drop`` leaves behind.
++    """
++
++    def __init__(self, **cfg) -> None:
++        self.in_channels = cfg.get("in_channels", 3)
++        self.out_channels = cfg.get("out_channels", 3)
++        self.latent_channels = cfg.get("latent_channels", 24)
++        self.block_out_channels = tuple(cfg.get("block_out_channels", (128, 256, 256, 512, 512, 1024)))
++        self.layers_per_block = cfg.get("layers_per_block", 2)
++        self.spatial_downsample_factors = tuple(cfg.get("spatial_downsample_factors", (2, 2, 2, 2, 1, 1)))
++        self.temporal_downsample_factors = tuple(cfg.get("temporal_downsample_factors", (1, 2, 2, 1, 1, 1)))
++        self.norm_num_groups = cfg.get("norm_num_groups", 32)
++        self.norm_eps = cfg.get("norm_eps", 1e-6)
++        self.decoder_num_layers = cfg.get("decoder_num_layers", 36)
++        self.decoder_num_attention_heads = cfg.get("decoder_num_attention_heads", 32)
++        self.decoder_attention_head_dim = cfg.get("decoder_attention_head_dim", 64)
++        self.decoder_num_register_tokens = cfg.get("decoder_num_register_tokens", 4)
++        self.decoder_ffn_mult = cfg.get("decoder_ffn_mult", 4)
++        self.decoder_rope_theta = cfg.get("decoder_rope_theta", 100.0)
++        self.decoder_rope_dim_ratio = cfg.get("decoder_rope_dim_ratio", 0.75)
++        self.decoder_norm_eps = cfg.get("decoder_norm_eps", 1e-5)
++        self.clip_length = cfg.get("clip_length", 17)
++        self.token_drop = cfg.get("token_drop", 3)
++        self.latents_mean = tuple(cfg.get("latents_mean", ()))
++        self.latents_std = tuple(cfg.get("latents_std", ()))
++
++        self.spatial_compression_ratio = math.prod(self.spatial_downsample_factors)
++        self.temporal_compression_ratio = math.prod(self.temporal_downsample_factors)
++
++        self.frame_pre_padding = (-self.clip_length) % self.temporal_compression_ratio
++        self.tokens_chunk_size = math.ceil(self.clip_length / self.temporal_compression_ratio)
++        self.token_overlap = (-self.token_drop) % self.tokens_chunk_size
++        self.frame_overlap = max(self.token_overlap * self.temporal_compression_ratio - self.frame_pre_padding, 0)
++
++    @classmethod
++    def from_pretrained(cls, path: str | os.PathLike) -> "MiniMaxH3VaeConfig":
++        cfg = json.loads((Path(path) / "config.json").read_text())
++        return cls(**{k: v for k, v in cfg.items() if not k.startswith("_")})
++
++
++# Decode does substantial host work (stitching, unpatchify, readback), so it raises torch's thread
++# count above the single thread a server worker pins for the denoise loop.
++_DECODE_TORCH_THREADS = 8
++
++
++def split_tiles(length: int, tile_size: int, min_overlap: int, ratio: int) -> tuple[list[int], list[int], list[int]]:
++    """Lay ``tile_size``-wide tiles over ``length``, latent-aligned (reference ``_split_tiles``).
++
++    The tile count is the smallest whose union covers ``length`` with every overlap at
++    least ``min_overlap``; the slack is spread round-robin over the overlaps in whole
++    ``ratio`` steps so each boundary lands on a latent grid point. Note every tile has
++    length exactly ``tile_size`` unless one tile already covers the axis -- which is why
++    the encoder only ever needs one activation shape.
++    """
++    if tile_size >= length:
++        return [0], [length], []
++
++    num_tiles = math.ceil(length / tile_size)
++    while tile_size * num_tiles - min_overlap * (num_tiles - 1) - length < 0:
++        num_tiles += 1
++
++    overlaps = [min_overlap] * (num_tiles - 1)
++    remaining = tile_size * num_tiles - sum(overlaps) - length
++    for i in range(remaining // ratio):
++        overlaps[i % (num_tiles - 1)] += ratio
++
++    starts = [0]
++    for i in range(num_tiles - 1):
++        starts.append(starts[-1] + tile_size - overlaps[i])
++    return starts, [tile_size] * num_tiles, overlaps
++
++
++def blend(a: torch.Tensor, b: torch.Tensor, blend_extent: int, dim: int) -> torch.Tensor:
++    """Linear cross-fade of ``a``'s tail into ``b``'s head along ``dim``."""
++    blend_extent = min(a.shape[dim], b.shape[dim], blend_extent)
++    positions = torch.arange(blend_extent, device=b.device, dtype=b.dtype)
++    shape = [1] * a.ndim
++    shape[dim] = blend_extent
++    weight_a = (1 - positions / blend_extent).view(shape)
++    weight_b = (positions / blend_extent).view(shape)
++
++    slice_a = [slice(None)] * a.ndim
++    slice_a[dim] = slice(-blend_extent, None)
++    slice_b = [slice(None)] * b.ndim
++    slice_b[dim] = slice(0, blend_extent)
++    blended = a[tuple(slice_a)] * weight_a + b[tuple(slice_b)] * weight_b
++
++    if blend_extent == b.shape[dim]:
++        return blended
++    slice_rest = [slice(None)] * b.ndim
++    slice_rest[dim] = slice(blend_extent, None)
++    return torch.cat([blended, b[tuple(slice_rest)]], dim=dim)
++
++
++OUTPUT_TYPES = ("float", "yuv420")
++"""A decoded clip is either a torch ``(1, 3, T, H, W)`` tensor or, on the YUV path, a planar
++``(T, H*3//2, W)`` uint8 array. Only the temporal assembly in :meth:`MiniMaxH3Vae._decode` touches
++both, and only along the frame axis -- these three keep that one difference in one place."""
++
++
++def clip_num_frames(clip) -> int:
++    return clip.shape[0] if isinstance(clip, np.ndarray) else clip.shape[2]
++
++
++def clip_frames(clip, start: int, stop: int):
++    return clip[start:stop] if isinstance(clip, np.ndarray) else clip[:, :, start:stop]
++
++
++def concat_clip_frames(parts: list):
++    if parts and isinstance(parts[0], np.ndarray):
++        return np.concatenate(parts, axis=0)
++    return torch.cat(parts, dim=2)
++
++
++def blend_clip_frames(a, b, extent: int):
++    """Cross-fade ``a``'s trailing frames into ``b``'s leading ones -- :func:`blend` along frames.
++
++    The planar branch blends already-quantized uint8. BT.601 is affine and 4:2:0 decimation is
++    linear, so a convex combination commutes with the conversion and the only cost is re-rounding:
++    bounded at 1 LSB, which ``test_temporal_crossfade_survives_the_yuv_conversion`` pins.
++    """
++    if not isinstance(a, np.ndarray):
++        return blend(a, b, extent, dim=-3)
++
++    extent = min(a.shape[0], b.shape[0], extent)
++    positions = np.arange(extent, dtype=np.float32).reshape(-1, *([1] * (a.ndim - 1)))
++    head = a[-extent:].astype(np.float32) * (1.0 - positions / extent) + b[:extent].astype(np.float32) * (
++        positions / extent
++    )
++    head = np.clip(np.rint(head), 0, 255).astype(np.uint8)
++    return head if extent == b.shape[0] else np.concatenate([head, b[extent:]], axis=0)
++
++
++def stitch_tiles(
++    tiles: list[list[torch.Tensor]], height_overlaps: list[int], width_overlaps: list[int]
++) -> torch.Tensor:
++    """Blend a 2D grid of tiles back into one tensor (reference ``_stitch_tiles``)."""
++    result_rows = []
++    for i, row in enumerate(tiles):
++        result_row = []
++        for j, tile in enumerate(row):
++            if i > 0:
++                tile = blend(tiles[i - 1][j], tile, height_overlaps[i - 1], dim=-2)
++            if j > 0:
++                tile = blend(row[j - 1], tile, width_overlaps[j - 1], dim=-1)
++            if i < len(tiles) - 1:
++                tile = tile[..., : -height_overlaps[i], :]
++            if j < len(row) - 1:
++                tile = tile[..., :, : -width_overlaps[j]]
++            result_row.append(tile)
++        result_rows.append(torch.cat(result_row, dim=-1))
++    return torch.cat(result_rows, dim=-2)
++
++
++class MiniMaxH3Vae(Module):
++    """Encode path for the H3 visual VAE, tiled and temporally chunked.
++
++    Encoders are built lazily and cached per distinct tile shape. Each carries
++    GroupNorms whose core grid is pinned at construction, so one encoder serves every
++    tile of a given ``(T, H, W)`` -- which, with tiling on, is every tile of the frame.
++    """
++
++    def __init__(
++        self,
++        config: MiniMaxH3VaeConfig,
++        *,
++        mesh_device: ttnn.MeshDevice,
++        dtype: ttnn.DataType = ttnn.float32,
++        tile_size: int = DEFAULT_TILE_SIZE,
++        tile_overlap: int = DEFAULT_TILE_OVERLAP,
++        use_tiling: bool = True,
++        weight_loader=None,
++        device_stitch: bool = False,
++        profile: bool = False,
++        ccl_manager=None,
++        pixel_denorm: tuple[Sequence[float], Sequence[float]] | None = None,
++        readback_uint8: bool = False,
++    ) -> None:
++        super().__init__()
++        self.config = config
++        self.mesh_device = mesh_device
++        # Used only to read a wave back (`_read_wave_units`); this VAE has no tensor parallelism and
++        # runs no collectives in its forward. Optional because the standalone numerics tests build the
++        # VAE on a 1x1 mesh with no fabric configured, where a CCL is neither needed nor openable.
++        self.ccl_manager = ccl_manager
++        self.dtype = dtype
++        self.tile_size = tile_size
++        self.tile_overlap = tile_overlap
++        self.use_tiling = use_tiling
++        # Hook for a caller that wants weights loaded through `utils.cache` rather than straight off
++        # the host state dict. Called as `weight_loader(module, subfolder, state)` once per distinct
++        # (T, H, W) sub-model, since each one holds its own shape-specialised conv3d weight layout.
++        # Defaults to a plain strict load, which is what every existing test does.
++        self._weight_loader = weight_loader
++        self._encoders: dict[tuple[int, int, int, int], MiniMaxH3Encoder3d] = {}
++        self._stitcher = None
++        # Blend the tile grid on device and read back the assembled canvas, instead of reading
++        # overlapping tiles and blending them on host.
++        self.device_stitch = device_stitch
++        # `(mean, std)` of the ImageNet normalization the decoder's pixels are still in. Set it and
++        # the de-normalization is folded into `proj_out`, so `decode` emits `[-1, 1]` pixels and the
++        # caller keeps no copy of the constants. Left unset the decoder emits reference-space values,
++        # which is what the numerics tests compare against.
++        self.pixel_denorm = pixel_denorm
++        # Cast decoded tiles to uint8 before the DMA, halving what crosses PCIe. Applies to the
++        # host path only: `device_stitch` reads back a canvas and never calls `_read_wave_units`,
++        # so the two are alternatives, not a combination.
++        self.readback_uint8 = readback_uint8
++        # Synchronize after each decode forward so `device` and `readback` are separable in the
++        # profile -- which also serializes them, so it is opt-in.
++        self.profile = profile
++        self._encoder_state: dict[str, torch.Tensor] | None = None
++        self._decoders: dict[tuple[int, int, int], object] = {}
++        self._decoder_state: dict[str, torch.Tensor] | None = None
++        # Per-decode breakdown, reset at the top of `decode`. Always collected: it is a handful of
++        # `perf_counter` calls against a multi-second stage, and without it "VAE decode: 6.0 s" is a
++        # number with nowhere to go.
++        self._profile = self._empty_profile()
++        self.last_decode_profile: dict[str, float] = {}
++
++    @staticmethod
++    def _empty_profile() -> dict[str, float]:
++        return {
++            "host_prep": 0.0,
++            "upload": 0.0,
++            "device": 0.0,
++            "readback": 0.0,
++            "readback_mb": 0.0,
++            "unpatchify": 0.0,
++            "tiling": 0.0,
++            "stitch": 0.0,
++            "waves": 0,
++            "units": 0,
++            # Per-wave readback durations, not just their sum: a mean hides a slow first wave, and
++            # comparing a mean against someone else's min-of-N is how a 2x phantom appears.
++            "readback_each": [],
++            "device_each": [],
++        }
++
++    def _read_wave_units(self, wave: ttnn.Tensor) -> torch.Tensor:
++        """Read a ``wave_size``-way dim-0 fracture back to host in unit order.
++
++        Both readers are correct; the choice is cost. ``ConcatMeshToTensor`` MPI-broadcasts every
++        shard this host does not own, so each rank pulls the whole wave over MPI on top of its own
++        DMA. ``fast_device_to_host`` moves the inter-host hop onto the fabric and DMAs only local
++        shards. ``concat_dims=[0, 0]`` is one dim fractured over the whole mesh, which
++        ``_reassemble_2d`` handles in its ``d0 == d1`` branch; the two are pinned bit-for-bit by
++        ``tests/unit/test_fast_device_to_host.py::TestLinearisedShardReadback``.
++
++        ``readback_uint8`` casts on device first, halving what crosses PCIe. The tiles it returns are
++        quantized *before* the host cross-fade rather than after, which costs at most 1 LSB: the blend
++        is a convex combination, so blending quantized values and quantizing a blend differ only by
++        the rounding. It needs ``pixel_denorm``, since the cast maps ``[-1, 1]``.
++        """
++        if self.ccl_manager is None:
++            return ttnn.to_torch(wave, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
++        pre_fn = float_to_uint8 if self.readback_uint8 else None
++        return fast_device_to_host(wave, self.mesh_device, [0, 0], ccl_manager=self.ccl_manager, pre_transfer_fn=pre_fn)
++
++    def _report_profile(self, total: float) -> None:
++        """Log where a decode's wall time went, and stash it on `last_decode_profile`."""
++        p = dict(self._profile)
++        accounted = sum(
++            p.get(k, 0.0)
++            for k in (
++                "host_prep",
++                "upload",
++                "device",
++                "readback",
++                "unpatchify",
++                "tiling",
++                "stitch",
++                "blend",
++                "concat",
++                "dispatch",
++                "compute",
++            )
++        )
++        each = p.get("readback_each") or []
++        if each:
++            logger.info(
++                f"    readback per wave: min {min(each) * 1000:.0f} / median "
++                f"{sorted(each)[len(each) // 2] * 1000:.0f} / max {max(each) * 1000:.0f} ms  "
++                f"[{' '.join(f'{v * 1000:.0f}' for v in each)}]  on {p.get('shape')} {p.get('dtype')}"
++            )
++        each_d = p.get("device_each") or []
++        if each_d:
++            logger.info(
++                f"    device   per wave: min {min(each_d) * 1000:.0f} / median "
++                f"{sorted(each_d)[len(each_d) // 2] * 1000:.0f} / max {max(each_d) * 1000:.0f} ms  "
++                f"[{' '.join(f'{v * 1000:.0f}' for v in each_d)}]"
++            )
++        p["residual"] = max(0.0, total - accounted)
++        p["total"] = total
++        self.last_decode_profile = p
++        waves, units = int(p["waves"]), int(p["units"])
++        logger.info(
++            f"VAE decode profile: {total:.2f} s over {waves} waves / {units} units "
++            f"({self.mesh_device.get_num_devices()} devices, "
++            f"{units / waves if waves else 0:.1f} units/wave)"
++        )
++        for name in ("device", "readback", "stitch", "unpatchify", "tiling", "upload", "host_prep", "residual"):
++            share = 100 * p[name] / total if total else 0.0
++            per_wave = f"  {p[name] / waves * 1000:6.0f} ms/wave" if waves and name in ("device", "readback") else ""
++            logger.info(f"    {name:<12} {p[name]:6.2f} s  ({share:4.1f} %){per_wave}")
++        logger.info(f"    readback volume {p['readback_mb'] / 1000:.2f} GB")
++
++    def _load_submodel(self, module, subfolder: str, state: dict[str, torch.Tensor]) -> None:
++        if self._weight_loader is not None:
++            self._weight_loader(module, subfolder, state)
++        else:
++            module.load_torch_state_dict(state)
++
++    def forward(self, *args, **kwargs):
++        """Unused: ``Module`` declares ``forward`` abstract, but this class has two entry points."""
++        raise RuntimeError("use encode() or encode_clip(); MiniMaxH3Vae has no single forward")
++
++    def load_encoder_state(self, state: dict[str, torch.Tensor]) -> None:
++        """Hold the encoder ``state_dict`` so lazily-built per-shape encoders can load it.
++
++        ``quant_conv`` is folded into ``conv_out`` here. The two are adjacent with no
++        nonlinearity between them, so one 1024->48 k3 conv does both and the awkward
++        48-channel 1x1x1 conv disappears entirely.
++        """
++        encoder_state = {k[len("encoder.") :]: v for k, v in state.items() if k.startswith("encoder.")}
++        if not encoder_state:
++            encoder_state = dict(state)
++        quant_weight = state.get("quant_conv.weight")
++        quant_bias = state.get("quant_conv.bias")
++        encoder_state.pop("quant_conv.weight", None)
++        encoder_state.pop("quant_conv.bias", None)
++        if quant_weight is not None and "conv_out.weight" in encoder_state:
++            # (48,48,1,1,1) composed with (48,1024,3,3,3) -> (48,1024,3,3,3)
++            quant_2d = quant_weight.reshape(quant_weight.shape[0], quant_weight.shape[1])
++            encoder_state["conv_out.weight"] = torch.einsum(
++                "oi,ijkmn->ojkmn", quant_2d, encoder_state["conv_out.weight"]
++            )
++            encoder_state["conv_out.bias"] = quant_2d @ encoder_state["conv_out.bias"] + quant_bias
++        self._encoder_state = encoder_state
++        self._is_loaded = True
++
++    def _encoder_for(self, num_frames: int, height: int, width: int, temporal_taps: int) -> MiniMaxH3Encoder3d:
++        key = (num_frames, height, width, temporal_taps)
++        if key not in self._encoders:
++            if self._encoder_state is None:
++                raise RuntimeError("call load_encoder_state() before encoding")
++            config = self.config
++            encoder = MiniMaxH3Encoder3d(
++                num_frames=num_frames,
++                height=height,
++                width=width,
++                in_channels=config.in_channels,
++                out_channels=2 * config.latent_channels,
++                block_out_channels=config.block_out_channels,
++                layers_per_block=config.layers_per_block,
++                spatial_downsample_factors=config.spatial_downsample_factors,
++                temporal_downsample_factors=config.temporal_downsample_factors,
++                temporal_taps=temporal_taps,
++                mesh_device=self.mesh_device,
++                dtype=self.dtype,
++            )
++            self._load_submodel(
++                encoder, f"vae_encoder_t{num_frames}_h{height}_w{width}_taps{temporal_taps}", dict(self._encoder_state)
++            )
++            self._encoders[key] = encoder
++        return self._encoders[key]
++
++    def _run_encoder(self, tile_BCTHW: torch.Tensor, temporal_taps: int) -> torch.Tensor:
++        return self._run_encoder_units([tile_BCTHW], temporal_taps)[0]
++
++    def _run_encoder_units(self, units: list[torch.Tensor], temporal_taps: int) -> list[torch.Tensor]:
++        """Encode independent ``(clip, tile)`` units, one per device, in mesh-sized waves.
++
++        Every unit is the same shape and fully independent of the others -- that is what
++        the reference's spatial tiling buys -- and the encoder contains no CCL, so handing
++        each device a different unit and running one program is exact SPMD. Gated bit-exact
++        against the replicated result in ``test_vae_data_parallel_minimax_h3.py``.
++
++        The last wave is padded by repeating a unit rather than shrinking the program: the
++        conv3d blockings and the GroupNorm core grid are chosen per shape at construction,
++        so a short final wave would build a second set of them.
++        """
++        if not units:
++            return []
++        # A wave is one program, so a differently-shaped unit would be silently mis-stacked.
++        odd = [tuple(u.shape) for u in units if u.shape != units[0].shape]
++        assert not odd, f"units must share a shape; {units[0].shape} vs {odd[0]}"
++        _, _, num_frames, height, width = units[0].shape
++        encoder = self._encoder_for(num_frames, height, width, temporal_taps)
++        in_channels = encoder.conv_in.in_channels
++        moments = 2 * self.config.latent_channels
++        wave_size = self.mesh_device.get_num_devices()
++
++        def prepare(unit: torch.Tensor) -> torch.Tensor:
++            x = unit.permute(0, 2, 3, 4, 1).contiguous()
++            if x.shape[-1] < in_channels:
++                x = torch.nn.functional.pad(x, (0, in_channels - x.shape[-1]))
++            return x
++
++        results: list[torch.Tensor] = []
++        for start in range(0, len(units), wave_size):
++            # Prepared per wave, not up front: `units` are cheap views into the source video,
++            # but permute().contiguous() materialises 13.4 MB each, so preparing all of them
++            # would cost 19 GB of host memory at 1440P/10s. Outputs are latents and tiny.
++            wave = [prepare(unit) for unit in units[start : start + wave_size]]
++            count = len(wave)
++            padded = wave + [wave[-1]] * (wave_size - count)
++            x_device = ttnn.from_torch(
++                torch.cat(padded, dim=0),
++                dtype=self.dtype,
++                device=self.mesh_device,
++                layout=ttnn.ROW_MAJOR_LAYOUT,
++                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
++            )
++            # Composer, not `_read_wave_units`: this output is rank 5 and `CCLManager.all_gather` only
++            # reshapes rank < 4, so the fabric path would need a flatten around it. An encode wave is
++            # ~31 MB against the decode wave's 1.4 GB, so the multi-host broadcast is not worth it.
++            out = ttnn.to_torch(
++                encoder(x_device),
++                mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
++            ).float()
++            for index in range(count):
++                results.append(out[index : index + 1, ..., :moments].permute(0, 4, 1, 2, 3).contiguous())
++        return results
++
++    def encode_clip(self, x_BCTHW: torch.Tensor, *, temporal_taps: int | None = None) -> torch.Tensor:
++        """Encode one temporal clip, spatially tiled -- the reference ``_encode_clip``.
++
++        A keyframe goes through here rather than :meth:`encode`, because a single frame
++        must not be put through the temporal chunking.
++        """
++        if temporal_taps is None:
++            temporal_taps = 1 if x_BCTHW.shape[2] == 1 else 3
++
++        if not self.use_tiling:
++            return self._run_encoder(x_BCTHW, temporal_taps)
++
++        units = self._clip_tiles(x_BCTHW)
++        encoded = self._run_encoder_units(units, temporal_taps)
++        return self._stitch_clip(encoded, x_BCTHW.shape[-2], x_BCTHW.shape[-1])
++
++    def _tile_grid(self, height: int, width: int):
++        ratio = self.config.spatial_compression_ratio
++        return (
++            split_tiles(height, self.tile_size, self.tile_overlap, ratio),
++            split_tiles(width, self.tile_size, self.tile_overlap, ratio),
++        )
++
++    def _clip_tiles(self, x_BCTHW: torch.Tensor) -> list[torch.Tensor]:
++        """One clip's spatial tile crops, row-major -- the reference ``_split_tiles`` order."""
++        (y_starts, y_lengths, _), (x_starts, x_lengths, _) = self._tile_grid(x_BCTHW.shape[-2], x_BCTHW.shape[-1])
++        return [
++            x_BCTHW[..., y : y + y_length, x : x + x_length]
++            for y, y_length in zip(y_starts, y_lengths)
++            for x, x_length in zip(x_starts, x_lengths)
++        ]
++
++    def _stitch_clip(self, encoded: list[torch.Tensor], height: int, width: int) -> torch.Tensor:
++        """Re-grid a row-major list of encoded tiles and cross-fade the overlaps."""
++        (_, y_lengths, y_overlaps), (_, x_lengths, x_overlaps) = self._tile_grid(height, width)
++        columns = len(x_lengths)
++        assert len(encoded) == len(y_lengths) * columns, f"{len(encoded)} tiles for a {len(y_lengths)}x{columns} grid"
++        rows = [encoded[i * columns : (i + 1) * columns] for i in range(len(y_lengths))]
++        ratio = self.config.spatial_compression_ratio
++        return stitch_tiles(rows, [o // ratio for o in y_overlaps], [o // ratio for o in x_overlaps])
++
++    def encode(self, x_BCTHW: torch.Tensor) -> torch.Tensor:
++        """Encode a video in ``clip_length``-frame chunks, dropping ``token_drop`` tails.
++
++        Mirrors the reference ``_encode``: the final frame is repeated to reach a whole
++        number of clips, and the trailing ``token_drop`` latent frames are then removed.
++
++        Every ``(clip, tile)`` pair is an independent work unit, so they are collected
++        across **all** clips and handed to the mesh together. Batching per clip instead
++        would leave the wave ragged -- 768P is a 4x7 grid, so 28 units against 32 devices
++        would waste an eighth of the mesh on every clip.
++        """
++        clip_length = self.config.clip_length
++        num_frames = x_BCTHW.shape[2]
++        if num_frames % clip_length != 0:
++            pad = x_BCTHW[:, :, -1:].repeat(1, 1, (-num_frames) % clip_length, 1, 1)
++            x_BCTHW = torch.cat([x_BCTHW, pad], dim=2)
++
++        height, width = x_BCTHW.shape[-2], x_BCTHW.shape[-1]
++        clips = [x_BCTHW[:, :, i * clip_length : (i + 1) * clip_length] for i in range(x_BCTHW.shape[2] // clip_length)]
++        if not self.use_tiling:
++            moments = torch.cat(self._run_encoder_units(clips, 3), dim=2)
++        else:
++            per_clip = [self._clip_tiles(clip) for clip in clips]
++            tiles_per_clip = len(per_clip[0])
++            flat = [unit for clip_units in per_clip for unit in clip_units]
++            encoded = self._run_encoder_units(flat, 3)
++            moments = torch.cat(
++                [
++                    self._stitch_clip(encoded[i * tiles_per_clip : (i + 1) * tiles_per_clip], height, width)
++                    for i in range(len(clips))
++                ],
++                dim=2,
++            )
++        if self.config.token_drop > 0:
++            moments = moments[:, :, : -self.config.token_drop]
++        return moments
++
++    # ---------------------------------------------------------------- decode
++
++    def load_decoder_state(self, state: dict[str, torch.Tensor]) -> None:
++        """Hold the decoder ``state_dict``, folding ``post_quant_conv`` into ``proj_in``.
++
++        The two are adjacent with no nonlinearity, so ``proj_in(post_quant_conv(z))`` is one
++        24->2048 linear and the awkward 24-channel 1x1x1 conv disappears.
++        """
++        decoder_state = {k[len("decoder.") :]: v for k, v in state.items() if k.startswith("decoder.")}
++        if not decoder_state:
++            decoder_state = dict(state)
++        post_weight = state.get("post_quant_conv.weight")
++        post_bias = state.get("post_quant_conv.bias")
++        decoder_state.pop("post_quant_conv.weight", None)
++        decoder_state.pop("post_quant_conv.bias", None)
++        if post_weight is not None and "proj_in.weight" in decoder_state:
++            post_2d = post_weight.reshape(post_weight.shape[0], post_weight.shape[1])
++            decoder_state["proj_in.bias"] = decoder_state["proj_in.weight"] @ post_bias + decoder_state["proj_in.bias"]
++            decoder_state["proj_in.weight"] = decoder_state["proj_in.weight"] @ post_2d
++        if self.pixel_denorm is not None:
++            self._fold_pixel_denorm(decoder_state)
++        self._decoder_state = decoder_state
++
++    def _fold_pixel_denorm(self, decoder_state: dict[str, torch.Tensor]) -> None:
++        """Fold the ImageNet de-normalization into ``proj_out``, landing pixels in ``[-1, 1]``.
++
++        ``proj_out`` emits a patch's pixels flattened as ``(C, pt, p, p)`` with ``C`` outermost --
++        the order :func:`decoder_minimax_h3.unpatchify` reshapes to -- so a per-channel affine is a
++        row scale plus a bias shift, the same move this class already makes for ``post_quant_conv``.
++        The reference's ``x*std + mean`` lands in ``[0, 1]``; the extra ``2x - 1`` is the range
++        ``rgb_to_yuv`` and ``float_to_uint8`` both take.
++
++        Exact, not approximate: the tile cross-fade is a convex combination and this is affine, so
++        it commutes with the blend. The reference's ``clamp`` is *not* affine and therefore stays
++        after the stitch rather than being folded in here.
++        """
++        pixel_mean, pixel_std = self.pixel_denorm
++        weight = decoder_state["proj_out.weight"]
++        out_features = weight.shape[0]
++        channels = self.config.out_channels
++        assert out_features % channels == 0, f"proj_out emits {out_features}, not a multiple of {channels}"
++        per_channel = out_features // channels
++
++        mean = torch.tensor(pixel_mean, dtype=weight.dtype)
++        std = torch.tensor(pixel_std, dtype=weight.dtype)
++        assert mean.numel() == channels and std.numel() == channels, "pixel_denorm must be per output channel"
++        scale = (2.0 * std).repeat_interleave(per_channel)
++        shift = (2.0 * mean - 1.0).repeat_interleave(per_channel)
++
++        decoder_state["proj_out.weight"] = weight * scale.view(-1, 1)
++        decoder_state["proj_out.bias"] = decoder_state["proj_out.bias"] * scale + shift
++
++    def _decoder_for(self, num_frames: int, height: int, width: int):
++        from .decoder_minimax_h3 import MiniMaxH3ViTDecoder3d
++
++        key = (num_frames, height, width)
++        if key not in self._decoders:
++            if self._decoder_state is None:
++                raise RuntimeError("call load_decoder_state() before decoding")
++            decoder = MiniMaxH3ViTDecoder3d(
++                num_frames=num_frames,
++                height=height,
++                width=width,
++                in_channels=self.config.latent_channels,
++                out_channels=self.config.out_channels,
++                patch_size=self.config.spatial_compression_ratio,
++                patch_size_t=self.config.temporal_compression_ratio,
++                num_layers=self.config.decoder_num_layers,
++                num_heads=self.config.decoder_num_attention_heads,
++                head_dim=self.config.decoder_attention_head_dim,
++                num_register_tokens=self.config.decoder_num_register_tokens,
++                ffn_mult=self.config.decoder_ffn_mult,
++                rope_theta=self.config.decoder_rope_theta,
++                rope_dim_ratio=self.config.decoder_rope_dim_ratio,
++                eps=self.config.decoder_norm_eps,
++                mesh_device=self.mesh_device,
++            )
++            self._load_submodel(decoder, f"vae_decoder_t{num_frames}_h{height}_w{width}", dict(self._decoder_state))
++            self._decoders[key] = decoder
++        return self._decoders[key]
++
++    def _run_decoder(self, latent_BCTHW: torch.Tensor) -> torch.Tensor:
++        return self._run_decoder_units([latent_BCTHW])[0]
++
++    def _run_decoder_units(self, units: list[torch.Tensor]) -> list[torch.Tensor]:
++        return list(self._stream_decoder_units(units))
++
++    def _stream_decoder_units(self, units: list[torch.Tensor]):
++        """Yield decoded pixel tiles in ``units`` order, running the mesh a wave at a time.
++
++        Same argument as :meth:`_run_encoder_units`: the reference decodes each spatial
++        tile of each temporal chunk on its own and only cross-fades afterwards, and the ViT
++        decoder holds no CCL, so one device per unit is exact SPMD. The temporal blend in
++        :meth:`decode` still runs in order on the host -- it is the *decodes* that are
++        independent, not the stitching.
++
++        A generator, not a list, because the read of wave ``k`` is deferred until wave ``k+1``
++        is enqueued: that only buys anything when the caller hands over every unit at once, and
++        a caller given a list would have to hold the whole video to do so. Streaming lets it
++        stitch and release each chunk while later waves are still in flight.
++        """
++        from .decoder_minimax_h3 import unpatchify
++
++        if not units:
++            return []
++        odd = [tuple(u.shape) for u in units if u.shape != units[0].shape]
++        assert not odd, f"units must share a shape; {units[0].shape} vs {odd[0]}"
++        _, _, num_frames, height, width = units[0].shape
++        decoder = self._decoder_for(num_frames, height, width)
++        wave_size = self.mesh_device.get_num_devices()
++
++        profile = self._profile
++        # Synchronizing after each forward is what makes `device` and `readback` separable in the
++        # profile -- and it also serializes them, defeating the pipelining below. So it is opt-in
++        # via the constructor's `profile` flag; leave it off to go fast.
++        attribute = self.profile
++
++        def read_wave(decoded, count: int) -> list[torch.Tensor]:
++            mark = time.perf_counter()
++            out = self._read_wave_units(decoded)
++            elapsed = time.perf_counter() - mark
++            profile["readback"] += elapsed
++            profile["readback_each"].append(elapsed)
++            profile["shape"] = tuple(decoded.shape)
++            profile["dtype"] = str(decoded.dtype)
++            profile["readback_mb"] += out.numel() * out.element_size() / 1e6
++
++            mark = time.perf_counter()
++            # `.float()` per tile rather than once over the whole batch: the batch is 32 x 22 MB and
++            # upcasting it whole allocates a 5 GB fp32 intermediate only to slice it 32 ways. The blend
++            # still runs in fp32, so this is numerically identical -- the device output is bf16 either
++            # way, and upcasting earlier adds no information.
++            tiles = [
++                unpatchify(
++                    out[index : index + 1].float(),
++                    num_frames=num_frames,
++                    height=height,
++                    width=width,
++                    out_channels=self.config.out_channels,
++                    patch_size=self.config.spatial_compression_ratio,
++                    patch_size_t=self.config.temporal_compression_ratio,
++                )
++                for index in range(count)
++            ]
++            profile["unpatchify"] += time.perf_counter() - mark
++            return tiles
++
++        pending: tuple | None = None  # (decoded_device_tensor, count) for the wave in flight
++        for start in range(0, len(units), wave_size):
++            mark = time.perf_counter()
++            wave = [
++                unit.permute(0, 2, 3, 4, 1).reshape(1, num_frames * height * width, -1)
++                for unit in units[start : start + wave_size]
++            ]
++            count = len(wave)
++            padded = wave + [wave[-1]] * (wave_size - count)
++            batch = torch.cat(padded, dim=0)
++            profile["host_prep"] += time.perf_counter() - mark
++
++            mark = time.perf_counter()
++            tokens = ttnn.from_torch(
++                batch,
++                dtype=ttnn.bfloat16,
++                device=self.mesh_device,
++                layout=ttnn.TILE_LAYOUT,
++                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
++            )
++            profile["upload"] += time.perf_counter() - mark
++
++            mark = time.perf_counter()
++            decoded = decoder(tokens)
++            if attribute:
++                ttnn.synchronize_device(self.mesh_device)
++            elapsed = time.perf_counter() - mark
++            profile["device"] += elapsed
++            profile["device_each"].append(elapsed)
++
++            # Read the previous wave only after this one is enqueued, so its transfer overlaps this
++            # wave's compute instead of following it. Two waves' device output are live at once,
++            # which is one extra tile per device.
++            if pending is not None:
++                yield from read_wave(*pending)
++            pending = (decoded, count)
++            profile["waves"] += 1
++            profile["units"] += count
++
++        if pending is not None:
++            yield from read_wave(*pending)
++
++    def _decode_clip_device_stitched(self, z_BCTHW: torch.Tensor, output_type: str = "float"):
++        """One clip, decoded and stitched entirely on device, read back as the assembled canvas.
++
++        The win is transfer volume, not compute. The host path reads back **overlapping** tiles --
++        28 of 256x256 against a 768x1344 canvas, 2.51 GB over the whole video -- and then blends them
++        on host. Blending first and reading back the canvas moves far less, and the two-axis
++        all-gather that co-locates the neighbours costs little against the readback it removes, so
++        the collective is nearly free.
++
++        The tile -> gathered-position map comes from `gathered_tile_order`'s inverse and is **not**
++        row-major: the two-axis gather transposes dim 0, so position
++        `c * rows + r` holds shard `r * cols + c`. Assuming row-major here puts tiles in the wrong
++        place, which the seam gate catches loudly -- but only because something finally reads them.
++        """
++        from .decoder_minimax_h3 import unpatchify  # noqa: F401  (host fallback parity)
++
++        (y_starts, y_lengths, y_overlaps), (x_starts, x_lengths, x_overlaps) = self._decode_tile_grid(
++            z_BCTHW.shape[-2], z_BCTHW.shape[-1]
++        )
++        grid_rows, grid_cols = len(y_lengths), len(x_lengths)
++
++        mark = time.perf_counter()
++        units = self._latent_tiles(z_BCTHW)
++        self._profile["tiling"] += time.perf_counter() - mark
++        assert len(units) == grid_rows * grid_cols, f"{len(units)} tiles for a {grid_rows}x{grid_cols} grid"
++
++        mesh_rows, mesh_cols = tuple(self.mesh_device.shape)
++        wave_size = self.mesh_device.get_num_devices()
++        assert (
++            len(units) <= wave_size
++        ), f"a device-stitched clip must fit one wave; {len(units)} tiles against {wave_size} devices"
++        # The co-location below all-gathers the *whole* of each cluster axis, so every device ends up
++        # holding `wave_size` tiles regardless of how many the grid has. That is affordable when the
++        # grid fills the mesh and ruinous when it does not: a 4x7 grid on a 4x32 quad would put 128
++        # tiles on every chip to use 28 of them. Refuse rather than allocate it. Lifting this needs
++        # the neighbour-exchange form, where a tile only ever pulls its two overlap strips.
++        assert grid_rows == mesh_rows and grid_cols <= mesh_cols, (
++            f"the gather-based device stitch needs a {mesh_rows}x<={mesh_cols} tile grid to match the "
++            f"mesh, got {grid_rows}x{grid_cols} on {mesh_rows}x{mesh_cols}"
++        )
++        _, _, num_frames, height, width = units[0].shape
++        decoder = self._decoder_for(num_frames, height, width)
++        profile = self._profile
++
++        mark = time.perf_counter()
++        wave = [unit.permute(0, 2, 3, 4, 1).reshape(1, num_frames * height * width, -1) for unit in units]
++        # Pad to the mesh with repeats of the last tile, as the host path does. The padding lands on
++        # devices whose gathered positions map outside the grid and is never indexed.
++        batch = torch.cat(wave + [wave[-1]] * (wave_size - len(wave)), dim=0)
++        profile["host_prep"] += time.perf_counter() - mark
++
++        mark = time.perf_counter()
++        tokens = ttnn.from_torch(
++            batch,
++            dtype=ttnn.bfloat16,
++            device=self.mesh_device,
++            layout=ttnn.TILE_LAYOUT,
++            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
++        )
++        profile["upload"] += time.perf_counter() - mark
++
++        mark = time.perf_counter()
++        from .stitch_device_minimax_h3 import DeviceTileStitcher, unpatchify_device
++
++        decoded = decoder(tokens)
++        # Row-major from here to the DMA. `unpatchify_device`'s rank-8 intermediate has trailing dims
++        # of 16, which a tiled reshape pads to 32x32 -- a 4x blowup for a view -- and the stitch's
++        # slices and concats land off tile boundaries on this grid's overlaps. One conversion here
++        # keeps every step after it on a fast path, `mesh_partition` included.
++        decoded = ttnn.to_layout(decoded, ttnn.ROW_MAJOR_LAYOUT)
++        pixels = unpatchify_device(
++            decoded,
++            num_frames=num_frames,
++            height=height,
++            width=width,
++            out_channels=self.config.out_channels,
++            patch_size=self.config.spatial_compression_ratio,
++            patch_size_t=self.config.temporal_compression_ratio,
++        )
++        # Co-locate every tile on every device. Two gathers, one per mesh axis.
++        gathered = ttnn.all_gather(pixels, 0, cluster_axis=0, topology=ttnn.Topology.Ring)
++        gathered = ttnn.all_gather(gathered, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
++
++        # Position of shard k in the gathered tensor: the inverse of the transpose.
++        order = [r * mesh_cols + c for c in range(mesh_cols) for r in range(mesh_rows)]
++        position = {shard: index for index, shard in enumerate(order)}
++        if self._stitcher is None:
++            self._stitcher = DeviceTileStitcher(self.mesh_device)
++        # `ttnn.Shape` does not support slicing, so materialize it as a list once.
++        gathered_shape = list(gathered.shape)
++
++        def tile_at(row: int, col: int) -> ttnn.Tensor:
++            index = position[row * grid_cols + col]
++            return ttnn.slice(gathered, [index, 0, 0, 0, 0], [index + 1, *gathered_shape[1:]])
++
++        rows = [[tile_at(i, j) for j in range(grid_cols)] for i in range(grid_rows)]
++        canvas = self._stitcher.stitch(rows, y_overlaps, x_overlaps)
++        elapsed = time.perf_counter() - mark
++        profile["device"] += elapsed
++        profile["device_each"].append(elapsed)
++        profile["waves"] += 1
++        profile["units"] += len(units)
++
++        mark = time.perf_counter()
++        canvas_shape = tuple(canvas.shape)
++        canvas_dtype = str(canvas.dtype)
++        if output_type == "yuv420":
++            out = self._read_canvas_yuv(canvas)
++            read_bytes = out.size
++        else:
++            out = local_device_to_torch(canvas).float()
++            read_bytes = out.numel() * out.element_size()
++        elapsed = time.perf_counter() - mark
++        profile["readback"] += elapsed
++        profile["readback_each"].append(elapsed)
++        profile["shape"] = canvas_shape
++        profile["dtype"] = canvas_dtype
++        profile["readback_mb"] += read_bytes / 1e6
++        return out
++
++    def _read_canvas_yuv(self, canvas: ttnn.Tensor) -> np.ndarray:
++        """Convert the replicated canvas to YUV 4:2:0 on device and read it back as planar uint8.
++
++        Two things earn their keep here. The `clamp` is the reference's post-stitch `clamp(0, 1)`,
++        moved to `[-1, 1]` by the `proj_out` fold and kept *after* the blend because clamping is the
++        one step in the chain that is not affine. The `mesh_partition` pair splits a canvas every
++        device already holds an identical copy of, so the DMA that follows runs across every PCIe
++        link instead of one -- the same repeat/partition trick `fast_device_to_host` uses to spread
++        a multi-host read.
++        """
++        canvas = ttnn.clamp(canvas, min=-1.0, max=1.0)
++        canvas = ttnn.typecast(canvas, ttnn.bfloat16)
++        canvas = ttnn.to_layout(canvas, ttnn.ROW_MAJOR_LAYOUT)
++
++        mesh_rows, mesh_cols = tuple(self.mesh_device.shape)
++        height, width = int(canvas.shape[-2]), int(canvas.shape[-1])
++        # `fast_device_to_host_yuv` reconstructs H and W as `per_shard * mesh_extent`, so an uneven
++        # split would silently assemble a canvas of the wrong size rather than fail.
++        assert height % mesh_rows == 0, f"canvas height {height} does not split over {mesh_rows} mesh rows"
++        assert width % mesh_cols == 0, f"canvas width {width} does not split over {mesh_cols} mesh columns"
++        assert (height // mesh_rows) % 2 == 0 and (
++            width // mesh_cols
++        ) % 2 == 0, "4:2:0 needs an even per-shard height and width"
++
++        canvas = ttnn.mesh_partition(canvas, dim=-2, cluster_axis=0)
++        canvas = ttnn.mesh_partition(canvas, dim=-1, cluster_axis=1)
++
++        planar = fast_device_to_host_yuv(canvas, self.mesh_device, ccl_manager=self.ccl_manager)
++        return planar.reshape(planar.shape[0], height * 3 // 2, width)
++
++    def decode_clip(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
++        """Decode one temporal clip, spatially tiled -- the reference ``_decode_clip``.
++
++        Tiles are laid out in *pixel* space and mapped back onto the latent grid, so the
++        blend extents are pixel-space too (unlike encode, where they are divided down).
++        """
++        if not self.use_tiling:
++            return self._run_decoder(z_BCTHW)
++
++        if self.device_stitch:
++            return self._decode_clip_device_stitched(z_BCTHW)
++
++        mark = time.perf_counter()
++        units = self._latent_tiles(z_BCTHW)
++        self._profile["tiling"] += time.perf_counter() - mark
++        decoded = self._run_decoder_units(units)
++        mark = time.perf_counter()
++        out = self._stitch_decoded(decoded, z_BCTHW.shape[-2], z_BCTHW.shape[-1])
++        self._profile["stitch"] += time.perf_counter() - mark
++        return out
++
++    def decode_tile_grid(self, latent_height: int, latent_width: int):
++        """Public alias for :meth:`_decode_tile_grid`, for callers that need the seam positions.
++
++        Exists because re-deriving this with `split_tiles(...)` and hardcoded constants is easy to get
++        wrong: at 1344x768 the real overlap of 64 gives a 4x7 grid, and an assumed 32 gives 4x6 with
++        boundary columns that are not boundaries. Ask the object that owns the geometry.
++        """
++        return self._decode_tile_grid(latent_height, latent_width)
++
++    def _decode_tile_grid(self, latent_height: int, latent_width: int):
++        """Tiles are laid out in *pixel* space, then mapped back onto the latent grid."""
++        ratio = self.config.spatial_compression_ratio
++        return (
++            split_tiles(latent_height * ratio, self.tile_size, self.tile_overlap, ratio),
++            split_tiles(latent_width * ratio, self.tile_size, self.tile_overlap, ratio),
++        )
++
++    def _latent_tiles(self, z_BCTHW: torch.Tensor) -> list[torch.Tensor]:
++        ratio = self.config.spatial_compression_ratio
++        (y_starts, y_lengths, _), (x_starts, x_lengths, _) = self._decode_tile_grid(
++            z_BCTHW.shape[-2], z_BCTHW.shape[-1]
++        )
++        return [
++            z_BCTHW[..., y // ratio : y // ratio + y_length // ratio, x // ratio : x // ratio + x_length // ratio]
++            for y, y_length in zip(y_starts, y_lengths)
++            for x, x_length in zip(x_starts, x_lengths)
++        ]
++
++    def _stitch_decoded(self, decoded: list[torch.Tensor], latent_height: int, latent_width: int) -> torch.Tensor:
++        """Re-grid decoded tiles. The blend extents are pixel-space here, not divided down."""
++        (_, y_lengths, y_overlaps), (_, x_lengths, x_overlaps) = self._decode_tile_grid(latent_height, latent_width)
++        columns = len(x_lengths)
++        assert len(decoded) == len(y_lengths) * columns, f"{len(decoded)} tiles for a {len(y_lengths)}x{columns} grid"
++        rows = [decoded[i * columns : (i + 1) * columns] for i in range(len(y_lengths))]
++        return stitch_tiles(rows, y_overlaps, x_overlaps)
++
++    def decode(self, z_BCTHW: torch.Tensor, *, output_type: str = "float"):
++        """Decode a latent video, mirroring the chunking ``encode`` applied.
++
++        ``output_type`` picks what crosses PCIe. ``"float"`` reads the decoder's own pixels back and
++        returns ``(1, 3, T, H, W)``. ``"yuv420"`` converts on device and returns a planar
++        ``(T, H*3//2, W)`` uint8 array ready for ``export_video_audio_yuv`` -- 1.5 bytes per pixel
++        against 6, and no host blend, unpatchify or upcast. It needs the assembled canvas, so it
++        requires ``device_stitch``, and it needs ``[-1, 1]`` pixels, so it requires ``pixel_denorm``.
++
++        ``token_drop`` removes the tail of every encoded chunk, so consecutive decoded
++        chunks overlap by ``frame_overlap`` pixel frames and are cross-faded. Ported from
++        the reference ``_decode``; the trailing repeated latent frames produce pixel frames
++        that were never asked for and are cut at the end.
++
++        Runs with raised torch threads (``_DECODE_TORCH_THREADS``), because a server worker pins
++        torch to one thread for the denoise loop's benefit and the host still does the tile
++        stitching, unpatchify and temporal blend. The previous limit is restored on the way out.
++        """
++        if output_type not in OUTPUT_TYPES:
++            raise ValueError(f"output_type must be one of {OUTPUT_TYPES}, got {output_type!r}")
++        if self.readback_uint8 and self.pixel_denorm is None:
++            raise ValueError("readback_uint8 needs pixel_denorm; the uint8 cast maps [-1, 1]")
++        if output_type == "yuv420":
++            if not self.device_stitch:
++                raise ValueError("output_type='yuv420' needs device_stitch=True; it reads back the stitched canvas")
++            if self.pixel_denorm is None:
++                raise ValueError("output_type='yuv420' needs pixel_denorm; the YUV kernel takes [-1, 1] pixels")
++
++        threads = _DECODE_TORCH_THREADS
++        previous_threads = torch.get_num_threads()
++        if threads > 0 and threads != previous_threads:
++            torch.set_num_threads(threads)
++        try:
++            return self._decode(z_BCTHW, output_type)
++        finally:
++            torch.set_num_threads(previous_threads)
++
++    def _decode(self, z_BCTHW: torch.Tensor, output_type: str = "float"):
++        self._profile = self._empty_profile()
++        decode_started = time.perf_counter()
++        config = self.config
++        chunk_size = config.tokens_chunk_size
++        temporal_ratio = config.temporal_compression_ratio
++        chunk_num_frames = chunk_size * temporal_ratio
++
++        num_tokens = z_BCTHW.shape[2] + config.token_drop
++        pad_tokens = (-num_tokens) % chunk_size
++        num_chunks = (num_tokens + pad_tokens) // chunk_size - int(config.token_drop > 0)
++        if pad_tokens > 0:
++            z_BCTHW = torch.cat([z_BCTHW, z_BCTHW[:, :, -1:].repeat(1, 1, pad_tokens, 1, 1)], dim=2)
++
++        # Every (chunk, tile) decode is independent -- only the temporal cross-fade below is
++        # ordered -- so all of them go to the mesh in one batch. Per-chunk batching would
++        # offer 28 units against 32 devices at 768P and idle an eighth of the mesh.
++        chunk_latents = [
++            z_BCTHW[:, :, i * chunk_size : i * chunk_size + chunk_size + config.token_overlap]
++            for i in range(num_chunks)
++        ]
++        if self.use_tiling and self.device_stitch and chunk_latents:
++            # Each chunk's tile grid is decoded, unpatchified, all-gathered and blended on device,
++            # and only the assembled canvas is read back. One chunk at a time, and serial on
++            # purpose: deferring a chunk's readback until the next is enqueued does not help,
++            # because the stage is device-bound and holding two canvases live only adds allocation.
++            clips = [self._decode_clip_device_stitched(latents, output_type) for latents in chunk_latents]
++        elif self.use_tiling and chunk_latents:
++            latent_height, latent_width = chunk_latents[0].shape[-2], chunk_latents[0].shape[-1]
++            mark = time.perf_counter()
++            # Every (chunk, tile) unit in one stream. One chunk at a time would give the wave loop
++            # a single wave per call, so it could never overlap a read with the next wave's compute,
++            # and every wave but the last would be padded out to the mesh.
++            all_units = [unit for latents in chunk_latents for unit in self._latent_tiles(latents)]
++            self._profile["tiling"] += time.perf_counter() - mark
++            tiles_per_chunk = len(all_units) // num_chunks
++
++            clips = []
++            # Holding every decoded tile would scale with the whole video. Stitching a chunk the
++            # moment its last tile lands caps the pile at one chunk plus the wave in flight.
++            buffered: list[torch.Tensor] = []
++            for tile in self._stream_decoder_units(all_units):
++                buffered.append(tile)
++                while len(buffered) >= tiles_per_chunk:
++                    mark = time.perf_counter()
++                    clips.append(self._stitch_decoded(buffered[:tiles_per_chunk], latent_height, latent_width))
++                    self._profile["stitch"] += time.perf_counter() - mark
++                    del buffered[:tiles_per_chunk]
++            assert not buffered, f"{len(buffered)} tiles left over for a {tiles_per_chunk}-tile chunk grid"
++        else:
++            clips = self._run_decoder_units(chunk_latents) if chunk_latents else []
++
++        assemble_mark = time.perf_counter()
++        decoded, overlap = [], None
++        for i in range(num_chunks):
++            clip = clips[i]
++            for j in range(int(config.token_drop > 0) + 1):
++                frame_start = j * chunk_num_frames
++                chunk = clip_frames(clip, frame_start, frame_start + chunk_num_frames)
++                chunk = clip_frames(chunk, config.frame_pre_padding, clip_num_frames(chunk))
++                if j == 0:
++                    if overlap is not None:
++                        chunk = blend_clip_frames(overlap, chunk, config.frame_overlap)
++                    decoded.append(chunk)
++                else:
++                    overlap = chunk
++        if overlap is not None:
++            decoded.append(overlap)
++
++        self._profile["blend"] = time.perf_counter() - assemble_mark
++        concat_mark = time.perf_counter()
++        result = concat_clip_frames(decoded)
++        self._profile["concat"] = time.perf_counter() - concat_mark
++        if pad_tokens > 0:
++            intra_tail = config.clip_length % temporal_ratio
++            tokens_before_pad = z_BCTHW.shape[2] - pad_tokens
++            pad_frames = sum(
++                intra_tail if intra_tail and (tokens_before_pad + k) % chunk_size == 0 else temporal_ratio
++                for k in range(pad_tokens)
++            )
++            result = clip_frames(result, 0, clip_num_frames(result) - pad_frames)
++        self._report_profile(time.perf_counter() - decode_started)
++        return result
++
++    def normalize_latents(self, latents: torch.Tensor) -> torch.Tensor:
++        """Apply the per-channel ``latents_mean`` / ``latents_std`` the pipeline expects."""
++        mean = torch.tensor(self.config.latents_mean, dtype=latents.dtype).view(1, -1, 1, 1, 1)
++        std = torch.tensor(self.config.latents_std, dtype=latents.dtype).view(1, -1, 1, 1, 1)
++        return (latents - mean) / std
