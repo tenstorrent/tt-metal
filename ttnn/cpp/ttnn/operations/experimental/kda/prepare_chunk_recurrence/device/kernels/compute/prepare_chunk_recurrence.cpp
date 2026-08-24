@@ -26,8 +26,6 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
-namespace {
-
 inline void WAIT(DataflowBuffer& buffer, uint32_t n) { buffer.wait_front(n); }
 inline void POP(DataflowBuffer& buffer, uint32_t n) { buffer.pop_front(n); }
 
@@ -182,29 +180,6 @@ inline void bcast_cols_mul(DataflowBuffer& a, DataflowBuffer& col, DataflowBuffe
     o.push_back(Mt * Nt);
 }
 
-// out[Mt,Nt] = A[Mt,Nt] - row[1,Nt]  (broadcast the single row of `row` across M)
-inline void bcast_rows_sub(DataflowBuffer& a, DataflowBuffer& row, DataflowBuffer& o, uint32_t Mt, uint32_t Nt) {
-    const uint32_t a_id = a.get_id();
-    const uint32_t row_id = row.get_id();
-    const uint32_t o_id = o.get_id();
-
-    o.reserve_back(Mt * Nt);
-    pack_reconfig_data_format(o_id);
-    reconfig_data_format(a_id, row_id);  // bcast(a_id,row_id): a_id->srcA, row_id->srcB
-    sub_bcast_rows_init(a_id, row_id);
-    for (uint32_t mi = 0; mi < Mt; mi++) {
-        for (uint32_t ni = 0; ni < Nt; ni++) {
-            tile_regs_acquire();
-            sub_tiles_bcast_rows(a_id, row_id, mi * Nt + ni, ni, 0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, o_id, mi * Nt + ni);
-            tile_regs_release();
-        }
-    }
-    o.push_back(Mt * Nt);
-}
-
 // out[0] = copy of src[src_tile] (single 32x32 tile). src must be available.
 inline void cpy_t(DataflowBuffer& src, uint32_t src_tile, DataflowBuffer& o) {
     const uint32_t src_id = src.get_id();
@@ -342,8 +317,6 @@ inline void inv_rms(
     o.push_back(n);
 }
 
-}  // namespace
-
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t SCALE_BITS, uint32_t EPS_BITS>
 TT_KERNEL void compute(uint32_t work_count) {
     static_assert(Ct == 1, "chunk KDA currently requires chunk_size=32");
@@ -395,39 +368,33 @@ TT_KERNEL void compute(uint32_t work_count) {
         WAIT(g, ck);
         WAIT(beta, Ct);
 
-        DataflowBuffer* Q = &q;
-        DataflowBuffer* Kk = &k;
-        if constexpr (true) {
-            square_sfpu(q, scratch_one, ck);
-            rowsum_k(Ct, Kt);
-            WAIT(scratch_two, Ct);
-            inv_rms(scratch_two, scratch_three, Ct, EPS_BITS, SCALE_BITS, true);
-            WAIT(scratch_three, Ct);
-            POP(scratch_two, Ct);
-            bcast_cols_mul(q, scratch_three, state_temporary, Ct, Kt);
-            WAIT(state_temporary, ck);
-            POP(scratch_three, Ct);
-            POP(q, ck);
+        square_sfpu(q, scratch_one, ck);
+        rowsum_k(Ct, Kt);
+        WAIT(scratch_two, Ct);
+        inv_rms(scratch_two, scratch_three, Ct, EPS_BITS, SCALE_BITS, true);
+        WAIT(scratch_three, Ct);
+        POP(scratch_two, Ct);
+        bcast_cols_mul(q, scratch_three, state_temporary, Ct, Kt);
+        WAIT(state_temporary, ck);
+        POP(scratch_three, Ct);
+        POP(q, ck);
 
-            square_sfpu(k, scratch_one, ck);
-            rowsum_k(Ct, Kt);
-            WAIT(scratch_two, Ct);
-            inv_rms(scratch_two, scratch_three, Ct, EPS_BITS, SCALE_BITS, false);
-            WAIT(scratch_three, Ct);
-            POP(scratch_two, Ct);
-            bcast_cols_mul(k, scratch_three, final_state, Ct, Kt);
-            WAIT(final_state, ck);
-            POP(scratch_three, Ct);
-            POP(k, ck);
-            Q = &state_temporary;
-            Kk = &final_state;
-        }
+        square_sfpu(k, scratch_one, ck);
+        rowsum_k(Ct, Kt);
+        WAIT(scratch_two, Ct);
+        inv_rms(scratch_two, scratch_three, Ct, EPS_BITS, SCALE_BITS, false);
+        WAIT(scratch_three, Ct);
+        POP(scratch_two, Ct);
+        bcast_cols_mul(k, scratch_three, final_state, Ct, Kt);
+        WAIT(final_state, ck);
+        POP(scratch_three, Ct);
+        POP(k, ck);
 
         // v_beta and k_beta.
         bcast_cols_mul(v, beta, v_beta, Ct, Vt);
         WAIT(v_beta, cv);
         POP(v, cv);
-        bcast_cols_mul(*Kk, beta, k_beta, Ct, Kt);
+        bcast_cols_mul(final_state, beta, k_beta, Ct, Kt);
         WAIT(k_beta, ck);
         POP(beta, Ct);
 
@@ -474,11 +441,11 @@ TT_KERNEL void compute(uint32_t work_count) {
         WAIT(state_update, ck);
 
         // Preserve exact scan-facing factors, and use anchored factors only for pairwise products.
-        ew(*Q, decay_exp, q_decay, ck, 2);
+        ew(state_temporary, decay_exp, q_decay, ck, 2);
         WAIT(q_decay, ck);
-        ew(*Q, decay, state_three, ck, 2);
+        ew(state_temporary, decay, state_three, ck, 2);
         WAIT(state_three, ck);  // q*exp(G-anchor)
-        POP(*Q, ck);
+        POP(state_temporary, ck);
         ew(k_beta, decay_exp, w, ck, 2);
         WAIT(w, ck);
         ew(k_beta, decay, state_two, ck, 2);
@@ -490,9 +457,9 @@ TT_KERNEL void compute(uint32_t work_count) {
         WAIT(decay, ck);
         POP(scratch_one, ck);
         POP(scratch_two, ck);
-        ew(*Kk, decay_factor, scratch_one, ck, 2);
+        ew(final_state, decay_factor, scratch_one, ck, 2);
         WAIT(scratch_one, ck);  // k*exp(anchor-G)
-        POP(*Kk, ck);
+        POP(final_state, ck);
         POP(decay_factor, ck);
 
         // Materialize both anchored pairwise products, then release state_two/state_three before
@@ -526,35 +493,11 @@ TT_KERNEL void compute(uint32_t work_count) {
         ew(scratch_one, state_update, scratch_two, ck, 2);
         WAIT(scratch_two, ck);
         POP(scratch_one, ck);
-        k_decay_transposed.reserve_back(Kt * Ct);
-        pack_reconfig_data_format(k_decay_transposed.get_id());
-        reconfig_data_format_srca(scratch_two.get_id());
-        transpose_init(scratch_two.get_id());
-        for (uint32_t ki = 0; ki < Kt; ki++) {
-            tile_regs_acquire();
-            transpose_tile(scratch_two.get_id(), ki, 0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, k_decay_transposed.get_id(), ki);
-            tile_regs_release();
-        }
-        k_decay_transposed.push_back(Kt);
+        transpose_col(scratch_two, k_decay_transposed, Kt);
         POP(scratch_two, ck);
 
         // dl [K,1] is the transpose of any replicated exp(G_last) row.
-        v_new.reserve_back(Kt);
-        pack_reconfig_data_format(v_new.get_id());
-        reconfig_data_format_srca(decay.get_id());
-        transpose_init(decay.get_id());
-        for (uint32_t ki = 0; ki < Kt; ki++) {
-            tile_regs_acquire();
-            transpose_tile(decay.get_id(), ki, 0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, v_new.get_id(), ki);
-            tile_regs_release();
-        }
-        v_new.push_back(Kt);
+        transpose_col(decay, v_new, Kt);
         POP(state_update, ck);
         POP(decay, ck);
         // v_beta, kd, q_decay, intra, k_dec_t, dl, T_inv stay pushed for the writer.

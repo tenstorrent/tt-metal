@@ -5,8 +5,8 @@
 
 #include <algorithm>
 #include <enchantum/enchantum.hpp>
+#include <set>
 
-#include <tt-metalium/work_split.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace ttnn::experimental::prim::kda_factory_detail {
@@ -117,6 +117,7 @@ KdaPrepWorkDist distribute_prep(tt::tt_metal::CoreCoord grid, uint32_t total, ui
     distribution.cores.reserve(count);
     distribution.wi_start.reserve(count);
     distribution.wi_count.reserve(count);
+    std::set<tt::tt_metal::CoreRange> ranges;
     uint32_t offset = 0;
     for (uint32_t index = 0; index < count; ++index) {
         const tt::tt_metal::CoreCoord core{index % grid.x, index / grid.x};
@@ -124,9 +125,10 @@ KdaPrepWorkDist distribute_prep(tt::tt_metal::CoreCoord grid, uint32_t total, ui
         distribution.cores.push_back(core);
         distribution.wi_start.push_back(offset);
         distribution.wi_count.push_back(item_count);
+        ranges.insert(tt::tt_metal::CoreRange{core, core});
         offset += item_count;
     }
-    distribution.core_set = tt::tt_metal::num_cores_to_corerangeset(count, grid, true);
+    distribution.core_set = tt::tt_metal::CoreRangeSet{ranges};
     return distribution;
 }
 
