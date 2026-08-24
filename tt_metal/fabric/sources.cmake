@@ -22,7 +22,7 @@ set(FABRIC_SOURCES
     control_plane.cpp
     mesh_graph_descriptor.cpp
     routing_table_generator.cpp
-    express_ring_topology.cpp
+    axis_route_topology.cpp
     mcast_reverse_tree.cpp
     mesh_graph.cpp
     erisc_datamover_builder.cpp

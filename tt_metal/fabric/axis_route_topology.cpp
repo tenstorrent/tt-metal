@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "express_ring_topology.hpp"
+#include "axis_route_topology.hpp"
 
 #include <algorithm>
 #include <functional>
@@ -33,7 +33,7 @@ std::optional<RoutingDirection> axis_edge_direction(
 
 namespace {
 
-constexpr int kNone = ExpressRingTopology::kNone;
+constexpr int kNone = AxisRouteTopology::kNone;
 
 struct Pattern {
     int step = 0;
@@ -49,7 +49,7 @@ struct Pattern {
 void fill_blocks(Pattern& pattern, MeshId mesh_id, int len) {
     TT_FATAL(
         pattern.step >= 2 && len % pattern.step == 0,
-        "ExpressRingTopology: mesh M{} express step {} does not tile axis length {}",
+        "AxisRouteTopology: mesh M{} express step {} does not tile axis length {}",
         *mesh_id,
         pattern.step,
         len);
@@ -63,7 +63,7 @@ void fill_blocks(Pattern& pattern, MeshId mesh_id, int len) {
     }
     TT_FATAL(
         !pattern.blocks.empty(),
-        "ExpressRingTopology: mesh M{} express pattern (start {}, step {}) tiles no block",
+        "AxisRouteTopology: mesh M{} express pattern (start {}, step {}) tiles no block",
         *mesh_id,
         pattern.start,
         pattern.step);
@@ -91,7 +91,7 @@ std::vector<Pattern> read_patterns(const MeshGraph& mesh_graph, MeshId mesh_id, 
         const int declared_axis = static_cast<int>(express.dim_idx());
         TT_FATAL(
             axis == kNone || axis == declared_axis,
-            "ExpressRingTopology: mesh M{} declares express links on more than one dimension",
+            "AxisRouteTopology: mesh M{} declares express links on more than one dimension",
             *mesh_id);
         axis = declared_axis;
         Pattern pattern;
@@ -168,16 +168,22 @@ std::vector<int> merged_cycle(const Pattern& small, const Pattern& large) {
 
 }  // namespace
 
-int ExpressRingTopology::ring_distance(int domain, int from, int to) const {
+int AxisRouteTopology::ring_distance(int domain, int from, int to) const {
     const int n = static_cast<int>(forward_cycle[domain].size());
     const int d = (pos_in_domain[to] - pos_in_domain[from] + n) % n;
     return std::min(d, n - d);
 }
 
-int ExpressRingTopology::next_row(int src, int dst) const {
+int AxisRouteTopology::next_row(int src, int dst) const {
     const auto step = [&](int domain, int from, int to) {
         const int n = static_cast<int>(forward_cycle[domain].size());
         const int p = pos_in_domain[from];
+        if (!wraps) {
+            // A line has no closing edge, so there is no shorter way round: step toward the
+            // destination. Without this, the modular compare below would return the far end for a
+            // distant destination -- a hop over an edge the axis does not have.
+            return forward_cycle[domain][pos_in_domain[to] > p ? p + 1 : p - 1];
+        }
         const int fwd = (pos_in_domain[to] - p + n) % n;
         return fwd <= n - fwd ? forward_cycle[domain][(p + 1) % n] : forward_cycle[domain][(p - 1 + n) % n];
     };
@@ -242,10 +248,10 @@ int ExpressRingTopology::next_row(int src, int dst) const {
             return src == b ? dst : step(src_domain, src, b);
         }
     }
-    TT_THROW("ExpressRingTopology: no paired landing for row {} from row {}", dst, src);
+    TT_THROW("AxisRouteTopology: no paired landing for row {} from row {}", dst, src);
 }
 
-std::vector<std::pair<int, int>> ExpressRingTopology::cyclic_non_ring_hops() const {
+std::vector<std::pair<int, int>> AxisRouteTopology::cyclic_non_ring_hops() const {
     const int len = axis_len;
     const auto hop_id = [len](int a, int b) { return a * len + b; };
     const auto is_ring_edge = [&](int a, int b) {
@@ -327,7 +333,7 @@ std::vector<std::pair<int, int>> ExpressRingTopology::cyclic_non_ring_hops() con
     return bad;
 }
 
-std::optional<ExpressRingTopology> derive_express_ring_topology(const MeshGraph& mesh_graph, MeshId mesh_id) {
+std::optional<AxisRouteTopology> derive_express_ring_topology(const MeshGraph& mesh_graph, MeshId mesh_id) {
     int axis = kNone;
     auto patterns = read_patterns(mesh_graph, mesh_id, axis);
     if (patterns.empty()) {
@@ -335,12 +341,12 @@ std::optional<ExpressRingTopology> derive_express_ring_topology(const MeshGraph&
     }
     TT_FATAL(
         axis == 0,
-        "ExpressRingTopology: mesh M{} declares express links along dimension {}; this cut supports dimension 0 only",
+        "AxisRouteTopology: mesh M{} declares express links along dimension {}; this cut supports dimension 0 only",
         *mesh_id,
         axis);
     TT_FATAL(
         patterns.size() <= 2,
-        "ExpressRingTopology: mesh M{} declares {} express patterns; only one or two are defined",
+        "AxisRouteTopology: mesh M{} declares {} express patterns; only one or two are defined",
         *mesh_id,
         patterns.size());
 
@@ -377,7 +383,7 @@ std::optional<ExpressRingTopology> derive_express_ring_topology(const MeshGraph&
         fill_blocks(pattern, mesh_id, len);
     }
 
-    ExpressRingTopology topo;
+    AxisRouteTopology topo;
     topo.axis_dim = axis;
     topo.axis_len = len;
     topo.domain_of.assign(len, kNone);
@@ -415,7 +421,7 @@ std::optional<ExpressRingTopology> derive_express_ring_topology(const MeshGraph&
         if (!leaf[row] || (before != kNone && leaf[before])) {
             continue;  // not a leaf, or not the first row of its run
         }
-        ExpressRingTopology::LeafRun run;
+        AxisRouteTopology::LeafRun run;
         run.anchor_before = before;
         for (int r = row; r != kNone && leaf[r] && static_cast<int>(run.rows.size()) < len; r = neighbour(r, 1)) {
             topo.leaf_run_of[r] = static_cast<int>(topo.leaf_runs.size());
@@ -426,7 +432,7 @@ std::optional<ExpressRingTopology> derive_express_ring_topology(const MeshGraph&
         TT_FATAL(
             run.anchor_before != kNone && run.anchor_after != kNone && !leaf[run.anchor_before] &&
                 !leaf[run.anchor_after],
-            "ExpressRingTopology: mesh M{} skipped run starting at row {} has no transit row on both sides",
+            "AxisRouteTopology: mesh M{} skipped run starting at row {} has no transit row on both sides",
             *mesh_id,
             row);
         topo.leaf_runs.push_back(std::move(run));
@@ -447,7 +453,7 @@ std::optional<ExpressRingTopology> derive_express_ring_topology(const MeshGraph&
             const int row = cycles[domain][p];
             TT_FATAL(
                 topo.domain_of[row] == kNone && topo.leaf_run_of[row] == kNone,
-                "ExpressRingTopology: mesh M{} row {} is a leaf or already in another ring",
+                "AxisRouteTopology: mesh M{} row {} is a leaf or already in another ring",
                 *mesh_id,
                 row);
             topo.domain_of[row] = static_cast<int>(domain);
@@ -458,7 +464,7 @@ std::optional<ExpressRingTopology> derive_express_ring_topology(const MeshGraph&
     for (int row = 0; row < len; row++) {
         TT_FATAL(
             (topo.domain_of[row] == kNone) == (topo.leaf_run_of[row] != kNone),
-            "ExpressRingTopology: mesh M{} row {} is neither a ring member nor a leaf",
+            "AxisRouteTopology: mesh M{} row {} is neither a ring member nor a leaf",
             *mesh_id,
             row);
     }
@@ -487,7 +493,7 @@ std::optional<ExpressRingTopology> derive_express_ring_topology(const MeshGraph&
         std::sort(expected.begin(), expected.end());
         TT_FATAL(
             landings == expected,
-            "ExpressRingTopology: mesh M{} has {} paired landings for {} continuing-family members",
+            "AxisRouteTopology: mesh M{} has {} paired landings for {} continuing-family members",
             *mesh_id,
             landings.size(),
             expected.size());
@@ -498,7 +504,7 @@ std::optional<ExpressRingTopology> derive_express_ring_topology(const MeshGraph&
     const auto require_edge = [&](int ortho, int row_a, int row_b, const char* what) {
         TT_FATAL(
             axis_edge_direction(mesh_graph, mesh_id, axis, ortho, row_a, row_b).has_value(),
-            "ExpressRingTopology: mesh M{} line {} is missing the {} edge {}-{}",
+            "AxisRouteTopology: mesh M{} line {} is missing the {} edge {}-{}",
             *mesh_id,
             ortho,
             what,
@@ -536,7 +542,7 @@ std::optional<ExpressRingTopology> derive_express_ring_topology(const MeshGraph&
         }
         TT_FATAL(
             chords == declared_chords,
-            "ExpressRingTopology: mesh M{} line {} carries {} chords but the declared patterns imply {}",
+            "AxisRouteTopology: mesh M{} line {} carries {} chords but the declared patterns imply {}",
             *mesh_id,
             ortho,
             chords,
@@ -546,15 +552,14 @@ std::optional<ExpressRingTopology> derive_express_ring_topology(const MeshGraph&
     return topo;
 }
 
-std::optional<ExpressRingTopology> derive_ordinary_ring_topology(
-    const MeshGraph& mesh_graph, MeshId mesh_id, int axis) {
+std::optional<AxisRouteTopology> derive_ordinary_ring_topology(const MeshGraph& mesh_graph, MeshId mesh_id, int axis) {
     const auto shape = mesh_graph.get_mesh_shape(mesh_id);
     const int len = static_cast<int>(shape[axis]);
     if (!axis_wraps(mesh_graph, mesh_id, axis, len)) {
         return std::nullopt;
     }
 
-    ExpressRingTopology topo;
+    AxisRouteTopology topo;
     topo.axis_dim = axis;
     topo.axis_len = len;
     topo.domain_of.assign(len, 0);
@@ -581,6 +586,73 @@ std::optional<ExpressRingTopology> derive_ordinary_ring_topology(
         }
     }
     return topo;
+}
+
+// The plain line along `axis`: one domain over every coordinate in order, no chords, no closing edge.
+// Always derivable, which is what makes it the fallback that guarantees every 2D mesh has an axis
+// topology on both dimensions.
+//
+// Trivially an arborescence from every root -- each coordinate's only way in is from its neighbour
+// toward the root -- so the multicast one-feeder-per-row gate always passes on a line.
+AxisRouteTopology derive_line_axis_topology(const MeshGraph& mesh_graph, MeshId mesh_id, int axis) {
+    const auto shape = mesh_graph.get_mesh_shape(mesh_id);
+    const int len = static_cast<int>(shape[axis]);
+
+    AxisRouteTopology topo;
+    topo.axis_dim = axis;
+    topo.axis_len = len;
+    topo.wraps = false;  // the whole point: no edge from len-1 back to 0
+    topo.domain_of.assign(len, 0);
+    topo.leaf_run_of.assign(len, kNone);
+    topo.leaf_index_of.assign(len, kNone);
+    topo.pos_in_domain.resize(len);
+    topo.forward_cycle.emplace_back();
+    for (int coord = 0; coord < len; coord++) {
+        topo.pos_in_domain[coord] = coord;
+        topo.forward_cycle.front().push_back(coord);
+    }
+
+    // Interior edges only -- coord..coord+1 for coord in [0, len-1). Unlike the ring derivation there
+    // is no wrap edge to require, and a missing interior edge means the axis is not even a line, so
+    // it stays fatal.
+    for (int ortho = 0; ortho < static_cast<int>(shape[1 - axis]); ortho++) {
+        for (int coord = 0; coord + 1 < len; coord++) {
+            TT_FATAL(
+                axis_edge_direction(mesh_graph, mesh_id, axis, ortho, coord, coord + 1).has_value(),
+                "Mesh M{} dim {} line {} is missing the ordinary edge {}-{}",
+                *mesh_id,
+                axis,
+                ortho,
+                coord,
+                coord + 1);
+        }
+    }
+    return topo;
+}
+
+// The topology governing `axis`, in precedence order: express chords where the mesh declares them,
+// the ordinary ring where the axis closes, else the plain line. Never fails to produce one, so every
+// caller can rely on a non-null answer for a 2D mesh.
+//
+// Precedence matters: derive_express_ring_topology() answers for the mesh's chord axis only, so the
+// orthogonal axis falls through to ring-or-line even on an express mesh -- which is exactly how
+// x_rings_ behaves today.
+AxisRouteTopology derive_axis_topology(const MeshGraph& mesh_graph, MeshId mesh_id, int axis) {
+    // Express chords are declared on dimension 0 only -- derive_express_ring_topology() fatals on
+    // any other dimension -- so there is nothing to try for axis 1, and attempting it anyway would
+    // surface a dimension-0 configuration error while the caller is asking about an unrelated axis.
+    // This guard matters because derivation is now attempted for every mesh and every axis; it used
+    // to run only for meshes that had already passed the express gate.
+    if (axis == 0) {
+        if (auto express = derive_express_ring_topology(mesh_graph, mesh_id);
+            express.has_value() && express->axis_dim == axis) {
+            return std::move(*express);
+        }
+    }
+    if (auto ring = derive_ordinary_ring_topology(mesh_graph, mesh_id, axis); ring.has_value()) {
+        return std::move(*ring);
+    }
+    return derive_line_axis_topology(mesh_graph, mesh_id, axis);
 }
 
 }  // namespace tt::tt_fabric

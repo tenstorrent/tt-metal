@@ -1,5 +1,10 @@
 # Fabric Codec Unification — Implementation Guide
 
+> **Step names:** every numbered step in this document has a short name — see
+> **§0 Step index** in `GALAXY_CODEC_UNIFICATION_STATUS.md`. Prefer the names when discussing
+> the work; the numbers exist for cross-referencing between these three documents.
+
+
 Ordered, file-by-file execution guide. Third of three documents:
 
 | doc | carries |
@@ -24,6 +29,8 @@ it is wrong — stop and check the contract.
 - ⚠ marks a step where getting it wrong is silent (wrong results or a hang) rather than a build
   failure.
 - No builds are run by this guide. Build when you choose to; the gates say what must pass.
+- **All testing is deferred to Phase 7** (owner call, 2026-08-21). Steps that only add tests are
+  skipped in place; gates keep their non-test conditions.
 
 ### Orientation: the ten files that matter most
 
@@ -73,11 +80,23 @@ routed by whatever stale byte sits at that index.
 `fabric_set_indexed_single_hop_unicast_route_from_direction` (≈line 586) is already written and
 correct, and has **zero callers**.
 
-Add the same gate `fabric_set_unicast_route` uses (≈line 288). Because the indexed helper is defined
-*later* in the file, add a forward declaration next to the existing ones at ≈line 144:
+⚠ **Two ordering corrections to this step, found while doing it.**
+
+**1. The shape-define fallback must move first.** `FABRIC_EXPRESS_MESH_Y_SIZE`'s zero-default lived at
+line 151, *after* the single-hop helper at line 48. Referencing it from the helper without moving it
+does not compile on an ERISC build, where the host never emits the shape defines. Hoist both the
+fallback `#define` block and the `Y+X <= route_buffer` `static_assert` to just after the
+`MeshRoutingFields` alias (≈line 24), before first use.
+
+**2. Use `#if / #else`, not an early return.** The guide originally said to add the express call and
+`return`, then move the pre-existing `ASSERT(next_hop_direction != Z)` below it. `#else` is better:
+the legacy body then does not compile at all on an express build, so there is no dead hop-program
+encode sitting in the binary and no risk of the two arms drifting.
+
+Add a forward declaration before the helper (the indexed one is defined later in the file):
 
 ```cpp
-// Defined in the indexed codec section below.
+// Defined in the indexed codec section below; the express path delegates to it.
 inline void fabric_set_indexed_single_hop_unicast_route_from_direction(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     eth_chan_directions next_hop_direction,
@@ -87,7 +106,7 @@ inline void fabric_set_indexed_single_hop_unicast_route_from_direction(
     uint8_t mesh_x_size);
 ```
 
-Then in `fabric_set_single_hop_unicast_route_from_direction`, before the existing body:
+then split the body:
 
 ```cpp
 #if defined(FABRIC_EXPRESS_ENABLED)
@@ -95,11 +114,27 @@ Then in `fabric_set_single_hop_unicast_route_from_direction`, before the existin
         packet_header, next_hop_direction, dst_dev_id, dst_mesh_id,
         FABRIC_EXPRESS_MESH_Y_SIZE, FABRIC_EXPRESS_MESH_X_SIZE);
     return;
+#else
+    ASSERT(next_hop_direction != eth_chan_directions::Z);   // legacy arm only
+    ...existing body...
 #endif
 ```
 
-Note the pre-existing `ASSERT(next_hop_direction != eth_chan_directions::Z)` must move *below* the
-new early return — the indexed helper permits Z (codec §7.1.1) and the legacy path does not.
+**3. Make the same-mesh precondition explicit.** The original comment said *"Do not use this helper
+for Z / inter-mesh traffic"* — the inter-mesh half is still true and now load-bearing. Neither arm
+encodes a boundary crossing: the legacy arm leaves `route_buffer[1..]` stale for the far side to trip
+over, and the indexed arm has no valid coordinates for a chip numbered in *another* mesh's id space.
+The indexed helper's existing `ASSERT(dst_dev_id < mesh_y_size * mesh_x_size)` does not catch this —
+it passes whenever the foreign id happens to be in range, then pokes the wrong slot. Add:
+
+```cpp
+ASSERT(dst_mesh_id ==
+       reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE)->my_mesh_id);
+```
+
+Note this makes the helper device-only for testing purposes (it reads L1), which is consistent with
+the rest of the indexed encoder family — `fabric_set_indexed_unicast_route` and
+`fabric_set_indexed_mcast_route` also read `ROUTING_TABLE_BASE`.
 
 **Callers that this fixes** (no change needed in them):
 
@@ -495,28 +530,67 @@ Nothing forces callers to migrate. Existing single-connection multicast callers 
 §7.3.1 is explicit that express multicast through a single-connection adapter is a *scoping*
 statement, not an enforced restriction.
 
-## 2.3 ⚠ Audit `recompute_path` against the indexed landing encoder (plan B5)
+## 2.3 ⚠ Audit `recompute_path` against the indexed landing encoder (plan B5) — **RESOLVED**
 
-**Files:** `tt_metal/fabric/hw/inc/edm_fabric/fabric_edge_node_router.hpp`,
-`tt_metal/fabric/hw/inc/tt_fabric_api.h` (`fabric_set_indexed_intermesh_landing_route`, ≈line 527)
+Phase 4.2 deletes `fabric_edge_node_router.hpp`. This is the audit that licenses that, done rather
+than deferred to "the compiler says it's unused."
 
-Phase 4 deletes `fabric_edge_node_router.hpp` entirely. Before that, establish that nothing is lost.
-`get_cmd_with_mesh_boundary_adjustment` has exactly two triggers; produce a written equivalence for
-each.
+### The legacy machinery, enumerated
 
-| Legacy trigger | Legacy action | Indexed equivalent | Verify |
+Two recompute triggers in `get_cmd_with_mesh_boundary_adjustment`:
+
+```text
+A   hop_cmd == NOOP, on any edge router (intermesh OR intramesh-on-edge)
+B   is_intramesh_router_on_edge && dst_start_mesh_id != my_mesh_id
+      && hop_cmd == FORWARD_<my_direction>          i.e. "the route says deliver here"
+```
+
+and four outcomes inside `recompute_path` → `fabric_set_unicast_route<called_from_router=true>`:
+
+```text
+1  next_direction valid                              full route to dst + prepend one hop
+2  next_dir invalid && my_mesh == dst_start_mesh      FORWARD_<my_dir>, drain here
+3  next_dir invalid && my_mesh != dst_start_mesh      FORWARD_<boundary>, route_buffer[1] = NOOP
+M  mcast_params_64 != 0 && dst_start_mesh == my_mesh  fabric_set_mcast_route(header)
+```
+
+### Equivalence
+
+| legacy | fires when | indexed equivalent | resolved |
 |---|---|---|---|
-| `hop_cmd == NOOP` on an edge router | `recompute_path` → re-encode from here | `receiver_channel_is_intermesh_ingress[rx]` → `fabric_set_indexed_intermesh_landing_route` before decode (kernel §4.2 step 3) | that `IS_RECEIVER_CHANNEL_n_INTERMESH_INGRESS` (`erisc_datamover_builder.cpp:1268-1271`) is set on **every** channel that could see a NOOP-triggered recompute today. It is currently `(is_inter_mesh && i < 2)`. Confirm VC2 genuinely never lands. |
-| `is_intramesh_router_on_edge && dst_mesh != my_mesh && hop_cmd == FORWARD_<my_dir>` | `recompute_path` → re-encode toward the boundary | `action_is_intermesh_exit(action, dst_mesh, my_mesh)` → forward as-is on the INTERMESH egress (`fabric_erisc_router.cpp:2178-2210`) | the semantic difference: legacy **rebuilt the maps** at the exit, indexed **forwards unchanged**. codec §4.5 guarantees this is safe because the carrier's maps already decode to exactly `LOCAL_DELIVER` at the exit. Confirm the encoder actually produces that for every carrier: `fabric_set_indexed_unicast_route` (line 419) widens to `exit_dev_id`, giving `LOCAL_DELIVER` on the X slot only — good. `fabric_set_indexed_mcast_route`'s carrier arm (line 476) does the same. |
+| **B → 3** | at the exit chip | `action_is_intermesh_exit(action, dst_mesh, my_mesh)` → forward **as-is** on the `INTERMESH` egress | ✓ semantics differ (legacy *rebuilds*, indexed *forwards unchanged*) but the outcome is the same boundary hop. Safe only via the exit-chip invariant — see residual risk |
+| **A → 1** | landing, dst elsewhere in this mesh | landing intercept → `widen_indexed_route_to_chip(dst_start_chip_id)` | ✓ |
+| **A → 2** | landing, this chip *is* the dst | same widen, with dst == self: Y row reaches STOP, X slot gets `LOCAL_DELIVER` at own column → decode delivers locally | ✓ equivalent to "drain" |
+| **A → 3** | landing on an *intermediate* mesh | landing intercept, `final_mesh != my_mesh` → widen toward this mesh's next exit | ✓ and strictly better: legacy re-enters case 3 hop by hop, indexed installs the whole next-exit route once |
+| **A → M** | destination-mesh mcast landing | landing intercept, `mcast_params_64 != 0` → `encode_indexed_mcast_maps` rooted here, anchor from `dst_start_node_id` | ✓ |
+| **A**, Z boundary | `set_forward` writes `NOOP` for a Z egress, so `recompute_path` *returns* `NOOP` as the new hop_cmd → admission sees `case NOOP: break` → stalls | no equivalent needed: Z is action bit 4, never a sentinel | ✓ the indexed path removes a latent stall rather than reproducing it |
 
-Also note the `mcast_params_64 != 0 && dst_start_mesh_id == my_mesh_id` branch in `recompute_path`
-that calls `fabric_set_mcast_route(packet_header)` — the indexed equivalent is the destination-mesh
-landing arm of `fabric_set_indexed_intermesh_landing_route`. Confirm the arg order there: the
-11-argument `encode_indexed_mcast_maps` overload (`fabric_common.h:595`) takes
-`(anchor_y, anchor_x, encode_root_x, n, s, e, w)`, and the landing call site (line 565) passes
-`(anchor_y, anchor_x, my_mesh_coord_x, N, S, E, W)`. That is correct — but it is the kind of call
-that a signature change would silently break, so add a compile-time-checked wrapper or a named-struct
-argument if you touch it.
+### Trigger-coverage check
+
+The one that could silently lose a case: legacy trigger **A** fires on *any* edge router, while the
+indexed landing fires only on receiver channels flagged `IS_RECEIVER_CHANNEL_n_INTERMESH_INGRESS`.
+Are those the same set?
+
+Yes, by construction. The `NOOP` that triggers A is planted by case 3 *at the exit*, into
+`route_buffer[1]`. The packet then crosses the boundary, so the router that trips on it is always the
+far-side landing — which is by definition an intermesh ingress. There is no path that plants a `NOOP`
+and then trips on it without crossing a boundary.
+
+### Residual risks (both recorded, neither blocking)
+
+**The exit-chip invariant becomes load-bearing.** Legacy *rebuilds* at the exit, so a sloppy incoming
+route gets corrected there. Indexed forwards unchanged, so correctness now rests on the encoder having
+produced exactly `LOCAL_DELIVER` and no eth bits at the exit chip (codec §4.5). That is a Phase 7 host
+test (`exit-chip invariant`), and it is the one property whose safety net Phase 4.2 removes.
+
+**VC2 is excluded from the landing intercept.** The builder emits
+`IS_RECEIVER_CHANNEL_n_INTERMESH_INGRESS = (is_inter_mesh && i < 2)`, i.e. VC0 and VC1 only, with the
+comment *"VC2 is excluded, staying outside the express derivation entirely."* Taken as a documented
+decision by the builder's author rather than independently re-derived here; if VC2 ever carries a
+carrier that lands, that flag needs widening.
+
+**Conclusion: 4.2 is licensed.** Every legacy trigger and outcome has an indexed counterpart, and the
+two divergences are improvements (no Z/NOOP overload, one-shot next-exit install) rather than gaps.
 
 ## 2.4 Add the missing device coverage
 
@@ -531,6 +605,131 @@ Phase 3 flips non-express meshes onto it, add:
 | 2D multicast on a LINE-axis mesh | the whole point of step 1.5 |
 | unicast on `[8,8]` and `[8,16]` | the whole point of step 1.3 |
 | exit-chip invariant | host test: for every (src, dst-mesh) pair, the widened maps decode to exactly `LOCAL_DELIVER` at the exit chip and no eth bits (codec §4.5) |
+
+## 2.5 Unify the 2D route API surface; make every consumer reach the indexed encoder
+
+The indexed encoders are the accurate ones — they can express Z, they are extent-independent, and they
+carry an explicit delivery flag. So no consumer should be able to reach a legacy encoder. Today most
+cannot, but the exceptions are not obvious, because the *same function name* forks internally in some
+places and is legacy-only in others.
+
+### 2.5.1 The client-facing API layer — audit first, because this is what other teams call
+
+⚠ An earlier version of this step audited only the *encoder* call sites. That is the wrong layer.
+What other teams actually call is the API in `hw/inc/mesh/api.h`, `hw/inc/linear/api.h`, and
+`hw/inc/udm/*` — the encoders are an implementation detail underneath.
+
+Auditing that layer gives the single most important result in this whole project:
+
+> **No public 2D fabric API exposes a legacy-shaped signature.** Every one of them is expressed in
+> destination terms — `(dst_dev_id, dst_mesh_id)` for unicast, `(dst_dev_id, dst_mesh_id, ranges)` for
+> multicast. None takes `direction + num_hops`. So the client surface is *already* in the indexed
+> vocabulary, and the legacy encoder was always the odd one out beneath it.
+
+**Consequence: no public API signature changes, and no consumer migrations.** That is why this step is
+small, and it is a stronger reason than "the names happen to fork internally."
+
+| layer | entry points | how it sets a route |
+|---|---|---|
+| `mesh/api.h` | 38: `fabric_{unicast,multicast}_noc_*` × `{plain, _set_state, _with_state}` | plain and `_set_state` call the forking `fabric_set_{unicast,mcast}_route`; `_with_state` **never touches the route** |
+| `linear/api.h` | ~24 route-setting sites | has 2D paths under `#if defined(FABRIC_2D)` — see 2.5.2 |
+| `udm/tt_fabric_udm_impl.hpp` | `calculate_initial_direction` → `fabric_set_unicast_route` | forking encoder; the express arm is step 3.4 |
+| `mesh/api.h` `fabric_multicast_source_inject_noc_unicast_write` | 1 | the **only** public API that calls an indexed encoder directly; step 2.2 makes it unconditional |
+
+Two properties worth confirming rather than assuming:
+
+**`_set_state` / `_with_state` reuse is codec-agnostic.** `_set_state` sets the route once;
+`_with_state` only updates payload and command fields and sends. The worker's template header is never
+mutated in transit (the router mutates its own received copy), so reuse is valid under both codecs —
+and *inherently* safer under indexed, where the maps are immutable by construction.
+
+**`SetRoute=false` has no external users.** The template parameter exists on several `mesh/api.h`
+entry points but every use is internal to that header, so no caller depends on pre-setting a route
+itself.
+
+### 2.5.2 ⚠ `linear/api.h` runs over 2D fabric too — and it confirms decision Q1
+
+The "linear" API is not 1D-only. Under `FABRIC_2D` its route shims call the 2D encoders
+(`linear/api.h:21-61`), and its multicast shim is structurally **one direction per call**, selected by
+the connection's own tag:
+
+```cpp
+switch (static_cast<eth_chan_directions>(slot.tag)) {
+    case EAST:  fabric_set_mcast_route(hdr, slot.dst_dev_id, slot.dst_mesh_id, hop, 0, 0, 0); break;
+    case WEST:  fabric_set_mcast_route(hdr, slot.dst_dev_id, slot.dst_mesh_id, 0, hop, 0, 0); break;
+    case NORTH: fabric_set_mcast_route(hdr, slot.dst_dev_id, slot.dst_mesh_id, 0, 0, hop, 0); break;
+    case SOUTH: fabric_set_mcast_route(hdr, slot.dst_dev_id, slot.dst_mesh_id, 0, 0, 0, hop); break;
+}
+```
+
+Exactly one nonzero extent, per slot. That is the per-direction contract from decision Q1, already
+hard-coded — independent confirmation that Q1 matches how the API behaves rather than constraining it.
+
+It also sharpens where Q1's guard belongs:
+
+| layer | can express a multi-direction rectangle in one call? | Q1 assert needed? |
+|---|---|---|
+| `linear/api.h` over 2D | **no** — one extent per slot, by construction | no; structurally safe |
+| `mesh/api.h` | **yes** — takes `ranges.e/w/n/s` together | **yes** — this is the layer the assert protects |
+
+So put the single-output-root assert on the `mesh/api.h` path (via `fabric_set_mcast_route`), and note
+that `linear/api.h` cannot trip it.
+
+### 2.5.3 Classify the encoder surface
+
+| entry point | external call sites | reaches indexed? |
+|---|---|---|
+| `fabric_set_unicast_route` (2D overload) | ~149 across ~40 files | ✓ worker path forks; **router path does not** — see 2.5.5 |
+| `fabric_set_mcast_route` | ~49 | ✓ worker path forks |
+| `fabric_set_single_hop_unicast_route{,_from_direction}` | 5 (all deepseek) | ✓ fixed in step 0.1 |
+| `fabric_set_route` | 2 | ✗ **legacy only** — see 2.5.4 |
+
+Because the first three fork behind a stable name, **their ~200 call sites need no change** — the fork
+inside them is what Phase 3 removes. That is the whole reason this step is small.
+
+### 2.5.4 Migrate the consumers of `fabric_set_route`
+
+`fabric_set_route(header, direction, branch_forward, start_hop, num_hops, terminate)` is the raw
+hop-program primitive. It has no indexed equivalent and never will — direction-plus-hop-count is the
+legacy model. Two consumers:
+
+| consumer | disposition |
+|---|---|
+| `impl/dispatch/kernels/cq_relay.hpp:90` | already gated `GALAXY_CLUSTER && !FABRIC_EXPRESS_ENABLED`; step 3.4 drops the legacy arm and keeps `fabric_set_unicast_route`. **Nothing to do here.** |
+| `tests/.../kernels/test_fabric_set_unicast_route.cpp:57,74,78` | ⚠ uses `fabric_set_route` to build a **reference** encoding that the test diffs the real API against. Deleting `fabric_set_route` in 4.1 breaks the test. Either re-base its reference onto the indexed expectation, or retire the test in favour of the step-2.4 coverage. **Decide here, not at 4.1.** |
+
+### 2.5.5 The router-side arm of `fabric_set_unicast_route` (plan B5)
+
+`fabric_set_unicast_route<called_from_router=true>` still runs the **legacy** encode even on an express
+build — the express fork is guarded `if constexpr (!called_from_router)`. It is unreachable today
+because its only caller, `recompute_path`, is only invoked from the non-express kernel arm.
+
+Confirm it is genuinely unreachable rather than merely untested, then let 4.1 delete it. If any caller
+turns up, it must be routed to `fabric_set_indexed_intermesh_landing_route` instead — that is the
+indexed equivalent of what router-side re-encode does.
+
+### 2.5.6 Delete the one unreachable indexed variant
+
+`fabric_set_indexed_single_hop_unicast_route` (the non-`_from_direction` wrapper) has **zero callers**
+and is now redundant: after step 0.1 the legacy-named wrapper delegates to
+`fabric_set_single_hop_unicast_route_from_direction`, which forks. Either delete it, or make it the
+only wrapper and have the legacy name alias it. Do not leave two wrappers where one is dead.
+
+Reachability of the rest, for the record — all live, none orphaned:
+
+```text
+fabric_set_indexed_unicast_route                  1 caller
+fabric_set_indexed_mcast_route                    3
+fabric_set_indexed_single_hop_..._from_direction  2
+fabric_set_indexed_intermesh_landing_route        1
+widen_indexed_route_to_chip                       4
+fabric_set_indexed_single_hop_unicast_route       0   <- delete
+```
+
+> **Gate 2.5.** Every client-facing API layer (`mesh/api.h`, `linear/api.h`, `udm/*`) is confirmed to
+> reach only the forking encoders, with no public signature change required. No consumer can reach a
+> legacy 2D encoder except through a path Phase 3 is about to flip. `fabric_set_route`'s two consumers
+> each have a written disposition. No orphaned indexed variants remain.
 
 > **Gate 2.** Every capability the legacy 2D path provides has a green indexed-path test, run on both
 > an express fixture and a non-express fixture. The 2.3 equivalence table is written down with each
@@ -610,20 +809,35 @@ the indexed encoder admits up to 64 per axis, but this assert is the one codec �
 removal for `[64,4]`. Leave it in place this phase — it is not blocking any in-tree shape — and note
 it as Phase 6 work.
 
-## 3.3 Make `get_fabric_kernel_defines()` require the node-aware overload (plan H6)
+## 3.3 Delete the no-node overload's express fatal (plan H6)
 
 **File:** `tt_metal/fabric/fabric.cpp` ≈lines 703-716
 
-The no-node overload currently `TT_FATAL`s if *any* mesh uses express, because it cannot pick an
-ABI. After the flip, every 2D mesh uses the indexed ABI, so the fatal fires for all 2D. Two options:
+The no-node `get_fabric_kernel_defines(api_type)` currently refuses to run on an express fabric:
 
-- **Preferred:** the ABI no longer varies per mesh, only the *shape* does. So the overload can keep
-  working for anything that does not need the shape defines, and `TT_FATAL` only when a 2D kernel
-  actually needs `FABRIC_2D_MESH_*_SIZE`. Narrow the message accordingly.
-- Alternative: migrate the remaining callers of the no-node overload to the node-aware one. Find
-  them with a grep on `get_fabric_kernel_defines(` and count before choosing.
+```cpp
+// The 2D ABI is selected per mesh, so it cannot be resolved without knowing which mesh the
+// kernel runs on. Refuse rather than return a set that silently encodes hop programs for a
+// mesh whose L1 holds indexed vectors.
+TT_FATAL(!any_mesh_uses_express, "...call the overload taking the kernel's FabricNodeId");
+```
 
-Resolve this before flipping 3.2, or 2D kernel compilation breaks broadly.
+**Delete the fatal.** Its premise -- that the 2D ABI varies per mesh -- is exactly what the flip
+removes. `api_type` selects the Linear (1D) versus Mesh (2D) *API surface*; express is a flavour of
+mesh routing, not a third api_type, so nothing at this layer has an ABI choice to make. The overload
+keeps returning `API_TYPE_*` + `FABRIC_2D`, which is correct and complete for what it does.
+
+No signature change and no caller migration. The one caller of this overload is the Python binding at
+`ttnn-nanobind/fabric.cpp:241`, which is a pure query.
+
+Shape defines are not this overload's job and never were. Kernels that encode 2D routes get them from
+the node-aware overload (`fabric.cpp:720`) or, for the dispatch relays, from their own resolution --
+`dispatch.cpp:585` and `prefetch.cpp:549` already look up `get_fabric_node_id_from_physical_chip_id`
+and pull `get_express_kernel_defines` for that mesh, with a comment saying why. A compile that has no
+single mesh shape is covered by the zero-fallback in `tt_fabric_api.h`, which retargets from
+`FABRIC_EXPRESS_ENABLED` to `FABRIC_2D` with everything else; the runtime
+`ASSERT(y_size > 0 && x_size > 0)` then catches genuine misuse. That is the existing ERISC mechanism,
+unchanged.
 
 ## 3.4 Flip the device producers
 
@@ -634,7 +848,20 @@ Resolve this before flipping 3.2, or 2D kernel compilation breaks broadly.
 | `tt_fabric_api.h` single-hop (≈48) | drop the `#if` added in Phase 0 — always delegate. |
 | `tt_fabric_api.h:151-156` | delete the `#if defined(...) && !defined(FABRIC_2D_MESH_Y_SIZE)` zero-default block if the defines are now always emitted to worker kernels; keep it if ERISC compiles still lack them (check `compute_mesh_router_builder` vs `fabric.cpp` define scopes — they are different call paths). |
 | `tt_fabric_api.h:158-165` | make the `Y+X ≤ sizeof(route_buffer)` static_assert unconditional |
-| `udm/tt_fabric_udm.hpp:482`, `udm/tt_fabric_udm_impl.hpp:107` | drop the `#if`; keep only the indexed arm |
+| `udm/tt_fabric_udm.hpp:482`, `udm/tt_fabric_udm_impl.hpp:107` | → `#if defined(FABRIC_2D)`, keeping only the indexed arm. ⚠ **Load-bearing, not cosmetic:** after the flip a non-express 2D mesh's L1 slot holds indexed vectors, so leaving these on `FABRIC_EXPRESS_ENABLED` sends non-express UDM down the *legacy* arm, which reads the slot as `intra_mesh_routing_path_t<2,true>` and gets garbage. |
+
+⚠ **Do not "simplify away" the UDM express `static_assert`** in `fabric_edm_packet_header.hpp`'s
+UDM 2D arm. It bars UDM + express because the mux fabric is cardinal-only
+(`NUM_DOWNSTREAM_MUX_CONNECTIONS == 3`, no Z mux), and it composes with this step precisely because
+Q2 kept `FABRIC_EXPRESS_ENABLED` express-scoped rather than promoting it to a universal ABI flag. Had
+it been renamed to mean "indexed 2D", that assert would fire for *every* UDM build after the flip.
+The three-way result after Phase 3 is:
+
+```text
+UDM + 2D non-express   indexed arm, cardinal-only first hops   -> supported
+UDM + 2D express       refused at compile time                  -> barred
+non-UDM + 2D           indexed arm                              -> supported
+```
 | `cq_relay.hpp:86-101` | delete the `#if GALAXY_CLUSTER && !FABRIC_EXPRESS_ENABLED` and keep only the `fabric_set_unicast_route` arm |
 
 ## 3.5 ⚠ Leave the connection-manager capacity entirely alone
@@ -745,7 +972,7 @@ remaining callers after Phase 3 flipped the kernel. Remove the include from
 | the `<2, true>` specialization of `intra_mesh_routing_path_t` and its `decode_route_to_buffer` | `fabric_common.h`, `hw/inc/fabric_routing_path_interface.h` |
 | `routing_encoding::encode_2d_unicast` | wherever it lives in `fabric_common.h` |
 | `calculate_chip_to_all_routing_fields` for the 2D compressed path | `compressed_routing_path.cpp:~60-161` |
-| `RoutingFieldsConstants::Mesh` | `fabric_common.h:189-212`. ⚠ Check 1D and the emulator (`emulated_program_runner.cpp:2373 __emule_fabric_set_route`) do not reference it before deleting. |
+| `RoutingFieldsConstants::Mesh` | `fabric_common.h:189-212`. ⚠ Check 1D does not reference it before deleting. |
 
 Update the `offsetof` / `sizeof` static asserts at `fabric_common.h:1162-1187`. The union slot stays
 1028 B (`indexed_route_vectors_t`), so `sizeof(routing_l1_info_t)` should stay 2576 — verify, don't

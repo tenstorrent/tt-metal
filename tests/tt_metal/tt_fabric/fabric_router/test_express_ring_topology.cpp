@@ -25,12 +25,12 @@
 #include "fabric_fixture.hpp"
 #include "utils.hpp"
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/fabric/express_ring_topology.hpp"
+#include "tt_metal/fabric/axis_route_topology.hpp"
 
 namespace tt::tt_fabric::express_ring_tests {
 namespace {
 
-constexpr int kNoContinueSrc = ExpressRingTopology::kNone;
+constexpr int kNoContinueSrc = AxisRouteTopology::kNone;
 
 struct Rings {
     std::vector<int> leaves;                       // ascending
@@ -54,11 +54,11 @@ std::string fixture_path(const std::string& fixture) {
         .string();
 }
 
-ExpressRingTopology derive(const std::string& fixture) {
+AxisRouteTopology derive(const std::string& fixture) {
     MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, fixture_path(fixture));
     auto topo = derive_express_ring_topology(mesh_graph, MeshId{0});
     EXPECT_TRUE(topo.has_value()) << fixture << " derived no express rings";
-    return topo.value_or(ExpressRingTopology{});
+    return topo.value_or(AxisRouteTopology{});
 }
 
 // A ControlPlane can only be built when the running world matches the descriptor's declared host
@@ -90,7 +90,7 @@ std::unique_ptr<ControlPlane> make_control_plane(
     return control_plane;
 }
 
-void expect_rings(const ExpressRingTopology& t, const Rings& want) {
+void expect_rings(const AxisRouteTopology& t, const Rings& want) {
     std::vector<int> leaves;
     for (int r = 0; r < t.axis_len; r++) {
         if (t.is_leaf(r)) {
@@ -99,14 +99,14 @@ void expect_rings(const ExpressRingTopology& t, const Rings& want) {
     }
     EXPECT_EQ(leaves, want.leaves) << "leaf set";
     for (const auto& [leaf, anchor] : want.anchors) {
-        ASSERT_NE(t.leaf_run_of[leaf], ExpressRingTopology::kNone) << "row " << leaf << " is not a leaf";
+        ASSERT_NE(t.leaf_run_of[leaf], AxisRouteTopology::kNone) << "row " << leaf << " is not a leaf";
         const auto& run = t.leaf_runs[t.leaf_run_of[leaf]];
         // The end a leaf attaches to: index 0 exits before its run, the last index exits after it.
         EXPECT_EQ(t.leaf_index_of[leaf] == 0 ? run.anchor_before : run.anchor_after, anchor)
             << "anchor of leaf " << leaf;
     }
     for (const auto& [leaf, pair] : want.leaf_pairs) {
-        ASSERT_NE(t.leaf_run_of[leaf], ExpressRingTopology::kNone) << "row " << leaf << " is not a leaf";
+        ASSERT_NE(t.leaf_run_of[leaf], AxisRouteTopology::kNone) << "row " << leaf << " is not a leaf";
         EXPECT_EQ(t.leaf_run_of[leaf], t.leaf_run_of[pair]) << leaf << " and " << pair << " share no run";
         EXPECT_EQ(std::abs(t.leaf_index_of[leaf] - t.leaf_index_of[pair]), 1)
             << leaf << " and " << pair << " are not adjacent in their run";
@@ -116,7 +116,7 @@ void expect_rings(const ExpressRingTopology& t, const Rings& want) {
     EXPECT_EQ(t.crossovers, want.crossovers) << "ordered crossovers";
 }
 
-void expect_hops(const ExpressRingTopology& t, const std::vector<Hop>& hops) {
+void expect_hops(const AxisRouteTopology& t, const std::vector<Hop>& hops) {
     for (const auto& h : hops) {
         EXPECT_EQ(t.next_row(h.src, h.dst), h.next) << "next row on " << h.src << " -> " << h.dst;
     }
@@ -126,7 +126,7 @@ void expect_hops(const ExpressRingTopology& t, const std::vector<Hop>& hops) {
 
 // 8x4: RING axis with a single span-4 chord 2<->5, its class closing one ring over the six transit
 // rows through the ordinary wrap. The pattern declares wrap: LINE, so no chord straddles the boundary.
-TEST(ExpressRingTopologyTest, Rings8x4) {
+TEST(AxisRouteTopologyTest, Rings8x4) {
     const Rings want{
         .leaves = {3, 4},
         .anchors = {{3, 2}, {4, 5}},
@@ -151,7 +151,7 @@ TEST(ExpressRingTopologyTest, Rings8x4) {
 
 // 16x4: LINE axis, span-4 chords 2<->5, 6<->9, 10<->13 and span-8 chords 0<->7, 8<->15. Single
 // spanning family -- note rows 1 and 14 are members despite owning no chord.
-TEST(ExpressRingTopologyTest, Rings16x4) {
+TEST(AxisRouteTopologyTest, Rings16x4) {
     const Rings want{
         .leaves = {3, 4, 11, 12},
         .anchors = {{3, 2}, {4, 5}, {11, 10}, {12, 13}},
@@ -174,7 +174,7 @@ TEST(ExpressRingTopologyTest, Rings16x4) {
 }
 
 // 24x4: LINE axis, five span-4 and three span-8 chords fused into one spanning family.
-TEST(ExpressRingTopologyTest, Rings24x4) {
+TEST(AxisRouteTopologyTest, Rings24x4) {
     const Rings want{
         .leaves = {3, 4, 11, 12, 19, 20},
         .anchors = {{3, 2}, {4, 5}, {11, 10}, {12, 13}, {19, 18}, {20, 21}},
@@ -192,7 +192,7 @@ TEST(ExpressRingTopologyTest, Rings24x4) {
 // 32x4: RING axis, so each class closes its own family. Domains are ordered by ascending span, so
 // domain 0 is the span-4 (ex4) ring and domain 1 the span-8 (ex8) ring; ex8 may continue into ex4
 // and the reverse crossing is terminal.
-TEST(ExpressRingTopologyTest, Rings32x4) {
+TEST(AxisRouteTopologyTest, Rings32x4) {
     const Rings want{
         .leaves = {3, 4, 11, 12, 19, 20, 27, 28},
         .anchors = {{3, 2}, {4, 5}, {11, 10}, {12, 13}, {19, 18}, {20, 21}, {27, 26}, {28, 29}},
@@ -301,7 +301,7 @@ TEST_F(ControlPlaneFixture, TestExpressRingPredicates32x4) {
 // in the Rings* tests above; what remains here is predicate behavior per (row, direction) and the
 // axis-level query semantics behind mesh_has_protected_ring_in_axis_of.
 
-TEST(ExpressRingTopologyTest, DoubleChordPerRowIsRejected) {
+TEST(AxisRouteTopologyTest, DoubleChordPerRowIsRejected) {
     // A row terminating two chords (span 4 and span 8 both landing on row 2) cannot be identified
     // by a bare Z command; derivation must refuse it rather than guess.
     const auto path = write_temp_descriptor("express_links_16x4_double_chord.textproto", R"(
@@ -323,7 +323,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 // A single wide pattern on the 32-row RING axis: each block skips six interior rows, so leaves form
 // runs of six rather than pairs. Exercises entering and leaving a long run one row at a time: each
 // hop must land on a physically adjacent row.
-TEST(ExpressRingTopologyTest, Rings32x4Ex8Only) {
+TEST(AxisRouteTopologyTest, Rings32x4Ex8Only) {
     MeshGraph mesh_graph(
         tt::tt_metal::ClusterType::BLACKHOLE_GALAXY,
         fixture_path("express_links_32x4_ex8_only_mesh_graph_descriptor.textproto"));
@@ -368,7 +368,7 @@ TEST(ExpressRingTopologyTest, Rings32x4Ex8Only) {
 
 // An open X dimension yields no X ring state even alongside a live express (Y) axis: the ordinary
 // ring derivation reports "not closed", so the express mesh's X ring state stays empty.
-TEST(ExpressRingTopologyTest, OpenXRingReportsNoXAxisRing) {
+TEST(AxisRouteTopologyTest, OpenXRingReportsNoXAxisRing) {
     const auto path = write_temp_descriptor("express_links_8x4_open_x.textproto", R"(
 mesh_descriptors {
   name: "M0"
@@ -394,7 +394,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 // X closes on this fixture, so the ordinary derivation would answer here. The non-express X
 // flow-control answer comes from the topology token (see
 // FabricContext::need_deadlock_avoidance_support's fallthrough), not from these predicates.
-TEST(ExpressRingTopologyTest, NoExpressTopologyYieldsNoRingState) {
+TEST(AxisRouteTopologyTest, NoExpressTopologyYieldsNoRingState) {
     const auto path = std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
                       "tests/tt_metal/tt_fabric/custom_mesh_descriptors" /
                       "bh_galaxy_single_4x4_subtorus_topology_mesh_graph_descriptor.textproto";
@@ -560,6 +560,79 @@ TEST_F(ControlPlaneFixture, TestExpressCarveOutWithoutEndWrapStillReportsAYRing)
     EXPECT_TRUE(control_plane->mesh_has_protected_ring_in_axis_of(MeshId{0}, D::E));  // X is RING here
     // Row 3 is a leaf amid a ringed axis: the per-node answer elides it, the per-mesh one doesn't.
     EXPECT_FALSE(control_plane->has_protected_ring(row(3), Dim::Y));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Line axes: next_row must never step over the absent wrap edge
+// ---------------------------------------------------------------------------------------------
+
+// AxisRouteTopology::next_row() picks the shorter way around a ring using modular arithmetic. On a
+// LINE that arithmetic is wrong: rows 0 and n-1 are NOT adjacent, so a distant destination would be
+// routed "the short way" over an edge the axis does not have -- a hop into a link that isn't wired.
+// The `wraps` flag is what separates the two, and these tests pin both sides of it.
+//
+// Built by hand rather than derived from a descriptor: a single domain covering every row is exactly
+// what derive_line_axis_topology() produces, and constructing it here keeps the test machine-free.
+namespace {
+
+AxisRouteTopology make_single_domain_axis(int len, bool wraps) {
+    AxisRouteTopology t;
+    t.axis_dim = 0;
+    t.axis_len = len;
+    t.wraps = wraps;
+    t.domain_of.assign(len, 0);
+    t.leaf_run_of.assign(len, AxisRouteTopology::kNone);
+    t.leaf_index_of.assign(len, AxisRouteTopology::kNone);
+    t.pos_in_domain.resize(len);
+    std::vector<int> cycle(len);
+    for (int i = 0; i < len; i++) {
+        cycle[i] = i;
+        t.pos_in_domain[i] = i;
+    }
+    t.forward_cycle.push_back(std::move(cycle));
+    return t;
+}
+
+}  // namespace
+
+TEST(AxisRouteTopologyLine, LineNeverStepsOverTheAbsentWrapEdge) {
+    constexpr int kLen = 8;
+    const auto line = make_single_domain_axis(kLen, /*wraps=*/false);
+
+    for (int src = 0; src < kLen; src++) {
+        for (int dst = 0; dst < kLen; dst++) {
+            if (src == dst) {
+                continue;
+            }
+            const int next = line.next_row(src, dst);
+            EXPECT_EQ(next, dst > src ? src + 1 : src - 1)
+                << "line hop " << src << " -> " << dst << " must be a single step toward the destination";
+            EXPECT_GE(next, 0);
+            EXPECT_LT(next, kLen);
+        }
+    }
+}
+
+// The specific regression: on a line, row 0 reaching a far destination must walk up, never wrap down
+// to the last row. `% n` alone would send it over the closing edge.
+TEST(AxisRouteTopologyLine, LineEndpointsDoNotWrapToEachOther) {
+    constexpr int kLen = 8;
+    const auto line = make_single_domain_axis(kLen, /*wraps=*/false);
+
+    EXPECT_EQ(line.next_row(0, kLen - 1), 1);
+    EXPECT_EQ(line.next_row(kLen - 1, 0), kLen - 2);
+    EXPECT_EQ(line.next_row(0, kLen - 2), 1);
+}
+
+// The counterpart: with a closing edge present, the short way round is correct and expected. If this
+// ever matches the line answers, `wraps` has stopped doing anything.
+TEST(AxisRouteTopologyLine, RingTakesTheShortWayRound) {
+    constexpr int kLen = 8;
+    const auto ring = make_single_domain_axis(kLen, /*wraps=*/true);
+
+    EXPECT_EQ(ring.next_row(0, kLen - 1), kLen - 1);  // one hop backwards over the wrap
+    EXPECT_EQ(ring.next_row(kLen - 1, 0), 0);
+    EXPECT_EQ(ring.next_row(0, 1), 1);  // forward when that is nearer
 }
 
 }  // namespace tt::tt_fabric::express_ring_tests

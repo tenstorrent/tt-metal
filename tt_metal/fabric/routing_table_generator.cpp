@@ -17,7 +17,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 
-#include "express_ring_topology.hpp"
+#include "axis_route_topology.hpp"
 
 namespace tt::tt_fabric {
 
@@ -48,7 +48,8 @@ RoutingTableGenerator::RoutingTableGenerator(const TopologyMapper& topology_mapp
         }
     }
     // Recover the express-link ring decomposition per mesh; null where a mesh declares none, which
-    // leaves that mesh on the base dimension-order policy.
+    // leaves that mesh on the base dimension-order policy. express_rings_ and x_rings_ keep their
+    // existing meaning and population rules so nothing that reads them changes behaviour.
     this->express_rings_.resize(intra_mesh_connectivity.size());
     this->x_rings_.resize(intra_mesh_connectivity.size());
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < intra_mesh_connectivity.size(); mesh_id_val++) {
@@ -56,10 +57,34 @@ RoutingTableGenerator::RoutingTableGenerator(const TopologyMapper& topology_mapp
         if (!rings.has_value()) {
             continue;  // no express links: the mesh keeps the base policy and needs no ring state
         }
-        this->express_rings_[mesh_id_val] = std::make_unique<ExpressRingTopology>(std::move(*rings));
+        this->express_rings_[mesh_id_val] = std::make_unique<AxisRouteTopology>(std::move(*rings));
         auto x_rings = derive_ordinary_ring_topology(mesh_graph, MeshId{mesh_id_val}, 1);
         if (x_rings.has_value()) {
-            this->x_rings_[mesh_id_val] = std::make_unique<ExpressRingTopology>(std::move(*x_rings));
+            this->x_rings_[mesh_id_val] = std::make_unique<AxisRouteTopology>(std::move(*x_rings));
+        }
+    }
+
+    // Per-axis topologies, for EVERY mesh and BOTH axes. This is what the indexed multicast encoder
+    // needs: it builds a reverse tree per axis, so a missing topology on either one silently produces
+    // an empty map rather than an error.
+    //
+    // x_rings_ above cannot serve that purpose -- it is only populated for express meshes, and only
+    // when the X dimension closes. Deriving it unconditionally is not safe either, because
+    // derive_ordinary_ring_topology() is fatal when a line on the axis lacks an ordinary edge while
+    // axis_wraps() only inspects line 0. derive_axis_topology() resolves both: it falls back to the
+    // plain line, so an axis that does not close (or does not close uniformly) still gets a usable
+    // topology instead of aborting init.
+    this->axis_topologies_.resize(intra_mesh_connectivity.size());
+    for (std::uint32_t mesh_id_val = 0; mesh_id_val < intra_mesh_connectivity.size(); mesh_id_val++) {
+        const auto shape = mesh_graph.get_mesh_shape(MeshId{mesh_id_val});
+        for (int axis = 0; axis < 2; axis++) {
+            // A degenerate axis has nothing to route along; leave it null rather than fabricate a
+            // one-element cycle that next_row() would be asked to step through.
+            if (static_cast<int>(shape[axis]) < 2) {
+                continue;
+            }
+            this->axis_topologies_[mesh_id_val][axis] =
+                std::make_unique<AxisRouteTopology>(derive_axis_topology(mesh_graph, MeshId{mesh_id_val}, axis));
         }
     }
 
@@ -72,12 +97,19 @@ RoutingTableGenerator::RoutingTableGenerator(const TopologyMapper& topology_mapp
 
 RoutingTableGenerator::~RoutingTableGenerator() = default;
 
-const ExpressRingTopology* RoutingTableGenerator::get_express_rings(MeshId mesh_id) const {
+const AxisRouteTopology* RoutingTableGenerator::get_express_rings(MeshId mesh_id) const {
     return *mesh_id < this->express_rings_.size() ? this->express_rings_[*mesh_id].get() : nullptr;
 }
 
-const ExpressRingTopology* RoutingTableGenerator::get_x_rings(MeshId mesh_id) const {
+const AxisRouteTopology* RoutingTableGenerator::get_x_rings(MeshId mesh_id) const {
     return *mesh_id < this->x_rings_.size() ? this->x_rings_[*mesh_id].get() : nullptr;
+}
+
+const AxisRouteTopology* RoutingTableGenerator::get_axis_topology(MeshId mesh_id, int axis) const {
+    if (*mesh_id >= this->axis_topologies_.size() || axis < 0 || axis > 1) {
+        return nullptr;
+    }
+    return this->axis_topologies_[*mesh_id][axis].get();
 }
 
 void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConnectivity& intra_mesh_connectivity) {
