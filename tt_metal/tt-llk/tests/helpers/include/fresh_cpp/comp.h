@@ -30,8 +30,20 @@
 // -0.0 discipline (the eqz-fresh / lane CL rule): every branch decides the
 // "is zero" question through sfpi::abs(v) == 0.0f rather than a raw sign
 // compare, so both zeros land on the golden's answer (torch: -0.0 == 0).
-// NaN is outside the swept domain (uniform(-2, 2) stimuli, sfpu_domains.py);
-// the unarycomp.h precedent note applies unchanged.
+//
+// NaN discipline (lane GH finding GH-F1, 2026-08-24): the edges legs inject
+// IEEE specials (specials_safe at Float32/dest_acc=Yes), and the sfpi
+// `v > 0.0f` lowering is a sign-clear+bits-nonzero SFPSETCC pair that
+// answers TRUE for quiet NaN — the legacy gtz/gez bodies therefore answered
+// 1.0 where the golden (torch: any comparison with NaN is False) and the
+// production kernel answer 0.0/gez-0.0.  Latent, pre-existing: those edge
+// nodes belong to no sweep row and had never been executed (sim-verified at
+// canon 9c9d15645c, laneGH-evidence-20260824).  gtz/gez now overwrite the
+// answer to 0 under sfpi::is_nan(v) as the last store; ltz/lez/ne are
+// naturally NaN-correct under their lowerings (sign test excludes
+// sign-clear qNaN; ne's golden answer for NaN is 1, which is its default
+// store).  NaN remains outside the functional legs' swept domain
+// (uniform(-2, 2) stimuli, sfpu_domains.py).
 //
 // Rows are addressed by immediate offset (dst_reg[d], full unroll) rather
 // than dst_reg++: constant dst indices need no TTINCRWC counter words (the
@@ -92,6 +104,12 @@ __attribute__((noinline)) void calculate_comp_fresh_cpp()
                 sfpi::dst_reg[d] = sfpi::vConst0;
             }
             v_endif;
+            // GH-F1: the > lowering admits quiet NaN; golden answers 0.
+            v_if (sfpi::is_nan(v))
+            {
+                sfpi::dst_reg[d] = sfpi::vConst0;
+            }
+            v_endif;
         }
         else if constexpr (COMP_MODE == SfpuType::less_than_equal_zero)
         {
@@ -121,6 +139,12 @@ __attribute__((noinline)) void calculate_comp_fresh_cpp()
             v_if (sfpi::abs(v) == 0.0f)
             {
                 sfpi::dst_reg[d] = sfpi::vConst1;
+            }
+            v_endif;
+            // GH-F1: the default-1 shape admits quiet NaN; golden answers 0.
+            v_if (sfpi::is_nan(v))
+            {
+                sfpi::dst_reg[d] = sfpi::vConst0;
             }
             v_endif;
         }
