@@ -371,6 +371,138 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         }
         pos += 8;
     };
+#if defined(__AVX512F__)
+    // 16 records per call, composed AND interleaved to the ring's AoS layout entirely in registers, then
+    // six 64 B streaming stores. th/meta/prog are block-invariant, so each 64-bit field is one 32-bit lane
+    // paired with a constant -- unpack builds them, permutex2var re-sequences, and a second permutex2var
+    // plus a masked permute lays out [t,m,d] triples. That is ~1.5 ops/record against ~12 for the scalar
+    // form, which spilled the vectors to stack, read them back a lane at a time and issued 8 B stores.
+    auto emit_atomic16 = [&](uint32_t lane, uint32_t th, uint32_t prog, __m512i w0s, __m512i w1s, __m512i w2s,
+                             uint32_t n) {
+        zone_markers += n;
+        alignas(64) uint32_t w1_arr[16];
+        _mm512_store_si512(w1_arr, w1s);
+        const uint64_t ts_first = (static_cast<uint64_t>(th) << 32) | w1_arr[0];
+        const uint64_t ts_last = (static_cast<uint64_t>(th) << 32) | w1_arr[n - 1];
+        order_regressions += ts_first < last_ts[lane] ? 1 : 0;
+        last_ts[lane] = ts_last;
+        if (min_ts == 0) {
+            min_ts = ts_first;
+        }
+        max_ts = ts_last;
+        if (!sink) {
+            return;
+        }
+        const __m512i ids = _mm512_and_si512(w0s, _mm512_set1_epi32(0x07FFFFFF));
+        const uint64_t meta64 = static_cast<uint64_t>((lane << 16) | (dev << 26)) << 32;
+        const uint64_t slot0 = pos & ring_mask;
+        auto* q = reinterpret_cast<uint64_t*>(ring_base + slot0 * sizeof(PerfDebugRawRec));
+        // 24 B x pos is 64 B-aligned only when pos % 8 == 0; anything else takes the 8-wide path.
+        if (n == 16 && slot0 + n <= ring_mask + 1 && (reinterpret_cast<uintptr_t>(q) & 63u) == 0) {
+            const __m512i thv = _mm512_set1_epi32(static_cast<int>(th));
+            const __m512i mev = _mm512_set1_epi32(static_cast<int>(static_cast<uint32_t>(meta64 >> 32)));
+            const __m512i pgv = _mm512_set1_epi32(static_cast<int>(static_cast<uint32_t>(prog)));
+            const __m512i seqA = _mm512_setr_epi64(0, 1, 8, 9, 2, 3, 10, 11);
+            const __m512i seqB = _mm512_setr_epi64(4, 5, 12, 13, 6, 7, 14, 15);
+            __m512i T[2], M[2], D[2];
+            {
+                const __m512i lo = _mm512_unpacklo_epi32(w1s, thv), hi = _mm512_unpackhi_epi32(w1s, thv);
+                T[0] = _mm512_permutex2var_epi64(lo, seqA, hi);
+                T[1] = _mm512_permutex2var_epi64(lo, seqB, hi);
+            }
+            {
+                const __m512i lo = _mm512_unpacklo_epi32(ids, mev), hi = _mm512_unpackhi_epi32(ids, mev);
+                M[0] = _mm512_permutex2var_epi64(lo, seqA, hi);
+                M[1] = _mm512_permutex2var_epi64(lo, seqB, hi);
+            }
+            {
+                const __m512i lo = _mm512_unpacklo_epi32(pgv, w2s), hi = _mm512_unpackhi_epi32(pgv, w2s);
+                D[0] = _mm512_permutex2var_epi64(lo, seqA, hi);
+                D[1] = _mm512_permutex2var_epi64(lo, seqB, hi);
+            }
+            const __m512i i0 = _mm512_setr_epi64(0, 8, 0, 1, 9, 0, 2, 10);
+            const __m512i i1 = _mm512_setr_epi64(0, 3, 11, 0, 4, 12, 0, 5);
+            const __m512i i2 = _mm512_setr_epi64(13, 0, 6, 14, 0, 7, 15, 0);
+            const __m512i j0 = _mm512_setr_epi64(0, 0, 0, 0, 0, 1, 0, 0);
+            const __m512i j1 = _mm512_setr_epi64(2, 0, 0, 3, 0, 0, 4, 0);
+            const __m512i j2 = _mm512_setr_epi64(0, 5, 0, 0, 6, 0, 0, 7);
+            for (uint32_t h = 0; h < 2; h++) {
+                auto* o = reinterpret_cast<__m512i*>(q + 24 * h);
+                _mm512_stream_si512(
+                    o + 0, _mm512_mask_permutexvar_epi64(
+                               _mm512_permutex2var_epi64(T[h], i0, M[h]), 0x24, j0, D[h]));
+                _mm512_stream_si512(
+                    o + 1, _mm512_mask_permutexvar_epi64(
+                               _mm512_permutex2var_epi64(T[h], i1, M[h]), 0x49, j1, D[h]));
+                _mm512_stream_si512(
+                    o + 2, _mm512_mask_permutexvar_epi64(
+                               _mm512_permutex2var_epi64(T[h], i2, M[h]), 0x92, j2, D[h]));
+            }
+        } else if (slot0 + n <= ring_mask + 1) {
+            // SHORT RUN, STILL NO SCALAR LOOP. Compose all 16 lanes regardless -- the inputs were already
+            // loaded -- and write only the 3n quadwords that are real: whole vectors while 8 fit, then one
+            // mask_storeu for the remainder. Masked stores are ordinary (there is no masked NT store), which
+            // is the right trade on a tail of at most 23 quadwords.
+            const __m512i thv = _mm512_set1_epi32(static_cast<int>(th));
+            const __m512i mev = _mm512_set1_epi32(static_cast<int>(static_cast<uint32_t>(meta64 >> 32)));
+            const __m512i pgv = _mm512_set1_epi32(static_cast<int>(static_cast<uint32_t>(prog)));
+            const __m512i seqA = _mm512_setr_epi64(0, 1, 8, 9, 2, 3, 10, 11);
+            const __m512i seqB = _mm512_setr_epi64(4, 5, 12, 13, 6, 7, 14, 15);
+            __m512i T[2], M[2], D[2];
+            {
+                const __m512i lo = _mm512_unpacklo_epi32(w1s, thv), hi = _mm512_unpackhi_epi32(w1s, thv);
+                T[0] = _mm512_permutex2var_epi64(lo, seqA, hi);
+                T[1] = _mm512_permutex2var_epi64(lo, seqB, hi);
+            }
+            {
+                const __m512i lo = _mm512_unpacklo_epi32(ids, mev), hi = _mm512_unpackhi_epi32(ids, mev);
+                M[0] = _mm512_permutex2var_epi64(lo, seqA, hi);
+                M[1] = _mm512_permutex2var_epi64(lo, seqB, hi);
+            }
+            {
+                const __m512i lo = _mm512_unpacklo_epi32(pgv, w2s), hi = _mm512_unpackhi_epi32(pgv, w2s);
+                D[0] = _mm512_permutex2var_epi64(lo, seqA, hi);
+                D[1] = _mm512_permutex2var_epi64(lo, seqB, hi);
+            }
+            const __m512i i0 = _mm512_setr_epi64(0, 8, 0, 1, 9, 0, 2, 10);
+            const __m512i i1 = _mm512_setr_epi64(0, 3, 11, 0, 4, 12, 0, 5);
+            const __m512i i2 = _mm512_setr_epi64(13, 0, 6, 14, 0, 7, 15, 0);
+            const __m512i j0 = _mm512_setr_epi64(0, 0, 0, 0, 0, 1, 0, 0);
+            const __m512i j1 = _mm512_setr_epi64(2, 0, 0, 3, 0, 0, 4, 0);
+            const __m512i j2 = _mm512_setr_epi64(0, 5, 0, 0, 6, 0, 0, 7);
+            __m512i out[6];
+            for (uint32_t h = 0; h < 2; h++) {
+                out[3 * h + 0] = _mm512_mask_permutexvar_epi64(
+                    _mm512_permutex2var_epi64(T[h], i0, M[h]), 0x24, j0, D[h]);
+                out[3 * h + 1] = _mm512_mask_permutexvar_epi64(
+                    _mm512_permutex2var_epi64(T[h], i1, M[h]), 0x49, j1, D[h]);
+                out[3 * h + 2] = _mm512_mask_permutexvar_epi64(
+                    _mm512_permutex2var_epi64(T[h], i2, M[h]), 0x92, j2, D[h]);
+            }
+            auto* qq = reinterpret_cast<uint64_t*>(ring_base + slot0 * sizeof(PerfDebugRawRec));
+            uint32_t left = 3u * n;
+            for (uint32_t v = 0; v < 6 && left != 0; v++) {
+                const uint32_t take = left < 8u ? left : 8u;
+                _mm512_mask_storeu_epi64(
+                    qq + 8 * v, static_cast<__mmask8>((1u << take) - 1u), out[v]);
+                left -= take;
+            }
+        } else {
+            alignas(64) uint32_t id_arr[16], dur_arr[16];
+            _mm512_store_si512(id_arr, ids);
+            _mm512_store_si512(dur_arr, w2s);
+            const uint64_t th_hi = static_cast<uint64_t>(th) << 32;
+            const uint64_t prog64 = prog;
+            for (uint32_t k = 0; k < n; k++) {  // ring wrap only: the slot run is not contiguous here
+                auto* r = reinterpret_cast<long long*>(w.emit_slot_ptr(pos + k));
+                _mm_stream_si64(r + 0, static_cast<long long>(th_hi | w1_arr[k]));
+                _mm_stream_si64(r + 1, static_cast<long long>(meta64 | id_arr[k]));
+                _mm_stream_si64(r + 2, static_cast<long long>((static_cast<uint64_t>(dur_arr[k]) << 32) | prog64));
+            }
+        }
+        pos += n;
+    };
+#endif
     auto emit_atomic8 = [&](
                             uint32_t lane, uint32_t th, uint32_t prog, __m256i w0s, __m256i w1s, __m256i w2s,
                             uint32_t n) {
@@ -464,7 +596,19 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         const uint64_t tf0 = tsc_now();
 #if defined(__AVX2__)
         const uint32_t payload = profiler::spsc_decode_frame(
-            s.decode, frame, emit, emit_data, profiler::SpscIgnoreProg{}, emit_zones8, emit_atomic8, fw);
+            s.decode,
+            frame,
+            emit,
+            emit_data,
+            profiler::SpscIgnoreProg{},
+            emit_zones8,
+            emit_atomic8,
+#if defined(__AVX512F__)
+            emit_atomic16,
+#else
+            profiler::SpscNoAtomic16{},
+#endif
+            fw);
 #else
         const uint32_t payload = profiler::spsc_decode_frame(s.decode, frame, emit, emit_data);
 #endif

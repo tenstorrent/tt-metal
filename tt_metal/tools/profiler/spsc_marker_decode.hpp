@@ -107,11 +107,33 @@ struct SpscIgnoreProg {
 // Sentinel default for the vectorized zone-block sink: without a real one the walk stays scalar.
 struct SpscNoZones8 {};
 struct SpscNoAtomic8 {};
+struct SpscNoAtomic16 {};
 
 #if defined(__AVX2__)
 // Deinterleave EIGHT consecutive 3-word atomic records (24 contiguous words) into vectors of word0
 // (type|id27), word1 (ts low) and word2 (duration). Output lane j belongs to record j; the stride-3
 // scatter across three source vectors costs 9 lane permutes + 6 blends, against 24 scalar loads.
+#if defined(__AVX512F__)
+// 16 atomic records (48 words) deinterleaved to SoA. Lane L of w{j} wants word 3L+j: words 0..31 come from
+// v0||v1 in one permutex2var, and 3L+j >= 32 is merged from v2 by a masked single-source permute. Six
+// shuffles for sixteen records, against fifteen for eight in the AVX2 twin below.
+inline void spsc_load_atomic16(const uint32_t* src, __m512i& w0s, __m512i& w1s, __m512i& w2s) {
+    const __m512i v0 = _mm512_loadu_si512(src);
+    const __m512i v1 = _mm512_loadu_si512(src + 16);
+    const __m512i v2 = _mm512_loadu_si512(src + 32);
+    const __m512i i0a = _mm512_setr_epi32(0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 0, 0, 0, 0, 0);
+    const __m512i i0b = _mm512_setr_epi32(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 4, 7, 10, 13);
+    const __m512i i1a = _mm512_setr_epi32(1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 0, 0, 0, 0, 0);
+    const __m512i i1b = _mm512_setr_epi32(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 5, 8, 11, 14);
+    const __m512i i2a = _mm512_setr_epi32(2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 0, 0, 0, 0, 0, 0);
+    // w2 crosses into v2 a lane earlier: lane 10 already wants word 32.
+    const __m512i i2b = _mm512_setr_epi32(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 6, 9, 12, 15);
+    w0s = _mm512_mask_permutexvar_epi32(_mm512_permutex2var_epi32(v0, i0a, v1), 0xF800, i0b, v2);
+    w1s = _mm512_mask_permutexvar_epi32(_mm512_permutex2var_epi32(v0, i1a, v1), 0xF800, i1b, v2);
+    w2s = _mm512_mask_permutexvar_epi32(_mm512_permutex2var_epi32(v0, i2a, v1), 0xFC00, i2b, v2);
+}
+#endif
+
 inline void spsc_load_atomic8(const uint32_t* src, __m256i& w0s, __m256i& w1s, __m256i& w2s) {
     const __m256i v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src));
     const __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src + 8));
@@ -180,7 +202,8 @@ template <
     typename EmitData,
     typename EmitProg = SpscIgnoreProg,
     typename EmitZones8 = SpscNoZones8,
-    typename EmitAtomic8 = SpscNoAtomic8>
+    typename EmitAtomic8 = SpscNoAtomic8,
+    typename EmitAtomic16 = SpscNoAtomic16>
 inline uint32_t spsc_decode_frame(
     SpanDecodeState& st,
     const uint32_t* frame,
@@ -189,10 +212,12 @@ inline uint32_t spsc_decode_frame(
     EmitProg&& emit_prog = SpscIgnoreProg{},
     EmitZones8&& emit_zones8 = SpscNoZones8{},
     EmitAtomic8&& emit_atomic8 = SpscNoAtomic8{},
+    EmitAtomic16&& emit_atomic16 = SpscNoAtomic16{},
     // Total words in the frame buffer. Nonzero authorizes the atomic block path to LOAD (never emit) up
     // to 24 words past a lane's live run -- the bytes exist in the frame/bounce buffer -- which lets
     // run-tails and sticky-split blocks go through the vector path with a partial count.
     uint32_t frame_words = 0) {
+    (void)emit_atomic16;  // sentinel-typed, or compiled out, without the 512-bit path
     const uint32_t* ctrl = frame + kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
     const auto xy_it = st.core_of_xy.find(ctrl[kernel_profiler::SPSC_CORE_XY]);
     if (xy_it == st.core_of_xy.end()) {
@@ -419,6 +444,27 @@ inline uint32_t spsc_decode_frame(
             if constexpr (!std::is_same_v<std::decay_t<EmitAtomic8>, SpscNoAtomic8>) {
                 // A full block fits inside the run; a partial one may over-read into the rest of the
                 // frame buffer when the caller vouched for its size (frame_words).
+#if defined(__AVX512F__)
+                if constexpr (!std::is_same_v<std::decay_t<EmitAtomic16>, SpscNoAtomic16>) {
+                    if (t == PP_ZONE_ATOMIC && i + 3 <= run &&
+                        (i + 48 <= run || (frame_words != 0 && p + i + 48 <= frame + frame_words))) {
+                        __m512i w0s, w1s, w2s;
+                        spsc_load_atomic16(p + i, w0s, w1s, w2s);
+                        const __mmask16 m = _mm512_cmpeq_epi32_mask(
+                            _mm512_srli_epi32(w0s, PP_TYPE_SHIFT), _mm512_set1_epi32(PP_ZONE_ATOMIC));
+                        uint32_t n =
+                            static_cast<uint32_t>(std::countr_zero(static_cast<uint32_t>(~m) | 0x10000u));
+                        n = std::min(n, (run - i) / 3);
+                        if (n != 0) {
+                            emit_atomic16(lane, th, pg, w0s, w1s, w2s, n);
+                            st.vec_atomic_recs += n;
+                            st.vec_block_rejects += (m != 0xFFFFu) ? 1 : 0;
+                            i += 3 * n;
+                            continue;
+                        }
+                    }
+                }
+#endif
                 if (t == PP_ZONE_ATOMIC && i + 3 <= run &&
                     (i + 24 <= run || (frame_words != 0 && p + i + 24 <= frame + frame_words))) {
                     __m256i w0s, w1s, w2s;
