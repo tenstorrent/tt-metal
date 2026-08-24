@@ -105,8 +105,9 @@ std::optional<TopKCoreConfig> find_topk_core_config_impl(
     // otherwise widths right at the eligibility floor (e.g. 1024 = 32 tiles on a
     // 96-core grid, lp2 = 64) would produce a zero split instead of a valid config.
     const uint32_t start_split_size = std::max(
-        static_cast<uint32_t>(width / tile_width / largest_power_of_two(max_cores)) * tile_width,
-        std::max(min_dim, tile_width));
+        {static_cast<uint32_t>(width / tile_width / largest_power_of_two(max_cores)) * tile_width,
+         min_dim,
+         tile_width});
 
     // The transposed intermediate CBs (c_2, c_4, c_6, and c_8 on local cores) all use bf16
     // when the input format is bfp8/bfp4 to avoid shared-exponent precision loss during sort
