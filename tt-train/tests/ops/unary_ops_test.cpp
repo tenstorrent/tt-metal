@@ -242,7 +242,16 @@ TEST_F(UnaryOpsTest, Silu) {
 
 TEST_F(UnaryOpsTest, Gelu) {
     auto* device = &autograd::ctx().get_device();
-    xt::xarray<float> data = random_input({4U, 1U, 20U, 5U});
+
+    auto N = 4;
+    auto C = 1;
+    auto H = 20;
+    auto W = 5;
+
+    // Load random data from OS using getrandom and copy into tensor
+    xt::xarray<float> data = xt::empty<float>({N, C, H, W});
+    load_random_data_from_os(std::span{data.data(), data.size()});
+
     auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
 
     auto result = gelu(tensor_ptr);
@@ -254,7 +263,16 @@ TEST_F(UnaryOpsTest, Gelu) {
 
 TEST_F(UnaryOpsTest, GeluTanh) {
     auto* device = &autograd::ctx().get_device();
-    xt::xarray<float> data = random_input({4U, 1U, 20U, 5U});
+
+    auto N = 4;
+    auto C = 1;
+    auto H = 20;
+    auto W = 5;
+
+    // Load random data from OS using getrandom and copy into tensor
+    xt::xarray<float> data = xt::empty<float>({N, C, H, W});
+    load_random_data_from_os(std::span{data.data(), data.size()});
+
     auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
 
     auto result = gelu(tensor_ptr, GeluVariant::TANH);
