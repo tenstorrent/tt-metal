@@ -196,8 +196,9 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         (kNumMaxValueAfterReductionTiles + kMaxValueBeforeReductionTiles) * bfloat16_single_tile_size_bytes;
     const uint64_t exp_sum_memory =
         (kNumExpSumBeforeReductionTiles + kNumExpSumAfterReductionTiles) * float32_single_tile_size_bytes;
-    const uint64_t input_memory =
-        Wt * bfloat16_single_tile_size_bytes + 2U * bfloat16_single_tile_size_bytes + uint32_read_page_size;
+    const uint64_t input_memory = Wt * bfloat16_single_tile_size_bytes +
+                                  (kNumInputTilesByIndx + kNumTargetLogitsTiles) * bfloat16_single_tile_size_bytes +
+                                  uint32_read_page_size;
 
     // Total L1 memory required
     const uint64_t required_L1_in_bytes =
