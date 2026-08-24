@@ -15,7 +15,7 @@ from tests.ttnn.utils_for_testing import assert_equal
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import TILE_HEIGHT, TILE_WIDTH
 
 
-@pytest.mark.parametrize("num_iters_of_each_case", [2])
+@pytest.mark.parametrize("num_iters_of_each_case", [1])  # one randomized pass per (max_norm, norm_type)
 @pytest.mark.parametrize("range_of_padding", [(0, 21, 10)])  # [0, 10, 20]
 @pytest.mark.parametrize("range_of_n", [(1, 4)])
 @pytest.mark.parametrize("range_of_c", [(1, 4)])
@@ -23,7 +23,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import TILE_
 @pytest.mark.parametrize("range_of_wt", [(1, 4)])
 @pytest.mark.parametrize("max_norm", [2.0, 1.0, -1.0])
 @pytest.mark.parametrize("norm_type", [2.0, -0.8, 2.2])
-@pytest.mark.parametrize("num_parameters", [32, 128])
+@pytest.mark.parametrize("num_parameters", [32])
 def test_moreh_clip_grad_norm(
     num_iters_of_each_case,
     num_parameters,

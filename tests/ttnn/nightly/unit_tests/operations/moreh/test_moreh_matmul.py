@@ -253,10 +253,35 @@ def moreh_matmul_backward(params, requires_grad, device, dtype=ttnn.bfloat16, us
         ),  # batched matmul
     ),
 )
-@pytest.mark.parametrize("use_randint", [True, False])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfloat8_b", "bfloat16"])
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-def test_moreh_matmul(params, dtype, use_randint, compute_kernel_options, device):
+def test_moreh_matmul(params, dtype, device):
+    compute_kernel_config = get_compute_kernel_options(False)
+    if dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b not supported")
+    passing = moreh_matmul(params, True, compute_kernel_config, device, use_randint=True, npu_dtype=dtype)
+    assert passing
+
+
+@pytest.mark.parametrize(
+    "params",
+    (
+        ([32, 32], [32, 32], [32, 32], False, False),  # single-core
+        ([1024, 128], [128, 1024], [1024, 1024], False, False),  # multi-core
+        ([1020, 310], [310, 1020], [1020, 1020], False, False),  # input, other mask
+        ([3, 1, 2, 1, 4, 1, 319, 95], [4, 2, 95, 470], [3, 1, 2, 1, 4, 2, 319, 470], False, False),  # batched matmul
+    ),
+)
+@pytest.mark.parametrize(
+    "use_randint, compute_kernel_options",
+    (
+        (True, True),
+        (False, False),
+        (False, True),
+    ),
+    ids=["randint-fp32acc", "float-bf16acc", "float-fp32acc"],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfloat8_b", "bfloat16"])
+def test_moreh_matmul_compute_kernel_options(params, dtype, use_randint, compute_kernel_options, device):
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
     if dtype == ttnn.bfloat8_b:
         pytest.skip("bfloat8_b not supported")

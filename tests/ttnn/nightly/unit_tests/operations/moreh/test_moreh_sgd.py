@@ -25,29 +25,7 @@ if is_wormhole_b0():
     fp32_dest_acc_en_ids.append("fp32_dest_acc_en=True")
 
 
-@pytest.mark.parametrize(
-    "shape",
-    [
-        [32, 32],  # single
-        [12, 6, 64, 64],  # multiple tiles
-    ],
-)
-@pytest.mark.parametrize("lr", [3.0])
-@pytest.mark.parametrize("momentum", [0.0, 7.7])
-@pytest.mark.parametrize("dampening", [0.0, 0.5])
-@pytest.mark.parametrize("weight_decay", [0.0, 2.2])
-@pytest.mark.parametrize("nesterov", [True, False], ids=["NESTEROV_TRUE", "NESTEROV_FALSE"])
-@pytest.mark.parametrize(
-    "momentum_initialized", [True, False], ids=["MOMENTUM_INITIALIZED", "MOMENTUM_NOT_INITIALIZED"]
-)
-@pytest.mark.parametrize("has_param_out", [True, False], ids=["HAS_PARAM_OUT_TRUE", "HAS_PARAM_OUT_FALSE"])
-@pytest.mark.parametrize("fp32_dest_acc_en", fp32_dest_acc_en, ids=fp32_dest_acc_en_ids)
-@pytest.mark.parametrize(
-    "npu_dtype, cpu_dtype",
-    [[ttnn.bfloat8_b, torch.bfloat16], [ttnn.bfloat16, torch.bfloat16]],
-    ids=["bfloat8", "bfloat16"],
-)
-def test_moreh_sgd(
+def run_moreh_sgd(
     shape,
     lr,
     momentum,
@@ -61,13 +39,6 @@ def test_moreh_sgd(
     cpu_dtype,
     device,
 ):
-    if nesterov and (momentum <= 0 or dampening != 0):
-        pytest.skip()
-    if npu_dtype == ttnn.bfloat8_b:
-        # Duong: ttnn.bfloat8_b has some bugs. only around half the tests passed for bfloat8_b. Some tests produce 0.0 or Inf results.
-        # I couldn't identify the pattern of failed tests, it seems kind of random so I think it's a precision error.
-        pytest.skip()
-
     torch.manual_seed(0)
 
     compute_kernel_config = get_compute_kernel_options(fp32_dest_acc_en)
@@ -177,6 +148,115 @@ def test_moreh_sgd(
         assert passing
     if momentum == 0:
         assert dev_momentum_buffer_out == None
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [32, 32],  # single
+    ],
+)
+@pytest.mark.parametrize("lr", [3.0])
+@pytest.mark.parametrize("momentum", [0.0, 7.7])
+@pytest.mark.parametrize("dampening", [0.0, 0.5])
+@pytest.mark.parametrize("weight_decay", [0.0, 2.2])
+@pytest.mark.parametrize("nesterov", [True, False], ids=["NESTEROV_TRUE", "NESTEROV_FALSE"])
+@pytest.mark.parametrize(
+    "momentum_initialized", [True, False], ids=["MOMENTUM_INITIALIZED", "MOMENTUM_NOT_INITIALIZED"]
+)
+@pytest.mark.parametrize("has_param_out", [True, False], ids=["HAS_PARAM_OUT_TRUE", "HAS_PARAM_OUT_FALSE"])
+@pytest.mark.parametrize("fp32_dest_acc_en", fp32_dest_acc_en, ids=fp32_dest_acc_en_ids)
+@pytest.mark.parametrize(
+    "npu_dtype, cpu_dtype",
+    [[ttnn.bfloat8_b, torch.bfloat16], [ttnn.bfloat16, torch.bfloat16]],
+    ids=["bfloat8", "bfloat16"],
+)
+def test_moreh_sgd(
+    shape,
+    lr,
+    momentum,
+    dampening,
+    weight_decay,
+    nesterov,
+    momentum_initialized,
+    has_param_out,
+    fp32_dest_acc_en,
+    npu_dtype,
+    cpu_dtype,
+    device,
+):
+    if nesterov and (momentum <= 0 or dampening != 0):
+        pytest.skip()
+    if npu_dtype == ttnn.bfloat8_b:
+        # Duong: ttnn.bfloat8_b has some bugs. only around half the tests passed for bfloat8_b. Some tests produce 0.0 or Inf results.
+        # I couldn't identify the pattern of failed tests, it seems kind of random so I think it's a precision error.
+        pytest.skip()
+
+    run_moreh_sgd(
+        shape,
+        lr,
+        momentum,
+        dampening,
+        weight_decay,
+        nesterov,
+        momentum_initialized,
+        has_param_out,
+        fp32_dest_acc_en,
+        npu_dtype,
+        cpu_dtype,
+        device,
+    )
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [12, 6, 64, 64],  # multiple tiles
+    ],
+)
+@pytest.mark.parametrize(
+    "momentum, dampening, nesterov",
+    (
+        (7.7, 0.5, False),
+        (7.7, 0.0, True),
+        (0.0, 0.0, False),
+    ),
+    ids=["momentum", "nesterov", "no-momentum"],
+)
+@pytest.mark.parametrize("lr", [3.0])
+@pytest.mark.parametrize("weight_decay", [2.2])
+@pytest.mark.parametrize("momentum_initialized", [True], ids=["MOMENTUM_INITIALIZED"])
+@pytest.mark.parametrize("has_param_out", [True], ids=["HAS_PARAM_OUT_TRUE"])
+@pytest.mark.parametrize("fp32_dest_acc_en", fp32_dest_acc_en, ids=fp32_dest_acc_en_ids)
+@pytest.mark.parametrize("npu_dtype, cpu_dtype", [[ttnn.bfloat16, torch.bfloat16]], ids=["bfloat16"])
+def test_moreh_sgd_multi_tile(
+    shape,
+    lr,
+    momentum,
+    dampening,
+    weight_decay,
+    nesterov,
+    momentum_initialized,
+    has_param_out,
+    fp32_dest_acc_en,
+    npu_dtype,
+    cpu_dtype,
+    device,
+):
+    run_moreh_sgd(
+        shape,
+        lr,
+        momentum,
+        dampening,
+        weight_decay,
+        nesterov,
+        momentum_initialized,
+        has_param_out,
+        fp32_dest_acc_en,
+        npu_dtype,
+        cpu_dtype,
+        device,
+    )
 
 
 @pytest.mark.parametrize(

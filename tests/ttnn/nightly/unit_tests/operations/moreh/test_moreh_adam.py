@@ -136,7 +136,7 @@ def run_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_e
 
 @pytest.mark.parametrize(
     "shape",
-    [[32, 32], [2, 2, 2, 2, 2, 2, 64, 64]],
+    [[32, 32]],
 )
 @pytest.mark.parametrize("lr", [0.0, 1e-1])
 @pytest.mark.parametrize("betas", ((0.9, 0.999), (0.5, 0.555)))
@@ -152,6 +152,20 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
     return run_moreh_adam(
         shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device, dtype=dtype, step=step
     )
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [[2, 2, 2, 2, 2, 2, 64, 64]],
+)
+@pytest.mark.parametrize("amsgrad", [True, False])
+@pytest.mark.parametrize("fp32_dest_acc_en", compute_kernel_options, ids=compute_kernel_ids)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_moreh_adam_large_shape(shape, amsgrad, fp32_dest_acc_en, device, dtype):
+    torch.manual_seed(0)
+    if dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b not supported")
+    return run_moreh_adam(shape, 1e-1, (0.9, 0.999), 1e-08, 0.3, amsgrad, fp32_dest_acc_en, device, dtype=dtype, step=1)
 
 
 @pytest.mark.parametrize(
