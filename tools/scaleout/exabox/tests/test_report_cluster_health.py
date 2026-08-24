@@ -7,12 +7,14 @@
 
 from __future__ import annotations
 
+import argparse
 import io
 import json
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -26,7 +28,12 @@ import fixtures  # noqa: E402
 from cluster_health_schema import loads_and_validate, validate_record  # noqa: E402
 from report_adapters import status_for  # noqa: E402
 from analyze_host_health_results import main as analyze_main  # noqa: E402
+from report_backfill import Leftover  # noqa: E402
 from report_cluster_health import (  # noqa: E402
+    RecordRequest,
+    _read_optional,
+    build_record,
+    leftover_namespace,
     main,
     parse_gsd_hostnames,
     parse_rank_bindings_yaml,
@@ -37,6 +44,8 @@ REPORT_SOURCE = EXABOX_DIR / "report_cluster_health.py"
 ADAPTER_SOURCE = EXABOX_DIR / "report_adapters.py"
 BACKFILL_SOURCE = EXABOX_DIR / "report_backfill.py"
 ANALYZE_HOST_SOURCE = EXABOX_DIR / "analyze_host_health_results.py"
+SCHEMA_SOURCE = EXABOX_DIR / "cluster_health_schema.py"
+README_SOURCE = EXABOX_DIR / "README.md"
 
 HOSTS = "bh-glx-110-c01u02,bh-glx-110-c01u08"
 TS = "2026-08-19T03:12:00Z"
@@ -224,6 +233,51 @@ class TestPortableTopology(unittest.TestCase):
         self.assertEqual(parse_rankfile(fixtures.RANKFILE_TWO_HOST)[0], "bh-glx-110-c01u02")
         parsed = parse_rank_bindings_yaml(fixtures.RANK_BINDINGS_TWO_HOST)
         self.assertEqual(parsed[1]["mesh_host_rank"], 1)
+
+    def test_bindings_without_mesh_host_rank(self):
+        rc, out, err = _run(
+            _base_argv(
+                "--rankfile",
+                self._descriptor("rankfile.txt", fixtures.RANKFILE_TWO_HOST),
+                "--rank-bindings",
+                self._descriptor("rank_bindings.yaml", fixtures.RANK_BINDINGS_NO_HOST_RANK),
+            )
+        )
+        self.assertEqual(rc, 0, err)
+        record = json.loads(out.strip())
+        bindings = record["topology"]["rank_bindings"]
+        self.assertEqual(len(bindings), 2)
+        self.assertNotIn("mesh_host_rank", bindings[0])
+        self.assertEqual(bindings[1]["mesh_id"], 1)
+        self.assertEqual(bindings[1]["host"], "bh-glx-110-c01u08")
+        validate_record(record, file_written=False)
+
+    def test_nested_block_skipped(self):
+        yaml = """\
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    mesh_host_rank: 0
+    extra_nested:
+      deep_key: ignored
+      nested:
+        deeper: also_ignored
+    host: h1
+  - rank: 1
+    mesh_id: 1
+    extra_nested:
+      deep_key: ignored
+    host: h2
+"""
+        result = parse_rank_bindings_yaml(yaml)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(
+            result[0],
+            {"rank": 0, "mesh_id": 0, "mesh_host_rank": 0, "host": "h1"},
+        )
+        self.assertEqual(result[1], {"rank": 1, "mesh_id": 1, "host": "h2"})
+        self.assertNotIn("extra_nested", result[0])
+        self.assertNotIn("deep_key", result[0])
 
     def test_fsd_physical(self):
         rc, out, err = _run(
@@ -440,9 +494,67 @@ class TestAnalyzeHostHealthCli(unittest.TestCase):
         self.assertIn("dry-run", stderr.getvalue())
 
 
+class TestRecordRequest(unittest.TestCase):
+    def test_leftover_namespace_builds_record_request(self):
+        leftover = Leftover(
+            test_type="physical",
+            hosts=HOSTS,
+            analyzer_code=1,
+            artifact_dir=fixtures.ARTIFACT_DIR,
+            ts=TS,
+            mtime=datetime.now(timezone.utc),
+            source=Path("unused.log"),
+        )
+        args = argparse.Namespace(
+            cabling=None,
+            deployment=None,
+            fsd=None,
+            gsd=None,
+            rankfile=None,
+            rank_bindings=None,
+            source=None,
+            triggered_by="operator",
+            trigger_kind=None,
+            orchestrator_id=None,
+            cluster="exabox",
+            label=["quad=110-C-Q1"],
+        )
+        request = leftover_namespace(leftover, args)
+        self.assertIsInstance(request, RecordRequest)
+        self.assertEqual(request.source, "backfill")
+        self.assertEqual(request.trigger_kind, "backfill")
+        request.label = ["superpod=SC36_3"]
+        record = build_record(request)
+        self.assertEqual(record["cluster"], "exabox")
+        self.assertEqual(record["labels"]["superpod"], "SC36_3")
+        self.assertNotIn("quad", record["labels"])
+
+
+class TestReadOptional(unittest.TestCase):
+    def test_missing_path_returns_none(self):
+        self.assertIsNone(_read_optional(None))
+        self.assertIsNone(_read_optional(""))
+
+    def test_warns_on_unexpected_exception(self):
+        stderr = io.StringIO()
+        with patch(
+            "report_cluster_health.read_descriptor_text",
+            side_effect=RuntimeError("boom"),
+        ), redirect_stderr(stderr):
+            self.assertIsNone(_read_optional("/tmp/descriptor.textproto"))
+        self.assertIn("could not read /tmp/descriptor.textproto: boom", stderr.getvalue())
+
+
 class TestNoSiteCoupling(unittest.TestCase):
     def test_report_modules_omit_forbidden_strings(self):
-        for path in (REPORT_SOURCE, ADAPTER_SOURCE, BACKFILL_SOURCE, ANALYZE_HOST_SOURCE):
+        for path in (
+            REPORT_SOURCE,
+            ADAPTER_SOURCE,
+            BACKFILL_SOURCE,
+            ANALYZE_HOST_SOURCE,
+            SCHEMA_SOURCE,
+            README_SOURCE,
+        ):
             text = path.read_text(encoding="utf-8")
             lowered = text.lower()
             self.assertNotIn("topology.yaml", text)

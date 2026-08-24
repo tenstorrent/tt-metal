@@ -95,11 +95,14 @@ CLUSTER_HEALTH_JSON_SCHEMA: dict[str, Any] = {
                     "items": {
                         "type": "object",
                         "additionalProperties": False,
-                        "required": ["rank", "mesh_id", "mesh_host_rank"],
+                        "required": ["rank", "mesh_id"],
                         "properties": {
                             "rank": {"type": "integer"},
                             "mesh_id": {"type": "integer"},
-                            "mesh_host_rank": {"type": "integer"},
+                            "mesh_host_rank": {
+                                "type": "integer",
+                                "description": "Optional, matching tt-run: single-host meshes omit it.",
+                            },
                             "host": {"type": "string"},
                         },
                     },
@@ -200,11 +203,13 @@ def _validate_rank_binding(item: Any, path: str) -> None:
     extra = set(obj) - RANK_BINDING_KEYS
     if extra:
         _fail(path, f"unknown keys: {sorted(extra)}")
-    for key in ("rank", "mesh_id", "mesh_host_rank"):
+    for key in ("rank", "mesh_id"):
         if key not in obj:
             _fail(path, f"missing {key}")
         if not _is_int(obj[key]):
             _fail(f"{path}.{key}", "must be an integer")
+    if "mesh_host_rank" in obj and not _is_int(obj["mesh_host_rank"]):
+        _fail(f"{path}.mesh_host_rank", "must be an integer")
     if "host" in obj:
         _require_str(obj["host"], f"{path}.host", allow_empty=True)
 
@@ -253,9 +258,9 @@ def validate_record(record: Any, *, file_written: bool = False) -> None:
     if "scope" in obj:
         _fail("scope", "forbidden")
 
-    for field in REQUIRED_FIELDS:
-        if field not in obj:
-            _fail(field, "required")
+    for fname in REQUIRED_FIELDS:
+        if fname not in obj:
+            _fail(fname, "required")
 
     if obj["schema"] != SCHEMA_ID:
         _fail("schema", f"must be {SCHEMA_ID!r}")
@@ -279,9 +284,9 @@ def validate_record(record: Any, *, file_written: bool = False) -> None:
     if "topology" in obj:
         _validate_topology(obj["topology"])
 
-    for field in OPTIONAL_STRING_FIELDS:
-        if field in obj:
-            _require_str(obj[field], field)
+    for fname in OPTIONAL_STRING_FIELDS:
+        if fname in obj:
+            _require_str(obj[fname], fname)
 
     if "duration_s" in obj:
         duration = obj["duration_s"]

@@ -35,7 +35,6 @@ _WRAPPER_HEADER = re.compile(
     re.MULTILINE,
 )
 # Last terminal recover event wins. Do not treat "Recovery completed at …" as success.
-# Last terminal recover event wins. Do not treat "Recovery completed at …" as success.
 # Host-prefixed wrapper lines: "[host][ts] Recovery attempt 1 of 1 failed (exit code 1)."
 _RECOVERY_EVENT = re.compile(
     r"Recovery succeeded on attempt"
@@ -134,33 +133,33 @@ def _last_match_in_windows(path: Path, pattern: re.Pattern[str]) -> re.Match[str
     return None
 
 
+_WRAPPER_SENTINEL_KEYS = ("analysis_exit_code", "return_code", "output_dir", "checked_at")
+
+
 def extract_trailing_json(text: str) -> dict[str, Any] | None:
-    """Return the last JSON object in text, if it looks like a wrapper summary."""
+    """Return the last JSON object in text, if it looks like a wrapper summary.
+
+    Walk candidate ``{`` … last-``}`` spans through ``json.loads`` so braces
+    inside strings do not throw off a manual depth count.
+    """
     end = text.rfind("}")
     if end < 0:
         return None
-    start = end
-    depth = 0
-    for i in range(end, -1, -1):
-        ch = text[i]
-        if ch == "}":
-            depth += 1
-        elif ch == "{":
-            depth -= 1
-            if depth == 0:
-                start = i
-                break
-    else:
-        return None
-    try:
-        obj = json.loads(text[start : end + 1])
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(obj, dict):
-        return None
-    if any(k in obj for k in ("analysis_exit_code", "return_code", "output_dir", "checked_at")):
-        return obj
-    return None
+    found: dict[str, Any] | None = None
+    search_from = 0
+    while search_from <= end:
+        start = text.find("{", search_from, end)
+        if start < 0:
+            break
+        try:
+            obj = json.loads(text[start : end + 1])
+        except json.JSONDecodeError:
+            search_from = start + 1
+            continue
+        if isinstance(obj, dict) and any(k in obj for k in _WRAPPER_SENTINEL_KEYS):
+            found = obj
+        search_from = start + 1
+    return found
 
 
 def load_sidecar_json(log_path: Path) -> dict[str, Any] | None:

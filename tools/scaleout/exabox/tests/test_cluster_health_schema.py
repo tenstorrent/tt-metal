@@ -55,6 +55,11 @@ class TestValidFixtures(unittest.TestCase):
         self.assertNotIn("analyzer_code", record)
         validate_record(record, file_written=False)
 
+    def test_rank_binding_without_mesh_host_rank(self):
+        record = json.loads(fixtures.LAPTOP_DRY_RUN)
+        record["topology"] = {"rank_bindings": [{"rank": 0, "mesh_id": 0}]}
+        validate_record(record, file_written=False)
+
     def test_host_from_diag(self):
         record = json.loads(fixtures.HOST_FROM_DIAG)
         validate_record(record, file_written=False)
@@ -121,6 +126,18 @@ class TestRejects(unittest.TestCase):
         record["record_uri"] = "cluster-health/abc.json"
         with self.assertRaisesRegex(ValueError, r"^record_uri:"):
             validate_record(record, file_written=True)
+
+    def test_rank_binding_missing_mesh_id(self):
+        record = self._dry_run()
+        record["topology"] = {"rank_bindings": [{"rank": 0}]}
+        with self.assertRaisesRegex(ValueError, r"missing mesh_id"):
+            validate_record(record)
+
+    def test_rank_binding_non_integer_mesh_host_rank(self):
+        record = self._dry_run()
+        record["topology"] = {"rank_bindings": [{"rank": 0, "mesh_id": 0, "mesh_host_rank": "1"}]}
+        with self.assertRaisesRegex(ValueError, r"mesh_host_rank:"):
+            validate_record(record)
 
     def test_site_alias_keys_rejected_in_topology(self):
         record = self._dry_run()

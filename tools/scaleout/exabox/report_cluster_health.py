@@ -18,6 +18,7 @@ import json
 import os
 import re
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -27,9 +28,9 @@ from report_adapters import status_for
 from report_backfill import Leftover, discover_leftovers, filter_leftovers, leftover_key, parse_window_date
 from analyze_host_health_results import parse_diag_report
 from resolve_host_ring_order import (
-    _resolve_leaf_host_ids,
-    _safe_read_text,
     parse_textproto,
+    read_descriptor_text,
+    resolve_leaf_host_ids,
 )
 
 STORE_ROOT_ENV = "CLUSTER_HEALTH_STORE_ROOT"
@@ -146,11 +147,16 @@ def _warn(message: str) -> None:
 
 
 def _read_optional(path: str | None) -> str | None:
+    """Return file text, or None after warning if the path is missing or unreadable.
+
+    Catches Exception so optional descriptor I/O cannot fail the report if
+    read_descriptor_text changes which error types it raises.
+    """
     if not path:
         return None
     try:
-        return _safe_read_text(path)
-    except (OSError, ValueError) as exc:
+        return read_descriptor_text(path)
+    except Exception as exc:
         _warn(f"could not read {path}: {exc}")
         return None
 
@@ -165,7 +171,7 @@ def topology_from_cabling_deployment(
     root = cabling.get("root_instance", {})
     if not isinstance(root, dict):
         root = {}
-    path_to_hid = _resolve_leaf_host_ids(root, {})
+    path_to_hid = resolve_leaf_host_ids(root, {})
 
     dep_hosts = [h for h in _as_list(deployment.get("hosts")) if isinstance(h, dict)]
     hid_to_name: dict[int, str] = {}
@@ -299,7 +305,10 @@ def parse_rank_bindings_yaml(text: str) -> list[dict[str, Any]]:
 
 def _assign_rank_field(current: dict[str, Any], key: str, value: str) -> None:
     if key in ("rank", "mesh_id", "mesh_host_rank"):
-        current[key] = int(value)
+        text = value.strip().strip("'\"")
+        # An absent or null mesh_host_rank is legal in tt-run bindings; leave the key unset.
+        if text.lstrip("-").isdigit():
+            current[key] = int(text)
     elif key == "host" and value:
         current["host"] = value
 
@@ -314,13 +323,14 @@ def topology_from_rank(
     hosts_by_rank = parse_rankfile(rankfile_text) if rankfile_text else {}
     out: list[dict[str, Any]] = []
     for item in bindings:
-        if not all(k in item for k in ("rank", "mesh_id", "mesh_host_rank")):
+        if not all(k in item for k in ("rank", "mesh_id")):
             continue
-        entry = {
+        entry: dict[str, Any] = {
             "rank": item["rank"],
             "mesh_id": item["mesh_id"],
-            "mesh_host_rank": item["mesh_host_rank"],
         }
+        if "mesh_host_rank" in item:
+            entry["mesh_host_rank"] = item["mesh_host_rank"]
         host = item.get("host") or hosts_by_rank.get(item["rank"])
         if host:
             entry["host"] = host
@@ -389,13 +399,81 @@ def build_topology(
     return merge_topology(parts)
 
 
-def build_record(args: argparse.Namespace) -> dict[str, Any]:
+@dataclass
+class RecordRequest:
+    """Inputs consumed by ``build_record``.
+
+    CLI, leftover backfill, and ``--from-diag-report`` must construct this type
+    (see ``record_request_from_cli`` / ``leftover_namespace``). A new field
+    without a default fails at construction instead of as a backfill-only
+    ``AttributeError``.
+    """
+
+    test_type: str
+    hosts: str
+    analyzer_code: int | None
+    artifact_dir: str
+    cabling: str | None
+    deployment: str | None
+    fsd: str | None
+    gsd: str | None
+    rankfile: str | None
+    rank_bindings: str | None
+    source: str | None
+    triggered_by: str | None
+    trigger_kind: str | None
+    orchestrator_id: str | None
+    cluster: str | None
+    label: list[str]
+    duration_s: float | None
+    ts: str | None
+    incomplete: bool = False
+    incomplete_reason: str = ""
+
+
+def _cli_overlay(args: argparse.Namespace) -> dict[str, Any]:
+    """CLI fields shared by live, leftover, and diag-report record requests.
+
+    Keys must match ``RecordRequest`` overlay attributes. Adding a field here
+    without the matching dataclass field (or the reverse) raises TypeError.
+    """
+    return {
+        "cabling": args.cabling,
+        "deployment": args.deployment,
+        "fsd": args.fsd,
+        "gsd": args.gsd,
+        "rankfile": args.rankfile,
+        "rank_bindings": args.rank_bindings,
+        "source": args.source,
+        "triggered_by": args.triggered_by,
+        "trigger_kind": args.trigger_kind,
+        "orchestrator_id": args.orchestrator_id,
+        "cluster": args.cluster,
+        "label": list(args.label or []),
+    }
+
+
+def record_request_from_cli(args: argparse.Namespace) -> RecordRequest:
+    return RecordRequest(
+        test_type=args.test_type,
+        hosts=args.hosts,
+        analyzer_code=args.analyzer_code,
+        artifact_dir=args.artifact_dir,
+        duration_s=args.duration_s,
+        ts=args.ts,
+        incomplete=bool(getattr(args, "incomplete", False)),
+        incomplete_reason=getattr(args, "incomplete_reason", "") or "",
+        **_cli_overlay(args),
+    )
+
+
+def build_record(args: RecordRequest) -> dict[str, Any]:
     hosts = parse_hosts(args.hosts)
     if not hosts:
         raise ValueError("hosts: must be a non-empty array")
 
     analyzer_code: int | None = args.analyzer_code
-    incomplete = bool(getattr(args, "incomplete", False))
+    incomplete = bool(args.incomplete)
     if incomplete:
         status = "degraded"
     else:
@@ -438,17 +516,40 @@ def build_record(args: argparse.Namespace) -> dict[str, Any]:
     labels = parse_labels(args.label)
     if incomplete:
         labels["incomplete"] = "true"
-        labels["incomplete_reason"] = getattr(args, "incomplete_reason", "") or "missing_terminal_outcome"
+        labels["incomplete_reason"] = args.incomplete_reason or "missing_terminal_outcome"
     if labels:
         record["labels"] = labels
 
     return record
 
 
+def _payload_matches(existing: bytes, payload_bytes: bytes) -> bool:
+    try:
+        return json.loads(existing) == json.loads(payload_bytes)
+    except json.JSONDecodeError:
+        return existing == payload_bytes
+
+
+def _existing_or_conflict(
+    dest: Path,
+    payload_bytes: bytes,
+    record: dict[str, Any],
+    published: dict[str, Any],
+) -> dict[str, Any]:
+    existing = dest.read_bytes()
+    if _payload_matches(existing, payload_bytes):
+        return published
+    _warn(f"refusing to overwrite different content at {dest}")
+    return record
+
+
 def publish_record(record: dict[str, Any], store_root: str) -> dict[str, Any]:
     """Atomically write one file under store_root. Returns the record to print.
 
-    On I/O failure, warns and returns the stdout-only record (no record_id).
+    Uses an exclusive link (no-clobber). If dest already exists, identical
+    content is treated as success; different content is left in place and the
+    stdout-only record is returned. On I/O failure, warns and returns the
+    stdout-only record (no record_id).
     """
     record_id = compute_record_id(
         record["test_type"],
@@ -470,22 +571,17 @@ def publish_record(record: dict[str, Any], store_root: str) -> dict[str, Any]:
         payload_bytes = payload.encode("utf-8")
         dest_dir.mkdir(parents=True, exist_ok=True)
         if dest.exists():
-            existing = dest.read_bytes()
-            try:
-                same = json.loads(existing) == json.loads(payload_bytes)
-            except json.JSONDecodeError:
-                same = existing == payload_bytes
-            if same:
-                return published
-            _warn(f"refusing to overwrite different content at {dest}")
-            return record
+            return _existing_or_conflict(dest, payload_bytes, record, published)
         tmp = dest_dir / f".{record_id}.{os.getpid()}.tmp"
         try:
             with open(tmp, "wb") as handle:
                 handle.write(payload_bytes)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(tmp, dest)
+            try:
+                os.link(tmp, dest)
+            except FileExistsError:
+                return _existing_or_conflict(dest, payload_bytes, record, published)
         finally:
             if tmp.exists():
                 try:
@@ -523,31 +619,24 @@ def emit_record(record: dict[str, Any], store_root: str | None) -> dict[str, Any
     return record
 
 
-def leftover_namespace(leftover: Leftover, args: argparse.Namespace) -> argparse.Namespace:
-    labels = list(args.label or [])
+def leftover_namespace(leftover: Leftover, args: argparse.Namespace) -> RecordRequest:
+    overlay = _cli_overlay(args)
+    labels = list(overlay["label"])
     for key, value in leftover.labels.items():
         labels.append(f"{key}={value}")
-    return argparse.Namespace(
+    overlay["label"] = labels
+    overlay["source"] = args.source or "backfill"
+    overlay["trigger_kind"] = args.trigger_kind or "backfill"
+    return RecordRequest(
         test_type=leftover.test_type,
         hosts=leftover.hosts,
         analyzer_code=leftover.analyzer_code,
         artifact_dir=leftover.artifact_dir,
-        cabling=args.cabling,
-        deployment=args.deployment,
-        fsd=args.fsd,
-        gsd=args.gsd,
-        rankfile=args.rankfile,
-        rank_bindings=args.rank_bindings,
-        source=args.source or "backfill",
-        triggered_by=args.triggered_by,
-        trigger_kind=args.trigger_kind or "backfill",
-        orchestrator_id=args.orchestrator_id,
-        cluster=args.cluster,
-        label=labels,
         duration_s=leftover.duration_s,
         ts=leftover.ts,
         incomplete=leftover.incomplete,
         incomplete_reason=leftover.incomplete_reason,
+        **overlay,
     )
 
 
@@ -629,33 +718,24 @@ def run_from_diag_report(args: argparse.Namespace) -> int:
     if not ts:
         ts = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     duration_s = args.duration_s if args.duration_s is not None else extract.duration_s
-    labels = list(args.label or [])
+    overlay = _cli_overlay(args)
+    labels = list(overlay["label"])
     for key, value in extract.labels.items():
         labels.append(f"{key}={value}")
-    ns = argparse.Namespace(
+    overlay["label"] = labels
+    request = RecordRequest(
         test_type="host",
         hosts=extract.hosts,
         analyzer_code=extract.analyzer_code,
         artifact_dir=extract.artifact_dir,
-        cabling=args.cabling,
-        deployment=args.deployment,
-        fsd=args.fsd,
-        gsd=args.gsd,
-        rankfile=args.rankfile,
-        rank_bindings=args.rank_bindings,
-        source=args.source,
-        triggered_by=args.triggered_by,
-        trigger_kind=args.trigger_kind,
-        orchestrator_id=args.orchestrator_id,
-        cluster=args.cluster,
-        label=labels,
         duration_s=duration_s,
         ts=ts,
         incomplete=extract.incomplete,
         incomplete_reason=extract.incomplete_reason,
+        **overlay,
     )
     try:
-        record = build_record(ns)
+        record = build_record(request)
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -730,7 +810,7 @@ def main(argv: list[str] | None = None) -> int:
             "(or pass --from-artifact-dir / --from-diag-report)"
         )
     try:
-        record = build_record(args)
+        record = build_record(record_request_from_cli(args))
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

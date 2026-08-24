@@ -100,6 +100,17 @@ rank_bindings:
     mesh_host_rank: 1
 """
 
+# Shape of the checked-in Exabox bindings: mesh_host_rank is optional in tt-run.
+RANK_BINDINGS_NO_HOST_RANK = """\
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+  - rank: 1
+    mesh_id: 1
+
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_exabox_1x32_mesh_graph_descriptor.textproto"
+"""
+
 DIAG_REPORT_PASS = """\
 {
   "tool_version": "0.3.0-draft",

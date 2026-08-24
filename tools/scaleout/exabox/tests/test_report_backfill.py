@@ -28,7 +28,9 @@ import fixtures  # noqa: E402
 from cluster_health_schema import SCHEMA_ID, loads_and_validate, validate_record  # noqa: E402
 from report_backfill import (  # noqa: E402
     discover_leftovers,
+    extract_trailing_json,
     leftover_from_log,
+    parse_compact_ts,
     parse_recover_code_from_text,
 )
 from report_cluster_health import main  # noqa: E402
@@ -53,12 +55,8 @@ def _backfill_argv(tree: Path, *extra: str) -> list[str]:
     ]
 
 
-def _publish_worker(exabox_dir: str, store_root: str, hosts: str, ts: str, artifact: str) -> str:
-    if exabox_dir not in sys.path:
-        sys.path.insert(0, exabox_dir)
-    from report_cluster_health import publish_record as publish
-
-    record = {
+def _base_publish_record(hosts: str, ts: str, artifact: str) -> dict:
+    return {
         "schema": SCHEMA_ID,
         "ts": ts,
         "test_type": "physical",
@@ -67,8 +65,77 @@ def _publish_worker(exabox_dir: str, store_root: str, hosts: str, ts: str, artif
         "analyzer_code": 0,
         "artifact_uri": artifact,
     }
-    published = publish(record, store_root)
+
+
+def _publish_worker(exabox_dir: str, store_root: str, hosts: str, ts: str, artifact: str) -> str:
+    if exabox_dir not in sys.path:
+        sys.path.insert(0, exabox_dir)
+    from report_cluster_health import publish_record as publish
+
+    published = publish(_base_publish_record(hosts, ts, artifact), store_root)
     return published["record_uri"]
+
+
+def _publish_labeled_worker(
+    exabox_dir: str,
+    store_root: str,
+    hosts: str,
+    ts: str,
+    artifact: str,
+    label: str,
+) -> dict:
+    if exabox_dir not in sys.path:
+        sys.path.insert(0, exabox_dir)
+    from report_cluster_health import publish_record as publish
+
+    record = _base_publish_record(hosts, ts, artifact)
+    record["labels"] = {"quad": label}
+    published = publish(record, store_root)
+    return {
+        "has_record_id": "record_id" in published,
+        "quad": published.get("labels", {}).get("quad"),
+        "record_uri": published.get("record_uri"),
+    }
+
+
+class TestExtractTrailingJson(unittest.TestCase):
+    def test_nested_object_at_end(self):
+        text = 'noise {"outer": {"inner": 1}} trailing'
+        obj = extract_trailing_json(text)
+        self.assertIsNone(obj)
+
+    def test_valid_sentinel_key(self):
+        text = 'ignored {"analysis_exit_code": 0, "output_dir": "/tmp"}'
+        obj = extract_trailing_json(text)
+        self.assertEqual(obj["analysis_exit_code"], 0)
+
+    def test_unbalanced_braces_returns_none(self):
+        self.assertIsNone(extract_trailing_json('{"foo": 1'))
+
+    def test_json_ending_with_string_returns_none(self):
+        self.assertIsNone(extract_trailing_json('{"analysis_exit_code": 0, "output_dir": "/tmp"'))
+
+    def test_nested_object_with_sentinel_parses_outer(self):
+        text = 'log {"analysis_exit_code": 2, "nested": {"inner": 1}}'
+        obj = extract_trailing_json(text)
+        self.assertEqual(obj["analysis_exit_code"], 2)
+        self.assertEqual(obj["nested"], {"inner": 1})
+
+    def test_braces_inside_string_values(self):
+        text = 'prefix {"analysis_exit_code": 0, "output_dir": "/tmp/}weird{"}'
+        obj = extract_trailing_json(text)
+        self.assertEqual(obj["output_dir"], "/tmp/}weird{")
+
+
+class TestParseCompactTs(unittest.TestCase):
+    def test_compact_yyyymmdd(self):
+        self.assertEqual(parse_compact_ts("20240115T143000Z"), "2024-01-15T14:30:00Z")
+
+    def test_rfc3339_passthrough(self):
+        self.assertEqual(parse_compact_ts("2024-01-15T14:30:00Z"), "2024-01-15T14:30:00Z")
+
+    def test_no_ts_token_returns_none(self):
+        self.assertIsNone(parse_compact_ts("not-a-date"))
 
 
 class TestBackfillDiscover(unittest.TestCase):
@@ -204,6 +271,26 @@ class TestConcurrentStore(unittest.TestCase):
                 self.assertTrue(path.is_file())
                 on_disk = json.loads(path.read_text(encoding="utf-8"))
                 validate_record(on_disk, file_written=True)
+            self.assertEqual(list(Path(tmp).rglob("*.tmp")), [])
+
+    def test_same_record_id_different_content_no_clobber(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = multiprocessing.get_context("spawn")
+            shared = (str(EXABOX_DIR), tmp, "bh-glx-110-c01u02", "2026-08-19T03:12:00Z", "/tmp/a")
+            jobs = [(*shared, "first"), (*shared, "second")]
+            with ctx.Pool(2) as pool:
+                results = pool.starmap(_publish_labeled_worker, jobs)
+            winners = [item for item in results if item["has_record_id"]]
+            losers = [item for item in results if not item["has_record_id"]]
+            self.assertEqual(len(winners), 1, results)
+            self.assertEqual(len(losers), 1, results)
+            files = list(Path(tmp).rglob("*.json"))
+            self.assertEqual(len(files), 1)
+            on_disk = json.loads(files[0].read_text(encoding="utf-8"))
+            validate_record(on_disk, file_written=True)
+            self.assertEqual(on_disk["labels"]["quad"], winners[0]["quad"])
+            self.assertEqual(Path(winners[0]["record_uri"]).resolve(), files[0].resolve())
+            self.assertNotEqual(winners[0]["quad"], losers[0]["quad"])
             self.assertEqual(list(Path(tmp).rglob("*.tmp")), [])
 
 
