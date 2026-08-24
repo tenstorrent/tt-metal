@@ -119,7 +119,7 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < num_blocks; ++b) {
         // Column x owns its own input block, the same index its result goes to.
-        u::ComputeBlock a = u::noc_load<1>(in0_storage, in0, b * u::kCoreGridW + this_core.x).wait();
+        u::ComputeBlock a = u::noc_load<0>(in0_storage, in0, b * u::kCoreGridW + this_core.x).wait();
 
         u::Block per_core_sum = tmp0_storage.store(RT_REDUCE(a));
 
@@ -127,7 +127,7 @@ void kernel_main() {
         // Stage 1 only -- no gather, no second fold. This is the shape that
         // isolates the reduction itself, and the only one max and mean are correct
         // in; see RT_REDUCE above.
-        u::noc_store<0>(std::move(per_core_sum), out, b * u::kCoreGridW + this_core.x);
+        u::noc_store<1>(std::move(per_core_sum), out, b * u::kCoreGridW + this_core.x);
     }
 }
 #else
@@ -146,7 +146,7 @@ void kernel_main() {
             // results, so column x's Reduced::num_pages tiles land contiguously
             // at b * kCoreGridW + x. The width comes from the harness's core-grid
             // define, so it costs no compile-time arg.
-            u::noc_store<0>(std::move(result), out, b * u::kCoreGridW + this_core.x);
+            u::noc_store<1>(std::move(result), out, b * u::kCoreGridW + this_core.x);
         }
     }
 }

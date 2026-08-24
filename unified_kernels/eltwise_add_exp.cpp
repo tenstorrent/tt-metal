@@ -67,21 +67,21 @@ void kernel_main() {
         // on all five projections, so it doubles as the check that the compute
         // projection can see the data-movement intrinsics.
         u::ComputeBlock a =
-            u::noc_load<1>(in0_storage, [&](u::L1Pages pages) {
+            u::noc_load<0>(in0_storage, [&](u::L1Pages pages) {
                 for (uint32_t p = 0; p < pages.count; ++p) {
                     noc_async_read(in0.get_noc_addr(b * tiles_per_block + p), pages.addr(p), pages.page_bytes);
                 }
             }).wait();
         u::ComputeBlock c =
-            u::noc_load<1>(in1_storage, [&](u::L1Pages pages) {
+            u::noc_load<0>(in1_storage, [&](u::L1Pages pages) {
                 for (uint32_t p = 0; p < pages.count; ++p) {
                     noc_async_read(in1.get_noc_addr(b * tiles_per_block + p), pages.addr(p), pages.page_bytes);
                 }
             }).wait();
 #else
         // Reader (DM thread 1) fills these; compute waits on them.
-        u::ComputeBlock a = u::noc_load<1>(in0_storage, in0, b).wait();
-        u::ComputeBlock c = u::noc_load<1>(in1_storage, in1, b).wait();
+        u::ComputeBlock a = u::noc_load<0>(in0_storage, in0, b).wait();
+        u::ComputeBlock c = u::noc_load<0>(in1_storage, in1, b).wait();
 #endif
 
         // Compute evaluates the expression; the allocator picks DST slots.
@@ -89,6 +89,6 @@ void kernel_main() {
         u::Block result = out_storage.store(u::exp_(a + c));
 
         // Writer (DM thread 0) drains it.
-        u::noc_store<0>(std::move(result), out, b);
+        u::noc_store<1>(std::move(result), out, b);
     }
 }

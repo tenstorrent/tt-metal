@@ -73,9 +73,9 @@ void kernel_main() {
     const auto out = TensorAccessor(out_args, out_addr);
 
     for (uint32_t b = 0; b < num_blocks; ++b) {
-        u::ComputeBlock a = u::noc_load<1>(in0_storage, in0, b).wait();
-        u::ComputeBlock c = u::noc_load<1>(in1_storage, in1, b).wait();
+        u::ComputeBlock a = u::noc_load<0>(in0_storage, in0, b).wait();
+        u::ComputeBlock c = u::noc_load<0>(in1_storage, in1, b).wait();
         u::Block result = out_storage.store(BN_APPLY(a, c));
-        u::noc_store<0>(std::move(result), out, b);
+        u::noc_store<1>(std::move(result), out, b);
     }
 }
