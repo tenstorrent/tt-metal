@@ -31,6 +31,18 @@
 #include "llk_defs.h"
 #include "params.h"
 
+// TOPK_XL_IMPL selects the math-thread SFPU body (lane GK, 2026-08-24):
+//   0 = production hand kernel (byte-untouched comparator)
+//   1 = X6 semantic arm: the SAME kernel with the three Dst face-transpose
+//       helpers re-spelled on the typed sfpi_crosslane.h X6 surface
+//       (helpers/include/topk_xl_x6/ckernel_sfpu_topk_xl_x6.h — a vendored
+//       sibling whose only delta is those three helpers).  UNPACK and PACK
+//       threads are impl-independent (the PACK-side remove_msb path has no
+//       transposes and always uses the production header).
+#ifndef TOPK_XL_IMPL
+#define TOPK_XL_IMPL 0
+#endif
+
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
@@ -169,7 +181,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#if TOPK_XL_IMPL == 1
+// X6 semantic arm: vendored sibling, sole delta = the three face-transpose
+// helpers on the typed sfpi_crosslane.h X6 surface.
+#include "topk_xl_x6/ckernel_sfpu_topk_xl_x6.h"
+#elif TOPK_XL_IMPL == 0
 #include "sfpu/experimental/ckernel_sfpu_topk_xl.h"
+#else
+#error "Unknown TOPK_XL_IMPL selector"
+#endif
 
 using namespace ckernel;
 

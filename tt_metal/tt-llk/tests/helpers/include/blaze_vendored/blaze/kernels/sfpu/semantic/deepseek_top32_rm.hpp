@@ -267,9 +267,20 @@ sfpi_inline void t32_ph3_pass()
     t32_ph3_st4_to_1<dir>(b);
     t32_store16<8, true>(b);
 }
+// LANE-GK FIRST-EXECUTION FIX (2026-08-24, finding GK-F1; the FU-F1 class —
+// this lift had never executed before the deepseek_top32 vehicle): the
+// original rebuild's step 5 runs inner_d = dist>>3 = 2 load/step/store
+// passes per direction, each followed by inc_x8_dest(8), THEN the trailing
+// inc_x8_dest(16) (net two compare passes covering rows {0,16}/{4,20} and
+// {8,24}/{12,28}, advancing +32).  The as-lifted body did ONE pass and
+// advanced +24 — half the step-5 compare-exchanges at misaligned bases;
+// end-to-end it surfaced as a near-miss top-32 (a few displaced/missing
+// winners).  Upstream tt-blaze twin fix owed.
 template <bool dir>
 sfpi_inline void t32_step5_pass()
 {
+    t32_step_pass<16, dir, false>();
+    t32_inc_dest_8();
     t32_step_pass<16, dir, false>();
     t32_inc_dest_8();
     t32_inc_dest_16();

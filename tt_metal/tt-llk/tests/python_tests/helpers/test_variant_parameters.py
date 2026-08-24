@@ -829,9 +829,14 @@ class TOPK_XL(TemplateParameter):
     fused_reduce: bool = False
     chunk_base_mode: TopKXLChunkBaseMode = TopKXLChunkBaseMode.Static
     chunk_base: int = 0
+    # Math-thread SFPU body selector (lane GK): 0 = production hand kernel,
+    # 1 = the X6 semantic arm (face transposes on the typed sfpi_crosslane.h
+    # surface; helpers/include/topk_xl_x6/).
+    topk_xl_impl: int = 0
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
+            f"#undef TOPK_XL_IMPL\n#define TOPK_XL_IMPL {self.topk_xl_impl}",
             f"constexpr std::uint32_t TOPK_XL_K = {self.k};",
             f"constexpr std::uint32_t TOPK_XL_NUM_CHUNKS = {self.num_chunks};",
             f"constexpr std::uint32_t TOPK_XL_TAIL_ELEMENTS = {self.tail_elements};",
@@ -844,6 +849,32 @@ class TOPK_XL(TemplateParameter):
             f"constexpr bool TOPK_XL_FUSED_REDUCE = {str(self.fused_reduce).lower()};",
             f"constexpr std::uint32_t TOPK_XL_CHUNK_BASE_MODE = {self.chunk_base_mode.value};",
             f"constexpr std::uint32_t TOPK_XL_CHUNK_BASE = {self.chunk_base};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class DS_TOP32(TemplateParameter):
+    """Compile-time configuration for the deepseek_top32 presorted-1024 vehicle
+    (lane GK, 2026-08-24; the blaze-dstop32 SKIP_BLOCKED_VEHICLE follow-up).
+
+    ``num_chunks`` 1024-element presorted chunks per row (1 tile each);
+    ``num_rows`` independent top-32 problems; ``impl`` selects the math-thread
+    SFPU phase bodies: 0 = vendored byte-exact blaze original
+    (blaze_vendored kernel_includes ckernel_sfpu_deepseek_top32_rm.h),
+    1 = the lane-EX builtin-bridge semantic lift
+    (blaze_vendored semantic/deepseek_top32_rm.hpp).
+    """
+
+    ds32_num_chunks: int = 2
+    ds32_num_rows: int = 1
+    ds32_impl: int = 0
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"#undef DS_TOP32_IMPL\n#define DS_TOP32_IMPL {self.ds32_impl}",
+            f"constexpr std::uint32_t DS_TOP32_NUM_CHUNKS = {self.ds32_num_chunks};",
+            f"constexpr std::uint32_t DS_TOP32_NUM_ROWS = {self.ds32_num_rows};",
         ]
         return "\n".join(lines)
 
