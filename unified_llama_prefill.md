@@ -2775,44 +2775,46 @@ ordering -- ttnn is right that same-NOC, same-VC writes cannot reorder -- it is 
 reset can overwrite the flag word before the multicast has read it, and the receivers then
 wait on a 1 that never arrives.
 
-**So the fix is the protocol, not the primitive.** A flag the sender never rewrites in the
-same breath -- an incrementing counter the receiver compares against a block number, rather
-than a 1 that must be set back to 0 -- needs no reset and therefore no flush to protect the
-reset.
+**So the obvious fix is the protocol, not the primitive** -- a flag the sender never rewrites
+in the same breath, an incrementing counter the receiver compares against a block number,
+needing no reset and therefore no flush to protect one.
 
-### The counter handshake: better protocol, no faster
+**Built it. It bought nothing, and has been reverted.** Recorded here so nobody spends the
+day on it twice.
 
-Both semaphores are now running counts that nothing ever resets. The sender waits for
-`(seq + 1) * num_dests` on the ready counter rather than `num_dests` followed by a reset;
-the flag is `inc_mcast(mcast, 1)` rather than set-1, multicast, flush, set-0; and the
-receiver does `wait_min(seq + 1)` rather than wait-1 then rearm. Each call carries its
-sequence number, which is the k-block index at every call site.
+The counter version made both semaphores running counts that nothing resets: the sender
+waited for `(seq + 1) * num_dests` instead of `num_dests` then a reset, the flag became
+`inc_mcast(mcast, 1)`, and the receiver did `wait_min(seq + 1)` instead of wait-1 then rearm.
+It was correct everywhere and it did remove a race the old protocol only avoids by accident
+-- a receiver cannot increment the ready counter for block b+1 before the sender's reset for
+block b, but nothing in the protocol says so, only the surrounding order of operations does.
 
-That removes one of the two flushes, the sender's two resets and the receiver's rearm --
-and with them a race that was only ever prevented by the ordering of the surrounding code:
-a receiver could not increment the ready counter for block b+1 before the sender's reset for
-block b, but nothing in the protocol said so.
+It measured 314.0us at 64 cores and depth 2, against 307.6, 312.0 and 315.0 taken three times
+on the existing protocol. The same number. With hindsight the reason is plain: **the flush it
+removes sits AFTER the flag goes out**, so its latency was already overlapped with the
+receivers making progress. The flush that matters is the one between the payload and the
+flag, and the counter form cannot remove it.
 
-**It is not faster.** 314.0us at 64 cores and depth 2, against 307.6, 312.0 and 315.0
-measured three times on the old protocol -- the same number. The reason is visible with
-hindsight: the flush it removed sat AFTER the flag went out, so its latency was already
-overlapped with the receivers making progress. The flush still there is the one between the
-payload and the flag, and that one is on the critical path.
+**Nor can any form.** ttnn skips that flush because its flag is a WRITE on the same NOC, VC
+and command buffer as the payload write, so the two cannot reorder. An atomic increment does
+not share the write path's ordering, so the increment form needs the flush. Going back to a
+write to inherit the ordering does not work either: with a monotonic value and `wait_min`, a
+flag multicast still in flight when the next block overwrites the local word delivers the
+LATER value, and a receiver steps past a payload that has not arrived. **The increment is
+safe without a second flush; the write is ordered without the first; neither gets both.**
 
-**And it cannot go the way ttnn's does.** ttnn skips that flush because its flag is a WRITE
-on the same NOC, VC and command buffer as the payload write, so the two cannot reorder. Ours
-is an atomic increment, which does not share the write path's ordering. Switching back to a
-write to inherit the ordering does not work either: with a monotonic value and `wait_min`,
-a flag multicast still in flight when the next block overwrites the local word would deliver
-the LATER value, and a receiver would then step past a payload that has not arrived. The
-increment is the form that is safe without a second flush; the write is the form that is
-ordered without the first. Nothing here gets both.
+Reverted because it cost an API change -- a sequence number threaded through every multicast
+overload and all three call sites -- for no measurable gain. The race it fixed is real but
+latent, and not worth that price on its own; if it is ever fixed it should be fixed without
+the parameter.
 
-So the handshake is now cleaner and one flush lighter, and the remaining 2.6x is not in it.
-Per the hoist ablation the per-k-block movement is ~26us a round across two broadcasts, and
-a flush is worth a couple of microseconds of that -- the rest is the read and the broadcast
-themselves. I do not have a mechanism for it, and after naming one that turned out to be
-shared with ttnn I would rather say that than name a fifth.
+**So the remaining 2.6x is not in the handshake at all.** The hoist ablation puts per-k-block
+movement at ~26us a round across two broadcasts, and a flush is a couple of microseconds of
+that -- the rest is the read and the broadcast themselves. No mechanism identified, and after
+naming one that turned out to be shared with ttnn, that is where this stops rather than a
+fifth guess. The measurement worth trusting next is instrumenting the sender directly --
+timing the read, the ready-wait and the multicast write as three separate zones -- rather
+than inferring from totals.
 
 Recorded because the sequence matters: the bandwidth ratio suggested a story, the ablation
 narrowed it to the per-k-block movement, and only READING THE OTHER IMPLEMENTATION showed
