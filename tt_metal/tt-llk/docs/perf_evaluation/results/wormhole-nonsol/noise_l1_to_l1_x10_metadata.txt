@@ -1,0 +1,8 @@
+arch: wormhole
+commit: 8b9db213408b812cebe7c873341102a6c92910e2
+iterations: 10
+speed_of_light: off
+host: wh-lb-35-special-nstojic-for-reservation-72888
+perf_run_types: L1_TO_L1
+build_root: /home/nstojic/llk-wh-build
+wipe_build: no
