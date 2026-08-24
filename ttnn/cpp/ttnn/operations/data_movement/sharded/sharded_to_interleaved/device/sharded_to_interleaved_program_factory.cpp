@@ -59,7 +59,7 @@ ProgramDescriptor ShardedToInterleavedProgramFactory::create_descriptor(
 
     auto shard_spec = input.shard_spec().value();
     auto shard_strategy = input.memory_config().memory_layout();
-    const bool is_tile = output.layout() == Layout::TILE;
+    const bool is_tile = input.layout() == Layout::TILE;
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     auto& all_cores = shard_spec.grid;
 
