@@ -734,9 +734,10 @@ public:
      * @note The destination bytes are UNDEFINED until write_zeros_l1_barrier() returns: do not read
      *       or write the window before the barrier.
      *
-     * @note Destination alignment (base + @p args.offset_bytes): NOC_L1_READ_ALIGNMENT_BYTES on
-     *       Wormhole/Blackhole (the zero is a NOC loopback read), NOC_L1_WRITE_ALIGNMENT_BYTES on
-     *       Quasar (an iDMA write). Both are 16 on Wormhole and Blackhole, and 1 on Quasar.
+     * @note Destination alignment (base + @p args.offset_bytes): on Wormhole/Blackhole the zero is a
+     *       NOC loopback read, so the address must be NOC_L1_READ_ALIGNMENT_BYTES (16) aligned. On
+     *       Quasar it is an overlay iDMA transaction rather than a NOC transfer, so the NOC alignment
+     *       constants do not apply and no alignment is required.
      *
      * @note Quasar: this temporarily reprograms the overlay write command buffer (cmd buffer 0)
      *       into iDMA zero mode; it is restored to normal write mode only by

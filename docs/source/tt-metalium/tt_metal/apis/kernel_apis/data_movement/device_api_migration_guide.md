@@ -571,7 +571,7 @@ noc.write_zeros_l1_barrier();                              // one barrier covers
 #### Alignment and bounds
 
 - **Destination bytes are undefined until the barrier returns.** Do not read or write the zeroed window between `async_write_zeros` and `write_zeros_l1_barrier()`.
-- **Wormhole/Blackhole alignment:** the zero is a NoC loopback read from the 32B-aligned hardware zeros region, so the destination address (base + `offset_bytes`) must be `NOC_L1_READ_ALIGNMENT_BYTES` (16B) aligned.
+- **Alignment:** on Wormhole/Blackhole the zero is a NoC loopback read from the 32B-aligned hardware zeros region, so the destination address (base + `offset_bytes`) must be `NOC_L1_READ_ALIGNMENT_BYTES` (**16**) aligned. On Quasar the zero is an overlay iDMA transaction rather than a NoC transfer, so the NoC alignment constants do not apply and there is no alignment requirement.
 - **Bounds:** `offset_bytes + size_bytes` must stay inside the region — this is the caller's responsibility and is not checked. `Scratchpad` asserts that `offset_bytes` alone is in range, but no destination type checks it against the transfer length, so an oversized `size_bytes` will run past the end of the region into whatever is next in L1.
 
 #### Zero pages of a DRAM tensor
