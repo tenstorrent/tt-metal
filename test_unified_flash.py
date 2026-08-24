@@ -71,6 +71,94 @@ def grid_transpose(k, sk, dt):
     return v.permute(2, 1, 0, 3).reshape(dt * TILE, sk * TILE)
 
 
+def _launch(
+    device,
+    tq,
+    tk,
+    tv,
+    tmask,
+    tcolones,
+    tout,
+    sq,
+    sk,
+    dt,
+    num_q,
+    k_offset,
+    sk_total,
+    n_heads,
+    n_kv_heads,
+    causal,
+    cores,
+    stream_buffering,
+    fidelity,
+):
+    """The launch itself, shared by run() and run_preloaded() so both take the same path."""
+    # Heads are partitioned across cores and share nothing: a core reads its own heads'
+    # queries and their KV heads, and writes its own output blocks. No core touches
+    # another's data, so there is no communication here at all -- only a range each.
+    #
+    # Capped at n_heads so no core is allocated a share of zero. The kernel would survive
+    # one (its loop simply would not run), but an idle core is a pointless allocation and
+    # the path is not worth having untested.
+    ncores = min(cores, n_heads)
+    core_ranges, core_list = core_block(ncores)
+    shares = split_evenly(n_heads, ncores)
+
+    ct_args = [sq, sk, dt, num_q, k_offset, sk_total, n_heads, n_kv_heads]
+    for t in (tq, tk, tv, tmask, tcolones, tout):
+        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+    addrs = [t.buffer_address() for t in (tq, tk, tv, tmask, tcolones, tout)]
+    # Same addresses everywhere, different head range per core.
+    rt_args = {c: addrs + [begin, count] for c, (begin, count) in zip(core_list, shares)}
+
+    scores_pages, out_pages, vec_pages = sq * sk, sq * dt, sq
+    cbs = [
+        make_cb(CB["q"], core_ranges, num_pages=sq * dt),
+        # Streamed per chunk, so these are the only CBs where a second block lets the
+        # reader run ahead of the compute. Worth a measured 5-6%, for L1 pages and
+        # nothing else -- these shipped single-buffered, which is what a single/double
+        # sweep turned up. The state CBs below are a different matter: their 2x is an
+        # aliasing requirement, and halving THEM deadlocks.
+        make_cb(CB["k"], core_ranges, num_pages=stream_buffering * dt * sk),
+        make_cb(CB["v"], core_ranges, num_pages=stream_buffering * sk * dt),
+        make_cb(CB["mask"], core_ranges, num_pages=stream_buffering * scores_pages),
+        make_cb(CB["one"], core_ranges, num_pages=1),
+        make_cb(CB["colones"], core_ranges, num_pages=sk),
+        make_cb(CB["masked"], core_ranges, num_pages=scores_pages),
+        make_cb(CB["rowmax"], core_ranges, num_pages=vec_pages),
+        make_cb(CB["prob"], core_ranges, num_pages=scores_pages),
+        make_cb(CB["rowsum"], core_ranges, num_pages=vec_pages),
+        make_cb(CB["pv"], core_ranges, num_pages=out_pages),
+        make_cb(CB["oscaled"], core_ranges, num_pages=out_pages),
+        make_cb(CB["corrold"], core_ranges, num_pages=vec_pages),
+        make_cb(CB["recipl"], core_ranges, num_pages=vec_pages),
+        make_cb(CB["mnow"], core_ranges, num_pages=vec_pages),
+        make_cb(CB["out"], core_ranges, num_pages=out_pages),
+        # State: TWICE the block, so store() can reserve while the old value is still resident.
+        make_cb(CB["m"], core_ranges, num_pages=2 * vec_pages),
+        make_cb(CB["l"], core_ranges, num_pages=2 * vec_pages),
+        make_cb(CB["o"], core_ranges, num_pages=2 * out_pages),
+    ]
+
+    program = unified_program(
+        kernel_source=KERNEL,
+        core_ranges=core_ranges,
+        cores=core_list,
+        cbs=cbs,
+        compile_time_args=ct_args,
+        runtime_args=rt_args,
+        defines=None if causal else [("FLASH_NONCAUSAL", "1")],
+        **(fidelity or {}),
+    )
+    out = ttnn.generic_op([tq, tk, tv, tmask, tcolones, tout], program)
+    # Free the inputs: run() is called many times in one device session, and without this
+    # the accumulated allocations exhaust DRAM partway through the sweep rather than at a
+    # boundary that would make the cause obvious.
+    for t in (tq, tk, tv, tmask, tcolones):
+        ttnn.deallocate(t)
+    return ttnn.to_torch(out).to(torch.float32)[0, 0]
+
+
 def run(
     device,
     sq,
@@ -194,70 +282,27 @@ def run(
     # layout the output projection and everything after it wants.
     tout = to_dev(torch.full([S_q, n_heads * D], float("nan")).to(torch.bfloat16))
 
-    # Heads are partitioned across cores and share nothing: a core reads its own heads'
-    # queries and their KV heads, and writes its own output blocks. No core touches
-    # another's data, so there is no communication here at all -- only a range each.
-    #
-    # Capped at n_heads so no core is allocated a share of zero. The kernel would survive
-    # one (its loop simply would not run), but an idle core is a pointless allocation and
-    # the path is not worth having untested.
-    ncores = min(cores, n_heads)
-    core_ranges, core_list = core_block(ncores)
-    shares = split_evenly(n_heads, ncores)
-
-    ct_args = [sq, sk, dt, num_q, k_offset, sk_total, n_heads, n_kv_heads]
-    for t in (tq, tk, tv, tmask, tcolones, tout):
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    addrs = [t.buffer_address() for t in (tq, tk, tv, tmask, tcolones, tout)]
-    # Same addresses everywhere, different head range per core.
-    rt_args = {c: addrs + [begin, count] for c, (begin, count) in zip(core_list, shares)}
-
-    scores_pages, out_pages, vec_pages = sq * sk, sq * dt, sq
-    cbs = [
-        make_cb(CB["q"], core_ranges, num_pages=sq * dt),
-        # Streamed per chunk, so these are the only CBs where a second block lets the
-        # reader run ahead of the compute. Worth a measured 5-6%, for L1 pages and
-        # nothing else -- these shipped single-buffered, which is what a single/double
-        # sweep turned up. The state CBs below are a different matter: their 2x is an
-        # aliasing requirement, and halving THEM deadlocks.
-        make_cb(CB["k"], core_ranges, num_pages=stream_buffering * dt * sk),
-        make_cb(CB["v"], core_ranges, num_pages=stream_buffering * sk * dt),
-        make_cb(CB["mask"], core_ranges, num_pages=stream_buffering * scores_pages),
-        make_cb(CB["one"], core_ranges, num_pages=1),
-        make_cb(CB["colones"], core_ranges, num_pages=sk),
-        make_cb(CB["masked"], core_ranges, num_pages=scores_pages),
-        make_cb(CB["rowmax"], core_ranges, num_pages=vec_pages),
-        make_cb(CB["prob"], core_ranges, num_pages=scores_pages),
-        make_cb(CB["rowsum"], core_ranges, num_pages=vec_pages),
-        make_cb(CB["pv"], core_ranges, num_pages=out_pages),
-        make_cb(CB["oscaled"], core_ranges, num_pages=out_pages),
-        make_cb(CB["corrold"], core_ranges, num_pages=vec_pages),
-        make_cb(CB["recipl"], core_ranges, num_pages=vec_pages),
-        make_cb(CB["mnow"], core_ranges, num_pages=vec_pages),
-        make_cb(CB["out"], core_ranges, num_pages=out_pages),
-        # State: TWICE the block, so store() can reserve while the old value is still resident.
-        make_cb(CB["m"], core_ranges, num_pages=2 * vec_pages),
-        make_cb(CB["l"], core_ranges, num_pages=2 * vec_pages),
-        make_cb(CB["o"], core_ranges, num_pages=2 * out_pages),
-    ]
-
-    program = unified_program(
-        kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=core_list,
-        cbs=cbs,
-        compile_time_args=ct_args,
-        runtime_args=rt_args,
-        defines=None if causal else [("FLASH_NONCAUSAL", "1")],
-        **(fidelity or {}),
+    got = _launch(
+        device,
+        tq,
+        tk,
+        tv,
+        tmask,
+        tcolones,
+        tout,
+        sq,
+        sk,
+        dt,
+        num_q,
+        k_offset,
+        sk_total,
+        n_heads,
+        n_kv_heads,
+        causal,
+        cores,
+        stream_buffering,
+        fidelity,
     )
-    out = ttnn.generic_op([tq, tk, tv, tmask, tcolones, tout], program)
-    # Free the inputs: run() is called many times in one device session, and without this
-    # the accumulated allocations exhaust DRAM partway through the sweep rather than at a
-    # boundary that would make the cause obvious.
-    for t in (tq, tk, tv, tmask, tcolones):
-        ttnn.deallocate(t)
-    got = ttnn.to_torch(out).to(torch.float32)[0, 0]
 
     # The reference divides the scores, where the device pre-divided Q: mathematically the same,
     # and the rounding difference shows up in the error rather than being hidden. One head at a
@@ -271,6 +316,59 @@ def run(
         wants.append(torch.softmax(scores, dim=-1) @ vf)
     # Concatenated along the COLUMNS, matching the layout the kernel writes.
     return got, torch.cat(wants, dim=1)
+
+
+def run_preloaded(device, q_blocks, k_blocks, v_blocks, sq, sk, dt, n_heads, n_kv_heads):
+    """The attention kernel on operands SOMEONE ELSE produced, for composing a layer.
+
+    q_blocks / k_blocks / v_blocks are already in the per-(head, chunk) block layout the
+    kernel reads -- run() builds those from random data, this takes them as given. One query
+    chunk against one key chunk, causal, which is the shape a single-chunk prefill has.
+
+    The mask and the column of ones are built here rather than passed: they are functions of
+    the shape, not of the data, so a caller has nothing to say about them.
+    """
+    S_q, S_k = sq * TILE, sk * TILE
+    keep = torch.arange(S_k).unsqueeze(0) <= (torch.arange(S_q) + (S_k - S_q)).unsqueeze(1)
+    mask = torch.where(keep, 0.0, MASK_NEG)
+    col_ones = torch.zeros([sk * TILE, TILE])
+    col_ones[:, 0] = 1.0
+
+    dram = ttnn.DRAM_MEMORY_CONFIG
+
+    def to_dev(t):
+        return ttnn.from_torch(
+            t.reshape(1, 1, *t.shape).to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=dram,
+        )
+
+    tq, tk, tv = to_dev(q_blocks), to_dev(k_blocks), to_dev(v_blocks)
+    tmask, tcolones = to_dev(mask), to_dev(col_ones)
+    tout = to_dev(torch.full([S_q, n_heads * dt * TILE], float("nan")))
+    return _launch(
+        device,
+        tq,
+        tk,
+        tv,
+        tmask,
+        tcolones,
+        tout,
+        sq,
+        sk,
+        dt,
+        1,
+        0,
+        sk,
+        n_heads,
+        n_kv_heads,
+        True,
+        1,
+        2,
+        None,
+    )
 
 
 def main(argv=None):

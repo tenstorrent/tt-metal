@@ -2259,8 +2259,62 @@ h*num_q_chunks + i, which is the mirror image of the problem just fixed on the o
 It matters once the QKV projection exists, since that will produce [S_q, d_model] and heads
 will be column slices of it -- a strided LOAD, the same shape of change.
 
-**Still open in phase 11:** end-to-end single-layer prefill against a reference, and fusing
-the two launches into one.
+### A whole llama decoder layer, and what it took to make the test mean anything
+
+Eleven steps, fourteen launches, every one a unified kernel: rmsnorm, three projections,
+RoPE on Q and K, flash attention, the output projection, the residual, the second rmsnorm,
+the gate and up projections, silu*up, the down projection and the second residual. Verified
+against a torch reference built independently from the same weights. Relative L2 on the
+layer output is 0.003-0.004 after eleven bf16 steps, at four (S, d_model, heads, kv)
+combinations. 16.6ms wall per layer at S=64, d_model=256 -- wall clock, so host dispatch
+dominates it and it is not a device number.
+
+silu had to be added for the FFN, and metal makes that oddly awkward: there is no
+`eltwise_unary/silu.h` to match the per-op headers the adaptor includes for exp, recip, relu,
+rsqrt and sqrt, even though the SFPU side has its own `ckernel_sfpu_silu.h`. `silu_tile` is
+declared only in the umbrella `compute_kernel_api.h`, so the adaptor now includes that.
+
+**The test as first written was nearly worthless, and only sabotage showed it.** Checking the
+layer OUTPUT and nothing else, I sabotaged three steps:
+
+| sabotage | output pcc | caught? |
+|---|---|---|
+| drop the attention residual | 0.288 | yes |
+| swap silu's operands, silu(u)*g | 0.999815 | **no** |
+| skip RoPE on K entirely | 0.999954 | **no** |
+
+Clean was 0.999948. Two real bugs sat inside the noise. The reason is structural: `y = h + f
+@ Wd` with `h = x + ao`, and with x positive and of unit scale while the branches are scaled
+smaller, an error inside a branch is diluted before it reaches y. A layer test that cannot
+see a missing RoPE is not testing a layer.
+
+So every stage is checked where it happens, not just the output -- ten checkpoints. That
+caught the silu swap (0.322 against 0.016 clean). It did NOT catch the missing RoPE on K,
+which needed one more step: comparing Q and K themselves. Checking RoPE through the attention
+output cannot work, because with random weights the scores are near-uniform and softmax
+returns roughly the mean of V whatever they are -- dropping RoPE on K moved the attention
+stage from 0.018 to 0.015, in the wrong direction and by nothing. That is exactly the vacuity
+the flash harness fixes with a ramp on the keys, reappearing a level up. With `rope_q` and
+`rope_k` as their own stages both sabotages fail at 0.90 and 0.95 against 0.008 clean.
+
+Clean per-stage drift, which is what sets the 0.06 tolerance: rmsnorm 0.005, rope 0.008-0.010,
+v_proj 0.009-0.012, attention 0.018-0.035, out_proj 0.019-0.039, residual 0.002-0.004,
+rmsnorm_ffn 0.006, silu_mul 0.015-0.021, layer 0.003-0.004. The comparisons are CUMULATIVE --
+each stage is measured against a reference from exact inputs, so upstream drift is included,
+which is the right thing for a composition test and is why attention sits higher than the
+kernels' own tests do. Sabotage margins are 20-100x, so the tolerance is not doing the work.
+
+**One step is not on device.** The projections produce [S, d_model], and the attention kernel
+still reads Q head-major and K grid-transposed, so `to_flash_layout` rearranges on the host
+between the projections and attention. It is a pure permutation with no arithmetic, so it does
+not affect what the numbers prove, but the layer is not yet a pure device pipeline and should
+not be described as one. The fix is the mirror of what the output side already does: Q wants a
+strided load (rows [i*sq, +sq), columns [h*dt, +dt)), K wants the same with its tile grid
+transposed, V the same as Q -- all three expressible with `noc_load`'s Fn form at identical
+NOC cost, since a read per page is what the built-in load already issues. That would delete
+the host-side `grid_transpose` entirely, which has been a wart since the first flash test.
+
+**Still open:** the strided loads above, and fusing the attention and projection launches.
 
 ## Phase 11 -- Full block orchestration
 
@@ -2269,7 +2323,7 @@ Host-side and kernel-loop work, not model gaps.
 - [x] GQA head mapping (n_heads != n_kv_heads) -- see below
 - [x] Multi-core work partitioning across heads -- see below
 - [x] Head concat + output projection -- see below (two launches; fusing is the item above)
-- [ ] End-to-end single-layer prefill against a reference
+- [x] End-to-end single-layer prefill against a reference -- see below
 
 ---
 
