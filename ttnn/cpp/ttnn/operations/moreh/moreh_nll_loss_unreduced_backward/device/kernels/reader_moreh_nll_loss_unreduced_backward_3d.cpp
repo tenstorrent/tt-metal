@@ -13,7 +13,6 @@ void kernel_main() {
     auto ignore_index = static_cast<int32_t>(get_arg(args::ignore_index));
     auto num_tiles_per_core = get_arg(args::num_tiles_per_core);
     auto start_id = get_arg(args::start_id);
-    auto C = get_arg(args::C);
     auto Ct = get_arg(args::Ct);
     auto Wt = get_arg(args::Wt);
 

@@ -10,7 +10,9 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward {
 
@@ -18,13 +20,9 @@ using namespace tt;
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 
+namespace {
+
 // ProgramSpec resource names, shared by all three rank configurations.
-//
-// These live at the op's namespace scope rather than in a file-local anonymous namespace on purpose:
-// this translation unit is part of a unity-build target, which merges every anonymous namespace in a
-// batch into one scope, and names this generic ("reader", "target", ...) are exactly what a sibling
-// moreh factory would pick too. A `const` at namespace scope already has internal linkage, and the
-// enclosing namespace is unique to this op, so no sibling can collide with these however it names its own.
 const KernelSpecName READER{"reader"};
 const KernelSpecName WRITER{"writer"};
 
@@ -41,8 +39,6 @@ const TensorParamName TARGET_TENSOR{"target"};
 const TensorParamName OUTPUT_GRAD_TENSOR{"output_grad"};
 const TensorParamName WEIGHT_TENSOR{"weight"};
 const TensorParamName INPUT_GRAD_TENSOR{"input_grad"};
-
-namespace {
 
 // Helper: append a DFB holding `num_tiles` tiles of `data_format` (skips creation when num_tiles == 0).
 void push_dfb(ProgramSpec& spec, const DFBSpecName& unique_id, uint32_t num_tiles, tt::DataFormat data_format) {
@@ -149,7 +145,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
         .compiler_options = {.defines = std::move(reader_defines)},
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"ignore_index", "num_tiles_per_core", "start_id", "Nt", "C", "Ct"},
+                .runtime_arg_names = {"ignore_index", "num_tiles_per_core", "start_id", "Nt", "Ct"},
             },
         .hw_config = ttnn::create_reader_datamovement_config(device.arch()),
     };
@@ -237,7 +233,6 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
                 {"num_tiles_per_core", units_per_core},
                 {"start_id", tile_offset},
                 {"Nt", Nt},
-                {"C", channel_size},
                 {"Ct", Ct},
             });
 
@@ -338,7 +333,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
         .compiler_options = {.defines = std::move(reader_defines)},
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"ignore_index", "num_tiles_per_core", "start_id", "C", "Ct", "Wt"},
+                .runtime_arg_names = {"ignore_index", "num_tiles_per_core", "start_id", "Ct", "Wt"},
             },
         .hw_config = ttnn::create_reader_datamovement_config(device.arch()),
     };
@@ -424,7 +419,6 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
                 {"ignore_index", ignore_index},
                 {"num_tiles_per_core", units_per_core},
                 {"start_id", tile_offset},
-                {"C", channel_size},
                 {"Ct", Ct},
                 {"Wt", Wt},
             });
@@ -463,6 +457,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
     const auto& input_grad_spec = input_grad.tensor_spec();
+    const auto& target_spec = target.tensor_spec();
     auto input_grad_shape = input_grad_spec.padded_shape();
     auto N = input_grad_shape[0];
     uint32_t channel_size = input_grad_shape[1];
@@ -474,7 +469,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
     auto Ht = H / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
     uint32_t num_inner_tile =
-        target.tensor_spec().padded_shape().volume() / N / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
+        target_spec.padded_shape().volume() / N / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
 
     const bool weight_has_value = weight.has_value();
 
@@ -584,7 +579,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
         .hw_config = ttnn::create_writer_datamovement_config(device.arch()),
     };
 
-    spec.tensor_parameters.push_back(TensorParameter{.unique_id = TARGET_TENSOR, .spec = target.tensor_spec()});
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = TARGET_TENSOR, .spec = target_spec});
     spec.tensor_parameters.push_back(
         TensorParameter{.unique_id = OUTPUT_GRAD_TENSOR, .spec = output_grad.tensor_spec()});
     spec.tensor_parameters.push_back(TensorParameter{.unique_id = INPUT_GRAD_TENSOR, .spec = input_grad_spec});

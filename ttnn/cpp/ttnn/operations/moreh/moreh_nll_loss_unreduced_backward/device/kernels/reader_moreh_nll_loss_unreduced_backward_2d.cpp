@@ -14,7 +14,6 @@ void kernel_main() {
     auto num_tiles_per_core = get_arg(args::num_tiles_per_core);
     auto start_id = get_arg(args::start_id);
     auto Nt = get_arg(args::Nt);
-    auto C = get_arg(args::C);
     auto Ct = get_arg(args::Ct);
 
     // ublocks size defined in tiles
