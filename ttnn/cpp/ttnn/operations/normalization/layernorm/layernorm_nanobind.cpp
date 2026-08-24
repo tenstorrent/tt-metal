@@ -62,7 +62,8 @@ void bind_normalization_layernorm_program_config(nb::module_& mod) {
             nb::arg("legacy_rsqrt").noconvert() = false,
             nb::arg("use_welford").noconvert() = false)
         .def_rw(
-            "compute_with_storage_grid_size", &prim::LayerNormShardedMultiCoreProgramConfig::compute_with_storage_grid_size)
+            "compute_with_storage_grid_size",
+            &prim::LayerNormShardedMultiCoreProgramConfig::compute_with_storage_grid_size)
         .def_rw("subblock_w", &prim::LayerNormShardedMultiCoreProgramConfig::subblock_w)
         .def_rw("block_h", &prim::LayerNormShardedMultiCoreProgramConfig::block_h)
         .def_rw("block_w", &prim::LayerNormShardedMultiCoreProgramConfig::block_w)
@@ -318,32 +319,6 @@ void bind_normalization_layernorm_device_operation(nb::module_& mod) {
 
 void bind_normalization_layernorm_program_factory(nb::module_& mod) {
     nb::class_<ttnn::prim::LayerNormMultiCoreProgramFactory>(mod, "LayerNormMultiCoreProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::LayerNormParams& operation_attributes,
-               const ttnn::prim::LayerNormInputs& tensor_args,
-               Tensor& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::LayerNormMultiCoreProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = nb::none(),
-            R"doc(
-            Creates a program descriptor for layer norm multi-core operation.
-
-            Args:
-                operation_attributes (LayerNormParams): Operation parameters including norm type, epsilon, memory config, etc.
-                tensor_args (LayerNormInputs): Input tensors including input, residual, weight, bias, and stats.
-                tensor_return_value (ttnn.Tensor): Output tensor reference.
-                core_range_set (ttnn.CoreRangeSet, optional): Optional core range set to restrict the program to specific cores.
-                    If not provided, uses device's compute grid.
-
-            Returns:
-                ttnn.ProgramDescriptor: The program descriptor for the layer norm operation.
-            )doc")
         .def_static(
             "default_core_range",
             &ttnn::prim::LayerNormMultiCoreProgramFactory::default_core_range,
