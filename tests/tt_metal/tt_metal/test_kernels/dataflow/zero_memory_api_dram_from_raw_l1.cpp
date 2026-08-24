@@ -11,13 +11,15 @@
 //   ZERO_TARGET_SCRATCHPAD            Scratchpad<uint32_t> from a scratchpad binding token
 //   ZERO_TARGET_LOCAL_TENSOR_ACCESSOR LocalTensorAccessor<uint32_t> from a tensor binding token
 //
-//   1. Zero the whole scratch region via overload (1) + write_zeros_l1_barrier().
-//   2. Loop overload (2) over the DRAM tensor's pages, using that region as the zeros source.
-//   3. write_zeros_dram_barrier(), then report status.
+//   1. CPU-stamp the scratch region non-zero and verify the stamp.
+//   2. Zero it via overload (1) + write_zeros_l1_barrier().
+//   3. CPU-verify it is now all zero.
+//   4. Loop overload (2) over the DRAM tensor's pages using that region as the zeros source, then
+//      write_zeros_dram_barrier() and report status.
 //
-// The host stamps the DRAM tensor with 0xFFFFFFFF beforehand and checks it reads back all zeros, so a
-// kernel that silently did nothing cannot pass. Step 1's result is verified on the CPU first, so a
-// DRAM-all-zeros outcome cannot be credited to a scratch that was never zeroed.
+// Step 1 is what makes steps 2-3 meaningful: a freshly allocated Scratchpad or L1 tensor may already
+// be zero, so without stamping first the all-zero check would pass even if overload (1) did nothing.
+// The host separately stamps the DRAM tensor with 0xFFFFFFFF and checks it reads back all zeros.
 //
 // TODO: remove the QUASAR_MANUAL_CACHE_MAINTENANCE blocks once CoreLocalMem::scoped_lock does
 // automatic cache management.
@@ -38,7 +40,10 @@
 
 namespace {
 constexpr uint32_t kStatusOk = 0xCAFEBABEu;
+constexpr uint32_t kStatusStampFail = 0xDEAD0001u;
 constexpr uint32_t kStatusScratchNotZero = 0xDEAD0011u;
+
+constexpr uint32_t kPatternBase = 0xA5A50000u;
 
 FORCE_INLINE void report(uintptr_t flag_addr, uint32_t status) {
     CoreLocalMem<volatile uint32_t> flag(flag_addr);
@@ -78,15 +83,34 @@ void kernel_main() {
     Noc noc;
     uint32_t status = kStatusOk;
 
-    // ---- 1. Pre-zero the whole scratch region (overload 1) ----
+    // ---- 1. Stamp the scratch region non-zero, so the all-zero check below proves overload (1)
+    // actually ran. A freshly allocated Scratchpad or L1 tensor may already be zero, in which case
+    // skipping this would let the test pass even if the zero did nothing. ----
     {
+        const auto stamp_lock = mem.scoped_lock(num_words);
+        for (uint32_t i = 0; i < num_words; ++i) {
+            mem[i] = kPatternBase + i;
+        }
+        for (uint32_t i = 0; i < num_words; ++i) {
+            if (mem[i] != kPatternBase + i) {
+                status = kStatusStampFail;
+                break;
+            }
+        }
+#ifdef ARCH_QUASAR  // QUASAR_MANUAL_CACHE_MAINTENANCE
+        flush_l2_cache_range(static_cast<uintptr_t>(region_addr), region_bytes);
+#endif
+    }
+
+    // ---- 2. Zero the whole scratch region (overload 1) ----
+    if (status == kStatusOk) {
         const auto zero_lock = mem.scoped_lock(num_words);
         noc.async_write_zeros(scratch, region_bytes);
         noc.write_zeros_l1_barrier();
     }
 
-    // Verify the L1 scratch really is zero before streaming it outward.
-    {
+    // ---- 3. Verify the L1 scratch really is zero before streaming it outward. ----
+    if (status == kStatusOk) {
         const auto verify_lock = mem.scoped_lock(num_words);
 #ifdef ARCH_QUASAR  // QUASAR_MANUAL_CACHE_MAINTENANCE
         invalidate_l2_cache_range(static_cast<uintptr_t>(region_addr), region_bytes);
@@ -99,7 +123,7 @@ void kernel_main() {
         }
     }
 
-    // ---- 2. Stream those zeros to every DRAM page (overload 2, raw L1 handle as scratch) ----
+    // ---- 4. Stream those zeros to every DRAM page (overload 2, raw L1 handle as scratch) ----
     if (status == kStatusOk) {
         for (uint32_t p = page_start; p < page_end; ++p) {
             noc.async_write_zeros(out, page_size, {.page_id = p}, scratch);

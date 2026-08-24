@@ -12,7 +12,9 @@
 //   zero_memory_api_consumer.cpp              overload (2) into DRAM, DFB as the zeros source
 //   zero_memory_api_raw_l1.cpp                overload (1) into CoreLocalMem / Scratchpad /
 //                                             LocalTensorAccessor, picked by a ZERO_TARGET define
-//   zero_memory_api_dram_from_scratchpad.cpp  overload (2) with a Scratchpad source, no CB/DFB
+//   zero_memory_api_dram_from_raw_l1.cpp      overload (2) into DRAM sourcing its zeros from
+//                                             CoreLocalMem / Scratchpad / LocalTensorAccessor,
+//                                             same ZERO_TARGET define, no CB/DFB in the program
 //
 // Every test is non-vacuous by construction: the target is pre-stamped with a known non-zero pattern
 // and that stamp is verified before the zero, so a kernel that did nothing cannot pass. Kernels report
@@ -69,6 +71,14 @@ constexpr uint32_t kStatusOk = 0xCAFEBABEu;
 
 // Must match zero_memory_api_raw_l1.cpp.
 constexpr uint32_t kPatternBase = 0xA5A50000u;
+
+// Host-known L1 addresses shared by the raw-L1 helpers below: a status word, a slot the kernel
+// reports its region address into, and the region itself for the CoreLocalMem target (the only one
+// the framework does not allocate). kCoreLocalMemAddr is 16B-aligned but not 32/64B, so the checks
+// run against a minimally aligned destination.
+constexpr uint32_t kFlagAddr = 100 * 1024;
+constexpr uint32_t kReportAddr = 100 * 1024 + 64;
+constexpr uint32_t kCoreLocalMemAddr = 104 * 1024 + 16;
 
 const char* StatusName(uint32_t status) {
     switch (status) {
@@ -128,12 +138,6 @@ const char* TargetDefine(RawL1Target t) {
 // Drives zero_memory_api_raw_l1.cpp for one handle type and window geometry, then verifies the
 // region's L1 from the host independently of the kernel's own in-kernel check.
 void RunRawL1ZeroTest(distributed::MeshDevice& mesh_device, const RawL1Cfg& cfg) {
-    constexpr uint32_t kFlagAddr = 100 * 1024;
-    constexpr uint32_t kReportAddr = 100 * 1024 + 64;
-    // Only used by the CoreLocalMem target: a fixed host-known L1 address clear of the flag and report
-    // words. 16B-aligned but not 32/64B, so the window/flank check below runs against a minimally
-    // aligned destination.
-    constexpr uint32_t kCoreLocalMemAddr = 104 * 1024 + 16;
     const experimental::NodeCoord node{0, 0};
 
     ASSERT_EQ(cfg.offset_bytes % 16u, 0u) << "window must respect the 16B WH/BH NoC read alignment";
@@ -153,6 +157,9 @@ void RunRawL1ZeroTest(distributed::MeshDevice& mesh_device, const RawL1Cfg& cfg)
         .unique_id = RAW_L1_KERNEL,
         .source = std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_raw_l1.cpp"},
         .num_threads = 1,
+        // region_addr is in the schema for every target but only read by the CoreLocalMem kernel
+        // variant; the other two learn their region from a binding token. One shared schema avoids a
+        // per-target arg list for a single uint32_t.
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"region_bytes", "offset_bytes", "window_bytes", "flag_addr", "report_addr", "region_addr"}},
@@ -526,19 +533,13 @@ static void RunDramFromRawL1Test(distributed::MeshDevice& mesh_device, RawL1Targ
     constexpr uint32_t num_pages = 4;
     constexpr uint32_t page_size_bytes = 4 * 1024;
     constexpr uint32_t total_words = num_pages * (page_size_bytes / sizeof(uint32_t));
-    constexpr uint32_t kFlagAddr = 100 * 1024;
-    constexpr uint32_t kCoreLocalMemAddr = 104 * 1024 + 16;
     const experimental::NodeCoord node{0, 0};
 
     std::vector<uint32_t> sentinel{0xBAADF00Du};
     slow_dispatch::WriteToL1(mesh_device, node, kFlagAddr, sentinel);
 
-    // Seed the CoreLocalMem region with junk, so the kernel's own all-zero check on the scratch
-    // proves overload (1) ran rather than finding incidentally-zero L1.
-    if (target == RawL1Target::CoreLocalMem) {
-        std::vector<uint32_t> junk(region_bytes / sizeof(uint32_t), 0xEEEEEEEEu);
-        slow_dispatch::WriteToL1(mesh_device, node, kCoreLocalMemAddr, junk);
-    }
+    // No host-side seeding needed: the kernel stamps the scratch non-zero and verifies the stamp
+    // before zeroing it, so the all-zero check proves overload (1) ran for every target type.
 
     auto tensor = MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(page_size_bytes, num_pages));
     std::vector<uint32_t> stamped(total_words, 0xFFFFFFFFu);
@@ -558,6 +559,9 @@ static void RunDramFromRawL1Test(distributed::MeshDevice& mesh_device, RawL1Targ
             std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_dram_from_raw_l1.cpp"},
         .num_threads = 1,
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "out"}},
+        // region_addr is in the schema for every target but only read by the CoreLocalMem kernel
+        // variant; the other two learn their region from a binding token. One shared schema avoids a
+        // per-target arg list for a single uint32_t.
         .runtime_arg_schema =
             {.runtime_arg_names = {"page_start", "page_end", "page_size", "flag_addr", "region_bytes", "region_addr"}},
         .hw_config = make_dm_config(mesh_device.arch(), DataMovementProcessor::RISCV_0, NOC::RISCV_0_default),
