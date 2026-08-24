@@ -156,7 +156,8 @@ train:
   perf:
     bh_p100: 160
     bh_p150b_civ2: 400
-    bh_galaxy_perf: 180
+  e2e_tier3:
+    bh_sc1: 260
 
 ttsim:
   unit:
