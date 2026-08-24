@@ -3,7 +3,7 @@
 
 import ttnn
 
-from .toy_spec_mul_program_spec import TP_A, TP_B, TP_OUT, create_program_spec
+from .toy_spec_mul_program_artifacts import create_program_artifacts
 
 
 def toy_spec_mul(
@@ -27,5 +27,8 @@ def toy_spec_mul(
 
     if out is None:
         out = ttnn.allocate_tensor_on_device(a.spec, a.device())
-    spec, run_args = create_program_spec(a, b, out, tile_limit=tile_limit)
-    return ttnn.generic_op([a, b, out], spec, run_args, {TP_A: 0, TP_B: 1, TP_OUT: 2})
+    # The factory owns every name it declares, so it returns the tensor bindings alongside the
+    # spec and run args. Nothing here needs to know what those names are.
+    io_tensors = [a, b, out]
+    spec, run_args, tensor_indices = create_program_artifacts(a, b, out, tile_limit=tile_limit)
+    return ttnn.generic_op(io_tensors, spec, run_args, tensor_indices)
