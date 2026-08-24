@@ -11,6 +11,8 @@ from typing import List, Optional
 import torch
 from loguru import logger
 
+import os
+
 import ttnn
 
 from ._utils import clamp, is_default_value, split_list
@@ -83,6 +85,23 @@ class SamplingParams:
 SAMPLING_PARAM_FIELDS = tuple(f.name for f in fields(SamplingParams))
 
 
+def uniform_from_device_seed(device_seed):
+    """Map one SeedManager device seed to a uniform in [0, 1) for the Python sampler.
+
+    Reuses the existing derivation rather than inventing a seeding scheme:
+    _hash_request_seed_to_device_seed(request_seed, counter, salt) already produces a
+    slot-independent, salt-separated per-token value, and align_seed_counters_to_positions
+    keeps the counter tied to the absolute decode position. Finishing the mapping on host
+    means the draw does not depend on per-core PRNG state, manual_seed ordering, or any SFPU
+    work between seeding and the draw -- the hazard 4b2f6978c9c had to work around.
+    """
+    x = (int(device_seed) * 0x2545F4914F6CDD1D) & _UINT64_MASK
+    x ^= x >> 33
+    x = (x * 0xFF51AFD7ED558CCD) & _UINT64_MASK
+    x ^= x >> 33
+    return (x >> 11) / float(1 << 53)
+
+
 @dataclass(frozen=True)
 class _TraceKey:
     penalties_on: bool
@@ -131,6 +150,7 @@ class SamplingGenerator:
         self.seed_manager = SeedManager(
             self.tt_sampling,
             max_batch_size=seed_batch_size,
+            salt_duplicate_seeds=getattr(args, "salt_duplicate_seeds", True),
         )
 
     def _new_trace_state(self):
@@ -172,10 +192,10 @@ class SamplingGenerator:
                 continue
         self._trace_states.clear()
 
-    def reset_prompt_tokens(self, prompt_tokens):
+    def reset_prompt_tokens(self, prompt_tokens, slots: list[int] | None = None):
         if not self._penalties_active:
             return
-        self.tt_penalties.reset_prompt_tokens(prompt_tokens)
+        self.tt_penalties.reset_prompt_tokens(prompt_tokens, slots=slots)
 
     def reset_output_state(self, tokens=None):
         if not self._penalties_active:
@@ -446,6 +466,41 @@ class SamplingGenerator:
         # Explicit request seeds update a persistent seed tensor every token;
         # run them directly so trace replay cannot observe stale seed state.
         use_internal_trace = enable_trace and not self.seed_manager.has_active_request_seed()
+        # TT_PY_SAMPLER_EAGER=1: never capture a sampling trace for the Python sampler; run it
+        # eagerly every step. The sampling trace is captured lazily on the FIRST decode step,
+        # i.e. while the decode trace is already live, and the Python sampler records ~40 ops
+        # there against ttnn.sampling's one. Eager sampling was the historical arrangement and
+        # carried the same error rate, so the trace buys little here.
+        if os.environ.get("TT_PY_SAMPLER_EAGER") and getattr(self.tt_sampling, "_py_sampler", False):
+            use_internal_trace = False
+
+        if getattr(self.tt_sampling, "_py_sampler_possible", False):
+            # Refresh the draw column OUTSIDE any trace: capture_trace runs _run_sampling
+            # inside the capture window, where device writes are illegal. The update is
+            # in-place into a persistent buffer, so trace replay picks it up each step.
+            seeds = getattr(self.seed_manager, "last_device_seeds", []) or []
+            batch = self.tt_sampling.max_batch_size * self.tt_sampling._sampling_dp
+            uniforms = []
+            for i in range(batch):
+                seed = seeds[i] if i < len(seeds) else None
+                if seed is None or int(seed) == MAX_UINT32:
+                    seed = self.seed_manager._next_unseeded_device_seed()
+                uniforms.append(uniform_from_device_seed(seed))
+            if os.environ.get("TT_PY_SEED_DEBUG"):
+                _seeded = [(i, int(seeds[i]), round(uniforms[i], 9))
+                           for i in range(min(len(seeds), batch))
+                           if seeds[i] is not None and int(seeds[i]) != MAX_UINT32]
+                logger.warning(f"[seed-dbg] batch={batch} len(seeds)={len(seeds)} "
+                               f"dp={self.tt_sampling._sampling_dp} "
+                               f"max_bs={self.tt_sampling.max_batch_size} seeded={_seeded[:6]}")
+            self.tt_sampling.set_rand_column(uniforms)
+            # REQUIRED, not optional. k/p/temp/rand are pushed with copy_host_to_device_tensor
+            # from OUTSIDE the sampling sub-device and then read by ops running on
+            # sub_core_grids; those two are not implicitly ordered, so without this barrier the
+            # draw reads stale parameters -- the visible symptom is different sampling params
+            # (greedy, temp=5, top_k=10) all producing byte-identical output. Grid placement
+            # cannot fix this one: the upload is a host->device transfer, not a device op.
+            ttnn.synchronize_device(self.mesh_device)
 
         if not use_internal_trace:
             tt_out = self._run_sampling(
@@ -780,10 +835,25 @@ class SeedManager:
     writes to device. `write_device_seed_values` writes explicit seeds only.
     """
 
-    def __init__(self, tt_sampling, max_batch_size=32):
+    def __init__(self, tt_sampling, max_batch_size=32, salt_duplicate_seeds=True):
         self.max_batch_size = max_batch_size
+        # When False, concurrent slots sharing a request seed keep salt 0, so two independent
+        # requests carrying the same seed stay bit-identical (the OpenAI/vLLM reproducibility
+        # contract, asserted by the vLLM TT sampling suite).
+        #
+        # #53077 added salting for "n>1 completions of one prompt with a fixed seed occupy
+        # several slots with the same request seed". That premise does not hold on the vLLM v1
+        # path: ParentRequest._get_child_sampling_params already gives child i `seed + i`
+        # (vllm/v1/engine/parallel_sampling.py), so n>1 children never reach the backend
+        # sharing a seed. There, every duplicate seed is genuinely independent requests that
+        # MUST match, and salting them is a regression. Demo paths that do replicate one seed
+        # across slots (e.g. simple_text_demo.py) keep the default and are unaffected.
+        self.salt_duplicate_seeds = salt_duplicate_seeds
         self.seeds = [None for _ in range(max_batch_size)]
         self.seed_counters = [0 for _ in range(max_batch_size)]
+        # Last per-slot device seeds pushed by get_new_values; the Python sampler turns these
+        # into its per-user uniforms so it draws from the same stream as the device PRNG path.
+        self.last_device_seeds = []
         # Disambiguates concurrent slots that carry the SAME explicit request
         # seed (n>1 completions of one prompt with a fixed seed). A slot whose
         # seed is unique among active slots always has salt 0, preserving the
@@ -840,6 +910,8 @@ class SeedManager:
         rather than a running count -- avoids re-colliding with a surviving
         duplicate after an earlier one finished and vacated its slot.
         """
+        if not self.salt_duplicate_seeds:
+            return 0
         taken = {
             self.seed_salts[other]
             for other in range(self.max_batch_size)
@@ -1118,5 +1190,6 @@ class SeedManager:
                 assert len(empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
                 new_seeds = self.max_batch_size * [new_seeds[empty_slots[0]]]
 
+        self.last_device_seeds = list(new_seeds)
         self.write_device_seed_values(new_seeds)
         self._reseted = False
