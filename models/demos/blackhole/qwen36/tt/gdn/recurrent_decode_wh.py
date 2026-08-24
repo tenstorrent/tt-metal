@@ -71,7 +71,7 @@ def _write_state_wh(h, k_row, delta, beta_t, outer_bf8=False):
     B, H, V = h.shape[0], h.shape[1], h.shape[3]
     _L1 = ttnn.L1_MEMORY_CONFIG
 
-    # [B,H] -> [B,H,1,1] via unsqueeze x2, not reshape -- see the decay_bhkv comment in the caller
+    # [B,H] -> [B,H,1,1] via unsqueeze x2, not reshape (see decay_bhkv in the caller)
     # for why (same tile-crossing cost, same fix).
     _beta_bh1 = ttnn.unsqueeze(beta_t, -1)
     beta_expanded = ttnn.unsqueeze(_beta_bh1, -1)
@@ -139,7 +139,7 @@ def recurrent_gated_delta_rule_decode_wh(
         q = ttnn.multiply(q, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
     k = l2_norm_ttnn(k, dim=-1)
 
-    # q/k arrive [B,1,H,K]; q_row/k_row need [B,H,1,K] -- a swap of dims 1,2, not a reshape that
+    # q/k arrive [B,1,H,K]; q_row/k_row need [B,H,1,K] -- a dim 1,2 swap, not a
     # adds/removes a singleton. ttnn.transpose does this in one op instead of reshape crossing the
     # tiled dims (H,K)->(1,K), same class of fix as k_col's transpose in _write_state_wh. MEASURED
     # (WH, B=32 H=16 K=128): 27.7us vs 51.6us per tensor (-46%), PCC 1.0 (exact).
@@ -147,7 +147,7 @@ def recurrent_gated_delta_rule_decode_wh(
     k_row = ttnn.transpose(k, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     # TRIED [B,H,1,V] here (matching v_read's natural matmul output, to skip v_read's reshape and
     # d_row's reshape below) and MEASURED it net-negative: removing those 2 reshapes saved ~27us
-    # but the subsequent subtract (delta = v_t - v_read) got ~39us MORE expensive operating on the
+    # but the following subtract (delta = v_t - v_read) got ~39us dearer on the
     # rank-4 [B,H,1,V] shape than on this [B,H,V] one, for a net +12us regression. Keep [B,H,V].
     v_t = ttnn.reshape(v, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG)
     beta_t = ttnn.reshape(beta, [B, H], memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -184,10 +184,10 @@ def recurrent_gated_delta_rule_decode_wh(
 
     # Decay before read; keep recurrence step L1-resident.
     # [B,H] -> [B,H,1,1] via two ttnn.unsqueeze calls, not one ttnn.reshape: a direct reshape moves
-    # the singleton across the tile-tiled dims in one step (B,H tiled -> 1,1 "tiled", i.e. every one
+    # the singleton across tile-tiled dims in one step (B,H tiled -> 1,1 tiled,
     # of the B*H scalars becomes its own separately-padded tile), which is expensive despite the
-    # tiny logical size. unsqueeze grows the rank one dim at a time without ever crossing a *pair*
-    # of tiled dims in a single op. MEASURED (WH, B=32 H=16, this reshape + the decay multiply
+    # tiny logical size. unsqueeze grows rank one dim at a time, never crossing
+    # a *pair* of tiled dims at once. MEASURED (WH, B=32 H=16, this reshape +
     # together): 171.9us vs 153.6us (-10.6%), identical result (PCC 1.0 vs the reshape version).
     _L1 = ttnn.L1_MEMORY_CONFIG
     _decay_bh1 = ttnn.unsqueeze(decay_t, -1)
@@ -205,7 +205,7 @@ def recurrent_gated_delta_rule_decode_wh(
     # no intermediate [B,H,K] reshape needed since k_row had no other consumer after this point.
     delta = ttnn.subtract(v_t, v_read, memory_config=_L1)
     # outer_bf8 is DELIBERATELY NOT tied to tile_opt: writing the recurrent-state increment at
-    # bf8 while h is bf16 is a real accuracy regression, not a free bandwidth win. It was bundled
+    # bf8 while h is bf16 is a real accuracy regression, not free bandwidth. It
     # into tile_opt in dc854ee0cc6 and cost ~0.04 of model-level logits PCC -- bisected against
     # the 2026-08-08 baseline: test_model_tp_decode_batched[B8] worst per-user PCC 0.99864 ->
     # 0.95927 there, degrading further to 0.94561 by HEAD, and back to 0.99800 with this False.
@@ -215,14 +215,14 @@ def recurrent_gated_delta_rule_decode_wh(
     # tile-native slices) is numerics-neutral and stays on.
     h = _write_state_wh(h=h, k_row=k_row, delta=delta, beta_t=beta_t, outer_bf8=False)
 
-    # o = q @ h. q_row was deliberately left at its incoming dtype above. Only cast it up when h is
+    # o = q @ h. q_row keeps its dtype; cast up only when h is
     # fp32 (the high_precision path, where k/v/beta/g -- unlike q -- were already cast to fp32
     # early): ttnn.matmul natively accepts mixed BF16 x BFLOAT8_B inputs (proven by the v_read
     # matmul above, which never casts k_row to match h at all), so unconditionally matching q_row
-    # to h's dtype was actively harmful once h became bfloat8_b -- it downcast q_row BF16 -> BFP8
+    # to h's dtype turned harmful once h became bfloat8_b: it downcast q_row to
     # for no reason, paying an extra typecast AND losing precision versus just leaving q_row at
     # BF16 and letting the matmul mix dtypes like v_read's already does. MEASURED (WH Tracy
-    # capture): that cast + the resulting BFP8 x BFP8 matmul cost ~26us + narrower precision for
+    # BFP8, and that cast plus the BFP8 x BFP8 matmul cost ~26us and precision
     # zero benefit over BF16 x BFP8 -> BF16.
     if h.dtype == ttnn.float32 and q_row.dtype != ttnn.float32:
         q_row = ttnn.typecast(q_row, ttnn.float32)
@@ -233,7 +233,7 @@ def recurrent_gated_delta_rule_decode_wh(
 
     # tile_opt: leave o at the matmul's native [B,H,1,V] -- reshaping to [B,1,H,V] crosses the tiled
     # pair (1,V)->(H,V) for no benefit, since the caller (forward_decode) rms_norms on this layout
-    # (last dim is still V) and does its own single reshape to [1,B,H*V] for the gate/out-proj.
+    # (last dim is still V) and reshapes once to [1,B,H*V] for gate/out-proj.
     # Otherwise return the original [B,1,H,V] the 27B caller path expects.
     if tile_opt:
         return o_t, h
