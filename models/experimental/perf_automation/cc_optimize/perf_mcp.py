@@ -2760,6 +2760,14 @@ def _run_full_pipeline_ms():
         cmd += ["-k", case]
     per_tokens = []
     stage_ms = {}
+    # EVERY SAMPLE, NOT THE LAST ONE. The headline is the median of _FULLPIPE_SAMPLES readings
+    # (`dec` below) precisely because one reading is noise; the per-stage split was a plain
+    # overwrite, so the report showed decode as the median beside the SAME stage as whatever the
+    # final sample happened to be -- 12.87 ms and 20.49 ms for one quantity in one report. Worse
+    # than cosmetic: `stage_win` is computed from these numbers and gates a candidate record, so a
+    # single slow or fast sample could fabricate a stage win or bury a real one while the headline
+    # it sits beside was properly filtered. Collect them all and take the same median.
+    stage_ms_samples: dict = {}
     stage_bytes: dict = {}
     stage_paths = {}
     stage_isl = {}
@@ -2861,6 +2869,7 @@ def _run_full_pipeline_ms():
                     _sv = float(line.split("]=", 1)[1].split()[0])
                     if _nm and _sv > 0:
                         stage_ms[_nm] = _sv
+                        stage_ms_samples.setdefault(_nm, []).append(_sv)
                         # THE PATH TRAVELS WITH THE NUMBER. It was printed on this same line and
                         # dropped, so a stage that fell back to EAGER arrived at the report
                         # indistinguishable from a traced one -- and was then scored against a band
@@ -3037,6 +3046,12 @@ def _run_full_pipeline_ms():
     if per_tokens:
         if headline_units:
             os.environ["PERF_MCP_LAST_HEADLINE_UNIT"] = headline_units[-1]
+        # The same filter the headline gets, applied to each stage independently: a stage missing
+        # from a sample simply has fewer readings, and median() of what it did report is still the
+        # right answer for it.
+        for _sn, _svals in stage_ms_samples.items():
+            if _svals:
+                stage_ms[_sn] = float(statistics.median(_svals))
         _persist_stage_ms(
             stage_ms,
             stage_paths,
