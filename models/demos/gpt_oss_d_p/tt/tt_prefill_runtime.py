@@ -393,7 +393,7 @@ class TtPrefillRuntime:
             mesh_shape=c.mesh_shape,
             sp_axis=c.sp_axis,
             num_users=c.num_users,
-            chunk_size=c.chunk_size,
+            chunk_size=c.default_chunk_size,
             num_kv_heads=self.hf_config.num_key_value_heads,
             head_dim=self.hf_config.head_dim,
             path=path,
@@ -424,7 +424,7 @@ class TtPrefillRuntime:
 
         return [_block(kv.k), _block(kv.v)]
 
-    def gather_layer(self, slot_id: int, layer_idx: int, n_tokens: int, kv_caches=None):
+    def gather_layer(self, slot_id: int, layer_idx: int, n_tokens: int, kv_caches=None, chunk_size=None):
         """Read one layer's device K/V cache back to NATURAL token order (un-rotating the block-cyclic
         SP layout). Returns (k, v) torch tensors in DEVICE convention: K is Meta-RoPE swizzled over the
         (full) head_dim — the caller reconciles vs the HF golden; V is raw. Shapes:
@@ -435,7 +435,8 @@ class TtPrefillRuntime:
         nkv = self.hf_config.num_key_value_heads
         slot = slot_id * self.config.num_layers + layer_idx
         # shard-row -> natural global position (inverse of the update_padded_kv_cache writer).
-        p = blockcyclic_positions(sp, self.config.default_chunk_size, self.config.max_seq_len)
+        chunk_size = chunk_size if chunk_size is not None else self.config.default_chunk_size
+        p = blockcyclic_positions(sp, chunk_size, self.config.max_seq_len)
 
         def gather(cache_tensor, col):
             dts = ttnn.get_device_tensors(cache_tensor)
@@ -504,6 +505,7 @@ class TtPrefillRuntime:
         n_chunks: int,
         trace_dir=None,
         first_layer_idx: int = 0,
+        chunk_size=None,
         real_len=None,
         pt_path_override=None,
     ) -> float:
@@ -534,12 +536,11 @@ class TtPrefillRuntime:
         trace_dir = resolve_trace_dir(raw_trace)
         token_ids = list(json.load(open(Path(trace_dir) / "metadata.json"))["token_ids"])
         # Only score tokens this run filled (matches MiniMax / avoids comparing past NCHUNKS*chunk_size).
-        n_tokens = min(len(token_ids), n_chunks * self.config.default_chunk_size)
+        chunk_size = chunk_size if chunk_size is not None else self.config.default_chunk_size
+        n_tokens = min(len(token_ids), n_chunks * chunk_size)
         if real_len is not None:
             n_tokens = min(n_tokens, int(real_len))
-        assert (
-            n_tokens > 0
-        ), f"kv_cache_pcc_check: n_tokens=0 (n_chunks={n_chunks}, chunk_size={self.config.default_chunk_size})"
+        assert n_tokens > 0, f"kv_cache_pcc_check: n_tokens=0 (n_chunks={n_chunks}, chunk_size={chunk_size})"
 
         head_dim = self.hf_config.head_dim
         rotary_dim = getattr(self.hf_config, "rotary_dim", head_dim)
@@ -563,7 +564,9 @@ class TtPrefillRuntime:
         min_k, min_v = 1.0, 1.0
         for L in range(self.config.num_layers):
             gL = first_layer_idx + L
-            dev_k, dev_v = self.gather_layer(slot_id=slot_id, layer_idx=L, n_tokens=n_tokens, kv_caches=kv_caches)
+            dev_k, dev_v = self.gather_layer(
+                slot_id=slot_id, layer_idx=L, n_tokens=n_tokens, kv_caches=kv_caches, chunk_size=chunk_size
+            )
             with safe_open(str(kv_dir / f"layer_{gL}.safetensors"), framework="pt") as h:
                 g_k = h.get_tensor(f"key_cache_layer_{gL}").float()[:, :, :n_tokens, :][..., src]  # HF -> Meta
                 g_v = h.get_tensor(f"value_cache_layer_{gL}").float()[:, :, :n_tokens, :]
