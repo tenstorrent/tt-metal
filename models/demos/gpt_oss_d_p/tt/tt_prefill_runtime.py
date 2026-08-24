@@ -49,7 +49,7 @@ class TtPrefillRuntimeConfig:
     max_seq_len: int  # per-user KV-cache length in tokens; must be a multiple of chunk_size
     mesh_shape: tuple = (4, 8)  # (SP rows, TP cols) on the Blackhole galaxy
     default_chunk_size: int = (
-        5120  # tokens per prefill_chunk() call unless the call overrides; one-shot sets == max_seq_len
+        8192  # per prefill_chunk() call unless overridden (8k divides 128k context); one-shot sets == max_seq_len
     )
     # Variable chunk length: additional chunk sizes to support alongside `chunk_size`. Each supported
     # size gets its own indexed rope (the block-cyclic period is chunk-size-specific); the MoE buffers

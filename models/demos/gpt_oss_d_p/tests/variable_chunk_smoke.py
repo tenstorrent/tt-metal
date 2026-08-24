@@ -28,7 +28,7 @@ GALAXY_NUM_DEVICES = 32
 # Sizes overridable via env: 1k/8k is the 128k-context pair (131072 = 128*1024 = 16*8192);
 # 10240 was the original large size (does NOT divide 128k).
 SMALL = int(os.getenv("VARCHUNK_SMALL", "1024"))
-LARGE = int(os.getenv("VARCHUNK_LARGE", "10240"))
+LARGE = int(os.getenv("VARCHUNK_LARGE", "8192"))
 
 
 def _raise_nproc_limit():
@@ -104,7 +104,7 @@ def main():
         t_large = time_prefill(LARGE)  # SAME 1024 real tokens padded into a 10240 chunk (~10x work)
         print(
             f"[varchunk] RESULT ({num_layers}L): prefill 1024 real tokens — "
-            f"as 1k chunk = {t_small * 1000:.1f} ms, as 10k chunk (padded) = {t_large * 1000:.1f} ms, "
+            f"as {SMALL}-tok chunk = {t_small * 1000:.1f} ms, as {LARGE}-tok chunk (padded) = {t_large * 1000:.1f} ms, "
             f"speedup = {t_large / t_small:.1f}x",
             flush=True,
         )
