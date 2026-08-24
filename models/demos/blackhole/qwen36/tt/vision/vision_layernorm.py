@@ -98,7 +98,10 @@ class LayerNorm(LightweightModule):
                 memory_config=self.sharded_output_config,
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.HiFi4,
-                    math_approx_mode=False,
+                    # Also gated: WormholeComputeKernelConfig defaults math_approx_mode to TRUE, so
+                    # hardcoding False here would change behavior on every un-gated config too.
+                    # The interleaved branch below uses False; match it only where the gate is on.
+                    math_approx_mode=not self.sharded_fp32_acc,
                     # SCOPED via self.sharded_fp32_acc, which vision_block gates on
                     # tp_common.wh_9b_n300_vision (Wormhole 9B on N300 only). Off everywhere else,
                     # which preserves the previously shipped behavior on Blackhole / the 27B /
