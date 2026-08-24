@@ -378,18 +378,36 @@ these magnitudes, but it runs in the unhelpful direction: our figures are a
 fraction optimistic rather than conservative. It is worth knowing when a
 measurement sits right on the threshold, and irrelevant otherwise.
 
-### 6.3 Direction: false regressions and false improvements
+### 6.3 What about false improvements?
 
-`move` is a range, so the counts below describe a **two-sided** rule,
-`|delta| > 2% AND |delta| > 30 cycles`. A regression-only gate fires on at most
-the same set and in practice about half as often, since only one of the two
-orderings is a slowdown. Nothing about improvements is missing from the
-measurement.
+Our measurement does not care which direction a number moved. `move` is just the
+gap between the fastest and slowest run, so a point is counted the same whether
+the noise made it look faster or slower.
 
-Whether the gate should *report* improvements is a design choice. An unexplained
-speedup is a common signature of a test that stopped doing work — an early
-return, an optimised-away loop. Suggested: report them at the same threshold, do
-not fail on them.
+That means the counts in this document already answer the *harder* version of the
+question: how often a gate would fire on **any** change beyond 2% and 30 cycles,
+in either direction.
+
+Concretely: if two runs of unchanged code come out 100,000 and 102,000, whether a
+gate calls that a regression depends purely on which one it happened to use as
+the baseline. Our count includes the point either way.
+
+A gate that only fails on slowdowns can therefore only fire **less** often —
+roughly half as often, since for any two runs only one of the two orderings is a
+slowdown. Nothing about improvements is missing from these numbers. If you later
+decide to flag speedups too, the figures here already cover that case.
+
+**Whether it should is a separate question, and a design choice rather than a
+measurement one.**
+
+A large unexplained speedup is a common sign that a test stopped doing its work —
+an early return, a loop the compiler removed, an output nobody writes any more. A
+regression-only gate never sees any of those. The cost of catching them is that
+every genuine optimisation trips the gate as well.
+
+The middle option, and the one we would suggest: **report** improvements that
+clear the same threshold, but do not **fail** on them. The information is free and
+the false failures are not.
 
 ### 6.4 Results
 
