@@ -6,6 +6,8 @@
 
 #include <algorithm>
 
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -58,6 +60,31 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
             scores.dtype() == tt::tt_metal::DataType::BFLOAT16,
             "fused_experts: routing_scores must be BFLOAT16, got {}",
             scores.dtype());
+        // Unlike x_tok, the routing tensors are NOT sized to the input's tile: the leader kernel
+        // (compute_expert_ids.cpp) reads them byte-wise via a hand-rolled tile_elem_offset that
+        // bakes in face_r_dim == 16 and the (16x16 face, 4 faces per tile) 32x32 layout. A tiny
+        // routing tile would compute wrong byte offsets and read garbage silently, so require
+        // 32x32 explicitly. (Regenerating them at 32x32 costs nothing -- the tile carries at most
+        // B*top_k <= 32*16 elements either way, and cb_routing is dominated by the O(E) selection
+        // scratch, not the routing tile itself.)
+        TT_FATAL(
+            idx.tensor_spec().tile().get_height() == tt::constants::TILE_HEIGHT &&
+                idx.tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH,
+            "fused_experts: routing_indices must use the standard {}x{} tile (leader reads them "
+            "with a 16x16-face-baked offset function); got {}x{}",
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH,
+            idx.tensor_spec().tile().get_height(),
+            idx.tensor_spec().tile().get_width());
+        TT_FATAL(
+            scores.tensor_spec().tile().get_height() == tt::constants::TILE_HEIGHT &&
+                scores.tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH,
+            "fused_experts: routing_scores must use the standard {}x{} tile (leader reads them "
+            "with a 16x16-face-baked offset function); got {}x{}",
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH,
+            scores.tensor_spec().tile().get_height(),
+            scores.tensor_spec().tile().get_width());
         // Pages are read by page id, so both must be interleaved rather than sharded.
         TT_FATAL(
             !idx.memory_config().is_sharded() && !scores.memory_config().is_sharded(),
@@ -216,19 +243,39 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
     // of a short prefill chunk) are packed into dim -2, each with its own routing-weight row, and
     // all B are computed in one op.
     //
-    // B is capped at a single 32-row tile, and the batch/seq dims of a [1, B, S, H] activation must
-    // therefore be folded into dim -2 (B*S tokens) by the caller. That is not an arbitrary limit:
-    // batching pays off here only because ONE fetch of an expert's weights serves every token, which
-    // requires every token's activation to be resident on every core simultaneously. Tokens packed
-    // in dim -2 share a single tile row, so the tile counts, the DST budget, the L1 footprint and
-    // the matmul cost are all identical to the single-token case. Tokens spread over separate tile
-    // rows (e.g. an unfolded [1, B, 1, H]) would instead multiply both the resident activation
-    // (k_tiles tiles) and the gathered activation block (num_experts * i_tiles tiles, already the
-    // dominant L1 consumer) by B, and waste 31 of every 32 matmul rows on tile padding.
+    // The token-row-shaped pipeline (input, output, cb_act, cb_out, cb_mm, cb_rscalar, cb_down_out,
+    // cb_acc, cb_wtmp) all track the input's tile height, so B is capped at that tile height rather
+    // than a fixed 32. Weights and routing stay 32x32. The batch/seq dims of a [1, B, S, H]
+    // activation must still be folded into dim -2 (B*S tokens) by the caller: batching pays off here
+    // only because ONE fetch of an expert's weights serves every token, which requires every token's
+    // activation to be resident on every core simultaneously. Tokens sharing one tile row is what
+    // keeps the tile counts, the DST budget, the L1 footprint and the matmul cost identical to the
+    // single-token case; tokens spread over separate tile rows (e.g. an unfolded [1, B, 1, H]) would
+    // multiply both the resident activation (k_tiles tiles) and the gathered activation block
+    // (num_experts * i_tiles tiles, already the dominant L1 consumer) by B.
+    const auto& input_tile = x.tensor_spec().tile();
+    const uint32_t input_tile_h = input_tile.get_height();
+    const uint32_t input_tile_w = input_tile.get_width();
     TT_FATAL(
-        batch >= 1 && batch <= TILE_DIM,
-        "fused_experts: batch (input_tensor dim -2) must be in [1, {}], got {}",
-        TILE_DIM,
+        input_tile_w == tt::constants::TILE_WIDTH,
+        "fused_experts: input_tensor tile width ({}) must be {} -- the token-row tile only varies "
+        "in height; width is fixed by the 16x16 face layout the routing / weight kernels use",
+        input_tile_w,
+        tt::constants::TILE_WIDTH);
+    // Only tile heights whose face layout is well-defined (num_faces along H is a whole number of
+    // face rows): height <= 16 (one face row) or height == 32 (two face rows). Sizes in between
+    // would leave a partial second face row that the kernel-side layout math does not handle.
+    TT_FATAL(
+        input_tile_h == tt::constants::TILE_HEIGHT || input_tile_h <= tt::constants::FACE_HEIGHT,
+        "fused_experts: input_tensor tile height ({}) must be either {} or <= {} (partial second "
+        "face row is not supported)",
+        input_tile_h,
+        tt::constants::TILE_HEIGHT,
+        tt::constants::FACE_HEIGHT);
+    TT_FATAL(
+        batch >= 1 && batch <= input_tile_h,
+        "fused_experts: batch (input_tensor dim -2) must be in [1, tile height {}], got {}",
+        input_tile_h,
         batch);
     const auto& x_shape = x.logical_shape();
     for (int d = 0; d + 2 < static_cast<int>(x_shape.rank()); ++d) {
@@ -285,6 +332,11 @@ tt::tt_metal::operation::Hash FusedExpertsDeviceOperation::compute_program_hash(
     // top_k / scaling / eps are compile-time args of the routing kernel, so they have to key the
     // program alongside the weight addresses. The ids' dtype does too (it selects the decode), and
     // it rides along in the routing_indices spec.
+    // Input tile height is baked into every token-row-shaped CB's tile descriptor and into the
+    // routing-scalar layout CT args, so tiny-tile programs must not alias a 32x32 program in the
+    // cache. Fold the input tile's H and W explicitly (the default spec-only hash keys on tensor
+    // spec, but not on the tile shape field within it).
+    const auto& input_tile = tensor_args.input_tensor.tensor_spec().tile();
     auto hash = tt::tt_metal::operation::hash_operation<FusedExpertsDeviceOperation>(
         attributes.num_experts,
         attributes.intermediate_size,
@@ -298,7 +350,9 @@ tt::tt_metal::operation::Hash FusedExpertsDeviceOperation::compute_program_hash(
         tensor_args.routing_scores,
         tensor_args.gate_up_weights.front(),
         tensor_args.down_weights.front(),
-        weight_addresses);
+        weight_addresses,
+        input_tile.get_height(),
+        input_tile.get_width());
     return hash;
 }
 
@@ -309,16 +363,21 @@ FusedExpertsDeviceOperation::spec_return_value_t FusedExpertsDeviceOperation::co
     //   act       = silu(clamp(gate, max=limit)) * clamp(up, -limit, limit),
     //               where [gate, up] = x @ gate_up_w[hit_ids[i]];
     //   output[b] = sum_i routing_weights[b, hit_ids[i]] * (act[b] @ down_w[hit_ids[i]]).
-    // Shape [1, B, H] (the B token rows, padded to a 32-row tile in TILE layout), BFLOAT16.
-    // H is the hidden size (== down weight output dim == input hidden dim).
-    const uint32_t batch = static_cast<uint32_t>(tensor_args.input_tensor.logical_shape()[-2]);
-    const uint32_t hidden = static_cast<uint32_t>(tensor_args.input_tensor.logical_shape()[-1]);
+    // Shape [1, B, H] (the B token rows, padded to the input's tile height in TILE layout),
+    // BFLOAT16. H is the hidden size (== down weight output dim == input hidden dim).
+    //
+    // The output inherits the input tensor's page config so its tile height matches the input's
+    // (rather than defaulting to 32x32). At B <= 16 that leaves the output stored as a single tile
+    // row too, so downstream ops can keep the same tiny tile without an intervening retile.
+    const auto& input_tensor = tensor_args.input_tensor;
+    const uint32_t batch = static_cast<uint32_t>(input_tensor.logical_shape()[-2]);
+    const uint32_t hidden = static_cast<uint32_t>(input_tensor.logical_shape()[-1]);
     const ttnn::Shape output_shape({1, batch, hidden});
     return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            input_tensor.tensor_spec().page_config(),
             attributes.output_memory_config));
 }
 

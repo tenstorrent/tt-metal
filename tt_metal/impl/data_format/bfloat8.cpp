@@ -79,7 +79,6 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
     auto subtile_cols = face_W;
     uint32_t num_exp_words = tt::round_up(num_faces * face_H, l1_alignment) / 4;
     uint32_t num_tile_words = tile_HW / 4;
-    uint32_t num_bfp8_in_tile = num_tile_words + num_exp_words;
 
     // the exponent index will always be 0 when tile_HW == 16, between 0-1 when tile_HW == 32, and between 0-3 otherwise
     uint32_t exp_bit_mask;
@@ -99,6 +98,9 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
         tile.has_value() ? tile->get_tile_size(tt::DataFormat::Bfp8_b) : tile_size(tt::DataFormat::Bfp8_b);
     TT_ASSERT(size_bytes % single_bfp8_tile_size == 0);
     uint64_t num_tiles = size_bytes / single_bfp8_tile_size;
+    // Per-tile stride in 32-bit words, including trailing DRAM-alignment padding after the mantissa section.
+    // Within-tile offsets (exponents at the start, then mantissas) still use num_exp_words / num_tile_words.
+    uint32_t words_per_tile = single_bfp8_tile_size / num_elements_in_dword;
 
     int data_index;
     int subtile_r;
@@ -128,15 +130,15 @@ std::vector<float> unpack_bfp8_tiles_into_float_vec(
                         data_index =
                             (tr * (subtiles_in_tile_col * face_HW / 4) + tc * (face_HW / 4) + i * (face_W / 4) +
                              j / 4);  // Each uint32_t contains 4 BFP8 values. Divide data index by 4.
-                        int64_t tile_and_data_index = data_index + (num_bfp8_in_tile * tile_index);
+                        int64_t tile_and_data_index = data_index + (words_per_tile * tile_index);
 
-                        int64_t exponent_index = (data_index >> 4) + (num_bfp8_in_tile * tile_index);
+                        int64_t exponent_index = (data_index >> 4) + (words_per_tile * tile_index);
 
                         // Extract the uint32_t value that stores the shared exponent for this set
                         // of data. Each 32 bit word is shared amongst 64 datums
                         exp_word = bfp8_tiles[exponent_index];
 
-                        int64_t num_exponent_words_skip = tile_index * num_exp_words;
+                        int64_t num_exponent_words_skip = tile_index * (words_per_tile - num_tile_words);
                         sub_word_index = ((tile_and_data_index - num_exponent_words_skip) >> 2) &
                                          exp_bit_mask;  // Extract the byte in which the shared exponent is stored. Each
                                                         // byte is shared amongst 16 datums.

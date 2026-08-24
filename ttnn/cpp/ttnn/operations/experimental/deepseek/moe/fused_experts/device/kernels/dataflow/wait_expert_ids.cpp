@@ -74,8 +74,13 @@ void kernel_main() {
     constexpr uint32_t experts_block = get_compile_time_arg_val(21);
     constexpr uint32_t gate_up_reserve_tiles = get_compile_time_arg_val(22);
     constexpr uint32_t down_reserve_tiles = get_compile_time_arg_val(23);
+    // Routing-scalar tile geometry (bf16 tile matching the input's height; width fixed at 32).
+    constexpr uint32_t rscalar_tile_h = get_compile_time_arg_val(24);
+    constexpr uint32_t rscalar_face_r_dim = get_compile_time_arg_val(25);
+    constexpr uint32_t rscalar_num_face_rows = get_compile_time_arg_val(26);
+    constexpr uint32_t rscalar_tile_bytes = get_compile_time_arg_val(27);
 
-    constexpr auto gate_up_args = TensorAccessorArgs<24>();
+    constexpr auto gate_up_args = TensorAccessorArgs<28>();
     constexpr auto down_args = TensorAccessorArgs<gate_up_args.next_compile_time_args_offset()>();
     // The gate_up then down weight base addresses (one per expert) follow the accessor args
     // in the compile-time args, indexed by the runtime-selected expert id.
@@ -127,5 +132,9 @@ void kernel_main() {
         gate_up_reserve_tiles,
         down_reserve_tiles,
         leader_noc_x,
-        leader_noc_y);
+        leader_noc_y,
+        rscalar_tile_h,
+        rscalar_face_r_dim,
+        rscalar_num_face_rows,
+        rscalar_tile_bytes);
 }

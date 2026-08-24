@@ -4,6 +4,14 @@ from typing import Any
 
 import ttnn
 
+# The single-user tile is a 1x32 tile that is used when batch size = 1.
+# This avoids the overhead of having 31 rows of padding, reducing size of activations & CBs 32 times.
+SINGLE_USER_TILE = ttnn.Tile((1, 32))
+
+# The full tile is a 32x32 tile that is used by default. For batch = 1, usage of this tile must be eliminated.
+FULL_TILE = ttnn.Tile((32, 32))
+
+
 # ``ttnn.ReadDeviceProfiler`` is a host call that syncs the device; it must never
 # run inside a ``ttnn`` trace capture (which records device ops only and forbids
 # host round-trips / syncs mid-capture). The traced decode path reuses several of
@@ -116,18 +124,37 @@ def rectangular_core_grid(num_cores: int, device) -> ttnn.CoreGrid:
 
 
 def print_l1_tensors(device):
+    """Print allocated L1 buffers and the unallocated holes (voids) between them.
+
+    A void is a gap in the per-bank address space that sits between occupied
+    ranges: addresses below and above it are allocated, but the gap itself is not.
+    Overlapping allocations are merged before voids are measured, so a hole is
+    reported only when no buffer covers that address.
+    """
     device_info = ttnn._ttnn.reports.get_buffers(device)
     l1_buffers = [b for b in device_info if b.buffer_type == ttnn.BufferType.L1]
     if not l1_buffers:
         print("No L1 buffers found.")
         return
 
+    l1_buffers = sorted(l1_buffers, key=lambda b: (b.address, b.max_size_per_bank))
+
     headers = ("#", "Address", "Size (bytes)", "Layout")
-    rows = [
-        (str(i), f"{b.address}", f"{b.max_size_per_bank:,}", str(b.buffer_layout)) for i, b in enumerate(l1_buffers)
-    ]
+    rows = []
+    occupied_end = None
+    total_void_size = 0
+    for i, b in enumerate(l1_buffers):
+        if occupied_end is not None and b.address > occupied_end:
+            void_size = b.address - occupied_end
+            total_void_size += void_size
+            rows.append(("", f"{occupied_end}", f"{void_size:,}", "VOID"))
+        rows.append((str(i), f"{b.address}", f"{b.max_size_per_bank:,}", str(b.buffer_layout)))
+        buf_end = b.address + b.max_size_per_bank
+        occupied_end = buf_end if occupied_end is None else max(occupied_end, buf_end)
+
     total_l1_size = sum(b.max_size_per_bank for b in l1_buffers)
     rows.append(("", "Total", f"{total_l1_size:,}", ""))
+    rows.append(("", "Voids", f"{total_void_size:,}", ""))
 
     widths = [max(len(headers[i]), *(len(r[i]) for r in rows)) for i in range(len(headers))]
 
@@ -147,6 +174,19 @@ def rectangular_core_range_set(num_cores: int, device) -> ttnn.CoreRangeSet:
     """``CoreRangeSet`` for :func:`rectangular_core_grid`."""
     core_grid = rectangular_core_grid(num_cores, device)
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))})
+
+
+def with_shard_height(memory_config: ttnn.MemoryConfig, shard_height: int) -> ttnn.MemoryConfig:
+    """Return a copy of ``memory_config`` with its shard height replaced by ``shard_height``."""
+    shard_spec = memory_config.shard_spec
+    if shard_spec is None:
+        raise ValueError("memory_config has no shard_spec to override")
+    new_shard_spec = ttnn.ShardSpec(
+        shard_spec.grid,
+        [shard_height, shard_spec.shape[1]],
+        shard_spec.orientation,
+    )
+    return ttnn.MemoryConfig(memory_config.memory_layout, memory_config.buffer_type, new_shard_spec)
 
 
 def width_sharded_l1_config(

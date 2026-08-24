@@ -124,8 +124,9 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
 
     uint32_t num_exp_words = tt::round_up(num_faces * face_H, l1_alignment) / num_exps_in_dword;
     uint32_t num_tile_words = tile_HW / num_elements_in_dword;
-    int num_bfp_dwords_in_tile = num_tile_words + num_exp_words;
     int num_dwords_per_row = subtile_cols / num_elements_in_dword;
+    // Per-tile stride in 32-bit words, including trailing DRAM-alignment padding after the mantissa section.
+    uint32_t words_per_tile = single_bfp_tile_size / 4;
 
     std::vector<float> float_vec;
     float_vec.resize(num_tiles * num_float_in_tile);
@@ -143,15 +144,15 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
                              tc * (face_HW / num_elements_in_dword) + i * num_dwords_per_row +
                              j / num_elements_in_dword);  // Each uint32_t contains 8 BFP4 values. Divide data index by
                                                           // 8
-                        int tile_and_data_index = data_index + (num_bfp_dwords_in_tile * tile_index);
+                        int tile_and_data_index = data_index + (words_per_tile * tile_index);
 
                         int exponent_index =
-                            (data_index >> data_dwords_per_exp_dword_log2) + (num_bfp_dwords_in_tile * tile_index);
+                            (data_index >> data_dwords_per_exp_dword_log2) + (words_per_tile * tile_index);
                         // Extract the uint32_t value that stores the shared exponent for this set
                         // of data. Each 32 bit word is shared amongst 64 datums
                         exp_word = bfp_tiles[exponent_index];
 
-                        int num_exponent_words_skip = tile_index * num_exp_words;
+                        int num_exponent_words_skip = tile_index * (words_per_tile - num_tile_words);
                         sub_word_index = ((tile_and_data_index - num_exponent_words_skip) >> data_dwords_per_exp_log2) &
                                          exp_bit_mask;  // Extract the byte in which the shared exponent is stored. Each
                                                         // byte is shared amongst 16 datums.
