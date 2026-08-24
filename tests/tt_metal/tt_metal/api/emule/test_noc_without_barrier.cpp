@@ -9,12 +9,12 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "device_fixture.hpp"
-#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -63,7 +63,7 @@ TEST_F(UnitMeshFixture, NoC_Barrier_Missing_SanityCheck) {
     SetRuntimeArgs(program, kernel, logical_core, {dst_buf->address()});
 
     EXPECT_DEATH(
-        slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
         ".*Race Condition: cb_pop_front.*called while a NoC read is still pending.*");
 }
 
@@ -121,7 +121,7 @@ TEST_F(UnitMeshFixture, NoC_Barrier_Missing_AddrGen_SanityCheck) {
     SetRuntimeArgs(program, kernel, logical_core, {src_buf->address(), dst_buf->address()});
 
     EXPECT_DEATH(
-        slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
         ".*Race Condition: cb_pop_front.*called while a NoC read is still pending.*");
 }
 
@@ -171,7 +171,7 @@ TEST_F(UnitMeshFixture, NoC_Barrier_Present_NoViolation) {
     SetRuntimeArgs(program, kernel, logical_core, {dst_buf->address()});
 
     // Must NOT abort.
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -224,7 +224,7 @@ TEST_F(UnitMeshFixture, NoC_Barrier_MultiRead_SingleBarrier_NoViolation) {
     SetRuntimeArgs(program, kernel, logical_core, {dst_buf->address()});
 
     // Must NOT abort — the single barrier cleared both in-flight reads.
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");

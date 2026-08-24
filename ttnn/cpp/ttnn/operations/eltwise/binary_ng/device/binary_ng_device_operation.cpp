@@ -16,17 +16,48 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::binary_ng {
 
 namespace utils {
+// ADD/SUB/RSUB take fast_and_approximate_mode=false to opt into the accurate SFPU kernel, whose
+// only benefit is rounding the bfloat16 result to nearest even. Reject the flag when the result is
+// not bfloat16 rather than silently accepting a request we cannot honour.
+void validate_fast_and_approximate_mode(
+    BinaryOpType binary_op_type,
+    const std::optional<bool>& fast_and_approximate_mode,
+    DataType output_dtype,
+    tt::ARCH arch) {
+    using enum BinaryOpType;
+    const bool accurate_mode_requested = fast_and_approximate_mode.has_value() && !*fast_and_approximate_mode;
+    if (!accurate_mode_requested) {
+        return;
+    }
+    if (binary_op_type != ADD && binary_op_type != SUB && binary_op_type != RSUB) {
+        return;
+    }
+    TT_FATAL(
+        output_dtype == DataType::BFLOAT16,
+        "fast_and_approximate_mode=false is only supported for a BFLOAT16 output on binary operation {}, got output "
+        "dtype {}. The accurate path exists to round the bfloat16 result to nearest even, so it has no effect for "
+        "other output dtypes; leave the flag unset (or pass true) for those.",
+        binary_op_type,
+        output_dtype);
+    TT_FATAL(
+        !(binary_op_type == RSUB && arch == tt::ARCH::QUASAR),
+        "fast_and_approximate_mode=false is not supported for RSUB on Quasar. "
+        "The RSUB SFPU kernel is not available on this architecture. "
+        "Use ttnn.subtract with swapped operands, or leave fast_and_approximate_mode unset (or pass true).");
+}
+
 bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_approximate_mode = false) {
     using enum BinaryOpType;
     using enum DataType;
     switch (val) {
         case ADD:
         case SUB:
+        case RSUB:
+            return !fast_and_approximate_mode || (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16));
         case LOGICAL_AND:
         case LOGICAL_OR:
         case LOGICAL_XOR:
-        case SQUARED_DIFFERENCE:
-        case RSUB: return a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16);
+        case SQUARED_DIFFERENCE: return a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16);
         case MUL:
             return !fast_and_approximate_mode || (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16));
         case DIV: return !fast_and_approximate_mode || (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32);
@@ -549,6 +580,11 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
 
     DataType dtype_a = input_tensor_a.dtype();
     DataType dtype_b = input_tensor_b.dtype();
+    ttnn::operations::binary_ng::utils::validate_fast_and_approximate_mode(
+        binary_op_type,
+        fast_and_approximate_mode,
+        output_tensor ? output_tensor->dtype() : output_dtype.value_or(dtype_a),
+        input_tensor_a.device()->arch());
     bool is_sfpu_op = (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(
         binary_op_type, dtype_a, dtype_b, fast_and_approximate_mode.value_or(false)));
     bool is_quant_op = ttnn::operations::binary::utils::is_quant_op(binary_op_type);
@@ -696,6 +732,11 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     }
 
     DataType dtype_a = input_tensor_a.dtype();
+    ttnn::operations::binary_ng::utils::validate_fast_and_approximate_mode(
+        binary_op_type,
+        fast_and_approximate_mode,
+        output_tensor ? output_tensor->dtype() : output_dtype.value_or(dtype_a),
+        input_tensor_a.device()->arch());
     bool is_sfpu_op = (ttnn::operations::binary_ng::utils::is_binary_sfpu_op(
         binary_op_type, dtype_a, dtype_a, fast_and_approximate_mode.value_or(false)));
     bool is_quant_op = ttnn::operations::binary::utils::is_quant_op(binary_op_type);

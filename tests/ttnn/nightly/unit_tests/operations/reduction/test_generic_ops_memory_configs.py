@@ -267,7 +267,8 @@ def test_generic_ops_wh_block_shard(
     assert passing, f"op={op} {output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
-# Test that generic reduction ops work correctly with a scalar applied to the input.
+# Test that generic reduction ops produce correct results, preserve dtype, and emit the
+# layout documented in nanobind across all supported dtype/layout combinations.
 @pytest.mark.parametrize("op", ["sum", "mean", "max", "min", "std", "var"])
 # bfloat8_b only exists in TILE layout, so dtype and layout are paired.
 @pytest.mark.parametrize(
