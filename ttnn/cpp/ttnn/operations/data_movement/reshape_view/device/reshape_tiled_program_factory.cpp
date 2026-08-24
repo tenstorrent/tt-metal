@@ -262,14 +262,14 @@ Tensor compute_reshape_mapping_host_tensor(
 // The device operation is parallelized over output tensor pages, where each core operates on a range of pages.
 
 // The reader kernel loads the mapping tensor page that corresponds to the current output tensor page on which it is
-// operating and pushes it on to the circular buffer. The reader kernel loops over all of the data segments represented
+// operating and pushes it on to the dataflow buffer. The reader kernel loops over all of the data segments represented
 // by the map and loads the specified input pages, avoiding redundant loads of pages for segments that come from the
-// same input page, and pushes them to the circular buffer.
+// same input page, and pushes them to the dataflow buffer.
 
-// The writer kernel pops mapping pages off the circular buffer, corresponding to the current page. It loops through
-// the input tensor pages specified by the map and, as necessary, pops input pages off the circular buffer, again
+// The writer kernel pops mapping pages off the dataflow buffer, corresponding to the current page. It loops through
+// the input tensor pages specified by the map and, as necessary, pops input pages off the dataflow buffer, again
 // accounting for consecutive segments that come from the same input page. Using the offsets and size supplied by the
-// map, the reader copies the segment from the input page to a scratch page stored in L1. When all segments are written,
+// map, the writer copies the segment from the input page to a scratch page stored in L1. When all segments are written,
 // the scratch page is copied to its output destination.
 
 ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_program_artifacts(
