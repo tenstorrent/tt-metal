@@ -858,13 +858,24 @@ class _NeighborhoodAttention3D(Module):
                 v = prep(lane(2))
                 ttnn.deallocate(packed)
         else:
-            q = prep(
-                self._rope(
-                    self._normed(self.q_norm, self._projected(self.to_q, y, heads_shape), scale=self.scale), tables
-                )
-            )
-            k = prep(self._rope(self._normed(self.k_norm, self._projected(self.to_k, y, heads_shape)), tables))
-            v = prep(self._projected(self.to_v, y, heads_shape))
+            # Still one lane at a time (see above): the spans name each step without hoisting any
+            # projection past the norm/rope that consumes it, so peak DRAM is unchanged. All three
+            # lanes share a label, so the tree pools them into one row per step with n=3.
+            def lane_unfused(projection, norm, *, scale=None, rope=True):
+                with deep_prof(self.mesh_device, "qkv-proj", category=decode_tree.PROJ):
+                    part = self._projected(projection, y, heads_shape)
+                if norm is not None:
+                    with deep_prof(self.mesh_device, "qkv-norm", category=decode_tree.NORM_ROPE):
+                        part = self._normed(norm, part, scale=scale)
+                    if rope:
+                        with deep_prof(self.mesh_device, "qkv-rope", category=decode_tree.NORM_ROPE):
+                            part = self._rope(part, tables)
+                with deep_prof(self.mesh_device, "qkv-prep (to seq/volume)", category=decode_tree.RESHAPE):
+                    return prep(part)
+
+            q = lane_unfused(self.to_q, self.q_norm, scale=self.scale)
+            k = lane_unfused(self.to_k, self.k_norm)
+            v = lane_unfused(self.to_v, None)
 
         if sharded:
             out = neighborhood_attention_3d_op_sp_w_sharded(
@@ -1015,7 +1026,8 @@ class DiffusionNABlock(Module):
         for index, band in enumerate(bands):
             # Bands own nothing they were handed: ``live`` is freed by this loop's own bookkeeping
             # below, so anything derived from it is released here the moment it stops being read.
-            padded = self._padded_rows(live, index, bands, rows)
+            with deep_prof(self.mesh_device, "halo assemble (padded rows)", category=decode_tree.RESHAPE):
+                padded = self._padded_rows(live, index, bands, rows)
             interior = ((band.lo - band.pad_lo) * rows, (band.hi - band.pad_lo) * rows)
 
             with block_prof(self.mesh_device, "context-inject", category=decode_tree.CONTEXT_INJECT):
@@ -1028,7 +1040,8 @@ class DiffusionNABlock(Module):
                 if padded is not live[index]:
                     ttnn.deallocate(padded)
 
-            modulated = _modulate_consuming(self.norm1(xs), scale_msa, shift_msa)
+            with deep_prof(self.mesh_device, "norm+modulate (pre-attn)", category=decode_tree.NORM_ROPE):
+                modulated = _modulate_consuming(self.norm1(xs), scale_msa, shift_msa)
             with block_prof(self.mesh_device, "attention", category=decode_tree.ATTENTION):
                 attended = self.attn(
                     modulated,
@@ -1037,15 +1050,17 @@ class DiffusionNABlock(Module):
                 )
             ttnn.deallocate(modulated)
 
-            residual = _slice_rows(xs, *interior)
-            if residual is not xs:
-                ttnn.deallocate(xs)
-            cropped = _slice_rows(attended, *interior)
-            if cropped is not attended:
-                ttnn.deallocate(attended)
-            y = _add_consuming(residual, cropped)
+            with deep_prof(self.mesh_device, "residual crop+add (attn)", category=decode_tree.RESHAPE):
+                residual = _slice_rows(xs, *interior)
+                if residual is not xs:
+                    ttnn.deallocate(xs)
+                cropped = _slice_rows(attended, *interior)
+                if cropped is not attended:
+                    ttnn.deallocate(attended)
+                y = _add_consuming(residual, cropped)
 
-            modulated = _modulate_consuming(self.norm2(y), scale_mlp, shift_mlp)
+            with deep_prof(self.mesh_device, "norm+modulate (pre-mlp)", category=decode_tree.NORM_ROPE):
+                modulated = _modulate_consuming(self.norm2(y), scale_mlp, shift_mlp)
             with block_prof(self.mesh_device, "mlp", category=decode_tree.MLP):
                 hidden = self.mlp_gate_up(modulated)
                 ttnn.deallocate(modulated)

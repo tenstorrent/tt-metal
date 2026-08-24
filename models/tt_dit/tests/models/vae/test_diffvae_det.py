@@ -33,7 +33,12 @@ from models.tt_dit.models.vae.diffvae_ltx import (
 )
 from models.tt_dit.utils.check import assert_quality
 
-CAPTURE = Path(os.environ.get("DIFFVAE_CAPTURE", "/home/noblewoodall/ltx25_diffvae/stages/crop10.safetensors"))
+CAPTURE = Path(
+    os.environ.get(
+        "DIFFVAE_CAPTURE",
+        os.path.expanduser("~/ltx25_diffvae/stages/crop10.safetensors"),
+    )
+)
 CHECKPOINT = Path(
     os.environ.get(
         "DIFFVAE_CHECKPOINT",

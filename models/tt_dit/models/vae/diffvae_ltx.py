@@ -34,7 +34,7 @@ from ...layers.na3d import (
 )
 from ...layers.normalization import RMSNorm
 from ...utils import decode_tree
-from .diffvae_ltx_stage5 import TILE, block_prof, log_dram, stage_time_end, stage_time_start, stage_timer
+from .diffvae_ltx_stage5 import TILE, block_prof, deep_prof, log_dram, stage_time_end, stage_time_start, stage_timer
 
 ROPE_BASE = 10000.0
 
@@ -244,6 +244,7 @@ class NeighborhoodAttention(Module):
         self.num_heads = dim // head_dim
         self.kernel_size = tuple(kernel_size)
         self.scale = head_dim**-0.5
+        self.mesh_device = mesh_device  # only for the deep-profile spans; nothing else reads it here
         # NA3D executor: "gather" (grouped gather + dense masked attention with the passed-in
         # device_plan), "op" (the SDPA op's on-device neighborhood_3d mask, replicated), or "op_sp"
         # (the op path with the attention split over T across sp_axis via ccl_manager).
@@ -384,37 +385,40 @@ class NeighborhoodAttention(Module):
         t, h, w = dims
         tokens = t * h * w
         heads = self.heads_local
-        if self.fused_qkv:
-            flat = self.qkv(x)
-            ttnn.deallocate(x)
-            qkv = ttnn.reshape(flat, (1, 1, tokens, int(flat.shape[-1])))
-            if not self.colpar_qkv and self.tp > 1:
-                # The head partition lands here rather than inside the attention, so the norms, the
-                # scale and both RoPEs below see heads/tp instead of computing every head and
-                # letting the attention discard all but this chip's. Under colpar_qkv the matmul
-                # already emitted only this chip's heads, so there is nothing to slice.
-                partitioned = ttnn.mesh_partition(qkv, dim=3, cluster_axis=self.tp_axis)
+        with deep_prof(self.mesh_device, "qkv-proj", category=decode_tree.PROJ):
+            if self.fused_qkv:
+                flat = self.qkv(x)
+                ttnn.deallocate(x)
+                qkv = ttnn.reshape(flat, (1, 1, tokens, int(flat.shape[-1])))
+                if not self.colpar_qkv and self.tp > 1:
+                    # The head partition lands here rather than inside the attention, so the norms, the
+                    # scale and both RoPEs below see heads/tp instead of computing every head and
+                    # letting the attention discard all but this chip's. Under colpar_qkv the matmul
+                    # already emitted only this chip's heads, so there is nothing to slice.
+                    partitioned = ttnn.mesh_partition(qkv, dim=3, cluster_axis=self.tp_axis)
+                    ttnn.deallocate(qkv)
+                    qkv = partitioned
+                q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                    qkv, num_heads=heads, num_kv_heads=heads, transpose_k_heads=False
+                )
                 ttnn.deallocate(qkv)
-                qkv = partitioned
-            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-                qkv, num_heads=heads, num_kv_heads=heads, transpose_k_heads=False
-            )
-            ttnn.deallocate(qkv)
-        else:
-            heads_shape = (tokens * self.num_heads, self.head_dim)
-            q, k, v = (ttnn.reshape(project(x), heads_shape) for project in (self.to_q, self.to_k, self.to_v))
-            ttnn.deallocate(x)
+            else:
+                heads_shape = (tokens * self.num_heads, self.head_dim)
+                q, k, v = (ttnn.reshape(project(x), heads_shape) for project in (self.to_q, self.to_k, self.to_v))
+                ttnn.deallocate(x)
 
-        q = self.q_norm(q)
-        k = self.k_norm(k)
-        q = ttnn.multiply(q, self.scale)
+        with deep_prof(self.mesh_device, "qkv-norm", category=decode_tree.NORM_ROPE):
+            q = self.q_norm(q)
+            k = self.k_norm(k)
+            q = ttnn.multiply(q, self.scale)
 
         if self.fused_rope:
-            # Rotate here, before the volume reshape: the op wants TILE, and q/k are still in the
-            # (1, heads, tokens, head_dim) form create_heads emitted.
-            cos_full, sin_full = self._fused_rope_tables(cos, sin, tokens)
-            q = _consume(q, ttnn.experimental.rotary_embedding_hf, cos_full, sin_full)
-            k = _consume(k, ttnn.experimental.rotary_embedding_hf, cos_full, sin_full)
+            with deep_prof(self.mesh_device, "qkv-rope (fused op)", category=decode_tree.NORM_ROPE):
+                # Rotate here, before the volume reshape: the op wants TILE, and q/k are still in the
+                # (1, heads, tokens, head_dim) form create_heads emitted.
+                cos_full, sin_full = self._fused_rope_tables(cos, sin, tokens)
+                q = _consume(q, ttnn.experimental.rotary_embedding_hf, cos_full, sin_full)
+                k = _consume(k, ttnn.experimental.rotary_embedding_hf, cos_full, sin_full)
 
         # Untilize before splitting out the head axis, never after. TILE rounds both of the last
         # two dims up to 32, so a trailing (num_heads, head_dim) of (4, 64) is padded 8x: at
@@ -453,10 +457,12 @@ class NeighborhoodAttention(Module):
             ttnn.deallocate(attended)
             return out
 
-        q, k, v = (to_volume(part) for part in (q, k, v))
+        with deep_prof(self.mesh_device, "qkv-to-volume", category=decode_tree.RESHAPE):
+            q, k, v = (to_volume(part) for part in (q, k, v))
         if not self.fused_rope:
-            q = apply_rope(q, cos, sin)
-            k = apply_rope(k, cos, sin)
+            with deep_prof(self.mesh_device, "qkv-rope (unfused)", category=decode_tree.NORM_ROPE):
+                q = apply_rope(q, cos, sin)
+                k = apply_rope(k, cos, sin)
 
         if self.na3d_backend == "op_sp_sharded":
             # Full-stage SP: x/q/k/v are this chip's T-slice, so `dims` here is local. The attention
@@ -491,20 +497,23 @@ class NeighborhoodAttention(Module):
                 heads_presharded=self.fused_qkv,
             )
         else:
-            attended = neighborhood_attention_3d(
-                q,
-                k,
-                v,
-                kernel_size=self.kernel_size,
-                scale=1.0,
-                device_plan=device_plan,
-                backend=self.na3d_backend,
-                ccl_manager=self.ccl_manager,
-                sp_axis=self.sp_axis,
-            )
-        attended = ttnn.to_layout(ttnn.reshape(attended, (tokens, self.dim)), ttnn.TILE_LAYOUT)
-        out = self.proj(attended)
-        ttnn.deallocate(attended)
+            # Stage 0's path: the grouped-gather executor. Named so stage 0 stops being one opaque row.
+            with deep_prof(self.mesh_device, f"na3d {self.na3d_backend}", category=decode_tree.SDPA):
+                attended = neighborhood_attention_3d(
+                    q,
+                    k,
+                    v,
+                    kernel_size=self.kernel_size,
+                    scale=1.0,
+                    device_plan=device_plan,
+                    backend=self.na3d_backend,
+                    ccl_manager=self.ccl_manager,
+                    sp_axis=self.sp_axis,
+                )
+        with deep_prof(self.mesh_device, "out-proj", category=decode_tree.PROJ):
+            attended = ttnn.to_layout(ttnn.reshape(attended, (tokens, self.dim)), ttnn.TILE_LAYOUT)
+            out = self.proj(attended)
+            ttnn.deallocate(attended)
         return out
 
 

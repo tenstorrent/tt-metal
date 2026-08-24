@@ -35,6 +35,22 @@ from models.tt_dit.models.vae.diffvae_ltx_stage5 import (
 )
 from models.tt_dit.utils.check import assert_quality
 
+
+def _gate_ccl(mesh_device):
+    """CCLManager for the gates. Defaults are the historical Linear/1-link the committed baseline
+    was recorded with, so an unset environment reproduces it exactly; DIFFVAE_TOPOLOGY /
+    DIFFVAE_NUM_LINKS let a gate run also cover the collective config the runner actually ships
+    (ring + 2 links). An all-gather only moves bytes, so this should not shift any PCC -- which is
+    the point of being able to check.
+    """
+    from models.tt_dit.parallel.manager import CCLManager
+
+    topology = (
+        ttnn.Topology.Ring if os.environ.get("DIFFVAE_TOPOLOGY", "linear").lower() == "ring" else ttnn.Topology.Linear
+    )
+    return CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=topology)
+
+
 _LTX_CORE_SRC = os.environ.get("LTX_CORE_SRC")
 if _LTX_CORE_SRC and _LTX_CORE_SRC not in sys.path:
     sys.path.insert(0, _LTX_CORE_SRC)
@@ -451,7 +467,6 @@ def test_stage5_parity_sharded(mesh_device: ttnn.MeshDevice, device_params, subm
     fabric-connected), so this runs on a 32-chip box without owning the whole cluster.
     """
     from models.tt_dit.layers.na3d import NA3DShard
-    from models.tt_dit.parallel.manager import CCLManager
 
     mesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     config = DiffVAEStage5Config()
@@ -467,7 +482,7 @@ def test_stage5_parity_sharded(mesh_device: ttnn.MeshDevice, device_params, subm
     randomize(reference, seed=1234)
     state = checkpoint_state(reference)
 
-    ccl_manager = CCLManager(mesh, num_links=1, topology=ttnn.Topology.Linear)
+    ccl_manager = _gate_ccl(mesh)
     model = DiffVAEStage5(config, mesh_device=mesh, dtype=dtype, ccl_manager=ccl_manager)
     model.load_torch_state_dict(state)
 
@@ -522,7 +537,6 @@ def test_stage5_gna_parity_w_sharded(*, mesh_device, device_params, sp_axis, gri
     measurement -- the reference is stride-1 attention, so its PCC IS the quality cost of GNA on a
     network trained without it.
     """
-    from models.tt_dit.parallel.manager import CCLManager
 
     # A stride that never reaches the op yields the stride-1 result, which would read as "GNA is free"
     # rather than as a plumbing failure. Observing the kwarg at the op boundary is the only check that
@@ -550,7 +564,7 @@ def test_stage5_gna_parity_w_sharded(*, mesh_device, device_params, sp_axis, gri
     randomize(reference, seed=1234)
     state = checkpoint_state(reference)
 
-    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    ccl_manager = _gate_ccl(mesh_device)
     model = DiffVAEStage5(
         config,
         mesh_device=mesh_device,

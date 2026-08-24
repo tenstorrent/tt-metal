@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# LTX-2.5 distilled 1080p DiffVAE run. Extra pytest flags can be appended: bash run_ltx25_diffvae.sh --timeout=0
+# LTX-2.5 distilled 1080p DiffVAE pipeline run. Extra pytest flags pass straight through:
+#   bash models/tt_dit/experimental/scripts/run_ltx25_pipeline.sh --timeout=0
 #
 # Exists because pasting the env prefix as one quoted multi-line command keeps corrupting it:
-# once via non-breaking spaces glued to the first var on each line (job 770/752), once via raw
-# newlines splitting it into five bash statements so pytest ran with no arguments (job 790).
+# once via non-breaking spaces glued to the first var on each line, once via raw newlines
+# splitting it into five bash statements so pytest ran with no arguments.
 set -euo pipefail
 
-cd /home/jameslee/tt-metal
+# Repo root, four levels up from this script, so the checkout can live anywhere.
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 
 export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
 export LTX25_ROOT=/mnt/MLPerf/huggingface/hub/models--Lightricks--LTX-2.5/snapshots/28dac7acdc1f78a70e98687db261a949754f8941
