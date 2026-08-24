@@ -679,7 +679,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // -----------------------------------------------------------------------
     // Dataflow buffers.
     // -----------------------------------------------------------------------
-    const auto scalar_face = FaceGeometry{.face_r_dim = 1, .num_faces = 4};
+    const auto scalar_face = FaceGeometry{.face_r_dim = 1, .num_faces = 1};
     const uint32_t window_size_hw = kernel_h * kernel_w;
     // WORKAROUND (Quasar): the input-CB tile's face_r_dim feeds both the reduce tensor-shape and the
     // TDMA buffer-descriptor y_dim, and Quasar LLK restricts both to powers of 2 <= 16
