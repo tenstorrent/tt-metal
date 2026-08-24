@@ -6059,3 +6059,87 @@ One sweep's word delta is bounded by grid x live capacity (~300 K, static_assert
 the numerator is exact; the soft-div is gone, the max config fits with ~180 B of headroom, and no
 inlining changed anywhere. Lesson for this code region: a single 64-bit divide costs more text than
 any feature; the FAILED-TO-LOAD message now says so.
+
+## §N+65 — The "knee regression" audit: historical knees were RUNWAY measurements, the sustained wall is the MOVER's per-frame rate, and NO_DECODE is not the gentlest host (bh-05 + bh-26, 2026-08-24)
+
+The question: production (4F+2M) with NO_DECODE showed stall onset at delay 100 / clean at 150
+(bh-05, fast, iters 10k), against remembered era knees of 40-50 (harness) and 15 (§N+40). Audit
+verdict: **no device-side service regression — the gap is four confounds, dominated by CAPTURE
+VOLUME**, plus one real (and newly named) sustained-regime wall.
+
+### 1. Capture volume is the dominant confound: every era knee was a BURST number
+
+Same code (80bbf89e439), same box, same dispatch, same delay, NO_DECODE:
+
+| | iters 500 (5k zones/RISC — every historical knee) | iters 10k (100k zones/RISC — every recent knee) |
+|---|---|---|
+| bh-05 fast d100 | **0** | **32,219** |
+| bh-05 fast d40  | **0** | 299k (earlier log) |
+| bh-26 slow d40  | **0** | 275-283k |
+
+At 5k zones/RISC the 4x64 MiB DRAM rings are runway for the entire capture (§N+39 said this — the
+volume knee at 20k zones/RISC — and it was not carried into any later knee comparison). At 100k
+zones/RISC the measurement becomes SUSTAINED service rate. Era-volume burst absorption on today's
+build is clean at fast delay 40 = 5.04 Gw/s offered — **1.9x above the era conduit's best documented
+clean point** (2.66 Gw/s = §N+23's clean-at-100, old wire), and clean where the era stalled (§N+23:
+21k at delay 50 = 4.81 Gw/s).
+
+Unit conversion used throughout (measured, §N+52): 1 delay = 7.407 ns; zone period = delay x 7.407 +
+86.7 ns (2-marker wire, 4 w/zone) or + ~31 ns (atomic wire, 3 w/zone). v5 clean-at-200-old-wire ==
+v6 clean-at-150-atomic == ~1.4 Gw/s: the v5→v6 delay-axis shift is entirely the producer getting
+faster (117→42 cyc/zone), zero device change. Box confound: **zero** (bh-26 on the same commit:
+fast d100 = 32.5-33.5k, d150 = 0-12 — identical to bh-05). Dispatch confound: only mattered for
+§N+40's "knee 15" (bh-26 + slow + iters 500); at iters 10k slow dispatch flatters nothing
+(d15 = 319-320k, matching §N+51's bh-18 floor of ~290k).
+
+### 2. The sustained wall: the MOVER's per-frame rate, pinned at ~1.7 frames/us
+
+At the iters-10k knee (bh-05 fast d100, split-on): all 4 DRAM rings at 100.0% high-water with
+3.7-4.0k ring-room waits per filler; filler worst sweep 84.6-95.0 us of which 68-81 us is c_reserve
+(= DRAM ring room for a filler); mover worst HOST credit-wait 0.1 us (host absent); movers at max
+batch 14 every busy sweep, 16.3 us/sweep = **1.16 us/frame**. System frame rate is pinned at the
+mover ceiling at both measured delays (1.70 f/us @150, 1.73 @100). Frames are fixed 2,640-word slots
+at 33-46% fill under fast-dispatch-synchronized producers + 4 fast quarter-grid fillers, so
+sustained words = 1.7 f/us x fill x 2,640 = the measured 1.44 Gw/s clean.
+
+Confirmations: ROLE_RING_MB 64→256 MiB: 32,219 → 5,289 (pure runway; rings still filled).
+ROLE_SPLIT=0 (direct-ship, no DRAM hop): 32,219 → ~1.0-1.2k at d100, clean at 125 — the split costs
+~1.2x sustained clean rate. Forcing RAW shipping (kPackMaxPayload=0): WORSE (38k; D2H 17.9 GB/s hits
+the byte wall) — the mover is pinched between issue-bound (packed) and byte-bound (raw); the 2/3
+threshold is right. Pacing proven out of the loop THREE ways: valve logic (gap=0 at max_run >= 384),
+occupancy 507 >> 384 at the knee, and FILL_PCT=0 ablation (32.8/33.0k vs 32.2k — no change).
+§N+40's "more fillers" lever OPTIMIZED THE BURST REGIME; in the sustained regime it back-fires
+(faster fillers → emptier frames → more frames/word → mover binds sooner). The sustained lever is
+frames-per-word: gate per-core staging on run size (fill 46% at d100 ⇒ ~2x capacity headroom).
+
+**Rule: quote a knee with dispatch mode, box, ack-probe, wire version, AND capture volume vs runway.**
+
+### 3. Env-lever floor for the slow-dispatch knee (no code changes)
+
+ROLE_RING_MB=448 (the per-bank region max; 44,485 frames/ring): slow iters-10k NO_DECODE knee moves
+150 → **clean at 25, 3/3 warm reps** (8.3 Gw/s offered). d22 = ~420, d20 = 32.5k. Below ~22 the
+constraint changes identity: filler worst sweep 17.5-19.5 us with credit-wait 0.5 us and rings <=62%
+— the §N+51 cadence floor (worker 512-word ring refills in ~30 us at d20 vs ~17-26 us revisit). No
+env knob touches it: READ_SPLIT regresses (32.5k→85k), NSTAGE=14 and FILL_PCT=0/90 are no-ops.
+Caveat: 448 MiB x 4 is runway — quote with iters; drain tail grows (wall 91→137 ms at 256 MiB).
+
+### 4. Onset anatomy (Tracy captures, on Mac ~/Projects/tt-captures/)
+
+Onset = ceiling-grazing, not capacity failure: at slow d22/RING=448 (full pipeline), exactly 3,376
+PRODUCER-STALL zones (matches L1 counters to the digit), mean 0.2 us / max 1.3 us / total 0.67 ms
+across 600 lanes (~0.006% perturbation), drizzled over the whole 19 ms run on 81 cores; filler
+sweeps p50/p99/max = 13.3/14.1/14.7 us vs 32.7 us fill window. Instrumentation cost measured by
+onset shift at constant regime: DRISC_ZONE_DETAIL=1 raises filler sweeps 13.3→16.3 us (+23%) and
+onset delay 22→30 (~35%); the workload's 3 point markers/iter (PP_EVENT + 2x PP_DATA — the
+BR/NC_Flag/_Data/_Iter rows) are worth ~45% of onset delay (pure zonescopes: onset 22→15).
+
+### 5. OPEN — NO_DECODE shows ~9x MORE onset stalls than the full Tracy pipeline
+
+Same box (bh-05), same device config (slow, d15, RING=448, pure zonescopes), same day:
+NO_DECODE = 2,183 / 2,413 / 2,470 / 2,633 (4 warm reps, 66-71 cores) vs full decode+Tracy = 262
+(39 cores). The L1 counters are host-independent, so this is a real device-visible host-mode effect.
+Working hypothesis: instant acks let the movers burst DRAM-ring reads + L1 handshake traffic
+flat-out, and at a 0.2-us-graze onset the added DRAM/NoC/L1-port contention against filler scans and
+stage-writes manufactures grazes; decode-paced acks spread mover traffic. NOT yet confirmed —
+resolve via filler sweep-time deltas across host arms (NO_DECODE vs decode-no-consumer vs
+decode+Tracy). Until resolved: NO_DECODE is the CONSERVATIVE onset count, not the gentlest host.
