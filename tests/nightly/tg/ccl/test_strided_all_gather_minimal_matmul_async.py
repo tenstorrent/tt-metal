@@ -8,14 +8,12 @@ import ttnn
 from tests.nightly.t3000.ccl.test_strided_all_gather_minimal_matmul_async import (
     run_strided_all_gather_minimal_matmul_impl,
 )
-from models.common.utility_functions import skip_for_blackhole
 
 
 # tiles_per_chunk needs to be divisible by num_workers_per_link
 # mm_cores_y is the number of in0 first col cores
 # mm_block_h and mm_block_w is the mm_block of a single mm_core_y
 # so the result of one chunk transfer will be mm_cores_y * mm_block_h * mm_block_w, which will be tiles_per_chunk.  tiles_per_chunk % num_workers_per_link must equal 0
-@skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize(
     "M, K, N, dim, other_dim, num_links, num_workers_per_link, layout, ag_input_dtype, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid, shard_weights, ag_offset",

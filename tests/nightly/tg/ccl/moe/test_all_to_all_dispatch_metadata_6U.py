@@ -249,7 +249,7 @@ def run_all_to_all_dispatch_metadata_test(
     num_iters,
     warmup_iters,
     trace_mode,
-    num_links=4,
+    num_links=2,
     scheme="random_sequential_experts",
     dtype=ttnn.bfloat16,
     profiler=BenchmarkProfiler(),
@@ -815,7 +815,7 @@ def test_correctness(mesh_device, mesh_shape, cluster_axis, routed_experts_per_d
     seq_len = 1
     num_iters = 20
     warmup_iters = 5
-    num_links = 4
+    num_links = 2
     dtype = ttnn.bfloat16
     congestion_scheme = "random_sequential_experts"
     worker_mode = ttnn.WorkerMode.DIRECT
@@ -904,7 +904,7 @@ def test_correctness_linear(mesh_device, mesh_shape, cluster_axis, routed_expert
     seq_len = 1
     num_iters = 20
     warmup_iters = 5
-    num_links = 4
+    num_links = 2
     dtype = ttnn.bfloat16
     congestion_scheme = "random_sequential_experts"
     worker_mode = ttnn.WorkerMode.DIRECT
@@ -985,7 +985,7 @@ def test_correctness_linear(mesh_device, mesh_shape, cluster_axis, routed_expert
         "decode",
     ],
 )
-@pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize(
     "congestion_scheme", ["random_sequential_experts", "worst_congestion_descending", "best_congestion"]

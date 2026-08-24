@@ -64,7 +64,7 @@ def run_reduce_scatter_test(
     num_iters,
     warmup_iters,
     trace_mode,
-    num_links=3,
+    num_links=2,
     scheme="random",
     use_regular_grid=False,
     input_grid=None,
@@ -361,7 +361,7 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode, use_noc1_only):
         warmup_iters,
         trace_mode,
         use_noc1_only=use_noc1_only,
-        num_links=3,
+        num_links=2,
         scheme="random",
     )
 
@@ -407,7 +407,7 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode, use_noc1_onl
         num_iters,
         warmup_iters,
         trace_mode,
-        num_links=3,
+        num_links=2,
         scheme="random",
         topology=ttnn.Topology.Linear,
         use_noc1_only=use_noc1_only,

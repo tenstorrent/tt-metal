@@ -68,7 +68,7 @@ from tests.nightly.t3000.ccl.test_all_to_all_combine import (
 @pytest.mark.parametrize("seq", [2], ids=["s2"])
 @pytest.mark.parametrize("local_reduce", [False, True], ids=["dense", "sparse"])
 @pytest.mark.parametrize("num_iters", [2])
-@pytest.mark.parametrize("num_links", [4], ids=["num_links_4"])
+@pytest.mark.parametrize("num_links", [2], ids=["num_links_2"])
 @pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 @pytest.mark.parametrize(
@@ -220,7 +220,7 @@ def test_all_to_all_combine_8x8_dual_galaxy(
 @pytest.mark.parametrize("seq", [1], ids=["s1"])
 @pytest.mark.parametrize("local_reduce", [True], ids=["sparse"])
 @pytest.mark.parametrize("num_iters", [2])
-@pytest.mark.parametrize("num_links", [4], ids=["num_links_4"])
+@pytest.mark.parametrize("num_links", [2], ids=["num_links_2"])
 @pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
@@ -292,7 +292,7 @@ def test_all_to_all_combine_quad_host_mesh(
 @pytest.mark.parametrize("local_reduce", [True])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
-@pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_perf(

@@ -75,7 +75,7 @@ from tracy import signpost
     ],
     ids=["s2"],
 )
-@pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize(
@@ -254,7 +254,7 @@ def test_all_to_all_dispatch_8x8_dual_galaxy(
     ],
     ids=["s2"],
 )
-@pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
@@ -342,7 +342,7 @@ def test_all_to_all_dispatch_quad_host_mesh(
     [(2, 40, 10), (128, 10, 5)],
     ids=["decode", "prefill"],
 )
-@pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
@@ -418,7 +418,7 @@ def test_all_to_all_dispatch_trace(
     [(1, 40, 10)],
     ids=["decode"],
 )
-@pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
@@ -501,7 +501,7 @@ def test_decode_perf(
     [(128, 3, 2)],
     ids=["prefill"],
 )
-@pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])

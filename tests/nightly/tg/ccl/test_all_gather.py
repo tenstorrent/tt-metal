@@ -8,7 +8,6 @@ import ttnn
 import math
 
 from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
-from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
@@ -28,7 +27,6 @@ def get_max_chunks_per_sync(num_devices, ag_output_shape, num_links, packet_size
     return (total_elems // packet_elems) // (num_devices * num_links)
 
 
-@skip_for_blackhole("This test is for wormhole")
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
@@ -80,8 +78,7 @@ def test_all_gather(
     )
 
 
-@skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("num_links", [3], ids=["3links"])
+@pytest.mark.parametrize("num_links", [2], ids=["2links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
     [
@@ -185,8 +182,7 @@ def test_all_gather_async(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("num_links", [3], ids=["3links"])
+@pytest.mark.parametrize("num_links", [2], ids=["2links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
     [
@@ -269,7 +265,6 @@ def test_all_gather_deepseek(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_blackhole("This test is for wormhole")
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -304,7 +299,6 @@ def test_all_gather_async_broadcast_without_explicit_subdevice(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_blackhole("This test is for wormhole")
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -818,8 +812,7 @@ def test_all_gather_wan(
 ###############################################################################
 
 
-@skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("num_links", [4], ids=["4links"])
+@pytest.mark.parametrize("num_links", [2], ids=["2links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
     [
@@ -908,8 +901,7 @@ def test_all_gather_llama70b_decode_mlp(
     )
 
 
-@skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("num_links", [4], ids=["4links"])
+@pytest.mark.parametrize("num_links", [2], ids=["2links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
     [
@@ -1006,8 +998,7 @@ def test_all_gather_llama70b_prefill_sdpa(
     )
 
 
-@skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("num_links", [3], ids=["3links"])
+@pytest.mark.parametrize("num_links", [2], ids=["2links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
     [
@@ -1105,7 +1096,6 @@ def test_all_gather_llama70b_prefill_mlp(
     )
 
 
-@skip_for_blackhole("This test is for wormhole")
 @pytest.mark.parametrize("num_links", [1], ids=["1links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
@@ -1201,8 +1191,7 @@ def test_all_gather_llama70b_prefill_layernorm(
     )
 
 
-@skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("num_links", [4], ids=["4links"])
+@pytest.mark.parametrize("num_links", [2], ids=["2links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
     [
@@ -1301,8 +1290,7 @@ def test_all_gather_llama70b_batch_head_coverage(
     )
 
 
-@skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("num_links", [3], ids=["3links"])
+@pytest.mark.parametrize("num_links", [2], ids=["2links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
     [

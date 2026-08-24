@@ -106,7 +106,7 @@ class MoEMeshConfig:
     model_configs: tuple
     device_params: dict
     use_linear_topology: bool = False
-    num_links: int = 4
+    num_links: int = 2
     cluster_axis: int = 1
     mux_core_ranges: tuple = (((1, 1), (3, 3)),)
 
@@ -350,7 +350,7 @@ def _run_model_test(
     has_bias,
     experts_per_device,
     activation_type,
-    num_links=4,
+    num_links=2,
     topology=None,
     cluster_axis=1,
     mux_core_range=((1, 1), (3, 3)),

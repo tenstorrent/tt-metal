@@ -13,7 +13,6 @@ from loguru import logger
 import ttnn
 from tracy import signpost
 
-from models.common.utility_functions import skip_for_blackhole
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
@@ -285,7 +284,6 @@ def run_distributed_rms_norm_decode_impl(
     mesh_device.reset_sub_device_stall_group()
 
 
-@skip_for_blackhole("This is a wormhole test")
 @pytest.mark.parametrize(
     "batch_size_per_row, hidden_size, input_shard_grid, output_shard_grid, config_name",
     [

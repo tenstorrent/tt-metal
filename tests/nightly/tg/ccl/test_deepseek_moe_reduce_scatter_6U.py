@@ -4,11 +4,9 @@
 
 import pytest
 import ttnn
-from models.common.utility_functions import skip_for_blackhole
 from tests.nightly.t3000.ccl.test_deepseek_moe_reduce_scatter import run_deepseek_moe_reduce_scatter_impl
 
 
-@skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("dtype, layout", [(ttnn.bfloat16, ttnn.TILE_LAYOUT)])
 @pytest.mark.parametrize("pre_rs_reduction_dim", [(0)])

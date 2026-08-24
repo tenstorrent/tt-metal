@@ -130,16 +130,16 @@ def test_line_all_reduce_on_TG_cols_post_commit(
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, layout, cluster_axis",
     [
-        (4, 3, [1, 1, 128000, 4096], ttnn.TILE_LAYOUT, 0),
-        (4, 3, [1, 1, 4096, 128000], ttnn.TILE_LAYOUT, 0),
-        (4, 3, [1, 1, 4096, 50304], ttnn.TILE_LAYOUT, 0),
-        (4, 3, [1, 1, 4094, 50300], ttnn.TILE_LAYOUT, 0),
-        (4, 3, [1, 1, 50304, 4096], ttnn.TILE_LAYOUT, 0),
-        (8, 3, [1, 1, 2048, 50304], ttnn.TILE_LAYOUT, 1),
-        (8, 3, [1, 1, 50304, 2048], ttnn.TILE_LAYOUT, 1),
-        (8, 3, [1, 1, 50304, 1024], ttnn.TILE_LAYOUT, 1),
-        (8, 3, [1, 1, 1024, 50304], ttnn.TILE_LAYOUT, 1),
-        (8, 3, [1, 1, 33, 66], ttnn.TILE_LAYOUT, 1),
+        (4, 2, [1, 1, 128000, 4096], ttnn.TILE_LAYOUT, 0),
+        (4, 2, [1, 1, 4096, 128000], ttnn.TILE_LAYOUT, 0),
+        (4, 2, [1, 1, 4096, 50304], ttnn.TILE_LAYOUT, 0),
+        (4, 2, [1, 1, 4094, 50300], ttnn.TILE_LAYOUT, 0),
+        (4, 2, [1, 1, 50304, 4096], ttnn.TILE_LAYOUT, 0),
+        (8, 2, [1, 1, 2048, 50304], ttnn.TILE_LAYOUT, 1),
+        (8, 2, [1, 1, 50304, 2048], ttnn.TILE_LAYOUT, 1),
+        (8, 2, [1, 1, 50304, 1024], ttnn.TILE_LAYOUT, 1),
+        (8, 2, [1, 1, 1024, 50304], ttnn.TILE_LAYOUT, 1),
+        (8, 2, [1, 1, 33, 66], ttnn.TILE_LAYOUT, 1),
     ],
 )
 @pytest.mark.parametrize(

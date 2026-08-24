@@ -32,7 +32,7 @@ from tests.tests_common.cache_entries_counter import CacheEntriesCounter
         "line",
     ],
 )
-@pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["wh_glx"]], ids=["8x4"], indirect=["mesh_device"])
+@pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["bh_glx"]], ids=["8x4"], indirect=["mesh_device"])
 def test_ring_joint_sdpa_dit_wh_glx(
     mesh_device,
     input_shape,
@@ -84,7 +84,7 @@ def test_ring_joint_sdpa_dit_wh_glx(
     ids=["sd35"],
 )
 @pytest.mark.parametrize("n_iters, trace_enabled", [(1, False), (10, True)], ids=["no_trace", "yes_trace"])
-@pytest.mark.parametrize("num_links", [3], ids=["3link"])
+@pytest.mark.parametrize("num_links", [2], ids=["2link"])
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
@@ -184,7 +184,7 @@ def test_ring_joint_sdpa(
     ids=["sd35"],
 )
 @pytest.mark.parametrize("n_iters, trace_enabled", [(3, False)], ids=["no_trace"])
-@pytest.mark.parametrize("num_links", [1, 2, 3], ids=["1link", "2link", "3link"])
+@pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2link"])
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
@@ -287,7 +287,7 @@ def test_ring_joint_sdpa_program_cache(
     indirect=["device_params"],
     ids=["line"],
 )
-@pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["wh_glx"]], ids=["8x4"], indirect=["mesh_device"])
+@pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["bh_glx"]], ids=["8x4"], indirect=["mesh_device"])
 @pytest.mark.parametrize(
     "sp_axis, b, nh, base_seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size",
     [

@@ -6,11 +6,10 @@ import pytest
 import torch
 import ttnn
 from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
-from models.common.utility_functions import comp_pcc, skip_for_blackhole, skip_for_wormhole_b0
+from models.common.utility_functions import comp_pcc
 
 
-@skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("num_links", [4], ids=["4links"])
+@pytest.mark.parametrize("num_links", [2], ids=["2links"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype, enable_trace, num_iters,cluster_axis",
     [
@@ -117,7 +116,6 @@ def test_reduce_scatter_async(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_blackhole("This test is for wormhole")
 @pytest.mark.parametrize("num_links", [1], ids=["1links"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
@@ -194,8 +192,7 @@ def test_reduce_scatter_async_big_mesh(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_blackhole("This test is for wormhole")
-@pytest.mark.parametrize("num_links", [4], ids=["4links"])
+@pytest.mark.parametrize("num_links", [2], ids=["2links"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
     [
@@ -271,7 +268,6 @@ def test_reduce_scatter_async_quad_host_mesh(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_blackhole("This test is for wormhole")
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology, cluster_axis",
     [
@@ -338,7 +334,6 @@ def test_reduce_scatter_on_reshaped_submesh(
     assert passing, f"PCC failed (topology={topology}, cluster_axis={cluster_axis}, dim={dim}, batch={batch}): {pcc}"
 
 
-@skip_for_blackhole("This test is for wormhole")
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize(

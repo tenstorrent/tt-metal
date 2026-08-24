@@ -448,7 +448,7 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
         (  # AllGather after SDPA
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             (1, 32, 32, 128),
-            4,
+            2,
             1,
             (32, 128),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
@@ -465,7 +465,7 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
         (  # AllGather after Binary Mult+Silu
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             (1, 1, 32, 3840),
-            4,
+            2,
             3,
             (32, 32),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 4))}),
@@ -611,7 +611,7 @@ def test_all_gather_6u_llama(
         (  # AllGather after SDPA
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             (1, 32, 32, 128),
-            3,
+            2,
             1,
             (32, 128),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
@@ -628,7 +628,7 @@ def test_all_gather_6u_llama(
         (  # AllGather after Binary Mult+Silu
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             (1, 1, 32, 3840),
-            3,
+            2,
             3,
             (32, 32),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 4))}),
@@ -756,15 +756,15 @@ def test_all_gather_tg_llama(
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set, input_dtype, output_dtype",
     [
-        ([1, 1, 32, 2048], 0, 3, 24, RING_CRS, 16, NORM_CRS, ttnn.bfloat8_b, None),  # FF2/DO all reduce (Llama)
-        ([1, 1, 32, 1280], 0, 3, 24, RING_CRS, 10, NORM_CRS_QWEN, ttnn.bfloat16, None),  # FF2/DO all reduce (Qwen)
-        ([1, 1, 32, 1280], 1, 3, 24, RING_CRS, 10, QKV_CRS, ttnn.bfloat8_b, ttnn.bfloat16),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 3, 24, RING_CRS, 28, FF1_CRS, ttnn.bfloat8_b, None),  # FF1 all reduce (Llama)
-        ([1, 1, 32, 3200], 1, 3, 24, RING_CRS, 28, FF1_CRS, ttnn.bfloat16, None),  # FF1 all reduce (Qwen)
+        ([1, 1, 32, 2048], 0, 2, 24, RING_CRS, 16, NORM_CRS, ttnn.bfloat8_b, None),  # FF2/DO all reduce (Llama)
+        ([1, 1, 32, 1280], 0, 2, 24, RING_CRS, 10, NORM_CRS_QWEN, ttnn.bfloat16, None),  # FF2/DO all reduce (Qwen)
+        ([1, 1, 32, 1280], 1, 2, 24, RING_CRS, 10, QKV_CRS, ttnn.bfloat8_b, ttnn.bfloat16),  # QKV all reduce
+        ([1, 1, 32, 3584], 1, 2, 24, RING_CRS, 28, FF1_CRS, ttnn.bfloat8_b, None),  # FF1 all reduce (Llama)
+        ([1, 1, 32, 3200], 1, 2, 24, RING_CRS, 28, FF1_CRS, ttnn.bfloat16, None),  # FF1 all reduce (Qwen)
         (
             [1, 1, 32, 16 * 1024],
             1,
-            3,
+            2,
             32,
             LM_HEAD_CRS,
             32,
@@ -772,7 +772,7 @@ def test_all_gather_tg_llama(
             ttnn.bfloat8_b,
             None,
         ),  # LM head all reduce (Llama)
-        ([1, 1, 32, 19456], 1, 3, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS, ttnn.bfloat8_b, None),  # LM head all reduce (Qwen)
+        ([1, 1, 32, 19456], 1, 2, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS, ttnn.bfloat8_b, None),  # LM head all reduce (Qwen)
     ],
     ids=[
         "ff2_llama",

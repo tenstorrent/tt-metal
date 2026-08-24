@@ -14,7 +14,6 @@ be a full mesh row/column -- hence the cluster-axis-0 submesh of the whole 8-dev
 import pytest
 
 import ttnn
-from models.common.utility_functions import skip_for_blackhole
 from tests.nightly.t3000.ccl.test_reduce_scatter_minimal_direct import (
     PERSISTENT_MODES,
     RS_DIRECT_DRAM_MEM_CONFIG,
@@ -26,7 +25,6 @@ from tests.nightly.t3000.ccl.test_reduce_scatter_minimal_direct import (
 )
 
 
-@skip_for_blackhole("This test is for wormhole")
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize("rs_input_dtype", [ttnn.bfloat16], ids=["bf16"])
