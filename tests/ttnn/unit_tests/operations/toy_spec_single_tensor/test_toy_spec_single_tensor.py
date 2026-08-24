@@ -13,7 +13,7 @@ import torch
 
 import ttnn
 from ttnn.operations.toy_spec_single_tensor import toy_spec_fill, toy_spec_square_
-from ttnn.operations.toy_spec_single_tensor.toy_spec_single_tensor import TP_OUT, create_fill_spec
+from ttnn.operations.toy_spec_single_tensor.toy_spec_single_tensor import create_fill_artifacts
 
 
 @pytest.fixture(scope="module")
@@ -90,7 +90,7 @@ def test_square_in_place_is_repeatable(device):
 def test_empty_io_tensors_is_rejected(device, expect_error):
     """The relaxed check is still structural: something has to be the output tensor."""
     out = _on_device(device, torch.zeros((1, 1, 32, 32), dtype=torch.bfloat16))
-    spec, run_args = create_fill_spec(out, 1.0)
+    spec, run_args, tensor_indices = create_fill_artifacts(out, 1.0)
 
     with expect_error(RuntimeError, "must contain at least the output tensor"):
-        ttnn.generic_op([], spec, run_args, {TP_OUT: 0})
+        ttnn.generic_op([], spec, run_args, tensor_indices)

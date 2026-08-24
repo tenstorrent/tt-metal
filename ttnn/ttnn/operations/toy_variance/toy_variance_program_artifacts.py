@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Metal 2.0 ProgramSpec for toy_variance on an INTERLEAVED input (single core).
+"""Metal 2.0 program artifacts for toy_variance on an INTERLEAVED input (single core).
 
 Computes per-row population variance Var(x) = E[(x - E[x])^2] using a two-pass
 streaming algorithm:
@@ -38,6 +38,8 @@ K_READER = "reader"
 K_COMPUTE = "compute"
 K_WRITER = "writer"
 
+# Internal to this module: the factory returns the tensor bindings it built, so these
+# names never have to travel to the entry point.
 TP_IN = "in"
 TP_OUT = "out"
 
@@ -58,7 +60,7 @@ def fp32_bits(value: float) -> int:
     return struct.unpack("I", struct.pack("f", value))[0]
 
 
-def create_program_spec(
+def create_program_artifacts(
     input_tensor: ttnn.Tensor,
     output_tensor: ttnn.Tensor,
     *,
@@ -218,4 +220,8 @@ def create_program_spec(
     )
 
     run_args = ttnn.ProgramRunArgs(kernel_run_args=[])
-    return spec, run_args
+
+    # Bind each declared TensorParameter to its position in the caller's io_tensors list,
+    # which is [input_tensor, output_tensor].
+    tensor_indices = {TP_IN: 0, TP_OUT: 1}
+    return spec, run_args, tensor_indices

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Metal 2.0 ProgramSpec for toy_spec_mul (elementwise multiply, tiled, interleaved)."""
+"""Metal 2.0 program artifacts for toy_spec_mul (elementwise multiply, tiled, interleaved)."""
 
 from pathlib import Path
 
@@ -15,6 +15,8 @@ DFB_OUT = "out"
 K_READER = "reader"
 K_COMPUTE = "compute"
 K_WRITER = "writer"
+# Internal to this module: the factory returns the tensor bindings it built, so these names
+# never have to travel to the entry point.
 TP_A = "a"
 TP_B = "b"
 TP_OUT = "out"
@@ -59,7 +61,7 @@ def _split_tiles(num_tiles: int, grid_size, *, tile_limit: int | None = None):
     return all_cores, assignment
 
 
-def create_program_spec(a: ttnn.Tensor, b: ttnn.Tensor, out: ttnn.Tensor, *, tile_limit: int | None = None):
+def create_program_artifacts(a: ttnn.Tensor, b: ttnn.Tensor, out: ttnn.Tensor, *, tile_limit: int | None = None):
     num_tiles = out.buffer_num_pages()
     tile_bytes = out.buffer_page_size()
     grid_size = a.device().compute_with_storage_grid_size()
@@ -132,4 +134,7 @@ def create_program_spec(a: ttnn.Tensor, b: ttnn.Tensor, out: ttnn.Tensor, *, til
         ]
     )
 
-    return spec, run_args
+    # Bind each declared TensorParameter to its position in the caller's io_tensors list,
+    # which is [a, b, out].
+    tensor_indices = {TP_A: 0, TP_B: 1, TP_OUT: 2}
+    return spec, run_args, tensor_indices
