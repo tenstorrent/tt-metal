@@ -1012,13 +1012,11 @@ GN_INTERLEAVED_SHAPES = [
 
 
 @pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x", GN_INTERLEAVED_SHAPES)
-# One case per (reduction path x input dtype) pair, instead of the welford_mode x in_dtype x
-# gb_dtype product. Those two axes interact: the thresholds below branch on use_welford x in_dtype,
+# One case per (reduction path x input dtype) pair.
+# Those two axes interact: the accuracy thresholds branch on use_welford x in_dtype,
 # and fp32 input on the welford path additionally aliases cb_x onto cb_in0 and enables
-# UnpackToDestFp32. gamma/beta dtype interacts with neither -- it only selects the gamma/beta CB
-# format, and the thresholds are already pinned across the gamma-beta matrix (see the comment on
-# them below) -- so it is varied across the six cases rather than crossed with them, giving each
-# welford_mode and each in_dtype both gamma/beta formats.
+# UnpackToDestFp32. On the other hand, gamma/beta dtype interacts with neither: it only selects
+# the gamma/beta CB format, it is varied across the six cases rather than crossed with them.
 @pytest.mark.parametrize(
     "welford_mode, in_dtype, gb_dtype",
     [
