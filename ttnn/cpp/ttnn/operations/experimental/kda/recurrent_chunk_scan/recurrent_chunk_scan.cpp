@@ -7,16 +7,10 @@
 #include <utility>
 
 #include "device/recurrent_chunk_scan_device_operation.hpp"
+#include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 
 namespace ttnn::experimental::kda {
 namespace {
-
-void validate_allocated_device_tensor(const ttnn::Tensor& tensor, const char* name) {
-    TT_FATAL(
-        tensor.storage_type() == StorageType::DEVICE && tensor.buffer() != nullptr,
-        "recurrent_chunk_scan: {} must be an allocated device tensor",
-        name);
-}
 
 void validate_protocol_inputs(
     const ttnn::Tensor& v_beta,
@@ -25,7 +19,9 @@ void validate_protocol_inputs(
     const ttnn::Tensor& intra,
     const ttnn::Tensor& k_dec_t,
     const ttnn::Tensor& final_decay,
-    const ttnn::Tensor& t_inv) {
+    const ttnn::Tensor& t_inv,
+    std::string_view operation_name) {
+    using namespace ttnn::experimental::prim::kda_factory_detail;
     const std::array<std::pair<const ttnn::Tensor*, const char*>, 7> inputs = {
         {{&v_beta, "v_beta"},
          {&kd, "kd"},
@@ -35,8 +31,8 @@ void validate_protocol_inputs(
          {&final_decay, "final_decay"},
          {&t_inv, "t_inv"}}};
     for (const auto& [tensor, name] : inputs) {
-        validate_allocated_device_tensor(*tensor, name);
-        TT_FATAL(tensor->logical_shape().rank() == 4, "recurrent_chunk_scan: {} must be rank 4", name);
+        check_allocated_device_tensor(*tensor, operation_name, name);
+        TT_FATAL(tensor->logical_shape().rank() == 4, "{}: {} must be rank 4", operation_name, name);
     }
 }
 
@@ -68,11 +64,13 @@ std::vector<ttnn::Tensor> recurrent_chunk_scan(
     const ttnn::Tensor& initial_state,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
-    validate_protocol_inputs(v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv);
-    validate_allocated_device_tensor(initial_state, "initial_state");
-    TT_FATAL(initial_state.logical_shape().rank() == 3, "recurrent_chunk_scan: initial_state must be rank 3");
+    using namespace ttnn::experimental::prim::kda_factory_detail;
+    constexpr std::string_view operation_name = "recurrent_chunk_scan";
+    validate_protocol_inputs(v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv, operation_name);
+    check_allocated_device_tensor(initial_state, operation_name, "initial_state");
+    TT_FATAL(initial_state.logical_shape().rank() == 3, "{}: initial_state must be rank 3", operation_name);
     auto [output_memory_config, kernel_config] = resolve_configs(v_beta, memory_config, compute_kernel_config);
-    TT_FATAL(!output_memory_config.is_sharded(), "recurrent_chunk_scan: output memory must be interleaved");
+    check_output_interleaved(output_memory_config, operation_name);
     return ttnn::experimental::prim::recurrent_chunk_scan(
         v_beta,
         kd,
@@ -97,7 +95,8 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
     const ttnn::Tensor& t_inv,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
-    validate_protocol_inputs(v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv);
+    constexpr std::string_view operation_name = "summarize_chunk_recurrence";
+    validate_protocol_inputs(v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv, operation_name);
     auto [output_memory_config, kernel_config] = resolve_configs(v_beta, memory_config, compute_kernel_config);
     return ttnn::experimental::prim::recurrent_chunk_scan(
         v_beta,

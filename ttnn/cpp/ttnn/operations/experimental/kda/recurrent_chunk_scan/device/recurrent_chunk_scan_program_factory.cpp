@@ -97,7 +97,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
     const m2::DFBSpecName KD{"kd"};
     const m2::DFBSpecName Q_DECAY{"q_decay"};
     const m2::DFBSpecName INTRA{"intra"};
-    const m2::DFBSpecName STATE_TWO{"state_two"};
+    const m2::DFBSpecName STATE_RING{"state_ring"};
     const m2::DFBSpecName VALUE_NEW{"value_new"};
     const m2::DFBSpecName FINAL_DECAY{"final_decay"};
     const m2::DFBSpecName OUTPUT{"output"};
@@ -108,7 +108,8 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
     const m2::DFBSpecName FINAL_STATE{"final_state"};
     const m2::DFBSpecName SCRATCH{"scratch"};
     const m2::DFBSpecName SUMMARY_RAW{"summary_raw"};
-    const m2::DFBSpecName STATE_THREE{"state_three"};
+    const m2::DFBSpecName SUMMARY_SEED{"summary_seed"};
+    const m2::DFBSpecName SUMMARY_RING{"summary_ring"};
 
     const m2::TensorParamName V_BETA_TENSOR{"v_beta"};
     const m2::TensorParamName KD_TENSOR{"kd"};
@@ -133,23 +134,24 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
     };
     m2::Group<m2::DataflowBufferSpec> dfb_specs = {
         make_dfb(STATE, kv, fp32),
-        make_dfb(T_INV, cc, input_format(in.t_inv)),
-        make_dfb(V_BETA, cv, input_format(in.v_beta)),
-        make_dfb(KD, ck, input_format(in.kd)),
-        make_dfb(Q_DECAY, summary ? kv : ck, summary ? fp32 : input_format(in.q_decay)),
-        make_dfb(INTRA, summary ? kv : cc, summary ? fp32 : input_format(in.intra)),
-        make_dfb(STATE_TWO, kv, fp32),
+        make_dfb(T_INV, 2 * cc, input_format(in.t_inv)),
+        make_dfb(V_BETA, 2 * cv, input_format(in.v_beta)),
+        make_dfb(KD, 2 * ck, input_format(in.kd)),
+        make_dfb(Q_DECAY, summary ? 1 : 2 * ck, summary ? fp32 : input_format(in.q_decay)),
+        make_dfb(INTRA, summary ? 1 : 2 * cc, summary ? fp32 : input_format(in.intra)),
+        make_dfb(STATE_RING, 2 * kv, fp32),
         make_dfb(VALUE_NEW, cv, fp32),
-        make_dfb(FINAL_DECAY, Kt, input_format(in.final_decay)),
-        make_dfb(OUTPUT, summary ? kv : cv, output_format),
-        make_dfb(OUTPUT_INTERMEDIATE, summary ? kv : cv, fp32),
-        make_dfb(K_DECAY_TRANSPOSED, kc, input_format(in.k_dec_t)),
+        make_dfb(FINAL_DECAY, 2 * Kt, input_format(in.final_decay)),
+        make_dfb(OUTPUT, summary ? kv : 2 * cv, output_format),
+        make_dfb(OUTPUT_INTERMEDIATE, summary ? 1 : cv, fp32),
+        make_dfb(K_DECAY_TRANSPOSED, 2 * kc, input_format(in.k_dec_t)),
         make_dfb(STATE_UPDATE, kv, fp32),
         make_dfb(STATE_TEMPORARY, kv, fp32),
         make_dfb(FINAL_STATE, kv, fp32),
         make_dfb(SCRATCH, scratch_entries, fp32),
         make_dfb(SUMMARY_RAW, kv, fp32),
-        make_dfb(STATE_THREE, kv, fp32),
+        make_dfb(SUMMARY_SEED, kv, fp32),
+        make_dfb(SUMMARY_RING, 2 * kv, fp32),
     };
 
     m2::KernelSpec reader{
@@ -165,6 +167,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
                 m2::ProducerOf(KD, "kd"),
                 m2::ProducerOf(Q_DECAY, "q_decay"),
                 m2::ProducerOf(INTRA, "intra"),
+                m2::ProducerOf(SUMMARY_SEED, "summary_seed"),
                 m2::ProducerOf(K_DECAY_TRANSPOSED, "k_decay_transposed"),
                 m2::ProducerOf(FINAL_DECAY, "final_decay"),
             },
@@ -176,15 +179,24 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
                 m2::TensorBinding{FINAL_DECAY_TENSOR, "final_decay"},
                 m2::TensorBinding{T_INV_TENSOR, "t_inv"},
             },
-        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"Vt_full", Vt_full}},
+        .compile_time_args =
+            {{"Ct", Ct},
+             {"Kt", Kt},
+             {"Vt", Vt},
+             {"Vt_full", Vt_full},
+             {"summary_pair", static_cast<uint32_t>(summary)}},
         .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block", "num_chunks"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
-    reader.compiler_options.defines["SUMMARY_PAIR"] = summary ? "1" : "0";
     if (!summary) {
         reader.tensor_bindings.push_back(m2::TensorBinding{Q_DECAY_TENSOR, "q_decay"});
         reader.tensor_bindings.push_back(m2::TensorBinding{INTRA_TENSOR, "intra"});
         reader.tensor_bindings.push_back(m2::TensorBinding{INITIAL_STATE_TENSOR, "initial_state"});
+    } else {
+        // The discarded recurrence branch is still parsed; aliases provide its binding names without extra parameters.
+        reader.tensor_bindings.push_back(m2::TensorBinding{V_BETA_TENSOR, "q_decay"});
+        reader.tensor_bindings.push_back(m2::TensorBinding{T_INV_TENSOR, "intra"});
+        reader.tensor_bindings.push_back(m2::TensorBinding{V_BETA_TENSOR, "initial_state"});
     }
 
     m2::KernelSpec writer{
@@ -195,11 +207,15 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         .dfb_bindings = {m2::ConsumerOf(OUTPUT, "output"), m2::ConsumerOf(FINAL_STATE, "final_state")},
         .tensor_bindings =
             {m2::TensorBinding{OUTPUT_TENSOR, "output"}, m2::TensorBinding{FINAL_STATE_TENSOR, "final_state"}},
-        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"Vt_full", Vt_full}},
+        .compile_time_args =
+            {{"Ct", Ct},
+             {"Kt", Kt},
+             {"Vt", Vt},
+             {"Vt_full", Vt_full},
+             {"summary_pair", static_cast<uint32_t>(summary)}},
         .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block", "num_chunks"}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
     };
-    writer.compiler_options.defines["SUMMARY_PAIR"] = summary ? "1" : "0";
 
     auto compute_hw = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
     auto& unpack_modes = m2::unpack_modes(compute_hw);
@@ -210,7 +226,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
           KD,
           Q_DECAY,
           INTRA,
-          STATE_TWO,
+          STATE_RING,
           VALUE_NEW,
           FINAL_DECAY,
           OUTPUT,
@@ -221,7 +237,8 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
           FINAL_STATE,
           SCRATCH,
           SUMMARY_RAW,
-          STATE_THREE}) {
+          SUMMARY_SEED,
+          SUMMARY_RING}) {
         unpack_modes[name] = UnpackMode::UnpackToSrc;
     }
     m2::KernelSpec compute{
@@ -237,8 +254,8 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
                 m2::ConsumerOf(KD, "kd"),
                 m2::ConsumerOf(Q_DECAY, "q_decay"),
                 m2::ConsumerOf(INTRA, "intra"),
-                m2::ProducerOf(STATE_TWO, "state_two"),
-                m2::ConsumerOf(STATE_TWO, "state_two"),
+                m2::ProducerOf(STATE_RING, "state_ring"),
+                m2::ConsumerOf(STATE_RING, "state_ring"),
                 m2::ProducerOf(VALUE_NEW, "value_new"),
                 m2::ConsumerOf(VALUE_NEW, "value_new"),
                 m2::ConsumerOf(FINAL_DECAY, "final_decay"),
@@ -255,14 +272,14 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
                 m2::ConsumerOf(SCRATCH, "scratch"),
                 m2::ProducerOf(SUMMARY_RAW, "summary_raw"),
                 m2::ConsumerOf(SUMMARY_RAW, "summary_raw"),
-                m2::ProducerOf(STATE_THREE, "state_three"),
-                m2::ConsumerOf(STATE_THREE, "state_three"),
+                m2::ConsumerOf(SUMMARY_SEED, "summary_seed"),
+                m2::ProducerOf(SUMMARY_RING, "summary_ring"),
+                m2::ConsumerOf(SUMMARY_RING, "summary_ring"),
             },
-        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}},
+        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"summary_pair", static_cast<uint32_t>(summary)}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_chunks"}},
         .hw_config = std::move(compute_hw),
     };
-    compute.compiler_options.defines["SUMMARY_PAIR"] = summary ? "1" : "0";
 
     m2::KernelRunArgs reader_run{.kernel = READER};
     m2::KernelRunArgs writer_run{.kernel = WRITER};
