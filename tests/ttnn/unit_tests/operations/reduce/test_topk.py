@@ -440,6 +440,29 @@ def test_topk_indices_tensor_on_non_last_dim_raise(device, expect_error):
         ttnn.topk(ttnn_input, k=k, dim=2, largest=True, sorted=True, indices_tensor=indices_tensor)
 
 
+@pytest.mark.parametrize("W", (64, 16384), ids=["single_core", "multi_core"])
+def test_topk_indices_tensor_payload_is_used(W, device):
+    # The payload is the constant 777 in every column, so the outcome is unambiguous: honoured means
+    # every returned index is 777, ignored means the op generated its own iota instead.
+    # W=64 takes the single-core factory, W=16384 the multi-core one.
+    torch.manual_seed(0)
+    k = 32
+    payload = 777
+    shape = [1, 1, 32, W]
+
+    ttnn_input = ttnn.from_torch(
+        torch.randn(shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    indices_tensor = ttnn.from_torch(
+        torch.full(shape, payload, dtype=torch.uint16), ttnn.uint16, layout=ttnn.Layout.TILE, device=device
+    )
+
+    _, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=True, sorted=True, indices_tensor=indices_tensor)
+
+    returned = ttnn.to_torch(ttnn_indices, dtype=torch.uint16)
+    assert torch.all(returned == payload), "indices_tensor was ignored; the op generated its own iota"
+
+
 @pytest.mark.parametrize("largest", [True, False])
 def test_topk_multicore_local_write_correctness(largest, device):
     """
