@@ -444,6 +444,9 @@ void kernel_main() {
     // The gate does NOT save the span read (the bulk read lands before fill is known); it saves FRAMES:
     // DRAM-ring reserves/writes on the filler and per-frame evacuation on the mover.
     constexpr uint32_t kStageMinFillPct = get_compile_time_arg_val(39);
+    // MOVER TRAFFIC SHAPING (arg 40; 0 = off): cycles of deliberate pace per frame moved, applied only to
+    // a productive sweep that KEPT UP (no peer backlog beyond one batch). See the controller below.
+    constexpr uint32_t kMoverFrameGap = get_compile_time_arg_val(40);
     constexpr uint32_t kGateForceMask = 7;  // force-ship every 8th sweep
     constexpr uint32_t kStageMinWords = (kNumRisc * kernel_profiler::PROFILER_L1_VECTOR_SIZE * kStageMinFillPct) / 100u;
     // ---- ROLE SPLIT (see the header). 0 = today's full-job drainer, and every arg below is then 0. ----
@@ -1553,6 +1556,9 @@ void kernel_main() {
         const uint64_t s_read0 = c_read, s_proc0 = c_proc, s_rsv0 = c_reserve, s_wr0 = c_write, s_bar0 = c_barrier;
         const uint64_t words_at_sweep_start = total_words;
         sweep_max_run = 0;
+        // MOVER: the largest raw peer backlog seen this sweep = the fullest DRAM ring, in frames. The
+        // shaper's safety signal: pace only while the ring has headroom to absorb the shaped rate.
+        [[maybe_unused]] uint32_t mv_max_backlog = 0;
 
         // Inside an active window EVERY sweep is instrumented, which costs one register compare against a
         // deadline. Only the FIRST sweep of a window is partial -- it arms late, from self_arm, at the moment
@@ -1641,6 +1647,11 @@ void kernel_main() {
                         }
                         if (n > ring_hi[peer]) {
                             ring_hi[peer] = n;
+                        }
+                        if constexpr (kMoverFrameGap != 0) {
+                            if (n > mv_max_backlog) {
+                                mv_max_backlog = n;  // raw backlog, before the batch clamps
+                            }
                         }
                         if (n != 0) {
                             // A MOVER's definition of work, known before anything expensive happens. This is the arm
@@ -2176,7 +2187,32 @@ void kernel_main() {
             // Same busy/idle signal the sweep bookkeeping already uses at both roles, so there is no second
             // definition of "did this sweep do anything" to drift.
             if (frames != frames_at_sweep_start) {
-                gap = 0;  // frames were there: drain flat out, never pace a productive consumer
+                // Frames were there. The shaper's criterion is RING HEADROOM, deliberately NOT backlog:
+                // at the onset-with-runway regime the mover is *always* backlogged (the ring is doing its
+                // job) yet its burst density is pure harm -- compressed sweeps inflate the landing tail of
+                // the fillers' posted head write-backs, the write whose landing releases a blocked producer
+                // (FINDINGS N+66: decode-paced acks shaped this by accident, arm B 164-212 stalls vs arm
+                // A's 2.2-2.6k at the same device config; a backlog-keyed first cut of this shaper was a
+                // measured no-op for exactly this reason). So: while the fullest peer ring is under HALF,
+                // pace kMoverFrameGap x frames just moved through the ordinary PACE zone below -- the ring
+                // absorbs the shaped rate, that is what runway is. Past half, drain flat out: from half to
+                // full there are thousands of sweeps of reaction room, and near-full is the one regime
+                // where mover rate gates the fillers (the sustained ceiling), which pausing would move.
+                // A stop-drain is never paced.
+                gap = 0;
+                if constexpr (kMoverFrameGap != 0) {
+                    // Engage ONLY when this sweep's own credit wait was ~nothing -- i.e. acks are instant
+                    // (NO_DECODE / an idle consumer) and no one else is shaping. Decode-paced acks ARE the
+                    // shaping this replaces; adding a gap on top of them double-paces the mover in the one
+                    // regime where its rate feeds back to producers (measured: full-pipe d100 stalls rose
+                    // with an unconditional shaper, and are untouched with this guard).
+                    const uint64_t rsv_this_sweep = c_reserve - s_rsv0;
+                    if (mv_max_backlog < kDramFrames / 2u && rsv_this_sweep < 1350u && stop_seen_at == 0) {
+                        const uint32_t moved = frames - frames_at_sweep_start;
+                        const uint32_t shaped = kMoverFrameGap * moved;
+                        gap = shaped > kMoverGapMax ? kMoverGapMax : shaped;
+                    }
+                }
             } else {
                 uint32_t inc = gap >> 1;
                 if (inc < 256u) {
@@ -2190,7 +2226,8 @@ void kernel_main() {
         // (12.7 us) against an 8.5 us sweep, so it is the majority of that core's wall time -- and without a
         // zone it is unexplained whitespace between SWEEPs, which is exactly what makes a drainer row
         // unreadable. A MOVER is excluded from the controller (see below), so its gap stays 0 and this zone
-        // never appears on a mover row: the absence IS the answer to "is the mover being paced".
+        // appears on a mover row only via the traffic shaper (kMoverFrameGap, keeping-up sweeps): a PACE
+        // zone after a productive mover sweep IS the shaper firing; after an idle one it is the idle ramp.
         if (gap != 0) {
             kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_PACE, SelfNow, SelfClose> z_pace(
                 self_now, self_zone_close);

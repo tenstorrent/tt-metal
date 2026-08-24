@@ -509,6 +509,22 @@ uint32_t perf_debug_dram_region_bytes_per_risc() {
 // sustained -12-17%. KNOWN TRADE: at high offered rates WITH large ring runway (the
 // ROLE_RING_MB=448 onset-hunting config) deferral erodes the worker-ring margin -- delay-25 went
 // clean -> 38k stalls -- so pair large-runway onset hunts with STAGE_MIN_FILL_PCT=0.
+// TT_METAL_PERF_DEBUG_MOVER_FRAME_GAP: deliberate mover traffic shaping, in DRISC cycles per frame
+// just moved. After a PRODUCTIVE sweep that nonetheless KEPT UP (every peer's backlog fit in one batch),
+// the mover pauses gap x frames_moved (capped at its 10 us pace ceiling) before the next sweep. A
+// backlogged sweep never pauses, so the sustained evacuation ceiling is untouched by construction.
+// Why (FINDINGS N+66): with instant acks (NO_DECODE) the mover compresses its sweeps ~2.4x, and that
+// burst density inflates the landing tail of the fillers' posted head write-backs -- the write whose
+// LANDING releases a blocked producer -- converting onset grazes into stalls (measured 9-16x). Decode-
+// paced acks were shaping this traffic by accident; this knob does it on purpose. 0 disables.
+uint32_t mover_frame_gap() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_MOVER_FRAME_GAP");
+        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 1600u;
+    }();
+    return v;
+}
+
 uint32_t stage_min_fill_pct() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_STAGE_MIN_FILL_PCT");
@@ -1998,7 +2014,9 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 // and the kernel static_asserts that pairing -- passing 1 with zones off would not build.
                 (sync_event_count() != 0 && self_frames_base != 0) ? 1u : 0u,
                 // arg 39: the per-core staging fill gate (percent of live span capacity; 0 = off).
-                stage_min_fill_pct()};
+                stage_min_fill_pct(),
+                // arg 40: mover traffic shaping, cycles per frame moved on a keeping-up sweep (0 = off).
+                mover_frame_gap()};
             const std::string kdrain = "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp";
             auto drain_id =
                 tensix_drain
