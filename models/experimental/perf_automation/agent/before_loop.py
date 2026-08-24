@@ -761,6 +761,30 @@ def before_loop(
     n_selected = preflight(tt_root, perf_rel, case, env=sub_env)
     stages.done(f"{n_selected} test(s) selected")
 
+    # STAGE MARKS GO IN HERE, at the one point every run passes. Injection at generation could not
+    # reach this model: generate_perf_test is not called for the main pipeline on a run that
+    # regenerates nothing, so run 24's test was the one written the previous evening -- unmarked, for
+    # the eighth time. THIS is where the run decides which file it will profile, whatever produced
+    # it, so it is the only placement that does not depend on how the file came to exist.
+    #
+    # BEFORE resolve_signposts, deliberately: that scan reads the test for signpost names, so the
+    # start/stop pair the injected block emits is found and configured rather than defaulted.
+    #
+    # The injector is idempotent and refuses when it cannot place the block, so running it on every
+    # run costs nothing and can never produce two marked passes.
+    stages.start("stage_marks", "Marking stage boundaries for the profiler")
+    try:
+        from .stage_marks import inject_stage_marks as _inject_marks
+
+        _pt = Path(tt_root) / perf_rel
+        _cur = _pt.read_text()
+        _new, _why = _inject_marks(_cur)
+        if _new != _cur:
+            _pt.write_text(_new)
+        stages.done(_why)
+    except Exception as _mi:  # noqa: BLE001
+        stages.done("not injected (%s: %s)" % (type(_mi).__name__, str(_mi)[:90]))
+
     stages.start("resolve_signposts", "Locating profiler signposts")
     from .probes import resolve_signposts
 

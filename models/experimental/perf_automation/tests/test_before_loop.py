@@ -114,6 +114,10 @@ def test_before_loop_all_mocks_produces_manifest_and_baseline(tmp_path, model_ro
         "discover",
         "lead_review",
         "preflight",
+        # Injecting the stage marks is a STEP, not a side effect: it rewrites the file the run is
+        # about to profile, and it must precede resolve_signposts so the start/stop pair it emits is
+        # found by that scan rather than defaulted.
+        "stage_marks",
         "resolve_signposts",
         "tracy_baseline",
     ]

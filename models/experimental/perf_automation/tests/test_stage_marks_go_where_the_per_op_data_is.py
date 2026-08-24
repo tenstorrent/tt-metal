@@ -228,3 +228,32 @@ def test_injecting_an_already_marked_file_rewrites_nothing():
     once, _ = inject_stage_marks(_real_test_src())
     again, why = inject_stage_marks(once)
     assert again == once and why == "already injected"
+
+
+def test_injection_happens_where_every_run_passes():
+    """THE EIGHTH GATE, and the reason the previous seven placements were all conditional.
+
+    Injecting at GENERATION only reaches a run that generates. generate_perf_test is not called for
+    the main pipeline on a run that regenerates nothing, so run 24 profiled a test written the
+    previous evening -- unmarked, for the eighth time. before_loop is where the run decides which
+    file it will profile, whatever produced that file, so it is the only placement that does not
+    depend on how the file came to exist.
+
+    And it must precede resolve_signposts, which reads the test for signpost names: injected after,
+    the start/stop pair the block emits would be invisible and the scan would fall back to defaults.
+    """
+    src = (_PA / "agent" / "before_loop.py").read_text()
+    assert "inject_stage_marks" in src, "the run-level injection is gone"
+    i = src.index("inject_stage_marks")
+    j = src.index("resolve_signposts", i)
+    k = src.index('"perf_test_resolved"', i)
+    assert i < j, "injection runs after the signpost scan, so its marks are not seen"
+    assert i < k, "injection runs after the manifest records which test will be profiled"
+
+
+def test_it_injects_into_the_test_the_run_actually_resolved():
+    """Not a path rebuilt from a convention -- the same perf_rel the manifest records."""
+    src = (_PA / "agent" / "before_loop.py").read_text()
+    i = src.index("inject_stage_marks")
+    blk = src[i : src.index("resolve_signposts", i)]
+    assert "perf_rel" in blk, "injects into some other path than the resolved perf test"
