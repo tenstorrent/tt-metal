@@ -26,17 +26,24 @@ Run the commands below from inside the allocation.
 ## Accuracy — KV PCC
 
 Same two processes as the perf run below (runner under `tt-run`, producer on rank 0's host); the producer
-reads the KV back and PCCs it against the golden trace. `PREFILL_MOCK_MIGRATION=1` makes the runner
-publish its KV chunk table for the read-back gate (without it the producer has nothing to PCC). On the
-producer (Process 2) add `PREFILL_PRODUCER_CHECK_PCC=1` and set `PREFILL_PRODUCER_MAX_REQUESTS=1` so every
-slot's KV is still resident when it is read back. PASS = `[producer] KV cache PCC PASSED` (threshold
-`PREFILL_STANDALONE_CHUNKED_PCC`, default `0.93`).
+reads the KV back and PCCs it against the golden trace. Single-rank, `PREFILL_MOCK_MIGRATION=1` makes the
+runner publish its KV chunk table for the read-back gate (without it the producer has nothing to PCC).
+Multi-rank, bare `PREFILL_MOCK_MIGRATION=1` is rejected (each rank would publish a table covering only its
+own layer slice); set `PREFILL_ENABLE_MIGRATION: "1"` ALONGSIDE it in the binding's `global_env` to select
+the merged mock — every rank joins the stage-layout all-gather, rank 0 publishes ONE table spanning all
+layers, and each rank writes a rank-scoped device map (`<stem>_r<rank>.json`; the producer merges the
+local ones). The table path must then be on shared storage (`PREFILL_MIGRATION_TABLE_PATH`, not `/tmp`).
+On the producer (Process 2) add `PREFILL_PRODUCER_CHECK_PCC=1` and set `PREFILL_PRODUCER_MAX_REQUESTS=1`
+so every slot's KV is still resident when it is read back. PASS = `[producer] KV cache PCC PASSED`
+(threshold `PREFILL_STANDALONE_CHUNKED_PCC`, default `0.93`).
 
 Both `PREFILL_MANIFEST` and `PREFILL_MOCK_MIGRATION` are shell-forwarded with `mpirun -x`, which lands on
 the launch-host rank only — fine at 1 galaxy (one rank), but at 2+ galaxies the remote ranks never see
 them and silently run the default model without publishing their table. For multi-host, put both in the
 request binding's `global_env` (the same `_minimax.yaml` copy made under Process 1, plus
-`PREFILL_MOCK_MIGRATION: "1"`) and drop them from the shell.
+`PREFILL_MOCK_MIGRATION: "1"` and `PREFILL_ENABLE_MIGRATION: "1"` — see above) and drop them from the
+shell. A ready-made 2-rank example (intragalaxy) is
+`models/demos/minimax_m3/tt/runners/manifests/m3_binding_mock_migration_intragalaxy_2rank.yaml`.
 
 ### 1 galaxy
 ```bash

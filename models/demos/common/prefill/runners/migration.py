@@ -241,6 +241,32 @@ def _build_device_map(mesh_device, mesh_shape) -> list[tuple[int, int, int]]:
     return device_map
 
 
+def rank_scoped_device_map_path(path: str, rank: int, num_ranks: int) -> str:
+    """Per-rank JSON device-map path: ``<stem>_r<rank><ext>`` when num_ranks > 1, else ``path``
+    unchanged. Co-located ranks (an intragalaxy pipeline) would otherwise overwrite each other's map
+    at the shared host-local path, leaving device-less readers only the last writer's chips; readers
+    glob the ``_r*`` siblings back together (see prefill_producer._read_device_map)."""
+    if num_ranks <= 1:
+        return path
+    stem, ext = os.path.splitext(path)
+    return f"{stem}_r{rank}{ext}"
+
+
+def validate_stage_layout_contiguous(stage_layout) -> int:
+    """Check a gathered layout's layer ranges tile ``[0, total)`` contiguously (no gaps/overlaps) and
+    return that cache's layer total. ``compute_layer_split`` produces a contiguous partition, so a
+    violation means the ranks disagree on the split (tt-blaze's missing-layer guard)."""
+    expected = 0
+    for s in sorted(stage_layout, key=lambda s: s["first_layer"]):
+        if s["first_layer"] != expected:
+            raise RuntimeError(
+                f"gathered layer ranges are not contiguous: expected next stage at layer {expected} but got "
+                f"first_layer={s['first_layer']} (stages={[(x['first_layer'], x['count']) for x in stage_layout]})"
+            )
+        expected += s["count"]
+    return expected
+
+
 def serialize_device_map(mesh_device, path: str) -> str:
     """Write a JSON {"<mesh_id>:<chip_id>": <asic_unique_id>} device map so a device-less consumer
     (the prefill_producer) can resolve a table's FabricNodeIds to the ASIC unique_id that

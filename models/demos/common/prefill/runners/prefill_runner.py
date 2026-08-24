@@ -823,6 +823,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             export_device_map_file_and_gather_stage_layouts,
             migration_device_map_file_path,
             publish_serialized_table_and_wait_ready,
+            rank_scoped_device_map_path,
         )
 
         # This rank's pipeline stage owns layers [first_layer_idx, first_layer_idx + num_my_layers).
@@ -900,11 +901,16 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             #
             # EVERY rank serializes its OWN local fabric_node -> ASIC unique_id device map so each
             # co-located producer can resolve only its host's chips for read_dram_umd (the multi-rank
-            # merged table carries every host's fnids; a producer with just its local map naturally
-            # filters to its own layers). The device-map path is host-local (each rank overwrites the
-            # same name on its own host); the table path MUST be on shared storage (only rank 0 writes
-            # it, but every host's reader resolves the same path) — enforced above for num_ranks > 1.
-            device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+            # merged table carries every host's fnids; a producer merges the local maps and skips
+            # layers owned by another host). Rank-scoped filename for num_ranks > 1 — co-located ranks
+            # would otherwise overwrite each other at the shared host-local path; the table path MUST
+            # be on shared storage (only rank 0 writes it, but every host's reader resolves the same
+            # path) — enforced above for num_ranks > 1.
+            device_map_path = rank_scoped_device_map_path(
+                os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json"),
+                rank,
+                num_ranks,
+            )
             serialize_device_map(mesh_device, device_map_path)
             if is_first_rank:
                 # RANK 0 builds the merged table spanning every gathered stage — identical to the real
@@ -936,9 +942,13 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             # device-less reader downstream: migration_driver's destination verification
             # (--verify-migration, both dst-bytes and dst-golden) and prefill_producer's source-KV
             # PCC each resolve chips through this file, log "device map ... not found", and FAIL —
-            # so a real migration run could never verify what it copied. Host-local by design (one
-            # file per host, each rank overwriting its own).
-            device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+            # so a real migration run could never verify what it copied. Host-local by design;
+            # rank-scoped filename for num_ranks > 1 so co-located ranks don't overwrite each other.
+            device_map_path = rank_scoped_device_map_path(
+                os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json"),
+                rank,
+                num_ranks,
+            )
             serialize_device_map(mesh_device, device_map_path)
             logger.info(f"[migration] rank {rank}: local device map -> {device_map_path}")
 
