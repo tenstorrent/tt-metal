@@ -109,7 +109,7 @@ def _extract_anchors(ckpt_path: Path, anchors_path: Path) -> None:
     import numpy as np
     import torch
 
-    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
     sd = ckpt["state_dict"]
     key = "agent._transfuser_model._trajectory_head.plan_anchor"
     anchor = sd[key].numpy()
