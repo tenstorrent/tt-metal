@@ -38,26 +38,36 @@ def bf16_bits(value: float) -> int:
     return int.from_bytes(struct.pack(">f", value)[:2], "big")
 
 
-def _split_tiles(num_tiles: int, grid_size) -> list[tuple]:
-    """(core, num_tiles, start_id) per participating core, row-major over the grid."""
-    cores = [ttnn.CoreCoord(x, y) for y in range(grid_size.y) for x in range(grid_size.x)]
-    cores = cores[: min(len(cores), num_tiles)]
+def _split_tiles(num_tiles: int, grid_size):
+    """(all_cores, [(core, num_tiles, start_id), ...]), row-major over the grid.
 
-    base, rem = divmod(num_tiles, len(cores))
+    row_wise=True orders cores along rows; the default orders them along columns, which
+    costs roughly 2x the NoC contention on a grid-filling interleaved op.
+    """
+    (
+        _,
+        all_cores,
+        core_group_1,
+        core_group_2,
+        tiles_per_core_1,
+        tiles_per_core_2,
+    ) = ttnn.split_work_to_cores(grid_size, num_tiles, row_wise=True)
+
     assignment = []
     start = 0
-    for i, core in enumerate(cores):
-        count = base + (1 if i < rem else 0)
-        assignment.append((core, count, start))
-        start += count
-    return assignment
+    for group, per_core in ((core_group_1, tiles_per_core_1), (core_group_2, tiles_per_core_2)):
+        if per_core == 0:
+            continue
+        for core in ttnn.corerange_to_cores(group, None, True):
+            assignment.append((core, per_core, start))
+            start += per_core
+    return all_cores, assignment
 
 
 def _plan(tensor: ttnn.Tensor):
     num_tiles = tensor.buffer_num_pages()
     tile_bytes = tensor.buffer_page_size()
-    assignment = _split_tiles(num_tiles, tensor.device().compute_with_storage_grid_size())
-    core_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core, _, _ in assignment])
+    core_set, assignment = _split_tiles(num_tiles, tensor.device().compute_with_storage_grid_size())
     num_tiles_by_core = {core: count for core, count, _ in assignment}
     start_id_by_core = {core: start for core, _, start in assignment}
     return tile_bytes, core_set, num_tiles_by_core, start_id_by_core
