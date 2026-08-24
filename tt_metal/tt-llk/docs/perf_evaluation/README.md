@@ -468,12 +468,23 @@ deviation and whether the flagged set is reproducible.
 
 | | 5 runs | 10 runs |
 |---|--:|--:|
-| points | 100,971 | 100,971 |
+| distinct measurements in the sweep | 100,971 | 100,971 |
+| values collected (measurements x runs) | 504,855 | **1,009,710** |
 | flagged by the rule | 53 | **83** |
 | worst move | 4.62% | **8.83%** |
 | tests involved | `perf_math_matmul` 45, other 8 | `perf_math_matmul` 60, `perf_matmul` 23 |
 
-All 83 are matmul. Nothing else in the sweep flags at all.
+The first row does not change, and that is not a mistake. A **point** is a
+distinct thing the sweep measures — one test, one marker, one run type, one
+configuration — and there are 100,971 of them whatever you do. That count is a
+property of the test suite, not of how many times you run it. What doubles is how
+many *values* each point has: five each, or ten each.
+
+Which is exactly why ten runs flags more than five. Every point gets twice as many
+chances to show its alternate value, and `move` is the gap between the fastest and
+slowest of them, so it can only widen.
+
+All 83 flagged are matmul. Nothing else in the sweep flags at all.
 
 The 83 rows are about **42 independent measurements**: `KERNEL` and `TILE_LOOP`
 are paired views of the same point.
