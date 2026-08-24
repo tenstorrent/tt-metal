@@ -20,6 +20,14 @@
 //   0            in0 base address
 //   1            in1 base address
 //   2            out base address
+//   3            block_begin    first block this core owns
+//   4            block_count    how many it owns
+//
+// Blocks are the unit of partitioning and need no coordination to split: block b reads
+// pages [b*tiles_per_block, +tiles_per_block) of each input and writes the same range of
+// the output, so two cores on different blocks never touch the same page. num_blocks stays
+// a compile-time arg because it sizes nothing the core walks -- the range does that -- but
+// it is what the host divides up.
 //
 // Defines: one of BN_SUB, BN_MUL, BN_DIV, BN_MAX, BN_CHAIN; add is the default.
 
@@ -50,7 +58,7 @@ constexpr uint32_t kCbOut = 16;
 #endif
 
 void kernel_main() {
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(0);
+    [[maybe_unused]] constexpr uint32_t num_blocks = get_compile_time_arg_val(0);
     constexpr uint32_t tiles_per_block = get_compile_time_arg_val(1);
 
     constexpr auto in0_args = TensorAccessorArgs<2>();
@@ -60,6 +68,8 @@ void kernel_main() {
     const uint32_t in0_addr = get_arg_val<uint32_t>(0);
     const uint32_t in1_addr = get_arg_val<uint32_t>(1);
     const uint32_t out_addr = get_arg_val<uint32_t>(2);
+    const uint32_t block_begin = get_arg_val<uint32_t>(3);
+    const uint32_t block_count = get_arg_val<uint32_t>(4);
 
     u::compute_init(kCbIn0, kCbOut);
 
@@ -72,7 +82,8 @@ void kernel_main() {
     const auto in1 = TensorAccessor(in1_args, in1_addr);
     const auto out = TensorAccessor(out_args, out_addr);
 
-    for (uint32_t b = 0; b < num_blocks; ++b) {
+    for (uint32_t n = 0; n < block_count; ++n) {
+        const uint32_t b = block_begin + n;
         u::ComputeBlock a = u::noc_load<0>(in0_storage, in0, b).wait();
         u::ComputeBlock c = u::noc_load<0>(in1_storage, in1, b).wait();
         u::Block result = out_storage.store(BN_APPLY(a, c));

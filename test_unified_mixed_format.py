@@ -52,7 +52,11 @@ def run(device, num_blocks=2, tiles_per_block=2, rhs_dtype=ttnn.float32, seed=0)
     ct_args = [num_blocks, tiles_per_block]
     for t in (ta, tb, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    rt_args = [ta.buffer_address(), tb.buffer_address(), tout.buffer_address()]
+    # The last two are the block range. binary.cpp partitions blocks across cores and reads
+    # the range from runtime args; this launcher is single-core, so it owns all of them.
+    # Omitting them does not fail to compile -- the loop bound becomes whatever is in that
+    # arg slot, which is how this hung the device.
+    rt_args = [ta.buffer_address(), tb.buffer_address(), tout.buffer_address(), 0, num_blocks]
 
     # The point of the test: in1's circular buffer carries a different data format, and
     # therefore a different page size, from in0's.
