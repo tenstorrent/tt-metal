@@ -2634,10 +2634,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch, boo
     } else if (defer_kernel_builds) {
         // Compile-only: run the workload-mutating prep on the caller thread, then defer only the
         // pure const kernel build to the executor with no per-program barrier, so builds from all
-        // programs run concurrently (joined later by wait_for_pending_kernel_builds()).
-        // read_binaries/watcher are skipped (dispatch-only). Race-free: the deferred task reads only
-        // write-once compile-time kernel fields (disjoint from the runtime-arg fields that
-        // override_runtime_arguments mutates on cache reuse) plus a moved-in build-options copy.
+        // programs run concurrently.
         const ContextId ctx_id = device_context_id;
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
@@ -2653,7 +2650,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch, boo
                     });
             }
         }
-        // No sync_build_steps: builds are joined later by wait_for_pending_kernel_builds().
     } else {
         // Local path: parallel build via thread pool.
         for (auto& kernels : kernels_) {

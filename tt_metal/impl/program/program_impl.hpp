@@ -237,8 +237,7 @@ public:
         const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const;
     std::vector<std::vector<CoreCoord>> logical_cores() const;
     // defer_kernel_builds: compile-only pre-pass -- defer each kernel's build to the executor (no
-    // barrier) and skip read_binaries. Only for programs not finalized/dispatched this pass (model
-    // workloads); infra programs (fabric/dispatch) must use the default.
+    // barrier) and skip read_binaries. Only for programs not finalized/dispatched this pass.
     void compile(IDevice* device, bool force_slow_dispatch = false, bool defer_kernel_builds = false);
     void compile_and_allocate(IDevice* device, bool force_slow_dispatch, bool defer_kernel_builds = false);
     void invalidate_circular_buffer_allocation();

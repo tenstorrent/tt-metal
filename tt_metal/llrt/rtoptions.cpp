@@ -764,9 +764,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_FORCE_JIT_COMPILE: this->force_jit_compile = true; break;
 
         // TT_METAL_COMPILE_ONLY
-        // Compile all kernels but skip device dispatch (pre-compilation). Any op that reads device
-        // tensor data asserts. Usually toggled at runtime via set_compile_only() around a pre-pass;
-        // the env var makes the whole process compile-only.
+        // Compile all kernels but skip device dispatch (pre-compilation).
+        // Any op that reads device tensor data asserts.
         // Default: false
         // Usage: export TT_METAL_COMPILE_ONLY=1
         case EnvVarID::TT_METAL_COMPILE_ONLY: this->compile_only = true; break;

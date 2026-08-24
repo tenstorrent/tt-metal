@@ -23,8 +23,7 @@
 namespace tt::tt_metal::distributed {
 
 void WaitForPendingCompiles() {
-    // Join the kernel builds deferred by compile-only mode (see ProgramImpl::compile()). Public
-    // wrapper kept stable for existing call sites (device close / program-cache clear).
+    // Join the kernel builds deferred by compile-only mode (see ProgramImpl::compile()).
     tt::tt_metal::wait_for_pending_kernel_builds();
 }
 
@@ -121,10 +120,8 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
 
     auto& ctx = tt::tt_metal::MetalContext::instance();
     if (ctx.rtoptions().get_compile_only()) {
-        // Compile-only: compile this workload's kernels but don't dispatch. Synchronous call (no
-        // workload captured by pointer -> no lifetime hazard); concurrency comes from inside
-        // compile(), which defers the builds. defer_kernel_builds=true also skips finalize_offsets
-        // (safe: never dispatched here). Infra programs don't take this path, so they stay normal.
+        // Compile-only: compile this workload's kernels but don't dispatch.
+        // Synchronous call, concurrency comes from inside compile(), which defers the builds.
         mesh_workload.impl().compile(mesh_cq.device(), /*defer_kernel_builds=*/true);
         return;
     }
