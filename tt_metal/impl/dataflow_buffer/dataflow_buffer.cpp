@@ -758,7 +758,7 @@ size_t serialize_dfb_config_for_core(
             TT_FATAL(offset + entry_sz <= out.size(),
                 "DFB config overflow (init entry dfb={} hart={})", dfb->id, h);
 
-            // Header (32B fixed). capacity is uint16 at bytes 26-27 (HW BUFFER_CAPACITY width).
+            // Header (36B fixed). capacity is uint16 at bytes 26-27 (HW BUFFER_CAPACITY width).
             dfb_hart_init_entry_t entry = {};
             entry.logical_dfb_id = dfb_narrow_field<uint8_t>(dfb->device_slot, dfb->id, "logical_dfb_id");
             entry.num_tcs        = num_tcs;
@@ -835,8 +835,12 @@ size_t serialize_dfb_config_for_core(
                     stride2_entries = side_stride_entries;
                 }
                 entry.run_length = dfb_narrow_field<uint16_t>(run_length, dfb->id, "run_length");
-                entry.stride2_precomp = is_dm_hart ? dfb->config.entry_size * stride2_entries
-                                                   : stride2_entries;
+                if (is_dm_hart) {
+                    entry.stride2_precomp = dfb->config.entry_size * stride2_entries;
+                } else {
+                    // The TRISC interface stores the jump as uint16 entries.
+                    entry.stride2_precomp = dfb_narrow_field<uint16_t>(stride2_entries, dfb->id, "stride2");
+                }
             }
             entry.capacity = rc.is_producer ? dfb_narrow_field<uint16_t>(dfb->capacity, dfb->id, "capacity")
                                             : static_cast<uint16_t>(0);
@@ -922,7 +926,7 @@ size_t serialize_dfb_config_for_core(
                     entry.remapper_pair_index);
             }
 
-            // Write AoP TC tail: dfb_blob_tc_pair_t[num_tcs] immediately after the 32B header,
+            // Write AoP TC tail: dfb_blob_tc_pair_t[num_tcs] immediately after the 36B header,
             // followed by uint8_t packed_tile_counter[num_tcs] padded to 4B.
             // Each pair is {base_addr(4B), limit(4B)} = 8B; ptc bytes are packed contiguously.
             // Total TC section = (num_tcs*9 + 3) & ~3 — identical to original SoA byte count.
@@ -2508,6 +2512,18 @@ void ProgramImpl::finalize_single_dfb_config(
     // No Tensix involved on either side.
     bool dm_dm_all = (config.cap == dfb::AccessPattern::ALL) &&
                          !producer_is_tensix_only && !consumer_is_tensix_only;
+
+    // A broadcasting producer posts every transaction's credits in FULL to every consumer's
+    // counter, but the implicit-sync ISR splits a txn window's credits equally across the
+    // descriptor's counters — each consumer would receive 1/C of its credits and hang. Reject the
+    // combination for BLOCKED rings up front.
+    if (dm_dm_all && config.pap == ::dfb::AccessPattern::BLOCKED) {
+        TT_FATAL(
+            !config.enable_producer_implicit_sync,
+            "BLOCKED DFB {}: a DM<->DM ALL producer broadcasts its credits, which the implicit-sync ISR "
+            "cannot express (it credits each counter an equal split). Use explicit sync on the producer.",
+            dfb->id);
+    }
 
     // Remapper is needed only for ALL 1-to-many with Tensix
     // Adding a TC to a remapper config entry removes it from the default Tensix<->DM mirror group, even with

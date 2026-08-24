@@ -139,6 +139,10 @@ struct LocalDFBInterface {
 
 static_assert(sizeof(DFBTCSlot) == 20, "DFBTCSlot size is incorrect");
 static_assert(sizeof(LocalDFBInterface) == 152, "LocalDFBInterface size is incorrect");
+static_assert(offsetof(LocalDFBInterface, num_entries) == 20, "num_entries must sit at byte 20");
+static_assert(offsetof(LocalDFBInterface, run_length) == 24, "run_length must sit at byte 24");
+static_assert(offsetof(LocalDFBInterface, stride2) == 28, "stride2 must sit at byte 28");
+static_assert(offsetof(LocalDFBInterface, tc_slots) == 32, "tc_slots must stay 4B-aligned at byte 32");
 
 #endif
 

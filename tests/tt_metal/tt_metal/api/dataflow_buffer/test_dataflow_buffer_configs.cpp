@@ -2409,6 +2409,86 @@ TEST_F(UnitMeshFixture, DMTest1xDFB1Bx4B_blk4_impl_rejected_2_0) {
     EXPECT_ANY_THROW(run_single_dfb_program_2_0(mesh_device, params));
 }
 
+// --- REJECTED CONFIG: BLOCKED->BLOCKED with mismatched block sizes (direct API) ---
+// The ring is one global block grid, which cannot serve two block sizes. The M2 spec layer
+// already rejects this; the direct CreateDataflowBuffer path must too.
+TEST_F(UnitMeshFixture, DirectApi_BlockSizeMismatch_rejected) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .producer_risc_mask = 0x1,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::BLOCKED,
+        .producer_block_size = 4,
+        .consumer_risc_mask = 0x10,
+        .num_consumers = 1,
+        .cap = dfb::AccessPattern::BLOCKED,
+        .consumer_block_size = 2};
+    Program program = CreateProgram();
+    EXPECT_THAT(
+        [&] {
+            experimental::dfb::CreateDataflowBuffer(program, CoreCoord(0, 0), config);
+            program.impl().finalize_dataflow_buffer_configs();
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("one global block grid")));
+}
+
+// --- REJECTED CONFIG: BLOCKED->STRIDED where the consumers cannot split a block (direct API) ---
+TEST_F(UnitMeshFixture, DirectApi_BlockedStrided_ConsumersDontDivideBlock_rejected) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 24,
+        .producer_risc_mask = 0x1,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::BLOCKED,
+        .producer_block_size = 3,
+        .consumer_risc_mask = 0x30,
+        .num_consumers = 2,
+        .cap = dfb::AccessPattern::STRIDED};
+    Program program = CreateProgram();
+    EXPECT_THAT(
+        [&] {
+            experimental::dfb::CreateDataflowBuffer(program, CoreCoord(0, 0), config);
+            program.impl().finalize_dataflow_buffer_configs();
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("must be divisible by num_consumers")));
+}
+
+// --- REJECTED CONFIG: implicit-sync broadcast BLOCKED producer (DM<->DM ALL) ---
+// The ISR credits each counter an equal split of a txn window, but a broadcasting producer must
+// post the full count to every counter — the consumers would starve at 1/C of their credits.
+TEST_F(UnitMeshFixture, DirectApi_BlockedAll_ImplicitBroadcastProducer_rejected) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .producer_risc_mask = 0x1,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::BLOCKED,
+        .producer_block_size = 4,
+        .consumer_risc_mask = 0x30,
+        .num_consumers = 2,
+        .cap = dfb::AccessPattern::ALL,
+        .enable_producer_implicit_sync = true,
+        .enable_consumer_implicit_sync = false};
+    Program program = CreateProgram();
+    EXPECT_THAT(
+        [&] {
+            experimental::dfb::CreateDataflowBuffer(program, CoreCoord(0, 0), config);
+            program.impl().finalize_dataflow_buffer_configs();
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("broadcasts its credits")));
+}
+
 // B10 — a BLOCKED binding needs block_size > 0 (check_block_size_validity in program_spec.cpp).
 // This config leaves it unset on a BLOCKED consumer, so it must throw.
 TEST_F(UnitMeshFixture, B10_Blocked_Rejected_2_0) {

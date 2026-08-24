@@ -115,6 +115,8 @@ namespace {
 template <bool is_write>
 inline void dfb_dm_advance_slot(LocalDFBInterface& intf, uint32_t n) {
     ASSERT(n == 1 || intf.run_length <= 1);
+    // A block-bursting side's stride hops whole blocks, so its ops must move exactly one block.
+    ASSERT(intf.block_size <= 1 || n == intf.block_size);
     auto& slot = intf.tc_slots[intf.tc_idx];
     const bool completing = static_cast<uint16_t>(intf.run_pos + 1u) >= intf.run_length;
     const uint32_t advance = (n - 1u) * intf.stride_size + (completing ? intf.stride2 : intf.stride_size);
@@ -402,16 +404,22 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
 
     uint8_t N = local_dfb_interface_.num_tcs_to_rr;
     dfb::PackedTileCounter ptc0 = local_dfb_interface_.tc_slots[0].packed_tile_counter;
-    // Credits land on the slots in runs of L ops (L == 1 rotates per op; a split side (run 0)
-    // credits every slot equally, which the L == 1 form also covers — its totals divide evenly).
+    // Per-slot expected credits after `transactions_issued` ENTRIES. Rotation happens per OP of
+    // block_size entries, in runs of L ops per slot — so count ops, distribute them in runs, and
+    // scale back to entries. A split side (run 0) credits every slot an equal share of each op.
     const uint16_t L = local_dfb_interface_.run_length > 1 ? local_dfb_interface_.run_length : 1u;
     const uint16_t NL = static_cast<uint16_t>(N * L);
+    const uint16_t block = local_dfb_interface_.block_size;
     auto expected_for_slot = [&](uint8_t i) -> uint16_t {
-        const uint16_t full = static_cast<uint16_t>((transactions_issued / NL) * L);
-        const uint16_t rem = transactions_issued % NL;
+        if (local_dfb_interface_.run_length == 0) {
+            return static_cast<uint16_t>(transactions_issued / N);
+        }
+        const uint16_t ops = static_cast<uint16_t>(transactions_issued / block);
+        const uint16_t full = static_cast<uint16_t>((ops / NL) * L);
+        const uint16_t rem = ops % NL;
         const uint16_t start = static_cast<uint16_t>(i * L);
         const uint16_t part = (rem <= start) ? 0u : ((rem - start > L) ? L : (rem - start));
-        return static_cast<uint16_t>(full + part);
+        return static_cast<uint16_t>((full + part) * block);
     };
     uint16_t expected_slot0 = expected_for_slot(0);
 
@@ -521,12 +529,14 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
 template <bool is_write>
 inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl(uint16_t num_entries) {
     // The lock walk below spaces entries stride_size apart from the cursor. That does not model a
-    // BLOCKED side whose held entries are block-contiguous while its stride hops blocks, nor a run
-    // walk (mid-run jumps). Locks are unsupported on those sides.
+    // BLOCKED side whose held entries are block-contiguous while its stride hops blocks, a run
+    // walk (mid-run jumps), or a run-of-one side whose every op jumps stride2 != stride (a
+    // BLOCKED->STRIDED consumer with block_size == num_consumers). Locks are unsupported there.
     ASSERT(
         local_dfb_interface_.run_length <= 1 &&
-        (local_dfb_interface_.block_size == 1 ||
-         local_dfb_interface_.stride_size == local_dfb_interface_.entry_size));
+        (local_dfb_interface_.block_size > 1
+             ? local_dfb_interface_.stride_size == local_dfb_interface_.entry_size
+             : local_dfb_interface_.stride2 == local_dfb_interface_.stride_size));
     const auto& s = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
     const uint32_t stride = local_dfb_interface_.stride_size;
     const uint32_t entry = local_dfb_interface_.entry_size;
