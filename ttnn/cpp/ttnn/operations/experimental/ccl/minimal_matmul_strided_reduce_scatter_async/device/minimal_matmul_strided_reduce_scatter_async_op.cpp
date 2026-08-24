@@ -151,6 +151,38 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
             "HEIGHT_SHARDED over the compute grid, one slot per RS reader per row, i.e. at least "
             "2 * num_links * num_workers_per_link slots); see "
             "CCLManager.get_mm_credit_counters_buffer.");
+
+        // Layout/size checks, on every call rather than only at program build: on a cached run the
+        // factory's checks never rerun, and the address-stability guard alone would miss a
+        // same-address reallocation of a smaller tensor. The factory keeps the exact checks that
+        // need build-time information (resolved worker count, chosen core placement); these cover
+        // what validation can know.
+        const auto validate_counter_array = [](const Tensor& t, const char* name, uint32_t min_row_slots) {
+            TT_FATAL(
+                t.memory_config().buffer_type() == tt::tt_metal::BufferType::L1 &&
+                    t.memory_config().shard_spec().has_value(),
+                "{} must be an L1 sharded tensor so that its row lands at the same local address on "
+                "every core that reads it",
+                name);
+            TT_FATAL(t.dtype() == DataType::UINT32, "{} must be uint32, got {}", name, t.dtype());
+            const uint32_t row_slots = t.memory_config().shard_spec()->shape[1];
+            TT_FATAL(
+                row_slots >= min_row_slots,
+                "{} provides {} uint32 slots per row but at least {} are needed; allocate a "
+                "[num_cores, num_cores] square over the full compute grid (see CCLManager)",
+                name,
+                row_slots,
+                min_row_slots);
+        };
+        const auto device_grid = tensor_args.input_tensor.device()->compute_with_storage_grid_size();
+        const uint32_t full_grid_slots = device_grid.x * device_grid.y;
+        // Progress rows are indexed by MM core id over the full device grid (see the RS factory).
+        validate_counter_array(*tensor_args.mm_progress_counters, "mm_progress_counters", full_grid_slots);
+        // Credit rows need one slot per RS reader: 2 directions * num_links * workers-per-direction.
+        // When num_workers_per_link is defaulted its value is resolved at build, so check the
+        // lower bound here; the factory validates the exact count.
+        const uint32_t min_rs_readers = 2 * attributes.num_links * attributes.num_workers_per_link.value_or(1);
+        validate_counter_array(*tensor_args.mm_credit_counters, "mm_credit_counters", min_rs_readers);
     }
 
     // RS validation: checks we can perform without the (not-yet-created) MM output tensor.
