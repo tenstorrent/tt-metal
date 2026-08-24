@@ -684,7 +684,10 @@
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
     export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-20b
-    pytest --timeout 600 models/demos/gpt_oss/tests/unit/
+    # The fused_op_unit_tests node is a CPU-only reference-contract test (no mesh);
+    # passing its node id directly bypasses that directory's 32-device collect-ignore.
+    pytest --timeout 600 models/demos/gpt_oss/tests/unit/ \
+      "models/demos/gpt_oss/tests/fused_op_unit_tests/test_gpt_oss_experts.py::test_gpt_oss_experts_reference_preserves_decode_shape"
   model: gpt-oss-20b
   model_family: GPT-OSS
   skus:
@@ -710,7 +713,10 @@
     # Check mlperf-write-access in the workflow to load weights and regenerate the cache.
     SKIP_MODEL_LOAD="--skip-model-load"
     [ "${MLPERF_READ_ONLY:-true}" = "false" ] && SKIP_MODEL_LOAD=""
-    pytest --timeout 1500 models/demos/gpt_oss/tests/unit $SKIP_MODEL_LOAD
+    # The fused_op_unit_tests node is a CPU-only reference-contract test (no mesh);
+    # passing its node id directly bypasses that directory's 32-device collect-ignore.
+    pytest --timeout 1500 models/demos/gpt_oss/tests/unit $SKIP_MODEL_LOAD \
+      "models/demos/gpt_oss/tests/fused_op_unit_tests/test_gpt_oss_experts.py::test_gpt_oss_experts_reference_preserves_decode_shape"
   model: gpt-oss-120b
   model_family: GPT-OSS
   skus:
