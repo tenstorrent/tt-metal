@@ -25,6 +25,15 @@ Proves:
   6. a DIFFERENT tt-metal head refuses the entry (consumers verify the
      source-tree identity, not just the toolchain);
   7. --no-store compiles into --run-root and leaves the store untouched.
+  8. FZ-F1 (lane GF): the store key is derived from the compiler the leg
+     will ACTUALLY invoke (resolved under the --compiler-derived
+     GCC_EXEC_PREFIX build env, the exact env build_leg pins), and a
+     DIVERGENCE between that resolution and the caller-env resolution
+     REFUSES LOUDLY before any compile — the lane-FZ poisoned-key
+     fail-open (hybrid shell GCC_EXEC_PREFIX + default --compiler stored
+     PIN bytes under the HYBRID's key) is structurally impossible; the
+     sound hybrid workflow (--compiler <hybrid driver>) publishes under
+     the hybrid cc1plus key.
 
 Run with the other gate self-tests; exit 0 all green.
 """
@@ -238,6 +247,114 @@ with tempfile.TemporaryDirectory() as td:
         and before == after
         and compiles == 2,
         f"rc={r.returncode} compiles={compiles}\n{r.stderr}",
+    )
+
+
+# ---------------- 8. FZ-F1 poisoned-key fail-open (lane GF) ----------------
+def write_gep_toolchain(root, name, cc1_bytes):
+    """A fake toolchain whose driver mimics the REAL one's GCC_EXEC_PREFIX
+    semantics: with GCC_EXEC_PREFIX set and ${GCC_EXEC_PREFIX}cc1plus
+    present it resolves THERE; otherwise it falls back to its own install's
+    lib/gcc/cc1plus.  cc1plus staged at <root>/<name>/compiler/lib/gcc/
+    (== build_gcc_exec_prefix of the driver realpath)."""
+    comp = root / name / "compiler"
+    (comp / "bin").mkdir(parents=True)
+    libgcc = comp / "lib/gcc"
+    libgcc.mkdir(parents=True)
+    cc1 = libgcc / "cc1plus"
+    cc1.write_bytes(cc1_bytes)
+    gxx = comp / "bin/riscv-tt-elf-g++"
+    gxx.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "-print-prog-name=cc1plus" ]; then\n'
+        '  if [ -n "${GCC_EXEC_PREFIX:-}" ] && [ -f "${GCC_EXEC_PREFIX}cc1plus" ]; then\n'
+        '    echo "${GCC_EXEC_PREFIX}cc1plus"\n'
+        "  else\n"
+        f'    echo "{cc1}"\n'
+        "  fi\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 0\n"
+    )
+    gxx.chmod(0o755)
+    objcopy = comp / "bin/riscv-tt-elf-objcopy"
+    objcopy.write_text('#!/bin/sh\ncat "$4"\n')
+    objcopy.chmod(0o755)
+    return gxx, cc1
+
+
+with tempfile.TemporaryDirectory() as td:
+    td = pathlib.Path(td)
+    pin_gxx, pin_cc1 = write_gep_toolchain(td, "pin", b"PIN CC1PLUS BYTES v1\n")
+    hyb_gxx, hyb_cc1 = write_gep_toolchain(td, "hybrid", b"HYBRID CC1PLUS BYTES v1\n")
+    repo = write_fake_repo(td)
+    store = td / "store"
+    counter = td / "compiles.count"
+    fz_args = [
+        "--flags=-mfz-fixture-flags",
+        "--arch",
+        "bh",
+        "--store-root",
+        str(store),
+        "--tt-metal-home",
+        str(repo),
+        "--producer-cmd",
+        PRODUCER,
+    ]
+
+    # 8a. THE FZ INCIDENT SHAPE: caller shell exports the HYBRID's
+    # GCC_EXEC_PREFIX but --compiler is the PIN driver (the checkout
+    # default).  The caller-env resolution says hybrid cc1plus; the leg
+    # would COMPILE with the pin (build_leg rewrites GCC_EXEC_PREFIX from
+    # the --compiler realpath).  Must REFUSE loudly BEFORE compiling —
+    # without the fix this published PIN bytes under the HYBRID key.
+    env_poison = dict(
+        os.environ,
+        COUNTER=str(counter),
+        GCC_EXEC_PREFIX=str(hyb_cc1.parent) + "/",
+    )
+    r = run_store(["ensure", *fz_args, "--compiler", str(pin_gxx)], env_poison)
+    compiles = len(counter.read_text().splitlines()) if counter.is_file() else 0
+    check(
+        "FZ-F1: caller-env vs build-env cc1plus divergence REFUSES loudly "
+        "before any compile (poisoned-key fail-open closed)",
+        r.returncode != 0
+        and "DIVERGENCE" in (r.stderr + r.stdout)
+        and "--compiler" in (r.stderr + r.stdout)
+        and compiles == 0
+        and not (store / "leg.json").exists()
+        and not any(store.rglob("leg.json")),
+        f"rc={r.returncode} compiles={compiles}\n{r.stderr[:800]}",
+    )
+
+    # 8b. The SOUND hybrid workflow: --compiler <hybrid driver>.  Publishes
+    # under the HYBRID cc1plus key (the compiler the leg actually invokes),
+    # caller GCC_EXEC_PREFIX present or not.
+    r = run_store(["ensure", *fz_args, "--compiler", str(hyb_gxx)], env_poison)
+    entries = sorted(store.rglob("leg.json"))
+    hyb_sha = __import__("hashlib").sha256(hyb_cc1.read_bytes()).hexdigest()
+    leg = json.loads(entries[0].read_text()) if entries else {}
+    check(
+        "FZ-F1: hybrid leg WITH --compiler <hybrid driver> publishes under "
+        "the hybrid cc1plus key (key == the compiler actually invoked)",
+        r.returncode == 0
+        and len(entries) == 1
+        and entries[0].parent.parent.name == hyb_sha[:12]
+        and leg.get("cc1plus_sha256") == hyb_sha,
+        f"rc={r.returncode} entries={entries}\n{r.stderr[:800]}",
+    )
+
+    # 8c. No-GEP caller env with the default-style --compiler still works
+    # (both resolutions agree on the pin cc1plus; key = pin sha).
+    env_clean = dict(os.environ, COUNTER=str(counter))
+    env_clean.pop("GCC_EXEC_PREFIX", None)
+    r = run_store(["ensure", *fz_args, "--compiler", str(pin_gxx)], env_clean)
+    pin_sha = __import__("hashlib").sha256(pin_cc1.read_bytes()).hexdigest()
+    check(
+        "FZ-F1: agreeing resolutions (no caller GEP) proceed and key by the "
+        "pin cc1plus",
+        r.returncode == 0 and (store / pin_sha[:12]).is_dir(),
+        f"rc={r.returncode}\n{r.stderr[:800]}",
     )
 
 if FAILS:

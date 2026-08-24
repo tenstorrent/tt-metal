@@ -261,6 +261,58 @@ with tempfile.TemporaryDirectory() as td:
         sorted(seen_legs),
     )
 
+    # FY-F1 INJECTION (lane GF): the knob-only-row blindness.  A row whose
+    # ONLY effect rides a default-off booking flag classifies byte-identical
+    # on the main sem OFF-vs-ON pair (unaryshift-fresh / castfp32tofp16a /
+    # unarybitwise-fresh at ON-28: lane FY measured their unroll knob legs
+    # MANUALLY because the pregate returned SKIP_NOT_CHANGED).  A row
+    # REGISTERED for knob silicon with a CLEAN byte-identical main verdict
+    # must still get its knob legs — the on-plus knob's (ON vs ON+flag)
+    # span is never measured by the main pair.
+    sw_fy = mk_sweep(td / "ev-fy")
+    sw_fy.a.knob_silicon_rows = ["unaryshift-fresh"]
+
+    def fake_classify_fy(row, sel, legs=None, tag="classify"):
+        # the unroll knob fires on this row; every other knob refuses
+        if tag == "knobs/replay-loop-unroll":
+            return {"status": "OK", "all": "CHANGED"}
+        return {"status": "OK", "all": "IDENTICAL"}
+
+    sw_fy.classify = fake_classify_fy
+    row_fy = mk_row("unaryshift-fresh", {"sem-perf": "perf.py::t[mathop:LeftShift]"})
+    (sw_fy.ev / "unaryshift-fresh").mkdir()
+    att = sw_fy.attribute_knobs(
+        row_fy, {"sem-perf": {"status": "OK", "all": "IDENTICAL"}}
+    )
+    check(
+        "FY-F1: REGISTERED knob-silicon row with byte-identical main legs "
+        "still gets knob attribution (on-plus knob fire found, not "
+        "SKIP_NOT_CHANGED)",
+        att.get("status") == "OK"
+        and att.get("firing_knobs") == ["replay-loop-unroll"]
+        and att.get("single_knob_attribution") == "replay-loop-unroll",
+        att,
+    )
+    att2 = sw_fy.attribute_knobs(
+        mk_row("otherop", {"sem-perf": "perf.py::t[mathop:O]"}),
+        {"sem-perf": {"status": "OK", "all": "IDENTICAL"}},
+    )
+    check(
+        "FY-F1: UNREGISTERED row keeps the historical cost pregate "
+        "(SKIP_NOT_CHANGED on byte-identical main)",
+        att2.get("status") == "SKIP_NOT_CHANGED",
+        att2,
+    )
+    att3 = sw_fy.attribute_knobs(
+        row_fy, {"sem-perf": {"status": "COMPILE_FAIL", "all": None}}
+    )
+    check(
+        "FY-F1: only a CLEAN byte-identical main verdict opens the "
+        "registered-row path (COMPILE_FAIL still skips)",
+        att3.get("status") == "SKIP_NOT_CHANGED",
+        att3,
+    )
+
     # knob_silicon: classification IDENTICAL short-circuits before any device
     # work, so a classify stub is enough to capture the legs it passes.
     sw2 = mk_sweep(td / "ev2")

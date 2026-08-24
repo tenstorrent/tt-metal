@@ -1268,12 +1268,36 @@ def partition_perf_legs(specs):
     only in an axis invisible to the CSV (e.g. fresh_cpp_impl sem vs hand)
     must never share a session — the combiner would collapse their rows.
 
-    specs: dicts with keys file, mathop (token or None), op, sel, leg.
+    SCHEMA-AWARE GROUPING (lane GE finding GE-F2, silent data loss):
+    splittability is necessary but NOT sufficient — the module-scoped perf
+    fixture writes ONE combined CSV whose column schema must be UNIQUE, and
+    the column set derives from the parameter classes each test FUNCTION
+    passes (helpers/perf/schema.py PerfSchemaError otherwise).  Two
+    same-file legs from DIFFERENT test functions co-scheduled in one
+    session can stack two schemas (perf_eltwise_binary_sfpu.py: production
+    int test's zone columns vs the fresh_cpp functions' fresh_cpp_impl) ->
+    PerfSchemaError at module teardown -> the whole module writes NO
+    perf_data while every node reports 'passed'.  The FM one-schema
+    contract holds per test function (one parametrize list -> homogeneous
+    columns by construction), so `func` is the schema grouping key:
+    same-file legs share a session ONLY when they also share the test
+    function (a spec whose func is None — unparsable node id — never
+    shares its file's sessions; fail closed).
+
+    specs: dicts with keys file, func (test function or None), mathop
+    (token or None), op, sel, leg.
     Deterministic (sorted greedy first-fit); selftest-covered."""
     bins = []
     for spec in sorted(
         specs,
-        key=lambda s: (s["file"], s["mathop"] or "", s["op"], s["sel"], s["leg"]),
+        key=lambda s: (
+            s["file"],
+            s.get("func") or "",
+            s["mathop"] or "",
+            s["op"],
+            s["sel"],
+            s["leg"],
+        ),
     ):
         placed = False
         for b in bins:
@@ -1286,6 +1310,10 @@ def partition_perf_legs(specs):
                 spec["mathop"]
                 and all(x["mathop"] for x in same)
                 and spec["mathop"] not in {x["mathop"] for x in same}
+                # GE-F2: one schema per session-and-file — the test
+                # function is the schema key (None never shares).
+                and spec.get("func")
+                and all(x.get("func") == spec["func"] for x in same)
             ):
                 b.append(spec)
                 placed = True
@@ -1398,7 +1426,10 @@ class Sweep:
                 continue
             if v.get("status") == "OK" and v.get("all") in ("IDENTICAL", "CHANGED"):
                 return v["all"] == "IDENTICAL"
-        return base_classes.get((row["corpus_id"], row_scope(row))) == "refusal"
+        return (
+            base_classes.get((row["corpus_id"], row_scope(row), self._class_op(row)))
+            == "refusal"
+        )
 
     def _order_rows(self):
         """ROW PRIORITY SCHEDULING (owner order, pipeline overhaul): rows
@@ -2899,6 +2930,32 @@ exit $RC
             "notes": [],
         }
 
+    def _empty_samples_gate(self, row, sel, samples, ksamples, result):
+        """GE-F2 fail-closed belt, assembly layer (serial AND batched): a
+        perf selector whose device legs EXECUTED (not dry-run, not refused,
+        not compile-blocked) but delivered ZERO parsable samples for a leg
+        is SILENT DATA LOSS — the weekly's mixed-schema sessions booked
+        'passed' nodes with empty sample arrays and the row read 'ok'
+        (lane GE: atan2/binary-float hand legs).  Loud FATAL: a RED event
+        (run exits nonzero) plus an on-row note; the cells stay None so
+        nothing books.  Diagnostic and KERNEL zones both gated — a verdict
+        without its KERNEL cell is equally unusable."""
+        if getattr(self.a, "dry_run", False):
+            return
+        for leg, vals in samples.items():
+            kvals = ksamples.get(leg, [])
+            if vals and kvals:
+                continue
+            zones = [z for z, v in (("diag", vals), ("kernel", kvals)) if not v]
+            msg = (
+                f"{row['op']}/{sel} leg '{leg}': EMPTY {'+'.join(zones)} "
+                f"perf samples on an executed device leg (0 of {PERF_RUNS} "
+                "reps parsed) — perf_data missing/unattributed (GE-F2 "
+                "silent-data-loss class): FATAL, nothing booked"
+            )
+            result["notes"].append(f"GE-F2 FATAL: {msg}")
+            self.reds.append(msg)
+
     def _measured_flags_gate(self, row, classifications, result):
         """Contradiction lint (the welford pin-12 lesson): if classify proves
         the ON set CHANGES this row's bytes, the measured silicon legs MUST
@@ -3049,6 +3106,26 @@ exit $RC
         return node.split("::", 1)[0]
 
     @staticmethod
+    def _node_func(node):
+        """The node id's TEST FUNCTION name — the schema-grouping key for
+        batched perf sessions (lane GE finding GE-F2).  The perf-CSV column
+        set derives from the parameter classes a test function passes to
+        PerfConfig, and the FM one-schema contract holds per FUNCTION (one
+        parametrize list, homogeneous columns) — but NOT across functions
+        of one module file (perf_eltwise_binary_sfpu.py: the production int
+        test emits zone columns the fresh_cpp functions do not).  Two
+        same-file nodes from DIFFERENT functions co-scheduled in one pytest
+        session stack >=2 schemas into the module-scoped combined CSV ->
+        PerfSchemaError at module teardown -> the WHOLE module writes no
+        perf_data while every node reports 'passed' (silent data loss).
+        None when the node id has no '::' part (fail closed: an unparsable
+        node never shares a session with another leg of its file)."""
+        if "::" not in node:
+            return None
+        func = node.split("::", 1)[1]
+        return func.split("[", 1)[0] or None
+
+    @staticmethod
     def _node_mathop(node):
         """The node id's mathop token (the only CSV-visible row
         discriminator between two ops of one perf module), or None."""
@@ -3082,6 +3159,7 @@ exit $RC
             "node": node,
             "extra_env": row_env(row, sel),
             "file": self._node_file(node),
+            "func": self._node_func(node),
             "mathop": self._node_mathop(node),
             "rep": 0 if kind == "corr" else int(label[1:]),
             "work": self.ev / row["op"] / "silicon" / sel / f"{label}-{leg}",
@@ -3738,9 +3816,25 @@ exit $RC
                                 "session?)"
                             )
                 elif passed:
+                    # GE-F2 fail-closed belt: a 'passed' perf node whose
+                    # session wrote NO perf_data for its module is SILENT
+                    # DATA LOSS (the PerfSchemaError-at-teardown class: a
+                    # mixed-schema session drops the whole module's CSV
+                    # while every node reports passed).  The leg FAILS
+                    # loudly — an empty sample set must never book as a
+                    # green cell.  Independent of the schema-aware
+                    # grouping fix by design (belt and braces).
+                    rc = rc or 96
                     notes.append(
-                        "session produced no perf_data for this module "
-                        "(session killed before module teardown?)"
+                        "GE-F2 FATAL: node passed but the session wrote NO "
+                        "perf_data for this module (PerfSchemaError at "
+                        "module teardown / mixed-schema session class) — "
+                        "silent data loss; leg failed closed"
+                    )
+                    self.reds.append(
+                        f"{job['op']}/{job['sel']} {job['label']}-{job['leg']}: "
+                        "passed node with NO module perf_data (GE-F2 silent "
+                        f"data loss class) in session {sdir.name}"
                     )
             log_lines = [
                 f"batched consumer session: {sdir}",
@@ -3906,6 +4000,7 @@ exit $RC
                 if j["kind"] == "perf":
                     specs[(j["op"], j["sel"], j["leg"])] = {
                         "file": j["file"],
+                        "func": j["func"],
                         "mathop": j["mathop"],
                         "op": j["op"],
                         "sel": j["sel"],
@@ -4067,6 +4162,8 @@ exit $RC
             result["runs"][f"{sel}/{cell}_kernel_samples"] = ksrc
             result["cells"][cell] = (sum(src) / len(src)) if src else None
             result["kernel_cells"][cell] = (sum(ksrc) / len(ksrc)) if ksrc else None
+            if row["nodes"][sel]:
+                self._empty_samples_gate(row, sel, {cell: src}, {cell: ksrc}, result)
         self._issue_slot_check(row, result)
         c = result["cells"]
         gen, hand = c.get("generated"), c.get("handwritten_replay")
@@ -4187,6 +4284,7 @@ exit $RC
                 result["runs"][f"{sel}/{cell}_kernel_samples"] = ksrc
                 result["cells"][cell] = (sum(src) / len(src)) if src else None
                 result["kernel_cells"][cell] = (sum(ksrc) / len(ksrc)) if ksrc else None
+            self._empty_samples_gate(row, sel, samples, ksamples, result)
         # marker validity first: an INVALID_MARKER cell must not feed a ratio
         self._issue_slot_check(row, result)
         # derived ratios — the kernel_* pair DECIDES the row's verdict class
@@ -4212,13 +4310,35 @@ exit $RC
         return result
 
     # ---------------- weekly: per-knob attribution ----------------
+    def _knob_pregate_open(self, row, main_cls):
+        """Whether a row enters per-knob attribution (lane FY finding
+        FY-F1).  Historical rule: only rows whose MAIN sem OFF-vs-ON
+        classification is CHANGED get knob legs — a pure compile-cost
+        heuristic.  That pregate was structurally BLIND to knob-only rows:
+        an on-plus knob's legs are (reviewed-ON) vs (reviewed-ON + flag),
+        a span the main OFF-vs-ON pair never measures, so a row whose only
+        effect rides a default-off booking flag (unaryshift-fresh /
+        castfp32tofp16a / unarybitwise-fresh at ON-28) classified
+        byte-identical on main and got NO automatic knob silicon (lane FY
+        measured those legs manually).  Fix: a row REGISTERED for knob
+        silicon (--knob-silicon-rows) with a CLEAN byte-identical main
+        verdict still gets its knob legs — each knob's own classify verdict
+        decides (IDENTICAL knobs record refusals exactly as before).
+        Unregistered rows keep the historical cost heuristic verbatim."""
+        if main_cls.get("all") == "CHANGED":
+            return True
+        return (
+            row["op"] in (getattr(self.a, "knob_silicon_rows", None) or [])
+            and main_cls.get("status") == "OK"
+            and main_cls.get("all") == "IDENTICAL"
+        )
+
     def attribute_knobs(self, row, classifications):
         if row["kind"] == "pinpair":
             return {"op": row["op"], "status": "SKIP_PINPAIR"}
         sel = "sem-perf" if row["nodes"]["sem-perf"] else "sem-corr"
-        if (
-            not row["nodes"][sel]
-            or classifications.get(sel, {}).get("all") != "CHANGED"
+        if not row["nodes"][sel] or not self._knob_pregate_open(
+            row, classifications.get(sel, {})
         ):
             return {"op": row["op"], "status": "SKIP_NOT_CHANGED"}
         firing = []
@@ -4386,6 +4506,19 @@ exit $RC
                     kval = self._kernel_value(row, sel, f"r{r}", leg, tag=tag)
                     if kval is not None:
                         ksamples[leg].append(kval)
+            empty = [
+                leg for leg in ("off", "knob") if not samples[leg] or not ksamples[leg]
+            ]
+            if empty and not self.a.dry_run:
+                # GE-F2 fail-closed belt, knob-leg edition: executed legs
+                # with zero parsable samples never book silently.
+                entry["status"] = "EMPTY_SAMPLES_FATAL"
+                self.reds.append(
+                    f"{row['op']}/{knob}: EMPTY perf samples on executed "
+                    f"knob leg(s) {','.join(empty)} (GE-F2 silent-data-loss "
+                    "class) — nothing booked"
+                )
+                continue
             cell = {leg: (sum(v) / len(v)) if v else None for leg, v in samples.items()}
             if cell["off"] and cell["knob"]:
                 cell["delta_pct"] = 100.0 * (cell["knob"] - cell["off"]) / cell["off"]
@@ -4536,9 +4669,18 @@ exit $RC
 
         cycles:  (id, scope, selector) -> [floats]  (min = the established
                  three-process convention when aggregating repeats)
-        classes: (id, scope) -> expected class from the schema-2
+        classes: (id, scope, op) -> expected class from the schema-2
                  expected_class column (win/parity/loss/refusal); rows with
                  status 'refusal'/'expected_refusal' also declare refusal.
+                 `op` is the SELECTOR OP PREFIX ('<op>:<cell>' selectors;
+                 None for prefix-less pinpair selectors) — lane GE finding
+                 GE-F1: a corpus TU id is SHARED between a parent op and its
+                 fresh twins (e.g. mulint32 / mulint32-fresh), so a class
+                 map keyed only (id, scope) let a parent refusal row
+                 OVERWRITE the fresh twin's measured class, minting
+                 structural REFUSAL->CHANGED YELLOWs that no anchor refresh
+                 could clear.  The op prefix disambiguates; consumers key
+                 through _class_op().
         Falls back to deriving win/parity/loss from the measured sem cells
         for schema-1 baselines without the column.
         """
@@ -4549,7 +4691,10 @@ exit $RC
             for rec in csv.DictReader(
                 (x for x in f if not x.startswith("#")), delimiter="\t"
             ):
-                key2 = (rec["id"], rec["scope"])
+                sel_op = (
+                    rec["selector"].split(":", 1)[0] if ":" in rec["selector"] else None
+                )
+                key2 = (rec["id"], rec["scope"], sel_op)
                 cls = (rec.get("expected_class") or "").strip()
                 if cls:
                     classes.setdefault(key2, cls)
@@ -4578,6 +4723,16 @@ exit $RC
                     op = rec["selector"]  # placeholder to keep black quiet
                     cycles.setdefault((rec["id"], rec["scope"], alias), []).append(cyc)
         return cycles, classes
+
+    @staticmethod
+    def _class_op(r):
+        """Expected-class map op key for a config row / result payload
+        (GE-F1): non-pinpair baseline selectors are '<op>:<cell>', so the
+        class map is keyed by the selector op prefix — a corpus TU id is
+        shared between a parent op and its fresh twins and must never
+        collapse their classes onto one key.  Pinpair rows keep their
+        native prefix-less selectors -> None."""
+        return None if r.get("kind") == "pinpair" else r.get("op")
 
     @staticmethod
     def _derived_class(baseline, r, scope=None):
@@ -4676,16 +4831,23 @@ exit $RC
         scope = r.get("scope") or f"{r['marker']}_MATH_ISOLATE_PER_TILE"
         r = dict(r, scope=scope)
         kscope = r.get("kernel_scope")
+        cls_op = self._class_op(r)
         has_kernel_anchor = bool(kscope) and (
-            (r["corpus_id"], kscope) in kbase_classes
-            or any(k[0] == r["corpus_id"] and k[1] == kscope for k in kbaseline)
+            (r["corpus_id"], kscope, cls_op) in kbase_classes
+            or any(
+                k[0] == r["corpus_id"] and k[1] == kscope
+                # op-scoped like the class map (GE-F1): a parent op's cycle
+                # anchors must not count as the fresh twin's kernel anchor
+                and (cls_op is None or k[2].startswith(cls_op + ":"))
+                for k in kbaseline
+            )
         )
         expected_kernel = (
-            kbase_classes.get((r["corpus_id"], kscope)) if kscope else None
+            kbase_classes.get((r["corpus_id"], kscope, cls_op)) if kscope else None
         ) or (self._derived_class(kbaseline, r, scope=kscope) if kscope else None)
         expected = (
             expected_kernel
-            or base_classes.get((r["corpus_id"], scope))
+            or base_classes.get((r["corpus_id"], scope, cls_op))
             or self._derived_class(baseline, r)
         )
         # acceptance 1 (class-aware, D4): a refusal is GREEN only when the
@@ -4754,6 +4916,16 @@ exit $RC
             verdicts.append(
                 "MACRO-LAUNCH ROW WITHOUT issue_slot_lb — HANDOFF §1 "
                 "metric caveat unenforceable on this row's cells: RED"
+            )
+            rag = "RED"
+        # acceptance 1e (lane GF, GE-F2): an executed perf leg that
+        # delivered ZERO parsable samples is silent data loss — the
+        # assembly stamps a 'GE-F2 FATAL' note; the row verdict carries
+        # the RED so streamed ROW-VERDICT.json and the final report agree.
+        if any(n.startswith("GE-F2 FATAL") for n in r.get("notes", [])):
+            verdicts.append(
+                "EMPTY SAMPLES ON EXECUTED PERF LEG(S) — perf_data "
+                "missing/unattributed (GE-F2 silent-data-loss class): RED"
             )
             rag = "RED"
         # acceptance 1c (finding sweep_2x2.py:1276): a cell with baseline
@@ -5235,7 +5407,9 @@ exit $RC
             # CHANGED row inside the sequential gating loop — the
             # serialized stretch that dominated weekly classify
             # wall-clock.  Mirror its gating EXACTLY (non-pinpair,
-            # perf-else-corr selector, main verdict CHANGED) and compile
+            # perf-else-corr selector, _knob_pregate_open: main verdict
+            # CHANGED, or a registered knob-silicon row whose main verdict
+            # is a clean byte-identical — FY-F1) and compile
             # the same verdict set concurrently; the gating loop then
             # resumes every one hash-matched from cache.  Rows whose main
             # verdict is still unwritten (solo-pool spec raised) simply
@@ -5250,7 +5424,10 @@ exit $RC
                 if not row["nodes"][sel]:
                     continue
                 cached = self._classify_cached(self.ev / row["op"] / "classify" / sel)
-                if cached is None or cached.get("all") != "CHANGED":
+                # Mirror attribute_knobs' pregate EXACTLY (FY-F1: registered
+                # knob-silicon rows with a clean byte-identical main verdict
+                # also get knob legs, so their prewarm must match).
+                if cached is None or not self._knob_pregate_open(row, cached):
                     continue
                 for knob in KNOBS:
                     knob_specs.append(

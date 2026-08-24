@@ -56,6 +56,10 @@ fix__smallwin\tbh\tp150\tdevice_cycles\tTILE_LOOP_MATH_ISOLATE_PER_TILE\tsmallwi
 fix__smallwin\tbh\tp150\tdevice_cycles\tTILE_LOOP_MATH_ISOLATE_PER_TILE\tsmallwin:sem_on\t95.0\tmeasured\twin\tselftest\tfixture
 fix__lossop\tbh\tp150\tdevice_cycles\tTILE_LOOP_MATH_ISOLATE_PER_TILE\tlossop:sem_off\t100.0\tmeasured\tloss\tselftest\tfixture
 fix__lossop\tbh\tp150\tdevice_cycles\tTILE_LOOP_MATH_ISOLATE_PER_TILE\tlossop:sem_on\t110.0\tmeasured\tloss\tselftest\tfixture
+fix__shared\tbh\tp150\tdevice_cycles\tTILE_LOOP_MATH_ISOLATE_PER_TILE\ttwinop-fresh:sem_off\t100.0\tmeasured\tloss\tselftest\tGE-F1 fixture: fresh twin, measured
+fix__shared\tbh\tp150\tdevice_cycles\tTILE_LOOP_MATH_ISOLATE_PER_TILE\ttwinop-fresh:sem_on\t110.0\tmeasured\tloss\tselftest\tGE-F1 fixture: fresh twin, measured
+fix__shared\tbh\tp150\tdevice_cycles\tTILE_LOOP_MATH_ISOLATE_PER_TILE\ttwinop:sem_off\t\trefusal_byte_identical\trefusal\tselftest\tGE-F1 fixture: parent refusal AFTER the twin (the overwrite direction)
+fix__shared\tbh\tp150\tdevice_cycles\tTILE_LOOP_MATH_ISOLATE_PER_TILE\ttwinop:sem_on\t\trefusal_byte_identical\trefusal\tselftest\tGE-F1 fixture: parent refusal AFTER the twin (the overwrite direction)
 """
 
 
@@ -166,6 +170,58 @@ def main():
     )
     check("refusal→changed is flagged YELLOW", "YELLOW", rag, rep, "REFUSAL→CHANGED")
 
+    # 3b. GE-F1 INJECTION (lane GF): a corpus TU id SHARED between a parent
+    #     op and its fresh twin (mulint32 / mulint32-fresh class).  The
+    #     parent's refusal_byte_identical baseline rows come AFTER the
+    #     twin's measured rows in the TSV — with the (id, scope)-keyed
+    #     class map they OVERWROTE the twin's class and every twin re-run
+    #     minted a structural REFUSAL→CHANGED YELLOW no anchor refresh
+    #     could clear.  With the selector-op-prefix keying: the measured
+    #     twin is GREEN (no refusal notice), the parent's refusal stays a
+    #     GREEN expected refusal.
+    rag, rep = run_report(
+        tmp,
+        "case3b-twin",
+        [
+            make_result(
+                "twinop-fresh",
+                "fix__shared",
+                {"sem_off": 100.0, "sem_on": 110.0},
+                causal_pct=10.0,
+            ),
+        ],
+    )
+    ok = rag == "GREEN" and "REFUSAL→CHANGED" not in rep
+    print(
+        f"SELFTEST {'PASS' if ok else 'FAIL'}: GE-F1 fresh twin on a shared "
+        f"TU id books its OWN measured class — no parent-refusal bleed "
+        f"(rag={rag}, expected GREEN without REFUSAL→CHANGED)"
+    )
+    if not ok:
+        failures.append("GE-F1 fresh twin no refusal bleed")
+        print(rep)
+    rag, rep = run_report(
+        tmp,
+        "case3b-parent",
+        [
+            make_result(
+                "twinop",
+                "fix__shared",
+                {
+                    "sem_off": "REFUSAL_BYTE_IDENTICAL",
+                    "sem_on": "REFUSAL_BYTE_IDENTICAL",
+                },
+            ),
+        ],
+    )
+    check(
+        "GE-F1 parent refusal on the shared TU id keeps its refusal class",
+        "GREEN",
+        rag,
+        rep,
+        "baseline class refusal",
+    )
+
     # 4. Win preserved within drift: GREEN.
     rag, rep = run_report(
         tmp,
@@ -192,6 +248,34 @@ def main():
         ],
     )
     check("INVALID_MARKER is RED", "RED", rag, rep, "INVALID_MARKER")
+
+    # 5b. GE-F2 (lane GF): an executed perf leg with EMPTY samples stamps a
+    #     'GE-F2 FATAL' assembly note — the row verdict must carry the RED
+    #     (acceptance 1e), so streamed ROW-VERDICT.json and the report agree
+    #     and an empty-samples row can never read 'ok'.
+    rag, rep = run_report(
+        tmp,
+        "case5b",
+        [
+            make_result(
+                "winop",
+                "fix__winop",
+                {"sem_off": 100.0, "sem_on": 80.5},
+                causal_pct=-19.5,
+                notes=[
+                    "GE-F2 FATAL: winop/hand-perf leg 'on': EMPTY diag+kernel "
+                    "perf samples on an executed device leg"
+                ],
+            ),
+        ],
+    )
+    check(
+        "GE-F2 FATAL empty-samples note gates the row RED",
+        "RED",
+        rag,
+        rep,
+        "EMPTY SAMPLES ON EXECUTED PERF LEG",
+    )
 
     # ---- sweep-hardening round 2 regression cases ----
 
