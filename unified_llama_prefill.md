@@ -2960,6 +2960,80 @@ what ttnn's reader does at the NOC level -- transaction ids, command buffers, VC
 `noc_async_read_one_packet_with_state` and friends -- rather than at the loop level, which is
 where the last four hypotheses were formed and died.
 
+### It was the NOC. B on NOC 0 and A on NOC 1: 308.3 -> 152.5us
+
+Reading ttnn's reader at the NOC level -- the thing the paragraph above says to do -- turns
+up nothing exotic. Same `TensorAccessor`, same `noc_async_read`, same general path (a 2KB
+tile is four bursts at `NOC_MAX_BURST_SIZE` 512 for both of us), no `_with_state` variants,
+no VC pinning on the reads. So instead of reading further I instrumented **ttnn's own** in1
+sender with our three zones and compared like for like:
+
+| per sender core | DRAM wait | broadcast |
+|---|---|---|
+| ttnn in1 sender, 32 k-blocks | **49.3 us** | 68.6 us |
+| ours, 8 k-blocks | **168.1 us** | 60.6 us |
+
+Our broadcast was already FASTER. The entire gap was one number: the DRAM wait, 3.4x, for
+the same 1MB per sender. Not the loop, not the handshake, not the flushes -- all of which
+had been measured and cleared -- but the reads themselves, exactly as the ablation had
+narrowed it to.
+
+Which left the one property of a read that the kernel picks and nothing above had varied:
+**which NOC it goes out on.** A DM thread is bound to a NOC by its index, so choosing the
+thread chooses the NOC, and we had A on thread 0 and B on thread 1 for no reason beyond
+"they should not serialise". All four assignments, same shape, same everything else:
+
+| [512,2048]@[2048,2048], 8x8 mcast, kt=8 depth=3 | |
+|---|---|
+| A on NOC 1, B on NOC 0 | **155.6 us** |
+| A on NOC 0, B on NOC 0 | 216.2 us |
+| A on NOC 0, B on NOC 1 (what we had) | 308.3 us |
+| A on NOC 1, B on NOC 1 | 403.5 us |
+
+**2.6x between the best and worst arrangement of the same reads.** The ordering separates
+into two independent effects. Which NOC carries **B** is worth ~1.4x on its own -- NOC 0 is
+simply better for these DRAM reads -- and B is the big operand, 8MB against A's 2MB, so it
+is the one that must have it. Given that, putting A on the *other* NOC is worth another
+1.4x, which is the ordinary parallelism argument and the only part we had reasoned about.
+We had optimised the small effect and got the large one backwards.
+
+The sender zones confirm the mechanism rather than merely correlating with it:
+
+| totals over all sender cores, one launch | A:0 B:1 | A:1 B:0 |
+|---|---|---|
+| MCAST-DRAM (wait for the reads) | 1702.8 us | **309.6 us** |
+| MCAST-SEND (the broadcast) | 602.8 us | 580.6 us |
+| MCAST-READY (the handshake) | 4.9 us | 4.9 us |
+
+**5.5x less DRAM wait; the broadcast and handshake do not move**, which is what a NOC-routing
+effect should look like and what a bandwidth or contention effect should not. Per sender that
+is 19.4us against ttnn's 49.3 -- **our reads are now faster than ttnn's**, and the remaining
+gap is somewhere else.
+
+Re-sweeping on top of it, since the best kt was chosen under the old assignment:
+
+| kt | depth 2 | depth 3 | depth 4 |
+|---|---|---|---|
+| 1 | 188.1 | 187.9 | 188.3 |
+| 2 | 165.6 | 165.1 | 165.3 |
+| 4 | 155.4 | 154.8 | 155.4 |
+| **8** | 153.7 | **152.5** | 152.7 |
+| 16 | 158.0 | 157.7 | 158.4 |
+
+**152.5us against ttnn's 117.5us -- 1.30x, down from 2.62x.** The whole 30-launch sweep
+now sits below where the single best configuration was an hour ago, and kt=8/depth=3 is
+still the peak, so nothing about the blocking choice changed.
+
+Two things this cost, both worth naming. The hypothesis was reachable at any point --
+`MMB_IN1_THREAD` already existed as a knob, and flipping it is a one-line define -- and it
+was not reached because every hypothesis for a day had been about *structure*: loop nesting,
+accumulator residency, block size, flushes, handshake shape, memory layout. Each was
+plausible, each was measured, each was wrong, and none of them was about the wire. What
+finally pointed at it was not more thinking about our kernel but instrumenting *theirs* with
+the same three zones, which turned "we are 2.6x slower" into "our DRAM wait is 3.4x, our
+broadcast is fine" -- a statement narrow enough that only one unexamined variable was left.
+Measure the reference, not just the thing you are optimising.
+
 ## Phase 11 -- Full block orchestration
 
 Host-side and kernel-loop work, not model gaps.

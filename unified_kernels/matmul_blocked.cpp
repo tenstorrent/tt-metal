@@ -51,7 +51,10 @@
 //   MMB_MCAST                   broadcast each operand to the cores that share it, which
 //                               needs MMB_GRID_H x MMB_GRID_W == mb x nb exactly
 //   MMB_GRID_H / MMB_GRID_W     the core grid, MMB_MCAST only
-//   MMB_IN1_THREAD              which DM thread carries the B broadcast (1 on hardware)
+//   MMB_IN0_THREAD / MMB_IN1_THREAD  which DM thread, and so which NOC, carries each
+//                               operand. NOT symmetric: NOC 0 is measurably better for
+//                               these DRAM reads, so the BIG operand belongs on it. See
+//                               unified_llama_prefill.md.
 //   5..      TensorAccessorArgs for A, then B, then out
 //
 // Runtime args (identical on all three kernels):
@@ -197,7 +200,7 @@ void kernel_main() {
             const u::ComputeBlock<W>& w = w_h;
 #else
             u::ComputeBlock a =
-                u::noc_load<0, /*pair=*/0>(a_storage, row, [&](u::L1Pages pages) {
+                u::noc_load<MMB_IN0_THREAD, /*pair=*/0>(a_storage, row, [&](u::L1Pages pages) {
                     for (uint32_t p = 0; p < pages.count; ++p) {
                         const uint32_t rr = i * mt + p / kt;
                         const uint32_t cc = b * kt + p % kt;
