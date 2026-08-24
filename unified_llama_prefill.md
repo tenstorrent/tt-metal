@@ -2316,7 +2316,7 @@ the host-side `grid_transpose` entirely, which has been a wart since the first f
 
 **Still open:** the strided loads above, and fusing the attention and projection launches.
 
-### K-blocking the projection: d_model 2048 reached, at 1.14x
+### Blocking the projection in two dimensions: d_model 2048 at 0.94x
 
 Wo is dm*dm tiles -- 64 at d_model 256, but 4096 (8MB) at d_model 2048 -- so holding it whole
 was what capped the projection. K is now split into kb blocks of kt tiles, and the two operands
@@ -2350,15 +2350,43 @@ inverts the bias-fold result, where Dst won: there the output block was 8 tiles 
 was cheap, here it is 128 and it is not. L1 is now the default and Dst is behind
 `PROJ_ACC_DST`.
 
-**Where the remaining 1.14x is**, from the shape of the numbers rather than a separate
-measurement: ttnn's 3962.7us is essentially the arithmetic -- 65536 tile-MACs at the
-0.061us/tile-MAC the sweep's best cell achieves is 3998us -- so there is no headroom to find in
-the multiply. Ours pays Wo's DRAM traffic once per query chunk, and fewer chunks is measurably
-better (4 chunks 4527us against 8 chunks 5345us, the 818us difference being four extra 8MB
-passes at roughly 28GB/s). Larger sq means fewer passes, but sq*dm is the output block and it
-has to fit L1 -- sq=4, kt=4 already fails to allocate. Breaking that trade needs the output
-COLUMNS blocked as well, which is what ttnn's `bmm_large_block` does and what would let a big
-sq coexist with a small resident block.
+**Then the output columns were blocked too, and that closed it.** With `nt == dm` the whole
+output width is resident, so `sq` is capped by `sq*dm` and Wo gets re-read once per query
+chunk. Blocking both dimensions trades one against the other. Over `st` total row-tiles the
+DRAM traffic is
+
+    st * dm^2 * (1/sq + 1/nt)   tiles
+
+-- every query chunk reads all of Wo, every output-column block reads all of the activation --
+subject to `2*sq*nt` plus operands fitting L1. `nt == dm` makes the first term dominate.
+Balancing them is the whole trick, and the model ranks the configurations before measuring:
+
+| [512, 2048] @ [2048, 2048], one core, HiFi2 | model (tiles) | measured |
+|---|---|---|
+| sq=8, kt=8, nt=16 | 12288 | **3711.0 us** |
+| sq=16, kt=8, nt=8 | 12288 | 3712.5 us |
+| sq=8, kt=4, nt=16 | 12288 | 3938.3 us |
+| **ttnn.matmul, same shape** | | **3962.9 us** |
+| sq=8, kt=8, nt=8 | 16384 | 4076.9 us |
+| sq=4, kt=8, nt=32 | 18432 | 4119.7 us |
+| sq=4, kt=2, nt=64 (K-only) | 17408 | 4531.6 us |
+
+**3711us against 3962.9us is 0.94x -- faster than ttnn.matmul on the same shape, on one
+core.** The model orders the configurations correctly except for one inversion: 17408 tiles
+measures slower than 18432, because the 17408 config has kt=2 and so kb=32 accumulate calls
+where the other has kb=8. Traffic explains most of it and per-call overhead explains the rest,
+which is the same pair of costs every measurement in this file keeps landing on.
+
+Every operand is now gathered by a custom load -- the activation's k-slice, Wo's (k, n) tile,
+and the output block's strided store -- because none of the three is contiguous in its backing
+tensor once both dimensions are blocked. That is free: one read per page is what a contiguous
+block load already issues. Gathering W also normalises its row stride to `nt`, so the matmul
+geometry never has to know it came out of a wider matrix.
+
+ttnn's 3962.9us is essentially just the arithmetic: 65536 tile-MACs at the 0.061us/tile-MAC
+the sweep's best cell achieves is 3998us. Beating it slightly is not a claim about the FPU --
+it is that at HiFi2 on one core this shape is bandwidth-bound, and the traffic model above is
+what got the blocking right.
 
 **What this does NOT do is let the whole layer run at d_model 2048.** Only the projection is
 k-blocked. rmsnorm still processes one [ht, wt] block, so at S=512 by d_model 2048 it would
