@@ -390,9 +390,6 @@ def pytest_configure(config):
         config.getoption("--compile-producer", default=False),
         config.getoption("--stimuli-only"),
         config.getoption("--use-stimuli"),
-        # A collect-only pass must not clear the artifact tree — it runs before
-        # the collect-only bail-out below, so it would delete a prior build's
-        # output that a following consumer step is about to read.
         collect_only=bool(config.option.collectonly),
     )
 

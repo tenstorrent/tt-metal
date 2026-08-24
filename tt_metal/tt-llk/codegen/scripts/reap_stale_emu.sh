@@ -13,10 +13,8 @@
 # reap regardless — e.g. from a batch trap after its child runs are killed.
 #
 # Scope: by default reaps ONLY this run's own job, identified by --tag (defaults
-# to $NNG_SOCKET_NAME). That is required once more than one slot runs under this
-# account — the untagged form is a blanket `pkill -u $USER` that would kill a
-# peer slot's healthy job. Pass --all for the old fleet-wide sweep (cron/batch
-# cleanup, where killing everything of ours is the intent).
+# to $NNG_SOCKET_NAME). Pass --all for a fleet-wide sweep of everything of ours
+# (cron/batch cleanup).
 #
 # Usage:
 #   reap_stale_emu.sh [--arch quasar] [--emu-host soc-l-12]
@@ -60,15 +58,11 @@ fi
 # straggler zrun/vovsh. A detached VOV farm job that survives still falls back to
 # EMULATOR_TIMEOUT. $USER/$found/$p/$g are evaluated on the remote (single-quoted).
 if [[ -n "$TAG" ]]; then
-  # Tag-scoped reap. MANDATORY once more than one slot can run under this
-  # account: the untagged form below is a blanket `pkill -u $USER`, so a peer
-  # slot's healthy job would be killed by another slot's pre-flight reap. It
-  # correctly spares OTHER users, but not our own concurrent runs.
-  #
-  # The tag is NNG_SOCKET_NAME, which the sim launcher passes through as
-  # `make ... NAME=<tag>`. That reaches the remote cmdline two ways: the make
-  # process carries `NAME=<tag>` directly, and its detached zrun/tee children
-  # carry the run directory `.../test_umd_remote_<config>_<tag>/`.
+  # Tag-scoped reap, required once more than one slot runs under this account:
+  # the untagged form below is a blanket `pkill -u $USER` and would kill a peer
+  # slot's healthy job. The tag is NNG_SOCKET_NAME, which the sim launcher passes
+  # as `make ... NAME=<tag>`; detached zrun/tee children carry it in their run
+  # directory path instead.
   remote_cmd="
 tag=$(printf '%q' "$TAG")
 found=\$(pgrep -u \"\$USER\" -f \"make -C verification(/emu)? (sim-test|test) .*NAME=\${tag}( |\\\$)\" 2>/dev/null)

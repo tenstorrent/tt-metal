@@ -1860,13 +1860,9 @@ def _classify_verification(
         collection["returncode"] == 5 and collection["selected"] == 0
     )
     if execution["timed_out"]:
-        # Must stay byte-identical with dashboard/hw_test/jobs.py's
-        # classify_verification_result: validate_verification_result recomputes
-        # the classification AND the reason codes and rejects any divergence.
-        # A sweep can exceed its wall clock with every executed test green. The
-        # coverage is genuinely incomplete either way, but "the sweep ran out of
-        # time" and "the candidate is broken" are different findings — say which,
-        # so a consumer does not start rewriting a fix that nothing implicated.
+        # Keep in lockstep with dashboard/hw_test/jobs.py's
+        # classify_verification_result: validation recomputes both the
+        # classification and the reason codes and rejects any divergence.
         return "timed_out", [
             "execution_timed_out",
             (
@@ -1979,23 +1975,11 @@ def cmd_verification_result(args: argparse.Namespace) -> int:
         "errors": collection["errors"],
         "returncode": collection["returncode"],
     }
-    # NO execution-vs-collection count guard here, deliberately.
-    #
-    # A previous "executed + skipped + xfailed > selected ⇒
-    # execution_count_exceeds_selection" check asserted an invariant the harness
-    # does not hold. conftest collapses the collection by COMPILE key, so many
-    # runtime variants share one collected item; the consumer then executes the
-    # expanded runtime set. Both `selected` and `collected` come from the
-    # producer's --collect-only and are therefore the collapsed number, so
-    # neither bounds the consumer's execution count and the guard fired on
-    # perfectly healthy sweeps (observed: selected=14 / executed=364 all green,
-    # selected=13 / executed=936 all green). Every such firing surfaced as
-    # `infra_error` on a run with zero failing tests, which reads downstream as
-    # "the candidate failed".
-    #
-    # Restoring a real bound needs a producer-side RUNTIME variant count that
-    # does not exist today. Until the harness reports one, there is nothing here
-    # to compare against — do not reintroduce this using selected/collected.
+    # Deliberately no execution-vs-collection count guard: conftest collapses the
+    # collection by COMPILE key, so executed > selected is normal. Both selected
+    # and collected come from the producer's --collect-only and are the collapsed
+    # number, so neither bounds the consumer. Do not reintroduce this without a
+    # producer-side RUNTIME variant count, which does not exist today.
     if signal_number is not None and (
         signal_number < 1
         or args.returncode not in (-signal_number, 128 + signal_number)

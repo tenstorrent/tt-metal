@@ -608,20 +608,11 @@ class TestConfig:
             )
             golden_generators_module.get_golden_generator = get_golden_proxied
 
-        # Always have a fresh build when compiling. Two guards, both required:
-        #
-        # worker_id == "master" (matches main): under xdist only the controller
-        # may remove the shared artifact tree — workers can already be compiling
-        # variants under it. Without this, `-n 15` had all 15 workers rmtree the
-        # tree and a green compile produced ZERO artifacts (measured: --jobs 15
-        # -> 0 files, --jobs 1 -> 8 files, same test, pytest PASSED both times).
-        #
-        # not collect_only: collection is a pure selector/count pass, and
-        # conftest calls setup_mode BEFORE its collect-only bail-out. So a
-        # collect-only pass was wiping the artifacts of a previous build; the
-        # caller then saw a matching build stamp, skipped rebuilding, and failed
-        # with "artifact root contains no files". Deterministic on any repeat run
-        # of an unchanged tree — i.e. exactly the retry path.
+        # Always have a fresh build when compiling. Under xdist only the
+        # controller may remove the shared artifact tree; workers can already be
+        # compiling variants under it. And never on a collect-only pass — conftest
+        # calls setup_mode before its collect-only bail-out, so this would delete
+        # a prior build that a following consumer step is about to read.
         if (
             TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]
             and worker_id == "master"

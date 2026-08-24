@@ -199,21 +199,11 @@ _validate() {
   # QSR_AETHER_LOCK (a shared-filesystem path) when configured so tensix-l-04
   # and tensix-l-05 cannot start or reap each other's runs. Other paths retain
   # the historical node-local lock.
-  # Measured 2026-08-24: Zebu grants concurrent 1x3 jobs freely (two submitted in
-  # the same second got modules 26-27 @U6.M2 and 28-29 @U7.M0, alongside three
-  # other users' jobs on group zs5). The emulator is NOT the scarce resource.
-  #
-  # What IS scarce is the NNG callback channel: IRD forwards exactly ONE port per
-  # reservation (<host>:$P_USER_DBD_PORT -> container:5555; any other port is
-  # refused from the emu host). So a reservation can host exactly one live emu
-  # session, and the correct exclusion is PER RESERVATION, not fleet-wide.
-  #
-  # Hence the lock is qualified by hostname: each compute reservation serializes
-  # its own solves, and tensix-l-04 and tensix-l-05 run concurrently -> 2 slots.
-  # Keeping it under QSR_AETHER_LOCK's shared directory means every runner on a
-  # host still shares one file, and reap_stale_emu.sh's "is a sim live here?"
-  # check stays correct. Set QSR_AETHER_LOCK_SCOPE=global to restore the old
-  # fleet-wide serialization.
+  # Zebu grants concurrent 1x3 jobs freely; the scarce resource is the NNG
+  # callback channel, of which IRD forwards exactly ONE per reservation. So a
+  # reservation hosts one live emu session and the lock is qualified by hostname:
+  # each reservation serializes its own solves while separate compute hosts run
+  # concurrently. QSR_AETHER_LOCK_SCOPE=global restores fleet-wide serialization.
   if [[ -z "$LOCKFILE" ]]; then
     if [[ "$ARCH" == "quasar" && -n "${QSR_AETHER_LOCK:-}" ]]; then
       if [[ "${QSR_AETHER_LOCK_SCOPE:-host}" == "global" ]]; then
