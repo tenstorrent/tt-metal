@@ -12,8 +12,11 @@ It is the committed analogue of ``scripts/navsim_inproc/check_parity.py`` (which
 measured trajectory PCC 0.999705), closing the "only random-weight gates are
 committed" gap.
 
-Skips cleanly if the checkpoint or plan-anchor asset is absent, so it is safe in
-CI: set ``DD_CHECKPOINT_PATH`` (and ``DD_ANCHOR_PATH``, see conftest) to enable.
+Asset handling is deliberately two-mode.  Locally the assets are optional and the
+test skips, so a checkout without a 730 MB checkpoint is still usable.  In CI the
+job stages the assets (``scripts/prepare_assets.py``) and sets
+``DD_REQUIRE_ASSETS=1``, which turns every "asset missing" path into a **failure**
+— a silently skipped gate is not a gate.
 """
 
 from __future__ import annotations
@@ -42,19 +45,33 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 def _checkpoint_path() -> str | None:
     data_root = os.environ.get("DD_DATA_ROOT", "/mnt/diffusion-drive")
     candidates = [
-        os.environ.get("DD_CHECKPOINT_PATH"),
-        f"{data_root}/weights/diffusiondrive_navsim_88p1_PDMS.pth",
+        os.environ.get("DD_CHECKPOINT_PATH"),  # explicit override
+        # scripts/prepare_assets.py target -- what the CI job stages.
+        str(Path(__file__).resolve().parents[2] / "data" / "diffusiondrive_navsim.pth"),
+        f"{data_root}/weights/diffusiondrive_navsim_88p1_PDMS.pth",  # staged eval layout
     ]
     return next((p for p in candidates if p and Path(p).exists()), None)
+
+
+def _assets_required() -> bool:
+    """CI sets DD_REQUIRE_ASSETS=1 after staging the assets."""
+    return os.environ.get("DD_REQUIRE_ASSETS", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _missing_asset(reason: str) -> None:
+    """Skip locally, but fail in CI -- a gate that skips itself gates nothing."""
+    if _assets_required():
+        pytest.fail(f"{reason} (DD_REQUIRE_ASSETS=1 -- CI must stage this asset)")
+    pytest.skip(reason)
 
 
 @pytest.mark.timeout(1800)
 def test_checkpoint_trajectory_pcc(device, model_config) -> None:
     if model_config.plan_anchor_path is None:
-        pytest.skip("plan_anchor_path not set — run scripts/prepare_assets.py first")
+        _missing_asset("plan_anchor_path not set — run scripts/prepare_assets.py first")
     ckpt = _checkpoint_path()
     if ckpt is None:
-        pytest.skip("real checkpoint not found — set DD_CHECKPOINT_PATH")
+        _missing_asset("real checkpoint not found — run scripts/prepare_assets.py or set DD_CHECKPOINT_PATH")
 
     # Real trained weights, latent=False (the deployed eval config).
     ref_cfg = DiffusionDriveConfig(plan_anchor_path=model_config.plan_anchor_path, latent=False)
