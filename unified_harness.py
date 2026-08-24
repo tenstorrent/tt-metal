@@ -189,3 +189,39 @@ def single_core():
     """The (0,0) core, as (core_ranges, cores)."""
     c = ttnn.CoreCoord(0, 0)
     return ttnn.CoreRangeSet([ttnn.CoreRange(c, c)]), [c]
+
+
+def core_block(n, width=8):
+    """The first `n` cores in row-major order, as (core_ranges, cores).
+
+    Row-major over a `width`-wide grid, so n=8 is one row and n=12 is a full row plus
+    four. The ranges are whole rows where possible and one partial row at the end, rather
+    than n single-core ranges, because a circular buffer is allocated per range.
+
+    The `cores` order IS the partition order for per-core runtime args: cores[i] is unit i
+    of whatever the caller is splitting up.
+    """
+    assert n >= 1
+    full, rem = divmod(n, width)
+    ranges = [ttnn.CoreRange(ttnn.CoreCoord(0, y), ttnn.CoreCoord(width - 1, y)) for y in range(full)]
+    if rem:
+        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, full), ttnn.CoreCoord(rem - 1, full)))
+    cores = [ttnn.CoreCoord(i % width, i // width) for i in range(n)]
+    return ttnn.CoreRangeSet(ranges), cores
+
+
+def split_evenly(total, parts):
+    """`total` units over `parts` workers as [(begin, count), ...], largest parts first.
+
+    The remainder is spread one unit per worker rather than piled on the last one: 10 over
+    4 is 3, 3, 2, 2 and not 3, 3, 3, 1. Since the workers run concurrently, the makespan is
+    the LARGEST share, so spreading the remainder is what keeps that at ceil(total/parts)
+    instead of letting one worker fall behind. Workers past `total` get a count of zero.
+    """
+    base, rem = divmod(total, parts)
+    out, begin = [], 0
+    for i in range(parts):
+        count = base + (1 if i < rem else 0)
+        out.append((begin, count))
+        begin += count
+    return out
