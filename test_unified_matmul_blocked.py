@@ -47,6 +47,7 @@ def run(
     depth=None,
     hoist=False,
     zones=False,
+    wdtype=None,
 ):
     """Extents and block widths all in TILES. a/b let a caller supply the operands."""
     assert mtot % mt == 0 and ktot % kt == 0 and ntot % nt == 0
@@ -58,16 +59,19 @@ def run(
 
     dram = ttnn.DRAM_MEMORY_CONFIG
 
-    def to_dev(t):
+    def to_dev(t, dtype=ttnn.bfloat16):
         return ttnn.from_torch(
             t.reshape(1, 1, *t.shape).to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
+            dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=dram,
         )
 
-    ta, tb = to_dev(a), to_dev(b)
+    # The WEIGHT's format is the interesting one: B is much the larger operand, so halving
+    # its bytes halves most of the traffic. A, the accumulator and the output stay bfloat16.
+    wdtype = wdtype or ttnn.bfloat16
+    ta, tb = to_dev(a), to_dev(b, wdtype)
     # NaN-filled: the allocator reuses addresses, so an output block nothing writes would
     # otherwise hold a previous run's values and a missed block would pass.
     tout = to_dev(torch.full([mtot * TILE, ntot * TILE], float("nan")))
@@ -113,7 +117,7 @@ def run(
     # ACROSS blocks. Same idea as the flash kernel's stream_buffering.
     cbs = [
         make_cb(CB_A, core_ranges, num_pages=depth * mt * kt),
-        make_cb(CB_B, core_ranges, num_pages=depth * kt * nt),
+        make_cb(CB_B, core_ranges, dtype=wdtype, num_pages=depth * kt * nt),
         make_cb(CB_OUT, core_ranges, num_pages=mt * nt),
     ] + ([make_cb(CB_ACC, core_ranges, num_pages=mt * nt)] if kt != ktot else [])
 
@@ -214,6 +218,29 @@ def main(argv=None):
             )
             if not ok:
                 failed.append(f"mcast-{mtot}-{ktot}-{ntot}-{mt}-{nt}")
+
+        # bfloat8_b weights: B's circular buffer carries a different data format, and so a
+        # different page size (1088, not 2048 -- it is a block format with an exponent
+        # section), from A's and the output's. matmul_block_init reconfigures the unpacker
+        # from the CB, and pages.page_bytes comes from the CB too, so nothing in the kernel
+        # names a format; if either of those were not true this would be quietly wrong
+        # rather than broken, which is why it is checked against the same threshold.
+        for mtot, ktot, ntot, mt, kt, nt, mc in (
+            (4, 8, 8, 4, 8, 8, False),
+            (4, 8, 8, 2, 4, 8, False),
+            (4, 16, 8, 2, 8, 4, False),
+            (4, 8, 8, 2, 8, 4, True),
+            (8, 8, 16, 2, 8, 4, True),
+        ):
+            got, want = run(device, mtot, ktot, ntot, mt, kt, nt, mcast=mc, wdtype=ttnn.bfloat8_b)
+            v = pcc(got, want)
+            ok = v >= args.pcc
+            logger.info(
+                f"  bfloat8_b weights {mtot}x{ktot} @ {ktot}x{ntot} mt={mt} kt={kt} nt={nt}"
+                f"{' mcast' if mc else ''}: pcc={v:.6f}  {'ok' if ok else 'FAIL'}"
+            )
+            if not ok:
+                failed.append(f"bf8-{mtot}-{ktot}-{ntot}-{mt}-{kt}-{nt}")
 
         # Partitioned across cores.
         for ncores in (2, 4, 8):
