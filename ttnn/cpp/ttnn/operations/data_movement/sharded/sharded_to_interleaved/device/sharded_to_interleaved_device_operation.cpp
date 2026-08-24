@@ -102,14 +102,16 @@ tt::tt_metal::TensorSpec ShardedToInterleavedDeviceOperation::compute_output_spe
     }
 
     const auto& input_tensor = tensor_args.input_tensor;
-    // An interleaved row-major page is one logical row, so the shard width must not leak into the
-    // output spec. Tile keeps its padded shape - there the padded row is the real extent.
+    // An interleaved row-major page is one logical row. Plain TensorLayout means alignment 1, so
+    // padding lands only in aligned_page_size; the factory clips each write to match.
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         return tt::tt_metal::TensorSpec(
             input_tensor.logical_shape(),
             tt::tt_metal::TensorLayout(
                 args.output_dtype, tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));
     }
+
+    // Tile keeps the padded shape: the writer indexes off that same padded row, so both must agree.
     return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout::fromPaddedShape(
