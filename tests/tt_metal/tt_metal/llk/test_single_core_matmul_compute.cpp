@@ -29,6 +29,7 @@
 #include <tt-metalium/constants.hpp>
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "impl/host_api/temp_quasar_api.hpp"
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
@@ -980,7 +981,241 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     return pass;
 }
 
+// MOP-less matmul (issue #52329): out[rt x ct] = in0[rt x kt] * in1[kt x ct] in one dest acquire.
+struct MatmulConfig {
+    uint32_t rt_dim = 1;
+    uint32_t ct_dim = 1;
+    uint32_t kt_dim = 1;
+    MathFidelity math_fidelity = MathFidelity::LoFi;
+};
+
+void run_matmul_no_mop(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const MatmulConfig& test_config) {
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
+
+    const experimental::NodeCoord node{0, 0};
+    const bool is_quasar = mesh_device->arch() == tt::ARCH::QUASAR;
+
+    const uint32_t rt_dim = test_config.rt_dim;
+    const uint32_t ct_dim = test_config.ct_dim;
+    const uint32_t kt_dim = test_config.kt_dim;
+    const uint32_t in0_num_tiles = rt_dim * kt_dim;
+    const uint32_t in1_num_tiles = kt_dim * ct_dim;
+    const uint32_t out_num_tiles = rt_dim * ct_dim;
+    const uint32_t single_tile_size = tt::constants::TILE_HW * sizeof(bfloat16);
+
+    log_info(
+        tt::LogTest,
+        "Testing matmul_block_no_mop rt_dim={} ct_dim={} kt_dim={} fidelity={}",
+        rt_dim,
+        ct_dim,
+        kt_dim,
+        static_cast<int>(test_config.math_fidelity));
+
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
+    auto make_dram = [&](uint32_t num_tiles) {
+        distributed::ReplicatedBufferConfig cfg{.size = single_tile_size * num_tiles};
+        return distributed::MeshBuffer::create(cfg, dram_config, mesh_device.get());
+    };
+    auto in0_dram = make_dram(in0_num_tiles);
+    auto in1_dram = make_dram(in1_num_tiles);
+    auto out_dram = make_dram(out_num_tiles);
+
+    experimental::KernelSpec::CompilerOptions::Defines defines_vec;
+    defines_vec.emplace("RT_DIM", std::to_string(rt_dim));
+    defines_vec.emplace("CT_DIM", std::to_string(ct_dim));
+    defines_vec.emplace("KT_DIM", std::to_string(kt_dim));
+
+    const experimental::DFBSpecName INP0_DFB{"inp0_dfb"};
+    const experimental::DFBSpecName INP1_DFB{"inp1_dfb"};
+    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
+
+    auto make_dfb = [&](const experimental::DFBSpecName& name, uint32_t num_entries) {
+        return experimental::DataflowBufferSpec{
+            .unique_id = name,
+            .entry_size = single_tile_size,
+            .num_entries = num_entries,
+            .data_format_metadata = tt::DataFormat::Float16_b,
+        };
+    };
+    // One matmul_block_no_mop call indexes a rt_dim x 1 slice of in0 and a 1 x ct_dim slice of in1 off
+    // the read pointer within a single dest acquire, so both operands must be fully resident.
+    experimental::DataflowBufferSpec inp0_dfb_spec = make_dfb(INP0_DFB, in0_num_tiles);
+    experimental::DataflowBufferSpec inp1_dfb_spec = make_dfb(INP1_DFB, in1_num_tiles);
+    experimental::DataflowBufferSpec out_dfb_spec = make_dfb(OUT_DFB, out_num_tiles);
+
+    // Quasar drives dataflow through the Gen2 config and takes its DFB sync explicitly
+    experimental::DataMovementHardwareConfig reader_hw_config;
+    experimental::DataMovementHardwareConfig writer_hw_config;
+    experimental::ComputeHardwareConfig compute_hw_config;
+    if (is_quasar) {
+        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        compute_hw_config = experimental::ComputeGen2Config{.fpu_math_fidelity = test_config.math_fidelity};
+    } else {
+        reader_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+        writer_hw_config = experimental::DataMovementGen1Config{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+        compute_hw_config = experimental::ComputeGen1Config{.fpu_math_fidelity = test_config.math_fidelity};
+    }
+
+    // Reads num_tiles into in0 and num_bcast_tiles into in1 from two DRAM buffers, which is exactly
+    // the two matmul operands; nothing about it is broadcast-specific.
+    experimental::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_bcast_col_reuse.cpp",
+        .num_threads = 1,
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = INP0_DFB,
+                 .accessor_name = "in0",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = INP1_DFB,
+                 .accessor_name = "in1",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             }},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles", "num_bcast_tiles"}},
+        .hw_config = reader_hw_config,
+    };
+
+    experimental::KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
+        .hw_config = writer_hw_config,
+    };
+
+    experimental::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/matmul_no_mop.cpp",
+        .num_threads = 1,
+        .compiler_options = {.defines = defines_vec},
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = INP0_DFB,
+                 .accessor_name = "in0",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = INP1_DFB,
+                 .accessor_name = "in1",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = OUT_DFB,
+                 .accessor_name = "out",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             }},
+        .hw_config = compute_hw_config,
+    };
+
+    experimental::WorkUnitSpec wu{
+        .name = "main",
+        .kernels = {READER, WRITER, COMPUTE},
+        .target_nodes = node,
+    };
+    experimental::ProgramSpec spec{
+        .name = "single_core_matmul_no_mop",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers = {inp0_dfb_spec, inp1_dfb_spec, out_dfb_spec},
+        .work_units = {wu},
+    };
+
+    Program built_program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    workload.add_program(device_range, std::move(built_program));
+    auto& program_run = workload.get_programs().at(device_range);
+
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src0_addr", static_cast<uint32_t>(in0_dram->address())},
+                 {"src0_bank_id", 0u},
+                 {"src1_addr", static_cast<uint32_t>(in1_dram->address())},
+                 {"src1_bank_id", 0u},
+                 {"num_tiles", in0_num_tiles},
+                 {"num_bcast_tiles", in1_num_tiles}}),
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", static_cast<uint32_t>(out_dram->address())},
+                 {"bank_id", 0u},
+                 {"num_tiles", out_num_tiles}}),
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+    };
+    experimental::SetProgramRunArgs(program_run, params);
+
+    // make_operand_stimulus emits face-major tile order, which is the DRAM page order the reader
+    // streams and the order make_matmul_golden indexes, so no tilize/untilize round trip is needed.
+    MatmulStimulus stimulus = make_matmul_stimulus(tt::DataFormat::Float16_b, rt_dim, kt_dim, ct_dim);
+    std::vector<float> golden_floats =
+        make_matmul_golden(stimulus.in0_floats, stimulus.in1_floats, rt_dim, kt_dim, ct_dim);
+
+    distributed::WriteShard(cq, in0_dram, stimulus.packed_input0, zero_coord);
+    distributed::WriteShard(cq, in1_dram, stimulus.packed_input1, zero_coord);
+
+    distributed::EnqueueMeshWorkload(cq, workload, is_quasar);
+    distributed::Finish(cq);
+
+    std::vector<uint32_t> dest_buffer_data;
+    distributed::ReadShard(cq, dest_buffer_data, out_dram, zero_coord);
+    std::vector<float> dest_floats = bf16_to_floats(dest_buffer_data);
+
+    // BF16 dest accumulation, so per-element error grows with the kt_dim * TILE_WIDTH inner length;
+    // the PCC backstop catches structural mis-permutations pointwise tolerances would let slip.
+    const float rtol = 0.05f;
+    const float atol = (kt_dim > 1) ? 0.4f : 0.2f;
+    bool pass = tt::test_utils::is_close_vectors<float>(
+        dest_floats, golden_floats, [&](float a, float b) { return tt::test_utils::is_close(a, b, rtol, atol); });
+    pass &= check_pcc(dest_floats, golden_floats, /*min_pcc=*/0.99);
+    if (not pass) {
+        dump_matmul_debug(stimulus.in0_floats, stimulus.in1_floats, golden_floats, dest_floats);
+    }
+    ASSERT_TRUE(pass);
+}
+
 }  // namespace unit_tests::compute::matmul
+
+// Compute-layer coverage: experimental MOP-less matmul (issue #52329). Ordered so the first
+// failure localises: 1x1x1 is a single tile through init + execute, kt_dim>1 adds dest
+// accumulation across inner steps, rt/ct > 1 adds the block reuse walk.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixTestSingleCoreComputeMatmulNoMop) {
+    using unit_tests::compute::matmul::MatmulConfig;
+    const std::vector<MatmulConfig> cases = {
+        {.rt_dim = 1, .ct_dim = 1, .kt_dim = 1},
+        {.rt_dim = 1, .ct_dim = 1, .kt_dim = 2},
+        {.rt_dim = 2, .ct_dim = 2, .kt_dim = 1},
+        {.rt_dim = 2, .ct_dim = 2, .kt_dim = 2},
+        {.rt_dim = 1, .ct_dim = 1, .kt_dim = 1, .math_fidelity = MathFidelity::HiFi4},
+        {.rt_dim = 2, .ct_dim = 2, .kt_dim = 2, .math_fidelity = MathFidelity::HiFi4},
+    };
+    for (const auto& cfg : cases) {
+        unit_tests::compute::matmul::run_matmul_no_mop(this->devices_.at(0), cfg);
+    }
+}
 
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmul) {
     for (auto& device : this->devices_) {
