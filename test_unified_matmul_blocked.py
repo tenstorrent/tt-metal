@@ -42,7 +42,8 @@ def run(
     a=None,
     b=None,
     mcast=False,
-    in1_thread=1,
+    in0_thread=1,
+    in1_thread=0,
     depth=None,
     hoist=False,
     zones=False,
@@ -130,6 +131,7 @@ def run(
                     ("MMB_MCAST", "1"),
                     ("MMB_GRID_H", str(mb)),
                     ("MMB_GRID_W", str(nb)),
+                    ("MMB_IN0_THREAD", str(in0_thread)),
                     ("MMB_IN1_THREAD", str(in1_thread)),
                 ]
                 if mcast
