@@ -193,16 +193,23 @@ def _host_sample(logits, temperature, top_p):
 
 
 def _default_ccl_packet_bytes():
-    """Ideal Fabric packet for dense Gemma4 width-sharded CCL pages (4×page).
+    """Leave Fabric's default packet size.
 
-    Matches ``validate_packet_size`` guidance: 31B pages are 1344 B → 5376;
-    12B pages are 960 B → 3840. Other models leave Fabric's default.
+    This used to return 4x the CCL page width (5376 for 31B, 3840 for 12B) to
+    satisfy the ``validate_packet_size`` "suboptimal packet size" warning. That
+    warning optimises single-op page packing, but measured end-to-end it costs
+    both TTFT and decode on P150x8 -- the tuned values are *slower* than the
+    Fabric default:
+
+        12B / P150x8 / long-context-4k, batch-1
+          packet 3840 (old default) : TTFT 543.7 ms, 44.62 tok/s/user
+          Fabric default (4352)     : TTFT 461.6 ms, 46.86 tok/s/user
+
+    Gains hold across ISLs (4k/32k/128k) on 12B and 31B. Blackhole-only path;
+    Wormhole already used the Fabric default and is unaffected. Set
+    ``GEMMA4_CCL_PACKET_BYTES`` to pin a value (e.g. to reproduce the old
+    behaviour or re-sweep).
     """
-    model = os.environ.get("HF_MODEL", "").lower()
-    if "31b" in model:
-        return 5376
-    if "12b" in model:
-        return 3840
     return None
 
 
