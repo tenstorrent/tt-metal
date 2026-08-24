@@ -2929,9 +2929,36 @@ not that fixing it is worthless.** The two are different claims and conflating t
 lever.
 
 It needs the primitive split into begin/finish so a sender can issue block b+1's reads while
-block b's flag is still going out. That is an API change of the kind that was just reverted
-for buying nothing -- the difference is that this one has a number attached before it is
-built, so it can be judged the same way.
+block b's flag is still going out. Before building that, one ablation bounds what it could
+possibly be worth: remove the broadcast ENTIRELY -- no ready-wait, no payload multicast, no
+flag, receivers skipping their wait to match (`TT_UNIFIED_MCAST_NOSEND`, wrong answer on
+purpose).
+
+| [512,2048]@[2048,2048], 8x8 mcast | |
+|---|---|
+| real | 312.7 us |
+| reads only, broadcast deleted | **258.7 us** |
+
+**54us, 17%, and that is the CEILING** -- perfect overlap can only hide the broadcast, never
+do better than deleting it. So the begin/finish split was NOT built: it buys at most 17% and
+leaves the gap at 2.2x, which does not justify a second API change of the kind that was just
+reverted for buying nothing. Measuring the bound cost one ablation; building first would have
+cost a day.
+
+**And the bound says something much more useful than its own number.** With the broadcast
+gone entirely, the reads alone still take 258.7us to move 10MB -- 39GB/s -- while ttnn moves
+the same 10MB in 118.6us WITH its broadcasts. **Our reads by themselves are 2.2x ttnn's
+entire runtime.** Every structural thing that could have explained this is now measured and
+matched: same loop nesting, same per-k-step sequence, same interleaved layout, same page
+size, same traffic, same number of sender cores, same NOC split across two threads. The
+handshake is 0.3us, compute is free, the CBs never stall, bank spread does not matter, block
+size does not matter.
+
+What is left is the rate at which a sender's `noc_async_read` stream actually retires, and
+nothing in the kernel's structure explains it. That is where this stops until someone reads
+what ttnn's reader does at the NOC level -- transaction ids, command buffers, VC assignment,
+`noc_async_read_one_packet_with_state` and friends -- rather than at the loop level, which is
+where the last four hypotheses were formed and died.
 
 ## Phase 11 -- Full block orchestration
 
