@@ -157,3 +157,107 @@ class TtCombineModule(LightweightModule):
         )
 
         return output
+
+
+class TtCombine2dModule(LightweightModule):
+    """TTNN wrapper around the combine_fabric2d device operation.
+
+    Same job as TtCombineModule — expert-processed tokens back to their origin devices, weighted
+    and placed at each token's original top-k slot — over a different transport. combine reaches
+    every chip in the dispatch group directly; combine_fabric2d forwards hop by hop along the ring
+    axis, chip-local DRAM -> eth -> the next chip's DRAM, managing the multi-hop routing itself
+    rather than leaving it to fabric.
+
+    That transport needs one input the direct op does not: `expert_offsets`, which tells every chip
+    where each ORIGIN chip's run starts inside each expert's region. It is a separate class rather
+    than a flag on TtCombineModule because the two ops take different inputs and have different
+    capabilities — notably there is no fp8 output path here.
+    """
+
+    def __init__(
+        self,
+        mesh_device: ttnn.MeshDevice,
+        experts_per_chip: int,
+        num_experts_per_tok: int,
+        seq_len_per_chip: int,
+        cluster_axis: int = 0,
+        num_links: int = 1,
+        topology: ttnn.Topology = ttnn.Topology.Linear,
+        memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+        init_zeros: bool = False,
+    ):
+        """
+        Initialize the fabric2d combine module.
+
+        Args:
+            mesh_device: TTNN mesh device.
+            experts_per_chip: Number of experts hosted on each device.
+            num_experts_per_tok: Number of experts each token is routed to (top-k).
+            seq_len_per_chip: Number of tokens on each source device (output token dimension size).
+            cluster_axis: Mesh axis the ring runs along (0 = SP/dispatch axis).
+            num_links: Number of fabric links per chip-to-chip connection. Each (link, direction)
+                pair is one stream, so the op runs 2 * num_links streams per chip.
+            topology: Fabric topology for the ring.
+            memory_config: Output memory configuration. Must be interleaved (L1 or DRAM).
+            init_zeros: Whether to zero-initialize the output buffer. combine_fabric2d has no
+                zero-init path, so this must stay False.
+
+        Note there is no dispatch_group_size: combine_fabric2d derives the ring from cluster_axis
+        and the mesh shape, and no fp8_output, because the op has no fp8 stage on the way out.
+        """
+        super().__init__()
+        self.mesh_device = mesh_device
+        self.experts_per_chip = experts_per_chip
+        self.num_experts_per_tok = num_experts_per_tok
+        self.seq_len_per_chip = seq_len_per_chip
+        self.cluster_axis = cluster_axis
+        self.num_links = num_links
+        self.topology = topology
+        self.memory_config = memory_config
+        self.init_zeros = init_zeros
+
+    def forward(
+        self,
+        dispatched_buffer: ttnn.Tensor,
+        dispatched_metadata: ttnn.Tensor,
+        expert_token_counts: ttnn.Tensor,
+        expert_region_offsets: ttnn.Tensor,
+        expert_offsets: ttnn.Tensor,
+    ):
+        """
+        Route expert-processed tokens back to origin devices over the explicitly-forwarded fabric2d.
+
+        Args:
+            dispatched_buffer: Expert-processed token embeddings produced by TtRoutedExpert.
+                A chip's page range for one expert holds that expert's tokens grouped by the chip
+                they ORIGINATED on. BFLOAT16.
+            dispatched_metadata: Per-token routing metadata produced by TtDispatchModule.forward().
+                3 int32 per token: (linearized_mesh_coord, token_idx, topk_idx). INT32 ROW_MAJOR.
+            expert_token_counts: Number of tokens dispatched to each expert; also closes the last
+                run. INT32 ROW_MAJOR.
+            expert_region_offsets: Where each expert's region starts in dispatched_buffer.
+                Same shape/layout as expert_token_counts.
+            expert_offsets: Where each ORIGIN chip's run starts inside each expert's region. Must be
+                REPLICATED along the dispatch-group axis — every chip needs every origin chip's
+                boundaries for the experts it hosts, which is what lets each kernel compute the token
+                sequence locally instead of exchanging addresses.
+
+        Returns:
+            output: Combined token embeddings, shape per device
+                (1, 1, seq_len_per_chip, num_experts_per_tok, emb_dim), BFLOAT16 ROW_MAJOR.
+        """
+        return ttnn.experimental.deepseek_prefill.combine_fabric2d(
+            dispatched_buffer,
+            dispatched_metadata,
+            expert_token_counts,
+            expert_region_offsets,
+            expert_offsets,
+            experts_per_chip=self.experts_per_chip,
+            num_experts_per_tok=self.num_experts_per_tok,
+            seq_len_per_chip=self.seq_len_per_chip,
+            cluster_axis=self.cluster_axis,
+            num_links=self.num_links,
+            topology=self.topology,
+            memory_config=self.memory_config,
+            init_zeros=self.init_zeros,
+        )
