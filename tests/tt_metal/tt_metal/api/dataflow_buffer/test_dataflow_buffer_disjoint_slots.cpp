@@ -303,7 +303,7 @@ TEST_F(UnitMeshFixture, HalfGrid3Plus3DFBsOnDevice) {
     }
     m2::SetProgramRunArgs(program, params);
 
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     for (uint32_t i = 0; i < per_half * 2; ++i) {
         std::vector<uint32_t> got;
@@ -321,7 +321,10 @@ TEST_F(UnitMeshFixture, HalfGrid16Plus16DFBsOnDevice) {
     constexpr uint32_t per_half = 16;
     constexpr uint32_t touched_magic = 0xA11CED00u;
     m2::ProgramSpec spec = make_split_touch_spec(this->device(), per_half);
-    Program program = m2::MakeProgramFromSpec(this->device(), spec);
+    auto device_range = distributed::MeshCoordinateRange(this->device().shape());
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, m2::MakeProgramFromSpec(this->device(), spec));
+    Program& program = workload.get_programs().at(device_range);
 
     expect_half_grid_slots_packed(program, per_half, is_quasar);
     expect_no_slot_collision_on_core(program, CoreCoord{0, 0});
@@ -339,7 +342,7 @@ TEST_F(UnitMeshFixture, HalfGrid16Plus16DFBsOnDevice) {
         {.kernel = m2::KernelSpecName{"cons_b"}, .runtime_arg_values = cons_rtas(m2::NodeCoord{1, 0})},
     };
     m2::SetProgramRunArgs(program, params);
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, /*blocking=*/true);
 
     std::vector<uint32_t> left_slots(per_half), right_slots(per_half);
     for (uint32_t i = 0; i < per_half; ++i) {
@@ -449,7 +452,7 @@ TEST_F(UnitMeshFixture, HalfGridOnDeviceDataflow1DFBEach) {
     m2_writeshard_barrier_uint32(this->device(), in_a, input_a);
     m2_writeshard_barrier_uint32(this->device(), in_b, input_b);
 
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_a, result_b;
     slow_dispatch::ReadFromBuffer(out_a.mesh_buffer(), result_a);
@@ -528,7 +531,9 @@ TEST_F(UnitMeshFixture, CoordinatorWorkerSlotReuseOnDevice) {
         {.kernel = m2::KernelSpecName{"worker_cons"}, .runtime_arg_values = std::move(worker_cons_rtas)},
     };
     m2::SetProgramRunArgs(program, params);
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    distributed::MeshWorkload coord_worker_workload;
+    coord_worker_workload.add_program(distributed::MeshCoordinateRange(this->device().shape()), std::move(program));
+    distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), coord_worker_workload, /*blocking=*/true);
 
     expect_touch_results(
         this->device(),

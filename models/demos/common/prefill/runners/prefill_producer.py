@@ -1104,7 +1104,12 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_tra
         if check_dflash:
             # None when no golden is configured (the drafter golden is prompt-specific, so opt-in).
             dflash_pcc = dflash_kv_table_pcc_check(
-                kv_table, slot_id, real_len, read_config_slice=read_dflash_slice, threshold=dflash_threshold
+                kv_table,
+                slot_id,
+                real_len,
+                read_config_slice=read_dflash_slice,
+                threshold=dflash_threshold,
+                rope_convention="interleaved",  # the only convention this branch's drafter implements
             )
             if dflash_pcc is not None:
                 min_dflash_overall = dflash_pcc if min_dflash_overall is None else min(min_dflash_overall, dflash_pcc)

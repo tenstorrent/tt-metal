@@ -3,30 +3,15 @@
 
 #include "affine_exclusive_scan_device_operation.hpp"
 
+#include <algorithm>
+#include <array>
+
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
-
-using namespace tt::tt_metal;
+#include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 
 namespace ttnn::experimental::prim {
-namespace {
-void check_device_tensor(const Tensor& tensor, const char* name) {
-    TT_FATAL(
-        tensor.storage_type() == StorageType::DEVICE && tensor.buffer() != nullptr,
-        "affine_exclusive_scan: {} must be an allocated device tensor",
-        name);
-    TT_FATAL(tensor.layout() == Layout::TILE, "affine_exclusive_scan: {} must use TILE layout", name);
-}
-
-void check_affine_tensor(const Tensor& tensor, const char* name) {
-    check_device_tensor(tensor, name);
-    TT_FATAL(
-        tensor.dtype() == DataType::FLOAT32 || tensor.dtype() == DataType::BFLOAT16,
-        "affine_exclusive_scan: {} must be FLOAT32 or BFLOAT16",
-        name);
-}
-}  // namespace
 
 AffineExclusiveScanOperation::program_factory_t AffineExclusiveScanOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
@@ -35,27 +20,39 @@ AffineExclusiveScanOperation::program_factory_t AffineExclusiveScanOperation::se
 
 void AffineExclusiveScanOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
-    check_affine_tensor(in.a, "a");
-    check_affine_tensor(in.b, "b");
-    check_device_tensor(in.initial_state, "initial_state");
+    constexpr std::string_view operation_name = "affine_exclusive_scan";
+    constexpr std::array accepted_summary_dtypes = {tt::tt_metal::DataType::FLOAT32, tt::tt_metal::DataType::BFLOAT16};
+    kda_factory_detail::check_allocated_device_tensor(in.a, operation_name, "a");
     TT_FATAL(
-        in.a.device() == in.b.device() && in.a.device() == in.initial_state.device(),
-        "affine_exclusive_scan: all inputs must be on the same device");
-    TT_FATAL(in.a.dtype() == in.b.dtype(), "affine_exclusive_scan: a and b must have matching dtypes");
-    TT_FATAL(in.initial_state.dtype() == DataType::FLOAT32, "affine_exclusive_scan: initial_state must be FLOAT32");
+        in.a.device()->arch() == tt::ARCH::BLACKHOLE,
+        "{} is only supported on Blackhole architecture, got {}",
+        operation_name,
+        in.a.device()->arch());
+    kda_factory_detail::check_layout(in.a, tt::tt_metal::Layout::TILE, operation_name, "a");
+    kda_factory_detail::check_dtype_in(in.a, accepted_summary_dtypes, "FLOAT32 or BFLOAT16", operation_name, "a");
+    kda_factory_detail::check_allocated_device_tensor(in.b, operation_name, "b");
+    kda_factory_detail::check_layout(in.b, tt::tt_metal::Layout::TILE, operation_name, "b");
+    kda_factory_detail::check_dtype_in(in.b, accepted_summary_dtypes, "FLOAT32 or BFLOAT16", operation_name, "b");
+    kda_factory_detail::check_allocated_device_tensor(in.initial_state, operation_name, "initial_state");
+    kda_factory_detail::check_layout(in.initial_state, tt::tt_metal::Layout::TILE, operation_name, "initial_state");
+    kda_factory_detail::check_dtype(in.initial_state, tt::tt_metal::DataType::FLOAT32, operation_name, "initial_state");
+    kda_factory_detail::check_same_device(in.a, in.b, operation_name, "b");
+    kda_factory_detail::check_same_device(in.a, in.initial_state, operation_name, "initial_state");
+    kda_factory_detail::check_matching_dtype(in.a, in.b, operation_name, "a and b");
+    const auto check_input_memory_layout = [operation_name](const Tensor& tensor, std::string_view name) {
+        const auto memory_layout = tensor.memory_config().memory_layout();
+        TT_FATAL(
+            memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED ||
+                memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+            "{}: {} must use interleaved or height-sharded memory",
+            operation_name,
+            name);
+    };
+    check_input_memory_layout(in.a, "a");
+    check_input_memory_layout(in.b, "b");
     TT_FATAL(attrs.groups_per_head > 0, "affine_exclusive_scan: groups_per_head must be positive");
-    TT_FATAL(
-        !attrs.output_mem_config.is_sharded(),
-        "affine_exclusive_scan: output memory configuration must be interleaved");
-    TT_FATAL(
-        !attrs.compute_kernel_config.packer_l1_acc,
-        "affine_exclusive_scan: packer_l1_acc=true is unsupported because the compute kernel does not accumulate "
-        "through L1");
-    TT_FATAL(
-        attrs.compute_kernel_config.throttle_level ==
-            ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE,
-        "affine_exclusive_scan: compute throttling is unsupported because this kernel does not implement throttled "
-        "math");
+    kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
+    kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
 
     const auto& a_shape = in.a.logical_shape();
     const auto& b_shape = in.b.logical_shape();
@@ -81,17 +78,30 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
     TT_FATAL(
         state_shape[0] == attrs.batch_heads && state_shape[1] == attrs.key_dim && state_shape[2] == attrs.value_dim,
         "affine_exclusive_scan: initial_state shape must be [batch_heads, K, V]");
+
+    constexpr uint32_t max_coordinate_table_workers = 128;
+    const auto grid = in.a.device()->compute_with_storage_grid_size();
+    const uint32_t worker_limit = std::min<uint32_t>(grid.x * grid.y, max_coordinate_table_workers);
+    const uint32_t group_workers = attrs.batch_heads * attrs.groups_per_head;
+    TT_FATAL(
+        group_workers <= worker_limit,
+        "affine_exclusive_scan: supports at most {} group workers on this device, got {}",
+        worker_limit,
+        group_workers);
 }
 
 AffineExclusiveScanOperation::spec_return_value_t AffineExclusiveScanOperation::compute_output_specs(
     const operation_attributes_t& a, const tensor_args_t&) {
-    return {TensorSpec(
-        Shape({a.batch_heads * a.groups_per_head, a.key_dim, a.value_dim}),
-        TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), a.output_mem_config))};
+    return {tt::tt_metal::TensorSpec(
+        tt::tt_metal::Shape({a.batch_heads * a.groups_per_head, a.key_dim, a.value_dim}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::FLOAT32,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            a.output_mem_config))};
 }
 AffineExclusiveScanOperation::tensor_return_value_t AffineExclusiveScanOperation::create_output_tensors(
     const operation_attributes_t& a, const tensor_args_t& in) {
-    return {create_device_tensor(compute_output_specs(a, in)[0], in.a.device())};
+    return {ttnn::create_device_tensor(compute_output_specs(a, in)[0], in.a.device())};
 }
 Tensor affine_exclusive_scan(
     const Tensor& a,
@@ -100,6 +110,8 @@ Tensor affine_exclusive_scan(
     uint32_t groups,
     const tt::tt_metal::MemoryConfig& mem,
     const DeviceComputeKernelConfig& cfg) {
+    // Cache-miss validation cannot protect attribute construction on cache hits. Keep these guards here because the
+    // launcher divides by groups and indexes all three input shapes before dispatching validation.
     TT_FATAL(groups > 0, "affine_exclusive_scan: groups_per_head must be positive");
     const auto& shape = a.logical_shape();
     const auto& b_shape = b.logical_shape();

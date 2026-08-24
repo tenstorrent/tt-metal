@@ -45,7 +45,7 @@
 #include "impl/host_api/temp_quasar_api.hpp"  // for QuasarComputeConfig
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_metal.hpp>  // for CompileProgram (JIT trigger)
+#include <tt-metalium/tt_metal.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>  // tensor_accessor::ArgsConfig / ArgConfig::RuntimePageSize
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -3940,7 +3940,7 @@ TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecWithTensorParameterSucceeds) 
 // TensorParameter JIT Smoke Tests (Gen1 / WH)
 // ============================================================================
 // Codegen-path smoke test for the Metal 2.0 TensorAccessor binding feature. Ends in
-// CompileProgram, so the auto-generated kernel_bindings_generated.h (with its `tensor::` namespace)
+// program.impl().compile, so the auto-generated kernel_bindings_generated.h (with its `tensor::` namespace)
 // must be syntactically valid and compose correctly with the rest of the kernel build. Doesn't
 // validate runtime behavior — catches regressions in codegen string-formatting, token type alias
 // generation, and include-path resolution.
@@ -3975,8 +3975,7 @@ void kernel_main() {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
 // ----------------------------------------------------------------------------
@@ -4012,8 +4011,7 @@ void kernel_main() {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
 // Compute-kernel counterpart. A scratchpad binding works on a compute kernel: scratchpad.h only
@@ -4040,8 +4038,7 @@ void kernel_main() {
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
 // Compile-only: a range-based for loop over a Scratchpad must compile. Exercises begin()/end() and the
@@ -4074,8 +4071,7 @@ void kernel_main() {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
 // ============================================================================
@@ -4083,7 +4079,7 @@ void kernel_main() {
 // ============================================================================
 //
 // Compiles a TT_KERNEL compute kernel through genfiles + the RISC-V compiler on a MOCK Wormhole
-// device (no silicon, no dispatch) via detail::CompileProgram. This is the only no-hardware
+// device (no silicon, no dispatch) via program.impl().compile. This is the only no-hardware
 // coverage that the generated kernel_main() shim is emitted on the COMPUTE (TRISC) compile path
 // and actually compiles: the on-hardware compute test (TtKernelNamedArgsLoopbackCompute) skips in
 // CI, and the shim unit tests only check the generated string, not its genfiles wiring.
@@ -4135,8 +4131,7 @@ TEST_F(ProgramSpecTestGen1, TtKernelComputeShimCompiles) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("wu", node, {"compute", "consumer"})};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
 // ============================================================================
@@ -4171,8 +4166,7 @@ void kernel_main() {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
 TEST_F(ProgramSpecTestGen1, EmptyCompileTimeVarargsReadableFromKernel) {
@@ -4192,8 +4186,7 @@ void kernel_main() {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
 // Template accessor bounds-checks at compile time: size==1 but get_compile_time_vararg<1>()
@@ -4252,8 +4245,7 @@ void kernel_main() {}
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
 // Same stress as above, on a compute (TRISC) kernel — CTA varargs are available on DM and compute.
@@ -4289,8 +4281,7 @@ void kernel_main() {}
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute_kernel"})};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
 // CTA varargs are a positional prefix ahead of TensorBinding CTA payloads.
@@ -4341,8 +4332,7 @@ void kernel_main() {
     EXPECT_TRUE(args_config.test(tensor_accessor::ArgConfig::IsDram))
         << "positional compile_args[N] must be the tensor args_config after the CTA-vararg prefix";
 
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
 TEST_F(ProgramSpecTestGen1, DifferentCompileTimeVarargsProducesDifferentKernelHash) {

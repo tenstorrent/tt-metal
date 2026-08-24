@@ -287,6 +287,7 @@ class TtPrefillRuntime:
             sp_axis=self.config.sp_axis,
             tp_axis=self.config.tp_axis,
             max_seq_len=dflash_seq,
+            chunk_size=self.config.chunk_size,
             num_links=self.config.num_links,
             topology=self.config.topology,
             owned_target_layer_ids=owned,
@@ -948,6 +949,7 @@ class TtPrefillRuntime:
             out_len=out_len,
             golden_dir=golden_dir,
             record_only=os.environ.get("PREFILL_STANDALONE_CHUNKED_RECORD_ONLY", "0") == "1",
+            rope_convention=dcfg.rope_convention,
         )
 
     def set_layer_completion_sink(self, sink) -> None:

@@ -24,6 +24,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -177,7 +178,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     // -------------------------------------------------------
     // Dispatch
     // -------------------------------------------------------
-    detail::LaunchProgram(device, program);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     // -------------------------------------------------------
     // Verify
@@ -558,7 +559,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     }
     detail::WriteToBuffer(input_buffer, input_data);
 
-    detail::LaunchProgram(device, program);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> output_data;
     detail::ReadFromBuffer(output_buffer, output_data);
@@ -638,7 +639,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     std::vector<uint32_t> zero_report(1, 0u);
     detail::WriteToDeviceL1(device, node, report_addr, zero_report);
 
-    detail::LaunchProgram(device, program);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> reported;
     detail::ReadFromDeviceL1(device, node, report_addr, sizeof(uint32_t), reported);
@@ -724,7 +725,7 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopback) {
     }
     detail::WriteToBuffer(input_buffer, input_data);
 
-    detail::LaunchProgram(device, program);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> output_data;
     detail::ReadFromBuffer(output_buffer, output_data);
@@ -788,7 +789,7 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
     std::vector<uint32_t> zero_report(1, 0u);
     detail::WriteToDeviceL1(device, node, report_addr, zero_report);
 
-    detail::LaunchProgram(device, program);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> reported;
     detail::ReadFromDeviceL1(device, node, report_addr, sizeof(uint32_t), reported);
@@ -814,7 +815,6 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
 
 TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
 
     const NodeCoord node{0, 0};
 
@@ -868,7 +868,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
     };
 
     Program program = MakeProgramFromSpec(*mesh_device, spec);
-    detail::LaunchProgram(device, program);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
     // If we got here, both kernels resolved their sem accessors to the same ID.
 }
 
@@ -897,7 +897,6 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
 
 TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
 
     // Tensor: 8 pages × 1024 bytes (BFLOAT16, ROW_MAJOR, shape {8, 512} → page = row = 1024 B)
     constexpr uint32_t num_pages = 8;
@@ -995,7 +994,7 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     // -------------------------------------------------------
     // Dispatch
     // -------------------------------------------------------
-    detail::LaunchProgram(device, program);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     // -------------------------------------------------------
     // Verify
@@ -1069,7 +1068,7 @@ TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
     std::vector<uint32_t> zero_report(kNumReportWords, 0u);
     detail::WriteToDeviceL1(device, node, kReportAddr, zero_report);
 
-    detail::LaunchProgram(device, program);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> reported;
     detail::ReadFromDeviceL1(device, node, kReportAddr, kNumReportWords * sizeof(uint32_t), reported);
@@ -1189,7 +1188,7 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
     detail::WriteToDeviceL1(device, node, kReportAddr, zero_report);
 
     // Dispatch via the slow-dispatch path (blocking — wait_until_cores_done defaults to true).
-    detail::LaunchProgram(device, program);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> reported;
     detail::ReadFromDeviceL1(device, node, kReportAddr, sizeof(uint32_t), reported);
@@ -1352,7 +1351,10 @@ void kernel_main() {
         .relaxations = TensorSpecRelaxations{.dynamic_tensor_shape = true}}};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    distributed::MeshCoordinateRange device_range(mesh_device->shape());
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, MakeProgramFromSpec(*mesh_device, spec));
+    Program& program = workload.get_programs().at(device_range);
 
     // Consumer's per-node RTAs (re-supplied on every set/update in this test).
     auto consumer_args = [&]() {
@@ -1365,7 +1367,7 @@ void kernel_main() {
 
     // Blocking launch, then read back the seven staged words.
     auto launch_and_read = [&]() {
-        detail::LaunchProgram(device, program);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
         std::vector<uint32_t> out;
         detail::ReadFromBuffer(output_buffer, out);
         EXPECT_GE(out.size(), 7u);
@@ -1535,7 +1537,10 @@ void kernel_main() {
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = kScratchpadBytes}};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    distributed::MeshCoordinateRange device_range(mesh_device->shape());
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, MakeProgramFromSpec(*mesh_device, spec));
+    Program& program = workload.get_programs().at(device_range);
 
     std::vector<uint32_t> expected_pattern(kNumElems);
     for (uint32_t i = 0; i < kNumElems; i++) {
@@ -1554,7 +1559,7 @@ void kernel_main() {
         params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"stage"}, .num_entries = dfb_num_entries});
         SetProgramRunArgs(program, params);
 
-        detail::LaunchProgram(device, program);
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
 
         std::vector<uint32_t> out;
         detail::ReadFromBuffer(output_buffer, out);
