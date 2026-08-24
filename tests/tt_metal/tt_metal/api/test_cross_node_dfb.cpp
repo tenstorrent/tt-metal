@@ -100,7 +100,7 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
         const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, mesh_device.get(), mapping, 256, 4);
         EXPECT_EQ(remote_dfb_id, 0u);
 
-        slow_dispatch::CompileProgram(*mesh_device, program);
+        program.impl().compile(mesh_device.get());
         program.impl().finalize_offsets(mesh_device.get());
 
         const auto& hal = MetalContext::instance().hal();
@@ -121,7 +121,7 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
         const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, mesh_device.get(), mapping, 256, 4);
-        slow_dispatch::CompileProgram(*mesh_device, program);
+        program.impl().compile(mesh_device.get());
         program.impl().finalize_offsets(mesh_device.get());
 
         const uint32_t original_data_addr = program.impl().get_cross_node_dfb(remote_dfb_id).buffer_address();
@@ -152,7 +152,7 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
         const CoreRangeSet dummy_all_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0))).merge(dummy_receiver_cores);
         auto dummy_data = cross_node_dfb_test::make_cross_node_data_buffer(
             mesh_device.get(), dummy_all_cores, /*entry_size=*/256, /*num_entries=*/4);
-        slow_dispatch::CompileProgram(*mesh_device, program);
+        program.impl().compile(mesh_device.get());
         program.impl().finalize_offsets(mesh_device.get());
         EXPECT_THROW(
             experimental::UpdateDynamicCrossNodeDFBAddress(program, remote_dfb_id, *dummy_data), std::exception);
@@ -166,7 +166,7 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
             all_cores,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
-        slow_dispatch::CompileProgram(*mesh_device, program);
+        program.impl().compile(mesh_device.get());
         program.impl().finalize_offsets(mesh_device.get());
         const auto& hal = MetalContext::instance().hal();
         uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);

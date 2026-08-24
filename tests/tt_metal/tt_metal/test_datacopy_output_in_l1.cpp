@@ -14,6 +14,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 
 using std::vector;
@@ -88,7 +89,7 @@ TEST_F(UnitMeshFixture, DatacopyOutputInL1) {
          (std::uint32_t)l1_dst_noc_xy.y,
          num_tiles});
 
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
     slow_dispatch::ReadFromBuffer(*dst_l1_buffer, result_vec);

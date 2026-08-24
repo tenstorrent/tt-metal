@@ -715,8 +715,6 @@ def test_rm_reduce_interleaved_program_cache(device, reduce_op, shape, dim):
 )
 def test_rm_reduce_h_axis_split(device, reduce_op, fast_and_approximate_mode, output_layout, shape):
     """H reduce on tall ROW_MAJOR input — exercises the multi-shard H-axis-split + combine path."""
-    if fast_and_approximate_mode and reduce_op != "mean":
-        pytest.skip("fast_and_approximate_mode only affects mean")
     torch.manual_seed(0)
     torch_input = torch.rand(shape, dtype=torch.float32)
     torch_ref = _golden(torch_input, reduce_op, dim=-2, keepdim=False)
@@ -725,17 +723,20 @@ def test_rm_reduce_h_axis_split(device, reduce_op, fast_and_approximate_mode, ou
     assert tt_input.layout == ttnn.ROW_MAJOR_LAYOUT
 
     ttnn_op = _OPS[reduce_op][1]
-    op_kwargs = {"dim": -2, "keepdim": False, "output_layout": output_layout}
-    if reduce_op == "mean":
-        op_kwargs["fast_and_approximate_mode"] = fast_and_approximate_mode
+    op_kwargs = {
+        "dim": -2,
+        "keepdim": False,
+        "output_layout": output_layout,
+        "fast_and_approximate_mode": fast_and_approximate_mode,
+    }
     tt_output = ttnn_op(tt_input, **op_kwargs)
     # None keeps the dense RM path's natural ROW_MAJOR output.
     assert tt_output.layout == (output_layout or ttnn.ROW_MAJOR_LAYOUT)
     output = ttnn.to_torch(tt_output)
 
-    # Only mean has an accurate fp32 SFPU reduce; the FPU path truncates to TF32, roughly doubling
-    # the relative error at these depths.
-    rtol = 0.002 if (reduce_op == "mean" and not fast_and_approximate_mode) else 0.004
+    # Accurate SFPU (full fp32) vs FPU (tf32 truncation). The FPU path roughly doubles the relative
+    # error at these depths; Quasar has no SFPU reduce LLKs, so it always takes the FPU bound.
+    rtol = 0.004 if fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR else 0.0011
     assert_numeric_metrics(
         torch_ref,
         output,

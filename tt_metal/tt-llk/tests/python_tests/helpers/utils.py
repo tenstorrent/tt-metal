@@ -3,6 +3,7 @@
 
 import os
 import subprocess
+import tempfile
 from collections import namedtuple
 from pathlib import Path
 
@@ -18,6 +19,8 @@ from .tile_constants import (
     DEFAULT_TILE_R_DIM,
 )
 from .tile_shape import construct_tile_shape
+
+TEMP_DIR = Path(tempfile.gettempdir())
 
 torch.set_printoptions(linewidth=500, sci_mode=False, precision=2, threshold=10000)
 
@@ -781,7 +784,7 @@ def create_directories(dirs: list[Path]):
         return
 
     # Acquire lock and create using os.makedirs (more robust than pathlib.mkdir)
-    lock = FileLock("/tmp/tt-llk-build.lock")
+    lock = FileLock(TEMP_DIR / "tt-llk-build.lock")
     with lock:
         for dir in dirs:
             os.makedirs(dir, exist_ok=True)
