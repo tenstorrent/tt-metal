@@ -188,6 +188,13 @@ SHAPES = [
     (1024, 768, 4608, 12, 9, True, "plain"),  # DBL_ff_spatial_mm_in_proj (swiglu post-matmul, not fused)
     (1152, 768, 4608, 12, 9, True, "plain"),  # SNG_x_c_mlp
     (128, 768, 4608, 12, 9, True, "plain"),  # DBL_ff_ctx_spatial_mm_in_proj
+    # Flux2 MMRS @1024px (bh_4x8_sp0_tp1), 12x8 matmul grid: RowParallel ff2 / proj_out, K already
+    # per-device. Swept under the windowed L1 handoff — the runner windows combos whose M block
+    # leaves >= 2 blocks per core and runs the rest via the DRAM handoff, mirroring the model.
+    # (128, 2304, 6144) is deliberately absent: Mt=4 rows over 8 grid rows is one partial block per
+    # core at every blocking, so it always takes the DRAM handoff and its existing entry stands.
+    (1152, 3072, 6144, 12, 8, False, "mmrs"),  # SNG proj_out @1024px
+    (1024, 2304, 6144, 12, 8, False, "mmrs"),  # DBL ff2 @1024px
     # 2048 tokens
     (4096, 768, 4608, 12, 9, True, "plain"),  # DBL_ff_spatial_mm_in_proj
     (4224, 768, 4608, 12, 9, True, "plain"),  # SNG_x_c_mlp
@@ -921,7 +928,42 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
         rs_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_cores, 0) for _ in range(3)]
         barrier_semaphore = ttnn.create_global_semaphore(mesh_device, ccl_cores, 0)
 
+        # Caller-owned counter arrays for the windowed L1 handoff, shaped like CCLManager's
+        # (uint32, L1 HEIGHT_SHARDED over the full grid; a [num_cores, num_cores] square covers
+        # both the per-MM-core progress rows and the per-RS-reader credit rows).
+        counter_slots = full_grid.x * full_grid.y
+
+        def _counter_array():
+            return ttnn.allocate_tensor_on_device(
+                ttnn.Shape([counter_slots, counter_slots]),
+                ttnn.uint32,
+                ttnn.ROW_MAJOR_LAYOUT,
+                mesh_device,
+                ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(ccl_cores, [1, counter_slots], ttnn.ShardOrientation.ROW_MAJOR),
+                ),
+            )
+
+        mm_progress_counters = _counter_array()
+        mm_credit_counters = _counter_array()
+
+        # Windowed L1 handoff, mirroring FusedMMRSConfig.get_params + forward_fused_addcmul: a
+        # combo whose M block leaves >= 2 blocks per core hands the MM output to the RS through a
+        # 2-block rolling L1 window; the rest take the DRAM handoff (a 1-block window cannot
+        # rotate, and its block-quantized height can exceed full residency). The sweep therefore
+        # compares windowed small-M-block combos and DRAM large-M-block combos on equal footing —
+        # exactly the choice the model would make for each blocking. Note the L1 pre-filter does
+        # not model the resident window shard (window * M_block * Nt_per_core tiles), so windowed
+        # combos near the budget are rejected by the device and logged, not mispredicted here.
+        mt_per_core = -(-((M + 31) // 32) // core_grid.y)
+        l1_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+        dram_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
         def run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True):
+            blocks_per_core = -(-mt_per_core // m_blk)
+            window = 2 if blocks_per_core >= 2 else None
             ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
                 input_tensor=tt_input,
                 weight_tensor=tt_weight,
@@ -934,7 +976,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 chunk_width_in_mm_blocks=1,
                 num_workers_per_link=num_workers_per_link,
                 bias=tt_bias,
-                memory_config_mm=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+                memory_config_mm=l1_mem if window is not None else dram_mem,
                 rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
                 topology=cfg["topology"],
                 cluster_axis=cluster_axis,
@@ -943,6 +985,9 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 fused_ternary_scalar=1.0,
                 addcmul_input_tensor1=tt_addcmul_a,
                 addcmul_input_tensor2=tt_addcmul_b,
+                mm_window_blocks=window,
+                mm_progress_counters=mm_progress_counters,
+                mm_credit_counters=mm_credit_counters if window is not None else None,
             )
             if sync:
                 ttnn.synchronize_device(mesh_device)

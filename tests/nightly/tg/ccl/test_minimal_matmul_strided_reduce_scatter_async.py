@@ -181,6 +181,46 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
             ),
             id="xlarge_9472_3456_5120_y7_cwimb1_rs3_fullgrid",
         ),
+        # Flux2 @1024px MMRS shapes (single-stream proj_out and double-stream ff2), at the blockings
+        # the 2026-08-24 sweep picked under the windowed L1 handoff (see fused_mmrs_configs).
+        # M_block is small on purpose: these shapes have only 4-5 M tile-rows per core, so the
+        # window can only rotate with M_block <= ceil(Mt_per_core / 2).
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=1152,
+                K=3072,
+                N=6144,
+                dim=3,
+                mm_block_m=96,  # 3 tiles
+                mm_block_k=96,  # 3 tiles
+                mm_block_n=256,  # 8 tiles
+                mm_core_grid=ttnn.CoreCoord(12, 8),
+                chunk_width_in_mm_blocks=1,
+                subblock_h=1,
+                subblock_w=4,
+                num_workers_per_link=5,
+                mm_window_blocks=2,
+            ),
+            id="flux2_projout_1152_3072_6144_x12y8_b338_window2",
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=1024,
+                K=2304,
+                N=6144,
+                dim=3,
+                mm_block_m=64,  # 2 tiles
+                mm_block_k=128,  # 4 tiles
+                mm_block_n=256,  # 8 tiles
+                mm_core_grid=ttnn.CoreCoord(12, 8),
+                chunk_width_in_mm_blocks=1,
+                subblock_h=2,
+                subblock_w=2,
+                num_workers_per_link=5,
+                mm_window_blocks=2,
+            ),
+            id="flux2_ff2_1024_2304_6144_x12y8_b248_window2",
+        ),
         # LTX video FFN ff2 (RowParallel reduce-scatter): per-device [4864,4096]@[4096,4096]
         pytest.param(
             MinimalMatmulStridedReduceScatterTestConfig(
