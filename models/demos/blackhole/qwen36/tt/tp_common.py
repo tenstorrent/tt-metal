@@ -175,6 +175,29 @@ def wh_9b_n300(args):
     return not is_blackhole() and getattr(args, "dim", 0) <= 4096 and getattr(args, "device_name", None) == "N300"
 
 
+def wh_9b_n300_vision(args):
+    """``wh_9b_n300`` for VISION args (VisionModelArgs), where ``args.dim`` is the wrong field.
+
+    VisionModelArgs sets ``dim`` to ``hf_config.vision_config.hidden_size`` -- 1152 on BOTH the 9B
+    and the 27B -- so wh_9b_n300's ``dim <= 4096`` test passes for either model and cannot
+    discriminate them. The text hidden size can: 4096 on the 9B, 5120 on the 27B. Read it from
+    hf_config so this works whichever args object the caller holds.
+
+    Same two other conditions as wh_9b_n300, and the same meaning: outside this scope the vision
+    tower keeps its previously shipped behavior.
+    """
+    if is_blackhole() or getattr(args, "device_name", None) != "N300":
+        return False
+    hf = getattr(args, "hf_config", None)
+    text_cfg = getattr(hf, "text_config", None) if hf is not None else None
+    text_dim = getattr(text_cfg, "hidden_size", None)
+    if text_dim is None:
+        # No text_config to check -- refuse rather than guess, so a config shape we have not seen
+        # falls back to shipped behavior instead of silently enabling a 9B-only path.
+        return False
+    return text_dim <= 4096
+
+
 def rope_permuted_enabled(args):
     """Permuted-head_dim full-width RoPE (attention/rope_tp.py's rope_channel_perm has the
     derivation). Reorders head_dim so ``rotary_embedding_hf``'s native full-width rotate-half
