@@ -117,8 +117,7 @@ std::vector<EthCoreCaptureResult> read_capture_from_all_eth_cores(
 
     for (const auto& [logical_core, channel_id] : capture_cores) {
         std::vector<uint32_t> raw_data;
-        tt_metal::detail::ReadFromDeviceL1(
-            device->get_devices()[0], logical_core, capture_addr, capture_size, raw_data, CoreType::ETH);
+        tt_metal::slow_dispatch::ReadFromL1(*device, logical_core, capture_addr, capture_size, raw_data, CoreType::ETH);
 
         CaptureResults capture{};
         std::memcpy(static_cast<void*>(&capture), raw_data.data(), std::min(capture_size, raw_data.size() * sizeof(uint32_t)));
@@ -155,8 +154,7 @@ void clear_capture_on_device(BaseFabricFixture* fixture, ChipId physical_chip_id
     const auto capture_cores = get_active_fabric_capture_cores(physical_chip_id);
     const auto& device = fixture->get_device(physical_chip_id);
     for (const auto& [logical_core, _] : capture_cores) {
-        tt_metal::detail::WriteToDeviceL1(
-            device->get_devices()[0], logical_core, capture_addr, raw, CoreType::ETH);
+        tt_metal::slow_dispatch::WriteToL1(*device, logical_core, capture_addr, raw, CoreType::ETH);
     }
 }
 
@@ -346,25 +344,24 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
     tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
 
     // Launch and wait
-    fixture->RunProgramNonblocking(receiver_device, receiver_program);
-    fixture->RunProgramNonblocking(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
+    fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    fixture->WaitForSingleProgramDone(receiver_device);
 
     // Validate sender/receiver status
     std::vector<uint32_t> sender_status;
     std::vector<uint32_t> receiver_status;
 
-    tt_metal::detail::ReadFromDeviceL1(
-        sender_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *sender_device,
         sender_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         sender_status,
         CoreType::WORKER);
 
-    tt_metal::detail::ReadFromDeviceL1(
-        receiver_device->get_devices()[0],
+    tt_metal::slow_dispatch::ReadFromL1(
+        *receiver_device,
         receiver_logical_core,
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,

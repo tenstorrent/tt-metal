@@ -50,6 +50,7 @@ jobs:
     uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -401,6 +402,7 @@ jobs:
   run-sweeps-with-tracer:
     name: ${{ matrix.batch_display }}
     needs: [check-harbor, build-artifact, prepare-validation-inputs, generate-sweeps, compute-sweep-matrix]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.prepare-validation-inputs.result == 'success' && needs.generate-sweeps.result == 'success' && needs.compute-sweep-matrix.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:

@@ -15,11 +15,12 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include "test_gold_impls.hpp"
 #include "impl/data_format/bfloat16_utils.hpp"
 
@@ -65,7 +66,7 @@ const char* op_id_to_llkop_define[] = {
 const char* bdim_to_llkdim_define[] = {"", "BroadcastType::ROW", "BroadcastType::COL", "", "BroadcastType::SCALAR"};
 const char* op_id_to_op_name[] = {"ADD", "SUB", "MUL"};
 
-void run_bcast_test(IDevice* dev, BcastDim::Enum bcast_dim, BcastOp::Enum bcast_op) {
+void run_bcast_test(distributed::MeshDevice& mesh_device, BcastDim::Enum bcast_dim, BcastOp::Enum bcast_op) {
     bool multibank = true;
 
     log_info(LogTest, "=============================================================");
@@ -95,12 +96,12 @@ void run_bcast_test(IDevice* dev, BcastDim::Enum bcast_dim, BcastOp::Enum bcast_
         page_size = dram_buffer_bytes;
     }
 
-    InterleavedBufferConfig buff_config{
-        .device = dev, .size = dram_buffer_bytes, .page_size = page_size, .buffer_type = BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig dram_config{.page_size = page_size, .buffer_type = BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = dram_buffer_bytes};
 
-    auto src0_dram_buffer = CreateBuffer(buff_config);
+    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &mesh_device);
     uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
-    auto dst_dram_buffer = CreateBuffer(buff_config);
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &mesh_device);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
     uint32_t src0_cb_index = 0;
@@ -187,12 +188,12 @@ void run_bcast_test(IDevice* dev, BcastDim::Enum bcast_dim, BcastOp::Enum bcast_
         src1_page_size = bcast_vals_nbytes;
     }
 
-    InterleavedBufferConfig src1_config{
-        .device = dev, .size = bcast_vals_nbytes, .page_size = src1_page_size, .buffer_type = BufferType::DRAM};
-
-    auto src1_dram_buffer = CreateBuffer(src1_config);
+    auto src1_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = bcast_vals_nbytes},
+        {.page_size = src1_page_size, .buffer_type = BufferType::DRAM},
+        &mesh_device);
     uint32_t dram_buffer_src1_addr = src1_dram_buffer->address();
-    detail::WriteToBuffer(src1_dram_buffer, bcast_tiled_u32);
+    slow_dispatch::WriteToBuffer(*src1_dram_buffer, bcast_tiled_u32);
 
     std::vector<uint32_t> reader_compile_time_args;
     TensorAccessorArgs(src0_dram_buffer).append_to(reader_compile_time_args);
@@ -253,12 +254,12 @@ void run_bcast_test(IDevice* dev, BcastDim::Enum bcast_dim, BcastOp::Enum bcast_
 
     // Execute
     vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(dram_buffer_bytes, 10.0f, 0x1234);
-    detail::WriteToBuffer(src0_dram_buffer, src0_vec);
+    slow_dispatch::WriteToBuffer(*src0_dram_buffer, src0_vec);
 
-    detail::LaunchProgram(dev, program);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+    slow_dispatch::ReadFromBuffer(*dst_dram_buffer, result_vec);
 
     // Validation
     auto comparison_function = [](float a, float b) {
@@ -285,32 +286,14 @@ void run_bcast_test(IDevice* dev, BcastDim::Enum bcast_dim, BcastOp::Enum bcast_
 
 }  // namespace
 
-TEST_F(MeshDeviceSingleCardFixture, BcastHAdd) {
-    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::H, BcastOp::ADD);
-}
-TEST_F(MeshDeviceSingleCardFixture, BcastHSub) {
-    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::H, BcastOp::SUB);
-}
-TEST_F(MeshDeviceSingleCardFixture, BcastHMul) {
-    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::H, BcastOp::MUL);
-}
+TEST_F(UnitMeshFixture, BcastHAdd) { run_bcast_test(this->device(), BcastDim::H, BcastOp::ADD); }
+TEST_F(UnitMeshFixture, BcastHSub) { run_bcast_test(this->device(), BcastDim::H, BcastOp::SUB); }
+TEST_F(UnitMeshFixture, BcastHMul) { run_bcast_test(this->device(), BcastDim::H, BcastOp::MUL); }
 
-TEST_F(MeshDeviceSingleCardFixture, BcastWAdd) {
-    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::W, BcastOp::ADD);
-}
-TEST_F(MeshDeviceSingleCardFixture, BcastWSub) {
-    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::W, BcastOp::SUB);
-}
-TEST_F(MeshDeviceSingleCardFixture, BcastWMul) {
-    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::W, BcastOp::MUL);
-}
+TEST_F(UnitMeshFixture, BcastWAdd) { run_bcast_test(this->device(), BcastDim::W, BcastOp::ADD); }
+TEST_F(UnitMeshFixture, BcastWSub) { run_bcast_test(this->device(), BcastDim::W, BcastOp::SUB); }
+TEST_F(UnitMeshFixture, BcastWMul) { run_bcast_test(this->device(), BcastDim::W, BcastOp::MUL); }
 
-TEST_F(MeshDeviceSingleCardFixture, BcastHWAdd) {
-    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::HW, BcastOp::ADD);
-}
-TEST_F(MeshDeviceSingleCardFixture, BcastHWSub) {
-    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::HW, BcastOp::SUB);
-}
-TEST_F(MeshDeviceSingleCardFixture, BcastHWMul) {
-    run_bcast_test(devices_[0]->get_devices()[0], BcastDim::HW, BcastOp::MUL);
-}
+TEST_F(UnitMeshFixture, BcastHWAdd) { run_bcast_test(this->device(), BcastDim::HW, BcastOp::ADD); }
+TEST_F(UnitMeshFixture, BcastHWSub) { run_bcast_test(this->device(), BcastDim::HW, BcastOp::SUB); }
+TEST_F(UnitMeshFixture, BcastHWMul) { run_bcast_test(this->device(), BcastDim::HW, BcastOp::MUL); }

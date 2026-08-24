@@ -135,9 +135,9 @@ void kernel_main() {
         expert_end_idx,
         linearized_mesh_coord);
 
+#if INIT_ZEROS
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
-#if INIT_ZEROS
     // Hybrid row output-zeroing: this core zeroes its assigned page range, then waits for untilizer row cores
     {
         uint32_t page_start = get_arg_val<uint32_t>(rt_args++);
@@ -161,11 +161,10 @@ void kernel_main() {
     uint32_t mcast_end_x = get_arg_val<uint32_t>(rt_args++);
     uint32_t mcast_end_y = get_arg_val<uint32_t>(rt_args++);
     uint32_t untilizer_counter_l1_offset = get_write_ptr(cb_dispatched_metadata_id);
-    uint32_t counter_ready_sem_l1_offset = get_semaphore(counter_ready_semaphore_id);
     uint64_t mcast_counter_noc_addr =
         get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, untilizer_counter_l1_offset);
-    uint64_t mcast_counter_sem_noc_addr =
-        get_noc_multicast_addr(mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, counter_ready_sem_l1_offset);
+    Semaphore<> counter_ready_sem(counter_ready_semaphore_id);
+    Noc noc_obj;
 
     // Per-untilizer semaphores (each scoped to just the (this sender, untilizer) pair):
     //   data_ready: untilizer ++ after each non-local row it writes into receive_buf.  We do
@@ -253,7 +252,8 @@ void kernel_main() {
             off += chunk;
         }
         noc_async_write_barrier();
-        noc_semaphore_inc_multicast(mcast_counter_sem_noc_addr, 1, num_untilizer_cores_group);
+        counter_ready_sem.inc_multicast(
+            noc_obj, mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, /*value=*/1, num_untilizer_cores_group);
     }
 
     uint32_t untilize_base = get_write_ptr(cb_untilize_id);

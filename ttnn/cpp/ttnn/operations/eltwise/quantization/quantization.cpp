@@ -43,6 +43,14 @@
 
 namespace {
 
+bool is_supported_quantized_dtype(const ttnn::DataType dtype) {
+    return dtype == ttnn::DataType::INT32 || dtype == ttnn::DataType::UINT8 || dtype == ttnn::DataType::INT8;
+}
+
+bool is_narrow_quantized_dtype(const ttnn::DataType dtype) {
+    return dtype == ttnn::DataType::UINT8 || dtype == ttnn::DataType::INT8;
+}
+
 ttnn::DataType get_output_dtype(
     const std::optional<const ttnn::DataType>& output_dtype,
     const std::optional<ttnn::Tensor>& output_tensor,
@@ -172,6 +180,35 @@ std::variant<ttnn::Tensor, T> reshape_per_channel_arg(
     return reshape_per_channel_vector_args(*tensor_p, input_shape, axis.value(), out_dtype);
 }
 
+// Widen quantized input to f32 for the composite paths. Use dequantize as the widening step
+// for int8 until typecast(int8 -> int32) is enabled (#50401).
+ttnn::Tensor widen_quantized_input_to_f32(const ttnn::Tensor& input) {
+    if (input.dtype() != ttnn::DataType::INT8) {
+        return ttnn::typecast(input, ttnn::DataType::FLOAT32);
+    }
+    return ttnn::dequantize(input, 1.0f, 0, /*axis=*/std::nullopt, ttnn::DataType::FLOAT32, std::nullopt, std::nullopt);
+}
+
+// Narrow composite's fp result to the output dtype. Use quantize as the narrowing step
+// for int8 until typecast(int32 -> int8) is enabled (#50401).
+ttnn::Tensor narrow_composite_result(
+    const ttnn::Tensor& shifted,
+    ttnn::DataType c_dtype,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    std::optional<ttnn::Tensor> optional_output_tensor) {
+    if (c_dtype != ttnn::DataType::INT8) {
+        return ttnn::typecast(shifted, c_dtype, memory_config, optional_output_tensor);
+    }
+    return ttnn::quantize(
+        shifted,
+        1.0f,
+        0,
+        /*axis=*/std::nullopt,
+        ttnn::DataType::INT8,
+        memory_config,
+        std::move(optional_output_tensor));
+}
+
 }  // anonymous namespace
 
 namespace ttnn {
@@ -194,14 +231,14 @@ Tensor quantize(
 
     TT_FATAL(tt::tt_metal::is_floating_point(a_dtype), "Quantize only takes floating-point number inputs");
     TT_FATAL(
-        c_dtype == DataType::INT32 || c_dtype == DataType::UINT8,
-        "Quantize only supports int32 or uint8 outputs for now, got {}",
+        is_supported_quantized_dtype(c_dtype),
+        "Quantize only supports int32, int8 or uint8 outputs for now, got {}",
         c_dtype);
-    // per-channel path narrows with ttnn::typecast(float, uint8), which wraps
+    // per-channel path narrows with ttnn::typecast(float, int8/uint8), which wraps
     // mod 256 instead of saturating, so reject it here.
     TT_FATAL(
-        !(axis.has_value() && c_dtype == DataType::UINT8),
-        "Per-channel (axis) quantize does not support uint8 output yet; use int32 output or per-tensor quantize");
+        !(axis.has_value() && is_narrow_quantized_dtype(c_dtype)),
+        "Per-channel (axis) quantize does not support int8/uint8 output yet; use int32 output or per-tensor quantize");
 
     constexpr ttsl::Span<const operations::unary::EltwiseUnaryWithParam> none{};
 
@@ -272,7 +309,7 @@ Tensor quantize(
             [&](const float scale, const Tensor& zero_point) {
                 const Tensor input_scaled =
                     ttnn::divide(input_a, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none);
-                return ttnn::typecast(
+                return narrow_composite_result(
                     ttnn::add(
                         input_scaled,
                         zero_point.dtype() == a_dtype ? zero_point : ttnn::typecast(zero_point, a_dtype),
@@ -282,7 +319,9 @@ Tensor quantize(
                         none,
                         none,
                         none),
-                    c_dtype);
+                    c_dtype,
+                    memory_config,
+                    optional_output_tensor);
             },
             [&](const Tensor& scale, const Tensor& zero_point) {
                 const Tensor input_scaled = ttnn::divide(
@@ -294,7 +333,7 @@ Tensor quantize(
                     none,
                     none,
                     none);
-                return ttnn::typecast(
+                return narrow_composite_result(
                     ttnn::add(
                         input_scaled,
                         zero_point.dtype() == a_dtype ? zero_point : ttnn::typecast(zero_point, a_dtype),
@@ -304,7 +343,9 @@ Tensor quantize(
                         none,
                         none,
                         none),
-                    c_dtype);
+                    c_dtype,
+                    memory_config,
+                    optional_output_tensor);
             }},
         scale_arg,
         zero_point_arg);
@@ -324,17 +365,28 @@ Tensor requantize(
     const DataType c_dtype = get_output_dtype(output_dtype, optional_output_tensor, DataType::INT32);
 
     TT_FATAL(
-        a_dtype == DataType::INT32 || a_dtype == DataType::UINT8,
-        "Requantize only supports int32 or uint8 inputs for now, got {}",
+        is_supported_quantized_dtype(a_dtype),
+        "Requantize only supports int32, int8 or uint8 inputs for now, got {}",
         a_dtype);
     TT_FATAL(
-        c_dtype == DataType::INT32 || c_dtype == DataType::UINT8,
-        "Requantize only supports int32 or uint8 outputs for now, got {}",
+        is_supported_quantized_dtype(c_dtype),
+        "Requantize only supports int32, int8 or uint8 outputs for now, got {}",
         c_dtype);
 
     TT_FATAL(
-        !(axis.has_value() && c_dtype == DataType::UINT8),
-        "Per-channel (axis) requantize does not support uint8 output yet; use int32 output or per-tensor requantize");
+        !(axis.has_value() && is_narrow_quantized_dtype(c_dtype)),
+        "Per-channel (axis) requantize does not support int8/uint8 output yet; use int32 output or per-tensor "
+        "requantize");
+
+    if (a_dtype == DataType::INT8) {
+        const bool all_params_scalar =
+            std::holds_alternative<float>(in_scale) && std::holds_alternative<int32_t>(in_zero_point) &&
+            std::holds_alternative<float>(out_scale) && std::holds_alternative<int32_t>(out_zero_point);
+        TT_FATAL(
+            all_params_scalar || c_dtype == DataType::INT32,
+            "Requantize with int8 input and non-scalar scales/zero-points only supports int32 output, got {}",
+            c_dtype);
+    }
 
     constexpr ttsl::Span<const operations::unary::EltwiseUnaryWithParam> none{};
 
@@ -401,7 +453,7 @@ Tensor requantize(
             out_zero_point_full, in_zero_point_scaled_full, std::nullopt, std::nullopt, std::nullopt, none, none, none);
 
         const Tensor input_scaled = ttnn::multiply(
-            ttnn::typecast(input_tensor, DataType::FLOAT32),
+            widen_quantized_input_to_f32(input_tensor),
             scale_recip_full,
             std::nullopt,
             std::nullopt,
@@ -425,7 +477,13 @@ Tensor requantize(
                 // Expansion of q' = [(q - z_in) * s_in] / s_out + z_out
                 const float scale_recip = in_scale / out_scale;
                 // z is passed to and consumed by the LLK as f32 anyway, might as well preserve some accuracy here.
-                const float zero_point = out_zero_point - (in_zero_point * scale_recip);
+                // Int8 input is read via the UInt8 unpacker and unbiased in the SFPU as e = q + 128, so fold
+                // the extra -128 * scale_recip into the zero-point: e * scale_recip + zp with
+                // zp = out_zp - (z_in + 128) * scale_recip reproduces (q - z_in) * scale_recip + out_zp.
+                // (z_in + 128) is the effective zero-point expressed in the excess-128 input domain.
+                const float in_zero_point_biased =
+                    (a_dtype == DataType::INT8) ? (in_zero_point + 128.0f) : static_cast<float>(in_zero_point);
+                const float zero_point = out_zero_point - (in_zero_point_biased * scale_recip);
 
                 const std::array post_activation{
                     operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::ZERO_POINT, zero_point}};
@@ -473,8 +531,8 @@ Tensor dequantize(
     const DataType c_dtype = get_output_dtype(output_dtype, optional_output_tensor, DataType::BFLOAT16);
 
     TT_FATAL(
-        a_dtype == DataType::INT32 || a_dtype == DataType::UINT8,
-        "Dequantize only supports int32 or uint8 inputs for now, got {}",
+        is_supported_quantized_dtype(a_dtype),
+        "Dequantize only supports int32, int8 or uint8 inputs for now, got {}",
         a_dtype);
     TT_FATAL(
         c_dtype == DataType::FLOAT32 || c_dtype == DataType::BFLOAT16,
@@ -511,18 +569,31 @@ Tensor dequantize(
     const auto zero_point_arg = reshape_per_channel_arg(zero_point, input_shape, axis, DataType::INT32);
 
     // The tensor-zero-point composites below subtract the zero-point straight off the input, but
-    // BinaryOpType::SUB has no UINT8 entry in dtype_sets::arithmetic_fpu, so a uint8 input has to
+    // BinaryOpType::SUB has no 8-bit entry in dtype_sets::arithmetic_fpu, so a narrow input has to
     // be widened first. int32 is the natural width: the zero-point is already int32, and the
     // subtraction stays exact. The scalar-zero-point paths skip this and feed binary_ng directly.
-    const Tensor input_for_shift =
-        a_dtype == DataType::UINT8 ? ttnn::typecast(input_tensor, DataType::INT32) : input_tensor;
+    // For int8, it runs a scale-1 dequantize, which would recurse into this function if it were eager.
+    const auto input_for_shift = [&]() -> Tensor {
+        if (a_dtype == DataType::UINT8) {
+            return ttnn::typecast(input_tensor, DataType::INT32);
+        }
+        if (a_dtype == DataType::INT8) {
+            return ttnn::typecast(widen_quantized_input_to_f32(input_tensor), DataType::INT32);
+        }
+        return input_tensor;
+    };
+
+    // Int8 input is read via the UInt8 unpacker and unbiased in the SFPU as e = q + 128. The dequant LLK
+    // computes (A + zp_neg) * scale with zp_neg = -zero_point, so subtract the extra 128 here.
+    const float dequant_int8_in_offset = (a_dtype == DataType::INT8) ? 128.0f : 0.0f;
 
     return std::visit(
         ttsl::overloaded{
             [&](const float scale, const int32_t zero_point) {
                 // LLK dequant kernel does addition, so we need to negate zero_point
                 const std::array post_activation{operations::unary::EltwiseUnaryWithParam{
-                    operations::unary::UnaryOpType::ZERO_POINT, static_cast<float>(-zero_point)}};
+                    operations::unary::UnaryOpType::ZERO_POINT,
+                    static_cast<float>(-zero_point) - dequant_int8_in_offset}};
                 return ttnn::prim::binary_ng(
                     input_tensor,
                     scale,
@@ -538,7 +609,8 @@ Tensor dequantize(
             },
             [&](const Tensor& scale, const int32_t zero_point) {
                 const std::array post_activation{operations::unary::EltwiseUnaryWithParam{
-                    operations::unary::UnaryOpType::ZERO_POINT, static_cast<float>(-zero_point)}};
+                    operations::unary::UnaryOpType::ZERO_POINT,
+                    static_cast<float>(-zero_point) - dequant_int8_in_offset}};
                 return ttnn::prim::binary_ng(
                     input_tensor,
                     scale,
@@ -559,7 +631,7 @@ Tensor dequantize(
             [&](const float scale, const Tensor& zero_point) {
                 const Tensor input_shifted = ttnn::typecast(
                     ttnn::subtract(
-                        input_for_shift, zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none),
+                        input_for_shift(), zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none),
                     DataType::FLOAT32);
                 return ttnn::multiply(
                     input_shifted, scale, c_dtype, memory_config, optional_output_tensor, none, none, none);
@@ -567,7 +639,7 @@ Tensor dequantize(
             [&](const Tensor& scale, const Tensor& zero_point) {
                 const Tensor input_shifted = ttnn::typecast(
                     ttnn::subtract(
-                        input_for_shift, zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none),
+                        input_for_shift(), zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none),
                     DataType::FLOAT32);
                 return ttnn::multiply(
                     input_shifted,

@@ -59,8 +59,11 @@ GROUP_NORM_ROW_MAJOR_SHAPES = [
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
     [
-        # Only SDXL/sd35 tests with 512x512 or larger sizes moved to nightly
+        # SDXL/sd35 tests with 512x512 or larger sizes and cases taking more than 4 minutes in sim.
         #  SDXL VAE
+        (1, 256, 256, 256, 32, 4, 8, 8),
+        (1, 512, 256, 256, 32, 4, 8, 8),
+        (1, 128, 1, 262144, 32, 64, 8, 4),  # SD 1.4 VAE Issue #21131
         (1, 128, 1024, 1024, 32, 32, 8, 8),
         (1, 128, 512, 512, 32, 8, 8, 8),
         (1, 256, 1024, 1024, 32, 48, 8, 8),

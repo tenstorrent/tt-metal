@@ -21,6 +21,34 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
+
+namespace {
+// Resolves the data type that will be used for the output index tensor: the preallocated indices dtype when
+// provided, otherwise the auto-selected width (UINT16 when the reduced dimension fits in 16 bits, else UINT32).
+DataType resolve_index_dtype(
+    const TopKDeviceOperation::operation_attributes_t& args, const TopKDeviceOperation::tensor_args_t& tensor_args) {
+    if (tensor_args.preallocated_outputs.has_value()) {
+        return std::get<1>(tensor_args.preallocated_outputs.value()).dtype();
+    }
+    const auto input_shape = tensor_args.input.padded_shape();
+    // fp32 input sorts with fp32 dest accumulation, which loads indices as INT32, so it requires
+    // 32-bit indices regardless of dimension size. This must agree with compute_output_specs, or the
+    // index CB format and the single-core cost model describe UInt16 while the output tensor is UINT32.
+    const bool uint16_indices = (input_shape[args.dim] <= std::numeric_limits<uint16_t>::max()) &&
+                                (tensor_args.input.dtype() != DataType::FLOAT32);
+    return uint16_indices ? DataType::UINT16 : DataType::UINT32;
+}
+
+// Maps the resolved index dtype onto the circular-buffer data format used by the sort datapath. 16-bit indices
+// use UInt16; 32-bit indices (UINT32/INT32) both use UInt32, since INT32 shares the same 4-byte layout for the
+// non-negative positions TopK produces and the sort LLKs only handle UInt32 among the 32-bit formats.
+tt::DataFormat index_cb_data_format_for(
+    const TopKDeviceOperation::operation_attributes_t& args, const TopKDeviceOperation::tensor_args_t& tensor_args) {
+    return (resolve_index_dtype(args, tensor_args) == DataType::UINT16) ? tt::DataFormat::UInt16
+                                                                        : tt::DataFormat::UInt32;
+}
+}  // namespace
+
 /**
  * @brief Selects the optimal program factory (single-core vs multi-core) for TopK execution
  *
@@ -35,9 +63,10 @@ namespace ttnn::prim {
  *    - Ensures sufficient work to justify parallel execution overhead
  *    - Dimension size must be a power of 2 for bitonic sort
  *
- * 2. OUTPUT DATA TYPE: Must support 16-bit indices (dimension size < 65536)
- *    - Multi-core implementation currently only supports UInt16 indices
- *    - Dimensions >= 65536 force single-core execution with UInt32 indices
+ * 2. DIMENSION SIZE: Reduced dimension must be < 65536
+ *    - Required by the multi-core bitonic sort network
+ *    - Larger dimensions force single-core execution
+ *    - Both 16-bit (UInt16) and 32-bit (UInt32/INT32) index outputs are supported
  *
  * 3. K VALUE LIMIT: K <= 64
  *    - Multi-core algorithm has optimized paths for small K values
@@ -65,8 +94,8 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
     // Check requirement #1: Minimum dimension size for multi-core efficiency
     bool multicore_supported = (input_tensor.padded_shape()[args.dim] >= ttnn::prim::constants::multi_core_min_width);
 
-    // Apply requirement #2: Multi-core implementation constraint
-    // Multi-core only supports UInt16 indices (dimension size must fit in 16 bits)
+    // Apply requirement #2: reduced dimension must fit the multi-core bitonic sort network (< 65536).
+    // The index output may still be 16- or 32-bit; the width flows into index_cb_data_format_for() below.
     multicore_supported &= (input_shape[args.dim] < std::numeric_limits<uint16_t>::max());
     // Dimension size must be a power of two for bitonic sort
     multicore_supported &= is_power_of_two(input_shape[args.dim]);
@@ -82,9 +111,10 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
         // Determine data formats for memory cost calculation
         const tt::DataFormat value_cb_data_format =
             tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-        // fp32 forces UInt32 indices (see compute_output_specs); size them so the cost isn't undercounted.
-        const tt::DataFormat index_cb_data_format =
-            input_tensor.dtype() == DataType::FLOAT32 ? tt::DataFormat::UInt32 : tt::DataFormat::UInt16;
+        // The index CB uses UInt16 for 16-bit indices and UInt32 for 32-bit indices (UINT32/INT32 share the
+        // same 4-byte layout). Multi-core supports both widths; use the width that will actually be allocated
+        // so the memory-cost analysis reflects the real footprint.
+        const tt::DataFormat index_cb_data_format = index_cb_data_format_for(args, tensor_args);
 
         // Calculate tile sizes for memory cost analysis
         const uint32_t value_tile_size = tile_size(value_cb_data_format);
@@ -177,13 +207,27 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
     if (indices_tensor.has_value()) {
         const auto indices_tensor_dtype = indices_tensor->dtype();
         TT_FATAL(
-            indices_tensor_dtype == DataType::UINT16 || indices_tensor_dtype == DataType::UINT32,
-            "Optional input tensor must be UINT16, or UINT32, got: {}",
+            indices_tensor_dtype == DataType::UINT16 || indices_tensor_dtype == DataType::UINT32 ||
+                indices_tensor_dtype == DataType::INT32,
+            "Optional input tensor must be UINT16, UINT32, or INT32, got: {}",
             indices_tensor_dtype);
         // fp32 input forces UINT32 index CBs (see compute_output_specs); UINT16 indices would be wrong.
         TT_FATAL(
             !(input_tensor_dtype == DataType::FLOAT32 && indices_tensor_dtype == DataType::UINT16),
             "Optional indices tensor must be UINT32 when input tensor is FLOAT32, got UINT16");
+        // The reader kernels page a caller-supplied indices tensor with the input's page index
+        // (page_id = i * Wt + j), so the two must describe the same tile grid: same padded width
+        // and same total number of tiles. A narrower indices tensor is read past the end of its
+        // buffer and returns indices that do not belong to the returned values. The composite
+        // topk() front-end checks the logical shapes too, but ttnn::prim::topk is a public entry
+        // point of its own. Ranks may legitimately differ (the front-end normalizes only the input
+        // to 4D), so compare the tile grid rather than the full shape.
+        TT_FATAL(
+            indices_tensor->padded_shape()[-1] == input_tensor.padded_shape()[-1] &&
+                indices_tensor->physical_volume() == input_tensor.physical_volume(),
+            "Optional indices tensor must span the same tile grid as the input tensor, got shape: {}, expected: {}",
+            indices_tensor->padded_shape(),
+            input_tensor.padded_shape());
     }
 
     // Preallocated output tensor validation
@@ -196,8 +240,9 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
             "Preallocated output tensor must be BFLOAT16, BFLOAT8_B, or FLOAT32 got: {}",
             output_tensor0_dtype);
         TT_FATAL(
-            output_tensor1_dtype == DataType::UINT16 || output_tensor1_dtype == DataType::UINT32,
-            "Preallocated indices tensor must be UINT16 or UINT32 got: {}",
+            output_tensor1_dtype == DataType::UINT16 || output_tensor1_dtype == DataType::UINT32 ||
+                output_tensor1_dtype == DataType::INT32,
+            "Preallocated indices tensor must be UINT16, UINT32, or INT32 got: {}",
             output_tensor1_dtype);
         TT_FATAL(
             output_tensor0_dtype == input_tensor_dtype,
@@ -220,10 +265,9 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
     // Execution feasibility validation
     // Verify that the operation can be executed with available hardware resources
     bool can_run = false;
-    // fp32 forces UInt32 indices (see compute_output_specs), so exclude it here too — otherwise
-    // verify_single_core_cost models UInt16 index CBs and undercounts the fp32 single-core L1 footprint.
-    bool uint16_output =
-        (input_shape[args.dim] <= std::numeric_limits<uint16_t>::max()) && (input_tensor.dtype() != DataType::FLOAT32);
+    // 16-bit indices are used only when the resolved index dtype is UINT16 (auto for small dims, or a
+    // preallocated UINT16 output); UINT32/INT32 outputs use the 32-bit path with a correspondingly larger tile.
+    bool uint16_output = (resolve_index_dtype(args, tensor_args) == DataType::UINT16);
 
     // Try multi-core execution first if dimension is large enough
     if (input_shape[args.dim] >= ttnn::prim::constants::multi_core_min_width) {
@@ -231,9 +275,7 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
 
         // Set up data formats for memory cost calculations
         tt::DataFormat value_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-        // fp32 forces UInt32 indices (see compute_output_specs); size them so the cost isn't undercounted.
-        tt::DataFormat index_cb_data_format =
-            input_tensor.dtype() == DataType::FLOAT32 ? tt::DataFormat::UInt32 : tt::DataFormat::UInt16;
+        tt::DataFormat index_cb_data_format = index_cb_data_format_for(args, tensor_args);
 
         uint32_t value_tile_size = tile_size(value_cb_data_format);
         uint32_t index_tile_size = tile_size(index_cb_data_format);

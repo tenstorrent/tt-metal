@@ -480,7 +480,7 @@ def load_and_compute_layer_by_layer(
     from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
     from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
-    from models.demos.deepseek_v3_d_p.utils.test_utils import dequantize_state_dict, detect_language_model_prefix
+    from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
 
     if gate_fallback_mode is None:
         gate_fallback_mode = GateComputeMode.HOST_ALL
@@ -531,7 +531,7 @@ def load_and_compute_layer_by_layer(
     # --- Process Embeddings ---
     logger.info("Processing embeddings...")
     embed_sd = sub_state_dict(lazy_sd, f"{prefix}model.embed_tokens.")
-    embed_dequant = dequantize_state_dict(embed_sd, config)
+    embed_dequant = convert_state_dict(embed_sd, config)
 
     if compute_reference:
         embed_with_prefix = {f"embed_tokens.{k}": v for k, v in embed_dequant.items()}
@@ -572,7 +572,7 @@ def load_and_compute_layer_by_layer(
         logger.info(f"Processing layer {i}/{num_layers}...")
 
         layer_sd = sub_state_dict(lazy_sd, f"{prefix}model.layers.{i}.")
-        layer_dequant = dequantize_state_dict(layer_sd, config)
+        layer_dequant = convert_state_dict(layer_sd, config)
 
         if compute_reference:
             layer_with_prefix = {f"layers.{i}.{k}": v for k, v in layer_dequant.items()}
@@ -691,7 +691,7 @@ def load_and_compute_layer_by_layer(
     # --- Process Norm ---
     logger.info("Processing norm...")
     norm_sd = sub_state_dict(lazy_sd, f"{prefix}model.norm.")
-    norm_dequant = dequantize_state_dict(norm_sd, config)
+    norm_dequant = convert_state_dict(norm_sd, config)
 
     if compute_reference:
         norm_with_prefix = {f"norm.{k}": v for k, v in norm_dequant.items()}
@@ -720,7 +720,7 @@ def load_and_compute_layer_by_layer(
     # --- Process LM Head ---
     logger.info("Processing lm_head...")
     lm_head_sd = sub_state_dict(lazy_sd, f"{prefix}lm_head.")
-    lm_head_dequant = dequantize_state_dict(lm_head_sd, config)
+    lm_head_dequant = convert_state_dict(lm_head_sd, config)
 
     if compute_reference:
         # Apply lm_head projection: logits = h_ref @ lm_head_weight.T

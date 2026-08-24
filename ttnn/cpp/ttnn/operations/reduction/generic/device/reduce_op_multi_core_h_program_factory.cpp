@@ -76,6 +76,18 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             ReduceOpDim::H);
     }
 
+    // H-axis split geometry: every slice reduces a uniform `slice_Ht` tiles, the last one's overhang
+    // past Ht_rm identity-padded by the reader. Clamped to Ht_rm so no slice is empty.
+    const uint32_t num_h_slices = rm_path ? std::min(std::max(operation_attributes.num_h_slices, 1u), plan.Ht_rm) : 1;
+    const uint32_t slice_Ht = rm_path ? tt::div_up(plan.Ht_rm, num_h_slices) : 0;
+    // compute_output_specs sizes the output's H from the unclamped attribute, so the clamp above must
+    // be a no-op; the host already bounds num_h_slices by Ht_rm.
+    TT_FATAL(
+        !rm_path || operation_attributes.num_h_slices <= plan.Ht_rm,
+        "Reduce H (dense RM): num_h_slices {} exceeds Ht_rm {}; the output spec and the kernels would disagree",
+        operation_attributes.num_h_slices,
+        plan.Ht_rm);
+
     uint32_t chunk_size = use_width_sharding ? 1 : ttnn::get_dest_reg_count(operation_attributes.compute_kernel_config);
 
     // For min/max with non-unity scalar, the GMPOOL hardware path only respects the scaler's
@@ -89,7 +101,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     const bool use_fpu_negate = operation_attributes.negate && !is_sfpu_reduce;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    auto num_cols = NC * Wt;
+    // One output tile column per (nc, slice, wt) of the (N, C, num_h_slices, W) result.
+    auto num_cols = NC * num_h_slices * Wt;
     uint32_t num_cores;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_cols_per_core_group_1, num_cols_per_core_group_2;
@@ -353,13 +366,24 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     if (use_post_mul) {
         reduce_defines["REDUCE_POST_MUL"] = "1";
     }
-    // Accurate fp32 mean: route Float32 SUM through the SFPU (needs 32-bit DEST)
+    // Accurate fp32: route Float32 through the SFPU (needs 32-bit DEST)
     const bool fp32_sfpu_reduce = is_sfpu_reduce && a.dtype() == DataType::FLOAT32 && fp32_dest_acc_en;
+    // A bf16 input packed into an FP32 partial needs the packer reconfigured, not just the unpacker.
+    if (rm_path && dst_cb_data_format != src0_cb_data_format) {
+        reduce_defines["REDUCE_RM_MIXED_FORMAT"] = "1";
+    }
+    // Write the compute-packed tiles whole instead of extracting their reduced row into RM pages.
+    if (rm_path && output.layout() == Layout::TILE) {
+        reduce_defines["REDUCE_RM_TILE_OUTPUT"] = "1";
+    }
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    // UnpackToDestFp32 unpacks c_0 straight into the fp32 DEST, bypassing the SrcA tf32 truncation.
+    // UnpackToDestFp32 unpacks c_0 (and RM cb_acc) into the fp32 DEST, bypassing SrcA tf32.
     if (fp32_sfpu_reduce) {
         unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        if (rm_path) {
+            unpack_to_dest_mode[CBIndex::c_5] = UnpackToDestMode::UnpackToDestFp32;
+        }
     }
 
     KernelDescriptor reader_desc;
@@ -369,7 +393,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
 
     if (rm_path) {
         std::vector<uint32_t> reader_compile_time_args =
-            build_rm_reader_ct_args(plan, scaler_bits, a, ReduceOpDim::H);
+            build_rm_reader_ct_args(plan, scaler_bits, a, ReduceOpDim::H, num_h_slices, slice_Ht);
 
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
@@ -414,7 +438,9 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     writer_desc.config = WriterConfigDescriptor{};
 
     if (rm_path) {
-        std::vector<uint32_t> writer_compile_time_args = build_rm_writer_ct_args(plan, output, ReduceOpDim::H);
+        // One writer for both layouts; tile_output picks whole-tile pages over (nc, slice) RM pages.
+        std::vector<uint32_t> writer_compile_time_args = build_rm_writer_ct_args(
+            plan, output, ReduceOpDim::H, operation_attributes.output_layout == Layout::TILE, num_h_slices);
 
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
@@ -445,19 +471,20 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     // reduce.cpp / reduce_h_neg.cpp expect {Ht, Wt, NC, post_mul_bits}.
     std::vector<uint32_t> compute_kernel_args_group_1;
     if (rm_path) {
-        compute_kernel_args_group_1 = build_rm_compute_ct_args(plan, plan.Ht_rm, post_mul_scaler_bits);
+        // The compute kernel's H loop bound is per-slice: slice_Ht == plan.Ht_rm when unsplit.
+        compute_kernel_args_group_1 = build_rm_compute_ct_args(plan, slice_Ht, post_mul_scaler_bits, fp32_sfpu_reduce);
     } else {
         compute_kernel_args_group_1 = {
             Ht,                          // Ht
             compute_Wt,                  // Wt
             compute_NC,                  // NC
             post_mul_scaler_bits,        // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
-            fp32_sfpu_reduce ? 1u : 0u,  // enable_fp32_sfpu: route Float32 SUM through the SFPU
+            fp32_sfpu_reduce ? 1u : 0u,  // enable_fp32_sfpu: route Float32 through the SFPU
         };
     }
 
-    // Int32 MIN uses the base reduce.cpp SFPU path (negate=false); float/bf16 MIN uses -MAX(-x) in
-    // reduce_h_neg.
+    // MIN on an SFPU path uses the base reduce.cpp kernel (negate=false); fast-mode float/bf16 MIN
+    // uses -MAX(-x) in reduce_h_neg.
     const std::string compute_kernel =
         rm_path ? std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_rm.cpp")
                 : std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +
@@ -491,7 +518,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
                 compute_Wt_group_2,          // Wt
                 compute_NC_group_2,          // NC
                 post_mul_scaler_bits,        // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
-                fp32_sfpu_reduce ? 1u : 0u,  // enable_fp32_sfpu: route Float32 SUM through the SFPU
+                fp32_sfpu_reduce ? 1u : 0u,  // enable_fp32_sfpu: route Float32 through the SFPU
             };
         }
 

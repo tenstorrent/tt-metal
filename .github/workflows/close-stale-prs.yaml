@@ -2,6 +2,13 @@ name: "[internal] Close Stale PRs"
 
 permissions:
   pull-requests: write
+  # actions/stale persists its "already processed" list as an Actions cache
+  # keyed _state, and refreshes it by deleting then re-saving. The delete needs
+  # actions: write; without it the delete 403s, the save cannot reserve the
+  # existing key, and the cache freezes at whatever the first run wrote.
+  # A frozen list is skipped verbatim on every later run, so those PRs would
+  # never be reconsidered. This is the narrowest scope that covers caches.
+  actions: write
 
 on:
   schedule:
@@ -13,7 +20,7 @@ jobs:
     if: github.repository == 'tenstorrent/tt-metal'
     runs-on: ubuntu-slim
     steps:
-      - uses: actions/stale@5bef64f19d7facfb25b37b414482c7164d639639 # v9.1.0
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           days-before-pr-stale: 32
@@ -31,5 +38,25 @@ jobs:
             to reopen it or open a new PR whenever you're ready to continue.
           stale-pr-label: "stale"
           exempt-draft-pr: false
-          operations-per-run: 100
+          # Scan oldest PRs first. The action defaults to descending, i.e.
+          # newest-created first, which is the least likely to be stale: the
+          # newest 485 open PRs here contain zero stale candidates, so the
+          # scan wasted 13 pages before finding anything. Ascending reaches
+          # 150 stale PRs in ~11 pages instead of ~19, and closes genuinely
+          # abandoned PRs first rather than newer ones that happen to qualify.
+          ascending: true
+          # This is a budget of API operations, NOT a count of PRs. Closing one
+          # PR costs 5 operations: GET list-events, GET list-comments, POST
+          # add-label, POST create-comment, PATCH close. Paging costs 1 more per
+          # 100 items scanned; PRs that turn out not to be stale cost nothing.
+          #
+          # The 3 POST/PATCH calls count against GitHub's secondary rate limit
+          # of 500 content-generating requests per hour, which is not raised by
+          # our enterprise plan. Capping at 150 PRs per run gives 150 x 3 = 450
+          # writes, 90% of that ceiling, leaving headroom for other automation.
+          #
+          # The action breaks out of its loop only once consumed >= this value,
+          # so it can overrun by up to 4 operations. 750 therefore closes at
+          # most 150 PRs for any page count, and ~148 in practice.
+          operations-per-run: 750
           remove-stale-when-updated: true

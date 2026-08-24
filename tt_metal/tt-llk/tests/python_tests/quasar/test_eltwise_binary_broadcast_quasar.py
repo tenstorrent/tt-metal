@@ -28,10 +28,10 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
-from helpers.perf import PerfConfig
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import BootMode, TestConfig
+from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
     DEST_SYNC,
@@ -40,9 +40,9 @@ from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     MATH_OP,
     NUM_FACES,
-    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    generate_input_dim,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.utils import passed_test
@@ -61,6 +61,12 @@ BINARY_BROADCAST_FORMATS = input_output_formats(
     ],
 ) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
 
+BROADCAST_TYPES = [
+    BroadcastType.Column,
+    BroadcastType.Row,
+    BroadcastType.Scalar,
+]
+
 
 def binary_broadcast_dest_sync_modes(*, is_perf=False):
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
@@ -74,20 +80,10 @@ def binary_broadcast_implied_math_formats(format, *, is_perf=False):
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
-def binary_broadcast_math_fidelities(format, mathop, *, is_perf=False):
+def binary_broadcast_math_fidelities(format, mathop):
     if format.input_format == DataFormat.Int8:
         return [MathFidelity.LoFi]
-    if is_perf:
-        return [MathFidelity.LoFi]
     return get_valid_math_fidelities(format, mathop)
-
-
-def binary_broadcast_input_dimensions(dest_acc, dest_sync_mode, *, is_perf=False):
-    if is_perf:
-        # Nested list: parametrize treats a flat list as multiple values, so
-        # [32, 32] would become input_dimensions=32 (int) and break generate_stimuli.
-        return [[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]]
-    return generate_unary_input_dimensions(dest_acc, dest_sync_mode)
 
 
 @pytest.mark.quasar
@@ -99,19 +95,15 @@ def binary_broadcast_input_dimensions(dest_acc, dest_sync_mode, *, is_perf=False
         MathOperation.Elwsub,
         MathOperation.Elwmul,
     ],
-    broadcast_type=[
-        BroadcastType.Column,
-        BroadcastType.Row,
-        BroadcastType.Scalar,
-    ],
+    broadcast_type=BROADCAST_TYPES,
     math_fidelity=lambda formats, mathop: binary_broadcast_math_fidelities(
         formats, mathop
     ),
     implied_math_format=lambda formats: binary_broadcast_implied_math_formats(formats),
     dest_sync_mode=lambda: binary_broadcast_dest_sync_modes(is_perf=False),
     input_dimensions=runtime(
-        lambda dest_acc, dest_sync_mode: binary_broadcast_input_dimensions(
-            dest_acc, dest_sync_mode, is_perf=False
+        lambda dest_acc, dest_sync_mode: generate_unary_input_dimensions(
+            dest_acc, dest_sync_mode
         )
     ),
     run_types=[[PerfRunType.L1_TO_L1]],
@@ -189,6 +181,7 @@ def test_eltwise_binary_broadcast_quasar(
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(4),
             TEST_FACE_DIMS(),
@@ -210,19 +203,16 @@ def test_eltwise_binary_broadcast_quasar(
         "disable_format_inference": formats.input_format.is_mx_format(),
     }
 
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+        boot_mode=boot_mode,
+    )
     if is_perf:
-        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
         configuration.run(perf_report)
         return
 
-    configuration = TestConfig(
-        **{
-            **test_config_kwargs,
-            "templates": test_config_kwargs["templates"]
-            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
-            "boot_mode": boot_mode,
-        },
-    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(

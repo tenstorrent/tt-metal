@@ -5,6 +5,8 @@
 #pragma once
 
 #include <optional>
+#include <variant>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -21,8 +23,15 @@ using MinimalMatmulConfig = ttnn::experimental::prim::MinimalMatmulConfig;
 
 namespace ttnn::experimental {
 
+// input_tensor: a single activation, or a 2-element list [prefix, suffix] virtually concatenated
+// (concat-free) on the channel (K, last) axis ONLY — the two must be identical on every other axis.
+// Any per-segment channel count is allowed; segments are joined at tile boundaries with zero-filled
+// gaps on both the activation (zero from tilization) and the weight (the stacked weight must be
+// per-segment tile-padded, i.e. zero rows between segments, via prepare_weight_for_concatenated_input).
+// The op size-checks prefix_padded_K + suffix_padded_K == weight_padded_K but trusts the weight
+// layout for gap content.
 ttnn::Tensor minimal_matmul(
-    const ttnn::Tensor& input_tensor,
+    const std::variant<ttnn::Tensor, std::vector<ttnn::Tensor>>& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& bias_tensor,
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,

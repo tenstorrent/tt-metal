@@ -407,18 +407,13 @@ void patch_slice_program_addresses(
         factory);
 }
 
-void SliceDeviceOperation::override_runtime_arguments(
+void SliceRmShardedProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
+    const SliceParams& args,
+    const SliceInputs& tensor_args,
+    Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    patch_slice_program_addresses(
-        program,
-        select_program_factory(operation_attributes, tensor_args),
-        operation_attributes,
-        tensor_args,
-        tensor_return_value);
+    patch_slice_program_addresses(program, SliceRmShardedProgramFactory{}, args, tensor_args, output);
 }
 
 }  // namespace ttnn::prim

@@ -1,6 +1,6 @@
 # Prefill KV-migration — configuration and gates
 
-The prefill side on its own terms: the files that configure it, and three gates that can be run against it
+The prefill side on its own terms: the files that configure it, and two gates that can be run against it
 directly with **no decode side present**. The tt-llm-engine launch harness generates and invokes this
 underneath; this document is the layer beneath that. It is also the path to take when integrating a new
 model, because the gates isolate failures that the harness necessarily reports as one.
@@ -10,9 +10,8 @@ Assumes the model is already integrated — adapter registered, golden trace sta
 
 | Gate | What it exercises | Needs |
 |------|-------------------|-------|
-| **0 — standalone PCC** | Prefill writes correct KV (precondition for everything) | tt-metal tree only |
-| **1 — mock migration** | The KV-chunk address table is correct, read device-lessly | tt-metal tree only |
-| **2 — loopback migration** | The real DRAM → transport → DRAM copy, and migrated-KV accuracy | + tt-llm-engine binaries |
+| **1 — mock migration** | Prefill writes correct KV (precondition for everything) and the KV-chunk address table is correct, read device-lessly | tt-metal tree only |
+| **2 — loopback migration** | The real DRAM → transport → DRAM copy, and the destination slots read back by the driver (`--verify-migration`, default `dst-bytes`) | + tt-llm-engine binaries |
 
 Gate 2 covers the same ground as the harness's own prefill-loopback stage. The difference is only that the
 harness drives it end to end instead of three terminals.
@@ -54,13 +53,22 @@ export RUN=./models/demos/common/prefill/runners/run_pipeline_prefill.sh
 export BINDING=models/demos/common/prefill/runners/topology_configuration/<binding>.yaml
 export MANIFEST=models/demos/common/prefill/runners/producer_manifests/<manifest>.yaml
 export MODEL_MANIFEST=models/demos/<your_model>/tt/runners/manifests/<your_model>.json
+
+# multi-host only: ONE rank-ordered host list, rank 0 first, reused by all three terminals
+export HOSTS=<H0>,<H1>            # endpoint:  --prefill_hosts
+export HOSTSP=<H0>:1,<H1>:1       # runner + driver: the --host list, passed to both launchers
 ```
 
 Two shape constraints apply: `MAX_SEQ_LEN % CHUNK_SIZE == 0` and `CHUNK_SIZE % (SP*32) == 0` (each SP shard
 stays 32-token-block aligned).
 
-`PREFILL_ENABLE_MIGRATION=1` is **single-rank only** — the runner rejects it for `num_ranks > 1` (pipelined
-migration is not implemented). Gate 2 therefore uses a 1-rank binding.
+**`PREFILL_MOCK_MIGRATION=1` is single-rank only** — the runner rejects it for `num_ranks > 1`, because each
+rank would publish a table covering just its own layer slice and a merged mock table is not implemented. So
+**Gate 1** needs a 1-rank binding. `PREFILL_ENABLE_MIGRATION=1` (Gate 2) has no such restriction: the real
+path merges the per-rank stage layouts through the worker
+(`deliver_device_map_and_gather_stage_layouts`), so a pipelined runner publishes one table spanning every
+rank's layers. Gate 2 runs on 1, 2 or 4 ranks — see *Covering every rank* below for what that costs on the
+read-back side.
 
 ---
 
@@ -71,9 +79,8 @@ migration is not implemented). Gate 2 therefore uses a 1-rank binding.
 { "env": { "PREFILL_MODEL": "my_model", "PREFILL_GATE_FALLBACK_MODE": "DEVICE_FP32" } }
 ```
 
-The `env:` map is applied verbatim by `setdefault`, so a rank binding's `global_env` still wins. A manifest
-may also carry a `users[]` + `migration{}` block for the pairwise-validation path; a plain model-config
-manifest omits it.
+The `env:` map is applied verbatim by `setdefault`, so a rank binding's `global_env` still wins. It is the
+only block the runner reads.
 
 ## Rank binding
 
@@ -100,13 +107,15 @@ global_env:
   PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
   PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"
   PREFILL_MIGRATION_CLIENT_DIR: "<tt-llm-engine>/disaggregation/migration/build_RelWithDebInfo/python"
-
-  PREFILL_VALIDATE_MIGRATION: "1"
-  PREFILL_MIGRATE_PAIRWISE: "1"                    # dst == src; omit for burst (vs golden)
-  PREFILL_STANDALONE_CHUNKED_NCHUNKS: "22"         # = num_users x chunks the producer pushes
-  MIGRATION_DONE_FILE: "/tmp/migration_done.sentinel"
-  PREFILL_MIGRATE_WAIT_S: "1200"
 ```
+
+Nothing about validation appears here: the runner publishes the KV-chunk table and the device map and
+that is the whole of its involvement. Both read-backs — the source `check_pcc` and the destination
+`--verify-migration` — run out in the driver process against those two published artefacts.
+
+The runner has no on-device check of its own to turn on, so there is no both-sides case to avoid: every
+verdict in either gate comes from the driver process. A binding that sets a runner-side validation or
+chunk-bound variable is carrying dead config — nothing reads it.
 
 ---
 
@@ -117,15 +126,15 @@ global_env:
 | module | what it is |
 |--------|------------|
 | `prefill_producer` | The plain runner test. H2D push, ack drain, golden PCC. Knows nothing about migration. |
-| `migration_driver` | The migration entry point. Drives the H2D half **with `prefill_producer`'s own helpers**, then owns the `MigrationLayerClient` attach, the cross-endpoint pairing, the src→dst mapping, the `migrate()` calls, and both sidecar files. |
+| `migration_driver` | The migration entry point. Drives the H2D half **with `prefill_producer`'s own helpers**, then owns the `MigrationLayerClient` attach, the cross-endpoint pairing, the src→dst mapping, the `migrate()` calls, both sidecar files, and — for loopback — the destination read-back that proves the copy landed. On a multi-host runner, launch it with `run_migration_driver.sh` so those read-backs cover every rank (*Covering every rank*, below). |
 
 The dependency runs one way: `prefill_producer` imports nothing from `migration_driver`, so a runner-only run
 can never pull migration in. Migration has to share the producer's process — it needs that run's
 resident-slot state and must migrate while the runner still holds the KV in device DRAM — which is why one
 module covers both halves rather than chaining two.
 
-So: **any run that migrates uses `migration_driver`**; only the no-migration gates (Gate 0 and Gate 1 below)
-use `prefill_producer`. Invoking `migration_driver` *is* the opt-in, so `migration: {issue: true}` is
+So: **any run that migrates uses `migration_driver`**; only the no-migration gate (Gate 1 below)
+uses `prefill_producer`. Invoking `migration_driver` *is* the opt-in, so `migration: {issue: true}` is
 redundant there and an explicit `false` is warned about rather than honoured.
 
 The harness follows the same rule. Its step is still **named** `prefill_producer` (that name appears in its
@@ -159,15 +168,15 @@ workload:
   chunks: "11"
   max_requests: 2                 # one resident request per slot
   interleave: round_robin
-  check_pcc: false                # the RUNNER validates migrated KV on-device
+  check_pcc: true                 # SOURCE-slot golden PCC; the destination has its own gate below
 
 migration:
   issue: true                     # attach the client and migrate after prefill
   dest_endpoint_id: 1             # == our own id => loopback
   dst_slot_offset: 2              # dst = src + 2  (0->2, 1->3)
   timeout_ms: 3600000
-  done_file: /tmp/migration_done.sentinel                # [MATCH RUNNER]
-  table_path: /tmp/prefill_kv_chunk_table.pb             # [MATCH RUNNER]
+  done_file: /tmp/migration_done.sentinel                # driver-side only; no runner counterpart
+  table_path: /tmp/prefill_kv_chunk_table.pb             # [MATCH RUNNER] shared storage if multi-host
   cmd_queue: /mig_ep1_cmd                                # [MATCH ENDPOINT]
   table_queue: /mig_ep1_table
   resp_queue: /mig_ep1_resp
@@ -222,36 +231,189 @@ crossed slot→prompt wiring or a slot-index bug in the address table still pass
 `slot_lengths` is keyed by slot, so with `max_requests > num_users` a recycled slot replays the *same*
 prompt; set `max_requests == num_users` for one resident request per slot.
 
-Coverage: `tests/test_producer_slot_prompts.py` (device-free, host logic) and
-`tests/test_producer_runner_e2e.py::test_producer_runner_multiprompt_pcc` (on-device, opt-in via
-`PREFILL_CI_MULTIPROMPT_TRACES`).
+### Multi-turn conversations
+
+`PREFILL_PRODUCER_MULTI_TURN_PROB` (manifest: `workload.multi_turn_prob`, default `0.0`) is the probability
+that a recycled slot **continues** its conversation instead of starting a fresh one. A continued turn
+resumes writing at the previous turn's length **aligned down to 32** and replays the ≤31 dropped tokens as
+part of its first chunk; aligning up instead would leave a permanent unwritten hole mid-sequence, and a
+sub-tile write offset is rejected outright (`update_padded_kv_cache` asserts `kv_actual_global % 32 == 0`,
+and the kernel's staircase disagrees with the host mirror off-tile). The replay is PCC-idempotent because
+the rope table is keyed on absolute position, though it is not bit-idempotent.
+
+Every length the producer reports stays **absolute** — measured from cache position 0, never relative to
+the turn — because `actual_end` is a cache position. When a conversation no longer has room for another
+full chunk the slot restarts from 0 rather than overrunning the per-user cache.
+
+At the default `0.0` nothing draws from the rng and the schedule is byte-for-byte what it was before the
+knob existed, so existing legs are unaffected.
+
+Coverage: the multi-turn scheduling described here has no dedicated automated test yet — a device-free
+host-logic test for turn continuation (align-down/replay and absolute-length bookkeeping) is a TODO. The
+closest existing coverage is the on-device producer/runner PCC gate
+`tests/test_producer_runner_e2e.py::test_producer_runner_pcc`, which drives the producer end to end and
+fails if any resident slot's KV PCC is below threshold, though it is not multi-turn-specific.
 
 ---
 
-## Gate 0 — standalone KV PCC
+## Verifying the migrated destination
 
-A precondition, with no migration involved. Single rank, so run the runner directly rather than under
-`tt-run`, and export the model config (see the forwarding note above).
+`migration_driver` reads the destination slots back **itself**, in the driver process — one per host on a
+multi-host runner, see *Covering every rank* — over the same device-less `read_dram_umd` path the source-side
+`check_pcc` uses. The runner does no work for it: it does not hold the check, does not poll the sentinel, and
+its own on-device checks are not part of this path. It does have to stay **alive** — the reads go to device
+DRAM — which is the default, since the driver sends no shutdown push unless `PREFILL_SEND_SHUTDOWN=1` (and
+even then, only after every rank's read-back).
 
-```bash
-env PREFILL_MANIFEST=$MODEL_MANIFEST \
-    PREFILL_NUM_LAYERS=<L> PREFILL_MAX_SEQ_LEN=<S> PREFILL_CHUNK_SIZE=<C> \
-    PREFILL_STANDALONE=1 PREFILL_STANDALONE_PCC=1 \
-    PREFILL_STANDALONE_NCHUNKS=$NCHUNKS PREFILL_STANDALONE_CHUNKED_NCHUNKS=$NCHUNKS \
-    python -m models.demos.common.prefill.runners.prefill_runner
+Order within a run: `check_pcc` and `--dump-src-kv` read the *sources* before the migrate; this reads the
+*destinations* after `wait_complete` lands, which is also after the DONE sentinel is published. So the
+sentinel means "copied", not "verified".
+
+```
+--verify-migration {off | dst-bytes | dst-golden | both}     # env: PREFILL_VERIFY_MIGRATION
+--verify-migration-layers 0,30,60                            # env: PREFILL_VERIFY_MIGRATION_LAYERS
 ```
 
-Expect `[kv-pcc]` per-layer lines, with the minimum at or above `PREFILL_STANDALONE_CHUNKED_PCC` (runner
-default `0.88`). The exact wording is your model's, since the validator lives in your package. `PREFILL_MODEL`
-comes from the model manifest here; exporting it directly also works.
+| mode | asks | needs a golden? | model-specific? |
+|------|------|-----------------|-----------------|
+| `dst-bytes` *(default)* | is dst **byte-identical** to src, chunk by chunk? | no | no — nothing is decoded |
+| `dst-golden` | does dst PCC to the src's golden trace? | yes | yes — decodes via the per-layout branch |
+| `both` | runs each in turn, reporting transport and model correctness separately | yes | yes |
+| `off` | nothing; the run proves transport only | — | — |
+
+`dst-bytes` is the default because migration is a byte copy: a correct destination is bit-identical, so
+there is no threshold to tune and no undefined-correlation hole over the all-zero pad tail or a dense
+layer's `index_k` — exactly the regions a PCC-based fidelity check has to paper over with a threshold and
+an all-zero short-circuit. `dst-golden` is not strictly stronger, it is differently strong: it proves the copy carries
+**model-correct** data rather than merely the same bytes the source held, but it decodes through the
+per-model layout branch, needs the golden on disk, and its PCC is undefined over the pad tail. `both` is
+the honest answer when you want transport and model correctness reported separately.
+
+For loopback migrations, both feed the **exit code**, alongside the source `check_pcc`: a driver run that
+migrates and exits 0 has verified the destination unless you passed `off`. Cross-endpoint verification is
+skipped as described below.
+
+Three limits are worth internalising before reading a PASS:
+
+- **Loopback only.** Cross-endpoint P→D is skipped with a warning — the destination lives in the decode
+  galaxy's table, a separate address space, and looking `dst` up in *our* table would confidently read the
+  wrong slot. Verify P→D on the decode side against a `--dump-src-kv` reference instead.
+- **Cross-talk is invisible with one prompt.** If every slot replays the same trace, all sources are
+  byte-identical and a copy landing in the wrong destination is indistinguishable from a correct one. Use
+  `PREFILL_PRODUCER_SLOT_TRACES` (see *Per-slot prompts*) if you want that property covered. This is a
+  property of identical sources, so it applies to `dst-golden` equally.
+- **A layer subset makes a PASS a sample.** `--verify-migration-layers` (and, implicitly,
+  `PREFILL_MIGRATION_LAYERS`) restricts the read; the driver logs a warning saying so. With a subset only
+  config 0 is checked, because a sparse model's compacted index config indexes rows by full-indexer rank
+  rather than global layer id.
+
+Cost is the reason the subset flag exists: `dst-bytes` reads *both* slots, so it roughly doubles a
+`check_pcc` pass — a full-depth Kimi pair is ~215k UMD reads. Chunks whose chips are not in this host's
+device map are skipped rather than failed, and the skip count is printed so a `PASSED` line cannot be
+mistaken for whole-model coverage — that skip is the whole subject of the next section. A check that
+compared nothing is reported as a **failure**.
+
+These two flags have no typed field in the manifest's `migration:` block. Set them on the CLI, export
+them, or put them in the manifest's raw `env:` passthrough:
+
+```yaml
+env:
+  PREFILL_VERIFY_MIGRATION: "both"
+  PREFILL_VERIFY_MIGRATION_LAYERS: "0,30,60"
+```
+
+---
+
+## Covering every rank — the multi-host driver
+
+`read_dram_umd` is **host-local**. It reaches the chips in the machine the process is running on and nothing
+else, and that applies to *both* driver read-backs — the source `check_pcc` and the destination
+`--verify-migration`. On a pipelined runner spanning N hosts, one driver process therefore verifies 1/N of
+the layers: every other rank's layers resolve to no local `unique_id` and are skipped. The run still says
+`PASSED`, and it is telling the truth about a fraction of the model.
+
+The fix is one process per host, and placing them is the **launcher's** job — `run_migration_driver.sh`,
+the sibling of `run_pipeline_prefill.sh`. The module itself spawns nothing; it only splits by rank once MPI
+has placed it, which keeps launch concerns (host list, MPI transport, env forwarding) in shell on both
+sides of the run.
+
+```bash
+# multi-host: <manifest> <host_list> [tcp_iface] [extra driver args...]
+./models/demos/common/prefill/runners/run_migration_driver.sh $MANIFEST "$HOSTSP"
+
+# one galaxy: no host list, no MPI — or invoke the module directly, same thing
+./models/demos/common/prefill/runners/run_migration_driver.sh $MANIFEST
+```
+
+The host list is in **rank order, rank 0 first**, and is the same list you gave `run_pipeline_prefill.sh` —
+which is why it stays a command-line argument rather than a manifest field, exactly as on the runner side.
+Pass one host (or none) and the script runs the module directly: one process, no MPI, this host's layers.
+
+Roles, once launched:
+
+| rank | does |
+|------|------|
+| 0 (the host you launched from) | the whole run — H2D feed, ack drain, `MigrationLayerClient`, `migrate()`, both sidecars — **plus** its own host's read-backs |
+| every other | a device-less **validator**: no H2D connect, no client, no migrate. It reads its own host's KV back and votes |
+
+Rank 0 must be the runner's rank-0 host: it alone attaches the H2D service and the `/mig_ep*` queues, which
+exist only there. The script prints the rank-0 host next to `hostname` so a wrong order is visible before
+anything hangs.
+
+Three collectives over the distributed context (host-side MPI, no mesh device) sequence it, so every rank
+must see the same env — the script forwards every exported `PREFILL_*`/`MIGRATION_*` variable and each rank
+applies the same manifest itself:
+
+| barrier | when | releases |
+|---------|------|----------|
+| **GO#1** | rank 0 has drained every LayerAck (so all layers are written) | the source `check_pcc` on every rank |
+| **GO#2** | every `migrate()`'s `wait_complete` has returned | the destination check on every rank |
+| **DONE** | all read-backs finished | the verdict fold — and it holds rank 0's shutdown sentinel until no rank is still reading |
+
+The migrated `(src, dst, real_len)` triples are broadcast at GO#2 rather than re-derived per rank, so the
+validators check what was actually migrated. Every rank still logs its own `N chunk(s) skipped — their chips
+are not in this host's device map`; that is the *other* ranks' half. The real verdict is the fold:
+
+```
+[migration_driver] rank=0: ok=True
+[migration_driver] rank=1: ok=True
+```
+
+Any rank failing fails the run's exit code. Two configuration requirements, and they pull in opposite
+directions:
+
+- `PREFILL_MIGRATION_TABLE_PATH` on **shared** storage — rank 0 writes the merged table, every validator
+  reads it from its own host. The driver exits with a clear error if it points at `/tmp`, `/dev/shm`,
+  `/run` or `/var/tmp`.
+- `PREFILL_MIGRATION_DEVICE_MAP_PATH` **host-local** — each runner rank serializes its own host's
+  `fabric_node → unique_id` map under that name, and that is precisely what filters each driver rank to its
+  own layers. On shared storage the ranks race `<path>.tmp` → `os.replace`.
+
+**The MPI interface must match the runner's.** These hosts are multi-homed and `docker0` carries the *same*
+address on every one, so unpinned OpenMPI advertises addresses on one NIC and connects on another. The
+script passes the same transport arguments `ttrun` gives the runner (`--mca btl self,tcp --mca
+btl_tcp_if_include <iface>`), defaulting to `ens5f0np0` — the same default `run_pipeline_prefill.sh` uses.
+Override it with the script's 3rd argument if you launched the runner with a different NIC (its own 3rd
+argument). Get this wrong and `MPI_Init` never completes: **every rank logs `applied manifest`
+and then goes silent**, usually alongside OpenMPI's *"accepted a TCP connection … cannot find a
+corresponding process entry for that peer"*. The driver announces `joining the distributed context (N
+rank(s) expected)` first so the hang is visible rather than mysterious.
+
+`--dump-src-kv` stays rank-0-only (every rank would write the same `src_slot<N>.pt` with a different layer
+subset and clobber the rest), so its dump covers one host's layers and warns when it does. Extra driver
+flags go after the script's three positional arguments and reach every rank verbatim.
+
+---
 
 ## Gate 1 — mock migration and producer read-back
 
-The runner serialises the KV-chunk table and device map and nothing else; the producer reads each chunk
-device-lessly via `read_dram_umd` — the same UMD path the migration worker uses — and PCCs against golden.
-This isolates one question: is `build_kv_chunk_table` correct? No endpoint, no worker and no MPI are
-involved. Requires the producer to implement a read-back for this model's cache layout (see
-`prefill_producer.py`).
+This is also the KV-correctness precondition: prefill must write correct KV before migration means
+anything. The runner serialises the KV-chunk table and device map and nothing else; the producer reads
+each chunk device-lessly via `read_dram_umd` — the same UMD path the migration worker uses — and PCCs
+against golden. This isolates one question: is `build_kv_chunk_table` correct? No endpoint, no worker and
+no MPI are involved. Requires the producer to implement a read-back for this model's cache layout (see
+`prefill_producer.py`). `PREFILL_MAX_SEQ_LEN` must be at least `chunks * CHUNK_SIZE` or the runner
+asserts when a chunk overruns the cache — it no longer derives from a chunk count.
 
 In the binding, replace the migration block with:
 
@@ -272,28 +434,38 @@ $RUN $BINDING $HOST:1
 python -m models.demos.common.prefill.runners.prefill_producer --manifest $MANIFEST
 ```
 
-`prefill_producer` here, deliberately: this gate migrates nothing, so it is one of the two runs that does
+`prefill_producer` here, deliberately: this gate migrates nothing, so it is the one run that does
 **not** use `migration_driver`.
 
 Expect `[producer] KV cache PCC PASSED` (threshold `PREFILL_STANDALONE_CHUNKED_PCC`, producer default
-`0.93` — note this differs from the runner's `0.88` default for the same variable).
+`0.93`).
 
 This gate is not a prerequisite for the producer's golden PCC on the real-migration path, because the runner
-serialises the device map there too — `serialize_device_map` is called from **both** the
-`PREFILL_ENABLE_MIGRATION=1` and the `PREFILL_MOCK_MIGRATION=1` branch (`prefill_runner.py`, the two calls
-under each branch). It has to be: `publish_table_and_wait_ready` hands the device map to the worker over the
-migration client and leaves nothing on disk, while the producer's device-less read-back resolves chips from
-the JSON sidecar. If that call ever regresses out of the real branch, the symptom is quiet — the producer
-waits 60 s, logs `device map ... not found; skipping KV read`, and both the golden PCC **and** the src-KV
-dump are silently lost. Gate 1 remains the cheapest way to separate a table problem from a transport problem.
+serialises the device map there too: one `serialize_device_map` call sits above the mock/real split inside the
+`_migration_enabled` block, so **every rank on either path** publishes its own host-local sidecar. It has to
+be: `deliver_device_map_and_gather_stage_layouts` hands the map to the co-located *worker* over the migration
+client and leaves nothing on disk, while every device-less read-back resolves chips from the JSON.
+
+That call **had** regressed to living under `if _mock_migration:` only, and the symptom is exactly as quiet as
+you would fear — a real-migration run published no sidecar, each reader polled 60 s, logged `device map ... not
+found; skipping KV read`, and every PCC plus the `--dump-src-kv` reference vanished with nothing raising. If
+you see that line, check this call before suspecting the table. Beware the confusing variant too: a *stale*
+map left in `/tmp` by an earlier mock run makes the same misconfiguration look like it works. Gate 1 remains
+the cheapest way to separate a table problem from a transport problem.
 
 ## Gate 2 — loopback migration
 
 The real DRAM → transport → DRAM copy. Loopback means `dest_endpoint_id` equals the endpoint's own id:
-source and destination slots share one table, routed through the endpoint's internal A→B worker pair. Three
-processes on one host — the shared-memory queues and UMD access are host-local, so all three must co-locate.
-Needs the tt-llm-engine binaries built (`migration_endpoint`, `migration_worker`), pointed at the same
-tt-metal tree the runner uses.
+source and destination slots share one table, routed through the endpoint's internal A→B worker pair. Needs
+the tt-llm-engine binaries built (`migration_endpoint`, `migration_worker`), pointed at the same tt-metal
+tree the runner uses.
+
+Three terminals, and the shared-memory queues plus the H2D socket are host-local, so **A, B and C all start
+on the same host** — the runner's rank-0 host. On a **pipelined runner** that stays true and each side simply
+fans out from there, always in rank order with rank 0 first: the endpoint gets `--prefill_hosts <H0>,…,<Hn>`
+(one `migration_endpoint` per host, each reading its own DRAM), the runner gets `<H0>:1,…,<Hn>:1`, and the
+driver is launched with `run_migration_driver.sh <manifest> <same list>`, which places one process per host
+(*Covering every rank*, above). Host order must be identical in all three.
 
 Launch order is A → B (wait for `WORKER_READY`) → C. Between runs, clear stale state:
 
@@ -306,35 +478,52 @@ rm -f /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_acks_* /tmp/
 # ---- Terminal A — migration endpoint ----
 cd <tt-llm-engine>/disaggregation/migration
 ./launch_migration_endpoints.sh --name_server_host $HOST \
-    --prefill_hosts $HOST --prefill_endpoint_id 1
+    --prefill_hosts $HOST --prefill_endpoint_id 1     # multi-host: --prefill_hosts $HOSTS
 
 ls /dev/shm/mig_ep1_*      # all three queues must exist BEFORE starting B
 
 # ---- Terminal B — runner (wait for WORKER_READY before starting C) ----
-cd $TT_METAL_HOME && $RUN $BINDING $HOST:1
+cd $TT_METAL_HOME && $RUN $BINDING $HOST:1            # multi-host: $RUN $BINDING $HOSTSP
+                                                      # (with an N-rank $BINDING)
 
 # ---- Terminal C — prefill + migrate ----
 cd $TT_METAL_HOME
-python -m models.demos.common.prefill.runners.migration_driver --manifest $MANIFEST
+./models/demos/common/prefill/runners/run_migration_driver.sh $MANIFEST      # one host
+./models/demos/common/prefill/runners/run_migration_driver.sh $MANIFEST "$HOSTSP"   # multi-host
 ```
 
 `migration_driver`, not `prefill_producer` — this gate migrates. See "Two producer entry points" above.
 
-The driver prefills, drains the acks, migrates each pair, then writes the DONE sentinel; the runner is
-polling for it and validates on-device. **PCC is logged by the runner (terminal B), not the driver** — the
-driver only reports the transport (the `MIGRATE slot … complete` lines). Accuracy lives in the runner's
-post-loop `[kv-migrate-validate]` output.
+The driver prefills, drains the acks, migrates each pair, writes the DONE sentinel, and then reads the
+destination slots back itself. **Everything lands in terminal C** — transport as the `MIGRATE slot …
+complete` lines, accuracy as the `verify …` lines below. Terminal B is a pure serving loop and logs no PCC
+at all. Multi-host, terminal C's lines are `[1,N]`-tagged per rank and the run's actual verdict is the
+`rank=N: ok=…` fold at the end.
 
-**2a — pairwise** (`PREFILL_MIGRATE_PAIRWISE=1`). Each destination is asserted bit-equal to its source,
-golden-free and length-agnostic. Also catches cross-talk between concurrent migrations. Expect, in terminal
-B, `[kv-migrate-validate] AFTER pairwise src=0 dst=2 min_pcc=…` per pair, then `ALL <N> pair(s) dst==src
-PASSED` at or above `PREFILL_MIGRATE_PAIRWISE_PCC` (default `0.99`).
+**2a — byte compare** (the default, `--verify-migration dst-bytes`). Each destination is asserted
+byte-identical to its source, chunk by chunk, golden-free and model-agnostic. Expect one
+`verify bytes: slot 0 -> 2 config 0: …` planning line per pair and config, then:
 
-**2b — burst** (omit `PREFILL_MIGRATE_PAIRWISE`). Source and destination are both PCC'd against the same
-golden. Expect `BEFORE src_slot=0 …` and `AFTER dst_slot=2 …`, then `ALL <N> migrated pair(s) PASSED`.
+```
+[migration_driver] verify bytes PASSED: 2 pair(s), 1342 chunk(s) byte-identical dst == src
+```
 
-The two are either/or per run; run twice for both signals. Pairwise is the cheaper fidelity check — burst
-anchors both slots to the golden but reads the cache twice.
+**2b — golden anchor** (`--verify-migration dst-golden`). Each destination is PCC'd against the source
+slot's golden trace, at `PREFILL_STANDALONE_CHUNKED_PCC` (same threshold as `check_pcc`). Expect an
+`AFTER dst_slot=2 (src=0) min_pcc=…` line per pair — the destination half of the number `check_pcc: true`
+already reports for the sources — then `verify golden PASSED: <N> migrated dst slot(s) >= <thr>`.
+
+`--verify-migration both` runs them in one pass, which is the useful default when a model is new: the byte
+compare isolates the transport, and the golden PCC tells you whether what was transported was right in the
+first place. See *Verifying the migrated destination* above for the cost and the three coverage caveats
+(loopback only, cross-talk needs per-slot prompts, a layer subset is a sample).
+
+The runner's request loop is unbounded and the driver's chunks are not a shutdown, so set
+`PREFILL_SEND_SHUTDOWN=1` on the driver to close the stream when it is done — otherwise terminal B sits in
+`recv` until you SIGTERM it. The driver sends that sentinel **last**: after the destination read-back and,
+multi-host, after the DONE barrier, so it never tears the mesh down under a UMD read in flight on any rank.
+Leaving it unset is the useful choice while iterating — terminal B stays up and you can rerun terminal C
+against it.
 
 For a multi-config cache (a sparse model publishes its index cache alongside the KV cache in one merged
 table), **config-id order is the src↔dst contract**. Loopback is self-consistent by construction, but a real
@@ -344,19 +533,21 @@ prefill→decode run needs the decode endpoint to publish its configs in the sam
 
 ## Runtime hooks each gate requires
 
-Validation is driven by the optional runtime hooks in `ADDING_A_PREFILL_MODEL.md` §2. Implement only what the
+Both gates run off the optional runtime hooks in `ADDING_A_PREFILL_MODEL.md` §2. Implement only what the
 gates you intend to run require.
 
 | Gate | Hook | Signature requirement |
 |------|------|-----------------------|
-| 0 | `kv_cache_pcc_check` | accepts `trace_dir`, `first_layer_idx` |
 | 1 | `build_kv_chunk_table` | serialises the block-cyclic layout; issues no comms |
-| 2a pairwise | `read_slot_kv` | returns bare host tensors, `[num_layers, heads(or 1), seq_cache, head_dim]` |
-| 2b burst | `kv_cache_pcc_check` | **also** accepts `real_len=` |
-| 2a + golden anchor | `kv_cache_pcc_check` | **also** accepts `pt_path_override=` |
+| 2 | `kv_migration_stages` | one `KvCacheStage` per migratable cache, for the cross-stage table merge |
+| 2 | `kv_migration_base_address` | alternative to the above, for a model with a SINGLE cache: just that cache's base DRAM address |
+| 2 `dst-bytes` | **none** | nothing is decoded — the byte compare is model-agnostic |
+| 2 `dst-golden` | none beyond Gate 1 | reuses the producer's own read-back, not a runtime hook |
 
-`runners/validation.py` calls these by keyword, so a runtime missing `real_len` or `pt_path_override` raises
-`TypeError` before any PCC runs. It presents as a crash rather than a validation failure.
+The destination check adds no per-model surface: `dst-bytes` compares raw chunks and never decodes, and
+`dst-golden` rides on `prefill_producer._read_slot_kv_and_check_pcc` — the same layout branch Gate 1
+already needs — rather than on a runtime hook. A new model whose cache is neither MLA nor the M3 triple
+gets a branch there, and both gates work.
 
 ## Values that must agree across the three processes
 
@@ -367,15 +558,65 @@ gates you intend to run require.
 | chunk size | `PREFILL_CHUNK_SIZE` | same var, exported | — |
 | mesh | `PREFILL_SP` / `PREFILL_TP` | `transport.sp` / `.tp` | — |
 | KV table | `PREFILL_MIGRATION_TABLE_PATH` | `migration.table_path` | — |
-| sentinel | `MIGRATION_DONE_FILE` | `migration.done_file` | — |
+| device map | `PREFILL_MIGRATION_DEVICE_MAP_PATH` | `migration.device_map_path` | — |
+| sentinel | — (driver-side only) | `migration.done_file` | — |
 | queues | `PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE` | `migration.{cmd,table,resp}_queue` | `--prefill-{cmd,table,resp}-queue` |
 | client `.so` | `PREFILL_MIGRATION_CLIENT_DIR` | exported (not in the manifest) | — |
-| chunk budget | `PREFILL_STANDALONE_CHUNKED_NCHUNKS` | `num_users` × `chunks` | — |
+| host list | the `--host` list given to `run_pipeline_prefill.sh` | `run_migration_driver.sh`'s 2nd arg, same order | `--prefill_hosts`, same order |
+| MPI NIC | `run_pipeline_prefill.sh`'s 3rd arg (`ens5f0np0`) | `run_migration_driver.sh`'s 3rd arg, same value | — |
 | slot count | `PREFILL_NUM_USERS` | ≥ max dst slot + 1 | — |
 
-`PREFILL_STANDALONE_CHUNKED_NCHUNKS` is the one worth double-checking: the driver never sends a shutdown
-push, so the runner uses that count to know prefill is done before it polls the DONE sentinel. Too low and
-the runner exits mid-prefill; too high and it blocks on chunks that never come, printing no PCC either way.
+The two path rows pull in opposite directions once more than one host is involved: the **table** must be on
+shared storage (rank 0 writes it, every driver rank reads it) and the **device map** must not be (each rank
+publishes its own host's chips under that name, which is what scopes each driver rank to its own layers).
+
+The sentinel has no runner-side counterpart: the driver writes it for an external P→D consumer, and
+nothing in the runner reads it. It also means "copied", not "verified" — the destination read-back runs
+after it is published.
+
+`PREFILL_STANDALONE_CHUNKED_NCHUNKS` is absent because nothing reads it: the request loop no longer takes a
+bound and always runs until the stream closes. That is what the driver needs — a bounded runner would head
+for teardown while the driver was still migrating and reading back — but it means the driver must close the
+stream itself with `PREFILL_SEND_SHUTDOWN=1`, or terminal B sits in `recv` after the gate has passed.
 
 Deriving every row of this table from a single place is the main thing the harness buys. It also rejects
 attempts to set any of them by hand.
+
+---
+
+## The endpoint's processes (Gate 2 only)
+
+| Process | Role |
+|---|---|
+| `migration_endpoint` | Owns the outward queues `/mig_ep<id>_{cmd,table,resp}` the runner talks to; relays commands inward and `WORKER_READY` outward. Copies no KV itself. |
+| `migration_worker` × 2 | The processes that touch DRAM: sender ("A") and loopback receiver ("B"), each with queues `/ep_<id>_{a,b}_{cmd,table,resp}`. Started by an MPI launcher — `prte` holds a pool of *slots* (one per process), `prun` requests them. |
+
+A worker reports `WORKER_READY` only once it holds the KV chunk table, the device map, and its A↔B link. The
+runner supplies the first two, then waits — it cannot distinguish a slow worker from an absent one.
+
+---
+
+## Troubleshooting: the runner times out in `wait_ready`
+
+```
+RuntimeError: MigrationLayerClient::wait_ready: timeout after 120000ms
+```
+
+Almost always: the two workers were never started, so nothing can answer. Confirm in the endpoint log
+(`/tmp/launch_mig_ep_<id>_*.log`; it holds binary bytes, so `grep` needs `-a`):
+
+```bash
+grep -a JOB_FAILED_TO_MAP $(ls -t /tmp/launch_mig_ep_1_*.log | head -1)
+```
+
+The workers are launched as one request for **two slots on the host**, and `prte` started inside a batch
+allocation takes its slot count from the allocation instead of from the `--host <node>:2` it was given. On a
+partition that advertises a whole accelerator node as one CPU (`scontrol show node <n>` → `CPUTot=1`) the
+request for two is refused. A larger allocation cannot fix this — the node has one CPU to give. Detach the
+launcher from the scheduler instead, before launching the endpoint:
+
+```bash
+# shellcheck disable=SC2046
+unset $(env | sed -n 's/^\(SLURM[^=]*\)=.*/\1/p')
+export PRTE_MCA_ras="^slurm"     # take the node pool from --host, not from the allocation
+```

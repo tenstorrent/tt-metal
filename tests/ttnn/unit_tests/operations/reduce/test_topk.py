@@ -365,7 +365,6 @@ def test_topk_input_dtypes_raise(torch_input_tensor_dtype, ttnn_input_tensor_dty
         (ttnn.float32, ttnn.uint16),
         (ttnn.uint32, ttnn.uint16),
         (ttnn.int32, ttnn.uint16),
-        (ttnn.bfloat16, ttnn.int32),
         (ttnn.bfloat16, ttnn.float32),
         (ttnn.bfloat16, ttnn.bfloat16),
     ],
@@ -405,6 +404,42 @@ def test_topk_fp32_input_with_uint16_indices_tensor_raise(device, expect_error):
         ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, indices_tensor=indices_tensor)
 
 
+def test_topk_narrower_indices_tensor_raise(device, expect_error):
+    # The indices are streamed with the input's page stride, so a narrower indices tensor is read at
+    # the wrong pages and produces wrong indices rather than an error.
+    torch.manual_seed(0)
+    k = 32
+    shape = [1, 1, 32, 8192]
+
+    input_torch = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    indices_torch = torch.zeros([1, 1, 32, shape[3] // 2], dtype=torch.uint16)
+    indices_tensor = ttnn.from_torch(indices_torch, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+
+    with expect_error(RuntimeError, "Indices tensor has incorrect shape"):
+        ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, indices_tensor=indices_tensor)
+
+
+def test_topk_indices_tensor_on_non_last_dim_raise(device, expect_error):
+    # The front end transposes the reduced dim to last and leaves the indices tensor alone, so the
+    # indices are paged in the input's post-transpose layout and come back rounded to a tile.
+    torch.manual_seed(0)
+    k = 32
+    shape = [1, 1, 8192, 32]
+
+    input_torch = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    indices_torch = torch.zeros(shape, dtype=torch.uint16)
+    for i in range(shape[2]):
+        indices_torch[:, :, i, :] = i
+    indices_tensor = ttnn.from_torch(indices_torch, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+
+    with expect_error(RuntimeError, "only supported for a reduction on the last dimension"):
+        ttnn.topk(ttnn_input, k=k, dim=2, largest=True, sorted=True, indices_tensor=indices_tensor)
+
+
 @pytest.mark.parametrize("largest", [True, False])
 def test_topk_multicore_local_write_correctness(largest, device):
     """
@@ -434,3 +469,323 @@ def test_topk_multicore_local_write_correctness(largest, device):
     assert torch.allclose(
         got_s, ref_s, atol=1e-2
     ), f"multi-core topk values mismatch (WAR regression?): max_diff={(got_s - ref_s).abs().max():.4f}"
+
+
+@pytest.mark.parametrize(
+    "N, C, H, W, dim, k",
+    (
+        (1, 1, 32, 64, 3, 32),  # small dim -> single-core path
+        (1, 1, 32, 4096, 3, 32),  # larger dim, still single-core
+        (1, 1, 32, 8192, 3, 50),  # power-of-2 dim, k<=64 -> multi-core path (32-bit indices)
+    ),
+)
+@pytest.mark.parametrize("index_dtype", (ttnn.int32, ttnn.uint32))
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_int32_indices(N, C, H, W, dim, k, index_dtype, largest, device):
+    # Exercises 32-bit (UINT32/INT32) index outputs on both the single-core and multi-core paths.
+    torch.manual_seed(2005)
+    shape = [N, C, H, W]
+
+    input = torch.randn(shape, dtype=torch.bfloat16) * 0.9
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    pyt_topk_values, _ = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
+
+    # Preallocate the value and (int32/uint32) index output tensors.
+    out_shape = shape.copy()
+    out_shape[dim] = k
+    value_tensor = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    index_tensor = ttnn.from_torch(
+        torch.zeros(out_shape, dtype=torch.int32), index_dtype, layout=ttnn.Layout.TILE, device=device
+    )
+
+    ttnn_values, ttnn_indices = ttnn.topk(
+        ttnn_input,
+        k,
+        dim=dim,
+        largest=largest,
+        sorted=True,
+        output_tensor=(value_tensor, index_tensor),
+    )
+
+    assert ttnn_indices.dtype == index_dtype
+
+    # The index dtype does not change which elements are selected; validate that the returned
+    # indices point at the correct top-k values (gather + cosine similarity, as in run_topk_test).
+    ttnn_torch_indices = ttnn.to_torch(ttnn_indices, dtype=torch.int32)
+    ttnn_torch_gather_from_indices = torch.gather(input, dim, ttnn_torch_indices.to(torch.int64))
+    cosine = torch.nn.CosineSimilarity(dim=dim)
+    ttnn_torch_cosine = torch.mean(cosine(pyt_topk_values, ttnn_torch_gather_from_indices))
+    assert ttnn_torch_cosine > 0.99, "Cosine similarity between topk values and gather from indices is less than 0.99"
+
+
+@pytest.mark.parametrize("num_rows", [64, 96])
+@pytest.mark.parametrize("largest", [True, False])
+def test_topk_multicore_values_beyond_first_tile_row(num_rows, largest, device):
+    """
+    Regression test for the multi-core final-gather values corruption: topk_final.cpp's values gather
+    ran without re-establishing datacopy unpack state at ht >= 1, so the state left by the previous
+    iteration's index transpose (TRANSPOSE mode, UInt16/UInt32 SRCA format) made the bare copy_tile
+    unpack the bf16 gathered values as garbage. Observable as fabricated ~1e38 values in EVERY row past
+    the first 32 flattened rows (indices unaffected) on any multi-core call with > 32 flattened rows.
+    """
+    torch.manual_seed(2006)
+    W, k = 8192, 32  # multi-core path; > 32 flattened rows => ht >= 1 iterations in the final gather
+    t = torch.randn((1, 1, num_rows, W), dtype=torch.bfloat16)
+    x = ttnn.from_torch(t, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    v, i = ttnn.topk(x, k, dim=-1, largest=largest, sorted=True)
+    ttnn.synchronize_device(device)
+
+    got = ttnn.to_torch(v).float()
+    ref, _ = torch.topk(t.float(), k, dim=-1, largest=largest, sorted=True)
+    got_s = got.sort(dim=-1, descending=True).values
+    ref_s = ref.sort(dim=-1, descending=True).values
+    # Pre-fix this fails catastrophically (~1e38 magnitudes), not marginally.
+    assert torch.allclose(
+        got_s, ref_s, atol=1e-2
+    ), f"values fabricated past first tile row: max_diff={(got_s - ref_s).abs().max():.4f}"
+
+
+# ---------------------------------------------------------------------------
+# Large-k Blackhole routing: ttnn.topk with bf16, dim=-1, largest=True,
+# stable=False and 64 < k <= 2048 is routed at the composite level through
+# ttnn.experimental.topk_large_indices (fused untilize+clamp to lowest-finite
+# bf16 — the private topk_route_prep device op, exercised by EVERY routed
+# call below -> op -> fused gather of the ORIGINAL values straight from the
+# TILE source + TILE assembly of both outputs + index dtype emit — the
+# private topk_route_finish device op, also exercised by EVERY routed call;
+# a slice pair only when k is not a multiple of 16), bypassing the
+# single-core cliff (the device op's own multi-core path is gated at
+# k <= 64 + pow2 width + width < 65536).
+#
+# Tie semantics on the routed path: the returned index SET is a correct top-k
+# set with deterministic-but-unspecified tie order, so these tests assert
+# value-exactness (both sides sorted descending) and index validity
+# (input[index] == value, in-range, unique), never index-order equality.
+# ---------------------------------------------------------------------------
+
+from models.common.utility_functions import is_blackhole
+
+
+def run_topk_large_k_routed_test(N, C, H, W, k, device):
+    torch.manual_seed(2005)
+    shape = [N, C, H, W]
+    torch_input = torch.randn(shape, dtype=torch.bfloat16) * 0.9
+    ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    pyt_values, _ = torch.topk(torch_input, k, dim=-1, largest=True, sorted=True)
+
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=True, sorted=True)
+
+    # Index dtype contract must match the stock device op: UINT16 iff the
+    # tile-padded width fits 16 bits, else UINT32.
+    padded_w = 32 * ((W + 31) // 32)
+    uint16_expected = padded_w <= UINT16_MAX
+    assert ttnn_indices.dtype == (ttnn.uint16 if uint16_expected else ttnn.uint32)
+
+    desired_shape = [N, C, H, k]
+    assert list(ttnn_values.shape) == desired_shape
+    assert list(ttnn_indices.shape) == desired_shape
+
+    torch_values = ttnn.to_torch(ttnn_values)
+    torch_indices = ttnn.to_torch(ttnn_indices, dtype=torch.uint16 if uint16_expected else torch.uint32).to(torch.int64)
+
+    # Values: exact, order included -- both sides are sorted descending, so
+    # this holds even under ties.
+    assert_equal(torch_values, pyt_values)
+
+    # Indices: value-based validation (tie order is unspecified).
+    assert torch_indices.min() >= 0
+    assert torch_indices.max() < W
+    gathered = torch.gather(torch_input, -1, torch_indices)
+    assert_equal(gathered, torch_values)
+    for row_indices in torch_indices.reshape(-1, k):
+        assert row_indices.unique().numel() == k
+
+
+@pytest.mark.skipif(
+    not is_blackhole(), reason="large-k routing is Blackhole-only; stock single-core takes minutes at these shapes"
+)
+@pytest.mark.parametrize("k", [96, 128, 256, 512, 1024, 2048])
+@pytest.mark.parametrize("W", [8192, 32768, 65536, 131072])
+def test_topk_large_k_routed(k, W, device):
+    # All combos take the routed (topk_large_indices) path: bf16, dim=-1,
+    # largest=True, stable=False, 64 < k <= 2048, W <= 2^19.
+    run_topk_large_k_routed_test(1, 1, 32, W, k, device)
+
+
+@pytest.mark.skipif(
+    not is_blackhole(), reason="large-k routing is Blackhole-only; stock single-core takes minutes at these shapes"
+)
+@pytest.mark.parametrize("k", [512, 2048])
+def test_topk_large_k_routed_non_pow2_width(k, device):
+    # W=100000: neither a power of two nor 16-bit -- the old multi-core gates
+    # excluded it entirely; the routed path supports it natively.
+    run_topk_large_k_routed_test(1, 1, 32, 100000, k, device)
+
+
+@pytest.mark.skipif(
+    not is_blackhole(), reason="large-k routing is Blackhole-only; stock single-core takes minutes at these shapes"
+)
+@pytest.mark.parametrize("W", [262144, 524288])
+@pytest.mark.parametrize("k", [1536, 2048])
+def test_topk_large_k_routed_wide(k, W, device):
+    # The routed envelope extends to 2^19 — kept from the gather-era L1
+    # constraint as the silicon-validated ceiling even though the fused
+    # topk_route_finish tail no longer stages full rows (see
+    # large_k_route_max_width in topk.cpp). Fewer rows keep host-side
+    # reference cost and transfer size sane at these widths.
+    run_topk_large_k_routed_test(1, 1, 8, W, k, device)
+
+
+@pytest.mark.skipif(
+    not is_blackhole(), reason="large-k routing is Blackhole-only; stock single-core takes minutes at these shapes"
+)
+def test_topk_large_k_routed_ragged_shape(device):
+    # H=30 and W=4999, neither a multiple of 32: the fused topk_route_prep
+    # writer must emit ONLY the logical sticks/columns (tile padding dropped
+    # on both axes), and W=4999 -> 157 width-tiles (prime) forces its
+    # bw_last=5 remainder blocks on every tile-row. Every other routed cell
+    # is 32-aligned, so this is the lone cover for both clamps.
+    run_topk_large_k_routed_test(1, 1, 30, 4999, 96, device)
+
+
+@pytest.mark.skipif(
+    not is_blackhole(), reason="large-k routing is Blackhole-only; stock single-core takes minutes at these shapes"
+)
+def test_topk_large_k_routed_ragged_tall(device):
+    # TALL ragged: enough tile-rows that cores own MULTIPLE prep blocks
+    # crossing tile-row boundaries (nblocks = 7 * ceil(157/8) = 140 > grid),
+    # which desynchronizes the prep input-CB read pointer on the bw_last
+    # remainder blocks -- the wrap hazard the flat 30-row ragged cell is
+    # structurally blind to (1 block/core there).
+    run_topk_large_k_routed_test(1, 1, 224, 4999, 96, device)
+
+
+@pytest.mark.skipif(
+    not is_blackhole(), reason="large-k routing is Blackhole-only; stock single-core takes minutes at these shapes"
+)
+def test_topk_large_k_routed_single_row(device):
+    # A single logical row engages topk_large_indices' column-parallel
+    # (intra-row multi-core) factory underneath the routed composite.
+    run_topk_large_k_routed_test(1, 1, 1, 65536, 2048, device)
+
+
+@pytest.mark.skipif(
+    not is_blackhole(), reason="large-k routing is Blackhole-only; stock single-core takes minutes at these shapes"
+)
+def test_topk_large_k_routed_neginf_lanes(device):
+    # Rows whose top-k contains exact -inf: the routed path clamps the op's
+    # input to the lowest finite bf16 (the op then sees no -inf and stamps a
+    # REAL source position for every lane — its 0xFFFFFFFF sentinel never
+    # fires) and gathers values from the ORIGINAL tensor, so -inf values are
+    # bit-exact and -inf lanes carry real positions (stock/torch parity).
+    # W=65536 is tile-aligned, so every returned index must be a real
+    # in-range column.
+    torch.manual_seed(2005)
+    W, k, finite_count = 65536, 512, 100  # W=65536 -> tile-padded > 65535 -> uint32 indices
+    torch_input = torch.full((1, 1, 32, W), -float("inf"), dtype=torch.bfloat16)
+    finite = (torch.randn(1, 1, 32, finite_count) * 0.9).to(torch.bfloat16)
+    torch_input[..., :finite_count] = finite
+
+    ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=True, sorted=True)
+    assert ttnn_indices.dtype == ttnn.uint32
+
+    torch_values = ttnn.to_torch(ttnn_values)
+    torch_indices = ttnn.to_torch(ttnn_indices, dtype=torch.uint32).to(torch.int64)
+    pyt_values, _ = torch.topk(torch_input, k, dim=-1, largest=True, sorted=True)
+
+    # Values match torch exactly, including the -inf tail.
+    assert_equal(torch_values, pyt_values)
+
+    # ALL lanes (finite and -inf alike) carry real, in-range, unique,
+    # self-consistent indices -- no sentinel anywhere.
+    assert torch_indices.min() >= 0
+    assert torch_indices.max() < W
+    gathered = torch.gather(torch_input, -1, torch_indices)
+    assert_equal(gathered, torch_values)
+    for row_indices in torch_indices.reshape(-1, k):
+        assert row_indices.unique().numel() == k
+    # The finite lanes specifically must point into the finite prefix.
+    assert torch_indices[..., :finite_count].max() < finite_count
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="fallback-path guards mirror the Blackhole routing predicate")
+def test_topk_large_k_routing_fallbacks(device):
+    # Shapes/args just OUTSIDE the routing predicate must keep the stock
+    # (device-op) path and stay correct. Kept at W=8192 so the stock
+    # single-core runs are fast.
+    W = 8192
+
+    # k=2049 exceeds the topk_large_indices ceiling (2048) -> stock path.
+    run_topk_test(1, 1, 32, W, 2049, ttnn.bfloat16, 3, True, True, device)
+
+    # largest=False is not supported by topk_large_indices -> stock path.
+    run_topk_test(1, 1, 32, W, 512, ttnn.bfloat16, 3, True, False, device)
+
+    # stable=True promises lowest-index tie-breaking -> stock path. A
+    # constant row makes this a real guard: stable top-96 of an all-equal
+    # row MUST return indices 0..95 in order, which the routed (non-stable)
+    # engine does not promise -- so this asserts INDICES, not just values.
+    # (Value-only asserts pass on either engine and would not catch the
+    # stable guard being deleted from the routing predicate.)
+    torch_input = torch.ones(1, 1, 32, W, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, 96, dim=-1, largest=True, sorted=True, stable=True)
+    assert_equal(ttnn.to_torch(ttnn_values), torch.ones(1, 1, 32, 96, dtype=torch.bfloat16))
+    expected_indices = torch.arange(96, dtype=torch.int64).expand(1, 1, 32, 96)
+    assert_equal(ttnn.to_torch(ttnn_indices).to(torch.int64), expected_indices)
+
+
+@pytest.mark.skipif(
+    not is_blackhole(), reason="large-k routing is Blackhole-only; stock single-core takes minutes at these shapes"
+)
+def test_topk_routed_k_not_multiple_of_16(device):
+    # k=100 exercises the routed k % 16 != 0 tail: topk_large_indices
+    # requires a multiple of 16, so the op runs at k_rounded=112 and
+    # post_topk_transform slices back down to 100. k_rounded=112 is also the
+    # suite's only k_rounded % 32 == 16 cell: topk_route_finish's last output
+    # tile is half k-padding (its right face pair must stay zero-filled).
+    run_topk_large_k_routed_test(1, 1, 32, 8192, 100, device)
+
+
+@pytest.mark.skipif(
+    not is_blackhole(), reason="large-k routing is Blackhole-only; stock single-core takes minutes at these shapes"
+)
+def test_topk_large_k_routed_multi_tile_rows(device):
+    # H=96 (3 row-tiles) x C=2 batches: topk_route_finish decomposes its work
+    # units over GLOBAL tile rows (batch * R_p/32 + rt) and pages the source
+    # gather at row_tile * width_tiles + idx/32 — every other routed cell has
+    # H <= 32 and a single batch (row_tile == 0, batch == 0 throughout), which
+    # would leave that decomposition entirely uncovered.
+    run_topk_large_k_routed_test(1, 2, 96, 8192, 96, device)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="routing predicate is Blackhole-only")
+def test_topk_large_k_routing_engages(device):
+    # Guards the routing predicate itself: outputs alone are also satisfied
+    # by the stock path, so a silently narrowed predicate would demote the
+    # whole routed suite to stock with everything still green. Graph capture
+    # shows which ops actually ran.
+    torch.manual_seed(2005)
+    torch_input = torch.randn(1, 1, 32, 8192, dtype=torch.bfloat16) * 0.9
+    ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    def ran_large_indices(captured) -> bool:
+        # The device op surfaces as TopkLargeIndices*/topk_large_indices
+        # depending on node type; normalize before matching.
+        return "largeindices" in str(captured).lower().replace("_", "")
+
+    # Routed shape (k=96 > 64): topk_large_indices must appear in the trace.
+    ttnn.graph.begin_graph_capture()
+    ttnn.topk(ttnn_input, 96, dim=-1, largest=True, sorted=True)
+    assert ran_large_indices(ttnn.graph.end_graph_capture())
+
+    # Stock shape (k=32, pow2 width >= 8192 -> multi-core bitonic eligible):
+    # the routed op must NOT appear.
+    ttnn.graph.begin_graph_capture()
+    ttnn.topk(ttnn_input, 32, dim=-1, largest=True, sorted=True)
+    assert not ran_large_indices(ttnn.graph.end_graph_capture())

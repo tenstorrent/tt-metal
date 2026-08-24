@@ -128,7 +128,7 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": 267_498_780,
     },
     "vae_decode_512x512": {
-        "wormhole": 171_560_642,
+        "wormhole": 167_473_541,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "vae_encode_1024x1024": {
@@ -136,16 +136,16 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": 141_175_333,
     },
     "vae_encode_512x512": {
-        "wormhole": 85_005_572,  # Note: this is an average value of 30 test runs due to high variability
+        "wormhole": 81_841_969,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "clip_encoder_1": {
         "wormhole": 23_745_000,  # Average of 3 main CI runs (Jun 22, 2026); transformers 5.10.2 bump reduced CLIP encoder dispatch
-        "blackhole": 11_927_000,  # Average of 3 main CI runs (Jun 22, 2026)
+        "blackhole": 11_720_533,
     },
     "clip_encoder_2": {
         "wormhole": 88_529_000,  # Average of 3 main CI runs (Jun 22, 2026)
-        "blackhole": 43_810_000,  # Average of 3 main CI runs (Jun 22, 2026)
+        "blackhole": 42_895_094,
     },
 }
 

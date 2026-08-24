@@ -41,10 +41,17 @@ constexpr uint32_t chunked_sliding_halo_source_start_tile(
     uint32_t logical_k_tile_rows,
     uint32_t halo_tile_rows) {
     const uint32_t q_group_tile_rows = q_local_tile_rows * ring_size;
-    if (q_group_tile_rows == 0 || logical_k_tile_rows < 2 * q_group_tile_rows || halo_tile_rows > q_local_tile_rows) {
+    if (q_group_tile_rows == 0 || logical_k_tile_rows < q_group_tile_rows || halo_tile_rows > q_local_tile_rows) {
         return 0;
     }
     const uint32_t current_group = logical_k_tile_rows / q_group_tile_rows - 1;
+    // The wrap source for device 0 is the prior group. It does not exist in group
+    // 0, but device 0's clipped work plan never reads the fixed-size payload sent
+    // on this edge. Clamp the origin to an in-bounds tile range and preserve the
+    // exchange length so the halo protocol remains synchronized.
+    if (current_group == 0 && source_device + 1 == ring_size) {
+        return 0;
+    }
     const uint32_t source_group = source_device + 1 == ring_size ? current_group - 1 : current_group;
     return source_group * q_local_tile_rows + q_local_tile_rows - halo_tile_rows;
 }
@@ -97,7 +104,9 @@ constexpr SlidingQWorkPlan build_sliding_q_work_plan(
     }
 
     const uint32_t q_group_tile_rows = ring_size * q_local_tile_rows;
-    if (logical_k_tile_rows < 2 * q_group_tile_rows || q_local_start_tile + q_chunk_tile_rows > q_local_tile_rows) {
+    // A complete first group is valid: device 0 clips at token 0 and every other
+    // device can consume its predecessor within the same group.
+    if (logical_k_tile_rows < q_group_tile_rows || q_local_start_tile + q_chunk_tile_rows > q_local_tile_rows) {
         return plan;
     }
 
@@ -151,6 +160,13 @@ constexpr SlidingQWorkPlan build_sliding_q_work_plan(
         if (source_ring_id != q_device_index) {
             const uint32_t halo_source_start = chunked_sliding_halo_source_start_tile(
                 source_ring_id, q_local_tile_rows, ring_size, logical_k_tile_rows, halo_tile_rows);
+            // A remote range must begin inside the fixed-size halo. This is
+            // guaranteed by the one-hop halo bound and first-group clipping;
+            // make it explicit so unsigned subtraction cannot produce an
+            // out-of-range compact-buffer index if that contract changes.
+            if (halo_source_start > first_k_chunk * k_chunk_tile_rows) {
+                return SlidingQWorkPlan{};
+            }
             first_compact_k_chunk = (first_k_chunk * k_chunk_tile_rows - halo_source_start) / k_chunk_tile_rows;
         }
         if (plan.source_range_count == SlidingQWorkPlan::max_source_ranges) {

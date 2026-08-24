@@ -100,6 +100,29 @@ std::optional<uint64_t> resolve_direct_neighbor_route_hash(
 
 using namespace CMAKE_UNIQUE_NAMESPACE;
 
+ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
+    const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
+    // input_batch_index / gathered_dim_size alter only runtime page ranges and iterator strides;
+    // exclude their values so changing cache slot or prefix does not recompile the program.
+    return tt::tt_metal::operation::hash_operation<HighBwAllGatherDeviceOperation>(
+        args.dim,
+        args.output_mem_config,
+        args.cluster_axis,
+        args.fabric_config,
+        args.axis_topology,
+        args.axis_num_devices,
+        args.axis_num_links,
+        args.num_devices,
+        args.packet_size,
+        args.neighbor_unicast_eligible,
+        args.neighbor_route_plan_hash,
+        args.subdevice_id,
+        args.sub_core_grid,
+        args.input_batch_index.has_value(),
+        args.gathered_dim_size.has_value(),
+        tensor_args);
+}
+
 void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
     const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -173,11 +196,49 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
             output_shape.size() == input_padded_shape.size(),
             "Output tensor shape should have same number of dimensions as input tensor but has {}",
             output_shape.size());
+        if (args.input_batch_index.has_value()) {
+            TT_FATAL(args.dim != 0, "high_bw_all_gather input_batch_index cannot be used when gathering dim 0");
+            TT_FATAL(
+                *args.input_batch_index < input_padded_shape[0],
+                "high_bw_all_gather input_batch_index {} must be < input batch {}",
+                *args.input_batch_index,
+                input_padded_shape[0]);
+            TT_FATAL(
+                output_shape[0] == 1,
+                "high_bw_all_gather selected-batch output must have batch 1, got {}",
+                output_shape[0]);
+            // The selected cache-slot path intentionally addresses one contiguous [1, ...] tensor.
+            // Supporting arbitrary leading dimensions would make the selected page range discontinuous.
+            for (int32_t i = 1; i < args.dim; ++i) {
+                TT_FATAL(
+                    input_padded_shape[i] == 1 && output_shape[i] == 1,
+                    "high_bw_all_gather selected-batch path requires singleton dimensions between batch and dim; "
+                    "input shape {}, output shape {}, dim {}",
+                    input_padded_shape,
+                    output_shape,
+                    args.dim);
+            }
+            expected_output_shape[0] = 1;
+        }
         TT_FATAL(
             output_shape == expected_output_shape,
-            "Output tensor shape must be {}, got {}",
+            "Output tensor shape must be the worst-case gathered shape {}, got {}",
             expected_output_shape,
             output_shape);
+
+        if (args.gathered_dim_size.has_value()) {
+            const uint32_t gathered_dim_size = *args.gathered_dim_size;
+            TT_FATAL(
+                gathered_dim_size > 0 && gathered_dim_size <= expected_output_shape[args.dim],
+                "high_bw_all_gather gathered_dim_size {} must be in (0, {}]",
+                gathered_dim_size,
+                expected_output_shape[args.dim]);
+            TT_FATAL(
+                gathered_dim_size % args.num_devices == 0,
+                "high_bw_all_gather gathered_dim_size {} must divide evenly across {} devices",
+                gathered_dim_size,
+                args.num_devices);
+        }
     }
 
     TT_FATAL(
@@ -187,26 +248,41 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
 }
 
 void HighBwAllGatherDeviceOperation::validate_on_program_cache_hit(
-    const HighBwAllGatherParams&, const HighBwAllGatherInputs& tensor_args) {
-    // Every miss-path validation input is part of the framework's canonical
-    // program-cache key, so a hit has already validated the same structure.
-    // Buffer allocation is not structural, however, and the program factory
-    // dereferences the persistent output buffer on cache hits as well.
-    TT_FATAL(tensor_args.output_tensor.buffer() != nullptr, "Output tensor must be allocated in buffers on device!");
+    const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
+    // The slot/prefix values are deliberately hash-excluded. Recheck only their cheap dynamic
+    // bounds here; all tensor/layout/fabric structure belongs to the program key and was proven on
+    // the miss path. This keeps a serving-loop cache hit to scalar validation plus direct RT-arg writes.
+    const auto& input_shape = tensor_args.input_tensor.padded_shape();
+    const auto& output_tensor = tensor_args.output_tensor;
+    TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor must be allocated in buffers on device!");
+    if (args.input_batch_index.has_value()) {
+        TT_FATAL(args.dim != 0, "high_bw_all_gather input_batch_index cannot be used when gathering dim 0");
+        TT_FATAL(
+            *args.input_batch_index < input_shape[0],
+            "high_bw_all_gather input_batch_index {} must be < input batch {}",
+            *args.input_batch_index,
+            input_shape[0]);
+    }
+    if (args.gathered_dim_size.has_value()) {
+        const int32_t rank = static_cast<int32_t>(input_shape.rank());
+        const int32_t gather_dim = args.dim < 0 ? args.dim + rank : args.dim;
+        const uint32_t max_gathered = input_shape[gather_dim] * args.num_devices;
+        TT_FATAL(
+            *args.gathered_dim_size > 0 && *args.gathered_dim_size <= max_gathered &&
+                *args.gathered_dim_size % args.num_devices == 0,
+            "high_bw_all_gather gathered_dim_size {} must be in (0, {}] and divide evenly across {} devices",
+            *args.gathered_dim_size,
+            max_gathered,
+            args.num_devices);
+    }
 }
 
 HighBwAllGatherDeviceOperation::spec_return_value_t HighBwAllGatherDeviceOperation::compute_output_specs(
-    const HighBwAllGatherParams& args, const HighBwAllGatherInputs& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    // The kernels gather complete device pages. A tile shard whose logical
-    // gather extent is not tile-aligned therefore exposes the gathered padded
-    // extent, matching the required preallocated output tensor.
-    auto shape = input_tensor.padded_shape();
-    shape[args.dim] *= args.num_devices;
-    return tt::tt_metal::TensorSpec(
-        shape,
-        tt::tt_metal::TensorLayout(
-            input_tensor.dtype(), input_tensor.tensor_spec().page_config(), args.output_mem_config));
+    const HighBwAllGatherParams&, const HighBwAllGatherInputs& tensor_args) {
+    // This op always writes the caller-provided persistent tensor.  In selected-batch mode its
+    // batch dimension is intentionally smaller than the source cache, so its own spec—not one
+    // re-derived from the input—is the authoritative output contract.
+    return tensor_args.output_tensor.tensor_spec();
 }
 
 HighBwAllGatherDeviceOperation::topology_return_value_t HighBwAllGatherDeviceOperation::compute_output_topologies(
@@ -231,7 +307,9 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     uint32_t cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<CoreRangeSet>& sub_core_grid,
-    std::optional<uint32_t> num_links) {
+    std::optional<uint32_t> num_links,
+    std::optional<uint32_t> input_batch_index,
+    std::optional<uint32_t> gathered_dim_size) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in HighBwAllGatherParams.
@@ -331,7 +409,9 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .neighbor_unicast_eligible = neighbor_unicast_eligible,
             .neighbor_route_plan_hash = direct_neighbor_route_hash.value_or(0),
             .subdevice_id = subdevice_id,
-            .sub_core_grid = sub_core_grid},
+            .sub_core_grid = sub_core_grid,
+            .input_batch_index = input_batch_index,
+            .gathered_dim_size = gathered_dim_size},
         HighBwAllGatherInputs{.input_tensor = input_tensor, .output_tensor = output_tensor}};
 }
 
@@ -346,9 +426,19 @@ Tensor high_bw_all_gather(
     uint32_t cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<CoreRangeSet>& sub_core_grid,
-    std::optional<uint32_t> num_links) {
+    std::optional<uint32_t> num_links,
+    std::optional<uint32_t> input_batch_index,
+    std::optional<uint32_t> gathered_dim_size) {
     auto [params, inputs] = ttnn::operations::experimental::high_bw_all_gather::high_bw_all_gather_build_operation_args(
-        input_tensor, output_tensor, dim, cluster_axis, subdevice_id, sub_core_grid, num_links);
+        input_tensor,
+        output_tensor,
+        dim,
+        cluster_axis,
+        subdevice_id,
+        sub_core_grid,
+        num_links,
+        input_batch_index,
+        gathered_dim_size);
     return ttnn::device_operation::launch<
         ttnn::operations::experimental::high_bw_all_gather::HighBwAllGatherDeviceOperation>(params, inputs);
 }
