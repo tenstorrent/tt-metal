@@ -60,6 +60,7 @@ import atexit
 import logging
 import os
 import queue
+import sys
 import threading
 from typing import Any, Dict, List
 
@@ -155,6 +156,42 @@ def _run_forward(model, feats, traced):
 _SINGLETON_LOCK = threading.Lock()
 _SINGLETON = None  # type: _DeviceWorker | None
 
+# ---------------------------------------------------------------------------
+# Exit-status tracking for the os._exit teardown bypass (see _shutdown)
+# ---------------------------------------------------------------------------
+# _shutdown has to leave the process via os._exit, which hard-codes the status.
+# Python also runs atexit handlers while unwinding a failure, so a fixed
+# os._exit(0) would report a broken evaluation as successful. These hooks record
+# the status the interpreter was already heading for so _shutdown can reproduce
+# it: sys.excepthook covers uncaught exceptions, and the sys.exit wrapper covers
+# the callers (hydra among them) that end the run with an explicit status.
+_EXIT_STATUS = 0
+_HOOKS_INSTALLED = False
+
+
+def _install_exit_status_hooks() -> None:
+    global _HOOKS_INSTALLED
+    if _HOOKS_INSTALLED:
+        return
+    _HOOKS_INSTALLED = True
+
+    prev_excepthook = sys.excepthook
+    prev_exit = sys.exit
+
+    def _excepthook(exc_type, exc, tb):
+        global _EXIT_STATUS
+        _EXIT_STATUS = 1  # an uncaught exception always means a failed run
+        prev_excepthook(exc_type, exc, tb)
+
+    def _exit(status=None):
+        global _EXIT_STATUS
+        if status is not None and status != 0:
+            _EXIT_STATUS = status if isinstance(status, int) else 1
+        prev_exit(status)
+
+    sys.excepthook = _excepthook
+    sys.exit = _exit
+
 
 class _DeviceWorker:
     """One thread that owns the device + model and serves forwards off a queue."""
@@ -174,6 +211,7 @@ class _DeviceWorker:
         self._ready.wait()  # block until setup finishes (or fails)
         if self._setup_exc is not None:
             raise self._setup_exc
+        _install_exit_status_hooks()
         atexit.register(self._shutdown)
 
     def _loop(self) -> None:
@@ -224,9 +262,12 @@ class _DeviceWorker:
         # Cluster on the MAIN thread at process exit; because the cluster is affine to
         # the (now-closed) device thread, that teardown SIGABRTs in umd::Cluster::
         # close_device. The PDM results CSV is already written by this point, so bypass
-        # the crashing C++ static teardown with an immediate clean exit. Only reached on
-        # the thread-pool funnel path (this atexit is registered by _DeviceWorker).
-        os._exit(0)
+        # the crashing C++ static teardown with an immediate exit. Only reached on the
+        # thread-pool funnel path (this atexit is registered by _DeviceWorker).
+        # Exit with the status the interpreter was already heading for, so a failure
+        # after the worker was created still reports as a failure (see
+        # _install_exit_status_hooks); only a clean run exits 0.
+        os._exit(_EXIT_STATUS)
 
 
 def _get_singleton(checkpoint_path: str, anchors_path: str, device_id: int) -> "_DeviceWorker":
