@@ -89,9 +89,11 @@ class TtPrefillRuntime:
         assert (
             config.max_seq_len % config.chunk_size == 0
         ), f"max_seq_len ({config.max_seq_len}) must be a multiple of chunk_size ({config.chunk_size})"
-        # Ring by default; GPT_OSS_ALLOW_LINEAR=1 permits Linear (pods without torus wraparound).
-        if os.getenv("GPT_OSS_ALLOW_LINEAR") != "1":
-            assert config.topology == ttnn.Topology.Ring, "GPT-OSS sequence-parallel prefill requires Ring topology"
+        # Ring by default (faster CCLs on torus pods); Linear is supported for pods without wraparound.
+        assert config.topology in (
+            ttnn.Topology.Ring,
+            ttnn.Topology.Linear,
+        ), f"GPT-OSS sequence-parallel prefill supports Ring or Linear topology, got {config.topology}"
 
         self.model_built = False
         self.kv_cache_allocated = False
