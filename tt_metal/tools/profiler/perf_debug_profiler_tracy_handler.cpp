@@ -49,6 +49,25 @@ const char* intern_plot_name(uint64_t key, const std::string& text) {
     return p;
 }
 
+// TracyTTPushZone rides QueueType::GpuZone, whose srcloc must be a pointer to a SourceLocationData that
+// outlives the capture (unlike PushStartMarker, which allocates one per push). One per zone identity, kept
+// forever -- the set is bounded by the number of distinct zone names, not by record count.
+const tracy::SourceLocationData* intern_zone_srcloc(
+    uint64_t key, const std::string& name, uint32_t color, const char* file, uint32_t line) {
+    static std::mutex mu;
+    static std::unordered_map<uint64_t, const tracy::SourceLocationData*> locs;
+    std::lock_guard<std::mutex> g(mu);
+    auto it = locs.find(key);
+    if (it != locs.end()) {
+        return it->second;
+    }
+    char* nm = new char[name.size() + 1];
+    std::memcpy(nm, name.c_str(), name.size() + 1);
+    auto* sl = new tracy::SourceLocationData{nm, nm, file, line, color};
+    locs.emplace(key, sl);
+    return sl;
+}
+
 }  // namespace
 #endif
 
@@ -208,6 +227,20 @@ void PerfDebugTracyHandler::HandleWorkerZone([[maybe_unused]] const perf_debug::
     marker.file = "kernel_profiler";
     marker.line = 0;
     marker.color = zone.color;
+
+    // A COMPLETE zone arrives as one record (ts = end, duration = length), so there is no pair to balance
+    // and the lane-depth bookkeeping below does not apply. PushZone hands the server both edges in a single
+    // queue item -- half the queue traffic of synthesising a start/end pair, which matters because the Tracy
+    // consumer is already the first thing to drop records under load.
+    if (zone.duration != 0) {
+        const uint64_t key = (static_cast<uint64_t>(zone.timer_id) << 32) ^ zone.color;
+        const tracy::SourceLocationData* srcloc = intern_zone_srcloc(
+            key, marker.marker_name, zone.color, "kernel_profiler", 0);
+        const uint64_t end = zone.timestamp;
+        const uint64_t start = end >= zone.duration ? end - zone.duration : end;
+        TracyTTPushZone(ctx, srcloc, static_cast<uint32_t>(marker.get_thread_id()), start, end);
+        return;
+    }
 
     // Mirror Tracy's per-lane GPU zone stack depth; drop an unmatched ZONE_END (would pop an empty
     // stack -> SEGV in tracy-capture). A never-opened lane's first END is a benign capture-start

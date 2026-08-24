@@ -130,8 +130,26 @@ void PerfDebugTracyConsumer::operator()(const PerfDebugRawRecordBatch& batch) {
             }
         }
         const uint64_t base = dev.clock_synced ? 0 : ts_base_[r.meta.dev];
+        if (type == PerfDebugRawRecType::Zone) {
+            // A COMPLETE zone: the device's atomic-zone path reports the END in ts with the length in
+            // `duration`, so there is no start record to pair with. Tracy's timeline is built from
+            // begin/end pushes, so expand it here -- without this the zone arrives as an unpaired end and
+            // renders as nothing, which is why an atomic-zone workload showed only the START/END pairs that
+            // PRODUCER-STALL happens to emit.
+            const uint64_t end = r.ts >= base ? r.ts - base : 0;
+            pkt.timestamp = end >= r.duration ? end - r.duration : 0;
+            pkt.is_start = true;
+            handler_->HandleWorkerZone(pkt);
+            pkt.timestamp = end;
+            pkt.is_start = false;
+            handler_->HandleWorkerZone(pkt);
+            continue;
+        }
         pkt.timestamp = r.ts >= base ? r.ts - base : 0;
         pkt.is_start = type == PerfDebugRawRecType::ZoneStart;
+        // A complete zone (PP_ZONE_ATOMIC) reports the END with the length in `duration` and has no start
+        // record to pair with; the handler pushes it as one GpuZone item rather than synthesising a pair.
+        pkt.duration = type == PerfDebugRawRecType::Zone ? r.duration : 0;
         handler_->HandleWorkerZone(pkt);
     }
 }

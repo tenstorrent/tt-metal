@@ -24,6 +24,9 @@ struct WorkerZonePacket {
     uint64_t timestamp = 0;  // full device ticks (59-bit, reconstructed from STICKY_TIMER)
     bool is_start = false;   // true = ZONE_START, false = ZONE_END
     uint32_t color = 0;      // explicit Tracy zone color (0 = auto by name)
+    // Nonzero marks a COMPLETE zone from the device's atomic-zone path: `timestamp` is the END and this is
+    // the length, so it needs no pairing. Zero means this packet is one edge of a START/END pair.
+    uint64_t duration = 0;
 };
 
 // A point-in-time worker-core event: a PP_DATA packet (payload) or a PP_EVENT flag (none). Resolved
