@@ -36,7 +36,7 @@
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
-#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -51,7 +51,6 @@ const uint32_t N_RANDS = 512;
 }  // namespace
 
 // Disabled because this test can hang the NoC due to hardware issues.
-// Uses slow_dispatch::LaunchProgram which requires slow dispatch mode
 TEST_F(UnitMeshFixture, DISABLED_StressNocMcast) {
     // Use default test parameters
     uint32_t time_secs = DEFAULT_SECONDS;
@@ -147,5 +146,5 @@ TEST_F(UnitMeshFixture, DISABLED_StressNocMcast) {
     }
     log_info(LogTest, "Running for {} seconds", time_secs);
 
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 }

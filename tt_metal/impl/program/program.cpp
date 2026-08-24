@@ -52,6 +52,7 @@
 #include "impl/device/device_impl.hpp"
 #include "impl/memory_tracking/memory_stats_shm.hpp"
 #include "tt-metalium/mesh_device.hpp"
+#include "tt-metalium/mesh_workload.hpp"
 #include <unistd.h>
 #include "jit_build/build.hpp"
 #include <tt_stl/enum.hpp>
@@ -3054,6 +3055,12 @@ void detail::ProgramCompileGroup::clear() {
 bool detail::ProgramCompileGroup::contains(tt::tt_metal::IDevice* device) {
     std::lock_guard lock(mutex_);
     return program_device_map_.contains(device);
+}
+
+void LaunchProgram(distributed::MeshDevice& mesh_device, Program&& program, bool wait_until_cores_done) {
+    distributed::MeshWorkload workload;
+    workload.add_program(distributed::MeshCoordinateRange(mesh_device.shape()), std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, wait_until_cores_done);
 }
 
 }  // namespace tt::tt_metal

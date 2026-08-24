@@ -570,3 +570,26 @@ def test_add_with_sub_devices(device, input_a_sharded, input_b_sharded, out_shar
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
     assert output_tensor.shape == shape
+
+
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_add_block_float_defaults_to_fpu(device, ttnn_dtype):
+    """Block-float operands have no SFPU add kernel; block-float add defaults to FPU."""
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.randn((128, 128), dtype=torch.bfloat16) * 100
+    torch_input_tensor_b = torch.randn((128, 128), dtype=torch.bfloat16) * 100
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    default = ttnn.to_torch(ttnn.add(input_tensor_a, input_tensor_b))
+    fast = ttnn.to_torch(
+        ttnn.add(
+            input_tensor_a,
+            input_tensor_b,
+            fast_and_approximate_mode=True,
+        )
+    )
+
+    assert torch.equal(default, fast)
