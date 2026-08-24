@@ -2604,6 +2604,52 @@ has a `PhysicalMcast` overload with the two semaphores, and `matmul_mcast.cpp` a
 core would join a row group for A and a column group for B, and the traffic term stops scaling
 with the core count.
 
+### Weight multicast: 814 -> 353us, and the ceiling is now bandwidth per read
+
+Each operand tile is read from DRAM ONCE and broadcast to the cores that share it: A along a
+grid ROW (those cores share an m-block), B down a COLUMN (they share an n-block). The traffic
+term stops depending on how many cores there are, which is what the N-split could not fix.
+
+**The library needed one addition.** Its multicast load read the operand as one contiguous
+block -- fine for the block-major layout `matmul_mcast.cpp` uses, useless for the blocked
+matmul, whose A is a k-slice of a row-major activation and whose B is a (k, n) tile of a wider
+matrix. So the handshake moved into an Fn form where `fn` runs on the SENDER only and fills
+its copy however it likes; the accessor form now delegates to it with a contiguous fill. A
+gathered operand is an ordinary block once it is in L1, and the broadcast does not care how
+the bytes got there -- at no extra traffic, since the built-in read issues one request per
+page too.
+
+**Measured, [512, 2048] @ [2048, 2048], HiFi2, natural layouts:**
+
+| cores | no multicast | with multicast |
+|---|---|---|
+| 16 | 814.1 us | **482.1 us** |
+| 32 | 940.0 us | 379.9 us |
+| 64 | 1359.3 us | **353.2 us** |
+
+It improves monotonically now, where without multicast it REVERSED past 16 cores. The whole
+arc for this shape: 2225us with M-split only, 814 after splitting N, 353 after multicast --
+**6.3x**, and the gap to ttnn goes from 6.9x to 3.0x.
+
+It also beats the block-major `matmul_mcast.cpp` at the same shape (353.2 against 364.5us)
+while needing no host-side rearrangement, which is the gather paying for itself.
+
+**The price is a strict mapping**, and it is worth stating: core (r, c) owns output block
+(r, c), so the grid is exactly mb x nb and each core holds one block. A multicast is
+COLLECTIVE -- every core in a group must make the same calls in the same order or the
+handshakes desynchronise -- which the flat unit range cannot promise, since `split_evenly`
+hands different cores different counts. It also caps nb at the grid width: nt=4 gives nb=16,
+wider than the 8-column device, and the program fails to build.
+
+**What is left is bandwidth per read, not traffic.** With multicast the traffic is A once plus
+B once, 5120 tiles or 10MB, and we move it in 353.2us -- 28.4GB/s. ttnn moves the same 10MB in
+118.6us, 84GB/s. So the remaining 3x is not extra data, it is that our reads are slower: the
+sender issues one request per page and BARRIERS before it can broadcast, with nothing else in
+flight, and the operand CBs hold exactly one block so it cannot read the next k-block while
+the current one is being broadcast and consumed. That is the prefetch-depth finding from the
+matmul k-block work, arrived at a third time and now the single thing standing between this
+and ttnn's number.
+
 ## Phase 11 -- Full block orchestration
 
 Host-side and kernel-loop work, not model gaps.

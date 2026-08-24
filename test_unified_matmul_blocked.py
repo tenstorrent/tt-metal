@@ -27,7 +27,23 @@ CB_A, CB_B, CB_OUT, CB_ACC = 0, 1, 16, 24
 TILE = 32
 
 
-def run(device, mtot, ktot, ntot, mt, kt, nt, cores=1, seed=0, fidelity=None, acc="l1", a=None, b=None):
+def run(
+    device,
+    mtot,
+    ktot,
+    ntot,
+    mt,
+    kt,
+    nt,
+    cores=1,
+    seed=0,
+    fidelity=None,
+    acc="l1",
+    a=None,
+    b=None,
+    mcast=False,
+    in1_thread=1,
+):
     """Extents and block widths all in TILES. a/b let a caller supply the operands."""
     assert mtot % mt == 0 and ktot % kt == 0 and ntot % nt == 0
     torch.manual_seed(seed)
@@ -55,10 +71,21 @@ def run(device, mtot, ktot, ntot, mt, kt, nt, cores=1, seed=0, fidelity=None, ac
     # The unit of work is one OUTPUT BLOCK, an (m, n) tile, indexed flat as m*nb + n. Both
     # dimensions are split across cores and neither needs a reduction -- different m or
     # different n write disjoint output. Splitting M alone made mt fight the core count.
-    nunits = (mtot // mt) * (ntot // nt)
-    ncores = min(cores, nunits)
-    core_ranges, core_list = core_block(ncores)
-    shares = split_evenly(nunits, ncores)
+    mb, nb = mtot // mt, ntot // nt
+    nunits = mb * nb
+    if mcast:
+        # Multicast needs the strict mapping: core (r, c) owns block (r, c), so the grid IS
+        # mb x nb and every core holds exactly one block. A broadcast is collective -- every
+        # core in a row or column must make the same calls in the same order -- which a
+        # split_evenly range cannot promise.
+        core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(nb - 1, mb - 1))])
+        core_list = [ttnn.CoreCoord(x, y) for y in range(mb) for x in range(nb)]
+        shares = [(0, 1)] * len(core_list)  # unused by the multicast path, but read
+        ncores = len(core_list)
+    else:
+        ncores = min(cores, nunits)
+        core_ranges, core_list = core_block(ncores)
+        shares = split_evenly(nunits, ncores)
 
     ct_args = [mt, ktot, ntot, kt, nt]
     for t in (ta, tb, tout):
@@ -79,12 +106,25 @@ def run(device, mtot, ktot, ntot, mt, kt, nt, cores=1, seed=0, fidelity=None, ac
         cbs=cbs,
         compile_time_args=ct_args,
         runtime_args=rt_args,
-        defines=[("MMB_ACC_DST", "1")] if acc == "dst" else None,
+        defines=(
+            ([("MMB_ACC_DST", "1")] if acc == "dst" else [])
+            + (
+                [
+                    ("MMB_MCAST", "1"),
+                    ("MMB_GRID_H", str(mb)),
+                    ("MMB_GRID_W", str(nb)),
+                    ("MMB_IN1_THREAD", str(in1_thread)),
+                ]
+                if mcast
+                else []
+            )
+        )
+        or None,
         **(fidelity or {}),
     )
     logger.info(
         f"blocked matmul [{mtot}x{ktot}]@[{ktot}x{ntot}]t  mt={mt} kt={kt} nt={nt} "
-        f"(mb={mtot // mt} kb={ktot // kt} nb={ntot // nt} = {nunits} blocks) cores={ncores}"
+        f"(mb={mb} kb={ktot // kt} nb={nb} = {nunits} blocks) cores={ncores}{' mcast' if mcast else ''}"
     )
     out = ttnn.generic_op([ta, tb, tout], program)
     for t in (ta, tb):
@@ -143,6 +183,25 @@ def main(argv=None):
             )
             if not ok:
                 failed.append(f"ffn-{name}")
+
+        # Multicast: each operand tile read from DRAM once and broadcast to the cores that
+        # share it -- A along a grid row (same m), B down a column (same n). The grid is
+        # exactly mb x nb, so these also check that the strict mapping lines up.
+        for mtot, ktot, ntot, mt, kt, nt in (
+            (4, 8, 8, 2, 8, 4),
+            (4, 8, 8, 1, 4, 2),
+            (8, 8, 16, 2, 8, 4),
+            (4, 8, 8, 4, 8, 8),  # 1x1 grid: the degenerate case, nobody to broadcast to
+        ):
+            got, want = run(device, mtot, ktot, ntot, mt, kt, nt, mcast=True)
+            v = pcc(got, want)
+            ok = v >= args.pcc
+            logger.info(
+                f"  mcast {mtot}x{ktot} @ {ktot}x{ntot} mt={mt} nt={nt} "
+                f"(grid {mtot // mt}x{ntot // nt}): pcc={v:.6f}  {'ok' if ok else 'FAIL'}"
+            )
+            if not ok:
+                failed.append(f"mcast-{mtot}-{ktot}-{ntot}-{mt}-{nt}")
 
         # Partitioned across cores.
         for ncores in (2, 4, 8):
