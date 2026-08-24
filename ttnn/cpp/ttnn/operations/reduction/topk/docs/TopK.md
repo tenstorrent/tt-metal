@@ -35,8 +35,8 @@ The operation returns both:
 - The dimension to select top K from must have at least 64 elements (min_dim_per_core)
 - Combined batch dimensions (W × H × D) must be a multiple of 32
 - Sharded memory configuration is not yet supported
-- Multi-core implementation only supports K ≤ 64 and requires uint16 indices
-- Multi-core implementation requires width ≥ 8192 (multi_core_min_width)
+- Multi-core implementation only supports K ≤ 64 (`multi_core_max_k`); index outputs may be uint16 or uint32/int32
+- Multi-core implementation requires a power-of-two width in [8192, 65535) (`multi_core_min_width`), **or**, for inputs with at most 2 tile rows (`multi_core_low_ht_max_tile_rows`), a power-of-two width in [1024, 65535) (`multi_core_low_ht_min_width`) — low-tile-row shapes leave the row-parallel single-core factory mostly idle, so they column-split instead (thresholds named in `topk_constants.hpp`, shared predicate `topk_multicore_structurally_eligible()` in `topk_utils.cpp`)
 
 ## Tensor Transformations
 
@@ -107,7 +107,7 @@ The TTNN TopK operation provides two execution strategies, each optimized for di
 | Strategy              | Description                                                                                     | Strengths                                                                            | Weaknesses                                                                                   | Typical Use Case                                |
 | --------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- | ----------------------------------------------- |
 | **Single Core**       | Each row is processed entirely on a single core using Bitonic Sort.                            | Simple, works for any tensor size, supports both uint16 and uint32 indices.         | Limited parallelism; all work for a row happens on one core.                                 | Default strategy for most cases.                |
-| **Multi Core**        | Work is split across multiple cores: local TopK on each core, then a final gather and TopK.    | **Highest parallelism**; exploits L1-to-L1 NoC communication; faster for large data. | Only supports K ≤ 64, uint16 indices only, requires width ≥ 8192, higher memory complexity. | Very wide tensors (width ≥ 8192) with small K. |
+| **Multi Core**        | Work is split across multiple cores: local TopK on each core, then a final gather and TopK.    | **Highest parallelism**; exploits L1-to-L1 NoC communication; faster for large data. | Only supports K ≤ 64, power-of-two width < 65535 that is ≥ 8192 (or ≥ 1024 with ≤ 2 tile rows), higher memory complexity. | Very wide tensors, or low-tile-row tensors ≥ 1024 wide, with small K. |
 
 ### Key Points:
 
@@ -122,8 +122,8 @@ The TTNN TopK operation provides two execution strategies, each optimized for di
   * Uses **internal core-to-core (L1-to-L1) communication** over the on-chip **Network-on-Chip (NoC)** for the gather phase.
   * However, its applicability is limited by:
     * **K ≤ 64** (one or two tiles)
-    * **Width ≥ 8192** (minimum for multi-core splitting)
-    * **uint16 indices only** (to fit in L1 memory constraints)
+    * **Power-of-two width < 65535, ≥ 8192** — or **≥ 1024 when the input has at most 2 tile rows** (the Ht-aware gate)
+    * Element addressing inside the bitonic network is 16-bit (width < 65535); the index *output* may be uint16 or uint32/int32
     * Sufficient **L1 memory** per core for local processing and gather phase
 
 ## Strategy Selection Logic
@@ -134,16 +134,26 @@ The TopK device operation automatically selects the appropriate strategy through
 
 All of the following conditions must be satisfied for multi-core execution:
 
-1. **Width Check**: Input dimension ≥ 8192 (`multi_core_min_width`)
-   - Ensures sufficient work to justify parallel execution overhead
+These are implemented by the shared predicate `topk_multicore_structurally_eligible()`
+(`topk_utils.cpp`, thresholds in `topk_constants.hpp`), used identically by
+`select_program_factory()`, `validate_on_program_cache_miss()`, and the composite
+router in `topk.cpp`:
 
-2. **K Constraint**: K ≤ 64
+1. **Width Check**: Input dimension ≥ 8192 (`multi_core_min_width`), OR the input has
+   at most 2 tile rows (`multi_core_low_ht_max_tile_rows`) and the dimension is
+   ≥ 1024 (`multi_core_low_ht_min_width`)
+   - Ensures sufficient work to justify parallel execution overhead
+   - The low-tile-row arm exists because the single-core factory parallelizes across
+     tile rows: with 1–2 tile rows most of the grid idles, so column-splitting wins
+     from width 1024 up (measured ~4x on 32×2048, k=32)
+
+2. **K Constraint**: K ≤ 64 (`multi_core_max_k`)
    - Multi-core algorithm has optimized paths for small K values
    - Larger K values may not benefit from parallel execution
 
-3. **Index Type**: Input dimension < 65536
-   - Multi-core implementation currently only supports UInt16 indices
-   - Dimensions ≥ 65536 force single-core execution with UInt32 indices
+3. **Width Structure**: Input dimension < 65535 and a power of two
+   - The bitonic network addresses elements with 16-bit indices and requires a
+     power-of-two width; the index *output* may still be uint16 or uint32/int32
 
 4. **Memory and Core Feasibility**: Pass `verify_multi_core_cost()` checks
    - Work must be divisible across available cores without remainder

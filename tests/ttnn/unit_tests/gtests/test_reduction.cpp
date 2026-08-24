@@ -788,6 +788,20 @@ TEST_F(ReductionSmoke, TopkMultiCoreRows64) {
 // splits are the configs the model was fitted against on that silicon.
 // If a coefficient or the search order changes, these assertions catch it
 // even though every numerical topk test stays green.
+//
+// Also locked here:
+// - num_cores is asserted as width / split (the only value consistent with a
+//   returned config), so a re-fit of the cost constants edits one number per row.
+// - The core-rectangle orientation (selected_x/selected_y): the arrangement
+//   search takes the WIDEST (smallest-y) factorization, which is what always
+//   shipped (the old descending double-loop's break only exited the inner
+//   x-loop) and what the cost constants were fitted against on silicon.
+// - The Ht-gate domain (W in [1024, 8192)) added by the low-tile-row
+//   eligibility change, including W=1024 on the 13x10 grid -- the cell where
+//   the unclamped start_split_size used to truncate to 0 and TT_FATAL.
+// - Non-tile-multiple K (50): Wt_final rounds K UP to the tile boundary
+//   (ceil(k/32) tiles per core, matching what the writer kernels physically
+//   gather), so k=50 must select the same config as k=64.
 TEST(TopkCoreConfigModel, SelectsFittedMakespanMinimum) {
     constexpr uint32_t l1_size = 1536 * 1024;                                       // BH L1 per core
     constexpr uint32_t value_tile_size = tt::tile_size(tt::DataFormat::Float16_b);  // 2048
@@ -799,24 +813,39 @@ TEST(TopkCoreConfigModel, SelectsFittedMakespanMinimum) {
         uint32_t width;
         uint32_t k;
         uint16_t expected_split;
-        uint16_t expected_cores;
+        uint16_t expected_x;
+        uint16_t expected_y;
     };
     // Expected values: minimum of 7 * Wt_local + 2 * Wt_final over all valid
     // power-of-two splits. The old first-valid picks were 128/64 (W=8192) and
     // 512/64 (W=32768) -- maximum cores, maximum serial final-stage work.
-    const std::array<Case, 4> cases{{
-        {8192, 64, 512, 16},
-        {8192, 50, 256, 32},
-        {8192, 32, 256, 32},
-        {32768, 64, 1024, 32},
+    const std::array<Case, 7> cases{{
+        {8192, 64, 512, 8, 2},
+        {8192, 50, 512, 8, 2},  // == the k=64 row: Wt_final rounds k up to the tile boundary
+        {8192, 32, 256, 8, 4},
+        {32768, 64, 1024, 8, 4},
+        // Ht-gate domain (low-tile-row shapes below multi_core_min_width):
+        {1024, 32, 128, 8, 1},  // formerly crashed: 32 tiles / lp2(96 cores) truncated the start split to 0
+        {2048, 32, 128, 8, 2},
+        {4096, 32, 256, 8, 2},
     }};
     for (const auto& c : cases) {
         const auto config = ttnn::prim::find_topk_core_config(
             c.width, min_dim, c.width / 2, c.k, core_range, l1_size, value_tile_size, index_tile_size);
         ASSERT_TRUE(config.has_value()) << "W=" << c.width << " k=" << c.k;
         EXPECT_EQ(config->split_size, c.expected_split) << "W=" << c.width << " k=" << c.k;
-        EXPECT_EQ(config->num_cores, c.expected_cores) << "W=" << c.width << " k=" << c.k;
-        EXPECT_EQ(config->rem, 0u) << "W=" << c.width << " k=" << c.k;
+        EXPECT_EQ(config->num_cores, c.width / c.expected_split) << "W=" << c.width << " k=" << c.k;
+        EXPECT_EQ(config->selected_x, c.expected_x) << "W=" << c.width << " k=" << c.k;
+        EXPECT_EQ(config->selected_y, c.expected_y) << "W=" << c.width << " k=" << c.k;
+    }
+
+    // Grids that cannot host the multi-core layout (local rectangle + final-core
+    // row) must return nullopt so the caller falls back to single-core -- these
+    // used to crash via unsigned underflow (single row) or a TT_FATAL (two rows).
+    for (const auto& small_range : {tt::tt_metal::CoreRange({0, 0}, {7, 0}), tt::tt_metal::CoreRange({0, 0}, {7, 1})}) {
+        const auto config = ttnn::prim::find_topk_core_config(
+            2048, min_dim, 1024, 32, small_range, l1_size, value_tile_size, index_tile_size);
+        EXPECT_FALSE(config.has_value()) << "range=" << small_range.str();
     }
 }
 

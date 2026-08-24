@@ -20,6 +20,7 @@
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_constants.hpp"
+#include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_route_prep_device_operation.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_route_finish_device_operation.hpp"
 
@@ -296,19 +297,20 @@ bool should_route_to_topk_large_indices(
     }
     if (k <= large_k_route_min_k_exclusive) {
         const uint32_t padded_width = transformed_tensor.padded_shape()[-1];
-        // Wide arm: route only cells the device op's multi-core bitonic
-        // cannot take (mirrors select_program_factory requirements #1-#2,
-        // topk_device_operation.cpp:66-72 — padded width must be < 65535 and
-        // a power of two), where stock otherwise falls to the linear
-        // single-core factory. Cells that fail only verify_multi_core_cost
-        // stay on the stock path (unchanged, conservative).
-        const bool is_pow2 = padded_width != 0 && (padded_width & (padded_width - 1)) == 0;
-        // Structurally single-core in stock: width >= 65535, non-pow2, OR pow2
-        // below the bitonic's multi_core_min_width floor (8192) — the lone
-        // pow2 cell in [4096, 8192) otherwise stays on the linear factory.
-        const bool multicore_structurally_ineligible = padded_width >= std::numeric_limits<uint16_t>::max() ||
-                                                       !is_pow2 ||
-                                                       padded_width < ttnn::prim::constants::multi_core_min_width;
+        // Wide arm: route only cells the device op's multi-core bitonic cannot
+        // take, where stock otherwise falls to the linear single-core factory.
+        // Structural eligibility (requirements #1-#3: width gate including the
+        // Ht-aware low-tile-row relaxation, < 65535, power of two, K limit) is
+        // the SHARED ttnn::prim::topk_multicore_structurally_eligible helper —
+        // the same predicate select_program_factory evaluates — so this router
+        // cannot drift from the device op's decision. Cells that fail only
+        // verify_multi_core_cost (grid/L1 feasibility) stay on the stock path
+        // (unchanged, conservative).
+        const uint32_t tile_height = transformed_tensor.tensor_spec().tile().get_height();
+        const uint32_t num_tile_rows = transformed_tensor.padded_shape().volume() /
+                                       std::max<uint32_t>(padded_width, 1) / std::max<uint32_t>(tile_height, 1);
+        const bool multicore_structurally_ineligible =
+            !ttnn::prim::topk_multicore_structurally_eligible(padded_width, num_tile_rows, k);
         const bool wide_arm = multicore_structurally_ineligible && padded_width >= small_k_route_min_padded_width;
         if (!wide_arm) {
             return false;
