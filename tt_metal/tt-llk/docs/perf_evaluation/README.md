@@ -835,31 +835,65 @@ Every one of those touches the DEST-to-L1 path: the sync mode that lets math and
 pack overlap, the accumulation width that changes DEST layout, and the output
 format the packer must convert to on the way out.
 
-#### The leading hypothesis
+#### A hypothesis we tested and discarded
 
-> **The math-to-pack handoff over DEST resolves two different ways.** When the
-> packer arrives at the `MATH_PACK` wait it either finds the half already
-> released and proceeds, or misses that window and waits for the next one. The
-> penalty is one arbitration quantum, which is why the measurement lands on one
-> of two discrete values rather than smearing.
+The obvious reading of the format association is **slack**: if the packer's work
+is cheap it finishes early and spends its time waiting at the `MATH_PACK`
+handshake, and waiting is where a race can happen. If its work is expensive it is
+the bottleneck, math is always ready first, and there is nothing to arbitrate.
 
-This is consistent with everything observed, and nothing observed contradicts it:
+That predicts flip rate should run *opposite* to how long the packer takes.
+Measuring both, per output format, on Wormhole `PACK_ISOLATE`:
 
-- Only pack-dependent measurements move (§8.9).
-- The outcome is discrete and two-valued, not analogue (§8.4).
-- It is symmetric — the odd run is as often faster as slower — because the race
-  can fall either way, and neither outcome is "correct".
-- It is independent per execution, so it survives serial replay on a fixed core
-  with a fixed order (§8.8).
-- No sweep parameter determines it, because a race is decided by timing and not
-  by configuration (§8.5) — while parameters that widen the race window, such as
-  `SyncHalf`, do raise the rate.
-- The alternate values repeat across different configurations, because the
-  quantum is a property of the handshake rather than of the workload (§8.4).
+| output format | points | flip rate | median cycles per tile |
+|---|--:|--:|--:|
+| `Float16_b` | 9,332 | **6.27%** | 19.0 |
+| `Float16` | 6,078 | 1.61% | 22.0 |
+| `Float32` | 8,944 | 0.50% | 23.0 |
+| `Bfp8_b` | 8,702 | **0.03%** | **17.9** |
 
-It remains a hypothesis. It has not been confirmed against hardware counters, and
-an alternative — that the packer's format-conversion path itself takes one of two
-durations — would fit the format association at least as well.
+(`Int32` and `UInt32` are omitted: 80 and 2 points, so their rates are one
+measurement and none.)
+
+**`Bfp8_b` refutes it.** It is the *cheapest* format for the packer — 17.9 cycles
+per tile, less than `Float16_b` — and it is essentially immune at 0.03% against
+6.27%. Under the slack hypothesis it should have been the worst case. It is the
+best by two hundred times.
+
+The three standard float formats do order correctly among themselves, but the
+duration differences are far too small to carry the rate differences: `Float32`
+costs only 21% more per tile than `Float16_b` and flips **12 times less often**.
+A gradual "more slack, more races" relationship does not produce that shape.
+
+#### What the format data does say
+
+The clean split is not fast against slow. It is **which pack path is used**.
+
+`Bfp8_b` is block floating point: the packer must derive a shared exponent across
+each block, which is separate logic and a separate data path from packing plain
+floats. It is the one format that does not go through the standard
+floating-point pack path, and it is the one format that does not exhibit the
+problem.
+
+> **The instability lives in the standard floating-point pack path. The
+> block-float path does not have it.**
+
+That is narrower and more actionable than "output format matters", and it is the
+statement to hand to whoever owns the packer.
+
+#### What is still open on the mechanism
+
+Within the standard path, something makes the completion time land on one of two
+values. The `MATH_PACK` handshake is still the most plausible site — it is the
+only place the packer waits, `SyncHalf` raises the rate 4x over `SyncFull`, and a
+handshake naturally produces a discrete quantum rather than a smear. But the
+format evidence no longer supports the specific "packer has slack, so it races"
+story, and the rate differences between `Float16_b`, `Float16` and `Float32` are
+too abrupt to be explained by timing margin alone.
+
+Hardware counters are now the only way forward. Timing cannot separate a packer
+that is *waiting* from one that is *working*, and that distinction is the whole
+question.
 
 #### What it costs
 
@@ -887,10 +921,15 @@ Three experiments, in increasing cost:
    `run_count`, which re-runs the same ELF on the same core inside one pytest
    item. With `run_count > 1` the report gains `std(...)` columns. A non-zero
    `std` places the cause below anything the test harness does.
-3. **Which counter is bimodal?** The `TDMA_PACK` counter bank measures packer
-   busy, dest-read availability and math availability. If dest-read availability
-   splits in the same ratio as the timing, the handshake hypothesis is confirmed;
-   if packer-busy cycles split instead, it is the conversion path.
+3. **Which counter is bimodal, and does it differ by pack path?** The
+   `TDMA_PACK` counter bank measures packer busy, dest-read availability and math
+   availability. Two comparisons matter. Within one configuration: if dest-read
+   availability splits in the same ratio as the timing, the packer is *waiting*
+   and the handshake is the site; if packer-busy cycles split instead, it is
+   doing more work and the conversion path is. Across formats: hold everything
+   constant except output format and compare `Float16_b` against `Bfp8_b`, the
+   affected path against the immune one. Whatever differs between those two is
+   where to look.
 
 Run these against `PACK_ISOLATE` on `perf_matmul` with `Float16_b` output, where
 the rate is 13% rather than 0.14%.
