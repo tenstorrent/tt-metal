@@ -666,9 +666,14 @@ def _resolve_model_path(variant_name: str) -> Path:
     return get_or_download_model(v, layer_idx=0, num_layers=v.num_layers_to_download)
 
 
-@lru_cache(maxsize=None)
 def _normalize_config(cfg):
     """Per-variant fixups every config must get, whichever path produced it.
+
+    NOT lru_cache'd, and it cannot be: a transformers ``PretrainedConfig`` defines ``__eq__``, which
+    in Python 3 sets ``__hash__ = None``, so every real config is unhashable and the decorator raised
+    ``TypeError: unhashable type: 'DeepseekV3Config'`` before the body ever ran. Nothing was lost by
+    removing it -- ``_resolve_config_only`` is already cached on a hashable variant name, and on the
+    ``_resolve_hf_config`` path the cost is ``AutoConfig.from_pretrained``, not these fixups.
 
     There are two independent config paths (`_resolve_hf_config` and `_resolve_config_only`) and they
     used to normalize differently, so the same checkpoint yielded two different configs depending on
