@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import os
-
 import torch
 from tqdm import tqdm
 
@@ -142,13 +140,11 @@ class Transformer(LightweightModule):
             TG=args.is_galaxy,
         )
 
-        # n150 decode sweep: lm_head BFP8/HiFi2 was fastest with PCC>=0.99 vs torch.
-        # KEEP only if EN/JA gates pass. Prefetcher / TG keep the caller's dtype.
+        # n150 decode sweep: lm_head BFP8/HiFi2 was fastest with PCC>=0.99 vs torch, EN/JA
+        # byte-identical. Baked in. Prefetcher / TG keep the caller's dtype.
         lm_dtype = dtype
         if prefetcher is None and not args.is_galaxy and args.num_devices == 1:
             lm_dtype = ttnn.bfloat8_b
-        if os.environ.get("QWEN3ASR_LOSSLESS") == "1":  # measurement-only JA baseline
-            lm_dtype = dtype
         self.lm_head = LMHead(
             args=args,
             mesh_device=mesh_device,

@@ -12,7 +12,6 @@ pattern, minus vision MRoPE (Qwen3-ASR uses plain 1D RoPE).
 
 prefill (embeds) -> greedy decode loop (token ids) -> text.
 """
-import os
 import time
 
 import torch
@@ -21,19 +20,17 @@ import ttnn
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.model import Transformer
 
-# Host argmax was the PR default (wide vocab D2H was cheaper than ttnn.argmax on P150).
-# Set QWEN3ASR_ONDEVICE_ARGMAX=0 to restore that path.
-ONDEVICE_ARGMAX = os.environ.get("QWEN3ASR_ONDEVICE_ARGMAX", "1") == "1"
-# Whisper-style decode trace: capture one AR step, replay it for every later token.
-# Set QWEN3ASR_DECODE_TRACE=0 to keep the eager loop.
-DECODE_TRACE = os.environ.get("QWEN3ASR_DECODE_TRACE", "1") == "1"
-# In-graph token + pos: argmax copies into the decode token buffer and plus_one
-# advances current_pos / RoPE idxs inside the captured graph (no per-step H2D).
-# Set QWEN3ASR_INGRAPH_DECODE=0 to restore host restage every AR step.
-INGRAPH_DECODE = os.environ.get("QWEN3ASR_INGRAPH_DECODE", "1") == "1"
-# Overlap blocking EOS D2H with the next AR step (ViT/Whisper 2CQ). Requires
-# open_device(..., num_command_queues=2). Set QWEN3ASR_2CQ=0 to disable.
-USE_2CQ = os.environ.get("QWEN3ASR_2CQ", "1") == "1"
+# n150 decode fast path — all baked in (no flags). Together: 17 -> ~68 tok/s.
+#   ONDEVICE_ARGMAX: argmax on device, only the token id is read back.
+#   DECODE_TRACE:    capture one AR step, replay it for every later token.
+#   INGRAPH_DECODE:  argmax writes the token buffer and plus_one advances pos/RoPE
+#                    idxs inside the captured graph (no per-step H2D).
+#   USE_2CQ:         overlap the blocking EOS D2H with the next AR step. Requires the
+#                    device opened with num_command_queues=2 (see demo open_device).
+ONDEVICE_ARGMAX = True
+DECODE_TRACE = True
+INGRAPH_DECODE = True
+USE_2CQ = True
 
 
 class Qwen3ASRDecoder(Transformer):
@@ -107,9 +104,9 @@ class Qwen3ASRDecoder(Transformer):
 
     def _argmax_from_untilized(self, tt_logits, seq_idx=0):
         """Slice valid vocab and argmax on device. Returns the idx tensor (not a python int)."""
+        vocab = int(self.vocab_size)
         if tt_logits.layout != ttnn.ROW_MAJOR_LAYOUT:
             tt_logits = ttnn.untilize(tt_logits, use_multicore=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        vocab = int(self.vocab_size)
         row = ttnn.slice(tt_logits, [0, 0, seq_idx, 0], [1, 1, seq_idx + 1, vocab])
         idx = ttnn.argmax(row, dim=-1, keepdim=False)
         return idx, row, tt_logits

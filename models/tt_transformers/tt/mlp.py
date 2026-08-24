@@ -113,7 +113,7 @@ class MLP(LightweightModule):
             w13_t = torch.cat([w1_t, w3_t], dim=-1).unsqueeze(0).unsqueeze(0)
             self.w13 = ttnn.as_tensor(
                 w13_t,
-                dtype=ff1_3_dtype,
+                dtype=self.ff1_3_dtype,
                 device=self.mesh_device,
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=w1_dims, mesh_shape=args.cluster_shape),
                 layout=ttnn.TILE_LAYOUT,

@@ -31,8 +31,27 @@ LN_EPS = 1e-5
 HIFI4 = ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False)
 
 
+def _mesh_mapper(device):
+    n = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+    return ttnn.ReplicateTensorToMesh(device) if n > 1 else None
+
+
+def _from_torch(t, device, **kwargs):
+    mapper = _mesh_mapper(device)
+    if mapper is not None:
+        kwargs.setdefault("mesh_mapper", mapper)
+    return ttnn.from_torch(t, device=device, **kwargs)
+
+
+def _to_torch(t):
+    shards = ttnn.get_device_tensors(t)
+    if len(shards) > 1:
+        return ttnn.to_torch(shards[0])
+    return ttnn.to_torch(t)
+
+
 def _to_dev(t, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
-    return ttnn.from_torch(t, dtype=dtype, layout=layout, device=device)
+    return _from_torch(t, device, dtype=dtype, layout=layout)
 
 
 N_WINDOW = 50
@@ -71,7 +90,7 @@ def conv_frontend_tt(mel, conv_w, conv_out_w, conv_out_b, device):
     # NHWC flattened -> (1,1,n*H*W, C=1)
     H, W = nm, chunk
     xh = x.permute(0, 2, 3, 1).reshape(1, 1, n * H * W, 1).contiguous()
-    xt = ttnn.from_torch(xh, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    xt = _from_torch(xh, device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     # config_tensors_in_dram: keep conv's persistent config tensors off the small (32-64 KB)
     # L1_SMALL region, which otherwise fills across requests -> bank_manager OOM.
     # deallocate_activation: free the conv input activation inside the op.
@@ -105,16 +124,18 @@ def conv_frontend_tt(mel, conv_w, conv_out_w, conv_out_b, device):
         xt = ttnn.gelu(conv_out)  # (1,1,n*H*W,480) NHWC
         ttnn.deallocate(conv_out)
     C = DS_HIDDEN
-    # NHWC (n,H,W,C) -> reference wants (n, W, C, H) flattened to (n, W, C*H)
-    xt_t = ttnn.to_torch(xt).reshape(n, H, W, C)
+    # NHWC (n,H,W,C) -> (n, W, C, H) flattened to (n, W, C*H), on device (Whisper-style, no D2H).
+    xt = ttnn.to_layout(xt, ttnn.ROW_MAJOR_LAYOUT)
+    xt = ttnn.reshape(xt, (n, H, W, C))
+    xt = ttnn.permute(xt, (0, 2, 3, 1))  # (n, W, C, H)
+    xt = ttnn.reshape(xt, (n, W, C * H))  # (n,13,7680)
+    xt2 = ttnn.to_layout(xt, ttnn.TILE_LAYOUT)
     ttnn.deallocate(xt)
-    xt_t = xt_t.permute(0, 2, 3, 1).reshape(n, W, C * H).contiguous()  # (n,13,7680)
-    xt2 = ttnn.from_torch(xt_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    out_d = ttnn.linear(xt2, conv_out_w, compute_kernel_config=HIFI4)  # (n,13,1024), no bias
+    out_d = ttnn.linear(xt2, conv_out_w, compute_kernel_config=HIFI4)  # (n,13,1024)
     ttnn.deallocate(xt2)
-    out = ttnn.to_torch(out_d).reshape(-1, D_MODEL).float()
+    out_rm = ttnn.to_layout(out_d, ttnn.ROW_MAJOR_LAYOUT)
     ttnn.deallocate(out_d)
-    return out
+    return ttnn.reshape(out_rm, (n, W, D_MODEL))
 
 
 def preprocess_weights(w, device):
@@ -157,15 +178,11 @@ def preprocess_weights(w, device):
 
 
 _PE_CACHE = {}
+_PE_TT = {}
 
 
-def encode_mel(mel, params, device):
-    """Full-TT encoder from mel (num_mel, T): TT conv2d frontend -> +PE -> transformer
-    -> projector. Returns audio embeds (S, output_dim) as torch."""
-    conv = conv_frontend_tt(mel, params["conv_w"], params["conv_out_w"], None, device)  # (S,1024) torch
-    per_chunk = 13
+def _sinusoid_pe(per_chunk=13):
     if per_chunk not in _PE_CACHE:
-        # sinusoidal PE[:13] (matches reference.sinusoids)
         import math
 
         ch = D_MODEL
@@ -173,10 +190,25 @@ def encode_mel(mel, params, device):
         inv = torch.exp(-log_inc * torch.arange(ch // 2).float())
         t = torch.arange(1500)[:, None].float() * inv[None, :]
         _PE_CACHE[per_chunk] = torch.cat([torch.sin(t), torch.cos(t)], 1)[:per_chunk]
-    pe = _PE_CACHE[per_chunk]
-    n = conv.shape[0] // per_chunk
-    x_host = (conv.reshape(n, per_chunk, D_MODEL) + pe.unsqueeze(0)).reshape(-1, D_MODEL)
-    return encode(x_host, params, device)
+    return _PE_CACHE[per_chunk]
+
+
+def encode_mel(mel, params, device):
+    """Full-TT encoder from mel (num_mel, T): TT conv2d frontend -> +PE -> transformer
+    -> projector. Returns audio embeds (S, output_dim) as torch."""
+    conv_d = conv_frontend_tt(mel, params["conv_w"], params["conv_out_w"], None, device)  # (n,13,1024) device RM
+    n = int(conv_d.shape[0])
+    per_chunk = 13
+    pe_key = id(device)
+    if pe_key not in _PE_TT:
+        pe = _sinusoid_pe(per_chunk).view(1, per_chunk, D_MODEL)
+        _PE_TT[pe_key] = _from_torch(pe, device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    x = ttnn.add(conv_d, _PE_TT[pe_key])
+    ttnn.deallocate(conv_d)
+    S = n * per_chunk
+    x = ttnn.reshape(x, (1, 1, S, D_MODEL))
+    x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+    return encode(x, params, device, S=S)
 
 
 def _layer(x, lp, device):
@@ -237,17 +269,22 @@ def _layer(x, lp, device):
     return x
 
 
-def encode(x_host, params, device):
-    """x_host: (S, D_MODEL) torch tensor = conv frontend output WITH positional embedding
-    already added (done on host, see reference.conv_frontend + sinusoids). Returns (S, output_dim) torch."""
-    S = x_host.shape[0]
-    x = ttnn.from_torch(
-        x_host.unsqueeze(0).unsqueeze(0),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )  # (1,1,S,D)
+def encode(x_in, params, device, S=None):
+    """x_in: (S, D_MODEL) torch, or a (1,1,S,D) device tensor with PE already added.
+    Returns (S, output_dim) torch."""
+    if isinstance(x_in, ttnn.Tensor):
+        x = x_in
+        if S is None:
+            S = int(x.shape[-2])
+    else:
+        S = x_in.shape[0] if S is None else S
+        x = _from_torch(
+            x_in.unsqueeze(0).unsqueeze(0),
+            device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # (1,1,S,D)
     for lp in params["layers"]:
         x = _layer(x, lp, device)
     x = ttnn.layer_norm(
@@ -258,6 +295,6 @@ def encode(x_host, params, device):
         x, params["proj1_w"], bias=params["proj1_b"], activation="gelu", core_grid=core, compute_kernel_config=HIFI4
     )
     x = ttnn.linear(x, params["proj2_w"], bias=params["proj2_b"], core_grid=core, compute_kernel_config=HIFI4)
-    out = ttnn.to_torch(x).reshape(-1, OUTPUT_DIM)[:S].float()
+    out = _to_torch(x).reshape(-1, OUTPUT_DIM)[:S].float()
     ttnn.deallocate(x)
     return out
