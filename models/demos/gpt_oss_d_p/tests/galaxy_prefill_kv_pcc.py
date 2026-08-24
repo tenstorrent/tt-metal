@@ -151,7 +151,7 @@ def main():
             num_layers=num_layers,
             max_seq_len=total,
             mesh_shape=(ROWS, COLS),
-            chunk_size=chunk,
+            default_chunk_size=chunk,
             num_users=1,
             expert_weight_dtype=expert_dtype,
             cache_dtype=kv_cache_dtype,

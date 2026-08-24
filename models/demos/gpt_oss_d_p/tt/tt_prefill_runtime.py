@@ -48,12 +48,14 @@ class TtPrefillRuntimeConfig:
     num_layers: int  # layers built/cached by this runtime (== model total for single-rank)
     max_seq_len: int  # per-user KV-cache length in tokens; must be a multiple of chunk_size
     mesh_shape: tuple = (4, 8)  # (SP rows, TP cols) on the Blackhole galaxy
-    chunk_size: int = 5120  # DEFAULT tokens per prefill_chunk() call; one-shot sets this == max_seq_len
+    default_chunk_size: int = (
+        5120  # tokens per prefill_chunk() call unless the call overrides; one-shot sets == max_seq_len
+    )
     # Variable chunk length: additional chunk sizes to support alongside `chunk_size`. Each supported
     # size gets its own indexed rope (the block-cyclic period is chunk-size-specific); the MoE buffers
     # are built at the LARGEST supported size (smaller chunks under-fill them). Lets a short request run
     # one small chunk (e.g. 1024) instead of padding up to a large `chunk_size` (~10x less compute).
-    extra_chunk_sizes: tuple = ()
+    additional_chunk_sizes: tuple = ()  # semantically a set; tuple for dataclass-default ergonomics
     num_users: int = 1  # independent cache slots (user-major batch)
     sp_axis: int = 0
     tp_axis: int = 1
@@ -92,9 +94,9 @@ class TtPrefillRuntime:
         self.config = config
 
         # Supported chunk sizes (variable chunk length), largest first. `chunk_size` is the default;
-        # `extra_chunk_sizes` add more. MoE + max_seq_len are sized at the largest. max_seq_len must be a
+        # `additional_chunk_sizes` add more. MoE + max_seq_len are sized at the largest. max_seq_len must be a
         # multiple of every supported size so each size's block-cyclic rope tiles the cache cleanly.
-        self.chunk_sizes = tuple(sorted({config.chunk_size, *config.extra_chunk_sizes}, reverse=True))
+        self.chunk_sizes = tuple(sorted({config.default_chunk_size, *config.additional_chunk_sizes}, reverse=True))
         self.max_chunk_size = self.chunk_sizes[0]
         for cs in self.chunk_sizes:
             assert config.max_seq_len % cs == 0, (
@@ -204,7 +206,7 @@ class TtPrefillRuntime:
         one code path; ``prefill_chunk`` embeds on device. On a non-first pipeline rank the input is
         already a hidden-state activation (D2D) — return a placeholder of the right spec for warm-up.
         """
-        chunk_size = chunk_size if chunk_size is not None else self.config.chunk_size
+        chunk_size = chunk_size if chunk_size is not None else self.config.default_chunk_size
         assert chunk_size in self.rope_indexed, f"chunk_size={chunk_size} not in supported {tuple(self.rope_indexed)}"
         sp = self.config.sp_factor
         s_local = chunk_size // sp
@@ -315,7 +317,7 @@ class TtPrefillRuntime:
                 "run with PREFILL_ENABLE_LAYER_ACK=0 or wire the D2H ack into this runtime."
             )
         assert self.model_built, "build the model before prefill_chunk()"
-        chunk_size = chunk_size if chunk_size is not None else self.config.chunk_size
+        chunk_size = chunk_size if chunk_size is not None else self.config.default_chunk_size
         assert chunk_size in self.rope_indexed, f"chunk_size={chunk_size} not in supported {tuple(self.rope_indexed)}"
         kv = self._resolve_kv(kv_caches)
         assert 0 <= slot_id < self.config.num_users, f"slot_id {slot_id} out of range [0, {self.config.num_users})"
@@ -435,7 +437,7 @@ class TtPrefillRuntime:
         nkv = self.hf_config.num_key_value_heads
         slot = slot_id * self.config.num_layers + layer_idx
         # shard-row -> natural global position (inverse of the update_padded_kv_cache writer).
-        p = blockcyclic_positions(sp, self.config.chunk_size, self.config.max_seq_len)
+        p = blockcyclic_positions(sp, self.config.default_chunk_size, self.config.max_seq_len)
 
         def gather(cache_tensor, col):
             dts = ttnn.get_device_tensors(cache_tensor)
@@ -469,7 +471,7 @@ class TtPrefillRuntime:
 
         sp = self.config.mesh_shape[0]
         n_tokens = dev_k.shape[2]
-        chunk_local = self.config.chunk_size // sp  # SP-rank contiguous block width (one-shot)
+        chunk_local = self.config.default_chunk_size // sp  # SP-rank contiguous block width (one-shot)
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         torch.save(
@@ -534,12 +536,12 @@ class TtPrefillRuntime:
         trace_dir = resolve_trace_dir(raw_trace)
         token_ids = list(json.load(open(Path(trace_dir) / "metadata.json"))["token_ids"])
         # Only score tokens this run filled (matches MiniMax / avoids comparing past NCHUNKS*chunk_size).
-        n_tokens = min(len(token_ids), n_chunks * self.config.chunk_size)
+        n_tokens = min(len(token_ids), n_chunks * self.config.default_chunk_size)
         if real_len is not None:
             n_tokens = min(n_tokens, int(real_len))
         assert (
             n_tokens > 0
-        ), f"kv_cache_pcc_check: n_tokens=0 (n_chunks={n_chunks}, chunk_size={self.config.chunk_size})"
+        ), f"kv_cache_pcc_check: n_tokens=0 (n_chunks={n_chunks}, chunk_size={self.config.default_chunk_size})"
 
         head_dim = self.hf_config.head_dim
         rotary_dim = getattr(self.hf_config, "rotary_dim", head_dim)
