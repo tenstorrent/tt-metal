@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <array>
+#include <gmock/gmock.h>
 #include <cstdint>
 #include <iostream>
 #include <optional>
@@ -13,6 +14,7 @@
 #include "ttnn/device.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 #include "ttnn/operations/conv/conv_types.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -38,6 +40,45 @@ struct Conv2DParam {
 };
 
 class Conv2DFixture : public ::testing::Test, public testing::WithParamInterface<Conv2DParam> {};
+
+TEST(Conv2DMemoryChecks, AcceptsMatchingRealizedDFBAndAllocatorDelta) {
+    EXPECT_NO_THROW(ttnn::prim::validate_conv2d_realized_dfb_size(4096, 4096));
+    EXPECT_NO_THROW(ttnn::prim::validate_conv2d_allocator_delta(1024, 3072, 2048));
+}
+
+TEST(Conv2DMemoryChecks, RejectsMismatchedRealizedDFBSize) {
+    EXPECT_THAT(
+        [] { ttnn::prim::validate_conv2d_realized_dfb_size(4096, 2048); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("does not match realized size")));
+}
+
+TEST(Conv2DMemoryChecks, RejectsMismatchedAllocatorDelta) {
+    EXPECT_THAT(
+        [] { ttnn::prim::validate_conv2d_allocator_delta(1024, 2048, 2048); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("L1 Allocation Pre Op")));
+}
+
+TEST(Conv2DMemoryChecks, AllowsNoDispatchZeroAllocatorState) {
+    EXPECT_NO_THROW(ttnn::prim::validate_conv2d_allocator_delta(1024, 0, 2048));
+}
+
+TEST(Conv2DComputeConfigCompatibility, Gen1PreservesLegacyForwardedFieldsAndDefaults) {
+    const ComputeKernelConfig requested{
+        .math_fidelity = MathFidelity::LoFi,
+        .math_approx_mode = true,
+        .fp32_dest_acc_en = true,
+        .dst_full_sync_en = true,
+    };
+
+    const auto hardware = ttnn::prim::make_legacy_conv2d_compute_hardware_config(requested);
+    const auto& gen1 = std::get<tt::tt_metal::experimental::ComputeGen1Config>(hardware);
+    EXPECT_EQ(gen1.fpu_math_fidelity, MathFidelity::LoFi);
+    EXPECT_TRUE(gen1.enable_32_bit_dest);
+    EXPECT_EQ(gen1.sfpu_precision_mode, tt::tt_metal::Precision::Precise);
+    EXPECT_EQ(gen1.bfp_pack_precision_mode, tt::tt_metal::Precision::Approximate);
+    EXPECT_TRUE(gen1.double_buffer_dest);
+    EXPECT_TRUE(gen1.unpack_modes.empty());
+}
 
 /*
     Reference implementation of Conv2D

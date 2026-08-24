@@ -9,17 +9,25 @@
 
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 
-#include "tt-metalium/buffer.hpp"
-#include "tt-metalium/circular_buffer_config.hpp"
-#include "tt-metalium/program_descriptors.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp"
+#include "tt-metalium/experimental/metal2_host_api/program_spec.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 
-// Invalid value for cb id is 32, number greater than the maximum number of index circular buffer can have.
-constexpr static uint32_t kInvalidCBIndex = 32;
+// Preserve the legacy Conv2D ProgramDescriptor contract while lowering to Metalium 2.0: only math
+// fidelity and FP32 destination accumulation were forwarded; all other hardware knobs kept defaults.
+tt::tt_metal::experimental::ComputeHardwareConfig make_legacy_conv2d_compute_hardware_config(
+    const ComputeKernelConfig& compute_kernel_config);
+
+// Complete a legacy Gen1 CB topology using the supported fictional-endpoint recipe. Every kernel
+// already bound to the DFB receives the opposite role under the same accessor name. Bindings do not
+// emit synchronization instructions; the existing Gen1 plain-CB multi-binding path preserves the
+// physical CB and kernel-owned handshake on both active and no-op placement nodes.
+void add_fictional_dfb_endpoints(
+    tt::tt_metal::experimental::ProgramSpec& spec, const tt::tt_metal::experimental::DFBSpecName& dfb_name);
 
 // List of all circular buffers used in Conv2d operations.
 enum class Conv2dCb {
@@ -31,14 +39,11 @@ enum class Conv2dCb {
     WEIGHTS,
     BIAS,
     READER_INDICES,
-    L1_ARRAY,
     MATMUL_PARTIALS,
     OUT,
     COUNT
 };
 struct CBInfo {
-    // Index of CB that will be passed in to the kernel.
-    uint32_t index = kInvalidCBIndex;
     // Type of the CB
     Conv2dCb name{Conv2dCb::COUNT};
     // Number of pages in the circular buffer.
@@ -59,7 +64,6 @@ struct CBInfo {
 
 // Returns a vector of CBInfo objects for the Conv2d operation.
 // The vector will contain information about all circular buffers used in the Conv2d operation.
-// CBInfo::index won't be valid until emit_cb_descriptors() is called.
 // When the program factory has the real reader indices DRAM buffer, it can pass its actual page
 // size so the predicted READER_INDICES CB footprint matches the CB the factory creates. Auto-shard
 // L1 estimation passes std::nullopt and falls back to the worst case (1 uint16 index per output row).
@@ -104,45 +108,18 @@ bool is_split_reader_viable(
     DataType output_datatype,
     bool act_reuse_enabled);
 
-// reader_indices_actual_page_size lets the factory communicate the in-DRAM config tensor's true
-// per-core page size so the post-build CB-size equality check matches what was allocated. When
-// std::nullopt, the worst-case READER_INDICES CB size is used (matches the factory's previous
-// behaviour for the in-DRAM path).
+conv_op_l1_usage predicted_conv2d_l1_usage(
+    const Conv2dParams& operation_attributes,
+    const Conv2dInputs& tensor_args,
+    std::optional<uint32_t> reader_indices_actual_page_size);
+
 void post_conv2d_op_memory_checks(
-    tt::tt_metal::Program& program,
+    const tt::tt_metal::distributed::MeshWorkload& workload,
     const Conv2dParams& operation_attributes,
-    const Conv2dInputs& tensor_args,
-    Tensor& output_tensor,
-    std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt);
+    const Conv2dInputs& tensor_args);
 
-// Builds CBDescriptor entries from a vector of CBInfo onto the supplied
-// ProgramDescriptor. The set of globally-allocated
-// CBs (ACT_SHARDED/OUT/MATMUL_PARTIALS/READER_INDICES) is wired to the supplied
-// raw Buffer*s, which is what the framework's fast cache-hit path patches.
-// This single helper is used by both the sharded and width-sharded conv2d
-// program factories to avoid divergence in CB emission logic.
-void emit_cb_descriptors(
-    std::vector<CBInfo>& cb_info,
-    tt::tt_metal::ProgramDescriptor& desc,
-    const CoreRangeSet& all_cores_set,
-    tt::tt_metal::Buffer* input_buffer,
-    tt::tt_metal::Buffer* output_buffer,
-    tt::tt_metal::Buffer* indices_buffer);
-
-// Descriptor-path equivalent of post_conv2d_op_memory_checks().  Verifies that
-// the sum of non-globally-allocated CB sizes emitted on `desc` matches the L1
-// usage predicted by calculate_L1_usage() — the same equality the legacy
-// program-based check enforced via calculate_total_cb_size().  The L1
-// allocator-tracking half of post_conv2d_op_memory_checks() can't be performed
-// here because the framework realises the Program after this function returns,
-// so post_op_l1_allocation_size isn't observable.  When that check is wanted
-// against a realised Program, post_conv2d_op_memory_checks() should be used
-// instead.  Fails fast (TT_FATAL) on CB-size mismatch so misconfigured CB
-// footprints surface in the same way as on the legacy path.
-void post_conv2d_op_memory_checks_descriptor(
-    const tt::tt_metal::ProgramDescriptor& desc,
-    const Conv2dParams& operation_attributes,
-    const Conv2dInputs& tensor_args,
-    std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt);
+void validate_conv2d_realized_dfb_size(uint32_t predicted_size, uint32_t realized_size);
+void validate_conv2d_allocator_delta(
+    uint32_t pre_op_size, uint32_t post_op_size, uint32_t predicted_tensor_allocation_size);
 
 }  // namespace ttnn::prim

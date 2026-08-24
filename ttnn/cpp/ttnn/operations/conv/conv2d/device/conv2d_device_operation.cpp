@@ -5,6 +5,7 @@
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 
 #include <array>
 #include <cstdint>
@@ -32,7 +33,8 @@ using ttnn::operations::conv::calculate_output_image_size;
 
 Conv2dDeviceOperation::program_factory_t Conv2dDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    if (tensor_args.a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+    const auto input_memory_layout = tensor_args.a.memory_config().memory_layout();
+    if (input_memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         // Use width sharded implementation
         return Conv2dWidthShardedProgramFactory{};
     }  // Use regular sharded implementation
@@ -140,6 +142,14 @@ void Conv2dDeviceOperation::validate_on_program_cache_miss(
                 "Error");
         }
     }
+}
+
+void Conv2dDeviceOperation::validate_after_program_cache_miss(
+    const operation_attributes_t& args,
+    const tensor_args_t& tensor_args,
+    const tensor_return_value_t& /*output_tensor*/,
+    const tt::tt_metal::distributed::MeshWorkload& workload) {
+    post_conv2d_op_memory_checks(workload, args, tensor_args);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv2dDeviceOperation::create_op_performance_model(
@@ -252,10 +262,8 @@ Tensor conv2d(
         .bias = bias,
     };
 
-    auto* device = a.device();
-
     operation_attributes.pre_op_l1_allocation_size_bytes =
-        device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+        a.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

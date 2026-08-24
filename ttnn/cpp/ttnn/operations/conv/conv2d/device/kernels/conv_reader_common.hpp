@@ -77,7 +77,7 @@ FORCE_INLINE void read_kernel_w(Noc noc, uint32_t& l1_write_addr_act, uint32_t& 
     act_l1_offset += stride_h_bytes;
 }
 
-template <uint32_t cb_id_act, uint32_t act_cb_tiles, uint32_t window_reuse_offset>
+template <uint32_t act_cb_tiles, uint32_t window_reuse_offset>
 FORCE_INLINE void pass_to_the_next_image_width(
     DataflowBuffer dfb_act,
     uint32_t& l1_write_addr_act,
@@ -89,25 +89,25 @@ FORCE_INLINE void pass_to_the_next_image_width(
     pixel_row++;
     dfb_act.reserve_back(act_cb_tiles);
     l1_write_addr_act = cb_start_addr + pixel_row * window_reuse_offset;
-    get_local_cb_interface(cb_id_act).fifo_wr_ptr = l1_write_addr_act;
+    get_local_cb_interface(dfb_act.get_id()).fifo_wr_ptr = l1_write_addr_act;
 
     if (new_batch_image_rows_to_fill > 0) {
         new_batch_image_rows_to_fill--;
     }
 }
 
-template <uint32_t cb_id_act, uint32_t act_cb_w_tiles>
+template <uint32_t act_cb_w_tiles>
 FORCE_INLINE void push_full_tile_height(Noc noc, DataflowBuffer dfb_act) {
     noc.async_read_barrier();
     dfb_act.push_back(act_cb_w_tiles);
 }
 
-template <uint32_t cb_id_act, uint32_t act_cb_w_tiles, uint32_t image_width_tiles>
+template <uint32_t act_cb_w_tiles, uint32_t image_width_tiles>
 FORCE_INLINE void push_remaining_tiles(
     DataflowBuffer dfb_act, uint32_t remaining_tiles_to_push, uint32_t cb_start_addr) {
     constexpr uint32_t tiles_to_push = image_width_tiles * act_cb_w_tiles;
     for (uint32_t i = 0; i < remaining_tiles_to_push; i += image_width_tiles) {
-        get_local_cb_interface(cb_id_act).fifo_wr_ptr = cb_start_addr;
+        get_local_cb_interface(dfb_act.get_id()).fifo_wr_ptr = cb_start_addr;
         dfb_act.push_back(tiles_to_push);
     }
 }
@@ -137,7 +137,7 @@ FORCE_INLINE void read_first_image_row_window(
     pixel_column++;
     // if full tile, push back
     if ((pixel_column & 31) == 0) {
-        push_full_tile_height<cb_id_act, act_cb_w_tiles>(noc, dfb_act);
+        push_full_tile_height<act_cb_w_tiles>(noc, dfb_act);
     }
 }
 
@@ -146,8 +146,7 @@ template <
     uint32_t stride_h_bytes,
     uint32_t outer_coalesced_read_bytes,
     uint32_t outer_stride_h_bytes>
-FORCE_INLINE void read_image_row_window_with_reuse(
-    Noc noc, uint32_t& l1_write_addr_act, uint32_t& act_l1_offset) {
+FORCE_INLINE void read_image_row_window_with_reuse(Noc noc, uint32_t& l1_write_addr_act, uint32_t& act_l1_offset) {
     l1_write_addr_act += outer_coalesced_read_bytes;
     act_l1_offset += outer_stride_h_bytes;
     read_kernel_w<coalesced_read_bytes, stride_h_bytes>(noc, l1_write_addr_act, act_l1_offset);
@@ -291,7 +290,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
         }
     }
     // Move on to the next output image width
-    pass_to_the_next_image_width<cb_id_act, act_cb_tiles, window_reuse_offset>(
+    pass_to_the_next_image_width<act_cb_tiles, window_reuse_offset>(
         dfb_act, l1_write_addr_act, cb_start_addr, pixel_row, pixel_column, new_batch_image_rows_to_fill);
 
     // ------ HANDLE REMAINING INPUT, WHERE WE READ JUST THE LAST KERNEL WIDTH OF THE WINDOW ------
@@ -324,12 +323,12 @@ FORCE_INLINE void read_sticks_activation_reuse(
 
             pixel_column++;
             if ((pixel_column & 31) == 0) {
-                push_full_tile_height<cb_id_act, act_cb_w_tiles>(noc, dfb_act);
+                push_full_tile_height<act_cb_w_tiles>(noc, dfb_act);
 
                 // Move on to the next output image width
                 if constexpr (!readers_process_full_image_widths) {
                     if (pixel_column == image_width_padded_to_tile) {
-                        pass_to_the_next_image_width<cb_id_act, act_cb_tiles, window_reuse_offset>(
+                        pass_to_the_next_image_width<act_cb_tiles, window_reuse_offset>(
                             dfb_act,
                             l1_write_addr_act,
                             cb_start_addr,
@@ -343,29 +342,13 @@ FORCE_INLINE void read_sticks_activation_reuse(
 
         if constexpr (readers_process_full_image_widths) {
             // Move on to the next output image width
-            pass_to_the_next_image_width<cb_id_act, act_cb_tiles, window_reuse_offset>(
+            pass_to_the_next_image_width<act_cb_tiles, window_reuse_offset>(
                 dfb_act, l1_write_addr_act, cb_start_addr, pixel_row, pixel_column, new_batch_image_rows_to_fill);
         }
 
         load_next_segment<window_inner, single_core_processes_multiple_batches>(
             packed_reader_indices_ptr, reader_idx, start_ind, end_ind, new_batch_image_rows_to_fill);
     }
-}
-
-template <uint32_t dram_addr_index, uint32_t page_size_index, uint32_t tensor_args_index, uint32_t cb_reader_index>
-void load_config_tensor_if_in_dram(Noc noc, DataflowBuffer reader_dfb, uint32_t core_index) {
-#ifdef CONFIG_TENSOR_IN_DRAM
-    // TODO: Instead of all cores reading from dram, only the first column reads, and does an MCAST to all the other
-    // cores in the row.
-    constexpr uint32_t config_dram_addr = get_compile_time_arg_val(dram_addr_index);
-    constexpr uint32_t config_page_size = get_compile_time_arg_val(page_size_index);
-    const auto config_tensor_args = TensorAccessorArgs<tensor_args_index>();
-    const auto config_accessor = TensorAccessor(config_tensor_args, config_dram_addr);
-
-    noc.async_read(config_accessor, reader_dfb, config_page_size, {.page_id = core_index}, {});
-    noc.async_read_barrier();
-    reader_dfb.push_back(1);
-#endif
 }
 
 template <int window_height, int window_width>

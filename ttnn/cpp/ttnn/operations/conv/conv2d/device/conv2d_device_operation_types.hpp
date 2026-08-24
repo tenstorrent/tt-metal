@@ -216,8 +216,9 @@ struct Conv2dParams {
     bool full_inner_dim = false;
     bool enable_activation_reuse = false;
     bool config_tensors_in_dram = false;
-    uint32_t pre_op_l1_allocation_size_bytes = 0;
     std::optional<bool> force_split_reader;
+    // Diagnostic-only cache-miss snapshot. Intentionally excluded from reflection/hash state.
+    uint32_t pre_op_l1_allocation_size_bytes = 0;
 
     static constexpr auto attribute_names = std::make_tuple(
         "sliding_window_config",

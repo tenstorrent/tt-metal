@@ -15,7 +15,6 @@
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/hal.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"
-#include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::prim {
@@ -25,7 +24,47 @@ using ttnn::operations::conv::is_1d_depthwise_conv;
 using ttnn::operations::conv::should_coalesce_1d_depthwise_conv_reads;
 using ttnn::operations::conv::SkipMcast;
 
-constexpr uint32_t l1_scratchpad_CB_size = 64;
+tt::tt_metal::experimental::ComputeHardwareConfig make_legacy_conv2d_compute_hardware_config(
+    const ComputeKernelConfig& compute_kernel_config) {
+    return tt::tt_metal::experimental::ComputeGen1Config{
+        .fpu_math_fidelity = compute_kernel_config.math_fidelity,
+        .enable_32_bit_dest = compute_kernel_config.fp32_dest_acc_en,
+    };
+}
+
+void add_fictional_dfb_endpoints(
+    tt::tt_metal::experimental::ProgramSpec& spec, const tt::tt_metal::experimental::DFBSpecName& dfb_name) {
+    auto dfb = std::find_if(spec.dataflow_buffers.begin(), spec.dataflow_buffers.end(), [&](const auto& candidate) {
+        return candidate.unique_id == dfb_name;
+    });
+    TT_FATAL(dfb != spec.dataflow_buffers.end(), "Cannot complete bindings for unknown Conv2D DFB '{}'", dfb_name);
+    dfb->advanced_options.allow_instance_multi_binding = true;
+
+    for (auto& kernel : spec.kernels) {
+        const std::size_t original_binding_count = kernel.dfb_bindings.size();
+        for (std::size_t i = 0; i < original_binding_count; ++i) {
+            const auto& binding = kernel.dfb_bindings[i];
+            if (binding.dfb_spec_name != dfb_name) {
+                continue;
+            }
+
+            const auto opposite = binding.endpoint_type == tt::tt_metal::experimental::DFBEndpointType::PRODUCER
+                                      ? tt::tt_metal::experimental::DFBEndpointType::CONSUMER
+                                      : tt::tt_metal::experimental::DFBEndpointType::PRODUCER;
+            const bool already_complete = std::any_of(
+                kernel.dfb_bindings.begin(), kernel.dfb_bindings.end(), [&](const auto& candidate) {
+                    return candidate.dfb_spec_name == dfb_name && candidate.accessor_name == binding.accessor_name &&
+                           candidate.endpoint_type == opposite;
+                });
+            if (!already_complete) {
+                auto fictional = binding;
+                fictional.endpoint_type = opposite;
+                fictional.accessor_aliases.clear();
+                kernel.dfb_bindings.push_back(std::move(fictional));
+            }
+        }
+    }
+}
 
 // to enable activation reuse feature, we need to allocate space for input needed for
 // one output image width + extra space for diff we need to add for each following output image width
@@ -340,13 +379,6 @@ std::vector<CBInfo> get_cb_info(
         .page_size = reader_indices_actual_page_size.value_or(reader_indices_worst_case_page_size),
         .is_globally_allocated = !conv_config.config_tensors_in_dram,
         .data_format = tt::DataFormat::UInt16});
-
-    // L1 scratchpad CB
-    cb_info.emplace_back(CBInfo{
-        .name = Conv2dCb::L1_ARRAY,
-        .num_pages = 1,
-        .page_size = l1_scratchpad_CB_size,
-        .data_format = tt::DataFormat::Float16_b});
 
     // Act sharded CB
     cb_info.emplace_back(CBInfo{
@@ -669,7 +701,7 @@ bool is_split_reader_viable(
 // count themselves (calculate_total_cb_size for the legacy path, summed
 // desc.cbs for the descriptor path) and compare against the returned
 // `CB_allocation_size`.
-static conv_op_l1_usage predicted_conv2d_l1_usage(
+conv_op_l1_usage predicted_conv2d_l1_usage(
     const Conv2dParams& operation_attributes,
     const Conv2dInputs& tensor_args,
     std::optional<uint32_t> reader_indices_actual_page_size) {
@@ -729,126 +761,45 @@ static conv_op_l1_usage predicted_conv2d_l1_usage(
         reader_indices_actual_page_size);
 }
 
-void emit_cb_descriptors(
-    std::vector<CBInfo>& cb_info,
-    tt::tt_metal::ProgramDescriptor& desc,
-    const CoreRangeSet& all_cores_set,
-    tt::tt_metal::Buffer* input_buffer,
-    tt::tt_metal::Buffer* output_buffer,
-    tt::tt_metal::Buffer* indices_buffer) {
-    uint32_t cb_index = 0;
-    for (auto& cb : cb_info) {
-        if (cb.num_pages == 0) {
-            continue;
-        }
-
-        tt::tt_metal::Buffer* buffer = nullptr;
-        if (cb.is_globally_allocated) {
-            if (cb.name == Conv2dCb::ACT_SHARDED) {
-                buffer = input_buffer;
-            } else if (cb.name == Conv2dCb::OUT || cb.name == Conv2dCb::MATMUL_PARTIALS) {
-                buffer = output_buffer;
-            } else if (cb.name == Conv2dCb::READER_INDICES) {
-                buffer = indices_buffer;
-            } else {
-                TT_THROW(
-                    "Unexpected circular buffer name {}. Expected one of: SHARDED_ACT_CB, OUT0_CB, READER_INDICES_CB",
-                    enchantum::to_string(cb.name));
-            }
-        }
-
-        cb.index = cb_index++;
-        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = cb.cb_size_per_core(),
-            .core_ranges = all_cores_set,
-            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb.index),
-                .data_format = cb.data_format,
-                .page_size = cb.page_size,
-            }}},
-            .buffer = buffer,
-            .address_offset = cb.address_offset,
-        });
-    }
-
-    for (auto& cb : cb_info) {
-        if (cb.overlapped_by_cb.has_value()) {
-            // If this CB is overlapped by another CB, mirror the overlapped CB's index.
-            const CBInfo& overlapped_cb = get_cb_info_by_name(cb_info, cb.overlapped_by_cb.value());
-            cb.index = overlapped_cb.index;
-        }
-    }
-}
-
-void post_conv2d_op_memory_checks_descriptor(
-    const tt::tt_metal::ProgramDescriptor& desc,
-    const Conv2dParams& operation_attributes,
-    const Conv2dInputs& tensor_args,
-    std::optional<uint32_t> reader_indices_actual_page_size) {
-    // Sum non-globally-allocated CB sizes from the descriptor.  Mirrors
-    // calculate_total_cb_size(program) which sums (cb->globally_allocated() ? 0 : cb->size())
-    // over the realised program: in the descriptor world, a CB is globally
-    // allocated iff its `buffer` is non-null.
-    uint32_t actual_cb_size = 0;
-    for (const auto& cb : desc.cbs) {
-        if (cb.buffer == nullptr) {
-            actual_cb_size += cb.total_size;
-        }
-    }
-
-    const conv_op_l1_usage l1_usage =
-        predicted_conv2d_l1_usage(operation_attributes, tensor_args, reader_indices_actual_page_size);
-
-    TT_FATAL(
-        actual_cb_size == l1_usage.CB_allocation_size,
-        "Calculated CB size {} does not match with the actual CB size {}",
-        l1_usage.CB_allocation_size,
-        actual_cb_size);
-
-    // NOTE: the legacy post_conv2d_op_memory_checks() also verifies that the
-    // device L1 allocator advanced by exactly l1_usage.tensor_allocation_size
-    // bytes between pre_op_l1_allocation_size_bytes and post-Program-creation.
-    // That second check requires a realised Program (so create_circular_buffer
-    // has already affected the allocator) and isn't reachable from the
-    // descriptor path: the framework realises the Program after this function
-    // returns.  The CB-size equality above is the same fail-fast guard the
-    // legacy path opens with, and is sufficient to catch CBInfo vs. emission
-    // drifts.
-}
-
 void post_conv2d_op_memory_checks(
-    tt::tt_metal::Program& program,
+    const tt::tt_metal::distributed::MeshWorkload& workload,
     const Conv2dParams& operation_attributes,
-    const Conv2dInputs& tensor_args,
-    Tensor& /*output_tensor*/,
-    std::optional<uint32_t> reader_indices_actual_page_size) {
-    auto* device = tensor_args.a.device();
-    const auto& pre_op_l1_allocation_size_bytes = operation_attributes.pre_op_l1_allocation_size_bytes;
+    const Conv2dInputs& tensor_args) {
+    for (const auto& [_, program] : workload.get_programs()) {
+        const auto predicted_l1_usage = predicted_conv2d_l1_usage(
+            operation_attributes, tensor_args, program.get_dataflow_buffer_entry_size("reader_indices"));
 
+        const uint32_t actual_local_dfb_size = program.total_local_dataflow_buffer_size();
+        validate_conv2d_realized_dfb_size(predicted_l1_usage.CB_allocation_size, actual_local_dfb_size);
+    }
+
+    auto* device = tensor_args.a.device();
     const uint32_t post_op_l1_allocation_size =
         device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-
-    const auto actual_cb_size = calculate_total_cb_size(program);
-    const conv_op_l1_usage l1_usage =
-        predicted_conv2d_l1_usage(operation_attributes, tensor_args, reader_indices_actual_page_size);
-
-    TT_FATAL(
-        actual_cb_size == l1_usage.CB_allocation_size,
-        "Calculated CB size {} does not match with the actual CB size {}",
-        l1_usage.CB_allocation_size,
-        actual_cb_size);
-
-    // For now assume that if post_op_l1_allocation_size == 0 op is being run
-    // in graph capture NO_DISPATCH mode.
-    // ToDo: Device should offer an API to inform the op if it is running in NO_DISPATCH mode.
-    bool is_graph_capture_no_dispatch_mode = post_op_l1_allocation_size == 0;
-    TT_FATAL(
-        post_op_l1_allocation_size == (pre_op_l1_allocation_size_bytes + l1_usage.tensor_allocation_size) ||
-            is_graph_capture_no_dispatch_mode,
-        "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}",
-        pre_op_l1_allocation_size_bytes,
+    const auto predicted_l1_usage = predicted_conv2d_l1_usage(operation_attributes, tensor_args, std::nullopt);
+    validate_conv2d_allocator_delta(
+        operation_attributes.pre_op_l1_allocation_size_bytes,
         post_op_l1_allocation_size,
-        l1_usage.tensor_allocation_size);
+        predicted_l1_usage.tensor_allocation_size);
+}
+
+void validate_conv2d_realized_dfb_size(uint32_t predicted_size, uint32_t realized_size) {
+    TT_FATAL(
+        realized_size == predicted_size,
+        "Predicted Conv2D L1 DFB size {} does not match realized size {}",
+        predicted_size,
+        realized_size);
+}
+
+void validate_conv2d_allocator_delta(
+    uint32_t pre_op_size, uint32_t post_op_size, uint32_t predicted_tensor_allocation_size) {
+    const bool is_graph_capture_no_dispatch_mode = post_op_size == 0;
+    TT_FATAL(
+        post_op_size == pre_op_size + predicted_tensor_allocation_size || is_graph_capture_no_dispatch_mode,
+        "Mismatch!! L1 Allocation Pre Op = {}, Post Op = {} Calculated Size = {}",
+        pre_op_size,
+        post_op_size,
+        predicted_tensor_allocation_size);
 }
 
 }  // namespace ttnn::prim

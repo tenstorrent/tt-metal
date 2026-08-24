@@ -2,58 +2,69 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <api/dataflow/dataflow_api.h>
+// Height-sharded Conv2D activation reader using the Metalium 2.0 kernel-binding surface:
+//   - CB-index CTAs -> dfb:: tokens (act / act_sharded / reader_indices)
+//   - compile-time choices -> TT_KERNEL template arguments
+//   - RTAs (core_index, remaining_tiles_to_push) -> TT_KERNEL function arguments
+//   - DRAM config-tensor read uses tensor::reader_indices (CONFIG_TENSOR_IN_DRAM path)
+//   - conv_reader_common.hpp helpers are templated on the CB-object type, so the DataflowBuffer
+//     constructed here from the dfb:: constexpr index is passed to them directly.
+
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/tensor_accessor.h"
+#include "api/tensor/local_tensor_accessor.h"
+#include "experimental/kernel_args.h"
 #include "conv_reader_common.hpp"
 
-void kernel_main() {
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(0);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(1);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(2);
-    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(3);
-    // need to have these as compile-time, they are inner loop bounds / unroll loops / constexpr conditionals based on
-    // them
-    constexpr uint32_t window_outer = get_compile_time_arg_val(4);
-    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(6);
-    constexpr uint32_t weight_size_h = get_compile_time_arg_val(7);
-    constexpr uint32_t weight_size_w = get_compile_time_arg_val(8);
-    constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(9);
-    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(10);
-    constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(11);
+template <
+    uint32_t dilation_h,
+    uint32_t dilation_w,
+    uint32_t stride_w,
+    uint32_t conv_act_c_read_bytes,
+    uint32_t window_outer,
+    uint32_t act_block_num_tiles,
+    uint32_t weight_size_h,
+    uint32_t weight_size_w,
+    uint32_t conv_act_size_w_padded,
+    uint32_t act_block_w_extra_align_bytes,
+    uint32_t act_num_blocks_h,
+    uint32_t needs_act_block_zero_out,
+    uint32_t split_reader_enabled,
+    uint32_t activation_reuse_enabled,
+    uint32_t config_tensor_in_dram,
+    uint32_t config_page_size,
+    uint32_t act_reuse_cb_tiles,
+    uint32_t act_block_w_tiles,
+    uint32_t readers_process_full_image_widths,
+    uint32_t image_width_tiles,
+    uint32_t output_image_width,
+    uint32_t window_reuse_offset,
+    uint32_t need_to_push_remaining_tiles,
+    uint32_t single_core_processes_multiple_batches>
+TT_KERNEL void kernel_main(uint32_t core_index, uint32_t remaining_tiles_to_push) {
+    constexpr uint32_t cb_id_act = dfb::act;
 
-    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(20) == 1;
-    constexpr uint32_t cb_id_act = get_compile_time_arg_val(21);
-    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(22);
-    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(23);
+    DataflowBuffer cb_act(cb_id_act);
 
-    constexpr bool split_reader_enabled = get_compile_time_arg_val(27);
-    constexpr bool activation_reuse_enabled = get_compile_time_arg_val(28);
-
-    DataflowBuffer dfb_act(cb_id_act);
-    DataflowBuffer dfb_sharded_act(cb_id_sharded_act);
-    DataflowBuffer dfb_reader_idx(cb_reader_indices);
-
-    volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb_reader_idx.get_write_ptr());
-
-    uint32_t runtime_arg_idx = 0;
-    uint32_t core_index = get_arg_val<uint32_t>(runtime_arg_idx++);
-    load_config_tensor_if_in_dram<29, 30, 31, cb_reader_indices>(Noc(), dfb_reader_idx, core_index);
-    // Activation reuse args (offset by 4 from index 29: address + page_size + 2 TensorAccessorArgs)
-    constexpr uint32_t act_reuse_cb_tiles = get_compile_time_arg_val(33);
-    constexpr uint32_t act_block_w_tiles = get_compile_time_arg_val(34);
-    constexpr bool readers_process_full_image_widths = get_compile_time_arg_val(35) == 1;
-    constexpr uint32_t image_width_tiles = get_compile_time_arg_val(36);
-    constexpr uint32_t output_image_width = get_compile_time_arg_val(37);
-    constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(38);
-    constexpr bool need_to_push_remaining_tiles = get_compile_time_arg_val(39) == 1;
-    constexpr bool single_core_processes_multiple_batches = get_compile_time_arg_val(40) == 1;
-
-    uint32_t remaining_tiles_to_push = get_arg_val<uint32_t>(runtime_arg_idx++);
+    // On the resident path this borrowed DFB exposes the existing L1 config slice. On the DRAM-config
+    // path it owns the destination into which the per-core page is read.
+    volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr;
+    DataflowBuffer cb_reader_idx(dfb::reader_indices);
+    packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_reader_idx.get_write_ptr());
+    if constexpr (config_tensor_in_dram) {
+        const auto config_accessor = TensorAccessor(tensor::reader_indices);
+        Noc().async_read(config_accessor, cb_reader_idx, config_page_size, {.page_id = core_index}, {});
+        Noc().async_read_barrier();
+        cb_reader_idx.push_back(1);
+    } else {
+        (void)core_index;
+    }
 
     Noc noc;
 
     if constexpr (needs_act_block_zero_out) {
-        zero_out_tiles<cb_id_act>(noc, dfb_act);
+        zero_out_tiles<cb_id_act>(noc, cb_act);
     }
 
     constexpr uint32_t window_outer_offset = conv_act_size_w_padded * conv_act_c_read_bytes * dilation_h;
@@ -73,41 +84,72 @@ void kernel_main() {
     // the conditional selecting between coalescing and no-colescing must be constexpr to that compiler can optimized
     // the other path away this has shown to be a big perf win
 
-    // coalesce reads along weight_size_w
-    uint32_t act_l1_read_addr = dfb_sharded_act.get_read_ptr();
+    // Coalesce reads along weight_size_w from the node-local input shard.
+    LocalTensorAccessor<uint8_t> sharded_act(tensor::input);
+    uint32_t act_l1_read_addr = sharded_act.get_bank_base_address();
 
     static_assert(coalesced_read_bytes <= NOC_MAX_BURST_SIZE);
     experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
 
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
+    // Vertical (kernel-row) stride in the halo'd L1 shard: one padded input row. Same value as
+    // window_outer_offset; used by the full-window gather (read_channels<weight_size_h>) to step between
+    // kernel rows within a single K-block.
+    constexpr uint32_t stride_h_bytes = window_outer_offset;
+    // window_outer == 1  <=> the whole reduction window is kept in one K-block (full_inner_dim): the full
+    //                        window (all weight_size_h kernel rows) must be
+    //                        gathered per stick here.
+    // window_outer > 1   <=> sliced per kernel row (normal spilling path): read one kernel row per outer
+    //                        block, unchanged from before.
+    // Mirrors the block-sharded reader, which derives the same flag.
+    constexpr bool sliced_inner_dim = window_outer > 1;
     uint32_t start_reader_idx = 0;
     uint32_t l1_write_addr_act = 0;
-    const uint32_t cb_start_addr = dfb_act.get_write_ptr();
+    const uint32_t cb_start_addr = cb_act.get_write_ptr();
     for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
         if constexpr (activation_reuse_enabled) {
             l1_write_addr_act = cb_start_addr;
-            get_local_cb_interface(cb_id_act).fifo_wr_ptr = l1_write_addr_act;
+            get_local_cb_interface(dfb::act).fifo_wr_ptr = l1_write_addr_act;
         }
         uint32_t reader_offset = act_l1_read_addr;
         for (uint32_t outer = 0; outer < window_outer; outer++) {
             reader_idx = start_reader_idx;
 
             if constexpr (!activation_reuse_enabled) {
-                dfb_act.reserve_back(act_block_num_tiles);
-                l1_write_addr_act = dfb_act.get_write_ptr();
+                cb_act.reserve_back(act_block_num_tiles);
+                l1_write_addr_act = cb_act.get_write_ptr();
 
-                read_sticks<
+                // read_activation_data branches on sliced_inner_dim:
+                //   sliced_inner_dim == true  -> per-kernel-row read_sticks (unchanged spilling path;
+                //                                the outer loop supplies filter_h blocks).
+                //   sliced_inner_dim == false -> full-window read_channels<weight_size_h> gather: for each
+                //                                stick it reads all weight_size_h kernel rows (each a
+                //                                coalesced weight_size_w * Cin burst, stepping by
+                //                                stride_h_bytes), laying the K columns out as [r][s][c] to
+                //                                match the reuse=true full-window weight layout
+                //                                (to_weight_special_padding_tile_layout).
+                // In both cases read_activation_data issues the async_read_barrier and advances reader_offset
+                // by window_outer_offset internally.
+                read_activation_data<
+                    sliced_inner_dim,
                     dilation_w,
                     coalesced_read_bytes,
                     conv_act_c_read_bytes,
                     act_block_w_extra_align_bytes,
                     stride_w_bytes,
                     weight_size_w,
-                    stride_w>(noc, packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
+                    stride_w,
+                    weight_size_h,
+                    window_outer_offset>(
+                    noc,
+                    packed_reader_indices_ptr,
+                    reader_offset,
+                    l1_write_addr_act,
+                    reader_idx,
+                    act_l1_read_addr,
+                    stride_h_bytes);
 
-                noc.async_read_barrier();
-                dfb_act.push_back(act_block_num_tiles);
-                reader_offset += window_outer_offset;
+                cb_act.push_back(act_block_num_tiles);
             } else {
                 read_sticks_activation_reuse<
                     coalesced_read_bytes,
@@ -126,7 +168,7 @@ void kernel_main() {
                     window_reuse_offset,
                     single_core_processes_multiple_batches>(
                     noc,
-                    dfb_act,
+                    cb_act,
                     packed_reader_indices_ptr,
                     act_l1_read_addr,
                     l1_write_addr_act,
@@ -146,10 +188,10 @@ void kernel_main() {
         // Last core sometimes has less work to do, but we still need to push the same number of tiles
         // to avoid blocking compute kernels
         if constexpr (need_to_push_remaining_tiles) {
-            push_remaining_tiles<cb_id_act, act_block_w_tiles, image_width_tiles>(
-                dfb_act, remaining_tiles_to_push, cb_start_addr);
+            push_remaining_tiles<act_block_w_tiles, image_width_tiles>(cb_act, remaining_tiles_to_push, cb_start_addr);
         }
     }
 
-    noc.async_write_barrier();
+    // Drain outstanding NOC reads/writes/atomics before returning (Metal 2.0 FW epilogue does not).
+    noc.async_full_barrier();
 }

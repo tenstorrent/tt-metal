@@ -2,10 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Height-sharded depthwise Conv1D reader using the Metalium 2.0 kernel-binding surface:
+//   - CB-index CTAs -> dfb:: tokens (act / act_sharded / reader_indices)
+//   - compile-time choices -> TT_KERNEL template arguments
+//   - experimental::CB -> DataflowBuffer
+// This kernel has no runtime args. There is no CONFIG_TENSOR_IN_DRAM path
+// (the depthwise height-sharded indices are always L1-resident).
+
 #include <stdint.h>
-#include <api/dataflow/dataflow_api.h>
+#include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/compile_time_args.h"
+#include "api/tensor/tensor_accessor.h"
+#include "api/tensor/local_tensor_accessor.h"
+#include "experimental/kernel_args.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 template <uint32_t read_bytes>
@@ -24,25 +33,21 @@ FORCE_INLINE void read_activation_stick(Noc noc, uint32_t l1_write_addr, uint32_
 }
 
 // conv1D reader kernel
-void kernel_main() {
-    constexpr uint32_t stride_w = get_compile_time_arg_val(2);
-    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(3);
-    // need to have these as compile-time, they are inner loop bounds / unroll loops / constexpr conditionals based on
-    // them
-    constexpr uint32_t window_outer = get_compile_time_arg_val(4);
-    constexpr uint32_t window_inner = get_compile_time_arg_val(5);
-    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(6);
-    constexpr uint32_t weight_size_h = get_compile_time_arg_val(7);
-    constexpr uint32_t weight_size_w = get_compile_time_arg_val(8);
-    constexpr uint32_t conv_act_size_w_padded = get_compile_time_arg_val(9);
-    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(10);
-    constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(11);
-    constexpr uint32_t cb_id_act = get_compile_time_arg_val(21);
-    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(22);
-    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(23);
+template <
+    uint32_t stride_w,
+    uint32_t conv_act_c_read_bytes,
+    uint32_t window_outer,
+    uint32_t window_inner,
+    uint32_t act_block_num_tiles,
+    uint32_t weight_size_h,
+    uint32_t weight_size_w,
+    uint32_t conv_act_size_w_padded,
+    uint32_t act_block_w_extra_align_bytes,
+    uint32_t act_num_blocks_h,
+    uint32_t coalesce_kw_reads>
+TT_KERNEL void kernel_main() {
     // Depthwise reuses the common reader arg slot that non-depthwise height-sharded conv uses for
     // activation reuse. Activation reuse is unsupported for the 1D depthwise path.
-    constexpr bool coalesce_kw_reads = get_compile_time_arg_val(28) == 1;
 
     // LOOP TO FILL READER OFFSETS
     /* We can add another loop to read chunks of a stick as well.
@@ -63,14 +68,15 @@ void kernel_main() {
         reader_offset += conv_act_size_w_padded;
     }
 
-    DataflowBuffer act_dfb(cb_id_act);
-    DataflowBuffer sharded_act_dfb(cb_id_sharded_act);
-    DataflowBuffer reader_indices_dfb(cb_reader_indices);
+    DataflowBuffer act_cb(dfb::act);
     Noc noc;
 
     // LOOP TO FILL READER INDICES
+    // The resident activation shard and reader-indices config are L1-resident; the depthwise path
+    // has no DRAM-config variant.
+    DataflowBuffer cb_reader_indices(dfb::reader_indices);
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_dfb.get_write_ptr());
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_reader_indices.get_write_ptr());
 
     uint32_t reader_idx = 0;
 
@@ -82,7 +88,8 @@ void kernel_main() {
 
     reader_offset_idx = 0;
     uint32_t act_l1_offset = 0;
-    uint32_t act_l1_read_addr = sharded_act_dfb.get_read_ptr();
+    LocalTensorAccessor<uint8_t> sharded_act(tensor::input);
+    uint32_t act_l1_read_addr = sharded_act.get_bank_base_address();
 
     if constexpr (coalesced_read_bytes <= NOC_MAX_BURST_SIZE) {
         experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
@@ -93,8 +100,8 @@ void kernel_main() {
             // Reset reader_idx to finish act_block_h_datums
             reader_idx = start_reader_idx;
 
-            act_dfb.reserve_back(act_block_num_tiles);
-            uint32_t l1_write_addr_act = act_dfb.get_write_ptr();
+            act_cb.reserve_back(act_block_num_tiles);
+            uint32_t l1_write_addr_act = act_cb.get_write_ptr();
             uint32_t reader_offset = act_l1_read_addr + (reader_offsets[reader_offset_idx] * conv_act_c_read_bytes);
             // #pragma GCC unroll 4 // unroll didn't help, but act_block_h_datums (loop bound) being const does help
             uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
@@ -115,14 +122,14 @@ void kernel_main() {
                 }
             }
             noc.async_read_barrier();
-            act_dfb.push_back(act_block_num_tiles);
+            act_cb.push_back(act_block_num_tiles);
 
             reader_offset_idx += window_inner;
         }
         reader_offset_idx = 0;
 
-        // +1: advance past the last segment word to the next block's count word (the inline loop
-        // above stops on the last segment; the shared read_sticks() helper does this increment).
+        // Advance past the last segment word to the next block's count word. The loop above stops
+        // on the last segment, while the shared read_sticks() helper performs this increment itself.
         start_reader_idx = reader_idx + 1;
     }
 }
