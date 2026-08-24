@@ -952,7 +952,8 @@ NocAsyncReadTx<thread, S> noc_load(
     Semaphore<thread>& receivers_ready,
     Semaphore<thread>& data_sent,
     const Accessor& acc,
-    uint32_t block_idx);
+    uint32_t block_idx,
+    uint32_t seq);
 
 template <int thread, typename S, typename Accessor>
 NocAsyncReadTx<thread, S> noc_load(
@@ -961,7 +962,8 @@ NocAsyncReadTx<thread, S> noc_load(
     Semaphore<thread>& receivers_ready,
     Semaphore<thread>& data_sent,
     const Accessor& acc,
-    uint32_t block_idx);
+    uint32_t block_idx,
+    uint32_t seq);
 
 // Same, with the handshake semaphores supplied by the harness's reservation.
 // Prefer these: the pair is protocol plumbing, and having callers allocate it
@@ -975,7 +977,7 @@ NocAsyncReadTx<thread, S> noc_load(
 // and still keep them apart.
 template <int thread, int pair = thread, typename S, typename Accessor>
 NocAsyncReadTx<thread, S> noc_load(
-    const Storage<S>& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx);
+    const Storage<S>& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx, uint32_t seq);
 
 // Multicast load with a CUSTOM fill, the same relationship the plain noc_load's Fn form has
 // to its accessor form. `fn` runs on the sender only and fills its copy however it likes;
@@ -986,13 +988,13 @@ NocAsyncReadTx<thread, S> noc_load(
 // strided in DRAM and contiguous nowhere -- but it is an ordinary block once in L1. Costs no
 // extra traffic: the built-in read issues one request per page too.
 template <int thread, int pair = thread, typename S, typename Fn>
-NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, PhysicalMcast mcast, Fn fn);
+NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, PhysicalMcast mcast, uint32_t seq, Fn fn);
 template <int thread, int pair = thread, typename S, typename Fn>
-NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, LogicalMcast mcast, Fn fn);
+NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, LogicalMcast mcast, uint32_t seq, Fn fn);
 
 template <int thread, int pair = thread, typename S, typename Accessor>
 NocAsyncReadTx<thread, S> noc_load(
-    const Storage<S>& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx);
+    const Storage<S>& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx, uint32_t seq);
 
 // Fill a one-page Storage with the constant metal's reduce folds in: the value in
 // the first row of each of the tile's four 16x16 faces, zero everywhere else.
