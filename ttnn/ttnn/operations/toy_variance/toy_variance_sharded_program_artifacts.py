@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Metal 2.0 ProgramSpec for toy_variance on a WIDTH-SHARDED input -- the cross-core case.
+"""Metal 2.0 program artifacts for toy_variance on a WIDTH-SHARDED input -- the cross-core case.
 
 Width-sharding splits W, which is the axis the variance reduces over. That makes the reduced axis a
 *dependent* axis split across cores, so the combine has to cross cores twice:
@@ -34,7 +34,7 @@ from pathlib import Path
 import ttnn
 from ttnn.mcast_spec import McastFamily
 
-from .toy_variance_program_spec import fp32_bits
+from .toy_variance_program_artifacts import fp32_bits
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 TILE_DIM = 32
@@ -53,6 +53,7 @@ K_READER = "reader"
 K_COMPUTE = "compute"
 K_WRITER = "writer"
 
+# Internal to this module -- see the note in toy_variance_program_artifacts.py.
 TP_IN = "in"
 TP_OUT = "out"
 
@@ -123,7 +124,7 @@ def validate(input_tensor: ttnn.Tensor) -> None:
         )
 
 
-def create_program_spec(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tensor, *, std_dev: bool = False):
+def create_program_artifacts(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tensor, *, std_dev: bool = False):
     shape = list(input_tensor.shape)
     origin_H, origin_W = shape[-2], shape[-1]
     Ht = origin_H // TILE_DIM
@@ -287,4 +288,5 @@ def create_program_spec(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tensor, *
     )
     mcast.attach(spec, run_args, kernels=[K_READER], cores=cores)
 
-    return spec, run_args
+    tensor_indices = {TP_IN: 0, TP_OUT: 1}
+    return spec, run_args, tensor_indices
