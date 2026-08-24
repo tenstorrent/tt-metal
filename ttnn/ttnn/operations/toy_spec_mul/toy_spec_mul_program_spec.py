@@ -20,36 +20,50 @@ TP_B = "b"
 TP_OUT = "out"
 
 
-def _split_tiles(num_tiles: int, grid_size, *, tile_limit: int | None = None) -> list[tuple]:
-    """(core, num_tiles, start_id) per participating core, row-major over the grid.
+def _split_tiles(num_tiles: int, grid_size, *, tile_limit: int | None = None):
+    """(all_cores, [(core, num_tiles, start_id), ...]), row-major over the grid.
 
-    The core set is always derived from the full tile count, so `tile_limit` changes only
-    the runtime arg VALUES and leaves the ProgramSpec byte-identical. Cores past the limit
-    get zero tiles.
+    Two calls to ttnn.split_work_to_cores. The core set comes from the FULL tile count and
+    the per-core counts from the (possibly limited) work, so `tile_limit` changes only the
+    runtime arg VALUES and leaves the ProgramSpec byte-identical. Cores past the limit get
+    zero tiles.
+
+    row_wise=True orders cores along rows; the default orders them along columns, which
+    costs roughly 2x the NoC contention on a grid-filling interleaved op.
     """
-    cores = [ttnn.CoreCoord(x, y) for y in range(grid_size.y) for x in range(grid_size.x)]
-    cores = cores[: min(len(cores), num_tiles)]
+    _, all_cores, *_ = ttnn.split_work_to_cores(grid_size, num_tiles, row_wise=True)
 
     work = num_tiles if tile_limit is None else min(tile_limit, num_tiles)
-    num_workers = min(len(cores), work) or 1
-    base, rem = divmod(work, num_workers)
+    (
+        _,
+        _,
+        core_group_1,
+        core_group_2,
+        tiles_per_core_1,
+        tiles_per_core_2,
+    ) = ttnn.split_work_to_cores(grid_size, work, row_wise=True)
+
+    counts = {}
+    for group, per_core in ((core_group_1, tiles_per_core_1), (core_group_2, tiles_per_core_2)):
+        if per_core == 0:
+            continue
+        for core in ttnn.corerange_to_cores(group, None, True):
+            counts[core] = per_core
 
     assignment = []
     start = 0
-    for i, core in enumerate(cores):
-        count = (base + (1 if i < rem else 0)) if i < num_workers else 0
+    for core in ttnn.corerange_to_cores(all_cores, None, True):
+        count = counts.get(core, 0)
         assignment.append((core, count, start))
         start += count
-    return assignment
+    return all_cores, assignment
 
 
 def create_program_spec(a: ttnn.Tensor, b: ttnn.Tensor, out: ttnn.Tensor, *, tile_limit: int | None = None):
     num_tiles = out.buffer_num_pages()
     tile_bytes = out.buffer_page_size()
     grid_size = a.device().compute_with_storage_grid_size()
-    assignment = _split_tiles(num_tiles, grid_size, tile_limit=tile_limit)
-
-    core_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core, _, _ in assignment])
+    core_set, assignment = _split_tiles(num_tiles, grid_size, tile_limit=tile_limit)
 
     dfbs = [
         ttnn.DataflowBufferSpec(unique_id=name, entry_size=tile_bytes, num_entries=2, data_format=dtype)
