@@ -49,6 +49,11 @@ on:
         required: false
         default: true
         type: boolean
+      run-wh_galaxy_perf:
+        description: "Run on wh_galaxy_perf (Galaxy Fabric Stability Tests)"
+        required: false
+        default: true
+        type: boolean
       run-bh_loudbox:
         description: "Run on bh_loudbox"
         required: false
@@ -69,12 +74,17 @@ on:
         description: >
           Filter by test name. Composes on top of the per-SKU checkboxes above.
           WH N300 scaleout unit tests , t3k fabric tests , t3k UDM tests ,
+          T3K NightlyFabric unit tests , T3K fabric addrgen write , T3K fabric stability (full) ,
           6U fabric quick , 6U multi-process ,
+          Galaxy NightlyFabric unit tests , Galaxy Fabric 2D Torus Nightly ,
+          Galaxy Multi-Mesh 4x4 and 2x4s , Galaxy Multi-Mesh 2x8 and 2x4s ,
           BH fabric 1D unit tests , BH fabric 2D fixture unit tests ,
           BH fabric mux v2 unit tests , BH fabric UDM mode unit tests ,
           BH ttnn UDM unit tests , BH fabric system health tests ,
           BH fabric stability nightly tests , BH ccl nightly tests ,
-          BH fabric infra unit tests
+          BH fabric infra unit tests , BH fabric sanity benchmark ,
+          BH Galaxy Fabric Torus Stability , BH Galaxy Socket Pipeline ,
+          Galaxy Fabric Stability Tests
         required: false
         default: ""
         type: string
@@ -175,7 +185,7 @@ jobs:
         github.event_name == 'schedule' && false
         || (github.event_name == 'workflow_dispatch' && (
               inputs.run-wh_n300_civ2 || inputs.run-wh_llmbox_civ2 || inputs.run-wh_galaxy
-              || inputs.run-bh_loudbox || inputs.run-bh_p300 || inputs.run-bh_quietbox_2))
+              || inputs.run-wh_galaxy_perf || inputs.run-bh_loudbox || inputs.run-bh_p300 || inputs.run-bh_quietbox_2))
         || github.event_name == 'push'
         || github.event_name == 'workflow_call' }}
       # Assemble enabled-skus from the checked per-SKU booleans on workflow_dispatch;
@@ -183,13 +193,14 @@ jobs:
       # Trailing commas are stripped by prepare_test_matrix.py's parse_enabled_skus.
       enabled-skus: >-
         ${{ github.event_name == 'workflow_dispatch' && format(
-              '{0}{1}{2}{3}{4}{5}',
-              inputs.run-wh_n300_civ2  && 'wh_n300_civ2,'   || '',
+              '{0}{1}{2}{3}{4}{5}{6}',
+              inputs.run-wh_n300_civ2   && 'wh_n300_civ2,'   || '',
               inputs.run-wh_llmbox_civ2 && 'wh_llmbox_civ2,' || '',
-              inputs.run-wh_galaxy     && 'wh_galaxy,'      || '',
-              inputs.run-bh_loudbox    && 'bh_loudbox,'     || '',
-              inputs.run-bh_p300       && 'bh_p300,'        || '',
-              inputs.run-bh_quietbox_2 && 'bh_quietbox_2,'  || ''
+              inputs.run-wh_galaxy      && 'wh_galaxy,'      || '',
+              inputs.run-wh_galaxy_perf && 'wh_galaxy_perf,' || '',
+              inputs.run-bh_loudbox     && 'bh_loudbox,'     || '',
+              inputs.run-bh_p300        && 'bh_p300,'        || '',
+              inputs.run-bh_quietbox_2  && 'bh_quietbox_2,'  || ''
             ) || 'ALL_SKUS_IN_TESTS' }}
       test-names: ${{ inputs.hw-test-names || '' }}
 

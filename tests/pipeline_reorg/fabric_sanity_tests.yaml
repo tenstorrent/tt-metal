@@ -3,6 +3,28 @@
 # llmbox, and BH multi-card (QB2 / P300). Wired into sanity-tests.yaml via the
 # `fabric-sanity-tests` job.
 #
+# ---------------------------------------------------------------------------
+# Wave 3 consolidation — relationship to tests/pipeline_reorg/fabric_tests.yaml
+# ---------------------------------------------------------------------------
+# fabric_tests.yaml (consumed by tm-fabric-tests + tt-metal-l2-nightly) is the
+# authoritative source for the deeper / longer variants of every entry below.
+# The entries in this file were intentionally NOT deduplicated because their
+# cmd already routes through the same shared shell script or a strict subset
+# of the same gtest binary as the fabric_tests.yaml counterpart, so drift risk
+# is minimal:
+#   * `t3k fabric tests` cmd is `run_t3000_ttfabric_tests` from
+#     tests/scripts/t3000/run_t3000_unit_tests.sh — the identical function
+#     fabric_tests.yaml `t3k fabric tests` calls. Bit-for-bit identical.
+#   * `WH N300 fabric sanity` and `fabric fast unit tests (1D, 2D, single
+#     erisc)` are deliberately narrower gtest filters than the fabric_tests
+#     equivalents (fewer subsuites, `FabricMuxV2Smoke` vs full `FabricMuxV2`).
+#     They exist to fit the every-4-hour sanity cadence + 15-min-per-leg
+#     budget; folding them into fabric_tests would either bloat sanity or
+#     require a per-consumer timeout-variant schema field.
+# When touching a shared cmd, update both files (or the shared script) in
+# lockstep. See FABRIC_L2_NIGHTLY_MOVE_CHECKPOINT.md §15 for the wave-3
+# reconciliation rationale.
+#
 # Each entry: name, cmd, skus{sku: {timeout}}, team, owner_id.
 # `arch` is derived from the SKU inline in the impl workflow's ARCH_NAME
 # expression (bh_* -> blackhole, wh_* -> wormhole_b0), not authored per entry.

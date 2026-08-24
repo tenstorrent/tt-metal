@@ -1,4 +1,12 @@
-# Fabric hardware test matrix — consumed by .github/workflows/tm-fabric-tests-impl.yaml.
+# Fabric hardware test matrix — single source of truth for fabric HW test
+# definitions. Consumed by:
+#   - .github/workflows/tm-fabric-tests-impl.yaml   (dispatch + push, all entries by SKU checkbox)
+#   - .github/workflows/fabric-l2-nightly-tests-impl.yaml
+#         (schedule 06:00 UTC, hardcoded L2_NIGHTLY_TEST_NAMES subset)
+#
+# Wave 3 consolidation folded the former fabric_l2_nightly_tests.yaml into
+# this file; see FABRIC_L2_NIGHTLY_MOVE_CHECKPOINT.md §15 for the reconciliation
+# table and coverage-union rationale.
 #
 # Each entry:
 #   name: GitHub Actions job display name (SKU is appended by prepare_test_matrix).
@@ -10,8 +18,11 @@
 # expression (bh_* -> blackhole, wh_* -> wormhole_b0), not authored per entry.
 #   upload_benchmarks: (optional) When true and github.ref_name==main, impl runs
 #     check-latency-bw-results + SFTP uploads (fabric BW / latency).
-#   auto_triage: (optional, default true) Set false for multi-process legs where
-#     MPI coordination causes triage false positives.
+#   auto_triage: (optional, default true) Passed through to setup-job. Set false
+#     for multi-process / MPI legs where tt-run coordination trips the
+#     dispatcher hang-detection heuristic.
+#   hang_detection_timeout: (optional, default 5.0) Passed through to setup-job
+#     for legs that need a wider window.
 #
 # For max allowed timeout refer to .github/time_budget.yaml (scaleout -> unit).
 # CPU-only fabric tests live in tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml
@@ -59,15 +70,60 @@
   owner_id: U06US5C7M7X # Sean Nijjar
 
 # ============================================================================
+# WH T3K NightlyFabric + stability — moved from fabric_l2_nightly_tests.yaml
+# (wave 3 consolidation). Fanned across both wh_llmbox (legacy CI pool, used by
+# tt-metal-l2-nightly's daily fabric name-filter) and wh_llmbox_civ2 (CIv2 pool
+# used by tm-fabric-tests dispatch). Consumers pick the pool via SKU checkbox
+# (tm-fabric-tests) or hardcoded enabled-skus (l2-nightly).
+# ============================================================================
+- name: T3K NightlyFabric unit tests
+  cmd: build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric*Fixture.*"
+  skus:
+    wh_llmbox:
+      timeout: 30
+    wh_llmbox_civ2:
+      timeout: 30
+  team: scaleout
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+
+- name: T3K fabric addrgen write
+  cmd: build/test/tt_metal/tt_fabric/test_addrgen_write
+  skus:
+    wh_llmbox:
+      timeout: 10
+    wh_llmbox_civ2:
+      timeout: 10
+  team: scaleout
+  owner_id: U07D5N7QL4U # Joseph Chu
+
+- name: T3K fabric stability (full)
+  # Full stability run (no --filter). TT_METAL_OPERATION_TIMEOUT_SECONDS=0
+  # disables the per-op timeout to let long-running subtests finish; a real
+  # hang is bounded by the SKU job timeout.
+  cmd: TT_METAL_OPERATION_TIMEOUT_SECONDS=0 build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability.yaml
+  skus:
+    wh_llmbox:
+      timeout: 120
+    wh_llmbox_civ2:
+      timeout: 120
+  team: scaleout
+  owner_id: U08FXFFH7L0 # Abhishek Agarwal
+
+# ============================================================================
 # WH Galaxy 6U — port of wh-6u-fabric-tests inline block.
 # Each entry prepends run_cluster_validation so a broken cluster fails fast
 # without running the heavy fabric matrix (was gated via step outcome before).
 # ============================================================================
 - name: 6U fabric quick
+  # SLOW_DISPATCH + ControlPlane-TG + FabricMuxFixture (v1) lines absorbed from
+  # wave-3 consolidation (formerly fabric_l2_nightly's galaxy-fabric-unit-suite).
   cmd: |
     ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.*TG*"
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric*MuxFixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*FabricMuxV2*Fixture.*"
     TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
@@ -76,7 +132,7 @@
     ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_ubench_6U_galaxy_quick.yaml
   skus:
     wh_galaxy:
-      timeout: 25
+      timeout: 30
   team: scaleout
   owner_id: U0845EV7A5U # Umair Cheema
   upload_benchmarks: true
@@ -104,11 +160,63 @@
   auto_triage: false
 
 # ============================================================================
+# WH Galaxy NightlyFabric + multi-mesh — moved from fabric_l2_nightly_tests.yaml
+# (wave 3 consolidation). Note: the Galaxy NightlyFabric unit tests entry below
+# also fans out a bh_galaxy leg, so it appears once here rather than being split
+# across the WH and BH Galaxy sections.
+# ============================================================================
+- name: Galaxy NightlyFabric unit tests
+  cmd: build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric*Fixture.*"
+  skus:
+    wh_galaxy:
+      timeout: 25
+    bh_galaxy:
+      timeout: 30
+  team: scaleout
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+
+- name: Galaxy Fabric 2D Torus Nightly
+  cmd: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2d_torus_nightly.yaml
+  skus:
+    wh_galaxy:
+      timeout: 45
+  team: scaleout
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+
+- name: Galaxy Multi-Mesh 4x4 and 2x4s
+  cmd: |
+    python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --rank-binding 4x4_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_stability_short_running.yaml
+    TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH=1 tt-run --rank-binding 4x4_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_mesh_passthrough.yaml
+  skus:
+    wh_galaxy:
+      timeout: 15
+  team: scaleout
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  auto_triage: false
+
+- name: Galaxy Multi-Mesh 2x8 and 2x4s
+  cmd: |
+    python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --rank-binding 2x8_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_multi_mesh_stability_short_running.yaml
+    TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH=1 tt-run --rank-binding 2x8_2x4_3_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_mesh_passthrough.yaml
+  skus:
+    wh_galaxy:
+      timeout: 15
+  team: scaleout
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  auto_triage: false
+
+# ============================================================================
 # BH multi-card — port of bh-multi-card-unit-tests matrix (9 groups × 3 SKUs).
 # Same cmd across all 3 SKUs; prepare_test_matrix fans out one leg per SKU.
 # ============================================================================
 - name: BH fabric 1D unit tests
-  cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+  # AERISC repeat absorbed from wave-3 consolidation (formerly the
+  # DISABLE_MULTI_AERISC leg of fabric_l2_nightly's bh-fabric-fast-unit).
+  cmd: |
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
   skus:
     bh_loudbox:
       timeout: 15
@@ -224,3 +332,63 @@
       timeout: 15
   team: scaleout
   owner_id: U06US5C7M7X # Sean Nijjar
+
+- name: BH fabric sanity benchmark
+  # Moved from fabric_l2_nightly_tests.yaml (wave 3 consolidation). Field
+  # renamed from upload_fabric_data to upload_benchmarks to match fabric_tests
+  # convention; fabric-l2-nightly-tests-impl.yaml was updated to read the new
+  # field name in the same PR.
+  cmd: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_ubench_at_least_2x2_mesh.yaml
+  upload_benchmarks: true
+  skus:
+    bh_loudbox:
+      timeout: 15
+    bh_p300:
+      timeout: 15
+    bh_quietbox_2:
+      timeout: 15
+  team: scaleout
+  owner_id: U07D5N7QL4U # Joseph Chu
+
+# ============================================================================
+# BH Galaxy — moved from fabric_l2_nightly_tests.yaml (wave 3 consolidation).
+# Note: the Galaxy NightlyFabric unit tests entry earlier in this file also
+# fans out a bh_galaxy leg.
+# ============================================================================
+- name: BH Galaxy Fabric Torus Stability
+  cmd: TT_METAL_OPERATION_TIMEOUT_SECONDS=0 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2d_torus_stability.yaml
+  skus:
+    bh_galaxy:
+      timeout: 20
+  team: scaleout
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+
+- name: BH Galaxy Socket Pipeline
+  cmd: |
+    python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
+    tt-run --rank-binding bh_galaxy_split_4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
+  skus:
+    bh_galaxy:
+      timeout: 10
+  team: scaleout
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  auto_triage: false
+
+# ============================================================================
+# WH Galaxy 6U perf — moved from tests/pipeline_reorg/galaxy_stress_tests.yaml.
+# Previously ran weekly (Sat 03:00 UTC) via galaxy-stress-tests.yaml; now runs
+# on manual dispatch cadence (tm-fabric-tests has no push trigger and its
+# schedule is CPU-only). Gated by the run-wh_galaxy_perf checkbox on
+# tm-fabric-tests.yaml.
+# ============================================================================
+- name: Galaxy Fabric Stability Tests
+  # TT_METAL_OPERATION_TIMEOUT_SECONDS=0 disables the metal per-op timeout
+  # (overrides setup-job's 5s default), which else false-fails legitimately
+  # slow subtests (size_4096 unicast ~6.2s). A real hang is bounded by the
+  # SKU job timeout below.
+  cmd: TT_METAL_OPERATION_TIMEOUT_SECONDS=0 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability.yaml --filter 'name.*_short'
+  skus:
+    wh_galaxy_perf:
+      timeout: 100
+  team: scaleout
+  owner_id: U08FXFFH7L0 # Abhishek Agarwal

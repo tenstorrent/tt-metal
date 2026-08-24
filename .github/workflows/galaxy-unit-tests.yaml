@@ -11,8 +11,6 @@ on:
         options:
           - all
           - unit
-          - fabric
-          - multiprocess
 #          - prefetcher
           - distributed-ops
           - tttv2

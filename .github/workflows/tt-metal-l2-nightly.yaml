@@ -65,6 +65,11 @@ on:
         required: false
         type: boolean
         default: false
+      run_fabric_tests:
+        description: "Run fabric l2 nightly tests (wh_llmbox + bh_loudbox/bh_p300/bh_quietbox_2)"
+        required: false
+        type: boolean
+        default: false
       run_triage_tests:
         description: "Run tt-triage tests"
         required: false
@@ -384,3 +389,32 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+
+  # =============================================================================
+  # Scaleout team
+  # =============================================================================
+  # Fabric l2 nightly tests — moved from t3000-e2e-tests / blackhole-e2e-tests.
+  # Runs on wh_llmbox + bh_loudbox/bh_p300/bh_quietbox_2 SKUs, which are outside
+  # generate-arch-matrix's l2-nightly-skus set; enabled-skus is composed inline
+  # below to keep other jobs' matrix unchanged.
+  fabric-l2-nightly-tests:
+    needs: [build-artifact]
+    if: ${{ github.event_name == 'schedule' || inputs.run_fabric_tests }}
+    secrets: inherit
+    uses: ./.github/workflows/fabric-l2-nightly-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      # Respect the existing run_wormhole / run_blackhole toggles: unchecking an
+      # arch on dispatch drops the corresponding fabric legs. Schedule always
+      # covers both archs (matches generate-arch-matrix). wh_galaxy / bh_galaxy
+      # added in wave 2 (galaxy fabric move) alongside wh_llmbox + BH loudbox
+      # SKUs from wave 1.
+      enabled-skus: >-
+        ${{ (github.event_name == 'schedule'
+              || (inputs.run_wormhole && inputs.run_blackhole))
+              && 'wh_llmbox,wh_galaxy,bh_loudbox,bh_p300,bh_quietbox_2,bh_galaxy'
+            || (inputs.run_wormhole && 'wh_llmbox,wh_galaxy')
+            || (inputs.run_blackhole && 'bh_loudbox,bh_p300,bh_quietbox_2,bh_galaxy')
+            || '' }}

@@ -16,54 +16,7 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-# --- integration ---
-- id: bh-fabric-infra-integration
-  name: fabric infra unit tests
-  cmd: |
-    ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_common.yaml
-    ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_at_least_2x2_mesh.yaml
-    TT_FABRIC_PROFILE_RX_CH_FWD=1 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_code_profiling.yaml
-  skus:
-    bh_loudbox:
-      timeout: 15
-    bh_p300:
-      timeout: 15
-    bh_quietbox_2:
-      timeout: 15
-  owner_id: U07D5N7QL4U # Joseph Chu
-  team: scaleout
-
-# --- perf ---
-- id: bh-fabric-sanity-benchmark
-  name: fabric sanity benchmark
-  cmd: ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_ubench_at_least_2x2_mesh.yaml
-  upload_fabric_data: true
-  skus:
-    bh_loudbox:
-      timeout: 15
-    bh_p300:
-      timeout: 15
-    bh_quietbox_2:
-      timeout: 15
-  owner_id: U07D5N7QL4U # Joseph Chu
-  team: scaleout
-
 # --- unit ---
-- id: bh-fabric-ttnn-udm-unit
-  name: fabric and ttnn UDM unit tests
-  cmd: |
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2DUDMModeFixture.*:*ChannelTrimming*"
-    ./build/test/ttnn/unit_tests_ttnn_udm
-  skus:
-    bh_loudbox:
-      timeout: 20
-    bh_p300:
-      timeout: 20
-    bh_quietbox_2:
-      timeout: 20
-  owner_id: U07D5N7QL4U # Joseph Chu
-  team: scaleout
-
 - id: bh-grid-20-cores-ttnn-sharding
   name: ttnn sharding on 20 cores
   cmd: pytest tests/ttnn/unit_tests/base_functionality/test_bh_20_cores_sharding.py::test_sharding_on_bh_20_cores
@@ -77,22 +30,6 @@
 # Fast multi-card legs that the legacy blackhole-multi-card-unit-tests-impl.yaml
 # also runs in post-commit (fast-only: true). Kept in e2e to match the run-count
 # observed on the pre-reorg reference run.
-- id: bh-fabric-fast-unit
-  name: fabric fast unit tests (1D, 2D, single erisc)
-  cmd: |
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*FabricMuxV2*Fixture.*"
-    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
-  skus:
-    bh_loudbox:
-      timeout: 15
-    bh_p300:
-      timeout: 15
-    bh_quietbox_2:
-      timeout: 15
-  owner_id: U07D5N7QL4U # Joseph Chu
-  team: scaleout
 
 - id: bh-ttnn-ops-fast-unit
   name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
@@ -120,19 +57,6 @@
   team: models
 
 # --- stress (continuous gate) ---
-- id: bh-fabric-stability-stress
-  name: fabric stability nightly tests
-  cmd: TT_METAL_OPERATION_TIMEOUT_SECONDS=0 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability.yaml --filter 'name.*_short'
-  skus:
-    bh_loudbox:
-      timeout: 15
-    bh_p300:
-      timeout: 15
-    bh_quietbox_2:
-      timeout: 15
-  owner_id: U07D5N7QL4U # Joseph Chu
-  team: scaleout
-
 - id: bh-ttnn-stress
   name: ttnn stress tests
   cmd: pytest tests/ttnn/stress_tests/

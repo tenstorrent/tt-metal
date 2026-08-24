@@ -194,15 +194,17 @@ scaleout:
     wh_n300_civ2: 10
   unit:
     cpu_medium: 235
-    wh_llmbox: 60
-    wh_galaxy: 75
+    # Wave 3 consolidation raised the following four keys to fit the fabric_l2_nightly
+    # entries that were folded into fabric_tests.yaml (moved from scaleout.e2e).
+    wh_llmbox: 165          # raised 60 → 165: fabric_tests T3K NightlyFabric trio (30+10+120 = 160) + 5 headroom
+    wh_llmbox_civ2: 225     # raised 65 → 225: existing 60 + T3K NightlyFabric trio fan-out (160) + 5 headroom
+    wh_galaxy: 160          # raised 75 → 160: existing 50 + WH Galaxy NightlyFabric/multi-mesh (25+45+15+15+5 = 100 with +5 on 6U fabric quick for SLOW_DISPATCH lines) + 5 headroom
+    bh_galaxy: 65           # NEW: bh_galaxy leg of Galaxy NightlyFabric (30) + BH Galaxy Torus Stability (20) + BH Galaxy Socket Pipeline (10) + 5 headroom
+    wh_galaxy_perf: 105     # Galaxy Fabric Stability Tests (100) + 5 headroom
     wh_n300_civ2: 15
-    wh_llmbox_civ2: 65
     bh_loudbox: 195
     bh_p300: 195
     bh_quietbox_2: 195
-  stress:
-    wh_galaxy_perf: 120
   integration:
     wh_llmbox: 40
   health:
@@ -217,15 +219,18 @@ scaleout:
   perf:
     wh_llmbox_perf: 140
   e2e:
-    wh_llmbox: 185
-    wh_galaxy: 100
-    bh_galaxy: 60
+    # Wave 3 consolidation removed the following keys (they were consumers only of
+    # the deleted fabric_l2_nightly_tests.yaml):
+    #   wh_galaxy: 125   (all consumers moved to scaleout.unit.wh_galaxy)
+    #   bh_galaxy: 60    (all consumers moved to scaleout.unit.bh_galaxy)
+    #   bh_loudbox / bh_p300 / bh_quietbox_2: 80  (all consumers moved to scaleout.unit.bh_*)
+    # scaleout.stress.wh_galaxy_perf: 120  (galaxy_stress_tests.yaml is empty
+    # post-wave-2; the Galaxy Fabric Stability Tests entry lives under
+    # scaleout.unit.wh_galaxy_perf in fabric_tests.yaml now)
+    wh_llmbox: 185          # still consumed by t3k_e2e_tests.yaml (25 min) — kept oversized for future headroom
     bh_sc1: 20
     bh_sc4: 90
     bh_sc16: 150
-    bh_loudbox: 80
-    bh_p300: 80
-    bh_quietbox_2: 80
   # Per-tier e2e budgets for DeepSeek supercluster tests now living in
   # tests/pipeline_reorg/models_e2e_tests.yaml (consumed by models-e2e / release-demo).
   e2e_tier1:

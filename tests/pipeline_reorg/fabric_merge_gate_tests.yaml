@@ -6,6 +6,19 @@
 # For max allowed timeout refer to .github/time_budget.yaml (scaleout -> merge_gate).
 # Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
 #
+# ---------------------------------------------------------------------------
+# Wave 3 consolidation — relationship to tests/pipeline_reorg/fabric_tests.yaml
+# ---------------------------------------------------------------------------
+# fabric_tests.yaml (consumed by tm-fabric-tests + tt-metal-l2-nightly) is the
+# authoritative source for the deeper WH N300 fabric variant (`WH N300 scaleout
+# unit tests`, also implemented as `./tests/scripts/run_cpp_fabric_tests.sh`).
+# The single entry in this file was intentionally NOT deduplicated because it
+# calls the identical shared script, differing only in the merge-gate-scoped
+# 10-min timeout (vs fabric_tests's 15-min). Since the cmd is a shared script
+# path, drift risk is zero. When touching run_cpp_fabric_tests.sh, no yaml
+# edit is required. See FABRIC_L2_NIGHTLY_MOVE_CHECKPOINT.md §15 for the
+# wave-3 reconciliation rationale.
+#
 # tests/scripts/run_cpp_fabric_tests.sh, which exercises:
 #   * fabric_unit_tests --gtest_filter="MeshGraphValidation*"           (host-side control-plane topology)
 #   * fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"             (2D fabric fast dispatch)

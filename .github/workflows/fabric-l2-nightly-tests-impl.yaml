@@ -1,0 +1,247 @@
+name: "[internal] Fabric L2 nightly tests impl"
+
+# Runs a hardcoded subset of tests/pipeline_reorg/fabric_tests.yaml on the
+# tt-metal-l2-nightly cadence (daily 06:00 UTC + manual).
+#
+# Wave 3 consolidation folded fabric_l2_nightly_tests.yaml into fabric_tests.yaml
+# and repointed this impl at the consolidated file with a compose-time name
+# filter (L2_NIGHTLY_TEST_NAMES below). See FABRIC_L2_NIGHTLY_MOVE_CHECKPOINT.md
+# §15 for the mapping between the old l2-nightly-only entries and their
+# fabric_tests.yaml counterparts.
+#
+# Entries that emit fabric BW / latency CSVs opt in via `upload_benchmarks: true`
+# (renamed from `upload_fabric_data` during the consolidation to match the
+# convention already used elsewhere in fabric_tests.yaml).
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      enabled-skus:
+        required: true
+        type: string
+        description: "Comma-separated SKUs (from sku_config.yaml), or ALL_SKUS_IN_TESTS."
+
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.filter-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/fabric_tests.yaml
+      # Single source of truth for which fabric_tests.yaml entries the
+      # tt-metal-l2-nightly schedule runs. Compose-time constant, not an input
+      # (unlike tm-fabric-tests which surfaces this as workflow_dispatch string).
+      # Keep this list in sync with the reconciliation table in
+      # FABRIC_L2_NIGHTLY_MOVE_CHECKPOINT.md §15.
+      L2_NIGHTLY_TEST_NAMES: >-
+        T3K NightlyFabric unit tests,
+        T3K fabric addrgen write,
+        T3K fabric stability (full),
+        BH fabric 1D unit tests,
+        BH fabric 2D fixture unit tests,
+        BH fabric mux v2 unit tests,
+        BH fabric UDM mode unit tests,
+        BH ttnn UDM unit tests,
+        BH fabric infra unit tests,
+        BH fabric sanity benchmark,
+        BH fabric stability nightly tests,
+        6U fabric quick,
+        6U multi-process,
+        Galaxy NightlyFabric unit tests,
+        Galaxy Fabric 2D Torus Nightly,
+        Galaxy Multi-Mesh 4x4 and 2x4s,
+        Galaxy Multi-Mesh 2x8 and 2x4s,
+        BH Galaxy Fabric Torus Stability,
+        BH Galaxy Socket Pipeline
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "unit"
+      - name: Build test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
+      - name: Restrict matrix to L2 nightly test names
+        id: filter-matrix
+        # Mirrors the filter step in tm-fabric-tests-impl.yaml, but pulls the
+        # name list from the compose-time env constant above (fixed cadence)
+        # instead of a workflow_dispatch input (user-chosen subset).
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, sys
+
+          matrix = json.loads(r"""${{ steps.build-matrix.outputs.matrix }}""")
+          names = [n.strip() for n in r"""${{ env.L2_NIGHTLY_TEST_NAMES }}""".split(",") if n.strip()]
+          # prepare_test_matrix.py appends " [<sku>]" to each name; match on the base.
+          base = lambda entry: entry["name"].split(" [")[0]
+          unknown = sorted(set(names) - {base(t) for t in matrix})
+          if unknown:
+              print(f"::error::L2_NIGHTLY_TEST_NAMES entries not present in the matrix: {', '.join(unknown)}")
+              sys.exit(1)
+          matrix = [t for t in matrix if base(t) in names]
+          print(f"Restricted matrix to {len(matrix)} legs: {', '.join(t['name'] for t in matrix)}", file=sys.stderr)
+          print("matrix=" + json.dumps(matrix, separators=(",", ":")))
+          PY
+
+  fabric-l2-nightly-tests:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      # Do not fail-fast: keep every leg running so hanging machines are not
+      # left mid-test by a peer failure (mirrors tm-fabric-tests-impl).
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    # Bind the mainline GH environment on main so the fabric BW / latency
+    # SFTP upload secrets below are available.
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    # ARCH_NAME is derived inline from matrix.test-group.sku:
+    # bh_* / *blackhole* -> blackhole; wh_* / *wormhole* -> wormhole_b0; else ''
+    # so downstream fabric binaries trip their -z guards on unrecognized SKUs.
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || (contains(matrix.test-group.sku, 'wh_') || contains(matrix.test-group.sku, 'wormhole')) && 'wormhole_b0' || '' }}
+        LOGURU_LEVEL: INFO
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      # Cap container memory to 256 GiB on WH-LB (wh_llmbox*) to keep T3K
+      # legs from ballooning host memory. Other SKUs use container default.
+      options: --device /dev/tenstorrent ${{ contains(matrix.test-group.sku, 'wh_llmbox') && '--memory 256g' || '' }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: Mark repository as safe directory
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          # MPI / multi-process legs (6U multi-process, Galaxy Multi-Mesh
+          # 4x4/2x8, BH Galaxy Socket Pipeline) set auto_triage:false in the
+          # testlist so tt-run coordination doesn't trip dispatcher hang-detection.
+          # Legs without the field fall through to setup-job's true default.
+          auto-triage: ${{ matrix.test-group.auto_triage != false }}
+          hang-detection-timeout: ${{ matrix.test-group.hang_detection_timeout || 5.0 }}
+      # Run smi-reset + system-health loop before every BH leg to ensure the
+      # links are online.
+      - name: Ensure BH links online
+        if: ${{ startsWith(matrix.test-group.sku, 'bh_') }}
+        uses: ./docker-job/.github/actions/ensure-bh-links-online
+        timeout-minutes: 10
+      - name: ${{ matrix.test-group.name }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: ${{ matrix.test-group.cmd }}
+      # Fabric BW / latency data upload: only entries that set
+      # `upload_benchmarks: true` opt in.
+      - name: Check for benchmark and latency data
+        id: check-data
+        if: ${{ !cancelled() && matrix.test-group.upload_benchmarks == true }}
+        uses: ./docker-job/.github/actions/check-latency-bw-results
+        with:
+          path: /work
+          arch: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || (contains(matrix.test-group.sku, 'wh_') || contains(matrix.test-group.sku, 'wormhole')) && 'wormhole_b0' || '' }}
+          check_bw: "true"
+          check_latency: "true"
+      - name: Upload benchmark data
+        if: ${{ !cancelled() && github.ref_name == 'main' && matrix.test-group.upload_benchmarks == true && steps.check-data.outcome == 'success' && steps.check-data.outputs.has_benchmark_data == 'true' }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/fabric_bandwidth_benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
+      - name: Upload latency data
+        if: ${{ !cancelled() && github.ref_name == 'main' && matrix.test-group.upload_benchmarks == true && steps.check-data.outcome == 'success' && steps.check-data.outputs.has_latency_data == 'true' }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/fabric_latency_benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
+      # Dump tt-smi state after a BH failure so triage has chip health /
+      # thermals / link status without needing a repro.
+      - name: Print tt-smi data on failure
+        if: ${{ failure() && startsWith(matrix.test-group.sku, 'bh_') }}
+        run: |
+          tt-smi -s
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - name: Generate gtest annotations on failure
+        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
+        if: ${{ failure() }}
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() && matrix.test-group.owner_id != null }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
