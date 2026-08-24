@@ -23,12 +23,13 @@ void kernel_main() {
     constexpr uint32_t dfb_id_in0 = 0;
 
     constexpr uint32_t onetile = 1;
-    uint32_t tile_bytes = get_tile_size(dfb_id_in0);
 
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
 
     Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);
+
+    uint32_t tile_bytes = dfb_in0.get_tile_size();
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {

@@ -32,6 +32,7 @@ private:
     std::ofstream kernels_ostream;
     std::ofstream mesh_devices_ostream;
     std::ofstream mesh_workloads_ostream;
+    std::ofstream mesh_buffers_ostream;
     bool initialized{false};
     std::filesystem::path logging_path;
 
@@ -53,6 +54,9 @@ public:
     void log_program_kernel_compile_finished(const ProgramData& program_data, const inspector::KernelData& kernel_data) noexcept;
     void log_program_compile_finished(const ProgramData& program_data) noexcept;
     void log_program_binary_status_change(const ProgramData& program_data, std::size_t device_id, ProgramBinaryStatus status) noexcept;
+
+    void log_mesh_buffer_allocated(const distributed::MeshBuffer* mesh_buffer) noexcept;
+    void log_mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buffer) noexcept;
 
     void log_mesh_device_created(const MeshDeviceData& mesh_device_data) noexcept;
     void log_mesh_device_destroyed(const MeshDeviceData& mesh_device_data) noexcept;

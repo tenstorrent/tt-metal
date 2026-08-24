@@ -295,8 +295,9 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", base.NO_INPUT_MASK_SHAPES)
 @pytest.mark.parametrize("specify_grid", [False])
-def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, specify_grid):
-    base.test_group_norm_no_input_mask(device, N, C, H, W, num_groups, specify_grid)
+@pytest.mark.parametrize("use_welford", base.welford_flavors, ids=base.welford_ids)
+def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, use_welford, specify_grid):
+    base.test_group_norm_no_input_mask(device, N, C, H, W, num_groups, use_welford, specify_grid)
 
 
 @pytest.mark.parametrize("N, C, H, W, num_groups", base.DRAM_GRID_SIZE_SHAPES)

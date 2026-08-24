@@ -590,6 +590,14 @@ private:
     bool local_circular_buffer_allocation_needed_{false};
     bool local_dataflow_buffer_allocation_needed_{false};
 
+    // Guards compile_and_allocate, which runs on every enqueue of a program, not just the first.
+    // Once a program has been compiled and laid out for a device, every step inside it is a no-op
+    // until something invalidates the CB or DFB layout, so it can be skipped wholesale. The
+    // invalidate_*_allocation hooks and the CB/DFB creation paths set this back to true. Recorded
+    // per device, since the layout steps also register the program against the device.
+    bool compile_and_allocate_needed_{true};
+    const IDevice* compile_and_allocate_device_{nullptr};
+
     // Scratchpads (Metal 2.0 only)
     // Guards allocate_scratchpads to ensure that it runs once per allocation cycle.
     // Scratchpad allocation occurs once on Program creation, and is re-run if the DFB layout
@@ -653,4 +661,9 @@ private:
 };
 
 }  // namespace detail
+
+// Launch `program` on every device in `mesh_device` via EnqueueMeshWorkload.
+// Takes ownership of `program`. When `wait_until_cores_done` is true, enqueue is blocking.
+void LaunchProgram(distributed::MeshDevice& mesh_device, Program&& program, bool wait_until_cores_done);
+
 }  // namespace tt::tt_metal

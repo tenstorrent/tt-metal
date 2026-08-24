@@ -4365,6 +4365,77 @@ def test_matmul_kt_not_divisible_by_in0_block_w_rejected(device, expect_error):
         ttnn.matmul(in0, in1, program_config=program_config)
 
 
+def _mcast_in1_tail_config(grid, per_core_m, per_core_n, out_block_h, out_block_w):
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=2,
+        out_block_h=out_block_h,
+        out_block_w=out_block_w,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+    )
+
+
+def test_matmul_mcast_in1_single_core_h_and_w_tail(device):
+    """The sole in1 sender must apply both logical M and N tails."""
+    torch.manual_seed(0)
+    torch_in0 = torch.randn((1, 1, 32, 64), dtype=torch.bfloat16)
+    torch_in1 = torch.randn((1, 1, 64, 224), dtype=torch.bfloat16)
+    torch_output = torch.matmul(torch_in0, torch_in1)
+
+    in0 = ttnn.from_torch(torch_in0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    in1 = ttnn.from_torch(torch_in1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    program_config = _mcast_in1_tail_config(grid=(1, 1), per_core_m=2, per_core_n=8, out_block_h=2, out_block_w=8)
+
+    output = ttnn.to_torch(ttnn.matmul(in0, in1, program_config=program_config))
+    assert_with_pcc(torch_output, output, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "m_tiles,n_tiles,grid,per_core_m,per_core_n,out_block_h,out_block_w,error",
+    [
+        (1, 9, (2, 1), 2, 8, 2, 4, r"mcast_in1 requires N .*single per_core_N block"),
+        (1, 3, (1, 1), 2, 8, 2, 4, r"logical N tail to be in the final internal W block"),
+        (3, 7, (1, 1), 8, 8, 4, 4, r"single-Y mcast_in1 sender requires the logical M tail"),
+        (7, 7, (1, 1), 8, 8, 4, 4, r"partial final H block only when per_core_M contains one internal H block"),
+    ],
+    ids=["multiple-x-blocks", "deep-w-tail", "single-y-deep-h-tail", "single-y-multi-block-h-tail"],
+)
+def test_matmul_mcast_in1_rejects_unsupported_distribution(
+    device,
+    expect_error,
+    m_tiles,
+    n_tiles,
+    grid,
+    per_core_m,
+    per_core_n,
+    out_block_h,
+    out_block_w,
+    error,
+):
+    in0 = ttnn.from_torch(
+        torch.randn((1, 1, m_tiles * 32, 64), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+    )
+    in1 = ttnn.from_torch(
+        torch.randn((1, 1, 64, n_tiles * 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+    )
+    program_config = _mcast_in1_tail_config(
+        grid=grid,
+        per_core_m=per_core_m,
+        per_core_n=per_core_n,
+        out_block_h=out_block_h,
+        out_block_w=out_block_w,
+    )
+
+    with expect_error(RuntimeError, error):
+        ttnn.matmul(in0, in1, program_config=program_config)
+
+
 def _offset_cancellation_inputs(m, k, n, offset, seed=0):
     """Matrix A is a small random signal plus a large constant offset. Matrix B has each column that
     sums to zero, so the constant offset from A contributes nothing to A @ B, and the correct result

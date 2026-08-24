@@ -10,6 +10,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.sampling.generator import SamplingGenerator
+from models.common.sampling.tt_sampling import TOPK_MAX_WIDTH, TTSampling
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode, copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
@@ -152,9 +153,16 @@ class Transformer(LightweightModule):
         )
 
         # Initialize on-device sampling if supported
-        # Sampling on device is supported only if each device has maximum logits size of 64*1024
-        sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
-        self._supports_on_device_sampling = prefetcher is None and self.args.vocab_size // sampling_splits <= 64 * 1024
+        # Sampling on device is supported only if each device holds at most TOPK_MAX_WIDTH logits.
+        # On a single device TTSampling cuts the padded vocab into as many same-device chunks as
+        # needed (power-of-two, each <= TOPK_MAX_WIDTH), so any vocab it can cut tile-aligned is
+        # supported (#53064); anything it cannot falls back to host sampling.
+        padded_vocab_size = getattr(self.args, "padded_vocab_size", None) or self.args.vocab_size
+        if list(self.mesh_device.shape) != [1, 1]:
+            vocab_fits_on_device = padded_vocab_size // self.args.num_devices <= TOPK_MAX_WIDTH
+        else:
+            vocab_fits_on_device = TTSampling.num_single_device_vocab_splits(padded_vocab_size) is not None
+        self._supports_on_device_sampling = prefetcher is None and vocab_fits_on_device
         if self._supports_on_device_sampling:
             self.sampling = SamplingGenerator(
                 args=args,
@@ -163,6 +171,66 @@ class Transformer(LightweightModule):
             )
         else:
             self.sampling = None
+
+    def update_weights(
+        self,
+        hf_state_dict: dict[str, ttnn.Tensor],
+        *,
+        hf_rope: bool = False,
+    ) -> None:
+        """In-place replace every weight from an HF-keyed dict of on-device 4D
+        ttnn tensors (replicated, DRAM-interleaved, TILE, bf16). Keys follow HF
+        safetensors naming; shapes are HF Linear/gamma/embedding wrapped in two
+        leading unit dims.
+
+        Strict by construction: every required key must be present (missing ->
+        ``KeyError``) and every provided key consumed by exactly one leaf
+        ``.update()`` (extras -> ``ValueError``). No "loose" mode -- silent
+        partial updates are an expensive class of bug.
+
+        ``hf_rope=False`` (default): caller has already permuted Q/K rows into
+        this model's convention (right for the ttml -> TTT transfer, both store
+        Meta-permuted rows). ``hf_rope=True`` defers HF -> Meta permutation to
+        ``Attention.update`` (currently raises -- kernel not wired up).
+
+        Tied embeddings: the protocol still requires both
+        ``model.embed_tokens.weight`` and ``lm_head.weight`` (typically the same
+        source tensor), keeping dispatch one-to-one with device buffers.
+
+        Every existing buffer keeps its device allocation, so captured traces
+        and the prefetcher's recorded addresses stay valid.
+        """
+        unconsumed = set(hf_state_dict.keys())
+
+        def consume(key: str) -> ttnn.Tensor:
+            if key not in hf_state_dict:
+                raise KeyError(f"Transformer.update_weights: missing required HF key {key!r}")
+            unconsumed.discard(key)
+            return hf_state_dict[key]
+
+        # Top-level (always required).
+        self.embd.update(embed_tokens=consume("model.embed_tokens.weight"))
+        self.norm.update(weight=consume("model.norm.weight"))
+        self.lm_head.update(weight=consume("lm_head.weight"))
+
+        # Per-layer: prefix-strip into a layer-local dict, dispatch.
+        for i, block in enumerate(self.layers):
+            prefix = f"model.layers.{i}."
+            layer_dict = {}
+            for key in list(hf_state_dict.keys()):
+                if key.startswith(prefix):
+                    layer_dict[key[len(prefix) :]] = hf_state_dict[key]
+                    unconsumed.discard(key)
+            block.update_weights(layer_dict, hf_rope=hf_rope)
+
+        if unconsumed:
+            sample = sorted(unconsumed)[:10]
+            raise ValueError(
+                f"Transformer.update_weights: {len(unconsumed)} HF key(s) not "
+                f"consumed by any leaf .update(). This usually means a typo, "
+                f"a stray weight, or a layer-index off-by-one. "
+                f"Showing up to 10: {sample}"
+            )
 
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
         get_last_token = (last_token_idx // 32) * 32

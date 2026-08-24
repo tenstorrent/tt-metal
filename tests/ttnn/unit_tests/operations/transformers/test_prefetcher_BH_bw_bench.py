@@ -52,6 +52,7 @@ from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.operations.prefetcher_common import (
     round_up as _round_up,
     make_recv_contig_weight as _make_recv_contig_weight,
+    require_tensor_prefetcher,
 )
 
 
@@ -60,11 +61,7 @@ pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 
 @pytest.fixture(autouse=True)
 def _require_tensor_prefetcher(device):
-    """Skip unless programmable DRAM cores are available on this device."""
-    if not ttnn.experimental.is_tensor_prefetcher_supported(device):
-        pytest.skip(
-            "programmable DRAM cores unavailable (need Blackhole, firmware >= 19.12.0.0, and either no harvested DRAM channels or a single device)"
-        )
+    require_tensor_prefetcher(device)
 
 
 _NUM_DRAM_BANKS = 8
