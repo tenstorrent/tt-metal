@@ -14,10 +14,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-EXABOX_DIR = Path(__file__).resolve().parents[1]
-if str(EXABOX_DIR) not in sys.path:
-    sys.path.insert(0, str(EXABOX_DIR))
+TESTS_DIR = Path(__file__).resolve().parent
+EXABOX_DIR = TESTS_DIR.parent
+for _path in (EXABOX_DIR, TESTS_DIR):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
+import fixtures  # noqa: E402
 from cluster_health_schema import (  # noqa: E402
     CLUSTER_HEALTH_JSON_SCHEMA,
     SCHEMA_ID,
@@ -25,26 +28,22 @@ from cluster_health_schema import (  # noqa: E402
     validate_record,
 )
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
 SCHEMA_SOURCE = EXABOX_DIR / "cluster_health_schema.py"
-
-
-def _load_fixture(name: str) -> dict:
-    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
 
 
 class TestValidFixtures(unittest.TestCase):
     def test_canonical_example_with_store(self):
-        record = _load_fixture("canonical_with_store.json")
+        record = json.loads(fixtures.CANONICAL_WITH_STORE)
         validate_record(record, file_written=True)
         self.assertEqual(record["schema"], SCHEMA_ID)
         self.assertEqual(record["labels"]["quad"], "110-C-Q1")
         self.assertEqual(record["labels"]["superpod"], "SC36_3")
 
     def test_laptop_dry_run(self):
-        record = _load_fixture("laptop_dry_run.json")
-        text = (FIXTURES / "laptop_dry_run.json").read_text(encoding="utf-8")
-        self.assertNotIn("/data/stackstorm", text)
+        text = fixtures.LAPTOP_DRY_RUN
+        record = json.loads(text)
+        self.assertNotIn("artifact_uri", record)
+        self.assertNotIn("source", record)
         self.assertNotIn("record_id", record)
         self.assertNotIn("record_uri", record)
         self.assertNotIn("labels", record)
@@ -52,12 +51,12 @@ class TestValidFixtures(unittest.TestCase):
         loads_and_validate(text, file_written=False)
 
     def test_recover_omits_analyzer_code(self):
-        record = _load_fixture("recover_no_analyzer_code.json")
+        record = json.loads(fixtures.RECOVER_NO_ANALYZER_CODE)
         self.assertNotIn("analyzer_code", record)
         validate_record(record, file_written=False)
 
     def test_host_from_diag(self):
-        record = _load_fixture("host_from_diag.json")
+        record = json.loads(fixtures.HOST_FROM_DIAG)
         validate_record(record, file_written=False)
         self.assertEqual(record["test_type"], "host")
         self.assertEqual(record["status"], "passed")
@@ -66,7 +65,7 @@ class TestValidFixtures(unittest.TestCase):
 
 class TestRejects(unittest.TestCase):
     def _dry_run(self) -> dict:
-        return copy.deepcopy(_load_fixture("laptop_dry_run.json"))
+        return copy.deepcopy(json.loads(fixtures.LAPTOP_DRY_RUN))
 
     def test_missing_hosts(self):
         record = self._dry_run()
@@ -139,13 +138,13 @@ class TestNoTopologyYaml(unittest.TestCase):
         self.assertNotIn("topology.yaml", source)
 
     def test_validate_does_not_open_files(self):
-        record = _load_fixture("laptop_dry_run.json")
+        record = json.loads(fixtures.LAPTOP_DRY_RUN)
         with patch("builtins.open") as mocked_open:
             validate_record(record, file_written=False)
             mocked_open.assert_not_called()
 
     def test_hosts_only_without_topology_is_valid(self):
-        record = _load_fixture("laptop_dry_run.json")
+        record = json.loads(fixtures.LAPTOP_DRY_RUN)
         self.assertNotIn("topology", record)
         validate_record(record)
 

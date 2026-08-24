@@ -5,7 +5,7 @@
 
 """Contract for portable cluster health records: ``exabox.cluster_health.v1``.
 
-Every launcher (CLI, StackStorm wrapper, later K8s Job) must emit the same
+Every launcher (CLI, scheduled job, or other wrapper) must emit the same
 object. This module is stdlib-only and performs no filesystem I/O.
 
 Status values are a closed enum. Physical analyzer exit code 0 maps to

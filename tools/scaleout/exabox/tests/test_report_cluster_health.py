@@ -16,10 +16,13 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-EXABOX_DIR = Path(__file__).resolve().parents[1]
-if str(EXABOX_DIR) not in sys.path:
-    sys.path.insert(0, str(EXABOX_DIR))
+TESTS_DIR = Path(__file__).resolve().parent
+EXABOX_DIR = TESTS_DIR.parent
+for _path in (EXABOX_DIR, TESTS_DIR):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
+import fixtures  # noqa: E402
 from cluster_health_schema import loads_and_validate, validate_record  # noqa: E402
 from report_adapters import status_for  # noqa: E402
 from analyze_host_health_results import main as analyze_main  # noqa: E402
@@ -30,7 +33,6 @@ from report_cluster_health import (  # noqa: E402
     parse_rankfile,
 )
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
 REPORT_SOURCE = EXABOX_DIR / "report_cluster_health.py"
 ADAPTER_SOURCE = EXABOX_DIR / "report_adapters.py"
 BACKFILL_SOURCE = EXABOX_DIR / "report_backfill.py"
@@ -61,7 +63,7 @@ def _base_argv(*extra: str) -> list[str]:
         "--analyzer-code",
         "1",
         "--artifact-dir",
-        str(FIXTURES),
+        fixtures.ARTIFACT_DIR,
         "--ts",
         TS,
         "--dry-run",
@@ -135,7 +137,7 @@ class TestDryRunCli(unittest.TestCase):
                 "--hosts",
                 "bh-glx-110-c01u02",
                 "--artifact-dir",
-                str(FIXTURES),
+                fixtures.ARTIFACT_DIR,
                 "--ts",
                 TS,
                 "--dry-run",
@@ -154,7 +156,7 @@ class TestDryRunCli(unittest.TestCase):
             "--hosts",
             HOSTS,
             "--artifact-dir",
-            str(FIXTURES),
+            fixtures.ARTIFACT_DIR,
             "--dry-run",
         ]
         rc, _out, err = _run(argv)
@@ -169,13 +171,16 @@ class TestDryRunCli(unittest.TestCase):
 
 
 class TestPortableTopology(unittest.TestCase):
+    def _descriptor(self, name: str, text: str) -> str:
+        return str(fixtures.temp_file(self, name, text))
+
     def test_cabling_and_deployment(self):
         rc, out, err = _run(
             _base_argv(
                 "--cabling",
-                str(FIXTURES / "cabling_two_host.textproto"),
+                self._descriptor("cabling.textproto", fixtures.CABLING_TWO_HOST),
                 "--deployment",
-                str(FIXTURES / "deployment_two_host.textproto"),
+                self._descriptor("deployment.textproto", fixtures.DEPLOYMENT_TWO_HOST),
             )
         )
         self.assertEqual(rc, 0, err)
@@ -189,13 +194,15 @@ class TestPortableTopology(unittest.TestCase):
         validate_record(record, file_written=False)
 
     def test_gsd_host_keys(self):
-        rc, out, err = _run(_base_argv("--gsd", str(FIXTURES / "gsd_two_host.yaml")))
+        rc, out, err = _run(
+            _base_argv("--gsd", self._descriptor("gsd.yaml", fixtures.GSD_TWO_HOST))
+        )
         self.assertEqual(rc, 0, err)
         record = json.loads(out.strip())
         hosts = {item["hostname"] for item in record["topology"]["physical"]}
         self.assertEqual(hosts, {"bh-glx-110-c01u02", "bh-glx-110-c01u08"})
         self.assertEqual(
-            parse_gsd_hostnames((FIXTURES / "gsd_two_host.yaml").read_text()),
+            parse_gsd_hostnames(fixtures.GSD_TWO_HOST),
             ["bh-glx-110-c01u02", "bh-glx-110-c01u08"],
         )
 
@@ -203,9 +210,9 @@ class TestPortableTopology(unittest.TestCase):
         rc, out, err = _run(
             _base_argv(
                 "--rankfile",
-                str(FIXTURES / "rankfile_two_host.txt"),
+                self._descriptor("rankfile.txt", fixtures.RANKFILE_TWO_HOST),
                 "--rank-bindings",
-                str(FIXTURES / "rank_bindings_two_host.yaml"),
+                self._descriptor("rank_bindings.yaml", fixtures.RANK_BINDINGS_TWO_HOST),
             )
         )
         self.assertEqual(rc, 0, err)
@@ -214,12 +221,14 @@ class TestPortableTopology(unittest.TestCase):
         self.assertEqual(len(bindings), 2)
         self.assertEqual(bindings[0]["host"], "bh-glx-110-c01u02")
         self.assertEqual(bindings[1]["mesh_id"], 0)
-        self.assertEqual(parse_rankfile((FIXTURES / "rankfile_two_host.txt").read_text())[0], "bh-glx-110-c01u02")
-        parsed = parse_rank_bindings_yaml((FIXTURES / "rank_bindings_two_host.yaml").read_text())
+        self.assertEqual(parse_rankfile(fixtures.RANKFILE_TWO_HOST)[0], "bh-glx-110-c01u02")
+        parsed = parse_rank_bindings_yaml(fixtures.RANK_BINDINGS_TWO_HOST)
         self.assertEqual(parsed[1]["mesh_host_rank"], 1)
 
     def test_fsd_physical(self):
-        rc, out, err = _run(_base_argv("--fsd", str(FIXTURES / "fsd_two_host.textproto")))
+        rc, out, err = _run(
+            _base_argv("--fsd", self._descriptor("fsd.textproto", fixtures.FSD_TWO_HOST))
+        )
         self.assertEqual(rc, 0, err)
         record = json.loads(out.strip())
         self.assertEqual(record["topology"]["physical"][1]["shelf_u"], 8)
@@ -242,7 +251,7 @@ class TestStoreWrite(unittest.TestCase):
                 "--analyzer-code",
                 "0",
                 "--artifact-dir",
-                str(FIXTURES),
+                fixtures.ARTIFACT_DIR,
                 "--ts",
                 TS,
                 "--store-root",
@@ -276,7 +285,7 @@ class TestStoreWrite(unittest.TestCase):
                 "--analyzer-code",
                 "0",
                 "--artifact-dir",
-                str(FIXTURES),
+                fixtures.ARTIFACT_DIR,
                 "--ts",
                 TS,
                 "--store-root",
@@ -302,7 +311,7 @@ class TestStoreWrite(unittest.TestCase):
                 "--analyzer-code",
                 "0",
                 "--artifact-dir",
-                str(FIXTURES),
+                fixtures.ARTIFACT_DIR,
                 "--ts",
                 TS,
                 "--store-root",
@@ -333,7 +342,7 @@ class TestStoreWrite(unittest.TestCase):
                 "--analyzer-code",
                 "0",
                 "--artifact-dir",
-                str(FIXTURES),
+                fixtures.ARTIFACT_DIR,
                 "--ts",
                 TS,
             ]
@@ -343,11 +352,14 @@ class TestStoreWrite(unittest.TestCase):
 
 
 class TestFromDiagReport(unittest.TestCase):
+    def _diag(self, text: str) -> str:
+        return str(fixtures.temp_file(self, "diag_report.json", text))
+
     def test_pass_fills_clocks_and_labels(self):
         rc, out, err = _run(
             [
                 "--from-diag-report",
-                str(FIXTURES / "diag_report_pass.json"),
+                self._diag(fixtures.DIAG_REPORT_PASS),
                 "--dry-run",
             ]
         )
@@ -365,7 +377,7 @@ class TestFromDiagReport(unittest.TestCase):
 
     def test_warn_is_degraded(self):
         rc, out, err = _run(
-            ["--from-diag-report", str(FIXTURES / "diag_report_warn.json"), "--dry-run"]
+            ["--from-diag-report", self._diag(fixtures.DIAG_REPORT_WARN), "--dry-run"]
         )
         self.assertEqual(rc, 0, err)
         record = json.loads(out.strip())
@@ -374,7 +386,7 @@ class TestFromDiagReport(unittest.TestCase):
 
     def test_fail_is_failed(self):
         rc, out, err = _run(
-            ["--from-diag-report", str(FIXTURES / "diag_report_fail.json"), "--dry-run"]
+            ["--from-diag-report", self._diag(fixtures.DIAG_REPORT_FAIL), "--dry-run"]
         )
         self.assertEqual(rc, 0, err)
         record = json.loads(out.strip())
@@ -386,7 +398,7 @@ class TestFromDiagReport(unittest.TestCase):
 
     def test_refuses_diag_dry_run(self):
         rc, _out, err = _run(
-            ["--from-diag-report", str(FIXTURES / "diag_report_dry_run.json"), "--dry-run"]
+            ["--from-diag-report", self._diag(fixtures.DIAG_REPORT_DRY_RUN), "--dry-run"]
         )
         self.assertEqual(rc, 1)
         self.assertIn("dry-run", err)
@@ -397,7 +409,7 @@ class TestFromDiagReport(unittest.TestCase):
             main(
                 [
                     "--from-diag-report",
-                    str(FIXTURES / "diag_report_pass.json"),
+                    self._diag(fixtures.DIAG_REPORT_PASS),
                     "--test-type",
                     "host",
                 ]
@@ -406,11 +418,14 @@ class TestFromDiagReport(unittest.TestCase):
 
 
 class TestAnalyzeHostHealthCli(unittest.TestCase):
+    def _diag(self, text: str) -> str:
+        return str(fixtures.temp_file(self, "diag_report.json", text))
+
     def test_prints_analysis_exit_code(self):
         stdout = io.StringIO()
         stderr = io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
-            rc = analyze_main(["--json", str(FIXTURES / "diag_report_warn.json")])
+            rc = analyze_main(["--json", self._diag(fixtures.DIAG_REPORT_WARN)])
         self.assertEqual(rc, 2)
         self.assertIn("Analysis exit code: 2", stdout.getvalue())
         self.assertIn("ts=2026-08-19T03:12:10Z", stdout.getvalue())
@@ -420,7 +435,7 @@ class TestAnalyzeHostHealthCli(unittest.TestCase):
         stdout = io.StringIO()
         stderr = io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
-            rc = analyze_main(["--json", str(FIXTURES / "diag_report_dry_run.json")])
+            rc = analyze_main(["--json", self._diag(fixtures.DIAG_REPORT_DRY_RUN)])
         self.assertEqual(rc, 1)
         self.assertIn("dry-run", stderr.getvalue())
 
@@ -429,8 +444,10 @@ class TestNoSiteCoupling(unittest.TestCase):
     def test_report_modules_omit_forbidden_strings(self):
         for path in (REPORT_SOURCE, ADAPTER_SOURCE, BACKFILL_SOURCE, ANALYZE_HOST_SOURCE):
             text = path.read_text(encoding="utf-8")
+            lowered = text.lower()
             self.assertNotIn("topology.yaml", text)
-            self.assertNotIn("/data/stackstorm/cluster-health", text)
+            for needle in ("stackstorm", "kubernetes", "k8s"):
+                self.assertNotIn(needle, lowered)
 
 
 if __name__ == "__main__":

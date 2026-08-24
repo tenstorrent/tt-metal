@@ -5,7 +5,7 @@
 
 """Discover leftover validation runs under an artifact tree for backfill.
 
-Prefers ST2-style JSON, then wrapper-log fields. Does not grep MPI / GTest bodies.
+Prefers a trailing wrapper summary JSON object, then wrapper-log fields. Does not grep MPI / GTest bodies.
 Large files are scanned in bounded chunks (head for metadata, reverse tail for outcomes).
 """
 
@@ -135,7 +135,7 @@ def _last_match_in_windows(path: Path, pattern: re.Pattern[str]) -> re.Match[str
 
 
 def extract_trailing_json(text: str) -> dict[str, Any] | None:
-    """Return the last JSON object in text, if it looks like an ST2 result."""
+    """Return the last JSON object in text, if it looks like a wrapper summary."""
     end = text.rfind("}")
     if end < 0:
         return None

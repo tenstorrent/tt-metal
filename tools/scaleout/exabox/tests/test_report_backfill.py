@@ -18,10 +18,13 @@ from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 
-EXABOX_DIR = Path(__file__).resolve().parents[1]
-if str(EXABOX_DIR) not in sys.path:
-    sys.path.insert(0, str(EXABOX_DIR))
+TESTS_DIR = Path(__file__).resolve().parent
+EXABOX_DIR = TESTS_DIR.parent
+for _path in (EXABOX_DIR, TESTS_DIR):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
+import fixtures  # noqa: E402
 from cluster_health_schema import SCHEMA_ID, loads_and_validate, validate_record  # noqa: E402
 from report_backfill import (  # noqa: E402
     discover_leftovers,
@@ -29,9 +32,6 @@ from report_backfill import (  # noqa: E402
     parse_recover_code_from_text,
 )
 from report_cluster_health import main  # noqa: E402
-
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-TREE = FIXTURES / "artifact_tree"
 
 
 def _run(argv: list[str]) -> tuple[int, str, str]:
@@ -42,10 +42,10 @@ def _run(argv: list[str]) -> tuple[int, str, str]:
     return rc, stdout.getvalue(), stderr.getvalue()
 
 
-def _backfill_argv(*extra: str) -> list[str]:
+def _backfill_argv(tree: Path, *extra: str) -> list[str]:
     return [
         "--from-artifact-dir",
-        str(TREE),
+        str(tree),
         "--triggered-by",
         "operator",
         "--dry-run",
@@ -73,23 +73,25 @@ def _publish_worker(exabox_dir: str, store_root: str, hosts: str, ts: str, artif
 
 class TestBackfillDiscover(unittest.TestCase):
     def test_json_sidecar_wins_over_footer(self):
-        log_path = TREE / "logs" / "physical_validation-20260819T031200Z.log"
-        leftover = leftover_from_log("physical", log_path, TREE)
+        tree = fixtures.artifact_tree(self)
+        log_path = tree / "logs" / fixtures.PHYSICAL_LOG
+        leftover = leftover_from_log("physical", log_path, tree)
         self.assertIsNotNone(leftover)
         self.assertEqual(leftover.analyzer_code, 0)
 
     def test_skips_log_without_hosts(self):
-        log_path = TREE / "logs" / "physical_validation-20260819T040000Z.log"
+        tree = fixtures.artifact_tree(self)
+        log_path = tree / "logs" / fixtures.PHYSICAL_NO_HOSTS_LOG
         stderr = io.StringIO()
         with redirect_stderr(stderr):
-            leftover = leftover_from_log("physical", log_path, TREE)
+            leftover = leftover_from_log("physical", log_path, tree)
         self.assertIsNone(leftover)
         self.assertIn("no hosts", stderr.getvalue())
 
     def test_discover_four_complete_leftovers(self):
         stderr = io.StringIO()
         with redirect_stderr(stderr):
-            leftovers = discover_leftovers(TREE)
+            leftovers = discover_leftovers(fixtures.artifact_tree(self))
         kinds = {item.test_type for item in leftovers}
         self.assertEqual(kinds, {"physical", "fabric", "dispatch", "recover"})
         self.assertEqual(len(leftovers), 4)
@@ -99,8 +101,9 @@ class TestBackfillDiscover(unittest.TestCase):
 
 class TestBackfillCli(unittest.TestCase):
     def test_dry_run_stdout_lines_no_files(self):
+        tree = fixtures.artifact_tree(self)
         with tempfile.TemporaryDirectory() as tmp:
-            rc, out, err = _run(_backfill_argv("--store-root", tmp))
+            rc, out, err = _run(_backfill_argv(tree, "--store-root", tmp))
             self.assertEqual(rc, 0, err)
             lines = [ln for ln in out.splitlines() if ln]
             self.assertEqual(len(lines), 4)
@@ -119,10 +122,11 @@ class TestBackfillCli(unittest.TestCase):
             self.assertEqual(list(Path(tmp).rglob("*.json")), [])
 
     def test_write_store(self):
+        tree = fixtures.artifact_tree(self)
         with tempfile.TemporaryDirectory() as tmp:
             argv = [
                 "--from-artifact-dir",
-                str(TREE),
+                str(tree),
                 "--triggered-by",
                 "operator",
                 "--store-root",
@@ -141,18 +145,19 @@ class TestBackfillCli(unittest.TestCase):
             self.assertEqual(len(set(uris)), 4)
 
     def test_mtime_window_drops_old(self):
-        recover = TREE / "logs" / "recover-20260819T031000Z.log"
+        tree = fixtures.artifact_tree(self)
+        recover = tree / "logs" / fixtures.RECOVER_LOG
         others = [
-            TREE / "logs" / "physical_validation-20260819T031200Z.log",
-            TREE / "logs" / "fabric_tests-20260819T031300Z.log",
-            TREE / "logs" / "dispatch_tests-20260819T031400Z.log",
+            tree / "logs" / fixtures.PHYSICAL_LOG,
+            tree / "logs" / fixtures.FABRIC_LOG,
+            tree / "logs" / fixtures.DISPATCH_LOG,
         ]
         old = datetime(2026, 8, 1, 12, tzinfo=timezone.utc).timestamp()
         recent = datetime(2026, 8, 19, 12, tzinfo=timezone.utc).timestamp()
         os.utime(recover, (old, old))
         for path in others:
             os.utime(path, (recent, recent))
-        rc, out, err = _run(_backfill_argv("--from", "2026-08-10", "--to", "2026-08-20"))
+        rc, out, err = _run(_backfill_argv(tree, "--from", "2026-08-10", "--to", "2026-08-20"))
         self.assertEqual(rc, 0, err)
         types = {json.loads(ln)["test_type"] for ln in out.splitlines() if ln}
         self.assertEqual(types, {"physical", "fabric", "dispatch"})
@@ -162,7 +167,7 @@ class TestBackfillCli(unittest.TestCase):
         rc, _out, err = _run(
             [
                 "--from-artifact-dir",
-                str(TREE),
+                str(fixtures.artifact_tree(self)),
                 "--triggered-by",
                 "operator",
             ]
@@ -174,7 +179,7 @@ class TestBackfillCli(unittest.TestCase):
         rc, _out, err = _run(
             [
                 "--from-artifact-dir",
-                str(TREE),
+                str(fixtures.artifact_tree(self)),
                 "--dry-run",
             ]
         )
@@ -202,18 +207,19 @@ class TestConcurrentStore(unittest.TestCase):
             self.assertEqual(list(Path(tmp).rglob("*.tmp")), [])
 
 
-EDGE = FIXTURES / "edge"
-
-
 class TestRecoverRealFooters(unittest.TestCase):
+    def _recover(self, text: str):
+        log = fixtures.temp_file(self, "recover-20260819T051000Z.log", text)
+        return leftover_from_log("recover", log, log.parent)
+
     def test_failed_even_when_recovery_completed_follows(self):
-        leftover = leftover_from_log("recover", EDGE / "recover-failed-real.log", EDGE)
+        leftover = self._recover(fixtures.RECOVER_FAILED_LOG)
         self.assertIsNotNone(leftover)
         self.assertEqual(leftover.analyzer_code, 1)
         self.assertFalse(leftover.incomplete)
 
     def test_last_success_wins_after_failed_attempt(self):
-        leftover = leftover_from_log("recover", EDGE / "recover-succeeded-real.log", EDGE)
+        leftover = self._recover(fixtures.RECOVER_SUCCEEDED_LOG)
         self.assertIsNotNone(leftover)
         self.assertEqual(leftover.analyzer_code, 0)
         self.assertFalse(leftover.incomplete)
@@ -226,7 +232,7 @@ class TestRecoverRealFooters(unittest.TestCase):
         self.assertIsNone(parse_recover_code_from_text(text))
 
     def test_incomplete_recover_is_degraded(self):
-        leftover = leftover_from_log("recover", EDGE / "recover-incomplete.log", EDGE)
+        leftover = self._recover(fixtures.RECOVER_INCOMPLETE_LOG)
         self.assertIsNotNone(leftover)
         self.assertTrue(leftover.incomplete)
         self.assertIsNone(leftover.analyzer_code)
@@ -234,20 +240,12 @@ class TestRecoverRealFooters(unittest.TestCase):
 
 class TestIncompleteAndLargeLogs(unittest.TestCase):
     def test_truncated_wrapper_emits_degraded(self):
-        leftover = leftover_from_log(
-            "physical", EDGE / "physical_validation-truncated.log", EDGE
-        )
+        name = "physical_validation-truncated.log"
+        tree = fixtures.log_tree(self, name, fixtures.PHYSICAL_TRUNCATED_LOG)
+        leftover = leftover_from_log("physical", tree / "logs" / name, tree)
         self.assertIsNotNone(leftover)
         self.assertTrue(leftover.incomplete)
-        rc, out, err = _run(
-            [
-                "--from-artifact-dir",
-                str(self._tree_with(EDGE / "physical_validation-truncated.log")),
-                "--triggered-by",
-                "operator",
-                "--dry-run",
-            ]
-        )
+        rc, out, err = _run(_backfill_argv(tree))
         self.assertEqual(rc, 0, err)
         rec = loads_and_validate(out.splitlines()[0], file_written=False)
         self.assertEqual(rec["status"], "degraded")
@@ -257,40 +255,39 @@ class TestIncompleteAndLargeLogs(unittest.TestCase):
         self.assertIn("degraded=1", err)
 
     def test_large_log_footer_beyond_64k(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            logs = Path(tmp) / "logs"
-            logs.mkdir()
-            dest = logs / "physical_validation-20260819T060000Z.log"
-            header = (
-                "=== Physical Validation - 20260819T060000Z ===\n"
-                "HOSTS=bh-glx-110-c01u02\n"
-                "OUTPUT_DIR=/tmp/huge\n"
-            )
-            padding = "x" * 100_000
-            dest.write_text(header + padding + "\nAnalysis exit code: 13\n", encoding="utf-8")
-            leftover = leftover_from_log("physical", dest, Path(tmp))
-            self.assertIsNotNone(leftover)
-            self.assertEqual(leftover.analyzer_code, 13)
-            self.assertFalse(leftover.incomplete)
+        name = "physical_validation-20260819T060000Z.log"
+        header = (
+            "=== Physical Validation - 20260819T060000Z ===\n"
+            "HOSTS=bh-glx-110-c01u02\n"
+            "OUTPUT_DIR=/tmp/huge\n"
+        )
+        padding = "x" * 100_000
+        tree = fixtures.log_tree(self, name, header + padding + "\nAnalysis exit code: 13\n")
+        leftover = leftover_from_log("physical", tree / "logs" / name, tree)
+        self.assertIsNotNone(leftover)
+        self.assertEqual(leftover.analyzer_code, 13)
+        self.assertFalse(leftover.incomplete)
 
     def test_analysis_exit_with_host_prefix(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            logs = Path(tmp) / "logs"
-            logs.mkdir()
-            dest = logs / "physical_validation-20260819T060200Z.log"
-            dest.write_text(
-                "=== Physical Validation - 20260819T060200Z ===\n"
-                "HOSTS=bh-glx-110-c01u02\n"
-                "[bh-glx-110-c01u02][06:02:00] Analysis exit code: 7\n",
-                encoding="utf-8",
-            )
-            leftover = leftover_from_log("physical", dest, Path(tmp))
-            self.assertIsNotNone(leftover)
-            self.assertEqual(leftover.analyzer_code, 7)
-            self.assertFalse(leftover.incomplete)
+        name = "physical_validation-20260819T060200Z.log"
+        tree = fixtures.log_tree(
+            self,
+            name,
+            "=== Physical Validation - 20260819T060200Z ===\n"
+            "HOSTS=bh-glx-110-c01u02\n"
+            "[bh-glx-110-c01u02][06:02:00] Analysis exit code: 7\n",
+        )
+        leftover = leftover_from_log("physical", tree / "logs" / name, tree)
+        self.assertIsNotNone(leftover)
+        self.assertEqual(leftover.analyzer_code, 7)
+        self.assertFalse(leftover.incomplete)
 
     def test_backfill_cli_keeps_caller_labels(self):
-        rc, out, err = _run(_backfill_argv("--label", "superpod=SC16_1", "--label", "ring=SC16"))
+        rc, out, err = _run(
+            _backfill_argv(
+                fixtures.artifact_tree(self), "--label", "superpod=SC16_1", "--label", "ring=SC16"
+            )
+        )
         self.assertEqual(rc, 0, err)
         records = [json.loads(ln) for ln in out.splitlines() if ln]
         self.assertTrue(records)
@@ -299,120 +296,98 @@ class TestIncompleteAndLargeLogs(unittest.TestCase):
             self.assertEqual(rec["labels"]["ring"], "SC16")
 
     def test_footer_across_chunk_boundary(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            logs = Path(tmp) / "logs"
-            logs.mkdir()
-            dest = logs / "physical_validation-20260819T060100Z.log"
-            header = (
-                "=== Physical Validation - 20260819T060100Z ===\n"
-                "HOSTS=bh-glx-110-c01u02\n"
-            )
-            encoded_header = header.encode("utf-8")
-            footer = b"\nAnalysis exit code: 4\n"
-            # Split "Analysis" across the last 64KiB reverse-chunk start.
-            prefix = 65536 - 8
-            dest.write_bytes(encoded_header + (b"y" * prefix) + footer)
-            leftover = leftover_from_log("physical", dest, Path(tmp))
-            self.assertIsNotNone(leftover)
-            self.assertEqual(leftover.analyzer_code, 4)
-
-    def _tree_with(self, log_path: Path) -> str:
-        tmp = tempfile.mkdtemp()
-        logs = Path(tmp) / "logs"
-        logs.mkdir()
-        (logs / log_path.name).write_text(log_path.read_text(encoding="utf-8"), encoding="utf-8")
-        self.addCleanup(lambda: __import__("shutil").rmtree(tmp, ignore_errors=True))
-        return tmp
+        name = "physical_validation-20260819T060100Z.log"
+        tree = fixtures.log_tree(self, name, "")
+        dest = tree / "logs" / name
+        header = (
+            "=== Physical Validation - 20260819T060100Z ===\n"
+            "HOSTS=bh-glx-110-c01u02\n"
+        ).encode("utf-8")
+        # Split "Analysis" across the last 64KiB reverse-chunk start.
+        prefix = 65536 - 8
+        dest.write_bytes(header + (b"y" * prefix) + b"\nAnalysis exit code: 4\n")
+        leftover = leftover_from_log("physical", dest, tree)
+        self.assertIsNotNone(leftover)
+        self.assertEqual(leftover.analyzer_code, 4)
 
 
 class TestRecursiveDedup(unittest.TestCase):
     def test_recursive_discovers_nested_logs_dirs(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            a = Path(tmp) / "executions" / "one" / "logs"
-            b = Path(tmp) / "nightly" / "SC16_1" / "logs"
-            a.mkdir(parents=True)
-            b.mkdir(parents=True)
-            src = TREE / "logs" / "dispatch_tests-20260819T031400Z.log"
-            (a / src.name).write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-            fabric = TREE / "logs" / "fabric_tests-20260819T031300Z.log"
-            (b / fabric.name).write_text(fabric.read_text(encoding="utf-8"), encoding="utf-8")
-            leftovers = discover_leftovers(Path(tmp), recursive=True)
-            kinds = {item.test_type for item in leftovers}
-            self.assertEqual(kinds, {"dispatch", "fabric"})
-            rc, out, err = _run(
-                [
-                    "--from-artifact-dir",
-                    tmp,
-                    "--recursive",
-                    "--triggered-by",
-                    "operator",
-                    "--dry-run",
-                ]
-            )
-            self.assertEqual(rc, 0, err)
-            self.assertEqual(len([ln for ln in out.splitlines() if ln]), 2)
-            self.assertIn("discovered=2", err)
-            self.assertIn("emitted=2", err)
+        root = fixtures.temp_dir(self)
+        fixtures.write(
+            root / "executions" / "one" / "logs",
+            fixtures.DISPATCH_LOG,
+            fixtures.ARTIFACT_TREE_LOGS[fixtures.DISPATCH_LOG],
+        )
+        fixtures.write(
+            root / "nightly" / "SC16_1" / "logs",
+            fixtures.FABRIC_LOG,
+            fixtures.ARTIFACT_TREE_LOGS[fixtures.FABRIC_LOG],
+        )
+        leftovers = discover_leftovers(root, recursive=True)
+        kinds = {item.test_type for item in leftovers}
+        self.assertEqual(kinds, {"dispatch", "fabric"})
+        rc, out, err = _run(
+            [
+                "--from-artifact-dir",
+                str(root),
+                "--recursive",
+                "--triggered-by",
+                "operator",
+                "--dry-run",
+            ]
+        )
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(len([ln for ln in out.splitlines() if ln]), 2)
+        self.assertIn("discovered=2", err)
+        self.assertIn("emitted=2", err)
 
     def test_duplicate_leftovers_counted_once(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            logs = Path(tmp) / "logs"
-            logs.mkdir()
-            src = TREE / "logs" / "dispatch_tests-20260819T031400Z.log"
-            text = src.read_text(encoding="utf-8")
-            (logs / src.name).write_text(text, encoding="utf-8")
-            leftovers = discover_leftovers(Path(tmp))
-            leftovers = leftovers + leftovers
-            from report_backfill import leftover_key
+        tree = fixtures.log_tree(
+            self, fixtures.DISPATCH_LOG, fixtures.ARTIFACT_TREE_LOGS[fixtures.DISPATCH_LOG]
+        )
+        leftovers = discover_leftovers(tree)
+        leftovers = leftovers + leftovers
+        from report_backfill import leftover_key
 
-            keys = [leftover_key(item) for item in leftovers]
-            self.assertEqual(len(keys), 2)
-            self.assertEqual(len(set(keys)), 1)
+        keys = [leftover_key(item) for item in leftovers]
+        self.assertEqual(len(keys), 2)
+        self.assertEqual(len(set(keys)), 1)
 
 
 class TestHostDiagLeftover(unittest.TestCase):
     def test_discover_diag_report_json(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            dest = Path(tmp) / "diag_report.json"
-            dest.write_text((FIXTURES / "diag_report_pass.json").read_text(encoding="utf-8"), encoding="utf-8")
-            leftovers = discover_leftovers(Path(tmp))
-            self.assertEqual(len(leftovers), 1)
-            leftover = leftovers[0]
-            self.assertEqual(leftover.test_type, "host")
-            self.assertEqual(leftover.hosts, "bh-glx-110-c01u02")
-            self.assertEqual(leftover.analyzer_code, 0)
-            self.assertEqual(leftover.ts, "2026-08-19T03:12:36Z")
-            self.assertEqual(leftover.duration_s, 36.5)
-            self.assertEqual(leftover.labels["tier"], "light")
-            self.assertEqual(leftover.labels["board_rev"], "RevC")
-            rc, out, err = _run(
-                [
-                    "--from-artifact-dir",
-                    tmp,
-                    "--triggered-by",
-                    "operator",
-                    "--dry-run",
-                ]
-            )
-            self.assertEqual(rc, 0, err)
-            record = loads_and_validate(out.splitlines()[0], file_written=False)
-            self.assertEqual(record["test_type"], "host")
-            self.assertEqual(record["status"], "passed")
-            self.assertEqual(record["duration_s"], 36.5)
-            self.assertEqual(record["labels"]["tier"], "light")
+        root = fixtures.temp_dir(self)
+        fixtures.write(root, "diag_report.json", fixtures.DIAG_REPORT_PASS)
+        leftovers = discover_leftovers(root)
+        self.assertEqual(len(leftovers), 1)
+        leftover = leftovers[0]
+        self.assertEqual(leftover.test_type, "host")
+        self.assertEqual(leftover.hosts, "bh-glx-110-c01u02")
+        self.assertEqual(leftover.analyzer_code, 0)
+        self.assertEqual(leftover.ts, "2026-08-19T03:12:36Z")
+        self.assertEqual(leftover.duration_s, 36.5)
+        self.assertEqual(leftover.labels["tier"], "light")
+        self.assertEqual(leftover.labels["board_rev"], "RevC")
+        rc, out, err = _run(_backfill_argv(root))
+        self.assertEqual(rc, 0, err)
+        record = loads_and_validate(out.splitlines()[0], file_written=False)
+        self.assertEqual(record["test_type"], "host")
+        self.assertEqual(record["status"], "passed")
+        self.assertEqual(record["duration_s"], 36.5)
+        self.assertEqual(record["labels"]["tier"], "light")
 
     def test_skips_dry_run_diag_report(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            dest = Path(tmp) / "diag_report.json"
-            dest.write_text((FIXTURES / "diag_report_dry_run.json").read_text(encoding="utf-8"), encoding="utf-8")
-            stderr = io.StringIO()
-            with redirect_stderr(stderr):
-                leftovers = discover_leftovers(Path(tmp))
-            self.assertEqual(leftovers, [])
-            self.assertIn("dry-run", stderr.getvalue())
+        root = fixtures.temp_dir(self)
+        fixtures.write(root, "diag_report.json", fixtures.DIAG_REPORT_DRY_RUN)
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            leftovers = discover_leftovers(root)
+        self.assertEqual(leftovers, [])
+        self.assertIn("dry-run", stderr.getvalue())
 
     def test_cli_duration_s_does_not_stamp_physical(self):
-        rc, out, err = _run(_backfill_argv("--duration-s", "99"))
+        rc, out, err = _run(_backfill_argv(fixtures.artifact_tree(self), "--duration-s", "99"))
         self.assertEqual(rc, 0, err)
         for line in out.splitlines():
             if not line:
@@ -421,16 +396,11 @@ class TestHostDiagLeftover(unittest.TestCase):
             self.assertNotIn("duration_s", rec)
 
     def test_recursive_nested_diag_report(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            nested = Path(tmp) / "node-a" / "results"
-            nested.mkdir(parents=True)
-            (nested / "diag_report.json").write_text(
-                (FIXTURES / "diag_report_warn.json").read_text(encoding="utf-8"),
-                encoding="utf-8",
-            )
-            leftovers = discover_leftovers(Path(tmp), recursive=True)
-            self.assertEqual(len(leftovers), 1)
-            self.assertEqual(leftovers[0].analyzer_code, 2)
+        root = fixtures.temp_dir(self)
+        fixtures.write(root / "node-a" / "results", "diag_report.json", fixtures.DIAG_REPORT_WARN)
+        leftovers = discover_leftovers(root, recursive=True)
+        self.assertEqual(len(leftovers), 1)
+        self.assertEqual(leftovers[0].analyzer_code, 2)
 
 
 if __name__ == "__main__":

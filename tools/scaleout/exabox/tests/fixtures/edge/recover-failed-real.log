@@ -1,7 +1,0 @@
-=== Recover - 20260819T051000Z ===
-HOSTS=bh-glx-110-d10u02,bh-glx-110-d10u08
-OUTPUT_DIR=/tmp/recover-failed
-
-[bh-glx-110-d10u02] Recovery attempt 1 of 1
-[bh-glx-110-d10u02] Recovery attempt 1 of 1 failed (exit code 1).
-[bh-glx-110-d10u02] Recovery completed at Wed Aug 19 05:04:23 UTC 2026
