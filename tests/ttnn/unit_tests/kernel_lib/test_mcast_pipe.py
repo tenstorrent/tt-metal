@@ -29,6 +29,16 @@ TILE_BYTES = 32 * 32 * 2  # bf16 tile
 ACK_EQUALS_FANOUT = 0xFFFFFFFF  # SenderPipe sentinel: consumer-ack count == the EXCLUDE fan-out (dense)
 
 
+def _mcast_rotating_span(compile_time_args):
+    """Read the rotating span from either opaque McastArgs wire form."""
+    presence_tag = compile_time_args[0]
+    if presence_tag == 1:  # compact
+        return compile_time_args[6]
+    if presence_tag == 2:  # extended exact-rectangle/chain wire
+        return compile_time_args[5]
+    raise AssertionError(f"unexpected McastArgs presence tag {presence_tag}")
+
+
 def _virt(device, lx, ly):
     """Logical worker -> virtual NoC coords (firmware-dependent; never hardcode the offset)."""
     c = device.worker_core_from_logical_core(ttnn.CoreCoord(lx, ly))
@@ -396,6 +406,24 @@ def test_family_multi_hop_payload_chain(device, data_ready_mode, sender_noc):
         use_chain_forwarding=True,
         handshake=True,
     )
+
+
+def test_family_large_payload_long_chain(device):
+    grid = device.compute_with_storage_grid_size()
+    group_size = 54
+    assert grid.x * grid.y >= group_size
+    members = [(core_id % grid.x, core_id // grid.x) for core_id in range(group_size)]
+    exact_ranges = [(member, member) for member in members]
+    family = _run_family_pipe(
+        device,
+        [(exact_ranges, members[0])],
+        payload_tiles=54,
+        n_iters=1,
+        sender_noc=1,
+        use_chain_forwarding=True,
+        handshake=True,
+    )
+    assert not family.uses_compact_wire
 
 
 def test_family_dense_chain_request_falls_back_to_multicast(device):
@@ -1198,7 +1226,7 @@ def _run_rotating_line(device, span, payload_tiles, receiver_span=None, sender_i
             sender_lines,
             ttnn.McastConfig(rotating_sender=True),
         )
-    assert mc.compile_time_args()[6] == span, f"expected {span} sender rounds"
+    assert _mcast_rotating_span(mc.compile_time_args()) == span, f"expected {span} sender rounds"
     semaphores = mc.owned_semaphores()
 
     cb = 0  # one CB per core: mcast source (in place) + landing region
@@ -1416,7 +1444,7 @@ def _run_fixed_line(
             sender_placement=sender_placement,
             config=ttnn.McastConfig(),
         )
-    assert mc.compile_time_args()[6] == 0, "fixed mode has no rotating span"
+    assert _mcast_rotating_span(mc.compile_time_args()) == 0, "fixed mode has no rotating span"
     if sender_placement == ttnn.Mcast1DSenderPlacement.Diagonal:
         for Y in range(GR):
             expected_sender = ttnn.CoreCoord((starting_sender_index + Y) % GC, Y)

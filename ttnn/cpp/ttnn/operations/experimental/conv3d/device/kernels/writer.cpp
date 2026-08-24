@@ -8,7 +8,6 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "api/dataflow/noc_semaphore.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/conv3d_weight_share.hpp"
 
 using namespace dataflow_kernel_lib;
 
@@ -37,6 +36,45 @@ FORCE_INLINE void read_weight_block(
     noc.async_read_barrier();
 }
 
+template <
+    bool enable_weight_share,
+    uint32_t tile_bytes,
+    uint32_t matmul_K_t,
+    uint32_t matmul_N_t,
+    uint32_t C_out_t,
+    typename WeightReader,
+    typename WeightCB,
+    typename WeightMcastArgs>
+FORCE_INLINE void load_weight_block(
+    Noc noc,
+    const WeightReader& weight_reader,
+    WeightCB& cb_weight,
+    const WeightMcastArgs& weights_mcast_args,
+    uint32_t c_in_offset_t,
+    uint32_t c_out_offset_t) {
+    constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
+    constexpr uint32_t weight_block_bytes = weight_tiles * tile_bytes;
+    cb_weight.reserve_back(weight_tiles);
+    const uint32_t local_addr = cb_weight.get_write_ptr();
+
+    if constexpr (enable_weight_share) {
+        if (weights_mcast_args.can_send()) {
+            read_weight_block<tile_bytes, matmul_K_t, matmul_N_t, C_out_t>(
+                noc, weight_reader, cb_weight, c_in_offset_t, c_out_offset_t);
+            auto weights_pipe = weights_mcast_args.sender(noc);
+            weights_pipe.send(local_addr, local_addr, weight_block_bytes);
+        } else {
+            ASSERT(weights_mcast_args.can_receive());
+            auto weights_pipe = weights_mcast_args.receiver(noc);
+            weights_pipe.receive(local_addr, weight_block_bytes);
+        }
+    } else {
+        read_weight_block<tile_bytes, matmul_K_t, matmul_N_t, C_out_t>(
+            noc, weight_reader, cb_weight, c_in_offset_t, c_out_offset_t);
+    }
+    cb_weight.push_back(weight_tiles);
+}
+
 void kernel_main() {
     constexpr uint32_t cb_matmul_result_rm = get_compile_time_arg_val(0);
     constexpr uint32_t cb_weight_tiled = get_compile_time_arg_val(1);
@@ -59,14 +97,9 @@ void kernel_main() {
     constexpr uint32_t C_out_block_bytes = get_compile_time_arg_val(19);
     constexpr bool use_bias = get_compile_time_arg_val(20) == 1;
     constexpr uint32_t semaphore_id = get_compile_time_arg_val(21);
-    // weight_share_mode (see WeightShareMode in conv3d_weight_share.hpp): Disabled, Chain, or Mcast.
-    constexpr WeightShareMode weight_share_mode = static_cast<WeightShareMode>(get_compile_time_arg_val(22));
-    constexpr bool enable_weight_chain = weight_share_mode == WeightShareMode::Chain;
-    constexpr bool enable_weight_mcast = weight_share_mode == WeightShareMode::Mcast;
-    constexpr uint32_t weights_mcast_sender_sem_id = get_compile_time_arg_val(23);
-    constexpr uint32_t weights_mcast_receiver_sem_id = get_compile_time_arg_val(24);
-    constexpr bool enable_streaming_output = get_compile_time_arg_val(25) == 1;
-    constexpr auto out_args = TensorAccessorArgs<26>();
+    constexpr bool enable_weight_share = get_compile_time_arg_val(22) == 1;
+    constexpr bool enable_streaming_output = get_compile_time_arg_val(23) == 1;
+    constexpr auto out_args = TensorAccessorArgs<24>();
     constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     uint32_t argidx = 0;
@@ -84,17 +117,19 @@ void kernel_main() {
     const uint32_t w_out_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_reducer = get_arg_val<uint32_t>(argidx++);
-    // weight_share_role: see WeightShareRole in conv3d_weight_share.hpp.
-    const WeightShareRole weight_share_role = static_cast<WeightShareRole>(get_arg_val<uint32_t>(argidx++));
-    const uint32_t weight_src_noc_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t weight_src_noc_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t chain_succ_noc_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t chain_succ_noc_y = get_arg_val<uint32_t>(argidx++);
-    const uint32_t mcast_num_iters = get_arg_val<uint32_t>(argidx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(argidx++);
 
-    constexpr McastArgs<bias_args.next_compile_time_args_offset(), 21> weights_mcast_args;
+    constexpr McastArgs<bias_args.next_compile_time_args_offset(), 15> weights_mcast_args;
+    static_assert(weights_mcast_args.active == enable_weight_share);
     argidx = weights_mcast_args.next_runtime_args_offset();
+
+    // The writer is dispatched over the full configured grid. Some cores own a valid C-in/C-out
+    // slice but no spatial output block; the outer loops below would otherwise load weights before
+    // reaching their empty spatial loops. Exact multicast families intentionally exclude those
+    // cores, so leave before constructing a pipe face or touching any weight CB state.
+    if (t_out_start >= t_out_end || h_out_start >= h_out_end || w_out_start >= w_out_end) {
+        return;
+    }
 
     Noc noc;
     experimental::CB cb_out(cb_matmul_result_rm);
@@ -104,8 +139,6 @@ void kernel_main() {
     experimental::CB cb_reduction(cb_reduction_tiled);
     experimental::CB cb_ack(cb_worker_ack_back);
     Semaphore<> sem(semaphore_id);
-    Semaphore<> weights_mcast_sender_sem(weights_mcast_sender_sem_id);
-    Semaphore<> weights_mcast_receiver_sem(weights_mcast_receiver_sem_id);
 
     // Reducer coordinates and worker core coordinates are only present when num_workers > 0
     uint32_t reducer_core_x = 0, reducer_core_y = 0;
@@ -126,24 +159,8 @@ void kernel_main() {
     const auto bias_reader = TensorAccessor(bias_args, bias_addr);
 
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
-    constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t C_out_t = C_out_num_blocks * matmul_N_t;
     constexpr uint32_t T_out_H_out_W_out = T_out * H_out * W_out;
-
-    // Mcast passive participant: this core sits inside the mcast bbox but has no work. It exists
-    // only to satisfy the multicast handshake (sender's wait depends on every core in the bbox
-    // ack'ing). Run mcast_num_iters handshakes (matching active receivers' iteration count) and
-    // exit before any work-dependent code below.
-    if constexpr (enable_weight_mcast) {
-        if (weight_share_role == WeightShareRole::McastPassive) {
-            auto weights_pipe = weights_mcast_args.receiver(noc);
-            for (uint32_t i = 0; i < mcast_num_iters; i++) {
-                weights_pipe.receive();
-            }
-            noc.async_atomic_barrier();
-            return;
-        }
-    }
 
     // Process each batch element
     for (uint32_t batch_idx = 0; batch_idx < N; batch_idx++) {
@@ -153,66 +170,8 @@ void kernel_main() {
             for (uint32_t c_out_block = c_out_block_start; c_out_block < c_out_block_end; c_out_block++) {
                 const uint32_t c_out_offset_t = c_out_block * matmul_N_t;
 
-                // Read weights for this block. Strategy depends on weight_share_mode:
-                //   - chain (1): each non-injector receives from pred, each non-tail forwards to succ
-                //   - mcast (2): sender DRAM-reads then multicasts over the bbox; receivers wait
-                //   - off (0): every core reads from DRAM independently
-                if constexpr (enable_weight_chain) {
-                    cb_weight.reserve_back(weight_tiles);
-                    if (weight_share_role == WeightShareRole::Local) {
-                        // Local DRAM read (single-core group inside a chain-mode program).
-                        read_weight_block<tile_bytes, matmul_K_t, matmul_N_t, C_out_t>(
-                            noc, weight_reader, cb_weight, c_in_offset_t, c_out_offset_t);
-                    } else {
-                        if (weight_share_role == WeightShareRole::ChainInjector) {
-                            read_weight_block<tile_bytes, matmul_K_t, matmul_N_t, C_out_t>(
-                                noc, weight_reader, cb_weight, c_in_offset_t, c_out_offset_t);
-                        } else {
-                            weights_mcast_sender_sem.up(noc, weight_src_noc_x, weight_src_noc_y, 1);
-                            weights_mcast_receiver_sem.wait(1);
-                            weights_mcast_receiver_sem.set(0);
-                        }
-                        if (weight_share_role != WeightShareRole::ChainTail) {
-                            weights_mcast_sender_sem.wait(1);
-                            weights_mcast_sender_sem.set(0);
-
-                            const uint32_t weight_block_bytes = weight_tiles * tile_bytes;
-                            const uint32_t local_addr = cb_weight.get_write_ptr();
-                            UnicastEndpoint ep;
-                            noc.async_write(
-                                use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_weight),
-                                ep,
-                                weight_block_bytes,
-                                {.offset_bytes = 0},
-                                {.noc_x = chain_succ_noc_x, .noc_y = chain_succ_noc_y, .addr = local_addr});
-                            noc.async_write_barrier();
-
-                            weights_mcast_receiver_sem.up(noc, chain_succ_noc_x, chain_succ_noc_y, 1);
-                            noc.async_atomic_barrier();
-                        }
-                    }
-                    cb_weight.push_back(weight_tiles);
-                } else if constexpr (enable_weight_mcast) {
-                    cb_weight.reserve_back(weight_tiles);
-                    if (weight_share_role == WeightShareRole::McastSender) {
-                        read_weight_block<tile_bytes, matmul_K_t, matmul_N_t, C_out_t>(
-                            noc, weight_reader, cb_weight, c_in_offset_t, c_out_offset_t);
-
-                        const uint32_t weight_block_bytes = weight_tiles * tile_bytes;
-                        const uint32_t local_addr = cb_weight.get_write_ptr();
-                        auto weights_pipe = weights_mcast_args.sender(noc);
-                        weights_pipe.send(local_addr, local_addr, weight_block_bytes);
-                    } else if (weight_share_role == WeightShareRole::McastReceiver) {
-                        auto weights_pipe = weights_mcast_args.receiver(noc);
-                        weights_pipe.receive();
-                    }
-                    cb_weight.push_back(weight_tiles);
-                } else {
-                    cb_weight.reserve_back(weight_tiles);
-                    read_weight_block<tile_bytes, matmul_K_t, matmul_N_t, C_out_t>(
-                        noc, weight_reader, cb_weight, c_in_offset_t, c_out_offset_t);
-                    cb_weight.push_back(weight_tiles);
-                }
+                load_weight_block<enable_weight_share, tile_bytes, matmul_K_t, matmul_N_t, C_out_t>(
+                    noc, weight_reader, cb_weight, weights_mcast_args, c_in_offset_t, c_out_offset_t);
 
                 if constexpr (use_bias) {
                     if (is_reducer) {

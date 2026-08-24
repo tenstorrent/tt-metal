@@ -296,7 +296,7 @@ public:
             }
 
             GroupState state{.group_index = group_index};
-            state.rectangles = exact_rectangles_(group.receiver_set());
+            state.rectangles = exact_wire_rectangles_(group.receiver_set());
             state.use_chain_forwarding = group.use_chain_forwarding() && state.rectangles.size() > 1u;
             TT_FATAL(
                 !state.use_chain_forwarding || !cfg_.rotating_sender,
@@ -472,8 +472,14 @@ private:
         bool use_chain_forwarding = false;
     };
 
-    static std::vector<tt::tt_metal::CoreRange> exact_rectangles_(const tt::tt_metal::CoreRangeSet& receiver_set) {
-        auto rectangles = receiver_set.merge_ranges().ranges();
+    std::vector<tt::tt_metal::CoreRange> exact_wire_rectangles_(const tt::tt_metal::CoreRangeSet& receiver_set) const {
+        std::vector<tt::tt_metal::CoreRange> virtual_singletons;
+        virtual_singletons.reserve(receiver_set.num_cores());
+        for (const auto& logical : tt::tt_metal::corerange_to_cores(receiver_set, std::nullopt, true)) {
+            const auto virtual_core = device_->worker_core_from_logical_core(logical);
+            virtual_singletons.emplace_back(virtual_core, virtual_core);
+        }
+        auto rectangles = tt::tt_metal::CoreRangeSet(std::move(virtual_singletons)).merge_ranges().ranges();
         std::sort(rectangles.begin(), rectangles.end(), [](const auto& lhs, const auto& rhs) {
             if (lhs.start_coord.y != rhs.start_coord.y) {
                 return lhs.start_coord.y < rhs.start_coord.y;
@@ -509,14 +515,11 @@ private:
         std::vector<uint32_t> args;
         args.reserve(4u * max_rectangles_);
         for (const auto& rectangle : state.rectangles) {
-            std::vector<std::pair<uint32_t, uint32_t>> virtual_cores;
-            virtual_cores.reserve(rectangle.size());
-            for (std::size_t y = rectangle.start_coord.y; y <= rectangle.end_coord.y; ++y) {
-                for (std::size_t x = rectangle.start_coord.x; x <= rectangle.end_coord.x; ++x) {
-                    virtual_cores.push_back(detail::virt_coord(device_, tt::tt_metal::CoreCoord{x, y}));
-                }
-            }
-            const auto bounds = detail::noc_ordered_bbox(cfg_.noc, virtual_cores);
+            const auto bounds = detail::noc_ordered_bbox(
+                cfg_.noc,
+                std::vector<std::pair<uint32_t, uint32_t>>{
+                    {static_cast<uint32_t>(rectangle.start_coord.x), static_cast<uint32_t>(rectangle.start_coord.y)},
+                    {static_cast<uint32_t>(rectangle.end_coord.x), static_cast<uint32_t>(rectangle.end_coord.y)}});
             args.insert(args.end(), bounds.begin(), bounds.end());
         }
         args.resize(4u * max_rectangles_, 0u);

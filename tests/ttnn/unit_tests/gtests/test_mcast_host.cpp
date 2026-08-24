@@ -14,6 +14,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -90,6 +91,62 @@ std::vector<uint32_t> expected_bbox(tt::tt_metal::IDevice* dev, const std::vecto
         virtual_cores.emplace_back(static_cast<uint32_t>(worker.x), static_cast<uint32_t>(worker.y));
     }
     return detail::noc_ordered_bbox(noc, virtual_cores);
+}
+
+std::vector<CoreRange> expected_wire_rectangles(tt::tt_metal::IDevice* dev, const CoreRangeSet& logical_cores) {
+    std::vector<CoreRange> virtual_singletons;
+    virtual_singletons.reserve(logical_cores.num_cores());
+    for (const auto& logical : tt::tt_metal::corerange_to_cores(logical_cores, std::nullopt, true)) {
+        const auto worker = dev->worker_core_from_logical_core(logical);
+        virtual_singletons.emplace_back(worker, worker);
+    }
+    auto rectangles = CoreRangeSet(std::move(virtual_singletons)).merge_ranges().ranges();
+    std::sort(rectangles.begin(), rectangles.end(), [](const auto& lhs, const auto& rhs) {
+        if (lhs.start_coord.y != rhs.start_coord.y) {
+            return lhs.start_coord.y < rhs.start_coord.y;
+        }
+        if (lhs.start_coord.x != rhs.start_coord.x) {
+            return lhs.start_coord.x < rhs.start_coord.x;
+        }
+        if (lhs.end_coord.y != rhs.end_coord.y) {
+            return lhs.end_coord.y < rhs.end_coord.y;
+        }
+        return lhs.end_coord.x < rhs.end_coord.x;
+    });
+    return rectangles;
+}
+
+std::vector<uint32_t> expected_extended_runtime_args(
+    tt::tt_metal::IDevice* dev,
+    const CoreRangeSet& logical_receivers,
+    const std::vector<CoreCoord>& logical_senders,
+    NOC noc,
+    uint32_t max_rectangles,
+    uint32_t role,
+    uint32_t sender_phase,
+    uint32_t ack_count) {
+    const auto rectangles = expected_wire_rectangles(dev, logical_receivers);
+    std::vector<uint32_t> args;
+    args.reserve(4u * max_rectangles + 2u * logical_senders.size() + 9u);
+    for (const auto& rectangle : rectangles) {
+        const auto bounds = detail::noc_ordered_bbox(
+            noc,
+            std::vector<std::pair<uint32_t, uint32_t>>{
+                {static_cast<uint32_t>(rectangle.start_coord.x), static_cast<uint32_t>(rectangle.start_coord.y)},
+                {static_cast<uint32_t>(rectangle.end_coord.x), static_cast<uint32_t>(rectangle.end_coord.y)}});
+        args.insert(args.end(), bounds.begin(), bounds.end());
+    }
+    args.resize(4u * max_rectangles, 0u);
+    for (const auto& sender : logical_senders) {
+        const auto worker = dev->worker_core_from_logical_core(sender);
+        args.push_back(static_cast<uint32_t>(worker.x));
+        args.push_back(static_cast<uint32_t>(worker.y));
+    }
+    args.insert(args.end(), 4u, 0u);  // No chain neighbors for exact multi-rectangle multicast.
+    args.insert(
+        args.end(),
+        {role, sender_phase, static_cast<uint32_t>(rectangles.size()), ack_count, detail::HARDWARE_MCAST_TRANSPORT});
+    return args;
 }
 
 std::vector<uint32_t> topology_only(std::vector<uint32_t> args) {
@@ -202,6 +259,70 @@ TEST_F(McastHostFixture, DenseFamilyUsesCompactWireEvenWhenChainRequested) {
         McastConfig{});
     EXPECT_TRUE(family.uses_compact_wire());
     EXPECT_EQ(family.compile_time_args()[0], 1u);
+}
+
+TEST_F(McastHostFixture, LogicalNeighborsAcrossWorkerDisjointGroupsUseChain) {
+    const auto grid = device_->compute_with_storage_grid_size();
+    std::optional<std::pair<CoreCoord, CoreCoord>> disjoint_neighbors;
+    for (uint32_t x = 0; x + 1 < grid.x; ++x) {
+        const CoreCoord first{x, 0};
+        const CoreCoord second{x + 1, 0};
+        const auto first_virtual = device_->worker_core_from_logical_core(first);
+        const auto second_virtual = device_->worker_core_from_logical_core(second);
+        const auto delta = first_virtual.x > second_virtual.x ? first_virtual.x - second_virtual.x
+                                                              : second_virtual.x - first_virtual.x;
+        if (first_virtual.y != second_virtual.y || delta != 1u) {
+            disjoint_neighbors = std::pair{first, second};
+            break;
+        }
+    }
+    if (!disjoint_neighbors.has_value()) {
+        GTEST_SKIP() << "worker mapping has no disjoint logical columns";
+    }
+
+    const auto [sender, receiver] = *disjoint_neighbors;
+    const McastFamily family(
+        device_,
+        std::vector<McastGroup>{
+            McastGroup(CoreRangeSet(CoreRange(sender, receiver)), sender, /*use_chain_forwarding=*/true)},
+        McastConfig{});
+
+    EXPECT_FALSE(family.uses_compact_wire());
+    EXPECT_EQ(family.max_rectangles(), 2u);
+    EXPECT_EQ(family.runtime_args(sender).back(), detail::CHAIN_FORWARD_TRANSPORT);
+}
+
+TEST_F(McastHostFixture, LargeRaggedRowMajorGroupsUseChain) {
+    const auto grid = device_->compute_with_storage_grid_size();
+    constexpr uint32_t group_size = 54;
+    constexpr uint32_t num_groups = 2;
+    if (grid.x * grid.y < group_size * num_groups) {
+        GTEST_SKIP() << "worker grid is too small for the Conv3D-shaped topology";
+    }
+
+    const auto logical_cores =
+        tt::tt_metal::corerange_to_cores(make_grid(grid.x, grid.y), group_size * num_groups, true);
+    std::vector<McastGroup> groups;
+    groups.reserve(num_groups);
+    for (uint32_t group_index = 0; group_index < num_groups; ++group_index) {
+        std::vector<CoreRange> exact_members;
+        exact_members.reserve(group_size);
+        const uint32_t begin = group_index * group_size;
+        for (uint32_t offset = 0; offset < group_size; ++offset) {
+            const auto core = logical_cores.at(begin + offset);
+            exact_members.emplace_back(core, core);
+        }
+        groups.emplace_back(
+            CoreRangeSet(std::move(exact_members)),
+            logical_cores.at(begin),
+            /*use_chain_forwarding=*/true);
+    }
+
+    const McastFamily family(device_, std::move(groups), McastConfig{});
+    EXPECT_FALSE(family.uses_compact_wire());
+    EXPECT_GT(family.max_rectangles(), 1u);
+    EXPECT_EQ(family.runtime_args(logical_cores.front()).back(), detail::CHAIN_FORWARD_TRANSPORT);
+    EXPECT_EQ(family.runtime_args(logical_cores.at(group_size)).back(), detail::CHAIN_FORWARD_TRANSPORT);
 }
 
 TEST_F(McastHostFixture, IrregularChainUsesSenderHeadThenLogicalRowMajorOrder) {
@@ -386,19 +507,48 @@ TEST_F(McastHostFixture, PerRow8x8) {
     EXPECT_EQ(sems[1].id, 1u);
     EXPECT_EQ(sems[1].initial_value, 0u);
 
-    // --- CT: [present, has_receivers, data_ready, consumer_ready, ack_count, flags, rotating_span]
-    //         (ack_count = span-1 = 7; flags = 1; rotating_span = 0 for fixed mode) ---
-    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 1, 0, 1, 7, 1, 0}));
+    const CoreRangeSet first_row(CoreRange(CoreCoord(0, 0), CoreCoord(7, 0)));
+    const uint32_t rectangle_count = expected_wire_rectangles(dev, first_row).size();
+    if (rectangle_count == 1u) {
+        EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 1, 0, 1, 7, 1, 0}));
+    } else {
+        EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{2, 1, 0, 1, 1, 0, rectangle_count}));
+    }
 
     // --- RT: sender at col 0 of row Y -> full line; the pipe excludes the source ---
     for (uint32_t Y : {0u, 3u, 7u}) {
-        EXPECT_EQ(topology_only(mc.runtime_args(CoreCoord(0, Y))), rect(virt(0, Y), virt(7, Y))) << "sender row " << Y;
+        const CoreRangeSet row(CoreRange(CoreCoord(0, Y), CoreCoord(7, Y)));
+        if (rectangle_count == 1u) {
+            EXPECT_EQ(topology_only(mc.runtime_args(CoreCoord(0, Y))), rect(virt(0, Y), virt(7, Y)))
+                << "sender row " << Y;
+        } else {
+            EXPECT_EQ(
+                mc.runtime_args(CoreCoord(0, Y)),
+                expected_extended_runtime_args(
+                    dev, row, {CoreCoord(0, Y)}, NOC::NOC_0, rectangle_count, detail::CAN_SEND, 0u, 7u))
+                << "sender row " << Y;
+        }
     }
     // --- RT: receiver at col X (!=0) of row Y -> [sender_x, sender_y, 0, 0] with sender at col 0 ---
     for (uint32_t X : {1u, 4u, 7u}) {
         const auto s = virt(0, /*Y=*/5);
-        EXPECT_EQ(topology_only(mc.runtime_args(CoreCoord(X, 5))), (std::vector<uint32_t>{s.first, s.second, 0, 0}))
-            << "receiver col " << X;
+        if (rectangle_count == 1u) {
+            EXPECT_EQ(topology_only(mc.runtime_args(CoreCoord(X, 5))), (std::vector<uint32_t>{s.first, s.second, 0, 0}))
+                << "receiver col " << X;
+        } else {
+            EXPECT_EQ(
+                mc.runtime_args(CoreCoord(X, 5)),
+                expected_extended_runtime_args(
+                    dev,
+                    CoreRangeSet(CoreRange(CoreCoord(0, 5), CoreCoord(7, 5))),
+                    {CoreCoord(0, 5)},
+                    NOC::NOC_0,
+                    rectangle_count,
+                    detail::CAN_RECEIVE,
+                    detail::NO_SENDER_ROUND,
+                    0u))
+                << "receiver col " << X;
+        }
         EXPECT_FALSE(mc.is_sender(CoreCoord(X, 5)));
     }
     EXPECT_TRUE(mc.is_sender(CoreCoord(0, 5)));
@@ -657,9 +807,13 @@ TEST_F(McastHostFixture, PerRowRotating8x8) {
     Mcast1D mc(dev, grid, Mcast1DShape::PerRow, /*sender_col ignored=*/0, cfg);
 
     EXPECT_TRUE(mc.has_receivers());
-    EXPECT_EQ(mc.compile_time_args()[6], 8u);  // 8 rounds; every column takes a sender turn
-    // The rotating span is self-described by the sixth CT word.
-    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 1, 0, 1, 7, 1, 8}));
+    const uint32_t rectangle_count =
+        expected_wire_rectangles(dev, CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(7, 0)))).size();
+    if (rectangle_count == 1u) {
+        EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 1, 0, 1, 7, 1, 8}));
+    } else {
+        EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{2, 1, 0, 1, 1, 8, rectangle_count}));
+    }
 
     for (uint32_t Y : {0u, 3u, 7u}) {
         std::vector<std::pair<uint32_t, uint32_t>> line;
@@ -667,18 +821,32 @@ TEST_F(McastHostFixture, PerRowRotating8x8) {
             line.push_back(virt(X, Y));
         }
         const auto expected = expected_rotating_row(line, /*noc1=*/false);
+        std::vector<CoreCoord> senders;
+        for (uint32_t X = 0; X < 8; ++X) {
+            senders.emplace_back(X, Y);
+        }
+        const CoreRangeSet row(CoreRange(CoreCoord(0, Y), CoreCoord(7, Y)));
         // Every core on the row emits the SAME line-uniform block (rect + ordered coords).
         for (uint32_t X : {0u, 1u, 4u, 7u}) {
-            EXPECT_EQ(topology_only(mc.runtime_args(CoreCoord(X, Y))), expected) << "row " << Y << " core col " << X;
+            if (rectangle_count == 1u) {
+                EXPECT_EQ(topology_only(mc.runtime_args(CoreCoord(X, Y))), expected)
+                    << "row " << Y << " core col " << X;
+            } else {
+                EXPECT_EQ(
+                    mc.runtime_args(CoreCoord(X, Y)),
+                    expected_extended_runtime_args(
+                        dev, row, senders, NOC::NOC_0, rectangle_count, detail::CAN_SEND | detail::CAN_RECEIVE, X, 7u))
+                    << "row " << Y << " core col " << X;
+            }
             EXPECT_TRUE(mc.is_sender(CoreCoord(X, Y)));        // every core is a sender at some round
             EXPECT_EQ(mc.num_receivers(CoreCoord(X, Y)), 7u);  // and reaches the other 7 on its round
         }
         // Spot-check the wire semantics: block[0..3] = rect, then coords[round] at 4 + 2*round.
-        const auto rt = topology_only(mc.runtime_args(CoreCoord(0, Y)));
-        ASSERT_EQ(rt.size(), 4u + 2u * 8u);
+        const auto rt = mc.runtime_args(CoreCoord(0, Y));
+        const uint32_t sender_coord_base = rectangle_count == 1u ? 4u : 4u * rectangle_count;
         for (uint32_t round = 0; round < 8; ++round) {
-            EXPECT_EQ(rt[4 + 2 * round + 0], virt(round, Y).first) << "round " << round << " sender_x";
-            EXPECT_EQ(rt[4 + 2 * round + 1], virt(round, Y).second) << "round " << round << " sender_y";
+            EXPECT_EQ(rt[sender_coord_base + 2 * round + 0], virt(round, Y).first) << "round " << round << " sender_x";
+            EXPECT_EQ(rt[sender_coord_base + 2 * round + 1], virt(round, Y).second) << "round " << round << " sender_y";
         }
     }
 }
@@ -734,13 +902,35 @@ TEST_F(McastHostFixture, PerRowRotatingNoc1) {
     cfg.noc = NOC::NOC_1;
     Mcast1D mc(dev, grid, Mcast1DShape::PerRow, /*sender_col ignored=*/0, cfg);
 
+    const uint32_t rectangle_count =
+        expected_wire_rectangles(dev, CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(7, 0)))).size();
+
     for (uint32_t Y : {0u, 5u}) {
         std::vector<std::pair<uint32_t, uint32_t>> line;
         for (uint32_t X = 0; X < 8; ++X) {
             line.push_back(virt(X, Y));
         }
-        EXPECT_EQ(topology_only(mc.runtime_args(CoreCoord(3, Y))), expected_rotating_row(line, /*noc1=*/true))
-            << "row " << Y;
+        if (rectangle_count == 1u) {
+            EXPECT_EQ(topology_only(mc.runtime_args(CoreCoord(3, Y))), expected_rotating_row(line, /*noc1=*/true))
+                << "row " << Y;
+        } else {
+            std::vector<CoreCoord> senders;
+            for (uint32_t X = 0; X < 8; ++X) {
+                senders.emplace_back(X, Y);
+            }
+            EXPECT_EQ(
+                mc.runtime_args(CoreCoord(3, Y)),
+                expected_extended_runtime_args(
+                    dev,
+                    CoreRangeSet(CoreRange(CoreCoord(0, Y), CoreCoord(7, Y))),
+                    senders,
+                    NOC::NOC_1,
+                    rectangle_count,
+                    detail::CAN_SEND | detail::CAN_RECEIVE,
+                    3u,
+                    7u))
+                << "row " << Y;
+        }
     }
 }
 
@@ -816,6 +1006,7 @@ TEST_F(McastHostFixture, Mcast2DFullyInsideDense) {
 
     McastConfig cfg;  // defaults: NOC_0, handshake, Flag, base_sem_id 0.
     Mcast2D mc(dev, rect, /*sender=*/CoreCoord(0, 0), cfg);
+    const uint32_t rectangle_count = expected_wire_rectangles(dev, rect).size();
 
     EXPECT_TRUE(mc.has_receivers());
     EXPECT_TRUE(mc.sender_in_rect());
@@ -832,16 +1023,42 @@ TEST_F(McastHostFixture, Mcast2DFullyInsideDense) {
     EXPECT_EQ(sems[0].core_ranges.num_cores(), 64u);
 
     // CT: [present, has_receivers, data_ready, consumer_ready, ack_count, flags, rotating_span].
-    EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 1, 0, 1, 63, 1, 0}));
+    if (rectangle_count == 1u) {
+        EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 1, 0, 1, 63, 1, 0}));
+    } else {
+        EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{2, 1, 0, 1, 1, 0, rectangle_count}));
+    }
 
     // sender -> whole-rect corners; receivers -> the sender's virtual coords.
     EXPECT_TRUE(mc.is_sender(CoreCoord(0, 0)));
-    EXPECT_EQ(topology_only(mc.runtime_args(CoreCoord(0, 0))), expected_rect2d(dev, 0, 0, 7, 7, /*noc1=*/false));
+    if (rectangle_count == 1u) {
+        EXPECT_EQ(topology_only(mc.runtime_args(CoreCoord(0, 0))), expected_rect2d(dev, 0, 0, 7, 7, /*noc1=*/false));
+    } else {
+        EXPECT_EQ(
+            mc.runtime_args(CoreCoord(0, 0)),
+            expected_extended_runtime_args(
+                dev, rect, {CoreCoord(0, 0)}, NOC::NOC_0, rectangle_count, detail::CAN_SEND, 0u, 63u));
+    }
     for (auto rc : {CoreCoord(1, 0), CoreCoord(3, 5), CoreCoord(7, 7)}) {
         const auto s = virt(0, 0);
         EXPECT_FALSE(mc.is_sender(rc));
-        EXPECT_EQ(topology_only(mc.runtime_args(rc)), (std::vector<uint32_t>{s.first, s.second, 0, 0}))
-            << "receiver (" << rc.x << "," << rc.y << ")";
+        if (rectangle_count == 1u) {
+            EXPECT_EQ(topology_only(mc.runtime_args(rc)), (std::vector<uint32_t>{s.first, s.second, 0, 0}))
+                << "receiver (" << rc.x << "," << rc.y << ")";
+        } else {
+            EXPECT_EQ(
+                mc.runtime_args(rc),
+                expected_extended_runtime_args(
+                    dev,
+                    rect,
+                    {CoreCoord(0, 0)},
+                    NOC::NOC_0,
+                    rectangle_count,
+                    detail::CAN_RECEIVE,
+                    detail::NO_SENDER_ROUND,
+                    0u))
+                << "receiver (" << rc.x << "," << rc.y << ")";
+        }
     }
 }
 
@@ -851,26 +1068,48 @@ TEST_F(McastHostFixture, Mcast2DFullyInsideMiddleSender) {
     const auto rect = make_grid(/*gc=*/8, /*gr=*/8);
     McastConfig cfg;
     Mcast2D mc(dev, rect, /*sender=*/CoreCoord(3, 4), cfg);
+    const uint32_t rectangle_count = expected_wire_rectangles(dev, rect).size();
 
     EXPECT_TRUE(mc.sender_in_rect());
     EXPECT_TRUE(mc.is_sender(CoreCoord(3, 4)));
     EXPECT_FALSE(mc.is_sender(CoreCoord(0, 0)));
-    EXPECT_EQ(topology_only(mc.runtime_args(CoreCoord(3, 4))), expected_rect2d(dev, 0, 0, 7, 7, /*noc1=*/false));
+    if (rectangle_count == 1u) {
+        EXPECT_EQ(topology_only(mc.runtime_args(CoreCoord(3, 4))), expected_rect2d(dev, 0, 0, 7, 7, /*noc1=*/false));
+    } else {
+        EXPECT_EQ(
+            mc.runtime_args(CoreCoord(3, 4)),
+            expected_extended_runtime_args(
+                dev, rect, {CoreCoord(3, 4)}, NOC::NOC_0, rectangle_count, detail::CAN_SEND, 0u, 63u));
+    }
     const auto w = dev->worker_core_from_logical_core(CoreCoord(3, 4));
-    EXPECT_EQ(
-        topology_only(mc.runtime_args(CoreCoord(0, 0))),
-        (std::vector<uint32_t>{static_cast<uint32_t>(w.x), static_cast<uint32_t>(w.y), 0, 0}));
+    if (rectangle_count == 1u) {
+        EXPECT_EQ(
+            topology_only(mc.runtime_args(CoreCoord(0, 0))),
+            (std::vector<uint32_t>{static_cast<uint32_t>(w.x), static_cast<uint32_t>(w.y), 0, 0}));
+    } else {
+        EXPECT_EQ(
+            mc.runtime_args(CoreCoord(0, 0)),
+            expected_extended_runtime_args(
+                dev,
+                rect,
+                {CoreCoord(3, 4)},
+                NOC::NOC_0,
+                rectangle_count,
+                detail::CAN_RECEIVE,
+                detail::NO_SENDER_ROUND,
+                0u));
+    }
 }
 
 // Divergent ack_count: the geometric fan-out is still area-1, but only `ack_count` cores ack.
 TEST_F(McastHostFixture, Mcast2DDivergentNumActive) {
     auto* dev = device_;
-    const auto rect = make_grid(/*gc=*/8, /*gr=*/8);
+    const auto rect = make_grid(/*gc=*/4, /*gr=*/4);
     McastConfig cfg;
     Mcast2D mc(dev, rect, /*sender=*/CoreCoord(0, 0), cfg, /*ack_count=*/10);
 
     EXPECT_EQ(mc.ack_count(), 10u);
-    EXPECT_EQ(mc.num_receivers(CoreCoord(0, 0)), 63u);  // geometric fan-out unchanged
+    EXPECT_EQ(mc.num_receivers(CoreCoord(0, 0)), 15u);  // geometric fan-out unchanged
     EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 1, 0, 1, 10, 1, 0}));
 }
 
@@ -1093,8 +1332,16 @@ TEST_F(McastHostFixture, Mcast2DNoc1) {
     McastConfig cfg;
     cfg.noc = NOC::NOC_1;
     Mcast2D mc(dev, rect, /*sender=*/CoreCoord(0, 0), cfg);
+    const uint32_t rectangle_count = expected_wire_rectangles(dev, rect).size();
 
-    EXPECT_EQ(topology_only(mc.runtime_args(CoreCoord(0, 0))), expected_rect2d(dev, 0, 0, 7, 7, /*noc1=*/true));
+    if (rectangle_count == 1u) {
+        EXPECT_EQ(topology_only(mc.runtime_args(CoreCoord(0, 0))), expected_rect2d(dev, 0, 0, 7, 7, /*noc1=*/true));
+    } else {
+        EXPECT_EQ(
+            mc.runtime_args(CoreCoord(0, 0)),
+            expected_extended_runtime_args(
+                dev, rect, {CoreCoord(0, 0)}, NOC::NOC_1, rectangle_count, detail::CAN_SEND, 0u, 63u));
+    }
 }
 
 // Degenerate single-core rect: no receivers -> inactive, ack_count 0. The RT is still the sender's
@@ -1254,30 +1501,30 @@ TEST_F(McastHostFixture, LayerNormPostAllGatherRowsUseOutsideSenders) {
 // UNUSED_SEM_ID. This is what lets the kernel's sender()/receiver() take no behaviour knobs.
 TEST_F(McastHostFixture, FlagsWordEncoding) {
     auto* dev = device_;
-    const auto grid = make_grid(/*gc=*/8, /*gr=*/8);
+    const auto grid = make_grid(/*gc=*/4, /*gr=*/4);
     constexpr uint32_t UNUSED = 0xFFFFFFFFu;
 
-    // handshake off + Flag => flags 0; consumer_ready UNUSED; ack_count still = the fan-out (7).
+    // handshake off + Flag => flags 0; consumer_ready UNUSED; ack_count still = the fan-out (3).
     {
         McastConfig cfg;
         cfg.handshake = false;
         Mcast1D mc(dev, grid, Mcast1DShape::PerRow, /*sender_col=*/0, cfg);
-        EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 1, 0, UNUSED, 7, 0, 0}));
+        EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 1, 0, UNUSED, 3, 0, 0}));
     }
     // handshake on + Counter => flags 3 (bit0 pre_handshake | bit1 signal).
     {
         McastConfig cfg;
         cfg.data_ready = DataReadyMode::Counter;
         Mcast1D mc(dev, grid, Mcast1DShape::PerRow, /*sender_col=*/0, cfg);
-        EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 1, 0, 1, 7, 3, 0}));
+        EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 1, 0, 1, 3, 3, 0}));
     }
-    // handshake off + Counter => flags 2 (bit1 only); Mcast2D dense fan-out 63, consumer_ready UNUSED.
+    // handshake off + Counter => flags 2 (bit1 only); Mcast2D dense fan-out 15, consumer_ready UNUSED.
     {
         McastConfig cfg;
         cfg.handshake = false;
         cfg.data_ready = DataReadyMode::Counter;
         Mcast2D mc(dev, grid, /*sender=*/CoreCoord(0, 0), cfg);
-        EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 1, 0, UNUSED, 63, 2, 0}));
+        EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 1, 0, UNUSED, 15, 2, 0}));
     }
 }
 
@@ -1287,7 +1534,7 @@ TEST_F(McastHostFixture, FlagsWordEncoding) {
 // non-acking receivers pass pre_handshake=false — instead of a second mcast object.
 TEST_F(McastHostFixture, PreHandshakeOverride) {
     auto* dev = device_;
-    const auto grid = make_grid(/*gc=*/8, /*gr=*/8);
+    const auto grid = make_grid(/*gc=*/4, /*gr=*/4);
 
     // handshake=True object: default emission has pre_handshake (flags bit0) set.
     McastConfig cfg;  // handshake=true, Flag
@@ -1301,8 +1548,8 @@ TEST_F(McastHostFixture, PreHandshakeOverride) {
     McastConfig cfg1;
     cfg1.data_ready = DataReadyMode::Counter;
     Mcast1D mc1(dev, grid, Mcast1DShape::PerRow, /*sender_col=*/0, cfg1);
-    EXPECT_EQ(mc1.compile_time_args(), (std::vector<uint32_t>{1, 1, 0, 1, 7, 3, 0}));  // bit0|bit1, fixed
-    EXPECT_EQ(mc1.compile_time_args(/*pre_handshake=*/false), (std::vector<uint32_t>{1, 1, 0, 1, 7, 2, 0}));
+    EXPECT_EQ(mc1.compile_time_args(), (std::vector<uint32_t>{1, 1, 0, 1, 3, 3, 0}));  // bit0|bit1, fixed
+    EXPECT_EQ(mc1.compile_time_args(/*pre_handshake=*/false), (std::vector<uint32_t>{1, 1, 0, 1, 3, 2, 0}));
 }
 
 }  // namespace ttnn::kernel_lib::host::test

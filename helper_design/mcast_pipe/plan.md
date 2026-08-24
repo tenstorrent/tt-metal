@@ -91,12 +91,15 @@ explicit family.
 
 ## Transport selection
 
-Transport is selected per group and round from the exact active receiver set:
+Transport is selected per group and round from the exact active receiver set
+after mapping it into the selected NoC's virtual worker coordinates. Logical
+neighbors that cross a harvested or disjoint physical worker region are not one
+hardware-multicast rectangle:
 
 1. An empty/local-only destination is a no-op or local completion as required
    by the existing protocol.
-2. A dense rectangle always uses one hardware multicast, regardless of
-   `use_chain_forwarding`.
+2. A receiver set that is one dense rectangle in virtual wire coordinates
+   always uses one hardware multicast, regardless of `use_chain_forwarding`.
 3. An irregular set with `use_chain_forwarding == false` uses its exact
    non-overlapping rectangle decomposition. One logical send covers every
    rectangle.
@@ -107,11 +110,12 @@ rectangles; it is not capped at the three needed by GroupNorm. It must cover the
 active receiver set exactly, with no duplicate destinations and no bounding-box
 holes.
 
-Chain order is never a user argument. The helper derives it deterministically
-in logical row-major order `(y, x)`, places the active sender at the head, and
-orders all remaining group cores row-major. Logical ordering is established
-before physical-coordinate conversion so topology does not depend on NoC
-orientation or Blackhole virtualization.
+Rectangle decomposition happens in virtual wire coordinates so no hardware
+multicast spans a physical hole. Chain order is never a user argument. The
+helper derives it deterministically in logical row-major order `(y, x)`, places
+the active sender at the head, and orders all remaining group cores row-major.
+Logical chain ordering is established before physical-coordinate conversion so
+topology does not depend on NoC orientation or Blackhole virtualization.
 
 Rotating hardware multicast, including multi-rectangle multicast, is supported.
 Rotating irregular chains are rejected in the first implementation because a

@@ -93,7 +93,6 @@ def test_migrated_host_bindings_treat_helper_outputs_as_opaque_ranges():
 def test_migrated_host_bindings_use_append_style_helper_tails():
     _, factories = _migrated_sources()
     allowed_queries = {
-        "ttnn/cpp/ttnn/operations/experimental/conv3d/device/conv3d_program_factory.cpp": 2,
         "ttnn/cpp/ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.cpp": 4,
         "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_program_factory.cpp": 1,
     }
@@ -346,28 +345,52 @@ def test_block_sharded_matmul_keeps_receiver_geometry_separate_from_sender_span(
     assert not re.search(r"Mcast[12]D\([^;]+CoreRangeSet\(all_cores\)", factory_2d, re.DOTALL)
 
 
-def test_conv3d_mcast_precedes_the_dynamic_operation_tail_and_scopes_weight_share_modes():
+def test_conv3d_mcast_precedes_the_dynamic_operation_tail():
     factory = (REPO_ROOT / "ttnn/cpp/ttnn/operations/experimental/conv3d/device/conv3d_program_factory.cpp").read_text()
     kernel = (REPO_ROOT / "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp").read_text()
 
-    assert "constexpr McastArgs<bias_args.next_compile_time_args_offset(), 21> weights_mcast_args;" in kernel
+    assert "constexpr McastArgs<bias_args.next_compile_time_args_offset(), 15> weights_mcast_args;" in kernel
     assert "argidx = weights_mcast_args.next_runtime_args_offset();" in kernel
-    assert kernel.index("const uint32_t mcast_num_iters") < kernel.index("weights_mcast_args;")
-    assert "weights_mcast.append_runtime_args_to(writer_args, core);" in factory
-    assert factory.index("writer_args.push_back(cw.mcast_num_iters);") < factory.index(
-        "weights_mcast.append_runtime_args_to(writer_args, core);"
+    assert kernel.index("const uint32_t num_workers") < kernel.index("weights_mcast_args;")
+    assert "weights_mcast_family->append_runtime_args_to(writer_args, core);" in factory
+    assert factory.index("writer_args.push_back(num_workers);") < factory.index(
+        "weights_mcast_family->append_runtime_args_to(writer_args, core);"
     )
-    assert factory.index("weights_mcast.append_runtime_args_to(writer_args, core);") < factory.index(
+    assert factory.index("weights_mcast_family->append_runtime_args_to(writer_args, core);") < factory.index(
         "if (num_workers > 0)"
     )
-    assert ": weights_mcast_template;" in factory
+    assert "append_absent_mcast_compile_time_args_to(writer_compile_time_args);" in factory
     assert "mcast_bbox_start_x" not in factory + kernel
     assert "mcast_num_dests" not in factory + kernel
 
 
+def test_conv3d_weight_stream_uses_one_exact_family_with_helper_owned_transport():
+    factory = (REPO_ROOT / "ttnn/cpp/ttnn/operations/experimental/conv3d/device/conv3d_program_factory.cpp").read_text()
+    kernel = (REPO_ROOT / "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp").read_text()
+
+    assert "std::optional<ttnn::kernel_lib::host::McastFamily> weights_mcast_family;" in factory
+    assert "std::vector<ttnn::kernel_lib::host::McastGroup> groups;" in factory
+    assert "/*use_chain_forwarding=*/true" in factory
+    assert "weights_mcast_family->append_compile_time_args_to(writer_compile_time_args);" in factory
+    assert "weights_mcast_family->append_runtime_args_to(writer_args, core);" in factory
+    assert kernel.count("McastArgs<") == 1
+    assert "constexpr McastArgs<bias_args.next_compile_time_args_offset(), 15> weights_mcast_args;" in kernel
+    assert "weights_pipe.receive(local_addr, weight_block_bytes);" in kernel
+    assert "conv3d_weight_share.hpp" not in factory + kernel
+    assert "Mcast2D" not in factory
+    for operation_owned_detail in (
+        "WeightShareRole",
+        "chain_succ_noc",
+        "weight_src_noc",
+        "McastPassive",
+        "mcast_num_iters",
+    ):
+        assert operation_owned_detail not in factory + kernel
+
+
 def test_sender_pipe_degenerate_copy_preserves_async_write_semantics():
     source = (REPO_ROOT / "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.inl").read_text()
-    start = source.index("    local_copy_(uint32_t src_l1")
+    start = source.index(">::local_copy_(uint32_t src_l1")
     body = source[start : source.index("// ReceiverPipe", start)]
     assert "noc_.async_write(" in body
     assert "async_read" not in body
@@ -592,10 +615,13 @@ def test_conv_ack_counts_are_geometry_derived_only_for_dense_families():
     block_binding = conv2d_factory[block_start:block_end]
     assert "weights_mcast_sender_semaphore_id}});" in block_binding
 
-    # Dense Conv3D rectangles make otherwise-idle members passive participants,
-    # so both the template and per-group Mcast2D bindings use area-minus-sender.
-    assert "CoreCoord{0, 0}, weights_mcast_config);" in conv3d_factory
-    assert "device, group_rect, CoreCoord{sender_x_log, sender_y_log}, weights_mcast_config);" in conv3d_factory
+    # Conv3D gives the helper each exact active group. The family owns the ACK
+    # count and selects dense multicast or an irregular chain without passive
+    # bounding-box participants or an operation-owned geometric scalar.
+    assert "std::vector<ttnn::kernel_lib::host::McastGroup> groups;" in conv3d_factory
+    assert "CoreRangeSet(std::move(exact_cores))" in conv3d_factory
+    assert "/*use_chain_forwarding=*/true" in conv3d_factory
+    assert "Mcast2D" not in conv3d_factory
 
     # These two geometries deliberately have fewer acknowledging participants
     # than landing cores and must retain their explicit operation-owned counts.

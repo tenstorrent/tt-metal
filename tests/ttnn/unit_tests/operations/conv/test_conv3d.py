@@ -264,6 +264,33 @@ def test_conv3d_sweep_shapes(
 
 
 @pytest.mark.parametrize(
+    "input_shape, grid_size",
+    [
+        ((1, 32, 1, 1, 5), (5, 1)),
+        ((1, 160, 1, 1, 18), (10, 9)),
+    ],
+    ids=["dense_weight_group", "irregular_weight_groups"],
+)
+@skip_with_watcher("Skipping test with watcher enabled due to failure, see github issue #37184")
+def test_conv3d_weight_mcast_family(device, input_shape, grid_size):
+    device_grid = device.compute_with_storage_grid_size()
+    if device_grid.x < grid_size[0] or device_grid.y < grid_size[1]:
+        pytest.skip(f"requires a {grid_size[0]}x{grid_size[1]} worker grid")
+
+    run_conv3d_test(
+        device,
+        input_shape,
+        out_channels=32,
+        kernel_size=(1, 1, 1),
+        stride=(1, 1, 1),
+        groups=1,
+        padding=(0, 0, 0),
+        padding_mode="zeros",
+        grid_size=grid_size,
+    )
+
+
+@pytest.mark.parametrize(
     "input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode",
     [
         [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), 1, (0, 1, 1), "replicate"],
