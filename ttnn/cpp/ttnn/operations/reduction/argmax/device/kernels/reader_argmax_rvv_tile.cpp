@@ -39,6 +39,10 @@ void kernel_main() {
     constexpr bool has_maxval = (bool)get_compile_time_arg_val(15);
     constexpr uint32_t num_c_time_args = 16;
 
+    // Base addresses are positional RUNTIME args by design (repo idiom, cf.
+    // reader_argmax_tile_layout*.cpp): TensorAccessorArgs carry only the
+    // compile-time banking/layout — TensorAccessor requires the base address
+    // at construction so program-cache rebinds can update it per allocation.
     const uint32_t src_base_addr = get_arg_val<uint32_t>(0);
     const uint32_t dst_base_addr = get_arg_val<uint32_t>(1);
     const uint32_t val_base_addr = has_maxval ? get_arg_val<uint32_t>(2) : 0;

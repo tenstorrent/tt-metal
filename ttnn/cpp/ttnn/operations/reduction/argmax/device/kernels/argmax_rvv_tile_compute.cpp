@@ -80,9 +80,17 @@ inline void amx_out_reserve(uint32_t cb, uint16_t my_received, uint16_t n) {
     }
 }
 
-inline void amx_out_push(uint32_t cb, uint16_t& my_received, uint32_t last_word_addr, uint16_t n) {
+// Publish `n` pages of CB `cb` after the caller has written `bytes_written`
+// bytes starting at the (16B-aligned) page base `page_addr`. Stores from this
+// RISC drain to L1 in program order, so reading back the aligned 4-byte word
+// that CONTAINS the last written byte — offset (bytes_written - 1) & ~3 —
+// guarantees every store into the page is L1-visible before the received
+// counter moves. Rounding DOWN is required (an aligned uint32_t load whose
+// span covers the final byte), so e.g. bytes_written == 2 fences word 0:
+// that IS the word holding the last written half-word, not an "early" fence.
+inline void amx_out_push(uint32_t cb, uint16_t& my_received, uint32_t page_addr, uint32_t bytes_written, uint16_t n) {
     asm volatile("fence" ::: "memory");
-    (void)*(volatile uint32_t*)last_word_addr;
+    (void)*(volatile uint32_t*)(page_addr + ((bytes_written - 1u) & ~3u));
     my_received += n;
     get_cb_tiles_received_ptr((int)cb)[0] = my_received;
 }
@@ -287,8 +295,11 @@ void kernel_main() {
                 ip[r] = s_running_idx[r];
                 vp[r] = (uint16_t)s_running_raw[r];
             }
-            amx_out_push(cb_out_val, recv_val, vpage + (((2u * units - 2u) & ~3u)), 1);
-            amx_out_push(cb_out_idx, recv_idx, ipage + (units - 1u) * 4u, 1);
+            // val page: `units` contiguous bf16 raw-bit half-words (2B each);
+            // idx page: `units` contiguous u32 indices (4B each). The helper
+            // fences on the aligned word containing the last written byte.
+            amx_out_push(cb_out_val, recv_val, vpage, 2u * units, 1);
+            amx_out_push(cb_out_idx, recv_idx, ipage, 4u * units, 1);
         }
     }
 #endif  // TRISC_PACK
