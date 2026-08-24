@@ -4585,6 +4585,53 @@ def _record_committed_win(message: str) -> None:
         pass
 
 
+def _perf_test_paths() -> list:
+    """Every perf test this run resolved, absolute. From the manifest, never a filename pattern."""
+    paths = []
+    try:
+        _root = gitio.repo_root(_MODEL_ROOT)
+    except Exception:  # noqa: BLE001
+        return paths
+    _m = _MANIFEST if isinstance(_MANIFEST, dict) else {}
+    cands = []
+    _res = (_m.get("perf_test_resolved") or {}).get("path")
+    if _res:
+        cands.append(_res)
+    for _c in _m.get("components") or []:
+        if isinstance(_c, dict) and _c.get("perf_test"):
+            cands.append(_c["perf_test"])
+    for _c in cands:
+        try:
+            _p = Path(str(_c).split("::", 1)[0])
+            paths.append(_p if _p.is_absolute() else (Path(_root) / _p))
+        except Exception:  # noqa: BLE001
+            continue
+    return paths
+
+
+def _reinject_stage_marks() -> list:
+    """Re-apply the stage marks the revert just removed. Returns what changed, never raises."""
+    out = []
+    try:
+        from agent.stage_marks import inject_stage_marks as _inject
+    except Exception:  # noqa: BLE001
+        return out
+    seen = set()
+    for _p in _perf_test_paths():
+        try:
+            if not _p.is_file() or str(_p) in seen:
+                continue
+            seen.add(str(_p))
+            cur = _p.read_text()
+            new, why = _inject(cur)
+            if new != cur:
+                _p.write_text(new)
+                out.append("%s: %s" % (_p.name, why))
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
 @mcp.tool()
 def git_commit(message: str) -> dict:
     """Commit the current model-dir changes (scoped to the model dir only — unrelated repo changes
@@ -4627,9 +4674,18 @@ def git_revert(sha: str) -> dict:
     except Exception:  # noqa: BLE001
         pass
     _discard_fullpipe_pending()
+    # THE REVERT RESTORES THE MODEL, NOT THE INSTRUMENTATION. The stage marks are an UNCOMMITTED edit
+    # to a tracked file inside the model dir, so the scoped checkout above -- doing exactly its job --
+    # erases them along with the rejected attempt. voxtral run 25: injected 09:29, first revert
+    # 11:20:47, and every later capture ran an unmarked test. Injecting earlier cannot win, because a
+    # revert always comes after; re-applying here is the only place that knows they were just removed.
+    # Idempotent and self-refusing, so it can never double-mark a pass.
+    _remarked = _reinject_stage_marks()
     out = {"reverted_to": sha}
     if _removed:
         out["removed_created_files"] = _removed
+    if _remarked:
+        out["stage_marks_reapplied"] = _remarked
     return out
 
 
@@ -6046,6 +6102,31 @@ def _persist_throughput(rep: dict, prof_for_peak: dict | None = None) -> None:
             "perf_layers": "all" if is_llm else _win,
         }
         _throughput_path().write_text(json.dumps(snap))
+        # THE BYTE ANCHOR, WRITTEN WHERE THE UNIT IS FINALLY KNOWN. KIND_FLOOR and KIND_PEAK_FLOPS are
+        # both pinned here; active_bytes was not, and its only writer (run.py) is guarded on `if
+        # _unit:` at a point BEFORE any trace has reported one -- so it never fired. run.py's own
+        # comment promises the gap is covered ("once a trace reports, the rebuild path anchors with
+        # the observed unit"); nothing implemented it, and _anchored_ceiling_facts is a reader.
+        #
+        # Unpinned, the memory roof is re-derived from the LIVE census on every step: this function
+        # runs from termination_check, which runs every step, so a dtype win (bf16 -> bf8_b halves a
+        # weight) shrinks the census and the ceiling follows it down mid-run -- the target retreating
+        # ahead of the measurement, which is the one thing an anchor exists to prevent. The compute
+        # roof was already protected this way; the memory roof was not.
+        try:
+            _ab = int(getattr(target, "active_bytes", 0) or 0)
+            _u = str(snap.get("unit") or "").strip().lower()
+            if _ab > 0 and _is_real_unit(_u):
+                _ledger().anchor(
+                    _ledger().KIND_ACTIVE_BYTES,
+                    float(_ab) / 1e6,
+                    depth=_u,
+                    mode="bytes_mb",
+                    source="_persist_throughput (%s)" % str(snap.get("bytes_source") or "census")[:60],
+                    model=_MODEL_ROOT.name if _MODEL_ROOT else "",
+                )
+        except Exception:  # noqa: BLE001 -- a pin that cannot be written must not cost the snapshot
+            pass
         _f = rep.get("modeled_floor_ms") if isinstance(rep, dict) else None
         if _f:
             _ledger().anchor(

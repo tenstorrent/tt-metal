@@ -1250,7 +1250,7 @@ def _unit_work_name(unit) -> str:
     return "inference"
 
 
-def stage_read_bytes(stage, *, model: str = "", task: str = "", measured=None, estimate=None) -> int:
+def stage_read_bytes(stage, *, model: str = "", task: str = "", measured=None, estimate=None, with_source: bool = False):
     """THE bytes one unit of `stage` reads. Every consumer asks here; nobody derives it again.
 
     Three sources, in this order, and the order is the point:
@@ -1276,21 +1276,27 @@ def stage_read_bytes(stage, *, model: str = "", task: str = "", measured=None, e
     `estimate` is a callable so the fallback is only paid for when the two measurements are absent --
     it prices activations and KV from the model's geometry and is not free.
     """
+    # WHICH OF THE THREE ANSWERED, reported by the one function that knows. A caller that needs to
+    # label the number must not re-run the chain to find out -- that is a second opinion on the same
+    # question, and two opinions on this quantity is the defect this function was extracted to end.
+    def _ret(val, src):
+        return (int(val), src) if with_source else int(val)
+
     try:
         _p = _pinned_stage_bytes(stage, model, task)
         if _p and int(_p) > 0:
-            return int(_p)
+            return _ret(_p, "pinned")
     except Exception:  # noqa: BLE001
         pass
     try:
         _m = int((measured or {}).get(stage) or 0)
         if _m > 0:
-            return _m
+            return _ret(_m, "measured")
     except Exception:  # noqa: BLE001
         pass
     try:
         _e = estimate() if callable(estimate) else estimate
-        return int(_e or 0)
+        return _ret(_e or 0, "estimate")
     except Exception:  # noqa: BLE001
         return 0
 
@@ -1622,10 +1628,21 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # observation is the one above it now.
         # ONE PLACE TO ASK. See stage_read_bytes: the order pinned -> measured -> estimate is the
         # whole property, and it lived inline here while other renderers reached elsewhere.
-        _b = stage_read_bytes(
-            name, model=model, task=task, measured=_meas_bytes, estimate=lambda: _bytes_for(name, toks)
+        _b, _b_src = stage_read_bytes(
+            name,
+            model=model,
+            task=task,
+            measured=_meas_bytes,
+            estimate=lambda: _bytes_for(name, toks),
+            with_source=True,
         )
         _b_now = int((_meas_bytes or {}).get(name) or 0)
+        # WHERE THE NUMBER CAME FROM, carried beside it. The three sources render identically today --
+        # a pinned measurement, this build's measurement and a checkpoint estimate are all just a
+        # figure in the GB/s column -- so a read set that was never measured looks exactly like one
+        # that was. That is not a cosmetic gap: the byte hook watched a ttnn class this build does not
+        # instantiate and returned 0 for every stage of every run for two days, and nothing on the
+        # page disagreed, because the estimate fallback kept printing plausible numbers.
         mem_ms = (_b / (float(peak_bw_gbps) * 1e9)) * 1000.0 if _b else None
         out[name] = {
             "share_basis": _share_bases.get(name, ""),
@@ -1633,6 +1650,7 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
             "compute_ms": comp_ms,
             "flops": flops or None,
             "bytes": _b,
+            "bytes_source": _b_src,
             "tokens": toks,
             "peak_flops": _pk_use or None,
             # This build's observed read set beside the pinned one, so a dtype win shows as the
@@ -1886,6 +1904,15 @@ def _roofline_tables(
     if _fid:
         _top = max(_fid, key=lambda r: r[1])
         _in_use = str(_top[0]) if _top[1] else ""
+    # AND SAY WHEN IT IS ONE VERDICT FOR EVERY STACK. Without stage signposts the capture cannot
+    # attribute an op to a stage, so this whole-profile figure is stamped across encode, prefill and
+    # decode alike -- stacks that do not share a rung. voxtral: 60.3% of matmul FLOPs are LoFi and
+    # 39.7% HiFi4, so every stack was priced at LoFi's 702 TFLOPS while encode and prefill run HiFi4
+    # at 175.5, a ceiling 4x too generous. The fallback is correct (inventing a per-stage peak would
+    # be worse); printing it as though it were three measurements is not.
+    _shared_peak = bool(_in_use) and not any(
+        (_roofs.get(_s) or {}).get("peak_stage") for _s in (_roofs or {})
+    )
 
     # BOTH ROOFS, BOTH STAGES. Only the WINNING floor used to survive `annotate_op`, so compute was
     # the only renderable term and the report printed a compute band over a memory-bound stage. Being
@@ -1950,7 +1977,15 @@ def _roofline_tables(
                     % (
                         (_nm, "%s TFLOPS" % _r(_pk))
                         + tuple(_n((rf["flops"] / (_pk * 1e12)) * 1000.0) for _, rf in _cols)
-                        + ("\u2190 in use" if str(_f) == _in_use else "",)
+                        + (
+                            (
+                                "\u2190 in use (whole profile: one peak shared by every stack)"
+                                if _shared_peak
+                                else "\u2190 in use"
+                            )
+                            if str(_f) == _in_use
+                            else "",
+                        )
                     )
                 ).rstrip()
             )
@@ -2133,9 +2168,17 @@ def _roofline_tables(
             out.append(_row(_lbl, _ncell(_n(_c), "ms"), _bandcell(_n(_lo_ms), _n(_hi_ms), "ms"), _meas))
             if _roof == "memory" and peak_bw_gbps:
                 _mb = _measured_bw_gbps(_rf, _ms)
+                # SAY WHICH BYTES THESE ARE. Both the memory ceiling and this GB/s figure divide by
+                # the stage's read set, and the three possible sources rendered identically: a pinned
+                # measurement, this build's measurement, and a checkpoint estimate all printed as a
+                # bare number. So a read set that was never measured was indistinguishable from one
+                # that was -- which is precisely how a dispatch hook that watched an op class the
+                # build never instantiates returned 0 for every stage of every run for two days,
+                # without the page disagreeing.
+                _bsrc = str(_rf.get("bytes_source") or "")
                 out.append(
                     _row(
-                        "",
+                        "" if _bsrc in ("", "pinned") else ("bytes: %s" % _bsrc),
                         _ncell(_r(peak_bw_gbps), "GB/s"),
                         _bandcell(_r(peak_bw_gbps * _LOF), _r(peak_bw_gbps * _HIF), "GB/s"),
                         _ncell(_r(_mb), "GB/s") if _mb else "",
