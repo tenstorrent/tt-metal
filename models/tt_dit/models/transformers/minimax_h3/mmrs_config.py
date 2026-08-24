@@ -53,7 +53,11 @@ _N = 5376
 # compiles one program per combo and compile time grows with M, putting M=9216 at ~75 min against ~9
 # min at M=4768. What actually matters is that the fused op beats the unfused matmul + reduce-scatter +
 # addcmul at each duration, and the block perf test measures that directly; see the perf log.
-_SWEPT_BLOCKING = FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 8, 14, 2, 2, None, 1)
+# Reswept 2026-08-24 under the windowed L1 handoff (the fused op now hands the MM output to the
+# RS through a rolling 2-block L1 window by default): M8/K7/N7 sb(4,1) at 992.3 us vs 1.313 ms for
+# the DRAM-era M4/K8/N14 blocking above (-24%). Mt_per_core=19, so M_block=8 leaves 3 blocks and
+# the window rotates.
+_SWEPT_BLOCKING = FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 7, 7, 4, 1, None, 1)
 
 _DEVICE_GRID = ttnn.CoreCoord(12, 10)
 
