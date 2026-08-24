@@ -386,9 +386,30 @@ python -m pytest $P/test_pcc_resnet_block.py $P/test_pcc_backbone.py \
 python -m pytest $P/test_pcc_stage2.py $P/test_pcc_stage3.py $P/test_pcc_stage4.py \
                  $P/test_pcc_full_model.py $P/test_pcc_grid_sample.py -v
 
-# Real-checkpoint gates — need $DD_CHECKPOINT_PATH (+ anchors); skip otherwise
+# Real-checkpoint gates — need the checkpoint + anchors; skip otherwise
 python -m pytest $P/test_pcc_checkpoint_accuracy.py $P/test_pcc_trace.py -v
 ```
+
+### Asset-dependent tests: skip locally, fail in CI
+
+The tests above resolve the checkpoint and plan anchors from, in order,
+`$DD_CHECKPOINT_PATH` / `$DD_ANCHOR_PATH`, then the repo `data/` dir that
+`scripts/prepare_assets.py` populates, then `$DD_DATA_ROOT` (the staged eval
+layout). When an asset is missing they **skip**, so a plain checkout without the
+≈700 MB checkpoint stays usable.
+
+That is the wrong behaviour in CI, where a gate that skips itself gates nothing.
+Set `DD_REQUIRE_ASSETS=1` to turn every "asset missing" path into a hard failure:
+
+```bash
+python models/demos/diffusion_drive/scripts/prepare_assets.py   # stage the assets
+DD_REQUIRE_ASSETS=1 python -m pytest $P/ -v                     # missing asset => failure
+```
+
+This is what the `DiffusionDrive unit tests` job in
+`tests/pipeline_reorg/models_unit_tests.yaml` does. `prepare_assets.py` pins the
+HuggingFace revision and verifies the checkpoint's SHA-256, deleting it and
+failing if it does not match.
 
 ---
 
