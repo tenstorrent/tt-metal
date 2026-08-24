@@ -1,7 +1,7 @@
 name: "[internal] ttnn ops PnR tests impl"
 
 # Team: ttnn
-# test list: ops_pnr.yaml (currently empty)
+# test list: ops_pnr.yaml (currently a single no-op placeholder entry)
 #
 # Reusable workflow for the ops PnR (package-and-release) test track. Mirrors
 # ops-integration-tests-impl.yaml / ops-unit-tests-impl.yaml's structure so this

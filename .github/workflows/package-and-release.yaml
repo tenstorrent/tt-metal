@@ -29,8 +29,10 @@ on:
         type: string
       additional_test_categories:
         description: >
-          Additional test categories to run (comma-separated). Currently only consumed by
-          the ops PnR test track (tests/pipeline_reorg/ops_pnr.yaml), which has no entries yet.
+          Additional test categories to run (comma-separated). Applied to both the ops PnR
+          test track (tests/pipeline_reorg/ops_pnr.yaml, filtered by its `category` field)
+          and the models e2e suite (tests/pipeline_reorg/models_e2e_tests.yaml, filtered
+          by `model_family` as an interim measure — see release-demo-tests-impl.yaml).
         required: false
         type: string
         default: ""

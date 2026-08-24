@@ -34,8 +34,10 @@ on:
         type: string
       additional_test_categories:
         description: >
-          Additional test categories to run (comma-separated). Currently only consumed by
-          the ops PnR test track (tests/pipeline_reorg/ops_pnr.yaml), which has no entries yet.
+          Additional test categories to run (comma-separated). Applied to both the ops PnR
+          test track (tests/pipeline_reorg/ops_pnr.yaml, filtered by its `category` field)
+          and the models e2e suite (tests/pipeline_reorg/models_e2e_tests.yaml, filtered
+          by `model_family` as an interim measure — see release-demo-tests-impl.yaml).
         required: false
         type: string
         default: ""
@@ -129,6 +131,7 @@ jobs:
       mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
       tier: "1"
       tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
+      additional_test_categories: ${{ inputs.additional_test_categories }}
       summary-scope: ${{ inputs.platform }}
 
   # Run-level aggregate of per-job AI summaries from release-demo-tests-impl.
@@ -185,7 +188,14 @@ jobs:
 
   # ===========================================================================
   # Team: ttnn
-  # test list: ops_pnr.yaml (currently empty)
+  # test list: ops_pnr.yaml (currently a single no-op placeholder entry)
+  #
+  # additional_test_categories is filtered here against ops_pnr.yaml's own
+  # `category` field, but against `model_family` for the models e2e suite
+  # below in release-demo-tests (see release-demo-tests-impl.yaml) — two
+  # different fields serving the same input as an interim measure. Plan is
+  # to unify these into a single `category` field/filter shared by every
+  # PnR test track once the models e2e taxonomy is settled.
   # ===========================================================================
   ops-pnr-tests:
     needs: [build-artifact, determine-test-skus]
