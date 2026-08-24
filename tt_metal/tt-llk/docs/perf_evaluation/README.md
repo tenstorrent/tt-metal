@@ -583,12 +583,34 @@ collapse onto one shared number. The alternate is not "the right answer plus an
 error" — it is a **different state the hardware enters**, and it costs about the
 same wherever it happens.
 
-### 8.5 It is not the configuration
+### 8.5 to 8.8: ruling out explanations, one at a time
 
-Every sweep parameter was scored by how much the flag rate varies across its
-values. Highest rates found:
+Each of the next four sections takes one candidate explanation and kills it. Some
+vocabulary first, since they lean on it.
 
-| parameter | strongest value | rate | vs weakest |
+| term | what it means |
+|---|---|
+| **configuration** | Each perf test runs the same kernel over and over with different settings — input and output format, tile count, matrix dimensions, arithmetic fidelity, and so on. One particular combination of those settings is a configuration. `perf_math_matmul` alone has tens of thousands. |
+| **sweep** | The whole set of configurations a test walks through. |
+| **sweep parameter** | One of the settings that varies. `tile_cnt` is tiles per measurement, `k_dimm` the inner matmul dimension, `math_fidelity` how many passes the FPU makes, `dst_index` which slot of the destination register the result goes to, `dest_sync` whether DEST is used whole or in halves. |
+| **flag rate** | Within some group of measurements, the fraction the rule would fail on. |
+| **the harness** | Everything between typing the command and the hardware running: pytest, plus the LLK helper code that compiles kernels, picks which core to use, chooses the execution order, and reads results back. |
+| **worker** | pytest runs several tests at once in separate worker processes. `-n 15` means fifteen workers, and each is tied to its own Tensix core. `-n 1` means one worker: everything sequential, all on core (0,0). |
+| **variant** | One compiled kernel binary — one configuration, one run type. |
+
+### 8.5 It is not how the test is configured
+
+**The idea.** Some setting makes a test unstable — a particular output format, a
+particular tile count. If so, flagged measurements would pile up on particular
+values of some parameter.
+
+**The test.** For every sweep parameter, compare the flag rate across its values.
+A parameter that causes the problem should show one value that is mostly bad and
+the rest clean.
+
+**The result.** The strongest separations found anywhere:
+
+| parameter | worst value | its flag rate | versus the best value |
 |---|---|--:|--:|
 | `dst_index` | 15.0 | 0.71% | 9× |
 | `math_fidelity` | LoFi | 0.20% | 5× |
@@ -596,51 +618,81 @@ values. Highest rates found:
 | `tile_cnt` (`perf_matmul`) | 3 | 0.37% | 2.6× |
 | `k_dimm` (`perf_matmul`) | 2.0 | 0.31% | 2× |
 
-Even the most enriched value leaves **99.3% of its points clean**, and flagged
-points appear at nine different `dst_index` values with `0.0` the most common. The
-two tests do not even agree on direction — `Float32` output is the safest in
-`perf_math_matmul` and among the worst in `perf_matmul`.
+**What it rules out.** No setting predicts instability. Three reasons:
 
-An earlier `dst_index = 15` hypothesis is **rejected**.
+- The worst value in the whole study still leaves **99.3% of its measurements
+  clean**. Nothing is "mostly bad".
+- Flagged measurements turn up at **nine of the sixteen** `dst_index` values, and
+  the most common one among them is `0.0`, not `15.0`.
+- The two matmul tests **disagree**. `Float32` output is the safest setting in
+  `perf_math_matmul` and among the worst in `perf_matmul`. A real cause would not
+  reverse between two tests of the same operation.
 
-### 8.6 It is not a fixed set of configurations
+An earlier hypothesis that `dst_index = 15` was responsible is therefore
+**rejected**. What the table does show is that some settings raise the *odds* a
+bit, which matters later — see §8.10.
+
+### 8.6 It is not one fixed list of bad configurations
+
+**The idea.** A specific set of configurations is broken. Find them, name them,
+exclude them from the gate, and move on.
+
+**The test.** Compare the set flagged by the five-run baseline against the set
+flagged by the ten-run one. If a fixed list is broken, the same configurations
+should appear both times.
+
+**The result.**
 
 | | count |
 |---|--:|
 | flagged with 5 runs | 53 |
 | flagged with 10 runs | 83 |
-| in both | **30** |
+| appeared in both | **30** |
 | only in the 5-run set | 23 |
-| new in the 10-run set | **53** |
+| never seen before the 10-run set | **53** |
 
-Only 30 of 53 recurred, and doubling the runs found 53 configurations never seen
-before. The flagged set is a **sample**, not a population: any matmul
-configuration can do this, at a low per-run probability. An exception list would
-grow every time anyone re-measured, so it is not a viable gate mechanism.
+**What it rules out.** An exception list. Only 30 of the original 53 came back,
+and running twice as long turned up 53 configurations we had never seen. The
+flagged set is a **sample**, not a complete list: any matmul configuration can do
+this, each with a low chance per run, and the longer you look the more you find.
+A list written today would be wrong tomorrow, so a gate cannot be built on one.
 
-### 8.7 It is not a per-run state
+### 8.7 It is not one bad run
 
-Over ten runs, the run holding the extreme value is spread 7.2% to 16.9% across
-the ten, against 10% under independence. A state established once per run and
-held would put nearly 100% on a single run. It does not.
+**The idea.** Occasionally a whole run goes wrong — the device is in an odd state,
+something else on the machine interferes — and every measurement in that run is
+off.
 
----
+**The test.** For each flagged measurement, ask which of the ten runs held the odd
+value. If one run were bad, nearly every flagged measurement would point at that
+same run.
 
-### 8.8 It is not anything the harness controls
+**The result.** The odd value is spread across all ten runs, each holding between
+7.2% and 16.9% of them. Pure chance would give 10% each.
 
-The harness can record which variant ran on which worker, in order
-(`--record-test-order`), and replay that exact sequence (`--test-order-file`
-with `--rewind-runner`). Replaying one worker's sequence at `-n 1` pins execution
-to core (0,0) and fixes the order, leaving nothing under software control to
-vary.
+**What it rules out.** Any explanation where a run is the unit of badness. Each
+measurement is affected independently of the others in the same run, which also
+means you cannot fix this by discarding a suspicious run.
 
-**Two replays of the same sequence.** 1,980 `TILE_LOOP` points. 1,377 differed,
-but almost all by a few cycles — median 1, quartiles −8 to +6. One point differed
-by more than 2%.
+### 8.8 It is not the core, the order, or tests running in parallel
 
-**Ten replays of the same sequence:**
+**The idea.** The problem lies in *how* the tests are executed rather than what
+they compute: which Tensix core a test lands on, what ran on that core just
+before it, or interference from fifteen tests measuring at the same time.
 
-| movement across the ten replays | points of 1,980 |
+**The test.** The harness can record exactly which test ran on which worker in
+which order (`--record-test-order`) and then replay that sequence
+(`--test-order-file` with `--rewind-runner`). Replaying one worker's sequence with
+`-n 1` pins everything to core (0,0), fixes the order, and removes all
+concurrency. Nothing the software controls is left free to vary.
+
+**The result.** Two replays of the same sequence, over 1,980 `TILE_LOOP`
+measurements: 1,377 differed, but almost all by a handful of cycles — median 1,
+quartiles −8 to +6. One measurement differed by more than 2%.
+
+Ten replays of that same sequence:
+
+| movement across the ten replays | measurements of 1,980 |
 |---|--:|
 | >0.1% | 264 |
 | >0.5% | 46 |
@@ -648,25 +700,27 @@ by more than 2%.
 | >2% | **2** |
 | >5% | 0 |
 
-The rule fires on **2 of 1,980 — 0.101%**. The parallel baseline rate is 42 of
-29,712 matmul `TILE_LOOP` points, or 0.141%, which predicts **2.8** here.
-Observed 2. Statistically indistinguishable.
+The rule fires on **2 of 1,980, or 0.101%**. In the normal parallel runs the rate
+is 42 of 29,712 matmul `TILE_LOOP` measurements, or 0.141% — which predicts
+**2.8** here. We observed 2. There is no meaningful difference.
 
-**Serial execution does not suppress the effect.**
-
-The shape is unchanged too:
+**Serial execution does not suppress the effect**, and the shape is unchanged:
 
 ```
-14,804 ×9 runs, one run at 14,505     −299 cycles, 2.02%
+14,804 cycles on nine runs, 14,505 on one     −299 cycles, 2.02%
 ```
 
-Nine identical values and one discrete step — the same signature as the parallel
-runs.
+Nine identical values and one discrete step, exactly as in the parallel runs.
 
-A separate observation from this experiment: at `-n 1` there is a floor of
-few-cycle jitter on most matmul points, 264 of 1,980 moving more than 0.1%. It is
-far below any threshold under discussion (±8 cycles on a 120,000-cycle point is
-0.007%) and invisible in the baseline tables, but it is not zero.
+**What it rules out.** Core placement, execution order, leftover state from
+whatever ran previously, and contention between concurrent tests — all at once,
+because the replay removed all four and the rate did not move.
+
+**One side observation.** At `-n 1` there is a floor of few-cycle jitter on most
+matmul measurements: 264 of 1,980 moved more than 0.1%. That is far below anything
+under discussion — ±8 cycles on a 120,000-cycle measurement is 0.007% — and it
+never appears in the baseline tables. But it is not zero, and it is worth knowing
+that perfect repeatability is not what the hardware gives you.
 
 ### 8.9 What is left
 
