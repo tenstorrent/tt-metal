@@ -548,6 +548,9 @@ def _run_tp_vision_generation(model, tokenizer, token_ids, vision_inputs, max_ge
     vocab = model.args.vocab_size
     mesh = model.mesh_device
     T = token_ids.shape[1]
+    _cap = os.environ.get("QWEN36_VISION_MAX_NEW")
+    if _cap:
+        max_generated_tokens = min(max_generated_tokens, int(_cap))
 
     # Flexible chunked SDPA requires the page-table width to be a multiple of 32.
     num_blocks = ((num_blocks + 31) // 32) * 32
@@ -569,10 +572,53 @@ def _run_tp_vision_generation(model, tokenizer, token_ids, vision_inputs, max_ge
     ttnn.synchronize_device(mesh)
     ttft = time.time() - t0 + t_vis
 
-    # Logits are replicated across the mesh ([1,1,vocab]); gather one replica.
+    # Prefill logits are replicated ([1,1,vocab]); first token stays host (one D2H, not the decode loop).
     lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
     nxt = _sample(lt.reshape(-1, vocab)[0], [])
     generated = [nxt]
+
+    # On-device per-shard argmax+max for default greedy (same path as text_demo._run_tp_generation).
+    # Skips the vocab all-gather + full-row D2H. TEMP/rep-pen/no-repeat stay on the host _sample path.
+    _greedy = _TEMP <= 0 and _REP_PEN == 1.0 and _NO_REPEAT == 0
+    model._ondev_argmax = _greedy
+    _check = os.environ.get("QWEN36_CHECK_ONDEV_ARGMAX") == "1"
+    _per_shard = vocab // model.num_devices
+    _MAXVAL_C = 32
+    _MAXVAL_R = (((_per_shard + _MAXVAL_C - 1) // _MAXVAL_C) + 31) // 32 * 32
+    _read_comp = ttnn.ConcatMeshToTensor(mesh, dim=0)
+    _vocab_comp = ttnn.ConcatMeshToTensor(mesh, dim=-1)
+    logger.info(f"[TP] decode token pick: {'on-device greedy' if _greedy else 'host _sample'}")
+
+    def _maxval_dev(sharded_logits):
+        padded = ttnn.pad(
+            sharded_logits, [(0, 0), (0, 0), (0, 0), (0, _MAXVAL_R * _MAXVAL_C - _per_shard)], value=-1e30
+        )
+        grid = ttnn.reshape(padded, (1, 1, _MAXVAL_R, _MAXVAL_C))
+        part = ttnn.max(grid, dim=-1)
+        part_row = ttnn.reshape(part, (1, 1, 1, _MAXVAL_R))
+        val = ttnn.max(part_row, dim=-1)
+        ttnn.deallocate(padded)
+        ttnn.deallocate(grid)
+        ttnn.deallocate(part)
+        ttnn.deallocate(part_row)
+        return val
+
+    def _argmax_dev(sharded_logits):
+        logits_rm = ttnn.to_layout(sharded_logits, ttnn.ROW_MAJOR_LAYOUT)
+        idx = ttnn.argmax(logits_rm, dim=-1, keepdim=False)
+        ttnn.deallocate(logits_rm)
+        return idx, _maxval_dev(sharded_logits)
+
+    def _read_tok(idx_t, val_t):
+        idxs = ttnn.to_torch(idx_t, mesh_composer=_read_comp).reshape(-1)
+        vals = ttnn.to_torch(val_t, mesh_composer=_read_comp).reshape(-1)
+        d = int(torch.argmax(vals).item())
+        return d * _per_shard + int(idxs[d].item())
+
+    def _host_tok(sharded_logits):
+        # Same logits as the device pick: concat shards, fp32 argmax. Matches the old host path.
+        full = ttnn.to_torch(sharded_logits, mesh_composer=_vocab_comp).reshape(-1)[:vocab]
+        return int(full.float().argmax())
 
     # ---- Traced paged decode with GDN snapshot/restore (see text_demo for the rationale). ----
     _gdn = [layer.attention for layer in model.layers if not layer.is_full_attention]
@@ -602,40 +648,65 @@ def _run_tp_vision_generation(model, tokenizer, token_ids, vision_inputs, max_ge
                 ttnn.copy(cc, dn.conv_states[j])
                 ttnn.deallocate(cc)
 
+    def _decode_fwd():
+        out = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+        return out[0]
+
+    def _update(token, position):
+        # page_table is constant (identity) and baked into the trace; only tokens/pos/rope change.
+        host = model.prepare_decode_inputs_host(
+            torch.tensor([[token]], dtype=torch.int32),
+            torch.tensor([position], dtype=torch.int32),
+            page_table=None,
+        )
+        copy_host_to_device(host[:3], device_tensors=dev[:3])
+
     dev = model.prepare_inputs_decode(
         torch.tensor([[nxt]], dtype=torch.int32), torch.tensor([T], dtype=torch.int32), page_table=page_table
     )
 
-    gdn_snap = _snapshot_gdn()  # exact post-prefill GDN state
-    # Compile decode programs (eager) then capture a throwaway trace; both advance GDN state.
-    model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+    gdn_snap = _snapshot_gdn()
+    _warm_logits = _decode_fwd()
+    tt_idx = tt_val = None
+    if _greedy:
+        _wi, _wv = _argmax_dev(_warm_logits)
+        ttnn.deallocate(_wi)
+        ttnn.deallocate(_wv)
     trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
-    tt_logits, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+    tt_logits = _decode_fwd()
+    if _greedy:
+        tt_idx, tt_val = _argmax_dev(tt_logits)
     ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
     _restore_gdn(gdn_snap)
 
-    def _update(token, position):
-        host = model.prepare_decode_inputs_host(
-            torch.tensor([[token]], dtype=torch.int32),
-            torch.tensor([position], dtype=torch.int32),
-            page_table=page_table,
-        )
-        copy_host_to_device(host, device_tensors=dev)
-
     pos = T
     decode_times = []
+    mismatches = 0
     while len(generated) < max_generated_tokens:
         _update(nxt, pos)
         t_step = time.time()
         ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh)
         decode_times.append(time.time() - t_step)
-        nxt = _sample(model.process_output_decode(tt_logits, B=1, S=1).reshape(-1)[:vocab], generated)
+        if _greedy:
+            nxt = _read_tok(tt_idx, tt_val)
+            if _check:
+                host_nxt = _host_tok(tt_logits)
+                if nxt != host_nxt:
+                    mismatches += 1
+                    logger.error(f"[ondev-argmax] step={len(generated)} device={nxt} host={host_nxt}")
+                    assert (
+                        nxt == host_nxt
+                    ), f"on-device greedy token {nxt} != host argmax {host_nxt} at step {len(generated)}"
+        else:
+            nxt = _sample(model.process_output_decode(tt_logits, B=1, S=1).reshape(-1)[:vocab], generated)
         generated.append(nxt)
         pos += 1
         if nxt == tokenizer.eos_token_id:
             break
     ttnn.release_trace(mesh, trace_id)
+    if _check and _greedy:
+        logger.info(f"[ondev-argmax] checked {len(generated) - 1} decode tokens, mismatches={mismatches}")
 
     return generated, _perf(ttft, decode_times)
 
