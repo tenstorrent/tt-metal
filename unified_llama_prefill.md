@@ -2388,11 +2388,62 @@ the sweep's best cell achieves is 3998us. Beating it slightly is not a claim abo
 it is that at HiFi2 on one core this shape is bandwidth-bound, and the traffic model above is
 what got the blocking right.
 
-**What this does NOT do is let the whole layer run at d_model 2048.** Only the projection is
-k-blocked. rmsnorm still processes one [ht, wt] block, so at S=512 by d_model 2048 it would
-want 1024 tiles in L1 at once; the FFN matmuls have the same single-block shape against an
-8192-wide intermediate; and flash attention has not been tried at 32 heads. Each is the same
-kind of fix and none of them is done. The verified layer is still d_model 256.
+### The same treatment for rmsnorm and the FFN, and one kernel for all four matmuls
+
+**The projection kernel was already a general blocked matmul, so it became one.**
+`attention_proj.cpp` is now `matmul_blocked.cpp`, taking mt, ktot, ntot, kt and nt instead of
+a single square d_model. That one kernel is all four of a layer's large matmuls: the output
+projection at K = N = d_model, gate and up at N = ffn, and down at K = ffn. Consolidating
+beat duplicating the same three gathers into a second kernel. `matmul.cpp` stays as the
+single-shot path for blocks that DO fit whole, which is cheaper when it is possible.
+
+The FFN shapes at llama-3.2-1B, S=512, one core, HiFi2 -- B is 16384 tiles (32MB) here, so
+these exist only because both dimensions are blocked:
+
+| | ours (mt=16, kt=8, nt=8) | ttnn.matmul | |
+|---|---|---|---|
+| gate/up, [512, 2048] @ [2048, 8192] | 14818.6 us | 21808.1 us | 0.68x |
+| down, [512, 8192] @ [8192, 2048] | 14675.7 us | 15772.1 us | 0.93x |
+
+**The 0.68x is not a speed claim.** The two shapes have identical arithmetic -- 262144
+tile-MACs each -- and ours measures within 1% of itself on them (14818.6 against 14675.7),
+which is the sanity check that says the implementation is symmetric. ttnn's 21808 against
+15772 for the same work is its single-core program config choosing badly for the wide-N shape,
+and ttnn on one core is not the configuration it is built for. What the numbers do support is
+that we are at the arithmetic limit: 262144 tile-MACs in 14675.7us is 0.056us per tile-MAC,
+against the 0.061 best cell in the matmul sweep.
+
+**rmsnorm now walks rows in chunks.** Rows are normalised independently -- each one's RMS
+depends on that row alone -- so a chunk height is a pure decomposition, and the test holds it
+to exactly that: every chunk height agrees to the BIT, not merely closely. It could not do
+S=512 by d_model 2048 before, because the kernel holds four blocks of the tensor at once (x,
+its square, the normalised value and the output), so 1024 tiles resident means 8MB. At chunk=1
+it is 256 tiles and it runs: 494.9us on one core, 147.5us on sixteen.
+
+Sixteen is the ceiling, and that is worth naming: the parallel unit is the row chunk, so at
+S=512 with a one-tile chunk there are only 16 of them and 48 of the 64 cores have nothing to
+do. ttnn's layer breakdown puts its two layernorms at 94.3us together, and it gets there by
+splitting differently. Ours would need the WIDTH split across cores as well, with a
+cross-core reduction for each row's sum -- the first place in this work where a core would
+have to talk to another one.
+
+**Accuracy, since a wide row moves it:** rel-L2 goes 0.00515 at 128-wide rows to 0.00690 at
+2048-wide, and max|err| 0.030 to 0.051. That is bf16 accumulation over 16x the terms, not a
+chunking artifact -- chunk=1 and chunk=2 agree exactly at the wide shape. It does cross the
+0.05 abs bound the narrow cases use, so the wide cases are gated on relative L2 instead; an
+absolute bound was never going to scale with the row width.
+
+**What still stops the LAYER at d_model 2048** is now only flash attention, which has not been
+tried at 32 heads, and the host-side Q/K/V layout glue. Every other component scales: rmsnorm,
+all four matmuls, RoPE (a flat per-tile stream), silu*up and the residuals (elementwise, any
+block count). The verified layer is still d_model 256.
+
+**Cost of these two changes, paid twice now:** changing a kernel's runtime-arg contract has no
+host-side check. Adding the chunk range to rmsnorm hung the device, because
+test_unified_layer.py has its own rmsnorm launcher that still passed four runtime args and the
+loop bound came from whatever was in the fifth slot. The 2D blocking hung it the same way
+earlier, from a compile-time arg count. Both were `tt-smi -r` and a one-line fix, but a kernel
+that reads argument N while a caller passes N-1 is not a compile error on either side.
 
 ### The ttnn equivalent, and what its op breakdown says about where to spend effort
 

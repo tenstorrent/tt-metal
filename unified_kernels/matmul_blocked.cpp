@@ -1,0 +1,172 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// A 2D-BLOCKED MATMUL: [M, K] @ [K, N], for the shapes that do not fit L1 whole.
+//
+// This started as the attention output projection and generalised into the thing that
+// projection turned out to be. It now drives all four of a layer's large matmuls, which
+// differ only in extents: the output projection is K = N = d_model, the gate and up
+// projections are K = d_model and N = ffn, and the down projection is the reverse.
+//
+// matmul.cpp remains the single-shot kernel for blocks that DO fit: it holds each operand
+// whole and has no blocking loops, which is cheaper when it is possible.
+//
+// BOTH dimensions are blocked, and that is the point rather than blocking K harder. B is
+// ktot*ntot tiles: 64 at 256x256, but 4096 -- 8MB -- for a 2048x2048 projection and 16384 for
+// a 2048x8192 FFN matrix, all far past L1. So the output is walked in [mt, nt] blocks and K in
+// kb blocks of kt tiles, and EVERY operand is gathered by a custom load, because none of the
+// three slices is contiguous in its backing tensor once both dimensions are cut. That is free:
+// one read per page is what a contiguous block load already issues, so only the addresses
+// differ. Gathering B also normalises its row stride to nt, so the matmul geometry never has
+// to know it came out of a wider matrix.
+//
+// Over mtot total row-tiles the DRAM traffic is
+//
+//     mtot * ktot * ntot * (1/mt + 1/nt)      tiles
+//
+// -- every M-block reads all of B, every output-column block reads all of A -- subject to the
+// output block and its partial both fitting L1, i.e. 2*mt*nt tiles plus operands. Taking
+// nt == ntot makes the first term dominate and forces mt small, which is the trap; balancing
+// the two is what wins. For [512, 2048] @ [2048, 2048] the model puts mt=4/nt=64 at 17408
+// tiles and mt=8/nt=16 at 12288, and they measure 4531.6us and 3711.0us against ttnn.matmul's
+// 3962.9us on one core.
+//
+// kt == ktot gives kb == 1, and that skips the accumulator entirely: with one k-block there is
+// no partial to carry, so paying a pack and a reload for it would be waste.
+//
+// What each thread ends up executing, per query chunk:
+//
+//   NCRISC   per k-block: cb_a (mt x kt) and cb_b (kt x nt), both gathered
+//   TRISC    matmul per k-block into the accumulator, then the mt x nt block in subblocks
+//   BRISC    drain cb_out (mt * nt tiles) per output block
+//
+// Compile-time args:
+//   0        mt          rows per M-block, in tiles
+//   1        ktot        K in tiles
+//   2        ntot        N in tiles
+//   3        kt          tiles per k-block; kt == ktot means no k-loop
+//   4        nt          tiles per output-column block; nt == ntot means the full width
+//   5..      TensorAccessorArgs for A, then B, then out
+//
+// Runtime args (identical on all three kernels):
+//   0        A base address, an [M, K] tensor
+//   1        B base address, a [K, N] tensor
+//   2        out base address, an [M, N] tensor
+//   3        first M-block this core owns
+//   4        how many M-blocks this core owns
+
+#include <tt/unified/core>
+
+namespace u = tt::unified;
+
+constexpr uint32_t kCbIn = 0;
+constexpr uint32_t kCbWo = 1;
+constexpr uint32_t kCbOut = 16;
+constexpr uint32_t kCbAcc = 24;  // running total; a separate CB from kCbOut
+
+void kernel_main() {
+    constexpr uint32_t mt = get_compile_time_arg_val(0);
+    constexpr uint32_t ktot = get_compile_time_arg_val(1);
+    constexpr uint32_t ntot = get_compile_time_arg_val(2);
+    constexpr uint32_t kt = get_compile_time_arg_val(3);
+    constexpr uint32_t nt = get_compile_time_arg_val(4);
+
+    static_assert(kt > 0 && ktot % kt == 0, "the k-block width must divide K");
+    static_assert(nt > 0 && ntot % nt == 0, "the output-column block width must divide N");
+    constexpr uint32_t kb = ktot / kt;
+    constexpr uint32_t nb = ntot / nt;
+
+    constexpr auto attn_args = TensorAccessorArgs<5>();
+    constexpr auto wo_args = TensorAccessorArgs<attn_args.next_compile_time_args_offset()>();
+    constexpr auto out_args = TensorAccessorArgs<wo_args.next_compile_time_args_offset()>();
+
+    const uint32_t a_addr = get_arg_val<uint32_t>(0);
+    const uint32_t b_addr = get_arg_val<uint32_t>(1);
+    const uint32_t out_addr = get_arg_val<uint32_t>(2);
+    // M-blocks are the unit of work across cores: they are rows of the output and stay
+    // independent, so a core's share needs no reduction with anyone else's. Splitting K or N
+    // instead would leave partial sums for something to combine.
+    const uint32_t m_begin = get_arg_val<uint32_t>(3);
+    const uint32_t m_count = get_arg_val<uint32_t>(4);
+
+    using A = u::Shape<mt, kt>;    // one (m, k) tile of A
+    using W = u::Shape<kt, nt>;    // one (k, n) tile of B
+    using Out = u::Shape<mt, nt>;  // one (m, n) tile of the output
+
+    u::matmul_init<A, W>(kCbIn, kCbWo, kCbOut);
+
+    u::Storage<A> a_storage(kCbIn);
+    u::Storage<W> w_storage(kCbWo);
+    u::Storage<Out> acc_storage(kCbAcc);
+    u::Storage<Out> out_storage(kCbOut);
+
+    const auto a_acc = TensorAccessor(attn_args, a_addr);
+    const auto b_acc = TensorAccessor(wo_args, b_addr);
+    const auto out = TensorAccessor(out_args, out_addr);
+
+    // Dst mode reloads the running total into DST before every k-block and packs it back
+    // after, which costs O(output block) per k-block -- and that block is mt*nt tiles, 128
+    // at mt=8 by nt=16. L1 mode lets the PACKER add into the partial
+    // instead, so the total never enters DST at all: one pack per k-block rather than a
+    // copy-in and a pack. See the numbers in unified_llama_prefill.md.
+#if defined(MMB_ACC_DST)
+    u::Accumulator<Out, u::AccumulatorMode::Dst> acc(acc_storage, out_storage);
+#else
+    u::Accumulator<Out, u::AccumulatorMode::L1> acc(acc_storage, out_storage);
+#endif
+
+    for (uint32_t c = 0; c < m_count; ++c) {
+        const uint32_t i = m_begin + c;
+
+        for (uint32_t n = 0; n < nb; ++n) {
+            acc.clear();
+
+            // This block of the output: rows [i*mt, +mt) by columns [n*nt, +nt).
+            auto store_block = [&](u::Block<Out> blk) {
+                u::noc_store<0>(std::move(blk), [&](u::L1Pages pages) {
+                    for (uint32_t p = 0; p < pages.count; ++p) {
+                        const uint32_t row = i * mt + p / nt;
+                        const uint32_t col = n * nt + p % nt;
+                        noc_async_write(pages.addr(p), out.get_noc_addr(row * ntot + col), pages.page_bytes);
+                    }
+                });
+            };
+
+            for (uint32_t b = 0; b < kb; ++b) {
+                const bool finish = (b == kb - 1);
+
+                // A's (m, k) tile: rows [i*mt, +mt) by columns [b*kt, +kt). Strided, because A's
+                // rows are what is contiguous.
+                u::ComputeBlock a =
+                    u::noc_load<1>(a_storage, [&](u::L1Pages pages) {
+                        for (uint32_t p = 0; p < pages.count; ++p) {
+                            // Row-major in L1: page p is tile (p / kt, p % kt).
+                            const uint32_t row = i * mt + p / kt;
+                            const uint32_t col = b * kt + p % kt;
+                            noc_async_read(a_acc.get_noc_addr(row * ktot + col), pages.addr(p), pages.page_bytes);
+                        }
+                    }).wait();
+
+                // B's (k, n) tile: rows [b*kt, +kt) by columns [n*nt, +nt).
+                u::ComputeBlock w =
+                    u::noc_load<1>(w_storage, [&](u::L1Pages pages) {
+                        for (uint32_t p = 0; p < pages.count; ++p) {
+                            const uint32_t row = b * kt + p / nt;
+                            const uint32_t col = n * nt + p % nt;
+                            noc_async_read(b_acc.get_noc_addr(row * ntot + col), pages.addr(p), pages.page_bytes);
+                        }
+                    }).wait();
+
+                if constexpr (kb == 1) {
+                    // One k-block: nothing to carry, so skip the accumulator entirely.
+                    (void)finish;
+                    store_block(out_storage.store(u::matmul(a, w)));
+                } else {
+                    u::Block result = acc.accumulate(u::matmul(a, w), finish);
+                    if (finish) {
+                        store_block(std::move(result));
+                    }
+                }
+            }
+        }
+    }
+}
