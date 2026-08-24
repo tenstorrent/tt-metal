@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 from ttnn.operations.toy_spec_mul import toy_spec_mul
-from ttnn.operations.toy_spec_mul.toy_spec_mul_program_spec import TP_A, TP_B, TP_OUT, create_program_spec
+from ttnn.operations.toy_spec_mul.toy_spec_mul_program_artifacts import create_program_artifacts
 
 
 @pytest.fixture(scope="module")
@@ -95,20 +95,25 @@ def test_interleaved_shapes_do_not_contaminate(device):
 def test_missing_tensor_arg_is_rejected(device, expect_error):
     ta, tb, a, b = _inputs(device, (1, 1, 32, 32), seed=5)
     out = ttnn.allocate_tensor_on_device(a.spec, a.device())
-    spec, run_args = create_program_spec(a, b, out)
+    spec, run_args, tensor_indices = create_program_artifacts(a, b, out)
+
+    # Drop one binding from what the factory built, rather than hand-writing the ids here: the
+    # test then cannot drift out of step with the factory's names.
+    incomplete = dict(tensor_indices)
+    incomplete.popitem()
 
     with expect_error(RuntimeError, "has no entry in tensor_args"):
-        ttnn.generic_op([a, b, out], spec, run_args, {TP_A: 0, TP_B: 1})
+        ttnn.generic_op([a, b, out], spec, run_args, incomplete)
 
 
 def test_spec_hash_is_structural(device):
     _, _, a, b = _inputs(device, (1, 1, 64, 64), seed=6)
     out = ttnn.allocate_tensor_on_device(a.spec, a.device())
 
-    spec1, _ = create_program_spec(a, b, out)
-    spec2, _ = create_program_spec(a, b, out)
+    spec1, _, _ = create_program_artifacts(a, b, out)
+    spec2, _, _ = create_program_artifacts(a, b, out)
     assert ttnn.compute_program_spec_hash(spec1) == ttnn.compute_program_spec_hash(spec2)
 
-    spec3, _ = create_program_spec(a, b, out)
+    spec3, _, _ = create_program_artifacts(a, b, out)
     spec3.dataflow_buffers[0].num_entries = 4
     assert ttnn.compute_program_spec_hash(spec3) != ttnn.compute_program_spec_hash(spec1)

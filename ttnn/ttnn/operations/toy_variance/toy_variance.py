@@ -10,7 +10,7 @@ Two placements, two blocking schemes:
   can be arbitrarily wide (e.g. 32 x 64000) without exceeding L1.
 - WIDTH-SHARDED input: W is split across a row of cores, so the reduced axis itself is split and the
   combine has to cross cores. Supported on a deliberately narrow set of shapes (see
-  `toy_variance_sharded_program_spec.supports_sharded`) -- everything else raises
+  `toy_variance_sharded_program_artifacts.validate`) -- everything else raises
   NotImplementedError rather than silently falling back.
 
 Constraints common to both (intentionally narrow for a toy):
@@ -22,8 +22,8 @@ Constraints common to both (intentionally narrow for a toy):
 
 import ttnn
 
-from . import toy_variance_sharded_program_spec as sharded
-from .toy_variance_program_spec import TP_IN, TP_OUT, create_program_spec
+from . import toy_variance_sharded_program_artifacts as sharded
+from .toy_variance_program_artifacts import create_program_artifacts
 
 
 def toy_variance(
@@ -67,10 +67,16 @@ def toy_variance(
         output_memory_config,
     )
 
+    # Each factory owns every name it declares, so it hands back the tensor bindings alongside
+    # the spec and run args. Nothing here needs to know what those names are.
+    io_tensors = [input_tensor, output_tensor]
+
     if input_tensor.memory_config().is_sharded():
         sharded.validate(input_tensor)
-        spec, run_args = sharded.create_program_spec(input_tensor, output_tensor, std_dev=std_dev)
-        return ttnn.generic_op([input_tensor, output_tensor], spec, run_args, {sharded.TP_IN: 0, sharded.TP_OUT: 1})
+        spec, run_args, tensor_indices = sharded.create_program_artifacts(input_tensor, output_tensor, std_dev=std_dev)
+        return ttnn.generic_op(io_tensors, spec, run_args, tensor_indices)
 
-    spec, run_args = create_program_spec(input_tensor, output_tensor, block_size=block_size, std_dev=std_dev)
-    return ttnn.generic_op([input_tensor, output_tensor], spec, run_args, {TP_IN: 0, TP_OUT: 1})
+    spec, run_args, tensor_indices = create_program_artifacts(
+        input_tensor, output_tensor, block_size=block_size, std_dev=std_dev
+    )
+    return ttnn.generic_op(io_tensors, spec, run_args, tensor_indices)

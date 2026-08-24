@@ -26,6 +26,8 @@ K_FILL = "fill"
 K_READER = "reader"
 K_COMPUTE = "compute"
 K_WRITER = "writer"
+# Internal to this module: each factory returns the tensor bindings it built, so these names
+# never have to travel to the entry points.
 TP_OUT = "out"  # fill program: the generated output
 TP_T = "t"  # in-place program: read and written
 
@@ -84,7 +86,7 @@ def _writer_kernel(tensor_parameter: str) -> ttnn.KernelSpec:
     )
 
 
-def create_fill_spec(out: ttnn.Tensor, value: float):
+def create_fill_artifacts(out: ttnn.Tensor, value: float):
     """Write-only program: `out` is the only tensor, and no kernel reads a tensor."""
     tile_bytes, core_set, num_tiles_by_core, start_id_by_core = _plan(out)
 
@@ -119,10 +121,13 @@ def create_fill_spec(out: ttnn.Tensor, value: float):
             ),
         ]
     )
-    return spec, run_args
+
+    # io_tensors is the single element [out].
+    tensor_indices = {TP_OUT: 0}
+    return spec, run_args, tensor_indices
 
 
-def create_square_spec(t: ttnn.Tensor):
+def create_square_artifacts(t: ttnn.Tensor):
     """In-place program: one TensorParameter, read by the reader and written by the writer."""
     tile_bytes, core_set, num_tiles_by_core, start_id_by_core = _plan(t)
 
@@ -166,7 +171,10 @@ def create_square_spec(t: ttnn.Tensor):
             ttnn.KernelRunArgs(kernel=K_WRITER, runtime_arg_values=dm_args),
         ]
     )
-    return spec, run_args
+
+    # io_tensors is the single element [t] -- the same tensor is the input and the output.
+    tensor_indices = {TP_T: 0}
+    return spec, run_args, tensor_indices
 
 
 def _check(t: ttnn.Tensor) -> None:
@@ -177,12 +185,14 @@ def _check(t: ttnn.Tensor) -> None:
 def toy_spec_fill(out: ttnn.Tensor, value: float) -> ttnn.Tensor:
     """Fill `out` with `value`. Write-only: io_tensors is just [out]."""
     _check(out)
-    spec, run_args = create_fill_spec(out, value)
-    return ttnn.generic_op([out], spec, run_args, {TP_OUT: 0})
+    io_tensors = [out]
+    spec, run_args, tensor_indices = create_fill_artifacts(out, value)
+    return ttnn.generic_op(io_tensors, spec, run_args, tensor_indices)
 
 
 def toy_spec_square_(t: ttnn.Tensor) -> ttnn.Tensor:
     """Square `t` in place. io_tensors is just [t]: it is both the input and the output."""
     _check(t)
-    spec, run_args = create_square_spec(t)
-    return ttnn.generic_op([t], spec, run_args, {TP_T: 0})
+    io_tensors = [t]
+    spec, run_args, tensor_indices = create_square_artifacts(t)
+    return ttnn.generic_op(io_tensors, spec, run_args, tensor_indices)
