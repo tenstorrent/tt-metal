@@ -61,6 +61,7 @@ class TtJanusProImageAttention(LightweightModule):
             packer_l1_acc=False,
         )
         self.configuration = configuration
+        self.use_fused_qkv_sdpa = configuration.VISION_FUSED_QKV_SDPA
 
         if weight_cache_path is None:
             cache_name = lambda _: None
@@ -229,19 +230,6 @@ class TtJanusProImageAttention(LightweightModule):
             ttnn.deallocate(xqkv_fused)
             xqkv_fused = interleaved
 
-        q_heads_1QSD, k_heads_1KSD, v_heads_1VSD = ttnn.experimental.nlp_create_qkv_heads(
-            xqkv_fused,
-            num_heads=self.n_local_heads,
-            num_kv_heads=self.n_local_kv_heads,
-            transpose_k_heads=False,
-            # SDPA is the only consumer and reads all three back immediately, so a DRAM round
-            # trip buys nothing. This op is pure data movement -- the write is most of what it
-            # costs -- and an L1 write stays on the core. The mcast fan-out that makes L1 lose
-            # on a matmul in0 has no counterpart here, since nothing multicasts these.
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(xqkv_fused)
-
         # TODO: get this from model_config, and derive k_chunk from the sequence instead of pinning it
         # to the tower's 576 -- a sequence that is not a multiple of it pads to a second, all-padding
         # chunk plus a mask CB.
@@ -251,23 +239,51 @@ class TtJanusProImageAttention(LightweightModule):
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8), q_chunk_size=192, k_chunk_size=576, exp_approx_mode=False
         )
-        attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
-            q_heads_1QSD,
-            k_heads_1KSD,
-            v_heads_1VSD,
-            is_causal=False,
-            scale=self.scale,
-            attn_mask=mask,
-            program_config=sdpa_cfg,
-            compute_kernel_config=self.compute_kernel_config_sdpa,
-            # Same reasoning as q/k/v above: nlp_concat_heads is the only consumer.
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
 
-        # deallocate keys and values
-        ttnn.deallocate(q_heads_1QSD)
-        ttnn.deallocate(k_heads_1KSD)
-        ttnn.deallocate(v_heads_1VSD)
+        if self.use_fused_qkv_sdpa:
+            # No head split runs: the reader takes q, k and v as strided windows of the fused tensor.
+            attn_output_1QSD = ttnn.transformer.fused_qkv_sdpa(
+                xqkv_fused,
+                self.n_local_heads,
+                attn_mask=mask,
+                scale=self.scale,
+                program_config=sdpa_cfg,
+                compute_kernel_config=self.compute_kernel_config_sdpa,
+                # nlp_concat_heads is the only consumer.
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(xqkv_fused)
+        else:
+            q_heads_1QSD, k_heads_1KSD, v_heads_1VSD = ttnn.experimental.nlp_create_qkv_heads(
+                xqkv_fused,
+                num_heads=self.n_local_heads,
+                num_kv_heads=self.n_local_kv_heads,
+                transpose_k_heads=False,
+                # SDPA is the only consumer and reads all three back immediately, so a DRAM round
+                # trip buys nothing. This op is pure data movement -- the write is most of what it
+                # costs -- and an L1 write stays on the core. The mcast fan-out that makes L1 lose
+                # on a matmul in0 has no counterpart here, since nothing multicasts these.
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(xqkv_fused)
+
+            attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
+                q_heads_1QSD,
+                k_heads_1KSD,
+                v_heads_1VSD,
+                is_causal=False,
+                scale=self.scale,
+                attn_mask=mask,
+                program_config=sdpa_cfg,
+                compute_kernel_config=self.compute_kernel_config_sdpa,
+                # Same reasoning as q/k/v above: nlp_concat_heads is the only consumer.
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+
+            # deallocate keys and values
+            ttnn.deallocate(q_heads_1QSD)
+            ttnn.deallocate(k_heads_1KSD)
+            ttnn.deallocate(v_heads_1VSD)
 
         ###
         # Output matmul

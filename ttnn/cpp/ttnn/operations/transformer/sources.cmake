@@ -17,6 +17,9 @@ set(TTNN_OP_TRANSFORMER_SRCS
     sdpa/device/sdpa_device_operation.cpp
     sdpa/device/sdpa_perf_model.cpp
     sdpa/device/sdpa_program_factory.cpp
+    sdpa/device/fused_qkv_sdpa_device_operation.cpp
+    sdpa/device/fused_qkv_sdpa_program_factory.cpp
+    sdpa/fused_qkv_sdpa.cpp
     sdpa/sdpa.cpp
     sdpa/device/sparse_sdpa_device_operation.cpp
     sdpa/device/sparse_sdpa_program_factory.cpp

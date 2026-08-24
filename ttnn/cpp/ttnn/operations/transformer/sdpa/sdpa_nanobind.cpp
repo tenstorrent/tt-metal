@@ -15,6 +15,7 @@
 #include <nanobind/stl/vector.h>
 
 #include "sdpa.hpp"
+#include "fused_qkv_sdpa.hpp"
 #include "sparse_sdpa.hpp"
 #include "sparse_sdpa_msa.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
@@ -349,6 +350,44 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("attention_sink") = nb::none(),
         nb::arg("cu_window_seqlens") = nb::none());
+
+    ttnn::bind_function<"fused_qkv_sdpa", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        Non-causal prefill scaled-dot-product attention that reads Q, K and V out of one fused
+        projection output, so the head split never runs as its own op.
+
+        Requires head_dim to be a multiple of the tile width. That makes a head's Q/K/V slice a
+        strided window of whole tiles, which the reader addresses directly -- no data moves.
+
+        Args:
+            qkv (ttnn.Tensor): [B, 1, S, 3*num_heads*head_dim] TILE, interleaved DRAM, with q, k and v
+                blocked along the last axis in that order (the layout a fused qkv matmul produces).
+            num_heads (int): query heads. The head axis is folded into the last dim, so it cannot be
+                inferred from the shape.
+
+        Keyword args:
+            attn_mask (ttnn.Tensor, optional): [B, num_heads or 1, S, S] TILE.
+            scale (float, optional): defaults to head_dim**-0.5.
+            memory_config (ttnn.MemoryConfig, optional): defaults to the qkv tensor's.
+            program_config (ttnn.SDPAProgramConfig, optional): the sequence must divide both chunk sizes.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
+
+        Returns:
+            ttnn.Tensor: [B, num_heads, S, head_dim].
+
+        Supports strictly less than scaled_dot_product_attention: non-causal only, and no paging,
+        chunking, sliding window, attention sink or MLA. Anything unsupported is rejected, not ignored.
+        )doc",
+        &ttnn::transformer::fused_qkv_sdpa,
+        nb::arg("qkv").noconvert(),
+        nb::arg("num_heads"),
+        nb::kw_only(),
+        nb::arg("attn_mask") = nb::none(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa", "ttnn.transformer.">(
         mod,

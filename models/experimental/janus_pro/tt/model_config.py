@@ -92,6 +92,12 @@ class ModelArgs(TTModelArgs):
     # the same length: every second block fails the gate at 0.9774 while these 12 pass at 0.9967.
     VISION_BFP8_RESIDUAL_FROM_LAYER = 12
 
+    # Read q/k/v straight out of the fused projection instead of splitting the heads first, which
+    # removes `nlp_create_qkv_heads` from every block. head_dim is 64, two whole tiles, so a head's
+    # slice is a strided window of whole tiles and the split costs nothing but address arithmetic --
+    # see ttnn.transformer.fused_qkv_sdpa.
+    VISION_FUSED_QKV_SDPA = True
+
     # Below this the explicit config was not measured against ttnn's derivation.
     _VISION_MIN_CONFIGURED_CORES = 24
     # Below this the sharded layer-norm factory loses to the interleaved one.
