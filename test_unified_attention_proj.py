@@ -58,13 +58,6 @@ def project(device, attn_torch, wo_torch, sq, dt, num_q, n_heads, cores=1, fidel
     # flash harness until it was fixed there.
     tout = to_dev(torch.full([num_q * sq * TILE, dm * TILE], float("nan")).to(torch.bfloat16))
 
-    # Query chunks are the unit of work here, not heads: a head is a k-block of this
-    # matmul, so splitting heads across cores would leave partial sums to reduce. Chunks
-    # are independent rows of the output.
-    ncores = min(cores, num_q)
-    core_ranges, core_list = core_block(ncores)
-    shares = split_evenly(num_q, ncores)
-
     # kt is the k-block width in tiles. Default: the whole of d_model in one block, which is
     # the single-shot path -- correct and fastest while Wo fits in L1 (dm*dm tiles). It does
     # not fit for long: 64 tiles at d_model 256, 4096 (8MB) at 2048, so a real d_model has to
@@ -73,6 +66,14 @@ def project(device, attn_torch, wo_torch, sq, dt, num_q, n_heads, cores=1, fidel
     nt = dm if nt is None else nt
     assert dm % kt == 0, "the k-block width must divide d_model"
     assert dm % nt == 0, "the output-column block width must divide d_model"
+    # The unit of work across cores is one OUTPUT BLOCK -- an (m, n) tile -- not a query
+    # chunk. Heads are a k-block of this matmul, so splitting THOSE would leave partial sums
+    # to reduce; different m or different n write disjoint output and need nothing.
+    nunits = num_q * (dm // nt)
+    ncores = min(cores, nunits)
+    core_ranges, core_list = core_block(ncores)
+    shares = split_evenly(nunits, ncores)
+
     ct_args = [sq, dm, dm, kt, nt]  # mt, ktot, ntot, kt, nt -- square, K = N = d_model
     for t in (tattn, two, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
