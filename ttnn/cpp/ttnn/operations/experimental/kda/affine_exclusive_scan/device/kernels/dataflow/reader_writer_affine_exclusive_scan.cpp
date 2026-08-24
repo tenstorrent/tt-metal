@@ -26,29 +26,27 @@ FORCE_INLINE void issue_tensor_block_read(
     }
 }
 
+template <uint32_t Kt, uint32_t Vt>
 FORCE_INLINE void issue_affine_pair_send(
-    Noc& noc,
-    uint32_t target,
-    DataflowBuffer& send_a,
-    DataflowBuffer& send_b,
-    DataflowBuffer& remote_a,
-    DataflowBuffer& remote_b,
-    uint32_t a_tiles,
-    uint32_t b_tiles) {
+    Noc& noc, uint32_t target, DataflowBuffer& send_a, DataflowBuffer& send_b, DataflowBuffer& remote_affine) {
     const uint32_t target_x = worker_x(target);
     const uint32_t target_y = worker_y(target);
-    noc.async_write(
-        send_a,
-        UnicastEndpoint{},
-        a_tiles * send_a.get_entry_size(),
-        {},
-        {.noc_x = target_x, .noc_y = target_y, .addr = remote_a.get_write_ptr()});
-    noc.async_write(
-        send_b,
-        UnicastEndpoint{},
-        b_tiles * send_b.get_entry_size(),
-        {},
-        {.noc_x = target_x, .noc_y = target_y, .addr = remote_b.get_write_ptr()});
+    const uint32_t tile_bytes = remote_affine.get_entry_size();
+    for (uint32_t row = 0; row < Kt; ++row) {
+        const uint32_t remote_row = remote_affine.get_write_ptr() + row * (Kt + Vt) * tile_bytes;
+        noc.async_write(
+            send_a,
+            UnicastEndpoint{},
+            Kt * tile_bytes,
+            {.offset_bytes = row * Kt * tile_bytes},
+            {.noc_x = target_x, .noc_y = target_y, .addr = remote_row});
+        noc.async_write(
+            send_b,
+            UnicastEndpoint{},
+            Vt * tile_bytes,
+            {.offset_bytes = row * Vt * tile_bytes},
+            {.noc_x = target_x, .noc_y = target_y, .addr = remote_row + Kt * tile_bytes});
+    }
 }
 
 FORCE_INLINE void complete_affine_pair_send(Noc& noc, Semaphore<>& ready, uint32_t target) {
@@ -123,8 +121,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     DataflowBuffer local_b(dfb::local_b);
     DataflowBuffer to_remote_a(dfb::to_remote_a);
     DataflowBuffer to_remote_b(dfb::to_remote_b);
-    DataflowBuffer from_remote_a(dfb::from_remote_a);
-    DataflowBuffer from_remote_b(dfb::from_remote_b);
+    DataflowBuffer from_remote_affine(dfb::from_remote_affine);
     DataflowBuffer initial_state(dfb::initial_state);
     DataflowBuffer final(dfb::final);
     Noc noc;
@@ -152,8 +149,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
         const bool sends = group + distance < G;
         const bool receives = group >= distance;
         if (sends) {
-            issue_affine_pair_send(
-                noc, worker_index + distance, to_remote_a, to_remote_b, from_remote_a, from_remote_b, kk, kv);
+            issue_affine_pair_send<Kt, Vt>(noc, worker_index + distance, to_remote_a, to_remote_b, from_remote_affine);
         }
         if (receives) {
             issue_affine_pair_loopback(noc, worker_index, to_remote_a, to_remote_b, local_a, local_b, kk, kv);
@@ -170,16 +166,14 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
             local_b.push_back(kv);
         }
         if (receives) {
-            from_remote_a.reserve_back(kk);
-            from_remote_b.reserve_back(kv);
+            from_remote_affine.reserve_back(kk + kv);
             // All NoC writes complete before this receiver frees the old outbound block.
             to_remote_a.pop_front(kk);
             to_remote_b.pop_front(kv);
 
             ready_target++;
             ready.wait_min(ready_target);
-            from_remote_a.push_back(kk);
-            from_remote_b.push_back(kv);
+            from_remote_affine.push_back(kk + kv);
 
             // Compute must publish the replacement before any worker starts the next distance.
             to_remote_a.wait_front(kk);
@@ -195,19 +189,17 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     to_remote_b.wait_front(kv);
     if (group + 1 < G) {
         const uint32_t target = worker_index + 1;
-        issue_affine_pair_send(noc, target, to_remote_a, to_remote_b, from_remote_a, from_remote_b, kk, kv);
+        issue_affine_pair_send<Kt, Vt>(noc, target, to_remote_a, to_remote_b, from_remote_affine);
         complete_affine_pair_send(noc, ready, target);
     }
     // The final inclusive prefix is never reused after the exclusive neighbor shift.
     to_remote_a.pop_front(kk);
     to_remote_b.pop_front(kv);
     if (group > 0) {
-        from_remote_a.reserve_back(kk);
-        from_remote_b.reserve_back(kv);
+        from_remote_affine.reserve_back(kk + kv);
         ready_target++;
         ready.wait_min(ready_target);
-        from_remote_a.push_back(kk);
-        from_remote_b.push_back(kv);
+        from_remote_affine.push_back(kk + kv);
     }
 
     final.wait_front(kv);

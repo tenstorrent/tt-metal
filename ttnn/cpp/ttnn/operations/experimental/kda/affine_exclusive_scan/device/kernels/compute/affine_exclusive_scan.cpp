@@ -11,7 +11,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-template <uint32_t Mt, uint32_t Kt, uint32_t Nt>
+template <uint32_t Mt, uint32_t Kt, uint32_t Nt, uint32_t ARowStride = Kt>
 FORCE_INLINE void matmul(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& out) {
     constexpr uint32_t max_fp32_dst_tiles = 4;
     constexpr uint32_t subblock_cols = Nt % 4 == 0 ? 4 : Nt % 3 == 0 ? 3 : Nt % 2 == 0 ? 2 : 1;
@@ -32,7 +32,7 @@ FORCE_INLINE void matmul(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o
         for (uint32_t n = 0; n < Nt; n += subblock_cols) {
             tile_regs_acquire();
             for (uint32_t k = 0; k < Kt; ++k) {
-                matmul_block(a_id, b_id, m * Kt + k, k * Nt + n, 0, false, subblock_cols, subblock_rows, Kt);
+                matmul_block(a_id, b_id, m * ARowStride + k, k * Nt + n, 0, false, subblock_cols, subblock_rows, Kt);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -48,6 +48,53 @@ FORCE_INLINE void matmul(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o
         }
     }
     out.push_back(Mt * Nt);
+}
+
+template <uint32_t Mt, uint32_t Kt, uint32_t At, uint32_t Vt>
+FORCE_INLINE void matmul_affine(
+    DataflowBuffer& a, DataflowBuffer& affine, DataflowBuffer& out_a, DataflowBuffer& out_b) {
+    constexpr uint32_t Nt = At + Vt;
+    constexpr uint32_t max_fp32_dst_tiles = 4;
+    constexpr uint32_t subblock_cols = Nt % 4 == 0 ? 4 : Nt % 3 == 0 ? 3 : Nt % 2 == 0 ? 2 : 1;
+    constexpr uint32_t max_subblock_rows = max_fp32_dst_tiles / subblock_cols;
+    constexpr uint32_t subblock_rows = max_subblock_rows >= 4 && Mt % 4 == 0   ? 4
+                                       : max_subblock_rows >= 3 && Mt % 3 == 0 ? 3
+                                       : max_subblock_rows >= 2 && Mt % 2 == 0 ? 2
+                                                                               : 1;
+
+    const uint32_t a_id = a.get_id();
+    const uint32_t affine_id = affine.get_id();
+    const uint32_t out_a_id = out_a.get_id();
+    const uint32_t out_b_id = out_b.get_id();
+    out_a.reserve_back(Mt * At);
+    out_b.reserve_back(Mt * Vt);
+    pack_reconfig_data_format(out_a_id);
+    reconfig_data_format(affine_id, a_id);
+    matmul_block_init(a_id, affine_id, false, subblock_cols, subblock_rows, Kt);
+    for (uint32_t m = 0; m < Mt; m += subblock_rows) {
+        for (uint32_t n = 0; n < Nt; n += subblock_cols) {
+            tile_regs_acquire();
+            for (uint32_t k = 0; k < Kt; ++k) {
+                matmul_block(a_id, affine_id, m * Kt + k, k * Nt + n, 0, false, subblock_cols, subblock_rows, Kt);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t subblock_row = 0; subblock_row < subblock_rows; ++subblock_row) {
+                for (uint32_t subblock_col = 0; subblock_col < subblock_cols; ++subblock_col) {
+                    const uint32_t column = n + subblock_col;
+                    const uint32_t dst = subblock_row * subblock_cols + subblock_col;
+                    if (column < At) {
+                        pack_tile(dst, out_a_id, (m + subblock_row) * At + column);
+                    } else {
+                        pack_tile(dst, out_b_id, (m + subblock_row) * Vt + column - At);
+                    }
+                }
+            }
+            tile_regs_release();
+        }
+    }
+    out_a.push_back(Mt * At);
+    out_b.push_back(Mt * Vt);
 }
 
 FORCE_INLINE void add(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& out, uint32_t tiles) {
@@ -67,6 +114,28 @@ FORCE_INLINE void add(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& out,
         tile_regs_release();
     }
     out.push_back(tiles);
+}
+
+template <uint32_t Kt, uint32_t Vt>
+FORCE_INLINE void add_affine_b(DataflowBuffer& a, DataflowBuffer& affine, DataflowBuffer& out) {
+    const uint32_t a_id = a.get_id();
+    const uint32_t affine_id = affine.get_id();
+    const uint32_t out_id = out.get_id();
+    out.reserve_back(Kt * Vt);
+    pack_reconfig_data_format(out_id);
+    reconfig_data_format(a_id, affine_id);
+    add_init(a_id, affine_id);
+    for (uint32_t row = 0; row < Kt; ++row) {
+        for (uint32_t column = 0; column < Vt; ++column) {
+            tile_regs_acquire();
+            add_tiles(a_id, affine_id, row * Vt + column, row * (Kt + Vt) + Kt + column, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, out_id, row * Vt + column);
+            tile_regs_release();
+        }
+    }
+    out.push_back(Kt * Vt);
 }
 
 FORCE_INLINE void copy(DataflowBuffer& in, DataflowBuffer& out, uint32_t tiles) {
@@ -97,8 +166,7 @@ TT_KERNEL void compute(uint32_t group) {
     DataflowBuffer local_b(dfb::local_b);
     DataflowBuffer to_remote_a(dfb::to_remote_a);
     DataflowBuffer to_remote_b(dfb::to_remote_b);
-    DataflowBuffer from_remote_a(dfb::from_remote_a);
-    DataflowBuffer from_remote_b(dfb::from_remote_b);
+    DataflowBuffer from_remote_affine(dfb::from_remote_affine);
     DataflowBuffer initial_state(dfb::initial_state);
     DataflowBuffer final(dfb::final);
     DataflowBuffer scratch(dfb::scratch);
@@ -117,16 +185,13 @@ TT_KERNEL void compute(uint32_t group) {
         }
         local_a.wait_front(kk);
         local_b.wait_front(kv);
-        from_remote_a.wait_front(kk);
-        from_remote_b.wait_front(kv);
-        matmul<Kt, Kt, Kt>(local_a, from_remote_a, to_remote_a);
-        matmul<Kt, Kt, Vt>(local_a, from_remote_b, scratch);
+        from_remote_affine.wait_front(kk + kv);
+        matmul_affine<Kt, Kt, Kt, Vt>(local_a, from_remote_affine, to_remote_a, scratch);
         scratch.wait_front(kv);
         add(scratch, local_b, to_remote_b, kv);
         local_a.pop_front(kk);
         local_b.pop_front(kv);
-        from_remote_a.pop_front(kk);
-        from_remote_b.pop_front(kv);
+        from_remote_affine.pop_front(kk + kv);
         scratch.pop_front(kv);
     }
 
@@ -134,13 +199,11 @@ TT_KERNEL void compute(uint32_t group) {
     if (group == 0) {
         copy(initial_state, final, kv);
     } else {
-        from_remote_a.wait_front(kk);
-        from_remote_b.wait_front(kv);
-        matmul<Kt, Kt, Vt>(from_remote_a, initial_state, scratch);
+        from_remote_affine.wait_front(kk + kv);
+        matmul<Kt, Kt, Vt, Kt + Vt>(from_remote_affine, initial_state, scratch);
         scratch.wait_front(kv);
-        add(scratch, from_remote_b, final, kv);
-        from_remote_a.pop_front(kk);
-        from_remote_b.pop_front(kv);
+        add_affine_b<Kt, Vt>(scratch, from_remote_affine, final);
+        from_remote_affine.pop_front(kk + kv);
         scratch.pop_front(kv);
     }
     initial_state.pop_front(kv);

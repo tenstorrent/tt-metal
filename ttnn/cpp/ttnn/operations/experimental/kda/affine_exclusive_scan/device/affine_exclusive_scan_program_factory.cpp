@@ -48,8 +48,7 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
     const tt::tt_metal::experimental::DFBSpecName local_b_dfb_name{"local_b"};
     const tt::tt_metal::experimental::DFBSpecName to_remote_a_dfb_name{"to_remote_a"};
     const tt::tt_metal::experimental::DFBSpecName to_remote_b_dfb_name{"to_remote_b"};
-    const tt::tt_metal::experimental::DFBSpecName from_remote_a_dfb_name{"from_remote_a"};
-    const tt::tt_metal::experimental::DFBSpecName from_remote_b_dfb_name{"from_remote_b"};
+    const tt::tt_metal::experimental::DFBSpecName from_remote_affine_dfb_name{"from_remote_affine"};
     const tt::tt_metal::experimental::DFBSpecName initial_state_dfb_name{"initial_state"};
     const tt::tt_metal::experimental::DFBSpecName final_dfb_name{"final"};
     const tt::tt_metal::experimental::DFBSpecName scratch_dfb_name{"scratch"};
@@ -79,8 +78,7 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
         make_dfb(local_b_dfb_name, 2 * state_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(to_remote_a_dfb_name, key_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(to_remote_b_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
-        make_dfb(from_remote_a_dfb_name, key_matrix_tiles, tt::DataFormat::Float32),
-        make_dfb(from_remote_b_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
+        make_dfb(from_remote_affine_dfb_name, key_matrix_tiles + state_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(initial_state_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(final_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(scratch_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
@@ -92,11 +90,9 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
     // valid while these buffers hold one phase-independent slot. Any additional depth lets sender and
     // receiver select different halves and silently corrupts the scan.
     for (const auto& dataflow_buffer : dataflow_buffers) {
-        if (dataflow_buffer.unique_id == from_remote_a_dfb_name ||
-            dataflow_buffer.unique_id == from_remote_b_dfb_name) {
+        if (dataflow_buffer.unique_id == from_remote_affine_dfb_name) {
             TT_FATAL(
-                dataflow_buffer.num_entries ==
-                    (dataflow_buffer.unique_id == from_remote_a_dfb_name ? key_matrix_tiles : state_matrix_tiles),
+                dataflow_buffer.num_entries == key_matrix_tiles + state_matrix_tiles,
                 "affine_exclusive_scan: remotely addressed mailbox {} must hold exactly one block",
                 *dataflow_buffer.unique_id);
         }
@@ -122,9 +118,9 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
                 tt::tt_metal::experimental::DFBBinding{
                     to_remote_b_dfb_name, "to_remote_b", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
-                    from_remote_a_dfb_name, "from_remote_a", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
-                tt::tt_metal::experimental::DFBBinding{
-                    from_remote_b_dfb_name, "from_remote_b", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                    from_remote_affine_dfb_name,
+                    "from_remote_affine",
+                    tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
                     initial_state_dfb_name, "initial_state", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
@@ -153,12 +149,7 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
     auto compute_hardware_config = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
     auto& unpack_modes = tt::tt_metal::experimental::unpack_modes(compute_hardware_config);
     for (const auto& name :
-         {local_a_dfb_name,
-          local_b_dfb_name,
-          from_remote_a_dfb_name,
-          from_remote_b_dfb_name,
-          initial_state_dfb_name,
-          scratch_dfb_name}) {
+         {local_a_dfb_name, local_b_dfb_name, from_remote_affine_dfb_name, initial_state_dfb_name, scratch_dfb_name}) {
         unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
     }
     if (summary_format == tt::DataFormat::Float32) {
@@ -187,9 +178,9 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
                 tt::tt_metal::experimental::DFBBinding{
                     to_remote_b_dfb_name, "to_remote_b", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
-                    from_remote_a_dfb_name, "from_remote_a", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
-                tt::tt_metal::experimental::DFBBinding{
-                    from_remote_b_dfb_name, "from_remote_b", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                    from_remote_affine_dfb_name,
+                    "from_remote_affine",
+                    tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
                     initial_state_dfb_name, "initial_state", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
