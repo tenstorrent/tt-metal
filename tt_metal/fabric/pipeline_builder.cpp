@@ -380,6 +380,21 @@ GraphLayoutResult resolve_graph_layout(
             continue;  // no exit edge (shouldn't happen in a pipeline)
         }
 
+        // A SINGLE-CHIP stage has exactly one chip, so entry and exit are the same
+        // chip unconditionally and no alternative link can ever exist. That is not
+        // the hazard this block guards: the hazard is two persistent BRISC kernels on
+        // the same CORE, and a one-chip stage still has a whole core grid to spread
+        // them over. Blaze gives such a stage explicitly disjoint endpoints -- the
+        // DSv4 layer harness resolves a static entry core (attn hc_pre cell) and exit
+        // core (MoE HcPost sink) that are chosen to be disjoint -- so same-chip
+        // entry/exit is safe here. Without this, a tp=1 decoder stage can never be an
+        // intermediate pipeline stage:
+        //   resolve_graph_layout: stage N has only one chip at both the entry and
+        //   exit boundary -- cannot deconflict entry/exit on the same chip
+        if (submesh_chips[curr_sub].size() == 1) {
+            continue;
+        }
+
         if (exit_re->exit_row == entry_row && exit_re->exit_col == entry_col) {
             // Conflict: find an alternative link for the exit edge.
             size_t next_sub = node_to_sub.at(exit_re->dst);
