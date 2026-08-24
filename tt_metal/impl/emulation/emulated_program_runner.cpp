@@ -3206,6 +3206,11 @@ static void setup_core_state(
 static void populate_dfb_interface_slots(
     tt_emule::EmuleDFBInterface& iface, const DFBAllocInfo& alloc, uint8_t proc_id, bool is_tensix) {
     const auto& cfg = *alloc.cfg;
+    // tt-emule models STRIDED and ALL slot walks only; a BLOCKED ring (global block order, run-walk
+    // cursors) would silently fall into the STRIDED interleave and diverge from hardware.
+    TT_FATAL(
+        cfg.pap != ::dfb::AccessPattern::BLOCKED && cfg.cap != ::dfb::AccessPattern::BLOCKED,
+        "tt-emule has no BLOCKED DFB model; run BLOCKED DFBs on hardware or the RTL simulator.");
     const uint32_t total = cfg.entry_size * cfg.num_entries;
 
     // Compute proc_bit per-alloc: WH/BH ComputeKernel sets bit 2,

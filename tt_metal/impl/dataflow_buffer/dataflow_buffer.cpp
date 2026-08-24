@@ -2428,6 +2428,18 @@ void ProgramImpl::finalize_single_dfb_config(
         config.producer_block_size,
         config.consumer_block_size);
 
+    // A Tensix endpoint waits/pushes whole blocks through TT_WAIT_TILES/TT_WAIT_FREE/TT_PUSH_TILES,
+    // whose num_tiles field is 10 bits — 1024 silently encodes as 0.
+    if (config.pap == ::dfb::AccessPattern::BLOCKED &&
+        (has_tensix_risc(config.producer_risc_mask) || has_tensix_risc(config.consumer_risc_mask))) {
+        TT_FATAL(
+            std::max(config.producer_block_size, config.consumer_block_size) <= 1023u,
+            "DFB {}: BLOCKED with a Tensix endpoint requires block_size <= 1023 (Tensix tile-counter "
+            "ops carry a 10-bit tile count); got {}.",
+            dfb->id,
+            std::max(config.producer_block_size, config.consumer_block_size));
+    }
+
     validate_implicit_burst_fits_one_packet(*dfb);
 
     // TRISC pack/unpack store ring extent in uint32_t L1-aligned units; host rejects rings > L1 / uint32.

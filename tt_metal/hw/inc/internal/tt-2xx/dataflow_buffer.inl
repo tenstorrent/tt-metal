@@ -138,6 +138,9 @@ inline void dfb_dm_advance_slot(LocalDFBInterface& intf, uint32_t n) {
 }
 #endif  // !COMPILE_FOR_TRISC
 
+// First slot base to last slot limit. On a global-order BLOCKED ring every slot's limit is its base
+// plus the full ring, so this overshoots the ring extent by the slot-base spread — callers use it as
+// an upper bound, not an exact extent.
 inline uint32_t dfb_ring_span_address_units(const LocalDFBInterface& intf) {
     const uint8_t last = static_cast<uint8_t>(intf.num_tcs_to_rr - 1);
 #if defined(COMPILE_FOR_TRISC)
@@ -517,6 +520,13 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
 //     - record the scoped-lock event
 template <bool is_write>
 inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl(uint16_t num_entries) {
+    // The lock walk below spaces entries stride_size apart from the cursor. That does not model a
+    // BLOCKED side whose held entries are block-contiguous while its stride hops blocks, nor a run
+    // walk (mid-run jumps). Locks are unsupported on those sides.
+    ASSERT(
+        local_dfb_interface_.run_length <= 1 &&
+        (local_dfb_interface_.block_size == 1 ||
+         local_dfb_interface_.stride_size == local_dfb_interface_.entry_size));
     const auto& s = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
     const uint32_t stride = local_dfb_interface_.stride_size;
     const uint32_t entry = local_dfb_interface_.entry_size;
