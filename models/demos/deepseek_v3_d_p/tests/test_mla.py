@@ -499,9 +499,13 @@ def test_kimi_mla(
 
 
 # Mistral Small 4 119B: dense MLA at dims no current resident uses -- qk_head_dim 128 (family: 192 or
-# 256), kv_lora_rank 256 (family: 512), 32 heads (family: 64 or 128), and a LIVE YaRN factor of 128
-# (DeepSeek 40, GLM 1.0 = disabled) so the attention softmax scale is 0.194969 rather than the bare
-# qk_head_dim**-0.5 = 0.088388 (mla.py:381-385). Random weights only: this row exercises the MLA
+# 256), kv_lora_rank 256 (family: 512), 32 heads (family: 64 or 128), and a YaRN factor of 128
+# (DeepSeek 40, GLM 1.0 = disabled) that scales the rope inv_freq but is deliberately NOT folded into
+# the softmax scale: Mistral4Attention sets `scaling = qk_head_dim**-0.5` unconditionally and its
+# rotary reports attention_scaling = 1.0, so `mla_disable_yarn_mscale = True` keeps this row at the
+# bare 0.088388 (mla.py:381-389, mistral_small4_config.py:177). Folding mscale^2 in the DeepSeek way
+# would give 0.194969 -- a 2.2058x multiplier on the attention logits, i.e. a wrong softmax
+# temperature with no crash to reveal it. Random weights only: this row exercises the MLA
 # shapes, and the pretrained path is covered by the block and transformer tests.
 # (32,1) is included because it is a CI-listed BLACKHOLE_GALAXY mesh (conftest CI_ALLOWED_FABRICS) and
 # is the closest available probe of the TP=1 half of the PP=4 x (8,1) serving proposal.
