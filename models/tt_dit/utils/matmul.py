@@ -702,7 +702,17 @@ class FusedMMRSConfig(NamedTuple):
         if mm_window_blocks is not None and M is not None:
             # Clamp to the M blocks a core actually walks (fused MMRS never transposes: M on grid.y).
             mt_per_core = math.ceil(math.ceil(M / 32) / self.compute_with_storage_grid_size.y)
-            mm_window_blocks = min(mm_window_blocks, math.ceil(mt_per_core / self.M_block_size))
+            blocks_per_core = math.ceil(mt_per_core / self.M_block_size)
+            if blocks_per_core <= 1:
+                # A single block per core makes the window degenerate twice over: there is no slot
+                # rotation, so the pipelining the window exists for cannot happen; and the windowed
+                # tensor's height is quantized to WHOLE M blocks, so when M_block > Mt_per_core the
+                # "window" is TALLER than the real output (e.g. flux2 1024px: M_block=12 over 5 real
+                # rows -> a 384 KB/core resident shard, 2.4x full residency, which clashed with the
+                # blocking's own CBs). Fall back to the DRAM handoff instead.
+                mm_window_blocks = None
+            else:
+                mm_window_blocks = min(mm_window_blocks, blocks_per_core)
 
         if num_workers_override is not None:
             num_workers_per_link = num_workers_override
