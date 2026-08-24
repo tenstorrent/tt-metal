@@ -25,7 +25,7 @@ std::string dir_name(RoutingDirection direction) { return std::string(enchantum:
 }  // namespace
 
 std::optional<McastReverseTree> build_mcast_reverse_tree(
-    const MeshGraph& mesh_graph, MeshId mesh_id, const ExpressRingTopology& topo, int root, std::string* failure) {
+    const MeshGraph& mesh_graph, MeshId mesh_id, const AxisRouteTopology& topo, int root, std::string* failure) {
     const int len = topo.axis_len;
     const auto fail = [&](std::string message) -> std::optional<McastReverseTree> {
         if (failure != nullptr) {
@@ -247,7 +247,7 @@ std::vector<std::uint8_t> encode_mcast_axis_actions(const McastReverseTree& tree
 }
 
 ArborescenceGateResult run_mcast_arborescence_gate(
-    const MeshGraph& mesh_graph, MeshId mesh_id, const ExpressRingTopology& topo) {
+    const MeshGraph& mesh_graph, MeshId mesh_id, const AxisRouteTopology& topo) {
     ArborescenceGateResult result;
     result.trees.reserve(topo.axis_len);
 
@@ -271,8 +271,8 @@ ArborescenceGateResult run_mcast_arborescence_gate(
 std::vector<RoutingDirection> mcast_root_output_directions(
     const MeshGraph& mesh_graph,
     MeshId mesh_id,
-    const ExpressRingTopology& y_topo,
-    const ExpressRingTopology& x_topo,
+    const AxisRouteTopology& y_topo,
+    const AxisRouteTopology& x_topo,
     int root_y,
     int root_x,
     int n_hops,
@@ -321,7 +321,7 @@ namespace {
 bool embed_one_axis(
     const MeshGraph& mesh_graph,
     MeshId mesh_id,
-    const ExpressRingTopology& topo,
+    const AxisRouteTopology& topo,
     int root,
     std::uint8_t* table,
     std::uint32_t offset,
@@ -373,8 +373,8 @@ bool embed_one_axis(
 bool embed_mcast_reverse_trees(
     const MeshGraph& mesh_graph,
     MeshId mesh_id,
-    const ExpressRingTopology& y_topo,
-    const ExpressRingTopology& x_topo,
+    const AxisRouteTopology& y_topo,
+    const AxisRouteTopology& x_topo,
     int my_y,
     int my_x,
     std::uint8_t* table,

@@ -58,7 +58,7 @@
 #include "tt_metal/fabric/serialization/router_port_directions.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/physical_system_discovery.hpp"
-#include "tt_metal/fabric/express_ring_topology.hpp"
+#include "tt_metal/fabric/axis_route_topology.hpp"
 #include "tt_metal/fabric/mcast_reverse_tree.hpp"
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
@@ -1609,15 +1609,19 @@ bool ControlPlane::express_routing_enabled(MeshId mesh_id) const {
 
 // The ring covering `direction` from `local`: the express decomposition for an axis hop, the ordinary X
 // ring for E/W. Null when that dimension carries no ring.
-const ExpressRingTopology* ControlPlane::ring_for_direction(MeshId mesh_id, RoutingDirection direction) const {
+const AxisRouteTopology* ControlPlane::ring_for_direction(MeshId mesh_id, RoutingDirection direction) const {
     const bool orthogonal = direction == RoutingDirection::E || direction == RoutingDirection::W;
     return orthogonal ? this->routing_table_generator_->get_x_rings(mesh_id)
                       : this->routing_table_generator_->get_express_rings(mesh_id);
 }
 
+const AxisRouteTopology* ControlPlane::axis_topology(MeshId mesh_id, int axis) const {
+    return this->routing_table_generator_->get_axis_topology(mesh_id, axis);
+}
+
 // Coordinate of `node` along the ring's axis, and of the neighbor reached by `direction`.
 std::optional<int> ControlPlane::ring_coord_of_neighbor(
-    const ExpressRingTopology& rings, FabricNodeId local, RoutingDirection direction) const {
+    const AxisRouteTopology& rings, FabricNodeId local, RoutingDirection direction) const {
     const auto neighbors = this->get_intra_chip_neighbors(local, direction);
     if (neighbors.empty()) {
         return std::nullopt;
@@ -1963,51 +1967,84 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
     MeshShape mesh_shape = this->get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
     uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
     TT_ASSERT(num_chips <= 256, "Number of chips exceeds 256 for mesh {}", *mesh_id);
+    // Was a flat `<= 32` per axis, which predates the indexed vectors and no longer describes any
+    // real limit. The binding constraint is that the packed action maps address both coordinates and
+    // fit the L1 slot; shape_is_indexable() is the same predicate the packer enforces, so a shape
+    // that passes here cannot later fail to pack. The packet header's Y + X <= 67 bound is separate
+    // and reported by FabricContext.
     TT_ASSERT(
-        mesh_shape[0] <= 32 && mesh_shape[1] <= 32,
-        "One or both of mesh axis exceed 32 for mesh {}: {}x{}",
+        IndexedMeshRoutingFields::shape_is_indexable(mesh_shape[0], mesh_shape[1]),
+        "Mesh {} shape {}x{} cannot be indexed: axes must be <= {} and the packed routing vectors must "
+        "fit {} B of L1.",
         *mesh_id,
         mesh_shape[0],
-        mesh_shape[1]);
+        mesh_shape[1],
+        IndexedMeshRoutingFields::MAX_INDEXED_MESH_AXIS,
+        IndexedMeshRoutingFields::INDEXED_VECTOR_TABLE_BYTES);
 
-    // Express meshes embed the indexed destination-major vectors; all others keep the legacy
-    // compressed 2D table. Gated on express_routing_enabled, the same answer route generation used, so
-    // a chip's L1 layout always matches its decode.
-    if (this->express_routing_enabled(mesh_id)) {
+    // Every 2D mesh embeds the indexed destination-major vectors. The legacy compressed 2D table is
+    // gone from the union's live meaning; a chip's L1 layout and its decode are now the same for all
+    // 2D meshes rather than agreeing per-mesh by construction.
+    {
         indexed_route_vectors_t indexed_vectors;
         indexed_vectors.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, chip_id), num_chips);
 
         // The unicast vectors above are mesh-identical, but the reverse trees are not: this chip gets
         // only T(its own row) and T(its own column), written into the tail of the same slot.
-        const auto* y_rings = this->ring_for_direction(mesh_id, RoutingDirection::N);
-        const auto* x_rings = this->ring_for_direction(mesh_id, RoutingDirection::E);
-        if (y_rings != nullptr && x_rings != nullptr) {
+        // axis_topology() rather than ring_for_direction(): the latter is null on a non-express mesh
+        // (Y) or a non-closing dimension (X), and a null topology here means the tree region stays
+        // zeroed -- which on device decodes as feeder=0/command=0 for every row, yielding an empty
+        // map and a multicast that silently delivers to nothing. The line fallback guarantees an
+        // answer for any non-degenerate axis.
+        const auto* y_topo = this->axis_topology(mesh_id, 0);
+        const auto* x_topo = this->axis_topology(mesh_id, 1);
+        TT_FATAL(
+            y_topo != nullptr && x_topo != nullptr,
+            "mesh {}: no axis topology on {} (shape {}x{}); 2D multicast cannot be encoded",
+            *mesh_id,
+            y_topo == nullptr ? "Y" : "X",
+            mesh_shape[0],
+            mesh_shape[1]);
+        // A RING-declared axis has no wrap edges unless connectivity was built at a torus fabric
+        // config, so a torus can silently derive as a LINE here -- and a line reverse tree cannot
+        // close a full-ring multicast, which then delivers to only part of the ring and hangs any
+        // sync waiting on the whole ring. Logged once per mesh so the derived kind is visible in
+        // every run rather than inferred from a hang.
+        if (chip_id == 0) {
+            log_info(
+                tt::LogFabric,
+                "mesh {} shape {}x{}: axis topologies derived as Y={} X={}",
+                *mesh_id,
+                mesh_shape[0],
+                mesh_shape[1],
+                y_topo->wraps ? "RING" : "LINE",
+                x_topo->wraps ? "RING" : "LINE");
+        }
+        {
             const auto coord = this->get_mesh_graph().chip_to_coordinate(mesh_id, chip_id);
             std::string failure;
-            if (!embed_mcast_reverse_trees(
+            // Hard failure, not a warning. There is no fallback multicast encoder, so a zeroed tree
+            // region is not "multicast unavailable" -- it is a multicast that reports success and
+            // delivers nowhere. A row with two feeders is also structurally impossible on a chordless
+            // axis (each row's only way in is from its neighbour toward the root), so this can only
+            // trip on an express topology, where it already has to pass today.
+            TT_FATAL(
+                embed_mcast_reverse_trees(
                     this->get_mesh_graph(),
                     mesh_id,
-                    *y_rings,
-                    *x_rings,
+                    *y_topo,
+                    *x_topo,
                     static_cast<int>(coord[0]),
                     static_cast<int>(coord[1]),
                     indexed_vectors.data,
-                    &failure)) {
-                // Only multicast is rejected; unicast is unaffected and the tree region stays zeroed.
-                // The multicast producer must refuse to encode against a mesh that lands here.
-                log_warning(
-                    tt::LogFabric,
-                    "mesh {}: no multicast reverse trees, express multicast unavailable: {}",
-                    *mesh_id,
-                    failure);
-            }
+                    &failure),
+                "mesh {} chip {}: cannot encode 2D multicast: {}",
+                *mesh_id,
+                chip_id,
+                failure);
         }
 
         std::memcpy(&routing_info.indexed_route_vectors, &indexed_vectors, sizeof(indexed_route_vectors_t));
-    } else {
-        intra_mesh_routing_path_t<2, true> routing_path_2d;
-        routing_path_2d.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, chip_id), num_chips);
-        std::memcpy(&routing_info.routing_path_table_2d, &routing_path_2d, sizeof(intra_mesh_routing_path_t<2, true>));
     }
 
     // Build per-dst-mesh exit node table (1 byte per mesh) for this src chip

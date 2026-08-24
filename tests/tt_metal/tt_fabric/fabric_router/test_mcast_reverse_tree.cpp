@@ -5,7 +5,7 @@
 // Reverse-tree multicast: tree construction, the arborescence gate over every root on both axes,
 // packing, the encode pass, and the per-chip L1 embed.
 //
-// Machine-free: MeshGraph and ExpressRingTopology need no cluster, so multi-host mesh shapes are
+// Machine-free: MeshGraph and AxisRouteTopology need no cluster, so multi-host mesh shapes are
 // covered here on a single machine.
 //
 // Rows are axis coordinates, not chip ids: chip = row * 4 + col.
@@ -30,7 +30,7 @@
 #include "cluster.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "llrt/rtoptions.hpp"
-#include "tt_metal/fabric/express_ring_topology.hpp"
+#include "tt_metal/fabric/axis_route_topology.hpp"
 #include "tt_metal/fabric/mcast_reverse_tree.hpp"
 
 namespace tt::tt_fabric::mcast_reverse_tree_tests {
@@ -47,7 +47,7 @@ MeshGraph load(const std::string& fixture) {
 
 // union(R(root, dst)) recomputed from next_row, independently of the generator.
 std::map<int, std::pair<int, RoutingDirection>> canonical_edges(
-    const MeshGraph& mesh_graph, MeshId mesh_id, const ExpressRingTopology& topo, int root) {
+    const MeshGraph& mesh_graph, MeshId mesh_id, const AxisRouteTopology& topo, int root) {
     std::map<int, std::pair<int, RoutingDirection>> by_child;
     for (int dst = 0; dst < topo.axis_len; dst++) {
         if (dst == root) {
@@ -70,7 +70,7 @@ std::map<int, std::pair<int, RoutingDirection>> canonical_edges(
 std::vector<std::uint8_t> expected_actions(
     const MeshGraph& mesh_graph,
     MeshId mesh_id,
-    const ExpressRingTopology& topo,
+    const AxisRouteTopology& topo,
     int root,
     const std::vector<bool>& targets) {
     std::vector<std::uint8_t> want(topo.axis_len, 0);
@@ -119,7 +119,7 @@ std::string describe(const std::vector<bool>& targets) {
 void check_prune(
     const MeshGraph& mesh_graph,
     MeshId mesh_id,
-    const ExpressRingTopology& topo,
+    const AxisRouteTopology& topo,
     const McastReverseTree& tree,
     const std::vector<bool>& targets,
     const std::string& where) {
@@ -138,7 +138,7 @@ void check_prune(
 void check_prune_over_target_sets(
     const MeshGraph& mesh_graph,
     MeshId mesh_id,
-    const ExpressRingTopology& topo,
+    const AxisRouteTopology& topo,
     const McastReverseTree& tree,
     const std::string& where) {
     const int len = topo.axis_len;
@@ -173,7 +173,7 @@ void check_prune_over_target_sets(
     }
 }
 
-void check_axis(const MeshGraph& mesh_graph, const ExpressRingTopology& topo, const std::string& label) {
+void check_axis(const MeshGraph& mesh_graph, const AxisRouteTopology& topo, const std::string& label) {
     const MeshId mesh_id{0};
     const auto gate = run_mcast_arborescence_gate(mesh_graph, mesh_id, topo);
 
@@ -637,10 +637,10 @@ TEST(McastReverseTreeTest, Embed32x4) { check_embed("express_links_32x4_mesh_gra
 // slot. The fit check reads only the axis lengths, so a bare topology is enough to reach it.
 TEST(McastReverseTreeTest, EmbedRejectsShapeThatDoesNotFit) {
     const auto mesh_graph = load("express_links_32x4_mesh_graph_descriptor.textproto");
-    ExpressRingTopology y_topo;
+    AxisRouteTopology y_topo;
     y_topo.axis_dim = 0;
     y_topo.axis_len = 64;
-    ExpressRingTopology x_topo;
+    AxisRouteTopology x_topo;
     x_topo.axis_dim = 1;
     x_topo.axis_len = 4;
 

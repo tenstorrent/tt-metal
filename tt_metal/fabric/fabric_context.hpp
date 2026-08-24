@@ -87,8 +87,7 @@ public:
     // compile, so a kernel missing them writes hop programs while its chip's L1 holds indexed
     // vectors, with no diagnostic. The shape is the GLOBAL physical shape the L1 vectors were
     // packed with, matching the ControlPlane embed and the router's named args.
-    std::map<std::string, std::string> get_express_kernel_defines(
-        const ControlPlane& control_plane, MeshId mesh_id) const;
+    std::map<std::string, std::string> get_2d_kernel_defines(const ControlPlane& control_plane, MeshId mesh_id) const;
 
     // ============ Tensix Config Query ============
     // Returns true if tensix is enabled (MUX or UDM mode)
@@ -152,12 +151,15 @@ private:
         uint32_t max_hops;
         uint32_t buffer_size;
     };
+    // Base is 60 B since is_mcast_active was retired (was 61), so every tier gained a route byte.
+    // The 36 matters: [32,4] needs Y+X = 36 indexed route bytes and now fits a 96 B header rather
+    // than spilling to 112 B.
     static constexpr Routing2DBufferTier ROUTING_2D_BUFFER_TIERS[] = {
         // NOTE: 80B header size de-stabilized some Mesh benchmarks for 8X4 mesh, so disabling for now
-        //{19, 19},  // 80B header - max capacity (61+19=80)
-        {35, 35},  // 96B header - max capacity (61+35=96)
-        {51, 51},  // 112B header - max capacity (61+51=112)
-        {67, 67}   // 128B header - max capacity (61+67=128)
+        //{20, 20},  // 80B header - max capacity (60+20=80)
+        {36, 36},  // 96B header - max capacity (60+36=96)
+        {52, 52},  // 112B header - max capacity (60+52=112)
+        {67, 67}   // 128B header (60+67=127, padded to 128 by aligned(16))
     };
 
     // ============ Private Implementation ============

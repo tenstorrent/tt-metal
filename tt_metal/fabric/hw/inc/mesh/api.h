@@ -1195,7 +1195,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
     });
 }
 
-#if defined(FABRIC_EXPRESS_ENABLED)
+#if defined(FABRIC_2D)
 // clang-format off
 /**
  * Splits ONE multicast operation across several connections: builds a single route map and sends an
@@ -1241,8 +1241,8 @@ FORCE_INLINE uint8_t fabric_multicast_source_inject_noc_unicast_write(
         ranges.w,
         ranges.n,
         ranges.s,
-        FABRIC_EXPRESS_MESH_Y_SIZE,
-        FABRIC_EXPRESS_MESH_X_SIZE);
+        FABRIC_2D_MESH_Y_SIZE,
+        FABRIC_2D_MESH_X_SIZE);
     const uint8_t root_outputs = root_action & IndexedMeshRoutingFields::ACTION_ETH_MASK;
 
     uint8_t copy_index = 0;
@@ -1261,8 +1261,8 @@ FORCE_INLINE uint8_t fabric_multicast_source_inject_noc_unicast_write(
                 ranges.w,
                 ranges.n,
                 ranges.s,
-                FABRIC_EXPRESS_MESH_Y_SIZE,
-                FABRIC_EXPRESS_MESH_X_SIZE);
+                FABRIC_2D_MESH_Y_SIZE,
+                FABRIC_2D_MESH_X_SIZE);
         }
         header->to_noc_unicast_write(noc_unicast_command_header, size);
 
