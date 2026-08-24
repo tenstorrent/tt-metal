@@ -1877,13 +1877,13 @@ void kernel_main() {
                         mine[2] = m2;
                         mine[3] = m3;
                         mine[4] = m4;
-                        // HEAD WRITE-BACK, timed separately. `proc` is the largest busy-sweep phase (~46% at
-                        // 120 cores) and it is two very different things: a local scan of the staged control
-                        // vectors, and THIS -- one 20 B noc_async_write per live core per sweep, i.e. up to 120
-                        // separate NoC issues. This drainer is issue-bound rather than bandwidth-bound, so a
-                        // per-core small write is exactly the shape that hurts. Splitting it says whether to
-                        // attack the write-back (batch it, or write back less often) or the scan (tighten the
-                        // per-RISC loops), instead of guessing which half of `proc` matters.
+                        // HEAD WRITE-BACK, timed separately -- and MEASURED OPTIMAL AS IS (2026-08-24), keep the
+                        // two falsifications with it: (a) batching/deferring the issues to a post-scan loop was
+                        // WORSE at the onset edge (d22 140 -> 566 stalls) -- release IMMEDIACY dominates the
+                        // 0.5-0.6%-of-busy issue cost; (b) moving the write to kReadNoc was CATASTROPHIC (d22
+                        // 140 -> 14k, d20 23k -> 78k) -- this write travels TO the worker cores, the exact
+                        // route the span-read requests/31 KB responses occupy, while NOC_INDEX's staging and
+                        // mover traffic goes to DRAM rows and never touches worker routes.
                         const uint64_t t_h0 = get_timestamp();
                         const uint32_t sc = kHeadScratch + hb_slot * 32u;
                         volatile tt_l1_ptr uint32_t* scp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc);
