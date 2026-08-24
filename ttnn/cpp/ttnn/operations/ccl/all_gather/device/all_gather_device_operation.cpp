@@ -247,8 +247,9 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         const uint64_t txn = std::min(in_page, out_page);  // NOC transaction size
         // Bytes of the gathered output crossing one link -- the same quantity both factories compute, so
         // the thresholds here and there are comparable. Scaled by device count because a link carries more
-        // devices' data as the axis grows; every sweep ran at 8 devices, so that scaling is a model, not a
-        // measurement. Blackhole was fitted on tile only, Wormhole on tile and row-major.
+        // devices' data as the axis grows; each arch was swept at a single axis length (Wormhole 8 devices,
+        // Blackhole 4), so that scaling is a model, not a measurement.
+        // Blackhole was fitted on tile only, Wormhole on tile and row-major.
         const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
         const uint64_t per_link_bytes =
             input_tensor.physical_volume() * input_tensor.element_size() * args.num_devices / num_links;
