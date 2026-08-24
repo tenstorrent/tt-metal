@@ -1128,3 +1128,39 @@ def test_ttsampling_duplicate_request_seeds_sample_diverse_tokens(mesh_device):
         "duplicate-seed slots are drawing from identical RNG streams (#53077)"
     )
     assert tokens_first == tokens_second, "same request seed must reproduce the same tokens across runs"
+
+
+@pytest.mark.parametrize(
+    "shape, k, expected",
+    [
+        # Routed production shape: wide non-pow2 vocab chunk, small k -> True.
+        ((1, 1, 32, 64128), 32, True),
+        # Ex-MoE-gate region: merged topk.cpp has NO gate arm -> must be False.
+        # (A stale mirror with the pre-merge gate arm returns True here.)
+        ((1, 1, 32, 128), 16, False),
+        ((1, 1, 32, 512), 16, False),
+        # k_multiple drift detector: k=100 rounds to 112 with the merged
+        # multiple of 16 (fits width 112 -> True); the pre-merge multiple of
+        # 32 rounds to 128 (does not fit -> a stale mirror returns False).
+        ((1, 1, 32, 112), 100, True),
+        # Width ceiling: merged large_k_route_max_width is 1<<19; a padded
+        # width of 1<<20 must NOT route (stale mirror ceiling was 1<<20).
+        ((1, 1, 32, 1 << 20), 96, False),
+    ],
+)
+def test_topk_route_mirror_parity(mesh_device, shape, k, expected):
+    """The _utils.py routing-predicate mirror must track the MERGED topk.cpp
+    predicate (#53464: k_multiple=16, max_width=1<<19, no MoE-gate arm), not
+    any in-flight revision of it. Each cell distinguishes a merged constant
+    from a known stale value, so any re-drift flips at least one assertion."""
+    from models.common.sampling._utils import topk_would_route_to_large_indices
+
+    x = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device
+    )
+    # Routing is Blackhole-only: off-BH the predicate short-circuits to False,
+    # so every cell's expectation collapses to False there (still asserted --
+    # this doubles as off-BH never-routes coverage).
+    expected_here = expected and ttnn.device.is_blackhole(mesh_device)
+    assert topk_would_route_to_large_indices(x, k, mesh_device) is expected_here
+    ttnn.deallocate(x)

@@ -366,6 +366,13 @@ const std::vector<uint32_t>& AllocatorImpl::get_bank_ids_from_logical_core(
     return logical_core_to_bank_ids_.at(buffer_type).at(logical_core);
 }
 
+bool AllocatorImpl::has_bank(BufferType buffer_type, const CoreCoord& logical_core) const {
+    // Don't lock mutex_ because logical_core_to_bank_ids_ is populated during init and is not
+    // mutated afterwards, the same reasoning get_num_banks() relies on.
+    auto banks = logical_core_to_bank_ids_.find(buffer_type);
+    return banks != logical_core_to_bank_ids_.end() && banks->second.contains(logical_core);
+}
+
 const AllocatorConfig& AllocatorImpl::get_config() const { return *config_; }
 
 uint32_t AllocatorImpl::get_alignment(BufferType buffer_type) const {

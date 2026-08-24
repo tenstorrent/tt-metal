@@ -18,7 +18,7 @@
 #include "tt_stl/assert.hpp"
 #include "fmt/format.h"
 
-// Access to internal API: BuildEnvManager, CompileProgram, get_kernel
+// Access to internal API: BuildEnvManager, ProgramImpl, get_kernel
 #include "jit_build/build_env_manager.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -346,6 +346,8 @@ public:
         SetSingleDmPrintArgs(program, runtime_args);
 
         auto* device = mesh_device->get_devices()[0];
+        program.impl().compile(mesh_device.get());
+
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();
         uint32_t tensix_core_type = hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::TENSIX);
         uint32_t dm_class_idx = enchantum::to_underlying(tt::tt_metal::HalProcessorClassType::DM);
