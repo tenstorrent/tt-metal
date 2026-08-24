@@ -18,6 +18,7 @@ from ttnn.device import is_blackhole
 import ttnn
 from models.common.utility_functions import comp_pcc, hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers, resolve_has_indexer
@@ -30,7 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reverse_reorder_tensor_chunks,
     rotated_chip_positions,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     cpu_mla_reference,
     load_trace,
@@ -42,6 +43,12 @@ from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+_WORKER_L1_SIZE = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE
+
+
+def _local_fabric2d_params():
+    return fabric2d_device_params(worker_l1_size=_WORKER_L1_SIZE)
 
 
 def run_mla_inference(
@@ -201,8 +208,7 @@ def run_model(
     else:
         config, weights = request.getfixturevalue("random_weights")
 
-    fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
-    topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
+    topology = per_axis_topology(device_params["fabric_config"])
 
     production_mesh = [32, 4]
     sp_axis = 0
@@ -397,31 +403,15 @@ def run_model(
 
 # sp x tp
 @pytest.mark.parametrize(
-    "mesh_device",
-    [(32, 4), (8, 4), (2, 4)],
-    ids=["32x4", "8x4", "2x4"],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
+    "mesh_device,device_params",
     [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
+        # Multi-host 32x4 is a four-Galaxy scale-out diagnostic. There is no certified descriptor
+        # that closes this entire logical mesh into one XY torus, so it remains unwrapped Fabric2D.
+        pytest.param((32, 4), _local_fabric2d_params(), id="fabric2d-32x4"),
+        pytest.param((8, 4), torus_xy_device_params(worker_l1_size=_WORKER_L1_SIZE), id="torus-xy-8x4"),
+        pytest.param((2, 4), _local_fabric2d_params(), id="fabric2d-2x4"),
     ],
-    ids=["line", "ring", "fabric2d"],
-    indirect=True,
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
@@ -458,27 +448,13 @@ def test_ds_mla(
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 4), (2, 4)], ids=["8x4", "2x4"], indirect=True)
 @pytest.mark.parametrize(
-    "device_params",
+    "mesh_device,device_params",
     [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
+        pytest.param((8, 4), torus_xy_device_params(worker_l1_size=_WORKER_L1_SIZE), id="torus-xy-8x4"),
+        pytest.param((2, 4), _local_fabric2d_params(), id="fabric2d-2x4"),
     ],
-    ids=["line", "ring", "fabric2d"],
-    indirect=True,
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
 @pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
@@ -580,7 +556,7 @@ def _run_chunked_prefill(
     prefill_len=0,
     num_users=1,
     use_pretrained=False,
-    topology=ttnn.Topology.Linear,
+    topology=None,
     use_metadata_tensor=False,
     determinism_check=False,
     profile=False,
@@ -608,6 +584,8 @@ def _run_chunked_prefill(
     if profile and not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("realtime profiler inactive (needs Blackhole, WORKER dispatch, fabric-tensix DM off)")
     sp_axis, tp_axis = 0, 1
+    if topology is None:
+        topology = per_axis_topology()
     mesh_shape = list(mesh_device.shape)
     sp = mesh_shape[sp_axis]
     tile = ttnn.TILE_SIZE
@@ -962,30 +940,16 @@ _CHUNKED_SCENARIOS = (
 
 
 @pytest.mark.parametrize(
-    "device_params",
+    "mesh_device,device_params",
     [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            # high_bw_all_gather parks its readiness/completion semaphores in L1_SMALL when the device
-            # reserves one, and falls back to general L1 otherwise. On the 8x4 grid the fallback
-            # fragments L1 enough that a later op's static circular buffers collide with it.
-            "l1_small_size": 1152,
-        },
+        pytest.param((2, 2), fabric2d_device_params(l1_small_size=1152), id="fabric2d-2x2"),
+        pytest.param((2, 4), fabric2d_device_params(l1_small_size=1152), id="fabric2d-2x4"),
+        # high_bw_all_gather parks readiness/completion semaphores in L1_SMALL. On 8x4 the
+        # fallback fragments general L1 enough that a later op's static circular buffers collide.
+        pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4"),
     ],
-    ids=["line", "ring", "fabric2d"],
-    indirect=True,
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (8, 4)], ids=["2x2", "2x4", "8x4"], indirect=True)
 @pytest.mark.parametrize("reference", ["cpu", "trace", None], ids=["cpu", "trace", "func"])
 @pytest.mark.parametrize("kwargs", [kw for _, kw in _CHUNKED_SCENARIOS], ids=[sid for sid, _ in _CHUNKED_SCENARIOS])
 @pytest.mark.parametrize(
@@ -1037,11 +1001,7 @@ def test_mla_chunked_prefill(
     # fixture skips the test if the env var is set but the checkpoint is incomplete.
     if reference == "cpu" and os.environ.get(variant.env_var) and not kwargs.get("use_pretrained"):
         kwargs = {**kwargs, "use_pretrained": True}
-    topology = (
-        ttnn.Topology.Ring
-        if device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_1D_RING
-        else ttnn.Topology.Linear
-    )
+    topology = per_axis_topology(device_params["fabric_config"])
     _run_chunked_prefill(
         request,
         mesh_device,
@@ -1054,19 +1014,17 @@ def test_mla_chunked_prefill(
 
 
 @pytest.mark.parametrize(
-    "device_params",
+    "mesh_device,device_params",
     [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "l1_small_size": 1152,
-        }
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(l1_small_size=1152),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        )
     ],
-    ids=["fabric2d"],
-    indirect=True,
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
 @pytest.mark.parametrize("variant", ["kimi_k3"], indirect=True, ids=["k3"])
 @pytest.mark.skipif(not is_blackhole(), reason="kimi_k3 and the realtime profiler are Blackhole-only")
 @pytest.mark.skipif(
@@ -1081,11 +1039,12 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
     NOT comparable to test_kimi_k3_mla_chunked_perf_galaxy's 11_562_468: that number comes from the
     Tracy merge path, which averages collectives across chips, while this takes the max for every
     program. K3's forward is ~7% CCL, so the two disagree by construction."""
+    topology = per_axis_topology(device_params["fabric_config"])
     total_ns = _run_chunked_prefill(
         request,
         mesh_device,
         reference=None,
-        topology=ttnn.Topology.Linear,
+        topology=topology,
         profile=True,
         iters_isl=[5120],
         prefill_len=50 * 1024,
