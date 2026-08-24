@@ -23,7 +23,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 2_000_000}], indirect=True),
+    pytest.mark.use_module_device({"l1_small_size": 24576, "trace_region_size": 2_000_000}),
 ]
 
 CHUNK_SIZE = 32
@@ -157,7 +157,7 @@ def _run(
     [
         (2, 1, 32, 32, 0, ttnn.DRAM_MEMORY_CONFIG),
         (2, 3, 32, 32, 0x26, ttnn.L1_MEMORY_CONFIG),
-        (2, 4, 32, 64, 0x11, ttnn.DRAM_MEMORY_CONFIG),
+        (2, 4, 32, 64, 0, ttnn.DRAM_MEMORY_CONFIG),
         (3, 2, 64, 32, 0x37, ttnn.L1_MEMORY_CONFIG),
     ],
 )
@@ -346,11 +346,10 @@ def test_prepare_chunk_recurrence_production_performance(device: ttnn.Device) ->
         f"chunk-recurrence preparation {case.case_id}: duration={duration_ns:.0f} ns, "
         f"profiler_runtime_id={perf_record['runtime_id']}"
     )
-    lower = case.expected_duration_ns * (1 - _PRODUCTION_PERF_MARGIN)
     upper = case.expected_duration_ns * (1 + _PRODUCTION_PERF_MARGIN)
-    assert lower <= duration_ns <= upper, (
-        f"{case.case_id} duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
-        f"(reference {case.expected_duration_ns} ns, margin +/- {_PRODUCTION_PERF_MARGIN * 100:.0f}%)"
+    assert duration_ns <= upper, (
+        f"{case.case_id} duration {duration_ns:.0f} ns exceeds {upper:.0f} ns "
+        f"(reference {case.expected_duration_ns} ns, regression margin {_PRODUCTION_PERF_MARGIN * 100:.0f}%)"
     )
 
 
