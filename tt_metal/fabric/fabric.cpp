@@ -506,6 +506,32 @@ std::vector<uint32_t> get_forwarding_link_indices(
         control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
 }
 
+tt::tt_metal::CoreCoord get_forwarding_eth_core(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, uint32_t link_idx) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    TT_FATAL(
+        forwarding_direction.has_value(),
+        "Could not determine forwarding direction from src {} to dst {}",
+        src_fabric_node_id,
+        dst_fabric_node_id);
+
+    const auto eth_chans =
+        control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());
+    TT_FATAL(
+        link_idx < eth_chans.size(),
+        "Requested link index {} is out of bounds. {} ethernet channels available to forward b/w src {} and dst {}",
+        link_idx,
+        eth_chans.size(),
+        src_fabric_node_id,
+        dst_fabric_node_id);
+
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
+    return cluster.get_logical_ethernet_core_from_virtual(
+        physical_chip_id, cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_chans[link_idx]));
+}
+
 tt::tt_fabric::Topology get_fabric_topology() {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     return control_plane.get_fabric_context().get_fabric_topology();
