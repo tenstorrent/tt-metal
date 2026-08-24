@@ -122,9 +122,6 @@ GROUP_NORM_NON_TILE_ALIGNED_SHIFT_CASES = [
 
 SDXL_BASE_GROUP_NORM_SPLIT_SHAPES = [
     # (1, 256, 1024, 1024, 32, 32), # does not fit -> input is [16384, 8] per core (~260kB) gets tilized internally to [16384, 32] which is ~1MB, and 2 buffers are of that size (cb_x and cb_in)
-    # The two 512x512 entries, (1, 256, 512, 512, 32, 8) and (1, 512, 512, 512, 32, 16), moved to
-    # nightly: 8-10 min each on the simulator, past the pipeline's own --timeout 300, and they were
-    # already skipped on Blackhole under watcher (#37645).
     (
         1,
         512,
