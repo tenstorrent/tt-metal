@@ -965,7 +965,6 @@ TEST_F(NormalizationSmoke, GroupNormNoMcastInterleaved) {
         /*input_mask=*/std::nullopt,
         /*weight=*/std::nullopt,
         /*bias=*/std::nullopt,
-        /*reciprocals=*/std::nullopt,
         /*memory_config=*/std::nullopt,
         /*dtype=*/std::nullopt,
         ttnn::CoreGrid(1, 1));
@@ -1001,7 +1000,6 @@ TEST_F(NormalizationSmoke, GroupNormMcastInterleaved) {
         std::nullopt,
         std::nullopt,
         std::nullopt,
-        std::nullopt,
         ttnn::CoreGrid(1, 2));
     detail::expect_close(detail::to_float_vector(out), expected, 0.0f, 0.03f);
 }
@@ -1032,7 +1030,6 @@ TEST_F(NormalizationSmoke, DISABLED_GroupNormMultiRowTileWideC) {
         std::nullopt,
         std::nullopt,
         std::nullopt,
-        std::nullopt,
         ttnn::CoreGrid(1, 1));
     detail::expect_close(detail::to_float_vector(out), detail::gn_golden_expected(64, 1.0f, 0.0f), 0.0f, 0.03f);
 }
@@ -1058,7 +1055,6 @@ TEST_F(NormalizationSmoke, GroupNormShardedBlock1x1) {
         input,
         /*num_groups=*/2,
         detail::kGnEps,
-        std::nullopt,
         std::nullopt,
         std::nullopt,
         std::nullopt,
@@ -1094,7 +1090,6 @@ TEST_F(NormalizationSmoke, GroupNormShardedBlock1x1GammaBeta) {
         std::nullopt,
         gamma,
         beta,
-        std::nullopt,
         sharded_cfg,
         std::nullopt,
         ttnn::CoreGrid(1, 1));
@@ -1114,7 +1109,6 @@ TEST_F(NormalizationSmoke, GroupNormWelfordInterleaved) {
         /*input_mask=*/std::nullopt,
         /*weight=*/std::nullopt,
         /*bias=*/std::nullopt,
-        /*reciprocals=*/std::nullopt,
         /*memory_config=*/std::nullopt,
         /*dtype=*/std::nullopt,
         ttnn::CoreGrid(1, 1),
@@ -1155,7 +1149,6 @@ TEST_F(NormalizationSmoke, DISABLED_GroupNormInputMask) {
         mask,
         /*weight=*/std::nullopt,
         /*bias=*/std::nullopt,
-        std::nullopt,
         std::nullopt,
         std::nullopt,
         ttnn::CoreGrid(1, 1));
