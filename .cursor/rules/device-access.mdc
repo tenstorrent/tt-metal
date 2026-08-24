@@ -1,0 +1,12 @@
+---
+description: Ask before running any command that acquires the Tenstorrent device
+alwaysApply: true
+---
+
+# Device access
+
+The Tenstorrent card is a shared resource. Multiple users on this box (e.g. `nkira`, `smanoj`) contend for `CHIP_IN_USE_0_PCIe`, and running an unexpected `pytest` / demo can either be blocked for many minutes on someone else's lock, or SIGKILLed by them when they need the card back. Both waste tool calls and can disrupt in-progress work.
+
+Before running ANY command that opens the device — `pytest` on a `ttnn`/`tt_metal` test, a model demo, `tt-smi`, any C++ test binary under `build_*/test/`, anything that ends up calling `ttnn.open_device` / `Cluster()` — ask the user first. Describe the exact command you want to run and wait for approval.
+
+Building (`./build_metal.sh`), reading files, static analysis, and other host-side work do **not** touch the device and don't need approval.

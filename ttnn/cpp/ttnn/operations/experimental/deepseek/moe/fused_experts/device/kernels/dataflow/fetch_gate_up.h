@@ -221,18 +221,31 @@ inline void receiver_recv_act_block(
 // tokens are separated only here, by their weight, and a token that did not select the expert has
 // weight 0. Rows past `batch` are zeroed, so the tile-padding rows of the output stay zero.
 //
-// A tile is 4 16x16 faces (faces 0,1 = rows 0-15, faces 2,3 = rows 16-31), so row r spans 16
-// elements at row r%16 of face (r/16)*2 and the same offset of the next face. Every store is a
-// 32-bit write of two bf16 lanes: this loop runs on every core ahead of the DRAM-bound phases, so
-// halving its store count is pure critical-path savings, and writing every row (rather than zeroing
-// the tile first and then filling it) touches each word exactly once.
+// TILE LAYOUT (bf16, width 32, height `tile_h` in {1,2,4,8,16,32}):
+//   * face_r_dim = min(tile_h, 16); num_face_rows_per_tile = ceil(tile_h/16) (1 for tile_h<=16, 2
+//     for tile_h==32); num_faces = num_face_rows_per_tile * 2 (two 16-col faces side by side).
+//   * Faces are stored in raster order: (0,1) is the top pair of 16x16 (or face_r_dim x 16) faces,
+//     (2,3) the bottom pair (only present when tile_h > 16). Row r of the tile lands at face row
+//     `r % face_r_dim` of the face pair (r / face_r_dim) * 2, at column groups {0..15, 16..31}.
+//   * Every store is a 32-bit write of two bf16 lanes (halved store count on the critical path).
+//     Writing every real row (rather than zeroing the tile first) touches each word exactly once;
+//     rows past `batch` don't need to be visited at all for tile_h == batch, and for tile_h > batch
+//     the padding-row region is pre-zeroed by the reserve_back allocation.
+//
+// `tile_bytes` is the actual bytes-per-tile derived by the host from `tile.get_tile_size(bf16)`;
+// it is num_faces * face_r_dim * 16 * 2 -- the exact stride between consecutive expert tiles in
+// cb_rscalar. `face_r_dim` and `num_face_rows` come from the same host tile descriptor.
 inline void build_routing_scalars(
     uint32_t cb_bcast_id,
     uint32_t cb_rscalar_id,
     uint32_t first_expert,
     uint32_t count,
     uint32_t weight_base,
-    uint32_t batch) {
+    uint32_t batch,
+    uint32_t tile_h,
+    uint32_t face_r_dim,
+    uint32_t num_face_rows,
+    uint32_t tile_bytes) {
     CircularBuffer cb_bcast(cb_bcast_id);
     CoreLocalMem<volatile uint32_t> bcast(cb_bcast.get_write_ptr());
 
@@ -240,23 +253,32 @@ inline void build_routing_scalars(
     cb_rscalar.reserve_back(count);
     const uint32_t rscalar_l1 = cb_rscalar.get_write_ptr();
 
-    constexpr uint32_t kTileBytes = 1024 * 2;  // 32x32 bf16 tile
-    constexpr uint32_t kFaceWords = 256 / 2;   // 16x16 bf16 face, in 32-bit words
-    constexpr uint32_t kRowWords = 16 / 2;     // one face row (16 bf16), in 32-bit words
+    // 32-bit words per face and per face-row (bf16, width 32 => 16-wide faces => 8 words per row).
+    const uint32_t face_words = (face_r_dim * 16u * 2u) / 4u;
+    constexpr uint32_t kRowWords = 16 / 2;
+    // When tile_h < 32 (and specifically tile_h <= face_r_dim), the bottom half of the tile does
+    // not exist as storage. `num_face_rows == 1` skips the second face pair entirely.
+    const uint32_t real_rows = batch < tile_h ? batch : tile_h;
+    (void)num_face_rows;  // implicit in face_r_dim * num_face_rows == tile_h; kept for clarity.
     for (uint32_t e = 0; e < count; ++e) {
-        CoreLocalMem<volatile uint32_t> tile(rscalar_l1 + e * kTileBytes);
-        for (uint32_t r = 0; r < 32; ++r) {
-            uint32_t w_pair = 0;
-            if (r < batch) {
-                // fp32 bit pattern -> bf16 == high 16 bits, packed into both lanes of the store.
-                const uint32_t w_bf16 = bcast[weight_base + (first_expert + e) * batch + r] >> 16;
-                w_pair = (w_bf16 << 16) | w_bf16;
+        CoreLocalMem<volatile uint32_t> tile(rscalar_l1 + e * tile_bytes);
+        // Pre-zero: for tile_h > batch we need padding rows to be 0, and the CB is not guaranteed
+        // clean between blocks. Cheaper than a per-row branch inside the splat loop, and the whole
+        // tile fits in <= 2 KB.
+        if (real_rows < tile_h) {
+            const uint32_t words = tile_bytes / 4u;
+            for (uint32_t w = 0; w < words; ++w) {
+                tile[w] = 0;
             }
-            const uint32_t face_pair = (r >> 4) * 2 * kFaceWords;  // rows 0-15 -> faces 0,1; 16-31 -> 2,3
-            const uint32_t row_off = (r & 15) * kRowWords;
+        }
+        for (uint32_t r = 0; r < real_rows; ++r) {
+            const uint32_t w_bf16 = bcast[weight_base + (first_expert + e) * batch + r] >> 16;
+            const uint32_t w_pair = (w_bf16 << 16) | w_bf16;
+            const uint32_t face_pair = (r / face_r_dim) * 2u * face_words;
+            const uint32_t row_off = (r % face_r_dim) * kRowWords;
             for (uint32_t j = 0; j < kRowWords; ++j) {
                 tile[face_pair + row_off + j] = w_pair;
-                tile[face_pair + kFaceWords + row_off + j] = w_pair;
+                tile[face_pair + face_words + row_off + j] = w_pair;
             }
         }
     }
@@ -315,7 +337,14 @@ inline void run_reader_loop(
     uint32_t gate_up_reserve_tiles,
     uint32_t down_reserve_tiles,
     uint32_t leader_noc_x,
-    uint32_t leader_noc_y) {
+    uint32_t leader_noc_y,
+    // Routing-scalar tile geometry: bf16 tile of the input's height (matches the token-row-shaped
+    // pipeline), width fixed at 32. Passed as regular args so callers can plumb them from their
+    // compile-time args without changing this template's signature per tile shape.
+    uint32_t rscalar_tile_h,
+    uint32_t rscalar_face_r_dim,
+    uint32_t rscalar_num_face_rows,
+    uint32_t rscalar_tile_bytes) {
     // Both the gate_up and the down DRAM shards for this core are shard `core_index`; the
     // first `num_producers` cores also own a slice of the SwiGLU I dim.
     const bool swiglu_core = core_index < num_producers;
@@ -391,7 +420,17 @@ inline void run_reader_loop(
         // gather/broadcast wait below instead of delaying the first DRAM read.
         {
             DeviceZoneScopedN("FE_RSCALARS");
-            build_routing_scalars(cb_bcast_id, cb_rscalar_id, first_expert, block_experts, weight_base, batch);
+            build_routing_scalars(
+                cb_bcast_id,
+                cb_rscalar_id,
+                first_expert,
+                block_experts,
+                weight_base,
+                batch,
+                rscalar_tile_h,
+                rscalar_face_r_dim,
+                rscalar_num_face_rows,
+                rscalar_tile_bytes);
         }
 
         // ---- Down-weight prefetch across the sync (receivers only). ----

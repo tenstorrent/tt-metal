@@ -61,6 +61,12 @@ profiles:
       # Decode steps allowed in flight across batches; 0 = one per batch.
       # env: DEEPSEEK_V4_PIPELINE_DEPTH
       depth: 0
+      # Chips of the open mesh the layer stack may span; 0 = all of them. A cap
+      # leaves the rest idle, which is a win once weights are L1-resident: each
+      # extra chip is one more socket hop on the critical path and holds no more
+      # than the packed placement's two layers anyway.
+      # env: DEEPSEEK_V4_PIPELINE_MAX_DEVICES
+      max_devices: 0
       # L1 bytes per cross-submesh activation socket.
       # env: DEEPSEEK_V4_SOCKET_L1_BYTES
       socket_l1_bytes: 16384
@@ -232,8 +238,6 @@ profiles:
       depth: 4
 
     prefetcher:
-      # Packed L1 attention weights replace the streamed GCB path.
-      enabled: false
       # Each chip holds far fewer layers, so its DRAM read stream per step is
       # shorter and a deeper ring has more slack to hide the hops. Retune with
       # tools/analyze_profile.py: too deep starves the activation multicast.
@@ -247,7 +251,6 @@ profiles:
 
     decode:
       # ~4x the aggregate DRAM, so the KV budget scales with it.
-      packed_l1_weights: true
       batch: 1
       num_users: 8
       max_context: 524288
