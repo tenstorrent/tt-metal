@@ -48,7 +48,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // crosses them the same way, driven by NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4).
     // in0 goes to SrcB (partial tile [{1,2,4,8}, 32], bf16), in1 goes to SrcA (full [32, 32], BFP-compressed).
     // buffer_A == in0 (SrcB), buffer_B == in1 (SrcA); the primitive's address_a is SrcA and address_b is SrcB, so the
-    // SrcA/SrcB arguments are crossed relative to the buffer names below (matches custom_mm_test.cpp).
+    // SrcA/SrcB arguments are crossed relative to the buffer names below (same crossing as matmul_custom_compressed_test.cpp).
     // buffer_C carries the per-tile compression metadata (packed 3-bit format codes) read by the primitive.
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_B_src, // SrcA <- in1 (full tile, BFP-compressed)

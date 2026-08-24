@@ -26,12 +26,11 @@
 //      _llk_math_sdpa_bcast_col_srcb_reuse_ runs the SRCB_BCAST_COL eltwise MOP and the postamble clears SrcB:
 //      DEST[DST_INDEX] = A0 * broadcast_col(P1) + A1 * broadcast_col(P2)   (the ELWMULs accumulate).
 //
-// This kernel is driven by BOTH test_sdpa_bcast_col_srcb_reuse.py and test_unpack_A_sdpa.py: exercising either
-// primitive in isolation is impossible (unpack_A_sdpa is init/mop-config plus the dummy-SrcB-valid helper and has no
-// execute of its own; the math op cannot run without them), so one kernel covers both and the two test files differ
-// only in which primitive they nominally pin. All three unpack_A_sdpa symbols are driven here:
-// _llk_unpack_A_sdpa_init_ (the SrcA-only UNPACR MOP), the base llk_unpack_A execute under that MOP, and
-// _llk_unpack_A_sdpa_set_srcb_dummy_valid_.
+// This kernel covers unpack_A_sdpa as well, because exercising either primitive in isolation is impossible:
+// unpack_A_sdpa is init/mop-config plus the dummy-SrcB-valid helper and has no execute of its own, and the math op
+// cannot run without them. All three of its symbols are driven here: _llk_unpack_A_sdpa_init_ (the SrcA-only UNPACR
+// MOP), the base llk_unpack_A execute under that MOP, and _llk_unpack_A_sdpa_set_srcb_dummy_valid_. The test that
+// pinned unpack_A_sdpa by name (test_unpack_A_sdpa.py) is owned by #53361.
 //
 // Blackhole-only. The golden is verified on Blackhole silicon (p100a), not compile-green only.
 

@@ -1,15 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared driver for the SDPA column-broadcast SrcB-reuse advance tests.
+"""Driver for the SDPA column-broadcast SrcB-reuse advance test.
 
-`test_sdpa_bcast_col_srcb_reuse.py` and `test_unpack_A_sdpa.py` pin different primitives
-(`llk_math_sdpa_bcast_col_srcb_reuse.h` vs `llk_unpack_A_sdpa.h`) but drive the *same* op with
-the same stimuli and the same golden, so the stimuli/golden/compare body lives here once and both
-pass the same `sources/sdpa_bcast_col_srcb_reuse_test.cpp` -- neither primitive can be exercised
-without the other, so one kernel covers both. `test_sdpa_bcast_col_srca_srcb_reuse.py` deliberately
-does NOT share this driver: that variant sources both operands from DEST rather than from SrcA, so
-its golden is a different function of the inputs (see its banner).
+Drives `sources/sdpa_bcast_col_srcb_reuse_test.cpp`, which exercises
+`llk_math_sdpa_bcast_col_srcb_reuse.h` together with `llk_unpack_A_sdpa.h` -- neither primitive is
+testable alone (the unpack side is init/mop-config plus a dummy-SrcB-valid helper with no execute of
+its own), so one kernel and one golden cover both. `test_unpack_A_sdpa.py`, which used to share this
+driver to pin the unpack side by name, is owned by #53361.
+
+Kept as a module rather than inlined into the single test file so the measured op semantics below stay
+next to the golden that encodes them. `test_sdpa_bcast_col_srca_srcb_reuse.py` deliberately does NOT
+share it: that variant sources both operands from DEST rather than from SrcA, so its golden is a
+different function of the inputs (see its banner).
 
 Verified op semantics (measured on p100a, see run_sdpa_bcast_col_srcb_reuse below):
 
