@@ -164,6 +164,12 @@ void kernel_main() {
     // reads those, `bcast<Cols>` taking column 0 is a contract worth not quietly changing.
     using Kt1 = u::Shape<sk, 1>;
 
+    // d_model in tiles. The output is ONE [S_q, d_model] activation tensor, with head h
+    // occupying columns [h*dt, (h+1)*dt) -- the heads concatenated as they are written,
+    // rather than stacked head-major for someone else to gather later. See the store at
+    // the bottom of the head loop for why that costs nothing.
+    constexpr uint32_t dm = n_heads * dt;
+
     static_assert(
         n_kv_heads > 0 && n_heads % n_kv_heads == 0,
         "GQA needs n_kv_heads to divide n_heads: every KV head serves the same number of "
@@ -327,7 +333,26 @@ void kernel_main() {
         (void)sizeof(m_done);
 
         u::ComputeBlock rl = recipl_storage.store(u::recip(l_done));
-        u::noc_store<0>(out_storage.store(o_done * u::bcast<u::Axis::Cols>(rl)), out, q_base + i);
+
+        // The concat, done by the writer for free. This head's chunk is an [sq, dt]
+        // rectangle inside an [S_q, d_model] tensor: rows [i*sq, +sq), columns
+        // [h*dt, +dt). The built-in store would put it at one contiguous block index,
+        // which is the head-major layout the projection then had to gather from -- and
+        // gathering it there cost 30% of the projection, because for a fixed query
+        // chunk the heads sit num_q_chunks blocks apart and cannot be read as one
+        // operand.
+        //
+        // This costs NO extra NOC traffic. The built-in store already issues one write
+        // per page, since consecutive pages of an interleaved tensor sit on different
+        // banks, so all that changes is the destination page index each write is given.
+        u::noc_store<0>(out_storage.store(o_done * u::bcast<u::Axis::Cols>(rl)), [&](u::L1Pages pages) {
+            for (uint32_t p = 0; p < pages.count; ++p) {
+                // The block is row-major in L1: page p is its tile (p / dt, p % dt).
+                const uint32_t row = i * sq + p / dt;
+                const uint32_t col = h * dt + p % dt;
+                noc_async_write(pages.addr(p), out.get_noc_addr(row * dm + col), pages.page_bytes);
+            }
+        });
         }
     }
 }

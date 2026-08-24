@@ -2196,63 +2196,68 @@ Partition invariance is checked exactly -- 1 core against 2, 4 and 8 agree to 0.
 to a tolerance, because heads are independent and there is no reordering to excuse a
 difference.
 
-### Head concat is not an operation
+### Head concat is not an operation, and the writer does it for free
 
-    concat(O_0 .. O_{H-1}) @ Wo  ==  sum over h of  O_h @ Wo_h
+The attention kernel stores head h's query chunk as an [sq, dt] rectangle at columns
+[h*dt, +dt) of one [S_q, d_model] tensor, so the heads come out already concatenated and the
+output projection is an ordinary [S_q, d_model] @ Wo matmul. The concat is not a pass, not a
+gather and not a k-loop -- it is where the writer aims its pages.
 
-The concat only ever existed to put the heads side by side so one matmul could see them.
-Splitting the SAME matmul along its k dimension reaches the same sum with no data movement,
-so the output projection is an ACCUMULATING matmul whose k-blocks are the heads and the
-concat becomes a choice of k-blocking. `unified_kernels/attention_proj.cpp` is that, and it
-reads the attention kernel's existing head-major output at exactly the block indices it
-already writes -- `h * num_q_chunks + i`. Nothing is gathered, copied or rearranged, and Wo
-needs no rearranging either: row block h of a row-major [d_model, d_model] is contiguous
-pages.
+**It costs the attention kernel nothing**, and that is the fact the whole design rests on:
+the built-in store already issues one `noc_async_write` per page, because consecutive pages
+of an interleaved tensor sit on different banks. A strided store issues exactly the same
+number of writes with different destination indices. Measured: 486.88us against 487.11us for
+the contiguous store, which is noise.
 
-The output block is `sq * dm` tiles -- 16 at sq=2 with four 64-wide heads -- so this could
-not have been expressed at all before the accumulating path learned to walk subblocks.
-
-**Query chunks are the unit of work, not heads.** A head is a k-block here, so a core owning
-part of one would own a partial sum that something then has to reduce; chunks are rows of the
-output and stay independent. That is the opposite of the attention kernel, where heads are
-the independent axis -- worth noticing, because the same word means a different thing on
-either side of the pair.
-
-**Tested against a reference that starts from Q, K and V**, with both kernels running: the
-attention kernel's output feeds the projection on device, and the error is measured from the
-attention REFERENCE rather than from the device's own attention output, so it covers both
-kernels instead of treating the first's output as ground truth. 0.0014-0.0037 max error over
-four (heads, kv) combinations including a four-chunk query loop. Sabotaging the projection's
-block index to the other plausible ordering, `i * n_heads + h`, fails every case with
-num_q > 1 and correctly passes at num_q == 1, where the two orderings are the same index.
-
-**Perf, and it is the worst ratio in this work so far.** At S=256, four 64-wide heads, one
-core: attention 487.11us, projection 72.04us (13% of the pair), against 32.94us for
-`ttnn.matmul` on the same shape -- **2.19x**, well off the 1.14x median the matmul sweep
-gets. The cause is measured, not guessed, and it is the k-split this design chooses:
+**The route not taken, and why.** The first version left the output head-major and recovered
+the concat arithmetically -- `concat(O_0..O_H) @ Wo == sum over h of O_h @ Wo_h` -- as an
+accumulating matmul whose k-blocks are the heads. That is elegant and needs no strided store,
+and it cost 30%:
 
 | out 2x8 tiles, K = 8 tiles | |
 |---|---|
-| 4 k-blocks of 2 (heads, what the projection does) | 19.67 us |
-| 2 k-blocks of 4 | 15.85 us |
-| 1 k-block of 8 | 13.80 us |
+| 4 k-blocks of 2 (the heads) | 19.67 us |
+| 1 k-block of 8 (contiguous) | 13.80 us |
 
-30% of the projection's time is the forced split, ~5.9us a chunk. The kernel itself adds
-nothing on top: 18us a chunk measured against 19.67us for the equivalent standalone matmul.
-So this is structural, and it is the same finding as "do not block K" from the matmul work,
-arrived at from the other direction -- here the blocking is not a free choice, because for a
-fixed query chunk the heads sit `num_q_chunks` blocks apart and cannot be one contiguous
-read.
+For a fixed query chunk the heads sit `num_q_chunks` blocks apart, so they cannot be one
+operand: it was four accumulate CALLS where one would do. The k-blocking itself was not the
+expense -- per-call pass overhead was, the same finding as "do not block K" from the matmul
+work, reached from the other direction.
 
-**The fix, not taken yet, is to change what the attention kernel writes.** If it stored head
-h's chunk i strided into an [S_q, d_model] tensor -- rows [i*sq, +sq), columns [h*dt, +dt) --
-the projection would read one contiguous [sq, dm] operand and do ONE matmul call per chunk
-instead of n_heads. That is roughly 72 -> 55us, or 2.19x -> 1.67x. `noc_store` has a custom
-Fn form, so the strided write is expressible: sq strips of dt pages each, on the writer
-thread, which has slack. It is also arguably the better INTERFACE regardless of speed --
-[S_q, d_model] is the activation layout the rest of the model wants, where head-major is an
-intermediate only the projection understands. It is not done here because it changes the
-attention kernel's output contract and every test and reference that describes it.
+**Result at S=256, four 64-wide heads, one core:**
+
+| | head-major + k-loop | strided store |
+|---|---|---|
+| attention | 487.11 us | 486.88 us |
+| projection | 72.04 us | **34.36 us** |
+| projection vs `ttnn.matmul` | 2.19x | **1.04x** |
+| pair | 559.15 us | 521.24 us |
+
+**I predicted ~55us and 1.67x, and it came out at 34.36 and 1.04x.** Wrong in the useful
+direction, and worth understanding rather than pocketing: I had priced only the k-split, but
+removing it also removed the accumulator entirely -- no partial buffer, no reload, no extra
+pack -- and let Wo become resident, loaded once instead of once per (chunk, head). Three
+effects, and I costed one. The same mistake in shape as the DstResident prediction, just with
+the sign reversed.
+
+**Tested with both kernels running**, the error taken from the attention REFERENCE rather
+than the device's attention output so it covers both: 0.0014-0.0037 max error over four
+(heads, kv) combinations including a four-chunk query loop, plus five projection shapes and
+four core partitions. The flash suite's 28 checks still pass with the new layout, including
+exact partition invariance -- with several cores now writing disjoint COLUMN ranges of the
+same rows rather than disjoint row blocks.
+
+**LIMIT worth naming.** Wo is one resident block of dm*dm tiles: 64 tiles at d_model 256, but
+4096 tiles (8MB) at d_model 2048, far past L1. A real d_model needs the matmul k-blocked over
+slices of dm, and the activation operand is then strided in exactly the way the attention
+store is (row r's dm tiles are contiguous, so a k-slice of it is not), which `noc_load`'s Fn
+form can express. That reintroduces the per-call cost measured above -- which is what any
+implementation pays for a matmul too large to hold, ttnn included.
+
+**Q is still head-major on the way IN.** The attention kernel reads query head h at block
+h*num_q_chunks + i, which is the mirror image of the problem just fixed on the output side.
+It matters once the QKV projection exists, since that will produce [S_q, d_model] and heads
+will be column slices of it -- a strided LOAD, the same shape of change.
 
 **Still open in phase 11:** end-to-end single-layer prefill against a reference, and fusing
 the two launches into one.
