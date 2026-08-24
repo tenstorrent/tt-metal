@@ -221,6 +221,44 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
             ),
             id="flux2_ff2_1024_2304_6144_x12y8_b248_window2",
         ),
+        # LTX stage_1 ff2 and Wan2.2 480p ff2, at the blockings the 2026-08-24 windowed-handoff
+        # sweep picked (see fused_mmrs_configs).
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=1216,
+                K=4096,
+                N=4096,
+                dim=3,
+                mm_block_m=128,  # 4 tiles
+                mm_block_k=256,  # 8 tiles
+                mm_block_n=256,  # 8 tiles
+                mm_core_grid=ttnn.CoreCoord(12, 8),
+                chunk_width_in_mm_blocks=1,
+                subblock_h=2,
+                subblock_w=2,
+                num_workers_per_link=5,
+                mm_window_blocks=2,
+            ),
+            id="ltx_stage1_ff2_1216_4096_4096_x12y8_b488_window2",
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=2368,
+                K=3456,
+                N=5120,
+                dim=3,
+                mm_block_m=192,  # 6 tiles
+                mm_block_k=128,  # 4 tiles
+                mm_block_n=256,  # 8 tiles
+                mm_core_grid=ttnn.CoreCoord(12, 8),
+                chunk_width_in_mm_blocks=1,
+                subblock_h=2,
+                subblock_w=2,
+                num_workers_per_link=5,
+                mm_window_blocks=2,
+            ),
+            id="wan480p_ff2_2368_3456_5120_x12y8_b648_window2",
+        ),
         # LTX video FFN ff2 (RowParallel reduce-scatter): per-device [4864,4096]@[4096,4096]
         pytest.param(
             MinimalMatmulStridedReduceScatterTestConfig(

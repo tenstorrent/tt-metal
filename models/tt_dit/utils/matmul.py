@@ -744,7 +744,15 @@ fused_mmrs_configs = {
     },
     ttnn.CoreCoord(12, 10): {
         (9472, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1),
-        (9472 // 4, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1),
+        # Wan2.2 480p ff2, swept 2026-08-24 under the windowed L1 handoff: 532.4 us windowed vs
+        # 722.2 us best-DRAM (-26%). Mt_per_core=10, so M_block=6 leaves 2 blocks and the window
+        # rotates.
+        (9472 // 4, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 4, 8, 2, 2, None, 1, 5),  # 532.4 us
+        # LTX ff2 @stage_1 (M = 9728/sp8), swept 2026-08-24 under the windowed L1 handoff: 349.0 us
+        # windowed vs 377.1 us best-DRAM. Previously absent, so it fell to the default config whose
+        # M_block=8 exceeds the 5 rows per core -> DRAM fallback; this entry puts stage_1 on the
+        # windowed handoff (M_block=4 leaves 2 blocks per core).
+        (1216, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 8, 8, 2, 2, None, 1, 5),  # 349.0 us
         # LTX video FFN ff2 (RowParallel): per-device [4864,4096]@[4096,4096]
         (4864, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 7, 5, 6, 1, 3, None, 1, 3),
         # Flux2 @1024px, swept 2026-08-24 under the windowed L1 handoff (runner windows combos with

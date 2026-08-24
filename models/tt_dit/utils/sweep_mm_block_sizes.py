@@ -171,6 +171,15 @@ SHAPES = [
     (4768, 3584, 5376, 12, 7, False, "mmrs"),
     (4768, 3584, 5376, 12, 8, False, "mmrs"),
     (4768, 3584, 5376, 12, 9, False, "mmrs"),
+    # LTX / Wan2.2 MMRS ff2 shapes on BH 4x8 sp1tp0 (TP ring of 4 on axis 0), 12x8 matmul grid —
+    # resweep under the windowed L1 handoff (see the mmrs runner: combos with >= 2 M blocks per
+    # core run windowed, the rest via the DRAM handoff). LTX ff2: K = 16384/tp4, N = 4096;
+    # stage_1 M = 9728/sp8, stage_2 M = 38912/sp8. Wan2.2 ff2: K = 13824/tp4, N = 5120;
+    # 480p M = 2368, 720p M = 9472.
+    (1216, 4096, 4096, 12, 8, False, "mmrs"),  # LTX stage_1 (no config entry yet: DRAM fallback today)
+    (4864, 4096, 4096, 12, 8, False, "mmrs"),  # LTX stage_2
+    (2368, 3456, 5120, 12, 8, False, "mmrs"),  # Wan2.2 480p
+    (9472, 3456, 5120, 12, 8, False, "mmrs"),  # Wan2.2 720p
     # 12x8 won that grid sweep (1.313 ms vs 1.373 at 12x7 and 1.487 at 12x9); the longer durations
     # (M = 9216 / 13632) reuse its blocking rather than being swept -- warmup compiles one program per
     # combo and compile time grows with M, so M=9216 alone is ~75 min against ~9 min here, for a block
