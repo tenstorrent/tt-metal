@@ -41,6 +41,8 @@ class CCLManager:
         self._strided_ag_mm_sem_idx = {}
         # Single shared MM->RS progress counter array. See get_mm_progress_counters_buffer.
         self._mm_progress_counters_buffer = None
+        # Single shared RS->MM window credit array. See get_mm_credit_counters_buffer.
+        self._mm_credit_counters_buffer = None
 
         # Setup semaphores
         self._init_subdevice()
@@ -373,6 +375,34 @@ class CCLManager:
                 ),
             )
         return self._mm_progress_counters_buffer
+
+    def get_mm_credit_counters_buffer(self):
+        """Own the credit-counter array for the fused matmul -> strided reduce-scatter op's
+        rolling L1 window (mm_window_blocks): one uint32 slot per RS reader, one row per matmul
+        core. The RS readers bump their slot on every matmul core as they release an M block; the
+        matmul waits on the minimum across readers before recycling a window slot.
+
+        The counterpart of get_mm_progress_counters_buffer, and shared for the same reason: the
+        op's per-program fallback allocation is retained for as long as the program stays cached,
+        and each of those small permanent L1 blocks pins the freed space above it. A row is sized
+        to the full compute grid (comfortably above any real reader count); the op validates the
+        row is wide enough for its num_rs_readers.
+        """
+        if self._mm_credit_counters_buffer is None:
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            slots = grid.x * grid.y
+            self._mm_credit_counters_buffer = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([slots, slots]),
+                ttnn.uint32,
+                ttnn.ROW_MAJOR_LAYOUT,
+                self.mesh_device,
+                ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(self.ccl_cores, [1, slots], ttnn.ShardOrientation.ROW_MAJOR),
+                ),
+            )
+        return self._mm_credit_counters_buffer
 
     def get_exp_ring_ping_pong_semaphore(self, mesh_axis):
         """

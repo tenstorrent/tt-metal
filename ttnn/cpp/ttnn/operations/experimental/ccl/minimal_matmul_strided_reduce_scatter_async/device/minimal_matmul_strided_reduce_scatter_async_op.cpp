@@ -113,6 +113,22 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
             tb_shape[-1]);
     }
 
+    // An L1 MM output opts into the L1 handoff (see compute_output_specs). Unwindowed, the
+    // resident shard is Mt_per_core * Nt_per_core tiles on every matmul core for the life of the
+    // tensor: past a point it fails allocation outright, and well before that it lowers the L1
+    // floor enough that a LATER program's static circular buffers clash with it — a failure this
+    // op cannot see and the caller cannot easily attribute (issue #52863). Require the window so
+    // the footprint is bounded and explicit. W = M_blocks_per_core reproduces the full-residency
+    // layout exactly for callers that genuinely want it.
+    const bool caller_requested_l1_mm_output =
+        attributes.matmul_struct.output_mem_config.has_value() &&
+        attributes.matmul_struct.output_mem_config->buffer_type() == tt::tt_metal::BufferType::L1;
+    TT_FATAL(
+        !caller_requested_l1_mm_output || attributes.mm_window_blocks.has_value(),
+        "An L1 memory_config_mm requires mm_window_blocks: the L1 handoff must bound its resident "
+        "shard. Pass mm_window_blocks=2 (measured perf-neutral vs full residency), or "
+        "mm_window_blocks=ceil(Mt_per_core / M_block_size) to keep the whole MM output resident.");
+
     // RS validation: checks we can perform without the (not-yet-created) MM output tensor.
     TT_FATAL(attributes.num_links > 0, "num_links must be greater than 0.");
 
@@ -156,9 +172,13 @@ MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
     // Derive RS intermediate and output specs from the MM output shape
     auto mm_output_shape = mm_output_spec.logical_shape();
 
-    // RS intermediate shape: same as MM output for Ring topology
+    // RS intermediate shape: same as MM output for Ring topology.
+    // The default is DRAM, NOT the MM output's memory config: the intermediate is a full-size
+    // [M, N] tensor, so inheriting an L1 MM config would silently place ~M*N bytes in L1
+    // interleaved — far more than the handoff shard the caller opted into. A caller that wants
+    // an L1 intermediate must say so explicitly.
     MemoryConfig rs_intermediate_mem_config =
-        attributes.rs_intermediate_mem_config.value_or(mm_output_spec.memory_config());
+        attributes.rs_intermediate_mem_config.value_or(MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
 
     tt::tt_metal::TensorSpec rs_intermediate_spec(
         mm_output_shape,

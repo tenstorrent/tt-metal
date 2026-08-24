@@ -685,12 +685,24 @@ class FusedMMRSConfig(NamedTuple):
     chunk_width_in_mm_blocks: int
     # Optional explicit reduce-scatter worker count
     num_workers_per_link: int | None = None
+    # Rolling L1 window over the MM output, in M blocks. The op requires it whenever the MM output
+    # lands in L1: unwindowed, the resident shard is Mt_per_core * Nt_per_core tiles per matmul
+    # core, which for a large M crowds out later programs' circular buffers (issue #52863). 2 is
+    # the shallowest depth that still lets the matmul run a block ahead of the RS readers, and
+    # measured perf is flat in this knob, so the default leaves the most L1 to circular buffers.
+    # get_params clamps it to the blocks a core actually has.
+    mm_window_blocks: int | None = 2
 
-    def get_params(self, core_grid, num_links):
+    def get_params(self, core_grid, num_links, M=None):
         config_dict = self._asdict()
         num_buffers_per_channel = config_dict.pop("num_buffers_per_channel")
         chunk_width_in_mm_blocks = config_dict.pop("chunk_width_in_mm_blocks")
         num_workers_override = config_dict.pop("num_workers_per_link")
+        mm_window_blocks = config_dict.pop("mm_window_blocks")
+        if mm_window_blocks is not None and M is not None:
+            # Clamp to the M blocks a core actually walks (fused MMRS never transposes: M on grid.y).
+            mt_per_core = math.ceil(math.ceil(M / 32) / self.compute_with_storage_grid_size.y)
+            mm_window_blocks = min(mm_window_blocks, math.ceil(mt_per_core / self.M_block_size))
 
         if num_workers_override is not None:
             num_workers_per_link = num_workers_override
@@ -706,6 +718,7 @@ class FusedMMRSConfig(NamedTuple):
             "num_buffers_per_channel": num_buffers_per_channel,
             "chunk_width_in_mm_blocks": chunk_width_in_mm_blocks,
             "num_workers_per_link": num_workers_per_link,
+            "mm_window_blocks": mm_window_blocks,
         }
 
 
@@ -758,7 +771,7 @@ def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
             "using default, which is likely slower than not fusing at all"
         )
     config = config.get((M, K, N), default_fused_mmrs_config)
-    return config.get_params(device_core_grid, num_links)
+    return config.get_params(device_core_grid, num_links, M=M)
 
 
 def register_matmul_configs(configs: dict) -> None:

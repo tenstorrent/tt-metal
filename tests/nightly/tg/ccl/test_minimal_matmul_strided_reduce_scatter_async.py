@@ -412,6 +412,67 @@ def test_minimal_matmul_strided_reduce_scatter_async(
     )
 
 
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("num_links", [2], ids=["2link"])
+@pytest.mark.parametrize(
+    "device_params, topology",
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring)],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+@pytest.mark.parametrize(
+    "mm_window_blocks, expect_rejected",
+    [
+        # An L1 MM output without a window is rejected at validation: unwindowed, the resident
+        # shard's L1-floor erosion breaks LATER programs' circular buffers (issue #52863), so the
+        # op requires the caller to bound it.
+        pytest.param(None, True, id="l1_nowindow_rejected"),
+        # The same call with a window is the supported L1 handoff.
+        pytest.param(2, False, id="l1_window2"),
+    ],
+)
+def test_minimal_matmul_strided_reduce_scatter_l1_handoff(
+    mesh_device, num_links, topology, mm_window_blocks, expect_rejected, expect_error
+):
+    """Explicit coverage for the opt-in L1 MM-output handoff (mem_config_mm = L1)."""
+    mem_config_dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    mem_config_mm_l1 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+    def run():
+        run_minimal_matmul_strided_reduce_scatter_impl(
+            mesh_device,
+            512,  # M
+            512,  # K
+            2048,  # N
+            3,  # dim
+            num_links,
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            mem_config_dram,
+            mem_config_mm_l1,
+            mem_config_dram,
+            topology=topology,
+            enable_trace=False,
+            num_iters=1,
+            mm_block_m=128,
+            mm_block_k=128,
+            mm_block_n=128,
+            subblock_h=1,
+            subblock_w=1,
+            mm_core_grid=ttnn.CoreCoord(8, 2),
+            chunk_width_in_mm_blocks=2,
+            rs_mode="fused",
+            cluster_axis=1,
+            mm_window_blocks=mm_window_blocks,
+        )
+
+    if expect_rejected:
+        with expect_error(RuntimeError, "requires mm_window_blocks"):
+            run()
+    else:
+        run()
+
+
 @pytest.mark.skip(reason="Sweep test - skipped from nightly")
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
 @pytest.mark.parametrize(
