@@ -27,7 +27,8 @@
 // kernel_bindings_generated.h.
 //
 // NullState tags whether this KernelSpec attached the accessor to a real scratchpad (NonNull,
-// default) or left the resource id empty (Null). Constructing Scratchpad from a Null token is deleted.
+// default) or the named scratchpad was not declared on this ProgramSpec (Null). Constructing
+// Scratchpad from a Null token is deleted.
 //
 template <NullState S = NonNull>
 class ScratchpadBindingToken;

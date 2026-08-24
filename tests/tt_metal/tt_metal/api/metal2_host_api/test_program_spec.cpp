@@ -397,25 +397,6 @@ TEST_F(ProgramSpecTestQuasar, CPU_InvalidLocalAccessorNameFails) {
     }
 }
 
-TEST_F(ProgramSpecTestQuasar, CPU_KernelReferencesUnknownDFBFails) {
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "test_program";
-
-    auto kernel = MakeMinimalGen2DMKernel("kernel");
-    // Bind to a DFB that doesn't exist
-    kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"nonexistent_dfb"}, "accessor"));
-
-    spec.kernels = {kernel};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("Kernel 'kernel' references unknown DFB 'nonexistent_dfb'")));
-}
-
 TEST_F(ProgramSpecTestQuasar, CPU_DFBWithNoBindingsFails) {
     NodeCoord node{0, 0};
 
@@ -1379,19 +1360,6 @@ TEST_F(ProgramSpecTestQuasar, CPU_ZeroSizeScratchpadFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("size_per_node == 0")));
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_UnknownScratchpadReferenceFails) {
-    // A scratchpad_binding referencing a scratchpad_spec_name that isn't declared in spec.scratchpads.
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
-
-    // No spec.scratchpads declared, but the kernel binds one.
-    spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
-        .scratchpad_spec_name = ScratchpadSpecName{"missing_scratch"}, .accessor_name = "s"}};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("references unknown scratchpad")));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_UnboundScratchpadFails) {
@@ -3846,16 +3814,39 @@ TEST_F(ProgramSpecTestGen1, CPU_DuplicateTensorParameterNameFails) {
             ::testing::HasSubstr("Duplicate TensorParameter name 'input_tensor'")));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_KernelReferencesUnknownTensorParameterFails) {
+TEST_F(ProgramSpecTestGen1, CPU_UnresolvedTensorBindingIsNull) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
-    // Reference a TensorParameter that doesn't exist in the program.
+    // Binding lists keep the real spec name; omitting the TensorParameter makes it null.
     BindTensorParameterToKernel(spec.kernels[0], "nonexistent_tensor", "input_ta");
 
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("references unknown TensorParameter 'nonexistent_tensor'")));
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_UnresolvedDfbBindingIsNull) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto kernel = MakeMinimalGen1DMKernel("kernel");
+    // Binding lists keep the real spec name; omitting the DFB from dataflow_buffers makes it null.
+    kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"nonexistent_dfb"}, "accessor"));
+
+    spec.kernels = {kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_UnresolvedScratchpadBindingIsNull) {
+    // A scratchpad_binding whose spec name is not in spec.scratchpads is a null binding.
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+
+    spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = ScratchpadSpecName{"missing_scratch"}, .accessor_name = "s"}};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_UnboundTensorParameterFails) {
@@ -3881,42 +3872,49 @@ TEST_F(ProgramSpecTestGen1, CPU_EmptyUniqueIdOnTensorParameterFails) {
 
 TEST_F(ProgramSpecTestGen1, CPU_NullTensorBindingSucceeds) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
-    spec.kernels[0].tensor_bindings.push_back(NullBinding{.accessor_name = "optional_ta"});
+    spec.kernels[0].tensor_bindings.push_back(
+        TensorBinding{.tensor_parameter_name = TensorParamName{"optional_ta"}, .accessor_name = "optional_ta"});
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 // ============================================================================
-// NullBinding / optional resource bindings
+// Null bindings (unresolved referents) / optional resource bindings
 // ============================================================================
 // CollectSpecData / lowering checks are arch-agnostic. Hosted on Gen1 (WH mock) because the Quasar
 // mock fixture currently fails MeshDevice::create in this environment (empty dispatch cores).
+//
+// A binding is null when its spec name is not declared on this ProgramSpec. Kernel binding lists
+// always use the real spec names; omitting the resource from dataflow_buffers / tensor_parameters /
+// scratchpads is what makes the binding null.
 
 TEST_F(ProgramSpecTestGen1, CPU_NullBindingSucceedsWithoutMatchingResource) {
-    // NullBinding (and empty-spec-name structs) declare an accessor without a program-scope resource.
+    // Same spec names you would use when the resource is present; omitting the declarations makes
+    // these null.
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
-    spec.kernels[0].dfb_bindings.push_back(NullBinding{.accessor_name = "gamma"});
-    spec.kernels[0].tensor_bindings.push_back(NullBinding{.accessor_name = "gamma_src"});
-    spec.kernels[0].scratchpad_bindings.push_back(NullBinding{.accessor_name = "tmp"});
-    // Explicit empty-id form is equivalent:
+    spec.kernels[0].dfb_bindings.push_back(ProducerOf(DFBSpecName{"post_gamma"}, "gamma"));
+    spec.kernels[0].tensor_bindings.push_back(
+        TensorBinding{.tensor_parameter_name = TensorParamName{"post_gamma_t"}, .accessor_name = "gamma_src"});
+    spec.kernels[0].scratchpad_bindings.push_back(
+        ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"tmp"}, .accessor_name = "tmp"});
     spec.kernels[1].scratchpad_bindings.push_back(
-        ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{""}, .accessor_name = "tmp2"});
+        ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"tmp2"}, .accessor_name = "tmp2"});
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_MultipleNullScratchpadBindingsSucceed) {
-    // Two null scratchpad bindings share spec name "" — must not trip "bind at most once".
+    // Two unresolved scratchpad names on one kernel — must not trip "bind at most once".
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     spec.kernels[0].scratchpad_bindings = {
-        NullBinding{.accessor_name = "tmp_a"},
-        NullBinding{.accessor_name = "tmp_b"},
+        ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"tmp_a"}, .accessor_name = "tmp_a"},
+        ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"tmp_b"}, .accessor_name = "tmp_b"},
     };
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_NullBindingRequiresValidAccessorName) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
-    spec.kernels[0].dfb_bindings.push_back(NullBinding{.accessor_name = ""});
+    spec.kernels[0].dfb_bindings.push_back(ProducerOf(DFBSpecName{"post_gamma"}, ""));
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
@@ -3925,9 +3923,9 @@ TEST_F(ProgramSpecTestGen1, CPU_NullBindingRequiresValidAccessorName) {
 
 TEST_F(ProgramSpecTestGen1, CPU_DuplicateAccessorNameNullAndRealFails) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
-    // kernels[0] already has a DFB producer binding; add a null with the same accessor name.
+    // kernels[0] already has a DFB producer binding; add an unresolved optional under the same accessor.
     const std::string existing = spec.kernels[0].dfb_bindings[0].accessor_name;
-    spec.kernels[0].dfb_bindings.push_back(NullBinding{.accessor_name = existing});
+    spec.kernels[0].dfb_bindings.push_back(ProducerOf(DFBSpecName{"post_gamma"}, existing));
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("two different DFBs")));
@@ -3937,7 +3935,8 @@ TEST_F(ProgramSpecTestGen1, CPU_NullBindingDoesNotSatisfyUnusedDeclaration) {
     // A null binding must not count as a use of a declared resource.
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"orphan"}, .size_per_node = 64}};
-    spec.kernels[0].scratchpad_bindings.push_back(NullBinding{.accessor_name = "tmp"});
+    spec.kernels[0].scratchpad_bindings.push_back(
+        ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"tmp"}, .accessor_name = "tmp"});
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("declared but not bound")));
@@ -3954,12 +3953,14 @@ TEST_F(ProgramSpecTestGen1, CPU_EmptyUniqueIdOnDeclaredScratchpadFails) {
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_NullBindingAffectsKernelHash) {
-    // Same accessor name: null vs real must not share a JIT cache slot (zeroed offsets collide otherwise).
+    // Same accessor name and spec name: null (resource omitted) vs real must not share a JIT cache
+    // slot (zeroed offsets collide otherwise).
     auto make_null_spec = [] {
         ProgramSpec spec;
         spec.name = "null_binding_hash";
         auto dm = MakeMinimalGen1DMKernel("dm_kernel");
-        dm.scratchpad_bindings.push_back(NullBinding{.accessor_name = "pad"});
+        dm.scratchpad_bindings.push_back(
+            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
         spec.kernels = {dm};
         spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("wu", NodeCoord{0, 0}, {"dm_kernel"})};
         return spec;
@@ -3985,6 +3986,8 @@ TEST_F(ProgramSpecTestGen1, CPU_NullBindingAffectsKernelHash) {
 
 TEST_F(ProgramSpecTestGen1, CPU_OptionalBindingProbeBuildsWithNullAndReal) {
     // Host-side: both ProgramSpecs validate and lower (null vs real optional DFB/scratchpad).
+    // Binding lists are the kernel's arity in both programs; presence is decided only by whether
+    // the spec names appear in dataflow_buffers / scratchpads.
     // Per-resource Null token operator bool() JIT coverage:
     // NullDFB/Scratchpad/TensorBindingTokenOperatorBoolJITSmoke.
     const std::filesystem::path kernel_src = "tests/tt_metal/tt_metal/test_kernels/dataflow/optional_binding_probe.cpp";
@@ -3997,20 +4000,18 @@ TEST_F(ProgramSpecTestGen1, CPU_OptionalBindingProbeBuildsWithNullAndReal) {
         dm.dfb_bindings = {
             ProducerOf(DFBSpecName{"always_dfb"}, "always"),
             ConsumerOf(DFBSpecName{"always_dfb"}, "always"),
+            ProducerOf(DFBSpecName{"opt_dfb"}, "optional_dfb"),
+            ConsumerOf(DFBSpecName{"opt_dfb"}, "optional_dfb"),
         };
+        dm.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+            .scratchpad_spec_name = ScratchpadSpecName{"opt_pad"}, .accessor_name = "optional_pad"});
         if (bind_optional) {
-            dm.dfb_bindings.push_back(ProducerOf(DFBSpecName{"opt_dfb"}, "optional_dfb"));
-            dm.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"opt_dfb"}, "optional_dfb"));
-            dm.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
-                .scratchpad_spec_name = ScratchpadSpecName{"opt_pad"}, .accessor_name = "optional_pad"});
             spec.dataflow_buffers = {
                 MakeMinimalDFB("always_dfb"),
                 MakeMinimalDFB("opt_dfb"),
             };
             spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"opt_pad"}, .size_per_node = 64}};
         } else {
-            dm.dfb_bindings.push_back(NullBinding{.accessor_name = "optional_dfb"});
-            dm.scratchpad_bindings.push_back(NullBinding{.accessor_name = "optional_pad"});
             spec.dataflow_buffers = {MakeMinimalDFB("always_dfb")};
         }
         spec.kernels = {dm};
@@ -4461,8 +4462,7 @@ void kernel_main() {
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_NullDFBBindingTokenOperatorBoolJITSmoke) {
-    // Two null DFB bindings on one kernel: NullBinding helper vs explicit empty dfb_spec_name.
-    // Inline static_assert proves both emit Null tokens whose operator bool() is false.
+    // Two unresolved DFB names (producer + consumer of an omitted optional) emit Null tokens.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -4471,19 +4471,13 @@ TEST_F(ProgramSpecTestGen1, CPU_NullDFBBindingTokenOperatorBoolJITSmoke) {
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
-    static_assert(!dfb::via_null_helper);
-    static_assert(!dfb::via_empty_name);
-    static_assert(dfb::via_null_helper.is_null);
-    static_assert(dfb::via_empty_name.is_null);
+    static_assert(!dfb::gamma);
+    static_assert(dfb::gamma.is_null);
 }
 )"};
     dm_kernel.dfb_bindings = {
-        NullBinding{.accessor_name = "via_null_helper"},
-        DFBBinding{
-            .dfb_spec_name = DFBSpecName{""},
-            .accessor_name = "via_empty_name",
-            .endpoint_type = DFBEndpointType::CONSUMER,  // ignored for null bindings
-        },
+        ProducerOf(DFBSpecName{"post_gamma"}, "gamma"),
+        ConsumerOf(DFBSpecName{"post_gamma"}, "gamma"),
     };
 
     spec.kernels = {dm_kernel};
@@ -4495,7 +4489,7 @@ void kernel_main() {
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_NullScratchpadBindingTokenOperatorBoolJITSmoke) {
-    // Two null scratchpad bindings: NullBinding helper vs explicit empty scratchpad_spec_name.
+    // Unresolved scratchpad spec name emits a Null token.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -4504,18 +4498,12 @@ TEST_F(ProgramSpecTestGen1, CPU_NullScratchpadBindingTokenOperatorBoolJITSmoke) 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
-    static_assert(!scratch::via_null_helper);
-    static_assert(!scratch::via_empty_name);
-    static_assert(scratch::via_null_helper.is_null);
-    static_assert(scratch::via_empty_name.is_null);
+    static_assert(!scratch::tmp);
+    static_assert(scratch::tmp.is_null);
 }
 )"};
     dm_kernel.scratchpad_bindings = {
-        NullBinding{.accessor_name = "via_null_helper"},
-        ScratchpadBinding{
-            .scratchpad_spec_name = ScratchpadSpecName{""},
-            .accessor_name = "via_empty_name",
-        },
+        ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"tmp"}, .accessor_name = "tmp"},
     };
 
     spec.kernels = {dm_kernel};
@@ -4527,7 +4515,7 @@ void kernel_main() {
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_NullTensorBindingTokenOperatorBoolJITSmoke) {
-    // Two null tensor bindings: NullBinding helper vs explicit empty tensor_parameter_name.
+    // Unresolved tensor parameter name emits a Null token (no run-arg slot).
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -4536,18 +4524,12 @@ TEST_F(ProgramSpecTestGen1, CPU_NullTensorBindingTokenOperatorBoolJITSmoke) {
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
-    static_assert(!tensor::via_null_helper);
-    static_assert(!tensor::via_empty_name);
-    static_assert(tensor::via_null_helper.is_null);
-    static_assert(tensor::via_empty_name.is_null);
+    static_assert(!tensor::gamma_src);
+    static_assert(tensor::gamma_src.is_null);
 }
 )"};
     dm_kernel.tensor_bindings = {
-        NullBinding{.accessor_name = "via_null_helper"},
-        TensorBinding{
-            .tensor_parameter_name = TensorParamName{""},
-            .accessor_name = "via_empty_name",
-        },
+        TensorBinding{.tensor_parameter_name = TensorParamName{"post_gamma_t"}, .accessor_name = "gamma_src"},
     };
 
     spec.kernels = {dm_kernel};

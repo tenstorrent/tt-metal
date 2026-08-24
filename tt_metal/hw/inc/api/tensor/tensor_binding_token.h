@@ -31,7 +31,7 @@ namespace tensor_accessor {
 // For each kernel tensor binding, headergen emits the following into kernel_bindings_generated.h:
 //   - A type alias:  using my_TA_name_t = TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>;
 //   - A token value: constexpr my_TA_name_t my_TA_name{};
-// For a null binding (empty resource id on the host):
+// For a null binding (named TensorParameter not declared on this ProgramSpec):
 //   - using my_TA_name_t = TensorBindingToken<0u, 0u, Null>;
 //   - constexpr my_TA_name_t my_TA_name{};
 // The Null specialization has no args_t / addr_crta_offset payload (offsets are not meaningful).

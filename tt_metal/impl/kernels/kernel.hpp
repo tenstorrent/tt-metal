@@ -92,7 +92,7 @@ KernelHandle CreateKernelFromString(
 
 // Metal 2.0: DFB accessor names -> optional device slot (nullopt = null binding)
 struct DataflowBufferBindingHandle {
-    std::optional<uint16_t> device_slot;  // nullopt when this is a null binding
+    std::optional<uint16_t> device_slot;  // nullopt when this is a null binding (undeclared DFB)
 };
 using DataflowBufferBindingHandleMap = std::unordered_map<std::string, DataflowBufferBindingHandle>;
 // Metal 2.0: semaphore accessor names -> semaphore ids
@@ -122,7 +122,7 @@ struct TensorBindingHandle {
     // distinguish them with a boolean.
     // (We'll need to extend this to something more flexible if additional possibilities are added.)
     bool runtime_field_is_page_size = false;
-    bool is_null = false;  // true when host binding used an empty resource id
+    bool is_null = false;  // true when the named TensorParameter is not declared on this ProgramSpec
 };
 
 // Metal 2.0: per-kernel resolved scratchpad binding.
@@ -143,7 +143,7 @@ struct ScratchpadBindingHandle {
     uint32_t size_bytes = 0;         // per-node size; emitted as the accessor's compile-time size
     uint32_t addr_crta_word = 0;     // word index of the base-address slot within the kernel's CRTA buffer
     uint32_t allocated_address = 0;  // L1 base address; filled by allocate_scratchpads (0 until allocated)
-    bool is_null = false;            // true when host binding used an empty resource id
+    bool is_null = false;            // true when the named ScratchpadSpec is not declared on this ProgramSpec
 };
 
 // Metal 2.0: ordered TensorBinding tokens (KernelAdvancedOptions::tensor_binding_sequences).

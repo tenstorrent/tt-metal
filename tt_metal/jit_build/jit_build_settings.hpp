@@ -100,8 +100,8 @@ public:
     //  - DFB bindings
     //  - Semaphore bindings
     //  - Tensor bindings
-    // is_null is true when the host declared a null binding (empty resource id): codegen emits a
-    // NullState::Null token and the slot/offset arguments are unused.
+    // is_null is true when the named resource is not declared on this ProgramSpec (a null binding):
+    // codegen emits a NullState::Null token and the slot/offset arguments are unused.
     virtual void process_dataflow_buffer_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id, bool is_null)>) const {}
     virtual void process_semaphore_binding_handles(
