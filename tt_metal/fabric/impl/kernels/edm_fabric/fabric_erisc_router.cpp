@@ -1564,67 +1564,54 @@ FORCE_INLINE void run_routing_without_noc_sync_coordinated_as_non_master(
 }
 void run_coordinated_context_switch_to_base_firmware(
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
-    // [#45872] Runs on every context switch, including during a link down/recovery.
-    //   word[8]  RECV_CUM       = shadow counter the sender bumps per doorbell (arrivals; ground-truth "sent")
-    //   word[9]  RECV_WHILE_DOWN= arrivals during the down (RECV_CUM delta across the down window)
-    //   word[10] STOP_FLAG (16B-aligned @ 0x6F220) = 0 normally, raised to 1 at the up-edge so the senders HALT
-    //            after recovery, leaving a quiescent window with the during-down backlog still buffered.
-    //   word[12] FS22_MIN       = min of the router's LOCAL read of stream 22 while down (stayed 32)
-    // NEW -- DRAIN LATENCY (words 13/14): with senders halted, occupancy = RECV_CUM - TX must fall to <=0 as
-    // the router forwards the backlog. Measure HOW LONG: at the up-edge snapshot occupancy (word[13]
-    // DRAIN_START_OCC), then count context switches until occupancy first reaches <=0 (word[14] DRAIN_ITERS;
-    // 0xFFFFFFFF sentinel = never drained). TX is MEM_AERISC_TX_PKT_COUNT (word[1]). RECV_AT_DOWN is a static
-    // local. NOTE: this is context-switch units, not wall-clock; swap in eth_read_wall_clock for real time.
+    // [#45872] STOP-AND-DRAIN: raise the sender STOP flag at the recovery edge, then measure how many of the
+    // during-down backlog packets the router actually forwards out of a QUIESCENT buffer (no new sends).
+    //   word[8]  EXACT_FREE_LIVE = worker's counter-based (write-read) free slot count. FREEZES once senders stop
+    //            (worker no longer writes it), so its frozen value == the backlog at the moment the worker halted.
+    //   word[9]  EXACT_FREE_MIN  = min EXACT_FREE while down == PEAK exact occupancy (= num_buffers - w9).
+    //   word[10] STOP_FLAG (16B-aligned @ 0x6F220) = 0 normally, raised to 1 at the up-edge -> senders HALT.
+    //   word[11] FS22_AT_DOWN    = stream-register free slots at the moment the link went down.
+    //   word[12] FS22_MIN        = min of the router's read of stream 22 while down (exact register read).
+    //   word[13] EXACT_FREE_AT_UP= EXACT_FREE at the recovery edge == backlog baseline (occupancy = 32 - w13).
+    //   word[14] TX_AT_UP        = TX packet count at the recovery edge == drain baseline.
+    // DRAIN measured post-run: drained = TX_final(w1) - TX_AT_UP(w14); residual = (32 - w13) - drained. residual
+    // <= 0 => the backlog fully drained out; residual > 0 => that many packets stayed stuck (register hid them).
     static bool dbell_was_down = false;
     static bool stop_init = false;
-    static uint32_t recv_at_down = 0;
-    static bool drain_watching = false;
-    static bool drain_recorded = false;
-    static uint32_t drain_iters = 0;
     if (!stop_init) {
         *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_AT_DOWN_ADDR) = 0u;  // word[10] STOP_FLAG = 0
         stop_init = true;
     }
     const bool link_up_now = fabric_dbg_link_is_up();
-    const uint32_t recv_cum_now = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_CUM_ADDR);
-    const uint32_t tx_now = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_TX_PKT_COUNT_ADDR);
+    const uint32_t exact_free_now = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_CUM_ADDR);  // word[8]
+    const uint32_t tx_now = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_TX_PKT_COUNT_ADDR);            // word[1]
     const uint32_t fs22_now =
         static_cast<uint32_t>(get_ptr_val(static_cast<uint8_t>(sender_channel_free_slots_stream_ids[0])));
     if (!dbell_was_down && !link_up_now) {
         dbell_was_down = true;
-        recv_at_down = recv_cum_now;
-        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_FS22_AT_DOWN_ADDR) = fs22_now;
-        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_FS22_MIN_ADDR) = fs22_now;
+        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_WHILE_DOWN_ADDR) =
+            exact_free_now;                                                                    // w9 EXACT_FREE_MIN seed
+        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_FS22_AT_DOWN_ADDR) = fs22_now;  // w11 FS22_AT_DOWN
+        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_FS22_MIN_ADDR) = fs22_now;      // w12 FS22_MIN seed
     } else if (dbell_was_down) {
-        *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_WHILE_DOWN_ADDR) = recv_cum_now - recv_at_down;
-        auto* fs_min = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_FS22_MIN_ADDR);
+        auto* ef_min = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_WHILE_DOWN_ADDR);  // w9
+        if (exact_free_now < *ef_min) {
+            *ef_min = exact_free_now;
+        }
+        auto* fs_min = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_FS22_MIN_ADDR);  // w12
         if (fs22_now < *fs_min) {
             *fs_min = fs22_now;
         }
         if (link_up_now) {
             dbell_was_down = false;
-            // raise the stop flag: halt senders now, leaving the backlog buffered so we can watch it drain
-            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_AT_DOWN_ADDR) = 1u;  // word[10] STOP_FLAG = 1
-            // arm the drain-latency watch
-            const int32_t occ_at_up = static_cast<int32_t>(recv_cum_now) - static_cast<int32_t>(tx_now);
+            // [#45872 LOST-vs-RESET PROBE] STOP flag DISABLED -- senders must run to completion into the sync
+            // barrier so the sync packet reaches the slot and the word[23] min-free probe can read it.
+            // *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_AT_DOWN_ADDR) = 1u;           // w10
+            // STOP_FLAG = 1
             *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_LINK_DOWN_FLAG_ADDR) =
-                static_cast<uint32_t>(occ_at_up);  // word[13] DRAIN_START_OCC
+                exact_free_now;  // w13 EXACT_FREE_AT_UP (backlog)
             *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_NEUTRAL_MIN_ADDR) =
-                0xFFFFFFFFu;  // word[14] sentinel
-            drain_watching = true;
-            drain_recorded = false;
-            drain_iters = 0;
-        }
-    }
-
-    // DRAIN LATENCY: after the up-edge, count context switches until occupancy (RECV_CUM - TX) first hits <=0.
-    if (drain_watching && !drain_recorded) {
-        drain_iters++;
-        const int32_t occ = static_cast<int32_t>(recv_cum_now) - static_cast<int32_t>(tx_now);
-        if (occ <= 0) {
-            *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_NEUTRAL_MIN_ADDR) =
-                drain_iters;  // word[14] DRAIN_ITERS
-            drain_recorded = true;
+                tx_now;  // w14 TX_AT_UP (drain baseline)
         }
     }
 

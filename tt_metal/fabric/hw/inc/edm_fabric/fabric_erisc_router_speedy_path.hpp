@@ -118,6 +118,13 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
     bool has_unsent_packet = free_slots != WorkerInterfaceT::num_buffers;
     bool can_send = receiver_has_space_for_packet && has_unsent_packet;
 
+#if defined(ARCH_BLACKHOLE)
+    // [#45872 LOST-vs-RESET PROBE] word[23] = min free_slots since last TX. At the sync-barrier hang (no more
+    // TX resets it) this isolates the sync window: ==num_buffers -> decrement NEVER landed (LOST);
+    // <num_buffers -> it landed (dipped) then got reset (RESET).
+    fabric_dbg_track_min_free_since_tx(free_slots);
+#endif
+
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
         can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
     }
@@ -195,7 +202,9 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
                 invalidate_l1_cache();
                 const uint32_t loopback_val = *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_SYNC_MIN_FREE_ADDR);
                 loopback_samples++;
-                fabric_dbg_latch_loopback(loopback_val, loopback_samples);
+                // [#45872] loopback DISABLED: word[23] is now owned by the LOST-vs-RESET min-free probe.
+                (void)loopback_val;
+                // fabric_dbg_latch_loopback(loopback_val, loopback_samples);
             }
         } else {
             empty_streak = 0;
