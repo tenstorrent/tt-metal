@@ -743,11 +743,19 @@ def model_path(variant) -> Path:
 
 
 @pytest.fixture
-def hf_config(model_path):
+def hf_config(variant, model_path):
     """
     Load HF config for testing.
     Returns None if model path doesn't exist (weights not available).
+
+    `config_builder_overrides_checkpoint` means the adapter's config is authoritative even though
+    the checkpoint's own loads: transformers 5.x nests rope_theta inside rope_parameters, so an
+    AutoConfig-derived config lacks attributes ttMLA reads as plain ones. `config_only` already goes
+    through the builder, and this path has to agree with it -- otherwise the two fixtures hand out
+    different configs for one checkpoint and only the tests using the second one fail.
     """
+    if getattr(variant, "config_builder_overrides_checkpoint", False) and variant.config_builder is not None:
+        return variant.config_builder()
     return _resolve_hf_config(str(model_path))
 
 
