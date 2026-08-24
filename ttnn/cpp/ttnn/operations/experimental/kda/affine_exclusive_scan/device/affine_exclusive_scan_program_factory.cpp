@@ -51,7 +51,6 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
     const tt::tt_metal::experimental::DFBSpecName from_remote_affine_dfb_name{"from_remote_affine"};
     const tt::tt_metal::experimental::DFBSpecName initial_state_dfb_name{"initial_state"};
     const tt::tt_metal::experimental::DFBSpecName final_dfb_name{"final"};
-    const tt::tt_metal::experimental::DFBSpecName scratch_dfb_name{"scratch"};
 
     const tt::tt_metal::experimental::SemaphoreSpecName ready_semaphore_name{"ready"};
     const tt::tt_metal::experimental::SemaphoreSpecName arrival_semaphore_name{"arrival"};
@@ -81,10 +80,9 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
         make_dfb(from_remote_affine_dfb_name, key_matrix_tiles + state_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(initial_state_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
         make_dfb(final_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
-        make_dfb(scratch_dfb_name, state_matrix_tiles, tt::DataFormat::Float32),
     };
-    // Initial inputs/state and final output are one-shot transfers; scratch is compute-local. TO_REMOTE stays
-    // single-slot because dataflow releases the current block before the remote input that makes compute runnable.
+    // Initial inputs/state and final output are one-shot transfers. TO_REMOTE stays single-slot because dataflow
+    // releases the current block before the remote input that makes compute runnable.
     // LOCAL is the only unconstrained cross-kernel path with overlapping current/next lifetimes, so it is depth two.
     // The sender addresses a peer's inbound mailbox with its own local write pointer, which is only
     // valid while these buffers hold one phase-independent slot. Any additional depth lets sender and
@@ -148,8 +146,7 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
 
     auto compute_hardware_config = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
     auto& unpack_modes = tt::tt_metal::experimental::unpack_modes(compute_hardware_config);
-    for (const auto& name :
-         {local_a_dfb_name, local_b_dfb_name, from_remote_affine_dfb_name, initial_state_dfb_name, scratch_dfb_name}) {
+    for (const auto& name : {local_a_dfb_name, local_b_dfb_name, from_remote_affine_dfb_name, initial_state_dfb_name}) {
         unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
     }
     if (summary_format == tt::DataFormat::Float32) {
@@ -185,10 +182,6 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
                     initial_state_dfb_name, "initial_state", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
                     final_dfb_name, "final", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
-                tt::tt_metal::experimental::DFBBinding{
-                    scratch_dfb_name, "scratch", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
-                tt::tt_metal::experimental::DFBBinding{
-                    scratch_dfb_name, "scratch", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
             },
         .compile_time_args = {{"Kt", key_tiles}, {"Vt", value_tiles}, {"G", groups_per_head}},
         .runtime_arg_schema = {.runtime_arg_names = {"group"}},

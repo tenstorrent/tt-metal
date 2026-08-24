@@ -4,34 +4,70 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
-#include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-template <uint32_t Mt, uint32_t Kt, uint32_t Nt, uint32_t ARowStride = Kt>
-FORCE_INLINE void matmul(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& out) {
-    constexpr uint32_t max_fp32_dst_tiles = 4;
-    constexpr uint32_t subblock_cols = Nt % 4 == 0 ? 4 : Nt % 3 == 0 ? 3 : Nt % 2 == 0 ? 2 : 1;
-    constexpr uint32_t max_subblock_rows = max_fp32_dst_tiles / subblock_cols;
-    constexpr uint32_t subblock_rows = max_subblock_rows >= 4 && Mt % 4 == 0   ? 4
-                                       : max_subblock_rows >= 3 && Mt % 3 == 0 ? 3
-                                       : max_subblock_rows >= 2 && Mt % 2 == 0 ? 2
-                                                                               : 1;
+constexpr uint32_t largest_common_divisor_at_most(uint32_t lhs, uint32_t rhs, uint32_t limit) {
+    for (uint32_t divisor = limit; divisor > 1; --divisor) {
+        if (lhs % divisor == 0 && rhs % divisor == 0) {
+            return divisor;
+        }
+    }
+    return 1;
+}
 
-    const uint32_t a_id = a.get_id();
-    const uint32_t b_id = b.get_id();
+template <uint32_t Rows, uint32_t FirstColumns, uint32_t SecondColumns = FirstColumns>
+struct MatmulSubblock {
+    static constexpr uint32_t dst_tiles =
+        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
+    // Columns cannot straddle packed output matrices, so they divide both widths. Rows consume the remaining DST
+    // capacity. Selecting the largest legal divisor minimizes acquire/commit/wait cycles without partial blocks.
+    static constexpr uint32_t columns = largest_common_divisor_at_most(FirstColumns, SecondColumns, dst_tiles);
+    static constexpr uint32_t rows = largest_common_divisor_at_most(Rows, Rows, dst_tiles / columns);
+    static_assert(rows * columns <= dst_tiles);
+};
+
+// Apply a packed affine pair to a state: out = affine_a * state + affine_b. Unlike matmul_affine, this emits only
+// the transformed state; affine_b is loaded directly into DST so the matmul accumulates without an L1 partial.
+template <uint32_t Mt, uint32_t Kt, uint32_t Vt, uint32_t AffineRowStride = Kt + Vt>
+FORCE_INLINE void matmul_add_affine_b(DataflowBuffer& affine, DataflowBuffer& state, DataflowBuffer& out) {
+    constexpr uint32_t subblock_cols = MatmulSubblock<Mt, Vt>::columns;
+    constexpr uint32_t subblock_rows = MatmulSubblock<Mt, Vt>::rows;
+
+    const uint32_t affine_id = affine.get_id();
+    const uint32_t state_id = state.get_id();
     const uint32_t out_id = out.get_id();
-    out.reserve_back(Mt * Nt);
-    reconfig_data_format(b_id, a_id);
-    matmul_block_init(a_id, b_id, false, subblock_cols, subblock_rows, Kt);
+    out.reserve_back(Mt * Vt);
+    reconfig_data_format(state_id, affine_id);
+    matmul_block_init(affine_id, state_id, false, subblock_cols, subblock_rows, Kt);
     for (uint32_t m = 0; m < Mt; m += subblock_rows) {
-        for (uint32_t n = 0; n < Nt; n += subblock_cols) {
+        for (uint32_t n = 0; n < Vt; n += subblock_cols) {
             tile_regs_acquire();
+            copy_tile_to_dst_init_short_with_dt(state_id, affine_id);
+            for (uint32_t subblock_row = 0; subblock_row < subblock_rows; ++subblock_row) {
+                for (uint32_t subblock_col = 0; subblock_col < subblock_cols; ++subblock_col) {
+                    copy_tile(
+                        affine_id,
+                        (m + subblock_row) * AffineRowStride + Kt + n + subblock_col,
+                        subblock_row * subblock_cols + subblock_col);
+                }
+            }
+            reconfig_data_format_srca(affine_id, state_id);
+            matmul_block_init(affine_id, state_id, false, subblock_cols, subblock_rows, Kt);
             for (uint32_t k = 0; k < Kt; ++k) {
-                matmul_block(a_id, b_id, m * ARowStride + k, k * Nt + n, 0, false, subblock_cols, subblock_rows, Kt);
+                matmul_block(
+                    affine_id,
+                    state_id,
+                    m * AffineRowStride + k,
+                    k * Vt + n,
+                    0,
+                    false,
+                    subblock_cols,
+                    subblock_rows,
+                    Kt);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -40,29 +76,23 @@ FORCE_INLINE void matmul(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o
                     pack_tile(
                         subblock_row * subblock_cols + subblock_col,
                         out_id,
-                        (m + subblock_row) * Nt + n + subblock_col);
+                        (m + subblock_row) * Vt + n + subblock_col);
                 }
             }
             tile_regs_release();
         }
     }
-    out.push_back(Mt * Nt);
+    out.push_back(Mt * Vt);
 }
 
+// Compose packed affine pairs: out_a = a * affine_a and out_b = a * affine_b + local_b. The local B term is
+// preloaded into DST before matmul accumulation, then the packed A and B columns are emitted to separate buffers.
 template <uint32_t Mt, uint32_t Kt, uint32_t At, uint32_t Vt>
 FORCE_INLINE void matmul_affine(
     DataflowBuffer& a, DataflowBuffer& affine, DataflowBuffer& local_b, DataflowBuffer& out_a, DataflowBuffer& out_b) {
     constexpr uint32_t Nt = At + Vt;
-    constexpr uint32_t max_fp32_dst_tiles = 4;
-    constexpr uint32_t subblock_cols = At % 4 == 0 && Vt % 4 == 0   ? 4
-                                       : At % 3 == 0 && Vt % 3 == 0 ? 3
-                                       : At % 2 == 0 && Vt % 2 == 0 ? 2
-                                                                    : 1;
-    constexpr uint32_t max_subblock_rows = max_fp32_dst_tiles / subblock_cols;
-    constexpr uint32_t subblock_rows = max_subblock_rows >= 4 && Mt % 4 == 0   ? 4
-                                       : max_subblock_rows >= 3 && Mt % 3 == 0 ? 3
-                                       : max_subblock_rows >= 2 && Mt % 2 == 0 ? 2
-                                                                               : 1;
+    constexpr uint32_t subblock_cols = MatmulSubblock<Mt, At, Vt>::columns;
+    constexpr uint32_t subblock_rows = MatmulSubblock<Mt, At, Vt>::rows;
 
     const uint32_t a_id = a.get_id();
     const uint32_t affine_id = affine.get_id();
@@ -112,39 +142,25 @@ FORCE_INLINE void matmul_affine(
     out_b.push_back(Mt * Vt);
 }
 
-template <uint32_t Kt, uint32_t Vt>
-FORCE_INLINE void add_affine_b(DataflowBuffer& a, DataflowBuffer& affine, DataflowBuffer& out) {
-    const uint32_t a_id = a.get_id();
-    const uint32_t affine_id = affine.get_id();
-    const uint32_t out_id = out.get_id();
-    out.reserve_back(Kt * Vt);
-    reconfig_data_format(a_id, affine_id);
-    add_init(a_id, affine_id);
-    for (uint32_t row = 0; row < Kt; ++row) {
-        for (uint32_t column = 0; column < Vt; ++column) {
-            tile_regs_acquire();
-            add_tiles(a_id, affine_id, row * Vt + column, row * (Kt + Vt) + Kt + column, 0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, out_id, row * Vt + column);
-            tile_regs_release();
-        }
-    }
-    out.push_back(Kt * Vt);
-}
-
 FORCE_INLINE void copy(DataflowBuffer& in, DataflowBuffer& out, uint32_t tiles) {
+    constexpr uint32_t dst_tiles =
+        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     const uint32_t in_id = in.get_id();
     const uint32_t out_id = out.get_id();
     out.reserve_back(tiles);
     reconfig_data_format_srca(in_id);
     copy_tile_to_dst_init_short(in_id);
-    for (uint32_t tile = 0; tile < tiles; tile++) {
+    for (uint32_t first_tile = 0; first_tile < tiles; first_tile += dst_tiles) {
+        const uint32_t batch_tiles = first_tile + dst_tiles <= tiles ? dst_tiles : tiles - first_tile;
         tile_regs_acquire();
-        copy_tile(in_id, tile, 0);
+        for (uint32_t tile = 0; tile < batch_tiles; ++tile) {
+            copy_tile(in_id, first_tile + tile, tile);
+        }
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, out_id, tile);
+        for (uint32_t tile = 0; tile < batch_tiles; ++tile) {
+            pack_tile(tile, out_id, first_tile + tile);
+        }
         tile_regs_release();
     }
     out.push_back(tiles);
@@ -152,8 +168,8 @@ FORCE_INLINE void copy(DataflowBuffer& in, DataflowBuffer& out, uint32_t tiles) 
 
 template <uint32_t Kt, uint32_t Vt, uint32_t G>
 TT_KERNEL void compute(uint32_t group) {
-    constexpr uint32_t kk = Kt * Kt;
-    constexpr uint32_t kv = Kt * Vt;
+    constexpr uint32_t affine_a_tiles = Kt * Kt;
+    constexpr uint32_t affine_b_tiles = Kt * Vt;
     DataflowBuffer initial_a(dfb::initial_a);
     DataflowBuffer initial_b(dfb::initial_b);
     DataflowBuffer local_a(dfb::local_a);
@@ -163,39 +179,35 @@ TT_KERNEL void compute(uint32_t group) {
     DataflowBuffer from_remote_affine(dfb::from_remote_affine);
     DataflowBuffer initial_state(dfb::initial_state);
     DataflowBuffer final(dfb::final);
-    DataflowBuffer scratch(dfb::scratch);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::to_remote_a);
-    initial_a.wait_front(kk);
-    initial_b.wait_front(kv);
-    copy(initial_a, to_remote_a, kk);
-    copy(initial_b, to_remote_b, kv);
-    initial_a.pop_front(kk);
-    initial_b.pop_front(kv);
+    initial_a.wait_front(affine_a_tiles);
+    initial_b.wait_front(affine_b_tiles);
+    copy(initial_a, to_remote_a, affine_a_tiles);
+    copy(initial_b, to_remote_b, affine_b_tiles);
+    initial_a.pop_front(affine_a_tiles);
+    initial_b.pop_front(affine_b_tiles);
 
     for (uint32_t distance = 1; distance < G; distance *= 2) {
         if (group < distance) {
             continue;
         }
-        local_a.wait_front(kk);
-        local_b.wait_front(kv);
-        from_remote_affine.wait_front(kk + kv);
+        local_a.wait_front(affine_a_tiles);
+        local_b.wait_front(affine_b_tiles);
+        from_remote_affine.wait_front(affine_a_tiles + affine_b_tiles);
         matmul_affine<Kt, Kt, Kt, Vt>(local_a, from_remote_affine, local_b, to_remote_a, to_remote_b);
-        local_a.pop_front(kk);
-        local_b.pop_front(kv);
-        from_remote_affine.pop_front(kk + kv);
+        local_a.pop_front(affine_a_tiles);
+        local_b.pop_front(affine_b_tiles);
+        from_remote_affine.pop_front(affine_a_tiles + affine_b_tiles);
     }
 
-    initial_state.wait_front(kv);
+    initial_state.wait_front(affine_b_tiles);
     if (group == 0) {
-        copy(initial_state, final, kv);
+        copy(initial_state, final, affine_b_tiles);
     } else {
-        from_remote_affine.wait_front(kk + kv);
-        matmul<Kt, Kt, Vt, Kt + Vt>(from_remote_affine, initial_state, scratch);
-        scratch.wait_front(kv);
-        add_affine_b<Kt, Vt>(scratch, from_remote_affine, final);
-        from_remote_affine.pop_front(kk + kv);
-        scratch.pop_front(kv);
+        from_remote_affine.wait_front(affine_a_tiles + affine_b_tiles);
+        matmul_add_affine_b<Kt, Kt, Vt>(from_remote_affine, initial_state, final);
+        from_remote_affine.pop_front(affine_a_tiles + affine_b_tiles);
     }
-    initial_state.pop_front(kv);
+    initial_state.pop_front(affine_b_tiles);
 }
