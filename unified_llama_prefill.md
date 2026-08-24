@@ -2316,6 +2316,56 @@ the host-side `grid_transpose` entirely, which has been a wart since the first f
 
 **Still open:** the strided loads above, and fusing the attention and projection launches.
 
+### K-blocking the projection: d_model 2048 reached, at 1.14x
+
+Wo is dm*dm tiles -- 64 at d_model 256, but 4096 (8MB) at d_model 2048 -- so holding it whole
+was what capped the projection. K is now split into kb blocks of kt tiles, and the two operands
+split differently, which is the whole content of the change:
+
+- **Wo block b is contiguous.** It is rows [b*kt, +kt) of a row-major [dm, dm], so an ordinary
+  block load at index b.
+- **The activation's k-slice is not.** It is columns [b*kt, +kt) of an [sq, dm] block, and rows
+  are what is contiguous there, so it needs a custom load -- at the same page count, one read
+  per page either way, exactly as with the attention store.
+
+kt == dm gives kb == 1 and takes the single-shot path, so the d_model 256 case keeps its 1.04x
+rather than paying an accumulator it does not need.
+
+**Then the accumulator mode mattered more than the blocking.** Dst mode reloads the running
+total into DST before each k-block and packs it back after, which costs O(output block) per
+k-block -- and this output block is sq*dm tiles, 128 at sq=2 and d_model 2048. L1 mode lets the
+packer add into the partial instead, so the total never enters DST:
+
+| [512, 2048] @ [2048, 2048], one core, HiFi2 | Dst | L1 |
+|---|---|---|
+| sq=4, kt=2 (kb=32, 4 chunks) | 5764.9 us | **4527.1 us** |
+| sq=2, kt=4 (kb=16, 8 chunks) | 5918.1 us | 5345.6 us |
+| ttnn.matmul, same shape, one core | | 3962.7 us |
+
+**4527us against 3962.7us is 1.14x**, which is exactly the median the matmul sweep gets --
+so the projection is no worse at a real d_model than the library's matmul is anywhere else.
+L1 is also the more ACCURATE mode here (PCC 0.999963 against 0.999586), because the packer
+accumulates without the round trip through bf16 DST that Dst mode takes every k-block. That
+inverts the bias-fold result, where Dst won: there the output block was 8 tiles and the reload
+was cheap, here it is 128 and it is not. L1 is now the default and Dst is behind
+`PROJ_ACC_DST`.
+
+**Where the remaining 1.14x is**, from the shape of the numbers rather than a separate
+measurement: ttnn's 3962.7us is essentially the arithmetic -- 65536 tile-MACs at the
+0.061us/tile-MAC the sweep's best cell achieves is 3998us -- so there is no headroom to find in
+the multiply. Ours pays Wo's DRAM traffic once per query chunk, and fewer chunks is measurably
+better (4 chunks 4527us against 8 chunks 5345us, the 818us difference being four extra 8MB
+passes at roughly 28GB/s). Larger sq means fewer passes, but sq*dm is the output block and it
+has to fit L1 -- sq=4, kt=4 already fails to allocate. Breaking that trade needs the output
+COLUMNS blocked as well, which is what ttnn's `bmm_large_block` does and what would let a big
+sq coexist with a small resident block.
+
+**What this does NOT do is let the whole layer run at d_model 2048.** Only the projection is
+k-blocked. rmsnorm still processes one [ht, wt] block, so at S=512 by d_model 2048 it would
+want 1024 tiles in L1 at once; the FFN matmuls have the same single-block shape against an
+8192-wide intermediate; and flash attention has not been tried at 32 heads. Each is the same
+kind of fix and none of them is done. The verified layer is still d_model 256.
+
 ### The ttnn equivalent, and what its op breakdown says about where to spend effort
 
 There is a direct counterpart: `models/tt_transformers/tt/decoder.py`, class `TransformerBlock`

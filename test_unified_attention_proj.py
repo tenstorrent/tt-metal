@@ -34,11 +34,11 @@ import test_unified_flash as flash
 from unified_harness import core_block, make_cb, split_evenly, unified_program
 
 KERNEL = "unified_kernels/attention_proj.cpp"
-CB_IN, CB_WO, CB_OUT = 0, 1, 16
+CB_IN, CB_WO, CB_OUT, CB_ACC = 0, 1, 16, 24
 TILE = 32
 
 
-def project(device, attn_torch, wo_torch, sq, dt, num_q, n_heads, cores=1, fidelity=None):
+def project(device, attn_torch, wo_torch, sq, dt, num_q, n_heads, cores=1, fidelity=None, kt=None, acc="l1"):
     """attn_torch is the concatenated [num_q * sq * TILE, d_model] activation; wo is square."""
     dm = n_heads * dt
     assert attn_torch.shape == (num_q * sq * TILE, dm * TILE), attn_torch.shape
@@ -65,19 +65,25 @@ def project(device, attn_torch, wo_torch, sq, dt, num_q, n_heads, cores=1, fidel
     core_ranges, core_list = core_block(ncores)
     shares = split_evenly(num_q, ncores)
 
-    ct_args = [sq, dm, num_q]
+    # kt is the k-block width in tiles. Default: the whole of d_model in one block, which is
+    # the single-shot path -- correct and fastest while Wo fits in L1 (dm*dm tiles). It does
+    # not fit for long: 64 tiles at d_model 256, 4096 (8MB) at 2048, so a real d_model has to
+    # pass a smaller kt and let the matmul accumulate over the blocks.
+    kt = dm if kt is None else kt
+    assert dm % kt == 0, "the k-block width must divide d_model"
+    ct_args = [sq, dm, num_q, kt]
     for t in (tattn, two, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     addrs = [t.buffer_address() for t in (tattn, two, tout)]
     rt_args = {c: addrs + [begin, count] for c, (begin, count) in zip(core_list, shares)}
 
     cbs = [
-        make_cb(CB_IN, core_ranges, num_pages=sq * dm),
-        # Wo whole, pushed once and never popped -- every chunk re-reads the same tiles.
-        # This is the CB that bounds d_model: dm * dm tiles have to fit in L1.
-        make_cb(CB_WO, core_ranges, num_pages=dm * dm),
+        make_cb(CB_IN, core_ranges, num_pages=sq * kt),
+        # One k-block of Wo, kt * dm tiles. This is the CB that used to bound d_model, when
+        # it held all dm * dm of it.
+        make_cb(CB_WO, core_ranges, num_pages=kt * dm),
         make_cb(CB_OUT, core_ranges, num_pages=sq * dm),
-    ]
+    ] + ([make_cb(CB_ACC, core_ranges, num_pages=sq * dm)] if kt != dm else [])
 
     program = unified_program(
         kernel_source=KERNEL,
@@ -86,9 +92,10 @@ def project(device, attn_torch, wo_torch, sq, dt, num_q, n_heads, cores=1, fidel
         cbs=cbs,
         compile_time_args=ct_args,
         runtime_args=rt_args,
+        defines=[("PROJ_ACC_DST", "1")] if acc == "dst" else None,
         **(fidelity or {}),
     )
-    logger.info(f"projection: sq={sq} dm={dm} num_q={num_q} cores={ncores}")
+    logger.info(f"projection: sq={sq} dm={dm} kt={kt} (kb={dm // kt}) num_q={num_q} cores={ncores}")
     out = ttnn.generic_op([tattn, two, tout], program)
     for t in (tattn, two):
         ttnn.deallocate(t)
@@ -100,13 +107,13 @@ def reference(attn_torch, wo_torch, sq, dt, num_q, n_heads):
     return attn_torch.to(torch.float32) @ wo_torch.to(torch.float32)
 
 
-def run_proj(device, sq, dt, num_q, n_heads, cores=1, seed=0, fidelity=None):
+def run_proj(device, sq, dt, num_q, n_heads, cores=1, seed=0, fidelity=None, kt=None, acc="l1"):
     """The projection alone, on a random activation."""
     torch.manual_seed(seed)
     dm = n_heads * dt
     attn = (torch.rand([num_q * sq * TILE, dm * TILE]) - 0.5).to(torch.bfloat16)
     wo = ((torch.rand([dm * TILE, dm * TILE]) - 0.5) / (dm * TILE) ** 0.5).to(torch.bfloat16)
-    got = project(device, attn, wo, sq, dt, num_q, n_heads, cores=cores, fidelity=fidelity)
+    got = project(device, attn, wo, sq, dt, num_q, n_heads, cores=cores, fidelity=fidelity, kt=kt, acc=acc)
     return got, reference(attn, wo, sq, dt, num_q, n_heads)
 
 
@@ -148,6 +155,33 @@ def main(argv=None):
             )
             if not ok:
                 failed.append(f"proj-{sq}-{dt}-{num_q}-{n_heads}")
+
+        # k-blocked, which is what lets d_model exceed what L1 can hold. Every kt must give
+        # the same answer: the blocking is a decomposition, not an approximation.
+        base = None
+        for kt in (8, 4, 2, 1):
+            got, want = run_proj(device, 2, 2, 2, 4, kt=kt)  # dm = 8
+            pcc = torch.corrcoef(torch.stack([got.flatten(), want.flatten()]))[0, 1].item()
+            spread = 0.0 if base is None else (got - base).abs().max().item()
+            if base is None:
+                base = got
+            ok = pcc >= args.pcc and spread <= 0.02
+            logger.info(f"proj kt={kt} (kb={8 // kt}): pcc={pcc:.6f} vs-kt8={spread:.5f}  {'ok' if ok else 'FAIL'}")
+            if not ok:
+                failed.append(f"proj-kt-{kt}")
+
+        # d_model 2048, llama-3.2-1B's width: 32 heads of head_dim 64. Wo is 4096 tiles here,
+        # 8MB, so this shape exists only because K is blocked -- it cannot be held whole.
+        for sq, kt, acc in ((2, 2, "l1"), (2, 4, "l1"), (2, 2, "dst"), (1, 8, "l1")):
+            got, want = run_proj(device, sq, 2, 1, 32, kt=kt, acc=acc)
+            pcc = torch.corrcoef(torch.stack([got.flatten(), want.flatten()]))[0, 1].item()
+            ok = pcc >= args.pcc
+            logger.info(
+                f"proj d_model=2048 sq={sq} kt={kt} (kb={64 // kt}) acc={acc}: "
+                f"pcc={pcc:.6f}  {'ok' if ok else 'FAIL'}"
+            )
+            if not ok:
+                failed.append(f"proj-2048-{sq}-{kt}-{acc}")
 
         # Query chunks partitioned across cores.
         for num_q, ncores in ((2, 2), (4, 2), (4, 4), (3, 2)):
