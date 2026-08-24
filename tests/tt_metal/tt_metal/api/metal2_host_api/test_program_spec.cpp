@@ -3984,7 +3984,9 @@ TEST_F(ProgramSpecTestGen1, CPU_NullBindingAffectsKernelHash) {
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_OptionalBindingProbeBuildsWithNullAndReal) {
-    // Host-side: both ProgramSpecs validate and lower. Device JIT is covered by the JIT smoke below.
+    // Host-side: both ProgramSpecs validate and lower (null vs real optional DFB/scratchpad).
+    // Per-resource Null token operator bool() JIT coverage:
+    // NullDFB/Scratchpad/TensorBindingTokenOperatorBoolJITSmoke.
     const std::filesystem::path kernel_src = "tests/tt_metal/tt_metal/test_kernels/dataflow/optional_binding_probe.cpp";
 
     auto make_spec = [&](bool bind_optional) {
@@ -4458,41 +4460,102 @@ void kernel_main() {
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
-TEST_F(ProgramSpecTestGen1, OptionalBindingProbeJITSmokeNullAndReal) {
-    // Same device source JIT-compiles for both a NullBinding ProgramSpec and a real-binding one.
-    // Proves if constexpr (token) gates construction without #ifdef / FUSE_* defines.
-    auto make_and_compile = [&](bool bind_optional) {
-        NodeCoord node{0, 0};
-        ProgramSpec spec;
-        spec.name = bind_optional ? "optional_bound_jit" : "optional_null_jit";
-        auto dm = MakeMinimalGen1DMKernel("dm_kernel");
-        dm.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/optional_binding_probe.cpp";
-        dm.dfb_bindings = {
-            ProducerOf(DFBSpecName{"always_dfb"}, "always"),
-            ConsumerOf(DFBSpecName{"always_dfb"}, "always"),
-        };
-        if (bind_optional) {
-            dm.dfb_bindings.push_back(ProducerOf(DFBSpecName{"opt_dfb"}, "optional_dfb"));
-            dm.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"opt_dfb"}, "optional_dfb"));
-            dm.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
-                .scratchpad_spec_name = ScratchpadSpecName{"opt_pad"}, .accessor_name = "optional_pad"});
-            spec.dataflow_buffers = {MakeMinimalDFB("always_dfb"), MakeMinimalDFB("opt_dfb")};
-            spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"opt_pad"}, .size_per_node = 64}};
-        } else {
-            dm.dfb_bindings.push_back(NullBinding{.accessor_name = "optional_dfb"});
-            dm.scratchpad_bindings.push_back(NullBinding{.accessor_name = "optional_pad"});
-            spec.dataflow_buffers = {MakeMinimalDFB("always_dfb")};
-        }
-        spec.kernels = {dm};
-        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("wu", node, {"dm_kernel"})};
+TEST_F(ProgramSpecTestGen1, CPU_NullDFBBindingTokenOperatorBoolJITSmoke) {
+    // Two null DFB bindings on one kernel: NullBinding helper vs explicit empty dfb_spec_name.
+    // Inline static_assert proves both emit Null tokens whose operator bool() is false.
+    NodeCoord node{0, 0};
 
-        Program program = MakeProgramFromSpec(*mesh_device_, spec);
-        IDevice* device = mesh_device_->get_devices()[0];
-        detail::CompileProgram(device, program);
+    ProgramSpec spec;
+    spec.name = "null_dfb_op_bool";
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    static_assert(!dfb::via_null_helper);
+    static_assert(!dfb::via_empty_name);
+    static_assert(dfb::via_null_helper.is_null);
+    static_assert(dfb::via_empty_name.is_null);
+}
+)"};
+    dm_kernel.dfb_bindings = {
+        NullBinding{.accessor_name = "via_null_helper"},
+        DFBBinding{
+            .dfb_spec_name = DFBSpecName{""},
+            .accessor_name = "via_empty_name",
+            .endpoint_type = DFBEndpointType::CONSUMER,  // ignored for null bindings
+        },
     };
 
-    EXPECT_NO_THROW(make_and_compile(/*bind_optional=*/false));
-    EXPECT_NO_THROW(make_and_compile(/*bind_optional=*/true));
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_NullScratchpadBindingTokenOperatorBoolJITSmoke) {
+    // Two null scratchpad bindings: NullBinding helper vs explicit empty scratchpad_spec_name.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "null_scratch_op_bool";
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    static_assert(!scratch::via_null_helper);
+    static_assert(!scratch::via_empty_name);
+    static_assert(scratch::via_null_helper.is_null);
+    static_assert(scratch::via_empty_name.is_null);
+}
+)"};
+    dm_kernel.scratchpad_bindings = {
+        NullBinding{.accessor_name = "via_null_helper"},
+        ScratchpadBinding{
+            .scratchpad_spec_name = ScratchpadSpecName{""},
+            .accessor_name = "via_empty_name",
+        },
+    };
+
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_NullTensorBindingTokenOperatorBoolJITSmoke) {
+    // Two null tensor bindings: NullBinding helper vs explicit empty tensor_parameter_name.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "null_tensor_op_bool";
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    static_assert(!tensor::via_null_helper);
+    static_assert(!tensor::via_empty_name);
+    static_assert(tensor::via_null_helper.is_null);
+    static_assert(tensor::via_empty_name.is_null);
+}
+)"};
+    dm_kernel.tensor_bindings = {
+        NullBinding{.accessor_name = "via_null_helper"},
+        TensorBinding{
+            .tensor_parameter_name = TensorParamName{""},
+            .accessor_name = "via_empty_name",
+        },
+    };
+
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    IDevice* device = mesh_device_->get_devices()[0];
+    EXPECT_NO_THROW(detail::CompileProgram(device, program));
 }
 
 // Compute-kernel counterpart. A scratchpad binding works on a compute kernel: scratchpad.h only
