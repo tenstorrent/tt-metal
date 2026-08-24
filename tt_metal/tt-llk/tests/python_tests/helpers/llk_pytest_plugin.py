@@ -1,5 +1,6 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
+
 """Reusable pytest plugin for the LLK test harness.
 
 In-tree tests load this via ``tests/python_tests/conftest.py``. Out-of-tree
