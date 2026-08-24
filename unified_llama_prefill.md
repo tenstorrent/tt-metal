@@ -3246,6 +3246,68 @@ Attention and rmsnorm do not move at all across three format changes, which is t
 result and a useful check that the harness is changing what it says it is: neither reads a
 weight matrix, and their activations were left bfloat16.
 
+### The whole layer in bfloat8_b, and the packer bug turning out to be general
+
+Running the end-to-end layer at bfloat8_b failed at the FIRST stage -- rmsnorm, inf -- which
+said immediately that the packer fix committed with the matmul was too narrow. It had been
+placed at the four transitions a blocked matmul makes. But **rmsnorm packs to five buffers**
+(the squares, the row mean, its reciprocal square root, the normalised block and the output),
+and in general every `Strategy::run` in the library packs to one buffer that nothing had
+promised was the one the packer was programmed for.
+
+So the fix moved to where it belongs: one `pack_to(cb_id)` that names the destination, called
+by every pass. It keeps the currently-configured buffer in a static local -- per-RISC state,
+which is exactly the scope the packer's configuration has -- and is guarded twice. Nothing
+happens when the destination has not changed, and when it has, the LLK's two-argument form
+does nothing further if the two buffers agree on format. A kernel with one format throughout
+pays a compare per pass, and the measurements say so: the bf16 projection is 155.4us against
+152.8 before, rmsnorm 61.1 against 62.5, both inside the noise of the run.
+
+That replaced the four hand-placed calls from the previous commit with nine call sites that
+cover every pack path in the library -- SFPU tree, FPU eltwise, broadcast, reduce, single-shot
+matmul, both accumulator modes, the L1 copy-out and `bias_finish`.
+
+**The general statement is worth keeping**: in this library the packer's format is per-kernel
+state that a pass has to claim, exactly like the unpacker's srcA/srcB, and the library already
+knew that about the unpacker (`reconfigure` on an SFPU leaf, `reconfig_data_format_srca`
+around every `matmul_block_init`). The packer was simply missed, and stayed missed because
+until now nothing declared two buffers of different formats in one kernel.
+
+With that, the whole layer runs in bfloat8_b -- weights and inter-stage activations both, all
+eleven stages, four shapes:
+
+| stage | bf16 | bf8 | ratio |
+|---|---|---|---|
+| rmsnorm | 0.00513 | 0.01146 | 2.2x |
+| rope_q | 0.01033 | 0.02607 | 2.5x |
+| rope_k | 0.01011 | 0.02553 | 2.5x |
+| v_proj | 0.01179 | 0.02299 | 2.0x |
+| attention | 0.02604 | 0.03271 | 1.3x |
+| out_proj | 0.02951 | 0.03760 | 1.3x |
+| residual | 0.00313 | 0.00930 | 3.0x |
+| rmsnorm_ffn | 0.00579 | 0.01349 | 2.3x |
+| silu_mul | 0.01917 | 0.04913 | 2.6x |
+| **layer** | **0.00365** | **0.01369** | 3.8x |
+
+Relative L2 per stage, against a torch reference, at S=64 d_model=256. **Every stage clears
+the same 0.06 threshold bfloat16 is held to**, and the finished layer is 1.4% off. Both
+formats now run in the suite, on all four shapes, because eleven stages compound and a format
+that is fine on one matmul is not automatically fine in series -- which is the whole reason to
+run this rather than infer it from the per-op numbers.
+
+Two honest qualifications. `silu_mul` at 0.04913, and 0.05077 on the fourth shape, is the
+stage nearest the threshold -- an SFPU pass on a product of two bfloat8_b operands, which is
+where the format is worked hardest. And **flash attention and the output projection are NOT
+covered by this**: both cross the host on the way in (`to_flash_layout`, and the projection's
+torch weight), so they build their own bfloat16 tensors regardless of what the layer asked
+for. That is a gap in the coverage, not a claim about them, and it closes when the strided
+loads land and the host glue goes away.
+
+What stays bfloat16 by construction, and should: the accumulator, every row statistic, the
+RoPE rotation matrix and cos/sin tables, and each kernel's scalar constants. The accumulator
+is not a preference -- the packer's L1 accumulate reads its destination back and adds in
+place, which a shared-exponent format cannot do.
+
 ## Phase 11 -- Full block orchestration
 
 Host-side and kernel-loop work, not model gaps.

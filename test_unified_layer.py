@@ -64,19 +64,36 @@ def _dram():
     return ttnn.DRAM_MEMORY_CONFIG
 
 
-def to_dev(device, t):
+# The layer's two formats. ACT is what flows between stages and WGT is what the weight
+# matrices are stored as; both default to bfloat16 and run() swaps them together. They are
+# separate because they are separately defensible: a weight is read once per launch and
+# never accumulated, an activation is the output of one stage and the input of the next.
+# Everything a kernel keeps to ITSELF -- partial sums, row statistics, the rotation matrix,
+# scalar constants -- stays bfloat16 regardless. That is not caution, it is required in at
+# least one place: the packer's L1 accumulate reads its destination back and adds in place,
+# which a shared-exponent format cannot do.
+ACT = ttnn.bfloat16
+WGT = ttnn.bfloat16
+
+
+def to_dev(device, t, dtype=None):
     return ttnn.from_torch(
         t.reshape(1, 1, *t.shape).to(torch.bfloat16),
-        dtype=ttnn.bfloat16,
+        dtype=dtype or ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=_dram(),
     )
 
 
-def nan_out(device, rows, cols):
-    """An output buffer pre-filled with NaN, so a block nothing writes is unmistakable."""
-    return to_dev(device, torch.full([rows, cols], float("nan")))
+def nan_out(device, rows, cols, dtype=None):
+    """An output buffer pre-filled with NaN, so a block nothing writes is unmistakable.
+
+    bfloat8_b cannot represent NaN -- the fill lands as some large finite value instead --
+    so at that format this catches a missed block by failing the comparison rather than by
+    propagating, which is weaker but not silent.
+    """
+    return to_dev(device, torch.full([rows, cols], float("nan")), dtype)
 
 
 def bf16_pair(v):
@@ -88,6 +105,12 @@ def bf16_pair(v):
 
 
 def launch(device, kernel, cbs, ct_args, rt_args, tensors, defines=None):
+    """`cbs` entries are (index, pages) or (index, pages, dtype); the default is bfloat16.
+
+    A circular buffer's format must match the DRAM tensor it is read from or written to:
+    the page size follows the format (1088 bytes for bfloat8_b, 2048 for bfloat16) and a
+    disagreement reads the wrong bytes rather than failing.
+    """
     core_ranges, cores = single_core()
     args = list(ct_args)
     for t in tensors:
@@ -96,7 +119,7 @@ def launch(device, kernel, cbs, ct_args, rt_args, tensors, defines=None):
         kernel_source=kernel,
         core_ranges=core_ranges,
         cores=cores,
-        cbs=[make_cb(i, core_ranges, num_pages=n) for i, n in cbs],
+        cbs=[make_cb(c[0], core_ranges, num_pages=c[1], dtype=(c[2] if len(c) > 2 else ttnn.bfloat16)) for c in cbs],
         compile_time_args=args,
         runtime_args=rt_args,
         defines=defines,
@@ -105,17 +128,17 @@ def launch(device, kernel, cbs, ct_args, rt_args, tensors, defines=None):
 
 
 def rmsnorm(device, x, w, ht, wt):
-    out = nan_out(device, ht * TILE, wt * TILE)
+    out = nan_out(device, ht * TILE, wt * TILE, ACT)
     cbs = [
-        (RMS_CB["x"], ht * wt),
-        (RMS_CB["w"], wt),
+        (RMS_CB["x"], ht * wt, ACT),
+        (RMS_CB["w"], wt, WGT),
         (RMS_CB["eps"], 1),
         (RMS_CB["inv_n"], 1),
         (RMS_CB["sq"], ht * wt),
         (RMS_CB["mean"], ht),
         (RMS_CB["rsqrt"], ht),
         (RMS_CB["normed"], ht * wt),
-        (RMS_CB["out"], ht * wt),
+        (RMS_CB["out"], ht * wt, ACT),
     ]
     # The last two are the row-chunk range. rmsnorm walks the tensor in chunks of its
     # compile-time ht, and this layer passes the whole height as one chunk -- so one chunk,
@@ -127,11 +150,11 @@ def rmsnorm(device, x, w, ht, wt):
 
 def matmul(device, a, b, rt_dim, ct_dim, kt_dim):
     """Single-shot [rt, kt] @ [kt, ct]; the whole of b lives in L1."""
-    out = nan_out(device, rt_dim * TILE, ct_dim * TILE)
+    out = nan_out(device, rt_dim * TILE, ct_dim * TILE, ACT)
     cbs = [
-        (MM_CB["in0"], rt_dim * kt_dim),
-        (MM_CB["in1"], kt_dim * ct_dim),
-        (MM_CB["out"], rt_dim * ct_dim),
+        (MM_CB["in0"], rt_dim * kt_dim, ACT),
+        (MM_CB["in1"], kt_dim * ct_dim, WGT),
+        (MM_CB["out"], rt_dim * ct_dim, ACT),
         (MM_CB["acc"], rt_dim * ct_dim),
     ]
     rt = [a.buffer_address(), b.buffer_address(), out.buffer_address()]
@@ -146,16 +169,16 @@ def matmul(device, a, b, rt_dim, ct_dim, kt_dim):
 
 
 def apply_rope(device, x, cos, sin, m, seq_t, dim_t, chunk):
-    out = nan_out(device, seq_t * TILE, dim_t * TILE)
+    out = nan_out(device, seq_t * TILE, dim_t * TILE, ACT)
     total = seq_t * dim_t
     assert total % chunk == 0
     cbs = [
-        (ROPE_CB["x"], chunk),
+        (ROPE_CB["x"], chunk, ACT),
         (ROPE_CB["cos"], chunk),
         (ROPE_CB["sin"], chunk),
         (ROPE_CB["m"], 1),
         (ROPE_CB["rot"], chunk),
-        (ROPE_CB["out"], chunk),
+        (ROPE_CB["out"], chunk, ACT),
     ]
     rt = [t.buffer_address() for t in (x, cos, sin, m, out)]
     return launch(device, ROPE_KERNEL, cbs, [chunk, total // chunk], rt, (x, cos, sin, m, out))
@@ -163,9 +186,9 @@ def apply_rope(device, x, cos, sin, m, seq_t, dim_t, chunk):
 
 def binary(device, a, b, rows, cols, mode=None):
     """Elementwise over rows x cols tiles; mode None is add, "silu_mul" is silu(a) * b."""
-    out = nan_out(device, rows * TILE, cols * TILE)
+    out = nan_out(device, rows * TILE, cols * TILE, ACT)
     tiles = rows * cols
-    cbs = [(BN_CB["in0"], 2 * tiles), (BN_CB["in1"], 2 * tiles), (BN_CB["out"], 2 * tiles)]
+    cbs = [(BN_CB["in0"], 2 * tiles, ACT), (BN_CB["in1"], 2 * tiles, ACT), (BN_CB["out"], 2 * tiles, ACT)]
     rt = [a.buffer_address(), b.buffer_address(), out.buffer_address()]
     defines = [("BN_SILU_MUL", "1")] if mode == "silu_mul" else None
     return launch(device, BINARY_KERNEL, cbs, [1, tiles], rt, (a, b, out), defines)
@@ -196,8 +219,16 @@ def to_flash_layout(x_torch, n_heads, dt, sq, num_q, transpose):
 # --- the layer -----------------------------------------------------------------------
 
 
-def run(device, st, dt, n_heads, n_kv_heads, ffn_mult=2, seed=0):
-    """st = sequence in tiles, dt = head dim in tiles. One query chunk, one k chunk."""
+def run(device, st, dt, n_heads, n_kv_heads, ffn_mult=2, seed=0, fmt=None):
+    """st = sequence in tiles, dt = head dim in tiles. One query chunk, one k chunk.
+
+    `fmt` sets the activation and weight formats together, bfloat16 by default. Flash
+    attention and the output projection are NOT covered by it: both cross the host on the
+    way in (to_flash_layout, and project's torch weight), so they build their own tensors
+    and stay bfloat16. That is a gap in the coverage, not a claim about them.
+    """
+    global ACT, WGT
+    ACT = WGT = fmt or ttnn.bfloat16
     torch.manual_seed(seed)
     dm = n_heads * dt  # d_model in tiles
     dkv = n_kv_heads * dt
@@ -219,20 +250,20 @@ def run(device, st, dt, n_heads, n_kv_heads, ffn_mult=2, seed=0):
     rot_m = rope.trans_mat()
 
     dev = {}
-    for name, t in (
-        ("x", x),
-        ("w_attn", w_attn.reshape(1, D)),
-        ("w_ffn", w_ffn.reshape(1, D)),
-        ("wq", wq),
-        ("wk", wk),
-        ("wv", wv),
-        ("wo", wo),
-        ("wg", wg),
-        ("wu", wu),
-        ("wd", wd),
-        ("m", rot_m),
+    for name, t, fm in (
+        ("x", x, ACT),
+        ("w_attn", w_attn.reshape(1, D), WGT),
+        ("w_ffn", w_ffn.reshape(1, D), WGT),
+        ("wq", wq, WGT),
+        ("wk", wk, WGT),
+        ("wv", wv, WGT),
+        ("wo", wo, WGT),
+        ("wg", wg, WGT),
+        ("wu", wu, WGT),
+        ("wd", wd, WGT),
+        ("m", rot_m, ttnn.bfloat16),  # the rotation matrix is a constant, not a weight
     ):
-        dev[name] = to_dev(device, t)
+        dev[name] = to_dev(device, t, fm)
 
     # --- attention block -------------------------------------------------------------
     xn = rmsnorm(device, dev["x"], dev["w_attn"], st, dm)
@@ -261,7 +292,7 @@ def run(device, st, dt, n_heads, n_kv_heads, ffn_mult=2, seed=0):
     ao = proj.project(device, attn, wo.to(torch.float32), sq=st, dt=dt, num_q=1, n_heads=n_heads)
 
     # --- residual, then the FFN ------------------------------------------------------
-    h = binary(device, dev["x"], to_dev(device, ao), st, dm)
+    h = binary(device, dev["x"], to_dev(device, ao, ACT), st, dm)
     hn = rmsnorm(device, h, dev["w_ffn"], st, dm)
     g = matmul(device, hn, dev["wg"], st, dff, dm)
     u = matmul(device, hn, dev["wu"], st, dff, dm)
@@ -345,17 +376,22 @@ def main(argv=None):
     device = ttnn.open_device(device_id=0)
     failed = []
     try:
-        for st, dt, nh, nkv in ((2, 2, 2, 1), (2, 2, 4, 2), (4, 2, 2, 2), (2, 4, 2, 1)):
-            stages = run(device, st, dt, nh, nkv)
-            tag = f"S={st * TILE} d_model={nh * dt * TILE} heads={nh} kv={nkv}"
-            parts = []
-            for name, got, want in stages:
-                rel = ((got - want).norm() / want.norm()).item()
-                ok = rel <= args.rel
-                parts.append(f"{name}={rel:.5f}{'' if ok else '!'}")
-                if not ok:
-                    failed.append(f"{name}-{st}-{dt}-{nh}-{nkv}")
-            logger.info(f"layer {tag}: " + " ".join(parts))
+        # Both formats, same threshold. bfloat8_b roughly triples the per-stage error and
+        # still clears it by a wide margin -- the point of running it here rather than only
+        # on a matmul is that eleven stages compound, and a format that is fine once is not
+        # automatically fine in series.
+        for label, fmt in (("bf16", None), ("bf8 ", ttnn.bfloat8_b)):
+            for st, dt, nh, nkv in ((2, 2, 2, 1), (2, 2, 4, 2), (4, 2, 2, 2), (2, 4, 2, 1)):
+                stages = run(device, st, dt, nh, nkv, fmt=fmt)
+                tag = f"S={st * TILE} d_model={nh * dt * TILE} heads={nh} kv={nkv}"
+                parts = []
+                for name, got, want in stages:
+                    rel = ((got - want).norm() / want.norm()).item()
+                    ok = rel <= args.rel
+                    parts.append(f"{name}={rel:.5f}{'' if ok else '!'}")
+                    if not ok:
+                        failed.append(f"{label.strip()}-{name}-{st}-{dt}-{nh}-{nkv}")
+                logger.info(f"layer {label} {tag}: " + " ".join(parts))
     finally:
         ttnn.close_device(device)
 
