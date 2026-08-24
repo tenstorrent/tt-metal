@@ -6,17 +6,37 @@
 // Canonical semantic bodies for the shift op file (storm contract,
 // fresh_cpp/README.md).  Production: metal ckernel_sfpu_shift.h — all three
 // binary Int32 shifts are entirely raw TT_SFPLOAD/TTI_SFP* streams over fixed
-// LREG0..4 with magic immediates 0xFE0 (-32) and 0x020 (32); SFPSHFT is
-// logical-only, so the arithmetic right shift synthesizes sign extension by
-// ORing ~0 << (32 - amount) into lanes whose value is negative.  The left
-// shift's semantic body predates the storm (calculate_left_shift_fresh_cpp,
-// leftshift-fresh row); this header states the two RIGHT shifts: shift right
-// by the per-lane amount, zero where the amount is outside [0, 32); LOGICAL
-// fills the vacated bits with zero, arithmetic (LOGICAL = false) with the
-// sign bit — the golden's torch.bitwise_right_shift contract with the same
-// out-of-range guard.  Same INT32_2S_COMP load/store contract as the
-// production dispatch (typed DataLayout::SM32 — the fresh add/sub/mul/
-// left-shift precedent).
+// LREG0..4 with magic immediates 0xFE0 (-32) and 0x020 (32); the arithmetic
+// right shift synthesizes sign extension by ORing ~0 << (32 - amount) into
+// lanes whose value is negative.  The left shift's semantic body predates the
+// storm (calculate_left_shift_fresh_cpp, leftshift-fresh row); this header
+// states the two RIGHT shifts: shift right by the per-lane amount, zero where
+// the amount is outside [0, 32); LOGICAL fills the vacated bits with zero,
+// arithmetic (LOGICAL = false) with the sign bit — the golden's
+// torch.bitwise_right_shift contract with the same out-of-range guard.  Same
+// INT32_2S_COMP load/store contract as the production dispatch (typed
+// DataLayout::SM32 — the fresh add/sub/mul/left-shift precedent).
+//
+// Lane GH 2026-08-24 rewrite (previous bodies preserved in
+// fresh_cpp/shift_legacy.h, unwired).  Two facts remove most of the legacy
+// 26-slot row:
+//  1. Blackhole SFPSHFT has a NATIVE arithmetic mode
+//     (SFPSHFT_MOD1_ARITHMETIC; BlackholeA0 SFPSHFT.md functional model:
+//     negative shift amount + arithmetic mod = (int32_t)x >> ((-amt) & 31);
+//     the pinned craq sim implements the identical branch) — the production
+//     kernel's manual sign-fill choreography (save/setcc/setcc/32-amt/NOT/
+//     SHFT/OR, and the legacy fresh transcription of it) is a Wormhole-era
+//     assumption ("SFPSHFT is logical-only" is true only of WH; sfpi's own
+//     ShiftMode::Arithmetic is compiled out under __riscv_xtttensixwh).
+//  2. The compound range guard (amount < 0 || amount >= 32) is the single
+//     unsigned test (uint32)amount >= 32, decided by one logical shift:
+//     shft(amount, -5) != 0 — one SFPSETCC instead of the legacy
+//     setcc/iadd-setcc/compc chain.  Exhaustive over all 2^32 amounts:
+//     laneGH-evidence-20260824/shift_equiv_cert.c (which also proves the
+//     end-to-end old-vs-new row equivalence per lane).
+// Both SFPSHFT paths wrap the effective count mod 32 (the & 31 in the
+// functional model); every wrapped lane is out-of-range and overwritten by
+// the guard, so the wrap is never observable.
 #include <cstdint>
 
 namespace ckernel::sfpu
@@ -35,21 +55,20 @@ __attribute__((noinline)) void calculate_right_shift_fresh_cpp()
         {
             const sfpi::vInt value  = sfpi::dst_reg[0].mode<sfpi::DataLayout::SM32>();
             const sfpi::vInt amount = sfpi::dst_reg[tile_rows].mode<sfpi::DataLayout::SM32>();
-            // Logical right shift (SFPSHFT shifts right for negative counts).
-            sfpi::vInt result = sfpi::as<sfpi::vInt>(sfpi::shft(sfpi::as<sfpi::vUInt>(value), -amount));
-            if constexpr (!LOGICAL)
+            // Out-of-range test, one word: any bit above bit 4 set (sign bit
+            // included) <=> amount < 0 || amount >= 32.
+            const sfpi::vUInt oob = sfpi::shft(sfpi::as<sfpi::vUInt>(amount), -5);
+            // SFPSHFT shifts right for negative counts; mode picks the fill.
+            sfpi::vInt result;
+            if constexpr (LOGICAL)
             {
-                // Arithmetic contract: fill the vacated high bits with the
-                // sign bit (all-ones mask shifted left by 32 - amount; the
-                // amount > 0 guard keeps the in-range amount == 0 identity).
-                v_if (value < 0 && amount > 0)
-                {
-                    const sfpi::vInt fill = sfpi::as<sfpi::vInt>(sfpi::shft(sfpi::vUInt(0xFFFFFFFFu), sfpi::vInt(32) - amount));
-                    result                = result | fill;
-                }
-                v_endif;
+                result = sfpi::as<sfpi::vInt>(sfpi::shft(sfpi::as<sfpi::vUInt>(value), -amount));
             }
-            v_if (amount < 0 || amount >= 32)
+            else
+            {
+                result = sfpi::shft(value, -amount, sfpi::ShiftMode::Arithmetic);
+            }
+            v_if (oob != sfpi::vUInt(0u))
             {
                 result = 0;
             }
