@@ -95,12 +95,6 @@ xt::xarray<float> gelu_tanh_grad_reference(const xt::xarray<float>& x) {
     return 0.5F * (1.0F + t) + 0.5F * x * (1.0F - t * t) * kSqrt2OverPi * (1.0F + 3.0F * kGeluTanhK * x * x);
 }
 
-xt::xarray<float> random_input(const std::vector<std::size_t>& shape) {
-    xt::xarray<float> data = xt::empty<float>(shape);
-    load_random_data_from_os(std::span{data.data(), data.size()});
-    return data;
-}
-
 }  // namespace
 
 class UnaryOpsTest : public ::testing::Test {
@@ -253,7 +247,6 @@ TEST_F(UnaryOpsTest, Gelu) {
     load_random_data_from_os(std::span{data.data(), data.size()});
 
     auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
-
     auto result = gelu(tensor_ptr);
     EXPECT_TRUE(xt::allclose(core::to_xtensor(result->get_value()), gelu_exact_reference(data), 8e-3F, 2e-2F));
 
@@ -274,7 +267,6 @@ TEST_F(UnaryOpsTest, GeluTanh) {
     load_random_data_from_os(std::span{data.data(), data.size()});
 
     auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
-
     auto result = gelu(tensor_ptr, GeluVariant::TANH);
     EXPECT_TRUE(xt::allclose(core::to_xtensor(result->get_value()), gelu_tanh_reference(data), 8e-3F, 2e-2F));
 
