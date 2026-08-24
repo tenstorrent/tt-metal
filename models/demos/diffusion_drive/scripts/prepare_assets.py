@@ -20,6 +20,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import sys
 import urllib.request
 from pathlib import Path
@@ -30,6 +31,12 @@ from pathlib import Path
 
 _HF_REPO = "hustvl/DiffusionDrive"
 _HF_FILENAME = "diffusiondrive_navsim_88p1_PDMS"
+# Pin the artifact. ``main`` is a mutable ref, so a replaced upload would otherwise
+# be fetched and trusted silently. Revision *and* content hash are both checked and
+# a mismatch fails closed (the suspect file is deleted, not left on disk).
+_HF_REVISION = "8e3cc29cfdb5aa1a4c0818012f9a250d5153bc71"
+_CKPT_SHA256 = "008ffc39cc6c57ff9007025217e601f408818afa036c0bae4e543907993a005b"
+_CKPT_SIZE = 729518199
 _LOCAL_CKPT = "data/diffusiondrive_navsim.pth"
 _LOCAL_ANCHORS = "data/kmeans_navsim_traj_20.npy"
 
@@ -48,10 +55,40 @@ def _safe_subpath(root: Path, rel: str) -> Path:
     return dest
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _verify_checkpoint(path: Path) -> None:
+    """Fail closed unless ``path`` is byte-for-byte the pinned checkpoint.
+
+    Covers both threat models: a replaced upstream artifact, and a silently
+    truncated transfer (seen in practice — a dropped HTTPS download still exits 0).
+    The offending file is deleted so a re-run starts clean rather than reusing it.
+    """
+    size = path.stat().st_size
+    digest = _sha256(path)
+    if size == _CKPT_SIZE and digest == _CKPT_SHA256:
+        print(f"  Verified: sha256 {digest[:16]}... ({size} bytes)")
+        return
+    path.unlink(missing_ok=True)
+    raise RuntimeError(
+        f"checkpoint verification FAILED for {path} (file deleted)\n"
+        f"  expected sha256={_CKPT_SHA256} size={_CKPT_SIZE}\n"
+        f"  actual   sha256={digest} size={size}\n"
+        f"Refusing to use an unverified checkpoint."
+    )
+
+
 def _download_hf(repo_id: str, filename: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         print(f"  [skip] already exists: {dest}")
+        _verify_checkpoint(dest)
         return
 
     try:
@@ -59,20 +96,33 @@ def _download_hf(repo_id: str, filename: str, dest: Path) -> None:
     except ImportError:
         print("  huggingface_hub not installed — falling back to direct URL")
         _download_url(
-            f"https://huggingface.co/{repo_id}/resolve/main/{filename}",
+            f"https://huggingface.co/{repo_id}/resolve/{_HF_REVISION}/{filename}",
             dest,
         )
+        _verify_checkpoint(dest)
         return
 
-    print(f"  Downloading {repo_id}/{filename}")
+    print(f"  Downloading {repo_id}/{filename} @ {_HF_REVISION[:12]}")
     print(f"  -> {dest}")
     tmp = dest.with_suffix(dest.suffix + ".tmp")
     try:
-        downloaded = hf_hub_download(repo_id, filename, local_dir=str(tmp.parent), local_dir_use_symlinks=False)
-        Path(downloaded).rename(dest)
+        downloaded = hf_hub_download(
+            repo_id,
+            filename,
+            revision=_HF_REVISION,
+            local_dir=str(tmp.parent),
+        )
+        # The returned path is assembled from repo-controlled metadata, so confirm
+        # it really landed inside the asset dir before moving it into place.
+        src = Path(downloaded).resolve()
+        asset_dir = tmp.parent.resolve()
+        if asset_dir not in src.parents:
+            raise RuntimeError(f"download landed outside the asset dir: {src}")
+        src.rename(dest)
     except Exception as exc:
         tmp.unlink(missing_ok=True)
         raise RuntimeError(f"Download failed: {exc}") from exc
+    _verify_checkpoint(dest)
     print(f"  Saved: {dest}")
 
 
@@ -109,7 +159,16 @@ def _extract_anchors(ckpt_path: Path, anchors_path: Path) -> None:
     import numpy as np
     import torch
 
-    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+    try:
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+    except Exception as exc:
+        # weights_only=True rejects any pickle that would execute code on load.
+        # If the artifact will not decode as plain tensors, treat it as hostile
+        # rather than falling back to the unrestricted loader.
+        raise RuntimeError(
+            f"refusing to load {ckpt_path}: it did not decode as a plain tensor "
+            f"checkpoint under weights_only=True ({exc})"
+        ) from exc
     sd = ckpt["state_dict"]
     key = "agent._transfuser_model._trajectory_head.plan_anchor"
     anchor = sd[key].numpy()
