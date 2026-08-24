@@ -6,15 +6,15 @@ model: claude-sonnet-4.6
 features:
   gh-aw-detection: true
 cache:
-  key: pr-prefetch-${{ github.event.pull_request.head.sha || github.event.issue.number }}
+  key: pr-prefetch-${{ github.event.pull_request.head.sha || github.event.issue.number || fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_number }}
   path: /tmp/gh-aw/agent
   restore-keys:
-  - pr-prefetch-${{ github.event.pull_request.number || github.event.issue.number }}-
+  - pr-prefetch-${{ github.event.pull_request.number || github.event.issue.number || fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_number }}-
 pre-agent-steps:
   - name: Pre-fetch PR diff and review comments
     env:
       GH_TOKEN: ${{ github.token }}
-      PR_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+      PR_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number || fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_number }}
       PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       EXPR_GITHUB_REPOSITORY: ${{ github.repository }}
       PR_DIFF_MAX_LINES: "2000"
@@ -35,12 +35,20 @@ pre-agent-steps:
         COMMENT_COUNT=$(jq 'length' /tmp/gh-aw/agent/pr-review-comments.json)
         echo "Cache hit: using pre-fetched PR data for head ${CURRENT_HEAD_SHA} (${LINES} diff lines, ${COMMENT_COUNT} review comments)"
       else
-        { gh pr diff "$PR_NUMBER" --repo "$EXPR_GITHUB_REPOSITORY" \
+        set +e
+        gh pr diff "$PR_NUMBER" --repo "$EXPR_GITHUB_REPOSITORY" \
             --exclude '**/*.lock.yml' \
             --exclude '**/generated/**' \
             --exclude '**/dist/**' \
             --exclude '**/build/**' \
-            || true; } | head -n "${PR_DIFF_MAX_LINES}" > /tmp/gh-aw/agent/pr-diff.patch
+            > /tmp/gh-aw/agent/pr-diff.full 2>/tmp/gh-aw/agent/pr-diff.err
+        DIFF_EXIT=$?
+        set -e
+        if [ $DIFF_EXIT -ne 0 ]; then
+          echo "::error::gh pr diff failed (exit $DIFF_EXIT): $(cat /tmp/gh-aw/agent/pr-diff.err)" >&2
+          exit 1
+        fi
+        head -n "${PR_DIFF_MAX_LINES}" /tmp/gh-aw/agent/pr-diff.full > /tmp/gh-aw/agent/pr-diff.patch
         LINES=$(wc -l < /tmp/gh-aw/agent/pr-diff.patch)
         gh pr view "$PR_NUMBER" \
           --repo "$EXPR_GITHUB_REPOSITORY" \
@@ -63,12 +71,14 @@ pre-agent-steps:
         echo "Pre-fetched PR diff (${LINES} lines), metadata, and ${COMMENT_COUNT} existing review comments for head ${CURRENT_HEAD_SHA:-unknown}"
       fi
 max-daily-ai-credits: 10000
+if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
 "on":
   pull_request:
     paths-ignore:
     - "*.md"
     - docs/**
     types:
+    - opened
     - ready_for_review
   slash_command:
     events:
@@ -126,7 +136,7 @@ You are a skilled engineering reviewer who applies [Matt Pocock's engineering sk
 
 ## Available Matt Pocock Skills
 
-The following skills have been installed via `gh skill` and are available under `${RUNNER_TEMP}/gh-aw/mattpocock-skills/`. Discover exactly which skills are present using the `find` command in Step 2.
+The following skills have been installed via `gh skill` and are available under `.github/skills/`. Discover exactly which skills are present using the `find` command in Step 2.
 
 - **`/diagnosing-bugs`** — Disciplined debugging loop: reproduce → minimise → hypothesise → instrument → fix → regression-test. Use for PRs that fix bugs or address performance regressions.
 - **`/tdd`** — Test-driven development: red-green-refactor loop. Use for PRs that add features or fix bugs, especially where test coverage is thin.
@@ -162,14 +172,14 @@ cat /tmp/gh-aw/agent/pr-review-comments.json  # existing review comments (each: 
 
 Do **not** call `gh pr diff`, `gh pr view`, or `get_review_comments` inside the agent — the data is already available on disk.
 
-If the pre-fetched patch has 3000 lines, treat it as potentially truncated and focus your review on the highest-impact changed files. The 3000-line cap is intentional to keep token usage bounded on very large PRs; if important context appears missing, explicitly call that out in your review.
+If the pre-fetched patch has 2000 lines, treat it as potentially truncated and focus your review on the highest-impact changed files. The 2000-line cap is intentional to keep token usage bounded on very large PRs; if important context appears missing, explicitly call that out in your review.
 
 ### Step 2: Read Available Skills
 
-Discover the installed Matt Pocock skills from the install root `${RUNNER_TEMP}/gh-aw/mattpocock-skills/`. List what is available:
+Discover the installed Matt Pocock skills from the install root `.github/skills/`. List what is available:
 
 ```bash
-find "${RUNNER_TEMP}/gh-aw/mattpocock-skills" -name "SKILL.md" 2>/dev/null | head -30
+find .github/skills -name "SKILL.md" 2>/dev/null | head -30
 ```
 
 Use the inline skill guidance below by default. Only read a skill file when the inline guidance is insufficient for the specific PR.
@@ -229,7 +239,7 @@ For each issue found, create a review comment using `create-pull-request-review-
 {
   "path": "path/to/file.ts",
   "line": 42,
-  "body": "**[/tdd]** Missing edge case: `value` is `null` — add a test to prevent this regression.\n\n<details>\n<summary>💡 Suggested test</summary>\n\n```ts\nit('returns default when value is null', () => {\n  expect(fn(null)).toBe(defaultValue);\n});\n```\n\nMissing edge case tests are a common source of regressions.\n\n</details>\n\n@copilot please address this."
+  "body": "**[/tdd]** Missing edge case: `value` is `null` — add a test to prevent this regression.\n\n<details>\n<summary>💡 Suggested test</summary>\n\n```ts\nit('returns default when value is null', () => {\n  expect(fn(null)).toBe(defaultValue);\n});\n```\n\nMissing edge case tests are a common source of regressions.\n\n</details>"
 }
 ```
 
@@ -239,7 +249,6 @@ Guidelines:
 - Wrap code examples, detailed explanations, and multi-step suggestions in `<details><summary>💡 …</summary>` blocks
 - Be specific: file path, line number, exact issue
 - Limit to the **10 most impactful** issues
-- End each inline comment with `@copilot please address this.` to prompt follow-up action
 
 ### Step 6: Submit the Overall Review
 
@@ -279,7 +288,6 @@ Applied **`/tdd`** and **`/codebase-design`** — requesting changes on test cov
 
 If the review is complex or the overall findings are significant, post a single `add-comment` with a concise summary for the author. Apply progressive disclosure: one-line outcome visible, details in `<details>` blocks.
 Use `###` or lower for any headers — never `#` or `##`.
-Include `@copilot please address the review comments above.` at the end of the comment body to prompt follow-up action.
 
 ### Scope Rules
 
