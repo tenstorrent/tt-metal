@@ -102,10 +102,14 @@ tt::tt_metal::TensorSpec ShardedToInterleavedDeviceOperation::compute_output_spe
     }
 
     const auto& input_tensor = tensor_args.input_tensor;
-    // Propagate the input's padded_shape so the destination DRAM tensor has matching stick stride.
-    // Without this, when the source shard width exceeds the destination's logical width, the writer
-    // kernel writes more bytes per stick than the destination tensor's stick page can hold, causing
-    // inter-stick byte overlap and data corruption.
+    // An interleaved row-major page is one logical row, so the shard width must not leak into the
+    // output spec. Tile keeps its padded shape - there the padded row is the real extent.
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+        return tt::tt_metal::TensorSpec(
+            input_tensor.logical_shape(),
+            tt::tt_metal::TensorLayout(
+                args.output_dtype, tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));
+    }
     return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout::fromPaddedShape(
