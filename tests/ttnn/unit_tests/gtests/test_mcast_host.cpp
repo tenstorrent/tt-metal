@@ -105,6 +105,126 @@ std::vector<uint32_t> role_only(const std::vector<uint32_t>& args) {
 
 }  // namespace
 
+TEST_F(McastHostFixture, FamilySerializesExactThreeRectangleGroup) {
+    const CoreRangeSet receivers(std::vector<CoreRange>{
+        CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)),
+        CoreRange(CoreCoord(2, 0), CoreCoord(2, 0)),
+        CoreRange(CoreCoord(4, 0), CoreCoord(4, 0)),
+    });
+    const CoreCoord sender(6, 0);
+    const McastFamily family(
+        device_,
+        std::vector<McastGroup>{McastGroup(receivers, sender)},
+        McastConfig{.noc = NOC::NOC_1, .base_sem_id = 3});
+
+    EXPECT_FALSE(family.uses_compact_wire());
+    EXPECT_EQ(family.max_rectangles(), 3u);
+    EXPECT_EQ(family.compile_time_args(), (std::vector<uint32_t>{2, 1, 3, 4, 1, 0, 3}));
+    expect_same_cores(family.receiver_cores(), receivers);
+    EXPECT_TRUE(family.participating_cores().contains(sender));
+
+    const auto sender_rt = family.runtime_args(sender);
+    constexpr uint32_t topology_words = 4u * 3u + 2u + 4u;
+    ASSERT_EQ(sender_rt.size(), topology_words + 5u);
+    EXPECT_EQ(sender_rt[topology_words + 0], detail::CAN_SEND);
+    EXPECT_EQ(sender_rt[topology_words + 1], 0u);
+    EXPECT_EQ(sender_rt[topology_words + 2], 3u);
+    EXPECT_EQ(sender_rt[topology_words + 3], 3u);
+    EXPECT_EQ(sender_rt[topology_words + 4], 0u);
+
+    const auto receiver_rt = family.runtime_args(CoreCoord(2, 0));
+    const auto virtual_sender = device_->worker_core_from_logical_core(sender);
+    EXPECT_EQ(receiver_rt[12], static_cast<uint32_t>(virtual_sender.x));
+    EXPECT_EQ(receiver_rt[13], static_cast<uint32_t>(virtual_sender.y));
+    EXPECT_EQ(receiver_rt[topology_words + 0], detail::CAN_RECEIVE);
+    EXPECT_EQ(receiver_rt[topology_words + 1], detail::NO_SENDER_ROUND);
+    EXPECT_EQ(receiver_rt[topology_words + 2], 3u);
+    EXPECT_EQ(receiver_rt[topology_words + 3], 0u);
+}
+
+TEST_F(McastHostFixture, FamilySupportsDisjointGroupsWithDifferentRectangleCounts) {
+    const CoreRangeSet first_receivers(std::vector<CoreRange>{
+        CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)),
+        CoreRange(CoreCoord(2, 0), CoreCoord(2, 0)),
+    });
+    const CoreRangeSet second_receivers(std::vector<CoreRange>{
+        CoreRange(CoreCoord(0, 2), CoreCoord(0, 2)),
+        CoreRange(CoreCoord(2, 2), CoreCoord(2, 2)),
+        CoreRange(CoreCoord(4, 2), CoreCoord(4, 2)),
+    });
+    const McastFamily family(
+        device_,
+        std::vector<McastGroup>{
+            McastGroup(first_receivers, CoreCoord(6, 0)),
+            McastGroup(second_receivers, CoreCoord(6, 2)),
+        },
+        McastConfig{});
+
+    EXPECT_EQ(family.max_rectangles(), 3u);
+    constexpr uint32_t topology_words = 4u * 3u + 2u + 4u;
+    EXPECT_EQ(family.runtime_args(CoreCoord(6, 0))[topology_words + 2], 2u);
+    EXPECT_EQ(family.runtime_args(CoreCoord(6, 2))[topology_words + 2], 3u);
+    EXPECT_EQ(family.num_receivers(CoreCoord(6, 0)), 2u);
+    EXPECT_EQ(family.num_receivers(CoreCoord(6, 2)), 3u);
+}
+
+TEST_F(McastHostFixture, FamilyRejectsSenderOverlapAcrossGroups) {
+    const CoreRangeSet first_receivers(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    const CoreRangeSet second_receivers(CoreRange(CoreCoord(1, 0), CoreCoord(1, 0)));
+    EXPECT_ANY_THROW((McastFamily(
+        device_,
+        std::vector<McastGroup>{
+            McastGroup(first_receivers, CoreCoord(1, 0)),
+            McastGroup(second_receivers, CoreCoord(2, 0)),
+        },
+        McastConfig{})));
+}
+
+TEST_F(McastHostFixture, FamilyRejectsIncompatibleSenderSchedules) {
+    const CoreRangeSet first_receivers(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));
+    const CoreRangeSet second_receivers(CoreRange(CoreCoord(0, 2), CoreCoord(1, 2)));
+    McastConfig config;
+    config.rotating_sender = true;
+    EXPECT_ANY_THROW((McastFamily(
+        device_,
+        std::vector<McastGroup>{
+            McastGroup(first_receivers, std::vector<CoreCoord>{CoreCoord(0, 0), CoreCoord(1, 0)}),
+            McastGroup(second_receivers, std::vector<CoreCoord>{CoreCoord(0, 2)}),
+        },
+        config)));
+}
+
+TEST_F(McastHostFixture, DenseFamilyUsesCompactWireEvenWhenChainRequested) {
+    const CoreRangeSet receivers(CoreRange(CoreCoord(0, 0), CoreCoord(3, 0)));
+    const McastFamily family(
+        device_,
+        std::vector<McastGroup>{McastGroup(receivers, CoreCoord(0, 0), /*use_chain_forwarding=*/true)},
+        McastConfig{});
+    EXPECT_TRUE(family.uses_compact_wire());
+    EXPECT_EQ(family.compile_time_args()[0], 1u);
+}
+
+TEST_F(McastHostFixture, Mcast2DWrapsAnExactIrregularFamily) {
+    const CoreRangeSet receivers(std::vector<CoreRange>{
+        CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)),
+        CoreRange(CoreCoord(2, 0), CoreCoord(2, 0)),
+        CoreRange(CoreCoord(4, 0), CoreCoord(4, 0)),
+    });
+    const Mcast2D fixed(device_, receivers, CoreCoord(0, 0), McastConfig{});
+    EXPECT_EQ(fixed.compile_time_args(), (std::vector<uint32_t>{2, 1, 0, 1, 1, 0, 3}));
+    EXPECT_EQ(fixed.num_receivers(CoreCoord(0, 0)), 2u);
+
+    McastConfig rotating_config;
+    rotating_config.rotating_sender = true;
+    const Mcast2D rotating(device_, receivers, CoreCoord(0, 0), rotating_config);
+    EXPECT_EQ(rotating.compile_time_args(), (std::vector<uint32_t>{2, 1, 0, 1, 1, 3, 3}));
+    constexpr uint32_t topology_words = 4u * 3u + 2u * 3u + 4u;
+    const auto middle_rt = rotating.runtime_args(CoreCoord(2, 0));
+    ASSERT_EQ(middle_rt.size(), topology_words + 5u);
+    EXPECT_EQ(middle_rt[topology_words + 0], detail::CAN_SEND | detail::CAN_RECEIVE);
+    EXPECT_EQ(middle_rt[topology_words + 1], 1u);
+}
+
 TEST_F(McastHostFixture, PerCoreRolesAndSenderPhases) {
     auto* dev = device_;
     const CoreRangeSet receivers(CoreRange(CoreCoord(1, 1), CoreCoord(2, 2)));

@@ -322,6 +322,8 @@ from ttnn.types import (
     Mcast1DShape,
     Mcast1DSenderPlacement,
     Mcast2D,
+    McastGroup,
+    McastFamily,
     McastConfig,
     McastDataReady,
 )

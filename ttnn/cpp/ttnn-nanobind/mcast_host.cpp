@@ -3,9 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Python binding for the mcast HOST helper (ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp).
-// Thin passthrough: the API lives entirely in C++ (Mcast1D + McastConfig + Mcast1DShape); this file
-// only binds it. No factory functions or arg-massaging here — Python constructs an Mcast1D with the
-// shape enum + a McastConfig, exactly as C++ does.
+// Thin passthrough: the API lives entirely in C++; this file only binds the family/group model and
+// its Mcast1D/Mcast2D convenience wrappers. There are no Python-side factories or argument rewrites.
 
 #include "mcast_host.hpp"
 
@@ -42,6 +41,8 @@ void py_module_types(nb::module_& mod) {
         .value("Uniform", kh::Mcast1DSenderPlacement::Uniform)
         .value("Diagonal", kh::Mcast1DSenderPlacement::Diagonal);
     nb::class_<kh::McastConfig>(mod, "McastConfig");
+    nb::class_<kh::McastGroup>(mod, "McastGroup");
+    nb::class_<kh::McastFamily>(mod, "McastFamily");
     nb::class_<kh::Mcast1D>(mod, "Mcast1D");
     nb::class_<kh::Mcast2D>(mod, "Mcast2D");
 }
@@ -74,6 +75,64 @@ void py_module(nb::module_& mod) {
         .def_rw("rotating_sender", &kh::McastConfig::rotating_sender)
         .def_rw("base_sem_id", &kh::McastConfig::base_sem_id)
         .def_rw("sem_ids", &kh::McastConfig::sem_ids);
+
+    static_cast<nb::class_<kh::McastGroup>>(mod.attr("McastGroup"))
+        .def(
+            "__init__",
+            [](kh::McastGroup* self,
+               const CoreRangeSet& receiver_set,
+               const CoreCoord& sender,
+               bool use_chain_forwarding,
+               std::optional<uint32_t> ack_count) {
+                new (self) kh::McastGroup(receiver_set, sender, use_chain_forwarding, ack_count);
+            },
+            nb::arg("receiver_set"),
+            nb::arg("sender"),
+            nb::kw_only(),
+            nb::arg("use_chain_forwarding") = false,
+            nb::arg("ack_count") = std::optional<uint32_t>{})
+        .def(
+            "__init__",
+            [](kh::McastGroup* self,
+               const CoreRangeSet& receiver_set,
+               const std::vector<CoreCoord>& rotating_senders,
+               bool use_chain_forwarding,
+               std::optional<uint32_t> ack_count) {
+                new (self) kh::McastGroup(receiver_set, rotating_senders, use_chain_forwarding, ack_count);
+            },
+            nb::arg("receiver_set"),
+            nb::arg("rotating_senders"),
+            nb::kw_only(),
+            nb::arg("use_chain_forwarding") = false,
+            nb::arg("ack_count") = std::optional<uint32_t>{})
+        .def_prop_ro("receiver_set", &kh::McastGroup::receiver_set)
+        .def_prop_ro("senders", &kh::McastGroup::senders)
+        .def_prop_ro("rotating_sender", &kh::McastGroup::rotating_sender)
+        .def_prop_ro("use_chain_forwarding", &kh::McastGroup::use_chain_forwarding)
+        .def_prop_ro("ack_count", &kh::McastGroup::ack_count);
+
+    static_cast<nb::class_<kh::McastFamily>>(mod.attr("McastFamily"))
+        .def(
+            "__init__",
+            [](kh::McastFamily* self,
+               MeshDevice* device,
+               const std::vector<kh::McastGroup>& groups,
+               const kh::McastConfig& config) { new (self) kh::McastFamily(device, groups, config); },
+            nb::arg("device"),
+            nb::arg("groups"),
+            nb::arg("config") = kh::McastConfig{})
+        .def("owned_semaphores", &kh::McastFamily::owned_semaphores)
+        .def("compile_time_args", &kh::McastFamily::compile_time_args, nb::arg("pre_handshake") = std::optional<bool>{})
+        .def("runtime_args", &kh::McastFamily::runtime_args, nb::arg("core"))
+        .def("is_sender", &kh::McastFamily::is_sender, nb::arg("core"))
+        .def("num_receivers", &kh::McastFamily::num_receivers, nb::arg("core"))
+        .def("next_base_sem_id", &kh::McastFamily::next_base_sem_id)
+        .def_prop_ro("has_receivers", &kh::McastFamily::has_receivers)
+        .def_prop_ro("max_rectangles", &kh::McastFamily::max_rectangles)
+        .def_prop_ro("uses_compact_wire", &kh::McastFamily::uses_compact_wire)
+        .def_prop_ro("receiver_cores", &kh::McastFamily::receiver_cores)
+        .def_prop_ro("participating_cores", &kh::McastFamily::participating_cores)
+        .def_prop_ro("sender_only_cores", &kh::McastFamily::sender_only_cores);
 
     // Mcast1D — the one host helper. Ctor takes the shape enum + config directly (no factories). The
     // Python device is a MeshDevice; the C++ ctor takes IDevice* (upcast at the call).
@@ -149,9 +208,8 @@ void py_module(nb::module_& mod) {
             R"doc(base_sem_id the next family on the same grid should use so their ids don't overlap.)doc")
         .def("has_receivers", &kh::Mcast1D::has_receivers);
 
-    // Mcast2D — ONE mcast over a single rectangle. sender ∈ rect => fully-inside (rotating OK,
-    // fan-out area-1); sender ∉ rect => separate sender (fixed only, fan-out area). ack_count is the
-    // handshake ack wait-count (0 => the dense fan-out).
+    // Mcast2D — one exact receiver group. Dense sets retain the compact one-rectangle wire; irregular
+    // sets use the family multi-rectangle wire. ack_count is the handshake override (0 => fan-out).
     static_cast<nb::class_<kh::Mcast2D>>(mod.attr("Mcast2D"))
         .def(
             "__init__",

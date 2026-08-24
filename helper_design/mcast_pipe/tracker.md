@@ -1,8 +1,8 @@
 # Multicast family and chain-forwarding tracker
 
 Plan: [`plan.md`](plan.md)
-Status: design agreed; implementation not started
-Last updated: 2026-08-23
+Status: Stage 1 complete; Stage 2 pending
+Last updated: 2026-08-24
 
 This is the execution record for the `McastFamily`/`McastGroup`, exact
 multi-rectangle, GroupNorm, chain-forwarding, and Conv3D work. Keep results and
@@ -32,47 +32,52 @@ failed.
 - [x] `Mcast1D` and `Mcast2D` remain convenience constructors.
 - [x] GroupNorm is the multi-rectangle POC and must pass before chain work
   starts; Conv3D is the chain-forwarding POC.
+- [x] API source migration is limited to helper tests, GroupNorm, and Conv3D;
+  the full historical helper fleet is not reconciled in this rollout.
 
 ## Stage 1 — family/group and multi-rectangle vertical slice
 
+Stage started from commit `b69341112dd`.
+
 ### Host model
 
-- [ ] Add `McastGroup` with exact receiver set, sender schedule, and explicit
+- [x] Add `McastGroup` with exact receiver set, sender schedule, and explicit
   `use_chain_forwarding` flag defaulting to false.
-- [ ] Add `McastFamily` ownership of protocol, semaphores, coordinate conversion,
+- [x] Add `McastFamily` ownership of protocol, semaphores, coordinate conversion,
   validation, and serialization.
-- [ ] Validate disjoint group footprints, including rotating sender schedules.
-- [ ] Validate wire compatibility and rotation span across groups.
-- [ ] Implement per-core group lookup and role selection.
-- [ ] Implement exact deterministic rectangle decomposition for 1, 2, 3, and N
+- [x] Validate disjoint group footprints, including rotating sender schedules.
+- [x] Validate wire compatibility and rotation span across groups.
+- [x] Implement per-core group lookup and role selection.
+- [x] Implement exact deterministic rectangle decomposition for 1, 2, 3, and N
   rectangles.
-- [ ] Rebuild `Mcast1D` as one group per row/column.
-- [ ] Rebuild `Mcast2D` as a one-group family.
+- [x] Rebuild `Mcast1D` as one group per row/column.
+- [x] Rebuild `Mcast2D` as a one-group family.
 
 ### Wire and device pipe
 
-- [ ] Extend `McastArgs` without breaking ordinary dense use or operation-tail
+- [x] Extend `McastArgs` without breaking ordinary dense use or operation-tail
   offset chaining.
-- [ ] Create the selected sender/receiver pipe from family runtime arguments.
-- [ ] Change payload receiver API to require `dst_l1` and `size_bytes`.
-- [ ] Mechanically migrate all existing payload `receive()` call sites.
-- [ ] Implement one readiness wait for one logical multi-rectangle send.
-- [ ] Send the payload to all exact rectangles and complete/fence the source
+- [x] Create the selected sender/receiver pipe from family runtime arguments.
+- [x] Change payload receiver API to require `dst_l1` and `size_bytes`.
+- [x] Migrate helper-test payload `receive()` call sites; defer production
+  source migration to GroupNorm and Conv3D stages only.
+- [x] Implement one readiness wait for one logical multi-rectangle send.
+- [x] Send the payload to all exact rectangles and complete/fence the source
   once.
-- [ ] Implement multi-rectangle `send_signal()`/`receive_signal()` for Flag and
+- [x] Implement multi-rectangle `send_signal()`/`receive_signal()` for Flag and
   Counter protocols.
 
 ### Stage 1 validation gate
 
-- [ ] Host tests: group validation, decomposition, wrappers, offsets, NoCs, and
+- [x] Host tests: group validation, decomposition, wrappers, offsets, NoCs, and
   coordinate virtualization.
-- [ ] Device tests: payload and signals over 1, 2, 3, and N rectangles.
-- [ ] Device tests: concurrent disjoint groups with unequal rectangle counts.
-- [ ] Device tests: rotating multi-rectangle groups.
-- [ ] Device tests: repeated sends, dynamic pointers/sizes, aliases, and source
+- [x] Device tests: payload and signals over 1, 2, 3, and N rectangles.
+- [x] Device tests: concurrent disjoint groups with unequal rectangle counts.
+- [x] Device tests: rotating multi-rectangle groups.
+- [x] Device tests: repeated sends, dynamic pointers/sizes, aliases, and source
   lifetime.
-- [ ] `./build_metal.sh` passes.
-- [ ] Existing helper host/device and source-audit suites pass.
+- [x] `./build_metal.sh` passes.
+- [x] Applicable helper host/device and focused source-audit suites pass.
 
 Gate: do not integrate GroupNorm until every applicable Stage 1 item passes.
 
@@ -172,7 +177,10 @@ unrecorded partial run.
 
 | Date | Stage | Command/test | Result | Notes or artifact |
 |---|---|---|---|---|
-| | | | | |
+| 2026-08-24 | 1 | `build_Release/test/ttnn/unit_tests_ttnn --gtest_filter='McastHostFixture.*:GroupNormMcastGeometry.*'` | PASS | 45/45 focused host and geometry tests. |
+| 2026-08-24 | 1 | `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/kernel_lib/test_mcast_pipe_source_audit.py -k 'mcast_args_owns_its_compile_time_presence_tag or mcast_args_has_one_template_owned_runtime_base' -q` | PASS | 2/2 applicable helper-wire source audits. |
+| 2026-08-24 | 1 | `./build_metal.sh` | PASS | Release host build and Python binding install. |
+| 2026-08-24 | 1 | `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/kernel_lib/test_mcast_pipe.py --dev -q` | PASS | 91/91 helper device tests, including the complete family matrix. |
 
 ## Decisions and scope changes
 
@@ -182,6 +190,7 @@ scope, or gate before implementing it.
 | Date | Decision/change | Reason | Approved by |
 |---|---|---|---|
 | 2026-08-23 | Initial design decisions frozen in the linked plan. | Planning discussion. | User |
+| 2026-08-23 | Limit API source migration to helper tests, GroupNorm, and Conv3D; do not reconcile the full rollout ledger. | Explicit scope clarification. | User |
 
 ## Blockers
 

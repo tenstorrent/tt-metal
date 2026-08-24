@@ -191,8 +191,9 @@ Compatibility requirements:
 
 - Existing dense `Mcast1D` and `Mcast2D` call sites should not need semantic
   changes.
-- Payload receiver call sites undergo one intentional mechanical migration to
-  pass destination L1 and size.
+- The helper tests, GroupNorm, and Conv3D payload receiver call sites undergo
+  the intentional migration to pass destination L1 and size. Other migrated
+  operations are not reconciled or rewritten as part of this focused rollout.
 - `send_signal()` and `receive_signal()` retain their public shape.
 - Runtime operation arguments after a helper block must continue from the
   helper-reported next offset rather than assuming a fixed new width.
@@ -208,8 +209,9 @@ they are implemented and tested together before changing an operation.
    rectangle decomposition, and the `Mcast1D`/`Mcast2D` convenience builders.
 2. Extend `McastArgs` and sender-pipe construction to serialize/select a group
    and carry an arbitrary rectangle decomposition.
-3. Change payload receivers to require `dst_l1` and `size_bytes`; migrate all
-   existing payload receiver calls mechanically.
+3. Change payload receivers to require `dst_l1` and `size_bytes`; migrate the
+   helper tests first. Production source migration is limited to GroupNorm in
+   Stage 2 and Conv3D in Stage 4.
 4. Implement one-send/many-rectangles behavior for payloads and for Flag and
    Counter signals.
 5. Build host code and pass focused host and device helper tests as one gate.
@@ -260,6 +262,11 @@ Conv3D unit and nightly suites.
 Run the complete helper regressions, GroupNorm and Conv3D suites sequentially,
 check source audits and fresh JIT coverage, compare performance to the existing
 routes, and update the public helper documentation and migration records.
+
+This rollout does not reconcile or remigrate the full historical helper fleet.
+Completion is based on the helper tests plus GroupNorm and Conv3D; other
+operations that use the changed payload receiver API are left for a separate
+migration pass.
 
 ## Validation matrix
 
@@ -315,6 +322,7 @@ Host changes require `./build_metal.sh`; kernel-only changes do not.
 - More than one receiver call for one semantic send.
 - Moving GroupNorm or Conv3D synchronization that is independent of multicast
   transport into the helper.
+- Reconciling or remigrating every existing `mcast_pipe` operation.
 
 ## Completion criteria
 

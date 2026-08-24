@@ -75,7 +75,7 @@ void kernel_main() {
             noc.async_read_barrier();
             send_pipe->send(cb_addr, cb_addr, payload_bytes);
         } else if (can_receive) {
-            recv_pipe->receive(r);
+            recv_pipe->receive(cb_addr, payload_bytes, r);
         } else {
             continue;  // sender-only core outside its sender phase
         }

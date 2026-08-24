@@ -23,7 +23,9 @@ def test_mcast_args_owns_its_compile_time_presence_tag():
     assert "McastArgs::sender() cannot be used when the presence tag is false" in helper
     assert "McastArgs::receiver() cannot be used when the presence tag is false" in helper
     assert "return {0u};" in host
-    assert host.count("            1u,\n            has_receivers_ ? 1u : 0u,") == 2
+    assert "if (compact_wire_)" in host
+    assert host.count("                1u,\n                has_receivers_ ? 1u : 0u,") == 1
+    assert host.count("            2u,\n            has_receivers_ ? 1u : 0u,") == 1
 
 
 def test_mcast_args_has_one_template_owned_runtime_base():

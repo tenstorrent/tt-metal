@@ -26,27 +26,22 @@ template <
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
-    bool ROTATING_SENDER>
-SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::
+    bool ROTATING_SENDER,
+    uint32_t MAX_RECTS>
+SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    MAX_RECTS>::
     SenderPipe(const Noc& noc, const McastRect<NOC_ID>& dest, uint32_t consumer_ack_count) :
-    noc_(noc), dest_(dest), data_ready_(DATA_READY_SEM_ID), consumer_ready_(CONSUMER_READY_SEM_ID) {
+    noc_(noc), data_ready_(DATA_READY_SEM_ID), consumer_ready_(CONSUMER_READY_SEM_ID) {
     ASSERT(noc_.get_noc_id() == NOC_ID);
-    // Whether this sender's own core lies in the receiver rect is fixed at construction (my coords
-    // and the rect are both constant), so compute it ONCE here rather than per send().
-    in_rect_ = my_x[NOC_ID] >= dest_.xlo() && my_x[NOC_ID] <= dest_.xhi() && my_y[NOC_ID] >= dest_.ylo() &&
-               my_y[NOC_ID] <= dest_.yhi();
-    // Fan-out, derived from the rect area (num_dests == area ± source) — precomputed so send()
-    // branch-selects between two constants with no arithmetic:
-    //   * EXCLUDE-source count: area minus self if this sender is in its own box;
-    //   * INCLUDE-source (loopback) count: +1 for the sender's own self-copy.
-    num_dests_excl_ = dest_.area() - (in_rect_ ? 1u : 0u);
-    num_dests_incl_ = num_dests_excl_ + 1u;
-    // Degenerate self-only box (a 1x1 rect that IS the sender): no receivers, send() does a local
-    // copy. (`area==1 && in_rect` => excl==0.)
-    degenerate_ = (num_dests_excl_ == 0u);
-    // Handshake ack count: the dense default IS the EXCLUDE fan-out (every landing core acks);
-    // a divergent caller overrides with its smaller active-core count.
-    ack_count_ = (consumer_ack_count == ACK_EQUALS_FANOUT) ? num_dests_excl_ : consumer_ack_count;
+    dests_[0] = dest;
+    num_rects_ = 1;
+    initialize_geometry_(consumer_ack_count);
 }
 
 template <
@@ -55,15 +50,86 @@ template <
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
-    bool ROTATING_SENDER>
+    bool ROTATING_SENDER,
+    uint32_t MAX_RECTS>
+SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    MAX_RECTS>::SenderPipe(
+    const Noc& noc, const uint32_t* dest_coords, uint32_t num_rects, uint32_t consumer_ack_count) :
+    noc_(noc), data_ready_(DATA_READY_SEM_ID), consumer_ready_(CONSUMER_READY_SEM_ID), num_rects_(num_rects) {
+    ASSERT(noc_.get_noc_id() == NOC_ID);
+    ASSERT(num_rects_ <= MAX_RECTS);
+    for (uint32_t i = 0; i < num_rects_; ++i) {
+        dests_[i] = McastRect<NOC_ID>(
+            dest_coords[4u * i + 0u],
+            dest_coords[4u * i + 1u],
+            dest_coords[4u * i + 2u],
+            dest_coords[4u * i + 3u]);
+    }
+    initialize_geometry_(consumer_ack_count);
+}
+
+template <
+    uint8_t NOC_ID,
+    uint32_t DATA_READY_SEM_ID,
+    bool PRE_HANDSHAKE,
+    uint32_t CONSUMER_READY_SEM_ID,
+    DataReadySignal DATA_READY_SIGNAL,
+    bool ROTATING_SENDER,
+    uint32_t MAX_RECTS>
+void SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    MAX_RECTS>::initialize_geometry_(uint32_t consumer_ack_count) {
+    total_num_dests_excl_ = 0;
+    for (uint32_t i = 0; i < num_rects_; ++i) {
+        const auto& dest = dests_[i];
+        in_rect_[i] = my_x[NOC_ID] >= dest.xlo() && my_x[NOC_ID] <= dest.xhi() && my_y[NOC_ID] >= dest.ylo() &&
+                      my_y[NOC_ID] <= dest.yhi();
+        num_dests_excl_[i] = dest.area() - (in_rect_[i] ? 1u : 0u);
+        num_dests_incl_[i] = num_dests_excl_[i] + 1u;
+        total_num_dests_excl_ += num_dests_excl_[i];
+    }
+    degenerate_ = total_num_dests_excl_ == 0u;
+    ack_count_ = consumer_ack_count == ACK_EQUALS_FANOUT ? total_num_dests_excl_ : consumer_ack_count;
+}
+
+template <
+    uint8_t NOC_ID,
+    uint32_t DATA_READY_SEM_ID,
+    bool PRE_HANDSHAKE,
+    uint32_t CONSUMER_READY_SEM_ID,
+    DataReadySignal DATA_READY_SIGNAL,
+    bool ROTATING_SENDER,
+    uint32_t MAX_RECTS>
 template <SourceL1Guard SOURCE_GUARD>
 FORCE_INLINE void
-SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::send(
+SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    MAX_RECTS>::send(
     uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
     // Degenerate: no receiver cores. If the sender is in its own box and lands a copy elsewhere, do
     // a local copy (a loopback to just self may hang); else nothing.
     if (degenerate_) {
-        if (in_rect_ && src_l1 != dst_l1) {
+        bool self_destination = false;
+        for (uint32_t i = 0; i < num_rects_; ++i) {
+            self_destination = self_destination || in_rect_[i];
+        }
+        if (self_destination && src_l1 != dst_l1) {
             local_copy_(src_l1, dst_l1, size);
             // The sender does not call receive() on itself, so ensure the local copy lands before
             // send() returns and the data can be consumed.
@@ -78,17 +144,21 @@ SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA
     // Loopback iff the sender is in the box AND lands its own copy somewhere other than its source
     // (src == dst means the copy is already in place; never self-overwrite in place). The
     // in-box test is precomputed in the ctor; only the src/dst aliasing varies per send.
-    const bool loopback = in_rect_ && src_l1 != dst_l1;
-    // Branch-select between the two precomputed fan-out counts (no arithmetic): the loopback path
-    // adds the sender's own self-copy (+1), which never acks, so the consumer_ready wait above stays
-    // on ack_count_ regardless.
-    const uint32_t mcast_dests = loopback ? num_dests_incl_ : num_dests_excl_;
-    send_data_(src_l1, dst_l1, size, loopback, mcast_dests);
-    signal_ready_(loopback, mcast_dests);  // the signal rides the same mode as the data
+    bool any_loopback = false;
+    for (uint32_t i = 0; i < num_rects_; ++i) {
+        const bool loopback = in_rect_[i] && src_l1 != dst_l1;
+        const uint32_t mcast_dests = loopback ? num_dests_incl_[i] : num_dests_excl_[i];
+        if (mcast_dests == 0u) {
+            continue;
+        }
+        send_data_(i, src_l1, dst_l1, size, loopback, mcast_dests);
+        signal_ready_(i, loopback, mcast_dests);
+        any_loopback = any_loopback || loopback;
+    }
     // The default post-signal fence is also the source-L1 lifetime guard. CallerManaged may omit the
     // remote-only SENT wait, but cannot omit completion required by loopback, rotating-Flag reset, or
     // Counter atomic acknowledgement semantics.
-    fence_<SOURCE_GUARD>(loopback);
+    fence_<SOURCE_GUARD>(any_loopback);
     // A rotating sender receives on this same flag cell in another round. Clear the local multicast
     // source after the fence proves it is no longer in use, or that later receive() can consume this
     // core's own stale value instead of waiting for the next sender.
@@ -103,8 +173,16 @@ template <
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
-    bool ROTATING_SENDER>
-void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::
+    bool ROTATING_SENDER,
+    uint32_t MAX_RECTS>
+void SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    MAX_RECTS>::
     send_signal(uint32_t value) {
     if (degenerate_) {
         return;  // nobody to signal
@@ -118,7 +196,11 @@ void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID,
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
         ASSERT(value == VALID);
     }
-    signal_ready_(/*loopback=*/false, num_dests_excl_, value);
+    for (uint32_t i = 0; i < num_rects_; ++i) {
+        if (num_dests_excl_[i] > 0u) {
+            signal_ready_(i, /*loopback=*/false, num_dests_excl_[i], value);
+        }
+    }
     fence_<SourceL1Guard::Guard>(/*loopback=*/false);
     if constexpr (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Flag) {
         data_ready_.set(INVALID);
@@ -131,11 +213,19 @@ template <
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
-    bool ROTATING_SENDER>
+    bool ROTATING_SENDER,
+    uint32_t MAX_RECTS>
 FORCE_INLINE void
-SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::
-    send_data_(uint32_t src_l1, uint32_t dst_l1, uint32_t size, bool loopback, uint32_t mcast_dests) {
-    const auto& r = dest_.bounds();  // routing-correct start/end (precomputed in the rect's ctor)
+SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    MAX_RECTS>::send_data_(
+    uint32_t rect_index, uint32_t src_l1, uint32_t dst_l1, uint32_t size, bool loopback, uint32_t mcast_dests) {
+    const auto& r = dests_[rect_index].bounds();
     UnicastEndpoint src_ep;
     MulticastEndpoint dst_ep;
     const typename noc_traits_t<UnicastEndpoint>::src_args_type src_args{.addr = src_l1};
@@ -158,11 +248,18 @@ template <
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
-    bool ROTATING_SENDER>
+    bool ROTATING_SENDER,
+    uint32_t MAX_RECTS>
 FORCE_INLINE void
-SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::
-    signal_ready_(bool loopback, uint32_t mcast_dests, uint32_t value) {
-    const auto& r = dest_.bounds();  // routing-correct start/end (precomputed in the rect's ctor)
+SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    MAX_RECTS>::signal_ready_(uint32_t rect_index, bool loopback, uint32_t mcast_dests, uint32_t value) {
+    const auto& r = dests_[rect_index].bounds();
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
         data_ready_.inc_multicast(noc_, r.sx, r.sy, r.ex, r.ey, /*value=*/1, mcast_dests);  // monotone +1
     } else {
@@ -186,10 +283,18 @@ template <
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
-    bool ROTATING_SENDER>
+    bool ROTATING_SENDER,
+    uint32_t MAX_RECTS>
 template <SourceL1Guard SOURCE_GUARD>
 FORCE_INLINE void
-SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::fence_(
+SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    MAX_RECTS>::fence_(
     bool loopback) {
     // A real sender loopback always needs ACKED completion: this protects the locally published
     // destination as well as the source lifetime, independent of SOURCE_GUARD.
@@ -216,8 +321,16 @@ template <
     bool PRE_HANDSHAKE,
     uint32_t CONSUMER_READY_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL,
-    bool ROTATING_SENDER>
-void SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, ROTATING_SENDER>::
+    bool ROTATING_SENDER,
+    uint32_t MAX_RECTS>
+void SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    MAX_RECTS>::
     local_copy_(uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
     ASSERT(src_l1 != dst_l1);
     UnicastEndpoint dst_ep;
@@ -257,7 +370,9 @@ template <
     DataReadySignal DATA_READY_SIGNAL,
     uint32_t NUM_SENDERS>
 void ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, NUM_SENDERS>::receive(
-    uint32_t round) {
+    uint32_t dst_l1, uint32_t size_bytes, uint32_t round) {
+    (void)dst_l1;
+    (void)size_bytes;
     const uint32_t sender_index = round % NUM_SENDERS;
     const uint32_t sender_x = coords_[2 * sender_index + 0];
     const uint32_t sender_y = coords_[2 * sender_index + 1];

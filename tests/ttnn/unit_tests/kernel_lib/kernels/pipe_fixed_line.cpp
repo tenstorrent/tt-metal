@@ -83,7 +83,7 @@ void kernel_main() {
         // RECEIVER — built ONCE above the block loop and reused every block (no per-block reconstruction).
         auto pipe = mc.receiver(noc);
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
-            pipe.receive();
+            pipe.receive(cb_addr, payload_bytes);
             for (uint32_t i = 0; i < payload_pages; ++i) {
                 noc.async_write(
                     cb_obj,

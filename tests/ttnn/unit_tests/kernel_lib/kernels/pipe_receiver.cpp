@@ -33,11 +33,13 @@ void kernel_main() {
 
     // reserve the landing region: write_ptr == base == the address the sender mcasts to
     cb_dst_obj.reserve_back(payload_pages);
+    const uint32_t dst_addr = cb_dst_obj.get_write_ptr();
+    constexpr uint32_t payload_bytes = payload_pages * page_bytes;
 
     auto pipe = mc.receiver(noc);
 
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
-        pipe.receive();
+        pipe.receive(dst_addr, payload_bytes);
     }
 
     cb_dst_obj.push_back(payload_pages);

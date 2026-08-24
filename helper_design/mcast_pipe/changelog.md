@@ -6,6 +6,32 @@ feedback round lands.
 
 ---
 
+## Round 38 — multicast families and exact multi-rectangle transport (2026-08-24)
+
+- Added `McastGroup` and `McastFamily` as the host model for one semantic stream
+  containing disjoint exact receiver groups. Families validate complete group
+  footprints, sender-mode compatibility, and rotation spans; own shared
+  semaphores and coordinate conversion; and select each core's group through
+  runtime arguments. `Mcast1D` and `Mcast2D` now delegate their wire emission to
+  family convenience constructions.
+- Added a tagged extended family wire carrying a padded per-family rectangle
+  capacity and per-group live rectangle/ack counts. One `SenderPipe::send()` or
+  `send_signal()` performs one readiness phase, covers every exact rectangle,
+  and performs one completion phase. Dense ordinary groups retain the compact
+  tag-1 wire.
+- Payload `ReceiverPipe::receive()` now requires the destination L1 address and
+  byte count needed by the upcoming relay transport. API version advances from
+  v14 to `MCAST_PIPE_API_VERSION 15`. In this focused rollout only helper tests,
+  GroupNorm, and Conv3D migrate that source API; the historical operation fleet
+  and migration ledger are intentionally not reconciled here.
+- Added host and device coverage for exact 2/3/N-rectangle payloads on both
+  NoCs, unequal concurrent groups, fixed and rotating senders, Flag and Counter
+  control signals, dynamic destinations/sizes, source lifetime, and aliasing.
+  Validation passed: release build, 45/45 focused host tests, 2/2 applicable
+  source audits, and 91/91 helper device tests under `--dev`. Chain forwarding
+  and the GroupNorm/Conv3D production proofs are recorded in the staged plan
+  and tracker and are not claimed by this round.
+
 ## Round 37 — helper-design document and inventory reconciliation (2026-08-23)
 
 - Audited every helper-design artifact and separated live guidance from dated

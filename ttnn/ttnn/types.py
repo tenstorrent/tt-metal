@@ -127,5 +127,7 @@ Mcast1D = ttnn._ttnn.mcast_host.Mcast1D
 Mcast1DShape = ttnn._ttnn.mcast_host.Mcast1DShape
 Mcast1DSenderPlacement = ttnn._ttnn.mcast_host.Mcast1DSenderPlacement
 Mcast2D = ttnn._ttnn.mcast_host.Mcast2D
+McastGroup = ttnn._ttnn.mcast_host.McastGroup
+McastFamily = ttnn._ttnn.mcast_host.McastFamily
 McastConfig = ttnn._ttnn.mcast_host.McastConfig
 McastDataReady = ttnn._ttnn.mcast_host.McastDataReady

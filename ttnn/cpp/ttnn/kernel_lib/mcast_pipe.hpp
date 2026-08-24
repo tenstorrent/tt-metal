@@ -52,7 +52,7 @@
 // re-materialization changes the caller-facing API (renamed/removed type, moved param, changed
 // count/flag semantics — anything that forces a call site rewrite); leave it for internal-only
 // changes.
-#define MCAST_PIPE_API_VERSION 14
+#define MCAST_PIPE_API_VERSION 15
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -113,6 +113,8 @@ struct McastRect {
     struct Bounds {
         uint32_t sx, sy, ex, ey;
     };
+
+    constexpr McastRect() : McastRect(0, 0, 0, 0) {}
 
     // Coords may arrive in either ordering; normalize + precompute the routing corners ONCE.
     constexpr McastRect(uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) :
@@ -184,12 +186,14 @@ template <
     bool PRE_HANDSHAKE = true,
     uint32_t CONSUMER_READY_SEM_ID = UNUSED_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL = DataReadySignal::Flag,
-    bool ROTATING_SENDER = false>
+    bool ROTATING_SENDER = false,
+    uint32_t MAX_RECTS = 1>
 class SenderPipe {
     static_assert(
         !PRE_HANDSHAKE || CONSUMER_READY_SEM_ID != UNUSED_SEM_ID,
         "PRE_HANDSHAKE=true requires a real CONSUMER_READY_SEM_ID (the receiver->sender readiness ack). "
         "Pass it, or set PRE_HANDSHAKE=false for a fire-and-forget broadcast.");
+    static_assert(MAX_RECTS >= 1, "SenderPipe needs storage for at least one multicast rectangle.");
 
 public:
     // `dest` — receiver rectangle (geometry only); its area gives the runtime mcast fan-out.
@@ -197,6 +201,10 @@ public:
     // ACK_EQUALS_FANOUT, meaning "= the EXCLUDE fan-out the rect derives" (the dense case). Both are
     // runtime ctor args; everything they feed is precomputed ONCE here so send() does no arithmetic.
     explicit SenderPipe(const Noc& noc, const McastRect<NOC_ID>& dest, uint32_t consumer_ack_count = ACK_EQUALS_FANOUT);
+
+    // Multi-rectangle form used by McastFamily. `dest_coords` is MAX_RECTS packed
+    // [x0,y0,x1,y1] records in stable runtime-argument storage; only the first `num_rects` are live.
+    explicit SenderPipe(const Noc& noc, const uint32_t* dest_coords, uint32_t num_rects, uint32_t consumer_ack_count);
 
     // ===== DATA channel (a block + a ready signal) =====
     // By default send() is atomic and absorbs ALL FOUR guards:
@@ -223,12 +231,13 @@ public:
     // other rounds, without duplicating the rectangle-containment calculation at the call site.
 private:
     // ---- data multicast via the Noc object ----
-    FORCE_INLINE void send_data_(uint32_t src_l1, uint32_t dst_l1, uint32_t size, bool loopback, uint32_t mcast_dests);
+    FORCE_INLINE void send_data_(
+        uint32_t rect_index, uint32_t src_l1, uint32_t dst_l1, uint32_t size, bool loopback, uint32_t mcast_dests);
 
     // ---- signal the receivers the data is ready ----
     // `loopback` matches the data mcast of the same send(): when send() included the sender's own core
     // as a receiver, the signal must reach it too. send_signal() carries no data, so it never loops back.
-    FORCE_INLINE void signal_ready_(bool loopback, uint32_t mcast_dests, uint32_t value = VALID);
+    FORCE_INLINE void signal_ready_(uint32_t rect_index, bool loopback, uint32_t mcast_dests, uint32_t value = VALID);
 
     // ---- post-send fence ----
     template <SourceL1Guard SOURCE_GUARD>
@@ -237,15 +246,19 @@ private:
     // ---- local L1 self-copy (degenerate self-only guard) via the Noc object ----
     void local_copy_(uint32_t src_l1, uint32_t dst_l1, uint32_t size);
 
+    void initialize_geometry_(uint32_t consumer_ack_count);
+
     Noc noc_;
-    McastRect<NOC_ID> dest_;
+    McastRect<NOC_ID> dests_[MAX_RECTS];
     Semaphore<> data_ready_;
     Semaphore<> consumer_ready_;
-    bool in_rect_;             // is this sender's own core inside the receiver rect? computed once in the ctor
-    bool degenerate_;          // self-only box (no receivers) -> send() does a local copy
-    uint32_t num_dests_excl_;  // EXCLUDE-source mcast fan-out  = area - (in_rect?1:0)
-    uint32_t num_dests_incl_;  // INCLUDE-source (loopback) fan-out = num_dests_excl_ + 1
-    uint32_t ack_count_;       // consumer-ready handshake wait count (PRE_HANDSHAKE only)
+    bool in_rect_[MAX_RECTS];
+    uint32_t num_dests_excl_[MAX_RECTS];
+    uint32_t num_dests_incl_[MAX_RECTS];
+    uint32_t num_rects_ = 0;
+    uint32_t total_num_dests_excl_ = 0;
+    bool degenerate_ = true;
+    uint32_t ack_count_;
 };
 
 // =============================================================================
@@ -290,7 +303,7 @@ public:
 
     // Handle receiver readiness when enabled, then wait for data from the sender selected by `round`.
     // Sender selection repeats every NUM_SENDERS rounds, so callers pass the absolute work round.
-    void receive(uint32_t round = 0);
+    void receive(uint32_t dst_l1, uint32_t size_bytes, uint32_t round = 0);
 
     // Wait for the next control signal. The pipe advances its internal absolute round and wraps sender
     // selection every NUM_SENDERS events. Returns the Flag value or consumed Counter event count.
@@ -318,9 +331,12 @@ private:
 // single-rect is a pure HOST concern (which cores send, what rect); the decoder is shape-agnostic, so
 // the SAME McastArgs serves a row-family, a column-family, and a single-sender->rect.
 //
-//   CT block, present (7 words):
-//                        [ present, has_receivers, data_ready_sem_id, consumer_ready_sem_id, ack_count,
+//   CT block, compact present (tag 1, 7 words):
+//                        [ 1, has_receivers, data_ready_sem_id, consumer_ready_sem_id, ack_count,
 //                          flags, rotating_span ]
+//   CT block, extended family (tag 2, 7 words):
+//                        [ 2, has_receivers, data_ready_sem_id, consumer_ready_sem_id, flags,
+//                          rotating_span, max_rectangles ]
 //   CT block, absent (1 word): [ present = 0 ]
 //        flags bit0 = pre_handshake (gate on the receiver->sender readiness ack)
 //        flags bit1 = data-ready signal (0 = Flag, 1 = Counter)
@@ -332,6 +348,12 @@ private:
 //   RT block, rotating (rotating_span > 0), 6 + 2*rotating_span words:
 //        every core -> [ full-line rect corners, s0_x, s0_y, ... ]
 //        followed by [role flags, sender phase]
+//   RT block, extended family:
+//        [4*max_rectangles packed rectangle words, 2*num_senders sender-coordinate words,
+//         4 transport-topology words, role flags, sender phase, rectangle count, ack count, transport]
+//        The host pads each group's rectangle list to the family maximum, so every core keeps one
+//        compile-time-decoded boundary while its live rectangle count and handshake count remain
+//        per-group runtime values.
 //
 // The pipe *behaviour* (pre_handshake, data-ready signal, dense/divergent ack, rotating) is NOT a
 // call-site knob any more — the host computes each and rides it on the wire, and McastArgs feeds them
@@ -344,9 +366,9 @@ private:
 // The one mcast-args decoder. Chainable in BOTH arg lists, exactly like TensorAccessorArgs:
 //   McastArgs<a.next_compile_time_args_offset(), a.next_runtime_args_offset()> picks up right after a
 //   previous family `a` in CT and RT alike — no hand-indexed slots. Its first CT word is a presence
-//   tag. A false tag consumes no payload CT/RT words; a true tag is followed by the ordinary config.
-//   A zero rotating_span selects the fixed sender's 6-word RT block; a non-zero value selects the rotating wire
-//   (6 + 2*rotating_span RT words) and rotating-sender pipe behaviour. The CT reads are constexpr
+//   tag. A false tag consumes no payload CT/RT words; tag 1 selects the compact ordinary wire and tag
+//   2 selects the extended family wire. A zero rotating_span selects fixed-sender behavior; a non-zero
+//   value selects rotating-sender behavior. The CT reads are constexpr
 //   (valid non-type template args); the RT reads are lazy (get_arg_val at access), so the object holds
 //   only its template bases and stays constexpr-constructible for the chain.
 namespace detail {
@@ -361,15 +383,19 @@ template <uint32_t CT_BASE, uint32_t RT_BASE>
 struct McastArgsImpl<true, CT_BASE, RT_BASE> {
     constexpr McastArgsImpl() = default;
     static constexpr bool active = true;
+    static constexpr uint32_t wire_tag = get_compile_time_arg_val(CT_BASE);
+    static constexpr bool extended = wire_tag == 2u;
+    static_assert(wire_tag == 1u || wire_tag == 2u, "McastArgs: unknown present wire tag");
 
     // Use `has_receivers` to guard sender work. The per-core role metadata reports which pipe faces
     // this kernel instance may construct and its phase within the repeating sender rotation.
     static constexpr uint32_t has_receivers = get_compile_time_arg_val(CT_BASE + 1);
     static constexpr uint32_t data_ready = get_compile_time_arg_val(CT_BASE + 2);
     static constexpr uint32_t consumer_ready = get_compile_time_arg_val(CT_BASE + 3);
-    static constexpr uint32_t ack_count = get_compile_time_arg_val(CT_BASE + 4);
-    static constexpr uint32_t flags = get_compile_time_arg_val(CT_BASE + 5);
-    static constexpr uint32_t rotating_span = get_compile_time_arg_val(CT_BASE + 6);
+    static constexpr uint32_t legacy_ack_count = extended ? 0u : get_compile_time_arg_val(CT_BASE + 4);
+    static constexpr uint32_t flags = get_compile_time_arg_val(CT_BASE + (extended ? 4u : 5u));
+    static constexpr uint32_t rotating_span = get_compile_time_arg_val(CT_BASE + (extended ? 5u : 6u));
+    static constexpr uint32_t max_rectangles = extended ? get_compile_time_arg_val(CT_BASE + 6u) : 1u;
 
     // Pipe behaviour lifted off the flags word (host-computed): the caller never spells these.
     static constexpr bool pre_handshake = (flags & 0x1u) != 0u;
@@ -384,8 +410,8 @@ struct McastArgsImpl<true, CT_BASE, RT_BASE> {
     // storage. Callers should not need an unevaluated sender()/receiver() call merely to recover the
     // type that this argument block already determines.
     template <uint8_t NOC_ID>
-    using SenderPipeFor =
-        dataflow_kernel_lib::SenderPipe<NOC_ID, data_ready, pre_handshake, consumer_ready, signal, rotating>;
+    using SenderPipeFor = dataflow_kernel_lib::
+        SenderPipe<NOC_ID, data_ready, pre_handshake, consumer_ready, signal, rotating, max_rectangles>;
     using SenderPipe = SenderPipeFor<noc_index>;
     using ReceiverPipe =
         dataflow_kernel_lib::ReceiverPipe<data_ready, pre_handshake, consumer_ready, signal, num_senders>;
@@ -394,8 +420,17 @@ struct McastArgsImpl<true, CT_BASE, RT_BASE> {
     // is followed by [role flags, sender phase], where a non-sender's phase is UINT32_MAX.
     // Offsets for chaining the next argument decoder.
     static constexpr uint32_t next_compile_time_args_offset() { return CT_BASE + 7; }
-    static constexpr uint32_t topology_runtime_args() { return rotating ? (4u + 2u * rotating_span) : 4u; }
-    static constexpr uint32_t num_runtime_args() { return topology_runtime_args() + 2u; }
+    static constexpr uint32_t sender_coord_runtime_args() { return rotating ? rotating_span : 1u; }
+    static constexpr uint32_t sender_coords_runtime_offset() {
+        return extended ? 4u * max_rectangles : (rotating ? 4u : 0u);
+    }
+    static constexpr uint32_t topology_runtime_args() {
+        if constexpr (extended) {
+            return 4u * max_rectangles + 2u * sender_coord_runtime_args() + 4u;
+        }
+        return rotating ? (4u + 2u * rotating_span) : 4u;
+    }
+    static constexpr uint32_t num_runtime_args() { return topology_runtime_args() + (extended ? 5u : 2u); }
     static constexpr uint32_t next_runtime_args_offset() { return RT_BASE + num_runtime_args(); }
 
     // ---- pipe construction: NO behaviour knobs; everything comes from the wire ----
@@ -407,6 +442,24 @@ struct McastArgsImpl<true, CT_BASE, RT_BASE> {
     bool can_receive() const { return (get_arg_val<uint32_t>(RT_BASE + topology_runtime_args()) & 0x2u) != 0u; }
     // This is a recurring sender phase in [0, num_senders), not an absolute work round.
     uint32_t sender_round() const { return get_arg_val<uint32_t>(RT_BASE + topology_runtime_args() + 1u); }
+    uint32_t rectangle_count() const {
+        if constexpr (extended) {
+            return get_arg_val<uint32_t>(RT_BASE + topology_runtime_args() + 2u);
+        }
+        return 1u;
+    }
+    uint32_t ack_count() const {
+        if constexpr (extended) {
+            return get_arg_val<uint32_t>(RT_BASE + topology_runtime_args() + 3u);
+        }
+        return legacy_ack_count;
+    }
+    uint32_t transport() const {
+        if constexpr (extended) {
+            return get_arg_val<uint32_t>(RT_BASE + topology_runtime_args() + 4u);
+        }
+        return 0u;
+    }
     static constexpr uint32_t sender_index(uint32_t round) { return round % num_senders; }
     bool should_send(uint32_t round) const { return can_send() && sender_index(round) == sender_round(); }
 
@@ -414,7 +467,11 @@ struct McastArgsImpl<true, CT_BASE, RT_BASE> {
     template <uint8_t NOC_ID = noc_index>
     SenderPipeFor<NOC_ID> sender(const Noc& noc) const {
         ASSERT(can_send());
-        return SenderPipeFor<NOC_ID>(noc, rect<NOC_ID>(), ack_count);
+        if constexpr (extended) {
+            const uint32_t* rectangles = reinterpret_cast<const uint32_t*>(get_arg_addr(RT_BASE));
+            return SenderPipeFor<NOC_ID>(noc, rectangles, rectangle_count(), ack_count());
+        }
+        return SenderPipeFor<NOC_ID>(noc, rect<NOC_ID>(), legacy_ack_count);
     }
 
     // receiver(): hand ReceiverPipe a non-owning view directly into the stable RT block. FIXED: the
@@ -423,7 +480,8 @@ struct McastArgsImpl<true, CT_BASE, RT_BASE> {
     // num_senders rounds.
     ReceiverPipe receiver(const Noc& noc) const {
         ASSERT(can_receive());
-        const uint32_t* coords = reinterpret_cast<const uint32_t*>(get_arg_addr(RT_BASE + (rotating ? 4 : 0)));
+        const uint32_t* coords =
+            reinterpret_cast<const uint32_t*>(get_arg_addr(RT_BASE + sender_coords_runtime_offset()));
         return ReceiverPipe(noc, coords);
     }
 
@@ -440,11 +498,15 @@ struct McastArgsImpl<true, CT_BASE, RT_BASE> {
             get_arg_val<uint32_t>(RT_BASE + 3));
     }
     // Receiver view, FIXED: the sender's coords (the target of this receiver's readiness ack).
-    uint32_t sender_x() const { return get_arg_val<uint32_t>(RT_BASE + 0); }
-    uint32_t sender_y() const { return get_arg_val<uint32_t>(RT_BASE + 1); }
+    uint32_t sender_x() const { return get_arg_val<uint32_t>(RT_BASE + sender_coords_runtime_offset() + 0u); }
+    uint32_t sender_y() const { return get_arg_val<uint32_t>(RT_BASE + sender_coords_runtime_offset() + 1u); }
     // Receiver view, ROTATING: the sender broadcasting on `round`, round in [0, rotating_span).
-    uint32_t sender_x(uint32_t round) const { return get_arg_val<uint32_t>(RT_BASE + 4 + 2 * round + 0); }
-    uint32_t sender_y(uint32_t round) const { return get_arg_val<uint32_t>(RT_BASE + 4 + 2 * round + 1); }
+    uint32_t sender_x(uint32_t round) const {
+        return get_arg_val<uint32_t>(RT_BASE + sender_coords_runtime_offset() + 2u * round + 0u);
+    }
+    uint32_t sender_y(uint32_t round) const {
+        return get_arg_val<uint32_t>(RT_BASE + sender_coords_runtime_offset() + 2u * round + 1u);
+    }
 };
 
 template <uint32_t CT_BASE, uint32_t RT_BASE>

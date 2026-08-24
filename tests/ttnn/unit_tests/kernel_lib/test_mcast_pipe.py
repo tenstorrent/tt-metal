@@ -196,6 +196,347 @@ def _run_pipe(
     logger.info(f"variant={variant} rect={recv_rect} sender={sender_logical} N={n_iters}: PASS")
 
 
+def _coords_in_ranges(ranges):
+    coords = []
+    for (x0, y0), (x1, y1) in ranges:
+        coords.extend((x, y) for y in range(y0, y1 + 1) for x in range(x0, x1 + 1))
+    return coords
+
+
+def _core_range_set(ranges):
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*start), ttnn.CoreCoord(*end)) for start, end in ranges])
+
+
+def _run_family_pipe(
+    device,
+    group_specs,
+    *,
+    data_ready_mode=ttnn.McastDataReady.Flag,
+    payload_tiles=2,
+    n_iters=3,
+    handshake=True,
+    sender_noc=0,
+):
+    """Run one McastFamily whose group specs are (exact receiver ranges, fixed sender)."""
+    groups = []
+    receiver_ranges = []
+    sender_ranges = []
+    receiver_coords = []
+    sender_coords = []
+    for ranges, sender in group_specs:
+        receiver_set = _core_range_set(ranges)
+        groups.append(ttnn.McastGroup(receiver_set, ttnn.CoreCoord(*sender)))
+        receiver_ranges.extend(ranges)
+        sender_ranges.append((sender, sender))
+        receiver_coords.extend(_coords_in_ranges(ranges))
+        sender_coords.append(sender)
+
+    family = ttnn.McastFamily(
+        device,
+        groups,
+        ttnn.McastConfig(
+            noc=ttnn.NOC.NOC_1 if sender_noc else ttnn.NOC.NOC_0,
+            handshake=handshake,
+            data_ready=data_ready_mode,
+        ),
+    )
+    receiver_crs = _core_range_set(receiver_ranges)
+    sender_crs = _core_range_set(sender_ranges)
+    participating_crs = _core_range_set(receiver_ranges + sender_ranges)
+
+    payload = (
+        torch.arange(0, payload_tiles * 1024, dtype=torch.float32)
+        .reshape([1, 1, 32, 32 * payload_tiles])
+        .to(torch.bfloat16)
+    )
+    input_tensor = ttnn.from_torch(
+        payload,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([len(receiver_coords), 1, 32, 32 * payload_tiles]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    cb_src, cb_dst = 0, 1
+    cbs = [
+        ttnn.CBDescriptor(
+            total_size=payload_tiles * TILE_BYTES,
+            core_ranges=participating_crs,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=cb_src, data_format=ttnn.bfloat16, page_size=TILE_BYTES)
+            ],
+        ),
+        ttnn.CBDescriptor(
+            total_size=payload_tiles * TILE_BYTES,
+            core_ranges=participating_crs,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=cb_dst, data_format=ttnn.bfloat16, page_size=TILE_BYTES)
+            ],
+        ),
+    ]
+
+    sender_ct = [cb_src, cb_dst] + list(family.compile_time_args())
+    sender_ct += [payload_tiles, TILE_BYTES, n_iters, 1]
+    sender_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    sender_rt = ttnn.RuntimeArgs()
+    for sx, sy in sender_coords:
+        sender_rt[sx][sy] = [input_tensor.buffer_address(), 0] + list(family.runtime_args(ttnn.CoreCoord(sx, sy)))
+    sender_kernel = ttnn.KernelDescriptor(
+        kernel_source=f"{KERNEL_DIR}/pipe_sender.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=sender_crs,
+        compile_time_args=sender_ct,
+        runtime_args=sender_rt,
+        config=ttnn.WriterConfigDescriptor() if sender_noc else ttnn.ReaderConfigDescriptor(),
+    )
+
+    receiver_ct = [cb_dst] + list(family.compile_time_args()) + [payload_tiles, TILE_BYTES, n_iters]
+    receiver_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    receiver_rt = ttnn.RuntimeArgs()
+    for output_index, (rx, ry) in enumerate(receiver_coords):
+        receiver_rt[rx][ry] = [output_tensor.buffer_address(), output_index * payload_tiles] + list(
+            family.runtime_args(ttnn.CoreCoord(rx, ry))
+        )
+    receiver_kernel = ttnn.KernelDescriptor(
+        kernel_source=f"{KERNEL_DIR}/pipe_receiver.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=receiver_crs,
+        compile_time_args=receiver_ct,
+        runtime_args=receiver_rt,
+        config=ttnn.ReaderConfigDescriptor() if sender_noc else ttnn.WriterConfigDescriptor(),
+    )
+
+    output = ttnn.generic_op(
+        [input_tensor, output_tensor],
+        ttnn.ProgramDescriptor(
+            kernels=[sender_kernel, receiver_kernel],
+            semaphores=family.owned_semaphores(),
+            cbs=cbs,
+        ),
+    )
+    torch_output = ttnn.to_torch(output).reshape(len(receiver_coords), 1, 32, 32 * payload_tiles)
+    expected = payload[0].to(torch.float32)
+    for output_index in range(len(receiver_coords)):
+        assert torch.equal(torch_output[output_index].to(torch.float32), expected)
+    return family
+
+
+MULTI_RECT_GROUPS = {
+    2: [([((0, 0), (1, 0)), ((0, 2), (1, 2))], (4, 0))],
+    3: [([((0, 0), (1, 0)), ((0, 2), (1, 2)), ((0, 4), (1, 4))], (4, 0))],
+    4: [([((0, 0), (1, 0)), ((0, 2), (1, 2)), ((0, 4), (1, 4)), ((0, 6), (1, 6))], (4, 0))],
+}
+
+
+@pytest.mark.parametrize("rectangle_count", [2, 3, 4])
+@pytest.mark.parametrize("sender_noc", [0, 1], ids=["noc0", "noc1"])
+def test_family_multi_rectangle_payload(device, rectangle_count, sender_noc):
+    family = _run_family_pipe(
+        device,
+        MULTI_RECT_GROUPS[rectangle_count],
+        sender_noc=sender_noc,
+        handshake=True,
+    )
+    assert family.max_rectangles == rectangle_count
+    assert not family.uses_compact_wire
+
+
+def test_family_concurrent_groups_with_different_rectangle_counts(device):
+    group_specs = [
+        ([((0, 0), (1, 0)), ((0, 2), (1, 2))], (2, 0)),
+        ([((4, 0), (5, 0)), ((4, 2), (5, 2)), ((4, 4), (5, 4))], (6, 0)),
+    ]
+    family = _run_family_pipe(device, group_specs, data_ready_mode=ttnn.McastDataReady.Counter, handshake=True)
+    assert family.max_rectangles == 3
+    assert family.num_receivers(ttnn.CoreCoord(2, 0)) == 4
+    assert family.num_receivers(ttnn.CoreCoord(6, 0)) == 6
+
+
+def _run_family_control_signal(device, data_ready_mode, n_iters, control_value=0, expected_value=None):
+    ranges = [((0, 0), (1, 0)), ((0, 2), (1, 2)), ((0, 4), (1, 4))]
+    sender = (4, 0)
+    receiver_coords = _coords_in_ranges(ranges)
+    receiver_crs = _core_range_set(ranges)
+    sender_crs = _core_range_set([(sender, sender)])
+    family = ttnn.McastFamily(
+        device,
+        [ttnn.McastGroup(receiver_crs, ttnn.CoreCoord(*sender))],
+        ttnn.McastConfig(handshake=True, data_ready=data_ready_mode),
+    )
+
+    output_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([len(receiver_coords), 8]),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        device,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_tensor = ttnn.from_torch(
+        torch.zeros([1, 1, 32, 32], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    cb_result = 0
+    cbs = [
+        ttnn.CBDescriptor(
+            total_size=32,
+            core_ranges=receiver_crs,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=cb_result, data_format=ttnn.uint32, page_size=32)],
+        )
+    ]
+
+    sender_rt = ttnn.RuntimeArgs()
+    sender_rt[sender[0]][sender[1]] = list(family.runtime_args(ttnn.CoreCoord(*sender)))
+    sender_kernel = ttnn.KernelDescriptor(
+        kernel_source=f"{KERNEL_DIR}/pipe_signal_sender.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=sender_crs,
+        compile_time_args=list(family.compile_time_args()) + [n_iters, control_value],
+        runtime_args=sender_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+
+    receiver_ct = [cb_result] + list(family.compile_time_args()) + [n_iters, control_value]
+    receiver_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    receiver_rt = ttnn.RuntimeArgs()
+    for output_index, (rx, ry) in enumerate(receiver_coords):
+        receiver_rt[rx][ry] = [output_tensor.buffer_address(), output_index] + list(
+            family.runtime_args(ttnn.CoreCoord(rx, ry))
+        )
+    receiver_kernel = ttnn.KernelDescriptor(
+        kernel_source=f"{KERNEL_DIR}/pipe_signal_receiver.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=receiver_crs,
+        compile_time_args=receiver_ct,
+        runtime_args=receiver_rt,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+
+    output = ttnn.generic_op(
+        [input_tensor, output_tensor],
+        ttnn.ProgramDescriptor(
+            kernels=[sender_kernel, receiver_kernel],
+            semaphores=family.owned_semaphores(),
+            cbs=cbs,
+        ),
+    )
+    if expected_value is None:
+        expected_value = n_iters
+    assert torch.equal(
+        ttnn.to_torch(output).to(torch.int64),
+        torch.full((len(receiver_coords), 8), expected_value, dtype=torch.int64),
+    )
+
+
+@pytest.mark.parametrize(
+    "data_ready_mode,n_iters,control_value,expected_value",
+    [
+        (ttnn.McastDataReady.Flag, 1, 0, 1),
+        (ttnn.McastDataReady.Counter, 5, 0, 5),
+    ],
+    ids=["flag", "counter"],
+)
+def test_family_multi_rectangle_control_signal(device, data_ready_mode, n_iters, control_value, expected_value):
+    _run_family_control_signal(device, data_ready_mode, n_iters, control_value, expected_value)
+
+
+def test_family_repeated_dynamic_destination_and_size(device):
+    ranges = [((0, 0), (1, 0)), ((0, 2), (1, 2)), ((0, 4), (1, 4))]
+    sender = (4, 0)
+    receiver_coords = _coords_in_ranges(ranges)
+    receiver_crs = _core_range_set(ranges)
+    sender_crs = _core_range_set([(sender, sender)])
+    participating_crs = _core_range_set(ranges + [(sender, sender)])
+    family = ttnn.McastFamily(
+        device,
+        [ttnn.McastGroup(receiver_crs, ttnn.CoreCoord(*sender))],
+        ttnn.McastConfig(handshake=True),
+    )
+
+    num_iters = 3
+    total_pages = num_iters * (num_iters + 1) // 2
+    payload = torch.zeros([total_pages, 1, 32, 32], dtype=torch.float32)
+    for page in range(total_pages):
+        payload[page] = float(page + 1)
+    payload = payload.to(torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        payload,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([len(receiver_coords) * total_pages, 1, 32, 32]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+    cb = 0
+    cbs = [
+        ttnn.CBDescriptor(
+            total_size=total_pages * TILE_BYTES,
+            core_ranges=participating_crs,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=cb, data_format=ttnn.bfloat16, page_size=TILE_BYTES)
+            ],
+        )
+    ]
+
+    sender_ct = [cb] + list(family.compile_time_args()) + [num_iters, total_pages, TILE_BYTES]
+    sender_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    sender_rt = ttnn.RuntimeArgs()
+    sender_rt[sender[0]][sender[1]] = [input_tensor.buffer_address()] + list(
+        family.runtime_args(ttnn.CoreCoord(*sender))
+    )
+    sender_kernel = ttnn.KernelDescriptor(
+        kernel_source=f"{KERNEL_DIR}/pipe_dynamic_sender.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=sender_crs,
+        compile_time_args=sender_ct,
+        runtime_args=sender_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+
+    receiver_ct = [cb] + list(family.compile_time_args()) + [num_iters, total_pages, TILE_BYTES]
+    receiver_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    receiver_rt = ttnn.RuntimeArgs()
+    for receiver_index, (x, y) in enumerate(receiver_coords):
+        receiver_rt[x][y] = [output_tensor.buffer_address(), receiver_index * total_pages] + list(
+            family.runtime_args(ttnn.CoreCoord(x, y))
+        )
+    receiver_kernel = ttnn.KernelDescriptor(
+        kernel_source=f"{KERNEL_DIR}/pipe_dynamic_receiver.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=receiver_crs,
+        compile_time_args=receiver_ct,
+        runtime_args=receiver_rt,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+
+    output = ttnn.generic_op(
+        [input_tensor, output_tensor],
+        ttnn.ProgramDescriptor(
+            kernels=[sender_kernel, receiver_kernel],
+            semaphores=family.owned_semaphores(),
+            cbs=cbs,
+        ),
+    )
+    torch_output = ttnn.to_torch(output).reshape(len(receiver_coords), total_pages, 1, 32, 32)
+    for receiver_index in range(len(receiver_coords)):
+        assert torch.equal(torch_output[receiver_index].to(torch.float32), payload.to(torch.float32))
+
+
 # ---------- SMOKE: single cell, canonical flag+linked, 1x2 rect, sender out-of-rect ----------
 def test_smoke(device):
     _run_pipe(
@@ -835,6 +1176,87 @@ def test_rotating_line_outside_sender(device):
 @pytest.mark.parametrize("payload_tiles", [1, 4])
 def test_rotating_line(device, span, payload_tiles):
     _run_rotating_line(device, span=span, payload_tiles=payload_tiles)
+
+
+def _run_rotating_multi_rectangle_family(device):
+    logical_cores = [(0, 0), (2, 0), (4, 0)]
+    exact_ranges = [(core, core) for core in logical_cores]
+    receiver_set = _core_range_set(exact_ranges)
+    rotating_senders = [ttnn.CoreCoord(*core) for core in logical_cores]
+    family = ttnn.McastFamily(
+        device,
+        [ttnn.McastGroup(receiver_set, rotating_senders)],
+        ttnn.McastConfig(rotating_sender=True, handshake=True),
+    )
+    assert family.max_rectangles == 3
+    assert not family.uses_compact_wire
+
+    span = len(logical_cores)
+    payload_tiles = 1
+    payload = torch.zeros([span, 1, 32, 32], dtype=torch.float32)
+    for index in range(span):
+        payload[index] = float(index + 1)
+    payload = payload.to(torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        payload,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([span * span, 1, 32, 32]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    cb = 0
+    cbs = [
+        ttnn.CBDescriptor(
+            total_size=TILE_BYTES,
+            core_ranges=receiver_set,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=cb, data_format=ttnn.bfloat16, page_size=TILE_BYTES)
+            ],
+        )
+    ]
+    ct = [cb] + list(family.compile_time_args()) + [span, payload_tiles, TILE_BYTES]
+    ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    rt = ttnn.RuntimeArgs()
+    for index, (x, y) in enumerate(logical_cores):
+        rt[x][y] = [
+            input_tensor.buffer_address(),
+            index,
+            output_tensor.buffer_address(),
+            index * span,
+        ] + list(family.runtime_args(ttnn.CoreCoord(x, y)))
+
+    kernel = ttnn.KernelDescriptor(
+        kernel_source=f"{KERNEL_DIR}/pipe_rotating_line.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=receiver_set,
+        compile_time_args=ct,
+        runtime_args=rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    output = ttnn.generic_op(
+        [input_tensor, output_tensor],
+        ttnn.ProgramDescriptor(kernels=[kernel], semaphores=family.owned_semaphores(), cbs=cbs),
+    )
+    torch_output = ttnn.to_torch(output).reshape(span * span, 1, 32, 32)
+    for receiver_index in range(span):
+        for round_index in range(span):
+            assert torch.equal(
+                torch_output[receiver_index * span + round_index].to(torch.float32),
+                payload[round_index].to(torch.float32),
+            )
+
+
+def test_family_rotating_multi_rectangle(device):
+    _run_rotating_multi_rectangle_family(device)
 
 
 # ======== FIXED-sender LINE via the host helper (Mcast1D) + the unified McastArgs decoder ========
