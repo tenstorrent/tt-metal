@@ -161,12 +161,12 @@ def test_ffn_pcc(
     # dim 0 stacks mesh_shape[0] copies of the same result. Tile the reference to match rather than
     # slicing off one copy: a row that diverged would then still show up in the PCC. No-op on a
     # single-row mesh, which is what every non-Galaxy param here is.
+    #
+    # Tile once and only once -- at K3's 3200x7168 each fp32 copy is ~92 MB, ~734 MB tiled across a
+    # Galaxy's 8 rows, in a test that is already multi-gigabyte on the host.
     torch_reference = torch_output.repeat(mesh_shape[0], 1)
 
     logger.debug("Comparing outputs with PCC")
-    # The 2x4 Fabric2D profile replicates this TP-only FFN across both SP rows. The composer concatenates
-    # those replicas on the sequence dimension, so validate each replica against the same Torch output.
-    torch_output = torch_output.repeat(mesh_shape[0], 1)
     pcc_passed, pcc_message = assert_with_pcc(
         torch_reference.to(torch.float32),
         tt_output_torch.to(torch.float32),
