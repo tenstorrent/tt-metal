@@ -10,6 +10,79 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
+FORCE_INLINE uint32_t worker_x(uint32_t worker) { return get_common_vararg(2 * worker); }
+FORCE_INLINE uint32_t worker_y(uint32_t worker) { return get_common_vararg(2 * worker + 1); }
+
+template <typename Accessor>
+FORCE_INLINE void issue_tensor_block_read(
+    Noc& noc, const Accessor& accessor, DataflowBuffer& buffer, uint32_t page, uint32_t tiles) {
+    for (uint32_t tile = 0; tile < tiles; tile++) {
+        noc.async_read(
+            accessor,
+            buffer,
+            buffer.get_entry_size(),
+            {.page_id = page + tile},
+            {.offset_bytes = tile * buffer.get_entry_size()});
+    }
+}
+
+FORCE_INLINE void issue_affine_pair_send(
+    Noc& noc,
+    uint32_t target,
+    DataflowBuffer& send_a,
+    DataflowBuffer& send_b,
+    DataflowBuffer& remote_a,
+    DataflowBuffer& remote_b,
+    uint32_t a_tiles,
+    uint32_t b_tiles) {
+    const uint32_t target_x = worker_x(target);
+    const uint32_t target_y = worker_y(target);
+    noc.async_write(
+        send_a,
+        UnicastEndpoint{},
+        a_tiles * send_a.get_entry_size(),
+        {},
+        {.noc_x = target_x, .noc_y = target_y, .addr = remote_a.get_write_ptr()});
+    noc.async_write(
+        send_b,
+        UnicastEndpoint{},
+        b_tiles * send_b.get_entry_size(),
+        {},
+        {.noc_x = target_x, .noc_y = target_y, .addr = remote_b.get_write_ptr()});
+}
+
+FORCE_INLINE void complete_affine_pair_send(Noc& noc, Semaphore<>& ready, uint32_t target) {
+    noc.async_write_barrier();
+    ready.up(noc, worker_x(target), worker_y(target), 1);
+}
+
+FORCE_INLINE void issue_affine_pair_loopback(
+    Noc& noc,
+    uint32_t worker_index,
+    DataflowBuffer& send_a,
+    DataflowBuffer& send_b,
+    DataflowBuffer& local_a,
+    DataflowBuffer& local_b,
+    uint32_t a_tiles,
+    uint32_t b_tiles) {
+    local_a.reserve_back(a_tiles);
+    local_b.reserve_back(b_tiles);
+    const uint32_t local_x = worker_x(worker_index);
+    const uint32_t local_y = worker_y(worker_index);
+    noc.async_write(
+        send_a,
+        UnicastEndpoint{},
+        a_tiles * send_a.get_entry_size(),
+        {},
+        {.noc_x = local_x, .noc_y = local_y, .addr = local_a.get_write_ptr()});
+    noc.async_write(
+        send_b,
+        UnicastEndpoint{},
+        b_tiles * send_b.get_entry_size(),
+        {},
+        {.noc_x = local_x, .noc_y = local_y, .addr = local_b.get_write_ptr()});
+}
+
 template <uint32_t G>
 FORCE_INLINE void synchronize_head_stage(
     uint32_t worker_index,
@@ -20,15 +93,13 @@ FORCE_INLINE void synchronize_head_stage(
     Semaphore<>& release) {
     completed_stages++;
     const uint32_t coordinator = worker_index - group;
-    const uint32_t coordinator_x = get_common_vararg(2 * coordinator);
-    const uint32_t coordinator_y = get_common_vararg(2 * coordinator + 1);
+    const uint32_t coordinator_x = worker_x(coordinator);
+    const uint32_t coordinator_y = worker_y(coordinator);
     arrival.up(noc, coordinator_x, coordinator_y, 1);
     if (group == 0) {
         arrival.wait_min(completed_stages * G);
         for (uint32_t worker = coordinator; worker < coordinator + G; worker++) {
-            const uint32_t worker_x = get_common_vararg(2 * worker);
-            const uint32_t worker_y = get_common_vararg(2 * worker + 1);
-            release.up(noc, worker_x, worker_y, 1);
+            release.up(noc, worker_x(worker), worker_y(worker), 1);
         }
         noc.async_atomic_barrier();
     }
@@ -61,63 +132,18 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     Semaphore<> arrival(sem::arrival);
     Semaphore<> release(sem::release);
 
-    auto worker_x = [](uint32_t worker) { return get_common_vararg(2 * worker); };
-    auto worker_y = [](uint32_t worker) { return get_common_vararg(2 * worker + 1); };
-    auto read_tiles = [&](const auto& accessor, DataflowBuffer& buffer, uint32_t page, uint32_t tiles) {
-        buffer.reserve_back(tiles);
-        for (uint32_t tile = 0; tile < tiles; tile++) {
-            noc.async_read(
-                accessor,
-                buffer,
-                buffer.get_entry_size(),
-                {.page_id = page + tile},
-                {.offset_bytes = tile * buffer.get_entry_size()});
-        }
-        noc.async_read_barrier();
-        buffer.push_back(tiles);
-    };
-    read_tiles(a_accessor, initial_a, worker_index * kk, kk);
-    read_tiles(b_accessor, initial_b, worker_index * kv, kv);
-    read_tiles(initial_state_accessor, initial_state, (worker_index / G) * kv, kv);
+    initial_a.reserve_back(kk);
+    initial_b.reserve_back(kv);
+    initial_state.reserve_back(kv);
+    issue_tensor_block_read(noc, a_accessor, initial_a, worker_index * kk, kk);
+    issue_tensor_block_read(noc, b_accessor, initial_b, worker_index * kv, kv);
+    issue_tensor_block_read(noc, initial_state_accessor, initial_state, (worker_index / G) * kv, kv);
+    noc.async_read_barrier();
+    initial_a.push_back(kk);
+    initial_b.push_back(kv);
+    initial_state.push_back(kv);
 
     uint32_t completed_stages = 0;
-    auto send_pair = [&](uint32_t target, DataflowBuffer& current_a, DataflowBuffer& current_b) {
-        const uint32_t target_x = worker_x(target);
-        const uint32_t target_y = worker_y(target);
-        noc.async_write(
-            current_a,
-            UnicastEndpoint{},
-            kk * current_a.get_entry_size(),
-            {},
-            {.noc_x = target_x, .noc_y = target_y, .addr = from_remote_a.get_write_ptr()});
-        noc.async_write(
-            current_b,
-            UnicastEndpoint{},
-            kv * current_b.get_entry_size(),
-            {},
-            {.noc_x = target_x, .noc_y = target_y, .addr = from_remote_b.get_write_ptr()});
-    };
-    auto loopback_pair = [&] {
-        local_a.reserve_back(kk);
-        local_b.reserve_back(kv);
-        const uint32_t local_x = worker_x(worker_index);
-        const uint32_t local_y = worker_y(worker_index);
-        noc.async_write(
-            to_remote_a,
-            UnicastEndpoint{},
-            kk * to_remote_a.get_entry_size(),
-            {},
-            {.noc_x = local_x, .noc_y = local_y, .addr = local_a.get_write_ptr()});
-        noc.async_write(
-            to_remote_b,
-            UnicastEndpoint{},
-            kv * to_remote_b.get_entry_size(),
-            {},
-            {.noc_x = local_x, .noc_y = local_y, .addr = local_b.get_write_ptr()});
-        noc.async_write_barrier();
-        local_a.push_back(kk);
-        local_b.push_back(kv);
-    };
 
     uint32_t ready_target = 0;
     for (uint32_t distance = 1; distance < G; distance *= 2) {
@@ -126,16 +152,22 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
         const bool sends = group + distance < G;
         const bool receives = group >= distance;
         if (sends) {
-            send_pair(worker_index + distance, to_remote_a, to_remote_b);
+            issue_affine_pair_send(
+                noc, worker_index + distance, to_remote_a, to_remote_b, from_remote_a, from_remote_b, kk, kv);
         }
         if (receives) {
-            // This barrier retires both the remote send and same-core loopback when this worker does both.
-            loopback_pair();
-        } else if (sends) {
-            noc.async_write_barrier();
+            issue_affine_pair_loopback(noc, worker_index, to_remote_a, to_remote_b, local_a, local_b, kk, kv);
         }
         if (sends) {
-            ready.up(noc, worker_x(worker_index + distance), worker_y(worker_index + distance), 1);
+            // This retires both the remote send and a same-core loopback when this worker does both. Readiness is
+            // published only after the remote writes complete.
+            complete_affine_pair_send(noc, ready, worker_index + distance);
+        } else if (receives) {
+            noc.async_write_barrier();
+        }
+        if (receives) {
+            local_a.push_back(kk);
+            local_b.push_back(kv);
         }
         if (receives) {
             from_remote_a.reserve_back(kk);
@@ -163,9 +195,8 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     to_remote_b.wait_front(kv);
     if (group + 1 < G) {
         const uint32_t target = worker_index + 1;
-        send_pair(target, to_remote_a, to_remote_b);
-        noc.async_write_barrier();
-        ready.up(noc, worker_x(target), worker_y(target), 1);
+        issue_affine_pair_send(noc, target, to_remote_a, to_remote_b, from_remote_a, from_remote_b, kk, kv);
+        complete_affine_pair_send(noc, ready, target);
     }
     // The final inclusive prefix is never reused after the exclusive neighbor shift.
     to_remote_a.pop_front(kk);
