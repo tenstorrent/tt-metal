@@ -14,7 +14,6 @@
 #include <ranges>
 #include <span>
 #include <stdexcept>
-#include <string_view>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -86,7 +85,8 @@ xt::xarray<float> gelu_exact_grad_reference(const xt::xarray<float>& x) {
 
 // Hendrycks tanh approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
 xt::xarray<float> gelu_tanh_reference(const xt::xarray<float>& x) {
-    xt::xarray<float> t = xt::tanh(kSqrt2OverPi * (x + kGeluTanhK * x * x * x));
+    constexpr float kSqrt2OverPi = 0.7978845608028654F;  // sqrt(2 / pi)
+    xt::xarray<float> t = xt::tanh(kSqrt2OverPi * (x + 0.044715F * x * x * x));
     return 0.5F * x * (1.0F + t);
 }
 
@@ -94,14 +94,6 @@ xt::xarray<float> gelu_tanh_reference(const xt::xarray<float>& x) {
 xt::xarray<float> gelu_tanh_grad_reference(const xt::xarray<float>& x) {
     xt::xarray<float> t = xt::tanh(kSqrt2OverPi * (x + kGeluTanhK * x * x * x));
     return 0.5F * (1.0F + t) + 0.5F * x * (1.0F - t * t) * kSqrt2OverPi * (1.0F + 3.0F * kGeluTanhK * x * x);
-}
-
-// Same contract as xt::allclose, but reports the observed max absolute difference on failure so that
-// tolerances can be tuned from measurements instead of guesses.
-void expect_allclose(
-    const xt::xarray<float>& got, const xt::xarray<float>& expected, float rtol, float atol, std::string_view label) {
-    EXPECT_TRUE(xt::allclose(got, expected, rtol, atol))
-        << label << ": rtol=" << rtol << " atol=" << atol << " max_abs_diff=" << xt::amax(xt::abs(got - expected))();
 }
 
 xt::xarray<float> random_input(const std::vector<std::size_t>& shape) {
@@ -268,11 +260,11 @@ TEST_F(UnaryOpsTest, Gelu) {
     auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
 
     auto result = gelu(tensor_ptr);
-    expect_allclose(core::to_xtensor(result->get_value()), gelu_exact_reference(data), kGeluRtol, kGeluAtol, "gelu fw");
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(result->get_value()), gelu_exact_reference(data), kGeluRtol, kGeluAtol));
 
     result->backward();
-    expect_allclose(
-        core::to_xtensor(tensor_ptr->get_grad()), gelu_exact_grad_reference(data), kGeluRtol, kGeluAtol, "gelu bw");
+    EXPECT_TRUE(
+        xt::allclose(core::to_xtensor(tensor_ptr->get_grad()), gelu_exact_grad_reference(data), kGeluRtol, kGeluAtol));
 }
 
 // The default must stay ACCURATE: this is what keeps GPT numerics unchanged by this feature.
@@ -302,16 +294,11 @@ TEST_F(UnaryOpsTest, GeluTanh) {
     auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
 
     auto result = gelu(tensor_ptr, GeluVariant::TANH);
-    expect_allclose(
-        core::to_xtensor(result->get_value()), gelu_tanh_reference(data), kGeluRtol, kGeluAtol, "gelu_tanh fw");
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(result->get_value()), gelu_tanh_reference(data), kGeluRtol, kGeluAtol));
 
     result->backward();
-    expect_allclose(
-        core::to_xtensor(tensor_ptr->get_grad()),
-        gelu_tanh_grad_reference(data),
-        kGeluRtol,
-        kGeluTanhBwAtol,
-        "gelu_tanh bw");
+    EXPECT_TRUE(xt::allclose(
+        core::to_xtensor(tensor_ptr->get_grad()), gelu_tanh_grad_reference(data), kGeluRtol, kGeluTanhBwAtol));
 }
 
 // FAST_LUT is forward-only: ttnn has no LUT backward kernel, so pairing it with autograd would give
@@ -326,26 +313,6 @@ TEST_F(UnaryOpsTest, GeluFastLutRejectsGrad) {
     // The other two variants have matching backward kernels and stay available.
     EXPECT_NO_THROW(gelu(tensor_ptr, GeluVariant::ACCURATE));
     EXPECT_NO_THROW(gelu(tensor_ptr, GeluVariant::TANH));
-}
-
-// Inference paths disable gradient mode but leave requires_grad set on parameters, and no backward
-// node is created there, so FAST_LUT must remain usable.
-TEST_F(UnaryOpsTest, GeluFastLutAllowedUnderNoGrad) {
-    auto* device = &autograd::ctx().get_device();
-    xt::xarray<float> data = random_input({4U, 1U, 20U, 5U});
-    auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
-
-    // Restore the mode even if the assertion below throws -- the fixture only sets up per-suite, so a
-    // leaked GradMode would corrupt every later test.
-    struct GradModeGuard {
-        autograd::GradMode previous = autograd::ctx().get_gradient_mode();
-        ~GradModeGuard() {
-            autograd::ctx().set_gradient_mode(previous);
-        }
-    } guard;
-    autograd::ctx().set_gradient_mode(autograd::GradMode::DISABLED);
-
-    EXPECT_NO_THROW(gelu(tensor_ptr, GeluVariant::FAST_LUT));
 }
 
 // The two variants only separate above bfloat16 resolution in the negative tail. On [-2, 1] -- and
@@ -364,8 +331,8 @@ TEST_F(UnaryOpsTest, GeluAccurateVsTanhDiffer) {
     auto tanh_xt = core::to_xtensor(gelu(tanh_ptr, GeluVariant::TANH)->get_value());
 
     // Each variant tracks its own reference far more tightly than it tracks the other one.
-    expect_allclose(accurate_xt, gelu_exact_reference(data), 5e-2F, 0.F, "accurate tail");
-    expect_allclose(tanh_xt, gelu_tanh_reference(data), 5e-2F, 0.F, "tanh tail");
+    EXPECT_TRUE(xt::allclose(accurate_xt, gelu_exact_reference(data), 5e-2F, 0.F));
+    EXPECT_TRUE(xt::allclose(tanh_xt, gelu_tanh_reference(data), 5e-2F, 0.F));
 
     EXPECT_GT(xt::amax(xt::abs(accurate_xt - tanh_xt))(), 1e-4F);
     EXPECT_FALSE(xt::allclose(accurate_xt, tanh_xt, 1e-2F, 0.F));

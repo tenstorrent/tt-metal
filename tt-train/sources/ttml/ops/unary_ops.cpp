@@ -59,8 +59,7 @@ autograd::TensorPtr relu(const autograd::TensorPtr& tensor) {
 
 autograd::TensorPtr gelu(const autograd::TensorPtr& tensor, GeluVariant variant) {
     // Unlike ttnn, fast_lut variant is not supported (no fast-lut backward kernel)
-    if (variant == GeluVariant::FAST_LUT && autograd::ctx().get_gradient_mode() == autograd::GradMode::ENABLED &&
-        autograd::any_requires_grad(tensor)) {
+    if (variant == GeluVariant::FAST_LUT) {
         throw std::invalid_argument("gelu: GeluVariant::FAST_LUT is not supported for training");
     }
 
