@@ -122,7 +122,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="GRPO BoolQ training example")
     parser.add_argument(
         "--config",
-        default="tt-train/configs/training_configs/grpo_boolq_llama_1dev.yaml",
+        default="tt-train/configs/training_configs/grpo_boolq_llama_1b_1dev.yaml",
         help=(
             "Training config path, relative to TT_METAL_RUNTIME_ROOT or absolute. "
             "Its device_config section (enable_ddp, mesh_shape) selects single-device vs DDP."
