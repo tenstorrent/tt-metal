@@ -754,7 +754,9 @@ fused_mmrs_configs = {
         # windowed handoff (M_block=4 leaves 2 blocks per core).
         (1216, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 8, 8, 2, 2, None, 1, 5),  # 349.0 us
         # LTX video FFN ff2 (RowParallel): per-device [4864,4096]@[4096,4096]
-        (4864, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 7, 5, 6, 1, 3, None, 1, 3),
+        # LTX ff2 @stage_2 (M = 38912/sp8), reswept 2026-08-24 under the windowed L1 handoff:
+        # 933.8 us vs ~1088 us for the previous DRAM-era M7/K5/N6 blocking (-14%).
+        (4864, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 8, 6, 2, 2, None, 1, 5),  # 933.8 us
         # Flux2 @1024px, swept 2026-08-24 under the windowed L1 handoff (runner windows combos with
         # >=2 M blocks per core). Windowed won both shapes outright: 394.1 us vs 443.8 us best-DRAM
         # for (1152,...), 331.5 us vs 345.4 us for (1024,...). The old (1152,...) M_block=12 entry
