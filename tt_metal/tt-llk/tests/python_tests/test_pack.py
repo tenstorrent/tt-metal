@@ -30,19 +30,22 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     PackerReluType,
+    PerfRunType,
     format_dict,
 )
 from helpers.param_config import (
+    generate_perf_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
 )
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
     DEST_SYNC,
+    LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
@@ -52,6 +55,36 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.utils import passed_test
+
+PACK_FORMATS = input_output_formats(
+    [
+        DataFormat.Float16_b,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        DataFormat.Int32,
+        DataFormat.Bfp8_b,
+    ]
+)
+PACK_RELU_TYPES = [
+    PackerReluType.NoRelu,
+    PackerReluType.ZeroRelu,
+    PackerReluType.MinThresholdRelu,
+    PackerReluType.MaxThresholdRelu,
+]
+
+
+def generate_pack_perf_combinations():
+    """Dest-full tall/wide matrices, SyncHalf, dest index 0, all ReLU types."""
+    combinations = []
+    for fmt in PACK_FORMATS:
+        for dest_acc in get_valid_dest_accumulation_modes(fmt):
+            for dimensions in generate_perf_input_dimensions(dest_acc, DestSync.Half):
+                for relu_type in PACK_RELU_TYPES:
+                    combinations.append((fmt, dest_acc, dimensions, relu_type))
+    return combinations
+
+
+PERF_PACK_COMBINATIONS = generate_pack_perf_combinations()
 
 
 @parametrize(
@@ -84,6 +117,11 @@ def test_pack(
     relu_type,
     dest_sync,
     dest_index,
+    *,
+    is_perf: bool = False,
+    perf_report=None,
+    run_types=None,
+    loop_factor: int = 1,
 ):
     if (formats.input_format == DataFormat.Int32) ^ (
         formats.output_format == DataFormat.Int32
@@ -173,23 +211,30 @@ def test_pack(
             )
         num_blocks = tile_cnt_A // num_tiles_in_block
 
-    configuration = TestConfig(
-        "sources/pack_test.cpp",
-        formats,
-        templates=[
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
+
+    test_config_kwargs = {
+        "test_name": "sources/pack_test.cpp",
+        "formats": formats,
+        "templates": [
             generate_input_dim(input_dimensions, input_dimensions),
             TILIZE(),
             DEST_SYNC(dest_sync),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt_A),
             DEST_INDEX(dest_index),
             RELU_CONFIG(relu_config),
             NUM_FACES(num_faces=FACES_PER_TILE),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -199,9 +244,18 @@ def test_pack(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=unpack_to_dest,
+        "dest_acc": dest_acc,
+        "unpack_to_dest": unpack_to_dest,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
 
