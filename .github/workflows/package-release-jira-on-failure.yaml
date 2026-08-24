@@ -21,6 +21,11 @@ on:
       - "Package and release"
     types:
       - completed
+    # Only real releases. Package and release also runs on main (cron dev
+    # release) and on feature branches via dispatch; those failures are CI
+    # noise and must not reach the RELEASE board.
+    branches:
+      - stable
   workflow_dispatch:
     inputs:
       run-id:
@@ -39,8 +44,14 @@ env:
 
 jobs:
   file-jira:
-    # Only when the watched run failed (or a manual test dispatch).
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure' }}
+    # Only when a stable run failed (or a manual test dispatch). The branch is
+    # re-checked here because the `branches:` filter above does not apply to
+    # workflow_dispatch, and because a mis-set filter would otherwise file
+    # silently against the wrong board.
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.workflow_run.conclusion == 'failure' &&
+           github.event.workflow_run.head_branch == 'stable') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -105,7 +116,9 @@ jobs:
           JIRA_DESCRIPTION: ${{ steps.collect.outputs.description }}
           JIRA_LABELS: "ci-failure,package-and-release"
           # While one issue is open for this pipeline, later failures comment on it.
-          JIRA_DEDUP_LABEL: "package-release-failure"
+          # Scope per commit: re-runs of the same release de-dupe onto one
+          # ticket, a later release failure opens a new one.
+          JIRA_DEDUP_LABEL: "package-release-failure:${{ github.event.workflow_run.head_sha || inputs.run-id }}"
         run: |
           if [ -z "${JIRA_USER_EMAIL}" ] || [ -z "${JIRA_API_TOKEN}" ]; then
             echo "::notice::JIRA_RELEASE_* secrets not configured; skipping Jira filing."
