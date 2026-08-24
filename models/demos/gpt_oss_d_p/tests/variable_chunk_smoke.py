@@ -82,7 +82,7 @@ def main():
 
         def time_prefill(chunk_size, real=SMALL, iters=3):
             """Prefill `real` real tokens as a single one-shot chunk of width `chunk_size`. Median ms.
-            No compile() warmup here, so the first of `iters` JIT-warms and is discarded by the median."""
+            No compile() warmup here; the first of `iters` JIT-warms and the median over all iters damps it."""
             toks = [0] * chunk_size
             ts = []
             for _ in range(iters):
@@ -96,7 +96,7 @@ def main():
         t_small = time_prefill(SMALL)  # 1024 real tokens as a 1024 chunk (no waste)
         t_large = time_prefill(LARGE)  # same SMALL tokens padded into a LARGE chunk
         print(
-            f"[varchunk] RESULT ({num_layers}L): prefill 1024 real tokens — "
+            f"[varchunk] RESULT ({num_layers}L): prefill {SMALL} real tokens — "
             f"as {SMALL}-tok chunk = {t_small * 1000:.1f} ms, as {LARGE}-tok chunk (padded) = {t_large * 1000:.1f} ms, "
             f"speedup = {t_large / t_small:.1f}x",
             flush=True,

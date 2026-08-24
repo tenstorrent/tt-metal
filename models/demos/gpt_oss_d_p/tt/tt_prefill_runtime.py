@@ -47,10 +47,11 @@ def resolve_chunk_sizes(default_chunk_size: int, additional_chunk_sizes: tuple, 
     """Supported chunk sizes, deduped, largest first; each must divide max_seq_len (rope must tile the cache)."""
     sizes = tuple(sorted({default_chunk_size, *additional_chunk_sizes}, reverse=True))
     for cs in sizes:
-        assert max_seq_len % cs == 0, (
-            f"max_seq_len ({max_seq_len}) must be a multiple of every supported chunk size; "
-            f"{cs} does not divide it (supported: {sizes})"
-        )
+        if max_seq_len % cs != 0:
+            raise ValueError(
+                f"max_seq_len ({max_seq_len}) must be a multiple of every supported chunk size; "
+                f"{cs} does not divide it (supported: {sizes})"
+            )
     return sizes
 
 
