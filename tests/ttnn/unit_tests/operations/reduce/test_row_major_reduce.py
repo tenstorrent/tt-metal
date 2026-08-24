@@ -262,7 +262,7 @@ def test_std_row_major(device, input_shape, dim):
         pcc_threshold=0.99,
         rtol=0.01,
         atol=0.01,
-        frobenius_threshold=0.007,
+        frobenius_threshold=0.005,
     )
 
 
