@@ -11,7 +11,7 @@
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
-#include "express_ring_topology.hpp"
+#include "axis_route_topology.hpp"
 #include "hostdevcommon/fabric_common.h"
 
 namespace tt::tt_fabric {
@@ -21,7 +21,7 @@ namespace tt::tt_fabric {
 // encode a multicast by walking the edge list once from the leaves inward, setting a parent's output
 // when its subtree holds a requested target.
 //
-// Topology comes from MeshGraph and canonical next hops from ExpressRingTopology, so a fixture can be
+// Topology comes from MeshGraph and canonical next hops from AxisRouteTopology, so a fixture can be
 // checked without a cluster.
 
 // One edge, oriented child -> parent, carrying the command the parent issues to reach the child.
@@ -46,7 +46,7 @@ struct McastReverseTree {
 std::optional<McastReverseTree> build_mcast_reverse_tree(
     const MeshGraph& mesh_graph,
     MeshId mesh_id,
-    const ExpressRingTopology& topo,
+    const AxisRouteTopology& topo,
     int root,
     std::string* failure = nullptr);
 
@@ -60,7 +60,7 @@ struct ArborescenceGateResult {
 };
 
 ArborescenceGateResult run_mcast_arborescence_gate(
-    const MeshGraph& mesh_graph, MeshId mesh_id, const ExpressRingTopology& topo);
+    const MeshGraph& mesh_graph, MeshId mesh_id, const AxisRouteTopology& topo);
 
 // The one-hot IndexedMeshRoutingFields::ACTION_* bit a hop in this direction asks a router to take.
 std::uint8_t mcast_action_bit(RoutingDirection direction);
@@ -105,8 +105,8 @@ std::vector<std::uint8_t> encode_mcast_axis_actions(const McastReverseTree& tree
 std::vector<RoutingDirection> mcast_root_output_directions(
     const MeshGraph& mesh_graph,
     MeshId mesh_id,
-    const ExpressRingTopology& y_topo,
-    const ExpressRingTopology& x_topo,
+    const AxisRouteTopology& y_topo,
+    const AxisRouteTopology& x_topo,
     int root_y,
     int root_x,
     int n_hops,
@@ -126,8 +126,8 @@ std::vector<RoutingDirection> mcast_root_output_directions(
 bool embed_mcast_reverse_trees(
     const MeshGraph& mesh_graph,
     MeshId mesh_id,
-    const ExpressRingTopology& y_topo,
-    const ExpressRingTopology& x_topo,
+    const AxisRouteTopology& y_topo,
+    const AxisRouteTopology& x_topo,
     int my_y,
     int my_x,
     std::uint8_t* table,

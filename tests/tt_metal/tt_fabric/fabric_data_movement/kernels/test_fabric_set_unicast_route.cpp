@@ -10,6 +10,17 @@
 using namespace tt::tt_fabric;
 
 // old runtime implementation moved from tt_fabric_api.h
+// This reference encoder is 2D-only -- it is called solely from the FABRIC_2D arm of kernel_main()
+// below -- but used to be compiled into the 1D build too, where it is dead weight. It is now guarded
+// because it is built on fabric_set_route(), the legacy hop-program primitive removed in the codec
+// unification, so compiling it on a 1D build would break the live T3K 1D tests for a function they
+// never call.
+//
+// The 2D arm still references fabric_set_route and therefore does NOT compile. That is tracked as C1:
+// the two tests that consume it (Fabric2DFixture TestSetUnicastRoute / ...IdleEth) are DISABLED_
+// pending a reference re-based on the indexed action maps. Re-enabling them requires rewriting this
+// function first.
+#ifdef FABRIC_2D
 void fabric_set_unicast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     uint16_t my_dev_id,
@@ -80,6 +91,7 @@ void fabric_set_unicast_route(
         }
     }
 }
+#endif  // FABRIC_2D
 
 void kernel_main() {
     uint32_t src_mesh_id = get_arg_val<uint32_t>(0);

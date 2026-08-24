@@ -84,20 +84,12 @@ public:
         tt::tt_fabric::fabric_client_connect<mux_num_buffers_per_channel>(edm);
 
         if constexpr (FABRIC_2D) {
-// An express mesh decodes destination-indexed action maps, which the direction/hop-count form
-// below cannot express; go through the unicast producer so the express encode is selected.
-#if defined(GALAXY_CLUSTER) && !defined(FABRIC_EXPRESS_ENABLED)
-            tt::tt_fabric::fabric_set_route(
-                (tt::tt_fabric::HybridMeshPacketHeader*)packet_header_addr,
-                (eth_chan_directions)router_direction,
-                0,  // branch forward
-                0,  // start hop
-                num_hops,
-                true);
-#else
+            // 2D decodes destination-indexed action maps, which the direction/hop-count form cannot
+            // express, so always go through the unicast producer. The old GALAXY_CLUSTER arm called
+            // fabric_set_route() -- the raw hop-program primitive -- which has no indexed equivalent
+            // by construction.
             tt::tt_fabric::fabric_set_unicast_route(
                 (tt::tt_fabric::HybridMeshPacketHeader*)packet_header_addr, to_dev_id, to_mesh_id);
-#endif
         } else {
             auto header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_addr);
             fabric_set_unicast_route<false>((LowLatencyPacketHeader*)header, num_hops);

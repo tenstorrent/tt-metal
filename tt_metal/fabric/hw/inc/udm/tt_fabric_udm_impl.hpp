@@ -104,14 +104,19 @@ struct udm_read_fields {
  * @return Initial direction as uint32_t (eth_chan_directions enum value)
  */
 FORCE_INLINE uint32_t calculate_initial_direction(uint16_t dst_chip_id, uint16_t my_chip_id) {
-#if defined(FABRIC_EXPRESS_ENABLED)
-    // On an express mesh the 2D union slot holds the indexed destination-keyed vectors, so the
-    // legacy hop counts below are not readable. The initial direction is the action the source
-    // coordinate carries toward the destination: the Y-axis action while rows differ (dimension
-    // order), else the X-axis action. Can legitimately be Z (express chord).
-    auto* routing_info = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
-    constexpr uint32_t y_size = FABRIC_EXPRESS_MESH_Y_SIZE;
-    constexpr uint32_t x_size = FABRIC_EXPRESS_MESH_X_SIZE;
+    // The 2D union slot holds the indexed destination-keyed vectors. The initial direction is the
+    // action the source coordinate carries toward the destination: the Y-axis action while rows
+    // differ (dimension order), else the X-axis action. Can legitimately be Z on an express mesh --
+    // which is why UDM + express is refused at compile time (see fabric_edm_packet_header.hpp): the
+    // mux fabric is cardinal-only and has no Z mux to hand such a packet to.
+    // ROUTING_TABLE_BASE, not MEM_TENSIX_ROUTING_TABLE_BASE: the base is core-type dependent
+    // (aerisc / ierisc / dispatch-tensix / tensix all differ, see fabric_common.h), and the two other
+    // readers in this file already use the macro. They coincide on a plain Tensix worker, so
+    // hardcoding the Tensix one happens to work there and silently reads the wrong region on a
+    // dispatch-engine or idle-erisc compile.
+    auto* routing_info = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    constexpr uint32_t y_size = FABRIC_2D_MESH_Y_SIZE;
+    constexpr uint32_t x_size = FABRIC_2D_MESH_X_SIZE;
     ASSERT(y_size > 0 && x_size > 0);  // the host emits the shape defines to express worker kernels
     ASSERT(dst_chip_id < y_size * x_size);
     const uint32_t dst_y = dst_chip_id / x_size;
@@ -137,28 +142,6 @@ FORCE_INLINE uint32_t calculate_initial_direction(uint16_t dst_chip_id, uint16_t
             default: ASSERT(false); return static_cast<uint32_t>(eth_chan_directions::EAST);
         }
     }
-#else
-    auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
-
-    uint32_t initial_dir = static_cast<uint32_t>(eth_chan_directions::EAST);
-
-    const auto& compressed_route = routing_info->paths[dst_chip_id];
-    uint8_t ns_hops = compressed_route.get_ns_hops();
-    uint8_t ew_hops = compressed_route.get_ew_hops();
-
-    // First hop is the leading hop in dimension order (NS if any NS hops exist, else EW), using the
-    // stored direction bits (ns_direction: 1=South/0=North, ew_direction: 1=East/0=West).
-    (void)my_chip_id;
-    if (ns_hops > 0) {
-        initial_dir = compressed_route.get_ns_direction() ? static_cast<uint32_t>(eth_chan_directions::SOUTH)
-                                                          : static_cast<uint32_t>(eth_chan_directions::NORTH);
-    } else if (ew_hops > 0) {
-        initial_dir = compressed_route.get_ew_direction() ? static_cast<uint32_t>(eth_chan_directions::EAST)
-                                                          : static_cast<uint32_t>(eth_chan_directions::WEST);
-    }
-
-    return initial_dir;
-#endif
 }
 
 /**

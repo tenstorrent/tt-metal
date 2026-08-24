@@ -412,27 +412,20 @@ constexpr size_t MY_ERISC_ID = NAMED_CT_ARG("MY_ERISC_ID");
 constexpr size_t NUM_ACTIVE_ERISCS = NAMED_CT_ARG("NUM_ACTIVE_ERISCS");
 static_assert(MY_ERISC_ID < NUM_ACTIVE_ERISCS, "MY_ERISC_ID must be less than NUM_ACTIVE_ERISCS");
 
-// Defines if packet header updates (as the packet header traverses its route) are done on the receiver side or the
-// sender side. If true, then the receiver channel updates the packet header before forwarding it. If false, the sender
-// channel updates the packet header before sending it over Ethernet.
-constexpr bool UPDATE_PKT_HDR_ON_RX_CH = NAMED_CT_ARG("UPDATE_PKT_HDR_ON_RX_CH") != 0;
-
 constexpr bool FORCE_ALL_PATHS_TO_USE_SAME_NOC = NAMED_CT_ARG("FORCE_ALL_PATHS_TO_USE_SAME_NOC") != 0;
 
 constexpr bool is_intermesh_router_on_edge = NAMED_CT_ARG("IS_INTERMESH_ROUTER_ON_EDGE") != 0;
 constexpr bool is_intramesh_router_on_edge = NAMED_CT_ARG("IS_INTRAMESH_ROUTER_ON_EDGE") != 0;
 
 // ============================================================================
-// Express routing
+// Indexed 2D routing
 // ============================================================================
-// Deployment-wide selector between the legacy hop-program 2D path and the indexed destination-keyed
-// 2D ABI; the two decodes must never mix, so this is not safe to toggle per workload. Enabling needs
-// -DFABRIC_EXPRESS_ENABLED plus the MESH_*_SIZE and IS_RECEIVER_CHANNEL_*_INTERMESH_INGRESS named CT
-// args, and the #else values below are never read.
-#if defined(FABRIC_EXPRESS_ENABLED)
-constexpr bool express_enabled = true;
-constexpr size_t EXPRESS_MESH_Y_SIZE = NAMED_CT_ARG("MESH_Y_SIZE");
-constexpr size_t EXPRESS_MESH_X_SIZE = NAMED_CT_ARG("MESH_X_SIZE");
+// Every 2D router decodes destination-keyed action maps -- there is one 2D codec, so this is keyed on
+// FABRIC_2D rather than on express enablement. The #else arm exists for 1D builds, which get neither
+// the shape nor the ingress CT args.
+#if defined(FABRIC_2D)
+constexpr size_t MESH_Y_SIZE = NAMED_CT_ARG("MESH_Y_SIZE");
+constexpr size_t MESH_X_SIZE = NAMED_CT_ARG("MESH_X_SIZE");
 // The landing intercept is keyed per receiver channel, not per kernel: a boundary-facing router's
 // intrachip channels carry intramesh egress traffic that must not be re-encoded.
 constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_is_intermesh_ingress = {
@@ -440,9 +433,8 @@ constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_is_interm
     static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_1_INTERMESH_INGRESS")),
     static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_2_INTERMESH_INGRESS"))};
 #else
-constexpr bool express_enabled = false;
-constexpr size_t EXPRESS_MESH_Y_SIZE = 0;
-constexpr size_t EXPRESS_MESH_X_SIZE = 0;
+constexpr size_t MESH_Y_SIZE = 0;
+constexpr size_t MESH_X_SIZE = 0;
 constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_is_intermesh_ingress = {false, false, false};
 #endif
 

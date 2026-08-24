@@ -1944,12 +1944,23 @@ TEST_F(Fabric1DFixture, TestSetUnicastRouteIdleEth) {
 }
 
 // 1 mesh all-to-all
-TEST_F(Fabric2DFixture, TestSetUnicastRoute) { RunSetUnicastRouteTest(this, false); }
+//
+// The 2D variants are disabled by the indexed-codec cutover. Their kernel
+// (kernels/test_fabric_set_unicast_route.cpp) validates fabric_set_unicast_route() by diffing it
+// against a *reference* encoding built from fabric_set_route() -- the raw hop-program primitive. 2D
+// now emits destination-indexed action maps, so the two sides no longer describe the same thing and
+// the comparison is meaningless rather than merely failing. fabric_set_route() itself is deleted with
+// the rest of the legacy 2D producers.
+//
+// Re-enabling requires a new oracle. The natural one is the host: it has the ControlPlane, so it can
+// derive the expected Y/X action maps from get_forwarding_direction() and pass them in as runtime
+// args for the kernel to diff against what fabric_set_unicast_route() encoded. That is genuinely
+// independent -- host reads the routing tables, device reads the packed L1 vectors -- where diffing
+// two device encoders against each other was not. The 1D variants above are unaffected: the 1D codec
+// is unchanged.
+TEST_F(Fabric2DFixture, DISABLED_TestSetUnicastRoute) { RunSetUnicastRouteTest(this, false); }
 
-TEST_F(Fabric2DFixture, TestSetUnicastRouteIdleEth) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
-        GTEST_SKIP() << "Test applicable only on T3K";
-    }
+TEST_F(Fabric2DFixture, DISABLED_TestSetUnicastRouteIdleEth) {
     RunSetUnicastRouteTest(this, false, HalProgrammableCoreType::IDLE_ETH);
 }
 

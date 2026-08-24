@@ -589,7 +589,7 @@ void DispatchKernel::CreateKernel() {
             auto& control_plane = get_control_plane_ref();
             const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device_->id());
             for (const auto& [name, value] :
-                 control_plane.get_fabric_context().get_express_kernel_defines(control_plane, fabric_node_id.mesh_id)) {
+                 control_plane.get_fabric_context().get_2d_kernel_defines(control_plane, fabric_node_id.mesh_id)) {
                 defines[name] = value;
             }
         }

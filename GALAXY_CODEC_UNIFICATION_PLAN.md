@@ -1,5 +1,10 @@
 # Fabric Codec Unification Plan
 
+> **Step names:** every numbered step in this document has a short name — see
+> **§0 Step index** in `GALAXY_CODEC_UNIFICATION_STATUS.md`. Prefer the names when discussing
+> the work; the numbers exist for cross-referencing between these three documents.
+
+
 Strategy for making **one** 2D packet encoding — the indexed destination-keyed ABI — the only 2D
 codec in the fabric, and for removing the express-specific *compile path* wherever the fork is
 about the codec rather than about express topology.
@@ -158,6 +163,7 @@ Host-side, `express_routing_enabled(mesh_id)` survives untouched for G2-G5.
 | **VC-shape fork axes** — `FABRIC_2D_VC1_ACTIVE`, `FABRIC_2D_VC2_SERVICED`, `FABRIC_2D_VC1_SERVICED`, `FABRIC_2D_VC0_CROSSOVER_TO_VC1` | Larger and independent of the codec. This project must leave them undisturbed. |
 | **`UDM_MODE` as a variant** | Only its *producer* forks on express, and that is in scope. UDM as a kernel variant is not. |
 | **Arch forks** — `ARCH_WORMHOLE` / `ARCH_BLACKHOLE` | Real silicon differences. |
+| **The profiler / noc-tracing decode** — `tools/profiler/fabric_event_profiler.hpp` `recordRoutingFields2D`, and its host side in `profiler.cpp` | Out of scope, owner call. Note only: it reads `routing_fields.branch_west_offset`, so Phase 4.4 makes it a **build break** rather than an optional follow-on. Disposition to be decided then; no work planned here. |
 | **1D low-latency codec** (`LowLatencyRoutingFields`, shift/refill) | A different codec on a different header type for a single-downstream topology. Rationale in §1.3. |
 
 ### 1.3 Why 1D stays separate
@@ -231,21 +237,48 @@ Plus one gate that already wants unconditional treatment and just has a stray gu
 | H5 | `fabric_context.cpp:359-364` — `get_max_2d_indexed_route_bytes_from_topology` skips non-express meshes | remove the `continue`; the function is otherwise already shape-generic |
 | H6 | `fabric.cpp:704-714` — `get_fabric_kernel_defines()` **TT_FATALs** if any mesh uses express | after unification every 2D mesh needs the node-aware overload, so this becomes a hard requirement for all 2D, not an express carve-out |
 
-### 2.2 Device: producers
+### 2.2 Client-facing API layers (what other teams call)
+
+The layer above the producers. Audited for step 2.5, and the result is the most load-bearing fact in
+the project:
+
+> **No public 2D fabric API exposes a legacy-shaped signature.** All of them are destination-shaped —
+> `(dst_dev_id, dst_mesh_id)`, or that plus `ranges.e/w/n/s`. None takes `direction + num_hops`. The
+> client surface is already in the indexed vocabulary; the legacy encoder was the odd one out beneath
+> it. **So no public signature changes and no consumer migrations are required.**
+
+| layer | entry points | route path | needs change? |
+|---|---|---|---|
+| `hw/inc/mesh/api.h` | 38 (`fabric_{unicast,multicast}_noc_*` × `{plain,_set_state,_with_state}`) | plain / `_set_state` → forking encoders; `_with_state` never touches the route | no |
+| `hw/inc/linear/api.h` | ~24 route-setting sites; **has 2D paths** under `#if defined(FABRIC_2D)` | forking encoders; multicast is one direction per slot, by connection tag | no — see below |
+| `hw/inc/udm/tt_fabric_udm_impl.hpp` | `calculate_initial_direction` → `fabric_set_unicast_route` | forking encoder | express arm only (P7/P8) |
+| `mesh/api.h` `fabric_multicast_source_inject_*` | 1 | the only public API calling an indexed encoder directly | unconditional (P6) |
+
+**`linear/api.h` independently confirms decision Q1.** Its 2D multicast shim
+(`linear/api.h:33-61`) switches on `slot.tag` and passes **exactly one nonzero extent per call** —
+the per-direction contract, already hard-coded. That also localises where Q1's single-output-root
+assert belongs: `linear/api.h` cannot express a multi-direction rectangle and so cannot trip it;
+`mesh/api.h` takes all four extents together and is the layer the assert protects.
+
+Two properties confirmed rather than assumed: `_set_state`/`_with_state` reuse is codec-agnostic (the
+worker's template header is never mutated in transit, and indexed maps are immutable by
+construction), and `SetRoute=false` has no callers outside `mesh/api.h`.
+
+### 2.3 Device: producers
 
 | # | Site | Fork | Target |
 |---|---|---|---|
 | P1 | `tt_fabric_api.h:288-295` — `fabric_set_unicast_route` (2D) | `#if FABRIC_EXPRESS_ENABLED` + `if constexpr (!called_from_router)` → indexed; **router path always legacy** | indexed unconditionally, both worker and router |
 | P2 | `tt_fabric_api.h:205-227` — `fabric_set_mcast_route` | same shape | indexed unconditionally |
 | P3 | `tt_fabric_api.h:48-68` — `fabric_set_single_hop_unicast_route*` | **no gate at all** — always legacy. `fabric_set_indexed_single_hop_*` (line 586) is **dead code** | route to the indexed helper; delete the legacy one |
-| P4 | `tt_fabric_api.h:70+` — `fabric_set_route` (direction + hop counts) | legacy-only primitive; still the mcast spine/branch builder and used by `cq_relay.hpp:90` | delete after P2 and P5 |
+| P4 | `tt_fabric_api.h:116` — `fabric_set_route` (direction + hop counts) | **legacy-only primitive, no indexed equivalent** (direction-plus-hop-count *is* the legacy model). Two external consumers: `cq_relay.hpp:90` and `test_fabric_set_unicast_route.cpp`, which uses it as its **reference** encoding | delete after P2, P5, and the §3.3 disposition |
 | P5 | `cq_relay.hpp:89` — `#if GALAXY_CLUSTER && !FABRIC_EXPRESS_ENABLED` | picks `fabric_set_route` vs `fabric_set_unicast_route` | keep only the `fabric_set_unicast_route` arm |
 | P6 | `mesh/api.h:1198` — `fabric_multicast_source_inject_noc_unicast_write` | whole function under `#if FABRIC_EXPRESS_ENABLED` | unconditional (the API is useful for any multi-output root, and non-express roots are single-output so it degenerates safely) |
 | P7 | `udm/tt_fabric_udm_impl.hpp:107` — `calculate_initial_direction` | indexed vs `get_ns_hops()` | indexed only |
 | P8 | `udm/tt_fabric_udm.hpp:482` — `select_relay_to_mux_connection` | indexed vs `get_ns_hops()` | indexed only |
 | P9 | `routing_plane_connection_manager.hpp:21` — `TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS` 6 vs 4 | `FABRIC_EXPRESS_ENABLED && ARCH_BLACKHOLE` | **no change at all** — this is G2 (Z-port presence), not G1, and the define keeps its name and condition. The only genuine express site left device-side. |
 
-### 2.3 Device: kernel
+### 2.4 Device: kernel
 
 | # | Site | Fork |
 |---|---|---|
@@ -258,7 +291,7 @@ Plus one gate that already wants unconditional treatment and just has a stray gu
 | K7 | `fabric_erisc_router_ct_args.hpp:432-447` | the `#if defined(FABRIC_EXPRESS_ENABLED)` block itself |
 | K8 | WH + `FABRIC_2D_VC1_ACTIVE` | kernel §3.3 compass-only bit-test admission exception. **Retained** — but must be re-expressed as "no Z sender on this build," not "not express" |
 
-### 2.4 Packet header fields to retire (codec §4.5.1)
+### 2.5 Packet header fields to retire (codec §4.5.1)
 
 | Field | Bytes | Blocking on |
 |---|---|---|
@@ -379,6 +412,20 @@ on same-mesh destinations** (`tt_fabric_api.h:35-44`), which the single-hop help
 on. codec §2.11 calls it removable *after* cutover. Keep it through the whole project; remove it as
 a separate cleanup (Phase 6) so that a single-hop regression cannot be confused with a codec
 regression.
+
+---
+
+### 3.3 The route-encoding test uses a legacy primitive as its oracle
+
+Found while auditing the API surface for step 2.5.
+
+**C1.** `tests/.../kernels/test_fabric_set_unicast_route.cpp:57,74,78` builds a **reference** encoding
+with `fabric_set_route` and diffs the real API against it. Phase 4.1 deletes `fabric_set_route`, so the
+test stops compiling. Re-base its reference onto the indexed expectation, or retire it in favour of
+the step-2.4 coverage — decided at 2.5, not discovered at 4.1.
+
+This is a build break, so it cannot be missed. It is recorded only so the disposition is chosen
+deliberately rather than under time pressure at 4.1.
 
 ---
 
@@ -522,6 +569,14 @@ the gate, that must be a loud configuration error at fabric init, not a runtime 
 
 ## 6. Phasing
 
+> **Sequencing change (owner call, 2026-08-21): all testing is deferred to a final Phase 7.**
+> Implementation lands first. Each phase's exit gate below keeps only its *non-test* conditions.
+>
+> The tradeoff, stated once: Phase 3's gate was "full regression green on every 2D platform," which
+> is what made a flag day survivable. Without tests it degrades to "it builds," and regressions from
+> Phases 1-6 surface together at the end rather than at the phase that caused them. Per-phase log
+> entries in the status doc are the bisect trail instead.
+
 Each phase is independently landable and leaves the tree green. Phase 3 is the only flag day.
 
 ```text
@@ -565,9 +620,15 @@ tests: every in-tree descriptor shape packs vectors and passes the arborescence 
   `fabric_set_indexed_intermesh_landing_route`; write the equivalence note; fill any gap.
 - Add the missing device-side coverage: intermesh landing (intermediate and destination), multicast
   on a LINE-axis mesh, `X > 4` unicast.
+- **Unify the 2D route API surface (guide 2.5)** so no consumer can reach a legacy encoder. Audit the
+  client-facing layers first (§2.2) — they need no signature change, which is what makes this small. The
+  ~200 `fabric_set_unicast_route` / `fabric_set_mcast_route` call sites need **no** change — they go
+  through names that already fork internally, and the fork is what Phase 3 removes. The real work is
+  narrow: `fabric_set_route`'s two consumers (P4), the `called_from_router` arm (B5), and one orphaned
+  indexed variant.
 
 **Exit gate:** every capability the legacy 2D path provides has a green indexed-path test, on both
-express and non-express fixtures.
+express and non-express fixtures; the §3.3 test-oracle disposition is chosen.
 
 ### Phase 3 — flip (flag day)
 
@@ -590,6 +651,9 @@ galaxy. Measure Galaxy bandwidth and record the 112 B-header cost (R2).
 - Add the 40-byte / 96 B tier; update the four `static_assert`s at
   `fabric_edm_packet_header.hpp:1295-1298`.
 - Update profiler/debug consumers that decode `hop_index` / `branch_*`.
+
+⚠ Precondition: the §3.3 test-oracle disposition must be settled before this phase deletes
+`fabric_set_route`.
 
 **Exit gate:** Galaxy back to a 96 B header with bandwidth at or above the Phase-0 baseline. No
 symbol named `hop_index`, `branch_east_offset`, `branch_west_offset`, or `turn_point` remains in a
@@ -691,9 +755,9 @@ Phases 1 and 2 are where the real design work lives (B1, B2, D1, D5).
    (`FABRIC_EXPRESS_MESH_{Y,X}_SIZE` → `FABRIC_2D_MESH_{Y,X}_SIZE`, kernel-side
    `EXPRESS_MESH_{Y,X}_SIZE` → `MESH_{Y,X}_SIZE`); `express_enabled` is deleted in Phase 5 rather
    than renamed. `FABRIC_EXPRESS_ENABLED` itself **survives under its own name** for the one genuine
-   express site (Z-port capacity, §4.1) — it stops being a codec selector, not a define. **Consequence:** every `FABRIC_2D` compile must then carry the shape defines,
-   including the dispatch kernels (`dispatch.cpp:585`, `prefetch.cpp:549`), which makes H6
-   (§3.3 / guide 3.3) load-bearing rather than tidy.
+   express site (Z-port capacity, §4.1) — it stops being a codec selector, not a define. H6 (§3.3 / guide 3.3) reduces to deleting the no-node
+   overload's express fatal, whose premise -- a per-mesh 2D ABI -- is what the flip removes. The
+   dispatch relays already resolve their own mesh for the shape defines.
 3. **`derive_line_axis_topology` placement**: extend `express_ring_topology.{hpp,cpp}` (keeps all
    three derivations together, but the filename becomes wrong) or a new
    `axis_route_topology.{hpp,cpp}` that absorbs all three? Recommendation: rename the file and the

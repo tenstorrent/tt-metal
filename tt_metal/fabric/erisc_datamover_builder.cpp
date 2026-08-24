@@ -950,7 +950,6 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(local_physical_chip_id);
 
     const auto& fabric_context = control_plane.get_fabric_context();
-    const auto topology = fabric_context.get_fabric_topology();
 
     auto sender_channel_to_check = get_worker_connected_sender_channel();
 
@@ -966,21 +965,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         remote_worker_sender_channel = get_worker_connected_sender_channel();
     }
 
-    bool update_pkt_hdr_on_rx_ch = true;
-    bool fabric_tensix_extension_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
-                                           tt::tt_fabric::FabricTensixConfig::DISABLED;
-    bool support_pkt_hdr_update_on_sender_channel =
-        !fabric_tensix_extension_enabled &&
-        (topology == tt::tt_fabric::Topology::Torus || topology == tt::tt_fabric::Topology::Mesh);
-    if (support_pkt_hdr_update_on_sender_channel) {
-        // The only mode that currently supports packet header update on sender channel is
-        // a mesh when we aren't also implementing a mux on a tensix core.
-        // The other topologies haven't been updated to support this new mode yet.
-        // For mux case, information about direction isn't tied to the channels yet.
-        // Information about turning and how to update the packet header route isn't exposed
-        // to the mux yet to implement sender side updates.
-        update_pkt_hdr_on_rx_ch = false;
-    }
+    // UPDATE_PKT_HDR_ON_RX_CH is gone: it chose between an RX-side and a sender-side realisation of
+    // the legacy 2D hop-program advance, and indexed 2D transit does not advance anything. 1D keeps
+    // its own decrement/shift/refill, which never consulted this flag.
 
     // TODO: this validation should be done in the allocator with the channel IDs passed in
     auto* channel_allocator = config.channel_allocator.get();
@@ -1250,15 +1237,14 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["MY_ETH_CHANNEL"] = my_eth_channel_;
     named_args["MY_ERISC_ID"] = risc_id;
     named_args["NUM_ACTIVE_ERISCS"] = static_cast<uint32_t>(this->get_configured_risc_count());
-    named_args["UPDATE_PKT_HDR_ON_RX_CH"] = update_pkt_hdr_on_rx_ch;
     named_args["FORCE_ALL_PATHS_TO_USE_SAME_NOC"] = requires_forced_assignment_to_noc1();
     named_args["IS_INTERMESH_ROUTER_ON_EDGE"] = is_intermesh_router_on_edge;
     named_args["IS_INTRAMESH_ROUTER_ON_EDGE"] = is_intramesh_router_on_edge;
 
-    // --- Express ABI args (only when this router's mesh selected the indexed 2D ABI) ---
-    // Keyed on express_routing_enabled, the same condition ComputeMeshRouterBuilder::create_kernel uses
-    // to emit FABRIC_EXPRESS_ENABLED. The kernel reads these args only under that define.
-    if (express_routing_enabled) {
+    // --- Indexed 2D ABI args (every 2D router; the kernel reads them under FABRIC_2D) ---
+    // No longer keyed on express_routing_enabled: every 2D mesh runs the indexed decode, so every 2D
+    // router needs its coordinate bounds and its landing-intercept flags.
+    if (fabric_context.is_2D_routing_enabled()) {
         // Same accessor and scope the packer and the worker defines use. These are the router's
         // coordinate bounds, so a disagreement with the packed L1 vectors reads the wrong row.
         const auto mesh_shape =
@@ -1267,7 +1253,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args["MESH_X_SIZE"] = mesh_shape[1];
         // A router receives inter-mesh landings iff its eth peer is in another mesh, and both carrier
         // VCs take them: a neighbour mesh's workers inject on VC0, so that traffic arrives here on VC0
-        // rather than VC1. VC2 is excluded, staying outside the express derivation entirely.
+        // rather than VC1. VC2 is excluded -- see guide 2.3, which takes that as the builder's own
+        // documented decision rather than re-deriving it.
         for (size_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
             named_args[fmt::format("IS_RECEIVER_CHANNEL_{}_INTERMESH_INGRESS", i)] = (is_inter_mesh && i < 2) ? 1 : 0;
         }
