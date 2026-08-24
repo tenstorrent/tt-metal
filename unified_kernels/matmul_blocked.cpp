@@ -160,6 +160,30 @@ void kernel_main() {
         const uint32_t n = me.x;
         acc.clear();
 
+#if defined(MMB_ABL_HOIST)
+        // TIMING ABLATION ONLY -- deliberately the WRONG ANSWER. Every k-block reuses block
+        // 0's operands, so the k-loop keeps its matmuls and its accumulator but loses every
+        // per-k-block DRAM read and broadcast. The gap against the real kernel is what the
+        // operand movement costs, which is the question once fidelity has shown the math is
+        // not on the critical path at all.
+        u::ComputeBlock a_h =
+            u::noc_load<0, 0>(a_storage, row, [&](u::L1Pages pages) {
+                for (uint32_t p = 0; p < pages.count; ++p) {
+                    const uint32_t rr = i * mt + p / kt;
+                    const uint32_t cc = p % kt;
+                    noc_async_read(a_acc.get_noc_addr(rr * ktot + cc), pages.addr(p), pages.page_bytes);
+                }
+            }).wait();
+        u::ComputeBlock w_h =
+            u::noc_load<MMB_IN1_THREAD, 1>(w_storage, col, [&](u::L1Pages pages) {
+                for (uint32_t p = 0; p < pages.count; ++p) {
+                    const uint32_t rr = p / nt;
+                    const uint32_t cc = n * nt + p % nt;
+                    noc_async_read(b_acc.get_noc_addr(rr * ntot + cc), pages.addr(p), pages.page_bytes);
+                }
+            }).wait();
+#endif
+
         for (uint32_t b = 0; b < kb; ++b) {
             const bool finish = (b == kb - 1);
 
@@ -168,6 +192,10 @@ void kernel_main() {
             // the other, and sharing a ready counter across both would let one core's count
             // land while another is still waiting, so a wait-for-equality would never match.
             // Different threads also means different NOCs, so the two overlap.
+#if defined(MMB_ABL_HOIST)
+            const u::ComputeBlock<A>& a = a_h;
+            const u::ComputeBlock<W>& w = w_h;
+#else
             u::ComputeBlock a =
                 u::noc_load<0, /*pair=*/0>(a_storage, row, [&](u::L1Pages pages) {
                     for (uint32_t p = 0; p < pages.count; ++p) {
@@ -184,6 +212,7 @@ void kernel_main() {
                         noc_async_read(b_acc.get_noc_addr(rr * ntot + cc), pages.addr(p), pages.page_bytes);
                     }
                 }).wait();
+#endif
 
             auto store_block = [&](u::Block<Out> blk) {
                 u::noc_store<0>(std::move(blk), [&](u::L1Pages pages) {
