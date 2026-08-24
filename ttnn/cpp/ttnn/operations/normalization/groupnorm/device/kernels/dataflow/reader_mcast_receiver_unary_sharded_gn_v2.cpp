@@ -23,7 +23,7 @@ void kernel_main() {
     constexpr uint32_t tile_height = get_compile_time_arg_val(5);
 
     constexpr uint32_t operation_ct_args_end = 6;
-    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, 0> mid_mcast_args;
+    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, 0> reduction_mcast_args;
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex_id = tt::CBIndex::c_9;
@@ -44,7 +44,7 @@ void kernel_main() {
     const uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
     const DataFormat data_format = get_dataformat(dfb_ex_partial_id);
 
-    auto reduce_pipe = mid_mcast_args.receiver(noc);
+    auto reduction_pipe = reduction_mcast_args.receiver(noc);
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = dfb_in0.get_read_ptr();
@@ -72,7 +72,7 @@ void kernel_main() {
         for (uint32_t j = 0; j < 2; ++j) {
             dfb_ex_partial.wait_front(1);
             dfb_ex_global.reserve_back(1);
-            reduce_pipe.receive();
+            reduction_pipe.receive(dfb_ex_global.get_write_ptr(), single_tile_size_bytes);
             dfb_ex_global.push_back(1);
             dfb_ex_partial.pop_front(1);
         }

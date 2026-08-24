@@ -61,10 +61,10 @@ void kernel_main() {
 
     constexpr uint32_t operation_rt_args_end = 5;
     constexpr dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), operation_rt_args_end>
-        mid_mcast_args;
+        reduction_mcast_args;
 
     Noc noc;
-    auto reduce_pipe = mid_mcast_args.receiver(noc);
+    auto reduction_pipe = reduction_mcast_args.receiver(noc);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
     DataflowBuffer dfb_in0(dfb_in0_id);
@@ -181,7 +181,7 @@ void kernel_main() {
             p_global_means[0] = local_result.mean;
             p_global_vars[0] = local_result.variance;
 
-            reduce_pipe.receive();
+            reduction_pipe.receive(global_means_ptr, 2 * single_tile_size_bytes);
 
             local_means_ptr += local_stride_per_group;
             local_vars_ptr += local_stride_per_group;

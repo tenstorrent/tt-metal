@@ -124,21 +124,11 @@ void kernel_main() {
 
     constexpr uint32_t operation_rt_args_end = 5 + 2 * num_mcast_cores;
     constexpr dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), operation_rt_args_end>
-        mid_mcast_args;
-    constexpr dataflow_kernel_lib::McastArgs<
-        mid_mcast_args.next_compile_time_args_offset(),
-        mid_mcast_args.next_runtime_args_offset()>
-        first_mcast_args;
-    constexpr dataflow_kernel_lib::McastArgs<
-        first_mcast_args.next_compile_time_args_offset(),
-        first_mcast_args.next_runtime_args_offset()>
-        last_mcast_args;
+        reduction_mcast_args;
 
     Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
-    auto mid_pipe = mid_mcast_args.sender(noc);
-    auto first_pipe = first_mcast_args.sender(noc);
-    auto last_pipe = last_mcast_args.sender(noc);
+    auto reduction_pipe = reduction_mcast_args.sender(noc);
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex2_partial_id = tt::CBIndex::c_21;
@@ -354,9 +344,7 @@ void kernel_main() {
                             }
 
                             if constexpr (num_mcast_cores > 1) {
-                                mid_pipe.send_signal();
-                                first_pipe.send_signal();
-                                last_pipe.send_signal();
+                                reduction_pipe.send_signal();
                             }
                         } else if (cur_read_iteration == 2) {
                             const auto dst_a = TensorAccessor(out_args, out_addr);
@@ -418,9 +406,7 @@ void kernel_main() {
                                 l1_read_addr_ex = dfb_ex2.get_read_ptr();
                             }
 
-                            mid_pipe.send(l1_read_addr_ex, l1_read_addr_ex, num_bytes_read);
-                            first_pipe.send(l1_read_addr_ex, l1_read_addr_ex, num_bytes_read);
-                            last_pipe.send(l1_read_addr_ex, l1_read_addr_ex, num_bytes_read);
+                            reduction_pipe.send(l1_read_addr_ex, l1_read_addr_ex, num_bytes_read);
                             if (cur_read_iteration == 0) {
                                 dfb_ex.pop_front(1);
                             } else {

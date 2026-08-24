@@ -483,47 +483,25 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         .core_ranges = all_cores,
         .initial_value = 0});
 
-    // GroupNorm's logical multicast group may wrap across the shard-grid boundary. Represent its
-    // middle/first/last rectangular partition with three fixed host-helper blocks. An absent edge
-    // rectangle is a sender-only rectangle; SenderPipe's degenerate in-place send is a no-op. This
-    // keeps rectangle optionality in each core's RT geometry while giving every kernel one fixed
-    // 3 * McastArgs wire.
-    auto make_group_mcasts = [&](const std::vector<CoreCoord>& group) {
-        std::vector<CoreCoord> mcast_group_first;
-        std::vector<CoreCoord> mcast_group_mid(group);
-        std::vector<CoreCoord> mcast_group_last;
-        if (!is_rectangle_grid(group)) {
-            auto mutable_group = group;
-            split_and_form_rectangle_grids(mutable_group, mcast_group_first, mcast_group_mid, mcast_group_last);
+    // A reduction is one semantic multicast stream. Each logical GroupNorm work group is one exact
+    // family group; McastFamily decomposes wrapped groups into their real rectangles without fake
+    // sender-only padding rectangles.
+    std::vector<ttnn::kernel_lib::host::McastGroup> reduction_groups;
+    reduction_groups.reserve(mcast_groups.size());
+    for (const auto& group : mcast_groups) {
+        std::set<CoreRange> receiver_ranges;
+        for (const auto& core : group) {
+            receiver_ranges.insert(CoreRange(core));
         }
-
-        const CoreCoord sender = group.front();
-        auto rectangle_or_sender = [&](const std::vector<CoreCoord>& rectangle) {
-            if (rectangle.empty()) {
-                return CoreRangeSet(CoreRange(sender, sender));
-            }
-            CoreCoord start = rectangle.front();
-            CoreCoord end = rectangle.front();
-            for (const auto& core : rectangle) {
-                start.x = std::min(start.x, core.x);
-                start.y = std::min(start.y, core.y);
-                end.x = std::max(end.x, core.x);
-                end.y = std::max(end.y, core.y);
-            }
-            return CoreRangeSet(CoreRange(start, end));
-        };
-
-        std::vector<ttnn::kernel_lib::host::Mcast2D> mcasts;
-        mcasts.reserve(3);
-        const auto config = ttnn::kernel_lib::host::McastConfig{
+        reduction_groups.emplace_back(
+            CoreRangeSet(std::move(receiver_ranges)), group.front(), /*use_chain_forwarding=*/false);
+    }
+    const auto reduction_family = ttnn::kernel_lib::host::McastFamily(
+        device,
+        std::move(reduction_groups),
+        ttnn::kernel_lib::host::McastConfig{
             .noc = reader_noc,
-            .sem_ids = std::vector<uint32_t>{reduce_sender_semaphore_id, reduce_receiver_semaphore_id}};
-        mcasts.emplace_back(device, rectangle_or_sender(mcast_group_mid), sender, config);
-        mcasts.emplace_back(device, rectangle_or_sender(mcast_group_first), sender, config);
-        mcasts.emplace_back(device, rectangle_or_sender(mcast_group_last), sender, config);
-        return mcasts;
-    };
-    const auto representative_group_mcasts = make_group_mcasts(mcast_groups.front());
+            .sem_ids = std::vector<uint32_t>{reduce_sender_semaphore_id, reduce_receiver_semaphore_id}});
 
     // reader defines
     std::map<std::string, std::string> reader_mcast_sender_defines;
@@ -585,10 +563,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         reader_mcast_receiver_compile_time_args.push_back(tile_width);
         reader_mcast_receiver_compile_time_args.push_back(static_cast<uint32_t>(stats_is_fp32));
     }
-    for (const auto& mcast : representative_group_mcasts) {
-        mcast.append_compile_time_args_to(reader_mcast_sender_compile_time_args, /*pre_handshake_override=*/false);
-        mcast.append_compile_time_args_to(reader_mcast_receiver_compile_time_args, /*pre_handshake_override=*/true);
-    }
+    reduction_family.append_compile_time_args_to(reader_mcast_sender_compile_time_args, /*pre_handshake=*/false);
+    reduction_family.append_compile_time_args_to(reader_mcast_receiver_compile_time_args, /*pre_handshake=*/true);
 
     // reader sender kernel
     KernelDescriptor reader_mcast_sender_desc;
@@ -1217,8 +1193,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     log_debug(tt::LogOp, "num_cores_per_group: {}", num_cores_per_group);
 
     for (const auto& group : mcast_groups) {
-        const auto group_mcasts = make_group_mcasts(group);
-
         for (size_t j = 0; j < group.size(); ++j) {
             CoreCoord core = group[j];
             std::vector<uint32_t> reader_mcast_args;
@@ -1234,9 +1208,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                     reader_mcast_args.push_back(coord.y);
                 }
             }
-            for (const auto& mcast : group_mcasts) {
-                mcast.append_runtime_args_to(reader_mcast_args, core);
-            }
+            reduction_family.append_runtime_args_to(reader_mcast_args, core);
             if (j == 0) {  // mcast sender
                 reader_mcast_sender_desc.runtime_args.emplace_back(core, std::move(reader_mcast_args));
 

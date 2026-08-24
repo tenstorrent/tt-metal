@@ -66,19 +66,11 @@ void kernel_main() {
 
     constexpr uint32_t operation_rt_args_end = 5 + 2 * num_mcast_cores;
     constexpr dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), operation_rt_args_end>
-        mid_mcast_args;
-    constexpr dataflow_kernel_lib::
-        McastArgs<mid_mcast_args.next_compile_time_args_offset(), mid_mcast_args.next_runtime_args_offset()>
-            first_mcast_args;
-    constexpr dataflow_kernel_lib::
-        McastArgs<first_mcast_args.next_compile_time_args_offset(), first_mcast_args.next_runtime_args_offset()>
-            last_mcast_args;
+        reduction_mcast_args;
 
     Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
-    auto mid_pipe = mid_mcast_args.sender(noc);
-    auto first_pipe = first_mcast_args.sender(noc);
-    auto last_pipe = last_mcast_args.sender(noc);
+    auto reduction_pipe = reduction_mcast_args.sender(noc);
 
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
@@ -234,9 +226,7 @@ void kernel_main() {
             p_global_vars[0] = global_result.variance;
 
             if constexpr (num_mcast_cores > 1) {
-                mid_pipe.send(global_means_ptr, global_means_ptr, 2 * single_tile_size_bytes);
-                first_pipe.send(global_means_ptr, global_means_ptr, 2 * single_tile_size_bytes);
-                last_pipe.send(global_means_ptr, global_means_ptr, 2 * single_tile_size_bytes);
+                reduction_pipe.send(global_means_ptr, global_means_ptr, 2 * single_tile_size_bytes);
             }
 
             local_means_ptr += local_stride_per_group;

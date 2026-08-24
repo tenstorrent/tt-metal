@@ -107,7 +107,7 @@ void kernel_main() {
     const uint32_t out_start_id = get_arg_val<uint32_t>(3);
     uint32_t num_channels_tiles = get_arg_val<uint32_t>(4);
 
-    constexpr dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), 5> mid_mcast_args;
+    constexpr dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), 5> reduction_mcast_args;
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;    // E[x] partial reduce
     constexpr uint32_t dfb_ex2_partial_id = tt::CBIndex::c_21;  // E[x] partial reduce
@@ -127,8 +127,8 @@ void kernel_main() {
 #endif
 
     Noc noc;
-    Semaphore<> reduce_receiver_sem(mid_mcast_args.consumer_ready);
-    auto reduce_pipe = mid_mcast_args.receiver(noc);
+    Semaphore<> reduce_receiver_sem(reduction_mcast_args.consumer_ready);
+    auto reduction_pipe = reduction_mcast_args.receiver(noc);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex2_partial(dfb_ex2_partial_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
@@ -246,8 +246,9 @@ void kernel_main() {
                             //Wait for local variance calculation
                             dfb_ex2_partial.wait_front(1);
                         }
-                        reduce_receiver_sem.up(noc, mid_mcast_args.sender_x(), mid_mcast_args.sender_y(), 1);
-                        reduce_pipe.receive_signal();
+                        reduce_receiver_sem.up(
+                            noc, reduction_mcast_args.sender_x(), reduction_mcast_args.sender_y(), 1);
+                        reduction_pipe.receive_signal();
                         if (cur_read_iteration == 0) {
                             dfb_ex_partial.pop_front(1);
                         } else {
@@ -303,11 +304,11 @@ void kernel_main() {
                 if (cur_read_iteration == 0 || cur_read_iteration == 1) {
                     if (cur_read_iteration == 0) {
                         dfb_ex_global.reserve_back(1);
-                        reduce_pipe.receive();
+                        reduction_pipe.receive(dfb_ex_global.get_write_ptr(), single_tile_size_bytes);
                         dfb_ex_global.push_back(1);
                     } else if (cur_read_iteration == 1) {
                         dfb_ex2_global.reserve_back(1);
-                        reduce_pipe.receive();
+                        reduction_pipe.receive(dfb_ex2_global.get_write_ptr(), single_tile_size_bytes);
                         dfb_ex2_global.push_back(1);
                     }
                 }

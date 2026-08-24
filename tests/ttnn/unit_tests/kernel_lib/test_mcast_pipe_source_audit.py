@@ -359,46 +359,54 @@ def test_sender_pipe_degenerate_copy_preserves_async_write_semantics():
     assert "barrier" not in body
 
 
-def test_interleaved_groupnorm_uses_three_opaque_helper_wires_and_preserves_legacy_phases():
+def test_groupnorm_uses_one_family_wire_and_preserves_legacy_phases():
     base = REPO_ROOT / "ttnn/cpp/ttnn/operations/normalization/groupnorm/device"
     factories = [
         (base / "groupnorm_mcast_program_factory.cpp").read_text(),
         (base / "groupnorm_no_mcast_program_factory.cpp").read_text(),
+        (base / "groupnorm_sharded_program_factory.cpp").read_text(),
     ]
     kernel_base = base / "kernels/dataflow"
     legacy_sender = (kernel_base / "reader_mcast_sender_unary_gn.cpp").read_text()
     legacy_receiver = (kernel_base / "reader_mcast_receiver_unary_gn.cpp").read_text()
     welford_sender = (kernel_base / "welford_reader_mcast_sender_unary_gn.cpp").read_text()
     welford_receiver = (kernel_base / "welford_reader_mcast_receiver_unary_gn.cpp").read_text()
+    sharded_legacy_sender = (kernel_base / "reader_mcast_sender_unary_sharded_gn_v2.cpp").read_text()
+    sharded_legacy_receiver = (kernel_base / "reader_mcast_receiver_unary_sharded_gn_v2.cpp").read_text()
+    sharded_welford_sender = (kernel_base / "welford_reader_mcast_sender_unary_sharded_gn_v2.cpp").read_text()
+    sharded_welford_receiver = (kernel_base / "welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp").read_text()
 
-    for source in (legacy_sender, legacy_receiver, welford_sender, welford_receiver):
+    senders = (legacy_sender, welford_sender, sharded_legacy_sender, sharded_welford_sender)
+    receivers = (legacy_receiver, welford_receiver, sharded_legacy_receiver, sharded_welford_receiver)
+    for source in senders + receivers:
         assert "mcast_dest_noc" not in source
         assert "num_mcast_cores_mid_group" not in source
 
-    for source in (legacy_sender, welford_sender):
-        assert len(re.findall(r"constexpr\s+dataflow_kernel_lib::\s*McastArgs<", source)) == 3
-        assert "mid_mcast_args.next_compile_time_args_offset()" in source
-        assert "mid_mcast_args.next_runtime_args_offset()" in source
-        assert "first_mcast_args.next_compile_time_args_offset()" in source
-        assert "first_mcast_args.next_runtime_args_offset()" in source
-    for source in (legacy_receiver, welford_receiver):
-        assert re.search(r"constexpr\s+dataflow_kernel_lib::\s*McastArgs<", source)
+    for source in senders + receivers:
+        assert len(re.findall(r"constexpr\s+dataflow_kernel_lib::\s*McastArgs<", source)) == 1
+        assert "reduction_mcast_args" in source
 
-    assert legacy_sender.count("_pipe.send_signal();") == 3
-    assert legacy_sender.count("_pipe.send(l1_read_addr_ex") == 3
-    assert "reduce_pipe.receive_signal();" in legacy_receiver
-    assert "reduce_pipe.receive();" in legacy_receiver
+    assert legacy_sender.count("reduction_pipe.send_signal();") == 1
+    assert legacy_sender.count("reduction_pipe.send(l1_read_addr_ex") == 1
+    assert "reduction_pipe.receive_signal();" in legacy_receiver
+    assert "reduction_pipe.receive(dfb_ex_global.get_write_ptr(), single_tile_size_bytes);" in legacy_receiver
+    assert "reduction_pipe.receive(dfb_ex2_global.get_write_ptr(), single_tile_size_bytes);" in legacy_receiver
     assert "reduce_receiver_sem.up(" in legacy_receiver
-    assert welford_sender.count("_pipe.send(global_means_ptr") == 3
-    assert "reduce_pipe.receive();" in welford_receiver
+    assert welford_sender.count("reduction_pipe.send(global_means_ptr") == 1
+    assert "reduction_pipe.receive(global_means_ptr, 2 * single_tile_size_bytes);" in welford_receiver
+    assert sharded_legacy_sender.count("reduction_pipe.send(l1_read_addr_ex") == 1
+    assert "reduction_pipe.receive(dfb_ex_global.get_write_ptr(), single_tile_size_bytes);" in sharded_legacy_receiver
+    assert sharded_welford_sender.count("reduction_pipe.send(global_means_ptr") == 1
+    assert "reduction_pipe.receive(global_means_ptr, 2 * single_tile_size_bytes);" in sharded_welford_receiver
 
-    mcast_factory, no_mcast_factory = factories
-    assert "/*pre_handshake_override=*/use_welford" in mcast_factory
-    assert mcast_factory.count("mcast.append_runtime_args_to(reader_args, core);") == 1
-    assert "/*pre_handshake_override=*/false" in no_mcast_factory
-    assert no_mcast_factory.count("mcast.append_runtime_args_to(reader_args, core);") == 1
+    mcast_factory, no_mcast_factory, sharded_factory = factories
+    assert "/*pre_handshake=*/use_welford" in mcast_factory
+    assert "/*pre_handshake=*/false" in no_mcast_factory
+    assert "/*pre_handshake=*/true" in sharded_factory
     for source in factories:
-        assert "std::vector<ttnn::kernel_lib::host::Mcast2D>" in source
+        assert "ttnn::kernel_lib::host::McastFamily" in source
+        assert "reduction_family.append_runtime_args_to" in source
+        assert "ttnn::kernel_lib::host::Mcast2D" not in source
         assert "mcast_dest_noc" not in source
 
 

@@ -1,7 +1,7 @@
 # Multicast family and chain-forwarding tracker
 
 Plan: [`plan.md`](plan.md)
-Status: Stage 1 complete; Stage 2 pending
+Status: Stages 1–2 complete; Stage 3 pending
 Last updated: 2026-08-24
 
 This is the execution record for the `McastFamily`/`McastGroup`, exact
@@ -83,26 +83,28 @@ Gate: do not integrate GroupNorm until every applicable Stage 1 item passes.
 
 ## Stage 2 — GroupNorm exact multi-rectangle proof
 
+Stage started from commit `afaff417f1c`.
+
 ### Integration
 
-- [ ] Model the GroupNorm statistics stream as one family across exact groups.
-- [ ] Set `use_chain_forwarding == false`.
-- [ ] Replace three `Mcast2D` argument blocks with one family argument block.
-- [ ] Replace three sender pipes/sends with one selected pipe/send.
-- [ ] Remove fake singleton padding for absent first/last rectangles.
-- [ ] Pass global-statistics destination and exact byte count to `receive()`.
-- [ ] Preserve the early/manual readiness ACK protecting remote Welford reads.
-- [ ] Cover legacy and Welford routes.
+- [x] Model the GroupNorm statistics stream as one family across exact groups.
+- [x] Set `use_chain_forwarding == false`.
+- [x] Replace three `Mcast2D` argument blocks with one family argument block.
+- [x] Replace three sender pipes/sends with one selected pipe/send.
+- [x] Remove fake singleton padding for absent first/last rectangles.
+- [x] Pass global-statistics destination and exact byte count to `receive()`.
+- [x] Preserve the early/manual readiness ACK protecting remote Welford reads.
+- [x] Cover legacy and Welford routes.
 
 ### Stage 2 validation gate
 
-- [ ] One legacy parametrization passes through the safe pytest wrapper.
-- [ ] One Welford parametrization passes through the safe pytest wrapper.
-- [ ] Focused GroupNorm POC tests pass.
-- [ ] Full GroupNorm unit suite passes.
-- [ ] Full GroupNorm nightly suite passes.
-- [ ] Relevant helper regressions and source audits pass.
-- [ ] GroupNorm performance is recorded and accepted.
+- [x] One legacy parametrization passes through the safe pytest wrapper.
+- [x] One Welford parametrization passes through the safe pytest wrapper.
+- [x] Focused GroupNorm POC tests pass.
+- [x] Full GroupNorm unit suite passes.
+- [x] Full GroupNorm nightly suite passes.
+- [x] Relevant helper regressions and source audits pass.
+- [x] GroupNorm performance baseline is recorded.
 
 Gate: do not begin Stage 3 until Stage 2 is fully green.
 
@@ -181,6 +183,17 @@ unrecorded partial run.
 | 2026-08-24 | 1 | `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/kernel_lib/test_mcast_pipe_source_audit.py -k 'mcast_args_owns_its_compile_time_presence_tag or mcast_args_has_one_template_owned_runtime_base' -q` | PASS | 2/2 applicable helper-wire source audits. |
 | 2026-08-24 | 1 | `./build_metal.sh` | PASS | Release host build and Python binding install. |
 | 2026-08-24 | 1 | `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/kernel_lib/test_mcast_pipe.py --dev -q` | PASS | 91/91 helper device tests, including the complete family matrix. |
+| 2026-08-24 | 2 | `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/kernel_lib/test_mcast_pipe_source_audit.py -k 'groupnorm_uses_one_family_wire' -q` | PASS | Focused source audit confirms one family wire across all GroupNorm host and kernel routes. |
+| 2026-08-24 | 2 | `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/fused/test_group_norm.py --dev -k 'test_group_norm_with_block_sharded_v2_8x4_grid and legacy and 1280' -q` | PASS | Focused legacy compile and device case. |
+| 2026-08-24 | 2 | `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/fused/test_group_norm.py --dev -k 'test_group_norm_with_block_sharded_v2_8x4_grid and welford and 1280' -q` | PASS | Focused Welford compile and device case. |
+| 2026-08-24 | 2 | `./build_metal.sh` | PASS | Full host build after all GroupNorm factory changes. |
+| 2026-08-24 | 2 | `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/fused/test_group_norm.py -q` | PASS | 345 passed, 10 expected platform skips. |
+| 2026-08-24 | 2 | `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py -q` | PASS | 181 passed, 5 skipped, 1 expected xfail. |
+| 2026-08-24 | 2 | `scripts/run_safe_pytest.sh tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py -q` | PASS | 203 passed, 6 platform skips. |
+| 2026-08-24 | 2 | `scripts/run_safe_pytest.sh tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm_DRAM.py -q` | PASS | 257 passed, 111 unsupported/platform skips. |
+| 2026-08-24 | 2 | `scripts/run_safe_pytest.sh tests/ttnn/nightly/unit_tests/operations_compute_only/fused/test_group_norm.py -q` | PASS | 8/8 compute-only validation tests. |
+| 2026-08-24 | 2 | `scripts/run_safe_pytest.sh tests/ttnn/perf_tests/operations/mcast/test_groupnorm_chain_vs_rectangles.py -q` | PASS | Exact five-group POC uses rectangle counts `[2,3,3,3,2]`; 7-trial median 22,087 ns, 0.15% standard deviation. |
+| 2026-08-24 | 2 | `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/kernel_lib/test_mcast_pipe.py --dev -q` | PASS | 91/91 helper device regression tests after GroupNorm integration. |
 
 ## Decisions and scope changes
 
