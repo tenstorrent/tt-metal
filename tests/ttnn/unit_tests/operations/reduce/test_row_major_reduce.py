@@ -254,8 +254,10 @@ def test_std_row_major(device, input_shape, dim):
     output_tensor = ttnn.to_torch(output_tensor)
 
     # test for equivalance
-    # Tolerances match the TILE-layout welford std/var tests in test_reduction.py;
-    # bf16 outputs cannot meet 1e-06/1e-09 (sub-ULP) bounds.
+    # Tolerances lifted from test_reduction.py::test_std: an RM input is tilized and dispatched
+    # to the same welford_reduce primitive as a TILE input (generic_reductions.cpp), so the TILE
+    # bounds apply. check_ulp keeps its default (False) like the sibling; bf16 outputs cannot
+    # meet the previous 1e-06/1e-09 (sub-ULP) bounds.
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -291,8 +293,10 @@ def test_var_row_major(device, input_shape, dim):
     output_tensor = ttnn.to_torch(output_tensor)
 
     # test for equivalance
-    # Tolerances match the TILE-layout welford std/var tests in test_reduction.py;
-    # bf16 outputs cannot meet 1e-06/1e-09 (sub-ULP) bounds.
+    # Tolerances lifted from test_reduction.py::test_var: an RM input is tilized and dispatched
+    # to the same welford_reduce primitive as a TILE input (generic_reductions.cpp), so the TILE
+    # bounds apply. check_ulp keeps its default (False) like the sibling; bf16 outputs cannot
+    # meet the previous 1e-06/1e-09 (sub-ULP) bounds.
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
