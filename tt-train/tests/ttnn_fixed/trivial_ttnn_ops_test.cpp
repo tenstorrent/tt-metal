@@ -1199,30 +1199,31 @@ TEST_F(TrivialTnnFixedTest, TestSamplingWideRowManyOwners) {
 namespace {
 
 // gumbel_sfpu.h's approximate log, re-derived on the host. The four constants are DUPLICATED from
-// ttml::metal::sfpu::gumbel_noise_log in gumbel_sfpu.h -- keep them in sync with that header. The
+// ttml::metal::sfpu::gumbel_noise_neg_log in gumbel_sfpu.h -- keep them in sync with that header. The
 // header itself is TRISC-only, so the invariants the kernel relies on are pinned here by
 // reconstruction.
-constexpr float kApproxLogLn2 = 0.693359375F;
-constexpr float kApproxLogB = -0.240234375F;
-constexpr float kApproxLogC = 1.4140625F;
-constexpr float kApproxLogD = -0x1.2c801p+0F;
+constexpr float kApproxNegLogLn2 = -0.693359375F;
+constexpr float kApproxLogB = 0.240234375F;
+constexpr float kApproxLogC = -1.4140625F;
+constexpr float kApproxLogD = 0x1.2c801p+0F;
 
-// The mantissa polynomial p(m) = m*(m*B + C) + D on the octave [1, 2), in double.
-double approx_log_poly(double m) {
+// The NEGATED mantissa polynomial q(m) = m*(m*B + C) + D = -p(m) on the octave [1, 2), in double.
+// The kernel returns -ln directly (negation folded into the constants), so the mirror does too.
+double approx_neg_log_poly(double m) {
     return m * (m * static_cast<double>(kApproxLogB) + static_cast<double>(kApproxLogC)) +
            static_cast<double>(kApproxLogD);
 }
 
-// The full approximation log(v) ~= e*ln2 + p(m) for v = m * 2^e, m in [1, 2), matching the
+// The full approximation -log(v) ~= e*(-ln2) + q(m) for v = m * 2^e, m in [1, 2), matching the
 // setexp/exexp split the SFPI pass performs.
 template <typename T>
-T approx_log(T v) {
+T approx_neg_log(T v) {
     int exponent = 0;
     const T half_mantissa = std::frexp(v, &exponent);  // v = half_mantissa * 2^exponent, in [0.5, 1)
     const T m = half_mantissa * T(2);
     const T e = static_cast<T>(exponent - 1);
     const T poly = m * (m * T(kApproxLogB) + T(kApproxLogC)) + T(kApproxLogD);
-    return e * T(kApproxLogLn2) + poly;
+    return e * T(kApproxNegLogLn2) + poly;
 }
 
 }  // namespace
@@ -1230,14 +1231,14 @@ T approx_log(T v) {
 TEST(GumbelSfpuHostTest, TestGumbelApproxLogInvariants) {
     constexpr double kTwoPowNeg20 = 0x1p-20;
 
-    // Endpoint ties, exact: p(1) = -2^-20 and p(2) = ln2_c - 2^-20. These are what make
-    // e*ln2_c + p(m) continuous across octave boundaries, and the shared -2^-20 shift is what
+    // Endpoint ties, exact: q(1) = +2^-20 and q(2) = -ln2_c + 2^-20. These are what make
+    // e*(-ln2_c) + q(m) continuous across octave boundaries, and the shared +2^-20 shift is what
     // keeps -log(U) strictly positive without a zero guard.
-    EXPECT_EQ(approx_log_poly(1.0), -kTwoPowNeg20);
-    EXPECT_EQ(approx_log_poly(2.0), static_cast<double>(kApproxLogLn2) - kTwoPowNeg20);
+    EXPECT_EQ(approx_neg_log_poly(1.0), kTwoPowNeg20);
+    EXPECT_EQ(approx_neg_log_poly(2.0), static_cast<double>(kApproxNegLogLn2) + kTwoPowNeg20);
 
-    // p rises across a dense sweep of the octave, including the fp32 neighbours of both
-    // endpoints, and stays within the fitted error bound of the exact log. A monotone transform
+    // q falls across a dense sweep of the octave, including the fp32 neighbours of both
+    // endpoints, and stays within the fitted error bound of the exact -log. A monotone transform
     // of U cannot reorder samples, so this is the property that preserves argmax semantics.
     constexpr int kGridPoints = 1'000'000;
     std::vector<double> grid;
@@ -1253,30 +1254,30 @@ TEST(GumbelSfpuHostTest, TestGumbelApproxLogInvariants) {
 
     uint32_t monotonicity_violations = 0U;
     double max_error = 0.0;
-    double prev = approx_log_poly(grid.front());
+    double prev = approx_neg_log_poly(grid.front());
     for (double m : grid) {
-        const double p = approx_log_poly(m);
-        if (p < prev) {
+        const double q = approx_neg_log_poly(m);
+        if (q > prev) {
             ++monotonicity_violations;
         }
-        prev = p;
+        prev = q;
         if (m < 2.0) {
-            max_error = std::max(max_error, std::abs(p - std::log(m)));
+            max_error = std::max(max_error, std::abs(q + std::log(m)));
         }
     }
-    EXPECT_EQ(monotonicity_violations, 0U) << "p(m) must be nondecreasing on [1, 2]";
-    EXPECT_LE(max_error, 5.5e-3) << "|p(m) - ln(m)| left the fitted bound";
+    EXPECT_EQ(monotonicity_violations, 0U) << "q(m) must be nonincreasing on [1, 2]";
+    EXPECT_LE(max_error, 5.5e-3) << "|q(m) + ln(m)| left the fitted bound";
 
     // Across octave boundaries: the full approximation, evaluated at fp32-adjacent points spanning
-    // powers of two, must be nondecreasing. The exponent range comfortably covers everything the
-    // noise chain feeds it: U in [2^-32, 1) and -log(U) in [~1e-6, ~22].
+    // powers of two, must be NONINCREASING (it is -log). The exponent range comfortably covers
+    // everything the noise chain feeds it: U in [2^-32, 1) and -log(U) in [~1e-6, ~22].
     for (int e = -40; e <= 32; e += 8) {
         const float x = std::ldexp(1.0F, e);
         const float below = std::nextafterf(x, 0.0F);
         const float above = std::nextafterf(x, HUGE_VALF);
-        EXPECT_LE(approx_log<double>(static_cast<double>(below)), approx_log<double>(static_cast<double>(x)))
+        EXPECT_GE(approx_neg_log<double>(static_cast<double>(below)), approx_neg_log<double>(static_cast<double>(x)))
             << "octave boundary below 2^" << e;
-        EXPECT_LE(approx_log<double>(static_cast<double>(x)), approx_log<double>(static_cast<double>(above)))
+        EXPECT_GE(approx_neg_log<double>(static_cast<double>(x)), approx_neg_log<double>(static_cast<double>(above)))
             << "octave boundary above 2^" << e;
     }
 
@@ -1286,9 +1287,9 @@ TEST(GumbelSfpuHostTest, TestGumbelApproxLogInvariants) {
     // from + scale would round past the bound (compute_rand_scale_bits), and there the ceiling is
     // near 13.75 -- the approximate-log analogue of the exact log's ~16.6.
     const float u_raw_max = std::nextafterf(1.0F, 0.0F);  // kGumbelUniformUpperBound
-    const float raw_inner = approx_log<float>(u_raw_max);
-    ASSERT_LT(raw_inner, 0.0F) << "log(U) must stay strictly negative below 1.0";
-    EXPECT_LE(-approx_log<float>(-raw_inner), 13.9F);
+    const float raw_inner = approx_neg_log<float>(u_raw_max);
+    ASSERT_GT(raw_inner, 0.0F) << "-log(U) must stay strictly positive below 1.0";
+    EXPECT_LE(approx_neg_log<float>(raw_inner), 13.9F);
 
     const float lower = 0x1p-32F;  // kGumbelUniformLowerBound
     float scale = u_raw_max - lower;
@@ -1298,7 +1299,7 @@ TEST(GumbelSfpuHostTest, TestGumbelApproxLogInvariants) {
         scale = std::bit_cast<float>(scale_bits);
     }
     const float u_top = lower + scale;
-    const float top_inner = approx_log<float>(u_top);
-    ASSERT_LT(top_inner, 0.0F);
-    EXPECT_LE(-approx_log<float>(-top_inner), 13.8F) << "noise ceiling left the documented ~13.75 cap";
+    const float top_inner = approx_neg_log<float>(u_top);
+    ASSERT_GT(top_inner, 0.0F);
+    EXPECT_LE(approx_neg_log<float>(top_inner), 13.8F) << "noise ceiling left the documented ~13.75 cap";
 }

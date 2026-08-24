@@ -30,7 +30,7 @@
  * the caller's rand from/scale bits enforce that.
  *
  * Both logs feed only the Gumbel noise magnitude, so they run through a
- * cheap approximation (see gumbel_noise_log) rather than tt-llk's precise
+ * cheap approximation (see gumbel_noise_neg_log) rather than tt-llk's precise
  * minimax body; define GUMBEL_SAMPLE_PRECISE_LOG to use it instead. Either
  * way the pass uses immediate constants only -- no programmable const LREGs
  * and no replay slots -- so it composes with rand_tile on both architectures
@@ -47,43 +47,50 @@ namespace ttml::metal::sfpu {
 // this one has no attribute -- emitted from ambient host state (an env var, say) it would change
 // the compiled binary without changing the program hash, silently serving stale cached programs.
 // Flipping it means editing this header, which the JIT source hash does see.
-sfpi_inline sfpi::vFloat gumbel_noise_log(const sfpi::vFloat v) {
-    return ckernel::sfpu::_calculate_log_body_no_init_(v);
+// Returns -ln(v): both call sites want the negated log, so the default branch folds the
+// negation into its constants; this debug branch pays one register sign flip per call instead.
+sfpi_inline sfpi::vFloat gumbel_noise_neg_log(const sfpi::vFloat v) {
+    return -ckernel::sfpu::_calculate_log_body_no_init_(v);
 }
 #else
 /**
- * Approximate ln(v) for the noise chain: exponent split plus one quadratic
+ * Approximate -ln(v) for the noise chain: exponent split plus one quadratic
  * over the mantissa octave -- 2 MADs and 4 constants (3 of them single-load
  * fp16a) versus the precise body's 3 MADs, 4 two-load fp32 constants, and
- * predicated zero guard. kLn2, kB, and kC sit exactly on the fp16a grid
- * because an fp16a-exact literal loads with a single SFPLOADI where a full
- * fp32 constant takes two -- keep them on that grid when re-fitting.
+ * predicated zero guard. The NEGATION is folded into the constants: both
+ * call sites want -log (the inner produces -log U, the outer's result IS
+ * the Gumbel value), so returning -ln directly deletes two per-element
+ * register sign flips. Sign flips are exact, so kNegLn2, kB, and kC stay
+ * exactly on the fp16a grid -- an fp16a-exact literal loads with a single
+ * SFPLOADI where a full fp32 constant takes two -- keep them on that grid
+ * when re-fitting.
  *
  * The noise needs distributional fidelity, not ULP accuracy. Invariants
- * (pinned host-side by TestGumbelApproxLogInvariants):
- *  - Monotone: p(m) = m*(m*B + C) + D rises on [1,2) (p' >= 0.45), and the
- *    stored constants satisfy p(1) = -2^-20 and p(2) = LN2 - 2^-20 exactly,
- *    so e*LN2 + p(m) is continuous and increasing across octave boundaries
- *    (up to 1-ulp fp32 jitter). A monotone transform of U cannot reorder
- *    samples, so argmax semantics survive the approximation.
- *  - Error: |p - ln| <= 5.4e-3 on [1,2), plus |e|*2.1e-4 from the fp16a
+ * (pinned host-side by TestGumbelApproxLogInvariants), stated for the
+ * negated polynomial q(m) = m*(m*B + C) + D = -p(m):
+ *  - Monotone: q falls on [1,2) (q' <= -0.45), and the stored constants
+ *    satisfy q(1) = +2^-20 and q(2) = kNegLn2 + 2^-20 exactly, so
+ *    e*kNegLn2 + q(m) is continuous and decreasing across octave
+ *    boundaries (up to 1-ulp fp32 jitter). A monotone transform of U
+ *    cannot reorder samples, so argmax semantics survive the approximation.
+ *  - Error: |q + ln| <= 5.4e-3 on [1,2), plus |e|*2.1e-4 from the fp16a
  *    ln(2) -- orders below the sampling test's binomial resolution.
  *  - No zero guard: the caller's rand bounds give U in [2^-32, 1-2^-24],
- *    and the uniform 2^-20 downward shift keeps -log(U) >= ~1e-6 under
- *    fp32 rounding, so the outer log's argument never reaches zero or
- *    flips sign. Cost: noise tops out near 13.75 instead of 16.64,
- *    compressing only the ~1e-6 upper quantile of the Gumbel tail.
+ *    and the uniform +2^-20 shift on q keeps -log(U) >= ~1e-6 under fp32
+ *    rounding, so the outer call's argument never reaches zero or flips
+ *    sign. Cost: noise tops out near 13.75 instead of 16.64, compressing
+ *    only the ~1e-6 upper quantile of the Gumbel tail.
  */
-sfpi_inline sfpi::vFloat gumbel_noise_log(const sfpi::vFloat v) {
-    constexpr float kLn2 = 0.693359375F;  // ln(2) to fp16a precision
-    constexpr float kB = -0.240234375F;   // fp16a-exact minimax under the endpoint ties
-    constexpr float kC = 1.4140625F;      // kLn2 - 3*kB, fp16a-exact
-    constexpr float kD = -0x1.2c801p+0F;  // 2*kB - kLn2 - 2^-20, fp32-exact
+sfpi_inline sfpi::vFloat gumbel_noise_neg_log(const sfpi::vFloat v) {
+    constexpr float kNegLn2 = -0.693359375F;  // -ln(2) to fp16a precision
+    constexpr float kB = 0.240234375F;        // fp16a-exact minimax under the endpoint ties
+    constexpr float kC = -1.4140625F;         // kNegLn2 - 3*kB, fp16a-exact
+    constexpr float kD = 0x1.2c801p+0F;       // 2*kB - kNegLn2 + 2^-20, fp32-exact
     const sfpi::vFloat m = sfpi::setexp(v, 127);
     const sfpi::vFloat poly = m * (m * kB + kC) + kD;
     const auto exp = sfpi::convert<sfpi::vSMag>(sfpi::exexp(v));
     const sfpi::vFloat expf = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::Nearest);
-    return expf * kLn2 + poly;
+    return expf * kNegLn2 + poly;
 }
 #endif
 
@@ -100,9 +107,10 @@ inline void calculate_gumbel_score(const std::uint32_t inv_temperature_bits) {
     for (int d = 0; d < 8; d++) {
         const sfpi::vFloat u = sfpi::dst_reg[0];
         const sfpi::vFloat logits = sfpi::dst_reg[LOGITS_DST_OFFSET * dst_tile_size_sfpi];
-        // Negations are LREG sign flips; neither intermediate touches DST.
-        const sfpi::vFloat neg_log_u = -gumbel_noise_log(u);
-        const sfpi::vFloat gumbel = -gumbel_noise_log(neg_log_u);
+        // Both consumers want -log, so the helper returns it directly (negation folded into
+        // its constants); nothing here flips signs, and neither intermediate touches DST.
+        const sfpi::vFloat neg_log_u = gumbel_noise_neg_log(u);
+        const sfpi::vFloat gumbel = gumbel_noise_neg_log(neg_log_u);
         sfpi::vFloat score = logits * inv_temperature + gumbel;
         if constexpr (!DST_ACCUM_MODE) {
             score = sfpi::convert<sfpi::vFloat16b>(score, sfpi::RoundMode::Nearest);
