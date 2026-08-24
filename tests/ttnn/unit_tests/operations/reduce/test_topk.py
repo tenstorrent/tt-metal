@@ -448,25 +448,26 @@ def test_topk_indices_tensor_on_non_last_dim_raise(device, expect_error):
 
 @pytest.mark.parametrize("W", (64, 16384), ids=["single_core", "multi_core"])
 def test_topk_indices_tensor_payload_is_used(W, device):
-    # The payload is the constant 777 in every column, so the outcome is unambiguous: honoured means
-    # every returned index is 777, ignored means the op generated its own iota instead.
+    # Column i is labelled i + label_offset. A label below the offset means the payload was ignored;
+    # subtracting it recovers the column, so a wrong column is caught too.
     # W=64 takes the single-core factory, W=16384 the multi-core one.
     torch.manual_seed(0)
     k = 32
-    payload = 777
+    label_offset = 20000
     shape = [1, 1, 32, W]
 
-    ttnn_input = ttnn.from_torch(
-        torch.randn(shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
-    )
-    indices_tensor = ttnn.from_torch(
-        torch.full(shape, payload, dtype=torch.uint16), ttnn.uint16, layout=ttnn.Layout.TILE, device=device
-    )
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    labels = (torch.arange(W, dtype=torch.int32) + label_offset).expand(shape)
 
-    _, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=True, sorted=True, indices_tensor=indices_tensor)
+    ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    indices_tensor = ttnn.from_torch(labels, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
 
-    returned = ttnn.to_torch(ttnn_indices, dtype=torch.uint16)
-    assert torch.all(returned == payload), "indices_tensor was ignored; the op generated its own iota"
+    values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=True, sorted=True, indices_tensor=indices_tensor)
+
+    returned = ttnn.to_torch(ttnn_indices, dtype=torch.uint16).to(torch.int64)
+    assert torch.all(returned >= label_offset), "indices_tensor was ignored; the op generated its own iota"
+    # Each label must name the column whose value was selected.
+    assert_equal(torch.gather(torch_input, -1, returned - label_offset), ttnn.to_torch(values))
 
 
 @pytest.mark.parametrize("W", (64, 16384), ids=["single_core", "multi_core"])
@@ -514,7 +515,7 @@ def test_topk_indices_tensor_too_narrow_raises(device, expect_error):
     # W is past 65535, so the op resolves the index dtype to UINT32 and sizes the index CB 32-bit,
     # but the payload here is UINT16. Reject rather than read a 16-bit tensor at a 32-bit stride.
     k = 32
-    W = 2 * UINT16_MAX + 1
+    W = UINT16_MAX + 1  # smallest width that forces UINT32
     shape = [1, 1, 32, W]
 
     ttnn_input = ttnn.from_torch(
@@ -558,7 +559,7 @@ def test_topk_row_major_tensor_raises(tensor_under_test, device, expect_error):
                     device=device,
                 ),
                 ttnn.from_torch(
-                    torch.zeros([1, 1, 32, k], dtype=torch.bfloat16),
+                    torch.zeros([1, 1, 32, k], dtype=torch.int32),
                     ttnn.uint16,
                     layout=ttnn.Layout.ROW_MAJOR,
                     device=device,
