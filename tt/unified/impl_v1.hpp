@@ -749,7 +749,6 @@ NocAsyncReadTx<thread, S> noc_load(
     PhysicalMcast mcast,
     Semaphore<thread>& receivers_ready,
     Semaphore<thread>& data_sent,
-    uint32_t seq,
     Fn fn) {
     // Also a custom routine. Every core reserves -- the sender fills its own copy
     // by reading, the receivers have theirs filled for them by the multicast --
@@ -776,36 +775,51 @@ NocAsyncReadTx<thread, S> noc_load(
                 return;
             }
 
-            // Do not multicast into a receiver's buffer until it has told us the buffer
-            // is free. The count is CUMULATIVE across calls and never reset: after `seq`
-            // blocks every one of the num_dests receivers has counted itself in once per
-            // block, so the target is (seq + 1) * num_dests. Resetting it instead would
-            // need the reset to be ordered against the next block's increments, which is
-            // exactly the kind of rendezvous a monotonic counter does not need.
-            receivers_ready.wait_min((seq + 1) * num_dests);
+            // Do not multicast into a receiver's buffer until it has told us the
+            // buffer is free. Then clear the count so the next block starts from
+            // zero -- leaving it set would let the next call skip the handshake.
+            receivers_ready.wait(num_dests);
+            receivers_ready.set(0);
 
             noc_async_read_barrier();  // payload is in our L1 before we forward it
 
             noc_async_write_multicast(pages.base, mcast.get_noc_addr(pages.base), pages.total_bytes(), num_dests);
 
-            // The flag must not overtake the payload it describes. ttnn's sender relies on
-            // same-NOC, same-VC, same-command-buffer ordering to skip this; ours cannot,
-            // because the flag below is an ATOMIC INCREMENT rather than a write and does
-            // not share the write path's ordering.
+            // The flag must not overtake the payload it describes.
+            //
+            // ttnn's matmul sender does NOT flush here: its payload and flag multicasts go
+            // out on the same NOC, VC and command buffer (NOC_CMD_STATIC_VC), so they cannot
+            // reorder, and it pays nothing. Ours cannot simply drop it -- removing both
+            // flushes deadlocks the device -- because of the set(0) below, not because of
+            // ordering. See there.
             noc_async_writes_flushed();
 
-            // An increment, not a value the sender writes and then has to take back. That
-            // is the whole point: an increment carries its addend in the NOC command, so
-            // there is no local word for the next block to clobber mid-flight, and so no
-            // second flush to protect one. The previous protocol set the flag to 1,
-            // multicast it, flushed, and set it back to 0 -- two NOC round trips per
-            // broadcast, and removing either deadlocked the device.
-            data_sent.inc_mcast(mcast, 1);
+            data_sent.set(1);
+            data_sent.set_mcast(mcast);
+
+            // Back to 0 so BOTH semaphores read 0 on every core once this returns.
+            // The flush is what makes that safe: set_mcast sources the value from
+            // local L1, so the write must have departed before it is overwritten.
+            // Otherwise the sender sits at 1 and anything else sharing the pair --
+            // synchronize_cores() -- sees a stale release and skips its wait.
+            //
+            // These two flushes are the measured difference against ttnn's sender, which
+            // does neither on Wormhole. They are not removable as they stand: taking both
+            // out deadlocks the device, because THIS set(0) can overwrite the flag word
+            // before set_mcast's write has sourced it, and the receivers then wait on a 1
+            // that never arrives. The cost is two NOC round trips per broadcast, and there
+            // are two broadcasts per k-block.
+            //
+            // The way out is the PROTOCOL, not the flush: a flag the sender never has to
+            // reset in the same breath -- an incrementing counter the receiver compares
+            // against a block number, say -- needs no set(0) and so no flush to protect it.
+            // ttnn gets there by never rewriting the word it just multicast.
+            noc_async_writes_flushed();
+            data_sent.set(0);
         } else {
-            // Count in once per block; the sender's target grows to match, so nothing
-            // here is ever reset and no rearm can race the next block's flag.
             receivers_ready.inc_remote(mcast.start);
-            data_sent.wait_min(seq + 1);
+            data_sent.wait(1);
+            data_sent.set(0);  // rearm for the next block
         }
     });
 }
@@ -817,10 +831,9 @@ NocAsyncReadTx<thread, S> noc_load(
     Semaphore<thread>& receivers_ready,
     Semaphore<thread>& data_sent,
     const Accessor& acc,
-    uint32_t block_idx,
-    uint32_t seq) {
+    uint32_t block_idx) {
     const uint32_t first = block_idx * storage.num_pages;
-    return noc_load<thread>(storage, mcast, receivers_ready, data_sent, seq, [&](L1Pages pages) {
+    return noc_load<thread>(storage, mcast, receivers_ready, data_sent, [&](L1Pages pages) {
         for (uint32_t p = 0; p < pages.count; ++p) {
             noc_async_read(acc.get_noc_addr(first + p), pages.addr(p), pages.page_bytes);
         }
@@ -834,9 +847,8 @@ NocAsyncReadTx<thread, S> noc_load(
     Semaphore<thread>& receivers_ready,
     Semaphore<thread>& data_sent,
     const Accessor& acc,
-    uint32_t block_idx,
-    uint32_t seq) {
-    return noc_load<thread>(storage, mcast.to_physical(), receivers_ready, data_sent, acc, block_idx, seq);
+    uint32_t block_idx) {
+    return noc_load<thread>(storage, mcast.to_physical(), receivers_ready, data_sent, acc, block_idx);
 }
 
 // The handles are locals, not statics. With id-based semaphores the object is a
@@ -847,7 +859,7 @@ NocAsyncReadTx<thread, S> noc_load(
 // static-storage is disallowed in this environment").
 template <int thread, int pair, typename S, typename Accessor>
 NocAsyncReadTx<thread, S> noc_load(
-    const Storage<S>& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx, uint32_t seq) {
+    const Storage<S>& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx) {
     static_assert(
         kMcastSemsReserved,
         "multicast needs its handshake semaphores reserved by the host: build the program through "
@@ -855,17 +867,17 @@ NocAsyncReadTx<thread, S> noc_load(
         "to the six-argument noc_load()");
     Semaphore<thread> receivers_ready(kMcastReadySem<pair>);
     Semaphore<thread> data_sent(kMcastSentSem<pair>);
-    return noc_load<thread>(storage, mcast, receivers_ready, data_sent, acc, block_idx, seq);
+    return noc_load<thread>(storage, mcast, receivers_ready, data_sent, acc, block_idx);
 }
 
 template <int thread, int pair, typename S, typename Accessor>
 NocAsyncReadTx<thread, S> noc_load(
-    const Storage<S>& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx, uint32_t seq) {
-    return noc_load<thread, pair>(storage, mcast.to_physical(), acc, block_idx, seq);
+    const Storage<S>& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx) {
+    return noc_load<thread, pair>(storage, mcast.to_physical(), acc, block_idx);
 }
 
 template <int thread, int pair, typename S, typename Fn>
-NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, PhysicalMcast mcast, uint32_t seq, Fn fn) {
+NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, PhysicalMcast mcast, Fn fn) {
     static_assert(
         kMcastSemsReserved,
         "multicast needs its handshake semaphores reserved by the host: build the program through "
@@ -873,12 +885,12 @@ NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, PhysicalMcast mcas
         "to the five-argument noc_load()");
     Semaphore<thread> receivers_ready(kMcastReadySem<pair>);
     Semaphore<thread> data_sent(kMcastSentSem<pair>);
-    return noc_load<thread>(storage, mcast, receivers_ready, data_sent, seq, fn);
+    return noc_load<thread>(storage, mcast, receivers_ready, data_sent, fn);
 }
 
 template <int thread, int pair, typename S, typename Fn>
-NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, LogicalMcast mcast, uint32_t seq, Fn fn) {
-    return noc_load<thread, pair>(storage, mcast.to_physical(), seq, fn);
+NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, LogicalMcast mcast, Fn fn) {
+    return noc_load<thread, pair>(storage, mcast.to_physical(), fn);
 }
 
 // --- synchronize_cores: a barrier across CORES, for one data-movement thread ---
