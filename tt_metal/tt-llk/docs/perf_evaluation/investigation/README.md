@@ -12,6 +12,7 @@ out, and what it does not.
 | [02](02-counters-cannot-see-it.md) | Can hardware counters show which stall it is? | **No.** The counter build does not reproduce the effect at all |
 | [03](03-per-thread-zones.md) | Inside the real pipeline, is the time lost in a thread or between threads? | **Unanswerable with these zones.** All three span the whole loop |
 | [04](04-repetition-does-not-help.md) | Can repeated runs average the instability away? | **No.** Median-of-5 still fails every gate run |
+| [05](05-the-cost-is-per-tile.md) | Is the extra time an event, or a rate? | **A rate.** About two extra cycles per tile, sustained |
 
 ## Where this stands
 
@@ -25,9 +26,14 @@ out, and what it does not.
 - It vanishes when the profiling instrumentation changes, while the total work
   stays the same. (02)
 
-**The strongest inference available:** a race with a window narrow enough that a
-few instructions of profiling code close it. A fixed data-dependent cost would
-survive that change; this does not.
+- The cost is **a rate, not an event** — roughly two extra cycles per tile,
+  sustained across the whole loop, agreeing across two tests that differ 16-fold
+  in loop factor and 20-fold in total cycles. (05)
+
+**The strongest inference available:** the pipeline has two stable steady
+rhythms differing by about two cycles per tile, and which one it settles into is
+decided by something with a very narrow timing window — narrow enough that a few
+instructions of profiling code change the answer.
 
 **Not established:** the mechanism. Which hardware interaction resolves two ways,
 and why. That is a silicon-level question.
@@ -55,7 +61,8 @@ Every instrument available has now been tried.
 | Per-thread zones (03) | **Ruled out.** The zones span the whole loop, so they cannot localise |
 | Repetition — median, min (04) | **Ruled out.** Cannot suppress it |
 | A zone around a single handshake | Kernel change, in the exact region under suspicion. 02 suggests it may remove the effect |
-| RTL simulation | ttsim is functional, so it cannot see timing; the VCS flow is Quasar-only. RTL is deterministic and would not reproduce a probabilistic race in any case |
+| **Loop-factor sweep (05)** | **The open lead.** `.claude/scripts/perf_loop_factor_sweep.sh` |
+| RTL simulation | Was closed: a 200,000-cycle kernel is hours to days, and RTL is deterministic. **05 may reopen it** -- if the cost is per tile, a ~1,900-cycle reproducer is about a minute of simulation, and at that size you read the handshake directly rather than hoping to catch a race |
 | Hand it to the packer path owner | The realistic route to a root cause |
 
 Note also `marko/dvalid-vs-semaphore-perf`, which is measuring dvalid against
