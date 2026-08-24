@@ -95,9 +95,8 @@ public:
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const { return programs_; }
-    // defer_kernel_builds (compile-only pre-compilation): defer each program's kernel builds to the
-    // shared executor and skip finalize_offsets(), since the workload is not dispatched on this pass.
-    // See ProgramImpl::compile().
+    // defer_kernel_builds: compile-only -- defer kernel builds and skip finalize_offsets (not
+    // dispatched this pass). See ProgramImpl::compile().
     void compile(MeshDevice* mesh_device, bool defer_kernel_builds = false);
 
     // For testing purposes only

@@ -826,10 +826,8 @@ void FDMeshCommandQueue::read_shard_from_device(
         return;
     }
 
-    // In compile-only mode nothing has been dispatched, so device tensor data is uninitialized.
-    // Skip the read so the caller can proceed and all downstream kernels still get compiled.
-    // If an op uses the read-back values to pick a data-dependent shape/argument, the kernels
-    // compiled past this point will be wrong -- warn once so that case is visible.
+    // Compile-only never dispatched, so device data is uninitialized: skip the read. Warn once,
+    // since an op that needs read-back values (data-dependent shape/arg) will compile wrong kernels.
     if (MetalContext::instance().rtoptions().get_compile_only()) {
         static bool warned = false;
         if (!warned) {

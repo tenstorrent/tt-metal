@@ -250,12 +250,9 @@ TEST_F(MeshEndToEnd2x4Tests, UntracedEltwiseAddTest) {
     }
 }
 
-// Basic functionality test for compile-only mode (TT_METAL_COMPILE_ONLY / rtoptions.compile_only).
-// Locks down the core contract: EnqueueMeshWorkload in compile-only mode compiles a workload's
-// kernels (deferred to the shared executor, joined by WaitForPendingCompiles) but does NOT dispatch
-// it, and a subsequent normal run is unaffected. This guards against regressions in the deferred
-// compile path (past bugs here caused use-after-free / heap corruption / device-init crashes).
-// End-to-end verification that the warmed cache is complete lives in the WAN test_compilation.sh.
+// Compile-only mode contract: EnqueueMeshWorkload compiles a workload's kernels but does not
+// dispatch it, and a subsequent normal run still works. (Full-cache coverage is in the WAN
+// test_compilation.sh.)
 TEST_F(MeshEndToEnd2x4Tests, CompileOnlyCompilesWithoutDispatch) {
     constexpr uint8_t kAddOpId = 0;
 

@@ -147,19 +147,16 @@ void SDMeshCommandQueue::read_shard_from_device(
     if (!mesh_device_->impl().is_local(device_coord)) {
         return;
     }
-    // In compile-only mode nothing has been dispatched, so device tensor data is uninitialized.
-    // Skip the read so the caller can proceed and all downstream kernels still get compiled.
-    // If an op uses the read-back values to pick a data-dependent shape/argument, the kernels
-    // compiled past this point will be wrong -- warn once so that case is visible.
+    // Compile-only never dispatched, so device data is uninitialized: skip the read. Warn once,
+    // since an op that needs read-back values (data-dependent shape/arg) will compile wrong kernels.
     if (MetalContext::instance().rtoptions().get_compile_only()) {
         static bool warned = false;
         if (!warned) {
             warned = true;
             log_warning(
                 LogMetal,
-                "compile-only mode: skipping device tensor read (returning host buffer as-is). Any op "
-                "that depends on read-back VALUES for a data-dependent shape/argument will compile "
-                "incorrect kernels.");
+                "Compile-only mode: skipping device tensor read. Any op that depends on read-back "
+                "values for a data-dependent shape/argument will compile incorrect kernels.");
         }
         return;
     }

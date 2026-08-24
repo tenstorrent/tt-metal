@@ -893,7 +893,8 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
-    // Join any outstanding compile-only async compiles before tearing anything down.
+    // Join any deferred compile-only kernel builds before tearing anything down (destructor
+    // context, so log rather than rethrow).
     try {
         tt::tt_metal::distributed::WaitForPendingCompiles();
     } catch (const std::exception& e) {

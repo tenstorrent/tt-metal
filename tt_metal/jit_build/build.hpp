@@ -221,23 +221,11 @@ void jit_build_once(size_t hash, const std::function<void()>& build_fn);
 // Clear the JIT build cache so that subsequent jit_build_once() calls re-execute.
 void jit_build_cache_clear();
 
-// Deferred kernel builds (compile-only mode).
-//
-// Unlike launch_build_step(), which appends to a caller-owned `events` vector that the caller
-// joins via sync_build_steps() before returning, these register into a PROCESS-GLOBAL pending set
-// with NO per-caller barrier. This lets many programs' kernel builds run on the shared executor
-// concurrently -- filling every core instead of a handful per program -- and be joined once, later,
-// via wait_for_pending_kernel_builds(). Used only by ProgramImpl::compile() in compile-only mode;
-// the normal execution path never touches this set.
-
-// Submit build_func to the shared build executor and register its future in the global pending set.
-void launch_pending_build_step(const std::function<void()>& build_func);
-
-// Register an already-launched build future in the global pending set.
-void add_pending_kernel_build(std::shared_future<void> build_future);
-
-// Join every pending deferred kernel build. Rethrows the first build error (after joining all, so
-// nothing is still running against captured state). No-op when the set is empty.
-void wait_for_pending_kernel_builds();
+// Deferred kernel builds (compile-only mode): register into a process-global set with no per-caller
+// barrier (unlike launch_build_step + sync_build_steps), so builds from many programs run
+// concurrently and are joined once via wait_for_pending_kernel_builds().
+void launch_pending_build_step(const std::function<void()>& build_func);  // submit + register
+void add_pending_kernel_build(std::shared_future<void> build_future);     // register an existing future
+void wait_for_pending_kernel_builds();  // join all; rethrows the first build error; no-op if empty
 
 }  // namespace tt::tt_metal

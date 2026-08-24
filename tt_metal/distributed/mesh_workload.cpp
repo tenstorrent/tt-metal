@@ -120,9 +120,8 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device, bool defer_kernel_builds
         }
         mesh_device->wait_for_thread_pool();
     }
-    // Compile-only pre-compilation defers the kernel builds (still in flight, joined later) and does
-    // not dispatch, so the L1 offset finalization -- which reads compiled binary sizes via
-    // Kernel::binaries() -- is both impossible (binaries not loaded) and unnecessary here.
+    // Compile-only defers the builds and doesn't dispatch, so finalize_offsets (needs loaded
+    // binaries) is neither possible nor needed.
     if (!defer_kernel_builds) {
         finalize_offsets(mesh_device);
     }

@@ -23,10 +23,8 @@
 namespace tt::tt_metal::distributed {
 
 void WaitForPendingCompiles() {
-    // Compile-only mode defers each program's kernel builds to the shared executor (see
-    // ProgramImpl::compile()); join them all here. Thin wrapper over the jit_build registry so the
-    // public distributed API and its existing call sites (device close / program-cache clear) stay
-    // stable. No-op when nothing is pending.
+    // Join the kernel builds deferred by compile-only mode (see ProgramImpl::compile()). Public
+    // wrapper kept stable for existing call sites (device close / program-cache clear).
     tt::tt_metal::wait_for_pending_kernel_builds();
 }
 
@@ -123,19 +121,10 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
 
     auto& ctx = tt::tt_metal::MetalContext::instance();
     if (ctx.rtoptions().get_compile_only()) {
-        // Compile-only mode: build this workload's kernels WITHOUT executing, then return (no
-        // dispatch). The call is SYNCHRONOUS here -- host-core concurrency comes from inside
-        // compile(), which in compile-only mode defers each kernel's pure file-build to the shared
-        // executor with no per-program barrier (see ProgramImpl::compile()). Those deferred builds
-        // are joined by WaitForPendingCompiles() at device close / program-cache clear. Because the
-        // call is synchronous, nothing captures the caller's workload by pointer, so there is no
-        // lifetime hazard. This branch is only entered when the compile_only flag is set; the normal
-        // path below is unchanged.
-        //
-        // defer_kernel_builds=true selects the deferred build path inside compile() and skips
-        // finalize_offsets (safe: this workload is never dispatched here). Infrastructure programs
-        // (fabric/dispatch/device init) never pass through here, so they keep the normal synchronous
-        // build + finalize.
+        // Compile-only: compile this workload's kernels but don't dispatch. Synchronous call (no
+        // workload captured by pointer -> no lifetime hazard); concurrency comes from inside
+        // compile(), which defers the builds. defer_kernel_builds=true also skips finalize_offsets
+        // (safe: never dispatched here). Infra programs don't take this path, so they stay normal.
         mesh_workload.impl().compile(mesh_cq.device(), /*defer_kernel_builds=*/true);
         return;
     }

@@ -2632,28 +2632,12 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch, boo
             Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
         }
     } else if (defer_kernel_builds) {
-        // Deferred compile-only path: warm the on-disk kernel cache without dispatching, and do so
-        // with maximum host-core utilization. Reached only for programs the caller guarantees will
-        // NOT be finalized/dispatched on this pass (model workloads in compile-only mode).
-        //
-        // The workload-mutating prep (prep_kernel: sets build options / full name, and on first
-        // compile set_remote_circular_buffer_init, set_cb_data_fmt_and_tile) runs SERIALLY on this
-        // (the caller's) thread. Only the pure, const kernel file-build (ensure_kernel_binaries ->
-        // generate_binaries, which reads compile-time kernel state and writes the filesystem) is
-        // deferred to the shared executor via launch_pending_build_step -- with NO per-program
-        // barrier. Every program's builds therefore run concurrently, filling all executor cores
-        // instead of the handful a single program provides. All builds are joined later by
-        // wait_for_pending_kernel_builds() (invoked before program-cache clear / device close).
-        //
-        // read_binaries() and watcher registration are intentionally skipped: they load the ELF
-        // into the Kernel for DISPATCH, which compile-only never performs. The on-disk ELF produced
-        // by ensure_kernel_binaries is exactly what a later normal run reuses via build_once().
-        //
-        // Race-free w.r.t. program-cache reuse: the deferred task captures a moved-in
-        // JitBuildOptions copy and re-fetches the (process-lived) build env by value inside the
-        // lambda; it touches the Kernel only through const generate_binaries(), reading compile-time
-        // fields that are written once (here, during prep) and never by override_runtime_arguments,
-        // which mutates only the disjoint runtime-arg fields on program-cache hits.
+        // Compile-only: run the workload-mutating prep on the caller thread, then defer only the
+        // pure const kernel build to the executor with no per-program barrier, so builds from all
+        // programs run concurrently (joined later by wait_for_pending_kernel_builds()).
+        // read_binaries/watcher are skipped (dispatch-only). Race-free: the deferred task reads only
+        // write-once compile-time kernel fields (disjoint from the runtime-arg fields that
+        // override_runtime_arguments mutates on cache reuse) plus a moved-in build-options copy.
         const ContextId ctx_id = device_context_id;
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
@@ -2700,9 +2684,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch, boo
 
 void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_dispatch, bool defer_kernel_builds) {
     this->compile(device, force_slow_dispatch, defer_kernel_builds);
-    // Deferred compile-only pre-compilation warms the kernel cache without dispatching: kernel
-    // builds are still in flight (joined later) and the program is never finalized, so the
-    // allocation/finalization steps below are both invalid and unnecessary. Return early.
+    // Compile-only defers the builds and never finalizes/dispatches, so the steps below are invalid.
     if (defer_kernel_builds) {
         return;
     }
