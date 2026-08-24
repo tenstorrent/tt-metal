@@ -744,29 +744,36 @@ fused_mmrs_configs = {
     },
     ttnn.CoreCoord(12, 10): {
         (9472, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1),
-        # Wan2.2 720p ff2 on the quad-galaxy config (M = 9472 / 4), swept 2026-08-24 under the
-        # windowed L1 handoff: 532.4 us windowed vs 722.2 us best-DRAM (-26%). Mt_per_core=10, so
-        # M_block=6 leaves 2 blocks and the window rotates.
-        (9472 // 4, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 4, 8, 2, 2, None, 1, 5),  # 532.4 us
-        # LTX ff2 @stage_1 (M = 9728/sp8), swept 2026-08-24 under the windowed L1 handoff: 349.0 us
-        # windowed vs 377.1 us best-DRAM. Previously absent, so it fell to the default config whose
-        # M_block=8 exceeds the 5 rows per core -> DRAM fallback; this entry puts stage_1 on the
-        # windowed handoff (M_block=4 leaves 2 blocks per core).
-        (1216, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 8, 8, 2, 2, None, 1, 5),  # 349.0 us
-        # LTX video FFN ff2 (RowParallel): per-device [4864,4096]@[4096,4096]
-        # LTX ff2 @stage_2 (M = 38912/sp8), reswept 2026-08-24 under the windowed L1 handoff:
-        # 933.8 us vs ~1088 us for the previous DRAM-era M7/K5/N6 blocking (-14%).
-        (4864, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 8, 6, 2, 2, None, 1, 5),  # 933.8 us
-        # Flux2 @1024px, swept 2026-08-24 under the windowed L1 handoff (runner windows combos with
-        # >=2 M blocks per core). Windowed won both shapes outright: 394.1 us vs 443.8 us best-DRAM
-        # for (1152,...), 331.5 us vs 345.4 us for (1024,...). The old (1152,...) M_block=12 entry
-        # was degenerate under the window (12-tile block over 5 rows/core -> 384 KB resident shard,
-        # CB clash); M_block must stay <= ceil(Mt_per_core/2) for the window to rotate.
-        (1152, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 3, 3, 8, 1, 4, None, 1, 5),  # 394.1 us
+        # Entries marked "swept 2026-08-24 (windowed)" were swept under the windowed L1 handoff
+        # with the runner that windows combos leaving >= 2 M blocks per core (DRAM otherwise), on
+        # a binary verified to place the RS intermediate in DRAM (an earlier stale build parked it
+        # in L1, flattering times ~3-4%; those numbers were restated from clean re-sweeps).
+        # M_block must stay <= ceil(Mt_per_core / 2) for the window to rotate.
+        #
+        # Wan2.2 720p ff2 on the quad-galaxy config (M = 9472 / 4), swept 2026-08-24 (windowed):
+        # 557.4 us windowed vs 722.2 us best-DRAM. Mt_per_core=10, M_block=6 leaves 2 blocks.
+        (9472 // 4, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 3, 8, 2, 2, None, 1, 5),  # 557.4 us
+        # LTX ff2 @stage_1 (M = 9728/sp8), swept 2026-08-24 (windowed): 361.6 us vs 376.1 us
+        # best-DRAM. Previously absent, so it fell to the default config whose M_block=8 exceeds
+        # the 5 rows per core -> DRAM fallback; this entry puts stage_1 on the windowed handoff.
+        (1216, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 14, 2, 2, None, 1, 5),  # 361.6 us
+        # LTX ff2 @stage_2 (M = 38912/sp8), swept 2026-08-24 (windowed): 966.8 us vs ~1088 us for
+        # the previous DRAM-era M7/K5/N6 blocking.
+        (4864, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 12, 2, 2, None, 1, 5),  # 966.8 us
+        # Aang ff2 (same K/N family as Wan). Windowed beats the best DRAM blocking on both:
+        # a2v 601.9 us vs 746.99 us DRAM-swept @ M6/K4/N8 (-19%); SR 2084.2 us vs 2191.75 us
+        # DRAM-swept @ M6/K4/N7 (-5%).
+        (2656, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 3, 8, 2, 2, None, 1, 5),  # a2v, 601.9 us
+        (11520, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 4, 8, 2, 2, None, 1, 5),  # SR, 2084.2 us
+        # Flux2 @1024px, swept 2026-08-24 (windowed). Windowed won both shapes outright:
+        # 407.5 us vs 443.8 us best-DRAM for (1152,...), 339.9 us vs 345.4 us for (1024,...).
+        # The pre-window (1152,...) M_block=12 entry was degenerate under the window (12-tile
+        # block over 5 rows/core -> 384 KB resident shard, CB clash).
+        (1152, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 3, 6, 8, 1, 4, None, 1, 5),  # 407.5 us
         (512, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 2, None, 1),
         (512, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1),
         (1024, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1),
-        (1024, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 2, 4, 8, 2, 2, None, 1, 5),  # 331.5 us, see above
+        (1024, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 2, 4, 8, 2, 2, None, 1, 5),  # 339.9 us, see above
         # 2048-resolution shapes — BH 4×8 ring sweep (2026-05-30, 2048.md)
         (4096, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 3, 8, 1, 2, None, 1),  # 1546.0 μs
         (128, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 6, 8, 1, 2, None, 1),  # 595.7 μs

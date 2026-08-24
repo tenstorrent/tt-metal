@@ -183,6 +183,8 @@ SHAPES = [
     # Aang MMRS ff2 shapes (same K/N family as Wan: K = 13824/tp4, N = 5120).
     (2656, 3456, 5120, 12, 8, False, "mmrs"),  # Aang a2v
     (11520, 3456, 5120, 12, 8, False, "mmrs"),  # Aang SR (super-resolution)
+    (1664, 3456, 5120, 12, 8, False, "mmrs"),  # Aang a2v @1080p
+    (7200, 3456, 5120, 12, 8, False, "mmrs"),  # Aang SR @1080p
     # 12x8 won that grid sweep (1.313 ms vs 1.373 at 12x7 and 1.487 at 12x9); the longer durations
     # (M = 9216 / 13632) reuse its blocking rather than being swept -- warmup compiles one program per
     # combo and compile time grows with M, so M=9216 alone is ~75 min against ~9 min here, for a block
