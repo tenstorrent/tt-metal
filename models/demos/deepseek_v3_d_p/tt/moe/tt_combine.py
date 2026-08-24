@@ -148,8 +148,7 @@ class TtCombineModule(LightweightModule):
             dispatch_group_size=self.dispatch_group_size,
             experts_per_chip=self.experts_per_chip,
             num_experts_per_tok=self.num_experts_per_tok,
-            # Variable chunk length: caller may pass the ACTUAL per-chip token count for this
-            # chunk (default None = the build-time size, so existing callers are unchanged).
+            # Optional per-call token count (None = build-time size; legacy callers unchanged).
             seq_len_per_chip=(self.seq_len_per_chip if seq_len_per_chip is None else seq_len_per_chip),
             cluster_axis=self.cluster_axis,
             num_links=self.num_links,

@@ -2,17 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Variable chunk length smoke test.
 
-Builds ONE prefill runtime supporting two chunk sizes {1024, 10240} and times processing the SAME
-1024-token prompt two ways — as a native 1024 chunk vs padded into a 10240 chunk — to show the small
-chunk avoids the ~10x padding waste on a typical short request.
+One runtime built for {SMALL, LARGE} (env VARCHUNK_SMALL/LARGE, default 1k/8k) prefills the same
+SMALL real tokens twice — as a native SMALL chunk vs padded into a LARGE chunk — and reports both.
 
-Both ways are ONE-SHOT (actual_start=0, gather-Q AllGather) — the primary use case for a short request
-and the exact path variable chunk optimizes. One-shot uses FABRIC_1D (linear); NO torus / ring needed,
-so this runs on any healthy galaxy node. We skip runtime.compile() (which would warm the multi-chunk
-ring path and require the torus); the timing loop's first iter JIT-warms, the median of 3 is warm.
-
-GALAXY-GATED. Env: HF_MODEL, GPT_OSS_WEIGHTS_FROM_CACHE=1, EXPERT_DTYPE=bf8,
-TT_MESH_GRAPH_DESC_PATH=.../single_bh_galaxy_mesh_graph_descriptor.textproto, PREFILL_NUM_LAYERS(opt).
+GALAXY-GATED; needs the torus descriptor + FABRIC_1D_RING (chunk 0 is cache-backed ring since #53153).
+Env: HF_MODEL, GPT_OSS_WEIGHTS_FROM_CACHE=1, EXPERT_DTYPE=bf8, PREFILL_NUM_LAYERS (optional).
 """
 
 import os
@@ -25,8 +19,7 @@ import ttnn
 
 ROWS, COLS = 4, 8
 GALAXY_NUM_DEVICES = 32
-# Sizes overridable via env: 1k/8k is the 128k-context pair (131072 = 128*1024 = 16*8192);
-# 10240 was the original large size (does NOT divide 128k).
+# 1k/8k: the 128k-context pair (131072 = 128*1024 = 16*8192).
 SMALL = int(os.getenv("VARCHUNK_SMALL", "1024"))
 LARGE = int(os.getenv("VARCHUNK_LARGE", "8192"))
 
@@ -101,7 +94,7 @@ def main():
             return statistics.median(ts)
 
         t_small = time_prefill(SMALL)  # 1024 real tokens as a 1024 chunk (no waste)
-        t_large = time_prefill(LARGE)  # SAME 1024 real tokens padded into a 10240 chunk (~10x work)
+        t_large = time_prefill(LARGE)  # same SMALL tokens padded into a LARGE chunk
         print(
             f"[varchunk] RESULT ({num_layers}L): prefill 1024 real tokens — "
             f"as {SMALL}-tok chunk = {t_small * 1000:.1f} ms, as {LARGE}-tok chunk (padded) = {t_large * 1000:.1f} ms, "

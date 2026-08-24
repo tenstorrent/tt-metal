@@ -211,8 +211,7 @@ class TtGptOssMoE(LightweightModule):
         expert_outputs = ttnn.unsqueeze(ttnn.unsqueeze(expert_outputs, dim=0), dim=0)
 
         combined_output = self.combine_module(
-            # Variable chunk length: pass this chunk's ACTUAL per-chip token count (s) so combine emits
-            # a matching-size output; post_combine_reduce then agrees with the actual-size router scores.
+            # Pass this chunk's actual per-chip token count so combine's output matches the scores.
             expert_outputs,
             metadata,
             tt_expert_token_counts,

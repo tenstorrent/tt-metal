@@ -51,10 +51,7 @@ class TtPrefillRuntimeConfig:
     default_chunk_size: int = (
         8192  # per prefill_chunk() call unless overridden (8k divides 128k context); one-shot sets == max_seq_len
     )
-    # Variable chunk length: additional chunk sizes to support alongside `chunk_size`. Each supported
-    # size gets its own indexed rope (the block-cyclic period is chunk-size-specific); the MoE buffers
-    # are built at the LARGEST supported size (smaller chunks under-fill them). Lets a short request run
-    # one small chunk (e.g. 1024) instead of padding up to a large `chunk_size` (~10x less compute).
+    # Other sizes this instance can serve per call (own rope each; MoE buffers sized at the largest).
     additional_chunk_sizes: tuple = ()  # semantically a set; tuple for dataclass-default ergonomics
     num_users: int = 1  # independent cache slots (user-major batch)
     sp_axis: int = 0
@@ -93,9 +90,7 @@ class TtPrefillRuntime:
         self.hf_config = hf_config
         self.config = config
 
-        # Supported chunk sizes (variable chunk length), largest first. `chunk_size` is the default;
-        # `additional_chunk_sizes` add more. MoE + max_seq_len are sized at the largest. max_seq_len must be a
-        # multiple of every supported size so each size's block-cyclic rope tiles the cache cleanly.
+        # Supported sizes, largest first. max_seq_len must be a multiple of each (rope must tile the cache).
         self.chunk_sizes = tuple(sorted({config.default_chunk_size, *config.additional_chunk_sizes}, reverse=True))
         self.max_chunk_size = self.chunk_sizes[0]
         for cs in self.chunk_sizes:
@@ -144,8 +139,7 @@ class TtPrefillRuntime:
             max_seq_len=self.config.max_seq_len,
             sequence_parallel=True,
             use_ep_moe=self.config.use_ep_moe,
-            # MoE dispatch/combine/expert buffers are MAX capacities: size them at the largest supported
-            # chunk so any smaller chunk under-fills them (no per-size MoE rebuild needed).
+            # MoE buffers are max capacities: size at the largest supported chunk.
             ep_seq_len_per_chip=self.max_chunk_size // self.config.sp_factor,
             expert_weight_dtype=self.config.expert_weight_dtype,
         )
@@ -166,10 +160,8 @@ class TtPrefillRuntime:
         self.kv_cache_allocated = True
 
     def _build_indexed_rope(self) -> None:
-        """Whole-cache, block-cyclic, SP-sharded YaRN cos/sin for the on-device indexed rope. ONE rope
-        PER supported chunk size — the block-cyclic period is chunk-size-specific, so a chunk of size
-        ``cs`` must use the rope built for ``cs`` (else SP rows >= 1 read the wrong positions). Built
-        once and reused for every chunk of that size. ``self.rope_indexed`` maps chunk_size -> rope."""
+        """Whole-cache indexed rope, one per supported chunk size (the block-cyclic period is
+        size-specific). ``self.rope_indexed`` maps chunk_size -> rope."""
         rs = getattr(self.hf_config, "rope_scaling", None) or {}
         self.rope_indexed = {
             cs: build_indexed_rope(
@@ -252,8 +244,7 @@ class TtPrefillRuntime:
         covered before the first served/timed request. (This is separate from the one-time empty-disk
         kernel-cache compile that only the very first run ever pays.)"""
         assert self.model_built
-        # Warm up EACH supported chunk size — the ring kernels + rope slice differ per size, so a size
-        # that isn't warmed here would JIT inside its first served chunk.
+        # Warm each supported size (else its kernels JIT inside the first served chunk).
         for chunk in self.chunk_sizes:
             ring = self.config.max_seq_len > chunk
             logger.info(
