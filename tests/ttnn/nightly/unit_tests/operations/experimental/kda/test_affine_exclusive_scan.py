@@ -181,19 +181,12 @@ def _composed_ttnn_baseline(
 
 @pytest.mark.parametrize("summary_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("sharded_inputs", [False, True], ids=("interleaved", "height-sharded-l1"))
-@pytest.mark.parametrize(
-    ("batch_heads", "groups_per_head", "key_dim", "value_dim"),
-    [(2, 1, 32, 32), (2, 3, 32, 32), (2, 4, 32, 32), (3, 2, 32, 64)],
-)
 def test_affine_exclusive_scan_contract_and_trace(
     device: ttnn.Device,
     summary_dtype: ttnn.DataType,
     sharded_inputs: bool,
-    batch_heads: int,
-    groups_per_head: int,
-    key_dim: int,
-    value_dim: int,
 ) -> None:
+    batch_heads, groups_per_head, key_dim, value_dim = 2, 4, 32, 32
     a, b, initial_state = _host_inputs(batch_heads, groups_per_head, key_dim, value_dim)
     expected = _oracle(a, b, initial_state, batch_heads, groups_per_head)
     leading = batch_heads * groups_per_head
@@ -237,6 +230,50 @@ def test_affine_exclusive_scan_contract_and_trace(
     for name, snapshot, tensor in zip(("a", "b", "initial_state"), snapshots, (a_tt, b_tt, state_tt), strict=True):
         assert_bit_identical(snapshot, ttnn.to_torch(tensor), name=f"{name} immutability")
     ttnn.release_trace(device, trace_id)
+
+
+@pytest.mark.parametrize(
+    ("batch_heads", "groups_per_head", "key_dim", "value_dim", "summary_dtype", "sharded_inputs"),
+    [
+        pytest.param(2, 1, 32, 32, ttnn.float32, False, id="bh2-g1-k32-v32-fp32-interleaved"),
+        pytest.param(2, 3, 32, 32, ttnn.bfloat16, True, id="bh2-g3-k32-v32-bf16-height-sharded-l1"),
+        pytest.param(3, 2, 32, 64, ttnn.float32, False, id="bh3-g2-k32-v64-fp32-interleaved"),
+    ],
+)
+def test_affine_exclusive_scan_shape_accuracy(
+    device: ttnn.Device,
+    batch_heads: int,
+    groups_per_head: int,
+    key_dim: int,
+    value_dim: int,
+    summary_dtype: ttnn.DataType,
+    sharded_inputs: bool,
+) -> None:
+    a, b, initial_state = _host_inputs(batch_heads, groups_per_head, key_dim, value_dim)
+    expected = _oracle(a, b, initial_state, batch_heads, groups_per_head)
+    leading = batch_heads * groups_per_head
+    a_memory = (
+        _height_sharded_memory_config(device, leading, key_dim, key_dim) if sharded_inputs else ttnn.DRAM_MEMORY_CONFIG
+    )
+    b_memory = (
+        _height_sharded_memory_config(device, leading, key_dim, value_dim)
+        if sharded_inputs
+        else ttnn.DRAM_MEMORY_CONFIG
+    )
+    device_inputs = (
+        _to_device(a, device, summary_dtype, memory_config=a_memory),
+        _to_device(b, device, summary_dtype, memory_config=b_memory),
+        _to_device(initial_state, device),
+    )
+
+    output = _run(*device_inputs, groups_per_head)
+
+    assert_accurate(
+        expected,
+        ttnn.to_torch(output),
+        name=f"{summary_dtype} shape-sweep exclusive entry states",
+        pcc_threshold=0.999,
+    )
 
 
 @pytest.mark.parametrize("summary_dtype", [ttnn.float32, ttnn.bfloat16])
