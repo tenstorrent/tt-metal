@@ -18,8 +18,6 @@
 
 #include "repeat_interleave_force.hpp"
 
-// Internal to this file. `detail` is shared across the whole data_movement library and this is a
-// unity-build target, so unprefixed helper names must not have external linkage.
 namespace ttnn::operations::data_movement::detail {
 namespace {
 

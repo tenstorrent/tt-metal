@@ -58,6 +58,18 @@ void bind_repeat_interleave(nb::module_& mod) {
             Verification only: runs the native repeat_interleave implementation unconditionally. Not
             part of the ttnn API; use ttnn.repeat_interleave, which selects an implementation on its
             own.
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+                repeats (number): the number of repetitions for each element.
+                dim (number): the dimension to expand with the repetitions.
+
+            Keyword Args:
+                memory_config (ttnn.MemoryConfig, optional): memory configuration for the output.
+                    Defaults to `None`, which derives it from the input.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
         )doc");
 
     mod.def(
@@ -74,6 +86,21 @@ void bind_repeat_interleave(nb::module_& mod) {
             raising for a case outside its support scope rather than falling back to native. Not
             part of the ttnn API; use ttnn.repeat_interleave, which selects an implementation on its
             own.
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+                repeats (number): the number of repetitions for each element.
+                dim (number): the dimension to expand with the repetitions.
+
+            Keyword Args:
+                memory_config (ttnn.MemoryConfig, optional): memory configuration for the output.
+                    Defaults to `None`, which derives it from the input.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+
+            Raises:
+                RuntimeError: the codegen path does not support this case.
         )doc");
 }
 
