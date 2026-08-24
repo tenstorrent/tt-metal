@@ -1261,7 +1261,9 @@ def test_float_zero_comp_fresh_cpp(mathop, fresh_cpp_impl, edge_values):
     )
 
 
-@pytest.mark.parametrize("fresh_cpp_impl", [3, 1], ids=["production_lut", "fresh_cpp"])
+@pytest.mark.parametrize(
+    "fresh_cpp_impl", [3, 1, 4], ids=["production_lut", "fresh_cpp", "licensed_cpp"]
+)
 def test_tanh_lut_fresh_cpp(fresh_cpp_impl):
     """A/B the byte-untouched production approximation-mode LUT tanh against
     the fresh semantic tanh body under one golden/tolerance contract (laneED
@@ -1282,7 +1284,13 @@ def test_tanh_lut_fresh_cpp(fresh_cpp_impl):
     table).  Its worst error against exact tanh is at |x| -> 1.0-:
     |0.90625 - tanh(1.0)| = |0.90625 - 0.76159| ~ 0.145, so atol = 0.16
     bounds the approximation class the production kernel actually ships
-    (the SigmoidAppx/GeluAppx exact-golden + loose-tolerance precedent)."""
+    (the SigmoidAppx/GeluAppx exact-golden + loose-tolerance precedent).
+
+    impl 4 (lane GI, owner ratification 2026-08-24 item 2) is the LICENSED
+    semantic arm: an independently fitted 3-piece minimax PWL on the same
+    1.0/2.0 breakpoints (fresh_cpp/tanhlut_licensed.h), max |err| vs exact
+    tanh 0.0411 vs the hand LUT's 0.1447 on the row's golden domain —
+    equal-or-better proven exhaustively (laneGI accuracy oracle)."""
     approx = ApproximationMode.Yes if fresh_cpp_impl == 3 else ApproximationMode.No
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
@@ -1298,7 +1306,9 @@ def test_tanh_lut_fresh_cpp(fresh_cpp_impl):
     )
 
 
-@pytest.mark.parametrize("fresh_cpp_impl", [3, 1], ids=["production_lut6", "fresh_cpp"])
+@pytest.mark.parametrize(
+    "fresh_cpp_impl", [3, 1, 4], ids=["production_lut6", "fresh_cpp", "licensed_cpp"]
+)
 def test_sigmoid_lut_fresh_cpp(fresh_cpp_impl):
     """A/B the byte-untouched LEGACY tt-llk 6-segment SFPLUTFP32 sigmoid hand
     kernel against the fresh semantic sigmoid body under one golden/tolerance
@@ -1320,7 +1330,13 @@ def test_sigmoid_lut_fresh_cpp(fresh_cpp_impl):
 
     Formats mirror the sigmoid family's other corr nodes (Float32->Float32,
     the standard-profile BH-legal dest_acc:No combination; the fp16-coded
-    table itself dominates the error budget on any float pipeline)."""
+    table itself dominates the error budget on any float pipeline).
+
+    impl 4 (lane GI, owner ratification 2026-08-24 item 2) is the LICENSED
+    semantic arm: an independently fitted 4-region poly-leaf magnitude tree
+    (fresh_cpp/sigmoid_lut_licensed.h), max |err| vs exact sigmoid 0.0051
+    vs the hand table's 0.0180 on the row's golden domain — equal-or-better
+    proven exhaustively (laneGI accuracy oracle)."""
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
@@ -1331,6 +1347,46 @@ def test_sigmoid_lut_fresh_cpp(fresh_cpp_impl):
         [64, 64],
         custom_atol=0.05,
         custom_rtol=0.05,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 4], ids=["production", "licensed_cpp"])
+def test_gelu_appx_licensed_cpp(fresh_cpp_impl):
+    """A/B the byte-untouched production GeluAppx hand kernel against the
+    LICENSED semantic arm under one golden/tolerance contract (lane GI,
+    owner ratification 2026-08-24 item 2:
+    review_records/OWNER-RATIFICATION-arm-preference-lut-license.md).
+
+    The hand arm (impl 0) is calculate_gelu_appx — the 6-segment SFPLUTFP32
+    FP16 TABLE1 kernel (lut2_sign over LReg0/1/2/4/5/6) computing the even
+    part gelu(x) - 0.5x, plus 0.5x.  Its measured accuracy contract on the
+    row's golden domain (all finite bf16 — the GeluAppx stimulus Gaussian is
+    untruncated): max |err| vs exact gelu 0.0234 raw / 0.0239 bf16-stored,
+    at x ~ 0.249 (the [0,0.5) segment is a chord through the origin).
+
+    The licensed arm (impl 4, fresh_cpp/gelu_appx_licensed.h) is an
+    independently fitted 4-region poly-leaf magnitude tree at max |err|
+    0.0097 — equal-or-better than the hand kernel, proven exhaustively over
+    the bf16 grid and the fp32 stimulus sweep (laneGI accuracy oracle).
+
+    Stimuli, golden (exact torch gelu) and tolerance (the registered
+    GeluAppx CUSTOM_TOLERANCES) are identical between arms and identical to
+    the test_causal_lift_fresh_cpp[GeluAppx-*] family this row's sem arm
+    previously pointed at (torch.manual_seed(0) + same registry spec =>
+    byte-identical stimuli)."""
+    mathop = MathOperation.GeluAppx
+    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
         fresh_cpp_impl=fresh_cpp_impl,
     )
 

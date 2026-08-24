@@ -89,6 +89,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "fresh_cpp/elu_fitted.h"
 #include "fresh_cpp/exp_fitted.h"
 #include "fresh_cpp/expm1_fitted.h"
+#include "fresh_cpp/gelu_appx_licensed.h"
 #include "fresh_cpp/gelu_fitted.h"
 #include "fresh_cpp/i0_fitted.h"
 #include "fresh_cpp/i1_fitted.h"
@@ -100,6 +101,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "fresh_cpp/rsqrt_fitted.h"
 #include "fresh_cpp/selu_fitted.h"
 #include "fresh_cpp/sigmoid_fitted.h"
+#include "fresh_cpp/sigmoid_lut_licensed.h"
 #include "fresh_cpp/softplus.h"
 #include "fresh_cpp/softshrink.h"
 #include "fresh_cpp/softsign.h"
@@ -109,6 +111,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "fresh_cpp/tanh_fitted.h"
 #include "fresh_cpp/tanhderivative-lut.h"
 #include "fresh_cpp/tanhderivative_fitted.h"
+#include "fresh_cpp/tanhlut_licensed.h"
 #include "fresh_cpp/tanhshrink.h"
 #include "fresh_cpp/threshold.h"
 #include "fresh_cpp/threshold_fitted.h"
@@ -370,6 +373,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
             else if constexpr (FRESH_CPP_IMPL == 3 && SFPU_UNARY_OPERATION == SfpuType::sigmoid)
             {
                 SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_sigmoid_, (APPROX_MODE, iterations), block_tile, VectorMode::None, iterations);
+            }
+            // Lane GI LICENSED semantic arms (owner ratification 2026-08-24,
+            // review_records/OWNER-RATIFICATION-arm-preference-lut-license.md
+            // item 2): impl 4 = the accuracy-licensed sem body — matches the
+            // hand LUT kernel's measured accuracy contract (equal-or-better
+            // error on the row's golden domain, proven exhaustively; see the
+            // provenance headers in fresh_cpp/*_licensed.h).
+            else if constexpr (FRESH_CPP_IMPL == 4 && SFPU_UNARY_OPERATION == SfpuType::gelu_appx)
+            {
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_gelu_appx_licensed_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 4 && SFPU_UNARY_OPERATION == SfpuType::sigmoid)
+            {
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_sigmoid_lut_licensed_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 4 && SFPU_UNARY_OPERATION == SfpuType::tanh)
+            {
+                static_assert(
+                    FRESH_CPP_IMPL != 4 || SFPU_UNARY_OPERATION != SfpuType::tanh || (!APPROX_MODE && !is_fp32_dest_acc_en),
+                    "licensed tanh selector supports only non-approx, bf16 dest");
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_tanh_lut_licensed_cpp, (iterations), block_tile, VectorMode::None);
             }
             // Storm-lane S1 selectors (fresh_cpp/<op>.h semantic bodies).
             else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::abs)
