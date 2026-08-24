@@ -28,6 +28,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 
+pytestmark = pytest.mark.use_module_device
+
 
 SINGLE_CHIP_MESH_PARAMS = [
     pytest.param(

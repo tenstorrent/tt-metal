@@ -25,6 +25,8 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 
+pytestmark = pytest.mark.use_module_device
+
 NUM_TOKENS = 3200
 NUM_EXPERTS = 8
 EXPERT_DIM = 2

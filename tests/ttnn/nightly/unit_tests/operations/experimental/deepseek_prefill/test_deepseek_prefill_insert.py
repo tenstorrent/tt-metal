@@ -18,7 +18,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 
 
-pytestmark = pytest.mark.uncollect_if(pred=ci_pruning.no_production_counterpart)
+pytestmark = [
+    pytest.mark.uncollect_if(pred=ci_pruning.no_production_counterpart),
+    pytest.mark.use_module_device,
+]
 
 
 GLOBAL_ROWS = 128

@@ -24,6 +24,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 )
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 
+pytestmark = pytest.mark.use_module_device
+
 
 TEST_PARAMS = [(1, 1, 1), (1, 1, 33), (1, 1, 128), (1, 1, 3200)]
 

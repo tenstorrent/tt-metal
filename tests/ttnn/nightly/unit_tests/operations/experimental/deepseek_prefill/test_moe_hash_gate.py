@@ -22,6 +22,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     hash_gate_golden_act,
 )
 
+pytestmark = pytest.mark.use_module_device
+
 
 # (seq_len,) with num_batches == batch_size == 1 (single prefill sequence).
 SEQ_LENS = [32, 128, 100, 3200]
