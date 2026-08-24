@@ -213,6 +213,10 @@ Galaxy collectives are injected from `models/common/models/galaxy`; 2D modules d
 
 The reusable 2D set consists of `Embedding2D`, `RotarySetup2D`, `RMSNorm2D`, `Attention2D`, `MLP2D`, `LMHead2D`, and `Sampling2D`. There is no `Penalties2D`.
 
+Everything Galaxy-specific but model-neutral lives in `models/common/models/galaxy`: the `(8, 4)` geometry and placement recipes, the collective-resource plans, the `Attention2D`/`LMHead2D` collective adapters, the prefetch construction policy, the paged-KV metadata view, and a direct prefill/decode runner used by Milestone B tests and demos. No transformer graph lives there. Each product package (`models/common/models/llama33_70b_galaxy`, `models/common/models/qwen3_32b_galaxy`) owns its own graph — checkpoint contract, precision recipe, provider weight conversion, every 2D module config, its decoder layer, its tensor model, and its construction order — and borrows only that topology-neutral machinery. Neither package imports another model-named package.
+
+`Attention2D` takes two different paged page-table layouts, because the two modes address the cache differently. Prefill fills a named user's blocks with `paged_fill_cache(..., batch_idx=u)`, so its device-local table needs one row for every user the request fills; concatenated physical-batch-32 prefill therefore carries all 32 rows. Decode attends to one mesh column's users, so `paged_update_cache` and the paged decode SDPA both require the device-local table to carry exactly `users_per_column` rows — or that batch repeated once per core when the table is L1-sharded. A table sized to the full physical batch is the prefill layout and decode rejects it.
+
 Milestone A is still in progress. See [Milestone A 2D Module Status](MILESTONE_A_STATUS.md) for the evidence matrix, modularity scorecard, and hardware paths that remain unqualified.
 
 ---

@@ -56,6 +56,21 @@ not establish a defect in the general-purpose TTNN collectives, which pass in ot
 paths. That alternate Attention decode composition is unqualified and unnecessary; it is not an
 open Milestone A blocker or a required CCL follow-up.
 
+## Post-Record Module Corrections
+
+Milestone B step 1/4 (see `tttv2_2d_modules_milestone_b_work_log.md`) corrected two
+module contracts after the evidence above was recorded:
+
+- `Attention2D` now requires `wo` with source shape `(n_heads * head_dim, dim)`
+  instead of `(dim, dim)`, which is the only way to express Qwen3-32B's real
+  decoupled head dimension. The two shapes coincide for every geometry the
+  recorded evidence covers, so no recorded numerical result changes.
+- `LMHead2D` now also accepts a column-local activation width (`dim / 4`), which
+  is what a device activation from the column-sharded residual stream carries.
+  The recorded hardware qualification only passed host `LazyWeight` inputs.
+
+Both changes are host-tested; neither has been re-run on hardware.
+
 ## Modularity Scorecard
 
 | Required item | Evidence | Assessment |

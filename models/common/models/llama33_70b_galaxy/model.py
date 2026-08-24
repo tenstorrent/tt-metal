@@ -1,0 +1,1602 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""TTTv2 Llama-3.3-70B-Instruct reconstruction for the WH Galaxy `(8, 4)` mesh.
+
+Architecture: dense Llama transformer, no QKV bias and no Q/K normalization,
+GPT-NeoX rotate-half RoPE with Llama 3 scaling.
+
+    dim = 8192, layers = 80, n_heads = 64, n_kv_heads = 8, head_dim = 128,
+    hidden = 28672, vocab = 128256, rope_theta = 500000, rms_eps = 1e-5
+
+This package owns its own graph: the checkpoint contract, the precision recipe,
+provider conversion, every 2D module config, the decoder layer, and the tensor
+model. It borrows only topology-owned, model-neutral machinery from
+``models/common/models/galaxy`` — the `(8, 4)` geometry and placement recipes,
+the collective-resource plans, the Attention2D/LMHead2D collective adapters, the
+prefetch construction policy, and the paged-KV metadata view — plus the reusable
+2D modules themselves. It never imports another model-named package.
+
+Ownership order is explicit because the prefetcher is the resource root:
+
+1. resolve geometry and placements;
+2. resolve the Galaxy collective-resource policy;
+3. build every ``LazyWeight``;
+4. materialize and register the prefetched decode weights, then seal;
+5. create the Galaxy CCL/subdevice owner over the sealed prefetcher; and
+6. assemble the module configs and the tensor model.
+
+Residual convention (identical to the qualified WH Galaxy dataflow): a layer
+consumes ``(x, h)`` where ``x`` is the previous stage's contribution and ``h``
+is the running residual sum, and returns the new pair. Decode fuses ``h += x``
+into the distributed norm; prefill accumulates explicitly in DRAM.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import Any, Callable, Iterator, Sequence
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.common.models.galaxy.collectives import (
+    GalaxyAttentionCollectives,
+    GalaxyColumnAllReduce,
+    GalaxyColumnUserSelector,
+    deallocate_if_allocated,
+    galaxy_runtime_tensor_factory,
+)
+from models.common.models.galaxy.kv_contract import (
+    GalaxyAttentionKVSpec,
+    GalaxyPagedAttentionConfig,
+    GalaxyPagedKVContract,
+)
+from models.common.models.galaxy.plans import build_galaxy_resources_config, select_galaxy_resource
+from models.common.models.galaxy.prefetch import (
+    GALAXY_GLOBAL_CB_SIZE,
+    build_galaxy_prefetcher,
+    galaxy_dram_prefetch_start,
+)
+from models.common.models.galaxy.recipes import (
+    GALAXY_DEVICE_COUNT,
+    GALAXY_MESH_SHAPE,
+    GALAXY_PHYSICAL_BATCH,
+    GalaxyDecodePlacements,
+    GalaxyDenseGeometry,
+    GalaxyPrefillPlacements,
+    compute_kernel_config,
+    dram_sharded_weight_memory_config,
+    galaxy_padded_vocab_size,
+    resolve_galaxy_decode_placements,
+    resolve_galaxy_prefill_placements,
+    rope_core_grids,
+    sampling_core_grids,
+    validate_galaxy_mesh,
+)
+from models.common.models.galaxy.resources import create_galaxy_resources
+from models.common.modules.attention.attention_2d import (
+    Attention2D,
+    Attention2DConfig,
+    Attention2DSequenceConfig,
+    DecodeMetadata,
+    KVCacheBinding,
+    PrefillAttentionMode,
+    PrefillCollectiveMode,
+    PrefillMetadata,
+    PrefillRecipeIdentity,
+    PrefillRowMode,
+)
+from models.common.modules.embedding.embedding_2d import Embedding2D, Embedding2DConfig
+from models.common.modules.lazy_weight import LazyWeight
+from models.common.modules.lm_head.lm_head_2d import LMHead2D, LMHead2DConfig
+from models.common.modules.mlp.mlp_2d import MLP2D, MLP2DConfig
+from models.common.modules.rmsnorm.rmsnorm_2d import (
+    RMSNorm2D,
+    RMSNorm2DConfig,
+    RMSNorm2DGeometry,
+    RMSNorm2DResidualPolicy,
+)
+from models.common.modules.rope.rope_2d import RotarySetup2D, RotarySetup2DConfig
+from models.common.modules.sampling.sampling_2d import Sampling2D, Sampling2DConfig
+
+LLAMA33_70B_GALAXY_HF_MODEL = "meta-llama/Llama-3.3-70B-Instruct"
+
+#: Checkpoint geometry this package accepts, and nothing else.
+LLAMA33_70B_CHECKPOINT_CONTRACT = {
+    "num_hidden_layers": 80,
+    "hidden_size": 8192,
+    "num_attention_heads": 64,
+    "num_key_value_heads": 8,
+    "intermediate_size": 28672,
+    "vocab_size": 128256,
+}
+
+#: Decode weights streamed by the prefetcher, in the order a layer issues them.
+LLAMA33_70B_PREFETCHED_WEIGHT_NAMES = ("wqkv", "wo", "w1", "w3", "w2")
+
+_MLP_PREFILL_RESHAPE_CUTOFF = 1024
+
+
+# ============================================================================
+# Precision recipe
+# ============================================================================
+
+
+@dataclass(frozen=True)
+class Llama33_70BGalaxyPrecision:
+    """Per-model precision and math-fidelity recipe.
+
+    Defaults reproduce the dtypes the Milestone A WH Galaxy module
+    qualifications used for this geometry.
+    """
+
+    wqkv_dtype: Any = ttnn.bfloat8_b
+    wo_dtype: Any = ttnn.bfloat8_b
+    kv_cache_dtype: Any = ttnn.bfloat8_b
+    mlp_w1_w3_dtype: Any = ttnn.bfloat8_b
+    mlp_w2_dtype: Any = ttnn.bfloat8_b
+    embedding_dtype: Any = ttnn.bfloat16
+    norm_dtype: Any = ttnn.bfloat16
+    lm_head_dtype: Any = ttnn.bfloat8_b
+
+    # Activations. The residual stream stays bfloat16 so an 80-layer running sum
+    # is never re-quantized; MLP internals and collectives run bfloat8_b.
+    decode_activation_dtype: Any = ttnn.bfloat16
+    decode_mlp_activation_dtype: Any = ttnn.bfloat8_b
+    decode_residual_dtype: Any = ttnn.bfloat16
+    prefill_activation_dtype: Any = ttnn.bfloat16
+    prefill_mlp_activation_dtype: Any = ttnn.bfloat8_b
+    prefill_residual_dtype: Any = ttnn.bfloat16
+    attention_collective_dtype: Any = ttnn.bfloat8_b
+
+    attention_kernel_config: Any = field(default_factory=compute_kernel_config)
+    mlp_ff1_ff3_kernel_config: Any = field(default_factory=lambda: compute_kernel_config(packer_l1_acc=True))
+    mlp_ff2_kernel_config: Any = field(default_factory=lambda: compute_kernel_config(packer_l1_acc=True))
+    norm_kernel_config: Any = field(default_factory=compute_kernel_config)
+    lm_head_kernel_config: Any = field(default_factory=lambda: compute_kernel_config(packer_l1_acc=True))
+
+
+# TTTv1 `DecodersPrecision.accuracy("Llama-3.3-70B-Instruct")` resolves to the
+# generic Llama-3 recipe: BFP8 attention/KV/MLP with HiFi2 FF matmuls.
+LLAMA33_70B_GALAXY_ACCURACY = Llama33_70BGalaxyPrecision()
+
+# TTTv1 `DecodersPrecision.performance(...)`: BFP4 FF1/FF3 with LoFi fidelity.
+LLAMA33_70B_GALAXY_PERFORMANCE = Llama33_70BGalaxyPrecision(
+    mlp_w1_w3_dtype=ttnn.bfloat4_b,
+    mlp_ff1_ff3_kernel_config=compute_kernel_config(math_fidelity=ttnn.MathFidelity.LoFi, packer_l1_acc=True),
+)
+
+
+# ============================================================================
+# Provider-neutral host weights
+# ============================================================================
+
+
+@dataclass(frozen=True)
+class Llama33_70BGalaxyLayerWeights:
+    """Host tensors for one decoder layer, already in TT layout.
+
+    ``wqkv`` has shape ``[dim, qkv_size]`` with the eight mesh-row shards packed
+    contiguously (``[Q_row, K_row, V_row]`` per row). ``wo`` has shape
+    ``[n_heads * head_dim, dim]``, which for this model equals ``[dim, dim]``.
+    MLP weights are the transposed projections ``[dim, hidden]``,
+    ``[hidden, dim]``, ``[dim, hidden]``.
+    """
+
+    wqkv: Any
+    wo: Any
+    w1: Any
+    w2: Any
+    w3: Any
+    attention_norm: Any
+    ff_norm: Any
+
+
+@dataclass(frozen=True)
+class Llama33_70BGalaxyWeights:
+    """Host tensors for one complete model."""
+
+    embedding: Any
+    rope_cos: Any
+    rope_sin: Any
+    layers: tuple[Llama33_70BGalaxyLayerWeights, ...]
+    final_norm: Any
+    lm_head: Any
+
+
+# ============================================================================
+# Model parameters
+# ============================================================================
+
+
+@dataclass(frozen=True)
+class Llama33_70BGalaxyModelParameters:
+    """Provider-neutral dimensions for the Galaxy Llama reconstruction."""
+
+    dim: int = 8192
+    n_heads: int = 64
+    n_kv_heads: int = 8
+    head_dim: int = 128
+    hidden_dim: int = 28672
+    vocab_size: int = 128256
+    n_layers: int = 80
+    rms_norm_eps: float = 1e-5
+    rope_theta: float = 500000.0
+    rope_scaling_factor: float | None = 8.0
+    original_context_len: int | None = 8192
+    max_batch_size: int = GALAXY_PHYSICAL_BATCH
+    max_seq_len: int = 2048
+    prefill_sequence_lengths: tuple[int, ...] = (128,)
+    #: Per-row lengths served by concatenated physical-batch-32 prefill. Each
+    #: entry adds one recipe and one set of collective resources.
+    batched_prefill_sequence_lengths: tuple[int, ...] = ()
+    #: Sequence lengths that additionally resolve a prefix-cached/chunked recipe.
+    chunked_prefill_sequence_lengths: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "prefill_sequence_lengths", tuple(sorted(set(self.prefill_sequence_lengths))))
+        object.__setattr__(
+            self, "batched_prefill_sequence_lengths", tuple(sorted(set(self.batched_prefill_sequence_lengths)))
+        )
+        object.__setattr__(
+            self, "chunked_prefill_sequence_lengths", tuple(sorted(set(self.chunked_prefill_sequence_lengths)))
+        )
+        unknown = set(self.chunked_prefill_sequence_lengths) - set(self.prefill_sequence_lengths)
+        if unknown:
+            raise ValueError(f"chunked prefill lengths must also be plain prefill lengths, got {sorted(unknown)}")
+        if not 1 <= self.n_layers <= LLAMA33_70B_CHECKPOINT_CONTRACT["num_hidden_layers"]:
+            raise ValueError(
+                f"n_layers must be in [1, {LLAMA33_70B_CHECKPOINT_CONTRACT['num_hidden_layers']}], "
+                f"got {self.n_layers}"
+            )
+        if self.n_heads * self.head_dim != self.dim:
+            raise ValueError(
+                f"Llama-3.3-70B projects attention into dim: expected n_heads * head_dim == {self.dim}, "
+                f"got {self.n_heads * self.head_dim}"
+            )
+
+    @property
+    def padded_vocab_size(self) -> int:
+        return galaxy_padded_vocab_size(self.vocab_size)
+
+    def geometry(self) -> GalaxyDenseGeometry:
+        return GalaxyDenseGeometry(
+            dim=self.dim,
+            hidden_dim=self.hidden_dim,
+            n_heads=self.n_heads,
+            n_kv_heads=self.n_kv_heads,
+            head_dim=self.head_dim,
+            vocab_size=self.vocab_size,
+            max_seq_len=self.max_seq_len,
+            max_batch_size=self.max_batch_size,
+            prefill_sequence_lengths=self.prefill_sequence_lengths,
+            batched_prefill_sequence_lengths=self.batched_prefill_sequence_lengths,
+        )
+
+    def with_layers(self, n_layers: int) -> "Llama33_70BGalaxyModelParameters":
+        """Return the same parameters for a layer subset, e.g. a one-layer model."""
+
+        return replace(self, n_layers=n_layers)
+
+    def rope_table_len(self) -> int:
+        """Return a tile-aligned RoPE table long enough for the served context."""
+
+        return ((max(self.max_seq_len * 2, 8192) + 127) // 128) * 128
+
+
+def validate_llama33_70b_checkpoint(hf_config: Any, *, n_layers: int | None = None) -> None:
+    """Fail closed unless the checkpoint is exactly Llama-3.3-70B-Instruct."""
+
+    actual = {name: getattr(hf_config, name, None) for name in LLAMA33_70B_CHECKPOINT_CONTRACT}
+    mismatches = {
+        name: (actual[name], expected)
+        for name, expected in LLAMA33_70B_CHECKPOINT_CONTRACT.items()
+        if actual[name] != expected
+    }
+    if mismatches:
+        raise ValueError(f"Unexpected Llama-3.3-70B geometry (actual, expected): {mismatches}")
+    head_dim = int(getattr(hf_config, "head_dim", 0) or hf_config.hidden_size // hf_config.num_attention_heads)
+    if head_dim != 128:
+        raise ValueError(f"Llama-3.3-70B requires head_dim 128, got {head_dim}")
+    if bool(getattr(hf_config, "attention_bias", False)):
+        raise ValueError("Llama-3.3-70B has bias-free QKV projections")
+    if bool(getattr(hf_config, "tie_word_embeddings", False)):
+        raise ValueError("Llama-3.3-70B requires an untied LM head")
+    if n_layers is not None and not 1 <= n_layers <= int(hf_config.num_hidden_layers):
+        raise ValueError(f"n_layers must be in [1, {hf_config.num_hidden_layers}], got {n_layers}")
+
+
+def parameters_from_hf_config(
+    hf_config: Any,
+    *,
+    n_layers: int | None = None,
+    max_batch_size: int = GALAXY_PHYSICAL_BATCH,
+    max_seq_len: int = 2048,
+    prefill_sequence_lengths: tuple[int, ...] = (128,),
+    batched_prefill_sequence_lengths: tuple[int, ...] = (),
+    chunked_prefill_sequence_lengths: tuple[int, ...] = (),
+) -> Llama33_70BGalaxyModelParameters:
+    """Derive the model parameters from a validated HF config."""
+
+    validate_llama33_70b_checkpoint(hf_config, n_layers=n_layers)
+    scaling = getattr(hf_config, "rope_scaling", None) or {}
+    return Llama33_70BGalaxyModelParameters(
+        dim=int(hf_config.hidden_size),
+        n_heads=int(hf_config.num_attention_heads),
+        n_kv_heads=int(hf_config.num_key_value_heads),
+        head_dim=int(getattr(hf_config, "head_dim", 0) or hf_config.hidden_size // hf_config.num_attention_heads),
+        hidden_dim=int(hf_config.intermediate_size),
+        vocab_size=int(hf_config.vocab_size),
+        n_layers=int(hf_config.num_hidden_layers if n_layers is None else n_layers),
+        rms_norm_eps=float(hf_config.rms_norm_eps),
+        rope_theta=float(getattr(hf_config, "rope_theta", 500000.0)),
+        rope_scaling_factor=float(scaling.get("factor")) if scaling.get("factor") is not None else None,
+        original_context_len=(
+            int(scaling["original_max_position_embeddings"])
+            if scaling.get("original_max_position_embeddings") is not None
+            else None
+        ),
+        max_batch_size=max_batch_size,
+        max_seq_len=max_seq_len,
+        prefill_sequence_lengths=prefill_sequence_lengths,
+        batched_prefill_sequence_lengths=batched_prefill_sequence_lengths,
+        chunked_prefill_sequence_lengths=chunked_prefill_sequence_lengths,
+    )
+
+
+def default_paged_attention_config(
+    params: Llama33_70BGalaxyModelParameters, *, block_size: int = 32
+) -> GalaxyPagedAttentionConfig:
+    """Return a paged geometry covering the physical batch at max sequence."""
+
+    blocks_per_user = (params.max_seq_len + block_size - 1) // block_size
+    return GalaxyPagedAttentionConfig(
+        block_size=block_size,
+        max_num_blocks=blocks_per_user * params.max_batch_size,
+    )
+
+
+# ============================================================================
+# Lazy weights
+# ============================================================================
+
+
+@dataclass(frozen=True)
+class Llama33_70BGalaxyLazyLayerWeights:
+    """Resolved but unmaterialized device weights for one layer.
+
+    Decode and prefill keep distinct materializations: decode uses the DRAM
+    width-sharded ring layout the gather-in0 matmuls require, prefill uses
+    interleaved DRAM.
+    """
+
+    wqkv: LazyWeight
+    wo: LazyWeight
+    w1: LazyWeight
+    w2: LazyWeight
+    w3: LazyWeight
+    prefill_wqkv: LazyWeight
+    prefill_wo: LazyWeight
+    prefill_w1: LazyWeight
+    prefill_w2: LazyWeight
+    prefill_w3: LazyWeight
+    attention_norm: LazyWeight
+    ff_norm: LazyWeight
+
+    def prefetched(self) -> tuple[LazyWeight, ...]:
+        return tuple(getattr(self, name) for name in LLAMA33_70B_PREFETCHED_WEIGHT_NAMES)
+
+
+@dataclass(frozen=True)
+class Llama33_70BGalaxyLazyWeights:
+    """Resolved but unmaterialized device weights for one complete model."""
+
+    embedding: LazyWeight
+    rope_cos: LazyWeight
+    rope_sin: LazyWeight
+    layers: tuple[Llama33_70BGalaxyLazyLayerWeights, ...]
+    final_norm: LazyWeight
+    lm_head: LazyWeight
+
+    def prefetch_registration(self) -> tuple[tuple[str, LazyWeight], ...]:
+        """Return the decode weights to register, in per-layer issue order."""
+
+        return tuple(
+            (f"layer[{index}].{name}", weight)
+            for index, layer in enumerate(self.layers)
+            for name, weight in zip(LLAMA33_70B_PREFETCHED_WEIGHT_NAMES, layer.prefetched())
+        )
+
+
+def _lazy(
+    source: Any,
+    *,
+    mesh_device: Any,
+    dtype: Any,
+    mesh_mapper_config: Any = None,
+    memory_config: Any = ttnn.DRAM_MEMORY_CONFIG,
+    layout: Any = ttnn.TILE_LAYOUT,
+    cache: tuple[Path, str] | None = None,
+) -> LazyWeight:
+    return LazyWeight(
+        source=source,
+        device=mesh_device,
+        dtype=dtype,
+        mesh_mapper_config=mesh_mapper_config,
+        memory_config=memory_config,
+        layout=layout,
+        cache_dir_weight_name=cache,
+    )
+
+
+def _mesh_mapper(*placements: Any) -> ttnn.MeshMapperConfig:
+    return ttnn.MeshMapperConfig(placements=list(placements), mesh_shape_override=ttnn.MeshShape(*GALAXY_MESH_SHAPE))
+
+
+def _row_output_mapper() -> ttnn.MeshMapperConfig:
+    """Rows shard the output dimension, columns shard the reduced dimension."""
+
+    return _mesh_mapper(ttnn.PlacementShard(-1), ttnn.PlacementShard(-2))
+
+
+def _row_reduction_mapper() -> ttnn.MeshMapperConfig:
+    """Rows shard the reduced dimension, columns shard the output dimension."""
+
+    return _mesh_mapper(ttnn.PlacementShard(-2), ttnn.PlacementShard(-1))
+
+
+def build_llama33_70b_galaxy_lazy_weights(
+    *,
+    mesh_device: Any,
+    geometry: GalaxyDenseGeometry,
+    precision: Llama33_70BGalaxyPrecision,
+    weights: Llama33_70BGalaxyWeights,
+    cache_path: Path | None = None,
+) -> Llama33_70BGalaxyLazyWeights:
+    """Resolve every device weight placement without materializing anything."""
+
+    validate_galaxy_mesh("Galaxy Llama weights", mesh_device)
+    wqkv_memcfg = dram_sharded_weight_memory_config(mesh_device, geometry.local_dim, geometry.local_qkv_size)
+    wo_memcfg = dram_sharded_weight_memory_config(mesh_device, geometry.local_attention_dim, geometry.local_dim)
+    w1_w3_memcfg = dram_sharded_weight_memory_config(mesh_device, geometry.local_dim, geometry.local_hidden_dim)
+    w2_memcfg = dram_sharded_weight_memory_config(mesh_device, geometry.local_hidden_dim, geometry.local_dim)
+    row_output, row_reduction = _row_output_mapper(), _row_reduction_mapper()
+
+    def cache(index: int, kind: str, name: str) -> tuple[Path, str] | None:
+        return (cache_path / kind, f"layer{index}_{name}") if cache_path else None
+
+    def layer_weights(index: int, layer: Llama33_70BGalaxyLayerWeights) -> Llama33_70BGalaxyLazyLayerWeights:
+        # One row per projection: (name, host tensor, cache kind, dtype, mesh
+        # mapper, decode ring placement). Decode and prefill share the dtype and
+        # the mapper by construction and differ only in placement.
+        projections = (
+            ("wqkv", layer.wqkv, "attn", precision.wqkv_dtype, row_output, wqkv_memcfg),
+            ("wo", layer.wo, "attn", precision.wo_dtype, row_reduction, wo_memcfg),
+            ("w1", layer.w1, "mlp", precision.mlp_w1_w3_dtype, row_output, w1_w3_memcfg),
+            ("w2", layer.w2, "mlp", precision.mlp_w2_dtype, row_reduction, w2_memcfg),
+            ("w3", layer.w3, "mlp", precision.mlp_w1_w3_dtype, row_output, w1_w3_memcfg),
+        )
+        matrices: dict[str, LazyWeight] = {}
+        for name, source, kind, dtype, mapper, ring_memory_config in projections:
+            matrices[name] = _lazy(
+                source,
+                mesh_device=mesh_device,
+                dtype=dtype,
+                mesh_mapper_config=mapper,
+                memory_config=ring_memory_config,
+                cache=cache(index, kind, f"{name}_ring"),
+            )
+            matrices[f"prefill_{name}"] = _lazy(
+                source,
+                mesh_device=mesh_device,
+                dtype=dtype,
+                mesh_mapper_config=mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache=cache(index, kind, name),
+            )
+
+        def norm(source: Any, name: str) -> LazyWeight:
+            return _lazy(
+                source,
+                mesh_device=mesh_device,
+                dtype=precision.norm_dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                cache=cache(index, "norm", name),
+            )
+
+        return Llama33_70BGalaxyLazyLayerWeights(
+            **matrices,
+            attention_norm=norm(layer.attention_norm, "attention_norm"),
+            ff_norm=norm(layer.ff_norm, "ff_norm"),
+        )
+
+    return Llama33_70BGalaxyLazyWeights(
+        embedding=_lazy(
+            weights.embedding,
+            mesh_device=mesh_device,
+            dtype=precision.embedding_dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            cache=(cache_path / "embedding", "tok_embeddings") if cache_path else None,
+        ),
+        rope_cos=_lazy(
+            weights.rope_cos,
+            mesh_device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            cache=(cache_path / "rope", "cos") if cache_path else None,
+        ),
+        rope_sin=_lazy(
+            weights.rope_sin,
+            mesh_device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            cache=(cache_path / "rope", "sin") if cache_path else None,
+        ),
+        layers=tuple(layer_weights(index, layer) for index, layer in enumerate(weights.layers)),
+        final_norm=_lazy(
+            weights.final_norm,
+            mesh_device=mesh_device,
+            dtype=precision.norm_dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            cache=(cache_path / "norm", "final_norm") if cache_path else None,
+        ),
+        lm_head=_lazy(
+            weights.lm_head,
+            mesh_device=mesh_device,
+            dtype=precision.lm_head_dtype,
+            mesh_mapper_config=_row_output_mapper(),
+            cache=(cache_path / "lm_head", "output") if cache_path else None,
+        ),
+    )
+
+
+# ============================================================================
+# Module configs
+# ============================================================================
+
+
+@dataclass(frozen=True)
+class Llama33_70BGalaxyBlockConfig:
+    """Immutable configuration for one Galaxy Llama decoder layer."""
+
+    attention_norm_config: RMSNorm2DConfig
+    attention_config: Attention2DConfig
+    ff_norm_config: RMSNorm2DConfig
+    mlp_config: MLP2DConfig
+    kv_spec: GalaxyAttentionKVSpec
+    decode_attention_input_memcfg: Any
+    decode_mlp_input_memcfg: Any
+    decode_mlp_input_dtype: Any
+    decode_residual_memcfg: Any
+    prefill_attention_input_memcfg: Any
+    prefill_mlp_input_memcfg: Any
+    prefill_mlp_input_dtype: Any
+    prefill_residual_memcfg: Any
+    prefill_residual_dtype: Any
+
+
+@dataclass(frozen=True)
+class Llama33_70BGalaxyTransformer2DConfig:
+    """Complete immutable configuration for the Galaxy Llama tensor model."""
+
+    geometry: GalaxyDenseGeometry
+    mesh_device: Any
+    resources: Any
+    prefetcher: Any
+    embedding_config: Embedding2DConfig
+    rope_config: RotarySetup2DConfig
+    block_configs: tuple[Llama33_70BGalaxyBlockConfig, ...]
+    norm_config: RMSNorm2DConfig
+    lm_head_config: LMHead2DConfig
+    attention_collectives: GalaxyAttentionCollectives
+    decode_placements: GalaxyDecodePlacements
+    prefill_placements: GalaxyPrefillPlacements
+    sampling_config: Sampling2DConfig | None = None
+    cache_path: str | None = None
+    owns_shared_resources: bool = False
+
+    @property
+    def n_layers(self) -> int:
+        return len(self.block_configs)
+
+    @property
+    def num_devices(self) -> int:
+        return GALAXY_DEVICE_COUNT
+
+    @property
+    def vocab_size(self) -> int:
+        return self.geometry.vocab_size
+
+    @property
+    def max_batch_size(self) -> int:
+        return self.geometry.max_batch_size
+
+    @property
+    def max_seq_len(self) -> int:
+        return self.geometry.max_seq_len
+
+    @property
+    def dim(self) -> int:
+        return self.geometry.dim
+
+
+def _norm_config(
+    weight: LazyWeight,
+    *,
+    mesh_device: Any,
+    geometry: GalaxyDenseGeometry,
+    precision: Llama33_70BGalaxyPrecision,
+    resources: Any,
+    prefetch_contexts: tuple[Any, Any],
+    decode_placements: GalaxyDecodePlacements,
+    eps: float,
+    residual_policy: RMSNorm2DResidualPolicy,
+) -> RMSNorm2DConfig:
+    prefill_context, decode_context = prefetch_contexts
+    return RMSNorm2DConfig(
+        weight=weight,
+        cluster_shape=GALAXY_MESH_SHAPE,
+        eps=eps,
+        residual_policy=residual_policy,
+        geometry=RMSNorm2DGeometry.DISTRIBUTED,
+        mesh_device=mesh_device,
+        tt_ccl=resources.ccl,
+        collective_resource_selector=select_galaxy_resource,
+        decode_prefetch_context=decode_context,
+        prefill_prefetch_context=prefill_context,
+        max_batch_size=geometry.max_batch_size,
+        decode_input_memcfg=decode_placements.residual_memcfg,
+        decode_residual_memcfg=decode_placements.residual_memcfg,
+        decode_output_memcfg=decode_placements.residual_memcfg,
+        decode_stats_memcfg=decode_placements.norm_stats_memcfg,
+        prefill_input_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+        prefill_residual_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+        prefill_output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config_prefill=precision.norm_kernel_config,
+    )
+
+
+def _attention_sequence_configs(
+    geometry: GalaxyDenseGeometry,
+    precision: Llama33_70BGalaxyPrecision,
+    prefill: GalaxyPrefillPlacements,
+    chunked_lengths: tuple[int, ...] = (),
+) -> dict[PrefillRecipeIdentity, Attention2DSequenceConfig]:
+    """Resolve one frozen recipe per prefill shape this model may be asked for.
+
+    Three families share the interleaved DRAM placements and differ only in the
+    program configs their geometry requires:
+
+    - single-row prefill, one user per request;
+    - prefix-cached/chunked single-row prefill, whose SDPA reads the paged cache
+      and is therefore chunk-aligned rather than sequence-length tuned;
+    - concatenated physical-batch-32 prefill, whose projections see 32 rows of
+      tokens at once while SDPA still runs one causal sequence per row.
+    """
+
+    recipes: dict[PrefillRecipeIdentity, Attention2DSequenceConfig] = {}
+
+    def add(identity: PrefillRecipeIdentity, qkv: Any, sdpa: Any, wo: Any) -> None:
+        recipes[identity] = Attention2DSequenceConfig(
+            identity=identity,
+            qkv_program_config=qkv,
+            sdpa_program_config=sdpa,
+            wo_program_config=wo,
+            qkv_output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            heads_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            kv_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            sdpa_output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            concat_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            wo_output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            qkv_kernel_config=precision.attention_kernel_config,
+            sdpa_kernel_config=precision.attention_kernel_config,
+            wo_kernel_config=precision.attention_kernel_config,
+            activation_dtype=precision.prefill_activation_dtype,
+            chunk_alignment=geometry.chunk_alignment,
+        )
+
+    for length in geometry.prefill_sequence_lengths:
+        add(
+            PrefillRecipeIdentity(
+                length, PrefillRowMode.SINGLE_ROW, PrefillCollectiveMode.REGULAR, PrefillAttentionMode.REGULAR
+            ),
+            prefill.attention_program_configs[length],
+            prefill.attention_sdpa_program_configs[length],
+            prefill.attention_wo_program_configs[length],
+        )
+    for length in chunked_lengths:
+        add(
+            PrefillRecipeIdentity(
+                length, PrefillRowMode.SINGLE_ROW, PrefillCollectiveMode.REGULAR, PrefillAttentionMode.PREFIX_CHUNKED
+            ),
+            prefill.attention_program_configs[length],
+            prefill.chunked_sdpa_program_config,
+            prefill.attention_wo_program_configs[length],
+        )
+    for length in geometry.batched_prefill_sequence_lengths:
+        add(
+            PrefillRecipeIdentity(
+                length, PrefillRowMode.CONCAT_32, PrefillCollectiveMode.REGULAR, PrefillAttentionMode.REGULAR
+            ),
+            prefill.batched_attention_program_configs[length],
+            prefill.batched_attention_sdpa_program_configs[length],
+            prefill.batched_attention_wo_program_configs[length],
+        )
+    return recipes
+
+
+def _build_block_config(
+    index: int,
+    lazy: Llama33_70BGalaxyLazyLayerWeights,
+    *,
+    geometry: GalaxyDenseGeometry,
+    precision: Llama33_70BGalaxyPrecision,
+    mesh_device: Any,
+    resources: Any,
+    prefetch_contexts: tuple[Any, Any],
+    decode: GalaxyDecodePlacements,
+    prefill: GalaxyPrefillPlacements,
+    collectives: GalaxyAttentionCollectives,
+    norm_eps: float,
+    paged_attention_config: GalaxyPagedAttentionConfig | None,
+    chunked_lengths: tuple[int, ...] = (),
+) -> Llama33_70BGalaxyBlockConfig:
+    prefill_context, decode_context = prefetch_contexts
+    attention_config = Attention2DConfig(
+        wqkv=lazy.wqkv,
+        wo=lazy.wo,
+        n_heads=geometry.n_heads,
+        n_kv_heads=geometry.n_kv_heads,
+        head_dim=geometry.head_dim,
+        max_batch_size=geometry.max_batch_size,
+        max_seq_len=geometry.max_seq_len,
+        low_level=collectives.callables(),
+        runtime_tensor_factory=galaxy_runtime_tensor_factory,
+        runtime_tensor_releaser=deallocate_if_allocated,
+        # Llama 3.3 has no QKV bias and no Q/K normalization.
+        prefill_wqkv=lazy.prefill_wqkv,
+        prefill_wo=lazy.prefill_wo,
+        mesh_device=mesh_device,
+        architecture=mesh_device.arch(),
+        dim=geometry.dim,
+        users_per_column=geometry.users_per_column,
+        wqkv_mesh_mapper_config=lazy.wqkv.mesh_mapper_config,
+        wo_mesh_mapper_config=lazy.wo.mesh_mapper_config,
+        weight_memory_config=lazy.wqkv.memory_config,
+        wo_weight_memory_config=lazy.wo.memory_config,
+        weight_layout=ttnn.TILE_LAYOUT,
+        wqkv_dtype=precision.wqkv_dtype,
+        wo_dtype=precision.wo_dtype,
+        decode_input_placement=decode.attention_input_memcfg,
+        decode_output_placement=decode.residual_memcfg,
+        prefill_input_placement=ttnn.DRAM_MEMORY_CONFIG,
+        prefill_output_placement=ttnn.DRAM_MEMORY_CONFIG,
+        decode_qkv_output_memory_config=decode.attention_qkv_output_memcfg,
+        decode_heads_memory_config=decode.attention_heads_memcfg,
+        decode_kv_memory_config=decode.attention_kv_memcfg,
+        decode_sdpa_output_memory_config=decode.attention_sdpa_output_memcfg,
+        decode_concat_memory_config=decode.attention_concat_memcfg,
+        decode_concat_sub_core_grids=decode.attention_gather_users_memcfg.shard_spec.grid,
+        decode_wo_output_memory_config=decode.attention_wo_output_memcfg,
+        decode_program_config=decode.attention_qkv_program_config,
+        decode_sdpa_program_config=decode.attention_sdpa_program_config,
+        decode_wo_program_config=decode.attention_wo_program_config,
+        decode_qkv_kernel_config=precision.attention_kernel_config,
+        decode_sdpa_kernel_config=precision.attention_kernel_config,
+        decode_wo_kernel_config=precision.attention_kernel_config,
+        decode_activation_dtype=precision.decode_activation_dtype,
+        prefill_sequence_configs=_attention_sequence_configs(geometry, precision, prefill, chunked_lengths),
+        decode_prefetch_context=decode_context,
+        prefill_prefetch_context=prefill_context,
+        intermediate_releaser=deallocate_if_allocated,
+    )
+    mlp_config = MLP2DConfig(
+        w1=lazy.w1,
+        w2=lazy.w2,
+        w3=lazy.w3,
+        prefill_w1=lazy.prefill_w1,
+        prefill_w2=lazy.prefill_w2,
+        prefill_w3=lazy.prefill_w3,
+        mesh_device=mesh_device,
+        tt_ccl=resources.ccl,
+        collective_resource_selector=select_galaxy_resource,
+        decode_prefetch_context=decode_context,
+        prefill_prefetch_context=prefill_context,
+        dim=geometry.dim,
+        hidden_dim=geometry.hidden_dim,
+        max_batch_size=geometry.max_batch_size,
+        w1_w3_memcfg=lazy.w1.memory_config,
+        w2_memcfg=lazy.w2.memory_config,
+        decode_input_memcfg=decode.mlp_input_memcfg,
+        decode_w2_input_memcfg=decode.mlp_w2_input_memcfg,
+        decode_w1_w3_prg_config=decode.mlp_w1_w3_program_config,
+        decode_w2_prg_config=decode.mlp_w2_program_config,
+        decode_w1_w3_output_memcfg=decode.mlp_w1_w3_output_memcfg,
+        decode_w2_output_memcfg=decode.mlp_w2_output_memcfg,
+        ff1_out_reduce_scatter_memcfg=decode.mlp_reduce_scatter_memcfg,
+        ff2_out_reduce_scatter_memcfg=decode.residual_memcfg,
+        sharded_attn_input_memcfg=decode.residual_memcfg,
+        prefill_input_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+        prefill_w1_w3_output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+        prefill_w2_output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+        w1_w3_dtype=precision.mlp_w1_w3_dtype,
+        w2_dtype=precision.mlp_w2_dtype,
+        decode_activation_dtype=precision.decode_mlp_activation_dtype,
+        # The final decode collective produces the residual contribution, so it
+        # keeps the residual stream's dtype.
+        decode_ccl_dtype=precision.decode_residual_dtype,
+        decode_mul_dtype=precision.decode_mlp_activation_dtype,
+        prefill_activation_dtype=precision.prefill_mlp_activation_dtype,
+        prefill_ccl_dtype=precision.prefill_residual_dtype,
+        prefill_mul_dtype=precision.prefill_mlp_activation_dtype,
+        ff1_3_compute_kernel_cfg=precision.mlp_ff1_ff3_kernel_config,
+        ff2_compute_kernel_cfg=precision.mlp_ff2_kernel_config,
+        prefill_len_cutoff=_MLP_PREFILL_RESHAPE_CUTOFF,
+    )
+    return Llama33_70BGalaxyBlockConfig(
+        attention_norm_config=_norm_config(
+            lazy.attention_norm,
+            mesh_device=mesh_device,
+            geometry=geometry,
+            precision=precision,
+            resources=resources,
+            prefetch_contexts=prefetch_contexts,
+            decode_placements=decode,
+            eps=norm_eps,
+            # The first layer creates the residual stream from its input, so it
+            # has nothing to fuse. Every later layer fuses `h += x`.
+            residual_policy=(RMSNorm2DResidualPolicy.NONE if index == 0 else RMSNorm2DResidualPolicy.FUSED_DECODE),
+        ),
+        attention_config=attention_config,
+        ff_norm_config=_norm_config(
+            lazy.ff_norm,
+            mesh_device=mesh_device,
+            geometry=geometry,
+            precision=precision,
+            resources=resources,
+            prefetch_contexts=prefetch_contexts,
+            decode_placements=decode,
+            eps=norm_eps,
+            residual_policy=RMSNorm2DResidualPolicy.FUSED_DECODE,
+        ),
+        mlp_config=mlp_config,
+        kv_spec=GalaxyAttentionKVSpec.from_geometry(
+            n_kv_heads=geometry.n_kv_heads,
+            head_dim=geometry.head_dim,
+            kv_cache_dtype=precision.kv_cache_dtype,
+            paged_attention_config=paged_attention_config,
+        ),
+        decode_attention_input_memcfg=decode.attention_input_memcfg,
+        decode_mlp_input_memcfg=decode.mlp_input_memcfg,
+        decode_mlp_input_dtype=precision.decode_mlp_activation_dtype,
+        decode_residual_memcfg=decode.residual_memcfg,
+        prefill_attention_input_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+        prefill_mlp_input_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+        prefill_mlp_input_dtype=precision.prefill_mlp_activation_dtype,
+        prefill_residual_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+        prefill_residual_dtype=precision.prefill_residual_dtype,
+    )
+
+
+def build_llama33_70b_galaxy_transformer_2d_config(
+    *,
+    mesh_device: Any,
+    geometry: GalaxyDenseGeometry,
+    precision: Llama33_70BGalaxyPrecision,
+    lazy_weights: Llama33_70BGalaxyLazyWeights,
+    resources: Any,
+    prefetcher: Any,
+    norm_eps: float,
+    rope_theta: float,
+    rope_scaling_factor: float | None = None,
+    original_context_len: int | None = None,
+    use_qk_fused_rotary: bool = False,
+    paged_attention_config: GalaxyPagedAttentionConfig | None = None,
+    enable_device_sampling: bool = True,
+    chunked_prefill_sequence_lengths: tuple[int, ...] = (),
+    decode_placements: GalaxyDecodePlacements | None = None,
+    cache_path: Path | str | None = None,
+    owns_shared_resources: bool = False,
+) -> Llama33_70BGalaxyTransformer2DConfig:
+    """Resolve every 2D module config for the Galaxy Llama model."""
+
+    validate_galaxy_mesh("Galaxy Llama-3.3-70B", mesh_device)
+    if not lazy_weights.layers:
+        raise ValueError("the Galaxy Llama model requires at least one decoder layer")
+    decode = decode_placements or resolve_galaxy_decode_placements(geometry, mesh_device)
+    prefill = resolve_galaxy_prefill_placements(geometry, mesh_device)
+    prefetch_contexts = (prefetcher.context("prefill"), prefetcher.context("decode"))
+    rope_core_grid, rope_batch_grid = rope_core_grids(mesh_device, use_qk_fused=use_qk_fused_rotary)
+    # The RoPE transformation matrices are owned by RotarySetup2D, which the
+    # model constructs from this config. The collectives borrow them through a
+    # provider the model binds, so nothing materializes at config time.
+    collectives = GalaxyAttentionCollectives(
+        resources=resources,
+        mesh_device=mesh_device,
+        geometry=geometry,
+        decode_placements=decode,
+        use_fused_qk_rotary=use_qk_fused_rotary,
+        collective_dtype=precision.attention_collective_dtype,
+        head_dtype=precision.decode_activation_dtype,
+    )
+    embedding_config = Embedding2DConfig(
+        weights=lazy_weights.embedding,
+        mesh_device=mesh_device,
+        vocab_size=geometry.vocab_size,
+        dim=geometry.dim,
+        max_batch_size=geometry.max_batch_size,
+        embed_scale=1.0,
+        decode_output_dtype=precision.decode_activation_dtype,
+        decode_output_memcfg=ttnn.L1_MEMORY_CONFIG,
+        prefill_output_dtype=precision.prefill_activation_dtype,
+        prefill_output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    rope_config = RotarySetup2DConfig(
+        cos_matrix=lazy_weights.rope_cos,
+        sin_matrix=lazy_weights.rope_sin,
+        max_batch_size=geometry.max_batch_size,
+        head_dim=geometry.head_dim,
+        mesh_device=mesh_device,
+        users_per_column=geometry.users_per_column,
+        use_qk_fused=use_qk_fused_rotary,
+        rope_theta=rope_theta,
+        rope_scaling_factor=rope_scaling_factor,
+        original_context_len=original_context_len,
+        core_grid=rope_core_grid,
+        batch_grid=rope_batch_grid,
+    )
+    block_configs = tuple(
+        _build_block_config(
+            index,
+            layer,
+            geometry=geometry,
+            precision=precision,
+            mesh_device=mesh_device,
+            resources=resources,
+            prefetch_contexts=prefetch_contexts,
+            decode=decode,
+            prefill=prefill,
+            collectives=collectives,
+            norm_eps=norm_eps,
+            paged_attention_config=paged_attention_config,
+            chunked_lengths=tuple(chunked_prefill_sequence_lengths),
+        )
+        for index, layer in enumerate(lazy_weights.layers)
+    )
+    norm_config = _norm_config(
+        lazy_weights.final_norm,
+        mesh_device=mesh_device,
+        geometry=geometry,
+        precision=precision,
+        resources=resources,
+        prefetch_contexts=prefetch_contexts,
+        decode_placements=decode,
+        eps=norm_eps,
+        residual_policy=RMSNorm2DResidualPolicy.FUSED_DECODE,
+    )
+    lm_head_config = LMHead2DConfig(
+        output_weights=(lazy_weights.lm_head,),
+        vocab_size=geometry.vocab_size,
+        decode_collective=GalaxyColumnAllReduce(mesh_device),
+        mesh_device=mesh_device,
+        dim=geometry.dim,
+        padded_vocab_size=geometry.padded_vocab_size,
+        max_batch_size=geometry.max_batch_size,
+        compute_kernel_config=precision.lm_head_kernel_config,
+        decode_weights_memcfgs=(ttnn.DRAM_MEMORY_CONFIG,),
+        prefill_weights_memcfgs=(ttnn.DRAM_MEMORY_CONFIG,),
+        decode_input_memcfg=ttnn.L1_MEMORY_CONFIG,
+        prefill_input_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+        decode_output_memcfg=ttnn.L1_MEMORY_CONFIG,
+        prefill_output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+        decode_output_dtype=precision.decode_activation_dtype,
+        prefill_output_dtype=precision.prefill_activation_dtype,
+    )
+    # Sampling2D consumes logits whose users are sharded over the four mesh
+    # columns, while the decode graph keeps the physical batch replicated across
+    # columns. The model therefore only owns the resolved sampler; selecting each
+    # column's user slice is an executor responsibility (Milestone C).
+    sampling_sub_core_grids, sampling_topk_grid, sampling_start_core = sampling_core_grids()
+    sampling_config = (
+        Sampling2DConfig(
+            vocab_size=geometry.vocab_size,
+            padded_vocab_size=geometry.padded_vocab_size,
+            mesh_device=mesh_device,
+            max_batch_size=geometry.max_batch_size,
+            sub_core_grids=sampling_sub_core_grids,
+            sub_core_grid_topk=sampling_topk_grid,
+            start_core=sampling_start_core,
+        )
+        if enable_device_sampling
+        else None
+    )
+    return Llama33_70BGalaxyTransformer2DConfig(
+        geometry=geometry,
+        mesh_device=mesh_device,
+        resources=resources,
+        prefetcher=prefetcher,
+        embedding_config=embedding_config,
+        rope_config=rope_config,
+        block_configs=block_configs,
+        norm_config=norm_config,
+        lm_head_config=lm_head_config,
+        attention_collectives=collectives,
+        decode_placements=decode,
+        prefill_placements=prefill,
+        sampling_config=sampling_config,
+        cache_path=str(cache_path) if cache_path is not None else None,
+        owns_shared_resources=owns_shared_resources,
+    )
+
+
+# ============================================================================
+# Tensor model
+# ============================================================================
+
+
+def _relocate(tensor: Any, memory_config: Any, dtype: Any = None) -> Any:
+    """Place a tensor exactly, releasing the source when a copy is produced."""
+
+    needs_placement = memory_config is not None and tensor.memory_config() != memory_config
+    needs_dtype = dtype is not None and tensor.dtype != dtype
+    if not needs_placement and not needs_dtype:
+        return tensor
+    if needs_placement:
+        placed = (
+            ttnn.to_memory_config(tensor, memory_config, dtype)
+            if needs_dtype
+            else ttnn.to_memory_config(tensor, memory_config)
+        )
+    else:
+        placed = ttnn.typecast(tensor, dtype=dtype)
+    if placed is not tensor:
+        deallocate_if_allocated(tensor)
+    return placed
+
+
+def _release_unless(tensor: Any, *keep: Any) -> None:
+    if tensor is None:
+        return
+    if any(tensor is other for other in keep):
+        return
+    deallocate_if_allocated(tensor)
+
+
+class Llama33_70BTransformerBlock2D(LightweightModule):
+    """One Galaxy Llama decoder layer: norm, attention, norm, MLP, residual."""
+
+    def __init__(self, config: Llama33_70BGalaxyBlockConfig):
+        super().__init__()
+        self.config = config
+        self.attention_norm = RMSNorm2D.from_config(config.attention_norm_config)
+        self.attention = Attention2D.from_config(config.attention_config)
+        self.ff_norm = RMSNorm2D.from_config(config.ff_norm_config)
+        self.feed_forward = MLP2D.from_config(config.mlp_config)
+        self.kv_spec = config.kv_spec
+        # Strategy is bound once: layer 0 creates the residual stream, later
+        # layers fuse the accumulation into their distributed norm.
+        self._decode_attention_norm = (
+            self._decode_attention_norm_fused
+            if config.attention_norm_config.residual_policy is RMSNorm2DResidualPolicy.FUSED_DECODE
+            else self._decode_attention_norm_initial
+        )
+
+    @classmethod
+    def from_config(cls, config: Llama33_70BGalaxyBlockConfig) -> "Llama33_70BTransformerBlock2D":
+        return cls(config)
+
+    # Decode
+
+    def _decode_attention_norm_initial(self, x: Any, h: Any) -> tuple[Any, Any]:
+        if h is not None:
+            raise ValueError("the first Galaxy layer creates the residual stream and takes h=None")
+        return self.attention_norm.decode_forward(x), x
+
+    def _decode_attention_norm_fused(self, x: Any, h: Any) -> tuple[Any, Any]:
+        if h is None:
+            raise ValueError("fused residual decode requires the running residual sum")
+        normed, residual = self.attention_norm.decode_forward(x, residual=h)
+        _release_unless(x, normed, residual)
+        return normed, residual
+
+    def decode_forward(self, x: Any, h: Any, rot_mats: Any, metadata: DecodeMetadata) -> tuple[Any, Any]:
+        attention_input, h = self._decode_attention_norm(x, h)
+        attention_input = _relocate(attention_input, self.config.decode_attention_input_memcfg)
+        attention_output = self.attention.decode_forward(attention_input, rot_mats, metadata)
+        mlp_input, h = self.ff_norm.decode_forward(attention_output, residual=h)
+        _release_unless(attention_output, mlp_input, h)
+        mlp_input = _relocate(mlp_input, self.config.decode_mlp_input_memcfg, self.config.decode_mlp_input_dtype)
+        return self.feed_forward.decode_forward(mlp_input), h
+
+    # Prefill
+
+    def prefill_forward(self, x: Any, h: Any, rot_mats: Any, metadata: PrefillMetadata) -> tuple[Any, Any]:
+        residual_memcfg = self.config.prefill_residual_memcfg
+        residual_dtype = self.config.prefill_residual_dtype
+        if h is None:
+            h = x
+        else:
+            accumulated = ttnn.add(h, x, memory_config=residual_memcfg, dtype=residual_dtype)
+            _release_unless(h, accumulated)
+            _release_unless(x, accumulated)
+            h = accumulated
+        attention_input = self.attention_norm.prefill_forward(h)
+        attention_input = _relocate(attention_input, self.config.prefill_attention_input_memcfg)
+        attention_output = self.attention.prefill_forward(attention_input, rot_mats, metadata)
+        residual = ttnn.add(h, attention_output, memory_config=residual_memcfg, dtype=residual_dtype)
+        _release_unless(attention_output, residual)
+        _release_unless(h, residual)
+        mlp_input = self.ff_norm.prefill_forward(residual)
+        mlp_input = _relocate(mlp_input, self.config.prefill_mlp_input_memcfg, self.config.prefill_mlp_input_dtype)
+        return self.feed_forward.prefill_forward(mlp_input), residual
+
+    def forward(self, x: Any, h: Any, rot_mats: Any, *, mode: str, metadata: Any) -> tuple[Any, Any]:
+        if mode == "decode":
+            return self.decode_forward(x, h, rot_mats, metadata)
+        if mode == "prefill":
+            return self.prefill_forward(x, h, rot_mats, metadata)
+        raise ValueError(f"unsupported Galaxy layer mode: {mode}")
+
+    def close(self) -> None:
+        self.attention.close()
+
+
+class Llama33_70BGalaxyTransformer2D(LightweightModule):
+    """Llama-3.3-70B-Instruct as a full-mesh Galaxy `(8, 4)` tensor model."""
+
+    hf_model = LLAMA33_70B_GALAXY_HF_MODEL
+
+    def __init__(self, config: Llama33_70BGalaxyTransformer2DConfig):
+        super().__init__()
+        self.config = config
+        self.geometry = config.geometry
+        self.mesh_device = config.mesh_device
+        self.resources = config.resources
+        self.prefetcher = config.prefetcher
+        self.embedding = Embedding2D.from_config(config.embedding_config)
+        self.rope_setup = RotarySetup2D.from_config(config.rope_config)
+        self.attention_collectives = config.attention_collectives
+        # Binding a provider keeps the transformation matrices lazy: nothing
+        # materializes until the first forward pass asks for them.
+        self.attention_collectives.bind_transformation_matrices(self.rope_setup.get_both_trans_mats)
+        self.layers = [Llama33_70BTransformerBlock2D.from_config(block) for block in config.block_configs]
+        self.norm = RMSNorm2D.from_config(config.norm_config)
+        self.lm_head = LMHead2D.from_config(config.lm_head_config)
+        self.sampling = Sampling2D.from_config(config.sampling_config) if config.sampling_config else None
+        self.supports_on_device_sampling = self.sampling is not None
+        # Decode logits carry the whole physical batch on every column while the
+        # sampler consumes one column's user slice, so device sampling needs the
+        # selector between them. It allocates nothing until first use.
+        self.column_user_selector = (
+            GalaxyColumnUserSelector(
+                config.mesh_device,
+                max_batch_size=config.geometry.max_batch_size,
+                users_per_column=config.geometry.users_per_column,
+            )
+            if self.sampling is not None
+            else None
+        )
+        self.n_layers = config.n_layers
+        self.num_devices = GALAXY_DEVICE_COUNT
+        self.vocab_size = config.geometry.vocab_size
+        self.padded_vocab_size = config.geometry.padded_vocab_size
+        self.decode_residual_memcfg = config.decode_placements.residual_memcfg
+        self.prefill_residual_memcfg = ttnn.DRAM_MEMORY_CONFIG
+        self.model_args = None
+        self._kv_owner = object()
+        self._kv_specs = tuple(block.kv_spec for block in config.block_configs)
+        self._kv_bound = False
+        self._closed = False
+
+    # Executor and runtime contracts
+
+    def iter_executor_named_modules(self) -> Iterator[tuple[str, Any]]:
+        for index, layer in enumerate(self.layers):
+            for suffix, submodule in (
+                ("attn_norm", layer.attention_norm),
+                ("attention", layer.attention),
+                ("ff_norm", layer.ff_norm),
+                ("mlp", layer.feed_forward),
+            ):
+                yield f"layer[{index}].{suffix}", submodule
+        yield "final_norm", self.norm
+        yield "lm_head", self.lm_head
+
+    @property
+    def kv_specs(self) -> tuple[GalaxyAttentionKVSpec, ...]:
+        return self._kv_specs
+
+    def paged_kv_contract(self) -> GalaxyPagedKVContract:
+        """Return the per-layer KV metadata view for the common KV manager."""
+
+        return GalaxyPagedKVContract(self, self._kv_specs)
+
+    def configure_paged_attention(self, *, block_size: int, max_num_blocks: int) -> None:
+        """Install the final paged block geometry before any cache is bound."""
+
+        if self._kv_bound:
+            raise RuntimeError("paged attention cannot be reconfigured while a KV cache is bound")
+        paged = GalaxyPagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
+        self._kv_specs = tuple(spec.with_paged_config(paged) for spec in self._kv_specs)
+        for layer, spec in zip(self.layers, self._kv_specs):
+            layer.kv_spec = spec
+
+    def set_kv_cache(self, kv_cache: Sequence[Sequence[Any]] | None) -> None:
+        """Bind or unbind every layer's KV cache transactionally."""
+
+        if self._closed:
+            raise RuntimeError("the model is closed")
+        if kv_cache is None:
+            self._unbind_kv_cache()
+            return
+        if len(kv_cache) != len(self.layers):
+            raise ValueError(f"kv_cache has {len(kv_cache)} entries but the model has {len(self.layers)} layers")
+        self._unbind_kv_cache()
+        bound: list[Any] = []
+        try:
+            for index, (layer, spec, pair) in enumerate(zip(self.layers, self._kv_specs, kv_cache)):
+                tensors = tuple(pair)
+                if len(tensors) != 2:
+                    raise ValueError(f"kv_cache layer {index} must contain exactly two K/V tensors")
+                layer.attention.bind_kv_cache(
+                    KVCacheBinding(
+                        keys=tensors[0],
+                        values=tensors[1],
+                        owner=self._kv_owner,
+                        metadata=spec.paged_kv_metadata(),
+                        mesh_device=self.mesh_device,
+                    )
+                )
+                bound.append(layer.attention)
+        except BaseException:
+            for attention in reversed(bound):
+                attention.unbind_kv_cache(self._kv_owner)
+            raise
+        self._kv_bound = True
+
+    def _unbind_kv_cache(self) -> None:
+        for layer in self.layers:
+            if layer.attention.kv_cache_binding is not None:
+                layer.attention.unbind_kv_cache(self._kv_owner)
+        self._kv_bound = False
+
+    # Operation-boundary lifecycle
+
+    def activate(self, mode: str) -> Any:
+        """Activate the prefetch/CCL context for one operation boundary."""
+
+        return self.resources.activate(mode)
+
+    def synchronize(self, mode: str) -> None:
+        self.resources.synchronize(mode)
+
+    # Input staging helpers
+
+    def embed_decode(self, tokens: Any) -> Any:
+        """Embed one replicated `[1, 32]` decode token row into the residual stream."""
+
+        return _relocate(self.embedding.decode_forward(tokens), self.decode_residual_memcfg)
+
+    def embed_prefill(self, tokens: Any) -> Any:
+        """Embed one replicated `[1, sequence]` prefill token row."""
+
+        return self.embedding.prefill_forward(tokens)
+
+    def prepare_decode_rot_mats(self, position_idxs: Any) -> list[Any]:
+        """Return `(cos, sin)` for the physical decode batch."""
+
+        return self.rope_setup.decode_forward(position_idxs)
+
+    def prepare_prefill_rot_mats(self, start_pos: int, seq_len: int) -> list[Any]:
+        return self.rope_setup.prefill_forward(start_pos=start_pos, seq_len=seq_len)
+
+    def get_rot_idxs(self, position_idxs: Any, on_host: bool = False) -> Any:
+        return self.rope_setup.get_rot_idxs(position_idxs, on_host=on_host)
+
+    # Graph methods
+
+    def decode_forward(
+        self,
+        x_embed: Any,
+        current_pos: Any,
+        rot_mats: Any,
+        page_table: Any = None,
+    ) -> Any:
+        """Run one physical-batch-32 decode step and return padded logits."""
+
+        metadata = DecodeMetadata(current_positions=current_pos, page_table=page_table)
+        x, h = x_embed, None
+        for layer in self.layers:
+            x, h = layer.decode_forward(x, h, rot_mats, metadata)
+        normed, residual = self.norm.decode_forward(x, residual=h)
+        _release_unless(x, normed, residual)
+        _release_unless(residual, normed)
+        return self.lm_head.decode_forward(_relocate(normed, self.config.lm_head_config.decode_input_memcfg))
+
+    def prefill_forward(
+        self,
+        x_embed: Any,
+        rot_mats: Any,
+        *,
+        sequence_length: int,
+        user_ids: tuple[int, ...] = (0,),
+        page_table: Any = None,
+        chunk_page_table: Any = None,
+        chunk_start: int | None = None,
+        chunk_start_tensor: Any = None,
+        prefix_user_id: int | None = None,
+        collective_mode: PrefillCollectiveMode = PrefillCollectiveMode.REGULAR,
+        return_hidden_state: bool = False,
+    ) -> Any:
+        """Run one prefill request and return logits or the final hidden state."""
+
+        metadata = PrefillMetadata(
+            sequence_length=sequence_length,
+            user_ids=tuple(user_ids),
+            collective_mode=collective_mode,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            chunk_start=chunk_start,
+            chunk_start_tensor=chunk_start_tensor,
+            prefix_user_id=prefix_user_id,
+        )
+        x, h = x_embed, None
+        for layer in self.layers:
+            x, h = layer.prefill_forward(x, h, rot_mats, metadata)
+        hidden = ttnn.add(h, x, memory_config=self.prefill_residual_memcfg)
+        _release_unless(x, hidden)
+        _release_unless(h, hidden)
+        if return_hidden_state:
+            return hidden
+        return self.project_hidden_state(hidden)
+
+    def project_hidden_state(self, hidden: Any, *, mode: str = "prefill") -> Any:
+        """Apply the final norm and LM head to an already-extracted hidden state.
+
+        Decode never reaches this path: its residual sum is fused into the final
+        norm inside :meth:`decode_forward`.
+        """
+
+        if mode != "prefill":
+            raise ValueError("project_hidden_state is the prefill last-token projection")
+        normed = self.norm.prefill_forward(hidden)
+        _release_unless(hidden, normed)
+        return self.lm_head.prefill_forward(_relocate(normed, self.config.lm_head_config.prefill_input_memcfg))
+
+    def project_prefill_logits(
+        self,
+        hidden: Any,
+        *,
+        rows: int = 1,
+        sequence_length: int | None = None,
+        token_indices: Sequence[int] | None = None,
+    ) -> tuple[Any, ...]:
+        """Normalize a prefill hidden state and project one token per row.
+
+        The final norm runs over the whole token stream because its distributed
+        statistics gather is keyed by that geometry; only then is one token
+        selected per prefill row. Each row is projected separately, which is the
+        only shape ``LMHead2D`` can consume for a row count below the physical
+        batch, so the result is one logits tensor per row.
+
+        ``token_indices`` addresses each row's real last token, which is not
+        ``sequence_length - 1`` whenever a prompt was padded up to a supported
+        recipe length.
+        """
+
+        normed = self.norm.prefill_forward(hidden)
+        _release_unless(hidden, normed)
+        tokens = int(normed.shape[-2])
+        if rows < 1:
+            raise ValueError("prefill projection needs at least one row")
+        if sequence_length is None:
+            sequence_length = tokens // rows
+        if rows * sequence_length != tokens:
+            raise ValueError(f"{rows} rows of {sequence_length} tokens do not cover {tokens} prefill tokens")
+        indices = tuple(token_indices) if token_indices is not None else (sequence_length - 1,) * rows
+        if len(indices) != rows or any(not 0 <= index < sequence_length for index in indices):
+            raise ValueError(f"token_indices must hold one in-range index per row, got {indices}")
+        parts = (normed,) if rows == 1 else tuple(ttnn.split(normed, sequence_length, dim=2))
+        outputs: list[Any] = []
+        try:
+            for part, index in zip(parts, indices):
+                placed = _relocate(part[:, :, index : index + 1, :], self.config.lm_head_config.prefill_input_memcfg)
+                try:
+                    outputs.append(self.lm_head.prefill_forward(placed))
+                finally:
+                    deallocate_if_allocated(placed)
+            return tuple(outputs)
+        finally:
+            if rows > 1:
+                for part in parts:
+                    deallocate_if_allocated(part)
+            deallocate_if_allocated(normed)
+
+    def select_decode_column_users(self, logits: Any) -> Any:
+        """Return each mesh column's user slice of a column-replicated tensor."""
+
+        if self.column_user_selector is None:
+            raise RuntimeError("column user selection requires the device sampler to be enabled")
+        return self.column_user_selector(logits)
+
+    def sample_decode(
+        self,
+        logits: Any,
+        *,
+        top_k: Any = 1,
+        top_p: Any = 1.0,
+        temperature: Any = 0.0,
+        seed: Any = None,
+        forced_argmax: Any = False,
+        slot_ids: Sequence[int] | None = None,
+    ) -> Any:
+        """Sample one token per user from decode logits on device."""
+
+        if self.sampling is None:
+            raise RuntimeError("device sampling is disabled for this model")
+        column_logits = self.select_decode_column_users(logits)
+        try:
+            return self.sampling.decode_forward(
+                column_logits,
+                top_k=top_k,
+                top_p=top_p,
+                temperature=temperature,
+                seed=seed,
+                forced_argmax=forced_argmax,
+                slot_ids=slot_ids,
+            )
+        finally:
+            deallocate_if_allocated(column_logits)
+
+    def forward(self, x: Any, *args: Any, mode: str = "decode", **kwargs: Any) -> Any:
+        if mode == "decode":
+            return self.decode_forward(x, *args, **kwargs)
+        if mode == "prefill":
+            return self.prefill_forward(x, *args, **kwargs)
+        raise ValueError(f"unsupported Galaxy model mode: {mode}")
+
+    # Teardown
+
+    def close(self) -> None:
+        """Release model-owned device state; terminal and idempotent."""
+
+        if self._closed:
+            return
+        failures: list[BaseException] = []
+
+        def attempt(action: Callable[[], None]) -> None:
+            try:
+                action()
+            except BaseException as error:  # noqa: BLE001 - collect, then raise the first
+                failures.append(error)
+
+        attempt(self._unbind_kv_cache)
+        for layer in self.layers:
+            attempt(layer.close)
+        attempt(self.attention_collectives.cleanup)
+        attempt(self.rope_setup.release)
+        attempt(self.lm_head.release)
+        if self.sampling is not None:
+            attempt(self.sampling.release)
+        if self.column_user_selector is not None:
+            attempt(self.column_user_selector.release)
+        attempt(self.embedding.release)
+        if self.config.owns_shared_resources:
+            attempt(self.resources.cleanup)
+            attempt(self.prefetcher.cleanup)
+        self._closed = True
+        if failures:
+            raise failures[0]
+
+
+# ============================================================================
+# Assembly
+# ============================================================================
+
+
+def build_llama33_70b_galaxy_model(
+    mesh_device: Any,
+    *,
+    params: Llama33_70BGalaxyModelParameters,
+    weights: Llama33_70BGalaxyWeights,
+    precision: Llama33_70BGalaxyPrecision = LLAMA33_70B_GALAXY_ACCURACY,
+    paged_attention_config: GalaxyPagedAttentionConfig | None = None,
+    enable_device_sampling: bool = True,
+    use_qk_fused_rotary: bool = False,
+    cache_path: Path | str | None = None,
+    global_cb_size: int | None = GALAXY_GLOBAL_CB_SIZE,
+    prefetcher_injections: dict[str, Any] | None = None,
+) -> Llama33_70BGalaxyTransformer2D:
+    """Own the complete Galaxy construction order and return the tensor model.
+
+    The returned model owns the Galaxy resources and the prefetcher until a
+    model-owned executor takes over that role, so ``close()`` is the single
+    teardown entry point.
+    """
+
+    if len(weights.layers) != params.n_layers:
+        raise ValueError(f"expected {params.n_layers} layer weight sets, got {len(weights.layers)}")
+    validate_galaxy_mesh("Galaxy Llama-3.3-70B", mesh_device)
+    geometry = params.geometry()
+    decode = resolve_galaxy_decode_placements(geometry, mesh_device)
+    resources_config = build_galaxy_resources_config(mesh_device, geometry, decode)
+    lazy_weights = build_llama33_70b_galaxy_lazy_weights(
+        mesh_device=mesh_device,
+        geometry=geometry,
+        precision=precision,
+        weights=weights,
+        cache_path=Path(cache_path) if cache_path is not None else None,
+    )
+    registration = lazy_weights.prefetch_registration()
+    prefetcher = build_galaxy_prefetcher(
+        mesh_device,
+        resources_config,
+        expected_weight_count=len(registration),
+        global_cb_size=global_cb_size,
+        prefetch_num_layers=len(lazy_weights.layers),
+        dram_prefetch_start=galaxy_dram_prefetch_start(
+            tensors_per_layer=len(LLAMA33_70B_PREFETCHED_WEIGHT_NAMES),
+            num_layers=len(lazy_weights.layers),
+        ),
+        **(prefetcher_injections or {}),
+    )
+    resources = None
+    try:
+        for name, weight in registration:
+            prefetcher.register_weight(name, weight.get_device_weight())
+        prefetcher.seal()
+        resources = create_galaxy_resources(mesh_device, config=resources_config, prefetcher=prefetcher)
+        config = build_llama33_70b_galaxy_transformer_2d_config(
+            mesh_device=mesh_device,
+            geometry=geometry,
+            precision=precision,
+            lazy_weights=lazy_weights,
+            resources=resources,
+            prefetcher=prefetcher,
+            norm_eps=params.rms_norm_eps,
+            rope_theta=params.rope_theta,
+            rope_scaling_factor=params.rope_scaling_factor,
+            original_context_len=params.original_context_len,
+            use_qk_fused_rotary=use_qk_fused_rotary,
+            paged_attention_config=paged_attention_config,
+            enable_device_sampling=enable_device_sampling,
+            chunked_prefill_sequence_lengths=params.chunked_prefill_sequence_lengths,
+            decode_placements=decode,
+            cache_path=cache_path,
+            owns_shared_resources=True,
+        )
+        return Llama33_70BGalaxyTransformer2D(config)
+    except BaseException:
+        if resources is not None:
+            try:
+                resources.cleanup()
+            except BaseException:
+                pass
+        prefetcher.cleanup()
+        raise
+
+
+__all__ = [
+    "LLAMA33_70B_CHECKPOINT_CONTRACT",
+    "LLAMA33_70B_GALAXY_ACCURACY",
+    "LLAMA33_70B_GALAXY_HF_MODEL",
+    "LLAMA33_70B_GALAXY_PERFORMANCE",
+    "LLAMA33_70B_PREFETCHED_WEIGHT_NAMES",
+    "Llama33_70BGalaxyBlockConfig",
+    "Llama33_70BGalaxyLayerWeights",
+    "Llama33_70BGalaxyLazyLayerWeights",
+    "Llama33_70BGalaxyLazyWeights",
+    "Llama33_70BGalaxyModelParameters",
+    "Llama33_70BGalaxyPrecision",
+    "Llama33_70BGalaxyTransformer2D",
+    "Llama33_70BGalaxyTransformer2DConfig",
+    "Llama33_70BGalaxyWeights",
+    "Llama33_70BTransformerBlock2D",
+    "build_llama33_70b_galaxy_lazy_weights",
+    "build_llama33_70b_galaxy_model",
+    "build_llama33_70b_galaxy_transformer_2d_config",
+    "default_paged_attention_config",
+    "parameters_from_hf_config",
+    "validate_llama33_70b_checkpoint",
+]

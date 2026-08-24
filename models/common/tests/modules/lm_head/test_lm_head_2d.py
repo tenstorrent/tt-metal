@@ -169,6 +169,25 @@ def test_lm_head_2d_rejects_invalid_vocab_and_input_geometry():
         )
 
 
+def test_lm_head_2d_accepts_column_local_device_activation_width():
+    mesh = _galaxy()
+    module = LMHead2D([LazyWeight(source=_ShapeOnly(8192, 128256), device=mesh)], 128256, _Collective(mesh))
+    # A device activation produced by the column-sharded residual stream carries
+    # its own column shard (dim / 4), not the complete hidden dimension.
+    activation = MagicMock(spec=ttnn.Tensor)
+    activation.shape = (1, 1, 32, 2048)
+
+    assert _load_input(activation, module.config, module.config.decode_input_memcfg, mode="decode") == (
+        activation,
+        False,
+    )
+
+    wrong = MagicMock(spec=ttnn.Tensor)
+    wrong.shape = (1, 1, 32, 1024)
+    with pytest.raises(ValueError, match=r"\[N, C, S, 2048\]"):
+        _load_input(wrong, module.config, module.config.decode_input_memcfg, mode="decode")
+
+
 def test_lm_head_2d_rejects_foreign_or_materialized_lazy_input():
     mesh = _galaxy()
     module = LMHead2D([LazyWeight(source=_ShapeOnly(8192, 128256), device=mesh)], 128256, _Collective(mesh))
