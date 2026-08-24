@@ -56,7 +56,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in_cb, trans_mat_cb, out_cb);
     matmul_init(in_cb, trans_mat_cb);
-    binary_op_init_common(in_cb, cos_cb, out_cb);
+    compute_kernel_hw_startup(in_cb, cos_cb, out_cb);
 
     // trans_mat + cos/sin are streamed in from DRAM by the reader (nothing at all for a core with
     // no rope columns).
@@ -121,9 +121,9 @@ void kernel_main() {
 
         // sin_interm = rotated * sin  (broadcast sin's single row across all input rows if cos_bcast)
         if constexpr (cos_bcast) {
-            mul_bcast_rows_init_short(rotated_interm_cb, sin_cb);
+            mul_bcast_rows_init(rotated_interm_cb, sin_cb);
         } else {
-            mul_tiles_init(rotated_interm_cb, sin_cb);
+            mul_init(rotated_interm_cb, sin_cb);
         }
         sin_interm_cb_obj.reserve_back(rope_local);
         for (uint32_t base = 0; base < rope_local; base += kDstBatch) {
@@ -148,9 +148,9 @@ void kernel_main() {
 
         // cos_interm = in_rope * cos  (broadcast cos's single row across all input rows if cos_bcast)
         if constexpr (cos_bcast) {
-            mul_bcast_rows_init_short(in_cb, cos_cb);
+            mul_bcast_rows_init(in_cb, cos_cb);
         } else {
-            mul_tiles_init(in_cb, cos_cb);
+            mul_init(in_cb, cos_cb);
         }
         cos_interm_cb_obj.reserve_back(rope_local);
         for (uint32_t base = 0; base < rope_local; base += kDstBatch) {
@@ -175,7 +175,7 @@ void kernel_main() {
         // out_rope = cos_interm + sin_interm
         sin_interm_cb_obj.wait_front(rope_local);
         cos_interm_cb_obj.wait_front(rope_local);
-        add_tiles_init(cos_interm_cb, sin_interm_cb);
+        add_init(cos_interm_cb, sin_interm_cb);
         for (uint32_t base = 0; base < rope_local; base += kDstBatch) {
             const uint32_t g = (rope_local - base) < kDstBatch ? (rope_local - base) : kDstBatch;
             tile_regs_acquire();
