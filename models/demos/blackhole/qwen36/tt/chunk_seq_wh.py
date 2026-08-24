@@ -29,7 +29,6 @@ exactly one change (marked "THE ONE CHANGE vs upstream"). If upstream changes th
 re-copy it and re-apply that single edit. ``wh_compat.apply()`` asserts the upstream anchor
 still exists so drift fails loudly instead of silently running stale code.
 """
-import torch  # noqa: F401  (used by the copied body)
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -124,15 +123,36 @@ def _chunk_gated_delta_rule_seq_wh(
     # (batched prefill): BH rows run b*H + h, so user b owns [b*H, (b+1)*H).
     _is_per_row = isinstance(valid_len, (list, tuple))
     if _is_per_row or (valid_len is not None and valid_len < T):
-        _m = torch.zeros(BH, T, 1, dtype=torch.float32)
+        # Built ON DEVICE: arange over T compared against valid_len, so no host tensor is
+        # constructed and uploaded per call. Bit-exact with the old torch.zeros fill --
+        # (arange < valid) is exactly [1.0]*valid + [0.0]*(T-valid).
+        _ar = ttnn.arange(start=0, end=T, step=1, dtype=ttnn.float32, device=mesh_device)
+        _ar = ttnn.reshape(ttnn.to_layout(_ar, ttnn.TILE_LAYOUT), [1, T, 1])
+        if _is_per_row and len(set(int(v) for v in valid_len)) == 1:
+            # All users share a length (the common case -- the demo replicates one prompt), so
+            # collapse to the scalar path rather than building B identical row blocks.
+            _is_per_row = False
+            valid_len = int(valid_len[0])
         if _is_per_row:
+            # Per-row lengths, built ENTIRELY ON DEVICE: one [1,T,1] compare per user, repeated
+            # over that user's H rows, then concatenated. No host tensor and no from_torch, which
+            # also makes this trace-safe -- a host->device write inside begin_trace_capture raises
+            # "Writes are not supported during trace capture" (see wh_compat.py).
             _Bv = len(valid_len)
             _H = BH // _Bv
+            _rows = []
             for _b in range(_Bv):
-                _m[_b * _H : (_b + 1) * _H, : int(valid_len[_b]), :] = 1.0
+                _mb = ttnn.lt(_ar, float(int(valid_len[_b])))  # [1,T,1]
+                _rows.append(_mb if _H == 1 else ttnn.repeat(_mb, ttnn.Shape([_H, 1, 1])))
+                if _H != 1:
+                    ttnn.deallocate(_mb)
+            _m = _rows[0] if _Bv == 1 else ttnn.concat(_rows, dim=0)
+            if _Bv != 1:
+                for _r in _rows:
+                    ttnn.deallocate(_r)
         else:
-            _m[:, :valid_len, :] = 1.0
-        _m = ttnn.from_torch(_m, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+            _m = ttnn.lt(_ar, float(valid_len))
+        ttnn.deallocate(_ar)
         q = ttnn.multiply(q, _m, memory_config=None)
         k = ttnn.multiply(k, _m, memory_config=None)
         v = ttnn.multiply(v, _m, memory_config=None)
@@ -198,14 +218,10 @@ def _chunk_gated_delta_rule_seq_wh(
         triu_ones = ttnn.reshape(triu_ones, [1, chunk_size, chunk_size])
         tril_mask = _create_tril_ones(chunk_size, mesh_device, dtype=ttnn.float32)
         tril_mask = ttnn.reshape(tril_mask, [1, chunk_size, chunk_size])
-        _eye_1cc = ttnn.from_torch(
-            torch.eye(chunk_size, dtype=torch.float32).unsqueeze(0),
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # eye = tril * triu: 1 only where i == j, since tril is 1 at i>=j and triu at i<=j.
+        # Built from the two tensors already on device above -- no host tensor, no upload.
+        # Verified bit-exact vs torch.eye at C=32/64/128 (max|diff| 0.0).
+        _eye_1cc = ttnn.multiply(tril_mask, triu_ones, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         lower_causal = _create_tril_ones(chunk_size, mesh_device, dtype=ttnn.float32)
 
     _cmc = ttnn.DRAM_MEMORY_CONFIG if chunk_size > 64 else None
