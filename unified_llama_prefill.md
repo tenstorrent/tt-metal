@@ -2148,15 +2148,63 @@ tolerance, so the cases bite. The `n_kv=1` rows cannot catch it and are not expe
 with one KV head every mapping selects it. Six (n_heads, n_kv) combinations are now in
 `test_unified_flash.py`.
 
-**Still open in phase 11:** multi-core partitioning across heads, which this sets up -- a
-core's share of the heads is now a range on this loop rather than a separate launch per head.
+### Heads across cores: no communication, and the ceiling is per-core setup
+
+Heads share nothing -- a core reads its own heads' queries and their KV heads and writes its
+own output blocks -- so partitioning them needs no communication at all, only a range each.
+The kernel takes `head_begin`/`head_count` as RUNTIME args and the host owns the policy
+(`split_evenly` in `unified_harness.py`, spreading the remainder one unit per core so the
+makespan stays at ceil rather than piling it on the last core).
+
+Runtime args rather than a coordinate, deliberately. A range derived from
+`PhysicalCoord::this_core()` would be right on the two data-movement threads and the
+ORIGIN's range on compute, because `my_x`/`my_y` are never filled on a TRISC -- so the loads
+and the compute would disagree about how many blocks exist and the circular buffers would
+deadlock. `LogicalCoord::this_core()` is safe and would work, but the partition is a host
+policy and this keeps it there.
+
+**Scaling, 8 heads at sq=2 sk=4 dt=2 causal:**
+
+| cores | time | speedup | efficiency |
+|---|---|---|---|
+| 1 | 200.54 us | 1.00x | 100% |
+| 2 | 103.92 us | 1.93x | 96% |
+| 4 | 57.16 us | 3.51x | 88% |
+| 8 | 36.68 us | 5.47x | 68% |
+
+The efficiency curve is fully explained by per-core fixed setup, not by contention: fitting
+`T(n) = fixed + heads_per_core * per_head` gives fixed = 11.5us and per_head = 23.6us, which
+predicts 200.3us at one core and 35.1us at eight against 200.54 and 36.68 measured. Every
+core pays its own `matmul_init` hardware startup, reduce scaler and column of ones, and that
+cost stops being amortised once a core holds only one head. 32 heads over 32 cores is 50.22us
+total, 1.57us per head.
+
+**A testing hole this turned up, and it was mine.** The output tensor was allocated
+uninitialised, and since `run()` is called many times a session the allocator hands back the
+same address -- so an output block that NOTHING writes holds the previous run's correct
+values. Sabotaging the partition to drop one head passed cleanly at 8 heads over 8 cores and
+over 4, and was only caught at 4 over 2 where the preceding run had left something else
+there. The output is now pre-filled with NaN, which propagates into the error, and all three
+sabotage cases fail as they should. Worth keeping in mind for every other harness here that
+allocates an output without initialising it.
+
+**What the tests can and cannot catch.** A partition that MISSES a head is caught (nothing
+writes that block). A partition that OVERLAPS is not: two cores computing the same head both
+write the same correct values, so the answer stays right. Over-coverage shows up only as a
+missing speedup, which is why the scaling table above is evidence rather than decoration.
+Partition invariance is checked exactly -- 1 core against 2, 4 and 8 agree to 0.000000, not
+to a tolerance, because heads are independent and there is no reordering to excuse a
+difference.
+
+**Still open in phase 11:** head concat plus the output projection, and an end-to-end
+single-layer prefill against a reference.
 
 ## Phase 11 -- Full block orchestration
 
 Host-side and kernel-loop work, not model gaps.
 
 - [x] GQA head mapping (n_heads != n_kv_heads) -- see below
-- [ ] Multi-core work partitioning across heads
+- [x] Multi-core work partitioning across heads -- see below
 - [ ] Head concat + output projection wired to the attention core
 - [ ] End-to-end single-layer prefill against a reference
 
