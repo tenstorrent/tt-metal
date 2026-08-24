@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include "sanitizer/api.h"
 #include "internal/circular_buffer_interface.h"
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -53,6 +55,18 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     const uint32_t unpA_tile_size = get_local_cb_interface(unpA_operand_id).fifo_page_size;
     const uint32_t unpB_tile_size = get_local_cb_interface(unpB_operand_id).fifo_page_size;
 
+    SAN_HOOK(configure(
+        StateVal<Operand<Exu::Unpack>::DestWidth32>(is_fp32_dest_acc_en),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[unpA_operand_id]),
+        StateVal<Operand<Exu::Unpack>::InputFormatB>(unpack_src_format[unpB_operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[unpA_operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatB>(unpack_dst_format[unpB_operand_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(unpA_face_r_dim),
+        StateVal<Operand<Exu::Unpack>::FaceHeightB>(unpB_face_r_dim),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(unpA_num_faces),
+        StateVal<Operand<Exu::Unpack>::NumFacesB>(unpB_num_faces),
+        StateDiscard<std::uint32_t>(unpA_tile_size),
+        StateDiscard<std::uint32_t>(unpB_tile_size)));
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         unpack_src_format[unpA_operand_id],
         unpack_src_format[unpB_operand_id],
@@ -112,6 +126,14 @@ inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_op
     // Currently, there is a constraint that tile size is equal to the fifo page size
     // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
     const std::uint32_t tile_size = get_local_cb_interface(srca_operand_id).fifo_page_size;
+    // face_r_dim and num_faces are only committed when dim_stride_target reprograms dim/stride, so
+    // this reconfig does not claim them.
+    SAN_HOOK(reconfigure(
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[srca_operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[srca_operand_id]),
+        StateDiscard<std::uint32_t>(tile_size),
+        StateDiscard<std::uint32_t>(face_r_dim),
+        StateDiscard<std::uint32_t>(num_faces)));
     _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(
         unpack_src_format[srca_operand_id], unpack_dst_format[srca_operand_id], tile_size, face_r_dim, num_faces);
 }
@@ -136,6 +158,14 @@ inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_op
     // Currently, there is a constraint that tile size is equal to the fifo page size
     // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
     const std::uint32_t tile_size = get_local_cb_interface(srcb_operand_id).fifo_page_size;
+    // face_r_dim and num_faces are only committed when dim_stride_target reprograms dim/stride, so
+    // this reconfig does not claim them.
+    SAN_HOOK(reconfigure(
+        StateVal<Operand<Exu::Unpack>::InputFormatB>(unpack_src_format[srcb_operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatB>(unpack_dst_format[srcb_operand_id]),
+        StateDiscard<std::uint32_t>(tile_size),
+        StateDiscard<std::uint32_t>(face_r_dim),
+        StateDiscard<std::uint32_t>(num_faces)));
     _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(
         unpack_src_format[srcb_operand_id], unpack_dst_format[srcb_operand_id], tile_size, face_r_dim, num_faces);
 }

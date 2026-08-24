@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/compute/common.h"
+#include "sanitizer/api.h"
 #include "api/compute/src_order.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 
@@ -52,6 +53,8 @@ namespace ckernel {
 // clang-format on
 template <SrcOrder src_order = SrcOrder::Regular>
 ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
+    LLK_SAN_FUNCTION();
+
     // Map the operands onto the physical source registers. For SrcOrder::Reverse (matmul) in0 (icb0)
     // lands in SrcB and in1 (icb1) lands in SrcA, so the per-source state below is programmed with the
     // operands swapped. src_order is a template parameter, so reverse (and the selection below) is
@@ -95,7 +98,11 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
  * | Function   | ocb   | The identifier of the output circular buffer (CB)                  | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) { compute_kernel_hw_startup(icb0, icb0, ocb); }
+ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
+    LLK_SAN_FUNCTION();
+
+    compute_kernel_hw_startup(icb0, icb0, ocb);
+}
 
 // clang-format off
 /**

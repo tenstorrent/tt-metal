@@ -15,4 +15,6 @@ inline void llk_math_transpose_dest(uint dst_index) {
 }
 
 template <bool transpose_of_faces = true, bool is_32bit = false>
-inline void llk_math_transpose_dest_init() { _llk_math_transpose_dest_init_<transpose_of_faces, is_32bit>(); }
+inline void llk_math_transpose_dest_init() {
+    _llk_math_transpose_dest_init_<transpose_of_faces, is_32bit>();
+}

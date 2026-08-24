@@ -13,7 +13,6 @@
 #include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_pack_common.h"
-#include "sanitizer/api.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
@@ -448,9 +447,6 @@ inline void _llk_pack_reconfig_data_format_(
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    llk::san::pack_operand_configure<true>(
-        is_fp32_dest_acc_en, pack_src_format, pack_dst_format, llk::san::IGNORE, tile_c_dim, num_faces, partial_face, llk::san::IGNORE);
-
     reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
 }
 
@@ -497,9 +493,6 @@ inline void _llk_pack_hw_configure_(
     const std::uint32_t relu_config = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-
-    // sstanisic todo: partial face, narrow tile are weird (see #47440)
-    llk::san::pack_operand_configure(is_fp32_dest_acc_en, pack_src_format, pack_dst_format, face_r_dim, tile_c_dim, num_faces, partial_face, llk::san::IGNORE);
 
     configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
 }
@@ -562,9 +555,6 @@ inline void _llk_pack_init_(
         LLK_ASSERT(num_tiles <= 8, "Max supported num_tiles for FLOAT16 or FLOAT16_B is 8.");
     }
 
-    llk::san::pack_operand_check(llk::san::IGNORE, pack_src_format, llk::san::IGNORE, face_r_dim, tile_c_dim, num_faces, llk::san::IGNORE, llk::san::IGNORE);
-    llk::san::operation_init<llk::san::Operation::Pack>();
-
     // 8bit datums in the unpack src format are not affected by the blackhole issue,
     // so we can skip the workaround which involves unswizzling rows in the tile.
     if (skip_bh_tilize_workaround && pack_mode == PackMode::Tilize)
@@ -589,9 +579,6 @@ inline void _llk_pack_init_(
  */
 inline void _llk_pack_uninit_()
 {
-    // sstanisic todo: contract cannot be enforced if Pack has an uninit, without killing performance
-    // llk::san::operation_uninit<llk::san::Operation::Pack>();
-
     // No state to restore - Blackhole pack_init sets PAC X counter to FACE_C_DIM - 1 which is the default.
 }
 
@@ -617,8 +604,6 @@ inline void _llk_pack_uninit_()
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool mutex_ADC = false>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {
-    llk::san::operation_check<llk::san::Operation::Pack>();
-
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Blackhole: _llk_pack_ supports PackMode::Default and PackMode::Untilize only");
     static_assert(

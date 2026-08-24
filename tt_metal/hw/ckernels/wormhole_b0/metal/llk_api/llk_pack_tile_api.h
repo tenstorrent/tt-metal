@@ -29,6 +29,30 @@ inline void llk_pack_init(const std::uint32_t pack_output, std::uint32_t num_til
         LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
     }
 
+    // pack_dst_format only reaches per-op state that a later reconfig cannot repair when the MOP bakes
+    // it in: the multi-tile output-address offset, and the partial-face BFP PACR variant. Otherwise
+    // reconfig_packer_data_format re-derives everything init took from the format (set_packer_l1_offset),
+    // so a format reconfig between init and execute is legal and must not read as drift.
+    if (num_tiles > 1 || partial_face) {
+        SAN_HOOK(init<OperationPack>(
+            StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+            StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
+            StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+            StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
+            StateVal<Operand<Exu::Pack>::NarrowTile>(narrow_tile),
+            StateDiscard<std::uint32_t>(pack_output),
+            StateDiscard<std::uint32_t>(num_tiles)));
+    } else {
+        SAN_HOOK(init<OperationPack>(
+            StateDiscard<std::uint32_t>(pack_dst_format[output_id]),
+            StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
+            StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+            StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
+            StateVal<Operand<Exu::Pack>::NarrowTile>(narrow_tile),
+            StateDiscard<std::uint32_t>(pack_output),
+            StateDiscard<std::uint32_t>(num_tiles)));
+    }
+
     _llk_pack_init_<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
         pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
 }
@@ -49,15 +73,17 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
 
-    llk::san::pack_operand_check(
-        is_fp32_dest_acc_en,
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        get_output_face_r_dim(output_id),
-        llk::san::IGNORE,
-        get_output_num_faces(output_id),
-        get_output_partial_face(output_id),
-        get_output_narrow_tile(output_id));
+    SAN_HOOK(execute<OperationPack>(
+        StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(get_output_face_r_dim(output_id)),
+        StateVal<Operand<Exu::Pack>::NumFaces>(get_output_num_faces(output_id)),
+        StateVal<Operand<Exu::Pack>::PartialFace>(get_output_partial_face(output_id)),
+        StateVal<Operand<Exu::Pack>::NarrowTile>(get_output_narrow_tile(output_id)),
+        StateDiscard<std::uint32_t>(tile_index),
+        StateDiscard<std::uint32_t>(output),
+        StateDiscard<std::uint32_t>(output_tile_index)));
 
     _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
 }
@@ -74,15 +100,18 @@ inline void llk_matmul_pack(
         ((start_tile_index + ntiles - 1) < get_pack_dest_max_tiles<DST_SYNC_MODE>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");
 
-    llk::san::pack_operand_check(
-        is_fp32_dest_acc_en,
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        get_output_face_r_dim(output_id),
-        llk::san::IGNORE,
-        get_output_num_faces(output_id),
-        get_output_partial_face(output_id),
-        get_output_narrow_tile(output_id));
+    SAN_HOOK(execute<OperationPack>(
+        StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(get_output_face_r_dim(output_id)),
+        StateVal<Operand<Exu::Pack>::NumFaces>(get_output_num_faces(output_id)),
+        StateVal<Operand<Exu::Pack>::PartialFace>(get_output_partial_face(output_id)),
+        StateVal<Operand<Exu::Pack>::NarrowTile>(get_output_narrow_tile(output_id)),
+        StateDiscard<std::uint32_t>(start_tile_index),
+        StateDiscard<std::uint32_t>(output),
+        StateDiscard<std::uint32_t>(ntiles),
+        StateDiscard<std::uint32_t>(output_tile_index)));
 
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         std::uint32_t pack_tile_addr =

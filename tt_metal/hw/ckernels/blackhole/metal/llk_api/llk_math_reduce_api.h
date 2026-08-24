@@ -44,6 +44,4 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
     _llk_math_reduce_init_<type, dim, is_fp32_dest_acc_en, math_fidelity>(tensor_shape);
 }
 
-inline void llk_math_reduce_uninit() {
-    _llk_math_reduce_uninit_();
-}
+inline void llk_math_reduce_uninit() { _llk_math_reduce_uninit_(); }

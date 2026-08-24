@@ -5,6 +5,7 @@
 #pragma once
 #include "llk_unpack_A.h"
 #include "llk_unpack_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK A
@@ -32,6 +33,20 @@ inline void llk_unpack_A_init(
         operand_unpack_dst_format,
         tensor_shape.face_r_dim,
         tensor_shape.total_num_faces())));
+
+    // transpose_of_faces and within_face_16x16_transpose are not OperationUnpackUnary fields --
+    // transpose is modelled on the matmul operation, not the unary one.
+    SAN_HOOK(init<OperationUnpackUnary>(
+        StateVal<OperationUnpackUnary::BroadcastType>(to_underlying(BType)),
+        StateVal<OperationUnpackUnary::AccumulateToDest>(acc_to_dest),
+        StateVal<OperationUnpackUnary::BinaryReuseDest>(to_underlying(binary_reuse_dest)),
+        StateVal<OperationUnpackUnary::UnpackToDest>(unpack_to_dest),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(operand_unpack_src_format),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(operand_unpack_dst_format),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(tensor_shape.face_r_dim),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(tensor_shape.total_num_faces()),
+        StateDiscard<std::uint32_t>(transpose_of_faces),
+        StateDiscard<std::uint32_t>(within_face_16x16_transpose)));
 
     _llk_unpack_A_init_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         transpose_of_faces,
@@ -62,6 +77,17 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
         get_operand_face_r_dim(operand_id),
         get_operand_num_faces(operand_id))));
 
+    SAN_HOOK(execute<OperationUnpackUnary>(
+        StateVal<OperationUnpackUnary::BroadcastType>(to_underlying(BType)),
+        StateVal<OperationUnpackUnary::AccumulateToDest>(acc_to_dest),
+        StateVal<OperationUnpackUnary::BinaryReuseDest>(to_underlying(binary_reuse_dest)),
+        StateVal<OperationUnpackUnary::UnpackToDest>(unpack_to_dest),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(get_operand_face_r_dim(operand_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(get_operand_num_faces(operand_id)),
+        StateDiscard<std::uint32_t>(tile_index)));
+
     WAYPOINT("UPAW");
     _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
@@ -82,6 +108,19 @@ inline void llk_unpack_A_block(
 
     LLK_ASSERT(cb_access_within_bounds(operand_id, start_tile_index, ntiles), "Block tile read exceeds CB boundary");
 
+    // One execute per tile; the state is identical for every iteration, so it is restated once.
+    SAN_HOOK(execute<OperationUnpackUnary>(
+        StateVal<OperationUnpackUnary::BroadcastType>(to_underlying(BType)),
+        StateVal<OperationUnpackUnary::AccumulateToDest>(acc_to_dest),
+        StateVal<OperationUnpackUnary::BinaryReuseDest>(to_underlying(binary_reuse_dest)),
+        StateVal<OperationUnpackUnary::UnpackToDest>(unpack_to_dest),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operand_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(get_operand_face_r_dim(operand_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(get_operand_num_faces(operand_id)),
+        StateDiscard<std::uint32_t>(start_tile_index),
+        StateDiscard<std::uint32_t>(ntiles)));
+
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");
         _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
@@ -93,5 +132,9 @@ inline void llk_unpack_A_block(
 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_A_uninit() {
+    // No operand is in scope here; restating the broadcast variant is what ties the uninit to
+    // the operation that was initialised.
+    SAN_HOOK(uninit<OperationUnpackUnary>(StateVal<OperationUnpackUnary::BroadcastType>(to_underlying(BType))));
+
     _llk_unpack_A_uninit_<BType>();
 }

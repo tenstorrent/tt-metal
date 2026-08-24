@@ -333,8 +333,8 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
             TTI_SETRWC(p_setrwc::CLR_A, p_setrwc::CR_D, 0, p_setrwc::SET_B);
         });
 
-    const std::uint32_t replay           = TT_OP_REPLAY(0, main_len, 0, 0, 0, 0);
-    const std::uint32_t dest_inc_32      = TT_OP_REPLAY(main_len, tail_len, 0, 0, 0, 0);
+    const std::uint32_t replay      = TT_OP_REPLAY(0, main_len, 0, 0, 0, 0);
+    const std::uint32_t dest_inc_32 = TT_OP_REPLAY(main_len, tail_len, 0, 0, 0, 0);
 
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, replay, dest_inc_32);
     temp.set_last_inner_loop_instr(TT_OP_SETRWC(p_setrwc::CLR_A, 0, 0, p_setrwc::SET_BD));

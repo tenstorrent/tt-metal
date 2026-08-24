@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include "sanitizer/api.h"
 #include "internal/circular_buffer_interface.h"
 #include "ckernel.h"
 #include "ckernel_globals.h"
@@ -42,6 +44,15 @@ inline void llk_pack_hw_configure(std::uint32_t pack_output) {
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
 
+    SAN_HOOK(configure(
+        StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
+        StateVal<Operand<Exu::Pack>::TileWidth>(tile_c_dim),
+        StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+        StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
+        StateDiscard<std::uint32_t>(tile_size)));
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
@@ -151,6 +162,14 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
 
+    SAN_HOOK(reconfigure(
+        StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::TileWidth>(tile_c_dim),
+        StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+        StateVal<Operand<Exu::Pack>::PartialFace>(false),
+        StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
