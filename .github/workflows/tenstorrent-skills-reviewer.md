@@ -109,8 +109,6 @@ safe-outputs:
   create-pull-request-review-comment:
     side: "RIGHT"
     max: 10
-  create-check-run:
-    max: 1
   submit-pull-request-review:
     max: 1
     allowed-events: [COMMENT]
@@ -207,6 +205,8 @@ Each `SKILL.md` is a **router**. Read a `references/*.md` file only when the inl
 ### Step 3: Route
 
 Invoke the `pr-triage` agent and capture its JSON. Use the returned `domain_skills` (at most two), `high_impact_files`, and `key_signals`.
+
+`tt-comment-hygiene-review` is cheap and runs alongside on every diff — it does **not** count against the two domain slots.
 
 **Fallback — never fail the review because of triage.** If triage errors, times out, or returns unparseable output, do not retry more than once and do not abort. Apply `/tt-review-router`'s path table directly against `pr-meta.json` and the diff, take the two highest-risk matches, and fall back to the largest non-generated changed files for `high_impact_files`. Mention in Step 6 that routing used the fallback.
 
@@ -327,8 +327,11 @@ Tasks:
 | `generator_vllm.py`, vLLM plugin registration | `tt-vllm-serving-review` |
 | `tests/**`, or any behaviour change needing a test | `tt-test-coverage-review` |
 | A PR body or comment asserting a speedup or perf number | `tt-perf-claim-review` |
+| Any diff (cheap, runs alongside) | `tt-comment-hygiene-review` |
 
-3. Return **at most two** `domain_skills`. If more than two match, pick by risk: silent corruption and hangs outrank performance and style. Note what you dropped in `key_signals`.
+**The installed `/tt-review-router` is authoritative.** The table above is a copy for speed; if it and the installed router disagree, the router wins and the divergence is a bug worth reporting.
+
+3. Return **at most two** `domain_skills`. `tt-comment-hygiene-review` is cheap, applies to every diff, and is returned in `always_skills` rather than counting against those two. If more than two match, pick by risk: silent corruption and hangs outrank performance and style. Note what you dropped in `key_signals`.
 4. Rank `high_impact_files`, most important first.
 5. Give concise `key_signals` justifying the routing.
 
@@ -337,7 +340,7 @@ Routing rules:
 - **Route on what changed, not where the file lives.** A `.py` under `models/` editing a program config is a memory-config change; a `.cpp` under `ttnn/` that only renames a symbol needs no domain skill.
 - **Kernel changes usually pair** `ttnn-op-kernel-review` with `tt-l1-memory-review` — a new CB is both a structural and a footprint question.
 - **Perf claims are separate from perf changes.** A diff changing blocking routes to `tt-l1-memory-review`; a PR *asserting* a 1.4x speedup routes to `tt-perf-claim-review` whatever the diff touched.
-- **Nothing matched is a valid answer.** Return an empty `domain_skills` and say so. Forcing an irrelevant skill onto a diff is worse than reviewing with the core contract alone.
+- **An empty `domain_skills` is a valid answer.** Forcing an irrelevant domain skill onto a diff is worse than reviewing with the core contract alone. Note that empty means *no domain skill* — `tt-comment-hygiene-review` still applies, via `always_skills`.
 
 Return JSON only:
 
@@ -345,6 +348,7 @@ Return JSON only:
 {
   "change_type": "kernel | model | llk | ccl | serving | tests | perf_claim | mixed | none",
   "domain_skills": ["ttnn-op-kernel-review", "tt-l1-memory-review"],
+  "always_skills": ["tt-comment-hygiene-review"],
   "high_impact_files": ["path/one.cpp", "path/two.cpp"],
   "dropped_skills": ["tt-test-coverage-review"],
   "key_signals": ["new CB added in program factory", "split_work_to_cores changed"]
