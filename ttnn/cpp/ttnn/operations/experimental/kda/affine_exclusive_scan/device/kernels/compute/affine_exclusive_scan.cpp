@@ -25,7 +25,6 @@ FORCE_INLINE void matmul(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o
     const uint32_t b_id = b.get_id();
     const uint32_t out_id = out.get_id();
     out.reserve_back(Mt * Nt);
-    pack_reconfig_data_format(out_id);
     reconfig_data_format(b_id, a_id);
     matmul_block_init(a_id, b_id, false, subblock_cols, subblock_rows, Kt);
     for (uint32_t m = 0; m < Mt; m += subblock_rows) {
@@ -72,7 +71,6 @@ FORCE_INLINE void matmul_affine(
     const uint32_t out_b_id = out_b.get_id();
     out_a.reserve_back(Mt * At);
     out_b.reserve_back(Mt * Vt);
-    pack_reconfig_data_format(out_a_id);
     reconfig_data_format(affine_id, a_id);
     matmul_block_init(a_id, affine_id, false, subblock_cols, subblock_rows, Kt);
     for (uint32_t m = 0; m < Mt; m += subblock_rows) {
@@ -120,7 +118,6 @@ FORCE_INLINE void add_affine_b(DataflowBuffer& a, DataflowBuffer& affine, Datafl
     const uint32_t affine_id = affine.get_id();
     const uint32_t out_id = out.get_id();
     out.reserve_back(Kt * Vt);
-    pack_reconfig_data_format(out_id);
     reconfig_data_format(a_id, affine_id);
     add_init(a_id, affine_id);
     for (uint32_t row = 0; row < Kt; ++row) {
@@ -140,7 +137,6 @@ FORCE_INLINE void copy(DataflowBuffer& in, DataflowBuffer& out, uint32_t tiles) 
     const uint32_t in_id = in.get_id();
     const uint32_t out_id = out.get_id();
     out.reserve_back(tiles);
-    pack_reconfig_data_format(out_id);
     reconfig_data_format_srca(in_id);
     copy_tile_to_dst_init_short(in_id);
     for (uint32_t tile = 0; tile < tiles; tile++) {
