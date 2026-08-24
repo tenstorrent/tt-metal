@@ -24,8 +24,8 @@ namespace ttnn::prim {
 
 namespace {
 // The index dtype the op runs at: index CB, generated iota and output tensor all follow it.
-// A preallocated indices output pins it; a 32-bit indices_tensor widens it. UINT16 must not
-// narrow it, or the width check in validate would compare UINT16 with itself and pass.
+// A preallocated indices output pins it; a 32-bit indices_tensor widens it. A UINT16
+// indices_tensor never narrows it -- validate rejects one narrower than the input requires.
 DataType resolve_index_dtype(
     const TopKDeviceOperation::operation_attributes_t& args, const TopKDeviceOperation::tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_outputs.has_value()) {
@@ -227,7 +227,7 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             indices_tensor_dtype == DataType::UINT16 || indices_tensor_dtype == DataType::UINT32 ||
                 indices_tensor_dtype == DataType::INT32,
-            "Optional input tensor must be UINT16, UINT32, or INT32, got: {}",
+            "Optional indices tensor must be UINT16, UINT32, or INT32, got: {}",
             indices_tensor_dtype);
         // fp32 input forces UINT32 index CBs (see compute_output_specs); UINT16 indices would be wrong.
         TT_FATAL(

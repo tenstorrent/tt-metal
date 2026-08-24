@@ -40,9 +40,9 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
 
     if pass_indices_tensor:
-        indices_tensor_torch = torch.zeros(shape, dtype=torch_indices_dtype)
-        for i in range(W):
-            indices_tensor_torch[:, :, :, i] = i
+        # The payload must differ from the iota topk generates on its own, or the gather below
+        # cannot tell a read from a regeneration. Column i is labelled W - 1 - i.
+        indices_tensor_torch = (W - 1 - torch.arange(W)).expand(shape).to(torch_indices_dtype)
         indices_tensor = ttnn.from_torch(
             indices_tensor_torch, ttnn_indices_dtype, layout=ttnn.Layout.TILE, device=device
         )
@@ -89,7 +89,13 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     # rounding may also cause more ties than expected
     # the bigger we get, the tighter the distribution of the top K elements, so the pcc will be worse as stability/rounding will cause more ties
     # use cosine similarity on the gathered indices as this will show the top elements are all about the same
-    ttnn_torch_gather_from_indices = torch.gather(input, dim, ttnn_torch_indices.to(torch.int64))
+    # topk returns the labels it is given, so turn each label back into the column it names.
+    # The labelling above is its own inverse: label L names column W - 1 - L.
+    # Without a payload the op generates plain column indices, so no conversion is needed.
+    ttnn_torch_columns = ttnn_torch_indices.to(torch.int64)
+    if pass_indices_tensor:
+        ttnn_torch_columns = W - 1 - ttnn_torch_columns
+    ttnn_torch_gather_from_indices = torch.gather(input, dim, ttnn_torch_columns)
     cosine = torch.nn.CosineSimilarity(dim=dim)
     ttnn_torch_cosine = torch.mean(cosine(pyt_topk_values, ttnn_torch_gather_from_indices))
 
@@ -464,7 +470,7 @@ def test_topk_indices_tensor_payload_is_used(W, device):
 
 
 @pytest.mark.parametrize("W", (64, 16384), ids=["single_core", "multi_core"])
-@pytest.mark.parametrize("index_dtype", (ttnn.uint16, ttnn.uint32), ids=["uint16", "uint32"])
+@pytest.mark.parametrize("index_dtype", (ttnn.uint16, ttnn.uint32, ttnn.int32), ids=["uint16", "uint32", "int32"])
 def test_topk_indices_tensor_dtype(W, index_dtype, device):
     torch.manual_seed(0)
 
@@ -472,7 +478,7 @@ def test_topk_indices_tensor_dtype(W, index_dtype, device):
     shape = [1, 1, 32, W]
 
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
-    iota = torch.arange(W, dtype=torch.int32).expand(shape).contiguous()
+    iota = torch.arange(W, dtype=torch.int32).expand(shape)
 
     ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
     indices_tensor = ttnn.from_torch(iota, index_dtype, layout=ttnn.Layout.TILE, device=device)
@@ -492,7 +498,7 @@ def test_topk_indices_tensor_labels_above_uint16_max(device):
     shape = [1, 1, 32, W]
 
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
-    labels = (torch.arange(W, dtype=torch.int64) + offset).expand(shape).contiguous()
+    labels = (torch.arange(W, dtype=torch.int64) + offset).expand(shape)
 
     ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
     indices_tensor = ttnn.from_torch(labels, ttnn.uint32, layout=ttnn.Layout.TILE, device=device)
@@ -536,7 +542,7 @@ def test_topk_row_major_tensor_raises(tensor_under_test, device, expect_error):
     if tensor_under_test == "indices_tensor":
         kwargs = {
             "indices_tensor": ttnn.from_torch(
-                torch.arange(W, dtype=torch.int32).expand(shape).contiguous(),
+                torch.arange(W, dtype=torch.int32).expand(shape),
                 ttnn.uint16,
                 layout=ttnn.Layout.ROW_MAJOR,
                 device=device,
