@@ -469,11 +469,13 @@ def test_perf_fresh_cpp_right_shift(perf_report, formats, mathop, fresh_cpp_impl
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
     mathop=[MathOperation.SfpuMulInt32],
-    fresh_cpp_impl=[0, 1],
+    fresh_cpp_impl=[0, 1, 2],
 )
 def test_perf_fresh_cpp_mul_int(perf_report, formats, mathop, fresh_cpp_impl):
     # Handwritten (metal mul_int32 SFPLOADMACRO kernel) vs fresh typed-C++ Int32
     # multiply A/B, MATH_ISOLATE only (mirrors test_perf_fresh_cpp_add_sub_int).
+    # impl 1 = full-domain radix-23 four-partial body; impl 2 = contract-domain
+    # limb-2 body (lane GG, operands < 2^23 per the stimuli contract).
     tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
         [128, 64], [128, 64], face_r_dim=16, num_faces=4
     )

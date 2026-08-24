@@ -134,6 +134,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 call_mul_int_fresh_cpp<DstSync::SyncHalf, is_fp32_dest_acc_en, 8>(tile, tile + 1, tile, VectorMode::RC);
             }
             else if constexpr (
+                FRESH_CPP_IMPL == 2 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::MUL_INT32 &&
+                static_cast<std::uint32_t>(formats.math) == static_cast<std::uint32_t>(DataFormat::Int32))
+            {
+                // Fresh typed-C++ contract-domain limb-2 Int32 multiply (lane GG:
+                // operands < 2^23 per the row's stimuli contract; certified
+                // laneGG-evidence-20260824/mulint32_limb2_cert.c).
+                call_mul_int_limb2_fresh_cpp<DstSync::SyncHalf, is_fp32_dest_acc_en, 8>(tile, tile + 1, tile, VectorMode::RC);
+            }
+            else if constexpr (
                 FRESH_CPP_IMPL == 1 && SFPU_BINARY_OPERATION == ckernel::BinaryOp::LSHFT &&
                 static_cast<std::uint32_t>(formats.math) == static_cast<std::uint32_t>(DataFormat::Int32))
             {

@@ -897,14 +897,17 @@ def test_fresh_cpp_add_sub_int(formats, dest_acc, mathop, fresh_cpp_impl):
     formats=input_output_formats([DataFormat.Int32]),
     mathop=[MathOperation.SfpuMulInt32],
     dest_acc=[DestAccumulation.Yes],
-    fresh_cpp_impl=[0, 1],
+    fresh_cpp_impl=[0, 1, 2],
 )
 def test_fresh_cpp_mul_int(formats, dest_acc, mathop, fresh_cpp_impl):
     """Handwritten (metal mul_int32 SFPLOADMACRO kernel) vs fresh typed-C++ A/B over
     identical Int32 stimuli/golden; exact integer contract via the suite's integer
     format gate. Stimuli mirror test_sfpu_binary_int_uniform's SfpuMulInt32 range:
     positive operands with product < 2^31, so the low-32 golden round-trips the
-    sign-magnitude Dst packer for both implementations."""
+    sign-magnitude Dst packer for both implementations. impl 1 = full-domain
+    radix-23 four-partial body; impl 2 = contract-domain limb-2 body (lane GG:
+    operands < 2^23, exactly this node's stimuli contract, certified exhaustively
+    -- laneGG-evidence-20260824/mulint32_limb2_cert.c)."""
     low, high = _INT_BINARY_STIMULI[MathOperation.SfpuMulInt32]
     sfpu_binary(
         formats,
