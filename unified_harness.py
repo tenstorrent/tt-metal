@@ -33,7 +33,13 @@ TT_METAL_HOME = os.environ.get("TT_METAL_HOME", os.path.dirname(os.path.abspath(
 UNIFIED_INCLUDE_PATHS = [TT_METAL_HOME]
 
 TILE_HW = 32 * 32
-DTYPE_TILE_BYTES = {ttnn.bfloat16: TILE_HW * 2, ttnn.float32: TILE_HW * 4}
+# bfloat8_b is a BLOCK format: 1024 mantissa bytes plus a 64-byte exponent section per
+# tile, so it is 1088 rather than the 1024 a naive one-byte-per-element count would give.
+DTYPE_TILE_BYTES = {
+    ttnn.bfloat16: TILE_HW * 2,
+    ttnn.float32: TILE_HW * 4,
+    ttnn.bfloat8_b: TILE_HW + 64,
+}
 
 
 # Per data-movement thread: two for the multicast handshake, then one more for
