@@ -55,9 +55,7 @@ def load_snapshot(path: Path) -> tuple[dict[str, dict[str, Any]], dict[str, Any]
     return index, snapshot
 
 
-def canonical_labels(
-    hosts: list[Any], index: dict[str, dict[str, Any]]
-) -> tuple[dict[str, str] | None, str]:
+def canonical_labels(hosts: list[Any], index: dict[str, dict[str, Any]]) -> tuple[dict[str, str] | None, str]:
     matched: list[dict[str, Any]] = []
     unknown: list[str] = []
     for raw in hosts:
@@ -86,11 +84,7 @@ def canonical_labels(
 
 
 def _hierarchy(labels: dict[str, Any]) -> dict[str, str]:
-    return {
-        key: str(labels.get(key) or "")
-        for key in HIERARCHY_KEYS
-        if str(labels.get(key) or "")
-    }
+    return {key: str(labels.get(key) or "") for key in HIERARCHY_KEYS if str(labels.get(key) or "")}
 
 
 def _iter_records(root: Path) -> list[Path]:
@@ -99,9 +93,7 @@ def _iter_records(root: Path) -> list[Path]:
     return sorted(
         path
         for path in root.rglob("*.json")
-        if not path.name.startswith(".")
-        and ".tmp." not in path.name
-        and not path.name.endswith(".json.tmp")
+        if not path.name.startswith(".") and ".tmp." not in path.name and not path.name.endswith(".json.tmp")
     )
 
 
@@ -146,9 +138,7 @@ def plan_migration(
                 labels.pop(key, None)
             labels.update(canonical)
             labels["label_migration"] = MIGRATION_VERSION
-            labels["label_migrated_from"] = json.dumps(
-                before, sort_keys=True, separators=(",", ":")
-            )
+            labels["label_migrated_from"] = json.dumps(before, sort_keys=True, separators=(",", ":"))
             if snapshot_generated_at:
                 labels["label_snapshot_generated_at"] = snapshot_generated_at
             updated = dict(record)
@@ -178,9 +168,7 @@ def apply_changes(changes: list[Change], backup_root: Path) -> None:
     for change in changes:
         tmp = change.path.with_name(f".{change.path.name}.{os.getpid()}.tmp")
         try:
-            payload = json.dumps(
-                change.updated, separators=(",", ":"), ensure_ascii=False
-            ) + "\n"
+            payload = json.dumps(change.updated, separators=(",", ":"), ensure_ascii=False) + "\n"
             with tmp.open("w", encoding="utf-8") as handle:
                 handle.write(payload)
                 handle.flush()
