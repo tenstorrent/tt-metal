@@ -22,6 +22,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include "device_fixture.hpp"
 #include "impl/context/metal_context.hpp"
 #include "jit_build/build.hpp"
@@ -101,7 +102,7 @@ Program create_precompiled_program(
 
 // Snapshot of the process-wide srcs counter, which advances on every JitBuildState::compile()
 // call (the shared hot path of every jit_build* entry point). delta() > 0 after a
-// CompileProgram call means the JIT pipeline ran. Snapshotting (instead of resetting the
+// program.impl().compile call means the JIT pipeline ran. Snapshotting (instead of resetting the
 // telemetry singleton) keeps other tests sharing the same process unaffected.
 struct JitSrcsBaseline {
     uint32_t baseline = BuildCacheTelemetry::inst().get_srcs_count();
@@ -266,7 +267,6 @@ TEST_F(AnyDispatchMeshDeviceFixture, RuntimePrecompiledHitLoadsWithoutJit) {
         GTEST_SKIP() << "Fabric is active, so CreateKernel injects fabric defines that CompileKernelOffline "
                         "cannot reproduce; the offline bucket is keyed on a different compile hash.";
     }
-    auto* device = this->devices_.at(0)->get_devices().at(0);
 
     ScopedTempDir precompiled_root("tt_metal_precompiled_seed_hit");
     seed_precompiled_root(precompiled_root.path_, kReaderKernelPath, kReaderDmConfig);
@@ -276,7 +276,7 @@ TEST_F(AnyDispatchMeshDeviceFixture, RuntimePrecompiledHitLoadsWithoutJit) {
 
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(this->devices_.at(0).get()));
     EXPECT_EQ(jit_srcs.delta(), 0u);
 }
 
@@ -295,7 +295,6 @@ TEST_F(AnyDispatchMeshDeviceFixture, RuntimePrecompiledHitWithCbMetadataLoadsWit
     // hlk_desc contributions diverge, this test fails as `jit_srcs.delta() > 0` (runtime
     // falls through to JIT) rather than as a layout assertion, which is exactly the
     // failure mode that justifies surfacing CBCompileConfigsFromProgram in the public API.
-    auto* device = this->devices_.at(0)->get_devices().at(0);
 
     constexpr uint32_t kPageSize = 2048;
     constexpr DataFormat kCbFormat = DataFormat::Float16_b;
@@ -328,30 +327,28 @@ TEST_F(AnyDispatchMeshDeviceFixture, RuntimePrecompiledHitWithCbMetadataLoadsWit
 
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
-    EXPECT_NO_THROW(detail::CompileProgram(device, runtime_program));
+    EXPECT_NO_THROW(runtime_program.impl().compile(this->devices_.at(0).get()));
     EXPECT_EQ(jit_srcs.delta(), 0u);
 }
 
 TEST_F(AnyDispatchMeshDeviceFixture, RuntimeMissingPrecompiledFallsBackToJit) {
     const auto precompiled_config = make_precompiled_config(kMissingPrecompiledRoot, BinaryPolicy::JitCompile);
     Program program = create_precompiled_program(precompiled_config);
-    auto* device = this->devices_.at(0)->get_devices().at(0);
 
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(this->devices_.at(0).get()));
     EXPECT_GT(jit_srcs.delta(), 0u);
 }
 
 TEST_F(AnyDispatchMeshDeviceFixture, RuntimeMissingPrecompiledErrorsOnPolicyError) {
     const auto precompiled_config = make_precompiled_config(kMissingPrecompiledRoot, BinaryPolicy::Error);
     Program program = create_precompiled_program(precompiled_config);
-    auto* device = this->devices_.at(0)->get_devices().at(0);
 
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
     try {
-        detail::CompileProgram(device, program);
+        program.impl().compile(this->devices_.at(0).get());
         FAIL() << "Expected PrecompiledKernelNotFoundError";
     } catch (const experimental::PrecompiledKernelNotFoundError& ex) {
         EXPECT_EQ(ex.kernel_name(), kReaderKernelName);

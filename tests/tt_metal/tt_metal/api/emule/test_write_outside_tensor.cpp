@@ -12,6 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "device_fixture.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
@@ -63,7 +64,7 @@ TEST_F(UnitMeshFixture, OOB_Tensor_Gap_L1_SanityCheck) {
     SetRuntimeArgs(program, kernel, logical_core, {oob_addr});
 
     EXPECT_DEATH(
-        slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
         ".*Out-of-Bounds Write: Attempted to access address.*not part of any allocated tensor.*");
 }
 
@@ -111,7 +112,7 @@ TEST_F(UnitMeshFixture, OOB_Tensor_Gap_DRAM_SanityCheck) {
     SetRuntimeArgs(program, kernel, logical_core, {oob_addr});
 
     EXPECT_DEATH(
-        slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
         ".*Out-of-Bounds Write: Attempted to access DRAM address.*not part of any allocated tensor.*");
 }
 
@@ -156,7 +157,7 @@ TEST_F(UnitMeshFixture, OOB_Tensor_HostPoke_JustPast_SanityCheck) {
     SetRuntimeArgs(program, kernel, logical_core, {past_addr});
 
     EXPECT_DEATH(
-        slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
         ".*Out-of-Bounds Write: Attempted to access address.*not part of any allocated tensor.*");
 }
 
@@ -194,7 +195,7 @@ TEST_F(UnitMeshFixture, OOB_Tensor_InBounds_L1_NoViolation) {
     SetRuntimeArgs(program, kernel, logical_core, {in_addr});
 
     // Must NOT abort — the address is inside an allocated tensor.
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -232,7 +233,7 @@ TEST_F(UnitMeshFixture, OOB_Tensor_InBounds_DRAM_NoViolation) {
     SetRuntimeArgs(program, kernel, logical_core, {in_addr});
 
     // Must NOT abort — the offset is inside an allocated DRAM tensor.
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -281,7 +282,7 @@ TEST_F(UnitMeshFixture, OOB_Tensor_HostPoke_Accept_NoViolation) {
     SetRuntimeArgs(program, kernel, logical_core, {poke_addr});
 
     // Must NOT abort — the address is inside a host-designated raw-L1 region.
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
