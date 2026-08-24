@@ -608,6 +608,86 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
     )
 
 
+_logged_agmm_v3_signatures = set()
+
+
+def get_agmm_config(
+    M,
+    K,
+    N,
+    full_grid,
+    cluster_size,
+    num_links,
+    core_grid=None,
+    default_block_size=None,
+    use_heuristic=False,
+    fuse_swiglu=False,
+    use_addcmul=False,
+):
+    """Resolve (core_grid, MinimalMatmulConfig, num_workers_per_link) for
+    `all_gather_minimal_matmul_async`.
+
+    Precedence -- anything measured or explicit wins, bit-for-bit identical to the legacy path:
+      1. An explicit `core_grid` or `default_block_size` from the caller.
+      2. A swept `(M, K, N)` table entry for the legacy grid (`_grid_config_lookup`, i.e.
+         `grid_12_9_configs` and entries added via `register_matmul_configs`).
+      3. The v3 rule engine (`utils/agmm_rules.py`) -- picks the worker grid (orientation-aware)
+         and blocking; blind-validated within 5% of swept optimum on ~96% of shapes. Blackhole
+         only; the rules were fitted against Blackhole L1 and fabric parameters.
+      4. The legacy warned generic fallback.
+
+    On a v3 hit, an info log prints the config as a paste-able table line: sweep the shape with
+    `sweep_mm_block_sizes.py` and paste the winner into `grid_12_9_configs` (or a model table)
+    to override the rules permanently.
+    """
+    legacy_grid = core_grid or ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
+    legacy_workers = full_grid.x // num_links
+    table_hit = _grid_config_lookup.get((legacy_grid.x, legacy_grid.y), {}).get((M, K, N)) is not None
+    if core_grid is not None or default_block_size is not None or use_heuristic or table_hit:
+        config = get_matmul_config(M, K, N, legacy_grid, default_block_size, use_heuristic)
+        return legacy_grid, config, legacy_workers
+
+    v3 = None
+    if is_blackhole():
+        from .agmm_rules import pick_v3
+
+        v3 = pick_v3(
+            M,
+            K,
+            N,
+            cluster_size=cluster_size,
+            full_grid=(full_grid.x, full_grid.y),
+            fuse_swiglu=fuse_swiglu,
+            use_addcmul=use_addcmul,
+        )
+    if v3 is None:
+        config = get_matmul_config(M, K, N, legacy_grid)  # legacy warned generic fallback
+        return legacy_grid, config, legacy_workers
+
+    grid_x, grid_y = v3["core_grid"]
+    m_blk, k_blk, n_blk = v3["blocks"]
+    sub_h, sub_w = v3["subblock"]
+    signature = (M, K, N, grid_x, grid_y)
+    if signature not in _logged_agmm_v3_signatures:
+        logger.info(
+            f"AGMM v3 rule config for (M, K, N) = ({M}, {K}, {N}) on {grid_x}x{grid_y}"
+            f"{' transposed' if v3['transposed'] else ''}: "
+            f"({M}, {K}, {N}): ({m_blk}, {k_blk}, {n_blk}, ({sub_h}, {sub_w}))  "
+            f"# paste into grid config table after sweeping to override"
+        )
+        _logged_agmm_v3_signatures.add(signature)
+    config = ttnn.MinimalMatmulConfig(
+        M_block_size=m_blk,
+        K_block_size=k_blk,
+        N_block_size=n_blk,
+        subblock_h=sub_h,
+        subblock_w=sub_w,
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+    )
+    in0_axis = grid_x if v3["transposed"] else grid_y
+    return ttnn.CoreCoord(grid_x, grid_y), config, math.ceil(in0_axis / num_links)
+
+
 def get_1d_matmul_config(
     M: int,
     K: int,
