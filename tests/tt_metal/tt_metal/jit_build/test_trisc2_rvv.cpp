@@ -136,6 +136,11 @@ bool elf_contains_vector_instructions(const std::string& elf_path) {
     return false;
 }
 
+}  // namespace
+
+// Fixture lives in the named namespace: gtest TEST_F classes derive from it
+// with external linkage, and an anonymous-namespace base trips
+// -Werror=subobject-linkage under gcc Unity builds (merge-queue build-sweeps).
 class Trisc2RvvMockBlackholeFixture : public MeshDispatchFixture {
 protected:
     // Mock mode must be registered BEFORE the base fixture opens its shared devices — and that
@@ -201,8 +206,6 @@ protected:
         return state.export_target_recipe(kernel.get()).cflags;
     }
 };
-
-}  // namespace
 
 TEST_F(Trisc2RvvMockBlackholeFixture, KnobOffRecipesCarryNoVectorFlags) {
     auto kernel = compile_rvv_kernel(/*enable_trisc2_rvv=*/false);
