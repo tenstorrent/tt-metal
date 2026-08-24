@@ -347,6 +347,14 @@ def from_torch(
     import torch
     import numpy as np
 
+    if isinstance(tensor, torch.Tensor) and hasattr(tensor, "TRACEDTENSOR"):
+        # The graph tracer represents Torch inputs with a Tensor subclass. Keep that
+        # wrapper in the outer tracing layer for graph bookkeeping, but pass a plain
+        # Tensor to nanobind: ndarray_import cannot perform dtype conversion on the
+        # traced subclass.
+        with torch._C.DisableTorchFunctionSubclass():
+            tensor = tensor.as_subclass(torch.Tensor)
+
     if isinstance(tensor, np.ndarray):
         # We use bf16 as an intermediate type between types unsupported by ttnn (e.g., int64)
         # and types unsupported by Torch/NumPy (e.g., bfloat8).
