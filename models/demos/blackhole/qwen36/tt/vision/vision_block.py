@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.tt_transformers.tt.common import Mode
 
 from .vision_attention import VisionAttention
@@ -75,6 +76,14 @@ class VisionBlock(LightweightModule):
             ccl_topology=args.ccl_topology(),
             replicated_input=getattr(args, "vision_replicated_acts", False),
             ccl_kwargs=args.vision_ccl_kwargs,
+            # fp32 dest accumulation on the norm's SHARDED path, SCOPED TO WORMHOLE 9B ON N300
+            # (tp_common.wh_9b_n300_vision -- the vision-args variant, since VisionModelArgs.dim is
+            # the 1152 vision hidden size and cannot tell the 9B from the 27B). Off everywhere else.
+            # Currently latent: nothing in qwen36 passes in_sharded=True, so this changes no live op
+            # today. It exists so that enabling the sharded path later cannot silently drop the
+            # fp32 accumulation that the interleaved path documents as non-optional for this tower
+            # (absmax 354 vs rms 0.65 swamps a bf16 running sum; worth +0.005 PCC at full depth).
+            sharded_fp32_acc=tpc.wh_9b_n300_vision(args),
         )
         self.attention_norm = DistributedLayerNorm(
             state_dict_prefix=args.get_state_dict_prefix("norm1", layer_num),

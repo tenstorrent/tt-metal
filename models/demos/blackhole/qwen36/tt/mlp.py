@@ -15,9 +15,9 @@ import ttnn
 
 @dataclass(frozen=True)
 class MLPWeights:
-    w1: ttnn.Tensor  # gate_proj [in, out], bfloat4_b
+    w1: ttnn.Tensor  # gate_proj [in, out]; bfloat8_b on wh_9b_n300, else bfloat4_b
     w2: ttnn.Tensor  # down_proj [in, out], bfloat8_b
-    w3: ttnn.Tensor  # up_proj [in, out], bfloat4_b
+    w3: ttnn.Tensor  # up_proj [in, out]; bfloat8_b on wh_9b_n300, else bfloat4_b
     w_gate_up: ttnn.Tensor = None  # TP prefill: tile-pair-interleaved packed [gate|up] for fused-swiglu AGMM
 
 
@@ -55,7 +55,7 @@ _CKC_MLP_KPASS1 = ttnn.WormholeComputeKernelConfig(
 )
 
 
-def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
+def _build_gate_up(gate_w, up_w, mesh, tp, cache_path, dtype=ttnn.bfloat4_b):
     """Packed [gate|up] weight for all_gather_swiglu_prefill: prepare_for_fused_swiglu tile-pair
     interleave, then column-parallel shard on the 2N dim so each device holds its interleaved slice."""
     import torch
@@ -68,7 +68,7 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
     il = prepare_for_fused_swiglu(packed, ndev=tp, gate_is_first=True)  # [dim, 2*hidden]
     return ttnn.as_tensor(
         il,
-        dtype=ttnn.bfloat4_b,
+        dtype=dtype,
         device=mesh,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1),
         layout=ttnn.TILE_LAYOUT,
@@ -100,8 +100,26 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
             and not getattr(args, "mlp_1d_decode", False)
         )
 
+        # gate/up weight dtype, SCOPED TO WORMHOLE 9B ON N300 (tpc.wh_9b_n300) -- the same gate the
+        # other decode changes use. Every other config (Blackhole, the 27B, N150, T3K) keeps bfloat4_b.
+        #
+        # MEASURED (9B / N300). Component: MLP TP PCC 0.98556 -> 0.99852 (bfloat16 adds only a
+        # further +0.00004, so bf8 is the saturation point). END-TO-END vs the HF reference
+        # (tests/unit/test_prefill.py, test_decode.py -- a real oracle, unlike the self-referential
+        # test_model_tp which cannot see this): prefill 0.991320 -> 0.998400, decode min
+        # 0.982721 -> 0.989032, and 5/5 decode steps improve.
+        # THE PRICE is decode throughput: gate/up weight DRAM traffic doubles and batch-1 decode is
+        # bandwidth-bound -- 26.05 -> 23.29 tok/s at ISL 128, ~-11% over the 128..256k ladder.
+        # Prefill is compute-bound and unaffected (TTFT 8.26 -> 8.46s at 32k); batched decode
+        # amortizes the weight read (B=32 aggregate within noise, -3..-4%).
+        _gu_dtype = ttnn.bfloat8_b if (args is not None and tpc.wh_9b_n300(args)) else ttnn.bfloat4_b
+        # Tag the dtype into the cache key: without it the key is the weight NAME alone, so flipping
+        # this gate silently reuses a cache written at the other dtype (cf. tp.py's ".rp" tag).
+        _gu_tag = ".bfp8" if _gu_dtype == ttnn.bfloat8_b else ""
+
         def cache(name, tag=""):
-            return str(tensor_cache_path / f"mlp.{name}.weight{tag}.tp") if tensor_cache_path else None
+            _dt = _gu_tag if name in ("gate_proj", "up_proj", "gate_up") else ""
+            return str(tensor_cache_path / f"mlp.{name}.weight{tag}{_dt}.tp") if tensor_cache_path else None
 
         # Prefill-only packed [gate|up] AGMM weight (decode keeps w1/w3; extra DRAM ~w1+w3/layer).
         wgu = (
@@ -111,6 +129,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
                 mesh_device,
                 tp,
                 cache("gate_up", ".swiglu"),
+                dtype=_gu_dtype,
             )
             if tpc.mlp_gateup_agmm_enabled(tp)
             else None
@@ -124,7 +143,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
                     dim=-1,
                     memory_config=args.mlp_w1_weight_memcfg,
                     cache_path=cache("gate_proj", ".dramshard"),
-                    dtype=ttnn.bfloat4_b,
+                    dtype=_gu_dtype,
                 ),
                 w3=tpc.shard_w(
                     state_dict["up_proj.weight"],
@@ -132,7 +151,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
                     dim=-1,
                     memory_config=args.mlp_w3_weight_memcfg,
                     cache_path=cache("up_proj", ".dramshard"),
-                    dtype=ttnn.bfloat4_b,
+                    dtype=_gu_dtype,
                 ),
                 w2=tpc.shard_w(
                     state_dict["down_proj.weight"],
@@ -153,7 +172,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_path=cache("gate_proj"),
-                dtype=ttnn.bfloat4_b,
+                dtype=_gu_dtype,
             ),
             w3=tpc.shard_w(
                 state_dict["up_proj.weight"],
@@ -161,7 +180,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_path=cache("up_proj"),
-                dtype=ttnn.bfloat4_b,
+                dtype=_gu_dtype,
             ),
             w2=tpc.shard_w(
                 state_dict["down_proj.weight"],
@@ -185,7 +204,8 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
             cache_file_name=(tensor_cache_path / f"mlp.{name}.weight") if tensor_cache_path else None,
         )
 
-    # gate/up: bfloat4_b (bandwidth); down: bfloat8_b (accuracy).
+    # Single-device (tp == 1) path. gate/up stay bfloat4_b: tpc.wh_9b_n300 requires
+    # device_name == "N300" (2 devices), so the bfloat8_b gate in the TP branch never applies here.
     return MLPWeights(
         w1=load("gate_proj", ttnn.bfloat4_b),
         w2=load("down_proj", ttnn.bfloat8_b),
