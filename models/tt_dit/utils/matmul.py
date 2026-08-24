@@ -747,11 +747,16 @@ fused_mmrs_configs = {
         (9472 // 4, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1),
         # LTX video FFN ff2 (RowParallel): per-device [4864,4096]@[4096,4096]
         (4864, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 7, 5, 6, 1, 3, None, 1, 3),
-        (1152, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 12, 4, 8, 1, 1, None, 1, 5),
+        # Flux2 @1024px, swept 2026-08-24 under the windowed L1 handoff (runner windows combos with
+        # >=2 M blocks per core). Windowed won both shapes outright: 394.1 us vs 443.8 us best-DRAM
+        # for (1152,...), 331.5 us vs 345.4 us for (1024,...). The old (1152,...) M_block=12 entry
+        # was degenerate under the window (12-tile block over 5 rows/core -> 384 KB resident shard,
+        # CB clash); M_block must stay <= ceil(Mt_per_core/2) for the window to rotate.
+        (1152, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 3, 3, 8, 1, 4, None, 1, 5),  # 394.1 us
         (512, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 2, None, 1),
         (512, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1),
         (1024, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1),
-        (1024, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 1, 2, None, 1),
+        (1024, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 2, 4, 8, 2, 2, None, 1, 5),  # 331.5 us, see above
         # 2048-resolution shapes — BH 4×8 ring sweep (2026-05-30, 2048.md)
         (4096, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 3, 8, 1, 2, None, 1),  # 1546.0 μs
         (128, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 6, 8, 1, 2, None, 1),  # 595.7 μs
