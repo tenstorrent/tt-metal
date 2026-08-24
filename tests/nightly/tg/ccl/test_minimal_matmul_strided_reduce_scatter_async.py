@@ -243,6 +243,24 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
         ),
         pytest.param(
             MinimalMatmulStridedReduceScatterTestConfig(
+                M=4864,
+                K=4096,
+                N=4096,
+                dim=3,
+                mm_block_m=128,  # 4 tiles
+                mm_block_k=256,  # 8 tiles
+                mm_block_n=192,  # 6 tiles
+                mm_core_grid=ttnn.CoreCoord(12, 8),
+                chunk_width_in_mm_blocks=1,
+                subblock_h=2,
+                subblock_w=2,
+                num_workers_per_link=5,
+                mm_window_blocks=2,
+            ),
+            id="ltx_stage2_ff2_4864_4096_4096_x12y8_b486_window2",
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
                 M=2368,
                 K=3456,
                 N=5120,
