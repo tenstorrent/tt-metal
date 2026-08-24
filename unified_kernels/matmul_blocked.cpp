@@ -45,6 +45,13 @@
 //   2        ntot        N in tiles
 //   3        kt          tiles per k-block; kt == ktot means no k-loop
 //   4        nt          tiles per output-column block; nt == ntot means the full width
+//
+// Defines:
+//   MMB_ACC_DST                 carry the partial in DST instead of L1 (slower here)
+//   MMB_MCAST                   broadcast each operand to the cores that share it, which
+//                               needs MMB_GRID_H x MMB_GRID_W == mb x nb exactly
+//   MMB_GRID_H / MMB_GRID_W     the core grid, MMB_MCAST only
+//   MMB_IN1_THREAD              which DM thread carries the B broadcast (1 on hardware)
 //   5..      TensorAccessorArgs for A, then B, then out
 //
 // Runtime args (identical on all three kernels):
@@ -122,6 +129,85 @@ void kernel_main() {
     u::Accumulator<Out, u::AccumulatorMode::L1> acc(acc_storage, out_storage);
 #endif
 
+#if defined(MMB_MCAST)
+    // MULTICAST. Without it every core reads its own operands from DRAM, so the traffic term
+    // scales with the core count and the whole thing stops improving: measured on
+    // [512,2048]@[2048,2048], 16 cores reached 814us and 64 cores got WORSE, 1359us.
+    //
+    // The tiles a core needs are not its own, though. Cores in a grid ROW share an m-block,
+    // so they all want the same A tiles; cores in a COLUMN share an n-block and all want the
+    // same B tiles. So each tile is read from DRAM once and broadcast to the cores that
+    // share it, and the traffic stops depending on how many cores there are.
+    //
+    // The price is a strict mapping: core (r, c) owns output block (r, c), so the grid must
+    // be exactly mb x nb. A multicast is COLLECTIVE -- every core in the group has to make
+    // the same calls in the same order, or the handshakes desynchronise -- which the flat
+    // unit range below cannot promise, since split_evenly hands different cores different
+    // counts.
+    static_assert(
+        MMB_GRID_H * MMB_GRID_W > 0 && (ntot / nt) == MMB_GRID_W,
+        "with MMB_MCAST the grid width must equal the number of output-column blocks: core "
+        "(r, c) owns block (r, c), so there is nowhere to put a spare block");
+
+    const u::LogicalCoord me = u::LogicalCoord::this_core();
+    // Every core in a row runs the row statement and every core in a column runs the column
+    // statement; which side of each handshake it takes is decided inside, on its coordinate.
+    const u::LogicalMcast row{u::LogicalCoord::yx(me.y, 0), u::Extent::hw(1, MMB_GRID_W)};
+    const u::LogicalMcast col{u::LogicalCoord::yx(0, me.x), u::Extent::hw(MMB_GRID_H, 1)};
+
+    {
+        const uint32_t i = me.y;
+        const uint32_t n = me.x;
+        acc.clear();
+
+        for (uint32_t b = 0; b < kb; ++b) {
+            const bool finish = (b == kb - 1);
+
+            // The two broadcasts take SEPARATE handshake pairs, and get them for free by
+            // running on different threads: a core is the sender of one and a receiver of
+            // the other, and sharing a ready counter across both would let one core's count
+            // land while another is still waiting, so a wait-for-equality would never match.
+            // Different threads also means different NOCs, so the two overlap.
+            u::ComputeBlock a =
+                u::noc_load<0, /*pair=*/0>(a_storage, row, [&](u::L1Pages pages) {
+                    for (uint32_t p = 0; p < pages.count; ++p) {
+                        const uint32_t rr = i * mt + p / kt;
+                        const uint32_t cc = b * kt + p % kt;
+                        noc_async_read(a_acc.get_noc_addr(rr * ktot + cc), pages.addr(p), pages.page_bytes);
+                    }
+                }).wait();
+            u::ComputeBlock w =
+                u::noc_load<MMB_IN1_THREAD, /*pair=*/1>(w_storage, col, [&](u::L1Pages pages) {
+                    for (uint32_t p = 0; p < pages.count; ++p) {
+                        const uint32_t rr = b * kt + p / nt;
+                        const uint32_t cc = n * nt + p % nt;
+                        noc_async_read(b_acc.get_noc_addr(rr * ntot + cc), pages.addr(p), pages.page_bytes);
+                    }
+                }).wait();
+
+            auto store_block = [&](u::Block<Out> blk) {
+                u::noc_store<0>(std::move(blk), [&](u::L1Pages pages) {
+                    for (uint32_t p = 0; p < pages.count; ++p) {
+                        const uint32_t rr = i * mt + p / nt;
+                        const uint32_t cc = n * nt + p % nt;
+                        noc_async_write(pages.addr(p), out.get_noc_addr(rr * ntot + cc), pages.page_bytes);
+                    }
+                });
+            };
+
+            if constexpr (kb == 1) {
+                (void)finish;
+                store_block(out_storage.store(u::matmul(a, w)));
+            } else {
+                u::Block result = acc.accumulate(u::matmul(a, w), finish);
+                if (finish) {
+                    store_block(std::move(result));
+                }
+            }
+        }
+    }
+#else
+
     for (uint32_t u = 0; u < block_count; ++u) {
         // Flat (m, n) index. m-major, so a core given consecutive units walks one row band's
         // column blocks before moving down.
@@ -179,4 +265,5 @@ void kernel_main() {
             }
         }
     }
+#endif
 }
