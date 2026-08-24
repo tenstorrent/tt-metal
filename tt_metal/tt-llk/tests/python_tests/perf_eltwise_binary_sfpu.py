@@ -341,21 +341,13 @@ def _div_math_isolate_config(formats, dest_acc, input_dimensions):
 
 @pytest.mark.perf
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
     input_dimensions=_BINARY_SFPU_MATH_ISOLATE_DIMS,
 )
-def test_perf_eltwise_binary_sfpu_div_bf16(perf_report, formats, input_dimensions):
-    _div_math_isolate_config(formats, DestAccumulation.No, input_dimensions).run(
-        perf_report
+def test_perf_eltwise_binary_sfpu_div(perf_report, formats, input_dimensions):
+    dest_acc = (
+        DestAccumulation.Yes
+        if formats.input_format == DataFormat.Float32
+        else DestAccumulation.No
     )
-
-
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats([DataFormat.Float32]),
-    input_dimensions=_BINARY_SFPU_MATH_ISOLATE_DIMS,
-)
-def test_perf_eltwise_binary_sfpu_div_fp32(perf_report, formats, input_dimensions):
-    _div_math_isolate_config(formats, DestAccumulation.Yes, input_dimensions).run(
-        perf_report
-    )
+    _div_math_isolate_config(formats, dest_acc, input_dimensions).run(perf_report)

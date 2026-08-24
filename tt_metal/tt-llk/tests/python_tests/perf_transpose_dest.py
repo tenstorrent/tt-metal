@@ -21,15 +21,7 @@ from helpers.test_variant_parameters import (
 )
 
 
-@pytest.mark.perf
-@parametrize(
-    formats=input_output_formats(
-        [DataFormat.Float16_b, DataFormat.Int32],
-    ),
-    unpack_transpose_faces=[Transpose.No, Transpose.Yes],
-    math_transpose_faces=[Transpose.No, Transpose.Yes],
-)
-def test_perf_transpose_dest(
+def _run_transpose_dest_perf(
     perf_report,
     formats,
     unpack_transpose_faces,
@@ -81,3 +73,37 @@ def test_perf_transpose_dest(
     )
 
     configuration.run(perf_report)
+
+
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    unpack_transpose_faces=[Transpose.No, Transpose.Yes],
+    math_transpose_faces=[Transpose.No, Transpose.Yes],
+)
+def test_perf_transpose_dest_float(
+    perf_report,
+    formats,
+    unpack_transpose_faces,
+    math_transpose_faces,
+):
+    _run_transpose_dest_perf(
+        perf_report, formats, unpack_transpose_faces, math_transpose_faces
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    unpack_transpose_faces=[Transpose.No, Transpose.Yes],
+    math_transpose_faces=[Transpose.No, Transpose.Yes],
+)
+def test_perf_transpose_dest_int(
+    perf_report,
+    formats,
+    unpack_transpose_faces,
+    math_transpose_faces,
+):
+    _run_transpose_dest_perf(
+        perf_report, formats, unpack_transpose_faces, math_transpose_faces
+    )

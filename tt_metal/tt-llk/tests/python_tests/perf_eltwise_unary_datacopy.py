@@ -18,7 +18,7 @@ from test_eltwise_unary_datacopy import (
     loop_factor=[32],
     is_perf=[True],
 )
-def test_perf_eltwise_unary_datacopy(
+def test_perf_unary_datacopy(
     perf_report,
     formats_dest_acc_dims,
     run_types,

@@ -22,44 +22,34 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 
-
 # ---------------------------------------------------------------------------
 # Same-format: mirrors perf_unpack_tilize.py float matrix (1×1 … 8×8)
 # ---------------------------------------------------------------------------
+_SAME_FORMATS = input_output_formats(
+    [DataFormat.Float16_b, DataFormat.Float32], same=True
+)
+_CROSS_FORMATS = [
+    InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b),
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp4_b),
+    InputOutputFormat(DataFormat.Float32, DataFormat.Bfp8_b),
+    InputOutputFormat(DataFormat.Float32, DataFormat.Bfp4_b),
+]
+_FAST_TILIZE_FULL_CASES = [
+    (fmt, 1, ct) for fmt in _SAME_FORMATS for ct in [1, 2, 3, 4, 5, 6, 7, 8]
+] + [(fmt, 1, ct) for fmt in _CROSS_FORMATS for ct in [2, 4, 8]]
+
+
 @pytest.mark.perf
 @skip_for_wormhole
 @skip_for_quasar
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
-    rt_dim=[1],
-    ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
-)
-def test_perf_fast_tilize(perf_report, formats, rt_dim, ct_dim):
+@parametrize(formats_rt_ct=_FAST_TILIZE_FULL_CASES)
+def test_perf_fast_tilize_full(perf_report, formats_rt_ct):
+    formats, rt_dim, ct_dim = formats_rt_ct
     # Width 1 uses standard tilize fallback — not representative of fast path
     if ct_dim < 2:
         pytest.skip("ct_dim < 2 uses standard tilize fallback")
 
-    _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim)
-
-
-# ---------------------------------------------------------------------------
-# Cross-format output: mirrors test_fast_tilize_full.py format matrix
-# ---------------------------------------------------------------------------
-@pytest.mark.perf
-@skip_for_wormhole
-@skip_for_quasar
-@parametrize(
-    formats=[
-        InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b),
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp4_b),
-        InputOutputFormat(DataFormat.Float32, DataFormat.Bfp8_b),
-        InputOutputFormat(DataFormat.Float32, DataFormat.Bfp4_b),
-    ],
-    rt_dim=[1],
-    ct_dim=[2, 4, 8],
-)
-def test_perf_fast_tilize_bfp(perf_report, formats, rt_dim, ct_dim):
     _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim)
 
 
