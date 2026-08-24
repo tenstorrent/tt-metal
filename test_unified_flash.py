@@ -189,7 +189,10 @@ def run(
     # 8 heads over 8 cores and over 4 -- the stale block read as right -- and was only
     # caught at 4 over 2, where the preceding run had left something different there. NaN
     # propagates into the error, so a missed write now fails everywhere.
-    tout = to_dev(torch.full([n_heads * S_q, D], float("nan")).to(torch.bfloat16))
+    # ONE [S_q, d_model] activation tensor, head h in columns [h*D, (h+1)*D) -- the heads
+    # concatenated by the writer as it stores them, not stacked head-major. That is the
+    # layout the output projection and everything after it wants.
+    tout = to_dev(torch.full([S_q, n_heads * D], float("nan")).to(torch.bfloat16))
 
     # Heads are partitioned across cores and share nothing: a core reads its own heads'
     # queries and their KV heads, and writes its own output blocks. No core touches
@@ -266,7 +269,8 @@ def run(
         vf = vs[h // kv_group].to(torch.float32)
         scores = qf @ kf.T / (D**0.5) + mask
         wants.append(torch.softmax(scores, dim=-1) @ vf)
-    return got, torch.cat(wants, dim=0)
+    # Concatenated along the COLUMNS, matching the layout the kernel writes.
+    return got, torch.cat(wants, dim=1)
 
 
 def main(argv=None):
@@ -333,7 +337,7 @@ def main(argv=None):
         for n_heads, n_kv in ((2, 1), (2, 2), (4, 1), (4, 2), (4, 4), (8, 2)):
             got, want = run(device, sq, sk_total, dt, 2, True, n_heads=n_heads, n_kv_heads=n_kv)
             e = (got - want).abs().max().item()
-            ok = e <= args.abs_err and got.shape[0] == n_heads * sq * TILE
+            ok = e <= args.abs_err and tuple(got.shape) == (sq * TILE, n_heads * dt * TILE)
             logger.info(
                 f"GQA n_heads={n_heads} n_kv={n_kv} (group {n_heads // n_kv}): "
                 f"max|err|={e:.5f}  {'ok' if ok else 'FAIL'}"

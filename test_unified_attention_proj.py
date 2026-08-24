@@ -2,23 +2,21 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Head concat and the output projection, on device, fed by the real attention kernel.
+"""The output projection, on device, fed by the real attention kernel.
 
-The projection is an accumulating matmul whose k-blocks are the HEADS:
-
-    concat(O_0 .. O_{H-1}) @ Wo  ==  sum over h of  O_h @ Wo_h
-
-so there is no concat pass and no rearranging of anything. The attention kernel writes
-head h's query chunk i at block h * num_q_chunks + i, and the projection's k-loop reads
-exactly those blocks. See unified_kernels/attention_proj.cpp.
+The attention kernel writes its heads already concatenated -- head h's query chunk as an
+[sq, dt] rectangle at columns [h*dt, +dt) of one [S_q, d_model] tensor -- so the projection
+is an ordinary [S_q, d_model] @ Wo matmul with no concat and no k-loop over heads. The
+earlier design left the output head-major and recovered the concat as a k-loop, which cost
+30% of the projection; see unified_kernels/attention_proj.cpp.
 
 Two things are checked, and the second is the one that matters:
 
-  proj      the projection alone, on random heads -- shape coverage, cheap to sweep.
+  proj      the projection alone, on a random activation -- shape coverage, cheap to sweep.
   chained   the projection on the ACTUAL output of unified_kernels/flash_attention.cpp,
             against a torch reference that starts from Q, K and V. Nothing but the layout
-            contract connects the two kernels, so this is what would catch the two of them
-            disagreeing about where head h's chunk i lives.
+            contract connects the two kernels, so this is what would catch them disagreeing
+            about where head h's columns live.
 
     export TT_METAL_HOME=$PWD
     source python_env/bin/activate
@@ -36,14 +34,14 @@ import test_unified_flash as flash
 from unified_harness import core_block, make_cb, split_evenly, unified_program
 
 KERNEL = "unified_kernels/attention_proj.cpp"
-CB_IN0, CB_IN1, CB_OUT, CB_ACC = 0, 1, 16, 24
+CB_IN, CB_WO, CB_OUT = 0, 1, 16
 TILE = 32
 
 
 def project(device, attn_torch, wo_torch, sq, dt, num_q, n_heads, cores=1, fidelity=None):
-    """attn_torch is head-major [n_heads * num_q * sq * TILE, dt * TILE]; wo is square."""
+    """attn_torch is the concatenated [num_q * sq * TILE, d_model] activation; wo is square."""
     dm = n_heads * dt
-    assert attn_torch.shape == (n_heads * num_q * sq * TILE, dt * TILE), attn_torch.shape
+    assert attn_torch.shape == (num_q * sq * TILE, dm * TILE), attn_torch.shape
     assert wo_torch.shape == (dm * TILE, dm * TILE), wo_torch.shape
 
     dram = ttnn.DRAM_MEMORY_CONFIG
@@ -67,19 +65,18 @@ def project(device, attn_torch, wo_torch, sq, dt, num_q, n_heads, cores=1, fidel
     core_ranges, core_list = core_block(ncores)
     shares = split_evenly(num_q, ncores)
 
-    ct_args = [sq, dt, dm, num_q, n_heads]
+    ct_args = [sq, dm, num_q]
     for t in (tattn, two, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     addrs = [t.buffer_address() for t in (tattn, two, tout)]
     rt_args = {c: addrs + [begin, count] for c, (begin, count) in zip(core_list, shares)}
 
     cbs = [
-        make_cb(CB_IN0, core_ranges, num_pages=sq * dt),
-        make_cb(CB_IN1, core_ranges, num_pages=dt * dm),
+        make_cb(CB_IN, core_ranges, num_pages=sq * dm),
+        # Wo whole, pushed once and never popped -- every chunk re-reads the same tiles.
+        # This is the CB that bounds d_model: dm * dm tiles have to fit in L1.
+        make_cb(CB_WO, core_ranges, num_pages=dm * dm),
         make_cb(CB_OUT, core_ranges, num_pages=sq * dm),
-        # The running total, a separate CB from the output: the accumulator re-reads it
-        # every k-block, and one CB with two poppers is the bug its api.h note warns about.
-        make_cb(CB_ACC, core_ranges, num_pages=sq * dm),
     ]
 
     program = unified_program(
@@ -91,7 +88,7 @@ def project(device, attn_torch, wo_torch, sq, dt, num_q, n_heads, cores=1, fidel
         runtime_args=rt_args,
         **(fidelity or {}),
     )
-    logger.info(f"projection: sq={sq} dt={dt} dm={dm} num_q={num_q} n_heads={n_heads} cores={ncores}")
+    logger.info(f"projection: sq={sq} dm={dm} num_q={num_q} cores={ncores}")
     out = ttnn.generic_op([tattn, two, tout], program)
     for t in (tattn, two):
         ttnn.deallocate(t)
@@ -99,19 +96,15 @@ def project(device, attn_torch, wo_torch, sq, dt, num_q, n_heads, cores=1, fidel
 
 
 def reference(attn_torch, wo_torch, sq, dt, num_q, n_heads):
-    """The concat this kernel does not do, done explicitly."""
-    S_q = num_q * sq * TILE
-    heads = [attn_torch[h * S_q : (h + 1) * S_q].to(torch.float32) for h in range(n_heads)]
-    return torch.cat(heads, dim=1) @ wo_torch.to(torch.float32)
+    """Just the matmul: the concat already happened, in the attention kernel's store."""
+    return attn_torch.to(torch.float32) @ wo_torch.to(torch.float32)
 
 
 def run_proj(device, sq, dt, num_q, n_heads, cores=1, seed=0, fidelity=None):
-    """The projection alone, on random head outputs."""
+    """The projection alone, on a random activation."""
     torch.manual_seed(seed)
     dm = n_heads * dt
-    # Per-head distinct data, so reading the wrong head's block is a wrong answer rather
-    # than a coincidence -- the same reason the flash harness randomises per head.
-    attn = (torch.rand([n_heads * num_q * sq * TILE, dt * TILE]) - 0.5).to(torch.bfloat16)
+    attn = (torch.rand([num_q * sq * TILE, dm * TILE]) - 0.5).to(torch.bfloat16)
     wo = ((torch.rand([dm * TILE, dm * TILE]) - 0.5) / (dm * TILE) ** 0.5).to(torch.bfloat16)
     got = project(device, attn, wo, sq, dt, num_q, n_heads, cores=cores, fidelity=fidelity)
     return got, reference(attn, wo, sq, dt, num_q, n_heads)
@@ -123,7 +116,7 @@ def run_chained(device, sq, sk_total, dt, num_chunks, num_q, n_heads, n_kv_heads
     dm = n_heads * dt
     wo = ((torch.rand([dm * TILE, dm * TILE]) - 0.5) / (dm * TILE) ** 0.5).to(torch.bfloat16)
 
-    # The attention kernel's own output and its own reference, head-major.
+    # The attention kernel's own output and its own reference, both [S_q, d_model].
     attn_got, attn_want = flash.run(
         device, sq, sk_total, dt, num_chunks, True, num_q=num_q, n_heads=n_heads, n_kv_heads=n_kv_heads, seed=seed
     )
@@ -142,9 +135,9 @@ def main(argv=None):
     device = ttnn.open_device(device_id=0)
     failed = []
     try:
-        # The projection alone. n_heads is the k-block count and dm grows with it, so the
-        # output block is sq * dm tiles -- 16 at sq=2 with four 64-wide heads, which only
-        # the subblocked accumulating path can express at all.
+        # The projection alone. The output block is sq * dm tiles -- 16 at sq=2 with four
+        # 64-wide heads -- which the single-shot path walks in subblocks; before subblocking
+        # it could not have been expressed at all.
         for sq, dt, num_q, n_heads in ((1, 2, 1, 2), (2, 2, 1, 4), (2, 2, 2, 4), (1, 4, 2, 2), (2, 1, 2, 8)):
             got, want = run_proj(device, sq, dt, num_q, n_heads)
             pcc = torch.corrcoef(torch.stack([got.flatten(), want.flatten()]))[0, 1].item()
