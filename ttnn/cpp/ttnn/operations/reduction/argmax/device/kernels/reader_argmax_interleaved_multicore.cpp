@@ -264,6 +264,13 @@ void kernel_main() {
 
     // start and end coordinates of the cores that will be used to compute the intermediate outputs
     // At maximum, there can be two groups of cores (suffix 0 and 1)
+    //
+    // These four names are the operands of a NOC1 multicast rectangle, which is addressed
+    // end-corner first. The host therefore sends the group's *end* coordinate in the "start"
+    // argument and its *start* coordinate in the "end" argument, and set_multicast() below
+    // consumes them in that order. The inversion is deliberate and load-bearing: swapping these
+    // to make the names read naturally would address the wrong rectangle, and multicast has no
+    // check that would catch it.
     constexpr auto start_core_x0 = get_arg(args::start_core_x0);
     constexpr auto start_core_y0 = get_arg(args::start_core_y0);
     constexpr auto end_core_x0 = get_arg(args::end_core_x0);
