@@ -356,12 +356,10 @@ def _fabric_cfg_to_init_reliability_mode(fabric_cfg):
         return ttnn.FabricReliabilityMode.RELAXED_INIT
 
 
-def fabric_to_device_params(fabric_cfg, cmb_version):
+def fabric_to_device_params(fabric_cfg):
     device_params = {
         "fabric_config": fabric_cfg,
-        "fabric_router_config": create_fabric_router_config(
-            max_payload_size=get_max_payload_size(0 if cmb_version == 1 else 64)
-        ),
+        "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
     }
     reliability_mode = _fabric_cfg_to_init_reliability_mode(fabric_cfg)
     if reliability_mode is not None:
