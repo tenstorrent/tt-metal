@@ -142,7 +142,11 @@ inline void calculate_erfc() {
         sfpi::vFloat ax = sfpi::min(sfpi::abs(x), 5.0f);
         sfpi::vFloat r;
 #ifdef INP_FLOAT32
-        v_if(ax > 2.5f) {
+        // >= (not >): the validated tail model was swept over the CLOSED interval
+        // [2.5, 5.0] inclusive of the left endpoint, and is more accurate there
+        // than the old segment-0 rational (2 ULP vs 405 ULP at x=2.5 exactly) --
+        // caught by cross-validation, confirmed by direct measurement.
+        v_if(ax >= 2.5f) {
             sfpi::vFloat t = -(ax * ax);
             sfpi::vFloat z = t * ERFC_TAIL_INV_LN2;
             sfpi::vInt k_int;
