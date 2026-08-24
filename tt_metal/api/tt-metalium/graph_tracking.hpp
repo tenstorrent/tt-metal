@@ -89,21 +89,17 @@ public:
     virtual void track_function_end() {};
     virtual void track_function_end(const std::any& /*output_tensors*/) {};
 
-    // Closes the scope opened by track_function_start when it is left by an in-flight exception
-    // rather than by returning. `reason` carries the exception's message when one was recoverable.
-    // A processor that does not override this sees no end at all for the failing scope, which is
-    // the pre-existing behaviour.
-    virtual void track_function_abort(std::string_view /*reason*/){};
-
-    // Closes every scope this processor still holds open, marking each of them aborted.
-    // See GraphTracker::unwind_open_functions for when this is called.
-    virtual void unwind_open_functions(std::string_view /*reason*/){};
-
     virtual void begin_capture(RunMode /*mode*/){};
 
     virtual nlohmann::json end_capture();
 
     virtual ~IGraphProcessor() = default;
+};
+
+// Support to GraphProcessor for track nonclosed scopes, during exceptions processing.
+struct GraphFunctionAbort {
+    std::string reason;
+    bool unwind_all = false;
 };
 
 class IGraphHooks {
@@ -216,13 +212,6 @@ public:
     void track_function_abort(std::string_view reason);
 
     // Close every scope the processors of this thread still hold open, marking each aborted.
-    //
-    // Call sites that are not guarded by ScopedTrackedFunction leak their scope when they throw:
-    // the operation never reports an end, so everything recorded afterwards is nested under an
-    // operation that is already dead. The caller of this function supplies the missing knowledge
-    // that the leak happened — a new top-level operation is starting, so nothing can legitimately
-    // still be open — and the processors drop the dead scopes instead of growing the trace inside
-    // them. `reason` is attached to each closed scope as its abort reason.
     void unwind_open_functions(std::string_view reason);
 
     bool hook_allocate(const Buffer* buffer);
@@ -308,7 +297,7 @@ public:
             return;
         }
         for (auto& processor : started_processors_) {
-            processor->track_function_abort(reason);
+            processor->track_function_end(std::any(GraphFunctionAbort{std::string(reason), false}));
         }
     }
 
@@ -324,7 +313,7 @@ public:
                 // entered, so there is nothing to read here. Callers that want the text must use
                 // abort() from a catch block.
                 for (auto& processor : started_processors_) {
-                    processor->track_function_abort({});
+                    processor->track_function_end(std::any(GraphFunctionAbort{{}, false}));
                 }
             } else {
                 for (auto& processor : started_processors_) {

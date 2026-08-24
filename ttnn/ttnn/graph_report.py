@@ -1215,7 +1215,8 @@ def import_graph(
 
         elif node_type == "function_end":
             name = params.get("name", "unknown")
-            # Set by GraphProcessor::track_function_abort: this scope was left by an exception.
+            # Set by GraphProcessor when it receives GraphFunctionAbort through
+            # track_function_end: this scope was left by an exception.
             is_aborted = params.get("aborted") == "true"
             abort_reason = params.get("abort_reason", "")
 
