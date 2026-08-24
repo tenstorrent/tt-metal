@@ -113,8 +113,6 @@ safe-outputs:
   messages:
     footer: "> 🧠 *Reviewed using Matt Pocock's skills by [{workflow_name}]({run_url})*{ai_credits_suffix}{history_link}"
     run-failure: 🧠 [{workflow_name}]({run_url}) {status} during the skills-based review.
-    run-started: 🧠 [{workflow_name}]({run_url}) is reviewing this {event_type} using Matt Pocock's engineering skills...
-    run-success: 🧠 [{workflow_name}]({run_url}) has completed the skills-based review. ✅
 skills:
 - mattpocock/skills/diagnosing-bugs@801dca688564c529fa84f247f64472520d9ebe28
 - mattpocock/skills/tdd@801dca688564c529fa84f247f64472520d9ebe28
