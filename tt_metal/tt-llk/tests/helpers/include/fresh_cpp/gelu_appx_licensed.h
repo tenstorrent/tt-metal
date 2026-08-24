@@ -38,6 +38,7 @@ namespace ckernel::sfpu
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_gelu_appx_licensed_cpp()
 {
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; ++d)
     {
         const sfpi::vFloat x = sfpi::dst_reg[0];

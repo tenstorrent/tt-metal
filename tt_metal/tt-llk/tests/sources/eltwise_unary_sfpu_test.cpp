@@ -89,6 +89,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "fresh_cpp/elu_fitted.h"
 #include "fresh_cpp/exp_fitted.h"
 #include "fresh_cpp/expm1_fitted.h"
+#include "fresh_cpp/gelu_255_licensed.h"
 #include "fresh_cpp/gelu_appx_licensed.h"
 #include "fresh_cpp/gelu_fitted.h"
 #include "fresh_cpp/i0_fitted.h"
@@ -383,6 +384,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             else if constexpr (FRESH_CPP_IMPL == 4 && SFPU_UNARY_OPERATION == SfpuType::gelu_appx)
             {
                 SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_gelu_appx_licensed_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 4 && SFPU_UNARY_OPERATION == SfpuType::gelu)
+            {
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_gelu_255_licensed_cpp, (iterations), block_tile, VectorMode::None);
             }
             else if constexpr (FRESH_CPP_IMPL == 4 && SFPU_UNARY_OPERATION == SfpuType::sigmoid)
             {

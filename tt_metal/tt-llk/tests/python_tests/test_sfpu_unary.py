@@ -1352,6 +1352,46 @@ def test_sigmoid_lut_fresh_cpp(fresh_cpp_impl):
 
 
 @pytest.mark.parametrize("fresh_cpp_impl", [0, 4], ids=["production", "licensed_cpp"])
+def test_gelu_licensed_cpp(fresh_cpp_impl):
+    """A/B the byte-untouched production ACCURATE bf16 gelu hand kernel
+    against the gelu-255 LICENSED semantic arm under one golden/tolerance
+    contract (lane GI, owner ratification 2026-08-24 item 2: "gelu at the
+    hand kernel's 255-ulp contract").
+
+    The hand arm (impl 0) is calculate_gelu_piecewise — the 4-region
+    erf/erfc CDF kernel.  Its MEASURED accuracy contract on the row's
+    golden domain (all finite bf16; the Gelu Gaussian stimulus is
+    untruncated): max_abs 0.00777, max pure-bf16-ULP 253.19 vs the fp64
+    golden — the same 253.19 the fitter board's ttnn_pure records (the
+    255-ulp contract is real on this domain: torch-saturation flush +
+    staircase vs an exact golden).
+
+    The licensed arm (impl 4, fresh_cpp/gelu_255_licensed.h) keeps the hand
+    kernel's region structure and spends the licensed slack on polynomial
+    depth (deg-1 exp frac refine, linear H-correction, no grid snap, deg-11
+    core).  Composite dominance (max-abs AND max-pure-ULP <= hand, all
+    finite bf16) proven in laneGI accuracy-oracle/gelu255_verify.c — the
+    licensed arm's extrema exactly tie the hand kernel's.
+
+    Stimuli, golden (exact torch gelu) and tolerance (Float16_b default)
+    are identical between arms and to the gelu-fresh family."""
+    mathop = MathOperation.Gelu
+    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+        fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+@pytest.mark.parametrize("fresh_cpp_impl", [0, 4], ids=["production", "licensed_cpp"])
 def test_gelu_appx_licensed_cpp(fresh_cpp_impl):
     """A/B the byte-untouched production GeluAppx hand kernel against the
     LICENSED semantic arm under one golden/tolerance contract (lane GI,

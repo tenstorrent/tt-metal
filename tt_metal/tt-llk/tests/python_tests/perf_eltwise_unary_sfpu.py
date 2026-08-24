@@ -459,6 +459,10 @@ def test_perf_causal_lift_fresh_cpp(
         # byte-untouched).  impl 3 for GeluAppx falls through to the
         # production dispatch (hand-equivalent, unswept).
         MathOperation.GeluAppx,
+        # Lane GI gelu-255: impl 4 = the licensed slim body
+        # (fresh_cpp/gelu_255_licensed.h); impl 3 falls through to the
+        # production typed gelu (hand-equivalent, unswept).
+        MathOperation.Gelu,
     ],
     # impl 4 = the lane-GI LICENSED semantic arms (fresh_cpp/*_licensed.h).
     fresh_cpp_impl=[1, 3, 4],
