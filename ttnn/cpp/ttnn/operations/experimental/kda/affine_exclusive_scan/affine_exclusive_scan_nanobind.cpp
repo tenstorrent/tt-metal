@@ -44,7 +44,8 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
-                Compute-kernel configuration.
+                Compute-kernel configuration. Defaults to exact HiFi2 math with
+                FP32 destination accumulation.
 
         Returns:
             ttnn.Tensor: New FLOAT32 TILE-layout group-entry states
