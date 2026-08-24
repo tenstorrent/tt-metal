@@ -129,6 +129,30 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
         "shard. Pass mm_window_blocks=2 (measured perf-neutral vs full residency), or "
         "mm_window_blocks=ceil(Mt_per_core / M_block_size) to keep the whole MM output resident.");
 
+    // The windowed handoff also requires the caller-owned counter arrays. Without them the op
+    // falls back to a private per-program L1 allocation, retained for the program's cached life —
+    // and because L1 is handed out top-down, each such block permanently lowers the L1 floor:
+    // the slow-motion version of the failure the window prevents. Detailed shape/layout checks
+    // (L1 sharded, grid coverage, row width) happen at program build; this only requires presence.
+    // Sizing: both are uint32, HEIGHT_SHARDED in L1 over the full compute grid (grid.x * grid.y
+    // cores). mm_progress_counters rows need one slot per matmul core; mm_credit_counters rows
+    // need one slot per RS reader (2 * num_links * num_workers_per_link). A square
+    // [num_cores, num_cores] allocation covers both — see CCLManager.get_mm_progress_counters_buffer
+    // / get_mm_credit_counters_buffer.
+    if (attributes.mm_window_blocks.has_value()) {
+        TT_FATAL(
+            tensor_args.mm_progress_counters.has_value(),
+            "mm_window_blocks requires a caller-owned mm_progress_counters tensor (uint32, L1 "
+            "HEIGHT_SHARDED over the compute grid, one slot per matmul core per row); see "
+            "CCLManager.get_mm_progress_counters_buffer.");
+        TT_FATAL(
+            tensor_args.mm_credit_counters.has_value(),
+            "mm_window_blocks requires a caller-owned mm_credit_counters tensor (uint32, L1 "
+            "HEIGHT_SHARDED over the compute grid, one slot per RS reader per row, i.e. at least "
+            "2 * num_links * num_workers_per_link slots); see "
+            "CCLManager.get_mm_credit_counters_buffer.");
+    }
+
     // RS validation: checks we can perform without the (not-yet-created) MM output tensor.
     TT_FATAL(attributes.num_links > 0, "num_links must be greater than 0.");
 
