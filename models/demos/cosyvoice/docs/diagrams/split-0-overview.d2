@@ -1,0 +1,82 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# CosyVoice-300M on Tenstorrent (TTNN) -- overview: host front-end, three device
+# stages, and how the four inference modes reuse the same networks.
+
+direction: down
+
+classes: {
+  host: { style: { fill: "#f6f8fa"; stroke: "#8b949e"; stroke-dash: 4; font-color: "#57606a" } }
+  dev: { style: { fill: "#eef6ff"; stroke: "#0969da" } }
+  onnx: { shape: hexagon; style: { fill: "#fff8c5"; stroke: "#9a6700" } }
+  sub: { style: { fill: transparent; stroke: transparent; font-size: 14; font-color: "#57606a" } }
+}
+
+input: "Inputs" {
+  class: host
+  text: "Text" { shape: document }
+  prompt_audio: "Reference audio\n(optional)" { shape: document }
+  mode: "Mode" { shape: document }
+}
+
+frontend: "Host front-end (not ported to TTNN)" {
+  class: host
+  normalize: "Text normalization"
+  tokenizer: "Whisper-family\ntext tokenizer"
+  speech_tok: "speech_tokenizer_v1.onnx" { class: onnx }
+  campplus: "campplus.onnx\nspeaker x-vector" { class: onnx }
+  normalize -> tokenizer
+}
+
+input.text -> frontend.normalize
+input.prompt_audio -> frontend.speech_tok
+input.prompt_audio -> frontend.campplus
+
+modes: "Inference modes" {
+  class: host
+  sft: "SFT\nspeaker ID"
+  zero: "Zero-shot\nreference audio + transcript"
+  cross: "Cross-lingual\nreference audio"
+  instruct: "Instruct\nstyle description"
+  note: "All four run the same three stages\nwith the same weights — what changes is\nwhich prefix slots are filled" { style: { fill: "#fff8c5"; stroke: "#9a6700" } }
+  sft -> note
+  zero -> note
+  cross -> note
+  instruct -> note
+}
+input.mode -> modes
+
+device: "Tenstorrent device — TTNN" {
+  class: dev
+
+  llm: "1. Text → Semantic Speech Tokens" {
+    class: dev
+    a: "~1.24 GB FP32 · see split-1-llm" { class: sub }
+  }
+  flow: "2. Semantic Tokens → Mel Spectrogram" {
+    class: dev
+    a: "~0.42 GB FP32 · see split-2-flow" { class: sub }
+  }
+  vocoder: "3. Mel → Waveform" {
+    class: dev
+    a: "HiFTNet / HiFi-GAN path\n~0.08 GB FP32 · see split-3-vocoder" { class: sub }
+  }
+
+  llm -> flow: "semantic token IDs"
+  flow -> vocoder: "mel spectrogram"
+}
+
+frontend.tokenizer -> device.llm: "text token IDs"
+frontend.speech_tok -> device.llm: "prompt speech tokens"
+frontend.campplus -> device.llm: "x-vector"
+frontend.campplus -> device.flow: "x-vector"
+frontend.speech_tok -> device.flow: "prompt mel"
+modes.note -> device.llm: "which prefix slots are filled"
+
+output: "Output" {
+  class: dev
+  speech: "Generated speech\n22.05 kHz WAV" { shape: document; style: { fill: "#dafbe1"; stroke: "#1a7f37" } }
+}
+device.vocoder -> output: "speech"

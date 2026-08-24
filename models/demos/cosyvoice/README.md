@@ -17,6 +17,8 @@ spectrogram, and a **HiFTNet vocoder** turns the mel into a waveform. All three 
 through TTNN here — including the vocoder, which is the part that is normally left
 on the host. [Why that was the hard part](#why-the-vocoder-is-the-interesting-part).
 
+<img src="docs/diagrams/split-0-overview.png" alt="Inputs and host front-end feed three device stages: LLM, flow decoder, HiFTNet vocoder. All four inference modes run the same stages with the same weights." width="760">
+
 | property | value |
 |---|---|
 | Parameters | ~300 M (llm 1.24 GB + flow 0.42 GB + hift 0.08 GB, fp32) |
@@ -195,6 +197,17 @@ of the four are ONNX blobs, and none is on the critical path for this port.
 `prepare_inputs.py` writes a flat `.npz` the device side loads without importing
 CosyVoice or `onnxruntime` — the same boundary `export_weights.py` draws.
 
+<details>
+<summary>Each stage in detail</summary>
+
+<img src="docs/diagrams/split-1-llm.png" alt="Stage 1: text embedding, causal Conformer text encoder, AR prefix, 14-block decoder with KV cache, RAS sampling" width="760">
+
+<img src="docs/diagrams/split-2-flow.png" alt="Stage 2: token embedding, Conformer encoder, length regulator, 10-step CFM solver over a UNet estimator" width="700">
+
+<img src="docs/diagrams/split-3-vocoder.png" alt="Stage 3: f0 predictor, NSF excitation, 40-odd convolutions, inverse STFT to waveform" width="520">
+
+</details>
+
 `tt/flow/reference.py` and `tt/llm/reference.py` reimplement their stages in plain torch
 from the flat weight export alone — no CosyVoice, no `diffusers`, no device. Both reproduce
 the captured goldens to PCC 0.9999999, which is what lets a device bring-up start from
@@ -277,6 +290,9 @@ of a cycle over an utterance — finer than Tensix arithmetic delivers. So wavef
 models/demos/cosyvoice/
 ├── README.md                    this file
 ├── requirements-reference.txt   reference-environment pins (CPU)
+├── docs/
+│   ├── security.md              dependency and input-handling review
+│   └── diagrams/                .d2 sources + rendered .png; ./render.sh rebuilds them
 ├── scripts/
 │   ├── download_model.py        stdlib-only, resumable checkpoint fetch
 │   ├── gen_golden.py            capture per-module goldens from the reference
