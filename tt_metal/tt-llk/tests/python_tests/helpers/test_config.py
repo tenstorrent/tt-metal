@@ -172,6 +172,8 @@ class TestConfig:
     # Extra -I dirs for #include <foo.cpp> (tests/helpers/src style).
     EXTRA_SRC_INCLUDE_PREPEND: ClassVar[List[str]] = []
     EXTRA_SRC_INCLUDE_APPEND: ClassVar[List[str]] = []
+    # Truncated sha256 in _safe_artefact_key — on-disk name only, not a variant id.
+    ARTEFACT_KEY_HASH_CHARS: ClassVar[int] = 12
     WITH_COVERAGE: ClassVar[bool] = False
 
     OPTIONS_COMPILE: ClassVar[str] = None
@@ -604,13 +606,20 @@ class TestConfig:
         name = Path(source_path).name
         if re.fullmatch(r"[A-Za-z0-9._+-]+", name):
             return f"sources/{name}"
-        digest = sha256(os.path.abspath(source_path).encode()).hexdigest()[:12]
+        digest = sha256(os.path.abspath(source_path).encode()).hexdigest()[
+            : TestConfig.ARTEFACT_KEY_HASH_CHARS
+        ]
         safe = re.sub(r"[^A-Za-z0-9._+-]+", "_", name) or "driver.cpp"
         return f"sources/{safe}.{digest}"
 
     @staticmethod
-    def _escape_cpp_include_path(path: str) -> str:
-        return path.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    def _reject_unsafe_cpp_include_path(path: str) -> None:
+        """``#include "..."`` is a q-char-sequence — no C-string escapes."""
+        if any(char in path for char in '"\\\n'):
+            raise ValueError(
+                'C++ driver path cannot contain ", backslash, or newline '
+                f'(not valid in #include "..."): {path!r}'
+            )
 
     @staticmethod
     def _resolve_flag_roots(roots) -> list:
@@ -640,6 +649,21 @@ class TestConfig:
     def _merge_flag_list(existing: list, flags: list, prepend: bool) -> list:
         rest = [flag for flag in existing if flag not in flags]
         return flags + rest if prepend else rest + flags
+
+    @staticmethod
+    def _register_search_dirs(
+        prepend_list: list, append_list: list, flags: list, prepend: bool
+    ) -> tuple[list, list]:
+        """Move ``flags`` onto the prepend or append side; never both."""
+        if prepend:
+            append_list = [flag for flag in append_list if flag not in flags]
+            prepend_list = TestConfig._merge_flag_list(
+                prepend_list, flags, prepend=True
+            )
+        else:
+            prepend_list = [flag for flag in prepend_list if flag not in flags]
+            append_list = TestConfig._merge_flag_list(append_list, flags, prepend=False)
+        return prepend_list, append_list
 
     @staticmethod
     def _apply_extra_includes() -> None:
@@ -677,20 +701,15 @@ class TestConfig:
         For one variant only, pass ``include_dirs=[...]`` to the constructor.
         """
         flags = TestConfig._as_include_flags(dirs)
-        if prepend:
-            TestConfig.EXTRA_INCLUDE_APPEND = [
-                flag for flag in TestConfig.EXTRA_INCLUDE_APPEND if flag not in flags
-            ]
-            TestConfig.EXTRA_INCLUDE_PREPEND = TestConfig._merge_flag_list(
-                TestConfig.EXTRA_INCLUDE_PREPEND, flags, prepend=True
-            )
-        else:
-            TestConfig.EXTRA_INCLUDE_PREPEND = [
-                flag for flag in TestConfig.EXTRA_INCLUDE_PREPEND if flag not in flags
-            ]
-            TestConfig.EXTRA_INCLUDE_APPEND = TestConfig._merge_flag_list(
-                TestConfig.EXTRA_INCLUDE_APPEND, flags, prepend=False
-            )
+        (
+            TestConfig.EXTRA_INCLUDE_PREPEND,
+            TestConfig.EXTRA_INCLUDE_APPEND,
+        ) = TestConfig._register_search_dirs(
+            TestConfig.EXTRA_INCLUDE_PREPEND,
+            TestConfig.EXTRA_INCLUDE_APPEND,
+            flags,
+            prepend,
+        )
         if TestConfig.INCLUDES:
             TestConfig._apply_extra_includes()
 
@@ -707,24 +726,15 @@ class TestConfig:
         For one variant only, pass ``src_include_dirs=[...]`` to the constructor.
         """
         flags = TestConfig._as_include_flags(dirs)
-        if prepend:
-            TestConfig.EXTRA_SRC_INCLUDE_APPEND = [
-                flag
-                for flag in TestConfig.EXTRA_SRC_INCLUDE_APPEND
-                if flag not in flags
-            ]
-            TestConfig.EXTRA_SRC_INCLUDE_PREPEND = TestConfig._merge_flag_list(
-                TestConfig.EXTRA_SRC_INCLUDE_PREPEND, flags, prepend=True
-            )
-        else:
-            TestConfig.EXTRA_SRC_INCLUDE_PREPEND = [
-                flag
-                for flag in TestConfig.EXTRA_SRC_INCLUDE_PREPEND
-                if flag not in flags
-            ]
-            TestConfig.EXTRA_SRC_INCLUDE_APPEND = TestConfig._merge_flag_list(
-                TestConfig.EXTRA_SRC_INCLUDE_APPEND, flags, prepend=False
-            )
+        (
+            TestConfig.EXTRA_SRC_INCLUDE_PREPEND,
+            TestConfig.EXTRA_SRC_INCLUDE_APPEND,
+        ) = TestConfig._register_search_dirs(
+            TestConfig.EXTRA_SRC_INCLUDE_PREPEND,
+            TestConfig.EXTRA_SRC_INCLUDE_APPEND,
+            flags,
+            prepend,
+        )
 
     @staticmethod
     def add_helpers_tree(*trees, prepend: bool = True) -> None:
@@ -889,6 +899,7 @@ class TestConfig:
         # test_name is the C++ driver path; keep a sources/<basename> artefact
         # key so we don't mkdir through a .cpp file.
         if os.path.isabs(test_name):
+            TestConfig._reject_unsafe_cpp_include_path(test_name)
             self.test_source_path = test_name
             self.test_name = TestConfig._safe_artefact_key(test_name)
         else:
@@ -909,9 +920,11 @@ class TestConfig:
         self.dest_acc = dest_acc
         self.requires_device_print = requires_device_print
         self.expected_nondeterministic = expected_nondeterministic
-        # Per-variant ``-I`` dirs. Prepended onto the compile line so they win
-        # over process-wide ``add_include_dirs`` / ``add_src_include_dirs`` and
-        # in-tree copies. Use the class methods for suite-wide dirs.
+        # Per-variant header ``-I`` dirs land in ``local_options_compile`` (last
+        # ``-I`` group), so they win over ``add_include_dirs`` and in-tree
+        # headers but not over ``add_src_include_dirs``. Per-variant
+        # ``src_include_dirs`` are emitted first and do win over
+        # ``add_src_include_dirs``. Class methods are for suite-wide dirs.
         include_list = list(include_dirs or [])
         src_include_list = list(src_include_dirs or [])
         for helpers_tree in helpers_trees or []:
@@ -1143,7 +1156,8 @@ class TestConfig:
         """
         source = str(self.test_source_path or self.test_name)
         if os.path.isabs(source):
-            return f'#include "{TestConfig._escape_cpp_include_path(source)}"\n'
+            TestConfig._reject_unsafe_cpp_include_path(source)
+            return f'#include "{source}"\n'
         return f"#include  <{source}>\n"
 
     def generate_variant_hash(self):
@@ -1178,8 +1192,21 @@ class TestConfig:
 
         self.variant_id = sha256(str(" | ".join(temp_str)).encode()).hexdigest()
 
-    def resolve_compile_options(self) -> tuple[str, str, str]:
+    def resolve_shared_compile_options(self) -> tuple[str, str, str]:
+        """Flags for brisc/coverage. Process-wide ``INCLUDES`` only.
 
+        Shared artefacts are keyed by ``SHARED_DIR`` / ``.shared_complete``,
+        not ``variant_id``. Per-variant ``include_dirs`` must not leak in.
+        """
+        return self._compose_compile_options(list(TestConfig.INCLUDES))
+
+    def resolve_compile_options(self) -> tuple[str, str, str]:
+        include_tokens = TestConfig._as_include_flags(self.include_dirs) + list(
+            TestConfig.INCLUDES
+        )
+        return self._compose_compile_options(include_tokens)
+
+    def _compose_compile_options(self, include_tokens: list) -> tuple[str, str, str]:
         if (
             TestConfig.OPTIONS_COMPILE is not None
             and TestConfig.MEMORY_LAYOUT_LD_SCRIPT is not None
@@ -1193,9 +1220,6 @@ class TestConfig:
 
         MEMORY_LAYOUT_LD_SCRIPT = (
             f"{TestConfig.LINKER_SCRIPTS}/memory.{TestConfig.ARCH.value}.ld"
-        )
-        include_tokens = TestConfig._as_include_flags(self.include_dirs) + list(
-            TestConfig.INCLUDES
         )
         include_flags = " ".join(shlex.quote(flag) for flag in include_tokens)
         OPTIONS_COMPILE = f"{include_flags} {TestConfig.INITIAL_OPTIONS_COMPILE} "
@@ -1250,7 +1274,7 @@ class TestConfig:
                 return
 
             _, local_memory_layout_ld, local_non_coverage = (
-                self.resolve_compile_options()
+                self.resolve_shared_compile_options()
             )
 
             if TestConfig.WITH_COVERAGE:
@@ -1608,7 +1632,7 @@ class TestConfig:
                         f"-DPROCESSOR_INDEX={risc_id} "
                     )
                 compile_command = TestConfig._argv(
-                    TestConfig.GXX,
+                    [TestConfig.GXX],
                     TestConfig.ARCH_COMPUTE,
                     TestConfig.ARCH_SPECIFIC_OPTIONS,
                     TestConfig.OPTIONS_ALL,
