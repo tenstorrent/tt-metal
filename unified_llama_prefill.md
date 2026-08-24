@@ -2693,12 +2693,58 @@ without, and that is measured rather than tidy. The FFN agrees: gate/up on 64 co
 the per-block handshake is not what is left. Coarser blocks just delay the broadcast behind a
 longer read and cost overlap.
 
-**Where that leaves the gap.** Best is now ~310us against ttnn's 118.6, 2.6x. The compute is
-1024 tile-MACs per core at 0.056us each, about 57us, so we are 5.4x off compute-bound while
-ttnn is 2x off it. Traffic is the same 10MB for both; we move it at 32GB/s against 84. So
-there is still something in the read-and-broadcast path, and the next honest step is to
-profile the DM threads against compute rather than guess a fourth time -- the previous three
-guesses at this gap each found something real but none of them found all of it.
+### Profiling the threads: the math is not on the critical path at all
+
+Two measurements, and the first one is a knob rather than a probe.
+
+**Per-RISC kernel spans say nothing**, which is worth recording as a negative result. Every
+one of the five threads spans essentially the whole kernel -- BRISC 284.9us median, NCRISC
+266.0, the three TRISCs 272.x, against a ~310us program. Nobody is idle. But a SPAN includes
+time blocked on a circular buffer, so this ranks nothing: five threads in lockstep through a
+k-loop all span the loop.
+
+**The fidelity ablation is decisive.** Math fidelity changes the MAC cost and nothing else --
+LoFi is one pass per tile, HiFi2 two, HiFi4 four -- so it moves compute without touching a
+byte of data movement:
+
+| | |
+|---|---|
+| LoFi | 319.6 us |
+| HiFi2 | 317.4 us |
+| HiFi4 | 317.4 us |
+
+**Four times the math, zero difference.** Compute is not on the critical path; it is entirely
+hidden. That is a stronger statement than the bandwidth arithmetic suggested -- it had
+compute at 57us of ~310, and the truth is it contributes nothing.
+
+**So where does the movement go?** Hoisting the operands out of the k-loop -- one load and
+broadcast instead of eight, the wrong answer on purpose (`MMB_ABL_HOIST`):
+
+| multicast 8x8, mt=2 kt=8 nt=8, depth=2 | |
+|---|---|
+| real | 312.0 us |
+| operands hoisted | **127.2 us** |
+
+**The per-k-block operand movement is 185us of the 312, 59%**, over the seven rounds the
+hoist removes -- about 26us a round for a read, a broadcast and two handshakes. And the
+127.2us residual is close to ttnn's entire 118.6us, which says ttnn's per-k-block movement is
+nearly free where ours is the whole cost.
+
+**The mechanism, and it is structural rather than a tuning gap.** Per k-block the B sender
+moves 64 tiles (128KB) and the A sender 16 (32KB); at NOC and DRAM rates that is maybe 12us
+of traffic, and the handshakes another few. But 26us of it lands on the critical path because
+`noc_load`'s multicast form does reserve, read, BARRIER, wait-for-receivers, broadcast, push
+-- all inside one call. The read for k-block b+1 therefore cannot start until b's broadcast
+has finished, so the DM thread runs read(b), handshake(b), read(b+1), handshake(b+1) in
+series. Deeper CBs let the RESERVE happen early, which is why depth=2 bought 12%, but the
+read is issued inside the call that then blocks on the handshake, so nothing overlaps the
+part that matters.
+
+Fixing it means splitting the multicast load into two phases -- start the read, and later
+finish-and-broadcast -- so a sender can have the next block's DRAM read in flight while it is
+still broadcasting the current one. That is a real change to the primitive rather than a
+parameter, and it is the first time this gap has had a named mechanism instead of a
+bandwidth ratio.
 
 **What is left is bandwidth per read, not traffic.** With multicast the traffic is A once plus
 B once, 5120 tiles or 10MB, and we move it in 353.2us -- 28.4GB/s. ttnn moves the same 10MB in
