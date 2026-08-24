@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstring>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -113,26 +114,211 @@ struct SpscNoAtomic16 {};
 // Deinterleave EIGHT consecutive 3-word atomic records (24 contiguous words) into vectors of word0
 // (type|id27), word1 (ts low) and word2 (duration). Output lane j belongs to record j; the stride-3
 // scatter across three source vectors costs 9 lane permutes + 6 blends, against 24 scalar loads.
-#if defined(__AVX512F__)
-// 16 atomic records (48 words) deinterleaved to SoA. Lane L of w{j} wants word 3L+j: words 0..31 come from
-// v0||v1 in one permutex2var, and 3L+j >= 32 is merged from v2 by a masked single-source permute. Six
-// shuffles for sixteen records, against fifteen for eight in the AVX2 twin below.
-inline void spsc_load_atomic16(const uint32_t* src, __m512i& w0s, __m512i& w1s, __m512i& w2s) {
-    const __m512i v0 = _mm512_loadu_si512(src);
-    const __m512i v1 = _mm512_loadu_si512(src + 16);
-    const __m512i v2 = _mm512_loadu_si512(src + 32);
-    const __m512i i0a = _mm512_setr_epi32(0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 0, 0, 0, 0, 0);
-    const __m512i i0b = _mm512_setr_epi32(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 4, 7, 10, 13);
-    const __m512i i1a = _mm512_setr_epi32(1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 0, 0, 0, 0, 0);
-    const __m512i i1b = _mm512_setr_epi32(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 5, 8, 11, 14);
-    const __m512i i2a = _mm512_setr_epi32(2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 0, 0, 0, 0, 0, 0);
-    // w2 crosses into v2 a lane earlier: lane 10 already wants word 32.
-    const __m512i i2b = _mm512_setr_epi32(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 6, 9, 12, 15);
-    w0s = _mm512_mask_permutexvar_epi32(_mm512_permutex2var_epi32(v0, i0a, v1), 0xF800, i0b, v2);
-    w1s = _mm512_mask_permutexvar_epi32(_mm512_permutex2var_epi32(v0, i1a, v1), 0xF800, i1b, v2);
-    w2s = _mm512_mask_permutexvar_epi32(_mm512_permutex2var_epi32(v0, i2a, v1), 0xFC00, i2b, v2);
+// ---- AVX-512 atomic block -------------------------------------------------------------------------
+//
+// Attributed, NOT built with -march: raising the whole build's baseline to x86-64-v4 to reach these
+// intrinsics was measured as a 2.4x regression on an EVENT/DATA-interleaved profiler stream (23 -> 9.6
+// GB/s), because every one of the ~450 other translation units gets different codegen too. The pragma
+// below confines the ISA to this block; every function in it shares the attribute, which is what lets them
+// still inline into EACH OTHER (clang only refuses to inline across DIFFERING target attributes).
+//
+// The signature takes PLAIN arguments on purpose: the caller is compiled for the baseline ISA and cannot
+// form a __m512i, so the loads happen in here. Everything a record needs beyond its own three words --
+// th, prog, lane, dev -- is block-invariant, which is what makes the 64-bit fields composable by unpack
+// and the whole block layable-out in registers.
+// Shuffle/permute operands as plain aligned data at file scope, so the attributed block loads them from
+// L1 instead of rebuilding fifteen vectors on every call (it cannot be inlined into a baseline-ISA caller,
+// so nothing is hoisted for it).
+alignas(64) inline constexpr uint32_t kA16Idx[15][16] = {
+    {0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 0, 0, 0, 0, 0},          // w0 from v0||v1
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 4, 7, 10, 13},               // w0 tail from v2
+    {1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 0, 0, 0, 0, 0},         // w1
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 5, 8, 11, 14},
+    {2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 0, 0, 0, 0, 0, 0},          // w2 (crosses a lane earlier)
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 6, 9, 12, 15},
+    {0, 0, 1, 0, 8, 0, 9, 0, 2, 0, 3, 0, 10, 0, 11, 0},               // seqA (epi64 lanes)
+    {4, 0, 5, 0, 12, 0, 13, 0, 6, 0, 7, 0, 14, 0, 15, 0},             // seqB
+    {0, 0, 8, 0, 0, 0, 1, 0, 9, 0, 0, 0, 2, 0, 10, 0},                // AoS x0
+    {0, 0, 3, 0, 11, 0, 0, 0, 4, 0, 12, 0, 0, 0, 5, 0},               // x1
+    {13, 0, 0, 0, 6, 0, 14, 0, 0, 0, 7, 0, 15, 0, 0, 0},              // x2
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0},                 // y0
+    {2, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 4, 0, 0, 0},                 // y1
+    {0, 0, 5, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 7, 0},                 // y2
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},                 // spare
+};
+
+// OFF by default, and measured that way. The 512-bit block below is correct and takes 100% of kimi's
+// records, but it is not a win on this host: same-session A/B on an EVENT/DATA-interleaved synthetic gave
+// 22.5 GB/s without it against 9.9 with, and it introduced 1290 order regressions on kimi that the AVX2
+// path does not. Three delivery mechanisms were tried -- global -march=x86-64-v4 (which also cost 2.4x on
+// the synthetic by changing codegen for all ~450 TUs), the same with the compose inlined, and this
+// attribute -- and all three lost. Root-causing the regression needs a profile of the decode threads that
+// this setup could not capture, so it stays gated rather than deleted.
+// ---- One store discipline for the whole decode ----------------------------------------------------
+//
+// A ring record is 24 B, so a 16-record block is 64 B-aligned only when pos % 8 == 0. The previous version
+// checked that and, when it failed, issued its stores CACHED -- and cached stores mixed with the movnti
+// stores the other emitters keep issuing into the same lines cost a write-combining flush plus an RFO per
+// collision (the same effect broadcast_ring.hpp::emit_store documents at ~4x). pos % 8 is driven by output
+// ARITY -- PP_EVENT emits 2 records, PP_DATA emits 2+ceil(n/2) -- so an EVENT/DATA-interleaved stream lands
+// misaligned ~7/8 of the time, while a stream whose atomic runs are multiples of 8 preserves the phase and
+// never noticed. Measured: an identical mix with runs of 7 instead of 8 collapsed 17.9 -> 4.5 GB/s with no
+// EVENT/DATA present at all.
+//
+// So the fix is not a better alignment test, it is removing alignment from the contract. The sub-line
+// remainder lives in a register; every emission stitches carry+payload into whole 64 B lines and streams
+// them. Every ring line is written exactly once, by one aligned NT store, on every stream shape -- which
+// also means no cached store exists to mix with, and the alignment gate, the whole-groups-of-eight rule,
+// the ring-wrap bailout and the entire AVX2 atomic tier all go away.
+//
+// EVERY emitter must route through this. A direct write at `pos` while the carry holds a partial line would
+// be the same hazard wearing a different hat.
+#pragma clang attribute push(__attribute__((target("avx512f,avx512bw,avx512vl,avx512dq"))), apply_to = function)
+struct SpscNtCarry {
+    // Zero-init, NOT _mm512_setzero_si512(): a default member initializer is evaluated in the implicit
+    // constructor, which the pragma above does not reach, so an intrinsic there needs a target feature
+    // the constructor has not got.
+    __m512i carry{};  // live qwords at lanes [8-cq, 8)
+    uint32_t cq = 0;                         // qwords carried
+    uint64_t line_byte = 0;                  // ring byte the carry's line starts at; 64 B-aligned
+    uint8_t* ring = nullptr;
+    uint64_t cap_bytes = 0;                  // 24 B x a power-of-two slot count is always a multiple of 64
+
+    // nq qwords taken from lines[0..ceil(nq/8)]; the caller must leave one extra vector readable.
+    inline void put(const __m512i* lines, uint32_t nq) {
+        const uint32_t total = cq + nq;
+        const uint32_t L = total >> 3;
+        const uint32_t r = total & 7u;
+        const __m512i iota = _mm512_set_epi64(7, 6, 5, 4, 3, 2, 1, 0);
+        const __m512i idxA = _mm512_add_epi64(iota, _mm512_set1_epi64(8 - cq));
+        uint64_t off = line_byte % cap_bytes;
+        __m512i prev = carry;
+        for (uint32_t k = 0; k < L; k++) {
+            _mm512_stream_si512(
+                reinterpret_cast<__m512i*>(ring + off), _mm512_permutex2var_epi64(prev, idxA, lines[k]));
+            off += 64;
+            if (off == cap_bytes) {
+                off = 0;
+            }
+            prev = lines[k];
+        }
+        const __m512i outL = _mm512_permutex2var_epi64(prev, idxA, lines[L]);
+        carry = _mm512_permutexvar_epi64(_mm512_sub_epi64(iota, _mm512_set1_epi64(8 - r)), outL);
+        cq = r;
+        line_byte += static_cast<uint64_t>(L) << 6;
+    }
+    inline void put3(uint64_t a, uint64_t b, uint64_t c) {  // one 24 B record
+        __m512i v[2];
+        v[0] = _mm512_set_epi64(
+            0, 0, 0, 0, 0, static_cast<long long>(c), static_cast<long long>(b), static_cast<long long>(a));
+        v[1] = v[0];
+        put(v, 3);
+    }
+    inline void put_lines(const __m512i* lines, uint32_t bytes) { put(lines, bytes >> 3); }
+    // Publish the partial line before the reader is told about those records. The bytes stay carried, so the
+    // line is restreamed later with identical leading content -- benign for a reader that only looks at
+    // committed slots.
+    void flush_tail() {
+        alignas(64) uint64_t tmp[8];
+        _mm512_store_si512(tmp, carry);
+        const uint64_t off = line_byte % cap_bytes;
+        for (uint32_t k = 0; k < cq; k++) {
+            _mm_stream_si64(reinterpret_cast<long long*>(ring + off) + k, static_cast<long long>(tmp[8 - cq + k]));
+        }
+        _mm_sfence();
+    }
+};
+
+struct SpscA16Result {
+    uint32_t n;
+    uint64_t ts_first;
+    uint64_t ts_last;
+};
+
+// Any n from 1 to 16, so run tails need no narrower path. Same masked loads and 3-way deinterleave as
+// before; th/meta/prog are block-invariant, which is what lets unpack build the 64-bit fields.
+inline SpscA16Result spsc_atomic16_avx512(
+    const uint32_t* p,
+    uint32_t avail,
+    uint32_t max_recs,
+    uint32_t th,
+    uint32_t prog,
+    uint32_t lane,
+    uint32_t dev,
+    SpscNtCarry& sw) {
+    SpscA16Result out{0, 0, 0};
+    __m512i v0, v1, v2;
+    if (avail >= 48u) {  // frame interior: no mask math
+        v0 = _mm512_loadu_si512(p);
+        v1 = _mm512_loadu_si512(p + 16);
+        v2 = _mm512_loadu_si512(p + 32);
+    } else {
+        const __mmask16 m0 = static_cast<__mmask16>(avail >= 16u ? 0xFFFFu : ((1u << avail) - 1u));
+        const __mmask16 m1 =
+            static_cast<__mmask16>(avail <= 16u ? 0u : (avail >= 32u ? 0xFFFFu : ((1u << (avail - 16u)) - 1u)));
+        const __mmask16 m2 = static_cast<__mmask16>(avail <= 32u ? 0u : ((1u << (avail - 32u)) - 1u));
+        v0 = _mm512_maskz_loadu_epi32(m0, p);
+        v1 = _mm512_maskz_loadu_epi32(m1, p + 16);
+        v2 = _mm512_maskz_loadu_epi32(m2, p + 32);
+    }
+    const __m512i w0s = _mm512_mask_permutexvar_epi32(
+        _mm512_permutex2var_epi32(v0, _mm512_load_si512(kA16Idx[0]), v1), 0xF800, _mm512_load_si512(kA16Idx[1]), v2);
+    const __m512i w1s = _mm512_mask_permutexvar_epi32(
+        _mm512_permutex2var_epi32(v0, _mm512_load_si512(kA16Idx[2]), v1), 0xF800, _mm512_load_si512(kA16Idx[3]), v2);
+    const __m512i w2s = _mm512_mask_permutexvar_epi32(
+        _mm512_permutex2var_epi32(v0, _mm512_load_si512(kA16Idx[4]), v1), 0xFC00, _mm512_load_si512(kA16Idx[5]), v2);
+    const __mmask16 hit =
+        _mm512_cmpeq_epi32_mask(_mm512_srli_epi32(w0s, PP_TYPE_SHIFT), _mm512_set1_epi32(PP_ZONE_ATOMIC));
+    uint32_t n = static_cast<uint32_t>(std::countr_zero(static_cast<uint32_t>(~hit) | 0x10000u));
+    if (n > max_recs) {
+        n = max_recs;
+    }
+    if (n == 0) {
+        return out;
+    }
+    alignas(64) uint32_t w1_arr[16];
+    _mm512_store_si512(w1_arr, w1s);
+    const uint64_t th_hi = static_cast<uint64_t>(th) << 32;
+    out.n = n;
+    out.ts_first = th_hi | w1_arr[0];
+    out.ts_last = th_hi | w1_arr[n - 1];
+    const __m512i ids = _mm512_and_si512(w0s, _mm512_set1_epi32(0x07FFFFFF));
+    const __m512i thv = _mm512_set1_epi32(static_cast<int>(th));
+    const __m512i mev = _mm512_set1_epi32(static_cast<int>((lane << 16) | (dev << 26)));
+    const __m512i pgv = _mm512_set1_epi32(static_cast<int>(prog));
+    const __m512i seqA = _mm512_load_si512(kA16Idx[6]);
+    const __m512i seqB = _mm512_load_si512(kA16Idx[7]);
+    const __m512i x0 = _mm512_load_si512(kA16Idx[8]);
+    const __m512i x1 = _mm512_load_si512(kA16Idx[9]);
+    const __m512i x2 = _mm512_load_si512(kA16Idx[10]);
+    const __m512i y0 = _mm512_load_si512(kA16Idx[11]);
+    const __m512i y1 = _mm512_load_si512(kA16Idx[12]);
+    const __m512i y2 = _mm512_load_si512(kA16Idx[13]);
+    const __m512i tlo = _mm512_unpacklo_epi32(w1s, thv), thi2 = _mm512_unpackhi_epi32(w1s, thv);
+    const __m512i mlo = _mm512_unpacklo_epi32(ids, mev), mhi = _mm512_unpackhi_epi32(ids, mev);
+    const __m512i dlo = _mm512_unpacklo_epi32(pgv, w2s), dhi = _mm512_unpackhi_epi32(pgv, w2s);
+    __m512i o[7];
+    {
+        const __m512i T = _mm512_permutex2var_epi64(tlo, seqA, thi2);
+        const __m512i M = _mm512_permutex2var_epi64(mlo, seqA, mhi);
+        const __m512i D = _mm512_permutex2var_epi64(dlo, seqA, dhi);
+        o[0] = _mm512_mask_permutexvar_epi64(_mm512_permutex2var_epi64(T, x0, M), 0x24, y0, D);
+        o[1] = _mm512_mask_permutexvar_epi64(_mm512_permutex2var_epi64(T, x1, M), 0x49, y1, D);
+        o[2] = _mm512_mask_permutexvar_epi64(_mm512_permutex2var_epi64(T, x2, M), 0x92, y2, D);
+    }
+    if (n > 8) {  // the second compose half only when its lanes are live
+        const __m512i T = _mm512_permutex2var_epi64(tlo, seqB, thi2);
+        const __m512i M = _mm512_permutex2var_epi64(mlo, seqB, mhi);
+        const __m512i D = _mm512_permutex2var_epi64(dlo, seqB, dhi);
+        o[3] = _mm512_mask_permutexvar_epi64(_mm512_permutex2var_epi64(T, x0, M), 0x24, y0, D);
+        o[4] = _mm512_mask_permutexvar_epi64(_mm512_permutex2var_epi64(T, x1, M), 0x49, y1, D);
+        o[5] = _mm512_mask_permutexvar_epi64(_mm512_permutex2var_epi64(T, x2, M), 0x92, y2, D);
+    }
+    sw.put_lines(o, 24u * n);
+    return out;
 }
-#endif
+
+#pragma clang attribute pop
 
 inline void spsc_load_atomic8(const uint32_t* src, __m256i& w0s, __m256i& w1s, __m256i& w2s) {
     const __m256i v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src));
@@ -197,6 +383,10 @@ inline void spsc_prefetch(const void* p) {
 // cost lives. emit_atomic8(lane, timer_hi, prog, w0s, w1s, w2s, n) is the same idea for up to EIGHT
 // 3-word PP_ZONE_ATOMIC records (w2s = durations): n <= 8 leading lanes are valid, the rest are
 // speculative over-read and must not be emitted. Without it the atomic wire decodes entirely scalar.
+// Attributed together with SpscNtCarry/spsc_atomic16_avx512 above and the emitters that call in: this
+// walk inlines both, and clang will not inline across differing target attributes -- leaving it at the
+// baseline turns every record into a real call (measured: knee 112 -> worse than 125).
+#pragma clang attribute push(__attribute__((target("avx512f,avx512bw,avx512vl,avx512dq"))), apply_to = function)
 template <
     typename EmitMarker,
     typename EmitData,
@@ -217,7 +407,8 @@ inline uint32_t spsc_decode_frame(
     // to 24 words past a lane's live run -- the bytes exist in the frame/bounce buffer -- which lets
     // run-tails and sticky-split blocks go through the vector path with a partial count.
     uint32_t frame_words = 0) {
-    (void)emit_atomic16;  // sentinel-typed, or compiled out, without the 512-bit path
+    (void)emit_atomic16;
+    (void)emit_atomic8;  // the atomic arm is 512-bit only; the 8-wide tier is gone
     const uint32_t* ctrl = frame + kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
     const auto xy_it = st.core_of_xy.find(ctrl[kernel_profiler::SPSC_CORE_XY]);
     if (xy_it == st.core_of_xy.end()) {
@@ -269,145 +460,31 @@ inline uint32_t spsc_decode_frame(
         st.live_words += run;
         uint32_t th = st.timer_hi[lane];
         uint32_t pg = st.prog[lane];
+        // ONE DECODE PATH FOR BOTH FRAME LAYOUTS. A raw frame carries whole 512-word rings and is read
+        // circularly; a packed frame is already contiguous. That is a difference in ADDRESSING, not in
+        // decoding, and keeping two copies of the walk meant every improvement had to be made twice -- the
+        // 16-wide path went into the packed copy only, so DRISC self zones (raw frames) kept decoding
+        // scalar: 96 K records per stream on kimi. Linearise instead and share the walk. Raw frames are the
+        // drainers' own self frames, so the copy is off the workload's path.
+        uint32_t lin[kSpscRingCap];
         if (raw) {
             const uint32_t* ring = frame + kernel_profiler::SPSC_SPAN_PREFIX_WORDS +
                                    kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE + r * kSpscRingCap;
             const uint32_t hm = head & kSpscRingMask;
-            for (uint32_t o = 0; o < run; o += 16) {
-                spsc_prefetch(ring + ((hm + o) & kSpscRingMask));
+            const uint32_t first = kSpscRingCap - hm < run ? kSpscRingCap - hm : run;
+            std::memcpy(lin, ring + hm, first * sizeof(uint32_t));
+            if (first < run) {
+                std::memcpy(lin + first, ring, (run - first) * sizeof(uint32_t));
             }
-            uint32_t i = 0;
-            while (i < run) {
-                const uint32_t w0 = ring[(hm + i) & kSpscRingMask];
-                const uint32_t t = pp_type(w0);
-#if defined(__AVX2__)
-                // Screening only ever matches 2-word markers, so gate the attempt on the leading type: an
-                // all-atomic stream would otherwise pay two AVX loads, two shuffles and a movemask per
-                // 3-word record, every one of them rejected.
-                if constexpr (!std::is_same_v<std::decay_t<EmitZones8>, SpscNoZones8>) {
-                    const uint32_t idx = (hm + i) & kSpscRingMask;
-                    if (t <= PP_ZONE_END && i + 16 <= run && idx + 16 <= kSpscRingCap) {
-                        const __m256i v0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ring + idx));
-                        const __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ring + idx + 8));
-                        const __m256i even = _mm256_castps_si256(_mm256_shuffle_ps(
-                            _mm256_castsi256_ps(v0), _mm256_castsi256_ps(v1), _MM_SHUFFLE(2, 0, 2, 0)));
-                        const __m256i odd = _mm256_castps_si256(_mm256_shuffle_ps(
-                            _mm256_castsi256_ps(v0), _mm256_castsi256_ps(v1), _MM_SHUFFLE(3, 1, 3, 1)));
-                        const __m256i w0s = _mm256_permute4x64_epi64(even, _MM_SHUFFLE(3, 1, 2, 0));
-                        const __m256i types = _mm256_srli_epi32(w0s, PP_TYPE_SHIFT);
-                        if (_mm256_movemask_epi8(_mm256_cmpgt_epi32(types, _mm256_set1_epi32(1))) == 0) {
-                            const __m256i w1s = _mm256_permute4x64_epi64(odd, _MM_SHUFFLE(3, 1, 2, 0));
-                            emit_zones8(lane, th, pg, w0s, w1s);
-                            st.vec_zone_recs += 8;
-                            i += 16;
-                            continue;
-                        }
-                        st.vec_block_rejects++;
-                    }
-                }
-                if constexpr (!std::is_same_v<std::decay_t<EmitAtomic8>, SpscNoAtomic8>) {
-                    const uint32_t idx = (hm + i) & kSpscRingMask;
-                    // The ring mirror is fully readable, so a partial block may over-READ stale words
-                    // beyond the run; `n` caps what is decoded and emitted.
-                    if (t == PP_ZONE_ATOMIC && i + 3 <= run && idx + 24 <= kSpscRingCap) {
-                        __m256i w0s, w1s, w2s;
-                        spsc_load_atomic8(ring + idx, w0s, w1s, w2s);
-                        const __m256i types = _mm256_srli_epi32(w0s, PP_TYPE_SHIFT);
-                        const uint32_t mask = static_cast<uint32_t>(_mm256_movemask_epi8(
-                            _mm256_cmpeq_epi32(types, _mm256_set1_epi32(PP_ZONE_ATOMIC))));
-                        // countr_zero(0) == 32 -> n = 8 on a full match; lane 0 always matches (t checked).
-                        uint32_t n = static_cast<uint32_t>(std::countr_zero(~mask)) / 4;
-                        n = std::min(n, (run - i) / 3);
-                        if (n != 0) {
-                            emit_atomic8(lane, th, pg, w0s, w1s, w2s, n);
-                            st.vec_atomic_recs += n;
-                            st.vec_block_rejects += (mask != 0xFFFFFFFFu) ? 1 : 0;
-                            i += 3 * n;
-                            continue;
-                        }
-                    }
-                }
-#endif
-                st.scalar_recs++;
-                if (t == PP_ZONE_START || t == PP_ZONE_END || t == PP_ZONE_TOTAL) {
-                    if (i + 2 > run) {
-                        st.anomalies++;
-                        break;
-                    }
-                    const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
-                    const uint64_t ts = (t == PP_ZONE_TOTAL) ? w1 : pp_full_ts(th, w1);
-                    emit(lane, t, pp_low27(w0), ts, pg, 0);  // full 27-bit structural id
-                    i += 2;
-                } else if (t == PP_ZONE_ATOMIC) {
-                    // Complete zone: ts is the END and the duration rides its own arg, so the sink needs no
-                    // pairing state. start = ts - duration.
-                    if (i + 3 > run) {
-                        st.anomalies++;
-                        break;
-                    }
-                    const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
-                    const uint32_t w2 = ring[(hm + i + 2) & kSpscRingMask];
-                    emit(lane, t, pp_low27(w0), pp_full_ts(th, w1), pg, w2);
-                    i += 3;
-                } else if (t == PP_STICKY_TIMER) {
-                    th = pp_timer_hi(w0);
-                    i += 1;
-                } else if (t == PP_STICKY_PROG) {
-                    if (const uint32_t id = pp_low27(w0); id != pg) {
-                        pg = id;
-                        emit_prog(lane, pg);
-                    }
-                    i += 1;
-                } else if (t == PP_STICKY_PROG_EXT) {
-                    if (i + 2 > run) {
-                        st.anomalies++;
-                        break;
-                    }
-                    const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
-                    if (w1 != pg) {
-                        pg = w1;
-                        emit_prog(lane, pg);
-                    }
-                    i += 2;
-                } else if (t == PP_EVENT) {
-                    // PP_EVENT: exactly 2 words -- a flag with a compile-time structural id, no payload.
-                    if (i + 2 > run) {
-                        st.anomalies++;
-                        break;
-                    }
-                    const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
-                    emit_data(lane, PP_EVENT, pp_point_id(w0), pp_full_ts(th, w1), pg, nullptr, 0);
-                    i += 2;
-                } else if (t == PP_DATA) {
-                    // PP_DATA is 3 + size words and the length lives in word2, so the whole header must
-                    // be inside the run before the packet can be sized at all.
-                    if (i + 3 > run) {
-                        st.anomalies++;
-                        break;
-                    }
-                    const uint32_t n = pp_data_size(ring[(hm + i + 2) & kSpscRingMask]);
-                    if (i + 3 + n > run) {
-                        st.anomalies++;
-                        break;
-                    }
-                    const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
-                    // The payload can wrap the circular ring, so unwrap it into a flat scratch first.
-                    uint32_t payload[kSpscMaxDataWords];
-                    for (uint32_t k = 0; k < n; k++) {
-                        payload[k] = ring[(hm + i + 3 + k) & kSpscRingMask];
-                    }
-                    emit_data(lane, PP_DATA, pp_point_id(w0), pp_full_ts(th, w1), pg, payload, n);
-                    i += 3 + n;
-                } else {
-                    st.anomalies++;
-                    break;
-                }
-            }
-            st.timer_hi[lane] = th;
-            st.prog[lane] = pg;
-            continue;
+            p = lin;
+        } else {
+            p += extent - run;
         }
-        p += extent - run;
+        // The over-read gates below vouch for words past a lane's run using the FRAME buffer's extent. A
+        // linearised run lives in `lin` instead, where no such slack exists and `frame + frame_words` is not
+        // even a comparable pointer -- so the frame vouch must be withdrawn here, or the gates admit reads
+        // past the scratch and the decode picks up garbage records (measured: 1290 order regressions).
+        [[maybe_unused]] const uint32_t fw_eff = raw ? 0u : frame_words;
         // Just-in-time prefetch of this lane's live window: small bursts consumed immediately fit the
         // core's fill-buffer budget -- issuing whole frames ahead was measured 30-40% SLOWER (the bulk
         // cold-line prefetches starve the walk's own demand loads).
@@ -441,49 +518,32 @@ inline uint32_t spsc_decode_frame(
                     st.vec_block_rejects++;
                 }
             }
-            if constexpr (!std::is_same_v<std::decay_t<EmitAtomic8>, SpscNoAtomic8>) {
-                // A full block fits inside the run; a partial one may over-read into the rest of the
-                // frame buffer when the caller vouched for its size (frame_words).
-#if defined(__AVX512F__)
-                if constexpr (!std::is_same_v<std::decay_t<EmitAtomic16>, SpscNoAtomic16>) {
-                    if (t == PP_ZONE_ATOMIC && i + 3 <= run &&
-                        (i + 48 <= run || (frame_words != 0 && p + i + 48 <= frame + frame_words))) {
-                        __m512i w0s, w1s, w2s;
-                        spsc_load_atomic16(p + i, w0s, w1s, w2s);
-                        const __mmask16 m = _mm512_cmpeq_epi32_mask(
-                            _mm512_srli_epi32(w0s, PP_TYPE_SHIFT), _mm512_set1_epi32(PP_ZONE_ATOMIC));
-                        uint32_t n =
-                            static_cast<uint32_t>(std::countr_zero(static_cast<uint32_t>(~m) | 0x10000u));
-                        n = std::min(n, (run - i) / 3);
-                        if (n != 0) {
-                            emit_atomic16(lane, th, pg, w0s, w1s, w2s, n);
-                            st.vec_atomic_recs += n;
-                            st.vec_block_rejects += (m != 0xFFFFu) ? 1 : 0;
-                            i += 3 * n;
-                            continue;
-                        }
-                    }
-                }
-#endif
-                if (t == PP_ZONE_ATOMIC && i + 3 <= run &&
-                    (i + 24 <= run || (frame_words != 0 && p + i + 24 <= frame + frame_words))) {
-                    __m256i w0s, w1s, w2s;
-                    spsc_load_atomic8(p + i, w0s, w1s, w2s);
-                    const __m256i types = _mm256_srli_epi32(w0s, PP_TYPE_SHIFT);
-                    const uint32_t mask = static_cast<uint32_t>(
-                        _mm256_movemask_epi8(_mm256_cmpeq_epi32(types, _mm256_set1_epi32(PP_ZONE_ATOMIC))));
-                    uint32_t n = static_cast<uint32_t>(std::countr_zero(~mask)) / 4;
-                    n = std::min(n, (run - i) / 3);
-                    if (n != 0) {
-                        emit_atomic8(lane, th, pg, w0s, w1s, w2s, n);
-                        st.vec_atomic_recs += n;
-                        st.vec_block_rejects += (mask != 0xFFFFFFFFu) ? 1 : 0;
-                        i += 3 * n;
+#endif  // __AVX2__
+#if defined(__AVX2__)
+            // THE atomic arm. Any run length from 1 up goes through here -- the block emits n records for
+            // any n, so there is no tail case and no narrower path behind it.
+            if constexpr (!std::is_same_v<std::decay_t<EmitAtomic16>, SpscNoAtomic16>) {
+                if (t == PP_ZONE_ATOMIC) {
+                    const size_t readable = fw_eff != 0 ? static_cast<size_t>(frame + fw_eff - (p + i))
+                                                        : static_cast<size_t>(run - i);
+                    const uint32_t got = emit_atomic16(
+                        lane, th, pg, p + i, readable > 48u ? 48u : static_cast<uint32_t>(readable),
+                        (run - i) / 3u);
+                    if (got != 0) {
+                        st.vec_atomic_recs += got;
+                        i += 3 * got;
                         continue;
                     }
                 }
             }
 #endif
+            // Everything reaching here is a packet the vector paths above CANNOT take, and not for want of
+            // a wider instruction: PP_STICKY_TIMER redefines `th` and PP_STICKY_PROG/_EXT redefine `pg` for
+            // every record after them, so a lane cannot be decoded before its predecessors are; PP_DATA
+            // carries its length in its own word 2, so the next record's offset is unknown until it is read.
+            // A gather walk over the width chain was built and measured for the fixed-width types instead --
+            // it never fired, because a pure type never reaches this line. Measured on kimi: 99.6% of
+            // records take the 16-wide path, and the remainder is one state transition per iteration.
             st.scalar_recs++;
             if (t == PP_ZONE_START || t == PP_ZONE_END || t == PP_ZONE_TOTAL) {
                 if (i + 2 > run) {
@@ -556,5 +616,6 @@ inline uint32_t spsc_decode_frame(
     }
     return off - kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
 }
+#pragma clang attribute pop
 
 }  // namespace tt::tt_metal::profiler
