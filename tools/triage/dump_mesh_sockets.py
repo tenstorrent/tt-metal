@@ -23,19 +23,20 @@ Description:
     peer on this host shows as its device id, matching the Dev column; a peer on another rank shows as
     a fabric node id, which you match against the Node column of that rank's output.
 
-    bytes_sent and bytes_acked each exist in both buffers, and only the copy the PEER writes over the
-    NOC tracks a running kernel. Counter columns are grouped by the buffer they come from:
+    Counter columns, by where the value is read from:
 
-      sent@snd    sender_socket_md.bytes_sent                          STALE
-      acked@snd   sender_socket_md.bytes_acked_array[i]                live, written by the receiver
-      wr_off      sender write_ptr, offset from downstream_fifo_addr   STALE
-      sent@rcv    receiver_socket_md.bytes_sent                        live, written by the sender
-      acked@rcv   receiver_socket_md.bytes_acked                       STALE
-      rd_addr     receiver read_ptr, absolute L1 address               STALE
+      sent@snd    sender bytes_sent                                    kernel frame
+      acked@snd   sender_socket_md.bytes_acked_array[i]                L1, written by the receiver
+      wr_off      sender write_ptr, offset from downstream_fifo_addr   kernel frame
+      sent@rcv    receiver_socket_md.bytes_sent                        L1, written by the sender
+      acked@rcv   receiver bytes_acked                                 kernel frame
+      rd_addr     receiver read_ptr, absolute L1 address               kernel frame
 
-    The STALE columns are only refreshed by update_socket_config, which the kernels call at exit, so
-    they hold where the PREVIOUS invocation finished: the host-init value before the first one, a
-    cumulative leftover after it. To be fixed.
+    The L1 copies of the counters a kernel owns are only refreshed by update_socket_config at kernel
+    exit, so they hold where the previous invocation finished. The current values are read instead from
+    the SocketSenderInterface / SocketReceiverInterface local in the kernel's frame, matched on
+    config_addr. That halts the endpoint core. A column reads ? when the frame could not be walked or
+    the local was optimized out.
 
 Owner:
     onenezicTT
@@ -44,23 +45,30 @@ Owner:
 import struct
 from dataclasses import dataclass, field
 
+from callstack_provider import CallstackProvider, run as get_callstack_provider
 from inspector_data import run as get_inspector_data
 from metal_device_id_mapping import run as get_metal_device_id_mapping
 from run_checks import run as get_run_checks
-from triage import ScriptConfig, hex_serializer, log_warning_location, run_script, triage_field
+from triage import ScriptConfig, hex_serializer, log_warning_location, log_warning_risc, run_script, triage_field
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.device import Device
+from ttexalens.exceptions import DebugSymbolError
 from ttexalens.tt_exalens_lib import read_from_device
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 script_config = ScriptConfig(
-    depends=["inspector_data", "run_checks", "metal_device_id_mapping"],
+    depends=["inspector_data", "run_checks", "metal_device_id_mapping", "callstack_provider"],
 )
+
 
 RECV_FMT = "<6I"  # bytes_sent, read_ptr, fifo_addr, fifo_total_size, bytes_acked, is_h2d
 SEND_FMT = "<7I"  # bytes_sent, num_downstreams, write_ptr, dstr_bytes_sent_addr, dstr_fifo_addr,
 #                   dstr_fifo_total_size, is_d2h
+
+
+def hex_or_unknown(value: int | str | None) -> str:
+    return value if isinstance(value, str) else hex_serializer(value)
 
 
 def node_label(mesh_id: int, fabric_chip_id: int) -> str:
@@ -112,6 +120,7 @@ class Endpoint:
     acked_stride: int
     peers: list[Peer] = field(default_factory=list)
     md: ReceiverMd | SenderMd | None = None
+    interface: dict[str, int] = field(default_factory=dict)  # fields read from the kernel's Socket*Interface local
 
 
 @dataclass
@@ -123,12 +132,12 @@ class SocketRow:
     downstream_config_addr: int | None = triage_field("Downstream Addr", hex_serializer)
     num_downstreams: int | None = triage_field("Downstreams")
     downstream: int | None = triage_field("Downstream #")
-    sent_at_sender: int | None = triage_field("sent@snd")
+    sent_at_sender: int | str | None = triage_field("sent@snd")
     acked_at_sender: int | None = triage_field("acked@snd")
-    write_ptr: int | None = triage_field("wr_off")
+    write_ptr: int | str | None = triage_field("wr_off")
     sent_at_receiver: int | None = triage_field("sent@rcv")
-    acked_at_receiver: int | None = triage_field("acked@rcv")
-    read_ptr: int | None = triage_field("rd_addr", hex_serializer)
+    acked_at_receiver: int | str | None = triage_field("acked@rcv")
+    read_ptr: int | str | None = triage_field("rd_addr", hex_or_unknown)
     fifo_size: int | None = triage_field("fifo")
     peer: str = triage_field("Peer")
 
@@ -147,6 +156,46 @@ def read_md(ep: Endpoint) -> ReceiverMd | SenderMd:
         for i in range(max(n_down, 1))
     ]
     return SenderMd(sent, n_down, wr, dstr_config_addr, fifo, is_d2h, acked)
+
+
+def read_interface(ep: Endpoint, callstack_provider: CallstackProvider) -> dict[str, int]:
+    """The kernel's Socket{Sender,Receiver}Interface local, found by matching its config_addr."""
+    fields = ("bytes_sent", "write_ptr") if ep.role == "sender" else ("bytes_acked", "read_ptr")
+    dispatcher_data = callstack_provider.dispatcher_data
+    for risc_name in ep.location.noc_block.risc_names:
+        try:
+            if dispatcher_data.is_idle_in_default_view(ep.location, risc_name):
+                continue
+            frames = callstack_provider.get_cached_callstacks(
+                ep.location, risc_name, use_full_callstack=True
+            ).kernel_callstack_with_message.callstack
+        except TimeoutDeviceRegisterError:
+            raise
+        except Exception as e:
+            log_warning_risc(risc_name, ep.location, f"socket callstack: {e}")
+            continue
+        for frame in frames:
+            for var in frame.locals + frame.arguments:
+                if var.value is None:
+                    continue
+                try:
+                    # A kernel holding an array of interfaces keeps them out of reach of get_member.
+                    candidates = [var.value[i] for i in range(len(var.value))]
+                except Exception:
+                    candidates = [var.value]
+                for candidate in candidates:
+                    try:
+                        values = {f: int(candidate.get_member(f).read_value()) for f in ("config_addr", *fields)}
+                    except DebugSymbolError:
+                        break  # elements share a type, so one miss rules out the rest
+                    except TimeoutDeviceRegisterError:
+                        raise
+                    except Exception as e:
+                        log_warning_risc(risc_name, ep.location, f"socket interface: {e}")
+                        continue
+                    if values.pop("config_addr") == ep.config_addr:
+                        return values
+    return {}
 
 
 def discover(inspector_data, id_mapping, run_checks) -> list[Endpoint]:
@@ -205,9 +254,9 @@ def sender_row(ep: Endpoint, md: SenderMd, index: int) -> SocketRow:
         config_addr=ep.config_addr,
         downstream_config_addr=md.downstream_config_addr,
         downstream=index,
-        sent_at_sender=md.bytes_sent,
+        sent_at_sender=ep.interface.get("bytes_sent", "?"),
         acked_at_sender=md.bytes_acked[index],
-        write_ptr=md.write_ptr,
+        write_ptr=ep.interface.get("write_ptr", "?"),
         sent_at_receiver=None,  # receiver's buffer
         acked_at_receiver=None,  # receiver's buffer
         read_ptr=None,  # receiver's buffer
@@ -229,8 +278,8 @@ def receiver_row(ep: Endpoint, md: ReceiverMd) -> SocketRow:
         acked_at_sender=None,  # sender's buffer
         write_ptr=None,  # sender's buffer
         sent_at_receiver=md.bytes_sent,
-        acked_at_receiver=md.bytes_acked,
-        read_ptr=md.read_ptr,
+        acked_at_receiver=ep.interface.get("bytes_acked", "?"),
+        read_ptr=ep.interface.get("read_ptr", "?"),
         fifo_size=md.fifo_total_size,
         num_downstreams=None,  # sender's buffer
         peer=", ".join(p.label() for p in ep.peers),
@@ -247,6 +296,7 @@ def endpoint_rows(ep: Endpoint) -> list[SocketRow]:
 
 def run(args, context: Context):
     run_checks = get_run_checks(args, context)
+    callstack_provider = get_callstack_provider(args, context)
     endpoints = discover(get_inspector_data(args, context), get_metal_device_id_mapping(args, context), run_checks)
     if not endpoints:
         return None
@@ -265,6 +315,7 @@ def run(args, context: Context):
             except Exception as e:
                 log_warning_location(ep.location, f"{ep.role} socket config buffer 0x{ep.config_addr:x}: {e}")
                 continue
+            ep.interface = read_interface(ep, callstack_provider)
             rows += endpoint_rows(ep)
         return rows
 

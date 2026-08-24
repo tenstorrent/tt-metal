@@ -76,7 +76,6 @@ struct MeshSocketEndpointData {
 
 struct MeshSocketData {
     bool is_sender{};
-    std::weak_ptr<distributed::MeshBuffer> config_buffer;
     uint64_t config_buffer_address{};
     uint64_t data_buffer_address{};
     uint64_t fifo_size{};

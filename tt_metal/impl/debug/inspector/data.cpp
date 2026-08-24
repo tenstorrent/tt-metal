@@ -46,6 +46,7 @@ Data::Data(std::optional<int> rank, ContextId context_id) :
     // Initialize RPC server if enabled
     const auto& rtoptions = MetalContext::instance().rtoptions();
     mesh_buffer_logging_enabled = rtoptions.get_inspector_log_mesh_buffers();
+    mesh_socket_logging_enabled = rtoptions.get_inspector_log_mesh_sockets();
     runtime_entries_logging_enabled = rtoptions.get_inspector_log_runtime_entries();
     if (rtoptions.get_inspector_rpc_server_enabled()) {
         try {
@@ -165,11 +166,6 @@ void Data::rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& 
 
 void Data::rpc_get_sockets(rpc::Inspector::GetSocketsResults::Builder& results) {
     std::lock_guard<std::mutex> lock(mesh_sockets_mutex);
-    // Drop endpoints whose config buffer is gone or deallocated
-    std::erase_if(mesh_sockets_data, [](const auto& entry) {
-        auto config_buffer = entry.second.config_buffer.lock();
-        return !config_buffer || !config_buffer->is_allocated();
-    });
     auto sockets = results.initSockets(mesh_sockets_data.size());
     uint32_t i = 0;
     for (const auto& [config_buffer, socket_data] : mesh_sockets_data) {
@@ -712,6 +708,7 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT(inspector_capture_tensor_specs);
     RT(inspector_log_runtime_entries);
     RT(inspector_log_mesh_buffers);
+    RT(inspector_log_mesh_sockets);
     RT_CUSTOM("inspector_log_path", rt.get_inspector_log_path().string());
     RT(serialize_inspector_on_dispatch_timeout);
     RT(riscv_debug_info_enabled);

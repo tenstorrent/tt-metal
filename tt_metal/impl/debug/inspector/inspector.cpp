@@ -333,8 +333,17 @@ void Inspector::mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buff
         if (data->mesh_buffer_logging_enabled) {
             data->logger.log_mesh_buffer_deallocated(mesh_buffer);
         }
-        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
-        data->mesh_buffers_data.erase(mesh_buffer);
+        {
+            std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+            data->mesh_buffers_data.erase(mesh_buffer);
+        }
+        std::lock_guard<std::mutex> lock(data->mesh_sockets_mutex);
+        if (auto it = data->mesh_sockets_data.find(mesh_buffer); it != data->mesh_sockets_data.end()) {
+            if (data->mesh_socket_logging_enabled) {
+                data->logger.log_mesh_socket_destroyed(mesh_buffer, it->second);
+            }
+            data->mesh_sockets_data.erase(it);
+        }
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log mesh buffer deallocated: {}", e.what());
     }
@@ -356,7 +365,6 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
 
         inspector::MeshSocketData socket_data;
         socket_data.is_sender = is_sender;
-        socket_data.config_buffer = config_buffer;
         socket_data.config_buffer_address = config_buffer->address();
         socket_data.data_buffer_address = is_sender ? 0 : socket->get_data_buffer()->address();
         socket_data.fifo_size = socket->get_config().socket_mem_config.fifo_size;
@@ -407,6 +415,9 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
         socket_data.endpoints.reserve(endpoint_by_core.size());
         for (auto& [core, endpoint] : endpoint_by_core) {
             socket_data.endpoints.push_back(std::move(endpoint));
+        }
+        if (data->mesh_socket_logging_enabled) {
+            data->logger.log_mesh_socket_created(config_buffer.get(), socket_data);
         }
         data->mesh_sockets_data.insert_or_assign(config_buffer.get(), std::move(socket_data));
     } catch (const std::exception& e) {
