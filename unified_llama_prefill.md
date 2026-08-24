@@ -3034,6 +3034,47 @@ the same three zones, which turned "we are 2.6x slower" into "our DRAM wait is 3
 broadcast is fine" -- a statement narrow enough that only one unexamined variable was left.
 Measure the reference, not just the thing you are optimising.
 
+### The same rule holds in every kernel, and it is not a multicast artifact
+
+The multicast path has two senders on two threads, so its NOC assignment could plausibly
+have been about the two streams interfering rather than about the NOCs themselves. It is
+not. The **non**-multicast path, where every core reads its own operands and nothing is
+shared, splits exactly the same way:
+
+| [512,2048]@[2048,2048], 16 cores, NO multicast, mt=4 kt=8 nt=8 | |
+|---|---|
+| A on NOC 1, B on NOC 0 | **435.9 us** |
+| A on NOC 0, B on NOC 0 | 449.0 us |
+| A on NOC 0, B on NOC 1 | 802.0 us |
+| A on NOC 1, B on NOC 1 (what we had) | 1150.2 us |
+
+**2.6x again, same ordering.** And the old 807.8us figure recorded in the prefetch-depth
+section above is the A:0/B:1 row, so that whole measurement -- and the conclusion drawn from
+it, that depth hurts without multicast because DRAM is saturated -- was taken on a
+misconfigured NOC. The depth conclusion may or may not survive; it has not been re-taken.
+
+So the rule was applied to every kernel that reads DRAM, all of which had reads on thread 1
+and stores on thread 0 -- the wrong way round on the reads, and by chance the wrong way round
+on the writes too:
+
+| | reads 1 / writes 0 | reads 0 / writes 1 | reads 0 / writes 0 | reads 1 / writes 1 |
+|---|---|---|---|---|
+| rmsnorm [512,2048], 64 cores | 148.0 us | **62.5 us** | 91.5 us | 129.0 us |
+| flash attention, 8 heads, 8 cores | 355.4 us | **300.0 us** | 309.6 us | 358.6 us |
+
+**rmsnorm 2.4x, flash 1.18x**, and reads-on-0 wins in every kernel measured. The spread
+tracks how bandwidth-bound each one is: rmsnorm is almost pure streaming and moves the most,
+flash is latency- and compute-bound and moves the least, and the matmul sits between. Keeping
+reads and writes on *different* threads still matters on top of that -- reads 0 / writes 0
+loses to reads 0 / writes 1 in both -- but it is the smaller of the two effects, and it is
+the only one we had been reasoning about.
+
+The knobs are gone again rather than left behind as tuning surface: the answer is the same
+everywhere, so the kernels spell the threads literally and the rule is stated once, next to
+`noc_load` in api.h, where somebody choosing a thread will actually read it. The blocked
+matmul keeps `MMB_IN0_THREAD`/`MMB_IN1_THREAD` because it genuinely has two read streams of
+different sizes and the assignment between them is a real choice.
+
 ## Phase 11 -- Full block orchestration
 
 Host-side and kernel-loop work, not model gaps.
