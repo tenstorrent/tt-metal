@@ -128,8 +128,7 @@ def dense_sp_attention(
         num_links=ccl_manager.num_links,
         cluster_axis=cluster_axis,
         mesh_device=mesh_device,
-        # Plumbed from the runtime config: Ring on torus pods, Linear elsewhere. The op handles the
-        # sliding halo on Linear too (validated: 36L chunked, no-torus galaxy, min KV PCC 0.919 == ring).
+        # Plumbed from the runtime config: Ring on torus pods, Linear elsewhere (op supports both).
         topology=ccl_manager.topology,
         ccl_core_grid_offset=ccl_manager.ring_attention_ccl_core_grid_offset,
         use_column_major_ccl=True,
