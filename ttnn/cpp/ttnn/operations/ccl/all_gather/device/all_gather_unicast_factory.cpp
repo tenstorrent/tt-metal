@@ -155,15 +155,33 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     uint32_t num_links = operation_attributes.axis_num_links[axis];
     const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
     const auto arch = input_tensor.device()->arch();
+    // Bytes crossing one link of the gathered axis: the load each (link, direction) group has to move.
+    const uint64_t per_link_bytes = static_cast<uint64_t>(input_tensor.physical_volume()) *
+                                    input_tensor.element_size() * num_devices /
+                                    std::max(1u, num_links);
+    // The transfer unit, min(input page, output page); recomputed as output_chunk_size below.
+    const uint32_t chunk_bytes =
+        std::min<uint32_t>(input_page_size, output_tensor.buffer()->page_size());
+    bool cap_runs = false;
     uint32_t workers_per_dir = 1;
     if (arch == tt::ARCH::WORMHOLE_B0) {
         // Two workers saturate a link: one cannot keep it fed, and past two they only contend on the NOC.
-        // Never swept against the Blackhole value below.
+        // Never swept against the Blackhole values below.
         workers_per_dir = 2;
     } else if (arch == tt::ARCH::BLACKHOLE) {
-        // One worker (no mux) is far worse, and past three they only contend on the NOC. Swept over
-        // page sizes 64 B..8 KB on ring and line; three wins everywhere.
-        workers_per_dir = 3;
+        // Fabric-bound: the link runs short of payload, so it wants more workers feeding it and
+        // whole-packet runs rather than short DRAM-friendly ones. Two ways to get there -- a line, whose
+        // inbound traffic all arrives over one link where a ring's splits over two, and a chunk big
+        // enough that only one fits a packet, leaving the rest of the packet empty.
+        const bool bulk_line = !is_ring && per_link_bytes >= 1024u * 1024u;
+        const bool half_empty_packets = 2 * chunk_bytes > packet_size;
+        const bool fabric_bound = bulk_line || half_empty_packets;
+        // A mux plus its workers only pays off once each slice has real work; below that the extra cores
+        // are pure launch cost. A line relays far more stripes per device than a ring, so its per-slice
+        // overhead is amortized much later.
+        const uint64_t mux_floor = is_ring ? 16u * 1024u : 192u * 1024u;
+        workers_per_dir = per_link_bytes < mux_floor ? 1u : (fabric_bound ? 3u : 2u);
+        cap_runs = !fabric_bound;
     }
 
     // Shrink core usage to fit available core grid. Shrink workers_per_link first, and then shrink num_links.
@@ -302,11 +320,11 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     chunks_per_packet = std::max(chunks_per_group, (chunks_per_packet / chunks_per_group) * chunks_per_group);
     uint32_t cb_page_size = chunks_per_packet * output_chunk_size;
     uint32_t cb_depth = 3;
-    // Perf hack: pack multiple packets into a single CB page to reduce CB sync frequency between reader and
-    // writer. Note this increases effective CB depth. An integer multiplier preserves the whole-packet and
-    // whole-page properties above.
-    // Empirically determined heuristic, works well for all tensor sizes
-    const uint32_t ideal_multiplier = (arch == tt::ARCH::BLACKHOLE) ? 4 : 3;
+    // Pack several packets into one CB page to reduce reader/writer sync frequency (this also raises the
+    // effective CB depth). An integer multiplier preserves the whole-packet and whole-page properties above.
+    // Blackhole prefers no packing: a packet-sized entry keeps the writer closer behind the reader, which
+    // matters more there than the saved syncs.
+    const uint32_t ideal_multiplier = (arch == tt::ARCH::BLACKHOLE) ? 1 : 3;
     const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
     const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * cb_page_size), 1u, ideal_multiplier);
     if (multiplier < ideal_multiplier) {
@@ -370,6 +388,12 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     const uint32_t cb_pages_per_stripe = std::max(1u, (num_output_chunks / total_slices) / outputs_per_cb_page);
     const uint32_t data_valid_granularity = std::max(1u, cb_pages_per_stripe / 2u);
 
+    // Longest run the walk may emit, in chunks. Capping it costs packet payload but spreads the transfer
+    // over more DRAM banks, which is the better trade wherever DRAM is the limit (see cap_runs above). The
+    // cap is a byte budget so it holds across page sizes.
+    constexpr uint32_t max_run_bytes = 4096;
+    const uint32_t xfer_cap = cap_runs ? std::max(1u, max_run_bytes / output_chunk_size) : 0xFFFFFFFFu;
+
     // KERNEL CREATION
     // Reader
     std::vector<uint32_t> reader_compile_args = {
@@ -382,6 +406,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         cb_page_size,              // cb entry size
         do_init_barrier,           // wait for remote output allocation before relaying
         packet_size,               // packet_size (sets the transfer size, hence the walk order)
+        xfer_cap,                  // max run length in chunks
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
@@ -397,6 +422,7 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         packet_size,               // packet_size
         do_init_barrier,           // send init handshake before relaying
         data_valid_granularity,    // signal data_valid once per this many CB pages
+        xfer_cap,                  // max run length in chunks
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 

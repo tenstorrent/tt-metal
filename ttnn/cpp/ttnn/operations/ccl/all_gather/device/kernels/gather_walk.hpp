@@ -19,7 +19,8 @@
 //   seqno    -- a chunk's position in the emission order.
 //   stride   -- chunk step between neighbours in memory, from TensorAccessor.
 //   lane     -- residue class mod stride, i.e. one line of chunks contiguous in memory.
-//   xfer     -- chunks per transfer: the most that fits a packet and one NOC command.
+//   xfer     -- chunks per transfer: the most that fits a packet, one NOC command, and the
+//               host's run cap.
 //   tile     -- xfer * stride chunks, read column-major.
 //   run      -- one tile column: chunks contiguous at the destination, sent as one transfer.
 //   stripe   -- the chunks this device contributes per row of the output.
