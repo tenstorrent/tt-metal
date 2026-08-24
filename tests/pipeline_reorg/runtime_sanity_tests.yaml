@@ -26,6 +26,17 @@
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
+# --- Dispatch: randomized tensix programs (package-and-release health check) ---
+- name: runtime_release_sanity_dispatch
+  cmd: TT_METAL_SEED=0 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshCQProgramFixture.TensixTestRandomizedProgram'
+  skus:
+    wh_n150:
+      timeout: 10
+    bh_p150:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+
 # --- Device: init, cluster API, mock API (excluding NIGHTLY) ---
 - name: runtime_sanity_device
   cmd: ./build/test/tt_metal/unit_tests_device --gtest_filter='*:-*NIGHTLY*'
