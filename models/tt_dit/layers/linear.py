@@ -660,14 +660,24 @@ class RowParallelLinear(Module):
         _, rs_output_buffer = self.ccl_manager.get_rs_ping_pong_buffer(
             pre_rs_shape, 3, self.mesh_axis, return_intermediate=False
         )
+        # The MM output is scratch here (only the RS output is returned), so hand it to the RS
+        # through the rolling L1 window instead of a DRAM round-trip whenever the blocking config
+        # carries a window (the default). The window bounds the resident shard, and the credit
+        # array is the RS->MM return path that lets the matmul recycle window slots. A config
+        # with mm_window_blocks=None opts out and falls back to self.mm_memory_config (the op
+        # rejects an L1 MM output without a window).
+        mmrs_params = get_fused_mmrs_config(M, K, N, core_grid, self.ccl_manager.num_links)
+        use_l1_handoff = mmrs_params["mm_window_blocks"] is not None
         _, output = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
             input_tensor=[x, x_second] if x_second is not None else x,
             weight_tensor=weight,
             dim=3,
             multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(self.mesh_axis),
-            **get_fused_mmrs_config(M, K, N, core_grid, self.ccl_manager.num_links),
+            **mmrs_params,
             bias=self.bias.data if self.bias is not None else None,
-            memory_config_mm=self.mm_memory_config,
+            memory_config_mm=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+            if use_l1_handoff
+            else self.mm_memory_config,
             rs_intermediate_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             topology=self.ccl_manager.topology,
@@ -680,6 +690,7 @@ class RowParallelLinear(Module):
             addcmul_input_tensor2=addcmul_b,
             dtype=dtype,
             mm_progress_counters=self.ccl_manager.get_mm_progress_counters_buffer(),
+            mm_credit_counters=self.ccl_manager.get_mm_credit_counters_buffer() if use_l1_handoff else None,
         )
         if needs_reshape:
             output = ttnn.squeeze(output, 0)
