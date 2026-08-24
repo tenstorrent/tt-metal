@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <random>
@@ -162,8 +163,16 @@ bool verify_top32_outputs(
     return all_ok;
 }
 
+// When non-null, *elapsed_dispatch_us receives the wall-clock time spent in the
+// on-device dispatch/execution window (EnqueueMeshWorkload + Finish) only — it
+// excludes host-side program/buffer setup, which is identical regardless of the
+// compute kernel's instruction sequence. Informational only: no pass/fail
+// threshold, since dispatch latency is not calibrated across backends.
 bool run_top32_rm_dev(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t row_elements, uint32_t seed) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    uint32_t row_elements,
+    uint32_t seed,
+    double* elapsed_dispatch_us = nullptr) {
     auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -250,8 +259,13 @@ bool run_top32_rm_dev(
     detail::WriteToBuffer(buf_in0, in.packed_scores);
     detail::WriteToBuffer(buf_in1, in.indices_u32);
 
+    const auto dispatch_start = std::chrono::steady_clock::now();
     EnqueueMeshWorkload(cq, workload, false);
     Finish(cq);
+    if (elapsed_dispatch_us != nullptr) {
+        *elapsed_dispatch_us =
+            std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - dispatch_start).count();
+    }
 
     std::vector<uint32_t> out0;
     std::vector<uint32_t> out1;
@@ -270,6 +284,27 @@ TEST_F(MeshDeviceFixture, Top32RmDevPipelineCompletes) {
     for (uint32_t row : {64u, 128u, 160u, 3232u}) {
         log_info(LogTest, "Top32 RM dev row_elements={}", row);
         EXPECT_TRUE(unit_tests::compute::top32_rm_dev::run_top32_rm_dev(this->devices_.at(0), row, 12345u));
+    }
+}
+
+// Perf-timing regression for tenstorrent/tt-blaze#2244 ("Optimize topK-related LLK
+// functions"). Exercises the same production LLK path as Top32RmDevPipelineCompletes
+// (still checked for correctness) at row_elements representative of the issue's two
+// named sub-ops — 160 for local_top_k (row_elements < 1024, top32_rm_dev_compute.cpp)
+// and 3232 = 101*32 for cross_core_topk_merge (row_elements >= 1024,
+// top32_rm_dev_compute_v2.cpp, matching PR tenstorrent/tt-blaze#2304's own num_senders
+// table) — and logs the on-device dispatch window so successive runs can be diffed for
+// a before/after timing comparison.
+TEST_F(MeshDeviceFixture, Top32RmDevPerfTiming) {
+    if (this->arch_ != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "top32_rm_dev kernels are only supported on Blackhole";
+    }
+    for (uint32_t row : {160u, 3232u}) {
+        double elapsed_dispatch_us = 0.0;
+        const bool ok = unit_tests::compute::top32_rm_dev::run_top32_rm_dev(
+            this->devices_.at(0), row, 12345u, &elapsed_dispatch_us);
+        log_info(LogTest, "Top32 RM dev perf timing row_elements={} dispatch_us={:.2f}", row, elapsed_dispatch_us);
+        EXPECT_TRUE(ok);
     }
 }
 
