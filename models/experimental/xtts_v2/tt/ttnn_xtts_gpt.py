@@ -130,7 +130,7 @@ class TTNNGPTCore:
 
     def _mlp(self, x, block, prg_fc=None, prg_proj=None):
         # c_fc + gelu_new folded into the matmul — matches the base TTIR->TTNN lowering the
-        # compiler emits (validated to match the separate tanh-gelu at PCC ~0.9999993), and avoids
+        # compiler emits, is validated against the separate tanh-gelu by test_gpt_core_pcc, and avoids
         # a standalone elementwise gelu kernel. Decode carries it in prg_fc's fused_activation;
         # prefill has no prg, where the string form folds in on its own. Passing the string
         # ALONGSIDE an explicit program_config does NOT fuse — it adds a second kernel — so use
