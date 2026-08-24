@@ -55,6 +55,21 @@ def signpost(name: str) -> None:
         )
 
 
+def _no_marks(why: str) -> None:
+    """Say why there will be no per-stage split. The absence of this line is what hid the defect.
+
+    A zero from mark_stages reached the report as `stage_buckets {}`, which the roofline renders as
+    one shared peak across every stack -- the same output an unmarked capture produces. Nothing
+    distinguished "not asked", "asked and refused" and "ran and failed", so nine attempts at the
+    stage axis all looked alike from the outside."""
+    print(
+        "  [stage-marks] NO per-stage boundaries: %s -- every stack will share one math-fidelity "
+        "peak in the roofline." % why,
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def mark_stages(adapter, device) -> int:
     """Run each declared stage once, eagerly, between marks. Returns how many stages were marked.
 
@@ -64,13 +79,33 @@ def mark_stages(adapter, device) -> int:
 
     Zero is a real answer -- a pipeline that declares no stages, or whose steps will not run one at a
     time, simply gets no split, and every consumer keeps the whole-profile figure it already had.
+    But zero must SAY WHICH, because the three reasons are not the same problem and were reported
+    identically: this returned a bare 0 and printed nothing, so a caller that simply had not built
+    the adapter looked exactly like a pipeline with no stages to declare.
     """
     try:
         import ttnn
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        _no_marks("ttnn is not importable here (%s: %s)" % (type(exc).__name__, str(exc)[:120]))
         return 0
+    # SETUP BUILDS THE STAGES. `stages` is [] until setup() runs -- __init__ only declares the
+    # attribute, and setup() is what constructs the pipeline and binds one _Stage per declared stage.
+    # measure_adapter calls it (trace_replay: `adapter.setup(device)`); this did not, and read the
+    # empty list straight off a freshly constructed adapter. So every run returned 0 stages having
+    # never asked the pipeline, emitting the start/stop pair and none of the per-stage boundaries,
+    # which is exactly what the capture showed: 2 signposts where 8 were expected, and a roofline
+    # that shared one math-fidelity peak across all three stacks.
+    if not list(getattr(adapter, "stages", None) or []):
+        _setup = getattr(adapter, "setup", None)
+        if callable(_setup):
+            try:
+                _setup(device)
+            except Exception as exc:  # noqa: BLE001
+                _no_marks("adapter.setup failed (%s: %s)" % (type(exc).__name__, str(exc)[:140]))
+                return 0
     stages = list(getattr(adapter, "stages", None) or [])
     if not stages:
+        _no_marks("the pipeline declares no stages after setup")
         return 0
     n = 0
     for st in stages:
@@ -93,6 +128,8 @@ def mark_stages(adapter, device) -> int:
             )
         finally:
             signpost("stage:%s:end" % name)
+    if not n:
+        _no_marks("%d declared stage(s), none could be run one at a time" % len(stages))
     return n
 
 
