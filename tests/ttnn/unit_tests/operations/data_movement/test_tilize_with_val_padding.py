@@ -910,3 +910,48 @@ def test_tilize_with_val_padding_program_cache_addr_change_interleaved_multicore
         out_mem_cfg=dram,
         use_multicore=True,
     )
+
+
+# TilizeWithValPaddingMultiCoreBlockInterleavedFactory gives cores one of two block widths, and a
+# block's width fixes the size of the buffers carrying it: the reader fills a block with one raw
+# linear write, and cb_push_back requires the producer to write contiguously, so a buffer whose
+# size is not an exact multiple of its block overruns the next one. Each width therefore gets its
+# own buffers (#51305). Widths here are indivisible by any plausible block size, so both widths are
+# live at once; 8192 is the single-width case. Each shape runs twice to cover the program-cache
+# hit, where every reader/writer pair has to be re-pointed at the new buffers.
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        (1, 1, 30, 7328),
+        (1, 1, 100, 7328),
+        (1, 1, 60, 8192),
+        (1, 1, 90, 7392),
+        (1, 1, 150, 6304),
+        (2, 1, 60, 7328),
+    ],
+)
+@pytest.mark.parametrize("pad_value", [1.0])
+def test_tilize_with_val_padding_block_per_node_cb_size(device, input_shape, pad_value):
+    output_shape = (
+        input_shape[0],
+        input_shape[1],
+        math.ceil(input_shape[2] / 32) * 32,
+        input_shape[3],
+    )
+    dram_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    for _ in range(2):
+        torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+        tt_rm = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=dram_cfg,
+            device=device,
+        )
+
+        tt_tile = ttnn.tilize_with_val_padding(tt_rm, output_shape, pad_value, use_multicore=True)
+
+        assert tt_tile.layout == ttnn.TILE_LAYOUT
+        torch_golden = pytorch_tilize_with_val_padding(torch_input, output_shape, pad_value)
+        assert_equal(torch_golden, tt_tile.cpu().to_torch_with_padded_shape())
