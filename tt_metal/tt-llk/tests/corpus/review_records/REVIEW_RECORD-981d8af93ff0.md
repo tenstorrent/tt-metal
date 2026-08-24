@@ -1,7 +1,14 @@
 # REVIEW_RECORD — pin 27
 
 cc1plus sha256: 981d8af93ff044da5cb564df76b2a1e4907c9780501cdb8f1c68f1f17defd8bd
-driver (g++) sha256: 774e83d7a3d53d2e000730c47080b60a96cc8993bbabd2bbe62aa7fbd110e31e (unchanged)
+driver (g++) sha256: 6f79329d0aa7ac26a7c9d9c5f36295d4a57ce8d26434eb6e6010edffb30e1b96
+(CORRECTION 2026-08-23: the first ceremony commit wrongly carried pin-26's
+driver sha as "unchanged" — the driver rebuilds with cc1plus (embedded
+checksum) and the pin-27 install manifest records the new sha above; the
+error was caught by the weekly preflight's DRIVER SHA MISMATCH fail-closed
+guard on the first ON-28 weekly launch and corrected in the same-day
+follow-up commit. Ceremony rule banked: read the driver sha from the
+CURRENT install manifest at every pin, never assert "unchanged".)
 source: sfpi-gcc nkapre/sfpi 0045d296318 (merge of lane GA
 agent/hardsigmoid-residency bcf2ff308e9 + lane FZ agent/lcm-pricing
 e08f9c7b291, both off pin-26 97f38861a94; clean merges). Built in
