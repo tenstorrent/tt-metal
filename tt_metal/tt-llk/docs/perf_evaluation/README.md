@@ -342,24 +342,41 @@ source and allows a single percentage — see §10.
 
 ## 6. The threshold, and how it was derived
 
-### 6.1 Procedure
+### 6.1 How the number was chosen
 
-1. For a candidate rule *more than X% **and** more than C cycles*, count the
-   points where `move > X` and `cycles > C`. Those are points where some pairing
-   of two runs makes the gate fire with no code change.
-2. Take the smallest `(X, C)` for which that count is zero.
+The code never changed between runs, so **any measurement the gate would fail on
+is a false alarm by definition**. That turns picking a threshold into counting.
 
-`C = 30` comes from the fixed component: `INIT`/`UNINIT` move by at most 25–27
-cycles no matter how large the point is. `X = 2%` is what remains once that floor
-is applied.
+Take a candidate rule — *fail if a number is more than X% slower **and** more
+than C cycles slower* — and count how many measurements it would fail on. Then
+pick the smallest X and C where that count is zero. Smallest, because a larger
+threshold is just as safe but catches fewer real regressions.
 
-### 6.2 Relation to what a gate computes
+Doing that gives **C = 30 cycles** and **X = 2%**:
 
-A gate compares one baseline `b` against one current `c`: `(c − b) / b`. Over all
-ordered pairs from N runs the largest is `(max − min) / min`, slightly **larger**
-than `move = (max − min) / median`, because `min ≤ median`. At these magnitudes
-the difference is second order — 2.00% versus about 2.02% — but the direction
-matters: `move` marginally **under**-states the worst pairing.
+- The cycle floor has to clear the small markers. `INIT` and `UNINIT` move by up
+  to 25 cycles on Blackhole and 27 on Wormhole, so 30 is the first round number
+  above them.
+- With those excluded, the largest movement left anywhere is under 2%.
+
+Both numbers fall out of the data; neither was picked in advance.
+
+### 6.2 One caveat: our number is a hair smaller than the gate's
+
+We measure movement as `(max − min) / median`. A gate does something slightly
+different — it picks one run as the baseline, one as the current, and divides by
+**the baseline**, which may not be the median.
+
+An example. Five runs give 100,000 once and 102,000 four times.
+
+- We divide the 2,000-cycle gap by the median, 102,000, and report **1.96%**.
+- A gate that happened to use the 100,000 run as its baseline divides by 100,000
+  and reports **2.00%**.
+
+So a gate can see a slightly larger number than we do. The difference is tiny at
+these magnitudes, but it runs in the unhelpful direction: our figures are a
+fraction optimistic rather than conservative. It is worth knowing when a
+measurement sits right on the threshold, and irrelevant otherwise.
 
 ### 6.3 Direction: false regressions and false improvements
 
