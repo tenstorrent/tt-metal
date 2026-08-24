@@ -141,7 +141,7 @@ std::optional<TopKCoreConfig> find_topk_core_config_impl(
         // buffers to a single core (they live on one core), not amortised across all cores.
         // Each local core physically produces ceil(k / tile_width) tiles (the writer strides by
         // Kt tiles), so the gathered width is num_cores * Kt tiles — round K UP to the tile
-        // boundary. Flooring here (the old max(k, tile_width) formula) undersized the gather
+        // boundary. Warning: a flooring formula (e.g. max(k, tile_width)) undersizes the gather
         // CBs and the final reader's tile count for K values that are not tile multiples.
         const uint32_t Kt = tt::div_up(k, tile_width);
         const uint32_t Wt_final = num_cores * Kt;

@@ -245,7 +245,7 @@ std::vector<Tensor> post_topk_transform_tensor(
 // the wide-arm predicate below). The small-k arm therefore routes every
 // >= small_k_route_min_padded_width cell below the plain
 // multi_core_min_width floor, pow2 or not; eligible pow2 cells at or above
-// the floor keep the bitonic path unchanged.
+// the floor keep the stock bitonic path.
 constexpr uint32_t large_k_route_min_k_exclusive = 64;
 // Small-k arm floor (on the tile-padded width): below this the single-core
 // fallback is already sub-ms and the routed composite's fixed envelope is
@@ -310,9 +310,9 @@ bool should_route_to_topk_large_indices(
         //    linear single-core factory (~137 ns/elem) while the composite is
         //    tens of microseconds.
         //  * the pow2 [small_k_route_min_padded_width, multi_core_min_width)
-        //    low-tile-row cell: since the Ht-aware gate this is structurally
-        //    eligible for the stock multi-core bitonic, but the composite
-        //    still wins it — measured on p150a (bf16 largest W=4096, 3 Tracy
+        //    low-tile-row cell: structurally eligible for the stock
+        //    multi-core bitonic via the Ht-aware relaxation, but the
+        //    composite still wins it — measured on p150a (bf16 largest W=4096, 3 Tracy
         //    trials, <0.2% spread): 70.3 -> 46.8 us (k=32, 1 tile row) up to
         //    165.5 -> 48.0 us (k=64, 2 tile rows).
         // Both collapse to evaluating the SHARED
@@ -324,7 +324,7 @@ bool should_route_to_topk_large_indices(
         // (topk_would_route_to_large_indices). Eligible cells at width >=
         // multi_core_min_width keep the stock bitonic; cells that fail only
         // verify_multi_core_cost (grid/L1 feasibility) stay on the stock path
-        // (unchanged, conservative). When routing is declined for other
+        // (conservative). When routing is declined for other
         // reasons (sub_core_grids, preallocated outputs, non-bf16, smallest,
         // stable), the device op's own Ht-aware eligibility still upgrades
         // low-tile-row cells from single-core to multi-core.
@@ -559,13 +559,14 @@ std::vector<Tensor> topk(
     Tensor transformed_tensor = ::reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
 
     // Blackhole routing onto ttnn::experimental::topk_large_indices covers
-    // two regions where the composite measured faster than the stock op:
-    // k in (64, 2048] (off the multi-core k <= 64 gate), and k <= 64 rows at
-    // padded width >= 4096 that fail the plain multi_core_min_width bitonic
-    // gate (>= 65535, non-pow2, or any pow2 below 8192 — the router
-    // deliberately ignores the device op's Ht-aware low-tile-row relaxation
-    // because the composite also beats the stock multi-core bitonic there).
-    // See the comment block on
+    // two regions where the composite measures faster than the device op:
+    // k in (64, 2048] (above the device op's multi-core k <= 64 gate), and
+    // k <= 64 calls whose padded width is >= small_k_route_min_padded_width
+    // but fails the plain multi_core_min_width bitonic gate (>= 65535,
+    // non-pow2, or pow2 below multi_core_min_width). The router evaluates
+    // that gate without the device op's Ht-aware low-tile-row relaxation:
+    // the composite also beats the stock multi-core bitonic on those
+    // low-tile-row cells. See the comment block on
     // should_route_to_topk_large_indices for the full predicate and contract.
     if (operations::reduction::topk::CMAKE_UNIQUE_NAMESPACE::should_route_to_topk_large_indices(
             transformed_tensor,
