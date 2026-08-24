@@ -19,7 +19,9 @@ uint32_t largest_power_of_two(uint32_t x);
 // below the 16-bit bitonic index limit, power-of-two width, and K <=
 // multi_core_max_k. This is the single source of truth shared by
 // select_program_factory, validate_on_program_cache_miss, and the composite
-// router in topk.cpp; the cost/grid check (verify_multi_core_cost) comes on top.
+// router in topk.cpp (the router passes a pinned num_tile_rows to disable the
+// Ht-aware relaxation — the composite measured faster on that cell); the
+// cost/grid check (verify_multi_core_cost) comes on top.
 bool topk_multicore_structurally_eligible(uint32_t reduced_width, uint32_t num_tile_rows, uint32_t k);
 
 struct TopKCoreConfig {

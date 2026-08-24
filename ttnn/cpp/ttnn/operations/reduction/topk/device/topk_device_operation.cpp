@@ -61,7 +61,10 @@ tt::DataFormat index_cb_data_format_for(
  * ttnn::prim::topk_multicore_structurally_eligible() helper (topk_utils.cpp),
  * with thresholds named in topk_constants.hpp. The same helper gates
  * validate_on_program_cache_miss and the composite router in topk.cpp, so the
- * three sites cannot drift.
+ * three sites cannot drift. (The router evaluates it with the low-tile-row
+ * relaxation deliberately disabled: the composite measured faster than the
+ * stock multi-core bitonic on that cell — see
+ * should_route_to_topk_large_indices in topk.cpp.)
  *
  * 1. DIMENSION SIZE: Input dimension >= multi_core_min_width, OR the input has
  *    at most multi_core_low_ht_max_tile_rows tile rows and the dimension is

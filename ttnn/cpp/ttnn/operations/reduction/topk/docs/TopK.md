@@ -107,7 +107,7 @@ The TTNN TopK operation provides two execution strategies, each optimized for di
 | Strategy              | Description                                                                                     | Strengths                                                                            | Weaknesses                                                                                   | Typical Use Case                                |
 | --------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- | ----------------------------------------------- |
 | **Single Core**       | Each row is processed entirely on a single core using Bitonic Sort.                            | Simple, works for any tensor size, supports both uint16 and uint32 indices.         | Limited parallelism; all work for a row happens on one core.                                 | Default strategy for most cases.                |
-| **Multi Core**        | Work is split across multiple cores: local TopK on each core, then a final gather and TopK.    | **Highest parallelism**; exploits L1-to-L1 NoC communication; faster for large data. | Only supports K ≤ 64, power-of-two width < 65535 that is ≥ 8192 (or ≥ 1024 with ≤ 2 tile rows), higher memory complexity. | Very wide tensors, or low-tile-row tensors ≥ 1024 wide, with small K. |
+| **Multi Core**        | Work is split across multiple cores: local TopK on each core, then a final gather and TopK. The split is chosen by a fitted makespan model (see below), not by maximizing core count. | Parallel local sort; exploits L1-to-L1 NoC communication; faster for large data. | Only supports K ≤ 64, power-of-two width < 65535 that is ≥ 8192 (or ≥ 1024 with ≤ 2 tile rows), higher memory complexity. | Very wide tensors, or low-tile-row tensors ≥ 1024 wide, with small K. |
 
 ### Key Points:
 
@@ -247,12 +247,20 @@ The strategy consists of two phases:
 
 1. **Width Splitting**:
    - The input width is divided among multiple cores.
-   - Each core receives `Wt_local` width tiles (always configured for optimal bitonic sort performance).
-   - The split is chosen such that:
+   - Each core receives `Wt_local` width tiles.
+   - A split is *valid* when:
      - `split_size ≥ 64` (minimum 2 tiles per core)
      - `split_size ≤ width / 2`
      - Total cores used = `width / split_size`
      - Width must divide evenly by `split_size` (no remainder)
+     - The core count fits the grid as a contiguous rectangle, and the per-core CB footprint fits L1
+   - Among all valid power-of-two splits, the one with the lowest **modeled makespan** is selected:
+     `T ≈ kLocalCostFactor × Wt_local + kFinalCostFactor × Wt_final`, where `Wt_final = num_cores × Kt`.
+     The constants were fitted on Blackhole (p150a) silicon; a local tile costs ~3.5× a final tile because
+     local cores run full 64-element sorts per tile while the final core runs merge/rebuild pair-ops.
+     Note this is **not** the maximum-parallelism (most-cores / smallest-split) choice: adding cores grows
+     the serial final-stage gather (`Wt_final`), so the model balances the two stages instead
+     (see `find_topk_core_config()` in `topk_utils.cpp`).
 
 2. **Local Bitonic Sort Processing**:
    - **Initial Sort**: Process input tiles in pairs using `topk_local_sort` to create locally sorted sequences
@@ -324,27 +332,33 @@ This limits the maximum number of cores and the split size that can be used.
 
 #### Example:
 
-For a tensor of shape `[32, 16384]` (1 × 512 tiles), k=32, multi-core with 8 cores:
+For a tensor of shape `[32, 16384]` (1 × 512 tiles), k=32, on a grid large enough for a
+32-core rectangle (e.g. Blackhole), the makespan model picks:
 
 **Configuration:**
-- `split_size = 2048` (64 tiles per core)
-- 8 local cores + 1 final core = 9 cores total
+- `split_size = 512` (16 tiles per core): score `7×16 + 2×32 = 176`, beating
+  `split_size = 256` (64 cores, `7×8 + 2×64 = 184`) and `split_size = 1024`
+  (16 cores, `7×32 + 2×16 = 256`)
+- 32 local cores + 1 final core = 33 cores total
 
 **Local TopK (per core):**
-1. Each core loads 64 tiles (2048 elements)
-2. Executes Bitonic Sort on 64 tiles
+1. Each core loads 16 tiles (512 elements)
+2. Executes Bitonic Sort on 16 tiles
 3. Extracts top 32 elements (1 tile)
 4. Sends 1 tile to final core via NoC
 
 **Final TopK:**
-1. Final core receives 8 tiles (8 × 32 = 256 elements)
-2. Executes Bitonic Sort on 8 tiles
+1. Final core receives 32 tiles (32 × 32 = 1024 elements)
+2. Executes Bitonic Merge on 32 tiles
 3. Extracts global top 32 elements
 4. Writes 1 tile to DRAM
 
 **Advantages:**
-- 8-way parallelism in phase 1
+- 32-way parallelism in phase 1, with the local/final split balanced by the fitted cost model
 - Fast L1-to-L1 NoC communication (no DRAM roundtrip for intermediate results)
+
+On a smaller grid the same model simply evaluates the splits that fit and keeps the
+lowest-scoring one — the search never *assumes* a core count.
 
 ---
 

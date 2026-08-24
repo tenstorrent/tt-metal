@@ -84,7 +84,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                 - W is ideally ≥64. If this is not the case the op will pad the tensor to satisfy this constraint.
                 - The width of :attr:`input_tensor` along :attr:`dim` should be a multiple of tile width, and will be padded to the nearest multiple of tile width if needed.
                 - The padding is currently only supported for bfloat16, float32, int32, and uint32.
-                - To enable multicore execution, the width of :attr:`input_tensor` along :attr:`dim` must be ≥8192 and <65536, and :attr:`k` must be ≤64.
+                - To enable multicore execution, :attr:`k` must be ≤64 (`multi_core_max_k`) and the width of :attr:`input_tensor` along :attr:`dim` must be a power of two, below 65535 (`multi_core_max_width_exclusive`), and either ≥8192 (`multi_core_min_width`) or — when the input has at most 2 tile rows (`multi_core_low_ht_max_tile_rows`) — ≥1024 (`multi_core_low_ht_min_width`). These thresholds are named in `topk_constants.hpp` and enforced by the shared `topk_multicore_structurally_eligible()` predicate; multicore additionally requires the grid/L1 feasibility checks to pass, otherwise the op falls back to single-core. (On Blackhole, default bf16 `largest` calls in certain width/k bands are transparently dispatched to a faster composite pipeline instead — see `should_route_to_topk_large_indices` in `topk.cpp`.)
                 - All shape validations are performed on padded shapes.
                 - Sharded output memory configs are not supported for this operation.
         )doc";
