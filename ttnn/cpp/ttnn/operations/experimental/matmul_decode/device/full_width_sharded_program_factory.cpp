@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "matmul_decode_device_operation.hpp"
+#include "ring_walk.hpp"
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/shape.hpp"
@@ -20,11 +21,49 @@ namespace ttnn::operations::experimental::matmul_decode {
 using namespace tt;
 using namespace tt::tt_metal;
 
+namespace {
+// Ring-gather implementation of FullWidthSharded. Replaces the two-hub gather-then-broadcast
+// with a pipelined ring all-gather on in0. Kept separate from the hub-gather path so we can
+// keep the ENABLE_GLOBAL_CB weight streaming logic on the old path unchanged; the ring-gather
+// path is used only when the weights are L1-resident (plain or packed-weight cases).
+ProgramDescriptor create_descriptor_ring_gather_full(
+    const MatmulDecodeDeviceOperation::operation_attributes_t& operation_attributes,
+    const MatmulDecodeDeviceOperation::tensor_args_t& tensor_args,
+    MatmulDecodeDeviceOperation::tensor_return_value_t& tensor_return_value);
+}  // namespace
+
 // Full width-sharded: B/output are width(N)-sharded; reader gathers full A onto every core.
 ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    // Ring gather covers the L1-resident weight paths (plain and packed_weight) whenever the
+    // source grid and the compute grid are disjoint. Two cases still route to the two-hub
+    // gather:
+    //   1. ENABLE_GLOBAL_CB: the reader<->prefetcher handshake is baked into
+    //      reader_full_width_sharded.cpp; ring gather doesn't yet cover it.
+    //   2. Overlapping S ∩ C: the ring's pipeline schedule assumes every non-source core has
+    //      a source (or a source-fed forwarder) as its predecessor, which is trivially true
+    //      when S and C are disjoint contiguous runs. Handling arbitrary overlaps requires a
+    //      per-step "who is sending" mask that the current reader doesn't carry; the two-hub
+    //      gather already handles overlap correctly, so we prefer it in that case.
+    // Non-GCB path always uses the ring gather (closed ring; handles arbitrary S/C overlap).
+    // GCB (prefetcher) path still uses the two-hub gather because the reader<->prefetcher
+    // handshake is baked into reader_full_width_sharded.cpp.
+    if (!operation_attributes.global_cb.has_value()) {
+        const auto& a_grid = tensor_args.input_tensor_a.memory_config().shard_spec().value().grid;
+        const auto& b_grid = operation_attributes.packed_weight.has_value()
+                                 ? operation_attributes.packed_weight->cores
+                                 : tensor_args.input_tensor_b.memory_config().shard_spec().value().grid;
+        log_info(
+            tt::LogOp,
+            "matmul_decode FullWidthSharded: in0 gather = ring ({}, S={} cores, C={} cores)",
+            a_grid.intersects(b_grid) ? "overlapping S/C" : "disjoint S/C",
+            a_grid.num_cores(),
+            b_grid.num_cores());
+        return create_descriptor_ring_gather_full(operation_attributes, tensor_args, tensor_return_value);
+    }
+    log_info(tt::LogOp, "matmul_decode FullWidthSharded: in0 gather = hub (global_cb / prefetcher path)");
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     auto& output_tensor = tensor_return_value;
@@ -491,5 +530,356 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
 
     return desc;
 }
+
+namespace {
+
+using ring_walk::arriving_sender_ids_at;
+using ring_walk::build_ring_walk;
+using ring_walk::RG_ROLE_IDLE;
+using ring_walk::RingWalk;
+
+ProgramDescriptor create_descriptor_ring_gather_full(
+    const MatmulDecodeDeviceOperation::operation_attributes_t& operation_attributes,
+    const MatmulDecodeDeviceOperation::tensor_args_t& tensor_args,
+    MatmulDecodeDeviceOperation::tensor_return_value_t& tensor_return_value) {
+    const auto& input_tensor_a = tensor_args.input_tensor_a;
+    const auto& input_tensor_b = tensor_args.input_tensor_b;
+    auto& output_tensor = tensor_return_value;
+
+    const tt::DataFormat in0_data_format = datatype_to_dataformat_converter(input_tensor_a.dtype());
+    const tt::DataFormat in1_data_format = datatype_to_dataformat_converter(input_tensor_b.dtype());
+    const tt::DataFormat out_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
+
+    const auto& inputA_tile = input_tensor_a.tensor_spec().tile();
+    const auto& inputB_tile = input_tensor_b.tensor_spec().tile();
+    const auto& output_tile = output_tensor.tensor_spec().tile();
+    const uint32_t in0_tile_size = inputA_tile.get_tile_size(in0_data_format);
+    const uint32_t in1_tile_size = inputB_tile.get_tile_size(in1_data_format);
+    const uint32_t out_tile_size = output_tile.get_tile_size(out_data_format);
+    const TileDescriptor in0_tile_desc{inputA_tile};
+    const TileDescriptor in1_tile_desc{inputB_tile};
+    const TileDescriptor out_tile_desc{output_tile};
+
+    const uint32_t inputA_tile_height = inputA_tile.get_height();
+    TT_FATAL(
+        inputA_tile.get_width() == tt::constants::TILE_WIDTH &&
+            inputB_tile.get_height() == tt::constants::TILE_HEIGHT &&
+            inputB_tile.get_width() == tt::constants::TILE_WIDTH &&
+            output_tile.get_width() == tt::constants::TILE_WIDTH && inputA_tile_height == output_tile.get_height(),
+        "matmul_decode ring gather: unexpected tile geometry");
+
+    const uint32_t M_tiles = div_up(operation_attributes.M, inputA_tile_height);
+    const uint32_t K_tiles = div_up(operation_attributes.K, tt::constants::TILE_HEIGHT);
+
+    IDevice* device = input_tensor_a.device();
+
+    const auto& packed = operation_attributes.packed_weight;
+    auto inputA_core_range_set = input_tensor_a.memory_config().shard_spec().value().grid;
+    auto inputB_core_range_set =
+        packed.has_value() ? packed->cores : input_tensor_b.memory_config().shard_spec().value().grid;
+    auto output_core_range_set = output_tensor.memory_config().shard_spec().value().grid;
+    TT_FATAL(
+        inputB_core_range_set == output_core_range_set,
+        "matmul_decode ring gather: input tensor B and output tensor must have the same core range set");
+
+    // Per-core sharding geometry. inA_K_tiles_per_core (= K_local in tiles) is a source shard's
+    // width; each shard is M_tiles x inA_K_tiles_per_core.
+    const std::array<uint32_t, 2> inputA_shard_shape = input_tensor_a.memory_config().shard_spec().value().shape;
+    TT_FATAL(
+        inputA_shard_shape[0] == (M_tiles * inputA_tile_height) &&
+            inputA_shard_shape[1] % tt::constants::TILE_WIDTH == 0,
+        "matmul_decode ring gather: input A shard shape must be [M_tiles*tile_h, k * tile_w]");
+    const uint32_t inA_K_tiles_per_core = inputA_shard_shape[1] / tt::constants::TILE_WIDTH;
+
+    uint32_t inB_N_tiles_per_core;
+    if (packed.has_value()) {
+        const uint32_t N_tiles = div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
+        const uint32_t num_weight_cores = inputB_core_range_set.num_cores();
+        TT_FATAL(
+            N_tiles % num_weight_cores == 0,
+            "matmul_decode ring gather (packed_weight): N in tiles ({}) must be divisible by weight core count ({})",
+            N_tiles,
+            num_weight_cores);
+        inB_N_tiles_per_core = N_tiles / num_weight_cores;
+    } else {
+        const std::array<uint32_t, 2> inputB_shard_shape = input_tensor_b.memory_config().shard_spec().value().shape;
+        TT_FATAL(
+            inputB_shard_shape[0] == (K_tiles * tt::constants::TILE_HEIGHT) &&
+                inputB_shard_shape[1] % tt::constants::TILE_WIDTH == 0,
+            "matmul_decode ring gather: input B shard shape must be [K, per_core_N]");
+        inB_N_tiles_per_core = inputB_shard_shape[1] / tt::constants::TILE_WIDTH;
+    }
+
+    // No topological requirement on either grid: the ring walk is a logical sequence over
+    // corerange_to_cores(..., row_wise=true), and NoC unicasts route through intermediate cores
+    // at the hardware level without any relay kernel. Row-major snake grids (as used by the
+    // packed-weight deepseek layer test) work as well as rectangles.
+    TT_FATAL(
+        inputA_core_range_set.num_cores() > 0 && output_core_range_set.num_cores() > 0,
+        "matmul_decode ring gather: both input A grid and output grid must be non-empty");
+
+    const std::vector<CoreCoord> S_cores = corerange_to_cores(inputA_core_range_set, std::nullopt, /*row_wise=*/true);
+    const std::vector<CoreCoord> C_cores = corerange_to_cores(output_core_range_set, std::nullopt, /*row_wise=*/true);
+    const uint32_t num_senders = static_cast<uint32_t>(S_cores.size());
+
+    TT_FATAL(
+        num_senders == K_tiles / inA_K_tiles_per_core,
+        "matmul_decode ring gather: sender count ({}) must equal K_tiles / inA_K_tiles_per_core ({} / {})",
+        num_senders,
+        K_tiles,
+        inA_K_tiles_per_core);
+
+    // Phase 1: single CW ring only. Bidirectional (CCW on RISCV_0/NOC_1) is a straightforward
+    // extension -- build a second RingWalk over the second half of the senders, allocate a
+    // cb_in2_ccw, and instantiate a second reader kernel.
+    const RingWalk cw = build_ring_walk(device, /*sources=*/S_cores, /*hops=*/C_cores);
+
+    // Kernels and CBs are placed on the walk's cores (S ∪ C) only. Cores that fall inside the
+    // bounding box but neither shard nor compute get no kernel, no CB, and no L1 reservation.
+    std::vector<CoreCoord> S_or_C = S_cores;
+    for (const auto& c : C_cores) {
+        bool dup = false;
+        for (const auto& s : S_cores) {
+            if (s == c) {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup) {
+            S_or_C.push_back(c);
+        }
+    }
+    const CoreRangeSet all_ring_cores = CoreRangeSet(S_or_C);
+
+    ProgramDescriptor desc;
+
+    const uint32_t in0_cb_index = CBIndex::c_0;
+    const uint32_t in1_cb_index = CBIndex::c_1;
+    const uint32_t out_cb_index = CBIndex::c_2;
+    const uint32_t in2_cw_cb_index = CBIndex::c_3;
+    const uint32_t in2_ccw_cb_index = CBIndex::c_4;
+
+    // cb_in0: local shard, allocated only on source cores over the input tensor's L1.
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = M_tiles * inA_K_tiles_per_core * in0_tile_size,
+        .core_ranges = inputA_core_range_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = in0_cb_index,
+            .data_format = in0_data_format,
+            .page_size = in0_tile_size,
+            .tile = in0_tile_desc,
+        }}},
+        .buffer = input_tensor_a.buffer(),
+    });
+
+    // cb_in1: full weight, L1-resident, allocated on compute cores. In the packed case the
+    // buffer is the fused tensor and address_offset re-bases it onto this weight's slab.
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = K_tiles * inB_N_tiles_per_core * in1_tile_size,
+        .core_ranges = output_core_range_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = in1_cb_index,
+            .data_format = in1_data_format,
+            .page_size = in1_tile_size,
+            .tile = in1_tile_desc,
+        }}},
+        .buffer = input_tensor_b.buffer(),
+        .address_offset = packed.has_value() ? packed->tile_offset * in1_tile_size : 0,
+    });
+
+    // cb_out: on compute cores, aliased over the output tensor's L1.
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = M_tiles * inB_N_tiles_per_core * out_tile_size,
+        .core_ranges = output_core_range_set,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = out_cb_index,
+            .data_format = out_data_format,
+            .page_size = out_tile_size,
+            .tile = out_tile_desc,
+        }}},
+        .buffer = output_tensor.buffer(),
+    });
+
+    // cb_in2_cw: remote shard ring buffer for the CW direction. Sized to hold every shard this
+    // core receives (max = num_senders across all cores in the ring walk). This is the CB whose
+    // size scales with num_senders, but each core only fills num_recv slots.
+    const uint32_t in2_cb_num_tiles = num_senders * M_tiles * inA_K_tiles_per_core;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in2_cb_num_tiles * in0_tile_size,
+        .core_ranges = all_ring_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = in2_cw_cb_index,
+            .data_format = in0_data_format,
+            .page_size = in0_tile_size,
+            .tile = in0_tile_desc,
+        }}},
+    });
+
+    // cb_in2_ccw: zero-sized placeholder while CCW is not yet wired up. Sized to a single tile
+    // so CB allocation succeeds; the compute kernel skips CCW when num_shards_ccw == 0.
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in0_tile_size,
+        .core_ranges = all_ring_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = in2_ccw_cb_index,
+            .data_format = in0_data_format,
+            .page_size = in0_tile_size,
+            .tile = in0_tile_desc,
+        }}},
+    });
+
+    // Ring semaphores. sig_cw carries the pipeline credit for the CW ring. Allocated on the
+    // whole ring so every core can be atomically bumped from its predecessor.
+    constexpr uint32_t sig_cw_sem_id = 0;
+    desc.semaphores.push_back(SemaphoreDescriptor{
+        .id = sig_cw_sem_id,
+        .core_ranges = all_ring_cores,
+        .initial_value = 0,
+    });
+
+    const uint32_t shard_num_tiles = M_tiles * inA_K_tiles_per_core;
+    const uint32_t local_shard_num_tiles = shard_num_tiles;
+
+    // ---- Reader kernel (CW) ----
+    KernelDescriptor reader_cw;
+    reader_cw.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/reader_full_width_ring_gather.cpp";
+    reader_cw.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_cw.core_ranges = all_ring_cores;
+    reader_cw.compile_time_args = {
+        shard_num_tiles,
+        in0_tile_size,
+        sig_cw_sem_id,
+        local_shard_num_tiles,
+    };
+    reader_cw.named_compile_time_args = {
+        {"cb_in0", in0_cb_index},
+        {"cb_in2", in2_cw_cb_index},
+    };
+    reader_cw.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_1,
+        .noc = NOC::NOC_0,
+    };
+    // Position of a core in the CW walk (if any).
+    std::map<CoreCoord, uint32_t> cw_pos;
+    for (uint32_t p = 0; p < cw.cores.size(); ++p) {
+        cw_pos[cw.cores[p]] = p;
+    }
+    // Reader on every core in S ∪ C. `signal_in0` publishes cb_in0 for compute to consume:
+    // - source-only: harmless (push_back with no compute consumer, cb_in0 is allocated).
+    // - source-and-compute (overlap): required so compute.wait_front(cb_in0) resolves.
+    // - hop (compute-only, no own shard): 0 -- cb_in0 isn't allocated on this core.
+    reader_cw.runtime_args.reserve(S_or_C.size());
+    for (const auto& core : S_or_C) {
+        const auto it = cw_pos.find(core);
+        if (it == cw_pos.end()) {
+            reader_cw.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{RG_ROLE_IDLE, 0, 0, 0, 0, 0});
+            continue;
+        }
+        const uint32_t p = it->second;
+        const CoreCoord next = cw.next_phys[p];
+        const uint32_t signal_in0 = cw.is_source[p] ? 1u : 0u;
+        // Reader kernel only distinguishes "has own shard" (SOURCE) vs "no own shard" (HOP);
+        // it doesn't care whether we're also a compute core. Fold the roles here so the kernel
+        // stays simple.
+        const uint32_t reader_role = cw.is_source[p] ? /*SOURCE*/ 1u : /*HOP*/ 2u;
+        reader_cw.runtime_args.emplace_back(
+            core,
+            KernelDescriptor::CoreRuntimeArgs{
+                reader_role,
+                cw.num_recv[p],
+                cw.num_sends[p],
+                static_cast<uint32_t>(next.x),
+                static_cast<uint32_t>(next.y),
+                signal_in0});
+    }
+    desc.kernels.push_back(std::move(reader_cw));
+
+    // ---- Compute kernel ----
+    TT_FATAL(
+        M_tiles <= 8,
+        "matmul_decode ring gather: M_tiles must be <= 8 so the output block fits in DST, but got {}",
+        M_tiles);
+
+    KernelDescriptor compute_kd;
+    compute_kd.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/compute/"
+        "compute_full_width_ring_gather.cpp";
+    compute_kd.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_kd.core_ranges = output_core_range_set;
+
+    compute_kd.compile_time_args = {
+        M_tiles,
+        K_tiles,
+        inB_N_tiles_per_core,
+        inA_K_tiles_per_core,
+        // num_senders is the max any core's num_arriving_cw can be (compute-only cores see all
+        // S shards; overlap cores see S-1). Passed as a compile-time constant only so the
+        // kernel can size compile-time init decisions; the actual per-launch loop bound is a
+        // runtime arg (num_arriving_cw) since it varies per core.
+        /*num_senders=*/num_senders,
+    };
+    compute_kd.named_compile_time_args = {
+        {"cb_in0", in0_cb_index},
+        {"cb_in2_cw", in2_cw_cb_index},
+        {"cb_in2_ccw", in2_ccw_cb_index},
+        {"cb_in1", in1_cb_index},
+        {"cb_out", out_cb_index},
+    };
+    compute_kd.config = ComputeConfigDescriptor{
+        .math_fidelity = MathFidelity::HiFi4,
+        .math_approx_mode = false,
+    };
+    // Per-core runtime args:
+    //   [0] has_local_shard  (1 iff this core is also in S -- overlap)
+    //   [1] local_sender_id  (source index if has_local_shard, else don't-care)
+    //   [2] num_arriving_cw  (S for compute-only, S-1 for overlap)
+    //   [3] num_arriving_ccw (0 while CCW ring is not wired up)
+    //   [4..4+num_arriving_cw-1] cw_sender_ids (arrival order)
+    //   [4+num_arriving_cw..] ccw_sender_ids (currently empty)
+    compute_kd.runtime_args.reserve(C_cores.size());
+    for (const auto& core : C_cores) {
+        const auto it = cw_pos.find(core);
+        TT_FATAL(
+            it != cw_pos.end(),
+            "matmul_decode ring gather: compute core {} is not on the CW walk (internal error)",
+            core.str());
+        const uint32_t p = it->second;
+        const std::vector<uint32_t> ids = arriving_sender_ids_at(p, cw);
+        const uint32_t expected = num_senders - cw.is_source[p];
+        TT_FATAL(
+            ids.size() == expected,
+            "matmul_decode ring gather: compute core at walk pos {} sees {} sender IDs, expected {} "
+            "(is_source={})",
+            p,
+            ids.size(),
+            expected,
+            cw.is_source[p]);
+        KernelDescriptor::CoreRuntimeArgs rt;
+        rt.reserve(4 + ids.size());
+        rt.push_back(cw.is_source[p] ? 1u : 0u);                   // has_local_shard
+        rt.push_back(cw.is_source[p] ? cw.own_sender_id[p] : 0u);  // local_sender_id
+        rt.push_back(static_cast<uint32_t>(ids.size()));           // num_arriving_cw
+        rt.push_back(0);                                           // num_arriving_ccw
+        rt.insert(rt.end(), ids.begin(), ids.end());
+        compute_kd.runtime_args.emplace_back(core, std::move(rt));
+    }
+    desc.kernels.push_back(std::move(compute_kd));
+
+    log_debug(
+        tt::LogOp,
+        "matmul_decode ring gather: num_senders={}, num_compute={}, M_tiles={}, K_tiles={}, "
+        "inA_K_tiles_per_core={}, inB_N_tiles_per_core={}",
+        num_senders,
+        C_cores.size(),
+        M_tiles,
+        K_tiles,
+        inA_K_tiles_per_core,
+        inB_N_tiles_per_core);
+
+    return desc;
+}
+
+}  // namespace
 
 }  // namespace ttnn::operations::experimental::matmul_decode
