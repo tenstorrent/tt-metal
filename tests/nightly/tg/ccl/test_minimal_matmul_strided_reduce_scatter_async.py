@@ -421,21 +421,31 @@ def test_minimal_matmul_strided_reduce_scatter_async(
     ids=["fabric_ring"],
 )
 @pytest.mark.parametrize(
-    "mm_window_blocks, pass_counter_buffers, expected_error_message",
+    "mm_window_blocks, pass_counter_buffers, counter_row_slots, expected_error_message",
     [
         # An L1 MM output without a window is rejected at validation: unwindowed, the resident
         # shard's L1-floor erosion breaks LATER programs' circular buffers (issue #52863), so the
         # op requires the caller to bound it.
-        pytest.param(None, True, "requires mm_window_blocks", id="l1_nowindow_rejected"),
+        pytest.param(None, True, None, "requires mm_window_blocks", id="l1_nowindow_rejected"),
         # The windowed handoff without the caller-owned counter arrays is likewise rejected: the
         # per-program fallback allocation permanently lowers the L1 floor.
-        pytest.param(2, False, "caller-owned mm_progress_counters", id="l1_window2_no_counters_rejected"),
+        pytest.param(2, False, None, "caller-owned mm_progress_counters", id="l1_window2_no_counters_rejected"),
+        # Counter arrays with too-narrow rows (1 slot, when progress rows need one per compute-grid
+        # core) are rejected by the size validation.
+        pytest.param(2, True, 1, "uint32 slots per row", id="l1_window2_undersized_counters_rejected"),
         # The same call with a window and both counter arrays is the supported L1 handoff.
-        pytest.param(2, True, None, id="l1_window2"),
+        pytest.param(2, True, None, None, id="l1_window2"),
     ],
 )
 def test_minimal_matmul_strided_reduce_scatter_l1_handoff(
-    mesh_device, num_links, topology, mm_window_blocks, pass_counter_buffers, expected_error_message, expect_error
+    mesh_device,
+    num_links,
+    topology,
+    mm_window_blocks,
+    pass_counter_buffers,
+    counter_row_slots,
+    expected_error_message,
+    expect_error,
 ):
     """Explicit coverage for the opt-in L1 MM-output handoff (mem_config_mm = L1)."""
     mem_config_dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
@@ -468,6 +478,7 @@ def test_minimal_matmul_strided_reduce_scatter_l1_handoff(
             cluster_axis=1,
             mm_window_blocks=mm_window_blocks,
             pass_counter_buffers=pass_counter_buffers,
+            counter_row_slots=counter_row_slots,
         )
 
     if expected_error_message is not None:
