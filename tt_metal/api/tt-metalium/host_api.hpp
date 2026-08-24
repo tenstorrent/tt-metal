@@ -98,6 +98,7 @@ ChipId GetPCIeDeviceID(ChipId device_id);
  * | device_id  | ID of the device to target| ChipId (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
  * */
 // clang-format on
+[[deprecated("Use distributed::MeshDevice::create_unit_mesh instead. This API will be removed after 2026-09-27.")]]
 IDevice* CreateDevice(
     ChipId device_id,
     uint8_t num_hw_cqs = 1,
@@ -118,6 +119,7 @@ IDevice* CreateDevice(
  * | device_id  | ID of the device to target| ChipId (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
  * */
 // clang-format on
+[[deprecated("Use distributed::MeshDevice::create_unit_mesh instead. This API will be removed after 2026-09-27.")]]
 IDevice* CreateDeviceMinimal(
     ChipId device_id, uint8_t num_hw_cqs = 1, const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{});
 
@@ -132,6 +134,7 @@ IDevice* CreateDeviceMinimal(
  * | device   | Pointer to a device object | IDevice* |             | True     |
  */
 // clang-format on
+[[deprecated("Use MeshDevice RAII or MeshDevice::close instead. This API will be removed after 2026-09-27.")]]
 bool CloseDevice(IDevice* device);
 
 // ==================================================
