@@ -3308,6 +3308,74 @@ RoPE rotation matrix and cos/sin tables, and each kernel's scalar constants. The
 is not a preference -- the packer's L1 accumulate reads its destination back and adds in
 place, which a shared-exponent format cannot do.
 
+### Where perf stands, and what the packer change cost (nothing)
+
+**The ubench first, because the packer change touches every compute pass in the library.**
+`pack_to` was added to nine call sites, and the guard that makes it free in the uniform case
+is an argument, not a measurement -- so it was measured, by running the full single-core
+sweep against `tt/unified/math.hpp` checked out from the commit before any packer change:
+
+| 231 shapes, one core, HiFi2 | |
+|---|---|
+| total across every shape | 4763.9 -> 4765.5us, **1.0003x** |
+| median per-shape ratio | 1.0000 |
+| shapes slower by >3% | 2 of 231 |
+| shapes faster by >3% | 0 of 231 |
+| holes found | 9 both sides, identical |
+| best per-MAC cost | 0.060us both sides |
+
+**No regression.** The two shapes past 3% are the smallest in the sweep -- 2.44 -> 2.53us and
+2.69 -> 2.80us -- and the reason to call that jitter rather than cost is that a real per-pass
+cost would grow with the number of passes, and this does the opposite:
+
+| shapes grouped by size | median new/old |
+|---|---|
+| 1-16 MACs | 1.0000 |
+| 17-128 MACs | 1.0000 |
+| over 128 MACs | 1.0001 |
+
+Absolute drift is +0.008us on shapes under 5us and +0.006us on shapes over 20us -- flat, which
+is what launch jitter looks like and is not what a per-pass compare would look like.
+
+**The layer.** Re-measured after `pack_to`, everything bfloat8_b, on the 8x8 grid:
+
+| parallelised stage | us |
+|---|---|
+| FFN gate + up x2 | 692.8 |
+| flash attention, 32 heads | 336.3 |
+| FFN down | 277.5 |
+| Q + output projections | 187.5 |
+| rmsnorm x2 | 121.7 |
+| K and V projections x2 | 67.2 |
+| **subtotal** | **1683.0** |
+
+1687.0 before the packer change and 1683.0 after, i.e. unmoved. Against **ttnn's whole
+TransformerBlock at 1820us** -- still not like for like, and here is the size of what is
+missing, which has not been stated numerically before:
+
+| stage, STILL SINGLE CORE | us on one core | /64 if it parallelised perfectly |
+|---|---|---|
+| silu(gate) * up, 4096 tiles | 10315.7 | 161 |
+| RoPE on Q, [512,2048] | 2412.0 | 38 |
+| residual x2, 1024 tiles | 353.1 | 6 |
+| **total** | **13080.8** | **204** |
+
+Neither `rope.cpp` nor `binary.cpp` has a multi-core harness, which is the whole reason these
+three are not in the subtotal. So the projection for a complete layer is **1683 + at best 204,
+about 1890us against ttnn's 1820** -- roughly parity, and a projection rather than a
+measurement, because perfect scaling is the optimistic end and these two kernels have never
+been run on more than one core.
+
+**silu*up is now the single largest remaining item in the layer**, at 10.3ms of one core
+against the 13.1ms those three stages cost together. It is one SFPU pass over 4096 tiles, and
+partitioning it is the same shape of work as the row-chunking rmsnorm already has.
+
+One correction worth recording: the first pass at this table measured `add` where it meant
+`silu_mul` and reported 674us for that row. The real figure is 10315.7us, 15x larger, and the
+reason it was caught is that it disagreed with the 10972us the old single-core breakdown had
+recorded for the same stage. Cross-checking a new measurement against an old one that should
+agree is worth the minute it costs.
+
 ## Phase 11 -- Full block orchestration
 
 Host-side and kernel-loop work, not model gaps.
