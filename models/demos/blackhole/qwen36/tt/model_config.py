@@ -142,7 +142,7 @@ class Qwen36ModelArgs(ModelArgs):
         # ttnn.slice's STARTING offset must be tile-aligned to stay tile-native (a non-tile-aligned
         # END is free -- confirmed empirically: slice[0:24] and slice[32:56] on a TILE tensor both
         # dispatch as a single SliceDeviceOperation, only slice[24:48] triggers the 3-op
-        # untilize/retilize sequence). Moving b to start at the next tile boundary makes both a and b
+        # untilize/retilize). Starting b at the next tile boundary makes a and b
         # single-op tile-native slices with no change to Nv/v/state/conv1d/the GQA ratio anywhere
         # else -- see tests/perf/test_gdn_ab_pad_check.py, which confirmed this padding lands inside
         # per-core tile capacity already being paid for.
@@ -174,25 +174,25 @@ class Qwen36ModelArgs(ModelArgs):
         assert not (_ab_gap_9b and _ab_gap_27b), "a/b gap gates must be mutually exclusive"
         self.gdn_ab_gap = _gap_9b + _gap_27b
         self.gdn_qkvzab_dim_tp = self.gdn_qkvz_dim_tp + 2 * self.gdn_nv_tp + self.gdn_ab_gap
-        # NO PAD (was: prefill_kpass_width padded 6176 -> 6912 on Wormhole). Kept at 0 so the weight
+        # NO PAD (was: prefill_kpass_width padded 6176 -> 6912 on WH). Kept 0 so
         # geometry, cache key and decode progcfgs all use the natural width; see the history below,
         # because the reason this is safe now is NOT the reason it was originally padded.
         #
         # The 2048x4096x6176 in-proj is K-PASS bound, not subblock bound: its cost tracks
         # ceil(per_core_N / out_block_w), each pass re-reading the 16MB DRAM-resident in0. 6176 = 193
-        # tiles is PRIME, so at 8 columns per_core_N=25, whose only divisors are 1/5/25. The pad existed
+        # tiles is PRIME, so at 8 columns per_core_N=25, divisors 1/5/25 only.
         # because out_block_w=25 (one pass) overflowed L1, leaving 5 as the best available: padding to
         # 216 tiles bought per_core_N=27 / out_block_w=9 / 3 passes and measured -643us on the op.
         #
         # That L1 overflow was an artifact of fp32_dest_acc_en, not a property of the shape. With
         # COMPUTE_HIFI2_NO_FP32_ACC the intermediate CB halves and the output-subblock ceiling rises
-        # from 4 to 8, so per_core_N=25 gets out_subblock_w=5 and out_block_w=25 — ONE K pass — at the
+        # from 4 to 8, so per_core_N=25 gets out_subblock_w=5, out_block_w=25 --
         # unpadded width. MEASURED (device kernel duration, N150, M=2048 K=4096; the full sweep is in
         # tests/perf/test_gdn_inproj_sweep.py):
         #     N=6912  sub_w=3 blk_w=9   fp32_acc ON   3 passes  1493us   <- the padded config
         #     N=6912  sub_w=3 blk_w=27  fp32_acc OFF  1 pass    1403us
         #     N=6176  sub_w=5 blk_w=25  fp32_acc OFF  1 pass    1255us   -16.0%, and 12% less work
-        # So the pad is now strictly worse: one K pass makes the prime tile count harmless, and the
+        # So the pad is strictly worse now: one K pass makes the prime count
         # unpadded width does 11.9% fewer FLOPs. Reverting it also gives back the pad's accepted costs
         # — ~12.6MB/layer of weight DRAM and decode's ~11.9% extra in-proj work.
         #
@@ -207,7 +207,7 @@ class Qwen36ModelArgs(ModelArgs):
         # test_gdn_tp (11 tests, decode + prefill, N300) passes with min PCC 0.99959.
         #
         # gdn_qkvzab_pad_tiles is kept (as 0) rather than deleted because load_gdn_weights_tp reads it
-        # to qualify the weight cache key with `.pad{N}` — 0 selects the unpadded cache file, so a
+        # to qualify the weight cache key with `.pad{N}`; 0 selects the unpadded
         # previously cached padded weight cannot be silently reloaded at the wrong width. To restore
         # the pad, set it from prefill_kpass_width here AND drop gdn_qkvzab_prefill_progcfg below.
         self.gdn_qkvzab_pad_tiles = 0
@@ -270,17 +270,17 @@ class Qwen36ModelArgs(ModelArgs):
         # progcfg's own subblock choice is consistent with the runtime compute config that's paired
         # with it (mlp.py's compute_kernel_config_gateup_decode) -- at this N/core count it doesn't
         # change the chosen blocking (per_core_N=4 has no divisor between 4 and 8), but keeping the
-        # two in sync avoids a silent mismatch if either changes later. PCC cost is small and
+        # two in sync avoids a silent mismatch if either changes. PCC cost is
         # consistent with LoFi+bfp4 already dominating this matmul's error budget (gate 0.99032 ->
         # 0.98959, up 0.99320 -> 0.99268 -- 4th-decimal, same class as other accepted trades here).
         #
-        # SCOPED TO WORMHOLE 9B ON N300 (tpc.wh_9b_n300 -- see that helper for why each of the three
+        # SCOPED TO WORMHOLE 9B ON N300 (tpc.wh_9b_n300 -- see that helper for
         # conditions is load-bearing). The 56/fp32F pair was swept at the 9B's hidden_dim/tp = 6144;
-        # the 27B's is 2176, so neither the core count nor the subblock choice transfers. Outside the
+        # the 27B's is 2176, so neither core count nor subblock choice transfers.
         # scope this restores the previously shipped values exactly: 44 cores on Blackhole, 64 on
         # other Wormhole meshes, fp32_dest_acc_en left on.
         # NOTE: fp32_acc here MUST stay in lockstep with mlp.py's compute_kernel_config_gateup_decode,
-        # which is gated on the same helper -- a mismatch silently pairs a subblock cap of 8 with an
+        # gated on the same helper: a mismatch pairs a subblock cap of 8 with an
         # fp32-acc kernel (or vice versa).
         _gateup_9b = tpc.wh_9b_n300(self)
         _gateup_cores = 56 if _gateup_9b else (44 if tpc.is_blackhole() else 64)
@@ -302,7 +302,7 @@ class Qwen36ModelArgs(ModelArgs):
             fp32_acc=not _gateup_9b,
         )
         # down: num_cores=33 -> 11x3 on BH, the fastest measured config (wide1d_11x3c, ~63us, +28% vs
-        # the old 8x2). On WH (decode_grid_w=8) this falls back to 8x5; MEASURED full 8x8 grid is
+        # the old 8x2). On WH (decode_grid_w=8) this falls back to 8x5; the full
         # -1.4% vs 33, smaller than gate/up but consistently faster, same PCC.
         self.mlp_w2_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M, self.hidden_dim // tp, self.dim, num_cores=33 if tpc.is_blackhole() else 64, grid_w=self.decode_grid_w
@@ -315,7 +315,7 @@ class Qwen36ModelArgs(ModelArgs):
             M, self.dim, self.attn_qkv_fused_dim_tp, num_cores=64
         )
         # gdn_qkvz: num_cores=44 -> 11x4 on BH, the fastest measured config (wide1d_11x4c, ~59us, +22%
-        # vs the old 8x5). On WH (decode_grid_w=8), 44 was never independently tuned -- it only ever
+        # vs the old 8x5). On WH (decode_grid_w=8), 44 was never tuned alone -- it
         # fell back to whatever min(grid_w, 44) -> 8x6=48 cores happened to produce. MEASURED (WH,
         # M=32 K=4096 N=6176, same fp32_dest_acc_en=True/PCC as today): the full 8x8=64-core grid is
         # 150.4us vs 8x6's 156.5us, -3.9%, zero accuracy cost -- matches attn_qkv_decode_1d_progcfg
@@ -340,7 +340,7 @@ class Qwen36ModelArgs(ModelArgs):
         )
 
         # Prefill matmul factory (M = seq_len). Shared by MLP down-proj, attention in/out-proj, and
-        # GDN in/out-proj. On Blackhole the grid is already wider (8x10) with more L1 headroom, so the
+        # GDN in/out-proj. Blackhole's grid is wider (8x10) with more L1 headroom,
         # full per_core_N-wide output/intermediate CB fits (validated there); N300's grid tops out at
         # 8x8 with less L1/core, and a full decoder layer's combined GDN+attention+MLP CBs on this
         # config alone were measured to overflow (1.68-1.85MB vs N300's 1.5MB max) — halve it there
@@ -367,10 +367,10 @@ class Qwen36ModelArgs(ModelArgs):
         # legal with fp32 dest accumulation off). Worth -16.0% on that matmul; see the
         # gdn_qkvzab_pad_tiles note above for the measurements and the accuracy trade.
         #
-        # Scoped to this ONE matmul on purpose. prefill_progcfg above is shared by the MLP down-proj and
+        # Scoped to this ONE matmul deliberately: prefill_progcfg above is shared
         # both attention projections, which were tuned with fp32 dest accumulation ON and are NOT
         # covered by tests/perf/test_gdn_inproj_sweep.py. Widening this needs its own sweep per shape:
-        # one K pass means the full per_core_N-wide CB, and WH's L1 does not have room for every
+        # one K pass means the full per_core_N-wide CB, and WH's L1 lacks room
         # projection in a layer to do that (which is exactly why halve_out_block exists above).
         #
         # None on Blackhole: BH prefill takes the fused all_gather_matmul_prefill path, which pins its
@@ -411,13 +411,13 @@ class Qwen36ModelArgs(ModelArgs):
         )
         # WORMHOLE ONLY: same one-K-pass fix, for the attention wo (output) projection.
         # K=attn_out_dim_tp=2048, N=dim=4096 (128 tiles) -> per_core_N=16 at 8 cols: fp32 dest acc on
-        # caps out_subblock_w at 4 (blk_w=8, TWO K passes); off, cap rises to 8 (blk_w=16, ONE pass).
+        # caps out_subblock_w at 4 (blk_w=8, TWO passes); off it rises to 8 (ONE).
         #
         # MEASURED (device kernel duration, N300, M=2048 K=2048 N=4096;
         # tests/perf/test_attn_qkv_inproj_sweep.py):
         #     baseline fp32T/pkT in0=DRAM   558.6us   <- today (matches the 531-536us layer profile)
         #     kpass1   fp32F/pkT in0=DRAM   517.2us   -7.4%   pcc=0.99993 (vs 0.99997 baseline)
-        # Smaller win than the QKV in-proj (2->1 pass here vs 5->1 there), but same fix, same low risk.
+        # Smaller win than the QKV in-proj (2->1 vs 5->1), same fix, same risk.
         #
         # None on Blackhole: this progcfg is only consulted by attention/tp.py's _wo_proj when set.
         self.attn_wo_prefill_progcfg = (
@@ -435,7 +435,7 @@ class Qwen36ModelArgs(ModelArgs):
         self.act_shard_gdn_value = tpc.create_activation_shard_config(self.gdn_value_dim_tp)
         self.act_shard_attn_out = tpc.create_activation_shard_config(self.attn_out_dim_tp)
         # Decode token embedding: width-sharded L1 on dim_tp, 32 cores (8x4). Interleaved embedding
-        # is 1 core / ~21us at B=32 (token-tile split); this layout is 3.0us and the pre-norm
+        # is 1 core / ~21us at B=32 (token-tile split); this layout is 3.0us, and
         # all-gather consumes it directly (test_embedding_decode_sweep.py). None outside wh_9b_n300.
         self.emb_decode_memcfg = tpc.create_activation_shard_config(self.dim // tp) if tpc.wh_9b_n300(self) else None
 
@@ -454,16 +454,16 @@ class Qwen36ModelArgs(ModelArgs):
         # paged_fused_update_cache requires its two inputs' shard grids to be non-overlapping). Two
         # halves of the device grid: the NATURAL half (rows 0.._rows-1, which is exactly
         # kv_update_shard_cfg's grid and exactly what nlp_create_qkv_heads_decode emits) and the
-        # SHIFTED half (the next _rows rows). Using both doubles the cores for this one op (together =
+        # SHIFTED half (the next _rows rows). Both together doubles this op's cores
         # the full device grid at B=32) to collapse 2 device programs into 1.
         #
         # WHICH TENSOR GETS WHICH HALF IS NOT ARBITRARY -- V TAKES THE NATURAL ONE:
-        #   * K arrives INTERLEAVED at the write (it went through q/k-norm + RoPE), so it owes an
+        #   * K arrives INTERLEAVED (via q/k-norm + RoPE), so it owes an
         #     InterleavedToSharded no matter which half it targets -- the grid origin is FREE for K.
-        #   * V arrives ALREADY SHARDED on the natural half straight from the head split, so pointing
+        #   * V arrives ALREADY SHARDED on the natural half from the head split, so
         #     V at the natural half means it needs NO reshard at all (forward_decode's equality guard
         #     then short-circuits), while pointing it at the shifted half forces a Reshard op.
-        # This was originally assigned the other way round, which cost one extra device op per layer.
+        # Originally assigned the other way round, costing one extra op per layer.
         # MEASURED (test_attn_head_split_v_reshard_sweep.py::test_kv_write_grid_swap_removes_v_reshard,
         # N300, B=32): 26.7us/4 programs -> 26.0us/3 programs (-3.0%), K and V cache contents
         # bit-identical either way and no NaN.
@@ -512,73 +512,56 @@ class Qwen36ModelArgs(ModelArgs):
         # see that helper for the measurements and attention/rope_tp.py's rope_channel_perm for the
         # derivation.
         self.rope_permuted_enabled = tpc.rope_permuted_enabled(self)
-        # The ONE grid the decode-mode rotary runs on, for Q and K both: the NATURAL
-        # one-user-per-core height shard. Sharing it between Q and K is what lets a single cos/sin
-        # pair serve both (the sharded rotary lays its kernels on the input's grid, so cos/sin must
-        # live on the same cores as the tensor being rotated).
+        # The ONE grid the decode-mode rotary runs on, Q and K both: the natural one-user-per-core
+        # height shard. Sharing it lets one cos/sin pair serve both (the rotary
+        # kernels on the input's grid).
         #
         # TRIED AND REJECTED: pointing this at kv_cache_write_k_shard_cfg (the SHIFTED half) so K's
-        # rotary output would land in the fused KV write's layout directly and save K's reshard --
-        # the rotary copies its output shard spec from its input, so it structurally works, and
-        # test_attention_tp.py passes on it at PCC 1.00000. It is still WRONG: on
-        # test_model_tp.py::test_model_tp_decode_batched (B=8, the batched-vs-B1-oracle contract)
-        # the worst per-user PCC at the first decode step went 0.9436 (baseline) -> 0.870 with the
-        # shifted grid, while this natural grid measures 0.9456, i.e. baseline to within noise.
+        # rotary output lands in the fused KV write's layout and saves K's reshard. Structurally works
+        # and test_attention_tp.py passes at PCC 1.00000, but test_model_tp_decode_batched (B=8) worst
+        # per-user PCC at decode step 0 went 0.9436 -> 0.870; this natural grid measures 0.9456.
         #
-        # ROOT CAUSE (2026-08-20 -- the "KV-cache write corruption" reading above is WRONG; K was
-        # never the problem). The real mechanism, bisected and then reproduced standalone:
+        # ROOT CAUSE (2026-08-20; the earlier "KV-cache write corruption" reading was WRONG -- K was
+        # never the problem): paged_scaled_dot_product_attention_decode IGNORES THE SHARD-GRID ORIGIN
+        # of a height-sharded q: it enumerates batch->core as {i % grid_x,
+        # (0,0) (sdpa_decode_program_factory.cpp ~183, ~301-315 via the origin-discarding
+        # grid_to_cores overload, core_coord.cpp ~498-517); q's shard grid is queried for
+        # num_cores()/shape, never bounding_box().start_coord, and the one grid check is commented out
+        # (sdpa_decode_device_operation.cpp ~361). So q on rows 1.. is read from rows 0..
+        # Because the grid is shared, aiming it at the shifted half drags Q to
+        # from the rotary straight into SDPA still sharded (attention/tp.py:856 -> :945).
         #
-        #   ttnn's paged_scaled_dot_product_attention_decode IGNORES THE SHARD-GRID ORIGIN of a
-        #   height-sharded q. It enumerates batch->core as {i % grid_x, i / grid_x} from absolute
-        #   core (0,0) (sdpa_decode_program_factory.cpp ~183 and ~301-315 -- the body of the
-        #   origin-discarding grid_to_cores(num_cores,x,y,row_wise) overload, core_coord.cpp
-        #   ~498-517, inlined), and q's shard grid is only ever queried for num_cores()/shape, never
-        #   bounding_box().start_coord. There is no assert: the one grid-related check is commented
-        #   out (sdpa_decode_device_operation.cpp ~361). So q on rows 1.. is read from rows 0..
+        # EVIDENCE:
+        #   * test_rope_shifted_grid_bisect_qk.py -- natural Q+K 1.000000; shifted Q+K 0.03-0.14 (WHICH
+        #     user is worst moves with L1 allocation, so no figure is canonical);
+        #     shifted with Q alone moved back 1.000000. Q and K leaving the rotary
+        #     rotary is innocent and SDPA is handed correct data.
+        #   * test_sdpa_decode_sharded_q_origin.py -- standalone: natural q 1.000000, shifted
+        #     0.0855-0.1093 across all 8 combinations of {bf16,bfp8} cache x {uniform,per-user}
+        #     positions x call order. Not dtype- or position-dependent.
+        # CLEARED, do not re-tread: the rotary itself (bit-exact) and program-cache state (bit-identical
+        # warm/cold/warm). "Which decode step breaks flips between runs" was the same stale-address
+        # artefact: a freed natural-grid q leaves a correct copy where SDPA reads,
+        # also why a first standalone probe wrongly exonerated SDPA.
         #
-        # Since this grid is shared by Q AND K, aiming it at the shifted half does not just relocate
-        # K -- it drags Q onto row 1, and Q goes from the rotary straight into SDPA still sharded
-        # (attention/tp.py:856 -> :945, nothing in between). That, not the cache write, is the bug.
-        #
-        # EVIDENCE (three files, each eliminating one candidate):
-        #   * test_rope_shifted_grid_bisect_qk.py -- real TPAttention, B=8, worst per-user PCC vs a
-        #     B=1 oracle: natural Q+K 1.000000; shifted Q+K badly broken (0.03-0.14, and WHICH user is
-        #     worst moves -- the value depends on what was last freed at the L1 address SDPA wrongly
-        #     reads, so do not treat any single figure as canonical); shifted Q+K with **Q alone**
-        #     moved back to the natural grid before SDPA 1.000000. It also reads back Q and K as they
-        #     leave the rotary: both BIT-EXACT (max|diff| = 0) against the natural run in the failing
-        #     variant -- so the rotary is innocent and SDPA is handed correct data.
-        #   * test_sdpa_decode_sharded_q_origin.py -- standalone, no model: natural-grid q PCC
-        #     1.000000, shifted-grid q PCC 0.0855-0.1093, across all 8 combinations of {bf16, bfp8}
-        #     cache x {uniform, per-user} positions x call order. Not dtype- or position-dependent.
-        # Two candidates were checked and CLEARED along the way, so nobody re-treads them: the rotary
-        # itself (its output is bit-exact on either grid, per the capture above) and program-cache
-        # state (results are bit-identical across warm/cold/warm caches). An early "which decode step
-        # breaks flips between runs" observation was an ARTEFACT of the same stale-address mechanism:
-        # freeing a natural-grid q leaves a correct copy at the address SDPA wrongly reads, so the
-        # failure can masquerade as passing depending on allocation order -- which is also why a first
-        # standalone probe wrongly exonerated SDPA. See that file's docstring for how to avoid the trap.
-        #
-        # WHY THE RESHARD STAYS ANYWAY. paged_fused_update_cache needs K and V on DISJOINT grids, and
-        # both K (from the rotary) and V (from the head split) naturally arrive on the natural grid --
-        # so exactly one of them must always move. The shifted rope grid is the only arrangement that
-        # makes BOTH free, and it needs Q's placement fixed, for which the options are:
-        #   (i)  move Q back to the natural grid after the rotary -- costs the op it saves (net zero;
-        #        this is exactly the measured-clean `shifted_k_only` variant above);
-        #   (ii) pass the q grid as SDPAProgramConfig.sub_core_grids (the one origin-aware path) --
-        #        correct, but it confines SDPA to the B cores q lives on, and SDPA is ~76us on the
-        #        full grid, so this loses far more than the ~0.6-1us Reshard it saves;
-        #   (iii) fix the ttnn kernel -- a C++ change, out of scope here.
-        # Dropping the fused write instead (two paged_update_cache calls, both on the natural grid, no
-        # reshard at all) is the same program count and measured slower overall (18.3us fused + ~1us
-        # reshard vs 20.3us unfused). So the shipped arrangement is a local optimum: KEEP IT.
-        #
-        # The guard below is what makes that safe rather than lucky.
+        # WHY THE RESHARD STAYS. paged_fused_update_cache needs K and V on DISJOINT grids, and both
+        # arrive on the natural grid, so exactly one must move. The shifted grid
+        # arrangement freeing both, and it needs Q's placement fixed:
+        #   (i)   move Q back after the rotary -- costs the op it saves (the measured-clean
+        #         shifted_k_only variant);
+        #   (ii)  pass the q grid as SDPAProgramConfig.sub_core_grids (the one
+        #         origin-aware path) -- correct, but confines SDPA to B cores;
+        #         ~76us on the full grid vs the ~0.6-1us Reshard saved;
+        #   (iii) fix the ttnn kernel -- C++, out of scope.
+        # Dropping the fused write (two paged_update_cache calls, natural grid, no reshard) is the same
+        # program count and measured slower: 18.3us fused + ~1us reshard vs 20.3us unfused.
+        # Shipped arrangement is a local optimum: KEEP IT. The guard below makes
+        # that safe rather than lucky.
         self.rope_k_shard_cfg = self.kv_update_shard_cfg
         # LOAD-BEARING, NOT COSMETIC: the decode rotary's grid becomes the grid of the q that reaches
-        # SDPA, and per the root-cause note above SDPA silently misreads a q whose grid does not start
+        # SDPA, and per the note above SDPA misreads a q whose grid does not start
         # at (0,0). kv_update_shard_cfg is origin-anchored today (built from a ttnn.CoreGrid, i.e.
-        # rooted at (0,0)), so this holds -- but it is derived from max_batch_size, and nothing else in
+        # rooted at (0,0)), so this holds -- but it derives from max_batch_size and
         # the type system ties the two together. Fail loudly rather than serve quietly-wrong tokens.
         #
         # SCOPED TO THE PERMUTED-ROPE PATH, deliberately: rope_k_shard_cfg is only ever READ when
@@ -587,7 +570,7 @@ class Qwen36ModelArgs(ModelArgs):
         # wh_9b_n300 + rope_head_dim < head_dim (tp_common.rope_permuted_enabled). _init_tp_config,
         # by contrast, runs for EVERY TP config (27B on T3K/P150x4 included), so asserting
         # unconditionally here would police a precondition those configs never rely on -- and could
-        # fail a model that does not even take this code path. Same scoping rule as every other decode
+        # fail a model that never takes this path. Same scoping rule as the other
         # change in this file.
         if self.rope_permuted_enabled:
             _rope_q_origin = self.rope_k_shard_cfg.shard_spec.grid.bounding_box().start

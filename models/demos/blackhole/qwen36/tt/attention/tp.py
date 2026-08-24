@@ -78,13 +78,13 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     v_proj = tpc.replicate_kv_weight(state_dict["v_proj.weight"], args.n_kv_heads, args.num_devices, args.head_dim)
 
     # Permuted-head_dim RoPE (attention/rope_tp.py's rope_channel_perm): fold the head_dim
-    # channel permutation into the weights that FEED the rotary, so the runtime needs no op for it.
+    # channel permutation into the weights FEEDING the rotary; no runtime op.
     # q_proj is [q_head0 | gate_head0 | q_head1 | ...], hence stride=2*head_dim to permute only each
-    # head's q half -- the gate must stay in HF order, it multiplies the (unpermuted) attention
+    # head's q half; the gate stays in HF order, multiplying the unpermuted
     # output. k_proj is plain per-head blocks. V and o_proj are deliberately untouched: nothing about
-    # V is rotated and the attention output has to reach o_proj in HF channel order. The q/k NORM
+    # V is rotated and the output must reach o_proj in HF channel order. q/k NORM
     # weights are per-channel over head_dim, so they permute with it.
-    # Cache files get a distinct ".rp" tag -- these are different tensors from the HF-order ones and
+    # Cache files get a ".rp" tag: these differ from the HF-order tensors and
     # must never be served from (or written to) the same cache entry.
     rope_permuted = getattr(args, "rope_permuted_enabled", False)
     rp = ".rp" if rope_permuted else ""
@@ -207,7 +207,7 @@ class TPAttention:
         self.scale = self.HD**-0.5
         self.rope_dim = args.rope_head_dim
         self.compute_cfg = tpc.COMPUTE_HIFI2
-        # bf8 SDPA: bf8 Q + bf8 KV; keeps HiFi2 (HiFi4 was slower). Default ON for Wormhole N300,
+        # bf8 SDPA: bf8 Q + bf8 KV, HiFi2 (HiFi4 was slower). Default ON for N300,
         # override with QWEN_SDPA_BF8=0/1 — see tp_common.sdpa_bf8_enabled for the measurements.
         # Must agree with model.py's allocate_kv_caches (same helper), which sets the paged cache's
         # dtype to match what this flag casts K/V to before the fill.
@@ -308,7 +308,7 @@ class TPAttention:
             prefill_progcfg_fn or self.args.prefill_progcfg,
             self.args.dim,
             # LoFi (not HiFi2) on the kpass1 path: the BFP8 weight's mantissa already dominates this
-            # matmul's error, so HiFi2's extra math passes bought ~7e-5 of PCC for 12% of the op.
+            # matmul's error, so HiFi2's extra passes bought ~7e-5 PCC for 12% cost.
             # See tp_common.COMPUTE_LOFI_NO_FP32_ACC for the measurements.
             prefill_compute_cfg=tpc.COMPUTE_LOFI_NO_FP32_ACC if prefill_progcfg_fn is not None else None,
         )
@@ -833,7 +833,7 @@ class TPAttention:
             # SCOPED TO WORMHOLE 9B ON N300 (tpc.wh_9b_n300) like the other decode changes: applying
             # the gate after the concat instead of before is elementwise-identical (concat-heads is a
             # pure permutation and the gate is head-major to match), and prefill's _make_heads has
-            # done exactly this for longer -- but it was only measured and PCC-checked on this one
+            # done exactly this for longer, but was only measured and PCC-checked on
             # config, so every other mesh/model keeps the original pre-concat multiply by reshaping
             # the flat gate back to [1,B,NH,HD] here.
             gate_is_flat = tpc.wh_9b_n300(self.args)
@@ -880,10 +880,10 @@ class TPAttention:
         # REVERTED Q+K merged RoPE (was here briefly): an isolated microbenchmark measured -2.3%
         # (172.3us -> 168.4us) for concatenating Q+K before rotating once. A REAL full-layer Tracy
         # capture (test_profile_single_layer_attention_decode.py, tt-perf-report) caught what the
-        # isolated test missed: concatenating NH=16 + NKV=4 = 20 heads is not a clean tile multiple,
+        # isolated test missed: NH=16 + NKV=4 = 20 heads is no clean tile multiple,
         # so the concat forces Untilize -> Concat -> TilizeWithValPadding round-trips on BOTH sides of
         # the merge (6+5+1+18+9+22 = 61us of new ops) that the synthetic benchmark's tensors never
-        # hit. Net effect in the real layer: this section went from 46us to 98us (+113%), swamping
+        # hit. In the real layer this section went 46us -> 98us (+113%), swamping
         # every other win this session found. Lesson: an isolated op-shape microbenchmark cannot
         # decide a change like this -- the exact same caution mlp.py's _CKC_MLP_KPASS1 comment already
         # gives ("the isolated sweep... CANNOT decide this... trust the full-layer capture"). Confirm
@@ -933,10 +933,10 @@ class TPAttention:
                 # Fused K+V cache write (paged_fused_update_cache): needs K and V on DISJOINT shard
                 # grids. V is pointed at the NATURAL half -- the grid nlp_create_qkv_heads_decode
                 # already emits -- so the equality guard below short-circuits and V pays NO reshard,
-                # exactly as it did before the fused write existed; K takes the SHIFTED half, which is
+                # exactly as before the fused write existed; K takes the SHIFTED half,
                 # free for K because it arrives interleaved from RoPE and owes a reshard either way.
                 # See model_config.py's kv_cache_write_{k,v}_shard_cfg for why this assignment (and
-                # not the reverse) is the cheap one, and for the NaN footgun in trying to make the
+                # not the reverse) is the cheap one, and for the NaN footgun in making
                 # head split emit onto the shifted half instead.
                 # VERIFIED (test_kv_cache_sdpa_decode_sweep.py + test_attn_head_split_v_reshard_sweep.py
                 # ::test_kv_write_grid_swap_removes_v_reshard, N300, per-user-distinct paged cache):
@@ -1062,7 +1062,7 @@ class TPAttention:
             )
             ttnn.deallocate(q)
 
-        # Sigmoid gate. When the head split left it FLAT ([1,1,B,NH*HD], the layout it arrives in from
+        # Sigmoid gate. When the head split left it FLAT ([1,1,B,NH*HD], as it
         # the QKV projection), it is applied INSIDE _concat_heads_decode -- after the concat, where
         # the attention output is back in that same flat layout. That removes the [1,1,B,NH*HD] ->
         # [1,B,NH,HD] gate reshape entirely (a real 7us/8-core op per layer) instead of paying it just
@@ -1154,7 +1154,7 @@ class TPAttention:
         ttnn.deallocate(v)
 
         # Chunked SDPA over paged cache; keep Q bf16 unless bf8 mode (QWEN_SDPA_BF8=1), which also
-        # makes the KV cache bf8 -> full bf8 matmul. TESTED mixed dtype (bf16 Q against the bf8
+        # makes the KV cache bf8 -> full bf8 matmul. TESTED mixed dtype (bf16 Q vs
         # cache/K/V): PASSES correctness (PCC actually a hair better, 0.99979 vs 0.99969) but SDPA
         # itself measures ~24us SLOWER (507us vs 483-485us) — full bf8 both operands is faster on
         # this hardware, matching the same BF16-activation-vs-BFP8-both pattern seen on the other
@@ -1204,7 +1204,7 @@ class TPAttention:
             k_chunk_size=_kc,
         )
 
-        # Pad page table to cover Q+offset and satisfy stick-size % 32 (extra blocks masked by causality).
+        # Pad page table for Q+offset and stick-size % 32 (extra blocks masked).
         # ttnn.pad instead of zeros+concat: same result (verified via ttnn.to_torch, byte-identical),
         # 1 program dispatch instead of 4 -- ttnn's ROW_MAJOR concat path for this shape decomposes
         # into a Concat plus TWO internal Permute-kernel dispatches (visible in the build log as
