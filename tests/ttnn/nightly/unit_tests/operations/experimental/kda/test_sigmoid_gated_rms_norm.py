@@ -23,7 +23,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True),
+    pytest.mark.use_module_device({"l1_small_size": 24576}),
 ]
 
 _BATCH = 1
@@ -392,7 +392,7 @@ def test_sigmoid_gated_rms_norm_production_performance(device: ttnn.Device, case
     )
 
 
-def test_sigmoid_gated_rms_norm_program_key_includes_epsilon(device: ttnn.Device) -> None:
+def test_sigmoid_gated_rms_norm_program_key_includes_epsilon(device: ttnn.Device, isolated_program_cache: None) -> None:
     _, (input_tt, gate_tt, weight_tt) = _device_inputs(
         device, batch=1, sequence=32, num_heads=2, value_dim=64, seed=1321
     )
@@ -404,7 +404,9 @@ def test_sigmoid_gated_rms_norm_program_key_includes_epsilon(device: ttnn.Device
     assert device.num_program_cache_entries() == entries + 1
 
 
-def test_sigmoid_gated_rms_norm_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:
+def test_sigmoid_gated_rms_norm_cache_hit_rebinds_fresh_tensors(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     host_a, device_inputs_a = _device_inputs(device, batch=1, sequence=32, num_heads=2, value_dim=64, seed=1911)
     host_b, device_inputs_b = _device_inputs(device, batch=1, sequence=32, num_heads=2, value_dim=64, seed=1912)
 
@@ -444,7 +446,9 @@ def test_sigmoid_gated_rms_norm_cache_hit_rebinds_fresh_tensors(device: ttnn.Dev
     assert not torch.equal(actual_a, actual_b)
 
 
-def test_sigmoid_gated_rms_norm_default_compute_config_matches_explicit_defaults(device: ttnn.Device) -> None:
+def test_sigmoid_gated_rms_norm_default_compute_config_matches_explicit_defaults(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     _, (input_tt, gate_tt, weight_tt) = _device_inputs(device, seed=817)
     implicit = ttnn.to_torch(_run(input_tt, gate_tt, weight_tt))
     entries = device.num_program_cache_entries()
@@ -462,7 +466,9 @@ def test_sigmoid_gated_rms_norm_default_compute_config_matches_explicit_defaults
     assert_bit_identical(implicit, explicit, name="implicit vs explicit production compute defaults")
 
 
-def test_sigmoid_gated_rms_norm_exact_math_changes_program_and_output(device: ttnn.Device) -> None:
+def test_sigmoid_gated_rms_norm_exact_math_changes_program_and_output(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     _, (input_tt, gate_tt, weight_tt) = _device_inputs(device, seed=818)
     approximate = ttnn.to_torch(_run(input_tt, gate_tt, weight_tt))
     entries = device.num_program_cache_entries()
