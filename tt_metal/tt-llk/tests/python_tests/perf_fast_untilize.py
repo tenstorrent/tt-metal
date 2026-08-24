@@ -4,16 +4,14 @@
 import pytest
 from conftest import skip_for_quasar, skip_for_wormhole
 from fast_untilize_common import (
-    FAST_UNTILIZE_CT_DIMS,
     FAST_UNTILIZE_DEST_SYNC_MODES,
-    FAST_UNTILIZE_RT_DIMS,
     FAST_UNTILIZE_TILE_C,
     FAST_UNTILIZE_TILE_R,
     fast_untilize_dest_acc_modes,
     fast_untilize_formats,
 )
-from helpers.llk_params import PerfRunType
-from helpers.param_config import parametrize
+from helpers.llk_params import DestSync, PerfRunType
+from helpers.param_config import generate_perf_input_dimensions, parametrize
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
@@ -24,20 +22,31 @@ from helpers.test_variant_parameters import (
 )
 
 
+def _fast_untilize_rt_ct(dest_acc, dest_sync):
+    tiles = [
+        (dims[0] // FAST_UNTILIZE_TILE_R, dims[1] // FAST_UNTILIZE_TILE_C)
+        for dims in generate_perf_input_dimensions(dest_acc, dest_sync)
+    ]
+    # Remainder blocking: one non-power-of-two width on Half dest.
+    if dest_sync == DestSync.Half and (1, 3) not in tiles:
+        tiles.append((1, 3))
+    return tiles
+
+
 @pytest.mark.perf
 @skip_for_wormhole
 @skip_for_quasar
 @parametrize(
     formats=fast_untilize_formats(),
     dest_acc=fast_untilize_dest_acc_modes,
-    rt_dim=FAST_UNTILIZE_RT_DIMS,
-    ct_dim=FAST_UNTILIZE_CT_DIMS,
     dest_sync=FAST_UNTILIZE_DEST_SYNC_MODES,
-    loop_factor=[8, 32, 128],
+    rt_ct=lambda dest_acc, dest_sync: _fast_untilize_rt_ct(dest_acc, dest_sync),
+    loop_factor=[32],
 )
 def test_perf_fast_untilize(
-    perf_report, formats, dest_acc, rt_dim, ct_dim, dest_sync, loop_factor
+    perf_report, formats, dest_acc, dest_sync, rt_ct, loop_factor
 ):
+    rt_dim, ct_dim = rt_ct
     tile_count = rt_dim * ct_dim
     dimensions = (rt_dim * FAST_UNTILIZE_TILE_R, ct_dim * FAST_UNTILIZE_TILE_C)
 

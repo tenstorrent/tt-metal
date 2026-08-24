@@ -71,14 +71,9 @@ def _dest_capacity(dest_sync, dest_acc) -> int:
 
 
 def _dest_fill_rt_ct_pairs(max_tiles):
-    """Power-of-two (rt, ct) pairs that exactly fill dest."""
-    pairs = []
-    rt_dim = 1
-    while rt_dim <= max_tiles:
-        if max_tiles % rt_dim == 0:
-            pairs.append((rt_dim, max_tiles // rt_dim))
-        rt_dim *= 2
-    return pairs
+    """Dest-full tall and wide only (not every power-of-two factorization)."""
+    pairs = [(max_tiles, 1), (1, max_tiles)]
+    return list(dict.fromkeys(pairs))
 
 
 def _fits_tiny_perf_tile_shape(cfg) -> bool:

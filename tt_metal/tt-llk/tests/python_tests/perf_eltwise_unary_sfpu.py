@@ -8,12 +8,17 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
+    DestSync,
     FastMode,
     MathOperation,
     StableSort,
     Transpose,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import (
+    generate_perf_input_dimensions,
+    input_output_formats,
+    parametrize,
+)
 from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.sfpu_domains import sfpu_unary_ops
 from helpers.stimuli_config import StimuliConfig
@@ -162,9 +167,9 @@ def _get_formats(mathop):
     ],  # Number of SFPU iterations
     fast_mode=lambda mathop: _get_fast_modes(mathop),
     stable_sort=lambda mathop: _get_stable_sort_modes(mathop),
-    input_dimensions=[
-        [128, 64],  # tile_cnt: 8
-    ],  # Specifying different input sizes to cover different tile counts
+    input_dimensions=lambda dest_acc: generate_perf_input_dimensions(
+        dest_acc, DestSync.Half
+    ),
 )
 def test_perf_eltwise_unary_sfpu(
     perf_report,

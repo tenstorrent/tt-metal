@@ -7,11 +7,16 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
+    DestSync,
     MathOperation,
     PerfRunType,
     ReducePool,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import (
+    generate_perf_input_dimensions,
+    input_output_formats,
+    parametrize,
+)
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
@@ -32,13 +37,21 @@ from helpers.test_variant_parameters import (
     dest_acc=[DestAccumulation.Yes],
     mathop=[MathOperation.ReduceRow],
     reduce_pool=[ReducePool.Max],
-    loop_factor=list(range(10, 201, 10)),
+    input_dimensions=lambda dest_acc: generate_perf_input_dimensions(
+        dest_acc, DestSync.Half
+    ),
+    loop_factor=[32],
 )
 def test_perf_sfpu_reduce(
-    perf_report, formats, dest_acc, mathop, reduce_pool, loop_factor
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    reduce_pool,
+    input_dimensions,
+    loop_factor,
 ):
-    input_dimensions = [32, 32]
-    tile_count = 1
+    tile_count = (input_dimensions[0] * input_dimensions[1]) // 1024
 
     configuration = PerfConfig(
         "sources/sfpu_reduce_row_max_perf.cpp",

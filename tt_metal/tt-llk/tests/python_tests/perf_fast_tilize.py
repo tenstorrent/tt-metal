@@ -4,8 +4,8 @@
 import pytest
 from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import DestAccumulation, PerfRunType
-from helpers.param_config import parametrize
+from helpers.llk_params import DestAccumulation, DestSync, PerfRunType
+from helpers.param_config import generate_perf_input_dimensions, parametrize
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
@@ -16,37 +16,15 @@ from helpers.test_variant_parameters import (
 )
 
 
-def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
-    """
-    Generates a list of tuples representing width and height in tiles for input tensors,
-    up to the specified maximum size in tiles.
-    For tilize tensor width is important so all widths from 1 to max_size are generated.
-    In the interest of reducing the number of test cases, instead of generating all possible heights
-    critical subsets of valid heights are generated (three smallest, three largest and three middle heights).
-    Parameters:
-    max_size (int): Maximum number of tiles the resulting tensor can have.
-    Returns:
-    List[tuple[int, int]]: A list of tuples representing the width and height of the input tensor in tiles.
-    """
-    dimensions = []
-    for width in range(1, max_size + 1):
-        max_height = max_size // width
-        heights = [
-            1,
-            2,
-            3,
-            (max_height // 2) - 1,
-            max_height // 2,
-            (max_height // 2) + 1,
-            max_height - 2,
-            max_height - 1,
-            max_height,
-        ]
-        heights = [h for h in heights if h > 0 and h <= max_height]
-        heights = list(set(heights))
-        for height in heights:
-            dimensions.append((width, height))
-    return dimensions
+def _fast_tilize_tile_dims(dest_acc):
+    """Dest-full tall/wide in tile counts, plus ct=2 for the narrow fast path."""
+    tiles = [
+        [dims[0] // 32, dims[1] // 32]
+        for dims in generate_perf_input_dimensions(dest_acc, DestSync.Half)
+    ]
+    if [1, 2] not in tiles:
+        tiles.append([1, 2])
+    return tiles
 
 
 @skip_for_blackhole
@@ -55,7 +33,7 @@ def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
     input_format=[DataFormat.Float32, DataFormat.Float16_b],
     output_format=[DataFormat.Float32, DataFormat.Float16_b, DataFormat.Bfp8_b],
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
-    input_dimensions=generate_input_dimensions(16),
+    input_dimensions=lambda dest_acc: _fast_tilize_tile_dims(dest_acc),
 )
 def test_fast_tilize_perf(
     perf_report,

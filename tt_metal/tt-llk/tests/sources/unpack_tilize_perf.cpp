@@ -46,20 +46,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t BLOCK_CT_DIM = params.BLOCK_CT_DIM;
     const std::uint32_t BLOCK_RT_DIM = params.BLOCK_RT_DIM;
 #endif
+    const std::uint32_t num_faces = params.num_faces;
     LLK_ASSERT(FULL_RT_DIM * FULL_CT_DIM == TILE_CNT, "FULL_RT_DIM * FULL_CT_DIM must be equal to TILE_CNT");
     constexpr std::uint32_t src = 0x65000;
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src,
-            formats.unpack_B_src,
-            formats.unpack_A_dst,
-            formats.unpack_B_dst,
-            FACE_R_DIM,
-            FACE_R_DIM,
-            4 /* num_faces */,
-            4 /* num_faces */);
-        _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */);
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
+        _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false /* narrow_tile */, num_faces);
         PROFILER_SYNC();
     }
 
@@ -78,14 +72,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t j = 0; j < BLOCK_CT_DIM; j++)
                 {
                     _llk_unpack_tilize_wrapper_(
-                        tile_row_addr,
-                        j,
-                        formats.unpack_A_src,
-                        formats.unpack_A_dst,
-                        0 /* block_ct_dim */,
-                        FACE_R_DIM,
-                        4 /* num_faces */,
-                        false /* narrow_tile */);
+                        tile_row_addr, j, formats.unpack_A_src, formats.unpack_A_dst, 0 /* block_ct_dim */, FACE_R_DIM, num_faces, false /* narrow_tile */);
                 }
             }
         }
@@ -112,7 +99,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
-    const bool is_int_fpu_en = false;
+    const std::uint32_t num_faces = params.num_faces;
+    const bool is_int_fpu_en      = false;
 
     {
         START_PERF_MEASURE("INIT")
@@ -124,7 +112,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             is_fp32_dest_acc_en,
             BroadcastType::NONE,
             is_int_fpu_en,
-            llk_test_pack_mode_v<false, TILIZE>>(4 /* num_faces */, formats.math);
+            llk_test_pack_mode_v<false, TILIZE>>(num_faces, formats.math);
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
@@ -139,7 +127,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            const std::uint32_t NUM_DVALIDS = _llk_unpack_tilize_num_dvalids_wrapper_(TILE_CNT, TILE_NUM_FACES);
+            const std::uint32_t NUM_DVALIDS = _llk_unpack_tilize_num_dvalids_wrapper_(TILE_CNT, num_faces);
             if constexpr (!unpack_to_dest)
             {
                 _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * NUM_DVALIDS);
@@ -207,6 +195,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
+    const std::uint32_t num_faces  = params.num_faces;
     static constexpr bool UNTILIZE = false;
 
     {
@@ -216,10 +205,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, false>>(
             formats.pack_src,
             formats.pack_dst,
-            16 * 16 * 4 /* tile_size */,
+            FACE_R_DIM * FACE_C_DIM * num_faces /* tile_size */,
             FACE_R_DIM,
             TILE_C_DIM,
-            4 /* num_faces */,
+            num_faces,
             false /* partial_face */,
             false /* narrow_tile */,
             0 /* relu_config */);
@@ -228,7 +217,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.pack_dst,
             FACE_R_DIM,
             TILE_C_DIM,
-            4 /* num_faces */,
+            num_faces,
             false /* partial_face */,
             false /* narrow_tile */,
             1 /* num_tiles */,
