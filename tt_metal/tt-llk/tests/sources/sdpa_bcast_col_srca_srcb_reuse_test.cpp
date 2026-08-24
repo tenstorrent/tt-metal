@@ -80,14 +80,17 @@ static constexpr std::uint32_t SRC_ROW = SRC_TILE * 64;
 // fire.
 static constexpr std::uint32_t OUTPUT_GRANULARITY = 1;
 
-// num_faces MUST be a compile-time constant on the math thread: sdpa_bcast_col_srca_srcb_reuse_configure_addrmod feeds
-// the ADDR_MOD dest.incr through a SETC16 whose immediate takes the "n" (integer-constant) asm constraint. Passing
-// params.num_faces (runtime) trips "impossible constraint in 'asm'". 2 is also the only value
-// sdpa_bcast_col_srca_srcb_reuse_configure_mop's LLK_ASSERT permits; on the MATH side it is the mop's inner-loop
-// count, i.e. the two 8-row ELWMUL chunks that together cover the tile's 16 dest rows (see the banner). It is
-// deliberately NOT params.num_faces, which is 1 here -- the unpack/pack side sees a single 16x16 face.
-// MATH_NUM_FACES comes from the MATH_NUM_FACES TemplateParameter in the generated build header, so the
-// value lives in python only (see helpers/test_variant_parameters.py:MATH_NUM_FACES).
+// The face count MUST be a compile-time constant on the math thread: sdpa_bcast_col_srca_srcb_reuse_configure_addrmod
+// feeds the ADDR_MOD dest.incr through a SETC16 whose immediate takes the "n" (integer-constant) asm constraint, so a
+// runtime value trips "impossible constraint in 'asm'". `num_faces` below is the constexpr the python driver emits by
+// passing NUM_FACES as a TEMPLATE parameter, and it is 1 here: the unpack/pack side sees a single 16x16 face.
+//
+// The MATH mop needs a DIFFERENT count, which is why it is pinned locally instead of coming from python: 2 is the only
+// value sdpa_bcast_col_srca_srcb_reuse_configure_mop's LLK_ASSERT permits, and on the MATH side it is the mop's
+// inner-loop count -- the two 8-row ELWMUL chunks that together cover the tile's 16 dest rows (see the banner). It is
+// a fixed property of the primitive, not a test parameter, so there is nothing for python to be the source of truth
+// for.
+static constexpr std::uint32_t MATH_MOP_NUM_FACES = 2;
 
 // This advance test exercises the MUL (softmax-scale) instantiation, LoFi fidelity.
 static constexpr EltwiseBinaryType SDPA_OP  = EltwiseBinaryType::ELWMUL;
@@ -129,8 +132,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_B_dst,
         FACE_R_DIM,
         FACE_R_DIM,
-        params.num_faces /* unpA_num_faces */,
-        params.num_faces /* unpB_num_faces */);
+        num_faces /* unpA_num_faces */,
+        num_faces /* unpB_num_faces */);
 
     // Step 1: unpack the two DEST seeds. buffer_A carries X (the operand the op scales in place) and buffer_B carries
     // P (the column source); the MATH thread A2D-datacopies them into DEST[DST_TILE] and DEST[SRC_TILE].
@@ -182,9 +185,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Step 1: copy the two seeds (unpacked into SrcA by unpack step 1, in this order) into DEST. X goes to
     // DEST[DST_TILE] (the op scales it in place) and the column source P to DEST[SRC_TILE].
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(params.num_faces, formats.math);
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(DST_TILE, formats.math, formats.math, params.num_faces);
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_TILE, formats.math, formats.math, params.num_faces);
+    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(num_faces, formats.math);
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(DST_TILE, formats.math, formats.math, num_faces);
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_TILE, formats.math, formats.math, num_faces);
 
     // Step 2: SDPA column-broadcast SrcA+SrcB-reuse eltwise.
     //   init     -> program addr_mods + the [MOVD2A, MOVD2A, ELWMUL] SRCB_BCAST_COL MOP.
@@ -199,7 +202,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // fused_signalling=true selects the output_granularity loop on the DEMO copy (per-tile FPU_SFPU with
     // OUTPUT_GRANULARITY=1). On promotion the BLAZE execute drops fused_signalling and the granularity loop is
     // unconditional — drop that template arg then; the golden is unaffected either way.
-    _llk_math_sdpa_bcast_col_srca_srcb_reuse_init_<SDPA_OP, NUM_TILES, SDPA_FIDELITY>(MATH_NUM_FACES, 0 /* acc_to_dest */);
+    _llk_math_sdpa_bcast_col_srca_srcb_reuse_init_<SDPA_OP, NUM_TILES, SDPA_FIDELITY>(MATH_MOP_NUM_FACES, 0 /* acc_to_dest */);
     _llk_math_sdpa_bcast_col_srca_srcb_reuse_preamble_<DST_SYNC, is_fp32_dest_acc_en, false /* clear_dest */>(SRC_ROW);
     _llk_math_sdpa_bcast_col_srca_srcb_reuse_<
         SDPA_OP,
@@ -228,14 +231,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    // The output is the single 16x16 DEST face the op writes (params.num_faces == 1, tile == one face), so the
+    // The output is the single 16x16 DEST face the op writes (num_faces == 1, tile == one face), so the
     // geometry has to be passed explicitly: the wrappers default to a full four-face 32x32 tile, and the Default-mode
     // pack MOP loops MOP_OUTER_LOOP == num_faces * num_tiles, so the default would retire 4 faces per _llk_pack_ and
     // write 4 * 512 B into the 512 B buffer_Res slot (faces 1-3 being whatever else is in DEST). Matches the
     // sibling tests, which pass (face_r_dim, tile_c_dim, num_faces) through as well.
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, FACE_R_DIM, FACE_C_DIM /* tile_c_dim: one face wide */, params.num_faces);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, FACE_C_DIM, params.num_faces);
+        formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, FACE_R_DIM, FACE_C_DIM /* tile_c_dim: one face wide */, num_faces);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, FACE_C_DIM, num_faces);
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
     _llk_packer_wait_for_math_done_();
     for (std::uint32_t i = 0; i < params.TILE_CNT; i++)

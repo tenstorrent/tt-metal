@@ -113,31 +113,6 @@ def sdpa_dest_tile_golden(out, torch_format):
     )
 
 
-def matmul_lofi_golden(in0, in1, formats, in0_dimensions, in1_dimensions):
-    """Row-major LoFi matmul golden, shape (in0_rows, ct_dim*32).
-
-    MatmulGolden rather than a raw torch matmul because the FPU runs LoFi here: it truncates the
-    SrcA/SrcB mantissas before multiplying, which biases a K-deep sum of positive values low by ~2%
-    -- far outside atol if the golden multiplies at full bf16 precision. Instantiated directly rather
-    than through `get_golden_generator`: the harness swaps in a DummyGoldenGenerator during
-    compile-producer, whose zeros(1024) would break the reshape for these narrow outputs.
-    """
-    from .golden_generators import MatmulGolden
-    from .llk_params import MathFidelity
-
-    return MatmulGolden()(
-        in0,
-        in1,
-        formats.output_format,
-        MathFidelity.LoFi,
-        input_A_dimensions=in0_dimensions,
-        input_B_dimensions=in1_dimensions,
-        tilize=False,
-        input_A_format=formats.input_format,
-        input_B_format=formats.input_format,
-    ).reshape(in0_dimensions[0], in1_dimensions[1])
-
-
 def dense_result_rowmajor(res_tensor, ct_dim, in0_rows):
     """Readback for the dense 2-face layout -> row-major (in0_rows, ct_dim*32).
 

@@ -435,35 +435,46 @@ def get_golden_generator(cls):
     return golden_registry[cls]
 
 
-def _dummy_zeros(**kwargs):
+def _dummy_zeros(*operands, **kwargs):
     # Size the dummy tensor from the caller's tile-shape kwargs when they are
     # all present (num_faces * face_r_dim * FACE_DIM per tile, times tile_cnt),
     # so callers that strictly size-check the result (e.g. untilize_block on a
-    # 16x32 tiny tile) get a correctly-sized tensor. When any sizing kwarg is
-    # absent, fall back to the historical ELEMENTS_PER_TILE (1024) so existing
-    # callers are unaffected.
+    # 16x32 tiny tile) get a correctly-sized tensor.
     num_faces = kwargs.get("num_faces")
     face_r_dim = kwargs.get("face_r_dim")
     tile_cnt = kwargs.get("tile_cnt")
-    if num_faces is None or face_r_dim is None or tile_cnt is None:
-        size = ELEMENTS_PER_TILE
-    else:
+    # MatmulGolden callers pass operand shapes instead of a tile geometry; its
+    # result is rows(A) x cols(B).
+    dims_a = kwargs.get("input_A_dimensions")
+    dims_b = kwargs.get("input_B_dimensions")
+    if num_faces is not None and face_r_dim is not None and tile_cnt is not None:
         size = tile_cnt * num_faces * face_r_dim * FACE_DIM
+    elif dims_a is not None and dims_b is not None:
+        size = dims_a[0] * dims_b[1]
+    else:
+        # Nothing named the geometry, so fall back to the first tensor operand:
+        # for the elementwise goldens the result is exactly as long as its
+        # inputs. This is the historical ELEMENTS_PER_TILE (1024) whenever the
+        # operand is a whole tile, and it is what keeps callers that size-check
+        # a PARTIAL-tile result (an 8x32 SDPA tile, say) working -- a fixed 1024
+        # would blow up when they combine the result with their own operands.
+        operand = next((arg for arg in operands if isinstance(arg, torch.Tensor)), None)
+        size = ELEMENTS_PER_TILE if operand is None else operand.numel()
     return torch.zeros(size, dtype=torch.bfloat16)
 
 
 class DummyGoldenGenerator:
-    def __call__(*args, **kwargs):
-        return _dummy_zeros(**kwargs)
+    def __call__(self, *args, **kwargs):
+        return _dummy_zeros(*args, **kwargs)
 
-    def transpose_faces_multi_tile(*args, **kwargs):
-        return _dummy_zeros(**kwargs)
+    def transpose_faces_multi_tile(self, *args, **kwargs):
+        return _dummy_zeros(*args, **kwargs)
 
-    def transpose_within_faces_multi_tile(*args, **kwargs):
-        return _dummy_zeros(**kwargs)
+    def transpose_within_faces_multi_tile(self, *args, **kwargs):
+        return _dummy_zeros(*args, **kwargs)
 
-    def accumulate_l1(*args, **kwargs):
-        return _dummy_zeros(**kwargs)
+    def accumulate_l1(self, *args, **kwargs):
+        return _dummy_zeros(*args, **kwargs)
 
 
 def dummy_golden_generator(cls):

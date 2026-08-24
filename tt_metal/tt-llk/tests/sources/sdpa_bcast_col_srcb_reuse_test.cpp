@@ -26,6 +26,13 @@
 //      _llk_math_sdpa_bcast_col_srcb_reuse_ runs the SRCB_BCAST_COL eltwise MOP and the postamble clears SrcB:
 //      DEST[DST_INDEX] = A0 * broadcast_col(P1) + A1 * broadcast_col(P2)   (the ELWMULs accumulate).
 //
+// This kernel is driven by BOTH test_sdpa_bcast_col_srcb_reuse.py and test_unpack_A_sdpa.py: exercising either
+// primitive in isolation is impossible (unpack_A_sdpa is init/mop-config plus the dummy-SrcB-valid helper and has no
+// execute of its own; the math op cannot run without them), so one kernel covers both and the two test files differ
+// only in which primitive they nominally pin. All three unpack_A_sdpa symbols are driven here:
+// _llk_unpack_A_sdpa_init_ (the SrcA-only UNPACR MOP), the base llk_unpack_A execute under that MOP, and
+// _llk_unpack_A_sdpa_set_srcb_dummy_valid_.
+//
 // Blackhole-only. The golden is verified on Blackhole silicon (p100a), not compile-green only.
 
 #include <cstdint>
@@ -58,10 +65,10 @@ static constexpr std::uint32_t DST_INDEX = 0;
 
 // num_faces MUST be a compile-time constant on the math thread: sdpa_bcast_col_srcb_reuse_configure_addrmod feeds
 // (16 + (num_dest_faces - num_faces)*16) into the ADDR_MOD dest.incr, which lands in a SETC16 whose immediate takes
-// the "n" (integer-constant) asm constraint. Passing params.num_faces (runtime) trips "impossible constraint in
-// 'asm'". The 8x32 tile is always 2 faces (the only shape the mop config accepts), so pin it here.
-// MATH_NUM_FACES comes from the MATH_NUM_FACES TemplateParameter in the generated build header, so the
-// value lives in python only (see helpers/test_variant_parameters.py:MATH_NUM_FACES).
+// the "n" (integer-constant) asm constraint, so a runtime value trips "impossible constraint in 'asm'". That is why
+// the python driver passes NUM_FACES as a TEMPLATE parameter rather than a runtime one: `num_faces` below is the
+// constexpr the generated build header declares (helpers/sdpa_bcast_utils.py), so the value lives in python only and
+// the unpack/pack sides read the same constant the math mop does.
 
 // This advance test exercises the MUL (softmax-scale) instantiation, LoFi fidelity.
 static constexpr EltwiseBinaryType SDPA_OP  = EltwiseBinaryType::ELWMUL;
@@ -111,8 +118,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_B_dst,
         params.in0_face_r_dim /* unpA_face_r_dim */,
         params.in0_face_r_dim /* unpB_face_r_dim */,
-        params.num_faces /* unpA_num_faces */,
-        params.num_faces /* unpB_num_faces */);
+        num_faces /* unpA_num_faces */,
+        num_faces /* unpB_num_faces */);
 
     // Step 1: seed the two column sources into DEST. Plain unpack_A -> SrcA, math datacopy A2D.
     // P1 goes to DEST[SRC_INDEX] (the preamble MOVD2Bs its rows 0-7 into SrcB rows 0-7) and P2 to
@@ -127,7 +134,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // into SrcA. set_srcb_dummy_valid injects the stall + SrcB SET_DVALID (no real data) that the math preamble
     // STALLWAIT(SRCB_VLD) waits on before it MOVD2Bs DEST into SrcB.
     _llk_unpack_A_sdpa_init_<NUM_TILES, BroadcastType::NONE>(
-        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, params.in0_face_r_dim, params.num_faces, formats.unpack_A_src, formats.unpack_A_dst);
+        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, params.in0_face_r_dim, num_faces, formats.unpack_A_src, formats.unpack_A_dst);
 
     // The dummy SrcB valid MUST be issued BEFORE the operand unpacks, matching the demo call order
     // (sdpa.h: sdpa_bcast_col_reuse_preamble() runs before sdpa_bcast_col_reuse_tiles()). Its leading
@@ -174,16 +181,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Step 1: copy the two column sources (unpacked into SrcA by unpack step 1) into DEST[SRC_INDEX] and
     // DEST[SRC_INDEX + 1]. The preamble's four MOVD2Bs read DEST rows 0-7 and 64-71, i.e. the first 8 rows
     // of each of these two 32x32 DEST tiles, into SrcB rows 0-7 (P1) and 8-15 (P2).
-    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(params.num_faces, formats.math);
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_INDEX, formats.math, formats.math, params.num_faces);
-    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_INDEX + 1, formats.math, formats.math, params.num_faces);
+    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(num_faces, formats.math);
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_INDEX, formats.math, formats.math, num_faces);
+    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en>(SRC_INDEX + 1, formats.math, formats.math, num_faces);
 
     // Step 2: SDPA column-broadcast SrcB-reuse eltwise.
     //   init      -> program addr_mods + the SRCB_BCAST_COL MUL MOP.
     //   preamble  -> STALLWAIT(SRCB_VLD) on the unpacker's dummy SrcB valid, then MOVD2B DEST rows -> SrcB.
     //   execute   -> DEST[DST_INDEX] = SrcA(operand) * broadcast_col(scale).
     //   postamble -> SETRWC CLR_B (release the reused SrcB).
-    _llk_math_sdpa_bcast_col_srcb_reuse_init_<SDPA_OP, NUM_TILES, SDPA_FIDELITY>(MATH_NUM_FACES, 0 /* acc_to_dest */);
+    _llk_math_sdpa_bcast_col_srcb_reuse_init_<SDPA_OP, NUM_TILES, SDPA_FIDELITY>(num_faces, 0 /* acc_to_dest */);
     _llk_math_sdpa_bcast_col_srcb_reuse_preamble_<DST_SYNC, is_fp32_dest_acc_en, CLEAR_DEST>();
     _llk_math_sdpa_bcast_col_srcb_reuse_<SDPA_OP, NUM_TILES, DST_SYNC, is_fp32_dest_acc_en, SDPA_FIDELITY, CLEAR_DEST>(DST_INDEX);
     _llk_math_sdpa_bcast_col_srcb_reuse_postamble_();
@@ -210,8 +217,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // two 16-row DEST faces. With the default full-tile config it instead reads DEST rows 0-15 as one face, so
     // the second half of the buffer comes back as the ZEROACC'd rows 8-15 rather than output columns 16-31.
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, true /* partial_face */);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, params.in0_face_r_dim, TILE_C_DIM, params.num_faces);
+        formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, num_faces, true /* partial_face */);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, params.in0_face_r_dim, TILE_C_DIM, num_faces);
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
     _llk_packer_wait_for_math_done_();
     for (std::uint32_t i = 0; i < params.TILE_CNT; i++)

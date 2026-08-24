@@ -162,6 +162,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             SRC_INDEX, DST_INDEX, false /* prev_max */);
         _llk_math_eltwise_sfpu_done_();
 
+        // Drain the SFPU before the packer reads DEST. _llk_math_eltwise_sfpu_done_ only clears the dest write
+        // address; it issues no wait, and the SFPU pipeline is still retiring the reduce's SFPSTOREs when the loop
+        // below starts packing. Same guard the promoted SFPU-on-PACK primitives use before their pack
+        // (ckernel_sfpu_topk_xl.h: TTI_STALLWAIT(STALL_PACK, WAIT_SFPU)).
+        TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU);
+
         for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
         {
             const std::uint32_t result_tile = block * params.NUM_TILES_IN_BLOCK + tile;

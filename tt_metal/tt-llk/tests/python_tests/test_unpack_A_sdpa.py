@@ -15,7 +15,8 @@
 # To exercise unpack_A_sdpa with a validatable NUMERIC golden it is paired with the demo-fork math SDPA column-
 # broadcast SrcB-reuse op (llk_math_sdpa_bcast_col_srcb_reuse.h), exactly as test_sdpa_bcast_col_srcb_reuse.py does --
 # the two differ only in which primitive is nominally under test, so they share one driver
-# (helpers/sdpa_bcast_utils.py) rather than cloning the stimuli/golden/compare body.
+# (helpers/sdpa_bcast_utils.py) AND one kernel (sources/sdpa_bcast_col_srcb_reuse_test.cpp) rather than cloning the
+# stimuli/golden/compare body or the .cpp.
 #
 # The pairing is what makes the ordering constraint on the dummy-SrcB helper observable: it must be issued BEFORE the
 # two operand unpacks. Issued after them, the unpacker blocks on SrcA banks that only the math execute frees while
@@ -43,4 +44,6 @@ def test_unpack_A_sdpa(
     formats,
     boot_mode=BootMode.DEFAULT,
 ):
-    run_sdpa_bcast_col_srcb_reuse("sources/unpack_A_sdpa_test.cpp", formats, boot_mode)
+    run_sdpa_bcast_col_srcb_reuse(
+        "sources/sdpa_bcast_col_srcb_reuse_test.cpp", formats, boot_mode
+    )

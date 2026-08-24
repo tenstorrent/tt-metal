@@ -40,12 +40,18 @@ from helpers.advance_llk_includes import (  # noqa: F401  (module-scoped autouse
 )
 from helpers.device import BootMode
 from helpers.format_config import DataFormat
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
+from helpers.llk_params import (
+    DestAccumulation,
+    MathFidelity,
+    MathOperation,
+    format_dict,
+)
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import MATH_NUM_FACES, NUM_FACES, TILE_COUNT
+from helpers.test_variant_parameters import NUM_FACES, TILE_COUNT
 from helpers.tile_constants import FACE_C_DIM, MAX_FACE_R_DIM
 from helpers.utils import passed_test
 
@@ -85,28 +91,44 @@ def test_sdpa_bcast_col_srca_srcb_reuse(
         tile_dimensions=TILE_DIMS,
     )
 
-    # Golden, in the same flat DEST-row order the packer writes back:
-    #   out[d, c] = X[d, c] * (1 + P[d % 8, 0])
-    # The scale repeats every 8 dest rows because srcb.incr == 0 across the MOP's two 8-row chunks.
+    # Golden, in the same flat DEST-row order the packer writes back. The op's ELWMUL carries CLR_NONE and
+    # accumulates into DEST while SrcA is a copy of DEST, so what the hardware computes is
+    #   out[d, c] = X[d, c] + X[d, c] * P[d % 8, 0]
+    # rather than the algebraically equal X * (1 + P): only the PRODUCT goes through the FPU, so only the
+    # product carries LoFi's mantissa truncation. EltwiseBinaryGolden models that truncation (SrcA masked to
+    # 5 mantissa bits, SrcB to 7), which a raw torch multiply does not. The column value repeats every 8 dest
+    # rows because srcb.incr == 0 across the MOP's two 8-row chunks.
     x = src_A.reshape(MAX_FACE_R_DIM, FACE_C_DIM).to(torch_format)
     p_col0 = src_B.reshape(MAX_FACE_R_DIM, FACE_C_DIM).to(torch_format)[
         :LOGICAL_ROWS, 0
     ]
-    scale = 1.0 + p_col0.repeat(MAX_FACE_R_DIM // LOGICAL_ROWS).reshape(
-        MAX_FACE_R_DIM, 1
+    bcast_col = (
+        p_col0.repeat(MAX_FACE_R_DIM // LOGICAL_ROWS)
+        .reshape(MAX_FACE_R_DIM, 1)
+        .expand(MAX_FACE_R_DIM, FACE_C_DIM)
     )
-    golden_tensor = (x * scale).flatten()
+    # Both operands are already quantized (stimuli are generated in input_format), so input_format is left
+    # unset -- the same call shape test_experimental_reconfig_escape.py uses.
+    product = get_golden_generator(EltwiseBinaryGolden)(
+        MathOperation.Elwmul,
+        x.flatten(),
+        bcast_col.flatten(),
+        formats.output_format,
+        MathFidelity.LoFi,
+    )
+    golden_tensor = x.flatten() + product
 
     configuration = TestConfig(
         "sources/sdpa_bcast_col_srca_srcb_reuse_test.cpp",
         formats,
         templates=[
-            # 2 is the mop's inner-loop count (the two 8-row ELWMUL chunks covering the tile's 16 dest rows),
-            # deliberately NOT NUM_FACES_HOST -- the unpack/pack side sees a single 16x16 face.
-            MATH_NUM_FACES(2),
+            # NUM_FACES is a TEMPLATE parameter, not a runtime one: it emits `constexpr num_faces`, and the
+            # SDPA addrmod config needs a compile-time face count (SETC16 "n" asm constraint). The mop's own
+            # inner-loop count is 2, not NUM_FACES_HOST -- that one is a fixed property of the primitive and
+            # is pinned in the .cpp (MATH_MOP_NUM_FACES).
+            NUM_FACES(NUM_FACES_HOST, NUM_FACES_HOST, NUM_FACES_HOST),
         ],
         runtimes=[
-            NUM_FACES(NUM_FACES_HOST, NUM_FACES_HOST, NUM_FACES_HOST),
             TILE_COUNT(tile_cnt),
         ],
         variant_stimuli=StimuliConfig(

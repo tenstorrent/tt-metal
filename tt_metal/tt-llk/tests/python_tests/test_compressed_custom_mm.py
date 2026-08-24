@@ -41,12 +41,12 @@ from helpers.compressed_utils import FMT_CODE, pack_bfp_tile, unpack_bfp_tile
 from helpers.custom_mm_utils import (
     dense_result_rowmajor,
     matmul_grid,
-    matmul_lofi_golden,
     pack_in0_faces,
 )
 from helpers.device import BootMode
 from helpers.format_config import DataFormat
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.golden_generators import MatmulGolden, get_golden_generator
+from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
 from helpers.param_config import generate_combination, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -199,9 +199,20 @@ def _run_compressed_custom_mm(
     packed_b, in1_dequant = _pack_in1_bfp(in1, kt_dim, ct_dim, code)
 
     # Golden multiplies the DEQUANTIZED in1, so BFP rounding is folded in rather than charged against PCC.
-    golden_tensor = matmul_lofi_golden(
-        in0, in1_dequant, formats, in0_dimensions, in1_dimensions
-    )
+    # LoFi, not a raw torch matmul: the FPU truncates the SrcA/SrcB mantissas before multiplying, which
+    # biases a K-deep sum of positive values low by ~2% -- far outside atol if the golden multiplies at full
+    # bf16 precision.
+    golden_tensor = get_golden_generator(MatmulGolden)(
+        in0,
+        in1_dequant,
+        formats.output_format,
+        MathFidelity.LoFi,
+        input_A_dimensions=in0_dimensions,
+        input_B_dimensions=in1_dimensions,
+        tilize=False,
+        input_A_format=formats.input_format,
+        input_B_format=formats.input_format,
+    ).reshape(in0_dimensions[0], in1_dimensions[1])
 
     in0_faces = pack_in0_faces(in0, kt_dim, in0_format)
     meta_bytes = np.array(_encode_meta(code, ct_dim, kt_dim), dtype=np.uint32).tobytes()

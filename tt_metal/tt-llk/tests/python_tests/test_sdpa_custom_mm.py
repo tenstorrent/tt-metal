@@ -42,13 +42,13 @@ from helpers.custom_mm_utils import (
     IN0_ROWS_SDPA,
     KT_DIMS,
     face_result_leading,
-    matmul_lofi_golden,
     pack_in0_faces,
     sdpa_dest_tile_golden,
 )
 from helpers.device import BootMode
 from helpers.format_config import DataFormat
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.golden_generators import MatmulGolden, get_golden_generator
+from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -104,9 +104,20 @@ def test_sdpa_custom_mm(
     in1 = src_B.reshape(in1_dimensions).to(torch_format)
 
     # Row-major LoFi matmul, then repacked into the one-16x16-face-per-output-tile order the packer writes back.
-    matmul_rowmajor = matmul_lofi_golden(
-        in0, in1, formats, in0_dimensions, in1_dimensions
-    )
+    # LoFi, not a raw torch matmul: the FPU truncates the SrcA/SrcB mantissas before multiplying, which
+    # biases a K-deep sum of positive values low by ~2% -- far outside atol if the golden multiplies at full
+    # bf16 precision.
+    matmul_rowmajor = get_golden_generator(MatmulGolden)(
+        in0,
+        in1,
+        formats.output_format,
+        MathFidelity.LoFi,
+        input_A_dimensions=in0_dimensions,
+        input_B_dimensions=in1_dimensions,
+        tilize=False,
+        input_A_format=formats.input_format,
+        input_B_format=formats.input_format,
+    ).reshape(in0_dimensions[0], in1_dimensions[1])
     golden_tensor = sdpa_dest_tile_golden(matmul_rowmajor, torch_format)
 
     in0_faces = pack_in0_faces(in0, kt_dim, formats.input_format)

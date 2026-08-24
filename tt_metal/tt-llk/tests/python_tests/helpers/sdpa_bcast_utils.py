@@ -5,8 +5,9 @@
 
 `test_sdpa_bcast_col_srcb_reuse.py` and `test_unpack_A_sdpa.py` pin different primitives
 (`llk_math_sdpa_bcast_col_srcb_reuse.h` vs `llk_unpack_A_sdpa.h`) but drive the *same* op with
-the same stimuli and the same golden, so the stimuli/golden/compare body lives here once and each
-test file supplies only its `sources/*.cpp`. `test_sdpa_bcast_col_srca_srcb_reuse.py` deliberately
+the same stimuli and the same golden, so the stimuli/golden/compare body lives here once and both
+pass the same `sources/sdpa_bcast_col_srcb_reuse_test.cpp` -- neither primitive can be exercised
+without the other, so one kernel covers both. `test_sdpa_bcast_col_srca_srcb_reuse.py` deliberately
 does NOT share this driver: that variant sources both operands from DEST rather than from SrcA, so
 its golden is a different function of the inputs (see its banner).
 
@@ -26,18 +27,23 @@ with everything an 8x32 tile (two 8x16 faces):
 import torch
 from helpers.device import BootMode
 from helpers.format_config import DataFormat
-from helpers.golden_generators import BroadcastGolden, get_golden_generator
-from helpers.llk_params import BroadcastType, DestAccumulation, format_dict
+from helpers.golden_generators import (
+    BroadcastGolden,
+    EltwiseBinaryGolden,
+    get_golden_generator,
+)
+from helpers.llk_params import (
+    BroadcastType,
+    DestAccumulation,
+    MathFidelity,
+    MathOperation,
+    format_dict,
+)
 from helpers.param_config import input_output_formats
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import (
-    IN_FACE_DIMS,
-    MATH_NUM_FACES,
-    NUM_FACES,
-    TILE_COUNT,
-)
+from helpers.test_variant_parameters import IN_FACE_DIMS, NUM_FACES, TILE_COUNT
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
@@ -116,30 +122,45 @@ def run_sdpa_bcast_col_srcb_reuse(cpp_source, formats, boot_mode=BootMode.DEFAUL
 
     # Golden, in untilized (row-major) space to match the readback below. The column broadcast is
     # computed in TILIZED space because that is where the per-face column-0 value lives, then
-    # untilized; the two products are then formed and summed row-major.
+    # untilized; the two products are then formed by the eltwise golden and summed row-major (the
+    # MOP's two ELWMULs accumulate into DEST).
+    #
+    # EltwiseBinaryGolden rather than a raw torch multiply: the products come off the FPU at LoFi,
+    # which truncates the SrcA/SrcB mantissas before multiplying, and the generator models that
+    # fidelity masking. Both operands are already quantized here (stimuli in input_format, the
+    # scale straight out of BroadcastGolden), so input_format is left unset -- the same call shape
+    # test_eltwise_bcast_col_custom.py and test_experimental_reconfig_escape.py use.
     per_tile = SDPA_NUM_FACES * SDPA_FACE_R_DIM * 16
     broadcast_golden = get_golden_generator(BroadcastGolden)
+    eltwise_golden = get_golden_generator(EltwiseBinaryGolden)
     operands = src_A.reshape(SDPA_TILE_PAIRS * rows, 32).to(torch_format)
 
-    golden_tensor = torch.zeros(rows, 32, dtype=torch_format)
+    golden_tensor = torch.zeros(rows * 32, dtype=torch_format)
     for t in range(SDPA_TILE_PAIRS):
         scale = _bcast_col_untilized(
             tilized_B.flatten()[t * per_tile : (t + 1) * per_tile],
             formats.input_format,
             broadcast_golden,
         ).to(torch_format)
-        golden_tensor += operands[t * rows : (t + 1) * rows, :] * scale
-    golden_tensor = golden_tensor.flatten()
+        golden_tensor += eltwise_golden(
+            MathOperation.Elwmul,
+            operands[t * rows : (t + 1) * rows, :].flatten(),
+            scale.flatten(),
+            formats.output_format,
+            MathFidelity.LoFi,
+        )
 
     configuration = TestConfig(
         cpp_source,
         formats,
         templates=[
-            # The MATH mop needs the face count as a compile-time constant (SETC16 "n" constraint).
-            MATH_NUM_FACES(SDPA_NUM_FACES),
+            # NUM_FACES is a TEMPLATE parameter here, not a runtime one: the MATH mop needs the face
+            # count as a compile-time constant (its ADDR_MOD dest.incr lands in a SETC16 whose
+            # immediate takes the "n" asm constraint), and it emits `constexpr num_faces`, which the
+            # unpack/pack sides read just as happily as the math thread.
+            NUM_FACES(SDPA_NUM_FACES, SDPA_NUM_FACES, SDPA_NUM_FACES),
         ],
         runtimes=[
-            NUM_FACES(SDPA_NUM_FACES, SDPA_NUM_FACES, SDPA_NUM_FACES),
             TILE_COUNT(1),
             IN_FACE_DIMS(
                 in0_face_r_dim=SDPA_FACE_R_DIM, in1_face_r_dim=SDPA_FACE_R_DIM

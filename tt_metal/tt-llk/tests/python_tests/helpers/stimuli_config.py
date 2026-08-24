@@ -419,7 +419,9 @@ class StimuliConfig:
         return packers.get(data_format)
 
     @staticmethod
-    def _write_prepacked(buffer, base_address: int, location: str) -> bool:
+    def _write_prepacked(
+        buffer, base_address: int, location: str, tile_count: int, tile_size: int
+    ) -> bool:
         """Write an operand the test already packed into its exact L1 image.
 
         Returns True when it took the write, False when ``buffer`` is a tensor and the
@@ -432,9 +434,29 @@ class StimuliConfig:
         that tile's format code. Those tests hand over bytes instead of a tensor, and
         the bytes go to L1 verbatim -- the same thing the silicon-validated
         compressed_utils.CompressedStimuliConfig does by overriding write() wholesale.
+
+        The bytes still have to fit the region the L1 layout reserved for this operand:
+        operands are laid out contiguously, so the next operand starts at
+        ``base_address + tile_count * tile_size``. Writing past that silently corrupts
+        the neighbouring buffer and shows up as a wrong-looking golden somewhere else,
+        so reject it here instead. ``tile_count``/``tile_size`` is what the caller
+        reserved, not a claim about how the bytes are structured -- a prepacked image is
+        free to be smaller (a dense partial-face run) or laid out differently inside the
+        region.
         """
         if not isinstance(buffer, (bytes, bytearray, memoryview)):
             return False
+
+        num_bytes = memoryview(buffer).nbytes
+        reserved = tile_count * tile_size
+        if num_bytes > reserved:
+            raise ValueError(
+                f"Prepacked operand at 0x{base_address:08X} is {num_bytes} B but only "
+                f"{reserved} B are reserved for it ({tile_count} tiles x {tile_size} B). "
+                "Raise tile_count (or declare a wider stimuli format) in the StimuliConfig "
+                "so the reservation covers the image."
+            )
+
         write_to_device(location, base_address, bytes(buffer))
         return True
 
@@ -457,7 +479,9 @@ class StimuliConfig:
         - Always strides through buffer at MAX_TILE_ELEMENTS (1024) intervals
         - Packs either full tiles (1024 elements) or partial tiles (num_faces * face_r_dim * 16)
         """
-        if StimuliConfig._write_prepacked(buffer, base_address, location):
+        if StimuliConfig._write_prepacked(
+            buffer, base_address, location, tile_count, tile_size
+        ):
             return
 
         addresses = []
@@ -524,7 +548,9 @@ class StimuliConfig:
         - Strides through buffer based on actual tile_dimensions (tile_r * tile_c)
         - Always writes all elements for the given tile dimensions
         """
-        if StimuliConfig._write_prepacked(buffer, base_address, location):
+        if StimuliConfig._write_prepacked(
+            buffer, base_address, location, tile_count, tile_size
+        ):
             return
 
         addresses = []
