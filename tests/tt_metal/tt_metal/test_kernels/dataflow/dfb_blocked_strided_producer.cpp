@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Metal 2.0 (declarative API) BLOCKED-producer -> STRIDED-consumer DFB producer.
-// A STRIDED consumer owns interleaved ring slots, so tiles have to go over one at a time for
-// the round-robin to credit the right consumer. This keeps dfb_blocked_producer's contiguous
-// DRAM read order but pushes per tile. A 1x1 ring has nothing to interleave with, so there the
-// whole block still moves in one transaction.
+// Blocks are contiguous in the ring (global block order), so each block moves in one NoC
+// transaction; its credits are split across the consumers, each of which owns an equal share of
+// every block. Keeps dfb_blocked_producer's contiguous DRAM read order. entries_per_txn carries
+// the transaction size, so the j-loop below is one iteration per block.
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
@@ -34,7 +34,7 @@ void kernel_main() {
     for (uint32_t b = 0; b < num_blocks; ++b) {
         // This thread's b-th block: block_size contiguous pages, blocks interleaved across producers.
         const uint32_t block_base_page = chunk_offset + (b * num_producers + producer_idx) * block_size;
-        // 1 while the ring is interleaved, block_size on a 1x1 ring where it isn't.
+        // block_size: a block is ring-contiguous under global block order.
 #ifdef ARCH_QUASAR
         const uint32_t entries_per_txn = dfb.get_entries_per_txn();
 #else

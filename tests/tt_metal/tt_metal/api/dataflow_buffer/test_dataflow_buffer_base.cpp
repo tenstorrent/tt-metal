@@ -363,8 +363,8 @@ DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB3Bx1A_blk4, 3, 1, 4, 24)
 DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB3Bx3A_blk4, 3, 3, 4, 24)
 
 // --- BLOCKED→STRIDED (DM→DM, explicit) ---
-// The producer reads block-contiguous DRAM but pushes per tile, so the STRIDED round-robin scatters each
-// tile into the next consumer's interleaved slot. Identity at P==1, a permutation at P>1.
+// The producer bursts whole blocks in global block order and each consumer drains its share of every
+// block, so the round-trip is identity for every P/C.
 #define DFB_BLOCKED_STRIDED_TEST_2_0(suffix, num_p, num_c, blk, entries, impl) \
     TEST_F(UnitMeshFixture, suffix##_2_0) {                                  \
         M2SingleDFBParams params{                                              \
@@ -380,15 +380,15 @@ DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB3Bx3A_blk4, 3, 3, 4, 24)
         };                                                                     \
         run_single_dfb_program_2_0(this->device(), params);              \
     }
-// P==1: per-tile pushes walk the interleaved slots in order, so identity regardless of C.
+// P==1 shapes.
 DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx2S_blk2_e4, 1, 2, 2, 4, false)
 DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx1S_blk4, 1, 1, 4, 16, false)
 DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx2S_blk4, 1, 2, 4, 16, false)
 DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx4S_blk4, 1, 4, 4, 16, false)
-// P>1 with C>=P: a permutation; the golden simulates the round-robin.
+// P>1 with C>=P.
 DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB2Bx2S_blk4, 2, 2, 4, 16, false)
 DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB2Bx4S_blk4, 2, 4, 4, 16, false)
-// Fan-in (P>C): each producer feeds one consumer, which round-robins its P/C feeders.
+// Fan-in (P>C): each consumer round-robins across all P producers' blocks.
 DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB2Bx1S_blk4, 2, 1, 4, 16, false)
 DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB4Bx1S_blk4, 4, 1, 4, 16, false)
 DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB4Bx2S_blk4, 4, 2, 4, 16, false)
@@ -398,6 +398,9 @@ DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB4Bx2S_blk4, 4, 2, 4, 16, false)
 DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx2S_blk4_impl, 1, 2, 4, 16, true)
 DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB1Bx4S_blk4_impl, 1, 4, 4, 16, true)
 DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB2Bx4S_blk4_impl, 2, 4, 4, 16, true)
+// C < bs: the implicit consumer's per-entry txns rotate its counters every bs/C entries — the first
+// implicit exercise of mid-run txn windows (per_txn covers whole runs on both counters).
+DFB_BLOCKED_STRIDED_TEST_2_0(DMTest1xDFB2Bx2S_blk4_impl, 2, 2, 4, 16, true)
 
 // --- BLOCKED→STRIDED (Trisc→DM, explicit) ---
 // The Tensix producer only posts credits over a flat prefilled ring, and a STRIDED consumer needs

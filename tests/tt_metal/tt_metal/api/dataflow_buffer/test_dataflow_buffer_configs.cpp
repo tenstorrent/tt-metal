@@ -2387,9 +2387,9 @@ TEST_F(UnitMeshFixture, TensixDMTest1xDFB4Bx4B_blk4_impl_rejected_2_0) {
 
 // --- REJECTED CONFIG: implicit BLOCKED whose txn window doesn't cover every tile counter ---
 // The ISR credits all of a RISC's tile counters equally when a txn ID retires, but a BLOCKED endpoint
-// advances its counter only every block_size entries. At P=1, C=4, block_size=4 and 16 entries the txn
-// window fills 2 of the 4 sub-rings while all 4 counters are credited, so consumers 2 and 3 would read
-// entries nobody wrote. compute_txn_descriptor rejects it; the explicit twin is unaffected.
+// moves a whole block per counter. At P=1, C=4, block_size=4 and 16 entries the txn window covers 2 of
+// the 4 counters' blocks while all 4 are credited, so consumers 2 and 3 would read entries nobody
+// wrote. compute_txn_descriptor rejects it; the explicit twin is unaffected.
 TEST_F(UnitMeshFixture, DMTest1xDFB1Bx4B_blk4_impl_rejected_2_0) {
     auto& mesh_device = this->device();
     if (mesh_device.arch() != ARCH::QUASAR) {

@@ -399,7 +399,18 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
 
     uint8_t N = local_dfb_interface_.num_tcs_to_rr;
     dfb::PackedTileCounter ptc0 = local_dfb_interface_.tc_slots[0].packed_tile_counter;
-    uint16_t expected_slot0 = transactions_issued / N + (0u < (transactions_issued % N) ? 1u : 0u);
+    // Credits land on the slots in runs of L ops (L == 1 rotates per op; a split side (run 0)
+    // credits every slot equally, which the L == 1 form also covers — its totals divide evenly).
+    const uint16_t L = local_dfb_interface_.run_length > 1 ? local_dfb_interface_.run_length : 1u;
+    const uint16_t NL = static_cast<uint16_t>(N * L);
+    auto expected_for_slot = [&](uint8_t i) -> uint16_t {
+        const uint16_t full = static_cast<uint16_t>((transactions_issued / NL) * L);
+        const uint16_t rem = transactions_issued % NL;
+        const uint16_t start = static_cast<uint16_t>(i * L);
+        const uint16_t part = (rem <= start) ? 0u : ((rem - start > L) ? L : (rem - start));
+        return static_cast<uint16_t>(full + part);
+    };
+    uint16_t expected_slot0 = expected_for_slot(0);
 
     auto read_actual_slot0 = [&]() -> uint16_t {
         if constexpr (is_producer) {
@@ -477,7 +488,7 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
             dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
             uint8_t tensix_id = dfb::get_tensix_id(ptc);
             uint8_t tc_id     = dfb::get_counter_id(ptc);
-            uint16_t expected = transactions_issued / N + (i < (transactions_issued % N) ? 1u : 0u);
+            uint16_t expected = expected_for_slot(i);
             if constexpr (is_producer) {
                 // Modular int16 comparison: posted (16-bit HW) wraps at 65 536, so
                 // `actual < expected` is wrong at wrap; cast the difference to int16_t

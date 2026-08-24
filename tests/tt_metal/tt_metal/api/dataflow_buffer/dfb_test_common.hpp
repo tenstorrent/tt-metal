@@ -663,52 +663,12 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
         } else if (
             p.producer_type == M2PorCType::DM && p.consumer_type == M2PorCType::DM &&
             p.pap == m2::DFBAccessPattern::BLOCKED && p.cap == m2::DFBAccessPattern::STRIDED) {
-            // DM→DM BLOCKED→STRIDED. The producer reads block-contiguous DRAM but pushes per tile, so the
-            // round-robin hands tile i to TC slot t = i % ntc, whose consumer c = (p + t*P) % C writes its
-            // k-th received tile to out page k*C + c. That k-th tile is local push i = t + k*ntc:
-            //   output[k*C + c] = input[((t + k*ntc)/bs * P + p)*bs + (t + k*ntc)%bs]
-            // Identity at P==1, a permutation at P>1.
+            // DM→DM BLOCKED→STRIDED is identity for every P/C: producer p bursts its DRAM blocks
+            // straight into its ring blocks (b ≡ p mod P, ascending), and consumer c reads the
+            // entries ≡ c mod C ascending, writing its k-th read to out page k*C + c — the k-th
+            // entry in its residue class. The two mappings cancel.
             const uint32_t wpe = p.entry_size / sizeof(uint32_t);
-            const uint32_t P = p.num_producers;
-            const uint32_t C = p.num_consumers;
-            const uint32_t bs = p.block_size;
-            std::vector<uint32_t> expected(input.size(), 0u);
-            if (P > 1) {
-                // Region mesh (P > 1): producer pp owns the contiguous region starting at entry pp*R and
-                // lays its k-th block at region offset k*bs, so ring entry pp*R + k*bs + j holds input
-                // page (k*P + pp)*bs + j. Consumer c rotates over its P slots, so its m-th read is ring
-                // entry (m%P)*R + c + (m/P)*C, and it writes that to page m*C + c.
-                // Collapses to the identity when C == bs.
-                for (uint32_t c = 0; c < C; ++c) {
-                    for (uint32_t m = 0; m < p.num_entries / C; ++m) {
-                        const uint32_t pp = m % P;
-                        const uint32_t o = c + (m / P) * C;
-                        const uint32_t src = ((o / bs) * P + pp) * bs + (o % bs);
-                        const uint32_t dst = m * C + c;
-                        std::copy(
-                            input.begin() + src * wpe, input.begin() + (src + 1) * wpe, expected.begin() + dst * wpe);
-                    }
-                }
-            } else {
-                // P == 1: the producer round-robins its C TCs; its k-th push to slot t is push t + k*C.
-                const uint32_t epp = p.num_entries / P;  // entries per producer
-                const uint32_t ntc = C / P;
-                for (uint32_t pp = 0; pp < P; ++pp) {
-                    for (uint32_t t = 0; t < ntc; ++t) {
-                        const uint32_t c = (pp + t * P) % C;
-                        const uint32_t tiles_to_c = epp / ntc;  // == num_entries / C
-                        for (uint32_t k = 0; k < tiles_to_c; ++k) {
-                            const uint32_t i = t + k * ntc;  // producer pp's local push index
-                            const uint32_t src = (i / bs * P + pp) * bs + (i % bs);
-                            const uint32_t dst = k * C + c;
-                            std::copy(
-                                input.begin() + src * wpe,
-                                input.begin() + (src + 1) * wpe,
-                                expected.begin() + dst * wpe);
-                        }
-                    }
-                }
-            }
+            std::vector<uint32_t> expected = input;
             if (expected != output) {
                 for (uint32_t t = 0; t < std::min<uint32_t>(entries_per_core, 16); ++t) {
                     int match = -1;
@@ -726,7 +686,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
                         match >= 0 ? ("input page " + std::to_string(match)) : std::string("UNKNOWN"));
                 }
             }
-            EXPECT_EQ(expected, output) << "M2 DM→DM BLOCKED→STRIDED permutation mismatch";
+            EXPECT_EQ(expected, output) << "M2 DM→DM BLOCKED→STRIDED identity mismatch";
         } else if (
             p.producer_type == M2PorCType::TENSIX && p.consumer_type == M2PorCType::DM &&
             p.pap == m2::DFBAccessPattern::BLOCKED && p.cap == m2::DFBAccessPattern::STRIDED) {
