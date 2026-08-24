@@ -3,6 +3,7 @@
 
 #include "affine_exclusive_scan_device_operation.hpp"
 
+#include <algorithm>
 #include <array>
 
 #include <tt-metalium/constants.hpp>
@@ -33,6 +34,17 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
     kda_factory_detail::check_same_device(in.a, in.b, operation_name, "b");
     kda_factory_detail::check_same_device(in.a, in.initial_state, operation_name, "initial_state");
     kda_factory_detail::check_matching_dtype(in.a, in.b, operation_name, "a and b");
+    const auto check_input_memory_layout = [operation_name](const Tensor& tensor, std::string_view name) {
+        const auto memory_layout = tensor.memory_config().memory_layout();
+        TT_FATAL(
+            memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED ||
+                memory_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+            "{}: {} must use interleaved or height-sharded memory",
+            operation_name,
+            name);
+    };
+    check_input_memory_layout(in.a, "a");
+    check_input_memory_layout(in.b, "b");
     TT_FATAL(attrs.groups_per_head > 0, "affine_exclusive_scan: groups_per_head must be positive");
     kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
@@ -61,6 +73,16 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
     TT_FATAL(
         state_shape[0] == attrs.batch_heads && state_shape[1] == attrs.key_dim && state_shape[2] == attrs.value_dim,
         "affine_exclusive_scan: initial_state shape must be [batch_heads, K, V]");
+
+    constexpr uint32_t max_coordinate_table_workers = 128;
+    const auto grid = in.a.device()->compute_with_storage_grid_size();
+    const uint32_t worker_limit = std::min<uint32_t>(grid.x * grid.y, max_coordinate_table_workers);
+    const uint32_t group_workers = attrs.batch_heads * attrs.groups_per_head;
+    TT_FATAL(
+        group_workers <= worker_limit,
+        "affine_exclusive_scan: supports at most {} group workers on this device, got {}",
+        worker_limit,
+        group_workers);
 }
 
 AffineExclusiveScanOperation::spec_return_value_t AffineExclusiveScanOperation::compute_output_specs(
@@ -83,6 +105,8 @@ Tensor affine_exclusive_scan(
     uint32_t groups,
     const tt::tt_metal::MemoryConfig& mem,
     const DeviceComputeKernelConfig& cfg) {
+    // Cache-miss validation cannot protect attribute construction on cache hits. Keep these guards here because the
+    // launcher divides by groups and indexes all three input shapes before dispatching validation.
     TT_FATAL(groups > 0, "affine_exclusive_scan: groups_per_head must be positive");
     const auto& shape = a.logical_shape();
     const auto& b_shape = b.logical_shape();

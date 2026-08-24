@@ -518,6 +518,55 @@ def test_affine_exclusive_scan_rejects_invalid_inputs(
         _run(a_tt, b_tt, state_tt, groups_per_head)
 
 
+def test_affine_exclusive_scan_rejects_excess_workers(
+    device: ttnn.Device,
+    expect_error: Callable,
+) -> None:
+    grid = device.compute_with_storage_grid_size()
+    worker_limit = min(grid.x * grid.y, 128)
+    group_workers = worker_limit + 1
+    a, b, initial_state = _host_inputs(1, group_workers, 32, 32)
+
+    with expect_error(RuntimeError, f"supports at most {worker_limit} group workers on this device"):
+        _run(
+            _to_device(a, device),
+            _to_device(b, device),
+            _to_device(initial_state, device),
+            group_workers,
+        )
+
+
+@pytest.mark.parametrize("input_name", ["a", "b"])
+@pytest.mark.parametrize(
+    "memory_layout",
+    [ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.TensorMemoryLayout.BLOCK_SHARDED],
+    ids=["width_sharded", "block_sharded"],
+)
+def test_affine_exclusive_scan_rejects_unsupported_input_sharding(
+    device: ttnn.Device,
+    expect_error: Callable,
+    input_name: str,
+    memory_layout: ttnn.TensorMemoryLayout,
+) -> None:
+    a, b, initial_state = _host_inputs(1, 4, 32, 32)
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        [128, 32],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    unsupported = ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, shard_spec)
+    a_memory = unsupported if input_name == "a" else ttnn.DRAM_MEMORY_CONFIG
+    b_memory = unsupported if input_name == "b" else ttnn.DRAM_MEMORY_CONFIG
+
+    with expect_error(RuntimeError, f"{input_name} must use interleaved or height-sharded memory"):
+        _run(
+            _to_device(a, device, memory_config=a_memory),
+            _to_device(b, device, memory_config=b_memory),
+            _to_device(initial_state, device),
+            4,
+        )
+
+
 def test_affine_exclusive_scan_rejects_invalid_configuration(
     device: ttnn.Device,
     expect_error: Callable,

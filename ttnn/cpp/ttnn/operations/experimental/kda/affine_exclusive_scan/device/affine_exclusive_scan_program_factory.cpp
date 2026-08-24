@@ -3,7 +3,6 @@
 
 #include "ttnn/operations/experimental/kda/affine_exclusive_scan/device/affine_exclusive_scan_program_factory.hpp"
 
-#include <algorithm>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
@@ -37,12 +36,6 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
     const uint32_t state_matrix_tiles = key_tiles * value_tiles;
 
     const auto grid = device.compute_with_storage_grid_size();
-    constexpr uint32_t max_affine_scan_workers = 128;
-    TT_FATAL(
-        group_heads <= std::min<uint32_t>(grid.x * grid.y, max_affine_scan_workers),
-        "affine_exclusive_scan supports at most {} group workers, got {}",
-        max_affine_scan_workers,
-        group_heads);
     auto distribution = kda_factory_detail::distribute_prep(grid, group_heads, group_heads);
     const auto& cores = distribution.core_set;
 
