@@ -130,9 +130,7 @@ def parse_diag_report(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Analyze an existing diag_report.json (does not run the diag suite)."
-    )
+    parser = argparse.ArgumentParser(description="Analyze an existing diag_report.json (does not run the diag suite).")
     parser.add_argument("--json", dest="json_path", help=f"Path to {DIAG_REPORT_NAME}")
     parser.add_argument(
         "--artifact-dir",
