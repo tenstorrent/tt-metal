@@ -118,7 +118,11 @@ void kernel_main() {
         // iteration index as PAYLOAD -- a runtime value on this wire is ordinary DeviceData payload (the
         // separate runtime-id event type is gone). Kept at three so the offered marker load stays
         // comparable with older knee/decode benchmarks of this workload.
-#if ZONE_MODE != 2  // EMPTY overhead mode wants a pure zone stream: no point markers between zones
+// The marker trio is OPT-IN (--markers 1 -> EMIT_MARKERS=1): it exists to exercise every point-marker
+// shape on the wire (PP_EVENT has no other emitter in the tree), but it costs ~21% of wire volume /
+// ~45% of onset delay, so knee sweeps and onset captures want a pure zone stream. EMPTY overhead mode
+// (ZONE_MODE == 2) never emits it regardless.
+#if defined(EMIT_MARKERS) && EMIT_MARKERS && ZONE_MODE != 2
         DeviceFlag(ZTAG "_Flag");
         DeviceTimestampedData(ZTAG "_Data", ((uint64_t)0xF00D << 32) | it);
         DeviceTimestampedData(ZTAG "_Iter", it);

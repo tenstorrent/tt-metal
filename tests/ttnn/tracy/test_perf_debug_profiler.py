@@ -87,7 +87,10 @@ def test_perf_debug_zones_capture(gx, gy, iters):
     env["TT_METAL_STREAMING_PROFILER_TRACY"] = "1"  # the Tracy sink is opt-in; this test verifies via tracy-capture
     try:
         proc = subprocess.run(
-            [str(WORKLOAD_BIN), "--gx", str(gx), "--gy", str(gy), "--iters", str(iters)],
+            # --markers 1: the point-marker trio is opt-in (off by default so knee sweeps run a pure
+            # zone stream), but THIS test is the wire-shape coverage vehicle -- PP_EVENT has no other
+            # emitter in the tree, so the markers must be on here or that layout goes untested.
+            [str(WORKLOAD_BIN), "--gx", str(gx), "--gy", str(gy), "--iters", str(iters), "--markers", "1"],
             env=env,
             cwd=str(TT_METAL_HOME),
             timeout=300,

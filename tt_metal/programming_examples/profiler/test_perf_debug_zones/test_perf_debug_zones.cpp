@@ -264,6 +264,9 @@ int main(int argc, char** argv) {
     uint32_t gx = 2, gy = 2, n_iters = 50, zone_cyc = 0;  // small grid + modest iters keep the run quick
     bool knee_mode = false;                               // set by --delay, including --delay 0
     bool clkprobe = false;                                // --clkprobe 1: read wall clocks and exit, no workload
+    uint32_t markers = 0;     // --markers 1: emit the point-marker trio (Flag/Data/Iter) per iteration.
+                              // OFF by default: it exercises every wire shape (PP_EVENT has no other
+                              // emitter) but costs ~21% of wire volume, which skews knee/onset numbers.
     uint32_t empty_mode = 0;  // --empty 1: unrolled EMPTY zones + stats consumer -> profiler self-overhead
                               // --empty 2: same, plus ONE extra wall-clock read pair per zone BODY -- the
                               //            duration delta vs --empty 1 prices read_wall_clock itself
@@ -283,6 +286,8 @@ int main(int argc, char** argv) {
             knee_mode = true;  // NOT `zone_cyc != 0`: --delay 0 is a real knee point (max rate)
         } else if (a == "--empty") {
             empty_mode = v;
+        } else if (a == "--markers") {
+            markers = v;
         }
     }
 
@@ -331,6 +336,7 @@ int main(int argc, char** argv) {
     std::map<std::string, std::string> defs{
         {"N_ITERS", std::to_string(n_iters) + "u"},
         {"ZONE_MODE", empty_mode >= 2 ? "3" : (empty_mode != 0 ? "2" : (knee_mode ? "1" : "0"))},
+        {"EMIT_MARKERS", markers != 0 ? "1" : "0"},
         {"ZONE_CYC", std::to_string(zone_cyc) + "u"}};
     const std::string kdir = "tt_metal/programming_examples/profiler/test_perf_debug_zones/kernels/";
 
