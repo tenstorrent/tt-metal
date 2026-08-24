@@ -84,9 +84,14 @@ void kernel_main() {
     // whether it carries 200 live words or 2,000, so a core ships only when it is worth the frame:
     // enough live words, any lane past kLaneShipWords, or the age bound below.
     constexpr uint32_t kShipMinPct = get_compile_time_arg_val(39);
-    // Half a lane's ring, as OBSERVED tail: the batched publish can hide up to SPSC_PUBLISH_BATCH_WORDS
-    // more, so the true worst occupancy at trigger is ~62%, leaving ~190 words of service headroom.
-    constexpr uint32_t kLaneShipWords = kernel_profiler::PROFILER_L1_VECTOR_SIZE / 2u;
+    // Per-lane ship trigger, chosen per sweep from DRAM ring occupancy -- see lane_trigger below. Half a
+    // lane leaves ~190 words of service headroom (the batched publish can hide up to
+    // SPSC_PUBLISH_BATCH_WORDS more, so worst occupancy at trigger is ~62%); a quarter leaves ~320.
+    //
+    // Both are sized against the GRID REVISIT time, which is what the producer actually races. At kimi's
+    // peak a core publishes ~7.1 M words/s, so 190 words is only ~135 us while a ~44 us sweep shipping
+    // kGenSlots cores at a time needs ~130-200 us to come back round -- marginal by ~1.5x, and every
+    // producer stall measured sat in the 25 ms where the rate peaks at 4x sustained.
     constexpr uint32_t kShipMaxAgeSweeps = 512u;
     constexpr uint32_t kShipMinWords = (kLiveWords * kShipMinPct) / 100u;
     // CV-FIRST SWEEPS: read each core's ring TAILS (32 B), decide the ship set, bulk-read spans only
@@ -351,6 +356,9 @@ void kernel_main() {
         for (uint32_t k = 2; k < kPrefix; k++) {
             pfx[k] = 0;
         }
+        // Word 2 is the slot EXTENT the mover ships by. A hand-built self frame is one frame in its slot,
+        // so its extent is its own frame length -- exactly what deriving it from word 1 used to yield.
+        pfx[2] = kernel_profiler::spsc_span_frame_words(kSpanWords);
         // The whole control vector, not just the words we use: it ships verbatim and the host reads a head
         // and a tail for all five RISCs. Rings 1-4 must read tail == head == 0 forever or the decoder would
         // walk uninitialised L1 as markers.
@@ -520,6 +528,18 @@ void kernel_main() {
             // fillers. A frame that lands contiguous here ships in ONE issue.
             const uint32_t slot0 = frames_staged % kDramFrames;
             uint32_t fpages = 0;
+            // PACK SEVERAL CORES PER RING SLOT. A slot is kSlotWords -- one core's WORST case -- but at
+            // streaming cadence a core carries only what it accrued since the last visit (~435 words at
+            // kimi's peak), and the ring is indexed in whole slots, so a slot-per-frame ring holds ~1/6 of
+            // its nominal bytes. That coupling is what makes protecting the producer and protecting the ring
+            // opposed: visiting often enough to keep the L1 rings below full is exactly what empties the
+            // frames. Concatenating frames into a slot breaks it -- the host already walks frames by their
+            // own headers, so only the MOVER needs the slot's extent, which rides in the opener's pfx[2].
+            uint32_t pack_used[kGenSlots];
+            uint32_t pack_off[kGenSlots];
+            uint8_t pack_open[kGenSlots];
+            uint32_t n_pack = 0;
+            uint32_t d_used = 0;
             for (uint32_t f = 0; f < count; f++) {
                 const uint32_t slot = kStageBase + (start + f) * kSlotBytes;
                 const tt_l1_ptr uint32_t* cv = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
@@ -535,17 +555,45 @@ void kernel_main() {
                 }
                 pfx[0] = kernel_profiler::spsc_span_w0();
                 pfx[1] = off - kPrefix;
-                fpages += kernel_profiler::spsc_span_frame_words(off - kPrefix) / kPageWords;
                 pfx[kSeqWord] = 0;
-                pfx[kSeqSrcWord] = frames_staged + f + 1u;
+                const uint32_t flen = kernel_profiler::spsc_span_frame_words(off - kPrefix);
+                if (d_used != 0 && d_used + flen > kSlotWords) {
+                    pack_used[n_pack++] = d_used;
+                    d_used = 0;
+                }
+                if (d_used == 0) {
+                    pack_open[n_pack] = static_cast<uint8_t>(f);
+                }
+                pack_off[f] = d_used;
+                d_used += flen;
+            }
+            if (d_used != 0) {
+                pack_used[n_pack++] = d_used;
+            }
+            // The opener carries [extent, stamp] in words 6,7 -- adjacent, and byte 24 == 8 mod 16, congruent
+            // with their destination at words 2,3 (byte 8), so ONE 8 B write closes a slot with the stamp
+            // last on the same route. Extent is page-padded by construction, so it is also the page count.
+            for (uint32_t i = 0; i < n_pack; i++) {
+                volatile tt_l1_ptr uint32_t* opfx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    kStageBase + (start + pack_open[i]) * kSlotBytes);
+                opfx[kSeqSrcWord - 1u] = pack_used[i];
+                opfx[kSeqSrcWord] = frames_staged + i + 1u;
+                fpages += pack_used[i] / kPageWords;
             }
             // The NIU reads the patched length and stamp words; Blackhole stores can reach SRAM out of order.
             asm volatile("fence" ::: "memory");
+            uint32_t pk = 0;
             for (uint32_t f = 0; f < count; f++) {
                 const uint32_t slot = kStageBase + (start + f) * kSlotBytes;
-                const uint32_t dslot = (slot0 + f < kDramFrames) ? (slot0 + f) : (slot0 + f - kDramFrames);
-                const uint64_t dbase =
-                    get_noc_addr_from_bank_id<true>(kDramBank, kDramAddr + dslot * kSlotBytes, NOC_INDEX);
+                if (f != 0 && pack_off[f] == 0) {
+                    pk++;  // this frame opened the next ring slot
+                }
+                const uint32_t ds = slot0 + pk;
+                const uint32_t dslot = (ds < kDramFrames) ? ds : ds - kDramFrames;
+                // Packed base: every frame extent is page-padded, so pack_off is a whole number of pages and
+                // the BH src/dst mod-16 congruence the pads establish is unchanged by shifting a frame here.
+                const uint64_t dbase = get_noc_addr_from_bank_id<true>(
+                    kDramBank, kDramAddr + dslot * kSlotBytes + pack_off[f] * 4u, NOC_INDEX);
                 const tt_l1_ptr uint32_t* cv = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
                 noc_async_write(slot, dbase, (kPrefix + kCtrlWords) * 4u, NOC_INDEX);
                 uint32_t off = kPrefix + kCtrlWords;
@@ -569,13 +617,14 @@ void kernel_main() {
                     off += run;
                 }
             }
-            for (uint32_t f = 0; f < count; f++) {
-                const uint32_t dslot = (slot0 + f < kDramFrames) ? (slot0 + f) : (slot0 + f - kDramFrames);
+            for (uint32_t i = 0; i < n_pack; i++) {
+                const uint32_t ds = slot0 + i;
+                const uint32_t dslot = (ds < kDramFrames) ? ds : ds - kDramFrames;
                 noc_async_write(
-                    kStageBase + (start + f) * kSlotBytes + kSeqSrcWord * 4u,
+                    kStageBase + (start + pack_open[i]) * kSlotBytes + (kSeqSrcWord - 1u) * 4u,
                     get_noc_addr_from_bank_id<true>(
-                        kDramBank, kDramAddr + dslot * kSlotBytes + kSeqWord * 4u, NOC_INDEX),
-                    4u,
+                        kDramBank, kDramAddr + dslot * kSlotBytes + (kSeqWord - 1u) * 4u, NOC_INDEX),
+                    8u,
                     NOC_INDEX);
             }
 
@@ -583,7 +632,7 @@ void kernel_main() {
             c_wr_chunk += t2 - t1;
             c_write += t2 - t1;
             *phase = kPhWrDone;
-            frames_staged += count;
+            frames_staged += n_pack;  // the ring advances by SLOTS filled, not cores drained
             pages += fpages;
             pushes++;
         }
@@ -856,6 +905,18 @@ void kernel_main() {
                         }
                         const uint64_t t_cv1 = get_timestamp();
                         c_read += t_cv1 - t_cv0;
+                        // SPEND SLACK WHERE IT EXISTS. Shipping a core early buys the producer service
+                        // headroom but costs a frame that carries less, and that cost lands on the DRAM ring.
+                        // While the ring is under half full the ring can afford it and the producer cannot:
+                        // the eager trigger took six of eight devices to ZERO stalls. Once the ring passes
+                        // half, the eager trigger is what fills it -- the same run left three rings at
+                        // 6316/6316 and two devices worse than the lazy trigger ever was, because a FULL ring
+                        // blocks the filler outright.
+                        invalidate_l1_cache();  // hs_tail is the MOVER's write into our L1; the cached copy predates it
+                        const uint32_t ring_inflight = frames_staged - *hs_tail;
+                        const uint32_t lane_trigger = (2u * ring_inflight >= kDramFrames)
+                                                          ? (kernel_profiler::PROFILER_L1_VECTOR_SIZE / 2u)
+                                                          : (kernel_profiler::PROFILER_L1_VECTOR_SIZE / 4u);
                         for (uint32_t c = 0; c < num_cores; c++) {
                             if (!seeded[c]) {
                                 ship_list[n_ship++] = static_cast<uint8_t>(c);
@@ -884,7 +945,7 @@ void kernel_main() {
                             // PER-LANE trigger, not span fill: one hot lane at 90% of its own ring is only ~18% of the span,
                             // and the producer that blocks is always a LANE. Level check only -- no growth term, so the
                             // producer's batched tail publish cannot fool it.
-                            if (stop_seen_at == 0 && live < kShipMinWords && peak < kLaneShipWords &&
+                            if (stop_seen_at == 0 && live < kShipMinWords && peak < lane_trigger &&
                                 ship_age[c] < kShipMaxAgeSweeps) {
                                 ship_age[c]++;
                                 ship_deferred++;

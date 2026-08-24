@@ -364,6 +364,9 @@ void kernel_main() {
         for (uint32_t k = 2; k < kPrefix; k++) {
             pfx[k] = 0;
         }
+        // Word 2 is the slot EXTENT the mover ships by. A hand-built self frame is one frame in its slot,
+        // so its extent is its own frame length -- exactly what deriving it from word 1 used to yield.
+        pfx[2] = kernel_profiler::spsc_span_frame_words(kSpanWords);
         // The whole control vector, not just the words we use: it ships verbatim and the host reads a head
         // and a tail for all five RISCs. Rings 1-4 must read tail == head == 0 forever or the decoder would
         // walk uninitialised L1 as markers.
@@ -460,9 +463,12 @@ void kernel_main() {
 
     // Frame geometry, derived from the staged control vector exactly as the host re-derives it
     // (profiler_common.h). Non-volatile loads: staging is a landed snapshot nothing else mutates.
+    // Extent of a ring SLOT, which the filler packs with as many cores' frames as fit. Word 2 is that
+    // extent, written by the filler in the same 8 B store as the stamp -- so a visible stamp implies a
+    // visible extent. Word 1 is only the FIRST packed frame's own length; using it would ship a fraction of
+    // the slot and desync the stream. Already page-padded, hence also the page count.
     auto frame_words_of = [&](uint32_t slot) -> uint32_t {
-        return kernel_profiler::spsc_span_frame_words(
-            reinterpret_cast<const tt_l1_ptr uint32_t*>(slot)[1]);
+        return reinterpret_cast<const tt_l1_ptr uint32_t*>(slot)[2];
     };
 
     // Ship `count` adjacent staged slots. The filler already packed each frame contiguously, so this is
