@@ -330,9 +330,9 @@ the traced production paths. Logged by the tests, not asserted.
 
 | Metric | Tool | Target | Single utterance | Paragraph |
 |:-------|:----:|:------:|:----------------:|:---------:|
-| MOS (naturalness) | UTMOS22-strong | ≥ 3.0 | 4.35 | 3.80 |
+| MOS (naturalness) | UTMOS22-strong | ≥ 3.0 | 4.38 | 3.82 |
 | CER (intelligibility) | Whisper-large-v3 | — | 1.60% | 0.86% |
-| Speaker similarity | ECAPA2 cosine | ≥ 0.55 | 0.697 | 0.748 |
+| Speaker similarity | ECAPA2 cosine | ≥ 0.55 | 0.713 | 0.750 |
 
 The paragraph path includes chunk seams ([§7](#7-caveats)). Traced eval is seeded (host Gumbel +
 `reset_seeds`); eager `test_tt_eval` is not. The demo uses a lighter CER (`whisper-base.en`) only to
@@ -376,11 +376,11 @@ changes:
 |----------|------:|
 | Generated | 197 codes (self-terminated at STOP) → 9.141 s audio |
 | Setup replay (conditioning + speaker + prefill) | 0.044 s (8 conditioning windows) |
-| Decode replay (197 codes) | 1.594 s (≈8.1 ms/code) |
+| Decode replay (197 codes) | 1.257 s (≈6.4 ms/code) |
 | Vocoder replay | 0.020 s |
-| **Total replay** | **1.657 s** |
-| **RTF** (replay ÷ audio) | **0.181** — ≈5.5× faster than real time |
-| Time-to-first-audio | 1.657 s (non-streaming: first audio = full clip) |
+| **Total replay** | **1.320 s** |
+| **RTF** (replay ÷ audio) | **0.144** — ≈6.9× faster than real time |
+| Time-to-first-audio | 1.320 s (non-streaming: first audio = full clip) |
 | Compile / capture (one-time, excluded from RTF) | ≈44 s for a code length not yet compiled / **≈4.5 s** once it is |
 | End-to-end wall (weight load → WAV) | ≈63 s / **≈23 s** on the same split |
 
@@ -399,23 +399,23 @@ when the text fits, otherwise sentence-chunked with one `traced_session` capture
 
 | ISL | chunks | pad_to | prompt | max_seq | codes | audio (s) | TTFT (ms) | codes/s | ms/code | replay (s) | RTF |
 |----:|-------:|-------:|-------:|--------:|------:|----------:|----------:|--------:|--------:|-----------:|----:|
-| 32 | 1 | 32 | 64 | 352 | 91 | 4.22 | 50.3 | 125.1 | 7.992 | 0.778 | 0.184 |
-| 64 | 1 | 64 | 96 | 384 | 158 | 7.33 | 51.1 | 123.4 | 8.105 | 1.340 | 0.183 |
-| 96 | 2 | 96 | 128 | 416 | 364 | 16.89 | 51.7 | 122.4 | 8.171 | 3.112 | 0.184 |
-| 128 | 2 | 96 | 128 | 416 | 364 | 16.89 | 51.7 | 121.7 | 8.219 | 3.130 | 0.185 |
-| 192 | 3 | 96 | 128 | 416 | 535 | 24.82 | 51.7 | 122.4 | 8.168 | 4.577 | 0.184 |
-| 256 | 4 | 96 | 128 | 416 | 731 | 33.92 | 51.7 | 122.5 | 8.162 | 6.243 | 0.184 |
-| 320 | 5 | 96 | 128 | 416 | 902 | 41.86 | 51.7 | 123.1 | 8.125 | 7.674 | 0.183 |
-| 352 | 5 | 96 | 128 | 416 | 902 | 41.86 | 51.7 | 122.5 | 8.166 | 7.711 | 0.184 |
+| 32 | 1 | 32 | 64 | 352 | 91 | 4.22 | 48.4 | 156.4 | 6.392 | 0.633 | 0.150 |
+| 64 | 1 | 64 | 96 | 384 | 158 | 7.33 | 49.4 | 157.1 | 6.366 | 1.065 | 0.145 |
+| 96 | 2 | 96 | 128 | 416 | 364 | 16.89 | 50.0 | 155.1 | 6.447 | 2.485 | 0.147 |
+| 128 | 2 | 96 | 128 | 416 | 364 | 16.89 | 50.0 | 155.5 | 6.429 | 2.478 | 0.147 |
+| 192 | 3 | 96 | 128 | 416 | 535 | 24.82 | 50.0 | 155.2 | 6.445 | 3.655 | 0.147 |
+| 256 | 4 | 96 | 128 | 416 | 731 | 33.92 | 50.0 | 155.0 | 6.451 | 4.992 | 0.147 |
+| 320 | 5 | 96 | 128 | 416 | 902 | 41.86 | 50.1 | 152.3 | 6.564 | 6.266 | 0.150 |
+| 352 | 5 | 96 | 128 | 416 | 902 | 41.86 | 50.0 | 155.3 | 6.439 | 6.153 | 0.147 |
 
 XTTS is non-streaming. *TTFT* is time to first code (`setup + decode/n`); time to first audio is
 the first chunk's replay. One code = 46.4 ms of audio. `pad_to` is the padded text length actually
 prefilled. ISL 96/128 and 320/352 are the same sentence groups (the sweep grows a whole sentence at
 a time).
 
-From ISL 96 up, chunking pins `max_seq` at 416, so ms/code is flat (~8.2) and ISL is no longer a
-cost axis — replay grows with chunk count at ≈1.53 s each (0.778 s at ISL 32 → 7.711 s at ISL 352).
-TTFT stays ~52 ms. RTF stays ~0.18.
+From ISL 96 up, chunking pins `max_seq` at 416, so ms/code is flat (~6.4) and ISL is no longer a
+cost axis — replay grows with chunk count at ≈1.24 s each (0.633 s at ISL 32 → 6.153 s at ISL 352).
+TTFT stays ~50 ms. RTF stays ~0.15.
 
 A wrapped prompt must end in `[STOP]`. Trimming to a tile-aligned length can drop it; without it
 the sampler drones to the code cap.
@@ -423,8 +423,8 @@ the sampler drones to the code cap.
 ### 6.6 Device profiles
 
 Per-op breakdowns come from Tracy via the two drivers in [§5.2](#52-performance-tests). One
-signposted decode step measures **7.514 ms** of pure device FW time; the remaining ~0.6 ms of the
-8.1 ms/code is the per-step fence and token readback.
+signposted decode step measures **5.819 ms** of pure device FW time (5.331 ms of it kernel); the
+remaining ~0.6 ms of the 6.4 ms/code is the per-step fence and token readback.
 
 ---
 
