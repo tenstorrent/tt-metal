@@ -108,6 +108,7 @@ safe-outputs:
     max: 1
   submit-pull-request-review:
     max: 1
+    allowed-events: [COMMENT]
   mentions: false
   messages:
     footer: "> 🧠 *Reviewed using Matt Pocock's skills by [{workflow_name}]({run_url})*{ai_credits_suffix}{history_link}"
@@ -155,7 +156,7 @@ A successful review:
 - focuses on the highest-impact changed lines instead of broad restatement of the PR
 - maps each finding to a concrete risk and a specific fix
 - uses skill labels only when they materially improve the advice
-- approves only when no actionable issue remains
+- states a clear "no actionable issues" verdict when nothing needs fixing, instead of manufacturing feedback
 - uses `noop` instead of generic praise when there is nothing useful to say
 
 ### Step 1: Load Pre-fetched PR Data
@@ -252,12 +253,7 @@ Guidelines:
 
 ### Step 6: Submit the Overall Review
 
-Submit a review using `submit_pull_request_review` with an overall summary:
-
-- **`APPROVE`** — Changes are solid; only minor suggestions
-- **`REQUEST_CHANGES`** — There are important issues that should be addressed
-- **`COMMENT`** — Observations only; no blocking issues
-- If you choose **`APPROVE`**, submit the approval review first. Only add `create_check_run` when you have a concrete success summary that helps the author or merge queue; skip it otherwise.
+Submit a review using `submit_pull_request_review` with event **`COMMENT`** — always. This workflow is advisory only: it cannot approve or request changes, so it can never block or fast-track a merge. State your overall assessment in the review body regardless of severity (from "no actionable issues" to "significant concerns") — the author and reviewers decide what to do with it. Only add `create_check_run` when you have a concrete success summary that helps the author or merge queue; skip it otherwise.
 
 The review body should apply progressive disclosure — keep the immediately visible portion brief and collapse details:
 
