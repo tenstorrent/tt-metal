@@ -32,9 +32,11 @@ uint32_t op_info_offset = 0;
 namespace llk::san {
 
 static_assert(
-    sizeof(SanitizerState) <= MEM_LLK_DEBUG_SIZE, "llk_san: sanitizer state must fit in MEM_LLK_DEBUG region");
+    sizeof(State) <= MEM_LLK_DEBUG_SIZE, "llk::san | fault   | sanitizer state must fit in MEM_LLK_DEBUG region");
+static_assert(
+    alignof(State) <= 32, "llk::san | fault   | sanitizer state is aligned more strictly than MEM_LLK_DEBUG_BASE");
 
-extern SanitizerState* const sanitizer = reinterpret_cast<SanitizerState*>(MEM_LLK_DEBUG_BASE);
+extern State* const state = reinterpret_cast<State*>(MEM_LLK_DEBUG_BASE);
 }  // namespace llk::san
 #endif
 
