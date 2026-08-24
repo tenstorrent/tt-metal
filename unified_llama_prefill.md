@@ -2842,11 +2842,13 @@ pattern against DRAM, twelve cores at a time.
 
 ### Sharded weights: tried, 10% worse, and the cost moved rather than vanished
 
-The idea was that a sender's whole read set for a column is the strip `[c*nt, +nt)` of B
-across every k-block, so WIDTH-sharding B one strip per column would turn pages
-round-robining across banks into one contiguous run. The kernel needed no change at all --
-`TensorAccessorArgs(t)` carries the layout and `get_noc_addr` resolves it -- so this was a
-harness-only experiment, which is itself the point worth keeping about the accessor design.
+Reverted; the numbers are kept because a negative result that cost device time is exactly
+what should not be re-run. The idea was that a sender's whole read set for a column is the
+strip `[c*nt, +nt)` of B across every k-block, so WIDTH-sharding B one strip per column would
+turn pages round-robining across banks into one contiguous run. The kernel needed no change
+at all -- `TensorAccessorArgs(t)` carries the layout and `get_noc_addr` resolves it -- so it
+was a harness-only experiment, which is itself the point worth keeping about the accessor
+design: a different memory layout is not a kernel change.
 
 | [512,2048]@[2048,2048], multicast, depth 2 | 64 cores | 32 cores |
 |---|---|---|
