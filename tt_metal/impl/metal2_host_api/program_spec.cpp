@@ -1551,8 +1551,19 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         // Coarse spec-time sizing check against the TensorSpec's full packed size. No Buffer is
         // available at spec time, so we can't query the per-bank allocation; the precise per-bank
         // check fires at attach time in AttachBorrowedDFBBuffers (program_run_args.cpp), where
-        // a Buffer is in hand. For sharded L1 tensors the two checks differ — a DFB can pass
-        // here against the full-tensor size and still fail per-bank later. By design.
+        // a Buffer is in hand.
+        //
+        // Sharded specs are skipped here, because the two quantities are not comparable: a DFB is a
+        // per-node object and a borrowed DFB views ONE shard, while compute_packed_buffer_size_bytes()
+        // is the whole tensor's logical packed size. A shard shape padded relative to the logical
+        // volume makes the per-node shard legitimately larger than the whole-tensor packed size --
+        // e.g. a height-sharded [1, 1, 16, 128] bf16 tensor with a 32-row shard allocates 8192 B per
+        // node against a 4096 B packed size -- so comparing them rejects specs the per-bank check
+        // accepts. The per-bank check (against Buffer::aligned_size_per_bank) is the authoritative
+        // one and still runs for these; only this early, approximate one is skipped.
+        if (tensor_spec.memory_config().is_sharded()) {
+            continue;
+        }
         const size_t dfb_bytes = static_cast<size_t>(dfb.entry_size) * static_cast<size_t>(dfb.num_entries);
         const size_t tensor_bytes = tensor_spec.compute_packed_buffer_size_bytes();
         TT_FATAL(

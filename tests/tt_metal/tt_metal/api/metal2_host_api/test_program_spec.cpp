@@ -1224,6 +1224,25 @@ TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBOversizedFails) {
             ::testing::HasSubstr("is larger than its borrowed TensorParameter")));
 }
 
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBShardedLargerThanPackedSizeSucceeds) {
+    // A DFB is a per-node object and a borrowed DFB views ONE shard, so for a sharded
+    // TensorParameter the per-node shard is the quantity that must hold it -- not
+    // compute_packed_buffer_size_bytes(), which is the whole tensor's logical packed size.
+    //
+    // A shard shape padded relative to the logical volume makes the per-node shard legitimately
+    // LARGER than the whole-tensor packed size. Here: logical [1, 1, 16, 128] bfloat16 packs to
+    // 16*128*2 = 4096 B, while the 32-row shard allocates 32*128*2 = 8192 B on its one node. A
+    // 8192 B DFB fits the shard exactly and must be accepted; comparing it against the 4096 B
+    // packed size would reject it. The authoritative per-bank check still runs at attach time
+    // (AttachBorrowedDFBBuffers, against Buffer::aligned_size_per_bank).
+    ProgramSpec spec = MakeBorrowedDFBProgramSpec(
+        "borrowed_tensor", tt::tt_metal::BufferType::L1, /*dfb_entry_size=*/256, /*dfb_num_entries=*/32);
+    spec.tensor_parameters = {
+        MakeShardedTensorParameter("borrowed_tensor", tt::tt_metal::Shape{1, 1, 16, 128}, {32, 128}, /*num_cores=*/1)};
+
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+}
+
 TEST_F(ProgramSpecTestQuasar, SemaphoresSucceed) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
