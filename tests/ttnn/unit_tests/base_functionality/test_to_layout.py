@@ -670,9 +670,11 @@ def test_to_layout_wh1(shape, input_layout, output_layout, device):
     assert_equal(input_a, output_tensor)
 
 
-# 128 tile columns is enough to keep every core in the disjoint grid below busy and to run the
-# single-core case over many blocks. The width used to be 128 * 1024, which is the same code path
-# 32x more times: ~9 min per parametrization under ttsim against ~28 s here (#53228).
+# use_low_perf short-circuits select_program_factory to TilizeSingleCoreProgramFactory, which
+# tilizes the whole tensor on corerange_to_cores(sub_core_grids)[0], so the width only controls how
+# many tiles that one core walks. 128 tile columns still runs it over many blocks; the width used to
+# be 128 * 1024, the same code path 32x more times: ~9 min per parametrization under ttsim against
+# ~28 s here (#53228).
 @pytest.mark.parametrize("shape", [[32, 4 * 1024]])
 @pytest.mark.parametrize(
     "sub_core_grids",
