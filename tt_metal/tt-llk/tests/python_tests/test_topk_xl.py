@@ -178,6 +178,7 @@ def _variant(
     chunk_base=0,
     dest_sync=DestSync.Full,
     formats=FORMATS,
+    impl=0,
 ):
     """
     Build the stimulus and the TestConfig for one variant. Returns (config, rows).
@@ -216,6 +217,7 @@ def _variant(
                 fused_reduce=fused_reduce,
                 chunk_base_mode=chunk_base_mode,
                 chunk_base=chunk_base,
+                topk_xl_impl=impl,
             ),
         ],
         variant_stimuli=StimuliConfig(
@@ -420,6 +422,87 @@ def test_topk_xl(K, num_chunks, partial_tail):
         num_chunks=num_chunks,
         tail_elements=(K // 2) if partial_tail else K,
         num_rows=2,
+    )
+
+
+# ---------------------------------------------------------------------------
+# X6 semantic-arm twins (lane GK, 2026-08-24).  impl=1 selects the vendored
+# topk_xl sibling whose ONLY delta is the three Dst face-transpose helpers
+# re-spelled on the typed sfpi_crosslane.h X6 surface (lane FV).  The goldens
+# are the same independent torch oracles as the production nodes; the
+# transpose choreography itself is oracle-proven by the FV X6 arsenal
+# (helpers/facetranspose_oracle.py, test_crosslane_facetranspose.py 14/14).
+# K=512/1024 exercise the generic transpose_N_faces path, K=2048 the
+# transpose_8_faces fast path; num_chunks=2 adds the unfused rebuild's
+# value+index face transposes; partial_tail adds -inf padding lanes.
+@parametrize(
+    K=[512, 1024, 2048],
+    num_chunks=[1, 2],
+    partial_tail=lambda num_chunks: [False] if num_chunks == 1 else [False, True],
+)
+def test_topk_xl_x6(K, num_chunks, partial_tail):
+    _run_test_topk(
+        K,
+        num_chunks=num_chunks,
+        tail_elements=(K // 2) if partial_tail else K,
+        num_rows=2,
+        impl=1,
+    )
+
+
+@parametrize(K=[512, 1024, 2048])
+def test_topk_xl_x6_all_equal(K):
+    """X6-arm twin of test_topk_xl_all_equal: every compare-exchange takes the
+    tie branch and resolves on the index bits, so a single mis-transposed
+    index datum flips the output set."""
+    (K,) = K
+
+    result, rows = _run(K, mode="all_equal", impl=1)
+    hw_idx, hw_val = _extract_hw_topk(result, K, 1)[0]
+
+    idx = sorted(int(i) for i in hw_idx.tolist())
+    assert idx == list(range(K)), "all-equal row did not return 0..K-1"
+    assert (hw_val == rows[0][0].item()).all(), "all-equal row returned a changed value"
+
+
+@parametrize(K=[512, 1024, 2048])
+def test_topk_xl_x6_denormal_fused_word(K):
+    """X6-arm twin of test_topk_xl_denormal_fused_word: +0-valued fused words
+    are fp32-denormal-shaped, the exact class the X6 cfg block's zero-flag
+    arm must protect through the face transposes (lane FV: 88/256 adversarial
+    positions corrupt without it)."""
+    (K,) = K
+
+    result, rows = _run(
+        K,
+        num_chunks=2,
+        mode="zeros_win",
+        fused_reduce=True,
+        group_id=GROUP_ID,
+        group_shift=GROUP_SHIFT,
+        impl=1,
+    )
+    hw_iw, hw_val = _extract_hw_topk(result, K, 1)[0]
+    assert hw_iw.numel() == K, f"expected {K} lanes, got {hw_iw.numel()}"
+
+    row = rows[0]
+    expected = {p for p in range(K) if float(row[p]) == 0.0}
+    assert expected, "stimulus produced no zeros"
+
+    zero_lane = hw_val == 0.0
+    n_zero = int(torch.count_nonzero(zero_lane))
+    assert n_zero == len(expected), (
+        f"expected {len(expected)} zero-valued lanes in the top-K, got "
+        f"{n_zero}; zeros should outrank every negative"
+    )
+
+    raw = hw_iw[zero_lane] & ((1 << GROUP_SHIFT) - 1)
+    got = {_decode_row_major(int(x), K) for x in raw.tolist()}
+    assert got == expected, (
+        "index bits of the denormal-shaped fused words did not survive: "
+        f"{len(got)} distinct coordinates for {len(expected)} zero lanes; "
+        f"missing {sorted(expected - got)[:8]}, unexpected {sorted(got - expected)[:8]}"
+        + ("  (all zero: the index was flushed)" if got == {0} else "")
     )
 
 
@@ -681,9 +764,14 @@ def test_topk_xl_dest_sync_half(K):
 # construction and needs no in-body marker seam.  The profiled variant is the
 # op-shaped row-major path (K=512, 2 chunks, 2 rows: covers copy_sort, the
 # merge tree, rebuild, and the per-row chunk_base reset).
-@pytest.mark.parametrize("label", ["production"])
+# label "x6" (lane GK, 2026-08-24) is the same vehicle with the math-thread
+# face transposes on the typed sfpi_crosslane.h X6 surface (impl=1) — the
+# sem arm of the topkxl-x6 corpus row; "production" stays the byte-untouched
+# hand comparator.
+@pytest.mark.parametrize("label", ["production", "x6"])
 def test_topk_xl_device_profile(perf_report, label: str):
     K, num_chunks, num_rows = 512, 2, 2
+    impl = 1 if label == "x6" else 0
     tiles_per_seq = _tiles_per_sequence(K)
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=format_dict[FORMATS.input_format])
     src_A, _rows = _build_input(K, num_chunks, K, num_rows, "positive", False)
@@ -707,6 +795,7 @@ def test_topk_xl_device_profile(perf_report, label: str):
                 fused_reduce=False,
                 chunk_base_mode=TopKXLChunkBaseMode.Static,
                 chunk_base=0,
+                topk_xl_impl=impl,
             ),
         ],
         variant_stimuli=StimuliConfig(
