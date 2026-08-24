@@ -463,6 +463,47 @@ def test_topk_indices_tensor_payload_is_used(W, device):
     assert torch.all(returned == payload), "indices_tensor was ignored; the op generated its own iota"
 
 
+@pytest.mark.parametrize("W", (64, 16384), ids=["single_core", "multi_core"])
+@pytest.mark.parametrize("index_dtype", (ttnn.uint16, ttnn.uint32), ids=["uint16", "uint32"])
+def test_topk_indices_tensor_dtype(W, index_dtype, device):
+    torch.manual_seed(0)
+
+    k = 32
+    shape = [1, 1, 32, W]
+
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    iota = torch.arange(W, dtype=torch.int32).expand(shape).contiguous()
+
+    ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    indices_tensor = ttnn.from_torch(iota, index_dtype, layout=ttnn.Layout.TILE, device=device)
+
+    values, indices = ttnn.topk(ttnn_input, k, dim=-1, indices_tensor=indices_tensor)
+
+    assert indices.dtype == index_dtype
+    indices = ttnn.to_torch(indices).to(torch.int64)
+
+    # Indices are the iota, so gathering from the input must reproduce the returned values.
+    assert_equal(torch.gather(torch_input, -1, indices), ttnn.to_torch(values))
+
+
+def test_topk_indices_tensor_too_narrow_raises(device, expect_error):
+    # W is past 65535, so the op resolves the index dtype to UINT32 and sizes the index CB 32-bit,
+    # but the payload here is UINT16. Reject rather than read a 16-bit tensor at a 32-bit stride.
+    k = 32
+    W = 2 * UINT16_MAX + 1
+    shape = [1, 1, 32, W]
+
+    ttnn_input = ttnn.from_torch(
+        torch.randn(shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    indices_tensor = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.int32), ttnn.uint16, layout=ttnn.Layout.TILE, device=device
+    )
+
+    with expect_error(RuntimeError, "must be the same width as the output indices dtype"):
+        ttnn.topk(ttnn_input, k, dim=-1, indices_tensor=indices_tensor)
+
+
 @pytest.mark.parametrize("largest", [True, False])
 def test_topk_multicore_local_write_correctness(largest, device):
     """

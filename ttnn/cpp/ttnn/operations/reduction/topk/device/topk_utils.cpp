@@ -6,6 +6,8 @@
 #include "ttnn/operations/reduction/topk/device/topk_constants.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 
+#include <limits>
+
 namespace ttnn::prim {
 
 /**
@@ -336,6 +338,12 @@ bool verify_single_core_cost(const ttnn::Tensor& input_tensor, uint32_t k, bool 
 
     // Verify that total memory requirement fits within single core's L1 cache
     return memory_cost_local < device->l1_size_per_core();
+}
+
+tt::tt_metal::DataType required_index_dtype(const ttnn::Tensor& input_tensor, int8_t dim) {
+    const bool dim_fits_uint16 = input_tensor.padded_shape()[dim] <= std::numeric_limits<uint16_t>::max();
+    const bool is_fp32 = input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32;
+    return (dim_fits_uint16 && !is_fp32) ? tt::tt_metal::DataType::UINT16 : tt::tt_metal::DataType::UINT32;
 }
 
 }  // namespace ttnn::prim
