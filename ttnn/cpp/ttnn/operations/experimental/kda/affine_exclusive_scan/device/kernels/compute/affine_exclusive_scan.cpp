@@ -52,10 +52,13 @@ FORCE_INLINE void matmul(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o
 
 template <uint32_t Mt, uint32_t Kt, uint32_t At, uint32_t Vt>
 FORCE_INLINE void matmul_affine(
-    DataflowBuffer& a, DataflowBuffer& affine, DataflowBuffer& out_a, DataflowBuffer& out_b) {
+    DataflowBuffer& a, DataflowBuffer& affine, DataflowBuffer& local_b, DataflowBuffer& out_a, DataflowBuffer& out_b) {
     constexpr uint32_t Nt = At + Vt;
     constexpr uint32_t max_fp32_dst_tiles = 4;
-    constexpr uint32_t subblock_cols = Nt % 4 == 0 ? 4 : Nt % 3 == 0 ? 3 : Nt % 2 == 0 ? 2 : 1;
+    constexpr uint32_t subblock_cols = At % 4 == 0 && Vt % 4 == 0   ? 4
+                                       : At % 3 == 0 && Vt % 3 == 0 ? 3
+                                       : At % 2 == 0 && Vt % 2 == 0 ? 2
+                                                                    : 1;
     constexpr uint32_t max_subblock_rows = max_fp32_dst_tiles / subblock_cols;
     constexpr uint32_t subblock_rows = max_subblock_rows >= 4 && Mt % 4 == 0   ? 4
                                        : max_subblock_rows >= 3 && Mt % 3 == 0 ? 3
@@ -64,6 +67,7 @@ FORCE_INLINE void matmul_affine(
 
     const uint32_t a_id = a.get_id();
     const uint32_t affine_id = affine.get_id();
+    const uint32_t local_b_id = local_b.get_id();
     const uint32_t out_a_id = out_a.get_id();
     const uint32_t out_b_id = out_b.get_id();
     out_a.reserve_back(Mt * At);
@@ -74,6 +78,19 @@ FORCE_INLINE void matmul_affine(
     for (uint32_t m = 0; m < Mt; m += subblock_rows) {
         for (uint32_t n = 0; n < Nt; n += subblock_cols) {
             tile_regs_acquire();
+            if (n >= At) {
+                copy_tile_to_dst_init_short_with_dt(affine_id, local_b_id);
+                for (uint32_t subblock_row = 0; subblock_row < subblock_rows; ++subblock_row) {
+                    for (uint32_t subblock_col = 0; subblock_col < subblock_cols; ++subblock_col) {
+                        copy_tile(
+                            local_b_id,
+                            (m + subblock_row) * Vt + n - At + subblock_col,
+                            subblock_row * subblock_cols + subblock_col);
+                    }
+                }
+                reconfig_data_format_srca(local_b_id, affine_id);
+                matmul_block_init(a_id, affine_id, false, subblock_cols, subblock_rows, Kt);
+            }
             for (uint32_t k = 0; k < Kt; ++k) {
                 matmul_block(a_id, affine_id, m * Kt + k, k * Nt + n, 0, false, subblock_cols, subblock_rows, Kt);
             }
@@ -95,25 +112,6 @@ FORCE_INLINE void matmul_affine(
     }
     out_a.push_back(Mt * At);
     out_b.push_back(Mt * Vt);
-}
-
-FORCE_INLINE void add(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& out, uint32_t tiles) {
-    const uint32_t a_id = a.get_id();
-    const uint32_t b_id = b.get_id();
-    const uint32_t out_id = out.get_id();
-    out.reserve_back(tiles);
-    pack_reconfig_data_format(out_id);
-    reconfig_data_format(a_id, b_id);
-    add_init(a_id, b_id);
-    for (uint32_t tile = 0; tile < tiles; tile++) {
-        tile_regs_acquire();
-        add_tiles(a_id, b_id, tile, tile, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, out_id, tile);
-        tile_regs_release();
-    }
-    out.push_back(tiles);
 }
 
 template <uint32_t Kt, uint32_t Vt>
@@ -186,13 +184,10 @@ TT_KERNEL void compute(uint32_t group) {
         local_a.wait_front(kk);
         local_b.wait_front(kv);
         from_remote_affine.wait_front(kk + kv);
-        matmul_affine<Kt, Kt, Kt, Vt>(local_a, from_remote_affine, to_remote_a, scratch);
-        scratch.wait_front(kv);
-        add(scratch, local_b, to_remote_b, kv);
+        matmul_affine<Kt, Kt, Kt, Vt>(local_a, from_remote_affine, local_b, to_remote_a, to_remote_b);
         local_a.pop_front(kk);
         local_b.pop_front(kv);
         from_remote_affine.pop_front(kk + kv);
-        scratch.pop_front(kv);
     }
 
     initial_state.wait_front(kv);
