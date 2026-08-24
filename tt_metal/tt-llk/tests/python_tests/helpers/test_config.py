@@ -497,7 +497,7 @@ class TestConfig:
                 "-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu",
                 # Keep this list to include roots every Blackhole test needs: INCLUDES is a session-wide
                 # ClassVar, so anything added here lands in the compile command for every Blackhole test. A
-                # root only some tests need belongs in a per-test fixture (see helpers/advance_llk_includes.py).
+                # root only some tests need belongs in a per-test fixture instead.
             ]
         if TestConfig.ARCH == ChipArchitecture.QUASAR:
             hw_specific_includes = [

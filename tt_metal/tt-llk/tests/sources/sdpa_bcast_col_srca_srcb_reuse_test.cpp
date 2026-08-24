@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// ADVANCE TEST: covers demo-fork experimental LLK sdpa_bcast_col_srca_srcb_reuse (tt-metal#47554 / tt-blaze#1971),
-// pending promotion. Include path (shadow -I) repoint on promotion. Primitive differs from tt-blaze only in
-// FPU<->SFPU signalling cadence (orthogonal to this numerical golden).
+// ADVANCE TEST: covers experimental LLK sdpa_bcast_col_srca_srcb_reuse (tt-metal#47554 / tt-blaze#1971), promoted
+// into tt_llk_blackhole/llk_lib/experimental/ on main by #53295. The includes below resolve through the canonical -I;
+// the demo-fork shadow tree this test was first written against no longer exists.
 //
 // What the op does (tt-blaze#1971): the softmax scale / normalize step, as a *DEST-to-DEST* eltwise. Unlike the
 // sibling srcb_reuse primitive, this variant reuses DEST for BOTH operands, so NOTHING it computes comes from an
@@ -42,11 +42,10 @@
 // The math thread posts semaphore::FPU_SFPU with no SFPU consumer; a bare post does not block (mirrors the sibling
 // srcb_reuse test), so no fake SFPU handshake is needed and there is no MATH-waits-on-SFPU deadlock.
 //
-// Signalling-only divergence vs tt-blaze: the promoted BLAZE execute drops `bool fused_signalling` (template position
-// 8), making the output_granularity loop unconditional; the promoted BLAZE init gains a trailing defaulted
-// `bool skip_addrmod=false`. Neither touches numerics. On promotion, drop the `fused_signalling=true` template arg on
-// the execute below (keeping output_granularity=1), leave the init call unchanged, and drop the -Wunused #pragma
-// shims once the promoted header is warning-clean. See promotion_notes.
+// Signalling-only divergence vs the demo fork this test was first written against: the promoted execute drops
+// `bool fused_signalling` (template position 8), making the output_granularity loop unconditional, and the promoted
+// init gains a trailing defaulted `bool skip_addrmod=false`. Neither touches numerics; the call below is already on
+// the promoted signature.
 
 #include <cstdint>
 
@@ -99,17 +98,15 @@ static constexpr MathFidelity SDPA_FIDELITY = MathFidelity::LoFi;
 #ifdef LLK_TRISC_UNPACK
 
 // PRIMITIVE symbols under test (NOT the forked _api.h wrapper / compute_kernel_api entry).
-// On promotion, repoint the -I in test_config.py so this resolves to the canonical header and this line is unchanged.
+// Resolved from the promoted experimental/ copy (landed on main via #53295); the demo-fork shadow tree this test was
+// originally written against is gone.
 //
-// The unpromoted demo-fork header declares MOP-config locals (outerloop/innerloop) and takes unpack_src/dst_format
-// params that the SCALAR/num_faces==2 path we instantiate does not read. The demo build tolerates these; the tt-llk
-// harness compiles with -Werror -Wunused-variable -Wunused-parameter, so suppress the pre-existing warnings without
-// editing the byte-identical shadow header. The offending locals live inside template bodies, so suppress at file
-// scope (an include-only wrap does not reach the instantiation point). Remove on promotion once the canonical header
-// is warning-clean.
-#pragma GCC diagnostic ignored "-Wunused-variable"
+// The promoted header still takes transpose_of_faces / unpack_src_format / unpack_dst_format params that the
+// num_faces == 2 path we instantiate does not read, and the harness compiles with -Werror -Wunused-parameter. The
+// offending params are on template bodies, so an include-only push/pop does not reach the instantiation point --
+// suppress at file scope. Drop this once the promoted header is warning-clean (tracked in #53295).
 #pragma GCC diagnostic ignored "-Wunused-parameter"
-#include "llk_unpack_A_sdpa.h"
+#include "experimental/llk_unpack_A_sdpa.h"
 // Base unpack_A supplies the per-tile execute for both the DEST seed and the operand stream; llk_unpack_A_sdpa.h is
 // init/mop-config + the dummy-SrcB-valid helper only.
 #include "llk_unpack_A.h"
@@ -158,19 +155,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 
 // PRIMITIVE symbol under test (NOT the forked _api.h wrapper / compute_kernel_api entry).
-// See the unpack-side note above: the unpromoted demo-fork header has pre-existing unused-variable declarations
-// (addr_mod / innerloop / outerloop locals) that trip the harness's -Werror. Suppress at file scope (the offending
-// vars live inside template bodies, so an include-only wrap does not reach the instantiation point). Remove on
-// promotion once the canonical header is clean.
-//
-// The srca_srcb addrmod helper (sdpa_bcast_col_srca_srcb_reuse_configure_addrmod) additionally leaves its `num_faces`
-// param unread on the LoFi ELWMUL path we instantiate (the dest.incr is a fixed 8 here, not derived from num_faces),
-// so also suppress -Wunused-parameter on this thread. Remove on promotion once the canonical header is clean.
-#pragma GCC diagnostic ignored "-Wunused-variable"
+// The promoted srca_srcb addrmod helper (sdpa_bcast_col_srca_srcb_reuse_configure_addrmod) leaves its `num_faces`
+// param unread on the LoFi ELWMUL path we instantiate -- the dest.incr is a fixed 8 here, not derived from num_faces
+// -- so suppress -Wunused-parameter on this thread too, at file scope for the same template-body reason as above.
+// Unlike the sibling srcb_reuse header, this one needs no -Wunused-variable shim: its MOP-config locals are all read
+// on the path we take. Drop this once the promoted header is warning-clean (tracked in #53295).
 #pragma GCC diagnostic ignored "-Wunused-parameter"
+#include "experimental/llk_math_sdpa_bcast_col_srca_srcb_reuse.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
-#include "llk_math_sdpa_bcast_col_srca_srcb_reuse.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -199,9 +192,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     //               clear_dest stays false: X in DEST is an INPUT here, not stale state to be cleared.
     //               The trailing SETRWC CLR_AB releases SrcA/SrcB (this variant has no separate postamble).
     //
-    // fused_signalling=true selects the output_granularity loop on the DEMO copy (per-tile FPU_SFPU with
-    // OUTPUT_GRANULARITY=1). On promotion the BLAZE execute drops fused_signalling and the granularity loop is
-    // unconditional — drop that template arg then; the golden is unaffected either way.
+    // The promoted execute runs the output_granularity loop unconditionally; the demo copy gated it behind a
+    // `fused_signalling` template arg in position 8, which is gone here. OUTPUT_GRANULARITY == 1 keeps the per-tile
+    // FPU_SFPU cadence either way, and the golden ignores signalling cadence.
     _llk_math_sdpa_bcast_col_srca_srcb_reuse_init_<SDPA_OP, NUM_TILES, SDPA_FIDELITY>(MATH_MOP_NUM_FACES, 0 /* acc_to_dest */);
     _llk_math_sdpa_bcast_col_srca_srcb_reuse_preamble_<DST_SYNC, is_fp32_dest_acc_en, false /* clear_dest */>(SRC_ROW);
     _llk_math_sdpa_bcast_col_srca_srcb_reuse_<
@@ -212,7 +205,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         SDPA_FIDELITY,
         false /* clear_dest */,
         false /* skip_signalling */,
-        true /* fused_signalling — DEMO-only; drop on promotion */,
         OUTPUT_GRANULARITY>(DST_ROW);
 
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();

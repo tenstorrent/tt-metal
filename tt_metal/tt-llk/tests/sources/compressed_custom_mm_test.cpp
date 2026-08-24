@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// ADVANCE TEST: covers demo-tree experimental LLK compressed_custom_mm (tt-metal#47554 / tt-blaze#1971), pending
-// promotion into tt_llk_blackhole/llk_lib/experimental/. Include path (shared with custom_mm) must be repointed on
-// promotion. Primitives verified byte-identical to tt-blaze main as of this writing.
+// ADVANCE TEST: covers experimental LLK compressed_custom_mm (tt-metal#47554 / tt-blaze#1971), promoted into
+// tt_llk_blackhole/llk_lib/experimental/ on main by #53295. The includes below resolve through the canonical -I; the
+// demo-fork shadow tree this test was first written against no longer exists.
 
 #include <algorithm>
 #include <cstdint>
@@ -22,16 +22,13 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #ifdef LLK_TRISC_UNPACK
 
 // PRIMITIVE symbol under test (NOT the forked _api.h wrapper / compute_kernel_api entry).
-// On promotion, repoint the -I in test_config.py so this resolves to the canonical header and this line is unchanged.
-//
-// The unpromoted demo-tree header carries constexpr-computed locals (get_replay_insn_for_combo intermediates) and a
-// clear_src template branch that the harness's -Werror -Wunused-variable / -Wunused-parameter flags on some
-// instantiations. Suppress locally around the include (do NOT edit the byte-identical shadow header); remove on
-// promotion once the canonical header is warning-clean.
+// Resolved from the promoted experimental/ copy (landed on main via #53295); the demo-fork shadow tree this test was
+// originally written against is gone. The promoted header still takes params that the instantiation we drive does not
+// read, which -Werror -Wunused-parameter flags. Scoped push/pop is enough here (unlike the sdpa siblings, the
+// offending params are not on template bodies). Drop it once the promoted header is warning-clean.
 #pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-variable"
 #pragma GCC diagnostic ignored "-Wunused-parameter"
-#include "llk_unpack_AB_compressed_custom_mm.h"
+#include "experimental/llk_unpack_AB_compressed_custom_mm.h"
 #pragma GCC diagnostic pop
 #include "llk_unpack_common.h"
 #include "params.h"
@@ -79,13 +76,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
-// PRIMITIVE symbol under test (NOT the forked _api.h wrapper / compute_kernel_api entry).
-// See the unpack-side note above: the unpromoted demo-tree header has constexpr/branch-dependent locals that trip the
-// harness's -Werror on some instantiations. Suppress at file scope (the offending vars live inside template bodies, so
-// an include-only wrap does not reach the instantiation point). Remove on promotion once the canonical header is clean.
-#pragma GCC diagnostic ignored "-Wunused-variable"
+// PRIMITIVE symbol under test (NOT the forked _api.h wrapper / compute_kernel_api entry), from the promoted
+// experimental/ copy. No -Wunused shim needed on this thread: the promoted math header is warning-clean on the path
+// we instantiate.
+#include "experimental/llk_math_compressed_custom_mm.h"
 #include "llk_math_common.h"
-#include "llk_math_compressed_custom_mm.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)

@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-# ADVANCE TEST: covers demo-tree experimental LLK compressed_custom_mm (tt-metal#47554 / tt-blaze#1971), pending
-# promotion into tt_llk_blackhole/llk_lib/experimental/. Include path (shared with custom_mm) is REUSED here; it must
-# be repointed to the canonical header on promotion. Primitives verified byte-identical to tt-blaze main as of this
-# writing.
+# ADVANCE TEST: covers experimental LLK compressed_custom_mm (tt-metal#47554 / tt-blaze#1971), promoted into
+# tt_llk_blackhole/llk_lib/experimental/ on main by #53295. The compute kernel includes the canonical headers; the
+# demo-fork shadow tree this test was first written against no longer exists.
 #
 # compressed_custom_mm is the BFP-compressed-in1 sibling of custom_mm. Same documented contract as custom_mm
 # (llk_math_compressed_custom_mm.h / llk_unpack_AB_compressed_custom_mm.h header banners):
@@ -29,14 +28,11 @@
 # then unpacked back to bf16, and that dequantized tensor is what the golden multiplies. This is what
 # compressed_utils.run_compressed does.
 #
-# Blackhole-only (@blackhole_only): the primitive headers resolve through a Blackhole-only shadow -I.
+# Blackhole-only (@blackhole_only): the primitive headers live under the Blackhole experimental/ tree.
 
 import pytest
 import torch
 from conftest import blackhole_only
-from helpers.advance_llk_includes import (  # noqa: F401  (module-scoped autouse fixture)
-    advance_llk_include_paths,
-)
 from helpers.compressed_utils import FMT_CODE, pack_bfp_tile, unpack_bfp_tile
 from helpers.custom_mm_utils import (
     dense_result_rowmajor,

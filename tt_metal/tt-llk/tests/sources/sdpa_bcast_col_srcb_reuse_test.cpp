@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// ADVANCE TEST: covers demo-tree experimental LLK sdpa_bcast_col_srcb_reuse (+ unpack_A_sdpa) (tt-metal#47554 /
-// tt-blaze#1971), pending promotion into tt_llk_blackhole/llk_lib/experimental/. Include path below must be repointed
-// on promotion. Primitives verified byte-identical to tt-blaze main as of this writing.
+// ADVANCE TEST: covers experimental LLK sdpa_bcast_col_srcb_reuse (+ unpack_A_sdpa) (tt-metal#47554 /
+// tt-blaze#1971), promoted into tt_llk_blackhole/llk_lib/experimental/ on main by #53295. The includes below resolve
+// through the canonical -I; the demo-fork shadow tree this test was first written against no longer exists.
 //
 // What the op does (tt-blaze#1971): eltwise ADD/SUB/MUL of a per-tile operand (SrcA) with a *column* broadcast
 // (SrcB) where the column source is DEST reused as a source register (DEST -> SrcB via MOVD2B), reused across every
@@ -83,17 +83,15 @@ static constexpr bool CLEAR_DEST = true;
 #ifdef LLK_TRISC_UNPACK
 
 // PRIMITIVE symbols under test (NOT the forked _api.h wrapper / compute_kernel_api entry).
-// On promotion, repoint the -I in test_config.py so this resolves to the canonical header and this line is unchanged.
+// Resolved from the promoted experimental/ copy (landed on main via #53295); the demo-fork shadow tree this test was
+// originally written against is gone.
 //
-// The unpromoted demo-tree header declares MOP-config locals (outerloop/innerloop) and takes unpack_src/dst_format
-// params that the SCALAR/num_faces==2 path we instantiate does not read. The demo build tolerates these; the tt-llk
-// harness compiles with -Werror -Wunused-variable -Wunused-parameter, so suppress the pre-existing warnings without
-// editing the byte-identical shadow header. The offending locals live inside template bodies, so suppress at file
-// scope (an include-only wrap does not reach the instantiation point). Remove on promotion once the canonical header
-// is warning-clean (see report: header-vs-#1971 note).
-#pragma GCC diagnostic ignored "-Wunused-variable"
+// The promoted header still takes transpose_of_faces / unpack_src_format / unpack_dst_format params that the
+// num_faces == 2 path we instantiate does not read, and the harness compiles with -Werror -Wunused-parameter. The
+// offending params are on template bodies, so an include-only push/pop does not reach the instantiation point --
+// suppress at file scope. Drop this once the promoted header is warning-clean (tracked in #53295).
 #pragma GCC diagnostic ignored "-Wunused-parameter"
-#include "llk_unpack_A_sdpa.h"
+#include "experimental/llk_unpack_A_sdpa.h"
 // Base unpack_A supplies the per-tile execute for both the DEST seed and the operand stream; llk_unpack_A_sdpa.h is
 // init/mop-config + the dummy-SrcB-valid helper only.
 #include "llk_unpack_A.h"
@@ -156,15 +154,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
-// PRIMITIVE symbol under test (NOT the forked _api.h wrapper / compute_kernel_api entry).
-// See the unpack-side note above: the unpromoted demo-tree header has pre-existing unused-variable declarations
-// (addr_mod / innerloop / outerloop locals) that trip the harness's -Werror. Suppress at file scope (the offending
-// vars live inside template bodies, so an include-only wrap does not reach the instantiation point). Remove on
-// promotion once the canonical header is clean.
+// PRIMITIVE symbol under test (NOT the forked _api.h wrapper / compute_kernel_api entry), from the promoted
+// experimental/ copy.
+//
+// Its configure_mop declares addr_mod / innerloop / outerloop (llk_math_sdpa_bcast_col_srcb_reuse.h:23-25) without
+// reading them on the path we instantiate, which trips -Werror=unused-variable. Same file-scope suppression rationale
+// as the unpack side: the declarations are inside template bodies, so an include-only push/pop does not reach the
+// instantiation point. These are the symbols #53361 asked @pmilenkovicTT to drop in #53295; this shim goes when they do.
 #pragma GCC diagnostic ignored "-Wunused-variable"
+#include "experimental/llk_math_sdpa_bcast_col_srcb_reuse.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
-#include "llk_math_sdpa_bcast_col_srcb_reuse.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)

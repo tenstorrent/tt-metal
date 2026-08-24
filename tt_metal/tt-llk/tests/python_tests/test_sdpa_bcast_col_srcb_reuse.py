@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-# ADVANCE TEST: covers demo-tree experimental LLK sdpa_bcast_col_srcb_reuse (+ unpack_A_sdpa) (tt-metal#47554 /
-# tt-blaze#1971), pending promotion into tt_llk_blackhole/llk_lib/experimental/. Include path used by the compute
-# kernel must be repointed to the canonical header on promotion. Primitives verified byte-identical to tt-blaze main
-# as of this writing.
+# ADVANCE TEST: covers experimental LLK sdpa_bcast_col_srcb_reuse (+ unpack_A_sdpa) (tt-metal#47554 /
+# tt-blaze#1971), promoted into tt_llk_blackhole/llk_lib/experimental/ on main by #53295. The compute kernel includes
+# the canonical headers; the demo-fork shadow tree this test was first written against no longer exists.
 #
 # sdpa_bcast_col_srcb_reuse documented contract
 # (llk_math_sdpa_bcast_col_srcb_reuse.h / llk_unpack_A_sdpa.h header banners, plus what the op was measured to do
@@ -27,12 +26,9 @@
 #
 # This advance test exercises the MUL (softmax-scale) instantiation, LoFi, on 8x32 tiles.
 #
-# Blackhole-only (@blackhole_only): the primitive headers resolve through a Blackhole-only shadow -I.
+# Blackhole-only (@blackhole_only): the primitive headers live under the Blackhole experimental/ tree.
 
 from conftest import blackhole_only
-from helpers.advance_llk_includes import (  # noqa: F401  (module-scoped autouse fixture)
-    advance_llk_include_paths,
-)
 from helpers.device import BootMode
 from helpers.param_config import parametrize
 from helpers.sdpa_bcast_utils import (

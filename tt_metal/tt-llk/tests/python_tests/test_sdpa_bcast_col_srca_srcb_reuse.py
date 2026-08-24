@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-# ADVANCE TEST: covers demo-fork experimental LLK sdpa_bcast_col_srca_srcb_reuse (tt-metal#47554 / tt-blaze#1971),
-# pending promotion. Include path (shadow -I) repoint on promotion. Primitive differs from tt-blaze only in
-# FPU<->SFPU signalling cadence (orthogonal to this numerical golden).
+# ADVANCE TEST: covers experimental LLK sdpa_bcast_col_srca_srcb_reuse (tt-metal#47554 / tt-blaze#1971), promoted
+# into tt_llk_blackhole/llk_lib/experimental/ on main by #53295. The compute kernel includes the canonical headers;
+# the demo-fork shadow tree this test was first written against no longer exists.
 #
 # sdpa_bcast_col_srca_srcb_reuse documented contract (llk_math_sdpa_bcast_col_srca_srcb_reuse.h banner, plus what the
 # op was measured to do on p100a):
@@ -31,13 +31,10 @@
 # different function of the inputs (DEST-to-DEST scale-by-(1+P) vs a two-operand-tile SrcA stream), so there is no
 # common golden to factor out.
 #
-# Blackhole-only (@blackhole_only): the primitive headers resolve through a Blackhole-only shadow -I.
+# Blackhole-only (@blackhole_only): the primitive headers live under the Blackhole experimental/ tree.
 
 import torch
 from conftest import blackhole_only
-from helpers.advance_llk_includes import (  # noqa: F401  (module-scoped autouse fixture)
-    advance_llk_include_paths,
-)
 from helpers.device import BootMode
 from helpers.format_config import DataFormat
 from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
