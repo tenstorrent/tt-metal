@@ -31,7 +31,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, single_core, unified_program
+from unified_harness import core_block, make_cb, split_evenly, unified_program
 
 KERNEL = "unified_kernels/binary.cpp"
 
@@ -67,7 +67,7 @@ OPS = {
 }
 
 
-def run(device, op, num_blocks=1, tiles_per_block=1, seed=0, force_sfpu=False):
+def run(device, op, num_blocks=1, tiles_per_block=1, seed=0, force_sfpu=False, cores=1):
     num_tiles = num_blocks * tiles_per_block
     shape = [1, num_tiles, 32, 32]
 
@@ -82,13 +82,18 @@ def run(device, op, num_blocks=1, tiles_per_block=1, seed=0, force_sfpu=False):
     tb = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram)
     tout = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram)
 
-    core_ranges, cores = single_core()
+    # Blocks are the unit of work and they share nothing: block b touches its own pages of
+    # both inputs and of the output, so splitting them needs no reduction and no ordering.
+    ncores = min(cores, num_blocks)
+    core_ranges, core_list = core_block(ncores)
+    shares = split_evenly(num_blocks, ncores)
 
     ct_args = [num_blocks, tiles_per_block]
     for t in (ta, tb, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
-    rt_args = [ta.buffer_address(), tb.buffer_address(), tout.buffer_address()]
+    addrs = [ta.buffer_address(), tb.buffer_address(), tout.buffer_address()]
+    rt_args = {c: addrs + [begin, count] for c, (begin, count) in zip(core_list, shares)}
 
     cbs = [
         make_cb(CB_IN0, core_ranges, num_pages=2 * tiles_per_block),
@@ -100,14 +105,16 @@ def run(device, op, num_blocks=1, tiles_per_block=1, seed=0, force_sfpu=False):
     program = unified_program(
         kernel_source=KERNEL,
         core_ranges=core_ranges,
-        cores=cores,
+        cores=core_list,
         cbs=cbs,
         compile_time_args=ct_args,
         runtime_args=rt_args,
         defines=([(define, "1")] if define else []) + ([("TT_UNIFIED_NO_FPU_ELTWISE", "1")] if force_sfpu else []),
     )
 
-    logger.info(f"running unified binary: op={op} num_blocks={num_blocks} tiles_per_block={tiles_per_block}")
+    logger.info(
+        f"running unified binary: op={op} num_blocks={num_blocks} tiles_per_block={tiles_per_block} cores={ncores}"
+    )
     out = ttnn.generic_op([ta, tb, tout], program)
 
     got = ttnn.to_torch(out).to(torch.float32)
@@ -153,6 +160,17 @@ def main(argv=None):
             for op in ops
             if op in ("add", "sub", "mul")
         }
+        # Partition invariance. Blocks share nothing, so splitting them is not an
+        # approximation and the check is EXACT rather than toleranced -- a core reading or
+        # writing outside its range would show as a difference, and nothing else would.
+        # 16 blocks over 1, 3 and 16 cores also covers the uneven split, which is where an
+        # off-by-one in the range arithmetic lives.
+        partitioned = {}
+        for op in ("add", "silu_mul"):
+            if op not in ops:
+                continue
+            one = run(device, op, 16, 4, args.seed)[0]
+            partitioned[op] = [(n, one, run(device, op, 16, 4, args.seed, cores=n)[0]) for n in (3, 8, 16)]
     finally:
         ttnn.close_device(device)
 
@@ -188,6 +206,14 @@ def main(argv=None):
         if not fpu_err > sfpu_err:
             logger.error("the FPU multiply is no longer the less accurate one -- has dispatch changed?")
             failed.append("mul-order")
+
+    for op, runs in partitioned.items():
+        for n, one, many in runs:
+            diff = (many - one).abs().max().item()
+            ok = diff == 0.0
+            logger.info(f"{op:6s} 16 blocks over {n:2d} cores vs 1: max|diff| = {diff:.6f}   {'ok' if ok else 'FAIL'}")
+            if not ok:
+                failed.append(f"{op}-cores-{n}")
 
     if failed:
         logger.error(f"FAIL: {failed}")

@@ -189,7 +189,10 @@ def binary(device, a, b, rows, cols, mode=None):
     out = nan_out(device, rows * TILE, cols * TILE, ACT)
     tiles = rows * cols
     cbs = [(BN_CB["in0"], 2 * tiles, ACT), (BN_CB["in1"], 2 * tiles, ACT), (BN_CB["out"], 2 * tiles, ACT)]
-    rt = [a.buffer_address(), b.buffer_address(), out.buffer_address()]
+    # The last two are the block range binary.cpp partitions across cores. This layer is
+    # one core and one block, so it owns block 0 and there is exactly one of them. Omitting
+    # them compiles fine and feeds the loop whatever is in that arg slot -- a hang.
+    rt = [a.buffer_address(), b.buffer_address(), out.buffer_address(), 0, 1]
     defines = [("BN_SILU_MUL", "1")] if mode == "silu_mul" else None
     return launch(device, BINARY_KERNEL, cbs, [1, tiles], rt, (a, b, out), defines)
 

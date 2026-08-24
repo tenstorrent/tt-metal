@@ -3376,6 +3376,85 @@ reason it was caught is that it disagreed with the 10972us the old single-core b
 recorded for the same stage. Cross-checking a new measurement against an old one that should
 agree is worth the minute it costs.
 
+### Parallelising silu*up: 10235.9 -> 262.9us
+
+`binary.cpp` walked all `num_blocks` blocks on one core. Blocks already share nothing -- block
+b reads pages `[b*tiles_per_block, +tiles_per_block)` of each input and writes the same range
+of the output -- so partitioning them needs no reduction, no ordering and no communication,
+only a `block_begin`/`block_count` pair per core, which is the same shape rmsnorm and
+matmul_blocked already use. `num_blocks` stays a compile-time arg because it is what the host
+divides, not what a core walks.
+
+| silu*up, 4096 tiles ([512, 8192]), 64 blocks of 64 tiles | | |
+|---|---|---|
+| 1 core | 10234.9 us | 1.0x |
+| 2 | 5126.0 | 2.0x |
+| 4 | 2572.3 | 4.0x |
+| 8 | 1297.6 | 7.9x |
+| 16 | 674.5 | 15.2x |
+| 32 | 409.6 | 25.0x |
+| **64** | **265.2** | **38.6x** |
+
+Linear to 16 cores, then falling off. **It is not falling off because of bandwidth**, which
+was the obvious guess: at 64 cores this moves 24MB in 265us, 90GB/s, while the plain `add`
+below reaches 184GB/s on the same kernel and the same grid. Per tile per core it is 4.14us
+against add's 2.08us, so what limits silu*up at 64 cores is the SFPU pass itself, and the next
+lever there is the activation rather than the partitioning.
+
+| residual (add), 1024 tiles | | |
+|---|---|---|
+| 1 core | 209.3 us | 1.0x |
+| 16 | 34.0 | 6.2x |
+| 64 | 33.3 | 6.3x |
+
+The add saturates at 16 cores and 6.3x is its ceiling, not a defect: 6MB in 33.3us is 184GB/s,
+which is most of what this part has ever measured, and no number of cores moves bytes faster.
+
+Correctness is checked EXACTLY rather than to a tolerance, which partitioning permits and
+should therefore be held to: the same 16 blocks over 1, 3, 8 and 16 cores are bit-identical,
+max|diff| 0.000000, and 3 into 16 covers the uneven split where an off-by-one in the range
+arithmetic would live. At the full 4096-tile shape every core count from 1 to 64 also matches
+one core bit for bit.
+
+**Where the layer stands after it:**
+
+| | us |
+|---|---|
+| matmuls, rmsnorm, attention (parallelised, bf8) | 1683.0 |
+| silu*up | 262.9 |
+| residual x2 | 66.7 |
+| **parallelised total** | **2012.6** |
+| RoPE on Q, STILL ONE CORE | 2411.4 |
+| total as it actually runs today | 4424.0 |
+
+against ttnn's 1820us. **RoPE is now the whole problem**: at 2411.4us on one core it costs more
+than everything else in the layer put together, where before this change it was second to
+silu*up. It is the same change -- `rope.cpp` walks a flat per-tile stream in chunks exactly as
+`binary.cpp` walked blocks -- and it is the obvious next thing.
+
+The earlier projection is worth marking against the outcome: it put these three stages at 204us
+if they parallelised perfectly, and the two that are done came in at 329.6 rather than 167.
+Perfect scaling was the optimistic end and it was labelled as such; the gap is the SFPU limit
+on silu and the bandwidth ceiling on add, neither of which more cores can fix.
+
+**And it hung the device twice on the way in, the same way as the last two times.** Adding
+two runtime args to a kernel is a change to a contract that lives in three places -- the
+kernel and every launcher of it -- and `binary.cpp` has three launchers: its own harness,
+`test_unified_mixed_format.py` and the layer. Fixing the harness leaves the other two passing
+the old three arguments, and the kernel then reads `block_count` out of whatever occupies that
+slot, so the loop runs for a garbage number of iterations. It does not fail to compile and it
+does not assert; the device hangs and wants `tt-smi -r`.
+
+The lesson is not "remember to update the launchers", which is what was concluded the last two
+times and evidently does not take. It is that **the arg list is a contract with no compiler
+behind it**, and the fix is the named-kernel-argument work that was surveyed and shelved
+earlier in this document -- Blaze's `blaze_rt_args::get<...>()`, which would make a missing
+argument a build error rather than a hang. Three hangs from one cause is the argument for
+picking it back up.
+
+What did work: `grep -rn "binary.cpp" *.py` found all three launchers in one go, and running
+it BEFORE fixing anything is the difference between one edit and two hangs.
+
 ## Phase 11 -- Full block orchestration
 
 Host-side and kernel-loop work, not model gaps.
