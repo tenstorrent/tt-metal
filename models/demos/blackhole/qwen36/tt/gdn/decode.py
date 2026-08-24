@@ -40,7 +40,7 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
     # capture" — and it wedges the device, since the fatal fires before end_trace_capture runs.
     # Every trace-capturing prefill test hits it. The L1 pressure this was working around is
     # instead fixed at its source, from inside this model's folder (see tt/wh_compat.py): the
-    # chunk-seq activations go to DRAM on WH, and the kernel's [BH, L, V] output relayout is bf16
+    # chunk-seq activations go to DRAM on WH, and the [BH, L, V] output relayout
     # rather than fp32 (33.5MB -> 16.8MB at L=2048, see tt/chunk_seq_wh.py).
 
     # After prefill, fuse separate conv states into one for efficient decode

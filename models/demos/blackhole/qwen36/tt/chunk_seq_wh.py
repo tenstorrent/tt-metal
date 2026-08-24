@@ -117,11 +117,11 @@ def _chunk_gated_delta_rule_seq_wh(
     _bmm_cfg = _bmm_progcfg(mesh_device, chunk_size // _TILE, chunk_size // _TILE, K // _TILE)
 
     # Right-padding mask: zero every state-affecting input past valid_len. The mask
-    # SHAPE is fixed by the bucket length T (only its values depend on valid_len), so a
+    # SHAPE is fixed by bucket length T (only values depend on valid_len), so a
     # single program serves all real lengths. Mirrors the zeros concatenated below for
     # pad_len; here it covers the [valid_len, T) region the caller padded.
-    # valid_len may be a scalar (one length for all BH rows) or a per-row list/tuple of length B
-    # (batched prefill): BH rows are ordered b*H + h, so user b owns rows [b*H, (b+1)*H).
+    # valid_len may be a scalar (all BH rows) or a per-row list/tuple of length B
+    # (batched prefill): BH rows run b*H + h, so user b owns [b*H, (b+1)*H).
     _is_per_row = isinstance(valid_len, (list, tuple))
     if _is_per_row or (valid_len is not None and valid_len < T):
         _m = torch.zeros(BH, T, 1, dtype=torch.float32)
@@ -212,7 +212,7 @@ def _chunk_gated_delta_rule_seq_wh(
 
     # ---- Decay preprocessing ----
     # decay = g_c @ triu_ones (prefix-sum of g along the chunk). triu_ones is broadcast across
-    # the batch, so the per-batch [1,C]@[C,C] bmm (M=1 -> pinned to ~4 cores) is bit-identical to
+    # the batch, so the per-batch [1,C]@[C,C] bmm (M=1, ~4 cores) is bit-identical
     # a single 2D [batch,C]@[C,C] matmul, which spreads the batch rows across ~24 cores. Same
     # math, same HiFi4/fp32 fidelity — pure parallelization win.
     triu_ones_2d = ttnn.reshape(triu_ones, [chunk_size, chunk_size], memory_config=None)
@@ -423,13 +423,14 @@ def _chunk_gated_delta_rule_seq_wh(
     _out_l1 = ttnn.L1_MEMORY_CONFIG
     # THE ONE CHANGE vs upstream: bf16 instead of fp32 for this L1-resident relayout.
     # fp32 costs BH*L*V*4 = 32*2048*128*4 = 33,554,432 B, which does not fit Wormhole's L1
-    # (80 cores / ~114MB / 64 banks) beside the live prefill working set; bf16 halves it to
-    # 16,777,216 B, which does. Measured: fp32 -> 14x "Out of Memory ... 33554432 B" and 7
+    # (80 cores / ~114MB / 64 banks) beside the live prefill set; bf16 halves it
+    # to 16,777,216 B, which does. fp32 gave 14x "Out of Memory ... 33554432 B"
     # test_prefill failures; bf16 -> 0 OOM, 17/17 pass, logit PCC 0.9998-1.0000 (unchanged).
-    # L1 (not DRAM) is kept deliberately: the DRAM path makes the `o[:, :T, :]` slice below do
+    # L1 (not DRAM) is deliberate: the DRAM path makes the `o[:, :T, :]` slice
     # host reads, and this runs inside begin_trace_capture.
     _out_dtype = ttnn.bfloat16
-    # No memory_config: kernel output is already TILE, so it'd be a no-op that warns; the reshape below places it in L1.
+    # No memory_config: output is already TILE, so it would be a warning no-op;
+    # the reshape below places it in L1.
     out_4d = ttnn.to_layout(
         ttnn.typecast(out_4d, _out_dtype, memory_config=_out_l1) if out_4d.dtype != _out_dtype else out_4d,
         ttnn.TILE_LAYOUT,

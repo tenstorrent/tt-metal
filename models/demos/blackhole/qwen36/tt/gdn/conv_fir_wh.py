@@ -57,13 +57,13 @@ from models.experimental.gated_attention_gated_deltanet.tt import ttnn_gated_del
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_decode_t1
 
 # The TILE-layout concat this file exists to replace. If upstream restructures it (e.g. adopts the
-# ROW_MAJOR form itself), this copy is stale -- fail loudly rather than run old layout logic.
+# ROW_MAJOR form), this copy is stale -- fail loudly, not run old logic.
 _UPSTREAM_ANCHOR = "x_padded = ttnn.concat([pad, x], dim=1, memory_config=mc)"
 
-# Largest per-tap tilized window (bytes) we are willing to place in L1; above this the tap falls back
-# to the caller's memory config. 16MB == exactly one [1, 2048, 4096] bf16 window, i.e. the production
-# chunk-outer prefill length. Sized to the transient window ALONE, which is the whole reason it can be
-# this large: it is freed within the loop iteration and never coexists with the chunk kernel's CBs
+# Largest per-tap tilized window (bytes) allowed in L1; above this the tap
+# falls back to the caller's memory config. 16MB == one [1, 2048, 4096] bf16
+# window, the production chunk-outer prefill length. Sized to the transient
+# window ALONE -- freed inside the loop iteration, never coexisting with the
 # (contrast the 8MB threshold on the long-lived norm tensors in gdn/tp.py).
 _TAP_L1_BUDGET = 16 << 20
 
@@ -167,7 +167,7 @@ def _causal_conv1d_fir_wh(
     # ---- THE ONE CHANGE vs upstream: build x_padded in ROW_MAJOR, not TILE. ----
     # Upstream concatenates in TILE, which makes each of the K shifted windows below untilize the
     # whole [B,(K-1)+T,D] tensor (they start at rows 1..K-1, never tile-aligned). One untilize here
-    # instead of the concat's tilize + 3 full-tensor untilizes; each tap then tilizes only its own
+    # instead of the concat's tilize + 3 full untilizes; each tap tilizes only
     # slice. Same ops, same order, same taps -- just fewer whole-tensor relayouts.
     _rm = ttnn.ROW_MAJOR_LAYOUT
     x_rm = ttnn.to_layout(x, _rm, memory_config=mc)
@@ -206,7 +206,7 @@ def _causal_conv1d_fir_wh(
         # valid_len value — defeating the bounded-program goal — so select those rows with a
         # one-hot matmul instead: the program depends only on shapes (fixed per bucket), and
         # only the one-hot VALUES depend on valid_len.
-        # valid_len may be a scalar (one length for all B rows) or a per-row list/tuple of length
+        # valid_len may be a scalar (all B rows) or a per-row list/tuple of
         # B (batched prefill: each user's own real length picks that user's decode conv window).
         sel = torch.zeros(B, kernel_size - 1, total_len, dtype=torch.float32)
         if isinstance(valid_len, (list, tuple)):
@@ -234,21 +234,21 @@ def _causal_conv1d_fir_wh(
 
     total_len = (kernel_size - 1) + T
     _dram = ttnn.DRAM_MEMORY_CONFIG
-    # Depthwise K-tap FIR via multiply + addcmul. x_padded is ROW_MAJOR (see THE ONE CHANGE), so each
+    # Depthwise K-tap FIR via multiply + addcmul. x_padded is ROW_MAJOR, so each
     # tap tilizes its own slice rather than untilizing the whole tensor.
     #
-    # SECOND CHANGE vs upstream: the LAST tap needs no slice and no tilize at all. Its window is
+    # SECOND CHANGE vs upstream: the LAST tap needs no slice and no tilize.
     #   x_padded[K-1 : K-1+T] == x
-    # by construction (x_padded is [carry(K-1) | x(T)]), and `x` is still live in TILE layout -- it is
-    # what we untilized to build x_padded in the first place. So feed `x` straight in. At T=2048,
-    # D=4096 on N300 that drops a 211us ROW_MAJOR slice and a 192us tilize, both moving 33.6MB, for
+    # Its window is `x` by construction (x_padded is [carry(K-1) | x(T)]), and
+    # `x` is still live in TILE layout -- what we untilized to build x_padded.
+    # Feed it straight in. At T=2048, D=4096 on N300 that drops a 211us slice
     # ~400us/layer. Accumulation order is untouched (still k = 0,1,..,K-1), so the result is unchanged.
-    # THIRD CHANGE vs upstream: land each tap's tilized window in L1 rather than `mc` (DRAM on WH).
+    # THIRD CHANGE vs upstream: land each tap's tilized window in L1, not `mc`.
     # The window is transient — produced, consumed by the multiply/addcmul, and freed inside one
-    # iteration — so unlike the long-lived tensors that forced DRAM here it never coexists with the
+    # iteration, so unlike the long-lived tensors that forced DRAM here it never
     # chunk kernel's circular buffers. Measured at T=2048, D=4096 on N300: Tilize 565->454us (it
     # writes L1 instead of DRAM) and the addcmuls 948->843us (they read L1), together -206us.
-    # Guarded by size: only when one window fits _TAP_L1_BUDGET, else fall back to `mc`. At D=4096 bf16
+    # Guarded by size: only when one window fits _TAP_L1_BUDGET, else use `mc`.
     # that covers chunks up to T=2048 (the production chunk-outer length) and declines gracefully above.
     _tap_mc = ttnn.L1_MEMORY_CONFIG if (T * D * 2) <= _TAP_L1_BUDGET else mc
     out = None
@@ -256,9 +256,9 @@ def _causal_conv1d_fir_wh(
         if k == kernel_size - 1:
             x_slice = x  # == x_padded[K-1 : K-1+T], already TILE
         else:
-            # The ROW_MAJOR window itself stays in `mc` (DRAM). MEASURED: also placing it in L1 (via an
+            # The ROW_MAJOR window stays in `mc` (DRAM). MEASURED: putting it in L1 too
             # explicit ttnn.slice with memory_config) makes the slice 262us cheaper but the tilize 249us
-            # dearer -- an L1->L1 tilize is slower than DRAM->L1 here -- for a net -38us, i.e. noise.
+            # dearer (an L1->L1 tilize beats DRAM->L1 here): net -38us, i.e. noise.
             # Not worth the extra slice+deallocate, so only the tilize OUTPUT is L1 (see _tap_mc).
             x_slice = ttnn.to_layout(x_padded[:, k : k + T], ttnn.TILE_LAYOUT, memory_config=_tap_mc)
         if out is None:
@@ -266,7 +266,7 @@ def _causal_conv1d_fir_wh(
         else:
             out = ttnn.addcmul(out, x_slice, weight_taps[k], memory_config=mc)
 
-    # Bias (+ fused SiLU when a bias is present) else standalone SiLU. Conv output lands in DRAM.
+    # Bias (+ fused SiLU if bias present) else standalone SiLU. Output in DRAM.
     _silu = [ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)]
     if bias_dev is not None:
         return ttnn.add(out, bias_dev, activations=_silu, memory_config=_dram), new_state

@@ -42,9 +42,9 @@ _MESH_SHAPE = {
     "P150": (1, 1),
     "P150x4": (1, 4),
     "P150x8": (1, 8),
-    # Wormhole: N300 is the 2-chip mesh the 9B needs (a single N150 cannot hold it: ~12GB DRAM/chip
-    # vs BH P150's ~32GB). Listing these explicitly matters — the old dict fell through to the (1,4)
-    # default for any WH mesh name, which both picked the wrong shape and flipped _MULTI on.
+    # Wormhole: N300 is the 2-chip mesh the 9B needs (one N150 cannot hold it:
+    # ~12GB DRAM/chip vs BH P150's ~32GB). Listing these matters: the old dict
+    # fell through to (1,4) for any WH name, wrong shape and _MULTI flipped on.
     "N150": (1, 1),
     "N300": (1, 2),
     "N150x4": (1, 4),

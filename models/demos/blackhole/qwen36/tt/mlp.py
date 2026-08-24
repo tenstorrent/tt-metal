@@ -24,29 +24,26 @@ class MLPWeights:
 # WORMHOLE MLP prefill: one K pass for gate/up/down.
 #
 # The unfused prefill arm below used halve_out_block=True because the full per_core_N-wide
-# output/intermediate CB (gate AND up live at once) overflowed WH L1 by ~28KB. Halving out_block_w is
-# what turns one K pass into two, and each extra pass re-reads the DRAM-resident activation. Dropping
-# fp32 dest accumulation halves that CB and raises the output-subblock cap from 4 to 8, so the
-# full-width block fits -- the same unlock that was worth -16% on the GDN in-projection. packer_l1_acc
-# goes ON at the same time (prefill had it off while decode had it on, with no comment defending it).
+# output/intermediate CB (gate AND up live at once) overflowed WH L1 by ~28KB.
+# Halving out_block_w turns one K pass into two, and each extra pass re-reads
+# the DRAM-resident activation. Dropping fp32 dest accumulation halves the CB
+# and raises the output-subblock cap from 4 to 8, so the full-width block fits
+# (-16% on the GDN in-proj too). packer_l1_acc goes ON at the same time.
 #
 # MEASURED IN THE REAL LAYER (Tracy, T=2048, N300, full decoder layer):
 #     gate  2048x4096x6144  1,321us @ 33.5% of peak  ->  982us @ 45.1%   (-339us)
 #     up    2048x4096x6144  1,183us @ 37.4%          ->  903us @ 49.0%   (-280us)
 #     down  2048x6144x4096  1,110us @ 39.9%          -> 1,013us @ 43.7%  (-97us)
 #                                                                        = -716us/layer
-# The GDN in-proj and out-proj matmuls are byte-identical across the same capture, which is the check
+# The GDN in/out-proj matmuls are byte-identical in the same capture, the check
 # that this is scoped to the MLP.
 #
-# ACCURACY: negligible. MLP PCC at T=2048 goes 0.9867734 -> 0.9866364 (test_mlp_tp), because LoFi with
-# bfp4 gate/up weights already dominates the error budget -- fp32 dest accumulation was never what was
-# holding this matmul's precision up.
+# ACCURACY: negligible. MLP PCC T=2048 0.9867734 -> 0.9866364 (test_mlp_tp). STALE: measured when
+# gate/up were bfp4; they are bfloat8_b on wh_9b_n300 now. Conclusion holds -- fp32 dest accumulation
+# is not the limiter -- but re-measure before quoting these two figures.
 #
-# CAUTION on measurement: the isolated sweep in tests/perf/test_mlp_matmul_sweep_prefill.py CANNOT
-# decide this. It dispatches 8 back-to-back copies of the same matmul over an 18MB bfp4 weight and runs
-# DRAM-saturated, which penalises packer_l1_acc=False far more than the real layer (whose gate matmul
-# sits at 41 GB/s) -- it reported the current config at 2,060us against a real 1,321us. Trust the
-# full-layer capture for this shape.
+# CAUTION: tests/perf/test_mlp_matmul_sweep_prefill.py runs DRAM-saturated and misreports this config
+# as 2,060us against a real 1,321us. Trust the full-layer capture.
 #
 # Wormhole only. On Blackhole at TP>1 mlp_gateup_agmm_enabled is always True, so the branch below is
 # unreachable there; the guard makes that explicit rather than relying on it.
@@ -100,21 +97,14 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
             and not getattr(args, "mlp_1d_decode", False)
         )
 
-        # gate/up weight dtype, SCOPED TO WORMHOLE 9B ON N300 (tpc.wh_9b_n300) -- the same gate the
-        # other decode changes use. Every other config (Blackhole, the 27B, N150, T3K) keeps bfloat4_b.
-        #
-        # MEASURED (9B / N300). Component: MLP TP PCC 0.98556 -> 0.99852 (bfloat16 adds only a
-        # further +0.00004, so bf8 is the saturation point). END-TO-END vs the HF reference
-        # (tests/unit/test_prefill.py, test_decode.py -- a real oracle, unlike the self-referential
-        # test_model_tp which cannot see this): prefill 0.991320 -> 0.998400, decode min
-        # 0.982721 -> 0.989032, and 5/5 decode steps improve.
-        # THE PRICE is decode throughput: gate/up weight DRAM traffic doubles and batch-1 decode is
-        # bandwidth-bound -- 26.05 -> 23.29 tok/s at ISL 128, ~-11% over the 128..256k ladder.
-        # Prefill is compute-bound and unaffected (TTFT 8.26 -> 8.46s at 32k); batched decode
-        # amortizes the weight read (B=32 aggregate within noise, -3..-4%).
+        # gate/up dtype, SCOPED to wh_9b_n300. Everything else keeps bfloat4_b.
+        # MEASURED (9B/N300): MLP TP PCC 0.98556 -> 0.99852; bfloat16 adds only +0.00004.
+        # HF parity (unit/test_prefill, test_decode): prefill 0.991320 -> 0.998400,
+        # decode min 0.982721 -> 0.989032, 5/5 steps up. test_model_tp is self-referential
+        # and cannot see this. COST: batch-1 decode 26.05 -> 23.29 tok/s at ISL 128 (~-11%
+        # over 128..256k); prefill (TTFT 8.26 -> 8.46s at 32k) and batched decode unaffected.
         _gu_dtype = ttnn.bfloat8_b if (args is not None and tpc.wh_9b_n300(args)) else ttnn.bfloat4_b
-        # Tag the dtype into the cache key: without it the key is the weight NAME alone, so flipping
-        # this gate silently reuses a cache written at the other dtype (cf. tp.py's ".rp" tag).
+        # Dtype in the cache key: else a flipped gate reuses the other's cache.
         _gu_tag = ".bfp8" if _gu_dtype == ttnn.bfloat8_b else ""
 
         def cache(name, tag=""):
@@ -205,7 +195,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
         )
 
     # Single-device (tp == 1) path. gate/up stay bfloat4_b: tpc.wh_9b_n300 requires
-    # device_name == "N300" (2 devices), so the bfloat8_b gate in the TP branch never applies here.
+    # device_name == "N300" (2 devices), so the TP branch's gate never applies.
     return MLPWeights(
         w1=load("gate_proj", ttnn.bfloat4_b),
         w2=load("down_proj", ttnn.bfloat8_b),
@@ -361,9 +351,9 @@ class Qwen36MLP:
             _gw = getattr(args, "decode_grid_w", 8)
             # TP-selected prefill tuning; absent (single-device 9B) => frozen TP=4 behavior.
             _pt = getattr(args, "prefill_tuning", None)
-            # This elif (inside _forward_tp, so always TP>1) is only reached when the fused AGMM path is
+            # This elif (inside _forward_tp, so TP>1) is reached only when the fused
             # unavailable (see _fused_gu above) — on Blackhole that never happens at TP>1 (fusion is
-            # always on there), so this combination was never tuned for BH's L1 budget and is new,
+            # always on there), so this was never tuned for BH's L1 budget and is new,
             # WH-only territory: the default full-per_core_N output/intermediate CB (both gate AND up
             # held at once) overflowed WH's smaller, already-at-max-grid L1 by ~28KB (measured). Halve it
             # (halve_out_block, see tp_common.py) and route the output to DRAM (below) instead of L1 —
@@ -375,7 +365,7 @@ class Qwen36MLP:
             # WORMHOLE ONLY: with _CKC_MLP_KPASS1's fp32_dest_acc_en=False the output-subblock ceiling
             # is DST_TILES (8), not DST_TILES_FP32_ACC (4) -- but the shared factory defaults to the
             # conservative 4 (correct for its fp32-acc callers: attention wo on BH, GDN out-proj).
-            # Raising it here was left undone when the MLP moved to one K pass: per_core_N is 24
+            # Left undone when the MLP moved to one K pass: per_core_N is 24
             # (gate/up) and 16 (down), both divisible by 8, so out_block_w == per_core_N (one K pass)
             # stays legal at sub_w=8. Same lever create_prefill_kpass1_matmul_program_config already
             # pulls explicitly for the GDN in-projection.
@@ -385,7 +375,7 @@ class Qwen36MLP:
             #     gate  2048x4096x6144   989.9us -> 864.6us   -12.7%
             #     up    2048x4096x6144   900.4us -> 815.0us    -9.5%
             #     down  2048x6144x4096  1015.0us -> 924.8us    -8.9%
-            # PCC is UNCHANGED to 5 decimals on all three (gate 0.99013, up 0.99313, down 0.99983) --
+            # PCC unchanged to 5 decimals (gate 0.99013, up 0.99313, down 0.99983)
             # this is pure blocking, not an accuracy trade.
             _sub_cap = tpc.DST_TILES if _kpass1 else None
             # MODEL-GATED (27B on Wormhole). The 27B's per-device gate/up width is
@@ -494,16 +484,16 @@ class Qwen36MLP:
             if _mlp_full_grid:
                 mc_out = ttnn.L1_MEMORY_CONFIG  # see _gu_mc above for why this is safe on the 27B
             # MEASURED (N300, 2026-08): putting `hidden` in L1 on WH prefill does NOT work, and the
-            # reason is not the one the note above gives. On WH the two are never both L1 anyway --
+            # reason differs from the note above. On WH the two are never both L1
             # prefill_out_memory_config's 8MB budget already sends the [2048,4096] down-proj OUTPUT to
-            # DRAM -- but `hidden` ALONE is too big: [1,2048,6144] bf16 = 25.2MB = ~393KB/core, and the
+            # anyway, but `hidden` ALONE is too big: [1,2048,6144] bf16 = 25.2MB
             # down-proj then cannot place its own circular buffers ("clash with L1 buffers ... L1 buffer
             # allocated at 1080192 and static circular buffer region ends at 1162432",
             # test_mlp_tp_prefill at T=2048). No smaller budget helps: 2048 IS the production
             # chunk-outer length, so anything that excludes it wins nothing. Keep DRAM.
             #
             # WORMHOLE PREFILL: emit `hidden` as bf8 while KEEPING IT IN DRAM. This is deliberately
-            # the dtype axis and NOT the placement axis -- L1 is the known-dead end above, and staying
+            # the dtype axis, NOT placement: L1 is the known-dead end above, and
             # in DRAM means none of that CB-clash risk applies. Two wins for one change:
             #   * the multiply writes half as many bytes (it is pure bandwidth, no FLOPs)
             #   * the down-proj's in0 becomes bf8, turning it into a BFP8 x BFP8 matmul
@@ -576,7 +566,7 @@ class Qwen36MLP:
         # Prefill passes tuned chunks_per_sync / num_workers_per_link (see tp_common
         # prefill_ccl_tuning); decode keeps tt_all_reduce's defaults, which its own path was tuned at.
         # Gate on x.shape[-2] (seq/M), not `T` above: T is x.shape[1] and the activation is
-        # [1, 1, S, dim] in both modes, so T is always 1 and this branch never fired. Attention
+        # [1, 1, S, dim] in both modes, so T is 1 and this never fired.
         # and GDN already pass prefill_ccl_tuning() unconditionally on their prefill RS.
         _ccl_kw = {}
         if x.shape[-2] > ttnn.TILE_SIZE:
