@@ -261,10 +261,24 @@ void kernel_main() {
                     curr_scalar_cb_id,
                     tiles_to_reduce,
                     0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/);
+                // [MP-DFB PROBE #48552] reduce_tile_math is a MATH op, so these markers reflect the MATH
+                // thread's real progress. pre- but not post-reduce-math => MATH stalls inside the reduce
+                // waiting on srcB (the scaler) dvalid -> confirms the scaler needs a full 16-row face (the old
+                // workaround's y=16 BD), i.e. num_faces=1's 1-row scaler is insufficient. post-reduce-math but
+                // not post-pop => stall at pop_front. post-pop => first chunk completed; hang is later.
+                if (n == 0 && c_i == 0 && chunk == 0) {
+                    DPRINT_MATH("[MP-DFB] pre-reduce-math\n");
+                }
                 for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                     reduce_tile_math<REDUCE_OP, REDUCE_DIM>(math_tile_idx, num_faces_in_input_tile);
                 }
+                if (n == 0 && c_i == 0 && chunk == 0) {
+                    DPRINT_MATH("[MP-DFB] post-reduce-math\n");
+                }
                 curr_in_cb.pop_front(1);
+                if (n == 0 && c_i == 0 && chunk == 0) {
+                    DPRINT_MATH("[MP-DFB] post-pop\n");
+                }
             }
             tile_regs_commit();
             tile_regs_wait();
