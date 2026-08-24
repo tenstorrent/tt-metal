@@ -239,6 +239,59 @@ TEST_F(UnitMeshFixture, OOB_Tensor_InBounds_DRAM_NoViolation) {
     ::unsetenv("TT_METAL_EMULE_ASAN");
 }
 
+// Positive control for live-range lifetime identity. Same-address wrappers are
+// routine (Buffer::view subviews, the mesh workload's kernel-binary view buffers):
+// a temporary non-owning buffer created at a live owner's address — usually with a
+// SMALLER size — registers a second range with the same start. Its destruction must
+// remove ITS range, not the owner's: a start-keyed removal would erase the owner's
+// full extent, leave the temporary's short one behind, and every later valid access
+// past the temporary's end would abort as a false-positive OOB.
+TEST_F(UnitMeshFixture, OOB_Tensor_SameAddressTempBuffer_NoViolation) {
+    ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
+
+    CoreCoord logical_core = {0, 0};
+    Program program = CreateProgram();
+
+    constexpr uint32_t buffer_size = 1024;
+    auto owner = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = buffer_size},
+        {.page_size = buffer_size, .buffer_type = BufferType::DRAM},
+        &this->device());
+    {
+        // Temporary explicit-address wrapper at the owner's address, quarter size
+        // (the mesh_workload kernel-bin view shape). Dies before the launch. Created
+        // on the PHYSICAL device: that id's registry is the one the launch snapshot
+        // consumes, where the owner's per-device buffer is registered.
+        constexpr uint32_t temp_size = buffer_size / 4;
+        auto temp =
+            Buffer::create(this->device().get_devices()[0], owner->address(), temp_size, temp_size, BufferType::DRAM);
+    }
+    // Access the owner PAST the temporary's extent — valid, must stay registered.
+    uint32_t in_addr = static_cast<uint32_t>(owner->address()) + buffer_size / 2;
+
+    std::string kernel_src = R"(
+        #include "api/dataflow/dataflow_api.h"
+        extern "C" uint8_t* __emule_dram_ptr(uint64_t offset);
+        void kernel_main() {
+            uint32_t addr = get_arg_val<uint32_t>(0);
+            volatile uint32_t* ptr = (volatile uint32_t*)__emule_dram_ptr(addr);
+            *ptr = 0x9abc;
+        }
+    )";
+    auto kernel = CreateKernelFromString(
+        program,
+        kernel_src,
+        logical_core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    SetRuntimeArgs(program, kernel, logical_core, {in_addr});
+
+    // Must NOT abort — the owner's full range is still live.
+    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    SUCCEED();
+
+    ::unsetenv("TT_METAL_EMULE_ASAN");
+}
+
 // Positive control for the host-poke fallback. Raw L1 that the host designated
 // via WriteToDeviceL1 (no Buffer allocated) is valid data outside the tensor
 // allocator; a kernel access into that exact [addr, addr+size) region must NOT
