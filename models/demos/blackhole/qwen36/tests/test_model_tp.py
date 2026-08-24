@@ -27,7 +27,12 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.blackhole.qwen36.tests.test_factory import get_pcc_threshold, parametrize_batch, parametrize_mesh_tp
+from models.demos.blackhole.qwen36.tests.test_factory import (
+    get_pcc_threshold,
+    parametrize_batch,
+    parametrize_mesh_tp,
+    validated_on_wormhole,
+)
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
 
@@ -521,13 +526,24 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
     pos = list(prompt_lens)
     # TEACHER-FORCED from the oracle's chain (oracle_fed above), matching what
     # test_model_tp_decode_batched and test_model_tp_prefill_paged_slots already do.
+    # SCOPED to Wormhole (test_factory.validated_on_wormhole) -- every WH mesh and both models.
+    # Teacher forcing CHANGES WHAT THIS TEST MEASURES, but self-feeding is not a usable baseline:
+    # on random-token prompts one flipped argmax makes step s+1 compare two different continuations
+    # (~0.52-0.65 at decode1 against a 0.97 gate), so the fix is needed wherever that was seen.
+    # Blackhole keeps the previously shipped self-fed chain -- it takes different fused paths and
+    # the artifact was not reproduced there.
+    _tf = validated_on_wormhole()
+    _fed = None if _tf else [int(torch.argmax(batched_pf[u])) for u in range(B)]
     for s in range(N_DEC):
-        tokens_step = torch.tensor([[oracle_fed[u][s]] for u in range(B)], dtype=torch.int32)
+        _toks = [oracle_fed[u][s] for u in range(B)] if _tf else _fed
+        tokens_step = torch.tensor([[t] for t in _toks], dtype=torch.int32)
         dev = bmodel.prepare_inputs_decode(tokens_step, torch.tensor(pos, dtype=torch.int32), bpt)
         out, _ = bmodel.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
         ls = bmodel.process_output_decode(out, B)
         for u in range(B):
             batched_dec[u].append(ls[u, 0, :vocab].float())
+            if not _tf:
+                _fed[u] = int(torch.argmax(ls[u, 0, :vocab]))
         pos = [p + 1 for p in pos]
     bmodel.free_kv_caches()
     del bmodel
@@ -820,8 +836,17 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
     # tokens keeps "batch scratch-swap + state assembly + batched-decode routing" the only delta,
     # which is what this test claims to isolate.
     tok_divergence = []  # (user, step, oracle_tok, batched_tok) — reported, not fatal
+    # SCOPED to Wormhole (test_factory.validated_on_wormhole) -- every WH mesh and both models.
+    # Teacher forcing CHANGES WHAT THIS TEST MEASURES, but self-feeding is not a usable baseline:
+    # on random-token prompts one flipped argmax makes step s+1 compare two different continuations
+    # (~0.52-0.65 at decode1 against a 0.97 gate), so the fix is needed wherever that was seen.
+    # Blackhole keeps the previously shipped self-fed chain -- it takes different fused paths and
+    # the artifact was not reproduced there.
+    _tf = validated_on_wormhole()
+    _fed = None if _tf else [int(torch.argmax(batched_pf[u])) for u in range(B)]
     for s in range(N_DEC):
-        tokens_step = torch.tensor([[oracle_fed[u][s]] for u in range(B)], dtype=torch.int32)
+        _toks = [oracle_fed[u][s] for u in range(B)] if _tf else _fed
+        tokens_step = torch.tensor([[t] for t in _toks], dtype=torch.int32)
         pos_t = torch.tensor(pos, dtype=torch.int32)
         dev = bmodel.prepare_inputs_decode(tokens_step, pos_t, bpt)
         out, _ = bmodel.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
@@ -831,6 +856,8 @@ def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, e
             own = int(torch.argmax(ls[u, 0, :vocab]))
             if own != oracle_fed[u][s + 1]:
                 tok_divergence.append((u, s, oracle_fed[u][s + 1], own))
+            if not _tf:
+                _fed[u] = own
         pos = [p + 1 for p in pos]
     if tok_divergence:
         logger.info(
