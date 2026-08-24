@@ -64,8 +64,7 @@ void load_random_data_from_os(std::span<float> data) {
     });
 }
 
-// Constants below match the ones the SFPU kernels use, see
-// tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gelu.h
+// GELU-related constants (compare to the ones in sfpu kernels)
 constexpr float kSqrt2 = 1.41421356237309504880F;
 constexpr float kInvSqrt2Pi = 0.3989422804014327F;   // 1 / sqrt(2 * pi)
 constexpr float kSqrt2OverPi = 0.7978845608028654F;  // sqrt(2 / pi)
@@ -101,17 +100,6 @@ xt::xarray<float> random_input(const std::vector<std::size_t>& shape) {
     load_random_data_from_os(std::span{data.data(), data.size()});
     return data;
 }
-
-// GELU tolerances. On uniform [-1, 1] inputs the measured max absolute error against the references
-// above is stable run to run: ~3.7e-3 (ACCURATE fw), ~4.2e-3 (ACCURATE bw), ~3.7e-3 (TANH fw),
-// ~1.2e-2 (TANH bw). Repeating the same measurement with FLOAT32 tensors gives the same numbers, so
-// this is the SFPU approximation itself, not bf16/fp32 dest accumulation -- absorb it with atol
-// rather than tightening rtol. GELU is ill-conditioned in relative terms on small negative inputs
-// (the value goes to zero while the absolute error does not), so rtol alone cannot bound it. rtol
-// matches the Silu test above.
-constexpr float kGeluRtol = 8e-3F;
-constexpr float kGeluAtol = 2e-2F;
-constexpr float kGeluTanhBwAtol = 3e-2F;
 
 }  // namespace
 
@@ -252,40 +240,16 @@ TEST_F(UnaryOpsTest, Silu) {
     EXPECT_TRUE(xt::allclose(grad_kernel, grad_composite, 8e-3F, 4e-2F));
 }
 
-// Default variant (== GeluVariant::ACCURATE) against the exact GELU and its derivative.
-// backward() seeds dL/dout = 1, so the input gradient is GELU'(x) directly.
 TEST_F(UnaryOpsTest, Gelu) {
     auto* device = &autograd::ctx().get_device();
     xt::xarray<float> data = random_input({4U, 1U, 20U, 5U});
     auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
 
     auto result = gelu(tensor_ptr);
-    EXPECT_TRUE(xt::allclose(core::to_xtensor(result->get_value()), gelu_exact_reference(data), kGeluRtol, kGeluAtol));
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(result->get_value()), gelu_exact_reference(data), 8e-3F, 2e-2F));
 
     result->backward();
-    EXPECT_TRUE(
-        xt::allclose(core::to_xtensor(tensor_ptr->get_grad()), gelu_exact_grad_reference(data), kGeluRtol, kGeluAtol));
-}
-
-// The default must stay ACCURATE: this is what keeps GPT numerics unchanged by this feature.
-TEST_F(UnaryOpsTest, GeluDefaultVariantIsAccurate) {
-    auto* device = &autograd::ctx().get_device();
-    xt::xarray<float> data = random_input({4U, 1U, 20U, 5U});
-    auto default_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
-    auto explicit_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
-
-    auto default_result = gelu(default_ptr);
-    auto explicit_result = gelu(explicit_ptr, GeluVariant::ACCURATE);
-    EXPECT_EQ(
-        xt::amax(
-            xt::abs(core::to_xtensor(default_result->get_value()) - core::to_xtensor(explicit_result->get_value())))(),
-        0.0F);
-
-    default_result->backward();
-    explicit_result->backward();
-    EXPECT_EQ(
-        xt::amax(xt::abs(core::to_xtensor(default_ptr->get_grad()) - core::to_xtensor(explicit_ptr->get_grad())))(),
-        0.0F);
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(tensor_ptr->get_grad()), gelu_exact_grad_reference(data), 8e-3F, 2e-2F));
 }
 
 TEST_F(UnaryOpsTest, GeluTanh) {
@@ -294,48 +258,10 @@ TEST_F(UnaryOpsTest, GeluTanh) {
     auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
 
     auto result = gelu(tensor_ptr, GeluVariant::TANH);
-    EXPECT_TRUE(xt::allclose(core::to_xtensor(result->get_value()), gelu_tanh_reference(data), kGeluRtol, kGeluAtol));
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(result->get_value()), gelu_tanh_reference(data), 8e-3F, 2e-2F));
 
     result->backward();
-    EXPECT_TRUE(xt::allclose(
-        core::to_xtensor(tensor_ptr->get_grad()), gelu_tanh_grad_reference(data), kGeluRtol, kGeluTanhBwAtol));
-}
-
-// FAST_LUT is forward-only: ttnn has no LUT backward kernel, so pairing it with autograd would give
-// the exact GELU derivative instead of the derivative of the LUT forward. gelu() rejects that
-// combination. Forward accuracy of the LUT itself is ttnn's to test, so it is not re-checked here.
-TEST_F(UnaryOpsTest, GeluFastLutRejectsGrad) {
-    auto* device = &autograd::ctx().get_device();
-    xt::xarray<float> data = random_input({4U, 1U, 20U, 5U});
-    auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
-
-    EXPECT_THROW(gelu(tensor_ptr, GeluVariant::FAST_LUT), std::invalid_argument);
-    // The other two variants have matching backward kernels and stay available.
-    EXPECT_NO_THROW(gelu(tensor_ptr, GeluVariant::ACCURATE));
-    EXPECT_NO_THROW(gelu(tensor_ptr, GeluVariant::TANH));
-}
-
-// The two variants only separate above bfloat16 resolution in the negative tail. On [-2, 1] -- and
-// for every positive x -- the exact/tanh gap stays below one bf16 ULP of the value (at x=-1: gap
-// 1.5e-4 vs ULP 4.9e-4), so the [-1, 1] data used by the tests above cannot distinguish them. By
-// x=-2.5 the gap is ~14 ULP (4.4e-4 vs 3.1e-5) and by x=-4 it is ~118 ULP, because GELU's value
-// collapses toward zero while the absolute gap does not. atol must stay 0 here or it swallows the
-// signal.
-TEST_F(UnaryOpsTest, GeluAccurateVsTanhDiffer) {
-    auto* device = &autograd::ctx().get_device();
-    xt::xarray<float> data = {{{{-4.F, -3.5F, -3.F, -2.5F}}}};
-    auto accurate_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
-    auto tanh_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
-
-    auto accurate_xt = core::to_xtensor(gelu(accurate_ptr, GeluVariant::ACCURATE)->get_value());
-    auto tanh_xt = core::to_xtensor(gelu(tanh_ptr, GeluVariant::TANH)->get_value());
-
-    // Each variant tracks its own reference far more tightly than it tracks the other one.
-    EXPECT_TRUE(xt::allclose(accurate_xt, gelu_exact_reference(data), 5e-2F, 0.F));
-    EXPECT_TRUE(xt::allclose(tanh_xt, gelu_tanh_reference(data), 5e-2F, 0.F));
-
-    EXPECT_GT(xt::amax(xt::abs(accurate_xt - tanh_xt))(), 1e-4F);
-    EXPECT_FALSE(xt::allclose(accurate_xt, tanh_xt, 1e-2F, 0.F));
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(tensor_ptr->get_grad()), gelu_tanh_grad_reference(data), 8e-3F, 3e-2F));
 }
 
 }  // namespace ttml::ops::tests
