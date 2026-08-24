@@ -512,7 +512,6 @@ def test_ttnn_combine(
     num_routed_experts,
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
-    topology,
     use_predictable_data,
     run_pcc_check,
     dispatched_buffer_layout,
