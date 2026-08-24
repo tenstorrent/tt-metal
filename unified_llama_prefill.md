@@ -3127,6 +3127,65 @@ are not near DRAM peak, so halving the bytes would not simply halve the time -- 
 one difference against ttnn that is arithmetic rather than a matter of tuning, and it is
 worth roughly the whole remaining gap if the kernels are anywhere near bandwidth-bound.
 
+### bfloat8_b weights: the layer's matmuls go 2522.2 -> 1929.1us
+
+ttnn's 1820us layer is bfloat8_b and everything here was bf16, so ttnn moved half the weight
+bytes we did. That difference is arithmetic rather than tuning, which made it the obvious next
+thing.
+
+**It needed no kernel change at all**, which is the part worth recording. B's circular buffer
+is declared bfloat8_b on the host; `matmul_block_init` reconfigures the unpacker from the CB,
+and `pages.page_bytes` comes from the CB too, so the gather loop reads 1088-byte pages without
+naming a format anywhere. The one host-side fix was `DTYPE_TILE_BYTES`, which had no entry for
+a block format -- bfloat8_b is 1088 bytes a tile, 1024 of mantissa plus a 64-byte exponent
+section, not the 1024 an element count would suggest. The mixed-format machinery that existed
+for the SFPU (test_unified_mixed_format.py, where a leaf's `reconfigure` flag is what makes a
+two-format tree correct) turns out to cover the FPU path as well.
+
+Accuracy barely moves: pcc 0.999967 -> 0.999957 on the small shapes, and on the real ones
+0.999929 for the projection, 0.999995 for gate/up, 0.999917 for FFN down.
+
+| [512, ...] on the 8x8 grid, A always bf16 | ours bf16 | ours bf8 | ttnn bf8 | ours/ttnn |
+|---|---|---|---|---|
+| projection @[2048,2048] | 153.2 | **113.5** | 88.6 | 1.28x |
+| K/V projection @[2048,512] | 52.4 | **50.1** | 42.8 | 1.17x |
+| FFN gate/up @[2048,8192] | 602.5 | **422.4** | 563.3 | **0.75x** |
+| FFN down @[8192,2048] | 473.4 | **299.0** | 256.2 | 1.17x |
+
+The best kt and depth are unchanged from bf16 in every case, which is worth knowing: halving
+B's bytes does not shift the blocking choice, it just moves fewer of them.
+
+**The gate/up row is not a fluke of ttnn's heuristic, and it is not flattering to us either.**
+ttnn's gate/up is identical at bf16 and bf8 weights -- 560.7 against 563.3 -- which says
+weights are not what binds it. What binds it is the OUTPUT: the shape writes 8MB where FFN
+down, with exactly the same 262144 tile-MACs, writes 2MB, and giving ttnn a bfloat8_b output
+takes it to 439.6us. So the comparison stands three ways: against ttnn writing the same 8MB
+bf16 output we do we are 1.33x faster, and against ttnn writing HALF our output bytes we are
+still slightly ahead at 422.4 to 439.6. Wide-N is a shape where the gather-store -- every page
+issued, then one barrier -- is doing better than what ttnn's writer does.
+
+The whole layer's measured part:
+
+| stage | bf16 | bf8 weights |
+|---|---|---|
+| FFN gate + up x2 | 1179.8 | 844.3 |
+| FFN down | 470.1 | 299.9 |
+| flash attention, 32 heads | 336.1 | 336.6 |
+| Q + output projections | 309.4 | 227.2 |
+| K and V projections x2 | 104.8 | 100.1 |
+| rmsnorm x2 | 122.0 | 121.1 |
+| **subtotal** | **2522.2** | **1929.1** |
+
+Attention and rmsnorm do not move, as they should not -- neither reads a weight matrix of any
+size. The three stages ttnn's 1820us includes and this does not (RoPE, two residuals, silu*up)
+are still unmeasured at this shape.
+
+**And the next lever is now visible in ttnn's own numbers**: a bfloat8_b OUTPUT was worth
+123.7us to ttnn on gate/up alone. Our outputs are all bf16. That is an activation-format
+change rather than a weight-format one, so it changes what the next stage consumes and cannot
+be done one matmul at a time -- but the FFN's intermediate is exactly the kind of value that
+does not need bf16, and it is 8MB written and 8MB read back.
+
 ## Phase 11 -- Full block orchestration
 
 Host-side and kernel-loop work, not model gaps.
