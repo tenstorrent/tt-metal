@@ -14,7 +14,6 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
-#include "api/debug/dprint.h"  // [MP-DFB PROBE #48552] temporary; remove after diagnosis
 
 //   0 = production path: narrow pack_untilize straight into the real output CB (out_cb), then DPRINT it.
 //   1 = experiment:      full-tile (32x32) pack of the reduced DEST into the scratch CB, then DPRINT it
@@ -159,24 +158,8 @@ void kernel_main() {
 #else
     constexpr uint32_t pack_target_cb_id = tilize_untilize_cb;
 #endif
-    // [MP-DFB PROBE #48552] MATH-thread prints (MATH's DPRINT buffer flushes reliably; UNPACK's lags and the
-    // assert is on UNPACK -- which is why DPRINT_UNPACK produced no output last time). Geometry is constexpr
-    // prelude data, valid on any thread: scaler nfaces_r==nfaces_c==1 => BD z_dim=1 (fix reached the prelude);
-    // ==2,2 => z_dim=4 (fix NOT in the emulator's build). Markers bracket the pre-loop hw_startup + reduce
-    // init so we can tell whether the assert is here or later in the loop. Remove after diagnosis.
-    DPRINT_MATH(
-        "[MP-DFB] scalar face_r={} nfaces_r={} nfaces_c={} | input face_r={} nfaces_r={} nfaces_c={}\n",
-        in_scalar_cb_0.get_face_r_dim(),
-        in_scalar_cb_0.get_num_faces_r_dim(),
-        in_scalar_cb_0.get_num_faces_c_dim(),
-        in_cb_0.get_face_r_dim(),
-        in_cb_0.get_num_faces_r_dim(),
-        in_cb_0.get_num_faces_c_dim());
-    DPRINT_MATH("[MP-DFB] pre-hw_startup\n");
     compute_kernel_hw_startup(in_cb_id_0, in_scalar_cb_id_0, pack_target_cb_id);
-    DPRINT_MATH("[MP-DFB] pre-reduce-init\n");
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter);
-    DPRINT_MATH("[MP-DFB] post-reduce-init\n");
 
     pack_untilize_dest_init<max_tiles_per_iter>(pack_target_cb_id);
 
@@ -215,12 +198,6 @@ void kernel_main() {
         DataflowBuffer curr_scalar_cb = in_scalar_cb_0;
         DataflowBuffer curr_in_cb = in_cb_0;
 #endif
-        // [MP-DFB PROBE #48552] MATH-thread marker: reaching this means the pre-loop init passed and we are
-        // in the per-stick loop. If [MP-DFB] geometry/markers print but this does NOT, the assert is in the
-        // pre-loop hw_startup/reduce-init; if this prints too, the fault is deeper in the loop. Remove after.
-        if (n == 0) {
-            DPRINT_MATH("[MP-DFB] loop-entered n=0\n");
-        }
         if constexpr (!one_scalar_per_core) {
             curr_scalar_cb.wait_front(1);
         }
@@ -261,24 +238,10 @@ void kernel_main() {
                     curr_scalar_cb_id,
                     tiles_to_reduce,
                     0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/);
-                // [MP-DFB PROBE #48552] reduce_tile_math is a MATH op, so these markers reflect the MATH
-                // thread's real progress. pre- but not post-reduce-math => MATH stalls inside the reduce
-                // waiting on srcB (the scaler) dvalid -> confirms the scaler needs a full 16-row face (the old
-                // workaround's y=16 BD), i.e. num_faces=1's 1-row scaler is insufficient. post-reduce-math but
-                // not post-pop => stall at pop_front. post-pop => first chunk completed; hang is later.
-                if (n == 0 && c_i == 0 && chunk == 0) {
-                    DPRINT_MATH("[MP-DFB] pre-reduce-math\n");
-                }
                 for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                     reduce_tile_math<REDUCE_OP, REDUCE_DIM>(math_tile_idx, num_faces_in_input_tile);
                 }
-                if (n == 0 && c_i == 0 && chunk == 0) {
-                    DPRINT_MATH("[MP-DFB] post-reduce-math\n");
-                }
                 curr_in_cb.pop_front(1);
-                if (n == 0 && c_i == 0 && chunk == 0) {
-                    DPRINT_MATH("[MP-DFB] post-pop\n");
-                }
             }
             tile_regs_commit();
             tile_regs_wait();
