@@ -24,6 +24,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
+from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
@@ -566,6 +567,7 @@ class Gemma4Model:
                     mesh_device=mesh_device,
                     tt_ccl=sampling_tt_ccl,
                 )
+                _apply_gemma4_single_untilize_override(self.sampling.tt_sampling)
                 topo = getattr(self.sampling.tt_sampling, "ag_topology", None)
                 topo_name = "Ring" if topo == ttnn.Topology.Ring else "Linear"
                 logger.info(
@@ -2161,3 +2163,50 @@ class Gemma4Model:
         else:
             torch_out = ttnn.to_torch(tt_out)
         return torch_out[:, :, :B, : self.vocab_size].view(B, S, -1)
+
+
+def _apply_gemma4_single_untilize_override(tt_sampling) -> None:
+    """Keep Gemma4's wide-vocab argmax on the single-untilize path (Blackhole).
+
+    Upstream ``TTSampling`` (#53167) untilizes wide logit rows in
+    ``TOPK_MAX_WIDTH`` (64Ki) chunks and rebuilds the row with
+    ``ttnn.concat(..., dim=3)``. The chunking avoids a wide-row untilize clash,
+    but the concat re-materializes the same full-width row, and for Gemma4's
+    262144 vocab that needs a ~4MB circular-buffer page against Blackhole's
+    ~1.43MB per-core L1::
+
+        TT_FATAL: ttnn.concat: required CB page size (4194304 B)
+                  exceeds per-core L1 capacity (1461376 B)
+
+    That aborts on-device sampling at init, forcing the host path (a full
+    262144-vocab logits readback every decode step) and costing ~36% decode
+    throughput (12B/P150x8 batch-32: 32.5 -> 19.2 tok/s/user).
+
+    ``_untilize_chunk_count`` is a ``@staticmethod`` invoked as
+    ``self._untilize_chunk_count(...)``, so an instance attribute shadows it.
+    Scoping the override to Gemma4's own ``TTSampling`` instance leaves the
+    shared ``models/common/sampling/tt_sampling.py`` untouched for every other
+    model.
+
+    Blackhole only: the single-untilize path is measured good there (12B
+    P150x8, batch-1 and batch-32, coherent output). Wormhole keeps upstream
+    behaviour because it has not been validated on real WH silicon here, and
+    the chunking exists to fix a wide-row clash that may still apply. Override
+    with ``GEMMA4_SAMPLING_SINGLE_UNTILIZE`` (1 = force on, 0 = force off).
+    """
+    env = os.environ.get("GEMMA4_SAMPLING_SINGLE_UNTILIZE")
+    if env is not None:
+        enable = env.lower() in ("1", "true", "yes")
+    else:
+        enable = is_blackhole()
+    if not enable or tt_sampling is None:
+        return
+    if not hasattr(type(tt_sampling), "_untilize_chunk_count"):
+        # Upstream dropped/renamed the hook - leave stock behaviour alone.
+        return
+    # Plain function, not staticmethod(): instance attributes bypass the
+    # descriptor protocol, so this is called unbound as f(width). Wrapping in
+    # staticmethod() only works on py>=3.10 where those objects became directly
+    # callable; this form has no version dependency.
+    tt_sampling._untilize_chunk_count = lambda width: 1
+    logger.info("Gemma4 sampling: single-untilize argmax path (avoids wide-row ttnn.concat L1 overflow)")
