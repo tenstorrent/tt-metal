@@ -38,6 +38,7 @@ public:
     explicit constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes) noexcept :
         crta_offset_(crta_offset), size_in_bytes_(size_in_bytes) {}
 
+    static constexpr NullState null_state = NonNull;
     static constexpr bool is_null = false;
     constexpr operator bool() const noexcept { return true; }
 
@@ -54,6 +55,7 @@ class ScratchpadBindingToken<Null> {
 public:
     constexpr ScratchpadBindingToken() noexcept = default;
 
+    static constexpr NullState null_state = Null;
     static constexpr bool is_null = true;
     constexpr operator bool() const noexcept { return false; }
 };

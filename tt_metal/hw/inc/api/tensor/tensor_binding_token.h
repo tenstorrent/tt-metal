@@ -54,6 +54,7 @@ struct TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET, NonNull> {
     static constexpr args_t args{};
     static constexpr uint32_t addr_crta_offset = ADDR_CRTA_OFFSET;  // in bytes
 
+    static constexpr NullState null_state = NonNull;
     static constexpr bool is_null = false;
     constexpr operator bool() const noexcept { return true; }
 };
@@ -61,6 +62,7 @@ struct TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET, NonNull> {
 // Null: symbol exists for optional bindings; no CTA/CRTA payload (do not instantiate TensorAccessorArgs).
 template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
 struct TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET, Null> {
+    static constexpr NullState null_state = Null;
     static constexpr bool is_null = true;
     constexpr operator bool() const noexcept { return false; }
 };
