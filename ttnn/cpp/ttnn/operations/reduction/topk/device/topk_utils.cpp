@@ -148,13 +148,16 @@ std::optional<TopKCoreConfig> find_topk_core_config(
                 }
             }
         }
-        // Comprehensive validation: check all requirements for a valid configuration
+        // Comprehensive validation: check all requirements for a valid configuration,
+        // and only materialize a config if it also beats the best modeled makespan so far.
+        const uint32_t score = kLocalCostFactor * Wt_local + kFinalCostFactor * Wt_final;
         if (num_cores <= max_cores &&      // Core count feasible
             per_core_cost < l1_size &&     // Memory fits
             num_cores > 1 &&               // Multi-core beneficial
             split_size >= min_dim &&       // Hardware minimum met
             contiguous_cores_available &&  // Can arrange cores
-            rem == 0) {                    // Perfect division (no remainder)
+            rem == 0 &&                    // Perfect division (no remainder)
+            score < best_score) {          // Beats the current best makespan
 
             // Create configuration with all the calculated parameters
             TopKCoreConfig config{};
@@ -170,11 +173,8 @@ std::optional<TopKCoreConfig> find_topk_core_config(
             config.selected_x = static_cast<uint16_t>(selected_x);
             config.selected_y = static_cast<uint16_t>(selected_y);
 
-            const uint32_t score = kLocalCostFactor * Wt_local + kFinalCostFactor * Wt_final;
-            if (score < best_score) {
-                best_score = score;
-                best_config = config;
-            }
+            best_score = score;
+            best_config = config;
         }
     }
     return best_config;
