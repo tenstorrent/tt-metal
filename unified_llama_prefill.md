@@ -2740,11 +2740,50 @@ series. Deeper CBs let the RESERVE happen early, which is why depth=2 bought 12%
 read is issued inside the call that then blocks on the handshake, so nothing overlaps the
 part that matters.
 
-Fixing it means splitting the multicast load into two phases -- start the read, and later
-finish-and-broadcast -- so a sender can have the next block's DRAM read in flight while it is
-still broadcasting the current one. That is a real change to the primitive rather than a
-parameter, and it is the first time this gap has had a named mechanism instead of a
-bandwidth ratio.
+I proposed splitting the multicast load into two phases -- start the read, then
+finish-and-broadcast -- so a sender could have the next block's DRAM read in flight during
+the current broadcast. **That diagnosis does not survive contact with ttnn's source, and the
+correction is the useful part.**
+
+### What ttnn's matmul actually does, and where the difference really is
+
+Checked against `reader_bmm_tile_layout_in0_sender_padding.cpp` rather than inferred:
+
+- **The loop nesting is the same.** K is the INNERMOST loop
+  (`for block < num_blocks_inner_dim` inside the h- and w-block loops), not hoisted outside
+  to reuse operands across an outer product. Ours is the same.
+- **The per-k-step sequence is the same.** `reserve_back`, read the tiles,
+  `noc.async_read_barrier()`, wait for the receivers' semaphore, `async_write_multicast`,
+  multicast the flag, `push_back`. Line for line, that is our multicast load.
+
+So ttnn serialises the read against the broadcast exactly as we do, and "split it into two
+phases" cannot be what makes it 2.6x faster -- both would have the same defect.
+
+**The difference is the flushes.** After the payload multicast ttnn does NOTHING on Wormhole:
+
+    // Note: no need for write barrier, since these two multicasts are done on the same noc
+    // id, same vc, same cmd_buf ... using NOC_CMD_STATIC_VC
+
+Only Blackhole gets a flush there. We do TWO `noc_async_writes_flushed()` per broadcast, and
+there are two broadcasts per k-block, so 32 NOC round trips per core over an eight-block
+k-loop.
+
+**They are not removable as they stand**: an ablation with both taken out DEADLOCKED the
+device, which is the proof they are load-bearing rather than defensive. The reason is not
+ordering -- ttnn is right that same-NOC, same-VC writes cannot reorder -- it is our
+`data_sent.set(0)` immediately after. `set_mcast` sources its value from local L1, so the
+reset can overwrite the flag word before the multicast has read it, and the receivers then
+wait on a 1 that never arrives.
+
+**So the fix is the protocol, not the primitive.** A flag the sender never rewrites in the
+same breath -- an incrementing counter the receiver compares against a block number, rather
+than a 1 that must be set back to 0 -- needs no reset and therefore no flush to protect the
+reset. That is how ttnn avoids paying anything here. It is a change to how the handshake is
+spelled, and it is worth roughly what the flushes cost.
+
+Recorded because the sequence matters: the bandwidth ratio suggested a story, the ablation
+narrowed it to the per-k-block movement, and only READING THE OTHER IMPLEMENTATION showed
+that the mechanism I had named was shared by both and therefore explained nothing.
 
 **What is left is bandwidth per read, not traffic.** With multicast the traffic is A once plus
 B once, 5120 tiles or 10MB, and we move it in 353.2us -- 28.4GB/s. ttnn moves the same 10MB in
