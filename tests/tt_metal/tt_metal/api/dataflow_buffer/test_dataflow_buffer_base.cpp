@@ -175,7 +175,7 @@ DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk4, DM, DM, 1, 1, 4, 16, false)
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk2, DM, DM, 1, 1, 2, 16, false)
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk8, DM, DM, 1, 1, 8, 16, false)
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk4_ring32, DM, DM, 1, 1, 4, 32, false)
-// Symmetric NxN: thread t owns sub-ring t and pairs 1:1 with consumer t, so still identity.
+// Symmetric NxN: producer t and consumer t share the same block residue class, one pair each.
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB2Bx2B_blk4, DM, DM, 2, 2, 4, 16, false)
 
 // 3Bx3B sits at the 6 DM-core Gen2 cap.
@@ -184,8 +184,7 @@ DFB_BLOCKED_TEST_2_0(DMTest1xDFB3Bx3B_blk4, DM, DM, 3, 3, 4, 24, false)
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk3, DM, DM, 1, 1, 3, 12, false)
 
 // --- ASYMMETRIC BLOCKED→BLOCKED (DM→DM, explicit) ---
-// Integer thread-count ratios only; the tile-counter round-robin keeps each block in one sub-ring.
-// Still identity: the producer's block read composes with the consumer's block write. P+C <= 6.
+// Integer thread-count ratios only; each block lives on one tile counter. Still identity. P+C <= 6.
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx2B_blk4, DM, DM, 1, 2, 4, 16, false)
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB2Bx1B_blk4, DM, DM, 2, 1, 4, 16, false)
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx4B_blk4, DM, DM, 1, 4, 4, 16, false)
@@ -203,8 +202,8 @@ DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk2_impl, DM, DM, 1, 1, 2, 16, true)
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk8_impl, DM, DM, 1, 1, 8, 16, true)
 
 // --- ASYMMETRIC BLOCKED→BLOCKED (DM→DM, implicit sync) ---
-// commit_implicit_read/write advance the tile counter only on a block boundary, so a block stays in one
-// sub-ring and implicit matches the explicit golden.
+// commit_implicit_read/write advance the tile counter only on a block boundary, so a block stays on
+// one counter and implicit matches the explicit golden.
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx2B_blk4_impl, DM, DM, 1, 2, 4, 16, true)
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB2Bx1B_blk4_impl, DM, DM, 2, 1, 4, 16, true)
 
@@ -229,7 +228,7 @@ TEST_F(UnitMeshFixture, DMTest1xDFB1Bx1B_blk4_entry2048_2_0) {
     run_single_dfb_program_2_0(this->device(), params);
 }
 
-// Same at 2Bx2B, across two sub-rings.
+// Same at 2Bx2B, across two producers.
 TEST_F(UnitMeshFixture, DMTest1xDFB2Bx2B_blk4_entry2048_2_0) {
     M2SingleDFBParams params{
         .producer_type = M2PorCType::DM,
@@ -302,8 +301,8 @@ DFB_BLOCKED_TEST_2_0(DMTensixTest1xDFB4Bx4B_blk4, DM, TENSIX, 4, 4, 4, 32, false
 
 // --- BLOCKED→ALL (Trisc→DM, explicit) ---
 // A Tensix producer routes the ALL fan-out through the remapper, not the broadcast credit mode.
-// Golden: output[r] = input[(r%P)*capacity + (r/P)], capacity = num_entries/P (identity at P==1).
-// Odd P+C is deliberate: the config blob is 36 + 62*(P+C) bytes, so it lands non-word-aligned --
+// Identity for every P under global block order.
+// Odd P+C is deliberate: the config blob size scales per endpoint, so odd counts land non-word-aligned --
 // regression coverage for the write_to_device truncation that dropped the remapper bytes.
 #define DFB_TRISC_BLOCKED_ALL_TEST_2_0(suffix, num_p, num_c, blk, entries) \
     TEST_F(UnitMeshFixture, suffix##_2_0) {                              \
@@ -331,8 +330,7 @@ DFB_TRISC_BLOCKED_ALL_TEST_2_0(TensixDMTest1xDFB4Bx2A_blk4, 4, 2, 4, 32)  // P+C
 
 // --- BLOCKED→ALL (DM→DM, explicit) ---
 // Every ALL consumer reads every entry, freed after all acks via broadcast credits (DM→DM never uses the
-// remapper). Identity at P==1; at P>1 the producer's per-block interleave doesn't cancel the consumer's
-// per-tile round-robin, so it's a permutation. C <= 4 (ALL slot cap), P+C <= 6 (Gen2 DM cap).
+// remapper). Identity for every P under global block order. C <= 4 (ALL slot cap), P+C <= 6 (Gen2 DM cap).
 #define DFB_BLOCKED_ALL_TEST_2_0(suffix, num_p, num_c, blk, entries) \
     TEST_F(UnitMeshFixture, suffix##_2_0) {                        \
         M2SingleDFBParams params{                                    \
@@ -349,15 +347,15 @@ DFB_TRISC_BLOCKED_ALL_TEST_2_0(TensixDMTest1xDFB4Bx2A_blk4, 4, 2, 4, 32)  // P+C
         run_single_dfb_program_2_0(this->device(), params);    \
     }
 
-// P==1: one sub-ring written in order, so identity regardless of C.
+// P==1 shapes.
 DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB1Bx1A_blk4, 1, 1, 4, 16)
 DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB1Bx2A_blk4, 1, 2, 4, 16)
 DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB1Bx2A_blk2, 1, 2, 2, 16)
 DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB1Bx4A_blk4, 1, 4, 4, 16)
-// P==2: 2 blocks of 4 per producer, so a permutation. 2Bx4A sits at the 6-core DM cap.
+// P==2: two blocks of 4 per producer. 2Bx4A sits at the 6-core DM cap.
 DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB2Bx2A_blk4, 2, 2, 4, 16)
 DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB2Bx4A_blk4, 2, 4, 4, 16)
-// Smaller block at P=2, and P=3 (the ALL producer ceiling). The golden keys only on P and block_size.
+// Smaller block at P=2, and P=3 (the ALL producer ceiling).
 DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB2Bx2A_blk2, 2, 2, 2, 16)
 DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB3Bx1A_blk4, 3, 1, 4, 24)
 DFB_BLOCKED_ALL_TEST_2_0(DMTest1xDFB3Bx3A_blk4, 3, 3, 4, 24)

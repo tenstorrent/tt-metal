@@ -687,7 +687,7 @@ TEST_F(UnitMeshFixture, A1Blocked_2_0_DMTensixDM_STRIDED_1B_blk4) {
 TEST_F(UnitMeshFixture, A1Blocked_2_0_DMTensixDM_ALL_1B_blk4) {
     run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::ALL, 1, 4, 16);
 }
-// Fan-in (P>1 into 1 Tensix consumer): BLOCKED identity, ALL permutation. Real multi-sub-ring reads.
+// Fan-in (P>1 into 1 Tensix consumer): identity for both patterns under global block order.
 TEST_F(UnitMeshFixture, A1Blocked_2_0_DMTensixDM_BLOCKED_2B_blk4) {
     run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::BLOCKED, 2, 4, 16);
 }
@@ -728,7 +728,7 @@ TEST_F(UnitMeshFixture, A1Fanout_2_0_DMTensixDM_BLOCKED_1Bx4_blk4) {
     run_a1_fanout_blocked_pipeline(this->device(), 4, 4, 16);
 }
 // Implicit DM producer with fan-out (C>P). The block-aware commit_implicit_read routes a whole block to
-// one sub-ring, so this matches the explicit per-block golden.
+// one consumer's counter, so this matches the explicit per-block golden.
 // RUN WITH TT_METAL_WATCHER=1 (multi-thread coherence).
 TEST_F(UnitMeshFixture, A1Fanout_2_0_DMTensixDM_BLOCKED_1Bx2_blk4_impl) {
     run_a1_fanout_blocked_pipeline(this->device(), 2, 4, 16, /*implicit=*/true);

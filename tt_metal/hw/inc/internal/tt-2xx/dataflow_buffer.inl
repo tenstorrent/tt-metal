@@ -592,6 +592,8 @@ inline uint32_t DataflowBuffer::prepare_implicit_read() {
     // A transaction fills `block_size` entries, so wait for room for all of them.
     // This is 1 by default in the non-blocked case.
     // Under SPLIT (run_length == 0) the block spans every TC, so wait for each TC's share on each TC.
+    // A broadcasting block producer posts the whole block to every TC, so wait for the full block
+    // on each (block_size == 1 broadcast keeps the single-TC wait: rotation covers the others).
     if (__builtin_expect(local_dfb_interface_.run_length == 0, 0)) {
         const uint32_t per_tc = local_dfb_interface_.block_size / local_dfb_interface_.num_tcs_to_rr;
         bool ready = false;
@@ -601,6 +603,19 @@ inline uint32_t DataflowBuffer::prepare_implicit_read() {
                 dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
                 if (overlay::fast_llk_intf_get_free_space(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) <
                     per_tc) {
+                    ready = false;
+                    break;
+                }
+            }
+        }
+    } else if (__builtin_expect(local_dfb_interface_.broadcast_tc && local_dfb_interface_.block_size > 1, 0)) {
+        bool ready = false;
+        while (!ready) {
+            ready = true;
+            for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
+                dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
+                if (overlay::fast_llk_intf_get_free_space(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) <
+                    local_dfb_interface_.block_size) {
                     ready = false;
                     break;
                 }
@@ -629,6 +644,13 @@ inline void DataflowBuffer::commit_implicit_read() {
             if (local_dfb_interface_.tc_slots[i].wr_ptr >= local_dfb_interface_.tc_slots[i].limit) {
                 local_dfb_interface_.tc_slots[i].wr_ptr = local_dfb_interface_.tc_slots[i].base_addr;
             }
+        }
+    } else if (__builtin_expect(local_dfb_interface_.broadcast_tc && block > 1, 0)) {
+        // BROADCAST block producer: one write position (slot 0), no rotation — the ISR posts the
+        // block's credits to every counter.
+        local_dfb_interface_.tc_slots[0].wr_ptr += local_dfb_interface_.stride_size * block;
+        if (local_dfb_interface_.tc_slots[0].wr_ptr >= local_dfb_interface_.tc_slots[0].limit) {
+            local_dfb_interface_.tc_slots[0].wr_ptr = local_dfb_interface_.tc_slots[0].base_addr;
         }
     } else {
         dfb_dm_advance_slot</*is_write=*/true>(local_dfb_interface_, block);

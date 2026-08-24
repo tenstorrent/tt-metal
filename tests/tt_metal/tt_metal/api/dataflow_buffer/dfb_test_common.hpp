@@ -607,17 +607,10 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             p.producer_type == M2PorCType::TENSIX && p.pap == m2::DFBAccessPattern::BLOCKED &&
             p.cap == m2::DFBAccessPattern::ALL) {
             // Trisc→DM BLOCKED→ALL routes the fan-out through the remapper (broadcast credits need a DM
-            // producer). Over a flat prefilled ring the ALL consumer reads round-robin across the P producer
-            // sub-rings, so output[r] = input[(r%P)*capacity + (r/P)], capacity = num_entries/P.
-            // Identity at P==1, and block-size-independent since a flat prefill carries no block order.
+            // producer). Identity for every P: the flat prefill is the global block order and the ALL
+            // consumer drains blocks in that order (a run of bs entries per counter, then the next block).
             const uint32_t wpe = p.entry_size / sizeof(uint32_t);
-            const uint32_t P = p.num_producers;
-            const uint32_t capacity = p.num_entries / P;
-            std::vector<uint32_t> expected(input.size(), 0u);
-            for (uint32_t r = 0; r < p.num_entries; ++r) {
-                const uint32_t src = (r % P) * capacity + (r / P);
-                std::copy(input.begin() + src * wpe, input.begin() + (src + 1) * wpe, expected.begin() + r * wpe);
-            }
+            std::vector<uint32_t> expected = input;
             if (expected != output) {
                 for (uint32_t t = 0; t < std::min<uint32_t>(entries_per_core, 16); ++t) {
                     int match = -1;
@@ -639,27 +632,11 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
         } else if (
             p.producer_type == M2PorCType::DM && p.consumer_type == M2PorCType::DM &&
             p.pap == m2::DFBAccessPattern::BLOCKED && p.cap == m2::DFBAccessPattern::ALL) {
-            // DM→DM BLOCKED→ALL. The producer block-bursts into its own sub-ring; the ALL consumer reads
-            // round-robin across the P sub-rings. At P>1 the producer's per-block interleave doesn't cancel
-            // that per-tile round-robin, so it's a permutation:
-            //   output[(b*bs + j)*P + p] = input[(b*P + p)*bs + j]      (identity at P==1)
-            const uint32_t wpe = p.entry_size / sizeof(uint32_t);
-            const uint32_t P = p.num_producers;
-            const uint32_t bs = p.block_size;
-            const uint32_t capacity = p.num_entries / P;
-            const uint32_t blocks_per_producer = capacity / bs;
-            std::vector<uint32_t> expected(input.size(), 0u);
-            for (uint32_t pp = 0; pp < P; ++pp) {
-                for (uint32_t b = 0; b < blocks_per_producer; ++b) {
-                    for (uint32_t j = 0; j < bs; ++j) {
-                        const uint32_t src = (b * P + pp) * bs + j;
-                        const uint32_t dst = (b * bs + j) * P + pp;
-                        std::copy(
-                            input.begin() + src * wpe, input.begin() + (src + 1) * wpe, expected.begin() + dst * wpe);
-                    }
-                }
-            }
-            EXPECT_EQ(expected, output) << "M2 DM→DM BLOCKED→ALL permutation mismatch";
+            // DM→DM BLOCKED→ALL is identity for every P: the producer bursts its DRAM blocks straight
+            // into its ring blocks (b ≡ p mod P, ascending), and the ALL consumer drains blocks in
+            // global order (a run of bs entries per counter, then the next block).
+            std::vector<uint32_t> expected = input;
+            EXPECT_EQ(expected, output) << "M2 DM→DM BLOCKED→ALL identity mismatch";
         } else if (
             p.producer_type == M2PorCType::DM && p.consumer_type == M2PorCType::DM &&
             p.pap == m2::DFBAccessPattern::BLOCKED && p.cap == m2::DFBAccessPattern::STRIDED) {
@@ -857,10 +834,9 @@ inline void run_a1_blocked_pipeline(
     detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), output);
 
     // DRAM_out[k] is the Tensix's k-th consumed tile from DFB_IN, since the back half is a FIFO
-    // pass-through. That is raw CONSUME order -- not the DM→DM identity, because this back half has no
-    // block-consumer reordering write.
+    // pass-through. Under global block order the consume order is the ring order, so BLOCKED and ALL
+    // round-trip as identity.
     const uint32_t wpe = entry_size / sizeof(uint32_t);
-    const uint32_t bs = block_size;
     const char* cap_name = "STRIDED";
     if (cap_in == m2::DFBAccessPattern::BLOCKED) {
         cap_name = "BLOCKED";
@@ -869,19 +845,9 @@ inline void run_a1_blocked_pipeline(
     }
     std::vector<uint32_t> expected(input.size(), 0u);
     if (cap_in == m2::DFBAccessPattern::ALL) {
-        // BLOCKED→ALL: the consumer writes in consume order, so this matches the DM→DM golden
-        // output[(b*bs+j)*P+p] = input[(b*P+p)*bs+j], capacity = num_entries/P. Identity at P==1.
-        const uint32_t capacity = num_entries / P;
-        const uint32_t blocks_per_producer = capacity / bs;
-        for (uint32_t pp = 0; pp < P; ++pp) {
-            for (uint32_t b = 0; b < blocks_per_producer; ++b) {
-                for (uint32_t j = 0; j < bs; ++j) {
-                    const uint32_t src = (b * P + pp) * bs + j;
-                    const uint32_t dst = (b * bs + j) * P + pp;
-                    std::copy(input.begin() + src * wpe, input.begin() + (src + 1) * wpe, expected.begin() + dst * wpe);
-                }
-            }
-        }
+        // BLOCKED→ALL is identity for every P: producers burst their DRAM blocks straight into
+        // their ring blocks (global block order) and the ALL consumer drains blocks in that order.
+        expected = input;
     } else if (cap_in == m2::DFBAccessPattern::BLOCKED) {
         // BLOCKED→BLOCKED is identity for every P: producer p bursts its DRAM blocks straight into
         // its ring blocks (b ≡ p mod P, ascending), and the consumer drains blocks in global order.

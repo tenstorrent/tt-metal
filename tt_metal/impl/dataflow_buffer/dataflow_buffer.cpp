@@ -438,11 +438,11 @@ bool has_tensix_risc(uint16_t risc_mask);
 
 // Global block order: block b sits at ring entries [b*bs, (b+1)*bs); producer p owns blocks
 // b % P == p, and the consumers own it by their own pattern (BLOCKED: consumer b % C; STRIDED:
-// consumer c owns the block's entries congruent to c mod C). Blocks round-robin across producers
-// (p0-p1-p0-p1) instead of each producer owning a contiguous sub-ring.
+// consumer c owns the block's entries congruent to c mod C; ALL: every consumer reads every
+// block). Blocks round-robin across producers (p0-p1-p0-p1) instead of each producer owning a
+// contiguous sub-ring.
 static bool dfb_uses_global_order(const DataflowBufferConfig& config) {
-    return config.pap == ::dfb::AccessPattern::BLOCKED &&
-           (config.cap == ::dfb::AccessPattern::BLOCKED || config.cap == ::dfb::AccessPattern::STRIDED);
+    return config.pap == ::dfb::AccessPattern::BLOCKED;
 }
 
 static uint32_t dfb_side_block_entries(
@@ -482,9 +482,14 @@ static bool dfb_dm_side_credits_split(const DataflowBufferImpl& dfb, bool is_pro
 // op; 0 = split. Mirrors the run_length the serializer writes for DM harts.
 static uint32_t dfb_dm_side_run_length(const DataflowBufferImpl& dfb, bool is_producer) {
     const DataflowBufferConfig& config = dfb.config;
-    if (!is_producer && config.pap == ::dfb::AccessPattern::BLOCKED &&
-        config.cap == ::dfb::AccessPattern::STRIDED) {
-        return std::max<uint32_t>(config.producer_block_size, 1u) / config.num_consumers;
+    if (!is_producer && config.pap == ::dfb::AccessPattern::BLOCKED) {
+        const uint32_t block = std::max<uint32_t>(config.producer_block_size, 1u);
+        if (config.cap == ::dfb::AccessPattern::STRIDED) {
+            return block / config.num_consumers;
+        }
+        if (config.cap == ::dfb::AccessPattern::ALL) {
+            return block;
+        }
     }
     return dfb_dm_side_credits_split(dfb, is_producer) ? 0u : 1u;
 }
@@ -776,40 +781,62 @@ size_t serialize_dfb_config_for_core(
             uint32_t side_stride_entries = dfb->stride_in_entries;
             {
                 const uint32_t bs = std::max<uint32_t>(dfb->config.producer_block_size, 1u);
-                const bool blocked_to_strided =
-                    global_order && dfb->config.cap == ::dfb::AccessPattern::STRIDED;
+                const uint32_t P = dfb->config.num_producers;
+                const uint32_t C = dfb->config.num_consumers;
+                const bool is_dm_hart = h < ::dfb::TENSIX_RISC_OFFSET;
                 uint32_t run_length;
                 uint32_t stride2_entries;  // stride2 in entries; converted per hart type below
-                if (global_order && !blocked_to_strided) {
-                    // B->B: DM run 1 (stride2 == stride), TRISC runs of bs.
-                    run_length = (h < ::dfb::TENSIX_RISC_OFFSET) ? 1u : bs;
-                    stride2_entries = (h < ::dfb::TENSIX_RISC_OFFSET)
-                                          ? side_stride_entries
-                                          : (dfb->stride_in_entries - 1u) * bs + 1u;
-                } else if (blocked_to_strided && rc.is_producer) {
-                    side_stride_entries = dfb->config.num_producers * dfb->config.num_consumers;
-                    run_length = (h < ::dfb::TENSIX_RISC_OFFSET)
-                                     ? (dfb_dm_side_credits_split(*dfb, /*is_producer=*/true) ? 0u : 1u)
-                                     : 0u;  // TRISC producer: legacy per-push rotation
-                    if (h >= ::dfb::TENSIX_RISC_OFFSET) {
-                        side_stride_entries = dfb->stride_in_entries;  // credits-only; cursor unused
+                if (global_order && dfb->config.cap == ::dfb::AccessPattern::BLOCKED) {
+                    // B->B: a DM side moves whole blocks with a single stride of lcm(P,C) blocks
+                    // (run 1); a TRISC side walks the block per tile (run of bs) and jumps
+                    // (lcm-1)*bs + 1 entries to its slot's next block.
+                    run_length = is_dm_hart ? 1u : bs;
+                    stride2_entries =
+                        is_dm_hart ? side_stride_entries : (dfb->stride_in_entries - 1u) * bs + 1u;
+                } else if (global_order && dfb->config.cap == ::dfb::AccessPattern::STRIDED) {
+                    if (rc.is_producer) {
+                        if (is_dm_hart) {
+                            // DM producer bursts one block per op, P*C entries of cursor per block
+                            // share; splits its credits across its counters when C > 1.
+                            side_stride_entries = P * C;
+                            run_length = dfb_dm_side_credits_split(*dfb, /*is_producer=*/true) ? 0u : 1u;
+                        } else {
+                            // TRISC producer: legacy per-push rotation (tile j credits consumer
+                            // j % C); credits-only, cursor unused.
+                            run_length = 0u;
+                        }
+                        stride2_entries = side_stride_entries;
+                    } else {
+                        // Consumer (DM or TRISC): walk its share of each block, then jump to its
+                        // share of this slot's next block.
+                        run_length = bs / C;
+                        stride2_entries = (P - 1u) * bs + C;
                     }
-                    stride2_entries = side_stride_entries;
-                } else if (blocked_to_strided) {
-                    // Consumer (DM or TRISC): walk its share of each block, then jump to its share
-                    // of this slot's next block.
-                    run_length = bs / dfb->config.num_consumers;
-                    stride2_entries = (dfb->config.num_producers - 1u) * bs + dfb->config.num_consumers;
+                } else if (global_order) {  // cap == ALL
+                    if (rc.is_producer) {
+                        if (is_dm_hart) {
+                            // DM producer bursts one block per op; its slot cursor hops P blocks.
+                            side_stride_entries = P;
+                            run_length = 1u;
+                        } else {
+                            // TRISC producer (remapper fan-out): credits-only, cursor unused.
+                            run_length = 0u;
+                        }
+                        stride2_entries = side_stride_entries;
+                    } else {
+                        // Every consumer reads every entry: walk a block per tile, then jump
+                        // (P-1)*bs + 1 entries to this slot's (= this producer's) next block.
+                        run_length = bs;
+                        stride2_entries = (P - 1u) * bs + 1u;
+                    }
                 } else {
-                    run_length = (h < ::dfb::TENSIX_RISC_OFFSET)
-                                     ? (dfb_dm_side_credits_split(*dfb, rc.is_producer) ? 0u : 1u)
-                                     : 0u;
+                    run_length =
+                        is_dm_hart ? (dfb_dm_side_credits_split(*dfb, rc.is_producer) ? 0u : 1u) : 0u;
                     stride2_entries = side_stride_entries;
                 }
                 entry.run_length = dfb_narrow_field<uint16_t>(run_length, dfb->id, "run_length");
-                entry.stride2_precomp = (h < ::dfb::TENSIX_RISC_OFFSET)
-                                            ? dfb->config.entry_size * stride2_entries
-                                            : stride2_entries;
+                entry.stride2_precomp = is_dm_hart ? dfb->config.entry_size * stride2_entries
+                                                   : stride2_entries;
             }
             entry.capacity = rc.is_producer ? dfb_narrow_field<uint16_t>(dfb->capacity, dfb->id, "capacity")
                                             : static_cast<uint16_t>(0);
@@ -1435,7 +1462,7 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
                 TT_FATAL(
                     config.num_entries % (config.producer_block_size * config.num_producers) == 0,
                     "BLOCKED-producer -> ALL DFB {}: num_entries {} must be divisible by "
-                    "block_size * num_producers = {} * {} (each producer's sub-ring must hold a whole "
+                    "block_size * num_producers = {} * {} (each producer must own a whole "
                     "number of blocks)",
                     dfb.id,
                     config.num_entries,
