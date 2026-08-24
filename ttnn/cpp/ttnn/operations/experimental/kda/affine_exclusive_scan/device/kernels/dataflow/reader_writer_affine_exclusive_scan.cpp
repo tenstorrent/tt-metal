@@ -10,8 +10,33 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
+template <uint32_t G>
+FORCE_INLINE void synchronize_head_stage(
+    uint32_t worker_index,
+    uint32_t group,
+    uint32_t& completed_stages,
+    Noc& noc,
+    Semaphore<>& arrival,
+    Semaphore<>& release) {
+    completed_stages++;
+    const uint32_t coordinator = worker_index - group;
+    const uint32_t coordinator_x = get_common_vararg(2 * coordinator);
+    const uint32_t coordinator_y = get_common_vararg(2 * coordinator + 1);
+    arrival.up(noc, coordinator_x, coordinator_y, 1);
+    if (group == 0) {
+        arrival.wait_min(completed_stages * G);
+        for (uint32_t worker = coordinator; worker < coordinator + G; worker++) {
+            const uint32_t worker_x = get_common_vararg(2 * worker);
+            const uint32_t worker_y = get_common_vararg(2 * worker + 1);
+            release.up(noc, worker_x, worker_y, 1);
+        }
+        noc.async_atomic_barrier();
+    }
+    release.wait_min(completed_stages);
+}
+
 template <uint32_t Kt, uint32_t Vt, uint32_t BH, uint32_t G>
-TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group, uint32_t coordinator_x, uint32_t coordinator_y) {
+TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     constexpr uint32_t kk = Kt * Kt;
     constexpr uint32_t kv = Kt * Vt;
     constexpr uint32_t worker_count = BH * G;
@@ -56,18 +81,6 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group, uint32_t coordina
     read_tiles(initial_state_accessor, initial_state, (worker_index / G) * kv, kv);
 
     uint32_t completed_stages = 0;
-    auto stage_barrier = [&] {
-        completed_stages++;
-        arrival.up(noc, coordinator_x, coordinator_y, 1);
-        if (worker_index == 0) {
-            arrival.wait_min(completed_stages * worker_count);
-            for (uint32_t worker = 0; worker < worker_count; worker++) {
-                release.up(noc, worker_x(worker), worker_y(worker), 1);
-            }
-            noc.async_atomic_barrier();
-        }
-        release.wait_min(completed_stages);
-    };
     auto send_pair = [&](uint32_t target, DataflowBuffer& current_a, DataflowBuffer& current_b) {
         const uint32_t target_x = worker_x(target);
         const uint32_t target_y = worker_y(target);
@@ -140,9 +153,10 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group, uint32_t coordina
             to_remote_a.wait_front(kk);
             to_remote_b.wait_front(kv);
         }
-        // Do not release the next NoC stage until every receiver has consumed the remote buffers and produced its
-        // next prefix. Otherwise the following stage can overwrite the remote buffers while compute is reading them.
-        stage_barrier();
+        // Each head is an independent G-worker scan. Do not release its next NoC stage until all G workers have
+        // consumed their remote buffers and produced the next prefix; otherwise that head can overwrite a mailbox
+        // while compute is still reading it. Arrival and release semaphore targets stay monotonic across stages.
+        synchronize_head_stage<G>(worker_index, group, completed_stages, noc, arrival, release);
     }
 
     to_remote_a.wait_front(kk);

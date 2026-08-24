@@ -145,9 +145,7 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
             },
         .compile_time_args =
             {{"Kt", key_tiles}, {"Vt", value_tiles}, {"BH", attrs.batch_heads}, {"G", groups_per_head}},
-        .runtime_arg_schema =
-            {.runtime_arg_names = {"worker_index", "group"},
-             .common_runtime_arg_names = {"coordinator_x", "coordinator_y"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"worker_index", "group"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
         .advanced_options = {.num_common_runtime_varargs = 2 * group_heads},
     };
@@ -213,13 +211,7 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
         worker_coordinates.push_back(physical.x);
         worker_coordinates.push_back(physical.y);
     }
-    const auto coordinator = device.worker_core_from_logical_core(distribution.cores[0]);
-    tt::tt_metal::experimental::KernelRunArgs dataflow_run{
-        .kernel = dataflow_kernel_name,
-        .common_runtime_arg_values =
-            {{"coordinator_x", static_cast<uint32_t>(coordinator.x)},
-             {"coordinator_y", static_cast<uint32_t>(coordinator.y)}},
-    };
+    tt::tt_metal::experimental::KernelRunArgs dataflow_run{.kernel = dataflow_kernel_name};
     dataflow_run.advanced_options.common_runtime_varargs = std::move(worker_coordinates);
     tt::tt_metal::experimental::KernelRunArgs compute_run{.kernel = compute_kernel_name};
     for (uint32_t worker_index = 0; worker_index < group_heads; ++worker_index) {

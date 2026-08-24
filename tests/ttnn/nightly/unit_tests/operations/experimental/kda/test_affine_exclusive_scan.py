@@ -50,13 +50,12 @@ _UNIT_CASE = _ProductionCase(
     expected_duration_ns=8250,
 )
 
-# Kimi-K3 production layouts. References are the pooled medians from two
-# independent 21-sample Blackhole profiler runs; see
-# specs/pr4-internal-format-bf16-report.md.
+# Kimi-K3 production layouts. References are pooled medians from two independent
+# three-sample Blackhole runs after scoping synchronization to each independent head.
 _PRODUCTION_CASES = (
-    _ProductionCase("sp1-tp8", 12, 8, 128, 128, 129107),
-    _ProductionCase("sp2-tp4", 24, 4, 128, 128, 99994),
-    _ProductionCase("sp4-tp2", 48, 2, 128, 128, 87234),
+    _ProductionCase("sp1-tp8", 12, 8, 128, 128, 96782),
+    _ProductionCase("sp2-tp4", 24, 4, 128, 128, 76542),
+    _ProductionCase("sp4-tp2", 48, 2, 128, 128, 66513),
 )
 
 
