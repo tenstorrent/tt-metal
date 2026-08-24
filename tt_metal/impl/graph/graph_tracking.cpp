@@ -36,8 +36,9 @@ void GraphTracker::track_function_abort(std::string_view reason) {
     if (processors.empty()) {
         return;
     }
+    std::any payload{GraphFunctionAbort{std::string(reason), false}};
     for (auto& it : processors) {
-        it->track_function_abort(reason);
+        it->track_function_end(payload);
     }
 }
 
@@ -45,8 +46,9 @@ void GraphTracker::unwind_open_functions(std::string_view reason) {
     if (processors.empty()) {
         return;
     }
+    std::any payload{GraphFunctionAbort{std::string(reason), true}};
     for (auto& it : processors) {
-        it->unwind_open_functions(reason);
+        it->track_function_end(payload);
     }
 }
 

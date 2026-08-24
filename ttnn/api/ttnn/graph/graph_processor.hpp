@@ -95,10 +95,6 @@ public:
     void track_function_end() override;
     void track_function_end(const std::any& output) override;
 
-    void track_function_abort(std::string_view reason) override;
-
-    void unwind_open_functions(std::string_view reason) override;
-
     void begin_capture(RunMode mode) override;
 
     nlohmann::json end_capture() override;
