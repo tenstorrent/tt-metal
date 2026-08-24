@@ -204,6 +204,80 @@ TEST_F(McastHostFixture, DenseFamilyUsesCompactWireEvenWhenChainRequested) {
     EXPECT_EQ(family.compile_time_args()[0], 1u);
 }
 
+TEST_F(McastHostFixture, IrregularChainUsesSenderHeadThenLogicalRowMajorOrder) {
+    const CoreRangeSet receivers(std::vector<CoreRange>{
+        CoreRange(CoreCoord(2, 0), CoreCoord(2, 0)),
+        CoreRange(CoreCoord(0, 1), CoreCoord(1, 1)),
+    });
+    const CoreCoord sender(1, 1);
+    const McastFamily family(
+        device_, std::vector<McastGroup>{McastGroup(receivers, sender, /*use_chain_forwarding=*/true)}, McastConfig{});
+
+    EXPECT_FALSE(family.uses_compact_wire());
+    EXPECT_EQ(family.max_rectangles(), 2u);
+    constexpr uint32_t chain_topology_offset = 4u * 2u + 2u;
+    constexpr uint32_t metadata_offset = chain_topology_offset + 4u;
+    auto virtual_coord = [&](CoreCoord core) {
+        const auto physical = device_->worker_core_from_logical_core(core);
+        return std::pair<uint32_t, uint32_t>{static_cast<uint32_t>(physical.x), static_cast<uint32_t>(physical.y)};
+    };
+
+    const auto sender_rt = family.runtime_args(sender);
+    const auto first_receiver = virtual_coord(CoreCoord(2, 0));
+    EXPECT_EQ(sender_rt[chain_topology_offset + 0], detail::NO_CHAIN_NEIGHBOR);
+    EXPECT_EQ(sender_rt[chain_topology_offset + 1], detail::NO_CHAIN_NEIGHBOR);
+    EXPECT_EQ(sender_rt[chain_topology_offset + 2], first_receiver.first);
+    EXPECT_EQ(sender_rt[chain_topology_offset + 3], first_receiver.second);
+    EXPECT_EQ(sender_rt[metadata_offset + 3], 1u);
+    EXPECT_EQ(sender_rt[metadata_offset + 4], detail::CHAIN_FORWARD_TRANSPORT);
+
+    const auto middle_rt = family.runtime_args(CoreCoord(2, 0));
+    const auto virtual_sender = virtual_coord(sender);
+    const auto last_receiver = virtual_coord(CoreCoord(0, 1));
+    EXPECT_EQ(middle_rt[chain_topology_offset + 0], virtual_sender.first);
+    EXPECT_EQ(middle_rt[chain_topology_offset + 1], virtual_sender.second);
+    EXPECT_EQ(middle_rt[chain_topology_offset + 2], last_receiver.first);
+    EXPECT_EQ(middle_rt[chain_topology_offset + 3], last_receiver.second);
+
+    const auto tail_rt = family.runtime_args(CoreCoord(0, 1));
+    EXPECT_EQ(tail_rt[chain_topology_offset + 0], first_receiver.first);
+    EXPECT_EQ(tail_rt[chain_topology_offset + 1], first_receiver.second);
+    EXPECT_EQ(tail_rt[chain_topology_offset + 2], detail::NO_CHAIN_NEIGHBOR);
+    EXPECT_EQ(tail_rt[chain_topology_offset + 3], detail::NO_CHAIN_NEIGHBOR);
+}
+
+TEST_F(McastHostFixture, IrregularChainRejectsRotatingSenders) {
+    const CoreRangeSet receivers(std::vector<CoreRange>{
+        CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)),
+        CoreRange(CoreCoord(2, 0), CoreCoord(2, 0)),
+    });
+    McastConfig config;
+    config.rotating_sender = true;
+    EXPECT_ANY_THROW((McastFamily(
+        device_,
+        std::vector<McastGroup>{McastGroup(
+            receivers,
+            std::vector<CoreCoord>{CoreCoord(0, 0), CoreCoord(2, 0)},
+            /*use_chain_forwarding=*/true)},
+        config)));
+}
+
+TEST_F(McastHostFixture, IrregularChainRequiresHandshakeAndOwnsAckCount) {
+    const CoreRangeSet receivers(std::vector<CoreRange>{
+        CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)),
+        CoreRange(CoreCoord(2, 0), CoreCoord(2, 0)),
+    });
+    EXPECT_ANY_THROW((McastFamily(
+        device_,
+        std::vector<McastGroup>{McastGroup(receivers, CoreCoord(4, 0), /*use_chain_forwarding=*/true)},
+        McastConfig{.handshake = false})));
+    EXPECT_ANY_THROW((McastFamily(
+        device_,
+        std::vector<McastGroup>{
+            McastGroup(receivers, CoreCoord(4, 0), /*use_chain_forwarding=*/true, /*ack_count=*/1u)},
+        McastConfig{})));
+}
+
 TEST_F(McastHostFixture, Mcast2DWrapsAnExactIrregularFamily) {
     const CoreRangeSet receivers(std::vector<CoreRange>{
         CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)),

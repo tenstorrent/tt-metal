@@ -35,8 +35,7 @@ SenderPipe<
     CONSUMER_READY_SEM_ID,
     DATA_READY_SIGNAL,
     ROTATING_SENDER,
-    MAX_RECTS>::
-    SenderPipe(const Noc& noc, const McastRect<NOC_ID>& dest, uint32_t consumer_ack_count) :
+    MAX_RECTS>::SenderPipe(const Noc& noc, const McastRect<NOC_ID>& dest, uint32_t consumer_ack_count) :
     noc_(noc), data_ready_(DATA_READY_SEM_ID), consumer_ready_(CONSUMER_READY_SEM_ID) {
     ASSERT(noc_.get_noc_id() == NOC_ID);
     dests_[0] = dest;
@@ -59,17 +58,50 @@ SenderPipe<
     CONSUMER_READY_SEM_ID,
     DATA_READY_SIGNAL,
     ROTATING_SENDER,
-    MAX_RECTS>::SenderPipe(
-    const Noc& noc, const uint32_t* dest_coords, uint32_t num_rects, uint32_t consumer_ack_count) :
-    noc_(noc), data_ready_(DATA_READY_SEM_ID), consumer_ready_(CONSUMER_READY_SEM_ID), num_rects_(num_rects) {
+    MAX_RECTS>::
+    SenderPipe(const Noc& noc, const uint32_t* dest_coords, uint32_t num_rects, uint32_t consumer_ack_count) :
+    SenderPipe(noc, dest_coords, num_rects, consumer_ack_count, McastTransport::HardwareMulticast, nullptr) {}
+
+template <
+    uint8_t NOC_ID,
+    uint32_t DATA_READY_SEM_ID,
+    bool PRE_HANDSHAKE,
+    uint32_t CONSUMER_READY_SEM_ID,
+    DataReadySignal DATA_READY_SIGNAL,
+    bool ROTATING_SENDER,
+    uint32_t MAX_RECTS>
+SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    MAX_RECTS>::
+    SenderPipe(
+        const Noc& noc,
+        const uint32_t* dest_coords,
+        uint32_t num_rects,
+        uint32_t consumer_ack_count,
+        McastTransport transport,
+        const uint32_t* chain_topology) :
+    noc_(noc),
+    data_ready_(DATA_READY_SEM_ID),
+    consumer_ready_(CONSUMER_READY_SEM_ID),
+    num_rects_(num_rects),
+    transport_(transport) {
     ASSERT(noc_.get_noc_id() == NOC_ID);
     ASSERT(num_rects_ <= MAX_RECTS);
+    ASSERT(transport_ == McastTransport::HardwareMulticast || transport_ == McastTransport::ChainForward);
     for (uint32_t i = 0; i < num_rects_; ++i) {
         dests_[i] = McastRect<NOC_ID>(
-            dest_coords[4u * i + 0u],
-            dest_coords[4u * i + 1u],
-            dest_coords[4u * i + 2u],
-            dest_coords[4u * i + 3u]);
+            dest_coords[4u * i + 0u], dest_coords[4u * i + 1u], dest_coords[4u * i + 2u], dest_coords[4u * i + 3u]);
+    }
+    if (transport_ == McastTransport::ChainForward) {
+        ASSERT(chain_topology != nullptr);
+        chain_successor_x_ = chain_topology[2];
+        chain_successor_y_ = chain_topology[3];
+        ASSERT(chain_successor_x_ != NO_CHAIN_NEIGHBOR && chain_successor_y_ != NO_CHAIN_NEIGHBOR);
     }
     initialize_geometry_(consumer_ack_count);
 }
@@ -112,16 +144,18 @@ template <
     bool ROTATING_SENDER,
     uint32_t MAX_RECTS>
 template <SourceL1Guard SOURCE_GUARD>
-FORCE_INLINE void
-SenderPipe<
+FORCE_INLINE void SenderPipe<
     NOC_ID,
     DATA_READY_SEM_ID,
     PRE_HANDSHAKE,
     CONSUMER_READY_SEM_ID,
     DATA_READY_SIGNAL,
     ROTATING_SENDER,
-    MAX_RECTS>::send(
-    uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
+    MAX_RECTS>::send(uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
+    if (transport_ == McastTransport::ChainForward) {
+        chain_send_(src_l1, dst_l1, size);
+        return;
+    }
     // Degenerate: no receiver cores. If the sender is in its own box and lands a copy elsewhere, do
     // a local copy (a loopback to just self may hang); else nothing.
     if (degenerate_) {
@@ -182,8 +216,19 @@ void SenderPipe<
     CONSUMER_READY_SEM_ID,
     DATA_READY_SIGNAL,
     ROTATING_SENDER,
-    MAX_RECTS>::
-    send_signal(uint32_t value) {
+    MAX_RECTS>::send_signal(uint32_t value) {
+    if (transport_ == McastTransport::ChainForward) {
+        ASSERT(value >= VALID);
+        if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
+            ASSERT(value == VALID);
+        }
+        if constexpr (PRE_HANDSHAKE) {
+            consumer_ready_.wait(1);
+            consumer_ready_.set(0);
+        }
+        chain_signal_(value);
+        return;
+    }
     if (degenerate_) {
         return;  // nobody to signal
     }
@@ -215,16 +260,69 @@ template <
     DataReadySignal DATA_READY_SIGNAL,
     bool ROTATING_SENDER,
     uint32_t MAX_RECTS>
-FORCE_INLINE void
-SenderPipe<
+FORCE_INLINE void SenderPipe<
     NOC_ID,
     DATA_READY_SEM_ID,
     PRE_HANDSHAKE,
     CONSUMER_READY_SEM_ID,
     DATA_READY_SIGNAL,
     ROTATING_SENDER,
-    MAX_RECTS>::send_data_(
-    uint32_t rect_index, uint32_t src_l1, uint32_t dst_l1, uint32_t size, bool loopback, uint32_t mcast_dests) {
+    MAX_RECTS>::chain_send_(uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
+    if constexpr (PRE_HANDSHAKE) {
+        consumer_ready_.wait(1);
+        consumer_ready_.set(0);
+    }
+    noc_.async_write(
+        CoreLocalMem<uint32_t>(src_l1),
+        UnicastEndpoint{},
+        size,
+        {},
+        {.noc_x = chain_successor_x_, .noc_y = chain_successor_y_, .addr = dst_l1});
+    // The ready signal is an atomic on a separate path, so use an ACKED data barrier to make the
+    // payload visible at the successor before publishing readiness.
+    noc_.async_write_barrier();
+    chain_signal_(VALID);
+}
+
+template <
+    uint8_t NOC_ID,
+    uint32_t DATA_READY_SEM_ID,
+    bool PRE_HANDSHAKE,
+    uint32_t CONSUMER_READY_SEM_ID,
+    DataReadySignal DATA_READY_SIGNAL,
+    bool ROTATING_SENDER,
+    uint32_t MAX_RECTS>
+FORCE_INLINE void SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    MAX_RECTS>::chain_signal_(uint32_t value) {
+    const uint32_t increment = DATA_READY_SIGNAL == DataReadySignal::Counter ? 1u : value;
+    data_ready_.up(noc_, chain_successor_x_, chain_successor_y_, increment);
+    noc_.async_atomic_barrier();
+}
+
+template <
+    uint8_t NOC_ID,
+    uint32_t DATA_READY_SEM_ID,
+    bool PRE_HANDSHAKE,
+    uint32_t CONSUMER_READY_SEM_ID,
+    DataReadySignal DATA_READY_SIGNAL,
+    bool ROTATING_SENDER,
+    uint32_t MAX_RECTS>
+FORCE_INLINE void SenderPipe<
+    NOC_ID,
+    DATA_READY_SEM_ID,
+    PRE_HANDSHAKE,
+    CONSUMER_READY_SEM_ID,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    MAX_RECTS>::
+    send_data_(
+        uint32_t rect_index, uint32_t src_l1, uint32_t dst_l1, uint32_t size, bool loopback, uint32_t mcast_dests) {
     const auto& r = dests_[rect_index].bounds();
     UnicastEndpoint src_ep;
     MulticastEndpoint dst_ep;
@@ -250,8 +348,7 @@ template <
     DataReadySignal DATA_READY_SIGNAL,
     bool ROTATING_SENDER,
     uint32_t MAX_RECTS>
-FORCE_INLINE void
-SenderPipe<
+FORCE_INLINE void SenderPipe<
     NOC_ID,
     DATA_READY_SEM_ID,
     PRE_HANDSHAKE,
@@ -286,16 +383,14 @@ template <
     bool ROTATING_SENDER,
     uint32_t MAX_RECTS>
 template <SourceL1Guard SOURCE_GUARD>
-FORCE_INLINE void
-SenderPipe<
+FORCE_INLINE void SenderPipe<
     NOC_ID,
     DATA_READY_SEM_ID,
     PRE_HANDSHAKE,
     CONSUMER_READY_SEM_ID,
     DATA_READY_SIGNAL,
     ROTATING_SENDER,
-    MAX_RECTS>::fence_(
-    bool loopback) {
+    MAX_RECTS>::fence_(bool loopback) {
     // A real sender loopback always needs ACKED completion: this protects the locally published
     // destination as well as the source lifetime, independent of SOURCE_GUARD.
     if (loopback) {
@@ -330,8 +425,7 @@ void SenderPipe<
     CONSUMER_READY_SEM_ID,
     DATA_READY_SIGNAL,
     ROTATING_SENDER,
-    MAX_RECTS>::
-    local_copy_(uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
+    MAX_RECTS>::local_copy_(uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
     ASSERT(src_l1 != dst_l1);
     UnicastEndpoint dst_ep;
     const uint32_t mx = my_x[NOC_ID];
@@ -356,7 +450,30 @@ template <
     uint32_t NUM_SENDERS>
 ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, NUM_SENDERS>::ReceiverPipe(
     const Noc& noc, const uint32_t* sender_coords) :
-    noc_(noc), data_ready_(DATA_READY_SEM_ID), consumer_ready_(CONSUMER_READY_SEM_ID), coords_(sender_coords) {
+    ReceiverPipe(noc, sender_coords, McastTransport::HardwareMulticast, nullptr) {}
+
+template <
+    uint32_t DATA_READY_SEM_ID,
+    bool PRE_HANDSHAKE,
+    uint32_t CONSUMER_READY_SEM_ID,
+    DataReadySignal DATA_READY_SIGNAL,
+    uint32_t NUM_SENDERS>
+ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, NUM_SENDERS>::ReceiverPipe(
+    const Noc& noc, const uint32_t* sender_coords, McastTransport transport, const uint32_t* chain_topology) :
+    noc_(noc),
+    data_ready_(DATA_READY_SEM_ID),
+    consumer_ready_(CONSUMER_READY_SEM_ID),
+    coords_(sender_coords),
+    transport_(transport) {
+    ASSERT(transport_ == McastTransport::HardwareMulticast || transport_ == McastTransport::ChainForward);
+    if (transport_ == McastTransport::ChainForward) {
+        ASSERT(chain_topology != nullptr);
+        chain_predecessor_x_ = chain_topology[0];
+        chain_predecessor_y_ = chain_topology[1];
+        chain_successor_x_ = chain_topology[2];
+        chain_successor_y_ = chain_topology[3];
+        ASSERT(chain_predecessor_x_ != NO_CHAIN_NEIGHBOR && chain_predecessor_y_ != NO_CHAIN_NEIGHBOR);
+    }
     // Init the flag THIS side waits on. The Counter signal needs no reset/init (monotone).
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Flag) {
         data_ready_.set(INVALID);
@@ -371,6 +488,21 @@ template <
     uint32_t NUM_SENDERS>
 void ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, NUM_SENDERS>::receive(
     uint32_t dst_l1, uint32_t size_bytes, uint32_t round) {
+    if (transport_ == McastTransport::ChainForward) {
+        chain_wait_for_predecessor_();
+        if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
+            data_ready_.wait_min(++round_);
+        } else {
+            data_ready_.wait(VALID);
+            data_ready_.set(INVALID);
+        }
+        if (chain_successor_x_ != NO_CHAIN_NEIGHBOR) {
+            chain_wait_for_successor_();
+            chain_forward_payload_(dst_l1, size_bytes);
+            chain_forward_signal_(VALID);
+        }
+        return;
+    }
     (void)dst_l1;
     (void)size_bytes;
     const uint32_t sender_index = round % NUM_SENDERS;
@@ -396,6 +528,15 @@ template <
     uint32_t NUM_SENDERS>
 uint32_t ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, NUM_SENDERS>::
     receive_signal() {
+    if (transport_ == McastTransport::ChainForward) {
+        chain_wait_for_predecessor_();
+        const uint32_t value = chain_consume_signal_();
+        if (chain_successor_x_ != NO_CHAIN_NEIGHBOR) {
+            chain_wait_for_successor_();
+            chain_forward_signal_(DATA_READY_SIGNAL == DataReadySignal::Counter ? VALID : value);
+        }
+        return value;
+    }
     if constexpr (PRE_HANDSHAKE) {
         const uint32_t sender_index = round_ % NUM_SENDERS;
         consumer_ready_.up(noc_, coords_[2 * sender_index + 0], coords_[2 * sender_index + 1], 1);
@@ -416,6 +557,92 @@ uint32_t ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, D
         ++round_;
         return value;
     }
+}
+
+template <
+    uint32_t DATA_READY_SEM_ID,
+    bool PRE_HANDSHAKE,
+    uint32_t CONSUMER_READY_SEM_ID,
+    DataReadySignal DATA_READY_SIGNAL,
+    uint32_t NUM_SENDERS>
+FORCE_INLINE void
+ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, NUM_SENDERS>::
+    chain_wait_for_predecessor_() {
+    if constexpr (PRE_HANDSHAKE) {
+        consumer_ready_.up(noc_, chain_predecessor_x_, chain_predecessor_y_, 1);
+    }
+}
+
+template <
+    uint32_t DATA_READY_SEM_ID,
+    bool PRE_HANDSHAKE,
+    uint32_t CONSUMER_READY_SEM_ID,
+    DataReadySignal DATA_READY_SIGNAL,
+    uint32_t NUM_SENDERS>
+FORCE_INLINE void
+ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, NUM_SENDERS>::
+    chain_wait_for_successor_() {
+    if constexpr (PRE_HANDSHAKE) {
+        consumer_ready_.wait(1);
+        consumer_ready_.set(0);
+    }
+}
+
+template <
+    uint32_t DATA_READY_SEM_ID,
+    bool PRE_HANDSHAKE,
+    uint32_t CONSUMER_READY_SEM_ID,
+    DataReadySignal DATA_READY_SIGNAL,
+    uint32_t NUM_SENDERS>
+FORCE_INLINE uint32_t
+ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, NUM_SENDERS>::
+    chain_consume_signal_() {
+    if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
+        data_ready_.wait_min(++round_);
+        return round_;
+    } else {
+        data_ready_.wait_min(VALID);
+        uintptr_t data_ready_addr = get_semaphore(DATA_READY_SEM_ID);
+#ifdef ARCH_QUASAR
+        data_ready_addr += MEM_L1_UNCACHED_BASE;
+#endif
+        const uint32_t value = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_ready_addr);
+        data_ready_.set(INVALID);
+        ++round_;
+        return value;
+    }
+}
+
+template <
+    uint32_t DATA_READY_SEM_ID,
+    bool PRE_HANDSHAKE,
+    uint32_t CONSUMER_READY_SEM_ID,
+    DataReadySignal DATA_READY_SIGNAL,
+    uint32_t NUM_SENDERS>
+FORCE_INLINE void
+ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, NUM_SENDERS>::
+    chain_forward_payload_(uint32_t dst_l1, uint32_t size_bytes) {
+    noc_.async_write(
+        CoreLocalMem<uint32_t>(dst_l1),
+        UnicastEndpoint{},
+        size_bytes,
+        {},
+        {.noc_x = chain_successor_x_, .noc_y = chain_successor_y_, .addr = dst_l1});
+    noc_.async_write_barrier();
+}
+
+template <
+    uint32_t DATA_READY_SEM_ID,
+    bool PRE_HANDSHAKE,
+    uint32_t CONSUMER_READY_SEM_ID,
+    DataReadySignal DATA_READY_SIGNAL,
+    uint32_t NUM_SENDERS>
+FORCE_INLINE void
+ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY_SIGNAL, NUM_SENDERS>::
+    chain_forward_signal_(uint32_t value) {
+    const uint32_t increment = DATA_READY_SIGNAL == DataReadySignal::Counter ? 1u : value;
+    data_ready_.up(noc_, chain_successor_x_, chain_successor_y_, increment);
+    noc_.async_atomic_barrier();
 }
 
 }  // namespace dataflow_kernel_lib

@@ -1,7 +1,7 @@
 # Multicast family and chain-forwarding tracker
 
 Plan: [`plan.md`](plan.md)
-Status: Stages 1–2 complete; Stage 3 pending
+Status: Stages 1–3 complete; Stage 4 pending
 Last updated: 2026-08-24
 
 This is the execution record for the `McastFamily`/`McastGroup`, exact
@@ -110,28 +110,30 @@ Gate: do not begin Stage 3 until Stage 2 is fully green.
 
 ## Stage 3 — row-major chain transport
 
+Stage started from commit `c6a19c93f0c`.
+
 ### Implementation
 
-- [ ] Derive logical row-major topology with the active sender as head.
-- [ ] Serialize/select predecessor and successor without exposing them to the
+- [x] Derive logical row-major topology with the active sender as head.
+- [x] Serialize/select predecessor and successor without exposing them to the
   operation.
-- [ ] Implement head payload injection with per-hop readiness.
-- [ ] Implement middle receive-then-forward from caller-supplied destination.
-- [ ] Implement tail receive-only behavior.
-- [ ] Relay the same Flag value through middle nodes.
-- [ ] Relay one Counter event through middle nodes.
-- [ ] Keep dense groups on hardware multicast when chain is enabled.
-- [ ] Reject rotating irregular chain groups at host construction.
+- [x] Implement head payload injection with per-hop readiness.
+- [x] Implement middle receive-then-forward from caller-supplied destination.
+- [x] Implement tail receive-only behavior.
+- [x] Relay the same Flag value through middle nodes.
+- [x] Relay one Counter event through middle nodes.
+- [x] Keep dense groups on hardware multicast when chain is enabled.
+- [x] Reject rotating irregular chain groups at host construction.
 
 ### Stage 3 validation gate
 
-- [ ] Two-core payload chain passes.
-- [ ] Multi-hop payload chain passes.
-- [ ] Repeated sends with changing destination and size pass.
-- [ ] Flag and Counter chain signal tests pass.
-- [ ] Dense-fallback test passes.
-- [ ] Rotating-irregular rejection test passes.
-- [ ] Full helper host/device suites and build pass.
+- [x] Two-core payload chain passes.
+- [x] Multi-hop payload chain passes.
+- [x] Repeated sends with changing destination and size pass.
+- [x] Flag and Counter chain signal tests pass.
+- [x] Dense-fallback test passes.
+- [x] Rotating-irregular rejection test passes.
+- [x] Full helper host/device suites and build pass.
 
 Gate: do not integrate Conv3D until every applicable Stage 3 item passes.
 
@@ -194,6 +196,13 @@ unrecorded partial run.
 | 2026-08-24 | 2 | `scripts/run_safe_pytest.sh tests/ttnn/nightly/unit_tests/operations_compute_only/fused/test_group_norm.py -q` | PASS | 8/8 compute-only validation tests. |
 | 2026-08-24 | 2 | `scripts/run_safe_pytest.sh tests/ttnn/perf_tests/operations/mcast/test_groupnorm_chain_vs_rectangles.py -q` | PASS | Exact five-group POC uses rectangle counts `[2,3,3,3,2]`; 7-trial median 22,087 ns, 0.15% standard deviation. |
 | 2026-08-24 | 2 | `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/kernel_lib/test_mcast_pipe.py --dev -q` | PASS | 91/91 helper device regression tests after GroupNorm integration. |
+| 2026-08-24 | 3 | `./build_metal.sh` | PASS | Full host build with row-major chain serialization and runtime pipe selection. |
+| 2026-08-24 | 3 | `build_Release/test/ttnn/unit_tests_ttnn --gtest_filter='McastHostFixture.*:GroupNormMcastGeometry.*'` | PASS | 48/48 host/helper geometry tests, including row-major topology, dense fallback, and rejection cases. |
+| 2026-08-24 | 3 | `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/kernel_lib/test_mcast_pipe.py --dev -k 'payload_chain or multi_rectangle_control_signal or repeated_dynamic_destination_and_size or dense_chain_request' -q` | PASS | 10/10 focused payload, Flag/Counter, dynamic-size, and dense-fallback cases. |
+| 2026-08-24 | 3 | `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/kernel_lib/test_mcast_pipe.py --dev -k 'multi_hop_payload_chain or selects_dense_multicast' -q` | PASS | 5/5 NoC0/NoC1 Flag/Counter multi-hop and mixed per-group transport cases. |
+| 2026-08-24 | 3 | `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/kernel_lib/test_mcast_pipe.py --dev -q` | PASS | Full helper device/wire suite: 101/101 passed. |
+| 2026-08-24 | 3 | `GN_CHAIN_TRIALS=1 scripts/run_safe_pytest.sh tests/ttnn/perf_tests/operations/mcast/test_groupnorm_chain_vs_rectangles.py -q` | PASS | Exact GroupNorm multi-rectangle regression remains green after unified pipe transport selection. |
+| 2026-08-24 | 3 | `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/kernel_lib/test_mcast_pipe_source_audit.py -k 'family_chain_topology or mcast_args_owns_its_compile_time_presence_tag or mcast_args_has_one_template_owned_runtime_base or groupnorm_uses_one_family_wire' -q` | PASS | 4/4 focused helper ownership and GroupNorm source audits. |
 
 ## Decisions and scope changes
 

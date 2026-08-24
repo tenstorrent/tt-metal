@@ -50,8 +50,10 @@
 //                                                role_flags, sender_phase ]
 //   RT, EXTENDED FAMILY:
 //                                [4*max_rectangles rectangle words, 2*num_senders sender-coordinate words,
-//                                 4 transport-topology words, role flags, sender phase,
+//                                 predecessor_x, predecessor_y, successor_x, successor_y,
+//                                 role flags, sender phase,
 //                                 rectangle count, ack count, transport]
+//                                transport = 0 hardware multicast; 1 row-major chain forwarding
 // =============================================================================
 
 #pragma once
@@ -141,6 +143,9 @@ namespace detail {
 static constexpr uint32_t CAN_SEND = 1u << 0;
 static constexpr uint32_t CAN_RECEIVE = 1u << 1;
 static constexpr uint32_t NO_SENDER_ROUND = 0xFFFFFFFFu;
+static constexpr uint32_t NO_CHAIN_NEIGHBOR = 0xFFFFFFFFu;
+static constexpr uint32_t HARDWARE_MCAST_TRANSPORT = 0u;
+static constexpr uint32_t CHAIN_FORWARD_TRANSPORT = 1u;
 
 // logical -> virtual (worker) coord.
 inline std::pair<uint32_t, uint32_t> virt_coord(tt::tt_metal::IDevice* device, const tt::tt_metal::CoreCoord& logical) {
@@ -292,6 +297,28 @@ public:
 
             GroupState state{.group_index = group_index};
             state.rectangles = exact_rectangles_(group.receiver_set());
+            state.use_chain_forwarding = group.use_chain_forwarding() && state.rectangles.size() > 1u;
+            TT_FATAL(
+                !state.use_chain_forwarding || !cfg_.rotating_sender,
+                "McastFamily: rotating irregular chain forwarding is not supported");
+            TT_FATAL(
+                !state.use_chain_forwarding || cfg_.handshake,
+                "McastFamily: irregular chain forwarding requires handshake=true");
+            TT_FATAL(
+                !state.use_chain_forwarding || !group.ack_count().has_value(),
+                "McastFamily: irregular chain forwarding owns its per-hop acknowledgement count");
+            if (state.use_chain_forwarding) {
+                state.chain_order.push_back(group.senders().front());
+                auto receivers = tt::tt_metal::corerange_to_cores(group.receiver_set(), std::nullopt, true);
+                std::sort(receivers.begin(), receivers.end(), [](const auto& lhs, const auto& rhs) {
+                    return lhs.y == rhs.y ? lhs.x < rhs.x : lhs.y < rhs.y;
+                });
+                for (const auto& receiver : receivers) {
+                    if (receiver != group.senders().front()) {
+                        state.chain_order.push_back(receiver);
+                    }
+                }
+            }
             state.footprint = group.receiver_set();
             for (const auto& sender : group.senders()) {
                 state.footprint =
@@ -341,14 +368,6 @@ public:
                             [](const McastGroup& group) { return !group.receiver_set().empty(); }) &&
                         (common_ack || all_acks_derived);
         compact_ack_count_ = common_ack ? common_ack_count.value_or(0u) : 0xFFFFFFFFu;
-
-        // Stage 1 materializes exact hardware multicast. Irregular chain groups are accepted only
-        // once Stage 3 supplies their device relay transport. Dense groups ignore the chain flag.
-        for (uint32_t group_index = 0; group_index < groups_.size(); ++group_index) {
-            TT_FATAL(
-                !groups_[group_index].use_chain_forwarding() || states_[group_index].rectangles.size() <= 1,
-                "McastFamily: irregular chain forwarding is not available until the chain transport is enabled");
-        }
 
         if (cfg_.sem_ids.has_value()) {
             const auto& ids = *cfg_.sem_ids;
@@ -447,8 +466,10 @@ private:
     struct GroupState {
         uint32_t group_index = 0;
         std::vector<tt::tt_metal::CoreRange> rectangles;
+        std::vector<tt::tt_metal::CoreCoord> chain_order;
         tt::tt_metal::CoreRangeSet footprint;
         std::vector<uint32_t> fanouts;
+        bool use_chain_forwarding = false;
     };
 
     static std::vector<tt::tt_metal::CoreRange> exact_rectangles_(const tt::tt_metal::CoreRangeSet& receiver_set) {
@@ -521,7 +542,36 @@ private:
         if (sender_phase == detail::NO_SENDER_ROUND) {
             return 0u;
         }
+        if (state.use_chain_forwarding) {
+            return state.chain_order.size() > 1u ? 1u : 0u;
+        }
         return groups_[state.group_index].ack_count().value_or(state.fanouts[sender_phase]);
+    }
+
+    std::vector<uint32_t> chain_topology_args_(const GroupState& state, const tt::tt_metal::CoreCoord& core) const {
+        if (!state.use_chain_forwarding) {
+            return {0u, 0u, 0u, 0u};
+        }
+
+        std::vector<uint32_t> args(4u, detail::NO_CHAIN_NEIGHBOR);
+        const auto it = std::find(state.chain_order.begin(), state.chain_order.end(), core);
+        TT_FATAL(
+            it != state.chain_order.end(),
+            "McastFamily: chain core ({},{}) is missing from its group topology",
+            core.x,
+            core.y);
+        const auto index = static_cast<std::size_t>(std::distance(state.chain_order.begin(), it));
+        if (index > 0u) {
+            const auto predecessor = detail::virt_coord(device_, state.chain_order[index - 1u]);
+            args[0] = predecessor.first;
+            args[1] = predecessor.second;
+        }
+        if (index + 1u < state.chain_order.size()) {
+            const auto successor = detail::virt_coord(device_, state.chain_order[index + 1u]);
+            args[2] = successor.first;
+            args[3] = successor.second;
+        }
+        return args;
     }
 
     std::vector<uint32_t> compact_runtime_args_(const tt::tt_metal::CoreCoord& core, const GroupState* state) const {
@@ -562,14 +612,15 @@ private:
         const bool can_send = phase != detail::NO_SENDER_ROUND;
         std::vector<uint32_t> args = rect_args_(*state);
         append_sender_coords_(args, *state);
-        // Reserved predecessor/successor coordinates. Stage 3 fills these for chain groups.
-        args.insert(args.end(), {0u, 0u, 0u, 0u});
+        const auto chain_topology = chain_topology_args_(*state, core);
+        args.insert(args.end(), chain_topology.begin(), chain_topology.end());
         args.push_back(
             (can_send ? detail::CAN_SEND : 0u) | (can_receive_(*state, core, phase) ? detail::CAN_RECEIVE : 0u));
         args.push_back(phase);
         args.push_back(static_cast<uint32_t>(state->rectangles.size()));
         args.push_back(sender_ack_count_(*state, phase));
-        args.push_back(0u);  // hardware multicast transport
+        args.push_back(
+            state->use_chain_forwarding ? detail::CHAIN_FORWARD_TRANSPORT : detail::HARDWARE_MCAST_TRANSPORT);
         return args;
     }
 

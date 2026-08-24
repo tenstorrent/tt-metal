@@ -72,6 +72,10 @@ namespace dataflow_kernel_lib {
 // -----------------------------------------------------------------------------
 enum class DataReadySignal { Flag, Counter };
 
+// Runtime-selected transport carried by an extended McastFamily wire. Dense groups always stay on
+// hardware multicast; an exact irregular group may instead use a per-hop row-major chain.
+enum class McastTransport : uint32_t { HardwareMulticast = 0, ChainForward = 1 };
+
 // Whether send() must make the payload source safe to reuse before returning.
 //   * Guard (default): send() waits until the linked data+signal writes have departed, so the caller
 //     may immediately overwrite/reuse src_l1.
@@ -93,6 +97,7 @@ static constexpr uint32_t UNUSED_SEM_ID = 0xFFFFFFFFu;
 // caller (the mcast box holds inactive cores that receive but never ack) passes its own smaller ack
 // count to override.
 static constexpr uint32_t ACK_EQUALS_FANOUT = 0xFFFFFFFFu;
+static constexpr uint32_t NO_CHAIN_NEIGHBOR = 0xFFFFFFFFu;
 
 // -----------------------------------------------------------------------------
 // A multicast destination rectangle, in NoC (virtual) coordinates. PURE GEOMETRY: the broadcast
@@ -205,6 +210,13 @@ public:
     // Multi-rectangle form used by McastFamily. `dest_coords` is MAX_RECTS packed
     // [x0,y0,x1,y1] records in stable runtime-argument storage; only the first `num_rects` are live.
     explicit SenderPipe(const Noc& noc, const uint32_t* dest_coords, uint32_t num_rects, uint32_t consumer_ack_count);
+    explicit SenderPipe(
+        const Noc& noc,
+        const uint32_t* dest_coords,
+        uint32_t num_rects,
+        uint32_t consumer_ack_count,
+        McastTransport transport,
+        const uint32_t* chain_topology);
 
     // ===== DATA channel (a block + a ready signal) =====
     // By default send() is atomic and absorbs ALL FOUR guards:
@@ -247,6 +259,8 @@ private:
     void local_copy_(uint32_t src_l1, uint32_t dst_l1, uint32_t size);
 
     void initialize_geometry_(uint32_t consumer_ack_count);
+    FORCE_INLINE void chain_send_(uint32_t src_l1, uint32_t dst_l1, uint32_t size);
+    FORCE_INLINE void chain_signal_(uint32_t value);
 
     Noc noc_;
     McastRect<NOC_ID> dests_[MAX_RECTS];
@@ -259,6 +273,9 @@ private:
     uint32_t total_num_dests_excl_ = 0;
     bool degenerate_ = true;
     uint32_t ack_count_;
+    McastTransport transport_ = McastTransport::HardwareMulticast;
+    uint32_t chain_successor_x_ = NO_CHAIN_NEIGHBOR;
+    uint32_t chain_successor_y_ = NO_CHAIN_NEIGHBOR;
 };
 
 // =============================================================================
@@ -300,6 +317,8 @@ public:
     // outlive the pipe. McastArgs::receiver() supplies a pointer into the stable RT-argument block;
     // a by-hand caller supplies storage whose scope covers every pipe use.
     explicit ReceiverPipe(const Noc& noc, const uint32_t* sender_coords);
+    explicit ReceiverPipe(
+        const Noc& noc, const uint32_t* sender_coords, McastTransport transport, const uint32_t* chain_topology);
 
     // Handle receiver readiness when enabled, then wait for data from the sender selected by `round`.
     // Sender selection repeats every NUM_SENDERS rounds, so callers pass the absolute work round.
@@ -310,11 +329,22 @@ public:
     uint32_t receive_signal();
 
 private:
+    FORCE_INLINE void chain_wait_for_predecessor_();
+    FORCE_INLINE void chain_wait_for_successor_();
+    FORCE_INLINE uint32_t chain_consume_signal_();
+    FORCE_INLINE void chain_forward_payload_(uint32_t dst_l1, uint32_t size_bytes);
+    FORCE_INLINE void chain_forward_signal_(uint32_t value);
+
     Noc noc_;
     Semaphore<> data_ready_;
     Semaphore<> consumer_ready_;
     const uint32_t* coords_;  // non-owning sender coord pairs [x0,y0,...]; storage outlives this pipe
     uint32_t round_ = 0;      // monotone round counter for DataReadySignal::Counter
+    McastTransport transport_ = McastTransport::HardwareMulticast;
+    uint32_t chain_predecessor_x_ = NO_CHAIN_NEIGHBOR;
+    uint32_t chain_predecessor_y_ = NO_CHAIN_NEIGHBOR;
+    uint32_t chain_successor_x_ = NO_CHAIN_NEIGHBOR;
+    uint32_t chain_successor_y_ = NO_CHAIN_NEIGHBOR;
 };
 
 // =============================================================================
@@ -350,10 +380,13 @@ private:
 //        followed by [role flags, sender phase]
 //   RT block, extended family:
 //        [4*max_rectangles packed rectangle words, 2*num_senders sender-coordinate words,
-//         4 transport-topology words, role flags, sender phase, rectangle count, ack count, transport]
+//         predecessor_x, predecessor_y, successor_x, successor_y,
+//         role flags, sender phase, rectangle count, ack count, transport]
 //        The host pads each group's rectangle list to the family maximum, so every core keeps one
 //        compile-time-decoded boundary while its live rectangle count and handshake count remain
 //        per-group runtime values.
+//        transport 0 uses exact hardware multicast; transport 1 uses the predecessor/successor pair
+//        for a fixed-sender row-major forwarding chain. Missing neighbors are UINT32_MAX.
 //
 // The pipe *behaviour* (pre_handshake, data-ready signal, dense/divergent ack, rotating) is NOT a
 // call-site knob any more — the host computes each and rides it on the wire, and McastArgs feeds them
@@ -469,7 +502,15 @@ struct McastArgsImpl<true, CT_BASE, RT_BASE> {
         ASSERT(can_send());
         if constexpr (extended) {
             const uint32_t* rectangles = reinterpret_cast<const uint32_t*>(get_arg_addr(RT_BASE));
-            return SenderPipeFor<NOC_ID>(noc, rectangles, rectangle_count(), ack_count());
+            const uint32_t* chain_topology = reinterpret_cast<const uint32_t*>(
+                get_arg_addr(RT_BASE + 4u * max_rectangles + 2u * sender_coord_runtime_args()));
+            return SenderPipeFor<NOC_ID>(
+                noc,
+                rectangles,
+                rectangle_count(),
+                ack_count(),
+                static_cast<McastTransport>(transport()),
+                chain_topology);
         }
         return SenderPipeFor<NOC_ID>(noc, rect<NOC_ID>(), legacy_ack_count);
     }
@@ -482,6 +523,11 @@ struct McastArgsImpl<true, CT_BASE, RT_BASE> {
         ASSERT(can_receive());
         const uint32_t* coords =
             reinterpret_cast<const uint32_t*>(get_arg_addr(RT_BASE + sender_coords_runtime_offset()));
+        if constexpr (extended) {
+            const uint32_t* chain_topology = reinterpret_cast<const uint32_t*>(
+                get_arg_addr(RT_BASE + 4u * max_rectangles + 2u * sender_coord_runtime_args()));
+            return ReceiverPipe(noc, coords, static_cast<McastTransport>(transport()), chain_topology);
+        }
         return ReceiverPipe(noc, coords);
     }
 

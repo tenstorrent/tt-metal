@@ -45,6 +45,21 @@ def test_mcast_args_has_one_template_owned_runtime_base():
     )
 
 
+def test_family_chain_topology_and_relay_are_helper_owned():
+    host = (REPO_ROOT / "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp").read_text()
+    helper = (REPO_ROOT / "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp").read_text()
+    implementation = (REPO_ROOT / "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.inl").read_text()
+
+    assert "state.chain_order.push_back(group.senders().front())" in host
+    assert "lhs.y == rhs.y ? lhs.x < rhs.x : lhs.y < rhs.y" in host
+    assert "chain_topology_args_" in host
+    assert "rotating irregular chain forwarding is not supported" in host
+    assert "ChainForward = 1" in helper
+    assert "chain_topology" in helper
+    assert "chain_forward_payload_" in implementation
+    assert "chain_forward_signal_" in implementation
+
+
 def _migrated_sources():
     ledger = json.loads(LEDGER_PATH.read_text())
     kernels = [REPO_ROOT / entry["kernel"] for entry in ledger["entries"] if entry["status"] == "migrated"]

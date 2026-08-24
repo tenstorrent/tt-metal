@@ -216,19 +216,24 @@ def _run_family_pipe(
     n_iters=3,
     handshake=True,
     sender_noc=0,
+    use_chain_forwarding=False,
 ):
     """Run one McastFamily whose group specs are (exact receiver ranges, fixed sender)."""
     groups = []
-    receiver_ranges = []
     sender_ranges = []
     receiver_coords = []
     sender_coords = []
     for ranges, sender in group_specs:
         receiver_set = _core_range_set(ranges)
-        groups.append(ttnn.McastGroup(receiver_set, ttnn.CoreCoord(*sender)))
-        receiver_ranges.extend(ranges)
+        groups.append(
+            ttnn.McastGroup(
+                receiver_set,
+                ttnn.CoreCoord(*sender),
+                use_chain_forwarding=use_chain_forwarding,
+            )
+        )
         sender_ranges.append((sender, sender))
-        receiver_coords.extend(_coords_in_ranges(ranges))
+        receiver_coords.extend(coord for coord in _coords_in_ranges(ranges) if coord != sender)
         sender_coords.append(sender)
 
     family = ttnn.McastFamily(
@@ -240,9 +245,9 @@ def _run_family_pipe(
             data_ready=data_ready_mode,
         ),
     )
-    receiver_crs = _core_range_set(receiver_ranges)
+    receiver_crs = _core_range_set([(coord, coord) for coord in receiver_coords])
     sender_crs = _core_range_set(sender_ranges)
-    participating_crs = _core_range_set(receiver_ranges + sender_ranges)
+    participating_crs = family.participating_cores
 
     payload = (
         torch.arange(0, payload_tiles * 1024, dtype=torch.float32)
@@ -359,7 +364,71 @@ def test_family_concurrent_groups_with_different_rectangle_counts(device):
     assert family.num_receivers(ttnn.CoreCoord(6, 0)) == 6
 
 
-def _run_family_control_signal(device, data_ready_mode, n_iters, control_value=0, expected_value=None):
+def test_family_two_core_payload_chain(device):
+    sender = (0, 0)
+    family = _run_family_pipe(
+        device,
+        [([((0, 0), (0, 0)), ((2, 0), (2, 0))], sender)],
+        use_chain_forwarding=True,
+        handshake=True,
+    )
+    assert not family.uses_compact_wire
+
+
+@pytest.mark.parametrize("data_ready_mode", [ttnn.McastDataReady.Flag, ttnn.McastDataReady.Counter])
+@pytest.mark.parametrize("sender_noc", [0, 1], ids=["noc0", "noc1"])
+def test_family_multi_hop_payload_chain(device, data_ready_mode, sender_noc):
+    _run_family_pipe(
+        device,
+        [
+            (
+                [
+                    ((0, 0), (0, 0)),
+                    ((2, 0), (2, 0)),
+                    ((0, 2), (0, 2)),
+                    ((2, 2), (2, 2)),
+                ],
+                (0, 0),
+            )
+        ],
+        data_ready_mode=data_ready_mode,
+        sender_noc=sender_noc,
+        use_chain_forwarding=True,
+        handshake=True,
+    )
+
+
+def test_family_dense_chain_request_falls_back_to_multicast(device):
+    family = _run_family_pipe(
+        device,
+        [([((0, 0), (3, 0))], (0, 0))],
+        use_chain_forwarding=True,
+        handshake=True,
+    )
+    assert family.uses_compact_wire
+
+
+def test_family_selects_dense_multicast_and_irregular_chain_per_group(device):
+    family = _run_family_pipe(
+        device,
+        [
+            ([((0, 0), (2, 0))], (0, 0)),
+            ([((4, 0), (4, 0)), ((6, 0), (6, 0)), ((4, 2), (4, 2))], (4, 0)),
+        ],
+        use_chain_forwarding=True,
+        handshake=True,
+    )
+    assert not family.uses_compact_wire
+
+
+def _run_family_control_signal(
+    device,
+    data_ready_mode,
+    n_iters,
+    control_value=0,
+    expected_value=None,
+    use_chain_forwarding=False,
+):
     ranges = [((0, 0), (1, 0)), ((0, 2), (1, 2)), ((0, 4), (1, 4))]
     sender = (4, 0)
     receiver_coords = _coords_in_ranges(ranges)
@@ -367,7 +436,13 @@ def _run_family_control_signal(device, data_ready_mode, n_iters, control_value=0
     sender_crs = _core_range_set([(sender, sender)])
     family = ttnn.McastFamily(
         device,
-        [ttnn.McastGroup(receiver_crs, ttnn.CoreCoord(*sender))],
+        [
+            ttnn.McastGroup(
+                receiver_crs,
+                ttnn.CoreCoord(*sender),
+                use_chain_forwarding=use_chain_forwarding,
+            )
+        ],
         ttnn.McastConfig(handshake=True, data_ready=data_ready_mode),
     )
 
@@ -445,11 +520,22 @@ def _run_family_control_signal(device, data_ready_mode, n_iters, control_value=0
     ],
     ids=["flag", "counter"],
 )
-def test_family_multi_rectangle_control_signal(device, data_ready_mode, n_iters, control_value, expected_value):
-    _run_family_control_signal(device, data_ready_mode, n_iters, control_value, expected_value)
+@pytest.mark.parametrize("use_chain_forwarding", [False, True], ids=["rectangles", "chain"])
+def test_family_multi_rectangle_control_signal(
+    device, data_ready_mode, n_iters, control_value, expected_value, use_chain_forwarding
+):
+    _run_family_control_signal(
+        device,
+        data_ready_mode,
+        n_iters,
+        control_value,
+        expected_value,
+        use_chain_forwarding,
+    )
 
 
-def test_family_repeated_dynamic_destination_and_size(device):
+@pytest.mark.parametrize("use_chain_forwarding", [False, True], ids=["rectangles", "chain"])
+def test_family_repeated_dynamic_destination_and_size(device, use_chain_forwarding):
     ranges = [((0, 0), (1, 0)), ((0, 2), (1, 2)), ((0, 4), (1, 4))]
     sender = (4, 0)
     receiver_coords = _coords_in_ranges(ranges)
@@ -458,7 +544,13 @@ def test_family_repeated_dynamic_destination_and_size(device):
     participating_crs = _core_range_set(ranges + [(sender, sender)])
     family = ttnn.McastFamily(
         device,
-        [ttnn.McastGroup(receiver_crs, ttnn.CoreCoord(*sender))],
+        [
+            ttnn.McastGroup(
+                receiver_crs,
+                ttnn.CoreCoord(*sender),
+                use_chain_forwarding=use_chain_forwarding,
+            )
+        ],
         ttnn.McastConfig(handshake=True),
     )
 
