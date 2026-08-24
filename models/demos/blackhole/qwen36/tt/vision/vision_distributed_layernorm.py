@@ -38,6 +38,7 @@ class DistributedLayerNorm(LightweightModule):
         ccl_topology=ttnn.Topology.Linear,
         replicated_input: bool = False,
         ccl_kwargs=None,
+        sharded_fp32_acc: bool = False,
     ):
         super().__init__()
         self.tt_ccl = tt_ccl
@@ -58,6 +59,8 @@ class DistributedLayerNorm(LightweightModule):
             state_dict_prefix=state_dict_prefix,
             weight_cache_path=weight_cache_path,
             weight_dtype=weight_dtype,
+            # Pass-through only; the caller (vision_block) owns the SKU gate.
+            sharded_fp32_acc=sharded_fp32_acc,
         )
 
     def forward(self, x: ttnn.Tensor, memory_config=None) -> ttnn.Tensor:
