@@ -124,6 +124,11 @@ std::optional<TopKCoreConfig> find_topk_core_config_impl(
     // Constants fitted on p150a silicon (4 configs across 8192/32768-wide k=64 cells,
     // <0.5% residual): a local tile costs ~3.5x a final tile — locals run full
     // 64-element sorts per tile while the final core runs merge/rebuild pair-ops.
+    // Wormhole impact: this selection logic is arch-neutral and changes nothing
+    // Wormhole-specific — the low-tile-row eligibility gate applies identically
+    // there, and the start-split clamp above only binds at the eligibility floor
+    // (a zero split needs lp2(max_cores) > width-in-tiles; Wormhole grids top out
+    // at lp2(max_cores) = 32, so W=1024's 32 tiles never truncate to zero there).
     constexpr uint32_t kLocalCostFactor = 7;
     constexpr uint32_t kFinalCostFactor = 2;
     std::optional<TopKCoreConfig> best_config = std::nullopt;
