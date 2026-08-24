@@ -12,20 +12,30 @@
 # live run_test.sh sim), so a running sim is never disturbed. Pass --force to
 # reap regardless — e.g. from a batch trap after its child runs are killed.
 #
+# Scope: by default reaps ONLY this run's own job, identified by --tag (defaults
+# to $NNG_SOCKET_NAME). That is required once more than one slot runs under this
+# account — the untagged form is a blanket `pkill -u $USER` that would kill a
+# peer slot's healthy job. Pass --all for the old fleet-wide sweep (cron/batch
+# cleanup, where killing everything of ours is the intent).
+#
 # Usage:
 #   reap_stale_emu.sh [--arch quasar] [--emu-host soc-l-12]
-#                     [--lock /shared/quasar-aether.lock] [--force]
+#                     [--lock /shared/quasar-aether.lock]
+#                     [--tag <NNG_SOCKET_NAME>] [--all] [--force]
 set -u
 
 ARCH="quasar"
 EMU_HOST="${EMU_HOST:-${QSR_AETHER_HOST:-${SSH_MACHINE_NAME:-soc-l-12}}}"
 LOCKFILE="${QSR_AETHER_LOCK:-/tmp/tt-llk-test.lock}"
 FORCE="false"
+TAG="${NNG_SOCKET_NAME:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --arch)     ARCH="$2";     shift 2 ;;
     --emu-host) EMU_HOST="$2"; shift 2 ;;
     --lock)     LOCKFILE="$2"; shift 2 ;;
+    --tag)      TAG="$2";      shift 2 ;;
+    --all)      TAG="";        shift   ;;
     --force)    FORCE="true";  shift   ;;
     -h|--help)  grep '^#' "$0" | sed 's/^# \?//'; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
@@ -49,6 +59,30 @@ fi
 # Remote script: kill each emu make's whole process group, then hard-kill any
 # straggler zrun/vovsh. A detached VOV farm job that survives still falls back to
 # EMULATOR_TIMEOUT. $USER/$found/$p/$g are evaluated on the remote (single-quoted).
+if [[ -n "$TAG" ]]; then
+  # Tag-scoped reap. MANDATORY once more than one slot can run under this
+  # account: the untagged form below is a blanket `pkill -u $USER`, so a peer
+  # slot's healthy job would be killed by another slot's pre-flight reap. It
+  # correctly spares OTHER users, but not our own concurrent runs.
+  #
+  # The tag is NNG_SOCKET_NAME, which the sim launcher passes through as
+  # `make ... NAME=<tag>`. That reaches the remote cmdline two ways: the make
+  # process carries `NAME=<tag>` directly, and its detached zrun/tee children
+  # carry the run directory `.../test_umd_remote_<config>_<tag>/`.
+  remote_cmd="
+tag=$(printf '%q' "$TAG")
+found=\$(pgrep -u \"\$USER\" -f \"make -C verification(/emu)? (sim-test|test) .*NAME=\${tag}( |\\\$)\" 2>/dev/null)
+for p in \$found; do
+  g=\$(ps -o pgid= -p \"\$p\" 2>/dev/null | tr -d ' ')
+  [ -n \"\$g\" ] && kill -TERM -\"\$g\" 2>/dev/null
+done
+sleep 2
+pkill -9 -u \"\$USER\" -f \"make -C verification(/emu)? (sim-test|test) .*NAME=\${tag}( |\\\$)\" 2>/dev/null
+pkill -9 -u \"\$USER\" -f \"(test_umd_remote|umd_remote_test)_[^/]*_\${tag}/\" 2>/dev/null
+n=\$(printf '%s\\n' \"\$found\" | grep -c . 2>/dev/null); n=\${n:-0}
+echo \"[reap] \$(hostname): killed \$n Aether make job(s) for tag \${tag}\"
+true"
+else
 remote_cmd='
 found=$(pgrep -u "$USER" -f "make -C verification(/emu)? (sim-test|test)" 2>/dev/null)
 for p in $found; do
@@ -64,6 +98,7 @@ pkill -9 -u "$USER" -f "make -C verification(/emu)? (sim-test|test)" 2>/dev/null
 n=$(printf "%s\n" "$found" | grep -c . 2>/dev/null); n=${n:-0}
 echo "[reap] $(hostname): killed $n Aether make job(s)"
 true'
+fi
 
 # Feed over stdin to bash -s: the ssh command-argument form is re-parsed by the
 # remote login shell and fails here (exit 255); stdin goes straight to bash.

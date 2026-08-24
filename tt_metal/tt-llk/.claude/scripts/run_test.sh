@@ -199,9 +199,28 @@ _validate() {
   # QSR_AETHER_LOCK (a shared-filesystem path) when configured so tensix-l-04
   # and tensix-l-05 cannot start or reap each other's runs. Other paths retain
   # the historical node-local lock.
+  # Measured 2026-08-24: Zebu grants concurrent 1x3 jobs freely (two submitted in
+  # the same second got modules 26-27 @U6.M2 and 28-29 @U7.M0, alongside three
+  # other users' jobs on group zs5). The emulator is NOT the scarce resource.
+  #
+  # What IS scarce is the NNG callback channel: IRD forwards exactly ONE port per
+  # reservation (<host>:$P_USER_DBD_PORT -> container:5555; any other port is
+  # refused from the emu host). So a reservation can host exactly one live emu
+  # session, and the correct exclusion is PER RESERVATION, not fleet-wide.
+  #
+  # Hence the lock is qualified by hostname: each compute reservation serializes
+  # its own solves, and tensix-l-04 and tensix-l-05 run concurrently -> 2 slots.
+  # Keeping it under QSR_AETHER_LOCK's shared directory means every runner on a
+  # host still shares one file, and reap_stale_emu.sh's "is a sim live here?"
+  # check stays correct. Set QSR_AETHER_LOCK_SCOPE=global to restore the old
+  # fleet-wide serialization.
   if [[ -z "$LOCKFILE" ]]; then
     if [[ "$ARCH" == "quasar" && -n "${QSR_AETHER_LOCK:-}" ]]; then
-      LOCKFILE="$QSR_AETHER_LOCK"
+      if [[ "${QSR_AETHER_LOCK_SCOPE:-host}" == "global" ]]; then
+        LOCKFILE="$QSR_AETHER_LOCK"
+      else
+        LOCKFILE="${QSR_AETHER_LOCK}.$(hostname 2>/dev/null || uname -n)"
+      fi
     else
       LOCKFILE="/tmp/tt-llk-test.lock"
     fi
@@ -721,13 +740,13 @@ _run_consumer() {
     # Stalled before tt-exalens ever reported ready → a boot wedge, not a kernel
     # hang. Transient (emulator congestion) → ENV so the caller may retry.
     echo "[run_test] ENV: stalled before tt-exalens became ready (boot wedge)" >&2
-    [[ -x "$REAP" ]] && bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >&2 2>&1 || true
+    [[ -x "$REAP" ]] && bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --tag "$RUN_TAG" --force >&2 2>&1 || true
     CONSUMER_TIMED_OUT="true" CONSUMER_INFRA_CODE="emulator_boot_stalled"
     code=3
   elif [[ -f "$hangflag" ]]; then
     echo "[run_test] HANG: no output for ${STALL}s" >&2
     if [[ "$MODE" == "simulator" ]]; then
-      [[ -x "$REAP" ]] && bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >&2 2>&1 || true
+      [[ -x "$REAP" ]] && bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --tag "$RUN_TAG" --force >&2 2>&1 || true
     else
       _hw_hang_cleanup
     fi
@@ -735,7 +754,7 @@ _run_consumer() {
     code=5
   elif [[ "$MODE" == "simulator" && $rc -ne 0 ]] && ! grep -qE "$READY_RE" "$log" 2>/dev/null; then
     echo "[run_test] ENV: tt-exalens never became ready" >&2
-    [[ -x "$REAP" ]] && bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >&2 2>&1 || true
+    [[ -x "$REAP" ]] && bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --tag "$RUN_TAG" --force >&2 2>&1 || true
     CONSUMER_INFRA_CODE="emulator_not_ready"
     code=3
   elif [[ "$MODE" == "hardware" && $rc -ne 0 ]] && grep -qF "TENSIX TIMED OUT" "$log" 2>/dev/null; then
@@ -814,7 +833,7 @@ _run_under_lock() {
   # Pre-flight reap under the lock: any live emu job now is an orphan from a run
   # whose peer died non-gracefully. Clear it before booting ours.
   if [[ "$MODE" == "simulator" && -x "$REAP" ]]; then
-    bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >&2 2>&1 || true
+    bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --tag "$RUN_TAG" --force >&2 2>&1 || true
   fi
 
   local collection_rc=0
@@ -860,7 +879,7 @@ _cleanup() {
     while kill -0 "$CONSUMER_PID" 2>/dev/null && [[ $waited -lt $GRACE_SECS ]]; do sleep 1; waited=$((waited + 1)); done
     kill -9 "$CONSUMER_PID" 2>/dev/null
     if [[ "${MODE:-}" == "simulator" && -x "${REAP:-}" ]]; then
-      bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >/dev/null 2>&1 || true
+      bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --tag "$RUN_TAG" --force >/dev/null 2>&1 || true
     fi
   fi
 }
