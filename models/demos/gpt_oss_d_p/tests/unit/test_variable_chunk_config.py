@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """CPU-only tests for variable-chunk size resolution (no device)."""
 
-import pytest
 
 from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import resolve_chunk_sizes
 
@@ -24,8 +23,8 @@ def test_128k_pair():
     assert resolve_chunk_sizes(8192, (1024,), 131072) == (8192, 1024)
 
 
-def test_non_divisible_rejected():
-    with pytest.raises(AssertionError):
+def test_non_divisible_rejected(expect_error):
+    with expect_error(AssertionError, "must be a multiple of every supported chunk size"):
         resolve_chunk_sizes(8192, (), 56320)  # 56320 % 8192 != 0
-    with pytest.raises(AssertionError):
+    with expect_error(AssertionError, "must be a multiple of every supported chunk size"):
         resolve_chunk_sizes(8192, (1000,), 57344)  # 1000 does not divide
