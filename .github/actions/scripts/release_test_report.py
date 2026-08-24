@@ -272,7 +272,7 @@ def render_plain(report, meta):
         "only compiles, is not evidence.",
     ]
     for req in without:
-        why = req.get("_evidence") or "no test executed by the release gate"
+        why = req.get("evidence") or "no test executed by the release gate"
         note = " FAILED this run." if req["failed"] else ""
         out.append(f"{req['key']} ({req['milestone']}) -- {req['summary']}: {why}.{note}")
         out += _lines(req["failed"])
@@ -376,7 +376,7 @@ def render_markdown(report, meta):
     ]
     out += ["| Requirement | Milestone | Owner | Why |", "|---|---|---|---|"]
     for req in [r for r in scoped if not r["passed"]]:
-        why = req.get("_evidence") or "no test executed by the release gate"
+        why = req.get("evidence") or "no test executed by the release gate"
         if req["failed"]:
             why = "**failed this run**: " + ", ".join(
                 f"`{format_test(r['config'], r['group'], r['filter'], r['runner'])}`" for r in req["failed"]
@@ -481,7 +481,8 @@ def main():
         print("JIRA_SKIP set; report not filed")
         return
 
-    with_evidence = sum(1 for r in report["requirements"] if r["passed"])
+    scoped = _in_scope(report["requirements"])
+    with_evidence = sum(1 for r in scoped if r["passed"])
     status = {PASSED: "all gating tests passed", FAILED: "failures present", INCONCLUSIVE: "inconclusive"}[verdict]
     print(
         file_issue(
@@ -490,8 +491,7 @@ def main():
             token=_env("JIRA_API_TOKEN", required=True),
             project=_env("JIRA_PROJECT_KEY", required=True),
             summary=(
-                f"Release test evidence {version}: {status} "
-                f"({with_evidence}/{len(report['requirements'])} requirements covered)"
+                f"Release test evidence {version}: {status} " f"({with_evidence}/{len(scoped)} requirements covered)"
             ),
             issue_type=_env("JIRA_ISSUE_TYPE", "Task"),
             description=render_plain(report, meta) + "\n",
