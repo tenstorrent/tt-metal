@@ -439,6 +439,9 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
     // ---- Per-core runtime args (name-first tables built from the legacy node-first loop) ----
     // cache_start_id comes from the shared helper; input_start_id / batch_start_id / the per-core head
     // count are shape-only and computed here, mirroring the legacy loop order exactly.
+    // NOTE: the kernels' "B" arg is the per-head cache-user count used as the next-head wrap threshold,
+    // so it must carry Bcache (cache batch), NOT the input's padded height B. B is used only for the
+    // input-side work-split math (num_batched_heads, batch_start_id).
     std::uint32_t g1_numcores = core_group_1.num_cores();
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
     const auto dyn = compute_update_cache_dynamic_args(operation_attributes, tensor_args);
@@ -457,7 +460,7 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
             reader_run_args.runtime_arg_values,
             core,
             {{"Wt", Wt},
-             {"B", B},
+             {"B", Bcache},
              {"num_batched_heads", num_batched_heads_per_core},
              {"cache_total_num_tiles", cache_total_num_tiles},
              {"cache_batch_num_tiles", cache_batch_num_tiles},
@@ -469,7 +472,7 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
             writer_run_args.runtime_arg_values,
             core,
             {{"Wt", Wt},
-             {"B", B},
+             {"B", Bcache},
              {"num_batched_heads", num_batched_heads_per_core},
              {"cache_total_num_tiles", cache_total_num_tiles},
              {"cache_batch_num_tiles", cache_batch_num_tiles},
