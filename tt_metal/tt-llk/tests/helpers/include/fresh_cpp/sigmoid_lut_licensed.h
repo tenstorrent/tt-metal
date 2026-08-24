@@ -34,7 +34,9 @@ namespace ckernel::sfpu
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_sigmoid_lut_licensed_cpp()
 {
-#pragma GCC unroll 8
+    // NO unroll pragma: measured-negative on this predicated-tree shape
+    // (headline-laneGI2-20260824 geluappx-fresh +654.93 unrolled vs
+    // headline-laneGI-20260824 +559.07 rolled).
     for (int d = 0; d < ITERATIONS; ++d)
     {
         const sfpi::vFloat x = sfpi::dst_reg[0];
