@@ -73,12 +73,11 @@
 # --- DIAGNOSTIC (mtairum): good-host SCALE sweep N150/N300/T3K on ONE T3K box to
 # localize f10cs05's per-layer deficit vs scale. Same silicon at each scale; tt-smi -r
 # between scales (privileged container). Pair vs f10cs05: N150 9.4 / N300 22-24 / T3K 51.4.
-- name: Llama 3.1-8B N300 (goodhost diag)
+- name: Llama 3.1-8B N300 collective latency (goodhost diag)
   cmd: |
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    export HF_HOME=/mnt/MLPerf/huggingface HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
-    echo "GOODHOST_SCALE_INFO hostname=$(hostname) commit=$(git rev-parse --short HEAD)"
-    echo -n "GOODHOST_SCALE N300 : "; MESH_DEVICE=N300 pytest -s --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32" --batch_size 1 --max_generated_tokens 32 2>&1 | grep -oE "Average speed: [0-9.]+ms @ [0-9.]+ tok/s/user" | tail -1; echo
+    export ARCH_NAME=wormhole_b0
+    echo "GOODHOST_AGLAT_INFO hostname=$(hostname) commit=$(git rev-parse --short HEAD)"
+    pytest -s --timeout 600 tests/nightly/t3000/ccl/test_probe_n300_collective.py 2>&1 | grep -E "N300_AG_LAT|passed|failed"
   model: llama3.1-8b
   model_family: Llama
   skus:
