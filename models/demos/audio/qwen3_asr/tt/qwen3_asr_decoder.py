@@ -342,3 +342,57 @@ class Qwen3ASRDecoder(Transformer):
             flush=True,
         )
         return out
+
+    def _decode_loop_2cq_iter(self, nxt, pos, max_new_tokens, eos_id, count):
+        """2CQ decode loop that YIELDS each token instead of collecting it. Mirrors
+        _decode_loop_2cq exactly (same pipelining); eos terminates without being
+        yielded. `count` is the number of tokens already produced (prefill = 1)."""
+        if getattr(self, "_decode_trace_id", None) is None:
+            self._capture_decode_trace(nxt, pos)
+        pending = None
+        while count < max_new_tokens:
+            host, ev = self._enqueue_traced_step()
+            if pending is not None:
+                tok = self._consume_token_host(*pending)
+                count += 1
+                if tok == eos_id:
+                    return
+                yield tok
+            pending = (host, ev)
+            pos += 1
+        if pending is not None:
+            tok = self._consume_token_host(*pending)
+            if tok != eos_id:
+                yield tok
+
+    @torch.no_grad()
+    def generate_iter(self, inputs_embeds, max_new_tokens=64, eos_id=151645):
+        """Streaming variant of generate(): yields token ids as they are produced
+        (never the trailing eos). Intentionally mirrors generate()'s loop rather
+        than sharing it, so the proven, gated batch path stays byte-for-byte
+        untouched while the server can consume tokens incrementally for SSE."""
+        use_trace = DECODE_TRACE and ONDEVICE_ARGMAX
+        use_2cq = use_trace and INGRAPH_DECODE and USE_2CQ
+        prefill_out, S = self.prefill_logits(inputs_embeds)
+        nxt = int(prefill_out if ONDEVICE_ARGMAX else prefill_out.argmax())
+        try:
+            if nxt == eos_id:
+                return
+            yield nxt
+            count = 1
+            if use_2cq:
+                yield from self._decode_loop_2cq_iter(nxt, S, max_new_tokens, eos_id, count)
+            else:
+                pos = S
+                cur = nxt
+                while count < max_new_tokens and cur != eos_id:
+                    step = self.decode_token_traced(cur, pos) if use_trace else self.decode_token(cur, pos)
+                    cur = int(step if ONDEVICE_ARGMAX else step.argmax())
+                    count += 1
+                    if cur == eos_id:
+                        break
+                    yield cur
+                    pos += 1
+        finally:
+            if use_trace:
+                self._release_decode_trace()
