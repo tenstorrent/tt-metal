@@ -145,19 +145,25 @@ def parametrize_full_depth():
     return decorator
 
 
-def build_full_depth_model(mesh_device):
-    """Full-depth TT model + tokenizer + a ``[1, PROMPT_LEN]`` prompt.
+def build_full_depth_model(mesh_device, *, max_seq_len=None, prompt_len=None):
+    """Full-depth TT model + tokenizer + a ``[1, prompt_len]`` prompt.
 
     No ``n_layers`` / ``layer_indices`` truncation, and the depth is asserted rather
     than assumed — a truncated stack would still produce plausible logits and quietly
     turn this into a much weaker test.
+
+    ``max_seq_len`` / ``prompt_len`` default to this module's single-prompt geometry;
+    the teacher-forcing e2e test passes its own, since it consumes far more than one
+    prompt's worth of positions.
     """
     from transformers import AutoTokenizer
 
     from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
     mesh_device.enable_program_cache()
-    model = Qwen36Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=NUM_BLOCKS * BLOCK_SIZE)
+    model = Qwen36Model.from_pretrained(
+        mesh_device, max_batch_size=1, max_seq_len=max_seq_len or NUM_BLOCKS * BLOCK_SIZE
+    )
     args = model.args
     num_hidden_layers = args.hf_config.get_text_config().num_hidden_layers
     assert args.n_layers == num_hidden_layers == len(model.layers), (
@@ -166,7 +172,7 @@ def build_full_depth_model(mesh_device):
     )
 
     tokenizer = AutoTokenizer.from_pretrained(args.CKPT_DIR, trust_remote_code=True)
-    token_ids = _build_prompt(tokenizer, PROMPT_LEN)
+    token_ids = _build_prompt(tokenizer, prompt_len or PROMPT_LEN)
     logger.info(
         f"Full-depth harness: {args.CKPT_DIR} — {args.n_layers} layers, dim={args.dim}, vocab={args.vocab_size}, "
         f"mesh={tuple(mesh_device.shape)} ({model.num_devices} device(s)), prompt={token_ids.shape[1]}"
@@ -230,12 +236,16 @@ def hf_reference(ckpt_dir, token_ids, decode_steps=0):
     return prefill_logits, decode_logits, teacher_tokens
 
 
-def allocate_paged_kv(model):
-    """Paged KV cache + GDN external state; returns the identity page table."""
+def allocate_paged_kv(model, num_blocks=NUM_BLOCKS):
+    """Paged KV cache + GDN external state; returns the identity page table.
+
+    ``num_blocks`` must cover every position the caller will touch — prompt plus, for
+    a decode loop, every step it will take.
+    """
     args = model.args
     n_kv = args.n_local_kv_heads if model.num_devices > 1 else args.n_kv_heads
-    model.allocate_kv_caches([NUM_BLOCKS, n_kv, BLOCK_SIZE, args.head_dim], ttnn.bfloat16, batch_size=1)
-    return torch.arange(NUM_BLOCKS, dtype=torch.int32).reshape(1, NUM_BLOCKS)
+    model.allocate_kv_caches([num_blocks, n_kv, BLOCK_SIZE, args.head_dim], ttnn.bfloat16, batch_size=1)
+    return torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
 
 
 def tt_prefill_logits(model, token_ids, page_table):
