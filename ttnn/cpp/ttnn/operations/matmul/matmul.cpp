@@ -4,6 +4,7 @@
 
 #include "matmul.hpp"
 
+#include <bit>
 #include <numeric>
 #include <variant>
 
@@ -219,7 +220,7 @@ static ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
-    const registry::CallOrigin call_origin,
+    const registry::CallSemantics call_semantics,
     ttnn::prim::MatmulParams& parameters,
     std::optional<ttnn::Tensor>& optional_output_tensor) {
     if (input_tensor_a.logical_shape().rank() == 0 || input_tensor_b.logical_shape().rank() == 0) [[unlikely]] {
@@ -233,7 +234,7 @@ static ttnn::Tensor bound_matmul(
         const auto registry_resolution = registry::resolve(
             registry::current_mode(),
             registry::Eligibility{
-                .call_origin = call_origin,
+                .call = call_semantics,
                 .has_program_config = parameters.program_config.has_value(),
                 .has_compute_kernel_config = parameters.compute_kernel_config.has_value(),
                 .has_user_core_grid = parameters.user_core_coord.has_value(),
@@ -439,7 +440,7 @@ Tensor matmul(
         input_tensor_a,
         input_tensor_b,
         /*bias=*/std::nullopt,
-        registry::CallOrigin::PublicMatmul,
+        registry::CallSemantics{.domain = registry::OperationDomain::DenseMatmul},
         matmul_params,
         optional_output_tensor);
 }
@@ -485,7 +486,7 @@ Tensor linear(
         input_tensor_a,
         input_tensor_b,
         bias,
-        registry::CallOrigin::IneligibleSharedCaller,
+        registry::CallSemantics{.domain = registry::OperationDomain::Linear},
         matmul_params,
         optional_output_tensor);
 }
@@ -612,7 +613,10 @@ Tensor addmm(
         mat1_tensor,
         mat2_tensor,
         std::nullopt,
-        registry::CallOrigin::IneligibleSharedCaller,
+        registry::CallSemantics{
+            .domain = registry::OperationDomain::Addmm,
+            .alpha_f32_bits = std::bit_cast<std::uint32_t>(alpha),
+            .beta_f32_bits = std::bit_cast<std::uint32_t>(beta)},
         matmul_params,
         optional_output_tensor);
 

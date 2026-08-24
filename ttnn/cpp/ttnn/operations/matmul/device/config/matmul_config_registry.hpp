@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -13,13 +14,22 @@ namespace ttnn::operations::matmul::registry {
 
 enum class Mode { Off, Shadow, On };
 
-// The shared bound_matmul helper also serves linear and addmm. Call origin is
-// explicit so adding a registry lookup cannot silently widen its semantic domain.
-enum class CallOrigin { PublicMatmul, IneligibleSharedCaller };
+// The shared bound_matmul helper serves three public operations. The domain is
+// explicit so a recipe certified for one operation can never match another.
+enum class OperationDomain { DenseMatmul, Linear, Addmm, IneligibleSharedCaller };
+
+struct CallSemantics {
+    OperationDomain domain = OperationDomain::IneligibleSharedCaller;
+    // Exact IEEE-754 binary32 spellings are part of addmm semantics. They stay
+    // absent for every other domain and avoid lossy decimal normalization.
+    std::optional<std::uint32_t> alpha_f32_bits = std::nullopt;
+    std::optional<std::uint32_t> beta_f32_bits = std::nullopt;
+};
 
 enum class ResolutionReason {
     Disabled,
-    IneligibleCallOrigin,
+    IneligibleOperationDomain,
+    MalformedOperationSemantics,
     ExplicitOverride,
     UnsupportedSemantics,
     EmptyRegistry,
@@ -27,7 +37,7 @@ enum class ResolutionReason {
 };
 
 struct Eligibility {
-    CallOrigin call_origin = CallOrigin::IneligibleSharedCaller;
+    CallSemantics call;
     bool has_program_config = false;
     bool has_compute_kernel_config = false;
     bool has_user_core_grid = false;
