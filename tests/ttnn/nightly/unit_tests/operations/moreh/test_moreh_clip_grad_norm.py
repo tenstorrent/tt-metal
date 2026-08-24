@@ -14,8 +14,7 @@ from tests.ttnn.utils_for_testing import assert_equal
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import TILE_HEIGHT, TILE_WIDTH
 
-# Module-scoped device: these tests all run with the default device config, so the device is
-# opened once per file instead of once per test case.
+# Module-scoped device: opens once per file instead of once per test case.
 pytestmark = pytest.mark.use_module_device
 
 

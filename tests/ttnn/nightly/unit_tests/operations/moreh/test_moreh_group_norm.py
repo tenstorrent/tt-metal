@@ -13,8 +13,7 @@ from loguru import logger
 
 from tests.ttnn.unit_tests.operations.test_utils import TILE_HEIGHT, TILE_WIDTH, to_ttnn, to_torch
 
-# Module-scoped device: these tests all run with the default device config, so the device is
-# opened once per file instead of once per test case.
+# Module-scoped device: opens once per file instead of once per test case.
 pytestmark = pytest.mark.use_module_device
 
 
