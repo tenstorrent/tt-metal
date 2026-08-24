@@ -33,10 +33,8 @@ namespace ttml::ops {
 
 namespace {
 
-// ttnn::experimental::gelu_bw takes a string, not a GeluVariant, and only special-cases the exact
-// string "tanh" -- anything else selects the exact-derivative polynomial kernel. FAST_LUT never
-// reaches here: gelu() rejects it when a gradient would be built, because ttnn has no LUT backward
-// kernel to pair with the LUT forward.
+// Unlike ttnn::gelu, ttnn::experimental::gelu_bw takes a string rather than a GeluVariant, so
+// we have to handle the string case explicitly.
 const std::string& gelu_bw_approximate(GeluVariant variant) {
     static const std::string k_none = "none";
     static const std::string k_tanh = "tanh";
@@ -59,32 +57,11 @@ autograd::TensorPtr relu(const autograd::TensorPtr& tensor) {
     return out;
 }
 
-GeluVariant gelu_variant_from_string(std::string_view name) {
-    if (name == "none" || name == "accurate") {
-        return GeluVariant::ACCURATE;
-    }
-    if (name == "tanh") {
-        return GeluVariant::TANH;
-    }
-    if (name == "fast_lut") {
-        return GeluVariant::FAST_LUT;
-    }
-    throw std::invalid_argument(
-        fmt::format("Unknown GELU variant: {}. Supported variants [none, accurate, tanh, fast_lut]", name));
-}
-
 autograd::TensorPtr gelu(const autograd::TensorPtr& tensor, GeluVariant variant) {
-    // FAST_LUT is forward-only: its backward would run the exact GELU derivative, which is not the
-    // derivative of the piecewise-linear forward, so training through it descends the wrong
-    // objective. Reject it exactly when add_backward_node() would create a node, so inference paths
-    // (GradMode::DISABLED) keep the fast kernel.
+    // Unlike ttnn, fast_lut variant is not supported (no fast-lut backward kernel)
     if (variant == GeluVariant::FAST_LUT && autograd::ctx().get_gradient_mode() == autograd::GradMode::ENABLED &&
         autograd::any_requires_grad(tensor)) {
-        throw std::invalid_argument(
-            "gelu: GeluVariant::FAST_LUT is forward-only -- ttnn has no LUT backward kernel, so the "
-            "gradient would be the exact GELU derivative rather than the derivative of the LUT "
-            "forward. Use GeluVariant::TANH for a trainable approximation, or run with gradient mode "
-            "disabled.");
+        throw std::invalid_argument("gelu: GeluVariant::FAST_LUT is not supported for training");
     }
 
     auto out = autograd::create_tensor();

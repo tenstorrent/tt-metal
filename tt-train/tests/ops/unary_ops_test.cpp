@@ -260,17 +260,6 @@ TEST_F(UnaryOpsTest, Silu) {
     EXPECT_TRUE(xt::allclose(grad_kernel, grad_composite, 8e-3F, 4e-2F));
 }
 
-TEST_F(UnaryOpsTest, GeluVariantFromString) {
-    EXPECT_EQ(gelu_variant_from_string("none"), GeluVariant::ACCURATE);
-    EXPECT_EQ(gelu_variant_from_string("accurate"), GeluVariant::ACCURATE);
-    EXPECT_EQ(gelu_variant_from_string("tanh"), GeluVariant::TANH);
-    EXPECT_EQ(gelu_variant_from_string("fast_lut"), GeluVariant::FAST_LUT);
-
-    EXPECT_THROW((void)gelu_variant_from_string("Tanh"), std::invalid_argument);
-    EXPECT_THROW((void)gelu_variant_from_string(""), std::invalid_argument);
-    EXPECT_THROW((void)gelu_variant_from_string("approximate"), std::invalid_argument);
-}
-
 // Default variant (== GeluVariant::ACCURATE) against the exact GELU and its derivative.
 // backward() seeds dL/dout = 1, so the input gradient is GELU'(x) directly.
 TEST_F(UnaryOpsTest, Gelu) {

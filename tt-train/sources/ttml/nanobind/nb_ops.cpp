@@ -13,7 +13,6 @@
 #include <span>
 #include <string>
 #include <ttnn/distributed/distributed_tensor.hpp>
-#include <variant>
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
@@ -561,24 +560,14 @@ void py_module(nb::module_& m) {
     {
         auto py_unary = static_cast<nb::module_>(m.attr("unary"));
         py_unary.def("relu", &ttml::ops::relu, nb::arg("tensor"));
-        // `variant` accepts ttnn.GeluVariant (GeluVariant is an alias of ttnn's enum, so it is that
-        // exact Python type) or one of the strings "none"/"accurate", "tanh", "fast_lut".
         py_unary.def(
             "gelu",
-            [](const autograd::TensorPtr& tensor, const std::variant<GeluVariant, std::string>& variant) {
-                return ttml::ops::gelu(
-                    tensor,
-                    std::holds_alternative<GeluVariant>(variant)
-                        ? std::get<GeluVariant>(variant)
-                        : ttml::ops::gelu_variant_from_string(std::get<std::string>(variant)));
-            },
+            &ttml::ops::gelu,
             nb::arg("tensor"),
             nb::kw_only(),
             nb::arg("variant") = GeluVariant::ACCURATE,
-            "GELU activation. `variant` takes a ttnn.GeluVariant or one of the strings\n"
-            "\"none\"/\"accurate\", \"tanh\", \"fast_lut\". FastLut is forward-only -- there is no\n"
-            "LUT backward kernel -- so it raises ValueError when `tensor` requires grad and gradient\n"
-            "mode is enabled. Use it for inference, or Tanh for a trainable approximation.");
+            "GELU activation. `variant` takes a ttnn.GeluVariant. Unlike ttnn, the FastLut variant is\n"
+            "not supported.");
         py_unary.def("silu", &ttml::ops::silu, nb::arg("tensor"), nb::arg("use_composite_bw") = false);
         py_unary.def("exp", &ttml::ops::exp, nb::arg("tensor"));
         py_unary.def("clip", &ttml::ops::clip, nb::arg("tensor"), nb::arg("lo"), nb::arg("hi"));
