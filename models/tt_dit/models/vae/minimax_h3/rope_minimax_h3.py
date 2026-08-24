@@ -10,20 +10,21 @@ Two things make this unlike every other RoPE in ``tt_dit``:
 * Only ``rope_dim_ratio * attention_head_dim = 48`` of each 64-wide head is rotated;
   the last 16 lanes pass through untouched.
 
-And the rotation pairs lane *i* with lane *i + 24*, because the reference builds 24
-angles (3 axes x 8 frequencies) and then ``.tile(2)`` duplicates them to 48 before a
-half-split ``chunk(2)``. That pairing is the reason
-``ttnn.experimental.rotary_embedding_llama`` cannot be used: on a 64-wide head it pairs
-*i* with *i + 32*, which is both the wrong partner and would rotate the pass-through
-lanes into the rotary ones.
+The reference builds 24 angles (3 axes x 8 frequencies), ``.tile(2)`` duplicates them to
+48, and a half-split ``chunk(2)`` pairs lane *i* with lane *i + 24*. Permuting the q/k
+weight rows **once at load time** so those partners become adjacent --
+``[0, 24, 1, 25, ..., 23, 47] + [48..63]`` -- turns that into an adjacent ``(2j, 2j+1)``
+pairing. Build ``cos``/``sin`` in the same permuted basis (each angle duplicated onto its
+lane pair, **cos=1 / sin=0 on the pass-through lanes 48..63**) and the rotation is exactly
+``x*cos + rot90(x)*sin`` over the full head with no slice -- 48 is not tile-aligned
+(48 % 32 = 16), so avoiding the slice is what makes this cheap.
 
-The fix avoids any slicing. Permute the q/k weight rows **once at load time** so the
-partners become adjacent -- ``[0, 24, 1, 25, ..., 23, 47] + [48..63]`` -- and then
-``ttnn.alt_complex_rotate90``, whose pairing is ``(2j, 2j+1)``, computes exactly the
-reference rotation. Build ``cos``/``sin`` in the same permuted basis, with **cos=1 and
-sin=0 on lanes 48..63**, and the pass-through falls out of ``x*cos + rot90(x)*sin``
-with no slice at all. 48 is not tile-aligned (48 % 32 = 16), so avoiding the slice is
-what makes this cheap.
+Those permuted tables are already in the stacked ``(2j, 2j+1)`` basis that
+``ttnn.experimental.rotary_embedding_llama`` consumes with the standard 32x32
+``get_rot_transformation_mat`` -- that matrix applies the same ``(2j, 2j+1)`` per-tile
+rotation as ``ttnn.alt_complex_rotate90``, so the decoder feeds the tables straight to the
+fused op (one op per q/k). An earlier note here claimed the llama op ``cannot be used``;
+that was wrong -- its pairing follows ``trans_mat``, not a fixed *i*<->*i+32*.
 
 Q and K take the same permute, so ``Q K^T`` is unchanged; V is never permuted, so the
 attention output is already in the normal basis and needs no inverse permute. The
