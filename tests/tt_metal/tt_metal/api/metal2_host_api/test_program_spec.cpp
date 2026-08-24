@@ -3988,8 +3988,8 @@ TEST_F(ProgramSpecTestGen1, CPU_OptionalBindingProbeBuildsWithNullAndReal) {
     // Host-side: both ProgramSpecs validate and lower (null vs real optional DFB/scratchpad).
     // Binding lists are the kernel's arity in both programs; presence is decided only by whether
     // the spec names appear in dataflow_buffers / scratchpads.
-    // Per-resource Null token operator bool() JIT coverage:
-    // NullDFB/Scratchpad/TensorBindingTokenOperatorBoolJITSmoke.
+    // Per-resource null token is_null JIT coverage:
+    // NullDFB/Scratchpad/TensorBindingTokenIsNullJITSmoke.
     const std::filesystem::path kernel_src = "tests/tt_metal/tt_metal/test_kernels/dataflow/optional_binding_probe.cpp";
 
     auto make_spec = [&](bool bind_optional) {
@@ -4461,17 +4461,16 @@ void kernel_main() {
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_NullDFBBindingTokenOperatorBoolJITSmoke) {
-    // Two unresolved DFB names (producer + consumer of an omitted optional) emit Null tokens.
+TEST_F(ProgramSpecTestGen1, CPU_NullDFBBindingTokenIsNullJITSmoke) {
+    // Two unresolved DFB names (producer + consumer of an omitted optional) emit NullDFBBindingToken.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.name = "null_dfb_op_bool";
+    spec.name = "null_dfb_is_null";
 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
-    static_assert(!dfb::gamma);
     static_assert(dfb::gamma.is_null);
 }
 )"};
@@ -4488,17 +4487,16 @@ void kernel_main() {
     EXPECT_NO_THROW(detail::CompileProgram(device, program));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_NullScratchpadBindingTokenOperatorBoolJITSmoke) {
-    // Unresolved scratchpad spec name emits a Null token.
+TEST_F(ProgramSpecTestGen1, CPU_NullScratchpadBindingTokenIsNullJITSmoke) {
+    // Unresolved scratchpad spec name emits a NullScratchpadBindingToken.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.name = "null_scratch_op_bool";
+    spec.name = "null_scratch_is_null";
 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
-    static_assert(!scratch::tmp);
     static_assert(scratch::tmp.is_null);
 }
 )"};
@@ -4514,17 +4512,16 @@ void kernel_main() {
     EXPECT_NO_THROW(detail::CompileProgram(device, program));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_NullTensorBindingTokenOperatorBoolJITSmoke) {
-    // Unresolved tensor parameter name emits a Null token (no run-arg slot).
+TEST_F(ProgramSpecTestGen1, CPU_NullTensorBindingTokenIsNullJITSmoke) {
+    // Unresolved tensor parameter name emits a NullTensorBindingToken (no run-arg slot).
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.name = "null_tensor_op_bool";
+    spec.name = "null_tensor_is_null";
 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
-    static_assert(!tensor::gamma_src);
     static_assert(tensor::gamma_src.is_null);
 }
 )"};

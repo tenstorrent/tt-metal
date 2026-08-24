@@ -93,7 +93,7 @@ public:
     // opts into a dynamic field like dynamic_tensor_shape) start at the word immediately
     // following the address slot, so the TAA's CRTA_OFFSET is ADDR_CRTA_OFFSET/sizeof(u32)+1.
     template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-    TensorAccessor(tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET, NonNull>) :
+    TensorAccessor(tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) :
         TensorAccessor(
             TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>{},
             static_cast<size_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {
@@ -106,8 +106,7 @@ public:
     }
 
     // Null bindings have no CTA/CRTA payload — constructing a TensorAccessor from one is a compile error.
-    template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-    TensorAccessor(tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET, Null>) = delete;
+    TensorAccessor(NullTensorBindingToken) = delete;
 
     constexpr const auto& dspec() const {
         if constexpr (DSpec::is_static) {
@@ -414,7 +413,7 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     // Construct TensorAccessor directly from a Metal 2.0 binding token.
     // (See the sharded specialization for the binding's CRTA section layout and the alignment rationale.)
     template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-    TensorAccessor(tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET, NonNull>) :
+    TensorAccessor(tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) :
         TensorAccessor(
             // TensorAccessorArgs: Create the args object from the token's CTA offset and CRTA offset.
             //   (But, add 1 to the token's CRTA offset to jump over the base address slot)
@@ -425,8 +424,7 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
             ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0, "TensorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
     }
 
-    template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-    TensorAccessor(tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET, Null>) = delete;
+    TensorAccessor(NullTensorBindingToken) = delete;
 
     template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
     constexpr explicit TensorAccessor(
@@ -546,7 +544,7 @@ TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t)
 // binding's base-address slot; any runtime accessor fields start at the next word,
 // so the TAA's CRTA_OFFSET is ADDR_CRTA_OFFSET/sizeof(u32)+1.
 template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-TensorAccessor(tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET, NonNull>)
+TensorAccessor(tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>)
     -> TensorAccessor<tensor_accessor::DistributionSpec<
         /* RankCT */ TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::RankCT,
         /* NumBanksCT */ TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::NumBanksCT,

@@ -243,7 +243,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "namespace dfb {\n";
             for (const auto& entry : dfb_entries) {
                 if (entry.is_null) {
-                    content << "constexpr DFBBindingToken<Null> " << entry.name << "{};\n";
+                    content << "constexpr NullDFBBindingToken " << entry.name << "{};\n";
                 } else {
                     content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << "};\n";
                 }
@@ -260,11 +260,11 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
 
         if (!ta_entries.empty() || !tensor_binding_sequence_entries.empty()) {
-            // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET[, NullState]>: pairs the binding's
+            // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
             // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
-            // its implicit base-address CRTA. Null bindings omit the payload (NullState::Null).
+            // its implicit base-address CRTA. Null bindings emit NullTensorBindingToken (no payload).
             // The kernel-side TensorAccessor (or LocalTensorAccessor) constructor unpacks both pieces
-            // for NonNull tokens only.
+            // from a real token only.
             //
             // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
             // template with extra metadata in the future without touching kernel source.
@@ -273,7 +273,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "namespace tensor {\n";
             for (const auto& entry : ta_entries) {
                 if (entry.is_null) {
-                    content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<0u, 0u, Null>;\n";
+                    content << "using " << entry.name << "_t = NullTensorBindingToken;\n";
                     content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
                 } else {
                     content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<"
@@ -293,13 +293,13 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             // Carries the word index of the scratchpad's (framework-allocated) base-address CRTA
             // and the scratchpad's compile-time per-node size.
             // The kernel-side Scratchpad(token) constructor unpacks both.
-            // Null bindings emit ScratchpadBindingToken<Null> with no payload.
+            // Null bindings emit NullScratchpadBindingToken with no payload.
             // The token's members are opaque, so the framework can extend it later without touching
             // kernel source.
             content << "namespace scratch {\n";
             for (const auto& entry : scratch_entries) {
                 if (entry.is_null) {
-                    content << "constexpr ScratchpadBindingToken<Null> " << entry.name << "{};\n";
+                    content << "constexpr NullScratchpadBindingToken " << entry.name << "{};\n";
                 } else {
                     content << "constexpr ScratchpadBindingToken " << entry.name << "{" << entry.addr_crta_word << "u, "
                             << entry.size_bytes << "u};\n";
