@@ -3,38 +3,50 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Standalone GSM8K evaluator for a sequence of Qwen3 checkpoints.
+"""Standalone GSM8K evaluator for a sequence of Qwen3 checkpoints, running on
+tt-metal hardware via :class:`TttGenerationWorker`.
 
-Companion to :mod:`gsm8k_training_example` (the ttml-based GRPO trainer). Runs
-on a CUDA host with vLLM -- no tt-metal dependency -- so the same script can
-score the base model, the SFT'd starting point, and the post-GRPO checkpoints
-side by side.
+Companion to :mod:`gsm8k_training_example` (the ttml-based GRPO trainer). This
+script drives the same on-device generation path as the training-time TTT
+rollout worker, so accuracy numbers are produced by the exact stack the
+trainer will consume during rollouts -- not a separate GPU inference engine.
 
-Output: one table per criterion, matching the multi-checkpoint layout of the
-project's reference GPU/TRL eval, minus the ``solved`` column:
+For every ``--models path[=display_name]`` entry a fresh worker is booted with
+``dummy_weights=False``, which routes HF weight loading through the standard
+tt-transformers path (``ModelArgs.load_state_dict`` -> tile-layout upload).
+Each checkpoint therefore reuses the training-side Q/K permutation, KV-cache
+setup and on-device sampling exactly as the trainer would.
+
+Output: one table per criterion, in the same layout the reference GPU/TRL
+eval printed (minus the ``solved`` column):
 
     correct answer
       checkpoint            pass@1  pass@2  pass@4  pass@8  pass@16
       Qwen3-0.6B-Base        33.0%   50.6%   67.6%   80.1%    88.5%
       sft                    32.7%   49.3%   65.6%   78.3%    86.0%
       grpo-checkpoint-100    ...
-    ...
 
-Four criteria, in the requested order: ``correct answer``, ``tags present``,
-``tags exactly once``, ``format-regex`` (renamed from "strict format").
+Four criteria: ``correct answer``, ``tags present``, ``tags exactly once``,
+``format-regex`` (renamed from "strict format"). Rows follow the order of the
+``--models`` argument.
 
 Prompts use the tokenizer's own chat template with ``enable_thinking=False``,
-untouched -- no override of ``chat_template`` or ``pad_token``. The default tag
-pair is ``<think>...</think>`` + ``<answer>...</answer>``, matching what the
-SFT model was trained against; pass ``--tags reasoning`` to swap.
+untouched -- no override of ``chat_template``, no ``pad_token`` mutation.
+Default tag pair is ``<think>...</think>`` + ``<answer>...</answer>``; pass
+``--tags reasoning`` to swap.
 
-Notes / prerequisites:
-  - Ttml GRPO checkpoint directories written by ``gsm8k_training_example.py``
-    are not directly HuggingFace-consumable. Converting them to a
-    ``from_pretrained``-ready layout is out of scope for this script; if you
-    point ``--models`` at a raw ttml checkpoint you will get a load error from
-    vLLM. Use the HF-format directory produced by whatever conversion step
-    lands next.
+Prerequisites:
+  - This runs on tt-metal, not CUDA. It opens a [1, 1] parent mesh on the
+    default Blackhole device; ensure ``TT_METAL_HOME`` is set and the process
+    has the card visible.
+  - Every ``--models`` entry must be a HuggingFace-format checkpoint directory
+    or repo id. Ttml GRPO checkpoints written by ``gsm8k_training_example.py``
+    are NOT directly HF-consumable and must be converted first (a separate
+    step, not implemented here).
+  - Every checkpoint referenced from ``--models`` must be registered in
+    ``models/tt_transformers/tt/model_config.py::ModelArgs.LOCAL_HF_PARAMS``
+    (needs a ``config.json`` for architecture bootstrap). Otherwise the worker
+    fails at boot.
 
 Usage:
     python eval_gsm8k.py \\
@@ -52,17 +64,22 @@ import argparse
 import gc
 import os
 import re
+import sys
 from math import comb
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, List, Optional, Sequence, Tuple
 
-# vLLM tries to JIT-build FlashInfer's sampling kernels at startup. On sm120
-# (RTX 50-series) that needs a CUDA >= 12.9 toolkit; with the 12.8 toolkit the
-# JIT aborts and takes engine init down with it. The native sampler is fine,
-# so opt out before vllm is imported.
-os.environ.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
+# Make ``utils.*`` importable when the file is run directly (needed before
+# any ``from utils.* import ...`` at module scope).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_EXAMPLE_ROOT = os.path.dirname(_THIS_DIR)
+if _EXAMPLE_ROOT not in sys.path:
+    sys.path.insert(0, _EXAMPLE_ROOT)
 
+import ttnn
 from datasets import load_dataset
 from transformers import AutoTokenizer
+from utils.qwen3_ttt_presets import bf16_attn_bfp8_mlp_optimizations, qwen3_stop_and_pad
+from utils.ttt_generation_worker import TttGenerationWorker
 
 
 # ---------------------------------------------------------------------------
@@ -70,9 +87,6 @@ from transformers import AutoTokenizer
 # ---------------------------------------------------------------------------
 ANSWER_OPEN, ANSWER_CLOSE = "<answer>", "</answer>"
 
-# Tag pairs the script can be pointed at. Default is ``think`` because the SFT
-# model uploaded by this project is trained on <think>...</think>; ``reasoning``
-# is provided for parity with the reference GPU/TRL eval script.
 TAG_PAIRS: dict[str, Tuple[str, str]] = {
     "think": ("<think>", "</think>"),
     "reasoning": ("<reasoning>", "</reasoning>"),
@@ -188,9 +202,14 @@ CRITERIA: Tuple[Tuple[str, Callable[[dict], bool]], ...] = (
 
 
 # ---------------------------------------------------------------------------
-# Generation
+# Prompt building
 # ---------------------------------------------------------------------------
-def build_prompts(tokenizer, questions: Sequence[str], reasoning_open: str, reasoning_close: str) -> List[str]:
+def build_prompt_texts(
+    tokenizer,
+    questions: Sequence[str],
+    reasoning_open: str,
+    reasoning_close: str,
+) -> List[str]:
     sysp = system_prompt(reasoning_open, reasoning_close)
     prompts: list[str] = []
     for q in questions:
@@ -204,47 +223,92 @@ def build_prompts(tokenizer, questions: Sequence[str], reasoning_open: str, reas
     return prompts
 
 
-def generate_vllm(
+# ---------------------------------------------------------------------------
+# On-device generation
+# ---------------------------------------------------------------------------
+def generate_on_tt(
     model_path: str,
-    prompts: Sequence[str],
-    max_tokens: int,
-    temperature: float,
+    prompts_token_ids: Sequence[Sequence[int]],
+    *,
     n_samples: int,
-    gpu_mem_util: float,
-    max_model_len: int,
-) -> List[List[str]]:
-    """One-shot generation for a single checkpoint. Instantiates the engine,
-    runs, and destroys it before returning so the next checkpoint can load."""
-    from vllm import LLM, SamplingParams
+    max_new_tokens: int,
+    temperature: float,
+    max_batch_size: int,
+    max_seq_len: int,
+) -> List[List[List[int]]]:
+    """Run generation for one checkpoint on a fresh TttGenerationWorker.
 
-    llm = LLM(
-        model=model_path,
-        dtype="bfloat16",
-        gpu_memory_utilization=gpu_mem_util,
-        max_model_len=max_model_len,
-        trust_remote_code=True,
-    )
-    sp = SamplingParams(
-        temperature=temperature,
-        top_p=1.0 if temperature == 0.0 else 0.95,
-        max_tokens=max_tokens,
-        n=n_samples,
-    )
-    outs = llm.generate(list(prompts), sp)
-    result = [[o.text for o in out.outputs] for out in outs]
+    Returns ``completions[q][s]`` = list of token IDs (stop-token stripped by
+    the worker). One worker is booted with ``dummy_weights=False`` so HF
+    weights are loaded through the standard tt-transformers path; on the way
+    out the mesh device is closed so the next checkpoint can boot cleanly.
 
-    # vLLM holds sizeable GPU state; drop refs and force a GC before the next
-    # engine is constructed so memory doesn't accumulate across checkpoints.
-    del llm
-    gc.collect()
+    Sampling params are baked into the worker's decode trace at first capture
+    (temperature/top_k/top_p/seed). ``seed=None`` here keeps sampling
+    non-deterministic, so calling ``generate()`` multiple times per prompt
+    yields distinct samples -- that is what makes pass@k > 1 meaningful.
+    """
+    parent_mesh = ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(1, 1),
+        offset=ttnn.MeshCoordinate(0, 0),
+    )
+
+    worker: Any = None
     try:
-        import torch
+        stop_ids, pad_id = qwen3_stop_and_pad(model_path)
+        worker = TttGenerationWorker(
+            mesh_device=parent_mesh,
+            model_source=model_path,
+            max_batch_size=max_batch_size,
+            max_seq_len=max_seq_len,
+            instruct=True,
+            optimizations=bf16_attn_bfp8_mlp_optimizations,
+            stop_token_ids=stop_ids,
+            pad_token_id=pad_id,
+            temperature=temperature,
+            top_k=0,
+            top_p=1.0,
+            seed=None,
+            dummy_weights=False,  # load real HF weights, not the fast-boot random shim
+        )
 
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except Exception:  # noqa: BLE001
-        pass
-    return result
+        # Duplicate each prompt n_samples times: same prompt goes into n_samples
+        # slots so one worker call returns n_samples independent rollouts (the
+        # baked-in seed=None makes each slot sample its own trajectory).
+        expanded: list[list[int]] = []
+        for p in prompts_token_ids:
+            for _ in range(n_samples):
+                expanded.append(list(p))
+
+        # Batch up to ``max_batch_size`` per generate() call. The worker itself
+        # pads short batches to the global size, so passing anything up to
+        # max_batch_size is safe.
+        flat_completions: list[list[int]] = []
+        total = len(expanded)
+        for start in range(0, total, max_batch_size):
+            batch = expanded[start : start + max_batch_size]
+            print(
+                f"[eval_gsm8k] {os.path.basename(model_path)}: "
+                f"generate() {start // max_batch_size + 1}/"
+                f"{(total + max_batch_size - 1) // max_batch_size} "
+                f"(batch of {len(batch)}, max_new_tokens={max_new_tokens})",
+                flush=True,
+            )
+            flat_completions.extend(worker.generate(batch, max_new_tokens=max_new_tokens))
+
+        # Reshape [total] -> [n_questions][n_samples].
+        assert len(flat_completions) == len(prompts_token_ids) * n_samples, (
+            f"expected {len(prompts_token_ids) * n_samples} completions, " f"got {len(flat_completions)}"
+        )
+        result: list[list[list[int]]] = []
+        for q_idx in range(len(prompts_token_ids)):
+            base = q_idx * n_samples
+            result.append([list(flat_completions[base + s]) for s in range(n_samples)])
+        return result
+    finally:
+        worker = None
+        gc.collect()
+        ttnn.close_mesh_device(parent_mesh)
 
 
 # ---------------------------------------------------------------------------
@@ -311,13 +375,27 @@ def main() -> None:
         "--temperature",
         type=float,
         default=1.0,
-        help="0.0 => greedy; must be > 0 when --n-samples > 1.",
+        help="Sampling temperature, baked into the worker's decode trace. "
+        "0.0 => greedy; must be > 0 when --n-samples > 1.",
     )
     ap.add_argument(
-        "--max-tokens",
+        "--max-new-tokens",
+        type=int,
+        default=512,
+        help="Max generation length per sample. Matches the training config's " "max_completion_length by default.",
+    )
+    ap.add_argument(
+        "--max-batch-size",
+        type=int,
+        default=32,
+        help="Per-generate batch cap. Matches the training config's "
+        "remote_rollout_config.max_batch_size by default.",
+    )
+    ap.add_argument(
+        "--max-seq-len",
         type=int,
         default=1024,
-        help="Max generation length per sample.",
+        help="KV-cache horizon. Must be >= max prompt tokens + --max-new-tokens.",
     )
     ap.add_argument(
         "--tags",
@@ -332,8 +410,6 @@ def main() -> None:
         help="Tokenizer repo/path. Defaults to the first --models entry so the "
         "chat template comes from the family's canonical checkpoint.",
     )
-    ap.add_argument("--gpu-mem-util", type=float, default=0.85)
-    ap.add_argument("--max-model-len", type=int, default=2048)
     args = ap.parse_args()
 
     if args.n_samples > 1 and args.temperature == 0.0:
@@ -347,6 +423,10 @@ def main() -> None:
     tag_strings = (reasoning_open, reasoning_close, ANSWER_OPEN, ANSWER_CLOSE)
     fmt_re = strict_format_re(reasoning_open, reasoning_close)
 
+    # Pin fabric config once, before opening any mesh device. Matches the
+    # training example so the worker's on-device paths behave identically.
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
+
     # -- dataset --
     print(f"Loading GSM8K {args.split} split...")
     ds = load_dataset("openai/gsm8k", "main")[args.split]
@@ -355,37 +435,39 @@ def main() -> None:
     questions = [ex["question"] for ex in ds]
     golds = [extract_hash_answer(ex["answer"]) for ex in ds]
     n_q = len(ds)
-    print(f"  {n_q} questions x {args.n_samples} samples = {n_q * args.n_samples} completions per model")
+    print(f"  {n_q} questions x {args.n_samples} samples = " f"{n_q * args.n_samples} completions per model")
 
-    # -- tokenizer / prompts (shared across models: the SFT'd repo carries a
-    #    chat template Qwen3-Base does not, so default to the first model
-    #    entry unless the user overrides) --
+    # -- tokenizer / prompts (shared across models: same Qwen3 vocab; default
+    #    to the first model entry so the chat template is guaranteed to exist,
+    #    since the base checkpoint does not ship one) --
     tokenizer_source = args.tokenizer or models[0][0]
     print(f"Building prompts with tokenizer from {tokenizer_source}")
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, trust_remote_code=True)
-    prompts = build_prompts(tokenizer, questions, reasoning_open, reasoning_close)
+    prompt_texts = build_prompt_texts(tokenizer, questions, reasoning_open, reasoning_close)
+    prompts_token_ids = [tokenizer(t, add_special_tokens=False)["input_ids"] for t in prompt_texts]
 
     # -- generate + score per model --
     ks = [k for k in (1, 2, 4, 8, 16) if k <= args.n_samples]
+    # per_model_rows[i] = (display, criterion_hits) where
+    # criterion_hits[c][q] = list of per-sample bools
     per_model_rows: list[tuple[str, list[list[list[bool]]]]] = []
-    # per_model_rows[i] = (display, [criterion_hits_per_question])
-    # criterion_hits_per_question[c][q] = list of per-sample bools
 
     for path, display in models:
         print(f"\n=== Evaluating {display} ({path}) ===")
-        completions = generate_vllm(
+        completions_ids = generate_on_tt(
             model_path=path,
-            prompts=prompts,
-            max_tokens=args.max_tokens,
-            temperature=args.temperature,
+            prompts_token_ids=prompts_token_ids,
             n_samples=args.n_samples,
-            gpu_mem_util=args.gpu_mem_util,
-            max_model_len=args.max_model_len,
+            max_new_tokens=args.max_new_tokens,
+            temperature=args.temperature,
+            max_batch_size=args.max_batch_size,
+            max_seq_len=args.max_seq_len,
         )
+        completions_text = [[tokenizer.decode(s, skip_special_tokens=True) for s in q] for q in completions_ids]
 
         # criterion_hits[c] is [per-question list of per-sample bools]
         criterion_hits: list[list[list[bool]]] = [[] for _ in CRITERIA]
-        for samples, gold in zip(completions, golds):
+        for samples, gold in zip(completions_text, golds):
             per_sample_scores = [
                 score_sample(t, gold, tag_strings, reasoning_open, reasoning_close, fmt_re) for t in samples
             ]
@@ -394,9 +476,6 @@ def main() -> None:
 
         per_model_rows.append((display, criterion_hits))
 
-    # -- print tables --
-    # For each criterion, print a table row per model. The print_tables helper
-    # expects rows of the shape [(display, criterion_hits)], which we already have.
     print_tables(per_model_rows, ks)
 
 
