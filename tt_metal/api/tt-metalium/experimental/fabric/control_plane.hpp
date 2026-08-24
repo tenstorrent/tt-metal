@@ -227,7 +227,16 @@ public:
     // E/W. Null when the mesh has no such ring. Public because the multicast reverse trees are built
     // from it off the control plane -- a host that must open one connection per canonical root output
     // has to run the same encoder the worker runs, and that needs this topology.
-    const ExpressRingTopology* ring_for_direction(MeshId mesh_id, RoutingDirection direction) const;
+    const AxisRouteTopology* ring_for_direction(MeshId mesh_id, RoutingDirection direction) const;
+
+    // The topology governing `axis` (0 = Y, 1 = X) of this mesh: express chords where declared for
+    // that axis, the ordinary ring where the axis closes, else the plain line. Never null for a 2D
+    // mesh with a non-degenerate axis.
+    //
+    // Prefer this over ring_for_direction() for anything that needs a per-axis tree. The latter is
+    // null on a non-express mesh (Y) or a non-closing dimension (X), and a null topology silently
+    // yields an empty multicast map rather than an error.
+    const AxisRouteTopology* axis_topology(MeshId mesh_id, int axis) const;
 
     // For traffic arriving at `local` from its `ingress` neighbor and leaving toward its `egress` one,
     // whether both hops ride one oriented view of the same ring, i.e. it stays on the ring it is on.
@@ -407,7 +416,7 @@ private:
 
     // Coordinate along that ring's axis of the neighbor reached by `direction`.
     std::optional<int> ring_coord_of_neighbor(
-        const ExpressRingTopology& rings, FabricNodeId local, RoutingDirection direction) const;
+        const AxisRouteTopology& rings, FabricNodeId local, RoutingDirection direction) const;
 
     // TODO: remove this from local node control plane. Can get it from the global control plane
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;

@@ -25,7 +25,7 @@
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
-#include "tt_metal/fabric/express_ring_topology.hpp"
+#include "tt_metal/fabric/axis_route_topology.hpp"
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
@@ -2581,7 +2581,7 @@ TEST(ExpressLinkRoutingTest, IntraMesh32x4DeadlockFree) {
 // runs of six leaves between them. Drives the full setup phase (mapper, table generation, route
 // validation) for a long-run topology. Rides the same 4-rank binding and cluster mapping as
 // IntraMesh32x4DeadlockFree, over the ex8-only descriptor it shares with
-// ExpressRingTopologyTest.Rings32x4Ex8Only. Run multi-rank under tt-run with 4 ranks.
+// AxisRouteTopologyTest.Rings32x4Ex8Only. Run multi-rank under tt-run with 4 ranks.
 TEST(ExpressLinkRoutingTest, IntraMesh32x4Ex8OnlyDeadlockFree) {
     if (!express_link_cluster_available()) {
         GTEST_SKIP() << kNoClusterSkipMsg;

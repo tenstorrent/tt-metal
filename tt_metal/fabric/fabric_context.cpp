@@ -78,18 +78,23 @@ uint32_t FabricContext::get_max_2d_hops_from_topology(const ControlPlane& contro
     return compute_max_2d_hops(mesh_shapes);
 }
 
-// Express meshes carry destination-indexed action maps rather than a hop program, so their route buffer
-// holds rows + cols bytes -- two more than the (rows-1) + (cols-1) Manhattan hop count. Meshes without
-// express links return 0 and are sized by hops alone.
+// Every 2D mesh carries destination-indexed action maps rather than a hop program, so its route buffer
+// holds rows + cols bytes -- two more than the (rows-1) + (cols-1) Manhattan hop count.
 uint32_t FabricContext::get_max_2d_indexed_route_bytes_from_topology(const ControlPlane& control_plane) const {
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
+    // Every 2D mesh: the indexed maps occupy Y + X bytes, two more than the (Y-1) + (X-1) hop count
+    // the tiers were sized from, and after the flip every 2D mesh carries them.
+    //
+    // compute_packet_specifications() takes the max of this and the hop count, so this can only grow
+    // the buffer. On [32,4] the extra two bytes cross a tier boundary (35 -> 51, i.e. a 96 B header
+    // becomes 112 B); Phase 4.4 gives those bytes back by retiring is_mcast_active, which dropped the
+    // header base 61 -> 60 and moved the tiers to 36/52/67, so [32,4] lands on 36 and stays at 96 B.
+    // Every other in-tree shape stays on its current tier. (routing_fields was NOT retired -- the
+    // profiler still decodes it.)
     uint32_t max_bytes = 0;
     for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
-        if (!control_plane.express_routing_enabled(mesh_id)) {
-            continue;
-        }
-        // Must match the shape get_express_kernel_defines emits as FABRIC_EXPRESS_MESH_*_SIZE, GLOBAL
+        // Must match the shape get_2d_kernel_defines emits as FABRIC_2D_MESH_*_SIZE, GLOBAL
         // scope included, since that is what the kernel widens against.
         const auto shape = control_plane.get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
         max_bytes = std::max(max_bytes, static_cast<uint32_t>(shape[0]) + static_cast<uint32_t>(shape[1]));
@@ -217,11 +222,11 @@ size_t FabricContext::get_1d_header_size(uint32_t extension_words) const {
 
 size_t FabricContext::get_2d_header_size(uint32_t route_buffer_size) const {
     // Use explicit template instantiation for compile-time type safety
-    // Only max-capacity tiers per header size (19, 35, 51, 67) to avoid switch bloat
+    // Only max-capacity tiers per header size (20, 36, 52, 67) to avoid switch bloat
     switch (route_buffer_size) {
-        case 19: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<19>);  // 80B header, max capacity
-        case 35: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<35>);  // 96B header, max capacity
-        case 51: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<51>);  // 112B header, max capacity
+        case 20: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<20>);  // 80B header, max capacity
+        case 36: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<36>);  // 96B header, max capacity
+        case 52: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<52>);  // 112B header, max capacity
         case 67: return sizeof(tt::tt_fabric::HybridMeshPacketHeaderT<67>);  // 128B header, max capacity
         default: TT_THROW("Unsupported 2D route buffer size: {}", route_buffer_size);
     }
@@ -366,21 +371,31 @@ bool FabricContext::need_deadlock_avoidance_support(
     return false;
 }
 
-std::map<std::string, std::string> FabricContext::get_express_kernel_defines(
+std::map<std::string, std::string> FabricContext::get_2d_kernel_defines(
     const ControlPlane& control_plane, MeshId mesh_id) const {
-    // Keyed on express_routing_enabled rather than raw Z-edge presence, since that is the answer route
-    // generation used when it packed the tables these defines make the kernel encode against.
-    if (!is_2D_routing_enabled_ || !control_plane.express_routing_enabled(mesh_id)) {
+    if (!is_2D_routing_enabled_) {
         return {};
     }
     // GLOBAL scope is required: the L1 vectors are packed against the global shape and indexed by
     // global chip ids, so a local-scope shape would desync the encode from the table.
     const auto mesh_shape = control_plane.get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
-    return {
-        {"FABRIC_EXPRESS_ENABLED", "1"},
-        {"FABRIC_EXPRESS_MESH_Y_SIZE", std::to_string(mesh_shape[0])},
-        {"FABRIC_EXPRESS_MESH_X_SIZE", std::to_string(mesh_shape[1])},
+
+    // The mesh shape is unconditional for 2D: every 2D mesh now carries indexed action maps, and the
+    // worker widens against this shape. It is not an express fact.
+    std::map<std::string, std::string> defines{
+        {"FABRIC_2D_MESH_Y_SIZE", std::to_string(mesh_shape[0])},
+        {"FABRIC_2D_MESH_X_SIZE", std::to_string(mesh_shape[1])},
     };
+
+    // FABRIC_EXPRESS_ENABLED stays conditional, and keeps its name, because it no longer selects a
+    // codec -- it reports that this mesh declares express chords. Its one remaining device consumer is
+    // Z-port capacity in routing_plane_connection_manager.hpp (6 connection slots instead of 4) and
+    // the UDM guard that refuses express + UDM. Making it unconditional would grow every Blackhole
+    // connection manager by two slots and break every UDM build.
+    if (control_plane.express_routing_enabled(mesh_id)) {
+        defines.emplace("FABRIC_EXPRESS_ENABLED", "1");
+    }
+    return defines;
 }
 
 std::map<std::string, std::string> FabricContext::get_fabric_kernel_defines(const ControlPlane& control_plane) const {

@@ -1216,7 +1216,9 @@ using LowLatencyRoutingFields = LowLatencyRoutingFieldsT<FABRIC_1D_PKT_HDR_EXTEN
 // 2D Mesh routing fields struct
 // This struct contains routing STATE (hop_index union) for 2D packet headers.
 // All constants are centralized in RoutingFieldsConstants::Mesh (fabric_common.h).
-// Access constants via: MeshRoutingFields (aliased from RoutingFieldsConstants::Mesh)
+// Access constants via: MeshRoutingFields (aliased from RoutingFieldsConstants::Mesh).
+// Dead to the fabric since the legacy 2D codec was removed; kept because tools/profiler/
+// fabric_event_profiler.hpp still decodes hop programs with these constants.
 struct LowLatencyMeshRoutingFields {
     // Type alias to reference centralized constants
     using MeshRoutingFields = RoutingFieldsConstants::Mesh;
@@ -1257,7 +1259,6 @@ struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteB
         uint16_t mcast_params[4];  // Array representing the hops in each direction
         uint64_t mcast_params_64;  // Used for efficiently writing to the mcast_params array
     };
-    uint8_t is_mcast_active;
 
     // Type alias for Sparse Multicast Routing Command Header
     // NOTE: Sparse multicast is not currently supported for 2D routing, tracked in issue #35604
@@ -1291,11 +1292,26 @@ struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteB
 
 // Validate expected sizes for max-capacity tiers only (one per header size)
 // Base size = 61B (command_fields:40 + payload_size:2 + noc_send_type:1 + src_ch_id:1 +
-//              routing_fields:4 + dst_start:4 + mcast_params:8 + is_mcast_active:1)
-static_assert(sizeof(HybridMeshPacketHeaderT<19>) == 80, "19B buffer must result in 80B header (max capacity)");
-static_assert(sizeof(HybridMeshPacketHeaderT<35>) == 96, "35B buffer must result in 96B header (max capacity)");
-static_assert(sizeof(HybridMeshPacketHeaderT<51>) == 112, "51B buffer must result in 112B header (max capacity)");
-static_assert(sizeof(HybridMeshPacketHeaderT<67>) == 128, "67B buffer must result in 128B header (max capacity)");
+//              routing_fields:4 + dst_start:4 + mcast_params:8)
+//
+// is_mcast_active was retired with the legacy 2D codec: it had zero readers, only writes. Reclaiming
+// its byte drops the base 61 -> 60, which is exactly what lets [32,4] hold Y+X = 36 route bytes in a
+// 96 B header (60 + 36 = 96) instead of spilling to the 112 B tier.
+//
+// routing_fields (hop_index / branch_east_offset / branch_west_offset) is retained despite being dead
+// to the fabric: tools/profiler/fabric_event_profiler.hpp still decodes branch_*_offset, and the
+// profiler is out of scope. Reclaiming those 4 more bytes is blocked on that decision.
+// Base is 60 B since is_mcast_active was retired, so each tier carries one more route byte than it
+// did. 36 is the one that matters: [32,4] needs Y+X = 36 and now fits the 96 B header.
+//
+// The top tier stays at 67, not 68: the struct is packed+aligned(16), so 60+67=127 still rounds to a
+// 128 B header, and RouteBufferSize <= 67 is a separate L1 memory-map bound (issue #32237) that this
+// change is not entitled to raise. The cost is one wasted padding byte in the largest tier, and a
+// hard ceiling of Y+X <= 67 on indexable shapes -- enforced on the host, see fabric_context.cpp.
+static_assert(sizeof(HybridMeshPacketHeaderT<20>) == 80, "20B buffer must result in 80B header (max capacity)");
+static_assert(sizeof(HybridMeshPacketHeaderT<36>) == 96, "36B buffer must result in 96B header (max capacity)");
+static_assert(sizeof(HybridMeshPacketHeaderT<52>) == 112, "52B buffer must result in 112B header (max capacity)");
+static_assert(sizeof(HybridMeshPacketHeaderT<67>) == 128, "67B buffer fills the 128B header (1B padding)");
 
 // Used to get the maximum number of hops that this packet header can support
 template <int RouteBufferSize>
@@ -1356,6 +1372,20 @@ static_assert(false, "UDM mode does not support 1D routing - use 2D routing inst
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
 // 2D routing with UDM
+#if defined(FABRIC_EXPRESS_ENABLED)
+// Express routing with UDM is not supported.
+//
+// UDM records the source's first-hop direction in the packet (udm_control.initial_direction) and uses
+// it to pick a downstream mux. The mux fabric is cardinal-only by construction --
+// NUM_DOWNSTREAM_MUX_CONNECTIONS is 3 ("all directions except self"), and the tensix builder skips Z
+// outright ("Skip Z direction - it's for 3D routing") -- so there is no Z mux to hand a packet to.
+// On an express mesh a first hop is often a chord, which would land in the zero-filled Z column of
+// direction_to_mux_index_map and be forwarded to mux 0: the wrong mux, silently.
+//
+// Supporting it means allocating a Z mux and widening NUM_DOWNSTREAM_MUX_CONNECTIONS to 4, which is a
+// tensix/mux builder change. Until then the combination is refused here rather than misrouting.
+static_assert(false, "UDM mode does not support express routing - the mux fabric is cardinal-only");
+#endif
 #if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
 #define PACKET_HEADER_TYPE tt::tt_fabric::UDMHybridMeshPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields

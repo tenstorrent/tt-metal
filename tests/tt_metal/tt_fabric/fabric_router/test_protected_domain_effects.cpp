@@ -6,12 +6,12 @@
 // GALAXY_BUILDER_ROUTING_CONFIG_CONTRACT.md section 4.4, checked against the worked node tables in
 // its section 6.
 //
-// The ladder is driven from the real derived ring topologies -- the same ExpressRingTopology state
+// The ladder is driven from the real derived ring topologies -- the same AxisRouteTopology state
 // the ControlPlane serves -- rather than hand-written predicate answers, so a disagreement between
 // the derivation and the ladder shows up here. The three ring queries are re-implemented over the
 // machine-free topology pair, mirroring ControlPlane::is_protected_ring_edge /
 // are_same_directed_ring_edges / continuation_allowed line for line; the ControlPlane versions
-// themselves are pinned CP-backed in test_express_ring_topology.cpp. Keeping this file machine-free
+// themselves are pinned CP-backed in test_axis_route_topology.cpp. Keeping this file machine-free
 // means the builder ladder runs in every environment.
 
 #include <gtest/gtest.h>
@@ -29,7 +29,7 @@
 #include "tt_metal/fabric/builder/injection_policy.hpp"
 #include "tt_metal/fabric/builder/protected_domain_effect.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
-#include "tt_metal/fabric/express_ring_topology.hpp"
+#include "tt_metal/fabric/axis_route_topology.hpp"
 
 namespace tt::tt_fabric {
 namespace {
@@ -42,8 +42,8 @@ constexpr auto k_intermesh = EdgeCapability::INTERMESH;
 // wrap present and the X ring closed -- express_links_32x4_mesh_graph_descriptor.textproto.
 struct QuadGalaxy {
     MeshGraph graph;
-    ExpressRingTopology y_rings;  // the express axis (dim 0)
-    ExpressRingTopology x_rings;  // the ordinary X ring (dim 1)
+    AxisRouteTopology y_rings;  // the express axis (dim 0)
+    AxisRouteTopology x_rings;  // the ordinary X ring (dim 1)
 
     QuadGalaxy() :
         graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, descriptor_path()),
@@ -62,7 +62,7 @@ struct QuadGalaxy {
 
     // --- The three ring queries, mirroring the ControlPlane methods over the machine-free state ---
 
-    const ExpressRingTopology* ring_for_direction(RoutingDirection direction) const {
+    const AxisRouteTopology* ring_for_direction(RoutingDirection direction) const {
         const bool orthogonal = direction == RoutingDirection::E || direction == RoutingDirection::W;
         return orthogonal ? &x_rings : &y_rings;
     }

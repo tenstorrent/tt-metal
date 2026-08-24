@@ -96,51 +96,6 @@ struct __attribute__((packed)) direction_table_t {
 #endif
 };
 
-// Compressed routing entry structures using manual bit packing
-// Note: Using uint32_t (4B) instead of packed uint16_t+uint8_t (3B) because union with 1D table
-// makes both equivalent in memory (union = max(1024, 1024) = 1024B). Prioritizing performance.
-// Can switch to 3B packed (uint16_t+uint8_t) if memory becomes critical in future.
-struct __attribute__((packed)) compressed_route_2d_t {
-    // Field widths (source of truth)
-    static constexpr uint32_t NS_HOPS_WIDTH = 7;
-    static constexpr uint32_t EW_HOPS_WIDTH = 7;
-    static constexpr uint32_t NS_DIR_WIDTH = 1;
-    static constexpr uint32_t EW_DIR_WIDTH = 1;
-    static constexpr uint32_t TURN_POINT_WIDTH = 7;
-
-    // Bit positions (derived from widths)
-    static constexpr uint32_t NS_HOPS_SHIFT = 0;
-    static constexpr uint32_t EW_HOPS_SHIFT = NS_HOPS_SHIFT + NS_HOPS_WIDTH;   // 7
-    static constexpr uint32_t NS_DIR_SHIFT = EW_HOPS_SHIFT + EW_HOPS_WIDTH;    // 14
-    static constexpr uint32_t EW_DIR_SHIFT = NS_DIR_SHIFT + NS_DIR_WIDTH;      // 15
-    static constexpr uint32_t TURN_POINT_SHIFT = EW_DIR_SHIFT + EW_DIR_WIDTH;  // 16
-
-    // Masks (derived from widths)
-    static constexpr uint32_t NS_HOPS_MASK = (1U << NS_HOPS_WIDTH) - 1;        // 0x7F
-    static constexpr uint32_t EW_HOPS_MASK = (1U << EW_HOPS_WIDTH) - 1;        // 0x7F
-    static constexpr uint32_t NS_DIR_MASK = (1U << NS_DIR_WIDTH) - 1;          // 0x1
-    static constexpr uint32_t EW_DIR_MASK = (1U << EW_DIR_WIDTH) - 1;          // 0x1
-    static constexpr uint32_t TURN_POINT_MASK = (1U << TURN_POINT_WIDTH) - 1;  // 0x7F
-
-    uint32_t data;
-
-#if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
-    void set(uint8_t ns_hops, uint8_t ew_hops, uint8_t ns_dir, uint8_t ew_dir, uint8_t turn_point) {
-        data = (ns_hops & NS_HOPS_MASK) | ((ew_hops & EW_HOPS_MASK) << EW_HOPS_SHIFT) |
-               ((ns_dir & NS_DIR_MASK) << NS_DIR_SHIFT) | ((ew_dir & EW_DIR_MASK) << EW_DIR_SHIFT) |
-               ((turn_point & TURN_POINT_MASK) << TURN_POINT_SHIFT);
-    }
-#else
-    uint8_t get_ns_hops() const { return data & NS_HOPS_MASK; }
-    uint8_t get_ew_hops() const { return (data >> EW_HOPS_SHIFT) & EW_HOPS_MASK; }
-    uint8_t get_ns_direction() const { return (data >> NS_DIR_SHIFT) & NS_DIR_MASK; }
-    uint8_t get_ew_direction() const { return (data >> EW_DIR_SHIFT) & EW_DIR_MASK; }
-    uint8_t get_turn_point() const { return (data >> TURN_POINT_SHIFT) & TURN_POINT_MASK; }
-#endif
-};
-
-static_assert(sizeof(compressed_route_2d_t) == 4, "2D route must be 4 bytes");
-
 // ============================================================================
 // Dynamic Packet Header Configuration
 // ============================================================================
@@ -162,8 +117,8 @@ struct FabricHeaderConfig {
 #ifdef FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE
     static constexpr uint32_t MESH_ROUTE_BUFFER_SIZE = FABRIC_2D_PKT_HDR_ROUTE_BUFFER_SIZE;
 #else
-    // Default: 35 bytes (96B header)
-    static constexpr uint32_t MESH_ROUTE_BUFFER_SIZE = 35;
+    // Default: 36 bytes (96B header, 60B base)
+    static constexpr uint32_t MESH_ROUTE_BUFFER_SIZE = 36;
 #endif
 
     // Validation (Fail fast)
@@ -293,15 +248,27 @@ struct IndexedMeshRoutingFields {
     }
 
     // ---- L1 region sizing -------------------------------------------------------
-    // Bound [Y,X] = [64,4]: 1024 B of Y table plus 4 B of X table, reusing the legacy 1024 B 2D union
-    // slot plus 4 B of trailing padding. Live tables are sized to the mesh shape via table_bytes().
-    static constexpr uint32_t MAX_INDEXED_MESH_Y = 64;
-    static constexpr uint32_t MAX_INDEXED_MESH_X = 4;
+    // Two different limits, kept distinct because conflating them is what excluded live meshes:
+    //
+    //   SLOT_SHAPE_{Y,X}  the shape the L1 slot is *sized* for. [64,4] gives 1024 B of Y table plus
+    //                     4 B of X table, reusing the legacy 1024 B 2D union slot plus 4 B of
+    //                     trailing padding. This is a budget, not a constraint on mesh shape.
+    //   MAX_INDEXED_MESH_AXIS
+    //                     the largest coordinate either axis may take. Fixed at 64 by the packed
+    //                     reverse-tree descriptor, which spends 6 bits per row index.
+    //
+    // A shape is admissible when both axes are within MAX_INDEXED_MESH_AXIS *and* its packed tables
+    // fit INDEXED_VECTOR_TABLE_BYTES -- not when it matches SLOT_SHAPE. The old per-axis `X <= 4`
+    // cap excluded in-tree descriptors ([8,8], [8,16], [16,8], [1,16]) whose tables are an order of
+    // magnitude smaller than the slot: [8,16] needs 80 B of 1028.
+    static constexpr uint32_t SLOT_SHAPE_Y = 64;
+    static constexpr uint32_t SLOT_SHAPE_X = 4;
+    static constexpr uint32_t MAX_INDEXED_MESH_AXIS = 64;
     // Expanded inline because Clang does not treat in-class constexpr member functions as defined for
     // constant evaluation within the class body, so table_bytes() cannot be called here.
     static constexpr uint32_t INDEXED_VECTOR_TABLE_BYTES =
-        MAX_INDEXED_MESH_Y * ((MAX_INDEXED_MESH_Y + ACTIONS_PER_BYTE - 1) / ACTIONS_PER_BYTE) +
-        MAX_INDEXED_MESH_X * ((MAX_INDEXED_MESH_X + ACTIONS_PER_BYTE - 1) / ACTIONS_PER_BYTE);  // 1028
+        SLOT_SHAPE_Y * ((SLOT_SHAPE_Y + ACTIONS_PER_BYTE - 1) / ACTIONS_PER_BYTE) +
+        SLOT_SHAPE_X * ((SLOT_SHAPE_X + ACTIONS_PER_BYTE - 1) / ACTIONS_PER_BYTE);  // 1028
 
     // ---- Pack (host-side table generation) --------------------------------------
     // The Y region occupies [0, table_bytes(y_size)) and the X region follows it, both as
@@ -373,11 +340,22 @@ struct IndexedMeshRoutingFields {
         return table + table_bytes(y_size) + dst_x * row_bytes(x_size);
     }
 
+    // Whether the indexed unicast vectors can represent this shape at all: both axes must be within
+    // the coordinate range an action map can address, and the packed tables must fit the L1 slot.
+    // This is the real bound that the old per-axis `<= 32` stood in for. It does NOT cover the two
+    // other independent limits a shape must also satisfy:
+    //   - the packet header route buffer, Y + X <= 67 (checked in FabricContext, issue #32237)
+    //   - the multicast trees, hybrid_region_fits() above
+    // [64,4] passes this one exactly (1028 B, the whole slot) and fails the header bound by one byte.
+    static constexpr bool shape_is_indexable(uint32_t y_size, uint32_t x_size) {
+        return y_size <= MAX_INDEXED_MESH_AXIS && x_size <= MAX_INDEXED_MESH_AXIS &&
+               vectors_region_bytes(y_size, x_size) <= INDEXED_VECTOR_TABLE_BYTES;
+    }
+
     template <typename YActionSource, typename XActionSource>
     static inline bool pack_indexed_route_vectors(
         std::uint8_t* out, uint32_t y_size, uint32_t x_size, YActionSource&& y_action, XActionSource&& x_action) {
-        if (y_size > MAX_INDEXED_MESH_Y || x_size > MAX_INDEXED_MESH_X ||
-            vectors_region_bytes(y_size, x_size) > INDEXED_VECTOR_TABLE_BYTES) {
+        if (!shape_is_indexable(y_size, x_size)) {
             return false;
         }
         const uint32_t region_bytes = vectors_region_bytes(y_size, x_size);
@@ -541,6 +519,38 @@ static_assert(
 static_assert(
     IndexedMeshRoutingFields::mcast_tree_x_offset(32, 4) == IndexedMeshRoutingFields::mcast_tree_y_offset(32, 4) + 62,
     "X tree must follow the Y tree's y_size-1 edges");
+
+// Shapes with X > 4 are declared by in-tree mesh graph descriptors and must be admissible: the old
+// per-axis `X <= 4` cap rejected them even though their tables are far smaller than the slot. Pinned
+// here so the bound cannot silently regress to a per-axis one.
+//   [8,8]   dual_bh_galaxy_torus_xy, dual_galaxy
+//   [8,16]  quad_galaxy, quad_galaxy_torus_xy
+//   [16,8]  16x8_quad_bh_galaxy_torus_xy
+//   [1,16]  bh_lbx2_1x16
+static_assert(
+    IndexedMeshRoutingFields::vectors_region_bytes(8, 8) == 32 && IndexedMeshRoutingFields::hybrid_region_fits(8, 8),
+    "[8,8] must fit the 2D union slot");
+static_assert(
+    IndexedMeshRoutingFields::vectors_region_bytes(8, 16) == 80 && IndexedMeshRoutingFields::hybrid_region_fits(8, 16),
+    "[8,16] must fit the 2D union slot");
+static_assert(
+    IndexedMeshRoutingFields::vectors_region_bytes(16, 8) == 80 && IndexedMeshRoutingFields::hybrid_region_fits(16, 8),
+    "[16,8] must fit the 2D union slot");
+static_assert(IndexedMeshRoutingFields::hybrid_region_fits(1, 16), "[1,16] must fit the 2D union slot");
+// The widest square shape the current ControlPlane 32-per-axis validation admits.
+static_assert(
+    IndexedMeshRoutingFields::vectors_region_bytes(32, 32) == 512 &&
+        IndexedMeshRoutingFields::hybrid_region_fits(32, 32),
+    "[32,32] must fit the 2D union slot");
+// The two bounds are independent: an axis may reach 64 even though the slot is sized for [64,4].
+static_assert(
+    IndexedMeshRoutingFields::MAX_INDEXED_MESH_AXIS >= IndexedMeshRoutingFields::SLOT_SHAPE_Y &&
+        IndexedMeshRoutingFields::MAX_INDEXED_MESH_AXIS >= IndexedMeshRoutingFields::SLOT_SHAPE_X,
+    "the per-axis coordinate bound must cover the slot's own shape");
+// 6-bit child/parent fields in the packed reverse-tree descriptor are what fixes the axis bound.
+static_assert(
+    IndexedMeshRoutingFields::MAX_INDEXED_MESH_AXIS <= 64,
+    "packed mcast tree edges carry 6-bit row indices, so an axis cannot exceed 64");
 
 // ============================================================================
 // Indexed multicast encode
@@ -923,88 +933,6 @@ inline void encode_1d_sparse_multicast(HopMaskType hop_mask, uint32_t& buffer) {
 // 2D Routing Encoders
 //=============================================================================
 
-/**
- * Canonical 2D unicast routing pattern encoder
- *
- * Handles NS -> EW routing with proper write command selection.
- *
- * This matches the existing decode_route_to_buffer logic (fabric_routing_path_interface.h lines 45-75):
- * - Final hop uses opposite-direction bit (no forward) to stop packet
- * - If both NS and EW exist: emit (ns_hops - 1) NS forwards, then ew_hops EW forwards, then 1 EW opposite
- * - If only NS: emit (ns_hops - 1) NS forwards, then 1 NS opposite
- * - If only EW: emit (ew_hops - 1) EW forwards, then 1 EW opposite
- *
- * Example: Traveling South 2 hops, then East 1 hop:
- *   - Forward South (0b1000), Forward South (0b1000), Forward East (0b0001), Write North (0b0100 - opposite)
- *   - Final North bit stops the packet at destination
- *
- * @param ns_hops Number of North/South hops
- * @param ew_hops Number of East/West hops
- * @param ns_dir North/South direction (0=North, 1=South)
- * @param ew_dir East/West direction (0=West, 1=East)
- * @param buffer Output buffer (uint8_t array)
- * @param max_buffer_size Size of buffer (8/16/24/32 bytes)
- * @param prepend_one_hop If true, adds one extra forward hop at the start (used by routers)
- */
-inline void encode_2d_unicast(
-    uint8_t ns_hops,
-    uint8_t ew_hops,
-    uint8_t ns_dir,
-    uint8_t ew_dir,
-    uint8_t* buffer,
-    uint32_t max_buffer_size,
-    bool prepend_one_hop = false) {
-    using MeshFields = RoutingFieldsConstants::Mesh;
-    uint32_t idx = 0;
-
-    // Forward commands per dimension
-    const uint8_t ns_fwd = (ns_dir == 1) ? MeshFields::FORWARD_SOUTH : MeshFields::FORWARD_NORTH;
-    const uint8_t ew_fwd = (ew_dir == 1) ? MeshFields::FORWARD_EAST : MeshFields::FORWARD_WEST;
-
-    // Final hop uses OPPOSITE direction to stop the packet at the destination
-    const uint8_t ns_write = (ns_dir == 1) ? MeshFields::FORWARD_NORTH : MeshFields::FORWARD_SOUTH;
-    const uint8_t ew_write = (ew_dir == 1) ? MeshFields::FORWARD_WEST : MeshFields::FORWARD_EAST;
-
-    // Build the ordered hop-direction list in dimension order (all NS, then all EW).
-    // Each entry is (forward_cmd, write_cmd) for that hop's dimension.
-    uint8_t fwd_list[FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE];
-    uint8_t wr_list[FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE];
-    uint32_t num_hops = 0;
-    const uint32_t total_cardinal = (uint32_t)ns_hops + (uint32_t)ew_hops;
-    for (uint32_t c = 0; c < total_cardinal; ++c) {
-        if (c < ns_hops) {
-            fwd_list[num_hops] = ns_fwd;
-            wr_list[num_hops] = ns_write;
-        } else {
-            fwd_list[num_hops] = ew_fwd;
-            wr_list[num_hops] = ew_write;
-        }
-        ++num_hops;
-    }
-
-    if (num_hops == 0) {
-        while (idx < max_buffer_size) {
-            buffer[idx++] = MeshFields::NOOP;
-        }
-        return;
-    }
-
-    // buffer[i] is the action performed at the (i+1)-th chip after the source. The source leaves via
-    // hop 0 (the "initial direction", not encoded here) unless prepend_one_hop is set (router usage),
-    // in which case hop 0's forward is emitted too. Every intermediate chip forwards the *next* hop,
-    // and the destination chip performs the write for the final hop.
-    const uint32_t first_hop = prepend_one_hop ? 0 : 1;
-    for (uint32_t k = first_hop; k < num_hops; ++k) {
-        buffer[idx++] = fwd_list[k];
-    }
-    buffer[idx++] = wr_list[num_hops - 1];
-
-    // Fill remainder with NOOP
-    while (idx < max_buffer_size) {
-        buffer[idx++] = MeshFields::NOOP;
-    }
-}
-
 }  // namespace routing_encoding
 
 // ============================================================================
@@ -1012,34 +940,30 @@ inline void encode_2d_unicast(
 // Number of routing table entries (destinations), not hops.
 // For 4×64 mesh: 64 entries, each storing a route up to 63 hops long.
 static const uint16_t MAX_CHIPS_LOWLAT_1D = 64;
-static const uint16_t MAX_CHIPS_LOWLAT_2D = 256;
 // Size of each routing table entry in bytes
 static const uint16_t SINGLE_ROUTE_SIZE_1D = 16;  // 4 words for 64 hops: base + 3 extension words
-static const uint16_t SINGLE_ROUTE_SIZE_2D = 32;
 
+// 1D only. 2D used to share this template via a `dim` parameter, holding compressed_route_2d_t hop
+// programs; 2D now carries indexed action-map vectors in indexed_route_vectors_t instead, so the 2D
+// arms are gone. `dim` is retained at 1 so the existing <1, compressed> spellings still name this
+// type.
 template <uint8_t dim, bool compressed>
 struct __attribute__((packed)) intra_mesh_routing_path_t {
-    static_assert(dim == 1 || dim == 2, "dim must be 1 or 2");
+    static_assert(dim == 1, "intra_mesh_routing_path_t is 1D only; 2D uses indexed_route_vectors_t");
 
-    // Compressed routing uses much smaller encoding
-    // 1D: 0 byte (num_hops passed from caller is the compressed info)
+    // Compressed 1D needs no table at all: the hop count the caller passes *is* the compressed form,
+    // and the routing word is generated arithmetically (decode_route_to_buffer_by_hops).
     static const uint16_t COMPRESSED_ROUTE_SIZE_1D = 0;
-    // 2D: 2 bytes (ns_hops:5bits, ew_hops:5bits, ns_dir:1bit, ew_dir:1bit, turn_point:4bits)
-    static const uint16_t COMPRESSED_ROUTE_SIZE_2D = sizeof(compressed_route_2d_t);
 
-    static constexpr uint16_t MAX_CHIPS_LOWLAT = (dim == 1) ? MAX_CHIPS_LOWLAT_1D : MAX_CHIPS_LOWLAT_2D;
-    static constexpr uint16_t COMPRESSED_ROUTE_SIZE = (dim == 1) ? COMPRESSED_ROUTE_SIZE_1D : COMPRESSED_ROUTE_SIZE_2D;
-    static constexpr uint16_t UNCOMPRESSED_ROUTE_SIZE = (dim == 1) ? SINGLE_ROUTE_SIZE_1D : SINGLE_ROUTE_SIZE_2D;
+    static constexpr uint16_t MAX_CHIPS_LOWLAT = MAX_CHIPS_LOWLAT_1D;
+    static constexpr uint16_t COMPRESSED_ROUTE_SIZE = COMPRESSED_ROUTE_SIZE_1D;
+    static constexpr uint16_t UNCOMPRESSED_ROUTE_SIZE = SINGLE_ROUTE_SIZE_1D;
     static constexpr uint16_t SINGLE_ROUTE_SIZE = compressed ? COMPRESSED_ROUTE_SIZE : UNCOMPRESSED_ROUTE_SIZE;
 
     std::conditional_t<
         !compressed,
-        std::uint8_t[MAX_CHIPS_LOWLAT * SINGLE_ROUTE_SIZE],  // raw for uncompressed
-        std::conditional_t<
-            dim == 1,
-            std::uint8_t[0],                         // empty for compressed 1D (0 bytes)
-            compressed_route_2d_t[MAX_CHIPS_LOWLAT]  // two for compressed 2D
-            >>
+        std::uint8_t[MAX_CHIPS_LOWLAT * SINGLE_ROUTE_SIZE],  // raw table
+        std::uint8_t[0]>                                     // compressed: no table
         paths = {};
 
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
@@ -1124,9 +1048,8 @@ struct __attribute__((packed)) indexed_route_vectors_t {
 
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
     // Fills the 2-bit vector table for this mesh by probing ControlPlane's first-hop relation along
-    // each axis (implemented in compressed_routing_path.cpp). Signature matches
-    // intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields so the ControlPlane call
-    // site swap is mechanical.
+    // each axis (implemented in compressed_routing_path.cpp). This is the sole 2D route artifact --
+    // the compressed_route_2d_t hop-program table it replaced is gone.
     void calculate_chip_to_all_routing_fields(const FabricNodeId& src_fabric_node_id, uint16_t num_chips);
 #endif
 };
@@ -1144,11 +1067,10 @@ struct routing_l1_info_t {
     direction_table_t<MAX_MESH_SIZE> intra_mesh_direction_table{};   // 96 bytes
     direction_table_t<MAX_NUM_MESHES> inter_mesh_direction_table{};  // 384 bytes
 
-    // Union overlaps 1D and 2D routing tables at same offset. indexed_route_vectors and
-    // routing_path_table_2d are never live at once.
+    // Union overlaps the 1D and 2D routing tables at the same offset; a build is one or the other.
+    // 2D is always the indexed vectors now -- the legacy compressed_route_2d_t table is gone.
     union __attribute__((packed)) {
         intra_mesh_routing_path_t<1, false> routing_path_table_1d;  // 1024 bytes
-        intra_mesh_routing_path_t<2, true> routing_path_table_2d;   // 1024 bytes
         indexed_route_vectors_t indexed_route_vectors;              // 1028 bytes
     };
 
@@ -1176,11 +1098,6 @@ static_assert(
     "1D uncompressed routing path must be 1024 bytes (64 entries x 16 bytes per route)");
 
 static_assert(sizeof(intra_mesh_routing_path_t<1, true>) == 0, "1D compressed routing path must be 0 bytes");
-
-// 256 chips * 4 bytes = 1024
-static_assert(
-    sizeof(intra_mesh_routing_path_t<2, true>) == 1024,
-    "2D compressed routing path must be 1024 bytes (256 entries x 4 bytes per route)");
 
 // Verify total struct size
 static_assert(

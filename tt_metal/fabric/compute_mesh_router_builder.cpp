@@ -903,14 +903,10 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
             defines["FABRIC_2D_VC0_CROSSOVER_TO_VC1"] = "";
         }
 
-        // FABRIC_EXPRESS_ENABLED: selects the indexed destination-keyed 2D ABI on this router.
-        // The gate is mesh-level (not per-node Z presence): Z-laden packet maps transit chips that
-        // have no Z edge of their own, so every router in an express mesh runs the indexed decode.
-        // Keyed on express_routing_enabled like the other three ABI gates (see fabric.cpp).
-        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-        if (control_plane.express_routing_enabled(local_node_.mesh_id)) {
-            defines["FABRIC_EXPRESS_ENABLED"] = "";
-        }
+        // No FABRIC_EXPRESS_ENABLED here. The router's indexed decode is now selected by FABRIC_2D
+        // (set above), since every 2D mesh runs it. The router has no other use for the express flag:
+        // it does not include routing_plane_connection_manager.hpp, so the Z-port capacity consumer --
+        // the flag's one remaining device consumer -- is worker-side only.
     }
 
     // Get SOC descriptor for eth core lookup

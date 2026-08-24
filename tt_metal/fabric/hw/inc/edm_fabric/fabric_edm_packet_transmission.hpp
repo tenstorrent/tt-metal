@@ -431,24 +431,21 @@ FORCE_INLINE void update_packet_header_for_next_hop(
     packet_header->routing_fields.value = new_value;
 }
 
+// 2D transit is immutable: the indexed action maps are complete when the worker writes them, and no
+// router advances a cursor. These two overloads used to implement the legacy hop-program advance --
+// `routing_fields.value + 1` on the RX side, and the equivalent remote slot-word write on the sender
+// side, selected by UPDATE_PKT_HDR_ON_RX_CH. Both are now no-ops.
+//
+// They are kept rather than removed because forward_payload_to_downstream_edm() is shared with 1D and
+// resolves this overload by header type. Deleting them would make the shared call site fail to
+// compile on a 2D build. The 1D overloads above still do real work.
 FORCE_INLINE void update_packet_header_for_next_hop(
-    volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader* packet_header,
-    tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {
-    if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-        packet_header->routing_fields.value = cached_routing_fields.value + 1;
-    }
-}
+    volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader* /*packet_header*/,
+    tt::tt_fabric::LowLatencyMeshRoutingFields /*cached_routing_fields*/) {}
 
 template <uint8_t NUM_SENDER_BUFFERS>
 void update_packet_header_for_next_hop(
-    tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface, uint32_t value) {
-    if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
-        tt::tt_fabric::HybridMeshPacketHeader* packet_base = nullptr;
-        std::uintptr_t offset = reinterpret_cast<std::uintptr_t>(&(packet_base->routing_fields));
-        downstream_edm_interface.template update_edm_buffer_slot_word(
-            offset, value, tt::tt_fabric::edm_to_downstream_noc);
-    }
-}
+    tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& /*downstream_edm_interface*/, uint32_t /*value*/) {}
 
 // This function forwards a packet to the downstream EDM channel for eventual sending
 // to the next chip in the line/ring
