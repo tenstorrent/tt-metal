@@ -453,8 +453,19 @@ def test_perf_causal_lift_fresh_cpp(
     mathop=[
         MathOperation.Tanh,
         MathOperation.Sigmoid,
+        # Lane GI (owner ratification 2026-08-24 item 2): GeluAppx joins so
+        # the licensed impl-4 sem arm gets a perf node in this family (its
+        # hand perf node stays test_perf_causal_lift_fresh_cpp impl 0,
+        # byte-untouched).  impl 3 for GeluAppx falls through to the
+        # production dispatch (hand-equivalent, unswept).
+        MathOperation.GeluAppx,
+        # Lane GI gelu-255: impl 4 = the licensed slim body
+        # (fresh_cpp/gelu_255_licensed.h); impl 3 falls through to the
+        # production typed gelu (hand-equivalent, unswept).
+        MathOperation.Gelu,
     ],
-    fresh_cpp_impl=[1, 3],
+    # impl 4 = the lane-GI LICENSED semantic arms (fresh_cpp/*_licensed.h).
+    fresh_cpp_impl=[1, 3, 4],
 )
 def test_perf_lut_variant_fresh_cpp(
     perf_report,

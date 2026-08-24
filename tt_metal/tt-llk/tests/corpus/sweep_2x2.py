@@ -678,6 +678,24 @@ KNOB_MODES = {
     "replay-exec-record": "drop-one",
     "planner-residency": "drop-one",
     "init-hoist": "drop-one",
+    # Lane GI (owner ratification 2026-08-24 item 3, EM solo-mode booking
+    # shape): laneEM's PASS-OP-MATRIX findings 2-3 prove these three ON-set
+    # knobs are SOLO-BLIND — dump-witnessed ON-25 fires with ZERO
+    # byte-attributed rows, because each pass only runs inside a pipeline
+    # the all-off solo base disables (the exact laneDO dependent/service
+    # class the drop-one mode exists for):
+    #   crossloop-hoist  9 fires (addcmul, exp, exp2, expm1cw, hardmish,
+    #                    hardtanh, i0, lerp, sdpa), 9 preempted, 0 byte;
+    #   crosscall-hoist  1 fire (sigmoidappx-tree), 0 byte;
+    #   drain-schedule   5 fires (minmax-max/min, mulint32-fresh, typecast,
+    #                    where), 0 byte.
+    # The OTHER majority-preempted knobs (invariant-loadi 12/35 preempted,
+    # capture-rotation, interlock-schedule, ...) keep solo: they have
+    # non-zero solo byte-changers, so their solo legs are NOT structurally
+    # A/A — EM finding 4 is a preemption fact, not a mode defect.
+    "crossloop-hoist": "drop-one",
+    "crosscall-hoist": "drop-one",
+    "drain-schedule": "drop-one",
     "replay-loop-unroll": "on-plus",
     "int-abs": "on-plus",
     "lut-select-leaf-ext": "on-plus",

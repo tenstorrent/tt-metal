@@ -926,13 +926,33 @@ def test_fresh_cpp_mul_int(formats, dest_acc, mathop, fresh_cpp_impl):
 )
 def test_fresh_cpp_left_shift(formats, dest_acc, mathop, fresh_cpp_impl):
     """Handwritten (metal ckernel_sfpu_shift.h raw-TTI fixed-LREG kernel) vs fresh
-    typed-C++ A/B over identical Int32 stimuli/golden; exact integer contract,
-    stimuli/golden identical to test_sfpu_binary_int's SfpuElwLeftShift node
-    (out-of-range shift amounts produce 0)."""
+    typed-C++ A/B over identical Int32 stimuli/golden; exact integer contract
+    (out-of-range shift amounts produce 0).
+
+    RE-SPECCED CONTRACT (lane GI, owner ratification 2026-08-24 item 3 —
+    Option R of DECISION-PACK-leftshift, adjudication record
+    laneGI-evidence-20260824/LEFTSHIFT-ADJUDICATION.md): the row's Dst-read
+    contract is RAW TWO'S COMPLEMENT.  torch.bitwise_left_shift golden
+    semantics are two's complement, and on Blackhole the production kernel's
+    INT32_2S_COMP load mod performs NO conversion (SFPLOAD.md: deprecated,
+    inert), so the hand arm already reads Dst raw — Option R ratifies shipped
+    behavior (the CX golden-re-spec pattern).  twos_complement=True packs the
+    tiles as raw 2c bits (the test_sfpu_binary_int_extremes precedent), which
+    also makes INT32_MIN representable.
+
+    The re-spec closes the latent stimuli gap the old node carried (harness
+    default uniform(0, 2^30): amounts ~always out of range, golden ~all
+    zeros, NO negative operand ever drawn — the SM32-vs-raw divergence was
+    unobservable): values now span the full signed range and amounts draw
+    from [-8, 40] so in-range shifts (~2/3 of lanes), negative amounts, and
+    >=32 amounts are all exercised, on BOTH arms."""
     sfpu_binary(
         formats,
         dest_acc,
         mathop,
+        spec_A=StimuliSpec.uniform(low=-2147483648.0, high=2147483647.0),
+        spec_B=StimuliSpec.uniform(low=-8.0, high=40.0),
+        twos_complement=True,
         fresh_cpp_impl=fresh_cpp_impl,
     )
 
