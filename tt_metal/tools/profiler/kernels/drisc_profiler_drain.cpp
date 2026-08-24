@@ -1877,13 +1877,21 @@ void kernel_main() {
                         mine[2] = m2;
                         mine[3] = m3;
                         mine[4] = m4;
-                        // HEAD WRITE-BACK, timed separately -- and MEASURED OPTIMAL AS IS (2026-08-24), keep the
-                        // two falsifications with it: (a) batching/deferring the issues to a post-scan loop was
-                        // WORSE at the onset edge (d22 140 -> 566 stalls) -- release IMMEDIACY dominates the
-                        // 0.5-0.6%-of-busy issue cost; (b) moving the write to kReadNoc was CATASTROPHIC (d22
-                        // 140 -> 14k, d20 23k -> 78k) -- this write travels TO the worker cores, the exact
+                        // HEAD WRITE-BACK, timed separately. Immediate, per core, on NOC_INDEX -- both measured
+                        // optimal (2026-08-24), keep the falsifications: (a) batching/deferring the issues to a
+                        // post-scan loop was WORSE at the onset edge (d22 140 -> 566 stalls) -- release IMMEDIACY
+                        // dominates the 0.5-0.6%-of-busy issue cost; (b) moving the write to kReadNoc was
+                        // CATASTROPHIC (d22 140 -> 14k) -- this write travels TO the worker cores, the exact
                         // route the span-read requests/31 KB responses occupy, while NOC_INDEX's staging and
                         // mover traffic goes to DRAM rows and never touches worker routes.
+                        //
+                        // POSTED, deliberately: a nonposted head write's worker ACK round-trip was swept into
+                        // every write_barrier_bounded wait (the barrier polls NIU_MST_WR_ACK_RECEIVED for ALL
+                        // nonposted writes), and those barriers exist only for the STAGING writes -- slot reuse
+                        // and publish_head gating. The ack protected nothing: heads touch neither staging nor
+                        // the DRAM ring. Posted also removes the ack packet itself from the congested worker
+                        // route. Scratch-reuse safety is the 32-slot rotation, same in-flight margin the
+                        // nonposted version relied on between barriers (<= kGenSlots live cores per batch).
                         const uint64_t t_h0 = get_timestamp();
                         const uint32_t sc = kHeadScratch + hb_slot * 32u;
                         volatile tt_l1_ptr uint32_t* scp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc);
@@ -1892,7 +1900,7 @@ void kernel_main() {
                         scp[2] = m2;
                         scp[3] = m3;
                         scp[4] = m4;
-                        noc_async_write(
+                        noc_async_write_one_packet<true, true>(
                             sc,
                             get_noc_addr(
                                 coords[c] & 0xFFFFu, coords[c] >> 16, cv_src + kernel_profiler::SPSC_RING_HEAD_0 * 4u),
@@ -2272,6 +2280,13 @@ void kernel_main() {
     *phase = kPhBarTail;
     *phase = kPhTailBar;  // distinct from kPhBar1: the tail barrier used to run while phase still read 11
     (void)write_barrier_bounded(get_timestamp() + kCreditWaitCycles, dbg_hw_ack, dbg_sw_ack);
+    // The posted head write-backs are not in the barrier above; drain their SENT counter (bounded spin --
+    // 20 B packets stream out in ns) so no scratch slot or unstreamed head is left behind at report time.
+    if constexpr (kRole != kRoleMover) {
+        const uint64_t t_ps = get_timestamp() + 1350000;  // 1 ms, absurdly generous
+        while (!ncrisc_noc_posted_writes_sent(NOC_INDEX) && get_timestamp() < t_ps) {
+        }
+    }
     // Publish the LAST staged frames. Without this the final batch is written to the ring but never announced,
     // so the mover cannot drain it and the tail of every capture is silently short by up to one sweep.
     publish_head();
