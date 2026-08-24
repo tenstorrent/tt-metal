@@ -29,7 +29,6 @@ struct noc_traits_t<DataflowBuffer>;
 #include "api/debug/waypoint.h"
 #include "api/lock.h"
 #include "api/core_local_mem.h"
-#include "api/null_state.h"
 #include <type_traits>
 
 #if __has_include("chlkc_descriptors.h")
@@ -82,26 +81,19 @@ template <bool IsWrite, typename ReleaseFunc>
 //
 // Here my_dfb_name is a constexpr DFBBindingToken, auto-included in kernel_bindings_generated.h.
 //
-// NullState tags whether this KernelSpec attached the accessor to a real DFB (NonNull, default)
-// or the named DFB was not declared on this ProgramSpec (Null). Constructing DataflowBuffer from a
-// Null token is deleted.
+// If this ProgramSpec did not declare the named DFB, codegen emits a NullDFBBindingToken
+// instead. Naming the symbol always compiles. Constructing a DataflowBuffer from a
+// NullDFBBindingToken does not.
 //
-template <NullState S = NonNull>
-struct DFBBindingToken;
-
-template <>
-struct DFBBindingToken<NonNull> {
+struct DFBBindingToken {
     explicit constexpr DFBBindingToken(uint16_t id) noexcept : id_(id) {}
 
-    static constexpr NullState null_state = NonNull;
     static constexpr bool is_null = false;
-    constexpr operator bool() const noexcept { return true; }
 
     // Implicit conversion to uint32_t:
     // This lets a Metal 2.0 kernel pass a DFBBindingToken directly to Gen1 (WH/BH) LLK
     // compute APIs that expect a raw CB id.
     // This conversion is constexpr; it's intended for Gen1 use only.
-    // Contextual bool conversion prefers operator bool() over this (so slot id 0 is still "true").
     constexpr operator uint32_t() const noexcept { return id_; }
 
     [[nodiscard]] constexpr uint16_t id() const noexcept { return id_; }
@@ -110,17 +102,9 @@ private:
     uint16_t id_;
 };
 
-template <>
-struct DFBBindingToken<Null> {
-    constexpr DFBBindingToken() noexcept = default;
-
-    static constexpr NullState null_state = Null;
+struct NullDFBBindingToken {
     static constexpr bool is_null = true;
-    constexpr operator bool() const noexcept { return false; }
 };
-
-// CTAD: `DFBBindingToken{slot}` → NonNull (matches codegen's unadorned NonNull emission).
-DFBBindingToken(uint16_t) -> DFBBindingToken<NonNull>;
 
 class DataflowBuffer {
 public:
@@ -133,10 +117,10 @@ public:
     // Preferred constructor for Metal 2.0 / ProgramSpec kernels.
     // Pass the named binding constant from kernel_bindings_generated.h:
     //   DataflowBuffer dfb(my_dfb_name);
-    DataflowBuffer(DFBBindingToken<NonNull> token) : DataflowBuffer(token.id()) {}
+    DataflowBuffer(DFBBindingToken token) : DataflowBuffer(token.id()) {}
 
     // Null bindings have no device slot — constructing a DataflowBuffer from one is a compile error.
-    DataflowBuffer(DFBBindingToken<Null>) = delete;
+    DataflowBuffer(NullDFBBindingToken) = delete;
 
     // Low-level constructor: prefer DFBBindingToken overload above for new kernel code.
     DataflowBuffer(uint16_t logical_dfb_id);

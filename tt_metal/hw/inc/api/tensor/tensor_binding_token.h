@@ -6,8 +6,14 @@
 
 #include <cstdint>
 
-#include "api/null_state.h"
 #include "api/tensor/tensor_accessor_args.h"
+
+// NullTensorBindingToken: emitted when this ProgramSpec did not declare the named TensorParameter.
+// Naming the symbol always compiles. Constructing a TensorAccessor / LocalTensorAccessor from it
+// does not.
+struct NullTensorBindingToken {
+    static constexpr bool is_null = true;
+};
 
 namespace tensor_accessor {
 
@@ -32,9 +38,9 @@ namespace tensor_accessor {
 //   - A type alias:  using my_TA_name_t = TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>;
 //   - A token value: constexpr my_TA_name_t my_TA_name{};
 // For a null binding (named TensorParameter not declared on this ProgramSpec):
-//   - using my_TA_name_t = TensorBindingToken<0u, 0u, Null>;
+//   - using my_TA_name_t = NullTensorBindingToken;
 //   - constexpr my_TA_name_t my_TA_name{};
-// The Null specialization has no args_t / addr_crta_offset payload (offsets are not meaningful).
+// The null token has no args_t / addr_crta_offset payload (offsets are not meaningful).
 //
 // This indirection gives us ultimate future-proofing flexibility over what actually goes into the
 // TensorBindingToken. We can change TensorBindingToken at any time, or add a wrapper-type indirection,
@@ -44,27 +50,13 @@ namespace tensor_accessor {
 // The Metal 2.0 binding flow currently supports only a subset of the CRTA-dynamic DSpec metadata that
 // TensorAccessorArgs nominally supports.
 //
-template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET, NullState S = NonNull>
-struct TensorBindingToken;
-
-// NonNull (default): real binding with CTA layout payload + address CRTA offset.
 template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-struct TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET, NonNull> {
+struct TensorBindingToken {
     using args_t = TensorAccessorArgs<CTA_OFFSET>;
     static constexpr args_t args{};
     static constexpr uint32_t addr_crta_offset = ADDR_CRTA_OFFSET;  // in bytes
 
-    static constexpr NullState null_state = NonNull;
     static constexpr bool is_null = false;
-    constexpr operator bool() const noexcept { return true; }
-};
-
-// Null: symbol exists for optional bindings; no CTA/CRTA payload (do not instantiate TensorAccessorArgs).
-template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
-struct TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET, Null> {
-    static constexpr NullState null_state = Null;
-    static constexpr bool is_null = true;
-    constexpr operator bool() const noexcept { return false; }
 };
 
 }  // namespace tensor_accessor

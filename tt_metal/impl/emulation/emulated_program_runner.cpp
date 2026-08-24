@@ -908,7 +908,7 @@ static void emit_metal2_namespaces(
         f << "namespace dfb {\n";
         for (const auto& [name, entry] : s.dfb_accessors) {
             if (entry.is_null) {
-                f << "constexpr DFBBindingToken<Null> " << name << "{};\n";
+                f << "constexpr NullDFBBindingToken " << name << "{};\n";
             } else {
                 f << "constexpr DFBBindingToken " << name << "{" << entry.id << "};\n";
             }
@@ -926,7 +926,7 @@ static void emit_metal2_namespaces(
         f << "namespace tensor {\n";
         for (const auto& ta : s.ta_accessors) {
             if (ta.is_null) {
-                f << "using " << ta.name << "_t = ::tensor_accessor::TensorBindingToken<0u, 0u, Null>;\n";
+                f << "using " << ta.name << "_t = NullTensorBindingToken;\n";
             } else {
                 f << "using " << ta.name << "_t = ::tensor_accessor::TensorBindingToken<" << ta.cta_offset << "u, "
                   << ta.addr_crta_offset << "u>;\n";
@@ -939,7 +939,7 @@ static void emit_metal2_namespaces(
         f << "namespace scratch {\n";
         for (const auto& sp : s.scratch_accessors) {
             if (sp.is_null) {
-                f << "constexpr ScratchpadBindingToken<Null> " << sp.name << "{};\n";
+                f << "constexpr NullScratchpadBindingToken " << sp.name << "{};\n";
             } else {
                 f << "constexpr ScratchpadBindingToken " << sp.name << "{" << sp.addr_crta_word << "u, "
                   << sp.size_bytes << "u};\n";
