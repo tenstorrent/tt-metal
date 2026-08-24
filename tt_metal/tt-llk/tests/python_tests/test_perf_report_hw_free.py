@@ -16,6 +16,7 @@ the optional-None and dynamic-param cases static reading can't. Needs the LLK en
 (pandas, ttexalens importable) but no hardware.
 """
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -25,6 +26,8 @@ from helpers.perf.core import (
     PerfConfig,
     PerfReport,
     _ci_provenance,
+    _prune_runs,
+    _refresh_latest,
     combine_perf_reports,
     postprocess_tile_loop,
 )
@@ -432,6 +435,89 @@ def test_ci_run_id_still_wins_for_provenance(monkeypatch):
     # All shards of one workflow must share run_id: it is a ROW_KEY column and
     # the data team's notion of a run spans shards.
     monkeypatch.setenv("GITHUB_RUN_ID", "999")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
     monkeypatch.setenv("PERF_RUN_TAG", "999-wormhole-3")
 
     assert _ci_provenance()["run_id"] == "999"
+
+
+def test_rerun_of_a_workflow_publishes_under_its_own_run_id(monkeypatch):
+    # "Re-run all/failed jobs" keeps GITHUB_RUN_ID and bumps GITHUB_RUN_ATTEMPT.
+    # Attempt 2 is a second, different measurement: sharing attempt 1's ROW_KEY
+    # (test_name, commit_sha, arch, run_id) would collide with rows already
+    # published.
+    monkeypatch.setenv("GITHUB_RUN_ID", "999")
+    monkeypatch.setenv("PERF_RUN_TAG", "999-wormhole-3")
+
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    assert _ci_provenance()["run_id"] == "999-2"
+
+    # Attempt 1 stays bare, so rows already archived keep the identity they were
+    # published with.
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    assert _ci_provenance()["run_id"] == "999"
+
+
+def test_prune_keeps_the_current_run_however_old_it_looks(tmp_path):
+    # The current run survives by name, not by being the newest: an mtime that is
+    # older than its neighbours (a clock step, a filesystem that lies) must not be
+    # able to delete the report this invocation just wrote.
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    current = runs / "run-current"
+    for i, d in enumerate([current, runs / "run-a", runs / "run-b"]):
+        d.mkdir()
+        os.utime(d, (0, i))  # current is the OLDEST
+
+    _prune_runs(runs, keep=1, current=current)
+
+    survivors = {d.name for d in runs.iterdir()}
+    assert survivors == {"run-current", "run-b"}
+
+
+def test_prune_survives_a_directory_it_cannot_stat(tmp_path, monkeypatch):
+    # One unreadable entry costs that entry, not the whole prune -- otherwise a
+    # single bad directory means history grows without bound forever after.
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    current = runs / "run-current"
+    bad = runs / "run-bad"
+    stale = runs / "run-stale"
+    for i, d in enumerate([stale, bad, current]):
+        d.mkdir()
+        os.utime(d, (0, i))
+
+    real_stat = Path.stat
+
+    def stat_that_fails_on_bad(self, *args, **kwargs):
+        if self == bad:
+            raise OSError("stat refused")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat_that_fails_on_bad)
+    _prune_runs(runs, keep=1, current=current)
+    monkeypatch.undo()
+
+    survivors = {d.name for d in runs.iterdir()}
+    assert "run-current" in survivors  # protected
+    assert "run-bad" in survivors  # skipped, never pruned blindly
+    assert "run-stale" not in survivors  # the prune still did its job
+
+
+def test_latest_swap_leaves_no_debris_when_it_fails(tmp_path, monkeypatch):
+    # The swap goes through a temporary name. If it fails, neither the old link
+    # nor a stray .latest.tmp.<pid> may be left behind for the next run to trip on.
+    perf_data = tmp_path / "perf_data"
+    (perf_data / "runs" / "run-1").mkdir(parents=True)
+    (perf_data / "runs" / "run-2").mkdir()
+    (perf_data / "latest").symlink_to(Path("runs") / "run-1", target_is_directory=True)
+
+    def replace_that_fails(self, *args, **kwargs):
+        raise OSError("rename refused")
+
+    monkeypatch.setattr(Path, "replace", replace_that_fails)
+    _refresh_latest(perf_data / "runs" / "run-2")
+    monkeypatch.undo()
+
+    assert (perf_data / "latest").readlink() == Path("runs") / "run-1"
+    assert not list(perf_data.glob(".latest.tmp.*"))

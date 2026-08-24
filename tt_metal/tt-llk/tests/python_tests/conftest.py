@@ -335,6 +335,11 @@ def pytest_configure(config):
     # spawns workers: they inherit the environment, so every process resolves the
     # same perf_data/runs/<tag>. Left to first use, each worker would mint its own
     # timestamp and scatter one run across several directories.
+    #
+    # Unconditional on purpose. It only mints a string into the environment — no
+    # directory is created until a perf report is actually written — and at
+    # configure time there is no reliable way to know whether a perf test will be
+    # selected (a node id selects one without ever naming the marker).
     TestConfig.perf_run_tag()
 
     config.coverage_enabled = config.getoption("--coverage", default=False)
