@@ -745,24 +745,47 @@ Now line up which measurements are affected, across every configuration measured
 | `PACK_ISOLATE` — pack thread only | 1,457 of 99,414 |
 | `L1_TO_L1` — unpack start to **pack end** | 83 of 100,971 |
 
-**Every failing measurement depends on when the packer finishes.** The two that
-never touch pack timing are clean across 191,538 Wormhole measurements and
-204,604 on Blackhole. Add the format association within `PACK_ISOLATE` —
-`Float16_b` output at a 13% flag rate against 0% for `Float32` and `Bfp8_b` — and
-the conclusion is:
+**Only measurements that involve the packer are ever affected.** The two run
+types that never touch pack timing are clean across 191,538 Wormhole
+measurements and 204,604 on Blackhole.
 
-> **The packer's completion time is bistable.** It lands on one of two discrete
-> values at low probability per execution, independent of core, execution order,
-> concurrency, build state and sweep configuration, with a rate that depends on
-> the output format.
+An earlier version of this section concluded from that table that *"the packer's
+completion time is bistable"*. **That inference does not survive a
+per-configuration join and has been withdrawn.** `PACK_ISOLATE` flags 1,457
+configurations and `L1_TO_L1` flags 42, and they are not the same
+configurations — the overlap is zero, which is what statistical independence
+predicts. They are plausibly two separate phenomena, and the gate question
+concerns the second. See `investigation/01-not-a-single-thread.md`.
 
-That is a packer or hardware question, not a measurement artefact, and no
-threshold can absorb it.
+What the evidence supports is weaker and more specific:
+
+> **When an affected measurement lands in its slow state, the whole pipeline
+> stalls together.** No thread's isolated work varies — a median of 0.2% of each
+> jump is attributable to any single thread. All three thread zones stretch by
+> the same number of cycles as the pipeline total. The stall is shared across a
+> coupled pipeline, so no thread is "the culprit", and the instruments available
+> cannot localise it further.
+
+Three of them were tried and are recorded in `investigation/`: isolate run types,
+hardware counters, and per-thread zones. The effect is also destroyed by changing
+the profiling instrumentation while the total work stays identical, which is the
+signature of a race with a very narrow window.
+
+It remains a hardware or kernel question rather than a measurement artefact, and
+no threshold can absorb it.
 
 ### 8.10 How matmul depends on the packer, and why that shows up here
 
 This section is mechanism. The facts in §8.9 are measurements; what follows
 separates what the architecture guarantees from what is still a hypothesis.
+
+**Read it with §8.9's withdrawal in mind.** The structural facts below — where
+the measurement boundaries sit, why matmul leans on the DEST handoff, what the
+`MATH_PACK` semaphore counts are — all still hold. The hypothesis that the
+handoff is where the two outcomes are decided is still the best available, and
+the per-thread evidence is consistent with it. But nothing here is confirmed, and
+the format-rate association belongs to `PACK_ISOLATE`, which the join shows is a
+different population from the `L1_TO_L1` failures.
 
 #### The pipeline, and where the measurement boundaries sit
 
