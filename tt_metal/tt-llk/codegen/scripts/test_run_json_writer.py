@@ -547,7 +547,13 @@ def _sealed_result(
         "returncode": collection_returncode,
     }
     if timed_out:
-        classification, reasons = "timed_out", ["execution_timed_out"]
+        # Mirrors _classify_verification / jobs.classify_verification_result: a
+        # timed-out sweep also reports whether any failure was actually observed.
+        classification, reasons = "timed_out", [
+            "execution_timed_out",
+            # This fixture always reports xpassed=0, so `failed` is the whole test.
+            "failures_observed" if failed else "no_failures_observed",
+        ]
     elif collection_returncode or collection_errors or markers:
         classification = "infra_error"
         reasons = []
