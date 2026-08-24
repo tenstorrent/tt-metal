@@ -657,6 +657,25 @@ KNOBS = {
     # blaze-sdpareducerow rows as the record-hoist-class negative
     # control (expected honest no-fire).
     "window-pairing": "-mtt-tensix-optimize-window-pairing",
+    # GJ (window-pairing-stride): stride-phase generalization of the FT
+    # tuner — admits the advancing address mode on ANY issued row word
+    # (the lane-GG limb-2 macro schedule hosts store+stride-absorption
+    # on the FIRST launch, which the compact-absorber invariant refused
+    # by name window-pairing-stride-unproven).  Every Dst footprint is
+    # rebased by its carrying word's stride phase (rvtt-cost.md F5';
+    # SFPLOADMACRO-hosted events latch their Dst row at launch).  The
+    # tuner itself only runs under window-pairing, which the ON set
+    # carries — booking A/B is (ON + flag) vs plain ON.  Target row:
+    # mulint32-fresh (interrow drain 2 -> 1, the lane-GG banked
+    # 2-nop/row + boundary-pair delivery residual halves; the remaining
+    # 1 nop = the REAL fixed-VD WAR hazard the model names as
+    # window-pairing-lreg-overlap).  MEASURED (headline-laneGJ-20260824d,
+    # BH p150, 3 reps, corr-before-perf, paired CRAQ PASS pinned sim
+    # 32489dda): KERNEL 38669 -> 35077.7 = -9.29% under the knob;
+    # vs-hand +5.11% -> -4.65% (the row flips LOSS -> WIN; hand anchor
+    # 36788).  roundingops / lcm-fresh / recip = measured honest
+    # no-fire (knob-attribution byte-identical, laneGJ evidence).
+    "window-pairing-stride": "-mtt-tensix-optimize-window-pairing-stride",
 }
 # Per-knob leg MODE (see the KNOBS comment).  Every key must be a KNOBS
 # key; absent = "solo".  The three seeded drop-one knobs are the known
@@ -729,6 +748,10 @@ KNOB_MODES = {
     # ON-set planner emission places one.  PROMOTED into the ON set
     # 2026-08-23 — drop-one from here (was on-plus while a booking knob).
     "window-pairing": "drop-one",
+    # GJ window-pairing-stride: the generalized stride proof only runs
+    # inside the FT tuner, which only runs under window-pairing on the
+    # ON-set planner emission — booking A/B is (ON + flag) vs plain ON.
+    "window-pairing-stride": "on-plus",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
