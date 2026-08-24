@@ -4,6 +4,8 @@
 import fcntl
 import glob
 import os
+import re
+import shlex
 import shutil
 import struct
 import subprocess
@@ -163,12 +165,13 @@ class TestConfig:
     OPTIONS_LINK: ClassVar[str] = None
     INITIAL_OPTIONS_COMPILE: ClassVar[str] = None
     INCLUDES: ClassVar[List[str]] = []
-    # Out-of-tree -I header dirs registered via add_include_dirs(). Prepended
-    # onto INCLUDES in setup_compilation_options so they win over in-tree copies.
-    EXTRA_INCLUDE_FLAGS: ClassVar[List[str]] = []
+    # Out-of-tree -I header dirs from add_include_dirs(). Prepend shadows
+    # in-tree copies; append sits after them.
+    EXTRA_INCLUDE_PREPEND: ClassVar[List[str]] = []
+    EXTRA_INCLUDE_APPEND: ClassVar[List[str]] = []
     # Extra -I dirs for #include <foo.cpp> (tests/helpers/src style).
-    # Prepended onto the kernel compile line ahead of RISCV_SOURCES.
-    EXTRA_SRC_INCLUDE_FLAGS: ClassVar[List[str]] = []
+    EXTRA_SRC_INCLUDE_PREPEND: ClassVar[List[str]] = []
+    EXTRA_SRC_INCLUDE_APPEND: ClassVar[List[str]] = []
     WITH_COVERAGE: ClassVar[bool] = False
 
     OPTIONS_COMPILE: ClassVar[str] = None
@@ -559,11 +562,55 @@ class TestConfig:
 
     @staticmethod
     def _as_include_flags(roots) -> List[str]:
+        """Turn roots into unquoted ``-I`` flags (one list entry per dir)."""
         flags: List[str] = []
         for root in roots:
             text = str(root)
-            flags.append(text if text.startswith("-I") else f"-I{Path(text).resolve()}")
+            flags.append(
+                text
+                if text.startswith("-I")
+                else f"-I{Path(text).expanduser().resolve()}"
+            )
         return flags
+
+    @staticmethod
+    def _argv(*parts) -> list:
+        """Flatten compile-flag strings and raw path tokens into one argv.
+
+        Strings are ``shlex.split`` (so already-quoted ``-I`` flags stay one
+        token). Lists/tuples are appended as-is — use those for paths that
+        may contain whitespace.
+        """
+        argv: list = []
+        for part in parts:
+            if part is None or part == "":
+                continue
+            if isinstance(part, (list, tuple)):
+                argv.extend(
+                    str(item) for item in part if item is not None and item != ""
+                )
+            else:
+                argv.extend(shlex.split(str(part)))
+        return argv
+
+    @staticmethod
+    def _safe_artefact_key(source_path: str) -> str:
+        """Artefact dir under ``ARTEFACTS_DIR`` for an absolute driver path.
+
+        The basename is used when it is a single safe token; otherwise it is
+        sanitized and disambiguated so ``VARIANT_DIR`` never carries spaces
+        or shell metacharacters.
+        """
+        name = Path(source_path).name
+        if re.fullmatch(r"[A-Za-z0-9._+-]+", name):
+            return f"sources/{name}"
+        digest = sha256(os.path.abspath(source_path).encode()).hexdigest()[:12]
+        safe = re.sub(r"[^A-Za-z0-9._+-]+", "_", name) or "driver.cpp"
+        return f"sources/{safe}.{digest}"
+
+    @staticmethod
+    def _escape_cpp_include_path(path: str) -> str:
+        return path.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
     @staticmethod
     def _resolve_flag_roots(roots) -> list:
@@ -575,19 +622,32 @@ class TestConfig:
                 resolved.append(Path(root).expanduser().resolve())
         return resolved
 
-    def _extra_src_include_flags(self) -> str:
-        flags = TestConfig._as_include_flags(self.src_include_dirs)
-        existing = [f for f in TestConfig.EXTRA_SRC_INCLUDE_FLAGS if f not in flags]
-        ordered = flags + existing
-        return (" ".join(ordered) + " ") if ordered else ""
+    def _extra_src_include_flag_lists(self) -> tuple[list, list]:
+        """Instance + process extras split for before/after in-tree ``helpers/src``."""
+        instance = TestConfig._as_include_flags(self.src_include_dirs)
+        prepend = instance + [
+            flag
+            for flag in TestConfig.EXTRA_SRC_INCLUDE_PREPEND
+            if flag not in instance
+        ]
+        seen = set(prepend)
+        append = [
+            flag for flag in TestConfig.EXTRA_SRC_INCLUDE_APPEND if flag not in seen
+        ]
+        return prepend, append
+
+    @staticmethod
+    def _merge_flag_list(existing: list, flags: list, prepend: bool) -> list:
+        rest = [flag for flag in existing if flag not in flags]
+        return flags + rest if prepend else rest + flags
 
     @staticmethod
     def _apply_extra_includes() -> None:
-        extras = list(TestConfig.EXTRA_INCLUDE_FLAGS)
-        if not extras:
-            return
+        prepend = list(TestConfig.EXTRA_INCLUDE_PREPEND)
+        append = list(TestConfig.EXTRA_INCLUDE_APPEND)
+        extras = set(prepend + append)
         rest = [flag for flag in TestConfig.INCLUDES if flag not in extras]
-        TestConfig.INCLUDES = extras + rest
+        TestConfig.INCLUDES = prepend + rest + append
 
     @staticmethod
     def llk_tree_include_roots(arch_root) -> List[Path]:
@@ -609,18 +669,28 @@ class TestConfig:
         """Add header search dirs (``-I``) for this process.
 
         Use for ``#include "foo.h"`` / ``"experimental/foo.h"``. Safe before or
-        after ``setup_build``. Dirs are stored on ``EXTRA_INCLUDE_FLAGS`` and
-        prepended (default) onto ``INCLUDES`` so an out-of-tree suite can
-        shadow in-tree copies. Call from the external ``conftest`` after
-        ``helpers`` is on ``sys.path``.
+        after ``setup_build``. ``prepend=True`` (default) places dirs before
+        in-tree ``INCLUDES`` so they can shadow ``experimental/`` copies.
+        ``prepend=False`` places them after in-tree dirs (no shadowing).
+        Call from the external ``conftest`` after ``helpers`` is on ``sys.path``.
 
         For one variant only, pass ``include_dirs=[...]`` to the constructor.
         """
         flags = TestConfig._as_include_flags(dirs)
-        existing = [f for f in TestConfig.EXTRA_INCLUDE_FLAGS if f not in flags]
-        TestConfig.EXTRA_INCLUDE_FLAGS = (
-            flags + existing if prepend else existing + flags
-        )
+        if prepend:
+            TestConfig.EXTRA_INCLUDE_APPEND = [
+                flag for flag in TestConfig.EXTRA_INCLUDE_APPEND if flag not in flags
+            ]
+            TestConfig.EXTRA_INCLUDE_PREPEND = TestConfig._merge_flag_list(
+                TestConfig.EXTRA_INCLUDE_PREPEND, flags, prepend=True
+            )
+        else:
+            TestConfig.EXTRA_INCLUDE_PREPEND = [
+                flag for flag in TestConfig.EXTRA_INCLUDE_PREPEND if flag not in flags
+            ]
+            TestConfig.EXTRA_INCLUDE_APPEND = TestConfig._merge_flag_list(
+                TestConfig.EXTRA_INCLUDE_APPEND, flags, prepend=False
+            )
         if TestConfig.INCLUDES:
             TestConfig._apply_extra_includes()
 
@@ -629,17 +699,32 @@ class TestConfig:
         """Add search dirs for ``#include <foo.cpp>`` on the kernel compile.
 
         This is the ``tests/helpers/src`` role — not where the test driver
-        lives (that is ``test_name`` / an absolute path). Extra dirs are
-        prepended (default) ahead of in-tree ``helpers/src`` so an out-of-tree
-        ``trisc.cpp`` can shadow it. Safe before or after ``setup_build``.
+        lives (that is ``test_name`` / an absolute path). ``prepend=True``
+        (default) places dirs ahead of in-tree ``helpers/src`` so an
+        out-of-tree ``trisc.cpp`` can shadow it. ``prepend=False`` places
+        them after. Safe before or after ``setup_build``.
 
         For one variant only, pass ``src_include_dirs=[...]`` to the constructor.
         """
         flags = TestConfig._as_include_flags(dirs)
-        existing = [f for f in TestConfig.EXTRA_SRC_INCLUDE_FLAGS if f not in flags]
-        TestConfig.EXTRA_SRC_INCLUDE_FLAGS = (
-            flags + existing if prepend else existing + flags
-        )
+        if prepend:
+            TestConfig.EXTRA_SRC_INCLUDE_APPEND = [
+                flag
+                for flag in TestConfig.EXTRA_SRC_INCLUDE_APPEND
+                if flag not in flags
+            ]
+            TestConfig.EXTRA_SRC_INCLUDE_PREPEND = TestConfig._merge_flag_list(
+                TestConfig.EXTRA_SRC_INCLUDE_PREPEND, flags, prepend=True
+            )
+        else:
+            TestConfig.EXTRA_SRC_INCLUDE_PREPEND = [
+                flag
+                for flag in TestConfig.EXTRA_SRC_INCLUDE_PREPEND
+                if flag not in flags
+            ]
+            TestConfig.EXTRA_SRC_INCLUDE_APPEND = TestConfig._merge_flag_list(
+                TestConfig.EXTRA_SRC_INCLUDE_APPEND, flags, prepend=False
+            )
 
     @staticmethod
     def add_helpers_tree(*trees, prepend: bool = True) -> None:
@@ -805,7 +890,7 @@ class TestConfig:
         # key so we don't mkdir through a .cpp file.
         if os.path.isabs(test_name):
             self.test_source_path = test_name
-            self.test_name = f"sources/{Path(test_name).name}"
+            self.test_name = TestConfig._safe_artefact_key(test_name)
         else:
             self.test_source_path = test_name
             self.test_name = test_name
@@ -1058,7 +1143,7 @@ class TestConfig:
         """
         source = str(self.test_source_path or self.test_name)
         if os.path.isabs(source):
-            return f'#include "{source}"\n'
+            return f'#include "{TestConfig._escape_cpp_include_path(source)}"\n'
         return f"#include  <{source}>\n"
 
     def generate_variant_hash(self):
@@ -1109,12 +1194,10 @@ class TestConfig:
         MEMORY_LAYOUT_LD_SCRIPT = (
             f"{TestConfig.LINKER_SCRIPTS}/memory.{TestConfig.ARCH.value}.ld"
         )
-        extra_includes = " ".join(TestConfig._as_include_flags(self.include_dirs))
-        include_flags = (
-            f"{extra_includes} {' '.join(TestConfig.INCLUDES)}"
-            if extra_includes
-            else " ".join(TestConfig.INCLUDES)
+        include_tokens = TestConfig._as_include_flags(self.include_dirs) + list(
+            TestConfig.INCLUDES
         )
+        include_flags = " ".join(shlex.quote(flag) for flag in include_tokens)
         OPTIONS_COMPILE = f"{include_flags} {TestConfig.INITIAL_OPTIONS_COMPILE} "
 
         OPTIONS_COMPILE += (
@@ -1469,6 +1552,10 @@ class TestConfig:
                 else TestConfig.SHARED_OBJ_DIR
             )
 
+            src_include_prepend, src_include_append = (
+                self._extra_src_include_flag_lists()
+            )
+
             def build_kernel_part(name: str):
                 # COMPILE_FOR_TRISC is the single source of truth for the compute thread id on every
                 # arch (unpack=0/math=1/pack=2/sfpu=3). Quasar also gets -DLLK_TRISC_<NAME> below, but the
@@ -1493,10 +1580,15 @@ class TestConfig:
                 ):
                     optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
 
-                COVERAGES_DEPS = (
-                    f"-Wl,--start-group {shared_obj_dir}/coverage.o -lgcov -Wl,--end-group "
+                coverage_args = (
+                    [
+                        "-Wl,--start-group",
+                        str(shared_obj_dir / "coverage.o"),
+                        "-lgcov",
+                        "-Wl,--end-group",
+                    ]
                     if self.coverage_build == CoverageBuild.Yes
-                    else f""
+                    else []
                 )
                 trisc_define = "ISOLATE_SFPU" if name == "sfpu" else name.upper()
                 device_print_flags = ""
@@ -1515,17 +1607,34 @@ class TestConfig:
                         f"-DDEVICE_PRINT_BUFFER_SIZE2={TestConfig.DEVICE_PRINT_BUFFER_SIZE2} "
                         f"-DPROCESSOR_INDEX={risc_id} "
                     )
-                compile_command = (
-                    f"{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.ARCH_SPECIFIC_OPTIONS} {TestConfig.OPTIONS_ALL} -I{TestConfig.TESTS_WORKING_DIR} "
-                    f"{self._extra_src_include_flags()}-I{TestConfig.RISCV_SOURCES} -I{VARIANT_DIR} {local_options_compile} {optional_kernel_flags} "
-                    f"-DLLK_TRISC_{trisc_define} {device_print_flags}{TestConfig.OPTIONS_LINK} {COVERAGES_DEPS} "
-                    f"-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / name}.ld -T{TestConfig.LINKER_SCRIPTS}/sections.ld "
-                    # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3) that
-                    # -nostdlib drops; only referenced helpers are linked, so it's a no-op otherwise.
-                    f"-x c++ - -lc -lgcc -o {VARIANT_ELF_DIR / name}.elf"
+                compile_command = TestConfig._argv(
+                    TestConfig.GXX,
+                    TestConfig.ARCH_COMPUTE,
+                    TestConfig.ARCH_SPECIFIC_OPTIONS,
+                    TestConfig.OPTIONS_ALL,
+                    [f"-I{TestConfig.TESTS_WORKING_DIR}"],
+                    src_include_prepend,
+                    [f"-I{TestConfig.RISCV_SOURCES}"],
+                    src_include_append,
+                    [f"-I{VARIANT_DIR}"],
+                    local_options_compile,
+                    optional_kernel_flags,
+                    f"-DLLK_TRISC_{trisc_define}",
+                    device_print_flags,
+                    TestConfig.OPTIONS_LINK,
+                    coverage_args,
+                    [
+                        f"-T{local_memory_layout_ld}",
+                        f"-T{TestConfig.LINKER_SCRIPTS / name}.ld",
+                        f"-T{TestConfig.LINKER_SCRIPTS / 'sections.ld'}",
+                    ],
+                    # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3)
+                    # that -nostdlib drops; only referenced helpers are linked.
+                    ["-x", "c++", "-", "-lc", "-lgcc", "-o"],
+                    [str(VARIANT_ELF_DIR / f"{name}.elf")],
                 )
 
-                logger.trace(compile_command)
+                logger.trace(" ".join(shlex.quote(part) for part in compile_command))
 
                 run_shell_command(  # %.elf : path/to/kernel/test.cpp trisc.cpp [coverage.o libgcov.a]
                     compile_command,
@@ -1555,7 +1664,15 @@ class TestConfig:
                     elf_path = VARIANT_ELF_DIR / f"{component}.elf"
                     meta_bin_path = PROFILER_VARIANT_META_DIR / f"{component}.meta.bin"
                     run_shell_command(
-                        f"{TestConfig.OBJCOPY} -O binary -j .profiler_meta {elf_path} {meta_bin_path}",
+                        [
+                            TestConfig.OBJCOPY,
+                            "-O",
+                            "binary",
+                            "-j",
+                            ".profiler_meta",
+                            str(elf_path),
+                            str(meta_bin_path),
+                        ],
                         TestConfig.TESTS_WORKING_DIR,
                     )
 
