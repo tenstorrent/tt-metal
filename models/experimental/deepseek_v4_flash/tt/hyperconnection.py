@@ -2,10 +2,13 @@ from typing import Optional
 
 import ttnn
 
-from .common import DeepSeekV4Module, _profile, width_sharded_l1_config
+from .common import DeepSeekV4Module, _profile, width_sharded_l1_config, with_shard_height
 from .l1_weights import packed_weight_spec
 from .layers import Linear, LinearDecode, _rms_norm_unweighted
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _memo
+
+SINGLE_USER_TILE = ttnn.Tile((1, 32))
+FULL_TILE = ttnn.Tile((32, 32))
 
 
 class DeepSeekV4HyperConnection(DeepSeekV4Module):
@@ -122,8 +125,16 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
             flat_mem_config = width_sharded_l1_config(t, hc * d, self.device)
         flat = ttnn.reshape(hidden_streams, [1, 1, t, hc * d], memory_config=flat_mem_config)
         flat = _rms_norm_unweighted(flat, self.norm_eps)
-
+        flat_memory_config = flat.memory_config()
+        single_user_tile_memory_config = with_shard_height(flat_memory_config, 1)
+        flat = ttnn.tilize(flat, tile=SINGLE_USER_TILE, memory_config=single_user_tile_memory_config)
         fused_w = self.fn(flat)  # [1,1,T,(2+H)*H]
+        fused_w_memory_config = with_shard_height(fused_w.memory_config(), 32)
+        fused_w = ttnn.tilize(fused_w, tile=FULL_TILE, memory_config=fused_w_memory_config)
+        fused_w = ttnn.reshape(
+            fused_w, [1, 1, t, (2 + hc) * hc], fused_w.padded_shape, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        fused_w = ttnn.to_memory_config(fused_w, ttnn.DRAM_MEMORY_CONFIG)
         _profile(self.device)
 
         # The pre_w / post_w / comb_w slices are split out of `fused_w` inside the op

@@ -41,6 +41,10 @@ bool can_use_sharded_optimized_factories(
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
 
+    if (is_retile(operation_attributes, tensor_args)) {
+        return false;
+    }
+
     if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
         return false;
     }
@@ -284,8 +288,7 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
     if (is_retile(operation_attributes, tensor_args)) {
         // A sharded input can be re-tiled in place (zero-copy) when the shard geometry is
         // compatible with the optimized sharded path; otherwise fall back to the interleaved retile.
-        if (input_tensor_a.memory_config().is_sharded() &&
-            can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
+        if (input_tensor_a.memory_config().is_sharded()) {
             return ttnn::prim::TilizeMultiCoreShardedRetileProgramFactory{};
         }
         return ttnn::prim::TilizeMultiCoreRetileProgramFactory{};

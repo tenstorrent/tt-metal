@@ -49,9 +49,37 @@ ProgramDescriptor TilizeMultiCoreShardedRetileProgramFactory::create_descriptor(
     TT_FATAL(a.is_sharded(), "Sharded retile program factory requires a sharded input");
 
     const auto& shard_spec = a.shard_spec().value();
-    const uint32_t shard_height = shard_spec.shape[0];
+    const uint32_t input_shard_height = shard_spec.shape[0];
     const uint32_t shard_width = shard_spec.shape[1];
     const CoreRangeSet& all_cores = shard_spec.grid;
+
+    // Output shard geometry. For an interleaved output we don't have an output shard spec; each
+    // core's output range in the interleaved buffer mirrors its input shard's row count under the
+    // *output* tile shape (input and output cover the same logical rows), so derive it from the
+    // input shard's real row count expressed in output tiles. For a sharded output we take the
+    // dimensions directly from the output shard spec — critically, the output shard height can
+    // differ from the input shard height (e.g. width-sharded logical H=1 padded to a tile: the
+    // input shard is 32 rows tall, the output shard 1 row tall). Using the input shard height for
+    // the output CB (as the old code did) allocated a CB many times larger than the output shard's
+    // L1 bank, tripping `total_size <= max_size_` in circular_buffer_config.
+    const bool output_is_interleaved = output.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
+    uint32_t output_shard_height = 0;
+    if (output_is_interleaved) {
+        // Interleaved output only supports the shrink/height-sharded ROW_MAJOR path below; each
+        // core's writer emits `num_real_output_tile_rows * tiles_per_block` tiles into a
+        // contiguous interleaved range. We treat the output shard height as covering the same
+        // rows the input shard does (rounded up to the output tile height).
+        output_shard_height = ((input_shard_height + out_tile_height - 1) / out_tile_height) * out_tile_height;
+    } else {
+        const auto& out_shard_spec = output.shard_spec().value();
+        output_shard_height = out_shard_spec.shape[0];
+        TT_FATAL(
+            out_shard_spec.shape[1] == shard_width,
+            "Sharded retile requires input and output shard widths to match ({} vs {})",
+            shard_width,
+            out_shard_spec.shape[1]);
+        TT_FATAL(out_shard_spec.grid == all_cores, "Sharded retile requires input and output shard grids to match");
+    }
 
     TT_FATAL(
         shard_width % in_tile_width == 0,
@@ -59,14 +87,14 @@ ProgramDescriptor TilizeMultiCoreShardedRetileProgramFactory::create_descriptor(
         shard_width,
         in_tile_width);
     TT_FATAL(
-        shard_height % in_tile_height == 0,
-        "Sharded retile requires shard height {} divisible by input tile height {}",
-        shard_height,
+        input_shard_height % in_tile_height == 0,
+        "Sharded retile requires input shard height {} divisible by input tile height {}",
+        input_shard_height,
         in_tile_height);
     TT_FATAL(
-        shard_height % out_tile_height == 0,
-        "Sharded retile requires shard height {} divisible by output tile height {}",
-        shard_height,
+        output_shard_height % out_tile_height == 0,
+        "Sharded retile requires output shard height {} divisible by output tile height {}",
+        output_shard_height,
         out_tile_height);
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
@@ -90,19 +118,42 @@ ProgramDescriptor TilizeMultiCoreShardedRetileProgramFactory::create_descriptor(
     TT_FATAL(src0_buffer != nullptr, "Input buffer should be allocated on device!");
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    const bool output_is_interleaved = output.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
-
-    // A retile leaves element dimensions unchanged, so each core's shard maps to whole tile-rows on
-    // both sides; only the tiling of those elements changes. Work is per-core and independent.
+    // A retile leaves the element dimensions unchanged. Each core's input shard and output shard
+    // therefore cover the same *logical* rows of the tensor, but the padded row count on each side
+    // is rounded up to its own tile height — for width-sharded tensors those two padded heights
+    // can differ (e.g. logical H=1: input shard 32 rows under a (32,32) tile, output shard 1 row
+    // under a (1,32) tile). We stage through a shared L1 mid buffer whose row extent covers the
+    // *taller* of the two shards; the shorter side either only fills its real rows (grow: input
+    // real rows < mid rows, remainder is zero-filled) or only drains its real rows (shrink:
+    // output real rows < mid rows, surplus tiles are simply not written).
     const uint32_t tiles_per_block = shard_width / in_tile_width;
-    const uint32_t num_input_tile_rows = shard_height / in_tile_height;
-    const uint32_t num_output_tile_rows = shard_height / out_tile_height;
-    const uint32_t num_tiles_per_shard_in = num_input_tile_rows * tiles_per_block;
-    const uint32_t num_tiles_per_shard_out = num_output_tile_rows * tiles_per_block;
+    const uint32_t mid_height = std::max(input_shard_height, output_shard_height);
+    TT_FATAL(
+        mid_height % in_tile_height == 0 && mid_height % out_tile_height == 0,
+        "Sharded retile: max shard height {} must be divisible by both tile heights ({}, {})",
+        mid_height,
+        in_tile_height,
+        out_tile_height);
+    const uint32_t num_input_tile_rows = mid_height / in_tile_height;  // rows in mid (input tile view)
+    const uint32_t num_tiles_per_shard_in = (input_shard_height / in_tile_height) * tiles_per_block;
+    const uint32_t num_tiles_per_shard_out = (output_shard_height / out_tile_height) * tiles_per_block;
 
-    // Compute untilizes the whole shard into mid, then tilizes it. Aliased c_1/c_2 page sizes can
-    // differ, so the allocation must be a multiple of both.
-    const uint32_t mid_input_pages = num_tiles_per_shard_in;
+    // Real (non-padded) row counts per core. For a width-sharded tensor every core carries the
+    // whole logical H, so the real rows are min(logical_H, shard_height). For height/block-sharded
+    // tensors we require the shard grid to divide the tensor evenly and treat every shard row as
+    // real (the interleaved retile factory handles ragged trailing shards; if that becomes needed
+    // here we can generalise later). The compute kernel uses these to cap the untilize loop
+    // (grow case) and the tilize/write loop (shrink case).
+    const auto& logical_shape = a.logical_shape();
+    const uint32_t logical_h = logical_shape.rank() >= 2 ? logical_shape[-2] : 1;
+    const bool is_width_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+    const uint32_t real_rows_per_core = is_width_sharded ? std::min(logical_h, input_shard_height) : input_shard_height;
+    const uint32_t num_real_input_tile_rows = (real_rows_per_core + in_tile_height - 1) / in_tile_height;
+    const uint32_t num_real_output_tile_rows = (real_rows_per_core + out_tile_height - 1) / out_tile_height;
+
+    // Compute untilizes `num_input_tile_rows` (mid-height) rows into mid, then tilizes them.
+    // Aliased c_1/c_2 page sizes can differ, so the allocation must be a multiple of both.
+    const uint32_t mid_input_pages = num_input_tile_rows * tiles_per_block;
     const uint32_t mid_size_align = std::lcm(mid_input_page_size, mid_output_page_size);
     const uint32_t mid_total_size =
         ((mid_input_pages * mid_input_page_size + mid_size_align - 1) / mid_size_align) * mid_size_align;
@@ -256,11 +307,15 @@ ProgramDescriptor TilizeMultiCoreShardedRetileProgramFactory::create_descriptor(
             .fp32_dest_acc_en = fp32_llk_acc,
             .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
         };
-        // All shards are the same size, so every core does identical work. num_input_blocks is in
-        // input tile-rows; all rows are real on both sides (no grow-case height padding and no
-        // shrink-case surplus within a shard), so the kernel's real-row caps equal the full counts.
+        // All shards are the same size, so every core does identical work. num_input_blocks is
+        // the mid buffer's tile-row count (in input tile geometry) — the untilize loop iterates
+        // that many times, zero-filling any rows past the real input (grow case). The two
+        // real-row caps let the kernel stop untilizing / tilizing at the logical H (they equal
+        // num_input_tile_rows / num_output_tile_rows-of-mid when there is no padding on either
+        // side, matching the previous behaviour when input and output shard heights agree).
         for (const auto& core : corerange_to_cores(all_cores)) {
-            compute_desc.emplace_runtime_args(core, {num_input_tile_rows, num_input_tile_rows, num_output_tile_rows});
+            compute_desc.emplace_runtime_args(
+                core, {num_input_tile_rows, num_real_input_tile_rows, num_real_output_tile_rows});
         }
         desc.kernels.push_back(std::move(compute_desc));
     }

@@ -168,6 +168,19 @@ def rectangular_core_range_set(num_cores: int, device) -> ttnn.CoreRangeSet:
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))})
 
 
+def with_shard_height(memory_config: ttnn.MemoryConfig, shard_height: int) -> ttnn.MemoryConfig:
+    """Return a copy of ``memory_config`` with its shard height replaced by ``shard_height``."""
+    shard_spec = memory_config.shard_spec
+    if shard_spec is None:
+        raise ValueError("memory_config has no shard_spec to override")
+    new_shard_spec = ttnn.ShardSpec(
+        shard_spec.grid,
+        [shard_height, shard_spec.shape[1]],
+        shard_spec.orientation,
+    )
+    return ttnn.MemoryConfig(memory_config.memory_layout, memory_config.buffer_type, new_shard_spec)
+
+
 def width_sharded_l1_config(
     height: int, width: int, device, num_cores: int | None = None, tile_height: int = ttnn.TILE_SIZE
 ) -> ttnn.MemoryConfig:

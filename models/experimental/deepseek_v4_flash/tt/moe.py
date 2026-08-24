@@ -246,7 +246,9 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
         # values. topk's ids are returned exactly as produced: TILE uint16, [1,1,T,k].
         biased = ttnn.add(scores, self.e_score_correction_bias)
         _profile(self.device)
+        biased = ttnn.to_memory_config(biased, ttnn.DRAM_MEMORY_CONFIG)
         _, top_idx = ttnn.topk(biased, self.top_k, dim=-1)
+        scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         return SparseRouting(scores=scores, indices=top_idx)
 
 
