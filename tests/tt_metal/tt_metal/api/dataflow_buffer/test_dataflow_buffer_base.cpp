@@ -170,7 +170,7 @@ INSTANTIATE_TEST_SUITE_P(
     }
 
 // --- BLOCKED→BLOCKED (DM→DM, explicit sync: one NoC burst per block) ---
-// 1x1: the whole ring is one sub-ring, so the round-trip is identity. Block and ring sizes vary.
+// Global block order makes every DM→DM round-trip identity. Block and ring sizes vary.
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk4, DM, DM, 1, 1, 4, 16, false)
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk2, DM, DM, 1, 1, 2, 16, false)
 DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk8, DM, DM, 1, 1, 8, 16, false)
@@ -250,13 +250,13 @@ TEST_F(UnitMeshFixture, DMTest1xDFB2Bx2B_blk4_entry2048_2_0) {
 // The Tensix producer only posts credits over a host-prefilled ring; the DM consumer bursts each block
 // out to DRAM. 1x1 is identity.
 DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB1Bx1B_blk4, TENSIX, DM, 1, 1, 4, 16, false)
-// Block-size and ring coverage at N=1, where the permutation degenerates to identity.
+// Block-size and ring coverage at N=1.
 DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB1Bx1B_blk2, TENSIX, DM, 1, 1, 2, 16, false)
 DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB1Bx1B_blk8, TENSIX, DM, 1, 1, 8, 16, false)
 DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB1Bx1B_blk4_ring32, TENSIX, DM, 1, 1, 4, 32, false)
 DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB1Bx1B_blk3, TENSIX, DM, 1, 1, 3, 12, false)
-// Symmetric NxN. The flat host prefill plus the consumer's de-interleave make the output a permutation,
-// not identity. Tensix threads must be 1, 2 or 4, so there is no 3Bx3B here.
+// Symmetric NxN. The flat host prefill is the global block order, so the round-trip is identity.
+// Tensix threads must be 1, 2 or 4, so there is no 3Bx3B here.
 DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB2Bx2B_blk4, TENSIX, DM, 2, 2, 4, 16, false)
 DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB4Bx4B_blk4, TENSIX, DM, 4, 4, 4, 32, false)
 
@@ -278,8 +278,8 @@ TEST_F(UnitMeshFixture, TensixDMTest1xDFB1Bx1B_blk4_entry2048_2_0) {
 }
 
 // --- ASYMMETRIC BLOCKED→BLOCKED (Trisc→DM, explicit) ---
-// Verified against the Tensix→DM permutation golden (capacity = num_entries/max(P,C), ntc = P/C when
-// P>=C else 1). Explicit only, since asymmetric implicit BLOCKED is rejected.
+// Identity for every P/C under global block order. Explicit only, since a Tensix producer cannot
+// feed an implicit BLOCKED DM consumer (rejected at config time).
 DFB_BLOCKED_TEST_2_0(TensixDMTest1xDFB1Bx2B_blk4, TENSIX, DM, 1, 2, 4, 16, false)
 // 32 entries gives 2 blocks per thread, so the C=4 fan-out is non-degenerate. At 16 it collapses to
 // identity and verifies nothing.

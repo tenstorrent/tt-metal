@@ -579,29 +579,11 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
         } else if (
             p.producer_type == M2PorCType::TENSIX && p.cap == m2::DFBAccessPattern::BLOCKED &&
             (p.num_consumers > 1 || p.num_producers > p.num_consumers)) {
-            // Tensix→DM BLOCKED is a permutation, not identity: the producer only posts credits over a flat
-            // prefilled ring, so no block-strided DRAM read cancels the consumer's de-interleave. Consumer c
-            // writes its block b to out page (b*C + c)*bs, reading sub-ring (t*C + c):
-            //   output[(b*C + c)*bs + j] = input[((b % ntc)*C + c)*capacity + (b / ntc)*bs + j]
-            //   capacity = num_entries/max(P,C),  ntc = (P>=C) ? P/C : 1
-            // Degenerates to identity at P==C==1, which the else branch handles.
+            // Tensix→DM BLOCKED is identity for every P/C: the flat prefill IS the global block order
+            // (ring entry s holds input page s), and consumer c drains its blocks b ≡ c (mod C)
+            // ascending, writing block b to out pages [b*bs, (b+1)*bs).
             const uint32_t wpe = p.entry_size / sizeof(uint32_t);
-            const uint32_t P = p.num_producers;
-            const uint32_t C = p.num_consumers;
-            const uint32_t capacity = p.num_entries / std::max(P, C);
-            const uint32_t ntc = (P >= C) ? (P / C) : 1u;
-            const uint32_t blocks_per_thread = num_entries_per_consumer / p.block_size;
-            std::vector<uint32_t> expected(input.size(), 0u);
-            for (uint32_t c = 0; c < C; ++c) {
-                for (uint32_t b = 0; b < blocks_per_thread; ++b) {
-                    for (uint32_t j = 0; j < p.block_size; ++j) {
-                        const uint32_t src = ((b % ntc) * C + c) * capacity + (b / ntc) * p.block_size + j;
-                        const uint32_t dst = (b * C + c) * p.block_size + j;
-                        std::copy(
-                            input.begin() + src * wpe, input.begin() + (src + 1) * wpe, expected.begin() + dst * wpe);
-                    }
-                }
-            }
+            std::vector<uint32_t> expected = input;
             // On mismatch, map each output tile back to the input page that actually landed there.
             if (expected != output) {
                 for (uint32_t t = 0; t < std::min<uint32_t>(entries_per_core, 16); ++t) {
@@ -620,7 +602,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
                         match >= 0 ? ("input page " + std::to_string(match)) : std::string("UNKNOWN"));
                 }
             }
-            EXPECT_EQ(expected, output) << "M2 Tensix→DM BLOCKED multi-thread permutation mismatch";
+            EXPECT_EQ(expected, output) << "M2 Tensix→DM BLOCKED identity mismatch";
         } else if (
             p.producer_type == M2PorCType::TENSIX && p.pap == m2::DFBAccessPattern::BLOCKED &&
             p.cap == m2::DFBAccessPattern::ALL) {
@@ -941,14 +923,9 @@ inline void run_a1_blocked_pipeline(
             }
         }
     } else if (cap_in == m2::DFBAccessPattern::BLOCKED) {
-        // BLOCKED→BLOCKED at C=1: the one consumer round-robins the P sub-rings, so its k-th pop is
-        // TC k%P at position k/P, and producer p filled position s from page (s/bs * P + p)*bs + s%bs.
-        for (uint32_t k = 0; k < num_entries; ++k) {
-            const uint32_t p = k % P;
-            const uint32_t s = k / P;
-            const uint32_t src = (s / bs * P + p) * bs + (s % bs);
-            std::copy(input.begin() + src * wpe, input.begin() + (src + 1) * wpe, expected.begin() + k * wpe);
-        }
+        // BLOCKED→BLOCKED is identity for every P: producer p bursts its DRAM blocks straight into
+        // its ring blocks (b ≡ p mod P, ascending), and the consumer drains blocks in global order.
+        expected = input;
     } else {
         // BLOCKED→STRIDED: C>=P forces P==1 here, so identity.
         expected = input;
