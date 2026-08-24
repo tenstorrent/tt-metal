@@ -15,6 +15,25 @@ import statistics
 import pytest
 
 
+
+@pytest.fixture(autouse=True)
+def _no_env_leak():
+    """_run_full_pipeline_ms writes os.environ DIRECTLY (PERF_MCP_LAST_HEADLINE_UNIT,
+    PERF_MCP_MODEL_NAME), which monkeypatch cannot revert because it never saw the assignment. Left
+    behind, those reached later tests in the same process: test_decode_roofline_physics then resolved
+    a real model and sized its weights from the HF cache (15.0 GB) instead of the 8 GB its own patch
+    installed. The tool then REFUSED TO START -- "refusing to start against a tool whose own tests
+    fail" -- so a leak from a unit test blocked a hardware run.
+
+    Snapshot and restore, rather than deleting known names: the next variable the measurement path
+    sets would otherwise reintroduce this silently."""
+    import os
+
+    before = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(before)
+
 def _sample(**stage_bytes):
     out = ["TRACE_STAGE_MS[decode]=12.0 path=trace+1cq", "TRACE_PER_TOKEN_MS=12.0", "TRACE_HEADLINE_UNIT=token"]
     for k, v in stage_bytes.items():
