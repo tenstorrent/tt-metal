@@ -779,6 +779,7 @@ class TestConfig:
         compile_producer: bool,
         stimuli_only: str = None,
         use_stimuli: str = None,
+        collect_only: bool = False,
     ):
         TestConfig.WORKER_ID = worker_id
 
@@ -839,10 +840,13 @@ class TestConfig:
 
         # Always have a fresh build when compiling. Under xdist, only the
         # controller may remove the shared artifact tree; workers can already
-        # be compiling variants under it.
+        # be compiling variants under it. Never on a collect-only pass either —
+        # setup_mode still runs while pytest is only counting tests, so this
+        # would wipe a build that a following consumer run is about to read.
         if (
             TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]
             and worker_id == "master"
+            and not collect_only
         ):
             shutil.rmtree(TestConfig.ARTEFACTS_DIR.absolute(), ignore_errors=True)
 

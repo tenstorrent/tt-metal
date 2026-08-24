@@ -416,6 +416,7 @@ def pytest_configure(config):
         config.getoption("--compile-producer", default=False),
         config.getoption("--stimuli-only"),
         config.getoption("--use-stimuli"),
+        collect_only=bool(config.option.collectonly),
     )
 
     # Create directories from all processes - lock in create_directories handles race
