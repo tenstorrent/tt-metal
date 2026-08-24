@@ -43,6 +43,17 @@ from .attention import GptOssKVCache, allocate_kv_cache
 from .rope import build_indexed_rope
 
 
+def resolve_chunk_sizes(default_chunk_size: int, additional_chunk_sizes: tuple, max_seq_len: int) -> tuple:
+    """Supported chunk sizes, deduped, largest first; each must divide max_seq_len (rope must tile the cache)."""
+    sizes = tuple(sorted({default_chunk_size, *additional_chunk_sizes}, reverse=True))
+    for cs in sizes:
+        assert max_seq_len % cs == 0, (
+            f"max_seq_len ({max_seq_len}) must be a multiple of every supported chunk size; "
+            f"{cs} does not divide it (supported: {sizes})"
+        )
+    return sizes
+
+
 @dataclass
 class TtPrefillRuntimeConfig:
     num_layers: int  # layers built/cached by this runtime (== model total for single-rank)
@@ -90,14 +101,10 @@ class TtPrefillRuntime:
         self.hf_config = hf_config
         self.config = config
 
-        # Supported sizes, largest first. max_seq_len must be a multiple of each (rope must tile the cache).
-        self.chunk_sizes = tuple(sorted({config.default_chunk_size, *config.additional_chunk_sizes}, reverse=True))
+        self.chunk_sizes = resolve_chunk_sizes(
+            config.default_chunk_size, config.additional_chunk_sizes, config.max_seq_len
+        )
         self.max_chunk_size = self.chunk_sizes[0]
-        for cs in self.chunk_sizes:
-            assert config.max_seq_len % cs == 0, (
-                f"max_seq_len ({config.max_seq_len}) must be a multiple of every supported chunk size; "
-                f"{cs} does not divide it (supported: {self.chunk_sizes})"
-            )
         assert config.topology == ttnn.Topology.Ring, "GPT-OSS sequence-parallel prefill requires Ring topology"
 
         self.model_built = False
