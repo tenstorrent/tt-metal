@@ -977,6 +977,19 @@ template <int thread, int pair = thread, typename S, typename Accessor>
 NocAsyncReadTx<thread, S> noc_load(
     const Storage<S>& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx);
 
+// Multicast load with a CUSTOM fill, the same relationship the plain noc_load's Fn form has
+// to its accessor form. `fn` runs on the sender only and fills its copy however it likes;
+// the broadcast that follows does not care how the bytes arrived.
+//
+// This is what lets a multicast operand be gathered rather than read as one contiguous
+// block. A k-slice of a row-major activation, or a (k, n) tile of a wider weight matrix, is
+// strided in DRAM and contiguous nowhere -- but it is an ordinary block once in L1. Costs no
+// extra traffic: the built-in read issues one request per page too.
+template <int thread, int pair = thread, typename S, typename Fn>
+NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, PhysicalMcast mcast, Fn fn);
+template <int thread, int pair = thread, typename S, typename Fn>
+NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, LogicalMcast mcast, Fn fn);
+
 template <int thread, int pair = thread, typename S, typename Accessor>
 NocAsyncReadTx<thread, S> noc_load(
     const Storage<S>& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx);

@@ -743,26 +743,28 @@ NocAsyncWriteTx<thread, S> noc_store(Block<S> block, Fn fn) {
     return NocAsyncWriteTx<thread, S>(block.cb_id);
 }
 
-template <int thread, typename S, typename Accessor>
+template <int thread, typename S, typename Fn>
 NocAsyncReadTx<thread, S> noc_load(
     const Storage<S>& storage,
     PhysicalMcast mcast,
     Semaphore<thread>& receivers_ready,
     Semaphore<thread>& data_sent,
-    const Accessor& acc,
-    uint32_t block_idx) {
-    const uint32_t first = block_idx * storage.num_pages;
-
+    Fn fn) {
     // Also a custom routine. Every core reserves -- the sender fills its own copy
     // by reading, the receivers have theirs filled for them by the multicast --
     // and publishing is still left to wait(), same as every other load.
+    //
+    // `fn` is how the SENDER fills its copy, and it runs on the sender only. That is
+    // what lets a multicast operand be GATHERED rather than read as one contiguous
+    // block: a k-slice of a row-major activation, or a (k, n) tile of a wider weight
+    // matrix, is strided in DRAM but perfectly ordinary once it is in L1, and the
+    // broadcast that follows does not care how it got there. Same page count either
+    // way -- the built-in read issues one per page too.
     return noc_load<thread>(storage, [&](L1Pages pages) {
         const uint32_t num_dests = mcast.volume() - 1;
 
         if (PhysicalCoord::this_core() == mcast.start) {
-            for (uint32_t p = 0; p < pages.count; ++p) {
-                noc_async_read(acc.get_noc_addr(first + p), pages.addr(p), pages.page_bytes);
-            }
+            fn(pages);
 
             // A one-core rectangle -- a 1xN or Nx1 grid gives one for the
             // degenerate axis -- has nobody to broadcast to. Read and publish,
@@ -807,6 +809,22 @@ NocAsyncReadTx<thread, S> noc_load(
 template <int thread, typename S, typename Accessor>
 NocAsyncReadTx<thread, S> noc_load(
     const Storage<S>& storage,
+    PhysicalMcast mcast,
+    Semaphore<thread>& receivers_ready,
+    Semaphore<thread>& data_sent,
+    const Accessor& acc,
+    uint32_t block_idx) {
+    const uint32_t first = block_idx * storage.num_pages;
+    return noc_load<thread>(storage, mcast, receivers_ready, data_sent, [&](L1Pages pages) {
+        for (uint32_t p = 0; p < pages.count; ++p) {
+            noc_async_read(acc.get_noc_addr(first + p), pages.addr(p), pages.page_bytes);
+        }
+    });
+}
+
+template <int thread, typename S, typename Accessor>
+NocAsyncReadTx<thread, S> noc_load(
+    const Storage<S>& storage,
     LogicalMcast mcast,
     Semaphore<thread>& receivers_ready,
     Semaphore<thread>& data_sent,
@@ -838,6 +856,23 @@ template <int thread, int pair, typename S, typename Accessor>
 NocAsyncReadTx<thread, S> noc_load(
     const Storage<S>& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx) {
     return noc_load<thread, pair>(storage, mcast.to_physical(), acc, block_idx);
+}
+
+template <int thread, int pair, typename S, typename Fn>
+NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, PhysicalMcast mcast, Fn fn) {
+    static_assert(
+        kMcastSemsReserved,
+        "multicast needs its handshake semaphores reserved by the host: build the program through "
+        "unified_program(), which reserves them and defines TT_UNIFIED_MCAST_SEM_BASE -- or pass your own pair "
+        "to the five-argument noc_load()");
+    Semaphore<thread> receivers_ready(kMcastReadySem<pair>);
+    Semaphore<thread> data_sent(kMcastSentSem<pair>);
+    return noc_load<thread>(storage, mcast, receivers_ready, data_sent, fn);
+}
+
+template <int thread, int pair, typename S, typename Fn>
+NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, LogicalMcast mcast, Fn fn) {
+    return noc_load<thread, pair>(storage, mcast.to_physical(), fn);
 }
 
 // --- synchronize_cores: a barrier across CORES, for one data-movement thread ---
