@@ -253,47 +253,21 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         const uint64_t per_link_bytes =
             input_tensor.physical_volume() * input_tensor.element_size() * args.num_devices / num_links;
 
-        // Chunks this device contributes per row of the output -- the same stripe the factories walk,
-        // derived the same way, so the threshold below is in the units the kernels see. Specs here vs
-        // buffers there is the same number (a buffer is allocated with page_size =
-        // spec.compute_page_size_bytes()), and the output has no buffer yet anyway.
-        const auto& padded_shape = input_tensor.padded_shape();
-        const auto tile_spec =
-            input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
-        uint64_t pages_per_stripe = 1;
-        for (int32_t i = args.dim_from_end; i < 0; i++) {
-            uint64_t extent;
-            if (i == -1) {
-                extent = input_tensor.layout() == Layout::TILE
-                             ? padded_shape[i] / tile_spec.get_width()
-                             : (padded_shape[i] * input_tensor.element_size()) / in_page;
-            } else if (input_tensor.layout() == Layout::TILE && i == -2) {
-                extent = padded_shape[i] / tile_spec.get_height();
-            } else {
-                extent = padded_shape[i];
-            }
-            pages_per_stripe *= extent;
-        }
-        const uint64_t stripe_chunks = pages_per_stripe * (in_page > out_page ? in_page / out_page : 1);
-
         switch (input_tensor.device()->arch()) {
             case tt::ARCH::WORMHOLE_B0: {
                 // Sweep result (T3000, both factories tuned; tile and row-major, 64 B..4 KB pages,
-                // 8 KB..200 MB per link).
+                // 64 KB..1.6 GB per link).
                 // A ring always uses multicast: it won every ring measured, by 5-20% on big tensors and
                 // more on small ones. Unicast has to re-read and re-send the data at each of the N/2
                 // hops, while a multicast packet is copied onward by the fabric.
-                // A line uses unicast only when the tensor is big and its stripe is short. Unicast's
-                // relay splits the sending across devices, which helps once the link is the bottleneck.
-                // A long stripe cancels that out, because it gives multicast long runs to send instead.
+                // A line uses unicast once the tensor is big enough: unicast's relay splits the sending
+                // across devices, which helps once the link is the bottleneck. Drop this test and small
+                // tensors pick unicast and run up to 71% slower.
                 //
-                // Size matters far more than stripe. Drop the size test and small tensors pick unicast
-                // and run up to 71% slower. Drop the stripe test and 5 of the 17 big line shapes
-                // measured pick unicast and run 0.5-2.2% slower.
-                // TODO: is up to 2.2% worth the stripe walk above? If not, keep the size test alone. i.e.:
-                //    use_unicast = !is_ring && per_link_bytes >= 3MB && stripe_chunks < 64
-                //                              ^^^^^^^^^^^^^^ dominant   ^^^^^^^^^^^^ ≤2.2% refinement
-                use_unicast = !is_ring && per_link_bytes >= 3'000'000 && stripe_chunks < 64;
+                // A short stripe favours unicast on top of that, because a long one gives multicast long
+                // runs to send instead. That refinement is left out: it cost 5 of the 17 big line shapes
+                // measured 0.5-2.2%, which is not worth walking the stripe geometry here to recover.
+                use_unicast = !is_ring && per_link_bytes >= 3'000'000;
                 break;
             }
             case tt::ARCH::BLACKHOLE: {
