@@ -178,9 +178,12 @@ class TestBackfillCli(unittest.TestCase):
             by_type = {rec["test_type"]: rec for rec in records}
             self.assertEqual(by_type["physical"]["analyzer_code"], 0)
             self.assertEqual(by_type["physical"]["status"], "passed")
+            self.assertNotIn("failure_reason", by_type["physical"].get("labels", {}))
             self.assertEqual(by_type["fabric"]["analyzer_code"], 3)
             self.assertEqual(by_type["fabric"]["status"], "failed")
+            self.assertEqual(by_type["fabric"]["labels"]["failure_reason"], "Fabric router sync timeout")
             self.assertEqual(by_type["dispatch"]["status"], "failed")
+            self.assertEqual(by_type["dispatch"]["labels"]["failure_reason"], "One or more dispatch tests failed")
             self.assertNotIn("analyzer_code", by_type["recover"])
             self.assertEqual(by_type["recover"]["status"], "passed")
             self.assertEqual(by_type["physical"]["source"], "backfill")
@@ -336,6 +339,7 @@ class TestIncompleteAndLargeLogs(unittest.TestCase):
         self.assertNotIn("analyzer_code", rec)
         self.assertEqual(rec["labels"]["incomplete"], "true")
         self.assertEqual(rec["labels"]["incomplete_reason"], "missing_terminal_outcome")
+        self.assertEqual(rec["labels"]["failure_reason"], "Incomplete run (missing terminal outcome)")
         self.assertIn("degraded=1", err)
 
     def test_large_log_footer_beyond_64k(self):
@@ -474,6 +478,10 @@ class TestHostDiagLeftover(unittest.TestCase):
         leftovers = discover_leftovers(root, recursive=True)
         self.assertEqual(len(leftovers), 1)
         self.assertEqual(leftovers[0].analyzer_code, 2)
+        rc, out, err = _run(_backfill_argv(root, "--recursive"))
+        self.assertEqual(rc, 0, err)
+        record = loads_and_validate(out.splitlines()[0], file_written=False)
+        self.assertEqual(record["labels"]["failure_reason"], "Diagnostic warning")
 
 
 if __name__ == "__main__":

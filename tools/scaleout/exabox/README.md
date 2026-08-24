@@ -141,7 +141,7 @@ python3 tools/scaleout/exabox/report_cluster_health.py \
   --dry-run
 ```
 
-Stdout is always one compact JSON object. Pass `--store-root DIR` (or set `CLUSTER_HEALTH_STORE_ROOT`) if your site persists files; there is no default directory. Layout is `DIR/<YYYY-MM-DD>/<record_id>.json` (one compact JSON line per file). Writes use a dotted temp in that same directory then an exclusive (no-clobber) link onto the final name; if that name already exists with different content the file is left in place and stdout omits `record_id`. Scrapers should glob `*.json` and ignore `*.tmp`. Optional `--cabling` / `--deployment` / `--fsd` / `--gsd` / `--rankfile` / `--rank-bindings` fill portable `topology` from native artifacts. Optional `--label key=value` stores opaque site aliases under `labels`.
+Stdout is always one compact JSON object. Pass `--store-root DIR` (or set `CLUSTER_HEALTH_STORE_ROOT`) if your site persists files; there is no default directory. Layout is `DIR/<YYYY-MM-DD>/<record_id>.json` (one compact JSON line per file). Writes use a dotted temp in that same directory then an exclusive (no-clobber) link onto the final name; if that name already exists with different content the file is left in place and stdout omits `record_id`. Scrapers should glob `*.json` and ignore `*.tmp`. Optional `--cabling` / `--deployment` / `--fsd` / `--gsd` / `--rankfile` / `--rank-bindings` fill portable `topology` from native artifacts. Optional `--label key=value` stores opaque site aliases under `labels`. Non-passing records automatically include a concise `labels.failure_reason` derived from the test type and analyzer code; an explicit `--label failure_reason=...` overrides it with caller-specific context.
 
 Replay leftover dumps without re-running validation:
 
@@ -170,6 +170,24 @@ python3 tools/scaleout/exabox/report_cluster_health.py \
 `--from-diag-report` sets `test_type=host`. PASS → `passed` (analyzer 0), WARN → `degraded` (2), FAIL → `failed` (1). Dry-run diag reports are refused. Optional `--label superpod=…` / `quad=…` / `ring=…` are still caller-supplied.
 
 `--dry-run` prints one JSON line per leftover (or one line for `--from-diag-report`) and never writes.
+
+Relabel existing hot/archive records from a caller-supplied canonical host
+snapshot with `migrate_cluster_health_labels.py`. Dry-run is the default;
+`--apply` requires a new backup directory and atomically replaces only records
+whose hierarchy changes. Record IDs, timestamps, status, hosts, artifacts, and
+orchestrator IDs are preserved.
+
+```bash
+python3 tools/scaleout/exabox/migrate_cluster_health_labels.py \
+  --snapshot /path/to/topology.snapshot.json \
+  --root /path/to/cluster-health \
+  --root /path/to/cluster-health-archive
+
+python3 tools/scaleout/exabox/migrate_cluster_health_labels.py \
+  --snapshot /path/to/topology.snapshot.json \
+  --root /path/to/cluster-health \
+  --apply --backup-root /path/to/new-backup-directory
+```
 
 ### Dispatch Tests
 

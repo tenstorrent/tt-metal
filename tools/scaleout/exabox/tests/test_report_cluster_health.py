@@ -26,7 +26,7 @@ for _path in (EXABOX_DIR, TESTS_DIR):
 
 import fixtures  # noqa: E402
 from cluster_health_schema import loads_and_validate, validate_record  # noqa: E402
-from report_adapters import status_for  # noqa: E402
+from report_adapters import reason_for, status_for  # noqa: E402
 from analyze_host_health_results import main as analyze_main  # noqa: E402
 from report_backfill import Leftover  # noqa: E402
 from report_cluster_health import (  # noqa: E402
@@ -113,6 +113,61 @@ class TestAdapters(unittest.TestCase):
     def test_unknown_test_type(self):
         with self.assertRaises(ValueError):
             status_for("ccl", 0)
+        with self.assertRaises(ValueError):
+            reason_for("ccl", 1)
+
+    def test_physical_reasons(self):
+        expected = {
+            1: "Unhealthy links (repeated - same links failing)",
+            2: "Unhealthy links (scattered - failures across different links)",
+            3: "DRAM training failures",
+            4: "Missing connections",
+            5: "Extra connections",
+            6: "Missing global connection",
+            7: "FSD configuration error",
+            8: "MGD topology mismatch",
+            9: "Workload timeout",
+            10: "ARC timeout",
+            11: "AICLK timeout",
+            12: "Network error",
+            13: "Device init error (missing devices)",
+            50: "Inconclusive - unrecognized errors",
+            66: "No log files found to analyze",
+        }
+        for code, reason in expected.items():
+            with self.subTest(code=code):
+                self.assertEqual(reason_for("physical", code), reason)
+        self.assertEqual(reason_for("physical", 99), "Unknown physical analysis error (rc=99)")
+
+    def test_fabric_reasons(self):
+        expected = {
+            1: "MGD error (topology mismatch)",
+            2: "Firmware initialization failed",
+            3: "Fabric router sync timeout",
+            4: "Test hanging (incomplete log)",
+            5: "NOC address conflict",
+            6: "Ethernet core timeout",
+            50: "Inconclusive (manual review required)",
+            66: "Input error (log file not found)",
+        }
+        for code, reason in expected.items():
+            with self.subTest(code=code):
+                self.assertEqual(reason_for("fabric", code), reason)
+        self.assertEqual(reason_for("fabric", 99), "Unknown fabric analysis error (rc=99)")
+
+    def test_dispatch_recover_and_host_reasons(self):
+        self.assertEqual(reason_for("dispatch", 1), "One or more dispatch tests failed")
+        self.assertEqual(reason_for("dispatch", 66), "No dispatch test log file found")
+        self.assertEqual(reason_for("recover", 7), "Recover failed (rc=7)")
+        self.assertEqual(reason_for("host", 1), "Diagnostic failed")
+        self.assertEqual(reason_for("host", 2), "Diagnostic warning")
+        self.assertEqual(reason_for("host", 99), "Diagnostic failed (code=99)")
+
+    def test_pass_has_no_reason(self):
+        for test_type in ("physical", "fabric", "dispatch", "recover", "host"):
+            with self.subTest(test_type=test_type):
+                self.assertEqual(reason_for(test_type, 0), "")
+        self.assertEqual(reason_for("recover", None), "")
 
 
 class TestDryRunCli(unittest.TestCase):
@@ -124,8 +179,15 @@ class TestDryRunCli(unittest.TestCase):
         record = loads_and_validate(lines[0], file_written=False)
         self.assertEqual(record["status"], "failed")
         self.assertEqual(record["analyzer_code"], 1)
+        self.assertEqual(record["labels"]["failure_reason"], "Unhealthy links (repeated - same links failing)")
         self.assertNotIn("record_id", record)
         self.assertNotIn("topology", record)
+
+    def test_explicit_failure_reason_wins(self):
+        rc, out, err = _run(_base_argv("--label", "failure_reason=Operator diagnosis"))
+        self.assertEqual(rc, 0, err)
+        record = json.loads(out.strip())
+        self.assertEqual(record["labels"]["failure_reason"], "Operator diagnosis")
 
     def test_labels_only_under_labels(self):
         rc, out, err = _run(_base_argv("--label", "quad=110-C-Q1", "--label", "superpod=SC36_3"))
@@ -154,6 +216,30 @@ class TestDryRunCli(unittest.TestCase):
         record = json.loads(out.strip())
         self.assertNotIn("analyzer_code", record)
         self.assertEqual(record["status"], "passed")
+        self.assertNotIn("failure_reason", record.get("labels", {}))
+        validate_record(record, file_written=False)
+
+    def test_recover_failure_has_reason_but_omits_analyzer_code(self):
+        rc, out, err = _run(
+            [
+                "--test-type",
+                "recover",
+                "--hosts",
+                "bh-glx-110-c01u02",
+                "--analyzer-code",
+                "7",
+                "--artifact-dir",
+                fixtures.ARTIFACT_DIR,
+                "--ts",
+                TS,
+                "--dry-run",
+            ]
+        )
+        self.assertEqual(rc, 0, err)
+        record = json.loads(out.strip())
+        self.assertNotIn("analyzer_code", record)
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(record["labels"]["failure_reason"], "Recover failed (rc=7)")
         validate_record(record, file_written=False)
 
     def test_missing_analyzer_code_for_physical(self):

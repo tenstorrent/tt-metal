@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from cluster_health_schema import SCHEMA_ID, TEST_TYPES, validate_record
-from report_adapters import status_for
+from report_adapters import reason_for, status_for
 from report_backfill import Leftover, discover_leftovers, filter_leftovers, leftover_key, parse_window_date
 from analyze_host_health_results import parse_diag_report
 from resolve_host_ring_order import (
@@ -514,6 +514,14 @@ def build_record(args: RecordRequest) -> dict[str, Any]:
         record["duration_s"] = args.duration_s
 
     labels = parse_labels(args.label)
+    if status != "passed" and "failure_reason" not in labels:
+        if incomplete:
+            detail = args.incomplete_reason or "missing_terminal_outcome"
+            reason = f"Incomplete run ({detail.replace('_', ' ')})"
+        else:
+            reason = reason_for(args.test_type, analyzer_code)
+        if reason:
+            labels["failure_reason"] = reason
     if incomplete:
         labels["incomplete"] = "true"
         labels["incomplete_reason"] = args.incomplete_reason or "missing_terminal_outcome"
