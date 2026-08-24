@@ -541,6 +541,142 @@ the conclusion is:
 That is a packer or hardware question, not a measurement artefact, and no
 threshold can absorb it.
 
+### 8.10 How matmul depends on the packer, and why that shows up here
+
+This section is mechanism. The facts in §8.9 are measurements; what follows
+separates what the architecture guarantees from what is still a hypothesis.
+
+#### The pipeline, and where the measurement boundaries sit
+
+A Tensix compute kernel runs on three threads that hand work along a chain:
+
+```
+  unpack (T0)  ->  math (T1)  ->  pack (T2)
+      L1        SrcA/SrcB      DEST        L1
+```
+
+The unpacker moves tiles from L1 into the source registers, math computes into
+the DEST register, and the packer moves DEST back out to L1.
+
+The four measurements differ only in which part of that chain they bracket:
+
+| measurement | from | to |
+|---|---|---|
+| `UNPACK_ISOLATE` | unpack `ZONE_START` | unpack `ZONE_END` |
+| `MATH_ISOLATE` | math `ZONE_START` | math `ZONE_END` |
+| `PACK_ISOLATE` | pack `ZONE_START` | pack `ZONE_END` |
+| `L1_TO_L1` | **unpack** `ZONE_START` | **pack** `ZONE_END` |
+
+`L1_TO_L1` is the only whole-pipeline measurement, and its closing boundary is
+the packer. So anything that delays the packer's last write lands inside
+`L1_TO_L1` and inside `PACK_ISOLATE`, and cannot appear in the other two. That is
+not a hypothesis — it follows from where the zones are placed, and it explains
+the table in §8.9 exactly.
+
+#### Why matmul leans on the packer harder than anything else
+
+Matmul accumulates across the `kt_dim` axis: math writes partial products into
+DEST repeatedly before a tile is finished. DEST is a shared resource, so math and
+pack must hand it back and forth, and the handshake is a semaphore:
+
+- `llk_pack_common.h` — the packer waits on `MATH_PACK` so it does not run ahead
+  of the math result, packs, then signals to release math.
+- `llk_math_common.h` — the semaphore is seeded with a **max count of 1 for
+  SyncFull and 2 for SyncHalf**.
+
+That count is the whole difference between the two dest-sync modes. Under
+`SyncFull` the packer and math take strict turns on the whole DEST. Under
+`SyncHalf` DEST is split in two and the packer flips the active half, so **math
+and pack genuinely overlap** — one works on a half while the other drains the
+other half.
+
+Matmul therefore spends most of the packer's life waiting on DEST availability,
+and under `SyncHalf` that wait is a race rather than a queue.
+
+#### What the data says about which configurations are affected
+
+Association only — these parameters co-vary — but they line up in one direction.
+Within `perf_math_matmul`, Wormhole `L1_TO_L1`, ten runs:
+
+| parameter | value | flag rate |
+|---|---|--:|
+| `dest_sync` | **Half** | 0.20% |
+| `dest_sync` | Full | 0.05% |
+
+And in Wormhole `PACK_ISOLATE`, where the effect is ~100x more frequent:
+
+| parameter | values | flag rate |
+|---|---|--:|
+| `formats.output` | **Float16_b** | 13% |
+| `formats.output` | Float16 | 3% |
+| `formats.output` | Float32, Bfp8_b | 0% |
+| `dest_acc` | Yes / No | 9% / 2% |
+| `formats.register_*` | Tf32 / Bfp8_b | 10% / 2% |
+
+Every one of those touches the DEST-to-L1 path: the sync mode that lets math and
+pack overlap, the accumulation width that changes DEST layout, and the output
+format the packer must convert to on the way out.
+
+#### The leading hypothesis
+
+> **The math-to-pack handoff over DEST resolves two different ways.** When the
+> packer arrives at the `MATH_PACK` wait it either finds the half already
+> released and proceeds, or misses that window and waits for the next one. The
+> penalty is one arbitration quantum, which is why the measurement lands on one
+> of two discrete values rather than smearing.
+
+This is consistent with everything observed, and nothing observed contradicts it:
+
+- Only pack-dependent measurements move (§8.9).
+- The outcome is discrete and two-valued, not analogue (§8.4).
+- It is symmetric — the odd run is as often faster as slower — because the race
+  can fall either way, and neither outcome is "correct".
+- It is independent per execution, so it survives serial replay on a fixed core
+  with a fixed order (§8.8).
+- No sweep parameter determines it, because a race is decided by timing and not
+  by configuration (§8.5) — while parameters that widen the race window, such as
+  `SyncHalf`, do raise the rate.
+- The alternate values repeat across different configurations, because the
+  quantum is a property of the handshake rather than of the workload (§8.4).
+
+It remains a hypothesis. It has not been confirmed against hardware counters, and
+an alternative — that the packer's format-conversion path itself takes one of two
+durations — would fit the format association at least as well.
+
+#### What it costs
+
+For a measurement: the reported cycle count for an affected matmul configuration
+is one of two values, 2-6% apart on `L1_TO_L1` and up to 24% on `PACK_ISOLATE`,
+chosen at low probability per execution.
+
+For a gate: nothing can be done with a threshold. The effect is not noise that
+averages out - repeating runs does not help (§6.4) - and it is not confined to a
+nameable set of configurations (§8.6). Any matmul point can produce it on any
+run. A gate must either exclude the affected measurements or wait for the cause
+to be fixed.
+
+For the numbers already published: they are unaffected. Every measurement in this
+document is what the hardware actually reported.
+
+#### What would settle it
+
+Three experiments, in increasing cost:
+
+1. **Is the penalty quantised?** Divide each observed jump by `loop_factor` and
+   by `loop_factor x tile_cnt`. A small integer would mean one extra stall per
+   iteration, and would give the quantum a size.
+2. **Does it flip between back-to-back executions?** `PerfConfig.run()` takes
+   `run_count`, which re-runs the same ELF on the same core inside one pytest
+   item. With `run_count > 1` the report gains `std(...)` columns. A non-zero
+   `std` places the cause below anything the test harness does.
+3. **Which counter is bimodal?** The `TDMA_PACK` counter bank measures packer
+   busy, dest-read availability and math availability. If dest-read availability
+   splits in the same ratio as the timing, the handshake hypothesis is confirmed;
+   if packer-busy cycles split instead, it is the conversion path.
+
+Run these against `PACK_ISOLATE` on `perf_matmul` with `Float16_b` output, where
+the rate is 13% rather than 0.14%.
+
 ---
 
 ## 9. What we know, and what we do not
