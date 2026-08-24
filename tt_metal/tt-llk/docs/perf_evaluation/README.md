@@ -199,18 +199,51 @@ often assumed.
 ## 5. Noise
 
 The same commit was run five times on one card. Nothing changed between runs, so
-every difference is measurement noise.
+every difference between them is measurement noise.
 
-Definitions, per **point** — one (test, marker, run type, sweep configuration),
-which is the granularity a row-by-row gate compares:
+> **In one sentence: we ran the same code five times, took the biggest wobble any
+> measurement showed between its best and worst run, and set the threshold just
+> above it.**
 
-```
-move   = (max(runs) − min(runs)) / median(runs)
-cycles =  max(runs) − min(runs)
-```
+### 5.0 What is being counted
 
-Both are ranges, so both are direction-agnostic: a point counts whether the noise
-made a run faster or slower.
+A **point** is one measured number — one test, one marker, one run type, one
+sweep configuration. It is the same granularity a row-by-row gate compares.
+Running five times gives that one number five values.
+
+Each point has two quantities, which are the *same wobble expressed in two
+units*:
+
+| | definition | in words |
+|---|---|---|
+| **cycles** | `max − min` | how many cycles the number moved between its best and worst run |
+| **move** | `(max − min) / median` | that same movement as a percentage of the number's typical value |
+
+Worked example. One `INIT` measurement came out **348, 350, 350, 351, 373** cycles
+across the five runs:
+
+- `cycles` = 373 − 348 = **25 cycles**
+- `move` = 25 / 350 = **7.1%**
+
+Both are ranges rather than signed differences, so a point is counted whether the
+noise made a run faster or slower. Nothing about false *improvements* is missing
+from these numbers — see §6.3.
+
+### 5.0.1 How to read the tables below
+
+Every table in this section shares the same columns:
+
+| column | what it is |
+|---|---|
+| `marker` | which part of the kernel is timed. `INIT` is one-time setup, `TILE_LOOP` the steady-state loop, `UNINIT` teardown, `KERNEL` the whole kernel |
+| `measured` | how many points of that kind exist in the sweep |
+| `>0.5%`, `>1%`, `>2%`, `>5%` | how many of those points moved by more than that percentage |
+| `worst move` | the largest movement seen, in percent |
+| `worst cycles` | the largest movement seen, in cycles |
+
+The last two columns are **independent maxima and normally come from different
+points**. The largest percentage is typically a small `INIT` value; the largest
+cycle count is typically a large `TILE_LOOP` value. Do not read them as one point.
 
 ### 5.1 Blackhole, `L1_TO_L1` — 108,377 points
 
@@ -252,19 +285,58 @@ move exceeding 2% means the value is under 50 cycles.
 | TILE_LOOP | 33,657 | 186 | 64 | 27 | 0 | 4.62% | 9,165 |
 | all | 100,971 | 9,138 | 4,007 | 795 | 2 | 5.65% | 9,165 |
 
-### 5.4 Two regimes
+### 5.4 Two regimes, and why one number cannot express both
 
 `TILE_LOOP` and `KERNEL` are close to deterministic on Blackhole: of 71,152
 measurements, **none** moved more than 2%, and most did not move at all —
 identical code returns identical cycle counts.
 
-All the ordinary noise is in `INIT` and `UNINIT`, and it is a **fixed number of
-cycles**: at most 25 on Blackhole, 27 on Wormhole, regardless of point size. On a
-350-cycle value that is 7%; on a 350,000-cycle value it is 0.007%.
+All the ordinary noise sits in `INIT` and `UNINIT`. The noise has two components,
+and the key point is that **each one is constant in a different unit**. That is
+the entire reason the rule needs two clauses.
 
-So the noise has two components — a fixed part of roughly 25 cycles, flat across
-four orders of magnitude, and a proportional part under 2%. One clause cannot
-cover both. See `results/*/plots/*_rule.png`.
+**A fixed component of about 25 cycles.** `INIT` and `UNINIT` move by at most 25
+cycles on Blackhole and 27 on Wormhole, no matter how large the point is. Because
+it is constant in *cycles*, its *percentage* depends entirely on the size of the
+number it lands on:
+
+| point size | what 25 cycles is |
+|---|--:|
+| 350 cycles (a typical `INIT`) | **7.1%** |
+| 12,000 cycles | 0.21% |
+| 250,000 cycles (a typical `TILE_LOOP`) | **0.01%** |
+
+**A proportional component under 2%.** Whatever else moves, moves by a share of
+the value. Because it is constant in *percent*, its *cycle count* depends on the
+size of the number:
+
+| point size | what 2% is |
+|---|--:|
+| 350 cycles | 7 cycles |
+| 250,000 cycles | **5,000 cycles** |
+
+So there is no single percentage that describes the fixed part, and no single
+cycle count that describes the proportional part. That is why knowing "the fixed
+part is 25 cycles" does not hand you a percentage — the answer is different for
+every point in the sweep.
+
+The consequence for a threshold:
+
+- **A percentage alone** must be at least 7% to survive 25 cycles landing on a
+  small `INIT`. Far too loose to catch a real regression.
+- **A cycle count alone** must be at least 5,000 to survive 2% landing on a large
+  `TILE_LOOP`. Equally useless.
+- **Requiring both** — more than 2% *and* more than 30 cycles — bounds each
+  component in the unit it is actually constant in. The percentage clause governs
+  large points, where 30 cycles is nothing; the cycle clause governs small points,
+  where 2% is nothing.
+
+See `results/*/plots/*_rule.png`, which plots movement against point size and
+shows the flat 25-cycle floor and the proportional band directly.
+
+The alternative to the cycle clause is to gate only `TILE_LOOP` and `KERNEL` and
+ignore `INIT`/`UNINIT` entirely. That removes the small-number problem at the
+source and allows a single percentage — see §10.
 
 ---
 
