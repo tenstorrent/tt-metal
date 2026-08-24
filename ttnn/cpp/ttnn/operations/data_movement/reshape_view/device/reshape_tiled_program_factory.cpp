@@ -297,7 +297,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
     const uint32_t num_input_pages = tt::div_up(input_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
     const uint32_t num_output_pages = tt::div_up(output_tensor.physical_volume(), tile_shape[0] * tile_shape[1]);
 
-    // Host-compute and upload the input->output page-mapping tensor. (Construction UNCHANGED.)
+    // Host-compute and upload the input->output page-mapping tensor.
     Tensor mapping_tensor = detail::compute_reshape_mapping_host_tensor(
                                 num_input_pages, num_output_pages, input_shape, output_shape, tile_shape, face_shape)
                                 .to_device(device);
@@ -435,7 +435,8 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
     };
     spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER}, .target_nodes = all_cores}};
 
-    // Per-node runtime args (name-first, transposed from the legacy node-first loop).
+    // Per-node runtime args. The run-args table is keyed name-first (name -> node -> value);
+    // AddRuntimeArgsForNode builds that from the per-core loop below.
     KernelRunArgs reader_kra{.kernel = READER};
     KernelRunArgs writer_kra{.kernel = WRITER};
 

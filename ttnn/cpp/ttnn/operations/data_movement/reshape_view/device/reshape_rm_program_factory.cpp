@@ -151,8 +151,8 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
     const TensorParamName SRC{"src"};
     const TensorParamName DST{"dst"};
 
-    // Named CTAs — identical for both instances (the legacy per-instance CTA difference was the circular-buffer
-    // index in slots [2]/[3], now expressed as a DFB binding rather than a compile-time arg).
+    // Named CTAs — identical for both instances. The per-instance difference is the DFB binding
+    // (src0/src1 vs src2/src3), not a compile-time arg, so a single CTA table serves both.
     const KernelSpec::CompileTimeArgs cta = {
         {"src_aligned_to_64", (source_page_size_bytes % 64 == 0) ? 1u : 0u},
         {"src_aligned_to_16", (source_page_size_bytes % 16 == 0) ? 1u : 0u},
@@ -229,7 +229,8 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
     }
     spec.work_units = {work_unit};
 
-    // ---- Per-node runtime args (name-first, transposed from the legacy node-first loop) ----
+    // ---- Per-node runtime args. The run-args table is keyed name-first (name -> node -> value);
+    // AddRuntimeArgsForNode builds that from the per-core loop below. ----
     KernelRunArgs reader_kra{.kernel = READER};
     KernelRunArgs writer_kra{.kernel = WRITER};
 
@@ -237,8 +238,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
     for (auto core : corerange_to_cores(total_cores, std::nullopt)) {
         if (done == 1) {
             // Idle core: the kernel short-circuits on nop==1 before building any TensorAccessor, so
-            // the framework-delivered base address is harmless. (Legacy passed 0u for the buffer
-            // slots; those slots are TensorBindings now.)
+            // the framework-delivered src/dst base addresses are never used here — harmless.
             AddRuntimeArgsForNode(
                 reader_kra.runtime_arg_values,
                 core,
