@@ -43,6 +43,7 @@ def run(
     b=None,
     mcast=False,
     in1_thread=1,
+    depth=None,
 ):
     """Extents and block widths all in TILES. a/b let a caller supply the operands."""
     assert mtot % mt == 0 and ktot % kt == 0 and ntot % nt == 0
@@ -93,9 +94,23 @@ def run(
     addrs = [t.buffer_address() for t in (ta, tb, tout)]
     rt_args = {c: addrs + [begin, count] for c, (begin, count) in zip(core_list, shares)}
 
+    # Default 2 with multicast and 1 without, which is measured rather than tidy. Depth pays
+    # only when the read path is LATENCY bound: with multicast just 16 of 64 cores touch DRAM
+    # and there is headroom for another read in flight (out-projection 350.2 -> 307.6us, FFN
+    # gate/up 1482.7 -> 1329.5). Without it every core reads for itself, DRAM is already
+    # saturated, and the extra requests only add contention -- 16 cores measured 807.8us at
+    # depth 1, 830.1 at 2 and 842.9 at 3, i.e. steadily worse.
+    depth = (2 if mcast else 1) if depth is None else depth
+
+    # `depth` blocks per operand CB. The kernel reserves ONE block at a time -- num_pages
+    # comes from the Shape, not the CB -- so a deeper CB is purely permission for the data
+    # movement thread to run ahead: with one block it cannot reserve k-block b+1 until
+    # compute has popped b, so its reads and the compute serialise. The reads within a block
+    # are already deep (every page is issued before the single barrier); this is depth
+    # ACROSS blocks. Same idea as the flash kernel's stream_buffering.
     cbs = [
-        make_cb(CB_A, core_ranges, num_pages=mt * kt),
-        make_cb(CB_B, core_ranges, num_pages=kt * nt),
+        make_cb(CB_A, core_ranges, num_pages=depth * mt * kt),
+        make_cb(CB_B, core_ranges, num_pages=depth * kt * nt),
         make_cb(CB_OUT, core_ranges, num_pages=mt * nt),
     ] + ([make_cb(CB_ACC, core_ranges, num_pages=mt * nt)] if kt != ktot else [])
 

@@ -2657,6 +2657,49 @@ across the grid -- 8MB of Wo is 128KB a core on 64 cores -- which removes the DR
 entirely rather than making it faster. That only pays when a weight is reused across many
 matmuls, which prefill does not do within one layer.
 
+### Prefetch depth: it pays only where multicast made room for it
+
+The reads WITHIN a block were already deep -- every page is issued before the single barrier
+-- so what was missing was depth ACROSS blocks: with a one-block operand CB the data-movement
+thread cannot reserve k-block b+1 until compute has popped b, so its reads and the compute
+serialise. Giving the operand CBs `depth` blocks is permission to run ahead, and it needs no
+kernel change at all: the kernel reserves one block at a time because `num_pages` comes from
+the Shape, not from the CB. Same mechanism as the flash kernel's `stream_buffering`.
+
+| [512,2048]@[2048,2048], multicast 8x8 | |
+|---|---|
+| depth 1 | 350.2 us |
+| **depth 2** | **307.6 us** |
+| depth 3 | 318.6 us |
+| depth 4 | 309.3 us |
+
+12%, and nothing beyond 2. **But it only helps where multicast made room for it**, which is
+the part worth keeping:
+
+| 16 cores, out-projection, NO multicast | |
+|---|---|
+| depth 1 | 807.8 us |
+| depth 2 | 830.1 us |
+| depth 3 | 842.9 us |
+
+Steadily WORSE. Depth pays when the read path is latency-bound and costs when it is
+bandwidth-bound: with multicast only 16 of 64 cores touch DRAM and there is headroom for
+another read in flight; without it every core reads for itself, DRAM is already saturated,
+and extra outstanding requests only add contention. So the default is 2 with multicast and 1
+without, and that is measured rather than tidy. The FFN agrees: gate/up on 64 cores goes
+1482.7 -> 1329.5us.
+
+**Bigger k-blocks do not help either** -- kt=8 gives 320.1us, kt=16 352.0, kt=32 370.8 -- so
+the per-block handshake is not what is left. Coarser blocks just delay the broadcast behind a
+longer read and cost overlap.
+
+**Where that leaves the gap.** Best is now ~310us against ttnn's 118.6, 2.6x. The compute is
+1024 tile-MACs per core at 0.056us each, about 57us, so we are 5.4x off compute-bound while
+ttnn is 2x off it. Traffic is the same 10MB for both; we move it at 32GB/s against 84. So
+there is still something in the read-and-broadcast path, and the next honest step is to
+profile the DM threads against compute rather than guess a fourth time -- the previous three
+guesses at this gap each found something real but none of them found all of it.
+
 **What is left is bandwidth per read, not traffic.** With multicast the traffic is A once plus
 B once, 5120 tiles or 10MB, and we move it in 353.2us -- 28.4GB/s. ttnn moves the same 10MB in
 118.6us, 84GB/s. So the remaining 3x is not extra data, it is that our reads are slower: the
