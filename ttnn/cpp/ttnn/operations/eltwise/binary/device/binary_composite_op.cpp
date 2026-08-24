@@ -952,6 +952,18 @@ Tensor situ_glu(
         TT_FATAL(!sub_core_grids.has_value(), "Cannot specify both sub_core_grids and sub_device_id");
         cores = gate.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
     }
+    if (!cores.has_value()) {
+        // Unrestricted, the composed ops fall back to the worker cores of get_sub_device_ids().front().
+        // That is the whole grid only while the device is unpartitioned: the default manager holds one
+        // sub-device spanning it. Once a custom manager is loaded, front() is sub-device 0 -- some
+        // arbitrary strip -- and silently landing there is never what a caller means.
+        const auto& loaded_sub_devices = gate.device()->get_sub_device_ids();
+        TT_FATAL(
+            loaded_sub_devices.size() == 1,
+            "situ_glu: {} sub-devices are loaded, so leaving the cores unrestricted would run on "
+            "sub-device 0 rather than the full grid. Pass sub_core_grids or sub_device_id.",
+            loaded_sub_devices.size());
+    }
 
     // A core restriction means another op is running concurrently on the complementary cores, and an
     // interleaved-L1 buffer comes from the global allocator: it takes L1 on every worker core, the
