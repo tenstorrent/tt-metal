@@ -35,6 +35,9 @@ import ttnn
 # Warmup compiles kernels + populates RoPE/mask/KV caches (trace capture can neither compile nor
 # upload from host); replay iters are averaged for a stable per-token number. Both env-tunable.
 _WARMUP_ITERS = max(1, int(os.environ.get("TT_TRACE_WARMUP_ITERS", "3")))
+# How far into a container the read-set walk looks for tensors. Op arguments nest a level or two
+# (a list of tensors, a dict of them); anything deeper is structure, not a read set.
+_NOTE_MAX_DEPTH = 3
 _REPLAY_ITERS = max(1, int(os.environ.get("TT_TRACE_REPLAY_ITERS", "16")))
 
 
@@ -95,12 +98,27 @@ def _count_op_dispatches(fn):
     step, because this is instrumentation riding a measurement: it may return less than the truth,
     never an exception.
     """
+    # WHICHEVER CLASS THE BUILD REGISTERED. This patched `Operation` because that is the class
+    # decorators.py defines first and it has the __call__ a dispatch hook wants. But ttnn chooses at
+    # REGISTRATION time -- `operation_class = FastOperation if ttnn.CONFIG.enable_fast_runtime_mode
+    # else Operation` (decorators.py) -- and that flag defaults to true in config.hpp. Measured on
+    # this build: 735 ops are FastOperation and 0 are Operation, so the hook sat on a class nothing
+    # instantiates, intercepted nothing, and reported 0 bytes for every stage on every run.
+    #
+    # Patching BOTH is the point. Swapping one name for the other would just move the blind spot to
+    # any build running with fast runtime off, or with logging or comparison mode on, where
+    # FastOperation delegates to Operation instead.
     try:
         from ttnn import decorators as _dec
-
-        target = _dec.Operation
-        orig = target.__call__
     except Exception:  # noqa: BLE001
+        fn()
+        return None, 0
+    targets = []
+    for _cn in ("FastOperation", "Operation"):
+        _c = getattr(_dec, _cn, None)
+        if _c is not None and callable(getattr(_c, "__call__", None)):
+            targets.append((_c, _c.__call__))
+    if not targets:
         fn()
         return None, 0
     # ONE DEFINITION OF "HOW BIG IS THIS DEVICE TENSOR". The first version of this re-implemented
@@ -116,33 +134,88 @@ def _count_op_dispatches(fn):
     n = [0]
     seen: dict = {}
 
-    def _note(x):
-        if _entry is None:
+    def _key(x, ent):
+        """A tensor's identity. `id()` is not one: CPython reuses the address of a collected object,
+        and 2000 short-lived objects measured here produced 161 distinct ids. Two activations that do
+        not overlap in life therefore counted as one, and the working set came out too small -- which
+        is the direction that matters, because this number becomes a write-once ceiling divisor.
+
+        The device buffer address is the real identity of a resident tensor, and the weights this is
+        trying to measure hold theirs for the whole step. Paired with size and dtype so that a buffer
+        reused between two differently-shaped tensors cannot silently merge them. id() remains the
+        fallback for anything that does not expose an address."""
+        try:
+            _addr = getattr(x, "buffer_address", None)
+            if callable(_addr):
+                return ("buf", int(_addr()), int(ent[0]), str(ent[1]))
+        except Exception:  # noqa: BLE001
+            pass
+        return ("id", id(x), int(ent[0]), str(ent[1]))
+
+    def _note(x, depth=0):
+        """A tensor is not always an argument: it is very often INSIDE one. This looked at bare
+        positional args and kwargs values only, so every tensor passed in a list, tuple or dict --
+        ttnn.concat takes a list -- contributed nothing at all. Verified: _tensor_entry returns None
+        for a list, a tuple and a dict, so a container was not partially counted, it was invisible.
+
+        Bounded depth, because this rides a measurement: op arguments nest a level or two, and a walk
+        that chases arbitrary structure is how the census once wandered into a 131k-token vocabulary."""
+        if _entry is None or depth > _NOTE_MAX_DEPTH:
             return
         try:
-            key = id(x)
-            if key in seen:
-                return
             ent = _entry(x)  # (numel, dtype_name) for a DEVICE tensor, None otherwise
             if ent:
-                seen[key] = ent[0] * _bpe(ent[1])
+                seen.setdefault(_key(x, ent), ent[0] * _bpe(ent[1]))
+                return
+            if isinstance(x, (list, tuple, set, frozenset)):
+                for _i in x:
+                    _note(_i, depth + 1)
+            elif isinstance(x, dict):
+                for _i in x.values():
+                    _note(_i, depth + 1)
         except Exception:  # noqa: BLE001
             return
 
-    def counting(self, *a, **kw):
-        n[0] += 1
-        for _x in a:
-            _note(_x)
-        for _x in kw.values():
-            _note(_x)
-        return orig(self, *a, **kw)
+    def _make_counting(orig):
+        def counting(self, *a, **kw):
+            n[0] += 1
+            for _x in a:
+                _note(_x)
+            for _x in kw.values():
+                _note(_x)
+            return orig(self, *a, **kw)
 
-    target.__call__ = counting
+        return counting
+
+    for _cls, _orig in targets:
+        _cls.__call__ = _make_counting(_orig)
     try:
         fn()
     finally:
-        target.__call__ = orig
+        for _cls, _orig in targets:
+            _cls.__call__ = _orig
     return n[0], int(sum(seen.values()))
+
+
+def _report_read_set(stage_name, dispatches, ws_bytes):
+    """Say which of the three things happened. A read set of 0 and a hook that never ran were the
+    SAME observable: both returned (0 bytes), both failed `if bytes > 0`, both printed nothing, and
+    both arrived as `bytes: {}`. That silence is why a hook pointed at the wrong class survived every
+    run and every test -- there was no output to disagree with.
+
+    The two facts needed to tell them apart are already in hand: `dispatches` is None when the hook
+    could not install and 0 when it installed and intercepted nothing. Print all three cases, and
+    carry the op count beside the bytes so the magnitude can be sanity-checked at a glance."""
+    if ws_bytes > 0:
+        print("TRACE_STAGE_BYTES[%s]=%d ops=%s" % (stage_name, ws_bytes, dispatches), flush=True)
+        return
+    if dispatches is None:
+        _why = "hook did not install (ttnn.decorators unavailable or no op class)"
+    elif not dispatches:
+        _why = "hook installed but intercepted 0 op dispatches"
+    else:
+        _why = "%d op dispatches carried no device tensors" % dispatches
+    print("TRACE_STAGE_BYTES_NONE[%s] reason=%s" % (stage_name, _why), flush=True)
 
 
 def _measure_native(device, stage):
@@ -165,6 +238,7 @@ def _measure_native(device, stage):
     for _ in range(max(0, _WARMUP_ITERS - 1)):
         stage.step()
     dispatched, _ws_bytes = _count_op_dispatches(stage.step)
+    _report_read_set(stage.name, dispatched, _ws_bytes)
     ttnn.synchronize_device(device)
     t0 = time.perf_counter()
     for _ in range(_REPLAY_ITERS):
@@ -189,8 +263,6 @@ def _measure_native(device, stage):
     # never measure -- every other route infers it from the checkpoint and a naming convention.
     # Silent when zero: nothing observed is not "this stage reads nothing", and a stage with no
     # reported bytes keeps the existing estimate rather than being given a ceiling of infinity.
-    if _ws_bytes > 0:
-        print("TRACE_STAGE_BYTES[%s]=%d" % (stage.name, _ws_bytes), flush=True)
     return per_s * 1000.0, path
 
 
@@ -209,13 +281,14 @@ def _measure_stage(device, stage):
     """
     if getattr(stage, "self_traced", False):
         return _measure_native(device, stage)
-    _ws_bytes = 0
+    _ws_bytes, _n = 0, None
     try:
         _n, _ws_bytes = _count_op_dispatches(stage.step)
-    except Exception:  # noqa: BLE001 -- instrumentation must never cost the measurement
-        _ws_bytes = 0
-    if _ws_bytes > 0:
-        print("TRACE_STAGE_BYTES[%s]=%d" % (stage.name, _ws_bytes), flush=True)
+    except Exception as _he:  # noqa: BLE001 -- instrumentation must never cost the measurement
+        print("TRACE_STAGE_BYTES_NONE[%s] reason=hook raised %s" % (stage.name, type(_he).__name__), flush=True)
+        _ws_bytes, _n = 0, None
+    else:
+        _report_read_set(stage.name, _n, _ws_bytes)
     tid = _capture_step_trace(device, stage.step)
     try:
         per_s = _replay_1cq(device, tid, _REPLAY_ITERS)

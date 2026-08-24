@@ -201,6 +201,11 @@ _FULLPIPE_TOL = float(os.environ.get("PERF_MCP_FULLPIPE_TOL", "0.08"))
 # Must match the BEFORE bookend (run.py sets 3): AFTER = min over 1-sample readings vs
 # BEFORE = median of 3 manufactured the full noise range as a gain on every run.
 _FULLPIPE_SAMPLES = max(1, int(os.environ.get("PERF_MCP_FULLPIPE_SAMPLES", "3")))
+# How far two readings of one stage's read set may differ and still be treated as the same
+# measurement. The working set is a property of the build, so agreeing samples are the evidence that
+# the number is an observation rather than instrumentation noise -- and only an observation may be
+# pinned as a permanent ceiling divisor.
+_STAGE_BYTES_AGREE_TOL = 0.01
 _FULLPIPE_TARGET_MS = float(os.environ.get("PERF_MCP_TARGET_MS", "0") or "0")
 
 # C++-kernel SAFETY: a bad Metalium kernel can WEDGE a device core (tt-lang/ttnn fail gracefully; raw
@@ -2769,6 +2774,9 @@ def _run_full_pipeline_ms():
     # it sits beside was properly filtered. Collect them all and take the same median.
     stage_ms_samples: dict = {}
     stage_bytes: dict = {}
+    # Every sample's reading, not just the last -- the read set is pinned WRITE-ONCE, so the value
+    # that lands here is the ceiling divisor for the rest of the model's life.
+    stage_bytes_samples: dict = {}
     stage_paths = {}
     stage_isl = {}
     # {stage: items PER REQUEST}, the legacy marker's unit. Kept apart from stage_isl, which holds
@@ -2861,6 +2869,7 @@ def _run_full_pipeline_ms():
                     _bv = int(float(line.split("]=", 1)[1].split()[0]))
                     if _bn and _bv > 0:
                         stage_bytes[_bn] = _bv
+                        stage_bytes_samples.setdefault(_bn, []).append(_bv)
                 except (ValueError, IndexError):
                     pass
             if "TRACE_STAGE_MS[" in line:
@@ -3052,6 +3061,12 @@ def _run_full_pipeline_ms():
         for _sn, _svals in stage_ms_samples.items():
             if _svals:
                 stage_ms[_sn] = float(statistics.median(_svals))
+        # The read set has the same last-write-wins defect and a worse consequence: it is pinned
+        # write-once. Take the median here, before the doc is written, so the recorded number and the
+        # pinned number are the same one.
+        for _bn2, _bvals in stage_bytes_samples.items():
+            if _bvals:
+                stage_bytes[_bn2] = int(round(statistics.median(_bvals)))
         _persist_stage_ms(
             stage_ms,
             stage_paths,
@@ -3068,17 +3083,35 @@ def _run_full_pipeline_ms():
         # measurement -- never reached, which is the defect KIND_FLOOR exists to prevent. Write-once
         # per (model, task, stage); the doc above keeps tracking the current build so the report can
         # tell a real dtype win from a stale reading.
+        # A READING THAT DOES NOT REPRODUCE IS NOT A CEILING. This pin is write-once, so the first
+        # value becomes the memory roof's divisor permanently -- there is no second chance to correct
+        # it, and every later "% of ceiling" for that stage inherits it. The gate already takes
+        # _FULLPIPE_SAMPLES readings, so agreement across them is free evidence: a stage's working set
+        # is a property of the build and must come out the same every time. One that varies is
+        # instrumentation noise, and pinning it would freeze the noise.
+        #
+        # Deliberately not a flag or an env switch: the run has the evidence in hand and can decide.
         try:
-            for _st, _bv in (stage_bytes or {}).items():
-                if _st and _bv > 0:
-                    _ledger().anchor(
-                        _ledger().KIND_STAGE_BYTES,
-                        float(_bv) / 1e6,
-                        depth=str(_st).strip().lower(),
-                        mode="bytes_mb",
-                        source="trace_replay observed read set",
-                        model=_MODEL_ROOT.name if _MODEL_ROOT else "",
+            for _st, _svals in (stage_bytes_samples or {}).items():
+                if not _st or not _svals:
+                    continue
+                _med = float(statistics.median(_svals))
+                _spread = (max(_svals) - min(_svals)) / _med if _med > 0 else 1.0
+                if len(_svals) < 2 or _spread > _STAGE_BYTES_AGREE_TOL:
+                    sys.stderr.write(
+                        "[full-pipeline-gate] read set for %s NOT pinned: %d reading(s), spread %.1f%% "
+                        "(need <= %.1f%%) -- values %s\n"
+                        % (_st, len(_svals), _spread * 100.0, _STAGE_BYTES_AGREE_TOL * 100.0, _svals)
                     )
+                    continue
+                _ledger().anchor(
+                    _ledger().KIND_STAGE_BYTES,
+                    _med / 1e6,
+                    depth=str(_st).strip().lower(),
+                    mode="bytes_mb",
+                    source="trace_replay observed read set (%d agreeing samples)" % len(_svals),
+                    model=_MODEL_ROOT.name if _MODEL_ROOT else "",
+                )
         except Exception:  # noqa: BLE001 -- a pin that cannot be written must not cost a measurement
             pass
         return statistics.median(per_tokens), "trace", None, decode_path

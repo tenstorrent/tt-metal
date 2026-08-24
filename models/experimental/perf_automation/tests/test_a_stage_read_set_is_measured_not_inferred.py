@@ -204,11 +204,31 @@ def test_the_read_set_is_pinned_so_a_dtype_win_cannot_move_the_ceiling(tmp_path,
     assert S._pinned_stage_bytes("prefill", "m", "main") is None  # keyed per stage
 
 
-def test_the_marker_is_emitted_only_when_something_was_observed():
-    """A stage with no reported bytes keeps its estimate rather than being handed an empty read set."""
-    src = (_PA / "agent" / "trace_replay.py").read_text()
-    assert "if _ws_bytes > 0:" in src
-    assert 'print("TRACE_STAGE_BYTES[%s]=%d"' in src
+def test_the_marker_is_emitted_only_when_something_was_observed(capsys):
+    """A stage with no reported bytes keeps its estimate rather than being handed an empty read set.
+
+    Asserted over BEHAVIOUR, not over the source line that used to implement it. The old form checked
+    for the literal `if _ws_bytes > 0:`, which passed while the hook watched a class the build never
+    instantiates -- the marker was correctly withheld, for the wrong reason, on every run. What must
+    hold is that a zero read set emits no measurement marker; a zero must now also SAY so, which the
+    parser ignores because it keys on "TRACE_STAGE_BYTES[" and the failure line is
+    "TRACE_STAGE_BYTES_NONE[".
+    """
+    import sys
+    import types
+
+    _stub = types.ModuleType("ttnn")
+    _stub.decorators = types.ModuleType("ttnn.decorators")
+    sys.modules.setdefault("ttnn", _stub)
+    sys.modules.setdefault("ttnn.decorators", _stub.decorators)
+    from agent import trace_replay as _tr
+
+    _tr._report_read_set("decode", 0, 0)
+    _tr._report_read_set("encode", 12, 4_786_000_000)
+    out = capsys.readouterr().out
+    assert "TRACE_STAGE_BYTES[decode]" not in out, "an empty read set was emitted as a measurement"
+    assert "TRACE_STAGE_BYTES_NONE[decode]" in out, "a zero said nothing at all -- the original defect"
+    assert "TRACE_STAGE_BYTES[encode]=4786000000" in out
 
 
 def test_the_marker_survives_the_round_trip():
@@ -231,8 +251,8 @@ def test_it_uses_the_census_definition_of_a_device_tensor():
     one quantity is how the ceiling's divisor came to disagree with itself before."""
     src = (_PA / "agent" / "trace_replay.py").read_text()
     assert "from .weight_census import _tensor_entry as _entry" in src
-    i = src.index("def _note(x):")
-    body = src[i : src.index("def counting", i)]
+    i = src.index("def _note(x, depth=0):")
+    body = src[i : src.index("def _make_counting", i)]
     assert "_entry(x)" in body
     for reimplemented in ("_on_device", "padded_shape", "for d in tuple(shape)"):
         assert reimplemented not in body, "still re-implementing the census: %s" % reimplemented
