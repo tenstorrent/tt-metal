@@ -75,8 +75,8 @@ void kernel_main() {
     const auto vec_acc = TensorAccessor(vec_args, vec_addr);
     const auto out = TensorAccessor(out_args, out_addr);
 
-    u::ComputeBlock b = u::noc_load<1>(block_storage, block_acc, 0).wait();
-    u::ComputeBlock v = u::noc_load<1>(vec_storage, vec_acc, 0).wait();
+    u::ComputeBlock b = u::noc_load<0>(block_storage, block_acc, 0).wait();
+    u::ComputeBlock v = u::noc_load<0>(vec_storage, vec_acc, 0).wait();
 
 #if defined(BC_THEN_SFPU)
     // A broadcast leaves the unpacker in a BROADCAST mode. An SFPU op afterwards has to
@@ -85,8 +85,8 @@ void kernel_main() {
     // proves that covers it.
     u::Storage<In> tmp_storage(kCbTmp);
     u::ComputeBlock t = tmp_storage.store(BC_APPLY(b, v));
-    u::noc_store<0>(out_storage.store(u::relu(t + t)), out, 0);
+    u::noc_store<1>(out_storage.store(u::relu(t + t)), out, 0);
 #else
-    u::noc_store<0>(out_storage.store(BC_APPLY(b, v)), out, 0);
+    u::noc_store<1>(out_storage.store(BC_APPLY(b, v)), out, 0);
 #endif
 }

@@ -3075,6 +3075,58 @@ everywhere, so the kernels spell the threads literally and the rule is stated on
 matmul keeps `MMB_IN0_THREAD`/`MMB_IN1_THREAD` because it genuinely has two read streams of
 different sizes and the assignment between them is a real choice.
 
+### Where the layer stands after the NOC fix
+
+Every kernel that reads DRAM was on the wrong NOC, so the whole layer moves at once. At the
+real llama-3.2-1B prefill shape -- S=512, d_model 2048, ffn 8192, 32 heads over 8 KV heads --
+on the full 8x8 grid, bf16, each matmul at its own best kt/depth:
+
+| stage | us | share |
+|---|---|---|
+| FFN gate + up, [512,2048]@[2048,8192] x2 | 1179.8 | 47% |
+| FFN down, [512,8192]@[8192,2048] | 470.1 | 19% |
+| flash attention, 32 heads causal | 336.1 | 13% |
+| Q projection [512,2048]@[2048,2048] | 154.7 | 6% |
+| output projection, same shape | 154.7 | 6% |
+| K and V projections [512,2048]@[2048,512] x2 | 104.8 | 4% |
+| rmsnorm x2 | 122.0 | 5% |
+| **subtotal** | **2522.2** | |
+
+against **ttnn's whole TransformerBlock at 1820us**, which also includes RoPE, the two
+residuals and silu*up -- none of which are in the subtotal above. So this is not yet a like
+for like layer number, and the honest statement is that the parts measured here are 1.39x
+ttnn's *entire* layer, where before this session's changes the same parts were roughly 4700us
+and the comparison was not worth making. The three unmeasured stages were 18% of the old
+single-core breakdown, so a full layer is plausibly around 3000us, or 1.6x -- to be measured,
+not claimed.
+
+The FFN sweeps that produced the two numbers above, both on the strict 8x8 grid:
+
+| FFN gate/up, mt=2 nt=32 | depth 1 | depth 2 | depth 3 |
+|---|---|---|---|
+| kt=1 | 826.2 | 633.4 | 633.9 |
+| kt=2 | 780.3 | 609.2 | 603.0 |
+| **kt=4** | 761.7 | **589.9** | 627.5 |
+| kt=8 | 743.2 | 671.1 | past L1 |
+
+| FFN down, mt=2 nt=8 | depth 2 | depth 3 |
+|---|---|---|
+| kt=8 | 480.0 | 483.8 |
+| **kt=16** | 471.5 | **470.1** |
+| kt=32 | 548.8 | past L1 |
+
+**And the bottleneck has moved.** The sender zones now put MCAST-DRAM at 309.6us against
+MCAST-SEND at 580.6: the reads that were the whole problem are no longer the larger half,
+and the broadcast is. That inverts the priority of the two shelved items -- the begin/finish
+overlap, whose measured ceiling was 17% when reads dominated, is now aimed at the bigger
+term, and it should be re-bounded before anything else is tried.
+
+The other lever is format. Everything here is bf16 and ttnn's 1820us is bfloat8_b, so ttnn
+moves half the weight bytes we do. At 60-66 GB/s effective across these shapes the matmuls
+are not near DRAM peak, so halving the bytes would not simply halve the time -- but it is the
+one difference against ttnn that is arithmetic rather than a matter of tuning, and it is
+worth roughly the whole remaining gap if the kernels are anywhere near bandwidth-bound.
+
 ## Phase 11 -- Full block orchestration
 
 Host-side and kernel-loop work, not model gaps.
