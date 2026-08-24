@@ -113,6 +113,11 @@ void kernel_main() {
     // GQA: n_heads query heads share n_kv_heads key/value heads, n_heads/n_kv_heads of
     // them per KV head. n_kv_heads == n_heads is ordinary multi-head attention and
     // n_kv_heads == 1 is multi-query; both fall out of the same mapping.
+    //
+    // These are the counts for the WHOLE tensor, not for this core. They fix the group
+    // size and so the mapping; which heads this core walks is head_begin/head_count
+    // below. A core holding four of thirty-two heads still needs to know there are
+    // thirty-two, or it would map its heads onto the wrong KV heads entirely.
     constexpr uint32_t n_heads = get_compile_time_arg_val(6);
     constexpr uint32_t n_kv_heads = get_compile_time_arg_val(7);
 
@@ -129,6 +134,16 @@ void kernel_main() {
     const uint32_t mask_addr = get_arg_val<uint32_t>(3);
     const uint32_t colones_addr = get_arg_val<uint32_t>(4);
     const uint32_t out_addr = get_arg_val<uint32_t>(5);
+    // This core's slice of the heads. Runtime rather than compile-time because it is the
+    // one thing that differs per core, and RUNTIME ARGS rather than a coordinate because
+    // every projection reads the same values from them: a head range derived from
+    // PhysicalCoord::this_core() would be right on the two data-movement threads and the
+    // ORIGIN's range on compute, so the loads and the compute would disagree about how
+    // many blocks exist and the circular buffers would deadlock. See the warning on
+    // PhysicalCoord::this_core() in api.h. LogicalCoord::this_core() would be safe, but
+    // the partition is a host policy and this keeps it there.
+    const uint32_t head_begin = get_arg_val<uint32_t>(6);
+    const uint32_t head_count = get_arg_val<uint32_t>(7);
 
     using Q = u::Shape<sq, dt>;
     using Kt = u::Shape<dt, sk>;
@@ -212,16 +227,18 @@ void kernel_main() {
     // reduce_max keeps the scaler above: a maximum has no matmul form.
     u::ComputeBlock col_ones = u::noc_load<1>(colones_storage, colones_acc, 0).wait();
 
-    // One launch covers n_heads query heads, so everything above -- matmul_init's hardware
-    // startup, the reduce scaler, the column of ones -- is paid once for the group rather
-    // than once per head.
+    // One launch covers this core's whole slice of the heads, so everything above --
+    // matmul_init's hardware startup, the reduce scaler, the column of ones -- is paid once
+    // for the slice rather than once per head. Heads share nothing: no core reads another's
+    // queries or writes another's output, so partitioning them across cores needs no
+    // communication at all, only this range.
     //
     // Measured at sq=2 sk=4 dt=2 with two query chunks: a single head is 29.24us, and eight
     // heads fused are 201.20us against 233.94us as eight launches. That is 4.1us saved per
     // head, 14% at eight, and the per-head cost falls 29.24 -> 25.15us as the group grows.
     // (Not the 13.1us the q-loop saved per query chunk -- that was a different measurement
     // and it does not transfer; this one is the head loop's own.)
-    for (uint32_t h = 0; h < n_heads; ++h) {
+    for (uint32_t h = head_begin; h < head_begin + head_count; ++h) {
         // The GQA mapping, and the only place the two head counts meet: consecutive query
         // heads share a KV head, so query head h reads KV head h / kv_group.
         const uint32_t kv_head = h / kv_group;

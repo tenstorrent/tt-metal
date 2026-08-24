@@ -25,7 +25,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, single_core, unified_program
+from unified_harness import core_block, make_cb, single_core, split_evenly, unified_program
 
 KERNEL = "unified_kernels/flash_attention.cpp"
 TILE = 32
@@ -84,6 +84,7 @@ def run(
     num_q=1,
     n_heads=1,
     n_kv_heads=1,
+    cores=1,
 ):
     """One launch, `num_q` query chunks of `sq` tiles each, against `sk_total` key tiles.
 
@@ -181,15 +182,32 @@ def run(
     col_ones[:, 0] = 1.0
     tq, tk, tv, tmask = to_dev(q), to_dev(k_dev), to_dev(v_dev), to_dev(mask_dev)
     tcolones = to_dev(col_ones.to(torch.bfloat16))
-    tout = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, 1, n_heads * S_q, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram
-    )
+    # Pre-filled with NaN rather than allocated uninitialised, so a block NOTHING writes is
+    # unmistakable. This is not hygiene, it is load-bearing: run() is called many times per
+    # session and the allocator hands back the same address, so an uninitialised output
+    # holds the PREVIOUS run's correct values. A partition that dropped a head passed at
+    # 8 heads over 8 cores and over 4 -- the stale block read as right -- and was only
+    # caught at 4 over 2, where the preceding run had left something different there. NaN
+    # propagates into the error, so a missed write now fails everywhere.
+    tout = to_dev(torch.full([n_heads * S_q, D], float("nan")).to(torch.bfloat16))
 
-    core_ranges, cores = single_core()
+    # Heads are partitioned across cores and share nothing: a core reads its own heads'
+    # queries and their KV heads, and writes its own output blocks. No core touches
+    # another's data, so there is no communication here at all -- only a range each.
+    #
+    # Capped at n_heads so no core is allocated a share of zero. The kernel would survive
+    # one (its loop simply would not run), but an idle core is a pointless allocation and
+    # the path is not worth having untested.
+    ncores = min(cores, n_heads)
+    core_ranges, core_list = core_block(ncores)
+    shares = split_evenly(n_heads, ncores)
+
     ct_args = [sq, sk, dt, num_q, k_offset, sk_total, n_heads, n_kv_heads]
     for t in (tq, tk, tv, tmask, tcolones, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    rt_args = [t.buffer_address() for t in (tq, tk, tv, tmask, tcolones, tout)]
+    addrs = [t.buffer_address() for t in (tq, tk, tv, tmask, tcolones, tout)]
+    # Same addresses everywhere, different head range per core.
+    rt_args = {c: addrs + [begin, count] for c, (begin, count) in zip(core_list, shares)}
 
     scores_pages, out_pages, vec_pages = sq * sk, sq * dt, sq
     cbs = [
@@ -223,7 +241,7 @@ def run(
     program = unified_program(
         kernel_source=KERNEL,
         core_ranges=core_ranges,
-        cores=cores,
+        cores=core_list,
         cbs=cbs,
         compile_time_args=ct_args,
         runtime_args=rt_args,
@@ -322,6 +340,34 @@ def main(argv=None):
             )
             if not ok:
                 failed.append(f"gqa-{n_heads}-{n_kv}")
+
+        # Heads partitioned across cores. Uneven splits are the interesting ones: 8 over 3
+        # is 3, 3, 2 and 6 over 4 is 2, 2, 1, 1, so a core's range is not simply its index.
+        for n_heads, n_kv, ncores in ((4, 2, 2), (4, 2, 4), (8, 2, 8), (8, 1, 3), (6, 3, 4), (16, 4, 8)):
+            got, want = run(device, sq, sk_total, dt, 2, True, n_heads=n_heads, n_kv_heads=n_kv, cores=ncores)
+            e = (got - want).abs().max().item()
+            ok = e <= args.abs_err
+            logger.info(
+                f"multicore heads={n_heads} kv={n_kv} cores={ncores}: max|err|={e:.5f}  {'ok' if ok else 'FAIL'}"
+            )
+            if not ok:
+                failed.append(f"multicore-{n_heads}-{n_kv}-{ncores}")
+
+        # The partition must not change the answer, so every core count has to agree
+        # EXACTLY -- heads are independent, so this is not a tolerance question. Note what
+        # this can and cannot catch: a partition that MISSES a head shows up here, since
+        # nothing writes that output block, but one that OVERLAPS does not, because two
+        # cores computing the same head both write the same correct values. Over-coverage
+        # shows up as a missing speedup instead, which is why the scaling numbers in
+        # unified_llama_prefill.md are part of the evidence and not just decoration.
+        ref = run(device, sq, sk_total, dt, 2, True, n_heads=8, n_kv_heads=2, cores=1)[0]
+        for ncores in (2, 4, 8):
+            other = run(device, sq, sk_total, dt, 2, True, n_heads=8, n_kv_heads=2, cores=ncores)[0]
+            spread = (other - ref).abs().max().item()
+            ok = spread == 0.0
+            logger.info(f"PARTITION INVARIANCE 1 vs {ncores} cores: max|diff|={spread:.6f}  {'ok' if ok else 'FAIL'}")
+            if not ok:
+                failed.append(f"partition-invariance-{ncores}")
     finally:
         ttnn.close_device(device)
 
