@@ -173,6 +173,7 @@ def run_model(
     is_ci_v2_env,
     tokenizer,
     request,
+    serve_hook=None,
 ):
     torch.manual_seed(42)
 
@@ -477,6 +478,8 @@ def run_model(
         token_ids = (
             reorder_tensor_chunks(token_ids.unsqueeze(1).unsqueeze(-1), chunk_order, seq_dim=2).squeeze(1).squeeze(-1)
         )
+    else:
+        chunk_order = None
 
     token_ids_reshaped = token_ids.reshape(sp_factor, 1, isl_per_chip)
 
@@ -488,6 +491,29 @@ def run_model(
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(0, None)),
     )
+
+    # --- Interactive serving (demo) ---
+    # Hand the fully-built, validated model to a caller-supplied server instead of running the
+    # test's forward. A callback (rather than an import of the demo module) keeps the dependency
+    # one-directional: this test module knows nothing about the server.
+    # See models/demos/deepseek_v3_d_p/demo/serve_mistral4_interactive.py. Blocks until killed.
+    if serve_hook is not None:
+        ttnn.deallocate(tt_tokens)  # the server owns the token window and uploads its own
+        serve_hook(
+            transformer=transformer,
+            mesh_device=mesh_device,
+            kvpe_cache=tt_kvpe_cache,
+            index_kv_cache=tt_index_kv_cache,
+            tokenizer=tokenizer,
+            config=config,
+            isl_total=isl_total,
+            sp_factor=sp_factor,
+            isl_per_chip=isl_per_chip,
+            chunk_order=chunk_order,
+            padding_side=padding_side,
+        )
+        profiler.end("total_test_time")
+        return
 
     # --- Determinism check (isolated from the pcc_validation path below) ---
     # Run num_iterations forwards on identical input and compare every iteration's per-stage
