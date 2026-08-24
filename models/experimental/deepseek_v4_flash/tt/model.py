@@ -281,7 +281,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self.require_cache = require_cache
 
         self.use_submeshes = use_submeshes
-        self.num_submeshes = full_device.get_num_devices()
+        self.mesh_devices = full_device.get_num_devices()
+        self.num_submeshes = system_config.pipeline.resolve_num_devices(self.mesh_devices)
 
         # Layer -> submesh placement is set by the *pipeline group size* (PGS, see
         # :func:`plan_layer_placement`): the devices are cut into groups of PGS
@@ -314,11 +315,13 @@ class DeepSeekV4Model(DeepSeekV4Module):
         )
 
         if use_submeshes:
+            idle = self.mesh_devices - self.num_submeshes
             logger.info(
-                f"Using submeshes: {self.num_submeshes} (pipeline group size "
+                f"Using submeshes: {self.num_submeshes} of {self.mesh_devices}"
+                f"{f' ({idle} left idle by pipeline.max_devices)' if idle else ''} (pipeline group size "
                 f"{pipeline_group_size or self.num_submeshes}, {self.pipeline_stages} populated)"
             )
-            full_device.reshape(ttnn.MeshShape(1, full_device.get_num_devices()))
+            full_device.reshape(ttnn.MeshShape(1, self.mesh_devices))
             self.submeshes = []
             for i in range(self.num_submeshes):
                 self.submeshes.append(full_device.create_submesh(ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(0, i)))

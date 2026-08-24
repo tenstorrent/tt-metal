@@ -3,7 +3,7 @@ from typing import NamedTuple, Optional
 import ttnn
 import torch
 
-from .common import DeepSeekV4Module, _profile, _region
+from .common import FULL_TILE, SINGLE_USER_TILE, DeepSeekV4Module, _profile, _region, with_shard_height
 from .decode_prefetch import check_decode_layout, decode_prefetch_page_bytes, make_decode_prefetch_buffers
 from .layers import Linear, LinearDecode
 from .l1_weights import packed_weight_spec
@@ -246,7 +246,9 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
         # values. topk's ids are returned exactly as produced: TILE uint16, [1,1,T,k].
         biased = ttnn.add(scores, self.e_score_correction_bias)
         _profile(self.device)
+        biased = ttnn.to_memory_config(biased, ttnn.DRAM_MEMORY_CONFIG)
         _, top_idx = ttnn.topk(biased, self.top_k, dim=-1)
+        scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         return SparseRouting(scores=scores, indices=top_idx)
 
 
@@ -544,10 +546,14 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         the knob to turn when the op's static CBs collide with the L1 buffers live at the
         call; the cost is one extra chip-wide gather/broadcast barrier per block.
         """
+        x_tok_single_tile_memory_config = with_shard_height(x_tok.memory_config(), 1)
+        x_tok = ttnn.tilize(x_tok, tile=SINGLE_USER_TILE, memory_config=x_tok_single_tile_memory_config)
+        indices = ttnn.to_memory_config(routing.indices, ttnn.DRAM_MEMORY_CONFIG)
+        scores = ttnn.to_memory_config(routing.scores, ttnn.DRAM_MEMORY_CONFIG)
         out = ttnn.experimental.deepseek.moe.fused_experts(
             x_tok,
-            routing_indices=routing.indices,
-            routing_scores=routing.scores,
+            routing_indices=indices,
+            routing_scores=scores,
             gate_up_weights=self._gate_up_fused,
             down_weights=self._down_fused,
             num_experts=self.top_k,
@@ -558,6 +564,8 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
             routing_eps=self.routing_eps,
             experts_block_size=self.experts_block_size,
         )  # [1, 1, H]
+        out_full_tile_memory_config = with_shard_height(out.memory_config(), 32)
+        out = ttnn.tilize(out, tile=FULL_TILE, memory_config=out_full_tile_memory_config)
         return ttnn.reshape(out, [1, 1, 1, self.hidden])
 
     def _token_routing(self, routing: SparseRouting, i: int) -> SparseRouting:

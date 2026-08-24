@@ -107,10 +107,23 @@ class PipelineSettings:
 
     group_size: int = 1
     depth: int = 0
+    max_devices: int = 0
     socket_l1_bytes: int = 16384
     pcie_alignment: int = 64
     h2d_fifo_pages: int = 64
     d2h_fifo_bytes: int = 4032
+
+    def resolve_num_devices(self, mesh_devices: int) -> int:
+        """How many of the open mesh's devices the layer stack should span.
+
+        ``0`` spans all of them. Capping matters once the weights are L1-resident:
+        the packed placement holds at most two layers per chip, so spreading the
+        stack over more chips than it needs buys nothing and costs one socket hop
+        per extra chip -- pure added latency on the critical path.
+        """
+        if self.max_devices <= 0:
+            return mesh_devices
+        return min(self.max_devices, mesh_devices)
 
     @property
     def h2d_fifo_bytes(self) -> int:
@@ -473,6 +486,7 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, Callable[[str], Any]], ...] = (
     ("device", "worker_l1_size", "DEEPSEEK_V4_WORKER_L1_SIZE", int),
     ("pipeline", "group_size", "DEEPSEEK_V4_PIPELINE_GROUP_SIZE", int),
     ("pipeline", "depth", "DEEPSEEK_V4_PIPELINE_DEPTH", int),
+    ("pipeline", "max_devices", "DEEPSEEK_V4_PIPELINE_MAX_DEVICES", int),
     ("pipeline", "socket_l1_bytes", "DEEPSEEK_V4_SOCKET_L1_BYTES", int),
     ("pipeline", "pcie_alignment", "DEEPSEEK_V4_PCIE_ALIGNMENT", int),
     ("pipeline", "h2d_fifo_pages", "DEEPSEEK_V4_H2D_FIFO_PAGES", int),

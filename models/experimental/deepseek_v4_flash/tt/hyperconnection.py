@@ -122,8 +122,11 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
             flat_mem_config = width_sharded_l1_config(t, hc * d, self.device)
         flat = ttnn.reshape(hidden_streams, [1, 1, t, hc * d], memory_config=flat_mem_config)
         flat = _rms_norm_unweighted(flat, self.norm_eps)
-
         fused_w = self.fn(flat)  # [1,1,T,(2+H)*H]
+        fused_w = ttnn.reshape(
+            fused_w, [1, 1, t, (2 + hc) * hc], fused_w.padded_shape, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        fused_w = ttnn.to_memory_config(fused_w, ttnn.DRAM_MEMORY_CONFIG)
         _profile(self.device)
 
         # The pre_w / post_w / comb_w slices are split out of `fused_w` inside the op

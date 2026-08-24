@@ -260,17 +260,19 @@ HostTensor to_row_major_layout_impl(const HostTensor& tensor) {
     }
 
     TT_FATAL(tensor.layout() == Layout::TILE, "Converting from {} to Row Major is unsupported.", tensor.layout());
+    // Preserve the source tile in the row-major PageConfig so later host-side helpers
+    // (e.g. unpad_from_tile) still know the original tile geometry.
+    auto tile = tensor.tensor_spec().tile();
     // Construct the new tensor spec first to verify that this is a supported Tensor configuration
     TensorSpec new_tensor_spec(
         tensor.logical_shape(),
         TensorLayout::fromPaddedShape(
             tensor.dtype(),
-            PageConfig(Layout::ROW_MAJOR),
+            PageConfig(Layout::ROW_MAJOR, tile),
             MemoryConfig{},
             tensor.logical_shape(),
             tensor.padded_shape()));
 
-    auto tile = tensor.tensor_spec().tile();
     auto physical_shape = tensor.tensor_spec().physical_shape();
 
     auto transformed_buffer = tensor.buffer().transform(

@@ -7,6 +7,8 @@
 
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
+#include <numeric>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -47,9 +49,37 @@ ProgramDescriptor TilizeMultiCoreShardedRetileProgramFactory::create_descriptor(
     TT_FATAL(a.is_sharded(), "Sharded retile program factory requires a sharded input");
 
     const auto& shard_spec = a.shard_spec().value();
-    const uint32_t shard_height = shard_spec.shape[0];
+    const uint32_t input_shard_height = shard_spec.shape[0];
     const uint32_t shard_width = shard_spec.shape[1];
     const CoreRangeSet& all_cores = shard_spec.grid;
+
+    // Output shard geometry. For an interleaved output we don't have an output shard spec; each
+    // core's output range in the interleaved buffer mirrors its input shard's row count under the
+    // *output* tile shape (input and output cover the same logical rows), so derive it from the
+    // input shard's real row count expressed in output tiles. For a sharded output we take the
+    // dimensions directly from the output shard spec — critically, the output shard height can
+    // differ from the input shard height (e.g. width-sharded logical H=1 padded to a tile: the
+    // input shard is 32 rows tall, the output shard 1 row tall). Using the input shard height for
+    // the output CB (as the old code did) allocated a CB many times larger than the output shard's
+    // L1 bank, tripping `total_size <= max_size_` in circular_buffer_config.
+    const bool output_is_interleaved = output.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
+    uint32_t output_shard_height = 0;
+    if (output_is_interleaved) {
+        // Interleaved output only supports the shrink/height-sharded ROW_MAJOR path below; each
+        // core's writer emits `num_real_output_tile_rows * tiles_per_block` tiles into a
+        // contiguous interleaved range. We treat the output shard height as covering the same
+        // rows the input shard does (rounded up to the output tile height).
+        output_shard_height = ((input_shard_height + out_tile_height - 1) / out_tile_height) * out_tile_height;
+    } else {
+        const auto& out_shard_spec = output.shard_spec().value();
+        output_shard_height = out_shard_spec.shape[0];
+        TT_FATAL(
+            out_shard_spec.shape[1] == shard_width,
+            "Sharded retile requires input and output shard widths to match ({} vs {})",
+            shard_width,
+            out_shard_spec.shape[1]);
+        TT_FATAL(out_shard_spec.grid == all_cores, "Sharded retile requires input and output shard grids to match");
+    }
 
     TT_FATAL(
         shard_width % in_tile_width == 0,
@@ -57,46 +87,108 @@ ProgramDescriptor TilizeMultiCoreShardedRetileProgramFactory::create_descriptor(
         shard_width,
         in_tile_width);
     TT_FATAL(
-        shard_height % in_tile_height == 0,
-        "Sharded retile requires shard height {} divisible by input tile height {}",
-        shard_height,
+        input_shard_height % in_tile_height == 0,
+        "Sharded retile requires input shard height {} divisible by input tile height {}",
+        input_shard_height,
         in_tile_height);
     TT_FATAL(
-        shard_height % out_tile_height == 0,
-        "Sharded retile requires shard height {} divisible by output tile height {}",
-        shard_height,
+        output_shard_height % out_tile_height == 0,
+        "Sharded retile requires output shard height {} divisible by output tile height {}",
+        output_shard_height,
         out_tile_height);
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    // The intermediate is row-major, so it cannot be a block-float format. If the input is
+    // already block-float, unpack it to bfloat16; otherwise keep the input dtype. Conversion
+    // to the output dtype happens on the final pack (see retile.cpp).
+    auto intermediate_dtype = is_block_float(a.dtype()) ? tt::tt_metal::DataType::BFLOAT16 : a.dtype();
+    tt::DataFormat mid_cb_data_format = datatype_to_dataformat_converter(intermediate_dtype);
     const uint32_t input_single_tile_size = input_tile.get_tile_size(input_cb_data_format);
     const uint32_t output_single_tile_size = output_tile.get_tile_size(output_cb_data_format);
-    const uint32_t mid_page_size = input_single_tile_size;
-    // The intermediate stays in the input data format (conversion happens on the final pack), so the
-    // consumer view sizes an output tile in the input format, not the output format.
-    const uint32_t out_tile_size_input_fmt = output_tile.get_tile_size(input_cb_data_format);
+    const uint32_t mid_input_page_size = input_tile.get_tile_size(mid_cb_data_format);
+    const uint32_t mid_output_page_size = output_tile.get_tile_size(mid_cb_data_format);
 
     const bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
-                              output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
+                              output.dtype() == DataType::FLOAT32 || output.dtype() == DataType::FP8_E4M3 ||
+                              output.dtype() == DataType::BFLOAT8_B;
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
     TT_FATAL(src0_buffer != nullptr, "Input buffer should be allocated on device!");
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    const bool output_is_interleaved = output.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
-
-    // A retile leaves element dimensions unchanged, so each core's shard maps to whole tile-rows on
-    // both sides; only the tiling of those elements changes. Work is per-core and independent.
+    // A retile leaves the element dimensions unchanged. Each core's input shard and output shard
+    // therefore cover the same *logical* rows of the tensor, but the padded row count on each side
+    // is rounded up to its own tile height — for width-sharded tensors those two padded heights
+    // can differ (e.g. logical H=1: input shard 32 rows under a (32,32) tile, output shard 1 row
+    // under a (1,32) tile). We stage through a shared L1 mid buffer whose row extent covers the
+    // *taller* of the two shards; the shorter side either only fills its real rows (grow: input
+    // real rows < mid rows, remainder is zero-filled) or only drains its real rows (shrink:
+    // output real rows < mid rows, surplus tiles are simply not written).
     const uint32_t tiles_per_block = shard_width / in_tile_width;
-    const uint32_t num_input_tile_rows = shard_height / in_tile_height;
-    const uint32_t num_output_tile_rows = shard_height / out_tile_height;
-    const uint32_t num_tiles_per_shard_in = num_input_tile_rows * tiles_per_block;
-    const uint32_t num_tiles_per_shard_out = num_output_tile_rows * tiles_per_block;
+    const uint32_t mid_height = std::max(input_shard_height, output_shard_height);
+    TT_FATAL(
+        mid_height % in_tile_height == 0 && mid_height % out_tile_height == 0,
+        "Sharded retile: max shard height {} must be divisible by both tile heights ({}, {})",
+        mid_height,
+        in_tile_height,
+        out_tile_height);
+    const uint32_t num_input_tile_rows = mid_height / in_tile_height;  // rows in mid (input tile view)
+    const uint32_t num_tiles_per_shard_in = (input_shard_height / in_tile_height) * tiles_per_block;
+    const uint32_t num_tiles_per_shard_out = (output_shard_height / out_tile_height) * tiles_per_block;
 
-    const uint32_t ratio = shrink ? (in_tile_height / out_tile_height) : (out_tile_height / in_tile_height);
-    // One output block occupies `ratio` input tile-rows of RM in the grow case, one otherwise.
-    const uint32_t mid_pages_per_out_block = (shrink ? 1u : ratio) * tiles_per_block;
+    // Real (non-padded) row counts per core. For a width-sharded tensor every core carries the
+    // whole logical H, so the real rows are min(logical_H, shard_height). For height/block-sharded
+    // tensors we require the shard grid to divide the tensor evenly and treat every shard row as
+    // real (the interleaved retile factory handles ragged trailing shards; if that becomes needed
+    // here we can generalise later). The compute kernel uses these to cap the untilize loop
+    // (grow case) and the tilize/write loop (shrink case).
+    const auto& logical_shape = a.logical_shape();
+    const uint32_t logical_h = logical_shape.rank() >= 2 ? logical_shape[-2] : 1;
+    const bool is_width_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+    const uint32_t real_rows_per_core = is_width_sharded ? std::min(logical_h, input_shard_height) : input_shard_height;
+    const uint32_t num_real_input_tile_rows = (real_rows_per_core + in_tile_height - 1) / in_tile_height;
+    const uint32_t num_real_output_tile_rows = (real_rows_per_core + out_tile_height - 1) / out_tile_height;
+
+    // Width chunking. For very wide shards the mid CB (row-major intermediate) would exceed L1
+    // if sized for the full shard width. We cap the per-chunk width at MAX_CHUNK_ELEMS elements
+    // (MAX_CHUNK_TILES tiles) and process the shard in `num_width_chunks` passes; the compute
+    // kernel manually seeks the aliased src/out CB pointers per (chunk, tile-row). We pick the
+    // largest divisor of tiles_per_block that fits under the cap so num_chunks divides evenly and
+    // the compute kernel needs only one template instantiation per pass.
+    constexpr uint32_t MAX_CHUNK_ELEMS = 256;
+    constexpr uint32_t MAX_CHUNK_TILES = MAX_CHUNK_ELEMS / TILE_WIDTH;
+    static_assert(MAX_CHUNK_TILES > 0, "MAX_CHUNK_ELEMS must be at least one tile wide");
+    auto compute_chunk_tiles = [MAX_CHUNK_TILES](uint32_t total_tiles) {
+        const uint32_t cap = std::min<uint32_t>(total_tiles, MAX_CHUNK_TILES);
+        for (uint32_t cw = cap; cw > 0; --cw) {
+            if (total_tiles % cw == 0) {
+                return cw;
+            }
+        }
+        return 1u;
+    };
+    // Interleaved-output writer reads pages sequentially from the output CB and scatters them by
+    // global tile id, so it requires push_backs in natural (tile-row-major) shard order. Width
+    // chunking would emit pages in (chunk, row) order instead, breaking that contract — keep the
+    // legacy single-pass path for the interleaved case. Sharded output uses zero-copy writes into
+    // the aliased L1 buffer, so the kernel can seek the write pointer per (chunk, row) safely.
+    const uint32_t chunk_tiles = output_is_interleaved ? tiles_per_block : compute_chunk_tiles(tiles_per_block);
+    const uint32_t num_width_chunks = tiles_per_block / chunk_tiles;
+    TT_FATAL(
+        chunk_tiles * num_width_chunks == tiles_per_block,
+        "Sharded retile: chunk_tiles ({}) must evenly divide tiles_per_block ({})",
+        chunk_tiles,
+        tiles_per_block);
+
+    // Compute untilizes `num_input_tile_rows` (mid-height) rows into mid, then tilizes them.
+    // Aliased c_1/c_2 page sizes can differ, so the allocation must be a multiple of both.
+    // Mid CB holds a single width-chunk's worth of tiles; the kernel pops between chunks.
+    const uint32_t mid_input_pages = num_input_tile_rows * chunk_tiles;
+    const uint32_t mid_size_align = std::lcm(mid_input_page_size, mid_output_page_size);
+    const uint32_t mid_total_size =
+        ((mid_input_pages * mid_input_page_size + mid_size_align - 1) / mid_size_align) * mid_size_align;
 
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
     constexpr uint32_t mid_cb_index = tt::CBIndex::c_1;       // input tile geometry (untilize producer)
@@ -128,19 +220,19 @@ ProgramDescriptor TilizeMultiCoreShardedRetileProgramFactory::create_descriptor(
     // program-creation time: c_1 carries the input tile shape for pack_untilize to write into, c_2
     // the output tile shape so llk_unpack_tilize reads the correct number of RM rows.
     desc.cbs.push_back(CBDescriptor{
-        .total_size = 2 * mid_pages_per_out_block * mid_page_size,
+        .total_size = mid_total_size,
         .core_ranges = all_cores,
         .format_descriptors = {{
             CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(mid_cb_index),
-                .data_format = input_cb_data_format,
-                .page_size = mid_page_size,
+                .data_format = mid_cb_data_format,
+                .page_size = mid_input_page_size,
                 .tile = input_tile_descriptor,
             },
             CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(mid_view_cb_index),
-                .data_format = input_cb_data_format,
-                .page_size = out_tile_size_input_fmt,
+                .data_format = mid_cb_data_format,
+                .page_size = mid_output_page_size,
                 .tile = output_tile_descriptor,
             },
         }},
@@ -233,24 +325,33 @@ ProgramDescriptor TilizeMultiCoreShardedRetileProgramFactory::create_descriptor(
         compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_desc.core_ranges = all_cores;
         compute_desc.compile_time_args = {
-            tiles_per_block,
+            chunk_tiles,
             src0_cb_index,
             mid_cb_index,
             mid_view_cb_index,
             output_cb_index,
             in_tile_height,
             out_tile_height,
-            out_tile_size_input_fmt,
-            mid_page_size,
+            mid_output_page_size,
+            mid_input_page_size,
+            tiles_per_block,
+            input_single_tile_size,
+            output_single_tile_size,
+            num_width_chunks,
         };
         compute_desc.config = ComputeConfigDescriptor{
             .fp32_dest_acc_en = fp32_llk_acc,
             .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
         };
-        // All shards are the same size, so every core does identical work. num_input_blocks is in
-        // input tile-rows; all rows are real (no grow-case height padding within a shard).
+        // All shards are the same size, so every core does identical work. num_input_blocks is
+        // the mid buffer's tile-row count (in input tile geometry) — the untilize loop iterates
+        // that many times, zero-filling any rows past the real input (grow case). The two
+        // real-row caps let the kernel stop untilizing / tilizing at the logical H (they equal
+        // num_input_tile_rows / num_output_tile_rows-of-mid when there is no padding on either
+        // side, matching the previous behaviour when input and output shard heights agree).
         for (const auto& core : corerange_to_cores(all_cores)) {
-            compute_desc.emplace_runtime_args(core, {num_input_tile_rows, num_input_tile_rows});
+            compute_desc.emplace_runtime_args(
+                core, {num_input_tile_rows, num_real_input_tile_rows, num_real_output_tile_rows});
         }
         desc.kernels.push_back(std::move(compute_desc));
     }

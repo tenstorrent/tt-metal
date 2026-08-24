@@ -96,10 +96,13 @@ def _build_rope(config, max_seq: int) -> dict:
     return rope
 
 
-def _build_and_prefill(mesh_device, text: str, prefetcher: contextlib.ExitStack):
+def _build_and_prefill(mesh_device, text: str, prefetcher: contextlib.ExitStack, system_config=None):
     """Build the full ttnn model, prepare the static traced-decode buffers, and
     prefill ``text`` one token at a time. Returns the populated state shared by
-    the decode demo and the max-perf measurement tests."""
+    the decode demo and the max-perf measurement tests.
+
+    ``system_config`` pins the tuning profile; ``None`` lets the model pick the one
+    matching the open mesh's device count."""
     from transformers import AutoTokenizer
     from transformers.models.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
 
@@ -146,6 +149,7 @@ def _build_and_prefill(mesh_device, text: str, prefetcher: contextlib.ExitStack)
         weight_dtype=_WEIGHT_DTYPE,
         max_layers=max_layers,
         use_submeshes=True,
+        system_config=system_config,
     )
     lm_head = Linear(
         _w(loader, "lm_head.weight"),
