@@ -285,34 +285,7 @@ class DemoConfig:
     # )
 
     # text: str = "Reading books every day helps the mind grow. It builds a strong brain. When you open a book, you learn new words. You see new places. You meet new people through stories. A good book teaches you about life. It shows you how other people think. You feel happy when a story is fun. You feel sad when things go wrong for the hero. These feelings make us kind. They help us care for our friends and neighbors.You do not need to read a lot at one time. Just ten minutes a day is fine. Sit in a quiet place. Turn off your phone. Open the pages and let your eyes move across the lines. Soon, you will want to read more.Books are true friends. They wait for you on the shelf. They never get mad. They share their secrets whenever you want. Pick up a story today. Let your imagination fly high. Enjoy the magic of words on paper. Your brain will thank you for this good gift."
-    text: str = (
-        "Voice synthesis has come a long way, and modern systems can already generate natural sounding speech with remarkable accuracy. Hey, how are you doing? "
-        "Technology has become an essential part of modern life, influencing the way people communicate, work, learn, travel, and solve everyday problems. "
-        "From smartphones and computers to artificial intelligence and advanced medical equipment, technological development continues to transform society at an unprecedented pace. "
-        "While technology presents certain challenges, its benefits have significantly improved productivity, accessibility, and quality of life. "
-        "One of the most important contributions of technology is improved communication. In the past, communicating with someone living far away could take days or even weeks. "
-        "Today, people can exchange messages instantly, participate in video calls, and collaborate with others across different countries. "
-        "Social platforms and communication tools have made it easier for families, friends, businesses, and organizations to remain connected regardless of geographical distance. "
-        "Technology has also transformed education. Students now have access to a vast amount of information through digital libraries, online courses, educational videos, and interactive learning platforms. "
-        "Remote learning allows people to study from locations that may not have access to traditional educational institutions. "
-        "Teachers can use digital tools to create engaging lessons, track student progress, and provide personalized learning experiences. "
-        "As a result, education has become more flexible and accessible. In the workplace, technology has increased efficiency and created new opportunities. "
-        "Automation can perform repetitive tasks quickly and accurately, allowing employees to focus on more complex and creative work. "
-        "Cloud computing enables teams to collaborate on shared documents and projects from different locations. "
-        "Artificial intelligence is increasingly being used to analyze large amounts of data, identify patterns, and support decision-making. "
-        "At the same time, technological progress has created entirely new industries and career opportunities. "
-        "Healthcare is another area that has benefited greatly from technological innovation. "
-        "Advanced imaging systems, robotic surgery, wearable devices, and digital health records help medical professionals diagnose and treat patients more effectively. "
-        "Researchers can use powerful computers to analyze biological data and accelerate the development of new treatments. "
-        "Telemedicine also allows patients to consult healthcare professionals without always needing to travel to a hospital or clinic. "
-        "However, the rapid growth of technology also creates challenges. Privacy and cybersecurity have become major concerns because personal and organizational information is increasingly stored online. "
-        "Automation may change the nature of employment and require workers to develop new skills. "
-        "Excessive use of digital devices can also affect social interactions and personal well-being. "
-        "Therefore, technological development should be accompanied by responsible policies, education, and ethical considerations. "
-        "In conclusion, technology plays a central role in shaping the modern world. It has improved communication, expanded access to education, increased workplace productivity, and supported major advances in healthcare. "
-        "Although it introduces new risks and challenges, these can be addressed through responsible development and thoughtful use. "
-        "As technology continues to evolve, society must ensure that its benefits are shared widely and that innovation contributes to a more efficient, connected, and sustainable future."
-    )
+    text: str = "Voice synthesis has come a long way, and modern systems can already generate natural sounding speech with remarkable accuracy. Hey, how are you doing? "
     # Four LJSpeech clips joined to ~32.6 s, clipped to gpt_cond_len (30 s) = 8 conditioning windows.
     ref_audio: str = "LJ001-0001.wav+LJ001-0003.wav+LJ001-0004.wav+LJ001-0005.wav"
     language: str = DEFAULT_LANGUAGE
