@@ -845,3 +845,4 @@ inline void call_left_shift_fresh_cpp(
 #include "fresh_cpp/hardshrink.h"
 #include "fresh_cpp/hardtanh.h"
 #include "fresh_cpp/heaviside.h"
+#include "fresh_cpp/mul_int32_limb2.h"
