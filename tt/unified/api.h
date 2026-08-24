@@ -734,6 +734,16 @@ private:
 #endif
 };
 
+// Optional per-instance profiler zones inside the multicast sender, for splitting its
+// k-block into waiting-for-receivers, waiting-for-DRAM, and broadcasting. Off unless
+// TT_UNIFIED_MCAST_ZONES is defined, because a zone per block per core is a lot of records
+// and the profiler drops them silently once its buffer fills.
+#if defined(TT_UNIFIED_MCAST_ZONES) && defined(IS_DM_THREAD) && IS_DM_THREAD
+#define TT_U_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define TT_U_ZONE(name) ((void)0)
+#endif
+
 // ---------------------------------------------------------------------------
 // NOC transaction handles
 //

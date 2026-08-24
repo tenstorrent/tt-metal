@@ -778,44 +778,57 @@ NocAsyncReadTx<thread, S> noc_load(
             // Do not multicast into a receiver's buffer until it has told us the
             // buffer is free. Then clear the count so the next block starts from
             // zero -- leaving it set would let the next call skip the handshake.
-            receivers_ready.wait(num_dests);
-            receivers_ready.set(0);
-
-            noc_async_read_barrier();  // payload is in our L1 before we forward it
-
-            noc_async_write_multicast(pages.base, mcast.get_noc_addr(pages.base), pages.total_bytes(), num_dests);
-
-            // The flag must not overtake the payload it describes.
             //
-            // ttnn's matmul sender does NOT flush here: its payload and flag multicasts go
-            // out on the same NOC, VC and command buffer (NOC_CMD_STATIC_VC), so they cannot
-            // reorder, and it pays nothing. Ours cannot simply drop it -- removing both
-            // flushes deadlocks the device -- because of the set(0) below, not because of
-            // ordering. See there.
-            noc_async_writes_flushed();
+            // The three zones below split the sender's k-block into the only parts that can
+            // be separately slow. Note that `fn` above merely ISSUES the reads: they are
+            // asynchronous, so their cost lands in the barrier, not in the issue.
+            {
+                TT_U_ZONE("MCAST-READY");  // waiting for receivers to free their buffers
+                receivers_ready.wait(num_dests);
+                receivers_ready.set(0);
+            }
 
-            data_sent.set(1);
-            data_sent.set_mcast(mcast);
+            {
+                TT_U_ZONE("MCAST-DRAM");   // the reads issued by fn actually landing
+                noc_async_read_barrier();  // payload is in our L1 before we forward it
+            }
 
-            // Back to 0 so BOTH semaphores read 0 on every core once this returns.
-            // The flush is what makes that safe: set_mcast sources the value from
-            // local L1, so the write must have departed before it is overwritten.
-            // Otherwise the sender sits at 1 and anything else sharing the pair --
-            // synchronize_cores() -- sees a stale release and skips its wait.
-            //
-            // These two flushes are the measured difference against ttnn's sender, which
-            // does neither on Wormhole. They are not removable as they stand: taking both
-            // out deadlocks the device, because THIS set(0) can overwrite the flag word
-            // before set_mcast's write has sourced it, and the receivers then wait on a 1
-            // that never arrives. The cost is two NOC round trips per broadcast, and there
-            // are two broadcasts per k-block.
-            //
-            // The way out is the PROTOCOL, not the flush: a flag the sender never has to
-            // reset in the same breath -- an incrementing counter the receiver compares
-            // against a block number, say -- needs no set(0) and so no flush to protect it.
-            // ttnn gets there by never rewriting the word it just multicast.
-            noc_async_writes_flushed();
-            data_sent.set(0);
+            {
+                TT_U_ZONE("MCAST-SEND");  // the broadcast itself, plus the flag and its flushes
+                noc_async_write_multicast(pages.base, mcast.get_noc_addr(pages.base), pages.total_bytes(), num_dests);
+
+                // The flag must not overtake the payload it describes.
+                //
+                // ttnn's matmul sender does NOT flush here: its payload and flag multicasts go
+                // out on the same NOC, VC and command buffer (NOC_CMD_STATIC_VC), so they cannot
+                // reorder, and it pays nothing. Ours cannot simply drop it -- removing both
+                // flushes deadlocks the device -- because of the set(0) below, not because of
+                // ordering. See there.
+                noc_async_writes_flushed();
+
+                data_sent.set(1);
+                data_sent.set_mcast(mcast);
+
+                // Back to 0 so BOTH semaphores read 0 on every core once this returns.
+                // The flush is what makes that safe: set_mcast sources the value from
+                // local L1, so the write must have departed before it is overwritten.
+                // Otherwise the sender sits at 1 and anything else sharing the pair --
+                // synchronize_cores() -- sees a stale release and skips its wait.
+                //
+                // These two flushes are the measured difference against ttnn's sender, which
+                // does neither on Wormhole. They are not removable as they stand: taking both
+                // out deadlocks the device, because THIS set(0) can overwrite the flag word
+                // before set_mcast's write has sourced it, and the receivers then wait on a 1
+                // that never arrives. The cost is two NOC round trips per broadcast, and there
+                // are two broadcasts per k-block.
+                //
+                // The way out is the PROTOCOL, not the flush: a flag the sender never has to
+                // reset in the same breath -- an incrementing counter the receiver compares
+                // against a block number, say -- needs no set(0) and so no flush to protect it.
+                // ttnn gets there by never rewriting the word it just multicast.
+                noc_async_writes_flushed();
+                data_sent.set(0);
+            }
         } else {
             receivers_ready.inc_remote(mcast.start);
             data_sent.wait(1);
