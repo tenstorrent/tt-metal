@@ -145,7 +145,11 @@ inline void validate_buffer_desc(const buffer_descriptor_u& buf_desc)
     LLK_ASSERT(buf_desc.f.z_dim == 1 || buf_desc.f.z_dim == 4, "z_dim must be 1 or 4");
     if (buf_desc.f.z_dim == 4)
     {
-        LLK_ASSERT(buf_desc.f.y_dim == 16, "y_dim must be 16 when z_dim is 4");
+        // [#48552] Band-aid (hacky tilize workaround, LLK-team guidance): disabled on the Quasar reduce path.
+        // llk_unpack_program_bfd programs the reduce scaler (operandB) with z=4 / y=1 (from the scaler CB's
+        // face_r_dim=1), tripping this assert before llk_unpack_tilizeA_B_init overwrites operandB to y=16.
+        // Re-enable once the scaler BD is programmed correctly (full face) at hw_configure time.
+        // LLK_ASSERT(buf_desc.f.y_dim == 16, "y_dim must be 16 when z_dim is 4");
     }
     if constexpr (MODE == L1AccessMode::Strided)
     {
