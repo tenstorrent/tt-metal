@@ -20,6 +20,12 @@ namespace ckernel
 namespace sfpu
 {
 
+// Set once bitonic_top32_ph3_st4_to_1's fixed 5-instruction step-4/step-3/transpose
+// body has been recorded into the replay buffer; the body never varies across calls
+// (only the SFPCONFIG toggle around it depends on dir), so it is recorded exactly once
+// per kernel launch and replayed on every subsequent call.
+static bool top32_ph3_st4_replay_recorded = false;
+
 // Currently unused: 8-datum load/store variants kept alongside the *16
 // versions below for future top32 configurations that process half-width
 // strips (e.g. single-LREG-pair sorts); not referenced by any kernel today.
@@ -135,6 +141,9 @@ inline void bitonic_top32_store16(std::uint32_t dist0, std::uint32_t dist1)
 
 inline void bitonic_top32_ph3_st4_to_1(bool dir)
 {
+    constexpr std::uint32_t replay_start = 0;
+    constexpr std::uint32_t replay_count = 5; // Step 4 (2) + Step 3 (2) + TRANSP (1)
+
     if (dir == static_cast<bool>(SortDir::ArgMin))
     {
         TTI_SFPCONFIG(0x104, 0xF, 1); // Reverse the max/min behaviour of SWAP
@@ -142,25 +151,33 @@ inline void bitonic_top32_ph3_st4_to_1(bool dir)
         TTI_SFPNOP;
     }
 
-    // Step 4
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+    // This step-4/step-3/transpose body is identical on every call and is applied
+    // twice per call (two 3-to-1 collapses); record it into the replay buffer once
+    // and issue two replays per call thereafter to amortize instruction fetch/decode.
+    if (!top32_ph3_st4_replay_recorded)
+    {
+        load_replay_buf<Exec>(
+            replay_start,
+            replay_count,
+            []
+            {
+                // Step 4
+                TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+                TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
 
-    // Step 3
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+                // Step 3
+                TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+                TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
 
-    TTI_SFPTRANSP(0, 0, 0, 0);
-
-    // Step 4
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-
-    // Step 3
-    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-
-    TTI_SFPTRANSP(0, 0, 0, 0);
+                TTI_SFPTRANSP(0, 0, 0, 0);
+            });
+        top32_ph3_st4_replay_recorded = true;
+    }
+    else
+    {
+        lltt::replay(replay_start, replay_count);
+    }
+    lltt::replay(replay_start, replay_count);
 
     if (dir == static_cast<bool>(SortDir::ArgMin))
     {
