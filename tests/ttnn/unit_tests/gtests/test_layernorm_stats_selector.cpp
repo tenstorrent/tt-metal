@@ -73,9 +73,19 @@ TEST(LayerNormStatsSelector, BlackholeCalibratedBoundaries) {
     auto bfp8_affine = default_params();
     bfp8_affine.input_format = tt::DataFormat::Bfp8_b;
 
+    auto bfp8_residual = bfp8_affine;
+    bfp8_residual.fuse_pre_add = true;
+
+    auto bfp8_residual_below = bfp8_residual;
+    bfp8_residual_below.padded_width = 2879;
+
     auto fp32_underutilized = default_params();
     fp32_underutilized.num_tile_rows = 32;
     fp32_underutilized.active_cores = 32;
+
+    auto fp32_residual_replay = fp32_underutilized;
+    fp32_residual_replay.fuse_pre_add = true;
+    fp32_residual_replay.compact_two_pass_fits_in_l1 = false;
 
     auto fp32_restricted_grid = default_params();
     fp32_restricted_grid.active_cores = 64;
@@ -103,7 +113,10 @@ TEST(LayerNormStatsSelector, BlackholeCalibratedBoundaries) {
         {"bf16 parameter-free at crossover", bf16_plain_at, true},
         {"bf16 gamma-only at parameter-free crossover", bf16_gamma_only, true},
         {"bfp8 affine", bfp8_affine, false},
+        {"bfp8 residual affine", bfp8_residual, true},
+        {"bfp8 residual affine below crossover", bfp8_residual_below, false},
         {"fp32 underutilized", fp32_underutilized, false},
+        {"fp32 residual replay", fp32_residual_replay, true},
         {"fp32 restricted grid", fp32_restricted_grid, false},
         {"two-pass compact allocation does not fit", two_pass_does_not_fit, false},
     };

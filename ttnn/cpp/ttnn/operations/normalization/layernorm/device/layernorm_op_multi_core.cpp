@@ -290,7 +290,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
          num_tile_rows_per_core_group_1,
          num_tile_rows_per_core_group_2] = split_work_to_cores(requested_cores, num_tile_rows, true /* row_wise */);
 
-    // Validate the requested reciprocal LUT before the selected backend is known.
     std::optional<Tensor> recip_tensor = std::nullopt;
     uint32_t reciprocal_buffer_size_bytes = 0;
     if (use_welford) {
@@ -440,6 +439,31 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     const auto use_welford_and_not_rms_norm = use_welford && !rms_norm;
     const auto fuse_pre_add = b.has_value();
     const bool two_pass_small = use_welford_and_not_rms_norm && !large_tensor_needed;
+    bool fused_pre_add_replay = false;
+
+    // The large fused path normally rereads both inputs for normalisation after
+    // materialising x = a + b for statistics. Retain the complete post-add row
+    // through an aliased CB view when the actual free L1 span can hold it.
+    if (device->arch() == tt::ARCH::BLACKHOLE && use_welford_and_not_rms_norm && large_tensor_needed && fuse_pre_add &&
+        gamma.has_value() && beta.has_value() && !input_is_row_major && in_data_format == tt::DataFormat::Float32 &&
+        !operation_attributes.fused_activation.has_value()) {
+        const std::uint32_t full_row_tiles = tt::round_up(Wt, block_size);
+        auto replay_footprint = make_cb_footprint(true);
+        replay_footprint.residual_values = static_cast<std::uint64_t>(full_row_tiles) * single_tile_size;
+        if (replay_footprint.fits(usable_cb_l1_bytes)) {
+            im6_t = full_row_tiles;
+            fused_pre_add_replay = true;
+        }
+    }
+
+    // Multicast uses the active-core bounding box. The default core pool owns
+    // inactive tail positions in that box; custom pools must be rectangular.
+    const bool affine_mcast_core_set_safe =
+        requested_cores == default_core_range(device) || all_cores.bounding_box().size() == num_cores;
+    const bool affine_mcast =
+        fused_pre_add_replay && num_cores >= 20 && num_tile_rows % num_cores == 0 && affine_mcast_core_set_safe;
+    constexpr std::uint32_t affine_mcast_ready_sem = 0;
+    constexpr std::uint32_t affine_mcast_done_sem = 1;
 
     // The two-pass kernel retains the current row until its mean, centered M2,
     // and x-mean traversals are complete. When L1 permits, let the reader fill
@@ -957,6 +981,13 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
     uint32_t curr_row = 0;
     auto all_core_coords = corerange_to_cores(all_cores, num_cores, true);
+    const CoreCoord affine_mcast_sender_core = all_core_coords.front();
+    const CoreRangeSet affine_mcast_sender_cores{CoreRange{affine_mcast_sender_core}};
+    const CoreRangeSet affine_mcast_receiver_cores = all_cores.subtract(affine_mcast_sender_cores);
+    const CoreRange affine_mcast_bbox = all_cores.bounding_box();
+    const CoreCoord affine_mcast_start = device->worker_core_from_logical_core(affine_mcast_bbox.start_coord);
+    const CoreCoord affine_mcast_end = device->worker_core_from_logical_core(affine_mcast_bbox.end_coord);
+    const CoreCoord affine_mcast_sender_noc = device->worker_core_from_logical_core(affine_mcast_sender_core);
     for (std::uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = all_core_coords[i];
 

@@ -534,6 +534,106 @@ def test_l1_interleaved_near_capacity(device):
     assert l1_pressure.is_allocated()
 
 
+@run_for_blackhole("Blackhole selects the tile backend for parameter-free FP32 LayerNorm")
+def test_layer_norm_tile_backend_does_not_require_reciprocal(device):
+    torch.manual_seed(20260824)
+    torch_input = torch.rand((32, 4096), dtype=torch.float32)
+    reference = torch.nn.functional.layer_norm(torch_input, normalized_shape=[4096])
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.layer_norm(
+        input_tensor,
+        program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+    )
+
+    assert_output_accuracy(reference, ttnn.to_torch(output), use_welford=True)
+
+
+@run_for_blackhole("Blackhole uses two-pass statistics for wide fused BFP8 LayerNorm")
+def test_layer_norm_bfp8_residual_affine_two_pass(device):
+    torch.manual_seed(20260824)
+    shape = (128, 2880)
+    torch_input = torch.rand(shape, dtype=torch.float32)
+    torch_residual = torch.rand(shape, dtype=torch.float32)
+    torch_weight = torch.rand((shape[-1],), dtype=torch.float32)
+    torch_bias = torch.rand((shape[-1],), dtype=torch.float32)
+    reference = torch.nn.functional.layer_norm(
+        torch_input + torch_residual,
+        normalized_shape=[shape[-1]],
+        weight=torch_weight,
+        bias=torch_bias,
+    )
+
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    residual_tensor = ttnn.from_torch(torch_residual, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    weight = ttnn.from_torch(torch_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    reciprocal = create_recip_tensor(device, shape[-1], use_welford=True)
+
+    output = ttnn.layer_norm(
+        input_tensor,
+        residual_input_tensor=residual_tensor,
+        weight=weight,
+        bias=bias,
+        program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+        recip_tensor=reciprocal,
+    )
+
+    assert_numeric_metrics(
+        reference,
+        ttnn.to_torch(output),
+        pcc_threshold=0.9999,
+        rtol=0.01,
+        atol=0.07,
+        frobenius_threshold=0.015,
+    )
+
+
+@run_for_blackhole("Blackhole replays retained residual rows and multicasts affine parameters")
+def test_layer_norm_fp32_residual_affine_replay_program_cache(device):
+    torch.manual_seed(20260824)
+    h, w = 1024, 2880
+    torch_input = torch.rand((h, w), dtype=torch.float32)
+    torch_residual = torch.rand((h, w), dtype=torch.float32)
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    residual_tensor = ttnn.from_torch(torch_residual, layout=ttnn.TILE_LAYOUT, device=device)
+    reciprocal = create_recip_tensor(device, w, use_welford=True)
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=True)
+    device.enable_program_cache()
+
+    first_weight = ttnn.from_torch(torch.rand((w,), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
+    first_bias = ttnn.from_torch(torch.rand((w,), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.layer_norm(
+        input_tensor,
+        residual_input_tensor=residual_tensor,
+        weight=first_weight,
+        bias=first_bias,
+        program_config=program_config,
+        recip_tensor=reciprocal,
+    )
+
+    torch_weight = torch.zeros((w,), dtype=torch.float32)
+    torch_bias = torch.full((w,), 2.0, dtype=torch.float32)
+    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.layer_norm(
+        input_tensor,
+        residual_input_tensor=residual_tensor,
+        weight=weight,
+        bias=bias,
+        program_config=program_config,
+        recip_tensor=reciprocal,
+    )
+
+    reference = torch.nn.functional.layer_norm(
+        torch_input + torch_residual,
+        normalized_shape=[w],
+        weight=torch_weight,
+        bias=torch_bias,
+    )
+    assert_output_accuracy(reference, ttnn.to_torch(output), use_welford=True)
+
+
 @pytest.mark.parametrize("dim_a", [24, 2048, 3072, 4096])
 @pytest.mark.parametrize("dim_b", [32, 2048, 3072, 4096])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])

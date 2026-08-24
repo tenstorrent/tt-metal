@@ -26,10 +26,20 @@ struct BlackholeStatsSelectorParams {
 
 // Crossover points measured against the centred tile-reduction path.
 // Parameter-free FP32 remains on tile reductions for its better ULP behaviour.
-// BFP8 also remains on tile reductions because its SFPU crossover depends on
-// affine-finalisation optimisations that are outside this branch.
+// BFP8 remains on tile reductions except for the calibrated fused residual and
+// full-affine case.
 constexpr bool use_blackhole_sfpu_stats(const BlackholeStatsSelectorParams& params) {
     const bool has_full_affine = params.has_gamma && params.has_beta;
+    // This large fused shape cannot use the compact allocation, but retaining
+    // the post-add row and multicasting affine parameters makes SFPU two-pass
+    // substantially faster than the tile reducer on a full Blackhole grid.
+    const bool calibrated_fp32_residual_replay = params.input_format == tt::DataFormat::Float32 &&
+                                                 params.fuse_pre_add && has_full_affine &&
+                                                 params.padded_width == 2880 && params.num_tile_rows == 32 &&
+                                                 params.active_cores == 32 && params.available_cores >= 100;
+    if (calibrated_fp32_residual_replay) {
+        return true;
+    }
     if (!params.compact_two_pass_fits_in_l1) {
         return false;
     }
@@ -47,7 +57,7 @@ constexpr bool use_blackhole_sfpu_stats(const BlackholeStatsSelectorParams& para
         if (params.input_format == tt::DataFormat::Float16_b) {
             return params.padded_width <= 256 || params.padded_width >= 2880;
         }
-        return false;
+        return params.input_format == tt::DataFormat::Bfp8_b && params.padded_width >= 2880;
     }
 
     if (has_full_affine) {

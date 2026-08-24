@@ -224,6 +224,8 @@ template <
     uint32_t dfb_ex_welford,
     uint32_t dfb_ex2_welford,
     bool welford_state_fp32_alias,
+    uint32_t dfb_replay,
+    bool fused_pre_add_replay,
     uint32_t input_dst,
     uint32_t mean_dst,
     uint32_t var_dst,
@@ -239,6 +241,7 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     DataflowBuffer dfb_ex2_obj(dfb_ex2);
     DataflowBuffer dfb_ex_welford_obj(dfb_ex_welford);
     DataflowBuffer dfb_ex2_welford_obj(dfb_ex2_welford);
+    DataflowBuffer dfb_replay_obj(dfb_replay);
 
     constexpr uint32_t last_tile_rows = W % tile_width;
     constexpr bool is_last_tile_full = last_tile_rows == 0;
@@ -266,12 +269,19 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
         pack_reconfig_data_format(dfb_interm_pre_add);
         dfb_interm_pre_add_obj.reserve_back(block.full_block_size());
+        if constexpr (fused_pre_add_replay) {
+            // Both FIFO views share backing storage but retain independent state.
+            dfb_replay_obj.reserve_back(block.full_block_size());
+        }
         tile_regs_wait();
         for (auto i : block.local()) {
             pack_tile(i, dfb_interm_pre_add);
         }
         tile_regs_release();
         dfb_interm_pre_add_obj.push_back(block.full_block_size());
+        if constexpr (fused_pre_add_replay) {
+            dfb_replay_obj.push_back(block.full_block_size());
+        }
 
         dfb_interm_pre_add_obj.wait_front(block.full_block_size());
         if (!block.is_first()) {
@@ -648,6 +658,7 @@ void kernel_main() {
     DataflowBuffer dfb_ex_obj(dfb_ex);
     DataflowBuffer dfb_ex2_obj(dfb_ex2);
     DataflowBuffer dfb_ex2pe_obj(dfb_ex2pe);
+    DataflowBuffer dfb_x_replay_obj(dfb_x_replay);
 
     constexpr uint32_t onetile = 1;
 
@@ -805,11 +816,17 @@ void kernel_main() {
             dfb_x_welford_obj_eltwise.wait_front(block.full_block_size());
 #endif
             tile_regs_acquire();
-            reconfig_data_format(dfb_in, dfb_ex);
-            sub_bcast_cols_init(dfb_in, dfb_ex);
+            constexpr auto dfb_normalize_in = fused_pre_add_replay ? dfb_x_replay : dfb_in;
+            reconfig_data_format(dfb_normalize_in, dfb_ex);
+            sub_bcast_cols_init(dfb_normalize_in, dfb_ex);
             // x-E[x]
             for (auto i : block.local()) {
-                sub_tiles_bcast_cols(dfb_in, dfb_ex, i, 0, i);
+                sub_tiles_bcast_cols(dfb_normalize_in, dfb_ex, i, 0, i);
+            }
+            if constexpr (fused_pre_add_replay) {
+                dfb_x_replay_obj.pop_front(block.full_block_size());
+            } else {
+                dfb_in_obj.pop_front(block.full_block_size());
             }
             dfb_in_obj.pop_front(block.full_block_size());
 #if defined(WELFORD_FP32_ALIAS) && !defined(FUSE_PRE_ADD)

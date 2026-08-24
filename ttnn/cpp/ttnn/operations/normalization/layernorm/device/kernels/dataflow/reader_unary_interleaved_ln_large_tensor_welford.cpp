@@ -8,6 +8,11 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "layernorm_dataflow_utils.h"
+#ifdef AFFINE_MCAST
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc_semaphore.h"
+#endif
 
 namespace generic = norm::kernel_util::generic;
 namespace layernorm_dataflow_utils = norm::layernorm::device::kernels::dataflow;
@@ -47,7 +52,7 @@ void kernel_main() {
     const uint32_t gamma_tile_bytes = dfb_gamma.get_tile_size();
     const auto addrg = TensorAccessor(tensor::gamma);
 #endif
-#ifdef FUSE_BETA
+#if defined(FUSE_BETA) && !defined(AFFINE_MCAST_RECEIVER)
     const uint32_t beta_tile_bytes = dfb_beta.get_tile_size();
     const auto addrb = TensorAccessor(tensor::beta);
 #endif
@@ -62,6 +67,9 @@ void kernel_main() {
 
     // read a ublock of tiles from src to the input buffer, and then push the ublock to unpacker
     uint32_t offs = 0;
+#ifdef AFFINE_MCAST
+    uint32_t affine_block_sequence = 0;
+#endif
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // First pass
         // Calculate E[x] and Var[x]
@@ -86,6 +94,7 @@ void kernel_main() {
 
         // Second pass
         // Calculate final output
+#if !defined(FUSED_PRE_ADD_REPLAY) || defined(FUSE_GAMMA) || defined(FUSE_BETA)
         for (auto block : generic::blocks(Wt, blk)) {
             layernorm_dataflow_utils::read_block_to_dfb(
                 noc, dfb_in0, src_a, src0_tile_bytes, offs + block.start() + tile_offset, block);
@@ -109,6 +118,65 @@ void kernel_main() {
             dfb_x_welford.push_back(block.full_block_size());
 #endif
 #endif
+#endif
+#ifdef AFFINE_MCAST_SENDER
+            dfb_gamma.reserve_back(block.full_block_size());
+            dfb_beta.reserve_back(block.full_block_size());
+            uint32_t gamma_offset = 0;
+            uint32_t beta_offset = 0;
+            for (auto r : block.local()) {
+                noc.async_read(
+                    addrg, dfb_gamma, gamma_tile_bytes, {.page_id = block.start() + r}, {.offset_bytes = gamma_offset});
+                noc.async_read(
+                    addrb, dfb_beta, beta_tile_bytes, {.page_id = block.start() + r}, {.offset_bytes = beta_offset});
+                gamma_offset += gamma_tile_bytes;
+                beta_offset += beta_tile_bytes;
+            }
+            noc.async_read_barrier();
+
+            affine_ready_sem.wait(num_receivers);
+            affine_ready_sem.set(0);
+
+            const uint32_t gamma_l1_addr = dfb_gamma.get_write_ptr();
+            const uint32_t beta_l1_addr = dfb_beta.get_write_ptr();
+            noc.async_write_multicast(
+                CoreLocalMem<uint32_t>(gamma_l1_addr),
+                mcast_ep,
+                block.size() * gamma_tile_bytes,
+                num_mcast_dests,
+                {},
+                {.noc_x_start = mcast_start_x,
+                 .noc_y_start = mcast_start_y,
+                 .noc_x_end = mcast_end_x,
+                 .noc_y_end = mcast_end_y,
+                 .addr = gamma_l1_addr},
+                true);
+            noc.async_write_multicast(
+                CoreLocalMem<uint32_t>(beta_l1_addr),
+                mcast_ep,
+                block.size() * beta_tile_bytes,
+                num_mcast_dests,
+                {},
+                {.noc_x_start = mcast_start_x,
+                 .noc_y_start = mcast_start_y,
+                 .noc_x_end = mcast_end_x,
+                 .noc_y_end = mcast_end_y,
+                 .addr = beta_l1_addr},
+                true);
+            affine_done_sem.set(++affine_block_sequence);
+            affine_done_sem.set_multicast(noc, mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, num_mcast_dests);
+            noc.async_write_barrier();
+
+            dfb_gamma.push_back(block.full_block_size());
+            dfb_beta.push_back(block.full_block_size());
+#elif defined(AFFINE_MCAST_RECEIVER)
+            dfb_gamma.reserve_back(block.full_block_size());
+            dfb_beta.reserve_back(block.full_block_size());
+            affine_ready_sem.up(noc, sender_noc_x, sender_noc_y, 1);
+            affine_done_sem.wait_min(++affine_block_sequence);
+            dfb_gamma.push_back(block.full_block_size());
+            dfb_beta.push_back(block.full_block_size());
+#else
 #ifdef FUSE_GAMMA
             {
                 layernorm_dataflow_utils::read_block_to_dfb(
@@ -122,7 +190,9 @@ void kernel_main() {
                     noc, dfb_beta, addrb, beta_tile_bytes, block.start(), block);
             }
 #endif
+#endif
         }  // wt loop
+#endif
         offs += Wt;
     }  // ncht loop
 }

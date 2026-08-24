@@ -198,6 +198,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         TT_FATAL(tensor_args.recip_tensor.has_value(), "Reciprocal tensor not provided for Welford layernorm");
     }
     if (use_welford) {
+        TT_FATAL(tensor_args.recip_tensor.has_value(), "Reciprocal tensor not provided for Welford layernorm");
         recip_tensor = tensor_args.recip_tensor;
         reciprocal_dfb_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
     }
