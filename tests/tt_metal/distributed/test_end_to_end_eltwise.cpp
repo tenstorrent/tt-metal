@@ -17,6 +17,7 @@
 #include "host_api.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
@@ -243,6 +244,99 @@ TEST_F(MeshEndToEnd2x4Tests, UntracedEltwiseAddTest) {
     std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
     std::vector<bfloat16> golden_vec = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
 
+    ASSERT_EQ(result_vec.size(), golden_vec.size());
+    for (std::size_t i = 0; i < result_vec.size(); i++) {
+        EXPECT_TRUE(is_close(static_cast<float>(result_vec[i]), static_cast<float>(golden_vec[i])));
+    }
+}
+
+// Basic functionality test for compile-only mode (TT_METAL_COMPILE_ONLY / rtoptions.compile_only).
+// Locks down the core contract: EnqueueMeshWorkload in compile-only mode compiles a workload's
+// kernels (deferred to the shared executor, joined by WaitForPendingCompiles) but does NOT dispatch
+// it, and a subsequent normal run is unaffected. This guards against regressions in the deferred
+// compile path (past bugs here caused use-after-free / heap corruption / device-init crashes).
+// End-to-end verification that the warmed cache is complete lives in the WAN test_compilation.sh.
+TEST_F(MeshEndToEnd2x4Tests, CompileOnlyCompilesWithoutDispatch) {
+    constexpr uint8_t kAddOpId = 0;
+
+    auto shard_shape = Shape2D{32, 32};
+    auto distributed_buffer_shape =
+        Shape2D{shard_shape.height() * mesh_device_->num_rows(), shard_shape.width() * mesh_device_->num_cols()};
+    auto num_tiles = 1;
+    auto tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    auto distributed_buffer_size_bytes = mesh_device_->num_rows() * mesh_device_->num_cols() * tile_size_bytes;
+
+    auto local_buffer_config =
+        DeviceLocalBufferConfig{.page_size = tile_size_bytes, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    auto distributed_buffer_config = tt::tt_metal::distributed::ShardedBufferConfig{
+        .global_size = distributed_buffer_size_bytes,
+        .global_buffer_shape = distributed_buffer_shape,
+        .shard_shape = shard_shape,
+        .shard_orientation = ShardOrientation::ROW_MAJOR};
+
+    auto a_buffer = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
+    auto b_buffer = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
+    auto out_buffer = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device_.get());
+
+    constexpr float kValToAdd = 0.7f;
+    constexpr float kSentinel = 123.0f;  // clearly distinct from any a+kValToAdd result (a in [0,1))
+    std::vector<uint32_t> a_data =
+        create_random_vector_of_bfloat16(distributed_buffer_size_bytes, 1 /* rand_max_float */, 0 /* seed */);
+    std::vector<uint32_t> b_data = create_constant_vector_of_bfloat16(distributed_buffer_size_bytes, kValToAdd);
+    std::vector<uint32_t> sentinel_data = create_constant_vector_of_bfloat16(distributed_buffer_size_bytes, kSentinel);
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    auto device_range = MeshCoordinateRange(mesh_device_->shape());
+
+    // Seed inputs, and pre-fill the output with a sentinel so we can detect whether the op executed.
+    EnqueueWriteMeshBuffer(cq, a_buffer, a_data, false /* blocking */);
+    EnqueueWriteMeshBuffer(cq, b_buffer, b_data, false /* blocking */);
+    EnqueueWriteMeshBuffer(cq, out_buffer, sentinel_data, true /* blocking */);
+
+    // --- Compile-only pass: should compile the workload's kernels but not dispatch. ---
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    // RAII guard so a failed assertion can never leave compile-only set for other tests.
+    struct CompileOnlyGuard {
+        tt::llrt::RunTimeOptions& opts;
+        ~CompileOnlyGuard() { opts.set_compile_only(false); }
+    } guard{rtoptions};
+
+    {
+        auto compile_only_program =
+            EltwiseBinaryProgramGenerator(a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kAddOpId);
+        auto compile_only_workload = MeshWorkload();
+        compile_only_workload.add_program(device_range, std::move(*compile_only_program));
+
+        rtoptions.set_compile_only(true);
+        EnqueueMeshWorkload(cq, compile_only_workload, false /* blocking */);
+        // Join the deferred kernel builds before the workload (and its programs) go out of scope.
+        WaitForPendingCompiles();
+        rtoptions.set_compile_only(false);  // leave compile-only before any device read
+    }
+
+    // The output must be untouched (still the sentinel): compile-only never dispatched.
+    std::vector<uint32_t> after_compile_only(a_data.size(), 0);
+    EnqueueReadMeshBuffer(cq, after_compile_only, out_buffer, true /* blocking */);
+    std::vector<bfloat16> after_compile_only_vec =
+        unpack_uint32_vec_into_bfloat16_vec(after_compile_only, bfloat16_identity_transform);
+    for (const auto& v : after_compile_only_vec) {
+        EXPECT_TRUE(is_close(static_cast<float>(v), kSentinel))
+            << "compile-only mode dispatched the workload (output changed from the sentinel)";
+    }
+
+    // --- Normal pass with a fresh workload: dispatch must still work and produce the correct result. ---
+    auto run_program =
+        EltwiseBinaryProgramGenerator(a_buffer, b_buffer, out_buffer, num_tiles, tile_size_bytes, kAddOpId);
+    auto run_workload = MeshWorkload();
+    run_workload.add_program(device_range, std::move(*run_program));
+    EnqueueMeshWorkload(cq, run_workload, false /* blocking */);
+
+    std::vector<uint32_t> result_data(a_data.size(), 0);
+    EnqueueReadMeshBuffer(cq, result_data, out_buffer, true /* blocking */);
+
+    auto transform_to_golden = [](const bfloat16& a) { return bfloat16(static_cast<float>(a) + kValToAdd); };
+    std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
+    std::vector<bfloat16> golden_vec = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
     ASSERT_EQ(result_vec.size(), golden_vec.size());
     for (std::size_t i = 0; i < result_vec.size(); i++) {
         EXPECT_TRUE(is_close(static_cast<float>(result_vec[i]), static_cast<float>(golden_vec[i])));
