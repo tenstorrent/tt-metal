@@ -3077,6 +3077,23 @@ def _run_full_pipeline_ms():
             stage_isl_per_request,
             stage_bytes,
         )
+        # PIN WHAT ONE CALL OF EACH STAGE RETIRES, beside the read set and for the same reason: it
+        # is a ceiling input (the compute floor is 2 x params x tokens), and the report's THEORETICAL
+        # column must not move while the run works. Observed per run, so unpinned it would follow a
+        # change in prefill chunking straight into the ceiling.
+        try:
+            for _tn, _tv in (stage_isl or {}).items():
+                if _tn and int(_tv or 0) > 0:
+                    _ledger().anchor(
+                        _ledger().KIND_STAGE_TOKENS,
+                        float(int(_tv)),
+                        depth=str(_tn).strip().lower(),
+                        mode="items",
+                        source="trace_replay observed item count",
+                        model=_MODEL_ROOT.name if _MODEL_ROOT else "",
+                    )
+        except Exception:  # noqa: BLE001 -- a pin that cannot be written must not cost a measurement
+            pass
         # PIN THE BASELINE READ SET, where it is produced. Measuring the bytes made them right; it did
         # not stop them moving, and the dtype rung moves them by construction: bf16 -> bf8_b halves a
         # weight, the observed bytes halve, and a ceiling recomputed from them retreats ahead of the

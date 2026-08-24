@@ -1328,6 +1328,23 @@ def _measured_bw_gbps(rf: dict, ms):
         return None
 
 
+# The two ceiling inputs the renderer reads but must never write. Named here so the lookup is one
+# function rather than a ledger import repeated at each use.
+_LED_PARAMS = "matmul_params"
+_LED_TOKENS = "stage_tokens"
+
+
+def _pinned_ceiling_input(kind: str, stage, model: str = "", task: str = ""):
+    """The pinned value for (kind, stage), or None. READ-ONLY -- see measurements.anchor_value."""
+    try:
+        led = _ledger()
+        if led is None:
+            return None
+        return led.anchor_value(kind, depth=str(stage or "").strip().lower(), model=model, task=task)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stage_ms=None, model="", task=""):
     """Both ceilings for both stages, from the MODEL'S OWN facts rather than from summing annotated ops.
 
@@ -1582,6 +1599,18 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
             _lo = int(_blk.get("lookup_params") or 0)
             _mm = max(0, int(_blk.get("params") or 0) - _lo) if _lo else 0
         _params = _mm or int(_blk.get("params") or 0) or int(params or 0)
+        # PINNED FIRST, like every other ceiling input. Read-only here: anchor_value never writes, so
+        # rendering a report cannot move the number it is reporting -- the producers (the arch mirror
+        # for params, trace_replay's observed counts for items) do the pinning where the value is
+        # made. Without this the compute roof was the last input still re-derived from whatever the
+        # model currently looks like, so a lever that reshaped a block moved the ceiling under the
+        # measurement chasing it.
+        try:
+            _lp = _pinned_ceiling_input(_LED_PARAMS, name, model, task)
+            if _lp and int(_lp) > 0:
+                _params = int(_lp)
+        except Exception:  # noqa: BLE001
+            pass
         _L = int(_blk.get("layers") or (mf or {}).get("layers") or 0)
         _H = int(_blk.get("hidden_size") or (mf or {}).get("hidden_size") or 0)
         # 2 x params x tokens counts every WEIGHT matmul -- each parameter is multiplied once per
@@ -1590,6 +1619,12 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # SQUARE of the sequence: 4 x layers x tokens^2 x hidden. Absent, prefill's compute floor is
         # understated by 0.4% at ISL 128 -- invisible, which is why it survived -- but 3.3% at 1024
         # and 21.3% at 8192, where it decides whether the stage reads compute- or memory-bound.
+        try:
+            _lt = _pinned_ceiling_input(_LED_TOKENS, name, model, task)
+            if _lt and int(_lt) > 0:
+                toks = int(_lt)
+        except Exception:  # noqa: BLE001
+            pass
         _attn = (4.0 * _L * float(toks) * float(toks) * _H) if (_L and _H) else 0.0
         flops = ((2.0 * float(_params) * float(toks) + _attn) / tp) if _params else 0.0
         # THIS STAGE'S OWN PEAK, when the capture marked its ops. The value resolved above is the

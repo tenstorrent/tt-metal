@@ -105,6 +105,12 @@ KIND_STAGE_BYTES = "stage_bytes"
 # to disagree about how many parameters it multiplies.
 KIND_MATMUL_PARAMS = "matmul_params"
 
+# ITEMS ONE CALL OF A STAGE RETIRES -- the `tokens` in the compute floor's 2 x params x tokens.
+# Anchored for the same reason every other ceiling input is: the THEORETICAL column must describe
+# the state the campaign started from, and this one is re-observed from the run on every step. A
+# prefill chunk that changes size would move the ceiling under the measurement chasing it.
+KIND_STAGE_TOKENS = "stage_tokens"
+
 PHASE_BEFORE = "before"
 PHASE_AFTER = "after"
 

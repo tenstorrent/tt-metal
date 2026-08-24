@@ -5631,6 +5631,39 @@ def _mirror_arch_facts(facts: dict) -> None:
             prev = {}
         merged = {**(prev if isinstance(prev, dict) else {}), **keep}
         (d / ARCH_MIRROR_NAME).write_text(json.dumps(merged, indent=2) + "\n")
+        # PIN EACH STAGE'S PARAM COUNT, because this file is merged newest-wins and the compute
+        # ceiling divides by it: 2 x params x tokens. Everything else the THEORETICAL column rests on
+        # is anchored -- the peak, the read set, the item count -- and this was the last input still
+        # re-derived from whatever the model currently looks like. A ceiling that moves while the run
+        # works cannot be compared across rounds, which is the whole reason an anchor exists.
+        #
+        # The docstring above argues architecture is stable, and it usually is; the anchor is for the
+        # case where it is not. Write-once, so the honest first answer wins over any later one.
+        try:
+            from cc_optimize import measurements as _led
+
+            _blocks = (merged.get("blocks") or {}) if isinstance(merged, dict) else {}
+            _roots = (merged.get("stage_roots") or {}) if isinstance(merged, dict) else {}
+            for _stage, _root in _roots.items():
+                _blk = _blocks.get(_root) or {}
+                _mm = int(_blk.get("matmul_params") or 0)
+                if not _mm:
+                    _lo = int(_blk.get("lookup_params") or 0)
+                    _mm = max(0, int(_blk.get("params") or 0) - _lo) if _lo else int(_blk.get("params") or 0)
+                if _stage and _mm > 0:
+                    _led.anchor(
+                        _led.KIND_MATMUL_PARAMS,
+                        float(_mm),
+                        depth=str(_stage).strip().lower(),
+                        mode="params",
+                        source="arch mirror: %s" % str(_root)[:40],
+                        # The state dir is keyed per model (.state/<model>), which is the same
+                        # name every other anchor in this run uses. Taking it from `d` keeps the key
+                        # identical without threading the model root into a mirroring helper.
+                        model=d.name,
+                    )
+        except Exception:  # noqa: BLE001 -- a pin that cannot be written must not cost the mirror
+            pass
     except Exception:  # noqa: BLE001 -- a mirror that cannot be written must never cost the write
         pass
 
