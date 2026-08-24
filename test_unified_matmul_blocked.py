@@ -46,6 +46,7 @@ def run(
     depth=None,
     hoist=False,
     zones=False,
+    b_shard=None,
 ):
     """Extents and block widths all in TILES. a/b let a caller supply the operands."""
     assert mtot % mt == 0 and ktot % kt == 0 and ntot % nt == 0
@@ -66,7 +67,25 @@ def run(
             memory_config=dram,
         )
 
-    ta, tb = to_dev(a), to_dev(b)
+    ta = to_dev(a)
+    # b_shard: width-shard B into one strip per output-column block. That is exactly what a
+    # column's sender reads across the whole k-loop, so its entire read set becomes one
+    # contiguous shard instead of pages round-robining across every bank. The KERNEL is
+    # unchanged -- TensorAccessorArgs(t) carries the layout and get_noc_addr resolves it.
+    if b_shard is None:
+        tb = to_dev(b)
+    else:
+        strips = ntot // nt
+        sgrid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(strips - 1, 0))])
+        spec = ttnn.ShardSpec(sgrid, [ktot * TILE, nt * TILE], ttnn.ShardOrientation.ROW_MAJOR)
+        btype = ttnn.BufferType.DRAM if b_shard == "dram" else ttnn.BufferType.L1
+        tb = ttnn.from_torch(
+            b.reshape(1, 1, *b.shape).to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, btype, spec),
+        )
     # NaN-filled: the allocator reuses addresses, so an output block nothing writes would
     # otherwise hold a previous run's values and a missed block would pass.
     tout = to_dev(torch.full([mtot * TILE, ntot * TILE], float("nan")))
