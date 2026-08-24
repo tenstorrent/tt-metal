@@ -452,10 +452,6 @@ def _cross_product_conflated_cmb_test_dimensions():
     for model_name, model_config_class, is_extended_model, test_meshes in COMBINE_MODELS:
         for target_mesh, fabric_cfg in test_meshes.target_meshes.items():
             device_params = fabric_to_device_params(fabric_cfg)
-<<<<<<< HEAD
-=======
-            fabric_topo = _fabric_cfg_to_fabric_topo_for_cmb_op(fabric_cfg)
->>>>>>> a8ce411dc85 (Revert the combine test layer to ba8cb4d0a92)
             topo_marker = _topo_marker(target_mesh, fabric_cfg)
             mesh_requirements_marker = pytest.mark.requires_mesh_topology(mesh_shape=target_mesh, topology=topo_marker)
             marks = (
@@ -480,10 +476,6 @@ def _cross_product_conflated_cmb_test_dimensions():
                     pytest.param(
                         shape,
                         device_params,
-<<<<<<< HEAD
-=======
-                        fabric_topo,
->>>>>>> a8ce411dc85 (Revert the combine test layer to ba8cb4d0a92)
                         seq_len_per_chip,
                         model_config.EMB_SIZE,
                         num_experts,
@@ -493,10 +485,7 @@ def _cross_product_conflated_cmb_test_dimensions():
                         marks=marks,
                         id=f"{model_name}-{_mesh_id(target_mesh, fabric_cfg)}-{test_scenario_id}",
                     )
-<<<<<<< HEAD
-=======
                 )
->>>>>>> a8ce411dc85 (Revert the combine test layer to ba8cb4d0a92)
 
     return params
 
@@ -526,11 +515,7 @@ def _cross_product_conflated_cmb_test_dimensions():
 #    test-code cross product calculation, or are skipped in the body of the test, depending on where it was less cumbersome to implement it.
 #
 @pytest.mark.parametrize(
-<<<<<<< HEAD
     "mesh_device, device_params, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
-=======
-    "mesh_device, device_params, topology, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
->>>>>>> a8ce411dc85 (Revert the combine test layer to ba8cb4d0a92)
     _cross_product_conflated_cmb_test_dimensions(),
     indirect=["mesh_device", "device_params"],
 )
@@ -580,11 +565,6 @@ def test_ttnn_combine(
 
 # ── combine_fabric2d ──────────────────────────────────────────────────────────────────────────
 
-# combine_fabric2d fuses each token's forwarding metadata into the same page as the token, so one
-# fabric write lands both. That costs 64 B of payload on top of the token; `combine` sends bare
-# tokens and needs none.
-CMB_FABRIC2D_ROUTING_INFO_BYTES = 64
-
 
 def _cmb_fabric2d_dimensions():
     """The single (mesh, device_params, ...) tuple the fabric2d case runs on."""
@@ -596,7 +576,7 @@ def _cmb_fabric2d_dimensions():
     return [
         pytest.param(
             mesh,
-            fabric_to_device_params(fabric_cfg, CMB_FABRIC2D_ROUTING_INFO_BYTES),
+            fabric_to_device_params(fabric_cfg),
             _fabric_cfg_to_fabric_topo_for_cmb_op(fabric_cfg),
             640,  # seq_len_per_chip
             model_config.EMB_SIZE,
