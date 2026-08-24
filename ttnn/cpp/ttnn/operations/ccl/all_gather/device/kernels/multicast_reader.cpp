@@ -35,12 +35,14 @@ void kernel_main() {
     constexpr bool load_balance_across_alt_routes = get_compile_time_arg_val(9) != 0;
     constexpr uint32_t num_connections = get_compile_time_arg_val(10);
     constexpr bool do_init_barrier = get_compile_time_arg_val(11) != 0;
-    constexpr auto input_tensor_args = TensorAccessorArgs<12>();
+    constexpr uint32_t xfer_cap = get_compile_time_arg_val(12);  // longest run the walk may emit, in chunks
+    constexpr auto input_tensor_args = TensorAccessorArgs<13>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
     constexpr bool enable_fabric = (num_connections > 0);
     constexpr uint32_t chunks_per_cb_entry = cb_page_size / output_chunk_size;
-    constexpr uint32_t xfer_max = chunks_per_transfer(packet_size, output_chunk_size);
+    constexpr uint32_t xfer_unc = chunks_per_transfer(packet_size, output_chunk_size);
+    constexpr uint32_t xfer_max = xfer_unc < xfer_cap ? xfer_unc : xfer_cap;
     // A chunk bigger than a burst cannot be one NOC command, so it takes the generic path.
     constexpr bool one_command = output_chunk_size <= NOC_MAX_BURST_SIZE;
 
