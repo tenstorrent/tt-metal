@@ -83,7 +83,8 @@ template <bool IsWrite, typename ReleaseFunc>
 // Here my_dfb_name is a constexpr DFBBindingToken, auto-included in kernel_bindings_generated.h.
 //
 // NullState tags whether this KernelSpec attached the accessor to a real DFB (NonNull, default)
-// or left the resource id empty (Null). Constructing DataflowBuffer from a Null token is deleted.
+// or the named DFB was not declared on this ProgramSpec (Null). Constructing DataflowBuffer from a
+// Null token is deleted.
 //
 template <NullState S = NonNull>
 struct DFBBindingToken;

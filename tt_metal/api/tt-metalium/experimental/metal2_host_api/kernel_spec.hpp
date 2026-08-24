@@ -121,6 +121,14 @@ struct KernelSpec {
     ///////////////////////////////////////////////////////////////////
     // Program-scope resource bindings
     ///////////////////////////////////////////////////////////////////
+    //
+    // A resource binding names an accessor on this kernel (`dfb::<accessor_name>`,
+    // `scratch::<accessor_name>`) and attaches it to a resource on the ProgramSpec.
+    //
+    // Resource bindings may be **null bindings**, to facilitate kernel code reuse.
+    // A null binding names a resource that does not exist on this ProgramSpec.
+    // On the device the accessor is still referable, but you cannot interact with
+    // or query it except to check that it is a null binding.
 
     // DFB bindings
     // Declares that this kernel requires a DFB resource (declared at the ProgramSpec level)
@@ -235,57 +243,6 @@ using DFBBinding = KernelSpec::DFBBinding;
 using TensorBinding = KernelSpec::TensorBinding;
 using SemaphoreBinding = KernelSpec::SemaphoreBinding;
 using ScratchpadBinding = KernelSpec::ScratchpadBinding;
-
-//------------------------------------------------
-// NullBinding — optional / absent resource binding
-//------------------------------------------------
-//
-// A null binding declares an accessor_name on the kernel without attaching it to a
-// program-scope resource. The device still emits a symbol (dfb::/tensor::/scratch::)
-// of NullState::Null; constructing a memory object from it is a compile error.
-//
-// Expressed as an empty resource identifier ("") on the existing binding types.
-// NullBinding is a helper that converts to any of those types (fills the id with "").
-// Other members (endpoint_type, access_pattern, …) are ignored for null bindings.
-//
-// Example:
-//   reader.tensor_bindings = {
-//       TensorBinding{.tensor_parameter_name = "post_input_t", .accessor_name = "src"},
-//       NullBinding{.accessor_name = "gamma_src"},
-//   };
-// Equivalent explicit form:
-//   ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{""}, .accessor_name = "tmp"};
-//
-struct NullBinding {
-    std::string accessor_name;
-
-    operator DFBBinding() const {
-        return DFBBinding{
-            .dfb_spec_name = DFBSpecName{""},
-            .accessor_name = accessor_name,
-            .endpoint_type = DFBEndpointType::CONSUMER,  // ignored for null bindings
-        };
-    }
-
-    operator TensorBinding() const {
-        return TensorBinding{
-            .tensor_parameter_name = TensorParamName{""},
-            .accessor_name = accessor_name,
-        };
-    }
-
-    operator ScratchpadBinding() const {
-        return ScratchpadBinding{
-            .scratchpad_spec_name = ScratchpadSpecName{""},
-            .accessor_name = accessor_name,
-        };
-    }
-};
-
-// True when the binding's resource identifier is empty (a null binding).
-inline bool IsNullBinding(const DFBBinding& b) { return b.dfb_spec_name.get().empty(); }
-inline bool IsNullBinding(const TensorBinding& b) { return b.tensor_parameter_name.get().empty(); }
-inline bool IsNullBinding(const ScratchpadBinding& b) { return b.scratchpad_spec_name.get().empty(); }
 
 //------------------------------------------------
 // Convenience factories for DFBBinding

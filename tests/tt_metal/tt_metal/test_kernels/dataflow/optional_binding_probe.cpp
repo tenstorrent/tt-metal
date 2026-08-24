@@ -4,7 +4,7 @@
 
 // Kernel used by optional-binding host tests: one always-present DFB and one optional
 // scratchpad / DFB that may be Null or NonNull.
-// Compiles for both ProgramSpecs — with a real optional binding and with NullBinding —
+// Compiles for both ProgramSpecs — with the optional resource declared and with it omitted —
 // using if constexpr on the token instead of #ifdef.
 //
 // Construction from an optional token must go through a NullState-templated helper so the

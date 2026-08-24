@@ -81,7 +81,10 @@ struct ProgramSpec {
     Group<KernelSpec> kernels;
 
     // Program-scope resources (allocated for the Program's execution lifetime)
-    // DFBs (local + cross-node), and semaphores
+    // DFBs (local + cross-node), and semaphores.
+    // A KernelSpec binding whose spec name is absent from these groups (or from
+    // tensor_parameters) is a null binding: the accessor exists on the device but
+    // is not attached to a host resource.
     Group<DataflowBufferSpec> dataflow_buffers;
     Group<CrossNodeDataflowBufferSpec> cross_node_dataflow_buffers;
     Group<SemaphoreSpec> semaphores;
