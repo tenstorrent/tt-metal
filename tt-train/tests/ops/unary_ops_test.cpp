@@ -112,15 +112,14 @@ xt::xarray<float> random_input(const std::vector<std::size_t>& shape) {
 
 // GELU tolerances. On uniform [-1, 1] inputs the measured max absolute error against the references
 // above is stable run to run: ~3.7e-3 (ACCURATE fw), ~4.2e-3 (ACCURATE bw), ~3.7e-3 (TANH fw),
-// ~1.2e-2 (TANH bw), ~2.4e-2 (FAST_LUT fw, a ~1% approximation by construction). Repeating the same
-// measurement with FLOAT32 tensors gives the same numbers, so this is the SFPU approximation itself,
-// not bf16/fp32 dest accumulation -- absorb it with atol rather than tightening rtol. GELU is
-// ill-conditioned in relative terms on small negative inputs (the value goes to zero while the
-// absolute error does not), so rtol alone cannot bound it. rtol matches the Silu test above.
+// ~1.2e-2 (TANH bw). Repeating the same measurement with FLOAT32 tensors gives the same numbers, so
+// this is the SFPU approximation itself, not bf16/fp32 dest accumulation -- absorb it with atol
+// rather than tightening rtol. GELU is ill-conditioned in relative terms on small negative inputs
+// (the value goes to zero while the absolute error does not), so rtol alone cannot bound it. rtol
+// matches the Silu test above.
 constexpr float kGeluRtol = 8e-3F;
 constexpr float kGeluAtol = 2e-2F;
 constexpr float kGeluTanhBwAtol = 3e-2F;
-constexpr float kGeluFastLutAtol = 5e-2F;
 
 }  // namespace
 
@@ -326,33 +325,46 @@ TEST_F(UnaryOpsTest, GeluTanh) {
         "gelu_tanh bw");
 }
 
-// FAST_LUT is a forward-only approximation: ttnn has no LUT backward kernel, so its gradient is the
-// exact GELU derivative, bit-identical to the ACCURATE path.
-TEST_F(UnaryOpsTest, GeluFastLut) {
+// FAST_LUT is forward-only: ttnn has no LUT backward kernel, so pairing it with autograd would give
+// the exact GELU derivative instead of the derivative of the LUT forward. gelu() rejects that
+// combination. Forward accuracy of the LUT itself is ttnn's to test, so it is not re-checked here.
+TEST_F(UnaryOpsTest, GeluFastLutRejectsGrad) {
     auto* device = &autograd::ctx().get_device();
     xt::xarray<float> data = random_input({4U, 1U, 20U, 5U});
-    auto fast_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
-    auto accurate_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
+    auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
 
-    auto fast_result = gelu(fast_ptr, GeluVariant::FAST_LUT);
-    // ~1% absolute error against the exact GELU by construction, hence the looser bound.
-    expect_allclose(
-        core::to_xtensor(fast_result->get_value()),
-        gelu_exact_reference(data),
-        kGeluRtol,
-        kGeluFastLutAtol,
-        "fast_lut fw");
-
-    auto accurate_result = gelu(accurate_ptr, GeluVariant::ACCURATE);
-    fast_result->backward();
-    accurate_result->backward();
-    EXPECT_EQ(
-        xt::amax(xt::abs(core::to_xtensor(fast_ptr->get_grad()) - core::to_xtensor(accurate_ptr->get_grad())))(), 0.0F);
+    EXPECT_THROW(gelu(tensor_ptr, GeluVariant::FAST_LUT), std::invalid_argument);
+    // The other two variants have matching backward kernels and stay available.
+    EXPECT_NO_THROW(gelu(tensor_ptr, GeluVariant::ACCURATE));
+    EXPECT_NO_THROW(gelu(tensor_ptr, GeluVariant::TANH));
 }
 
-// The two variants only separate above bfloat16 resolution in the negative tail: for |x| >= 1 the
-// exact/tanh gap is below one bf16 ULP, so the [-1, 1] data used by the tests above cannot
-// distinguish them. atol must stay 0 here or it swallows the signal.
+// Inference paths disable gradient mode but leave requires_grad set on parameters, and no backward
+// node is created there, so FAST_LUT must remain usable.
+TEST_F(UnaryOpsTest, GeluFastLutAllowedUnderNoGrad) {
+    auto* device = &autograd::ctx().get_device();
+    xt::xarray<float> data = random_input({4U, 1U, 20U, 5U});
+    auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
+
+    // Restore the mode even if the assertion below throws -- the fixture only sets up per-suite, so a
+    // leaked GradMode would corrupt every later test.
+    struct GradModeGuard {
+        autograd::GradMode previous = autograd::ctx().get_gradient_mode();
+        ~GradModeGuard() {
+            autograd::ctx().set_gradient_mode(previous);
+        }
+    } guard;
+    autograd::ctx().set_gradient_mode(autograd::GradMode::DISABLED);
+
+    EXPECT_NO_THROW(gelu(tensor_ptr, GeluVariant::FAST_LUT));
+}
+
+// The two variants only separate above bfloat16 resolution in the negative tail. On [-2, 1] -- and
+// for every positive x -- the exact/tanh gap stays below one bf16 ULP of the value (at x=-1: gap
+// 1.5e-4 vs ULP 4.9e-4), so the [-1, 1] data used by the tests above cannot distinguish them. By
+// x=-2.5 the gap is ~14 ULP (4.4e-4 vs 3.1e-5) and by x=-4 it is ~118 ULP, because GELU's value
+// collapses toward zero while the absolute gap does not. atol must stay 0 here or it swallows the
+// signal.
 TEST_F(UnaryOpsTest, GeluAccurateVsTanhDiffer) {
     auto* device = &autograd::ctx().get_device();
     xt::xarray<float> data = {{{{-4.F, -3.5F, -3.F, -2.5F}}}};

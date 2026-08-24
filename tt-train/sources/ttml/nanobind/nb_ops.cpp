@@ -576,8 +576,9 @@ void py_module(nb::module_& m) {
             nb::kw_only(),
             nb::arg("variant") = GeluVariant::ACCURATE,
             "GELU activation. `variant` takes a ttnn.GeluVariant or one of the strings\n"
-            "\"none\"/\"accurate\", \"tanh\", \"fast_lut\". FastLut approximates only the forward\n"
-            "pass; its backward uses the exact GELU derivative.");
+            "\"none\"/\"accurate\", \"tanh\", \"fast_lut\". FastLut is forward-only -- there is no\n"
+            "LUT backward kernel -- so it raises ValueError when `tensor` requires grad and gradient\n"
+            "mode is enabled. Use it for inference, or Tanh for a trainable approximation.");
         py_unary.def("silu", &ttml::ops::silu, nb::arg("tensor"), nb::arg("use_composite_bw") = false);
         py_unary.def("exp", &ttml::ops::exp, nb::arg("tensor"));
         py_unary.def("clip", &ttml::ops::clip, nb::arg("tensor"), nb::arg("lo"), nb::arg("hi"));

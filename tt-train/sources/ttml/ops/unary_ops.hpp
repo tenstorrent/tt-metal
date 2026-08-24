@@ -21,6 +21,9 @@ using GeluVariant = ttnn::operations::unary::GeluVariant;
 GeluVariant gelu_variant_from_string(std::string_view name);
 
 autograd::TensorPtr relu(const autograd::TensorPtr& tensor);
+// ACCURATE and TANH each pair their forward with a matching backward kernel. FAST_LUT is
+// forward-only -- ttnn has no LUT backward kernel -- so it throws std::invalid_argument if the input
+// requires grad while gradient mode is enabled; use it only for inference.
 autograd::TensorPtr gelu(const autograd::TensorPtr& tensor, GeluVariant variant = GeluVariant::ACCURATE);
 autograd::TensorPtr silu(const autograd::TensorPtr& tensor, bool use_composite_bw = false);
 autograd::TensorPtr mean(const autograd::TensorPtr& tensor);
