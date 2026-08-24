@@ -846,6 +846,23 @@ CoreCoord Device::dram_core_from_dram_channel(uint32_t dram_channel, NOC noc) co
         dram_channel, noc);
 }
 
+std::vector<experimental::Device::DramBankNoc0ReadEndpoint> Device::additional_dram_bank_noc0_read_endpoints(
+    uint32_t dram_channel) const {
+    const auto& soc_desc = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(id_);
+    const auto& endpoints = soc_desc.dram_bank_endpoint_coords.at(dram_channel);
+    TT_FATAL(!endpoints.empty(), "DRAM bank {} has no addressable endpoints", dram_channel);
+    std::vector<experimental::Device::DramBankNoc0ReadEndpoint> noc0_endpoints;
+    noc0_endpoints.reserve(endpoints.size() - 1);
+    for (uint32_t endpoint_index = 1; endpoint_index < endpoints.size(); ++endpoint_index) {
+        const auto& endpoint = endpoints[endpoint_index];
+        const auto noc0_coord =
+            soc_desc.translate_coord_to(tt_xy_pair(endpoint.x, endpoint.y), CoordSystem::TRANSLATED, CoordSystem::NOC0);
+        const auto address_coord = this->virtual_core_from_logical_core({dram_channel, endpoint_index}, CoreType::DRAM);
+        noc0_endpoints.push_back({{noc0_coord.x, noc0_coord.y}, address_coord});
+    }
+    return noc0_endpoints;
+}
+
 CoreCoord Device::logical_core_from_dram_channel(uint32_t dram_channel) const {
     return MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(id_).get_logical_core_for_dram_view(dram_channel);
 }

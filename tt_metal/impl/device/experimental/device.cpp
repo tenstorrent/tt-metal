@@ -52,4 +52,20 @@ uint32_t get_worker_noc_hop_distance(
     return get_worker_noc_hop_distance(mesh_device->get_devices().at(linear_index), logical_src, logical_dst, noc);
 }
 
+std::vector<DramBankNoc0ReadEndpoint> get_additional_dram_bank_noc0_read_endpoints(
+    IDevice* device, uint32_t dram_bank) {
+    TT_FATAL(device != nullptr, "Device pointer cannot be null");
+
+    if (auto* mesh = dynamic_cast<distributed::MeshDevice*>(device)) {
+        TT_FATAL(
+            mesh->num_devices() == 1,
+            "get_additional_dram_bank_noc0_read_endpoints() is only supported on unit MeshDevice.");
+        return get_additional_dram_bank_noc0_read_endpoints(mesh->get_devices().front(), dram_bank);
+    }
+
+    auto* dev = dynamic_cast<tt::tt_metal::Device*>(device);
+    TT_FATAL(dev != nullptr, "Device pointer must be a valid Device or MeshDevice");
+    return dev->additional_dram_bank_noc0_read_endpoints(dram_bank);
+}
+
 }  // namespace tt::tt_metal::experimental::Device

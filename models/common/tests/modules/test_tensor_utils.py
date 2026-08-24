@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
 import pytest
 import torch
 
@@ -245,11 +247,15 @@ def test_zeros_like_paged_cache():
     assert torch.all(result == 0)
 
 
-def test_program_config_to_dict_with_to_json():
+@pytest.mark.parametrize("num_workers_per_dram_bank", [1, 2])
+def test_program_config_to_dict_with_to_json(num_workers_per_dram_bank):
     """Test program_config_to_dict for a config that has to_json (matmul configs)."""
-    import json
-
-    cfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=4, per_core_M=1, per_core_N=2)
+    cfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=4,
+        per_core_M=1,
+        per_core_N=2,
+        num_workers_per_dram_bank=num_workers_per_dram_bank,
+    )
     d = program_config_to_dict(cfg)
 
     assert isinstance(d, dict)
@@ -257,7 +263,9 @@ def test_program_config_to_dict_with_to_json():
     assert d["in0_block_w"] == 4
     assert d["per_core_M"] == 1
     assert d["per_core_N"] == 2
+    assert d["num_workers_per_dram_bank"] == num_workers_per_dram_bank
     assert "fused_activation" in d
+    assert f"num_workers_per_dram_bank={num_workers_per_dram_bank}" in repr(cfg)
 
     json_str = json.dumps(d, sort_keys=True)
     roundtrip = json.loads(json_str)
@@ -283,8 +291,6 @@ def test_program_config_to_dict_without_to_json():
 
 def test_program_config_to_str():
     """Test program_config_to_str returns valid sorted JSON."""
-    import json
-
     cfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=2, per_core_M=3, per_core_N=4)
     result = program_config_to_str(cfg)
 

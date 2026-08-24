@@ -68,13 +68,19 @@ def run_test_matmul_in1_dram_sharded(
     in1_dtype,
     out_dtype,
     function_level_defaults,
+    num_workers_per_dram_bank=1,
+    atol_factor_override=None,
+    rtol_factor_override=None,
+    pcc_threshold_override=None,
 ):
     if is_blackhole():
         num_banks = device.dram_grid_size().x  # need to match harvesting of dram
     else:
         num_banks = 12
 
-    N_padded = pad_to_dram_banks(N, num_banks)
+    # Multi-reader kernels split each bank's width shard evenly. Pad the storage
+    # layout to banks * readers while keeping the tensor's logical N unchanged.
+    N_padded = pad_to_dram_banks(N, num_banks * num_workers_per_dram_bank)
 
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
@@ -155,6 +161,7 @@ def run_test_matmul_in1_dram_sharded(
         per_core_M=out_block_h,
         per_core_N=out_block_w,
         fused_activation=fused_activation,
+        num_workers_per_dram_bank=num_workers_per_dram_bank,
     )
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -233,6 +240,10 @@ def run_test_matmul_in1_dram_sharded(
         rtol_factor = 1.062
         pcc_threshold = 0.999
 
+    atol_factor = atol_factor if atol_factor_override is None else atol_factor_override
+    rtol_factor = rtol_factor if rtol_factor_override is None else rtol_factor_override
+    pcc_threshold = pcc_threshold if pcc_threshold_override is None else pcc_threshold_override
+
     assert_numeric_metrics(
         pt_out,
         tt_out,
@@ -241,6 +252,56 @@ def run_test_matmul_in1_dram_sharded(
         frobenius_threshold=0.001 * K,
         pcc_threshold=pcc_threshold,
         check_ulp=False,
+    )
+
+
+@pytest.mark.parametrize("num_workers_per_dram_bank", [1, 2], ids=["one_worker", "two_workers"])
+@pytest.mark.parametrize(
+    "N,fidelity,has_bias,activation,grid_size,in1_dtype",
+    [
+        (1024, ttnn.MathFidelity.HiFi2, True, None, (8, 2), ttnn.bfloat8_b),
+        (1280, ttnn.MathFidelity.LoFi, False, "relu", (8, 1), ttnn.bfloat4_b),
+    ],
+    ids=["bfp8_hifi2_bias", "bfp4_lofi_padded_relu"],
+)
+def test_matmul_in1_dram_sharded_worker_counts(
+    device,
+    N,
+    fidelity,
+    has_bias,
+    activation,
+    grid_size,
+    in1_dtype,
+    num_workers_per_dram_bank,
+    function_level_defaults,
+):
+    if num_workers_per_dram_bank > 1 and not is_blackhole():
+        pytest.skip("Multiple DRAM-sharded matmul workers per bank are currently Blackhole-only")
+
+    torch.manual_seed(0)
+    run_test_matmul_in1_dram_sharded(
+        device=device,
+        in0_sharded=True,
+        out_sharded=True,
+        in1_in_dram=True,
+        M=32,
+        K=2048,
+        N=N,
+        fidelity=fidelity,
+        packer_l1_acc=True,
+        has_bias=has_bias,
+        activation=activation,
+        grid_size=grid_size,
+        in0_dtype=ttnn.bfloat16,
+        in1_dtype=in1_dtype,
+        out_dtype=ttnn.bfloat16,
+        function_level_defaults=function_level_defaults,
+        num_workers_per_dram_bank=num_workers_per_dram_bank,
+        # Match established BFP4 matmul coverage. The quantized one-worker
+        # reference itself is around 0.99 PCC at LoFi for this shape.
+        atol_factor_override=0.04 if in1_dtype == ttnn.bfloat4_b else None,
+        rtol_factor_override=68.5 if in1_dtype == ttnn.bfloat4_b else None,
+        pcc_threshold_override=0.99 if in1_dtype == ttnn.bfloat4_b else None,
     )
 
 
