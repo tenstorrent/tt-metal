@@ -125,6 +125,14 @@ ttnn:
     wh_n150_civ2: 60
     bh_p100: 30
     bh_p150b_civ2_viommu: 30
+  pnr:
+    # Mirrors ttnn's L2 `integration` budget as a starting point; ops_pnr.yaml has no
+    # entries yet — retune once real ops PnR tests land.
+    wh_llmbox: 30
+    wh_galaxy: 100
+    wh_n150_civ2: 60
+    bh_p100: 30
+    bh_p150b_civ2_viommu: 30
   profiler:
     wh_llmbox: 30
     wh_n150_civ2: 8

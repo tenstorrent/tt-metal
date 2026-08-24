@@ -32,6 +32,13 @@ on:
         required: false
         default: ""
         type: string
+      additional_test_categories:
+        description: >
+          Additional test categories to run (comma-separated). Currently only consumed by
+          the ops PnR test track (tests/pipeline_reorg/ops_pnr.yaml), which has no entries yet.
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -175,6 +182,22 @@ jobs:
           else
             echo "::warning::Report file not found: $REPORT_FILE"
           fi
+
+  # ===========================================================================
+  # Team: ttnn
+  # test list: ops_pnr.yaml (currently empty)
+  # ===========================================================================
+  ops-pnr-tests:
+    needs: [build-artifact, determine-test-skus]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    secrets: inherit
+    uses: ./.github/workflows/ops-pnr-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.determine-test-skus.outputs.enabled-skus }}
+      additional_test_categories: ${{ inputs.additional_test_categories }}
 
   # Polls the "RTL Sim CI test" GitHub check on stable HEAD (posted by the
   # tt-umd-simulators polling agent -- GitLab issue #71). Runs in parallel
