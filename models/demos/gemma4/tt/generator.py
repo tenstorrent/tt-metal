@@ -278,6 +278,34 @@ class ChunkedPrefillPageTableGuardMixin:
                     return r
         return None
 
+    def _prepare_decode_trace_once(self, kv_cache, page_table, on_device_sampling):
+        """Opt out of the hoisted decode-trace preparation (upstream #53551).
+
+        ``Generator._prepare_decode_trace_once`` prepares the decode trace from
+        inside ``prefill_forward_text`` and sizes it with
+        ``batch_size = page_table.shape[0]`` -- the *prefill* page table. Gemma4
+        keeps its per-layer page tables padded to ``max_batch_size`` on purpose
+        (see ``_pad_page_tables_batch_to_max``: decode traces are captured against
+        persistent buffers sized at max batch so addresses never grow), so any
+        prefill narrower than max batch makes the hoisted decode compile run a
+        batch-1 input against 32-row page tables::
+
+            TT_FATAL: Batch size between page_table and input_tensor must match
+                      (paged_update_cache_device_operation)
+
+        That aborts EngineCore during prefill warmup, so the server never comes
+        up whenever max_num_seqs > 1 (max_num_seqs=1 happens to match and is why
+        the vLLM nightly leg still boots).
+
+        Upstream already treats this hoist as optional -- ``_uses_prefetcher``
+        returns early for models it does not suit, noting that "keeping these
+        models on the original non-hoisted path costs this change nothing it
+        targets". Gemma4 does its own decode warmup at the correct batches in
+        ``warmup_model_decode``, so skipping the hoist restores exactly the
+        behaviour it had before #53551 landed.
+        """
+        return
+
     def _activate_sequential_per_layer_row(self, page_table) -> None:
         """Slice multi-row hybrid page-table stash to the active sequential user.
 
