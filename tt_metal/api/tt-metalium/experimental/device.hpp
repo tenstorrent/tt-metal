@@ -35,4 +35,10 @@ uint32_t get_worker_noc_hop_distance(
     const CoreCoord& logical_src,
     const CoreCoord& logical_dst,
     NOC noc);
+
+// Returns the logical worker coordinate with the fewest hops to logical_eth_core
+// on a given NOC, and that hop count. The distance is measured worker -> eth core.
+// This API is experimental and may evolve into a stable Device API in the future
+CoreCoord get_closest_worker_to_eth_core(
+    IDevice* device, const CoreCoord& logical_eth_core, NOC noc, uint32_t& noc_hops);
 }  // namespace tt::tt_metal::experimental::Device
