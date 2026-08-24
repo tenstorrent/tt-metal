@@ -2492,6 +2492,66 @@ every measurement here has wanted -- but for a 22-op layer it is not the layer's
 the rows and dividing by iterations is. Reading it the first way gave 41.3us for a layer whose
 arithmetic cannot be done in under a millisecond, which is what caught it.
 
+### Where llama prefill perf actually stands
+
+Every component measured at the REAL llama-3.2-1B shape -- d_model 2048, 32 heads, 8 KV heads,
+head_dim 64, FFN 8192, S=512 -- on ONE core at bf16/HiFi2, each in its best blocking:
+
+| step | us | share |
+|---|---|---|
+| FFN gate + up, [512,2048]@[2048,8192] x2 | 29638 | 38% |
+| FFN down, [512,8192]@[8192,2048] | 14676 | 19% |
+| silu(gate) * up, 4096 tiles | 10972 | 14% |
+| flash attention, 32 heads causal | 9387 | 12% |
+| Q projection [512,2048]@[2048,2048] | 3711 | 5% |
+| output projection, same shape | 3711 | 5% |
+| RoPE on Q and K | 3007 | 4% |
+| K and V projections [512,2048]@[2048,512] | 1872 | 2% |
+| rmsnorm x2 | 990 | 1% |
+| residual x2 | 374 | <1% |
+| **total** | **78338** | |
+
+**78.3ms on one core.** ttnn's TransformerBlock is 1820us of device time on the full grid at
+bfloat8_b. That is 43x, and the two factors that explain it are 64 cores and a cheaper weight
+format -- not per-core arithmetic, where the same components measure at or slightly better
+than ttnn on one core: the output projection is 0.94x, FFN down 0.93x, and the matmuls run at
+0.056us per tile-MAC against the sweep's 0.061 best.
+
+The internal proportions also agree with ttnn's own breakdown, which is a decent check that
+nothing here is structurally wrong: matmuls are 62% of our layer against ttnn's 61%, and
+attention is 12% against its 7.5%.
+
+**The blocker is multi-core, and it is a specific one.** The parallel unit is the M-block, and
+the blocking that is efficient per core is the one that leaves almost nothing to parallelise.
+Measured on the output projection:
+
+| | M-blocks | cores | us |
+|---|---|---|---|
+| mt=8, nt=16 | 2 | 1 | 3710.7 |
+| mt=8, nt=16 | 2 | 2 | 2265.9 |
+| mt=1, nt=16 | 16 | 1 | 8102.7 |
+| mt=1, nt=16 | 16 | 8 | 4191.8 |
+| mt=1, nt=16 | 16 | 16 | 3371.7 |
+| **mt=2, nt=16** | 8 | 8 | **2225.0** |
+
+Sixteen cores at mt=1 (3371.7us) barely beats ONE core at mt=8 (3710.7us), because traffic
+goes as 1/mt and shrinking mt to make blocks gives back what the extra cores win. The best
+found is mt=2 on 8 cores, and that is only 1.67x over one core.
+
+So the ceiling is not the FPU and not the blocking arithmetic -- it is that cores are handed
+only M-blocks. A core should take an (m, n) TILE of the output instead: at S=512 and d_model
+2048 that is 8 M-blocks x 4 N-blocks = 32 units each still holding a large mt, where today the
+same shape offers either 2 fat blocks or 16 thin ones. Splitting N across cores needs no
+reduction (different output columns, disjoint writes), which is why it is the next thing to do
+rather than splitting K. rmsnorm has the same shape of problem from the other direction: its
+row chunks cap at 16 at this shape, and going wider needs the width split with a cross-core
+reduction per row.
+
+Two smaller things the table exposes. silu*up at 10972us for 4096 tiles is 2.7us a tile for
+one SFPU pass, which is worth a look -- ttnn spends 10% of a layer on its eltwise SFPU and we
+spend 14%. And RoPE at 3007us is 4% here against ttnn's 4%, so it is in proportion, but 2399us
+of it is Q alone at 1024 tiles.
+
 ## Phase 11 -- Full block orchestration
 
 Host-side and kernel-loop work, not model gaps.
