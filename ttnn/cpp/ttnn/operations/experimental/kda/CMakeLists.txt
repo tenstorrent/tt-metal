@@ -38,5 +38,5 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::SigmoidGatedRMSNorm>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::QkvCausalConv1dSilu>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::ReduceAffineTransforms>
-        TTNN::Ops::Experimental::KDA::PrepareChunkRecurrence
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::PrepareChunkRecurrence>
 )
