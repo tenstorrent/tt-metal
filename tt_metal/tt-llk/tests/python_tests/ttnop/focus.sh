@@ -13,12 +13,16 @@
 #
 #   ./focus.sh --sites unpack:3 --nop risc_nop --delays 8,16 \
 #       'test_x.py::test_y[params]'
+#
+# --metal sweeps a ttnn op test instead of an LLK kernel test; the node id is
+# then written from the repo root.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env.sh"
 
 REPORT_DIR="${TTNOP_REPORT_DIR:-$HERE/reports/focus}"
 # Defaults to 8 Tensix on this one case. --device-jobs 1 stays in-process.
 DEVICE_JOBS="${TTNOP_DEVICE_JOBS:-8}"
+METAL=0
 NODE_IDS=()
 
 # Flags beat a leftover export in the shell.
@@ -33,6 +37,7 @@ while [[ $# -gt 0 ]]; do
         --max-delay)         export TTNOP_MAX_DELAY="$2"; shift 2 ;;
         --repeats)           export TTNOP_REPEATS="$2";   shift 2 ;;
         --device-jobs)       DEVICE_JOBS="$2";            shift 2 ;;
+        --metal)             METAL=1;                     shift ;;
         --no-drift)          export TTNOP_DRIFT=0;        shift ;;
         --verbose)           export TTNOP_VERBOSE=1;      shift ;;
         --report-dir)        REPORT_DIR="$2";             shift 2 ;;
@@ -55,24 +60,35 @@ export TTNOP_REPEATS="${TTNOP_REPEATS:-10}"
 setup_report_dir
 reset_report_dir "$REPORT_DIR"
 
+# One image serves every core running the op, so a ttnn test occupies the whole
+# grid and a second worker has no core of its own: the plan stays in one process.
+if [[ "$METAL" == 1 ]]; then
+    metal_env
+    DEVICE_JOBS=1
+fi
+
 # Split this case's variant plan across the cores (8 unless --device-jobs).
 XDIST_ARGS=()
 [[ "$DEVICE_JOBS" -gt 1 ]] && XDIST_ARGS=(-n "$DEVICE_JOBS" --dist each)
 export TTNOP_SHARD_VARIANTS=1
 
 build_scanner
-cd "$PYTHON_TESTS"
+cd "$TESTS_ROOT"
 
 echo ">> delays=${TTNOP_DELAYS:-1-100} threads=${TTNOP_THREADS:-unpack,math}" \
      "sites=${TTNOP_SITE_MODE:-sync} filler=${TTNOP_FILLER:-auto}" \
      "unpacr_nop=${TTNOP_ENABLE_UNPACR_NOP:-0} repeats=${TTNOP_REPEATS}"
 echo ">> case=${NODE_ID}"
 echo ">> device_jobs=${DEVICE_JOBS} report=${REPORT_DIR}"
+[[ "$METAL" == 0 ]] || echo ">> metal kernel=${TTNOP_METAL_KERNEL:-<most recently loaded>}"
 
-# Host-only: build this variant if it isn't already in the shared tree.
-echo ">> [1/2] compiling"
-flock "$BUILD_LOCK" python3 -m pytest --compile-producer -q \
-    "${PYTEST_SIM_ARGS[@]}" "$NODE_ID"
+# Build this one variant if the shared tree does not already hold it. Metal JITs
+# its own kernels on the first launch and has no producer pass.
+if [[ "$METAL" == 0 ]]; then
+    echo ">> [1/2] compiling"
+    flock "$BUILD_LOCK" python3 -m pytest --compile-producer -q \
+        "${PYTEST_SIM_ARGS[@]}" "$NODE_ID"
+fi
 
 # Don't share the card with another sweep.
 exec 9>"$DEVICE_LOCK"
@@ -80,7 +96,7 @@ flock 9
 echo ">> [2/2] sweeping"
 started=$SECONDS
 status=0
-python3 -m pytest --compile-consumer -p ttnop_plugin -p no:randomly -q \
+python3 -m pytest "${CONSUMER_ARGS[@]}" -p ttnop_plugin -p no:randomly -q \
     "${PYTEST_SIM_ARGS[@]}" "${XDIST_ARGS[@]}" "$NODE_ID" || status=$?
 echo ">> timing: sweep=$((SECONDS - started))s total=${SECONDS}s"
 exit "$status"

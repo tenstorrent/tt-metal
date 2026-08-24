@@ -177,7 +177,9 @@ def reproduce_command(record: dict, delays=()) -> str:
     else:
         env["TTNOP_FILLER"] = record["filler"]
     assignments = " ".join(f"{key}={value}" for key, value in env.items())
-    return f"{assignments} ./focus.sh {shlex.quote(record['case'])}"
+    # A finding from a ttnn op test only reproduces through the Metal backend.
+    metal = " --metal" if os.environ.get("TTNOP_METAL", "") not in ("", "0") else ""
+    return f"{assignments} ./focus.sh{metal} {shlex.quote(record['case'])}"
 
 
 def as_ranges(values, separator: str = ", ") -> str:

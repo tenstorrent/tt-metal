@@ -9,10 +9,13 @@
 #           [--markers 'not perf and not nightly and not accuracy and not quasar']
 #           [--splits N --group G] [--report-dir DIR] [--jobs N]
 #           [--device-jobs N] [--collect-to FILE] [--nodeids FILE]
-#           [--changed-since SHA] [--enable-unpacr-nop]
+#           [--changed-since SHA] [--enable-unpacr-nop] [--metal]
 #
 # --splits/--group shard one suite across machines (each
 # machine needs its own --report-dir). --markers defaults to $PYTEST_MARKERS.
+#
+# --metal sweeps ttnn op tests instead of LLK kernel tests; --test is then
+# written from the repo root.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env.sh"
 
@@ -29,6 +32,7 @@ REPORT_DIR="${TTNOP_REPORT_DIR:-$HERE/reports}"
 COLLECT_TO=""
 NODEIDS=""
 CHANGED_SINCE="${TTNOP_CHANGED_SINCE:-}"
+METAL=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -44,6 +48,7 @@ while [[ $# -gt 0 ]]; do
         --nodeids) NODEIDS="$2"; shift 2 ;;
         --changed-since) CHANGED_SINCE="$2"; shift 2 ;;
         --enable-unpacr-nop) export TTNOP_ENABLE_UNPACR_NOP=1; shift ;;
+        --metal) METAL=1; shift ;;
         TTNOP_*=*|CHIP_ARCH=*) export "$1"; shift ;;
         *) echo "ttnop: unknown option $1" >&2; exit 4 ;;
     esac
@@ -86,8 +91,15 @@ mkdir -p "$STATE_DIR"
 export TTNOP_STATE_DIR="$STATE_DIR"
 trap 'rm -rf "$STATE_DIR"' EXIT
 
+# One image serves every core running the op, so a ttnn test occupies the whole
+# grid and there is no second core to put a second worker on.
+if [[ "$METAL" == 1 ]]; then
+    metal_env
+    DEVICE_JOBS=1
+fi
+
 build_scanner
-cd "$PYTHON_TESTS"
+cd "$TESTS_ROOT"
 
 SPLIT_ARGS=()
 [[ -n "$SPLITS" ]] && SPLIT_ARGS+=(--splits "$SPLITS" --group "${GROUP:-1}")
@@ -123,22 +135,26 @@ echo ">> delays=${TTNOP_DELAYS:-1-100} threads=${TTNOP_THREADS:-unpack,math}" \
 echo ">> test=${TESTS[*]:-$NODEIDS} compile_jobs=${JOBS} device_jobs=${DEVICE_JOBS}"
 [[ -z "$MARKERS" ]] || echo ">> markers=${MARKERS}"
 [[ -z "$SPLITS" ]] || echo ">> splits=${SPLITS} group=${GROUP:-1}"
+[[ "$METAL" == 0 ]] || echo ">> metal kernel=${TTNOP_METAL_KERNEL:-<most recently loaded>}"
 
 compile_s=0
 if [[ -z "$NODEIDS" ]]; then
     # Compile on CPUs. The producer wipes the shared build tree on entry, so hold an
     # exclusive lock or a parallel worker will delete artifacts out from under itself.
-    echo ">> [1/3] compiling"
-    started=$SECONDS
-    flock "$BUILD_LOCK" \
-        python3 -m pytest --compile-producer -n "$JOBS" -q \
-            "${QUIET_ARGS[@]}" "${PYTEST_SIM_ARGS[@]}" "${FILTER_ARGS[@]}" "${TESTS[@]}"
-    compile_s=$((SECONDS - started))
+    # Metal JITs its own kernels on the first launch and has no producer pass.
+    if [[ "$METAL" == 0 ]]; then
+        echo ">> [1/3] compiling"
+        started=$SECONDS
+        flock "$BUILD_LOCK" \
+            python3 -m pytest --compile-producer -n "$JOBS" -q \
+                "${QUIET_ARGS[@]}" "${PYTEST_SIM_ARGS[@]}" "${FILTER_ARGS[@]}" "${TESTS[@]}"
+        compile_s=$((SECONDS - started))
+    fi
 
     echo ">> [2/3] collecting"
     NODEIDS="$(mktemp /tmp/ttnop-nodeids-XXXXXX)"
     trap 'rm -rf "$STATE_DIR"; [[ -n "${COLLECT_TO:-}" ]] || rm -f "$NODEIDS"' EXIT
-    python3 -m pytest --collect-only -q --compile-consumer \
+    python3 -m pytest --collect-only -q "${CONSUMER_ARGS[@]}" \
         "${QUIET_ARGS[@]}" "${PYTEST_SIM_ARGS[@]}" "${SPLIT_ARGS[@]}" "${FILTER_ARGS[@]}" "${TESTS[@]}" \
         | awk '/::/' > "$NODEIDS"
     CASE_COUNT="$(grep -c . "$NODEIDS" || true)"
@@ -166,7 +182,7 @@ started=$SECONDS
 # resumes unfinished work. Exit 75 means a recorded wedge, 76 means an
 # incomplete run, and 70 means no JUnit file was produced.
 status=0
-supervise_nodeids "$NODEIDS" --compile-consumer \
+supervise_nodeids "$NODEIDS" "${CONSUMER_ARGS[@]}" \
     "${QUIET_ARGS[@]}" "${PYTEST_SIM_ARGS[@]}" "${XDIST_ARGS[@]}" || status=$?
 
 if [[ ! -f "$REPORT_DIR/junit.xml" ]]; then

@@ -97,7 +97,8 @@ Depth, one case repeated until a flaky race shows a rate:
 ```
 
 [FOCUS.md](FOCUS.md) is the full reference for the depth runner; its flags are
-aliases for the variables below.
+aliases for the variables below. Either runner takes `--metal` to sweep a ttnn op
+test instead of an LLK kernel test — see [Metal](#metal).
 
 `TTNOP_DELAYS` takes ints and `lo-hi` ranges, comma separated: `1-100` (the
 default), `1,5,10,20,40,60,80,100` for a coarse probe, `1-8,16,32` for a mix.
@@ -207,7 +208,7 @@ nest.
 
 ## Metal
 
-`./metal.sh` points the same sweep at a **ttnn op test**. The scan, sites, fillers
+`--metal` points either runner at a **ttnn op test**. The scan, sites, fillers
 and cave arithmetic are shared because they are Tensix-level; two things differ.
 
 **Where the poke lands.** The LLK harness loads each ELF once, so poking L1 sticks.
@@ -228,10 +229,15 @@ every core running the op gets the same perturbation.
 
 ```bash
 make metal_cave                 # reserve the cave, once
-./metal.sh path/to/test_op.py
-TTNOP_SITES=unpack:3 TTNOP_DELAYS=40-60 TTNOP_REPEATS=200 \
-    ./metal.sh 'path/to/test_op.py::test_case[params]'
+./ci.sh --metal --test tests/ttnn/unit_tests/operations/test_op.py
+./focus.sh --metal --sites unpack:3 --delays 40-60 --repeats 200 \
+    'tests/ttnn/unit_tests/operations/test_op.py::test_case[params]'
 ```
+
+Test paths are written from the repo root rather than from `python_tests/`, since
+that is where a ttnn test lives. `--device-jobs` is forced to 1: one image serves
+every core running the op, so a ttnn test occupies the whole grid and there is no
+spare core for a second worker.
 
 `make metal_cave` regenerates the six WH/BH TRISC linker scripts with
 `TTNOP_CAVE_BYTES` defined and drops the JIT kernel cache — the kernel hash is
@@ -242,7 +248,7 @@ puts them back. Nothing is reserved in a normal build.
 
 | variable | meaning |
 | --- | --- |
-| `TTNOP_METAL` | set by `metal.sh`; selects the Metal backend |
+| `TTNOP_METAL` | set by `--metal`; selects the Metal backend |
 | `TTNOP_METAL_KERNEL` | regex picking the compute kernel, e.g. `eltwise_sfpu` |
 
 The default kernel is the compute kernel with the most recently written XIP dump,
@@ -251,7 +257,7 @@ than one op, or the wrong kernel gets perturbed.
 
 ### Differences worth knowing before reading a report
 
-- **Slow dispatch is required** (`metal.sh` sets it). Fast dispatch stages the image
+- **Slow dispatch is required** (`--metal` sets it). Fast dispatch stages the image
   into a DRAM `kernels_buffer` on the first enqueue and relays it from there, so
   later host-image writes are invisible. It is the mode you want anyway: it removes
   command-queue overlap, so a `(site, delay)` pair measures kernel timing rather

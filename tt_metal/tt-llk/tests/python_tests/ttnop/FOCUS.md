@@ -145,6 +145,44 @@ For one unpack site with the two default automatic fillers and 10 repeats:
 
 
 
+## The rest of the knobs
+
+
+| flag            | variable            | default         | meaning                                                                                                                                                              |
+| --------------- | ------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--repeats`     | `TTNOP_REPEATS`     | `10`            | runs per variant. This is the denominator of the rate                                                                                                                |
+| `--device-jobs` | `TTNOP_DEVICE_JOBS` | `8`             | Tensix cores to spread the sweep over; `1` runs it in this process                                                                                                   |
+| `--max-delay`   | `TTNOP_MAX_DELAY`   | `100`           | cave capacity; raise it to sweep counts above 100. Too big and there may not be enough free space after `_etext` (before the next L1 section) to hold the filler run |
+| `--no-drift`    | `TTNOP_DRIFT`       | on              | drift freezes stimuli and compares each run to the clean one; off rolls the RNG instead                                                                              |
+| `--report-dir`  | `TTNOP_REPORT_DIR`  | `reports/focus` | where `failures.jsonl` and `report.md` land                                                                                                                          |
+| `--verbose`     | `TTNOP_VERBOSE`     | off             | print every detour as it is armed                                                                                                                                    |
+| `--metal`       | flag only           | off             | sweep a ttnn op test instead of an LLK kernel test (node id written from the repo root, one core, no compile pass). See the Metal section of the README               |
+|                 | `CHIP_ARCH`         | `wormhole`      | picks the build and the device lock                                                                                                                                  |
+
+
+Any `TTNOP_REPEATS > 1` also adds a **delay-0 control** per site and nop: it
+still detours through the cave but executes no fillers. If 0 passes and 54 fails,
+the fillers did it and not the jump.
+
+## Budget it first
+
+Example: `test_mul_reduce_scalar` has a few hundred instructions per thread and
+a handful of sync sites. At the defaults (`auto` ≈ 3 nops at an unpack site,
+delays 1-100 plus a delay-0 control, 10 repeats) one of those sites is already
+3 × 101 × 10 = 3030 variants, and each is a full test body. `--site all` uses
+the instruction count as the site count, so the same test becomes tens of
+thousands. Narrow at least two axes:
+
+
+| invocation                                       | runs | per core at `--device-jobs 8` |
+| ------------------------------------------------ | ---- | ----------------------------- |
+| `--sites unpack:3 --nop risc_nop --delays 54`    | 20   | 3                             |
+| `--sites unpack:3 --nop risc_nop --delays 40-60` | 220  | 28                            |
+| `--sites unpack:3 --delays 1-100` (3 nop types)  | 3030 | 379                           |
+
+
+The `Reproduce` block of any `report.md` is already a narrowed `focus.sh` line
+for one site, so the usual workflow is to copy one out rather than write it.
 
 ## Reading the report
 
