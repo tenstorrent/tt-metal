@@ -221,7 +221,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
             ),
             id="flux2_ff2_1024_2304_6144_x12y8_b248_window2",
         ),
-        # LTX stage_1 ff2 and Wan2.2 480p ff2, at the blockings the 2026-08-24 windowed-handoff
+        # LTX stage_1 ff2 and Wan2.2 720p quad-galaxy ff2 (M = 9472/4), at the blockings the 2026-08-24 windowed-handoff
         # sweep picked (see fused_mmrs_configs).
         pytest.param(
             MinimalMatmulStridedReduceScatterTestConfig(
@@ -257,7 +257,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
                 num_workers_per_link=5,
                 mm_window_blocks=2,
             ),
-            id="wan480p_ff2_2368_3456_5120_x12y8_b648_window2",
+            id="wan720p_quad_ff2_2368_3456_5120_x12y8_b648_window2",
         ),
         # LTX video FFN ff2 (RowParallel reduce-scatter): per-device [4864,4096]@[4096,4096]
         pytest.param(
