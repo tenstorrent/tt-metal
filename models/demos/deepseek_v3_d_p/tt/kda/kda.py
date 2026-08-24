@@ -203,6 +203,7 @@ class ttKDA:
         self.kda_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
@@ -329,6 +330,11 @@ class ttKDA:
                 (qkv_row_major.shape[0], sequence, channels),
             )
             # Retained by real-K3 T=5120 component A/B: 74.36-75.76% faster at direct Q/K/V PCC >=0.999989.
+        # Cap blocks at the operation's measured production size while keeping the
+        # chunk an exact divisor for smaller synthetic and TP-local channel counts.
+        channel_chunk_size = ttnn.TILE_SIZE * _largest_divisor_at_most(
+            channels // ttnn.TILE_SIZE, 768 // ttnn.TILE_SIZE
+        )
         q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
             qkv_row_major,
             state_row_major,
@@ -336,6 +342,7 @@ class ttKDA:
             config.q_dim,
             config.k_dim,
             config.v_dim,
+            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=channel_chunk_size),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.kda_compute_config,
         )
