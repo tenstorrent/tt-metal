@@ -8,10 +8,15 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
+    DestSync,
     MathOperation,
     Transpose,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import (
+    generate_perf_input_dimensions,
+    input_output_formats,
+    parametrize,
+)
 from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
@@ -54,6 +59,11 @@ def get_dest_accum_modes(formats):
         MathOperation.SfpuElwdiv,
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuElwpow,
+        MathOperation.SfpuXlogy,
+        MathOperation.SfpuElwGt,
+        MathOperation.SfpuBitwiseAnd,
+        MathOperation.SfpuMask,
+        MathOperation.SfpuAtan2,
     ],
     dest_acc=[
         DestAccumulation.Yes,
@@ -65,9 +75,9 @@ def get_dest_accum_modes(formats):
     iterations=[
         32,
     ],
-    input_dimensions=[
-        [128, 64],  # tile_cnt: 8
-    ],  # Specifying different input sizes to cover different tile counts
+    input_dimensions=lambda dest_acc: generate_perf_input_dimensions(
+        dest_acc, DestSync.Half
+    ),
 )
 def test_perf_eltwise_binary_sfpu_float(
     perf_report,
@@ -138,6 +148,7 @@ def test_perf_eltwise_binary_sfpu_float(
         MathOperation.SfpuElwLogicalRightShift,
         MathOperation.SfpuElwadd,
         MathOperation.SfpuElwsub,
+        MathOperation.SfpuGtInt,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
     loop_factor=[
@@ -146,9 +157,9 @@ def test_perf_eltwise_binary_sfpu_float(
     iterations=[
         32,
     ],
-    input_dimensions=[
-        [128, 64],  # tile_cnt: 8
-    ],
+    input_dimensions=lambda dest_acc: generate_perf_input_dimensions(
+        dest_acc, DestSync.Half
+    ),
 )
 def test_perf_eltwise_binary_sfpu_int(
     perf_report,

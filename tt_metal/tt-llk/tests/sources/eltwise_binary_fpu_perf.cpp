@@ -39,6 +39,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
+    const ckernel::TensorShape tensor_shape {
+        static_cast<std::uint8_t>(params.TEST_FACE_R_DIM),
+        static_cast<std::uint8_t>(params.TEST_FACE_C_DIM),
+        static_cast<std::uint8_t>(params.num_faces_r_dim_A),
+        static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
 
     {
         START_PERF_MEASURE("INIT")
@@ -47,11 +53,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.unpack_B_src,
             formats.unpack_A_dst,
             formats.unpack_B_dst,
-            FACE_R_DIM,
-            FACE_R_DIM,
-            /* num_faces */ 4,
-            /* num_faces */ 4);
-        _llk_unpack_AB_init_<>(DEFAULT_TENSOR_SHAPE);
+            tensor_shape.face_r_dim,
+            tensor_shape.face_r_dim,
+            num_faces,
+            num_faces);
+        _llk_unpack_AB_init_<BROADCAST_TYPE>(tensor_shape, params.UNPACK_TRANSPOSE_FACES);
         PROFILER_SYNC();
     }
     {
@@ -62,7 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _perf_unpack_loop_set_valid<true, true>(LOOP_FACTOR * TILE_CNT * TILE_NUM_FACES);
+            _perf_unpack_loop_set_valid<true, true>(LOOP_FACTOR * TILE_CNT * num_faces);
             return;
         }
         else
@@ -71,7 +77,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
                 {
-                    _llk_unpack_AB_<>(PERF_ADDRESS(PERF_INPUT_A, tile), PERF_ADDRESS(PERF_INPUT_B, tile));
+                    _llk_unpack_AB_<BROADCAST_TYPE>(PERF_ADDRESS(PERF_INPUT_A, tile), PERF_ADDRESS(PERF_INPUT_B, tile));
                 }
             }
         }
@@ -96,12 +102,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
+    const ckernel::TensorShape tensor_shape {
+        static_cast<std::uint8_t>(params.TEST_FACE_R_DIM),
+        static_cast<std::uint8_t>(params.TEST_FACE_C_DIM),
+        static_cast<std::uint8_t>(params.num_faces_r_dim_A),
+        static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
+    const std::uint32_t num_faces = tensor_shape.total_num_faces();
 
     {
         START_PERF_MEASURE("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BroadcastType::NONE, MATH_FIDELITY>(DEFAULT_TENSOR_SHAPE, 0 /* acc_to_dest */);
+        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY>(tensor_shape, 0 /* acc_to_dest */);
         PROFILER_SYNC();
     }
     {
@@ -112,7 +124,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * TILE_CNT * TILE_NUM_FACES);
+            _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * TILE_CNT * num_faces);
             return;
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -125,8 +137,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
                     {
-                        _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, DstSync::SyncHalf, is_fp32_dest_acc_en, MATH_FIDELITY>(
-                            DEFAULT_TENSOR_SHAPE, block_tile, false);
+                        _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BROADCAST_TYPE, DstSync::SyncHalf, is_fp32_dest_acc_en, MATH_FIDELITY>(
+                            tensor_shape, block_tile, false);
                     }
                 }
             }
@@ -142,8 +154,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile++)
                     {
-                        _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BroadcastType::NONE, DstSync::SyncHalf, is_fp32_dest_acc_en, MATH_FIDELITY>(
-                            DEFAULT_TENSOR_SHAPE, block_tile, false);
+                        _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BROADCAST_TYPE, DstSync::SyncHalf, is_fp32_dest_acc_en, MATH_FIDELITY>(
+                            tensor_shape, block_tile, false);
                     }
                     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }

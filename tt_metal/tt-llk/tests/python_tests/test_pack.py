@@ -74,13 +74,16 @@ PACK_RELU_TYPES = [
 
 
 def generate_pack_perf_combinations():
-    """Dest-full tall/wide matrices, SyncHalf, dest index 0, all ReLU types."""
+    """Dest-full tall/wide matrices per DestSync, dest index 0, all ReLU types."""
     combinations = []
     for fmt in PACK_FORMATS:
         for dest_acc in get_valid_dest_accumulation_modes(fmt):
-            for dimensions in generate_perf_input_dimensions(dest_acc, DestSync.Half):
-                for relu_type in PACK_RELU_TYPES:
-                    combinations.append((fmt, dest_acc, dimensions, relu_type))
+            for dest_sync in (DestSync.Half, DestSync.Full):
+                for dimensions in generate_perf_input_dimensions(dest_acc, dest_sync):
+                    for relu_type in PACK_RELU_TYPES:
+                        combinations.append(
+                            (fmt, dest_acc, dimensions, relu_type, dest_sync)
+                        )
     return combinations
 
 

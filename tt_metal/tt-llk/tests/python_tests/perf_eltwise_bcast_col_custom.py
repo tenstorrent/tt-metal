@@ -36,7 +36,7 @@ class CT_DIM(TemplateParameter):
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b]),
-    mathop=[MathOperation.Elwsub],
+    mathop=[MathOperation.Elwsub, MathOperation.Elwmul],
     dest_acc=[DestAccumulation.No],
     math_fidelity=[MathFidelity.LoFi],
     broadcast_type=[BroadcastType.Column],
