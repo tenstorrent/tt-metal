@@ -51,8 +51,8 @@
 //   0        A base address, an [M, K] tensor
 //   1        B base address, a [K, N] tensor
 //   2        out base address, an [M, N] tensor
-//   3        first M-block this core owns
-//   4        how many M-blocks this core owns
+//   3        first output BLOCK this core owns, as a flat (m, n) index
+//   4        how many output blocks this core owns
 
 #include <tt/unified/core>
 
@@ -82,11 +82,19 @@ void kernel_main() {
     const uint32_t a_addr = get_arg_val<uint32_t>(0);
     const uint32_t b_addr = get_arg_val<uint32_t>(1);
     const uint32_t out_addr = get_arg_val<uint32_t>(2);
-    // M-blocks are the unit of work across cores: they are rows of the output and stay
-    // independent, so a core's share needs no reduction with anyone else's. Splitting K or N
-    // instead would leave partial sums for something to combine.
-    const uint32_t m_begin = get_arg_val<uint32_t>(3);
-    const uint32_t m_count = get_arg_val<uint32_t>(4);
+    // The unit of work across cores is one OUTPUT BLOCK -- an (m, n) tile -- indexed flat as
+    // m*nb + n. Both dimensions are split, and neither needs a reduction: two cores holding
+    // different m or different n write disjoint parts of the output. Only K would need one,
+    // which is why K stays inside a core.
+    //
+    // Handing out M-blocks alone, as this did, made the blocking fight the parallelism: mt
+    // has to be LARGE for traffic (it goes as 1/mt) and SMALL to make enough blocks to
+    // spread. At [512,2048]@[2048,2048] that meant 16 cores at mt=1 scored 3371.7us against
+    // 3710.7us for ONE core at mt=8 -- the extra cores bought almost nothing. Splitting the
+    // output both ways gives mb*nb units instead of mb, so a large mt and a high core count
+    // stop being alternatives.
+    const uint32_t block_begin = get_arg_val<uint32_t>(3);
+    const uint32_t block_count = get_arg_val<uint32_t>(4);
 
     using A = u::Shape<mt, kt>;    // one (m, k) tile of A
     using W = u::Shape<kt, nt>;    // one (k, n) tile of B
@@ -114,10 +122,12 @@ void kernel_main() {
     u::Accumulator<Out, u::AccumulatorMode::L1> acc(acc_storage, out_storage);
 #endif
 
-    for (uint32_t c = 0; c < m_count; ++c) {
-        const uint32_t i = m_begin + c;
-
-        for (uint32_t n = 0; n < nb; ++n) {
+    for (uint32_t u = 0; u < block_count; ++u) {
+        // Flat (m, n) index. m-major, so a core given consecutive units walks one row band's
+        // column blocks before moving down.
+        const uint32_t i = (block_begin + u) / nb;
+        const uint32_t n = (block_begin + u) % nb;
+        {
             acc.clear();
 
             // This block of the output: rows [i*mt, +mt) by columns [n*nt, +nt).

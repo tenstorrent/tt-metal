@@ -2521,7 +2521,10 @@ The internal proportions also agree with ttnn's own breakdown, which is a decent
 nothing here is structurally wrong: matmuls are 62% of our layer against ttnn's 61%, and
 attention is 12% against its 7.5%.
 
-**The blocker is multi-core, and it is a specific one.** The parallel unit is the M-block, and
+**The blocker was multi-core, and splitting N fixed the first half of it -- see the section
+below.** The original diagnosis, kept because the second half is still true:
+
+The parallel unit was the M-block, and
 the blocking that is efficient per core is the one that leaves almost nothing to parallelise.
 Measured on the output projection:
 
@@ -2551,6 +2554,55 @@ Two smaller things the table exposes. silu*up at 10972us for 4096 tiles is 2.7us
 one SFPU pass, which is worth a look -- ttnn spends 10% of a layer on its eltwise SFPU and we
 spend 14%. And RoPE at 3007us is 4% here against ttnn's 4%, so it is in proportion, but 2399us
 of it is Q alone at 1024 tiles.
+
+### Splitting N across cores, and the wall behind it
+
+The unit of work is now one OUTPUT BLOCK -- an (m, n) tile, indexed flat as m*nb + n -- rather
+than an M-block. Neither dimension needs a reduction: two cores holding different m or
+different n write disjoint parts of the output, and only K would need one, which is why K
+stays inside a core. The host hands each core a contiguous range of that flat index.
+
+That removes the trade that made mt fight the core count. Output projection,
+[512, 2048] @ [2048, 2048], HiFi2:
+
+| | units | cores | us |
+|---|---|---|---|
+| before, M-split only, best found | 8 | 8 | 2225.0 |
+| mt=8 nt=16 | 8 | 1 | 3717.4 |
+| mt=8 nt=16 | 8 | 8 | 932.8 |
+| **mt=8 nt=8** | 16 | 16 | **814.1** |
+| mt=4 nt=8 | 32 | 32 | 940.0 |
+| mt=2 nt=8 | 64 | 64 | 1359.3 |
+
+**2225 -> 814us, 2.7x**, and 4.6x over one core. But the scaling stops at 16 cores and then
+REVERSES, which is the interesting part: more units means smaller mt and nt, and traffic goes
+as (1/mt + 1/nt), so past 16 cores the extra traffic costs more than the extra cores earn.
+The measured bandwidth tells the same story -- 26GB/s at 8 cores, 41 at 16, 43 at 32 -- so the
+device is not saturated and the limit is what we ASK it to move.
+
+**Against ttnn on the same shape, which is now the fair comparison:**
+
+| cores | ours | ttnn.matmul |
+|---|---|---|
+| 1 | 3717 us | 3962 us |
+| 4 | 1548 us | 1032 us |
+| 16 | 814 us | 288.5 us |
+| 64 | 1359 us | **118.6 us** |
+
+We win on one core and lose by 7x on sixty-four. ttnn scales 33x where we scale 4.6x, and the
+reason is structural rather than a tuning gap: **every core here fetches its own operand tiles
+from DRAM, while ttnn MULTICASTS them across the grid.** Cores in a grid row share the same A
+blocks and cores in a column share the same B blocks, so a weight tile is read from DRAM once
+and broadcast over the NOC. At 64 cores that is roughly mtot*ktot + ktot*ntot = 5120 tiles
+(10MB) against our 40960 (80MB) -- 8x the data for the same arithmetic. ttnn's 118.6us over
+10MB is 84GB/s, which is consistent; our model's 80MB in that time would need 675GB/s, which
+is not.
+
+So the next thing is weight multicast, and the library already has the primitive: `noc_load`
+has a `PhysicalMcast` overload with the two semaphores, and `matmul_mcast.cpp` and
+`mcast_bcast.cpp` already use it. What is missing is putting it under the blocked matmul: a
+core would join a row group for A and a column group for B, and the traffic term stops scaling
+with the core count.
 
 ## Phase 11 -- Full block orchestration
 

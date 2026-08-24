@@ -52,11 +52,13 @@ def run(device, mtot, ktot, ntot, mt, kt, nt, cores=1, seed=0, fidelity=None, ac
     # otherwise hold a previous run's values and a missed block would pass.
     tout = to_dev(torch.full([mtot * TILE, ntot * TILE], float("nan")))
 
-    # M-blocks across cores: rows of the output, independent, no reduction needed.
-    nblocks = mtot // mt
-    ncores = min(cores, nblocks)
+    # The unit of work is one OUTPUT BLOCK, an (m, n) tile, indexed flat as m*nb + n. Both
+    # dimensions are split across cores and neither needs a reduction -- different m or
+    # different n write disjoint output. Splitting M alone made mt fight the core count.
+    nunits = (mtot // mt) * (ntot // nt)
+    ncores = min(cores, nunits)
     core_ranges, core_list = core_block(ncores)
-    shares = split_evenly(nblocks, ncores)
+    shares = split_evenly(nunits, ncores)
 
     ct_args = [mt, ktot, ntot, kt, nt]
     for t in (ta, tb, tout):
@@ -82,7 +84,7 @@ def run(device, mtot, ktot, ntot, mt, kt, nt, cores=1, seed=0, fidelity=None, ac
     )
     logger.info(
         f"blocked matmul [{mtot}x{ktot}]@[{ktot}x{ntot}]t  mt={mt} kt={kt} nt={nt} "
-        f"(mb={nblocks} kb={ktot // kt} nb={ntot // nt}) cores={ncores}"
+        f"(mb={mtot // mt} kb={ktot // kt} nb={ntot // nt} = {nunits} blocks) cores={ncores}"
     )
     out = ttnn.generic_op([ta, tb, tout], program)
     for t in (ta, tb):
