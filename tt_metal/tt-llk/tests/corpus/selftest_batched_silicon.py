@@ -5,9 +5,18 @@ Drives the REAL sweep code (imported, not re-implemented) with filesystem
 fixtures only — no toolchain, no simulator, no device:
 
   1. partition_perf_legs: distinct files share a session; same-file legs
-     with distinct mathop tokens share (row-filter split); same-file
-     token-less legs (the sem-vs-hand impl axis, invisible to the CSV)
-     NEVER share; mixed token/token-less never share; deterministic.
+     of ONE test function with distinct mathop tokens share (row-filter
+     split); same-file token-less legs (the sem-vs-hand impl axis,
+     invisible to the CSV) NEVER share; mixed token/token-less never
+     share; SCHEMA-AWARE (lane GE, GE-F2): same-file legs from DIFFERENT
+     test functions NEVER share a session (each function's PerfConfig
+     param classes define the module CSV's column schema — mixing them
+     raises PerfSchemaError at module teardown and drops the WHOLE
+     module's perf_data while nodes report 'passed'); a func-less spec
+     never shares its file's sessions (fail closed); deterministic.
+  1b. GE-F2 fail-closed belt: a 'passed' perf leg whose session wrote NO
+     perf_data for its module splits to rc 96 + a GE-F2 FATAL note + a
+     RED event — silent empty-samples booking is impossible.
   2. LAYOUT PARITY (the mandate gate): a 3-op dry-run through the real
      _silicon_phase produces the IDENTICAL per-op evidence layout in
      batched and --serial-legacy modes — same per-leg dirs, same node.txt/
@@ -57,8 +66,15 @@ def check(name, cond, detail=""):
 
 
 # ---------------- 1. partition_perf_legs ----------------
-def spec_of(file, mathop, op, sel="sem-perf", leg="on"):
-    return {"file": file, "mathop": mathop, "op": op, "sel": sel, "leg": leg}
+def spec_of(file, mathop, op, sel="sem-perf", leg="on", func="test_perf_fn"):
+    return {
+        "file": file,
+        "func": func,
+        "mathop": mathop,
+        "op": op,
+        "sel": sel,
+        "leg": leg,
+    }
 
 
 parts = sweep.partition_perf_legs(
@@ -117,6 +133,74 @@ check(
     "packing: token legs + binary pair share; token-less get own sessions",
     len(p1) == 3 and sum(len(b) for b in p1) == 5,
     p1,
+)
+
+# GE-F2 INJECTION (lane GF): the weekly-20260823 silent-data-loss shape —
+# perf_eltwise_binary_sfpu.py's production int test (zone-column schema)
+# co-scheduled with fresh_cpp tests (fresh_cpp_impl schema) under distinct
+# mathop tokens.  WITHOUT the schema-aware grouping fix these share one
+# session (mathop rule alone admits them) -> PerfSchemaError at module
+# teardown -> the whole module writes no perf_data while nodes 'pass'.
+ge_f2 = [
+    spec_of(
+        "perf_eltwise_binary_sfpu.py",
+        "SfpuDivInt32Floor",
+        "divint32floor",
+        func="test_perf_sfpu_binary_extended_int",
+    ),
+    spec_of(
+        "perf_eltwise_binary_sfpu.py",
+        "SfpuElwRightShift",
+        "shift",
+        func="test_perf_fresh_cpp_right_shift",
+    ),
+    spec_of(
+        "perf_eltwise_binary_sfpu.py",
+        "SfpuAtan2",
+        "atan2",
+        func="test_perf_fresh_cpp_binary_atan2",
+    ),
+]
+parts = sweep.partition_perf_legs(list(ge_f2))
+check(
+    "GE-F2: same-file legs from DIFFERENT test functions NEVER share a "
+    "session (mixed-schema module CSV would drop ALL perf_data)",
+    len(parts) == 3 and all(len(b) == 1 for b in parts),
+    parts,
+)
+parts = sweep.partition_perf_legs(
+    [
+        spec_of(
+            "perf_eltwise_binary_sfpu.py",
+            "SfpuBinaryFmod",
+            "binaryfmod",
+            func="test_perf_fresh_cpp_binary_fmod_remainder",
+        ),
+        spec_of(
+            "perf_eltwise_binary_sfpu.py",
+            "SfpuBinaryRemainder",
+            "binaryremainder",
+            func="test_perf_fresh_cpp_binary_fmod_remainder",
+        ),
+    ]
+)
+check(
+    "GE-F2: same file + SAME test function + distinct mathops still share "
+    "(one schema by the FM per-function contract)",
+    len(parts) == 1 and len(parts[0]) == 2,
+    parts,
+)
+parts = sweep.partition_perf_legs(
+    [
+        spec_of("u.py", "Ceil", "ceil"),
+        spec_of("u.py", "Sqrt", "sqrt", func=None),
+    ]
+)
+check(
+    "GE-F2: a func-less (unparsable node id) spec never shares its file's "
+    "sessions (fail closed)",
+    len(parts) == 2,
+    parts,
 )
 
 
@@ -429,6 +513,56 @@ with tempfile.TemporaryDirectory() as td:
         "split: shared-module CSV without mathop column -> rc 97, no rows claimed",
         (w_max / "rc.txt").read_text().strip() == "97"
         and "cannot be attributed" in (w_max / "log.txt").read_text(),
+    )
+
+    # ------- 3b. GE-F2 fail-closed belt (lane GF injection) -------
+    # The weekly-20260823 silent-data-loss state, reconstructed: the node
+    # PASSED (all phases green) but the session wrote NO perf_data for its
+    # module (PerfSchemaError at module teardown killed the whole module's
+    # CSV).  WITHOUT the belt the leg split to rc 0 with only a quiet note
+    # and the row later booked EMPTY samples silently.
+    sdir_ge = td / "gdir/r1-p9"
+    sdir_ge.mkdir(parents=True)
+    (sdir_ge / "report.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "exitstatus": 0,
+                "reports": {
+                    node_max: {
+                        "setup": {"outcome": "passed"},
+                        "call": {"outcome": "passed"},
+                        "teardown": {"outcome": "passed"},
+                    },
+                },
+            }
+        )
+    )
+    reds_before = len(sw.reds)
+    sw._split_batch_session(
+        sdir_ge,
+        [sw._mk_job(row_max, "sem-perf", "r1", "on", "-mflags", "perf")],
+        0,
+        gctx,
+    )
+    w_ge = jobs[0]["work"]
+    check(
+        "GE-F2 belt: passed node with NO module perf_data -> leg rc 96 "
+        "(fail closed), GE-F2 FATAL note, RED event recorded",
+        (w_ge / "rc.txt").read_text().strip() == "96"
+        and "GE-F2 FATAL" in (w_ge / "log.txt").read_text()
+        and len(sw.reds) == reds_before + 1
+        and "silent data loss" in sw.reds[-1],
+        (
+            (w_ge / "rc.txt").read_text(),
+            sw.reds[reds_before:],
+        ),
+    )
+    check(
+        "GE-F2 belt: the failed-closed leg is NEVER cache-reused",
+        not sw._job_cached(
+            sw._mk_job(row_max, "sem-perf", "r1", "on", "-mflags", "perf")
+        ),
     )
 
     # ---------------- 4. _job_cached ----------------

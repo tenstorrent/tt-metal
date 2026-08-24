@@ -172,9 +172,17 @@ if conf_rows:
     stale = wp.check_on_set(conf_rows, sweep.ON_FLAGS)
     check("checked-in table names only reviewed ON-set flags", stale == [], stale)
     n_groups = len(wp.group_rows(conf_rows))
+    # Budget refreshed 5 -> 8 at the ON-28 promotion (tt-metal 461ed6c796,
+    # 2026-08-23): +window-pairing +replay-record-hoist +lreg-alloc each
+    # added its own R9 union fire witness (one compile group apiece).  The
+    # stale 5 made this selftest RED at every canon tip since the
+    # promotion (lane GE noted it pre-existing; lane GF refreshed).  Keep
+    # the gate TIGHT at the current reviewed table size — the next
+    # promotion that adds a witness group must touch this budget in the
+    # same commit, which is exactly the review this check exists to force.
     check(
-        f"checked-in table stays within the 5-compile budget ({n_groups})",
-        1 <= n_groups <= 5,
+        f"checked-in table stays within the 8-compile budget ({n_groups})",
+        1 <= n_groups <= 8,
     )
 
 if FAILS:

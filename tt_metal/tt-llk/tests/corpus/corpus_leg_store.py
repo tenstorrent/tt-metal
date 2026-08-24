@@ -101,14 +101,28 @@ def flagset_key(arch, flags):
     return sha256_text(f"arch={arch}\nflags={flags}\n")
 
 
-def resolve_cc1plus(compiler):
+def build_gcc_exec_prefix(compiler_realpath):
+    """The GCC_EXEC_PREFIX the leg compile pins (build_leg): derived from
+    the --compiler realpath, single source for both the compile env and the
+    key-resolution env (FZ-F1)."""
+    return str(pathlib.Path(compiler_realpath).parent.parent / "lib/gcc") + "/"
+
+
+def resolve_cc1plus(compiler, env=None):
     """cc1plus resolved through the driver (the binary that compiles) —
-    same primary-pin discipline as sweep_2x2.py."""
+    same primary-pin discipline as sweep_2x2.py.  `env` selects WHOSE
+    resolution this is: the store key must come from the BUILD env (the
+    exact GCC_EXEC_PREFIX build_leg pins for the compile), never from the
+    caller's shell env — see derive_identity for the FZ-F1 divergence
+    refusal."""
     compiler = pathlib.Path(compiler)
     if not compiler.is_file():
         sys.exit(f"corpus-leg-store: missing compiler {compiler}")
     cc1 = subprocess.run(
-        [str(compiler), "-print-prog-name=cc1plus"], capture_output=True, text=True
+        [str(compiler), "-print-prog-name=cc1plus"],
+        capture_output=True,
+        text=True,
+        env=env,
     ).stdout.strip()
     if not cc1 or not pathlib.Path(cc1).is_file():
         sys.exit(
@@ -289,10 +303,9 @@ def build_leg(args, ident, dest_dir):
         # search path, but GCC_EXEC_PREFIX wins (drivers are byte-identical
         # across cc1plus-only rebuilds, so pinning cc1plus is the pin that
         # matters).  Verified belt-and-braces by the post-compile re-hash.
-        GCC_EXEC_PREFIX=str(
-            pathlib.Path(ident["compiler_realpath"]).parent.parent / "lib/gcc"
-        )
-        + "/",
+        # Single source with derive_identity's key resolution (FZ-F1): the
+        # entry key was resolved under exactly this GCC_EXEC_PREFIX.
+        GCC_EXEC_PREFIX=build_gcc_exec_prefix(ident["compiler_realpath"]),
     )
     started = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     rc, run_root, log, cmd = run_producer(args, workdir, rt, env)
@@ -307,8 +320,16 @@ def build_leg(args, ident, dest_dir):
             f"publish.  Log: {log if args.keep_failed else '(removed; re-run with --keep-failed)'}\n{tail}"
         )
     # Post-compile identity re-check: a mid-leg toolchain flip publishes
-    # poison labeled with the preflight sha — discard instead.
-    _, cc1_sha_after = resolve_cc1plus(args.compiler)
+    # poison labeled with the preflight sha — discard instead.  Resolved
+    # under the SAME build env the compile pinned (FZ-F1): the caller-env
+    # resolution would re-verify the wrong compiler.
+    _, cc1_sha_after = resolve_cc1plus(
+        args.compiler,
+        env=dict(
+            os.environ,
+            GCC_EXEC_PREFIX=build_gcc_exec_prefix(ident["compiler_realpath"]),
+        ),
+    )
     if cc1_sha_after != ident["cc1plus_sha256"]:
         shutil.rmtree(workdir, ignore_errors=True)
         sys.exit(
@@ -390,11 +411,42 @@ def build_leg(args, ident, dest_dir):
 
 
 def derive_identity(args):
-    cc1, cc1_sha = resolve_cc1plus(args.compiler)
+    """Store-key identity, resolved under the BUILD env (FZ-F1 fix).
+
+    build_leg compiles with GCC_EXEC_PREFIX rewritten from the --compiler
+    realpath, so the cc1plus that keys the entry MUST be resolved under
+    that same env — the historical caller-env resolution let a hybrid lane
+    (shell GCC_EXEC_PREFIX pointing at its own cc1plus) run `ensure`
+    WITHOUT --compiler and silently store PINNED-toolchain bytes under the
+    HYBRID's key (lane FZ, poisoned-key fail-open).  Both resolutions are
+    computed and any divergence REFUSES LOUDLY: it means the compiler the
+    caller's env selects is not the compiler the leg will actually invoke
+    — the fix is to pass --compiler <the intended driver>."""
+    compiler_realpath = str(pathlib.Path(args.compiler).resolve())
+    build_env = dict(
+        os.environ, GCC_EXEC_PREFIX=build_gcc_exec_prefix(compiler_realpath)
+    )
+    cc1, cc1_sha = resolve_cc1plus(args.compiler, env=build_env)
+    caller_cc1, caller_sha = resolve_cc1plus(args.compiler)
+    if caller_sha != cc1_sha:
+        sys.exit(
+            "corpus-leg-store: CC1PLUS RESOLUTION DIVERGENCE (FZ-F1 "
+            "fail-closed): the caller environment resolves cc1plus to\n"
+            f"  {caller_cc1} (sha {caller_sha})\n"
+            "but the leg will COMPILE with the --compiler-derived "
+            f"GCC_EXEC_PREFIX ({build_env['GCC_EXEC_PREFIX']}), which "
+            "resolves to\n"
+            f"  {cc1} (sha {cc1_sha})\n"
+            "— storing under either key would poison the store (a leg "
+            "keyed to one compiler, compiled by another).  Pass "
+            "--compiler <the driver whose cc1plus you intend> (hybrid "
+            "legs MUST pass their hybrid driver), or unset/realign "
+            "GCC_EXEC_PREFIX in the calling environment."
+        )
     return {
         "cc1plus": cc1,
         "cc1plus_sha256": cc1_sha,
-        "compiler_realpath": str(pathlib.Path(args.compiler).resolve()),
+        "compiler_realpath": compiler_realpath,
         "compiler_sha256": sha256_file(args.compiler),
         "objcopy": pathlib.Path(args.compiler).with_name("riscv-tt-elf-objcopy"),
         "tt_metal_head": tt_metal_head(args.tt_metal_home),
