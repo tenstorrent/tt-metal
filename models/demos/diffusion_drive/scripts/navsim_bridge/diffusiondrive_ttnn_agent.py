@@ -21,8 +21,8 @@ Wire-up (see scripts/navsim_bridge/README.md):
 
 from __future__ import annotations
 
+import io
 import os
-import pickle
 import socket
 import struct
 from typing import Any, Dict, List
@@ -42,6 +42,30 @@ def _recv_exactly(conn, n: int) -> bytes:
             raise ConnectionError("ttnn server closed mid-message")
         buf += chunk
     return buf
+
+
+def _encode_msg(obj: dict) -> bytes:
+    """Serialise a ``{name: ndarray | scalar}`` mapping as an ``.npz`` payload.
+
+    Deliberately not pickle. This frames a socket that the eval harness feeds, and
+    the pickle loader executes code found in the payload, so a malformed or hostile
+    frame would be arbitrary code execution in the process holding the device.
+    ``.npz`` carries arrays only, and is read back with ``allow_pickle=False``.
+    """
+    buf = io.BytesIO()
+    np.savez(buf, **{k: np.asarray(v) for k, v in obj.items()})
+    return buf.getvalue()
+
+
+def _decode_msg(payload: bytes) -> dict:
+    with np.load(io.BytesIO(payload), allow_pickle=False) as npz:
+        out = {}
+        for key in npz.files:
+            val = npz[key]
+            # Scalars ("cmd", "ok", "error") were widened to 0-d arrays by
+            # np.asarray on the way out — hand them back as Python scalars.
+            out[key] = val.item() if val.ndim == 0 else val
+        return out
 
 
 class DiffusionDriveTtnnAgent(AbstractAgent):
@@ -77,12 +101,12 @@ class DiffusionDriveTtnnAgent(AbstractAgent):
             "lidar_feature": features["lidar_feature"].detach().cpu().numpy().astype(np.float32),
             "status_feature": features["status_feature"].detach().cpu().numpy().astype(np.float32),
         }
-        payload = pickle.dumps(req, protocol=pickle.HIGHEST_PROTOCOL)
+        payload = _encode_msg(req)
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
             c.connect(self._sock_path)
             c.sendall(struct.pack(">Q", len(payload)) + payload)
             (length,) = struct.unpack(">Q", _recv_exactly(c, 8))
-            resp = pickle.loads(_recv_exactly(c, length))
+            resp = _decode_msg(_recv_exactly(c, length))
         if "error" in resp:
             raise RuntimeError("ttnn server error:\n" + resp["error"])
         traj = torch.from_numpy(np.asarray(resp["trajectory"])).float().unsqueeze(0)  # (1, 8, 3)

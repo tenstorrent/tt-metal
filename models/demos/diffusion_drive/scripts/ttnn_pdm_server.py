@@ -21,7 +21,8 @@ This process:
   3. serves one request at a time: recv {camera,lidar,status} numpy arrays →
      run forward → send back {trajectory} numpy array.
 
-Protocol (both directions): 8-byte big-endian length prefix + pickle payload.
+Protocol (both directions): 8-byte big-endian length prefix + numpy .npz
+payload (never pickle — see _encode_msg).
 
 Run (tt-metal venv).  Paths come from env vars (see the demo README "Eval
 environment" block); the flags below override them:
@@ -38,8 +39,8 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import io
 import os
-import pickle
 import socket
 import struct
 import sys
@@ -74,7 +75,7 @@ except OSError:
 def _trim_heap() -> None:
     """Return freed glibc-arena pages to the OS.
 
-    The per-request pickle/numpy alloc-free churn fragments the glibc heap,
+    The per-request npz/numpy alloc-free churn fragments the glibc heap,
     growing RSS ~2.6 MB/forward → host OOM over ~12k forwards. The model forward
     itself retains nothing (verified: live ttnn-tensor count stays 0 across
     forwards), so this is heap fragmentation, not a Python/ttnn reference leak —
@@ -94,13 +95,37 @@ def _recv_exactly(conn, n: int) -> bytes:
     return buf
 
 
+def _encode_msg(obj: dict) -> bytes:
+    """Serialise a ``{name: ndarray | scalar}`` mapping as an ``.npz`` payload.
+
+    Deliberately not pickle. This frames a socket that the eval harness feeds, and
+    the pickle loader executes code found in the payload, so a malformed or hostile
+    frame would be arbitrary code execution in the process holding the device.
+    ``.npz`` carries arrays only, and is read back with ``allow_pickle=False``.
+    """
+    buf = io.BytesIO()
+    np.savez(buf, **{k: np.asarray(v) for k, v in obj.items()})
+    return buf.getvalue()
+
+
+def _decode_msg(payload: bytes) -> dict:
+    with np.load(io.BytesIO(payload), allow_pickle=False) as npz:
+        out = {}
+        for key in npz.files:
+            val = npz[key]
+            # Scalars ("cmd", "ok", "error") were widened to 0-d arrays by
+            # np.asarray on the way out — hand them back as Python scalars.
+            out[key] = val.item() if val.ndim == 0 else val
+        return out
+
+
 def _recv_msg(conn):
     (length,) = struct.unpack(">Q", _recv_exactly(conn, 8))
-    return pickle.loads(_recv_exactly(conn, length))
+    return _decode_msg(_recv_exactly(conn, length))
 
 
 def _send_msg(conn, obj) -> None:
-    payload = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
+    payload = _encode_msg(obj)
     conn.sendall(struct.pack(">Q", len(payload)) + payload)
 
 
