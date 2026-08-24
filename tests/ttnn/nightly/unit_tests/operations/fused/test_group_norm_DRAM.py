@@ -225,7 +225,6 @@ def test_sdxl_base_group_norm_split_unit_shapes(device, N, C, H, W, num_groups, 
 
 
 # The 512x512 split shapes, same "512x512 or larger" criterion as test_group_norm_DRAM above.
-# Both specify_grid values, so nightly keeps the specify_grid=True variant post-commit used to run.
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_splits",
