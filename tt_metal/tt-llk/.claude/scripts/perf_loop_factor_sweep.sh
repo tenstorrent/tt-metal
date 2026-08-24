@@ -37,11 +37,13 @@ done
 
 say analysing
 python3 - "$OUT" <<'PY'
-import glob, os, sys, pandas as pd
+import glob, os, re, sys, pandas as pd
 out = sys.argv[1]
 rows = []
-for d in sorted(glob.glob(os.path.join(out, 'lf*')), key=lambda p: -int(p.rsplit('lf', 1)[1])):
-    lf = int(d.rsplit('lf', 1)[1])
+# Directories only: the glob also matches lf<N>_run.log and lf<N>_compile.log.
+dirs = [d for d in glob.glob(os.path.join(out, 'lf*')) if os.path.isdir(d)]
+for d in sorted(dirs, key=lambda p: -int(re.search(r'lf(\d+)$', p).group(1))):
+    lf = int(re.search(r'lf(\d+)$', d).group(1))
     fs = [f for f in glob.glob(os.path.join(d, '**', '*.csv'), recursive=True)
           if not f.endswith(('.post.csv', '.counters.csv'))]
     if not fs:
@@ -56,6 +58,7 @@ for d in sorted(glob.glob(os.path.join(out, 'lf*')), key=lambda p: -int(p.rsplit
         'variants': len(t),
         'median_kernel_cycles': t['mean(L1_TO_L1)'].median(),
         'flipping': len(f),
+        'flip_%': round(len(f) / len(t) * 100, 2),
         'median_std': f['std(L1_TO_L1)'].median() if len(f) else 0,
         'max_std': f['std(L1_TO_L1)'].max() if len(f) else 0,
         'median_std_per_tile': (f['std(L1_TO_L1)'] / (lf * f['tile_cnt'])).median() if len(f) else 0,

@@ -12,7 +12,7 @@ out, and what it does not.
 | [02](02-counters-cannot-see-it.md) | Can hardware counters show which stall it is? | **No.** The counter build does not reproduce the effect at all |
 | [03](03-per-thread-zones.md) | Inside the real pipeline, is the time lost in a thread or between threads? | **Unanswerable with these zones.** All three span the whole loop |
 | [04](04-repetition-does-not-help.md) | Can repeated runs average the instability away? | **No.** Median-of-5 still fails every gate run |
-| [05](05-the-cost-is-per-tile.md) | Is the extra time an event, or a rate? | **A rate.** About two extra cycles per tile, sustained |
+| [05](05-the-cost-is-per-tile.md) | Is the extra time an event, or a rate? | **A rate**, confirmed by a loop-factor sweep. It survives down to a 4,945-cycle kernel |
 
 ## Where this stands
 
@@ -61,8 +61,8 @@ Every instrument available has now been tried.
 | Per-thread zones (03) | **Ruled out.** The zones span the whole loop, so they cannot localise |
 | Repetition — median, min (04) | **Ruled out.** Cannot suppress it |
 | A zone around a single handshake | Kernel change, in the exact region under suspicion. 02 suggests it may remove the effect |
-| **Loop-factor sweep (05)** | **The open lead.** `.claude/scripts/perf_loop_factor_sweep.sh` |
-| RTL simulation | Was closed: a 200,000-cycle kernel is hours to days, and RTL is deterministic. **05 may reopen it** -- if the cost is per tile, a ~1,900-cycle reproducer is about a minute of simulation, and at that size you read the handshake directly rather than hoping to catch a race |
+| Loop-factor sweep (05) | **Done.** Std per tile is flat across a 64-fold range; the effect survives at 4,945 cycles |
+| **Shrink further and take it to RTL** | **The open lead.** A ~5,000-cycle kernel is minutes of simulation, not days. Narrow to one configuration with `-k`, sweep `FACTORS="8 4 2"`, then simulate |
 | Hand it to the packer path owner | The realistic route to a root cause |
 
 Note also `marko/dvalid-vs-semaphore-perf`, which is measuring dvalid against

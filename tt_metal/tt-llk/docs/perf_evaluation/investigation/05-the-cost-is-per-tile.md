@@ -80,8 +80,45 @@ the handshake cycle by cycle.
 factors 1024, 256, 64 and 16 with `run_count=20`, and reports how many
 measurements still flip and the per-tile cost at each.
 
-- **The jump scales linearly and still flips at 16** — the per-tile reading is
-  confirmed and you have a minimal reproducer.
-- **It stops flipping below some loop factor** — the two rhythms need time to
-  establish, which is a strong clue in itself, and that threshold is the smallest
-  case that reproduces.
+## The sweep result: confirmed
+
+| loop_factor | kernel cycles | still flipping | median std | max std | **std per tile** |
+|--:|--:|--:|--:|--:|--:|
+| 1024 | 298,242 | 96 | 911 | 3,278 | **0.287** |
+| 256 | 74,738 | 283 | 91 | 965 | **0.248** |
+| 64 | 18,891 | 897 | 25 | 272 | **0.311** |
+| 16 | **4,945** | 2,844 | 9.5 | 66.6 | **0.353** |
+
+`perf_math_matmul`, `L1_TO_L1`, `run_count=20`, 19,920 variants at each factor.
+
+**Std per tile is flat across a 64-fold range of loop factor.** The cost is per
+tile, measured rather than inferred.
+
+**The effect survives down to a 4,945-cycle kernel**, with a maximum std of 66.6
+cycles — 1.3% of the measurement, comfortably detectable.
+
+### A caveat on the flipping counts
+
+They are **not comparable between rows.** The criterion combines an absolute
+floor (`std > 5`) with a relative one (`cv > 0.002`), and which one binds changes
+with kernel size: at loop factor 1024 it requires a std above 596, at 16 only
+above 10. The rise from 96 to 2,844 is mostly that, not the effect worsening.
+What the table establishes is **persistence** and the **flat per-tile column**.
+
+### What it unlocked
+
+A 4,945-cycle kernel simulates in eight minutes at 10 cycles per second, or five
+seconds at 1000. The objection that closed RTL — a 200,000-cycle kernel being
+hours to days — no longer applies. `loop_factor=4` should reach roughly 1,200
+cycles.
+
+Note also that each loop factor took 11–13 minutes regardless of size: 11:58 at
+1024, 11:05 at 16. The cost is per-variant setup across 20,000 variants, not the
+loop. **A targeted reproducer should cut the variant count with `-k`, not just
+the loop factor.**
+
+## Next
+
+Pick the smallest kernel that still flips hard, narrow to that single
+configuration with `-k`, and sweep `FACTORS="8 4 2"`. That runs in minutes rather
+than fifty, and produces the case to take to RTL.
