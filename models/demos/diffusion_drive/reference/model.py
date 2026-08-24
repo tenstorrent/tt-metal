@@ -1016,7 +1016,11 @@ def load_model(
         device = torch.device("cpu")
 
     model = DiffusionDriveModel(config)
-    ckpt = torch.load(checkpoint_path, map_location=device)
+    # weights_only=True is explicit rather than inherited: this is the load path the
+    # tests and the eval agent actually use, and the checkpoint is only ever read as a
+    # tensor state_dict. Being explicit keeps it safe on torch builds whose default
+    # differs, instead of silently opting into the code-executing pickle path.
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=True)
 
     # upstream checkpoints are nested under "state_dict"
     state_dict = ckpt.get("state_dict", ckpt)
