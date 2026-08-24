@@ -27,11 +27,13 @@ inline void Noc::async_write_zeros(
     const uint32_t max_chunk =
         (size_bytes > (uint32_t)NOC_MAX_BURST_SIZE) ? (uint32_t)NOC_MAX_BURST_SIZE : size_bytes;
     if constexpr (std::is_same_v<Scratch, DataflowBuffer>) {
-        // DFB exposes get_entry_size(); assert one reserved entry is big enough.
-        // The other admitted scratch types have no size accessor reachable from here, so the
-        // equivalent assert is intentionally omitted — callers own the size-vs-page-size discipline
-        // (at the host program-factory level for a CB or a Scratchpad).
+        // DFB exposes get_entry_size(); assert one reserved entry is big enough. Scratchpad also has
+        // an extent, checked in the branch below. CircularBuffer, CoreLocalMem and
+        // LocalTensorAccessor expose no size at all, so for those three scratch capacity stays the
+        // caller's responsibility.
         ASSERT(scratch.get_entry_size() >= max_chunk);
+    } else if constexpr (is_scratchpad_v<Scratch>) {
+        ASSERT(scratch.size_in_bytes() >= max_chunk);
     }
     uint32_t src_addr = get_src_ptr<AddressType::LOCAL_L1>(scratch, src_args_t<Scratch>{});
     uint64_t dst = accessor.get_noc_addr(args.page_id, args.offset_bytes, noc_id_);

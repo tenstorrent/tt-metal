@@ -22,6 +22,9 @@ inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const ds
         "noc.async_write_zeros: unsupported local-L1 destination. Supported: CircularBuffer, "
         "DataflowBuffer, CoreLocalMem, Scratchpad, LocalTensorAccessor. Use the TensorAccessor overload for DRAM.");
 
+    if constexpr (is_scratchpad_v<Dst>) {
+        ASSERT(static_cast<uint64_t>(args.offset_bytes) + size_bytes <= dst.size_in_bytes());
+    }
     const uint32_t local_addr = static_cast<uint32_t>(get_dst_ptr<AddressType::LOCAL_L1>(dst, args));
     DEBUG_SANITIZE_L1_ADDR(local_addr, size_bytes);
     ASSERT(local_addr % NOC_L1_WRITE_ALIGNMENT_BYTES == 0);

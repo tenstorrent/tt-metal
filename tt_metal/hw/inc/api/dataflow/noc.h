@@ -36,6 +36,10 @@ struct noc_traits_t<MulticastEndpoint>;
 template <typename T>
 inline constexpr bool noc_zero_l1_endpoint_v = false;
 
+// Is T a Scratchpad?
+template <typename T>
+inline constexpr bool is_scratchpad_v = false;
+
 /**
  * @brief Compile-time bit-flags that control optional NoC transaction behaviours.
  *
@@ -720,7 +724,7 @@ public:
     /**
      * @brief Zeroes a local-L1 destination buffer (overload 1).
      *
-     * Zeroes [base + @p args.offset_bytes, + @p size_bytes), where base is:
+     * Zeroes [start, start + @p size_bytes) where start = base + @p args.offset_bytes, and base is:
      *   - CircularBuffer / DataflowBuffer : get_write_ptr()
      *   - Scratchpad                      : get_base_address()
      *   - LocalTensorAccessor             : get_bank_base_address()
@@ -730,9 +734,9 @@ public:
      * @note The destination bytes are UNDEFINED until write_zeros_l1_barrier() returns: do not read
      *       or write the window before the barrier.
      *
-     * @note Wormhole/Blackhole: the zero is a NOC loopback read from the 32B-aligned zeros region, so
-     *       the destination address (base + @p args.offset_bytes) must be NOC_L1_READ_ALIGNMENT_BYTES
-     *       aligned.
+     * @note Destination alignment (base + @p args.offset_bytes): NOC_L1_READ_ALIGNMENT_BYTES on
+     *       Wormhole/Blackhole (the zero is a NOC loopback read), NOC_L1_WRITE_ALIGNMENT_BYTES on
+     *       Quasar (an iDMA write). Both are 16 on Wormhole and Blackhole, and 1 on Quasar.
      *
      * @note Quasar: this temporarily reprograms the overlay write command buffer (cmd buffer 0)
      *       into iDMA zero mode; it is restored to normal write mode only by
