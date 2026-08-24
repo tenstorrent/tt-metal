@@ -2808,13 +2808,42 @@ overload and all three call sites -- for no measurable gain. The race it fixed i
 latent, and not worth that price on its own; if it is ever fixed it should be fixed without
 the parameter.
 
-**So the remaining 2.6x is not in the handshake at all.** The hoist ablation puts per-k-block
-movement at ~26us a round across two broadcasts, and a flush is a couple of microseconds of
-that -- the rest is the read and the broadcast themselves. No mechanism identified, and after
-naming one that turned out to be shared with ttnn, that is where this stops rather than a
-fifth guess. The measurement worth trusting next is instrumenting the sender directly --
-timing the read, the ready-wait and the multicast write as three separate zones -- rather
-than inferring from totals.
+### Three zones on the sender, and the answer
+
+`TT_UNIFIED_MCAST_ZONES` puts a `DeviceZoneScopedN` around each of the three things a sender
+does per k-block. Off by default: a zone per block per core fills the profiler buffer
+quickly, and it drops records silently once it does. Note that `fn` merely ISSUES the reads,
+which are asynchronous, so their cost lands in the barrier rather than in the issue.
+
+32 cores (4x8), mt=4 kt=8 nt=8, eight k-blocks, per sender summed over its blocks:
+
+| zone | per block | per sender | share |
+|---|---|---|---|
+| MCAST-READY -- waiting for receivers | 0.04 us | 0.3 us | **0.2%** |
+| MCAST-DRAM -- the reads landing | 21.46 us | 127.3 us | **72%** |
+| MCAST-SEND -- broadcast, flag, flushes | 7.54 us | 50.2 us | 28% |
+
+**The handshake wait is 0.3us.** Everything spent on the counter protocol was aimed at a cost
+that does not exist -- which is the strongest argument for having reverted it, and a reminder
+that the flushes were never the same thing as the waiting.
+
+**It is the DRAM read, and it is bandwidth, not per-page overhead.** The two senders disagree
+too much for a fixed cost per request: the A sender moves 32 tiles at 151ns a page (13.6GB/s)
+while the B sender moves 64 at 366ns (5.6GB/s). What they have in common is the moment --
+twelve sender cores reading at once. Per k-block the grid demands 4x64KB of A plus 8x128KB of
+B, 1280KB, and over eight blocks exactly the 10MB that A-once-plus-B-once should be. At the
+B sender's 23.45us a block that is 188us of DRAM on the critical path, which is the 185us the
+hoist ablation attributed to operand movement, arrived at independently.
+
+**So: 56GB/s aggregate against ttnn's 84GB/s on the same 10MB.** Not more traffic, not more
+requests, not synchronisation -- the same bytes moving more slowly. That is where the 2.6x
+lives, and it is a narrower target than anything earlier in this file: the sender's read
+pattern against DRAM, twelve cores at a time.
+
+Worth noting what this says about the earlier sharding question. ttnn reaches 84GB/s from
+interleaved DRAM, so sharding is not how it gets there -- but a sharded weight would give
+each sender a contiguous run in one bank instead of pages round-robining across banks, and
+contiguity is the one property of the read pattern we have not tried changing.
 
 Recorded because the sequence matters: the bandwidth ratio suggested a story, the ablation
 narrowed it to the per-k-block movement, and only READING THE OTHER IMPLEMENTATION showed
