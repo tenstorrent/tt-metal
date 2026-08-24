@@ -44,7 +44,6 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_p
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
     get_fused_ring_host_timing,
-    num_full_indexer_layers,
     reset_fused_ring_host_timing,
     resolve_has_indexer,
 )
@@ -146,7 +145,7 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 # Traced and untraced get SEPARATE tables and SEPARATE margins, selected by mode in
 # `kimi_chunked_perf_gate` -- a traced baseline can never gate an untraced run or vice versa. The two
 # are different regimes, not a small delta: traced measures 0.6-0.95 s/chunk (a ramp, since chunk c
-# attends to KV[0:c*CHUNK]) while untraced is a flat ~1.09 s/chunk, host-dispatch bound so the op2op
+# attends to KV[0:c*CHUNK]) while untraced is a flat ~1.04 s/chunk, host-dispatch bound so the op2op
 # gap swamps the depth ramp entirely.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
@@ -170,23 +169,19 @@ KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
-    # (55k / code_debug). Per chunk, the MEDIAN OVER 10 CI RUNS of that run's own per-chunk median --
-    # a single run is not a usable baseline here the way it is for the traced twin. The 10 (all green,
-    # 2026-08-15, `main`, bh_sc1_high_power): 31868565025 31868547288 31868532277 31868515545
-    # 31868482938 31868467067 31868452031 31868433473 31867986909 31866023124.
+    # (55k / code_debug), 2026-08-21 on an 8x4 galaxy, with the routed experts folded into one program
+    # on a Fabric2D mesh. One run's per-chunk medians -- unlike the traced twin, a single run is thin
+    # evidence here, so re-cut this from a set of green runs the first time it disagrees.
     #
     # WITHIN a run the untraced spread is huge -- per-chunk stddev reaches 0.33 s (~30%), because every
     # iteration re-dispatches every op from host and pays a fresh, variable op2op gap. The MEDIAN of the
-    # 9 post-warmup iterations is not: across those 10 runs no chunk median lands further than 2.9% from
-    # the values below, and widening the sample to all 32 runs with a table from 2026-08-11 to 08-15
-    # (many branches) only reaches 3.2%. So the gate is on the median, with UNTRACED_PERF_MARGIN rather
-    # than the traced 3%.
+    # 9 post-warmup iterations is not: on the previous baseline no chunk median across 32 recorded runs
+    # landed further than 3.2% from its median-of-runs value. So the gate is on the median, with
+    # UNTRACED_PERF_MARGIN rather than the traced 3%.
     #
-    # If this does go flaky, re-center before widening: these are the median over the 10 runs, and
-    # centering each chunk on the midrange of all 32 instead pulls the worst deviation to 2.7% (the
-    # 3.2% is one-sided). Widening to 10% is the fallback after that -- every observed run fits inside
-    # a 6.2% total spread, so a band that needs more than 10% is a regression, not noise.
-    (61, 11, 10): [1.095, 1.094, 1.091, 1.098, 1.093, 1.089, 1.092, 1.089, 1.094, 1.089, 1.090],
+    # If this goes flaky, re-center on the median over several runs before widening. Widening to 10% is
+    # the fallback after that -- a band that needs more than 10% is a regression, not noise.
+    (61, 11, 10): [1.043, 1.036, 1.037, 1.047, 1.044, 1.034, 1.034, 1.034, 1.046, 1.041, 1.044],
 }
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
 # program, so the device is its only noise source; untraced re-dispatches from host every iteration and
@@ -314,7 +309,7 @@ def _record_indexer_k_cache_pcc(
     indexer_k is captured for a subset of layers (glm_5_1: all; glm_5_2: 0-2 + every 4th) — layers without
     a golden are skipped. GLM DSA variants only."""
     logger.info("Device indexer-K cache vs golden dsa/indexer_k:")
-    cache_full = gather_cache_tp0(tt_index_kv_cache, mesh_device)  # [num_full_indexer_layers or num_layers, T, D]
+    cache_full = gather_cache_tp0(tt_index_kv_cache, mesh_device)  # [full layers built, T, D]
     layers = [i for i in range(num_layers) if (trace_dir / "dsa" / f"indexer_k_layer_{i}").exists()]
     if not layers:
         logger.info("  (no indexer_k golden layers present -- skipping)")
@@ -411,7 +406,8 @@ def _preload_indexer_k_prefix_from_trace(
     trace, so a measured chunk at KV depth preload_isl has a REAL indexer prefix (representative top-k
     selection at depth) rather than a zero prior. Only "full" indexer layers own a cache slot / have a
     golden (glm_5_1: all; glm_5_2: 0-2 + every 4th); layer i is written to its compacted slot
-    full_indexer_rank(config, i), and the cache is strided by num_full_indexer_layers. The golden
+    full_indexer_rank(config, i), and the cache is strided by the full-layer count over the built
+    layers. The golden
     index_head_dim key is [rope | nope] already in the device's interleaved basis (GLM), so it is written
     verbatim -- no re-interleave (unlike KVPE's k_pe half-split -> interleaved). Rows past the trace are
     random (timing-representative). Mirrors _preload_kvpe_prefix_from_trace otherwise."""
@@ -419,7 +415,7 @@ def _preload_indexer_k_prefix_from_trace(
     if not full_layers:
         logger.info(f"no indexer_k golden in trace {trace_dir}; leaving the indexer prefix zero")
         return
-    num_slots = num_full_indexer_layers(config) or num_layers
+    num_slots = full_indexer_rank(config, num_layers)
     real_len = min(preload_isl, trace_len)
     rand_len = preload_isl - real_len
     logger.info(
@@ -746,15 +742,15 @@ def run_chunked_transformer(
     # forward, exactly like the KVPE cache. It is user-major layer-stacked
     # [num_users*index_cache_layers, 1, T, D_idx], so the indexer addresses slot
     # user*index_cache_layers + cache_layer_idx. Unlike the per-layer KVPE cache, the indexer stride is the
-    # COMPACTED full-indexer count (num_full_indexer_layers) for GLM-5.2 cross-layer reuse — "shared" layers
-    # reuse a "full" layer's cache and get no slot of their own — falling back to num_layers when there is no
-    # indexer_types map. bf8 (half the memory, top-k within bf16 noise). Dense variants get None.
+    # COMPACTED full-indexer count over the layers this instance builds — GLM-5.2 "shared" layers reuse a
+    # "full" layer's cache and get no slot of their own, and full_indexer_rank returns num_layers unchanged
+    # without an indexer_types map. bf8 (half the memory, top-k within bf16 noise). Dense variants get None.
     tt_index_kv_cache = None
     if has_indexer:
         # A sparse config must carry index_head_dim; assert rather than silently defaulting so a
         # misconfigured (missing-field) sparse setup fails loudly with a clear message.
         assert getattr(config, "index_head_dim", None) is not None, "sparse config must provide index_head_dim"
-        index_cache_layers = num_full_indexer_layers(config) or num_layers
+        index_cache_layers = full_indexer_rank(config, num_layers)
         tt_index_kv_cache = init_kvpe_cache(
             kvpe_cache_head_dim=config.index_head_dim,
             mesh_device=mesh_device,
@@ -1337,9 +1333,9 @@ def run_chunked_transformer_updated(
     )
 
     # Sparse (DSA) layers read a block-cyclic indexer key cache that is caller-owned and passed into
-    # forward, exactly like the KVPE cache. Strided by the compacted full-indexer count
-    # (num_full_indexer_layers, >1 for glm_5_2 cross-layer reuse; num_layers without an indexer_types map)
-    # so it matches the indexer's cache_batch stride. bf8 TILE. Dense variants get None.
+    # forward, exactly like the KVPE cache. Strided by the compacted full-indexer count over the built
+    # layers (>1 for glm_5_2 cross-layer reuse; num_layers without an indexer_types map) so it matches the
+    # indexer's cache_batch stride. bf8 TILE. Dense variants get None.
     tt_index_kv_cache = None
     if resolve_has_indexer(config):
         assert getattr(config, "index_head_dim", None) is not None, "sparse config must provide index_head_dim"
@@ -1349,7 +1345,7 @@ def run_chunked_transformer_updated(
             seq_len=SEQ_CACHE_NOPCC,
             mesh_shape=mesh_shape,
             sp_axis=sp_axis,
-            num_kvpe_cache_layers=num_full_indexer_layers(config) or num_layers,
+            num_kvpe_cache_layers=full_indexer_rank(config, num_layers),
             num_users=1,
             dtype=ttnn.bfloat8_b,
         )

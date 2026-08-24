@@ -9,6 +9,7 @@
 #include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "api/debug/ring_buffer.h"
 #include "internal/debug/stack_usage.h"
 #include "internal/debug/sanitize.h"
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
@@ -236,6 +237,8 @@ extern "C" uint32_t _start1() {
     if (hartid == 0) {
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
+        // Must precede the ready flag below, which releases the other pushers.
+        WATCHER_RING_BUFFER_INIT();
         // Originally initalized to WAIT by host firmware initializer.
         // Will be set back to WAIT immediately before running kernels.
         (*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
