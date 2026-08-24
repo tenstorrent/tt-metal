@@ -532,6 +532,9 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     // kernel_run_args loop below and the binding-only second pass after it.
     auto append_binding_crtas = [&](const auto& binding_handles, std::vector<uint32_t>& out) {
         for (const auto& handle : binding_handles) {
+            if (handle.is_null) {
+                continue;  // null bindings consume no CRTA words
+            }
             auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
             TT_FATAL(
                 t_it != tensor_by_param.end(),
@@ -542,16 +545,19 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         }
     };
 
-    // Append a kernel's scratchpad CRTA section to `out`, in binding order: one word per scratchpad
-    // binding, holding the scratchpad's allocated L1 base address. On the factory path,
+    // Append a kernel's scratchpad CRTA section to `out`, in binding order: one word per non-null
+    // scratchpad binding, holding the scratchpad's allocated L1 base address. On the factory path,
     // reserve_runtime_arg_buffers + allocate_scratchpads may already have filled this; on the
     // legacy order (SetProgramRunArgs before allocate_scratchpads) the address is 0 here and is
     // patched later. On any re-assembly the handle already carries the allocated address, so it
-    // is filled directly. The section is always present (sized by the kernel's scratchpad
+    // is filled directly. The section is always present (sized by the kernel's non-null scratchpad
     // bindings), so the buffer's word count is stable across re-set calls (install_crtas asserts
     // that).
     auto append_scratchpad_crtas = [](const auto& scratchpad_handles, std::vector<uint32_t>& out) {
         for (const auto& handle : scratchpad_handles) {
+            if (handle.is_null) {
+                continue;
+            }
             out.push_back(handle.allocated_address);
         }
     };
@@ -717,12 +723,20 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         const auto& binding_handles = kernel->tensor_binding_handles();
         std::size_t binding_section_words = 0;
         for (const auto& handle : binding_handles) {
-            binding_section_words += 1u + handle.num_runtime_field_crta_words;
+            if (!handle.is_null) {
+                binding_section_words += 1u + handle.num_runtime_field_crta_words;
+            }
+        }
+        std::size_t scratchpad_section_words = 0;
+        for (const auto& handle : kernel->scratchpad_binding_handles()) {
+            if (!handle.is_null) {
+                scratchpad_section_words += 1;
+            }
         }
         std::vector<uint32_t> combined_crtas;
         combined_crtas.reserve(
-            schema->common_runtime_arg_names.size() + binding_section_words +
-            kernel->scratchpad_binding_handles().size() + kernel_common_runtime_varargs(kernel_params).size());
+            schema->common_runtime_arg_names.size() + binding_section_words + scratchpad_section_words +
+            kernel_common_runtime_varargs(kernel_params).size());
         for (const auto& name : schema->common_runtime_arg_names) {
             auto v_it = kernel_params.common_runtime_arg_values.find(name);
             TT_FATAL(
@@ -847,6 +861,9 @@ void UpdateTensorArgs(
 
         RuntimeArgsData& crta = kernel->common_runtime_args_data();
         for (const auto& handle : binding_handles) {
+            if (handle.is_null) {
+                continue;
+            }
             auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
             TT_FATAL(
                 t_it != tensor_by_param.end(),
@@ -1189,9 +1206,16 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                 const auto& binding_handles = kernel->tensor_binding_handles();
                 size_t binding_section_words = 0;
                 for (const auto& h : binding_handles) {
-                    binding_section_words += 1u + h.num_runtime_field_crta_words;
+                    if (!h.is_null) {
+                        binding_section_words += 1u + h.num_runtime_field_crta_words;
+                    }
                 }
-                const size_t scratchpad_section_words = kernel->scratchpad_binding_handles().size();
+                size_t scratchpad_section_words = 0;
+                for (const auto& h : kernel->scratchpad_binding_handles()) {
+                    if (!h.is_null) {
+                        scratchpad_section_words += 1;
+                    }
+                }
                 const size_t crta_vararg_base =
                     schema->common_runtime_arg_names.size() + binding_section_words + scratchpad_section_words;
                 for (size_t j = 0; j < cvarargs.size(); ++j) {
@@ -1232,7 +1256,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
             }
             bool any_supplied = false;
             for (const auto& handle : binding_handles) {
-                if (tensor_by_param.contains(handle.tensor_parameter_name)) {
+                if (!handle.is_null && tensor_by_param.contains(handle.tensor_parameter_name)) {
                     any_supplied = true;
                     break;
                 }
@@ -1247,6 +1271,9 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                 kernel_name);
             RuntimeArgsData& crta = kernel->common_runtime_args_data();
             for (const auto& handle : binding_handles) {
+                if (handle.is_null) {
+                    continue;
+                }
                 auto t_it = tensor_by_param.find(handle.tensor_parameter_name);
                 if (t_it == tensor_by_param.end()) {
                     continue;  // tensor omitted → binding slot retained.

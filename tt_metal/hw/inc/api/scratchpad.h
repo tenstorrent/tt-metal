@@ -9,6 +9,7 @@
 
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
+#include "api/null_state.h"
 #include "experimental/kernel_args.h"
 
 // Opaque handle for a Program-scope scratchpad binding (declared in kernel_bindings_generated.h).
@@ -24,10 +25,21 @@
 //
 // Here my_scratchpad_name is a constexpr ScratchpadBindingToken, auto-included in
 // kernel_bindings_generated.h.
-class ScratchpadBindingToken {
+//
+// NullState tags whether this KernelSpec attached the accessor to a real scratchpad (NonNull,
+// default) or left the resource id empty (Null). Constructing Scratchpad from a Null token is deleted.
+//
+template <NullState S = NonNull>
+class ScratchpadBindingToken;
+
+template <>
+class ScratchpadBindingToken<NonNull> {
 public:
     explicit constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes) noexcept :
         crta_offset_(crta_offset), size_in_bytes_(size_in_bytes) {}
+
+    static constexpr bool is_null = false;
+    constexpr operator bool() const noexcept { return true; }
 
 private:
     template <typename T>
@@ -36,6 +48,18 @@ private:
     uint32_t crta_offset_;    // word index of the base-address slot in the CRTA buffer
     uint32_t size_in_bytes_;  // static per-node size
 };
+
+template <>
+class ScratchpadBindingToken<Null> {
+public:
+    constexpr ScratchpadBindingToken() noexcept = default;
+
+    static constexpr bool is_null = true;
+    constexpr operator bool() const noexcept { return false; }
+};
+
+// CTAD: `ScratchpadBindingToken{word, size}` → NonNull (matches codegen's unadorned emission).
+ScratchpadBindingToken(uint32_t, uint32_t) -> ScratchpadBindingToken<NonNull>;
 
 /**
  * @brief Kernel-side typed span over a Program-scope scratchpad.
@@ -76,8 +100,11 @@ public:
     using const_reference = const T&;
 
     // Metal 2.0 ctor: Create a Scratchpad from its binding token:
-    [[nodiscard]] explicit Scratchpad(const ScratchpadBindingToken& token) noexcept :
+    [[nodiscard]] explicit Scratchpad(const ScratchpadBindingToken<NonNull>& token) noexcept :
         Scratchpad(pointer{get_common_arg_val<uint32_t>(token.crta_offset_)}, token.size_in_bytes_) {}
+
+    // Null bindings have no allocated region — constructing a Scratchpad from one is a compile error.
+    explicit Scratchpad(const ScratchpadBindingToken<Null>&) = delete;
 
     /** @brief Get the element at the given index
      *
