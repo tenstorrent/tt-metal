@@ -102,6 +102,10 @@ def _encode_msg(obj: dict) -> bytes:
     the pickle loader executes code found in the payload, so a malformed or hostile
     frame would be arbitrary code execution in the process holding the device.
     ``.npz`` carries arrays only, and is read back with ``allow_pickle=False``.
+
+    Duplicated in the two endpoints on purpose: the agent side runs in the navsim
+    conda env (3.9) and the server side in the tt-metal venv (3.10), which is the
+    reason this bridge exists at all — they cannot import a shared module.
     """
     buf = io.BytesIO()
     np.savez(buf, **{k: np.asarray(v) for k, v in obj.items()})
