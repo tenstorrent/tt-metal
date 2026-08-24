@@ -20,25 +20,8 @@ namespace ttnn::prim {
 
 using namespace tt::constants;
 
-namespace {
-// Fill reader is converted in place (deepseek_prefill carries its own fork, not this file).
-constexpr const char* kFillReaderSource =
-    "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/dataflow/reader_fill_cache_interleaved_start_id.cpp";
-// Fill writer reuses the existing cross-family donor Metal 2.0 fork (shared-kernel rung 1): bind it,
-// adopt its interface (dfb::out CONSUMER, tensor::dst, named RTAs num_pages + start_id).
-constexpr const char* kFillWriterSource =
-    "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_metal2.cpp";
-
-// Named resources. Function-local (via this helper) to avoid unity-build symbol collisions with the
-// update factory's identically-named constants.
-struct FillNames {
-    KernelSpecName READER{"reader"};
-    KernelSpecName WRITER{"writer"};
-    DFBSpecName SRC0_DFB{"src0"};  // legacy c_0 (input, reused as pass-through output)
-    TensorParamName INPUT{"input"};
-    TensorParamName DST{"dst"};  // the cache tensor (donor writer's tensor::dst)
-};
-}  // namespace
+// Kernel sources and spec resource names are declared function-locally at their use sites (below) to
+// avoid unity-build symbol collisions with the update factory's identically-named constants.
 
 std::vector<std::pair<CoreCoord, std::uint32_t>> compute_fill_cache_start_ids(
     const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args) {
@@ -118,12 +101,12 @@ std::vector<std::pair<CoreCoord, std::uint32_t>> compute_fill_cache_start_ids(
 
 ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::create_program_artifacts(
     const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args, Tensor& tensor_return_value) {
-    const FillNames names;
-    const auto& READER = names.READER;
-    const auto& WRITER = names.WRITER;
-    const auto& SRC0_DFB = names.SRC0_DFB;
-    const auto& INPUT = names.INPUT;
-    const auto& DST = names.DST;
+    // Spec resource names (function-local to avoid unity-build collisions with the update factory).
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const DFBSpecName SRC0_DFB{"src0"};  // legacy c_0 (input, reused as pass-through output)
+    const TensorParamName INPUT{"input"};
+    const TensorParamName DST{"dst"};  // the cache tensor (donor writer's tensor::dst)
 
     const auto& cache_tensor = tensor_args.cache;
     const auto& input_tensor = tensor_args.input;
@@ -209,7 +192,10 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
     }
     const KernelSpec reader{
         .unique_id = READER,
-        .source = kFillReaderSource,
+        // Converted in place — not shared: deepseek_prefill carries its own fork, not this file.
+        .source =
+            "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/dataflow/"
+            "reader_fill_cache_interleaved_start_id.cpp",
         .compiler_options = {.defines = reader_defines},
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = SRC0_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER}},
@@ -221,7 +207,11 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
     // ---- Writer (donor Metal 2.0 fork; its interface: dfb::out CONSUMER, tensor::dst, num_pages/start_id) ----
     const KernelSpec writer{
         .unique_id = WRITER,
-        .source = kFillWriterSource,
+        // Reuse the existing cross-family donor Metal 2.0 fork (shared-kernel rung 1): bind it, adopt
+        // its interface (dfb::out CONSUMER, tensor::dst, named RTAs num_pages + start_id).
+        .source =
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+            "writer_unary_interleaved_start_id_metal2.cpp",
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = SRC0_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = DST, .accessor_name = "dst"}},
@@ -277,10 +267,10 @@ tt::tt_metal::experimental::ProgramRunArgs FillCacheMultiCoreProgramFactory::ove
     const KvCacheInputs& tensor_args,
     Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    const FillNames names;
-    const auto& WRITER = names.WRITER;
-    const auto& INPUT = names.INPUT;
-    const auto& DST = names.DST;
+    // Spec resource names — must match create_program_artifacts (function-local, per-factory).
+    const KernelSpecName WRITER{"writer"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName DST{"dst"};
 
     // Runs on every program-cache hit. compute_program_hash excludes batch_idx / update_idx, so the
     // writer's start_id (== cache_start_id) is NOT stable and must be re-applied. Buffer addresses

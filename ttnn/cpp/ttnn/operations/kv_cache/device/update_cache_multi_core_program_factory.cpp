@@ -20,33 +20,9 @@ namespace ttnn::prim {
 
 using namespace tt::constants;
 
-namespace {
 // Kernel sources (converted in place — not shared: paged_cache carries its own private copies).
-constexpr const char* kUpdateReaderSource =
-    "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/dataflow/reader_update_cache_interleaved_start_id.cpp";
-constexpr const char* kUpdateWriterSource =
-    "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/dataflow/writer_update_cache_interleaved_start_id.cpp";
-constexpr const char* kUpdateComputeSource =
-    "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/compute/update_cache.cpp";
-
-// Named resources. Declared function-locally (via this helper) rather than at namespace scope to
-// avoid unity-build symbol collisions with the fill factory's identically-named constants, while
-// keeping the create / override binding vocabulary from drifting.
-struct UpdateNames {
-    KernelSpecName READER{"reader"};
-    KernelSpecName WRITER{"writer"};
-    KernelSpecName COMPUTE_G1{"compute_group_1"};
-    KernelSpecName COMPUTE_G2{"compute_group_2"};
-    DFBSpecName CACHE_DFB{"cache"};      // legacy c_0 (src0)
-    DFBSpecName INPUT_DFB{"input"};      // legacy c_1 (src1)
-    DFBSpecName INTERM0_DFB{"interm0"};  // legacy c_24 (aliases c_25's L1)
-    DFBSpecName INTERM1_DFB{"interm1"};  // legacy c_25 (aliases c_24's L1)
-    DFBSpecName INTERM2_DFB{"interm2"};  // legacy c_26 (untilized_input)
-    DFBSpecName OUTPUT_DFB{"output"};    // legacy c_16
-    TensorParamName CACHE{"cache"};
-    TensorParamName INPUT{"input"};
-};
-}  // namespace
+// Declared function-locally at their use sites to avoid unity-build symbol collisions; the spec
+// resource names (KernelSpecName / DFBSpecName / TensorParamName) are likewise function-local below.
 
 UpdateCacheDynamicArgs compute_update_cache_dynamic_args(
     const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args) {
@@ -144,19 +120,19 @@ UpdateCacheDynamicArgs compute_update_cache_dynamic_args(
 
 ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::create_program_artifacts(
     const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args, Tensor& tensor_return_value) {
-    const UpdateNames names;
-    const auto& READER = names.READER;
-    const auto& WRITER = names.WRITER;
-    const auto& COMPUTE_G1 = names.COMPUTE_G1;
-    const auto& COMPUTE_G2 = names.COMPUTE_G2;
-    const auto& CACHE_DFB = names.CACHE_DFB;
-    const auto& INPUT_DFB = names.INPUT_DFB;
-    const auto& INTERM0_DFB = names.INTERM0_DFB;
-    const auto& INTERM1_DFB = names.INTERM1_DFB;
-    const auto& INTERM2_DFB = names.INTERM2_DFB;
-    const auto& OUTPUT_DFB = names.OUTPUT_DFB;
-    const auto& CACHE = names.CACHE;
-    const auto& INPUT = names.INPUT;
+    // Spec resource names (function-local to avoid unity-build collisions with the fill factory).
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE_G1{"compute_group_1"};
+    const KernelSpecName COMPUTE_G2{"compute_group_2"};
+    const DFBSpecName CACHE_DFB{"cache"};      // legacy c_0 (src0)
+    const DFBSpecName INPUT_DFB{"input"};      // legacy c_1 (src1)
+    const DFBSpecName INTERM0_DFB{"interm0"};  // legacy c_24 (aliases c_25's L1)
+    const DFBSpecName INTERM1_DFB{"interm1"};  // legacy c_25 (aliases c_24's L1)
+    const DFBSpecName INTERM2_DFB{"interm2"};  // legacy c_26 (untilized_input)
+    const DFBSpecName OUTPUT_DFB{"output"};    // legacy c_16
+    const TensorParamName CACHE{"cache"};
+    const TensorParamName INPUT{"input"};
 
     const auto& cache_tensor = tensor_args.cache;
     const auto& input_tensor = tensor_args.input;
@@ -311,7 +287,9 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
     }
     const KernelSpec reader{
         .unique_id = READER,
-        .source = kUpdateReaderSource,
+        .source =
+            "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/dataflow/"
+            "reader_update_cache_interleaved_start_id.cpp",
         .compiler_options = {.defines = reader_defines},
         .dfb_bindings =
             {DFBBinding{
@@ -337,7 +315,9 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
     // ---- Writer ----
     const KernelSpec writer{
         .unique_id = WRITER,
-        .source = kUpdateWriterSource,
+        .source =
+            "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/dataflow/"
+            "writer_update_cache_interleaved_start_id.cpp",
         .dfb_bindings =
             {DFBBinding{
                  .dfb_spec_name = OUTPUT_DFB, .accessor_name = "cache", .endpoint_type = DFBEndpointType::CONSUMER},
@@ -391,7 +371,7 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
         }
         return KernelSpec{
             .unique_id = id,
-            .source = kUpdateComputeSource,
+            .source = "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/compute/update_cache.cpp",
             // Legacy compute defaulted opt_level to O3; Metal 2.0 defaults to O2, so set it explicitly.
             .compiler_options = {.opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
             .dfb_bindings =
@@ -507,11 +487,11 @@ tt::tt_metal::experimental::ProgramRunArgs UpdateCacheMultiCoreProgramFactory::o
     const KvCacheInputs& tensor_args,
     Tensor& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    const UpdateNames names;
-    const auto& READER = names.READER;
-    const auto& WRITER = names.WRITER;
-    const auto& CACHE = names.CACHE;
-    const auto& INPUT = names.INPUT;
+    // Spec resource names — must match create_program_artifacts (function-local, per-factory).
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const TensorParamName CACHE{"cache"};
+    const TensorParamName INPUT{"input"};
 
     // Runs on every program-cache hit. compute_program_hash excludes update_idx / batch_offset /
     // compute_kernel_config, so the args they drive are NOT stable across hits and must be re-applied:
