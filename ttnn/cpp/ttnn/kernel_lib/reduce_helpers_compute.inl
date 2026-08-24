@@ -18,6 +18,7 @@
 #include "api/compute/pack.h"
 #include "api/debug/assert.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dfb_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
@@ -139,8 +140,22 @@ ALWI void reduce_post_mul_tile(uint32_t dst, uint32_t scaler_bits) {
     }
 }
 
+// FoldViaAdd reads an accumulator through SrcA/SrcB, which is invalid for a 32-bit CB configured
+// to unpack directly to DEST. PACK cannot inspect unpack_dst_format, so this check is UNPACK/MATH only.
+ALWI bool dfb_unpacks_to_dest(uint32_t dfb_id) {
+#if defined(UCK_CHLKC_PACK)
+    (void)dfb_id;
+    return false;
+#else
+    const uint32_t src = unpack_src_format[dfb_id];
+    const bool src_is_32bit = src == (uint32_t)DataFormat::Float32 || src == (uint32_t)DataFormat::Int32;
+    return src_is_32bit && src == unpack_dst_format[dfb_id];
+#endif
+}
+
 // Add the reduce-axis tiles into DST[0], then perform the within-tile collapse on the SFPU.
-// One DST register is used per output tile, so REDUCE_COL is not limited by DEST capacity.
+// With cross-call Accumulate, non-last calls instead pack the raw partial-sum tile and the final
+// call reloads it, folds in the last chunk, and performs the collapse exactly once.
 template <
     PoolType reduce_type,
     ReduceDim reduce_dim,
@@ -149,11 +164,13 @@ template <
     uint32_t output_dfb_id,
     ReduceInputPolicy input_policy,
     ReduceDataFormatReconfigMode reconfig_mode,
+    typename AccumulateT,
     typename PostReduceOp>
 ALWI void reduce_accumulate_via_add(
     ReduceInputBlockShape shape,
     ReduceInputMemoryLayout input_memory_layout,
     ReducePartialScaler partial_scaler,
+    AccumulateT accumulate,
     PostReduceOp post_reduce_op) {
     const uint32_t Ht = shape.rows;
     const uint32_t Wt = shape.cols;
@@ -166,6 +183,7 @@ ALWI void reduce_accumulate_via_add(
     constexpr bool is_col = reduce_dim == ReduceDim::REDUCE_COL;
     constexpr auto mask_bcast = is_col ? ckernel::BroadcastType::COL : ckernel::BroadcastType::ROW;
     constexpr bool streaming = input_policy == ReduceInputPolicy::WaitAndPopPerTile;
+    constexpr bool has_accum = is_accumulate_v<AccumulateT>;
 
     constexpr bool should_pop_p =
         input_policy == ReduceInputPolicy::WaitAndPopPerTile || input_policy == ReduceInputPolicy::BulkWaitBulkPop;
@@ -183,6 +201,18 @@ ALWI void reduce_accumulate_via_add(
     DataflowBuffer input_dfb(input_dfb_id);
     DataflowBuffer scaler_dfb(scaler_dfb_id);
     DataflowBuffer output_dfb(output_dfb_id);
+    DataflowBuffer accum_dfb([&]() -> uint32_t {
+        if constexpr (has_accum) {
+            return accumulate.config.cb_accumulator;
+        } else {
+            return 0;
+        }
+    }());
+
+    bool do_finalize = true;
+    if constexpr (has_accum) {
+        do_finalize = accumulate.is_last();
+    }
 
     constexpr bool reconfig_in = reconfig_mode == ReduceDataFormatReconfigMode::INPUT ||
                                  reconfig_mode == ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
@@ -210,7 +240,19 @@ ALWI void reduce_accumulate_via_add(
         ASSERT(get_dfb_num_pages(input_dfb_id) >= required_input_pages);
     }
 
-    if (has_partial) {
+    bool wait_scaler = has_partial;
+    if constexpr (has_accum) {
+        [[maybe_unused]] const uint32_t acc_cb = accumulate.config.cb_accumulator;
+        ASSERT(input_dfb_id != acc_cb);
+        ASSERT(accumulate.config.dst_index == 0u);
+        UNPACK(ASSERT(accumulate.reload != AccumulateReloadMode::FoldViaAdd || !dfb_unpacks_to_dest(acc_cb)));
+        ASSERT(accumulate.reload != AccumulateReloadMode::CopySeedZeroPair || !has_partial);
+#ifdef ARCH_QUASAR
+        ASSERT(accumulate.reload != AccumulateReloadMode::CopySeedSfpuAdd);
+#endif
+        wait_scaler = wait_scaler || accumulate.reload == AccumulateReloadMode::CopySeedZeroPair;
+    }
+    if (wait_scaler) {
         ASSERT(input_dfb_id != scaler_dfb_id && output_dfb_id != scaler_dfb_id);
         scaler_dfb.wait_front(mask_idx + 1);
     }
@@ -272,38 +314,166 @@ ALWI void reduce_accumulate_via_add(
                 start = output_idx * (Ht * row_pitch);
             }
 
-            uint32_t tile = 0;
-            if (full_cnt & 1u) {
-                copy_tile_init(input_dfb_id);
-                copy_tile(input_dfb_id, start, 0);
-                tile = 1;
-            }
-            add_init(input_dfb_id, input_dfb_id, true);
-            for (; tile < full_cnt; tile += 2) {
-                add_tiles(input_dfb_id, input_dfb_id, start + tile * stride, start + (tile + 1) * stride, 0);
-            }
-            if (has_partial) {
-                fold_partial_last(start + full_cnt * stride);
+            if constexpr (has_accum) {
+                if (accumulate.is_first()) {
+                    uint32_t tile = 0;
+                    if (full_cnt & 1u) {
+                        copy_tile_init(input_dfb_id);
+                        copy_tile(input_dfb_id, start, 0);
+                        tile = 1;
+                    }
+                    add_init(input_dfb_id, input_dfb_id, true);
+                    for (; tile < full_cnt; tile += 2) {
+                        add_tiles(input_dfb_id, input_dfb_id, start + tile * stride, start + (tile + 1) * stride, 0);
+                    }
+                    if (has_partial) {
+                        fold_partial_last(start + full_cnt * stride);
+                    }
+                } else {
+                    const uint32_t acc_cb = accumulate.config.cb_accumulator;
+                    accum_dfb.wait_front(1);
+                    if (accumulate.reload == AccumulateReloadMode::FoldViaAdd) {
+                        // Fold the running sum as an add operand. Odd chunks place it in the final add;
+                        // even chunks reload it as the seed. This mode requires a Default accumulator CB.
+                        if (full_cnt & 1u) {
+                            if (full_cnt == 1u) {
+                                reconfig_data_format_srcb(input_dfb_id, acc_cb);
+                                add_init(input_dfb_id, acc_cb, true);
+                                add_tiles(input_dfb_id, acc_cb, start, 0, 0);
+                                reconfig_data_format_srcb(acc_cb, input_dfb_id);
+                            } else {
+                                add_init(input_dfb_id, input_dfb_id, true);
+                                add_tiles(input_dfb_id, input_dfb_id, start, start + stride, 0);
+                                add_init(input_dfb_id, input_dfb_id, true);
+                                for (uint32_t tile = 2; tile + 1 < full_cnt; tile += 2) {
+                                    add_tiles(
+                                        input_dfb_id,
+                                        input_dfb_id,
+                                        start + tile * stride,
+                                        start + (tile + 1) * stride,
+                                        0);
+                                }
+                                reconfig_data_format_srcb(input_dfb_id, acc_cb);
+                                add_init(input_dfb_id, acc_cb, true);
+                                add_tiles(input_dfb_id, acc_cb, start + (full_cnt - 1u) * stride, 0, 0);
+                                reconfig_data_format_srcb(acc_cb, input_dfb_id);
+                            }
+                        } else {
+                            reconfig_data_format_srca(input_dfb_id, acc_cb);
+                            copy_tile_init(acc_cb);
+                            copy_tile(acc_cb, 0, 0);
+                            reconfig_data_format_srca(acc_cb, input_dfb_id);
+                            add_init(input_dfb_id, input_dfb_id, true);
+                            for (uint32_t tile = 0; tile < full_cnt; tile += 2) {
+                                add_tiles(
+                                    input_dfb_id, input_dfb_id, start + tile * stride, start + (tile + 1) * stride, 0);
+                            }
+                        }
+                    } else if (accumulate.reload == AccumulateReloadMode::CopySeedSfpuAdd) {
+                        // Sum the new chunk without DEST reuse, reload the accumulator into DST[1], then
+                        // combine the two fp32 DST tiles in the SFPU.
+                        uint32_t tile = 0;
+                        if (full_cnt & 1u) {
+                            copy_tile_init(input_dfb_id);
+                            copy_tile(input_dfb_id, start, 0);
+                            tile = 1;
+                        }
+                        add_init(input_dfb_id, input_dfb_id, true);
+                        for (; tile < full_cnt; tile += 2) {
+                            add_tiles(
+                                input_dfb_id, input_dfb_id, start + tile * stride, start + (tile + 1) * stride, 0);
+                        }
+                        reconfig_data_format_srca(input_dfb_id, acc_cb);
+                        copy_tile_init(acc_cb);
+                        copy_tile(acc_cb, 0, 1);
+                        reconfig_data_format_srca(acc_cb, input_dfb_id);
+#ifndef ARCH_QUASAR
+                        add_binary_tile_init();
+                        add_binary_tile(0, 1, 0);
+                        sfpu_reduce_init<PoolType::SUM, dst_fmt>();
+#else
+                        ASSERT(false);
+#endif
+                    } else {
+                        // CopySeed modes are safe for both Default and UnpackToDestFp32 accumulator CBs.
+                        reconfig_data_format_srca(input_dfb_id, acc_cb);
+                        copy_tile_init(acc_cb);
+                        copy_tile(acc_cb, 0, 0);
+                        reconfig_data_format_srca(acc_cb, input_dfb_id);
+                        if (accumulate.reload == AccumulateReloadMode::CopySeedUniform) {
+                            add_reuse_dest_init<ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id);
+                            for (uint32_t tile = 0; tile < full_cnt; ++tile) {
+                                add_reuse_dest_tiles<ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                                    input_dfb_id, start + tile * stride, 0);
+                            }
+                        } else if (accumulate.reload == AccumulateReloadMode::CopySeedZeroPair) {
+                            uint32_t tile = 0;
+                            if (full_cnt & 1u) {
+                                add_init(input_dfb_id, scaler_dfb_id, true);
+                                add_tiles(input_dfb_id, scaler_dfb_id, start, 0, 0);
+                                tile = 1;
+                            }
+                            add_init(input_dfb_id, input_dfb_id, true);
+                            for (; tile < full_cnt; tile += 2) {
+                                add_tiles(
+                                    input_dfb_id, input_dfb_id, start + tile * stride, start + (tile + 1) * stride, 0);
+                            }
+                        } else {
+                            uint32_t tile = 0;
+                            if (full_cnt & 1u) {
+                                add_reuse_dest_init<ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id);
+                                add_reuse_dest_tiles<ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                                    input_dfb_id, start, 0);
+                                tile = 1;
+                            }
+                            add_init(input_dfb_id, input_dfb_id, true);
+                            for (; tile < full_cnt; tile += 2) {
+                                add_tiles(
+                                    input_dfb_id, input_dfb_id, start + tile * stride, start + (tile + 1) * stride, 0);
+                            }
+                        }
+                    }
+                    accum_dfb.pop_front(1);
+                    if (has_partial) {
+                        fold_partial_last(start + full_cnt * stride);
+                    }
+                }
+            } else {
+                uint32_t tile = 0;
+                if (full_cnt & 1u) {
+                    copy_tile_init(input_dfb_id);
+                    copy_tile(input_dfb_id, start, 0);
+                    tile = 1;
+                }
+                add_init(input_dfb_id, input_dfb_id, true);
+                for (; tile < full_cnt; tile += 2) {
+                    add_tiles(input_dfb_id, input_dfb_id, start + tile * stride, start + (tile + 1) * stride, 0);
+                }
+                if (has_partial) {
+                    fold_partial_last(start + full_cnt * stride);
+                }
             }
         }
 
-        if constexpr (is_row) {
-            sfpu_reduce<PoolType::SUM, dst_fmt, ReduceDim::REDUCE_ROW>(0, 1, 1);
-        } else if constexpr (is_col) {
-            sfpu_reduce<PoolType::SUM, dst_fmt, ReduceDim::REDUCE_COL>(0, 1, 1);
-        } else {
-            sfpu_reduce<PoolType::SUM, dst_fmt, ReduceDim::REDUCE_ROW>(0, 1, 1);
-            sfpu_reduce<PoolType::SUM, dst_fmt, ReduceDim::REDUCE_COL>(0, 1, 1);
+        if (do_finalize) {
+            if constexpr (is_row) {
+                sfpu_reduce<PoolType::SUM, dst_fmt, ReduceDim::REDUCE_ROW>(0, 1, 1);
+            } else if constexpr (is_col) {
+                sfpu_reduce<PoolType::SUM, dst_fmt, ReduceDim::REDUCE_COL>(0, 1, 1);
+            } else {
+                sfpu_reduce<PoolType::SUM, dst_fmt, ReduceDim::REDUCE_ROW>(0, 1, 1);
+                sfpu_reduce<PoolType::SUM, dst_fmt, ReduceDim::REDUCE_COL>(0, 1, 1);
+            }
+            if constexpr (reduce_type == PoolType::AVG) {
+                const uint32_t n =
+                    (is_row || is_col) ? full_cnt * 32u + partial_scaler.valid_reduce_dim_elements : cnt * 1024u;
+                const float inverse = 1.0f / static_cast<float>(n);
+                uint32_t inverse_bits = 0;
+                __builtin_memcpy(&inverse_bits, &inverse, sizeof(inverse_bits));
+                mul_unary_tile(0, inverse_bits);
+            }
+            post_reduce_op(0);
         }
-        if constexpr (reduce_type == PoolType::AVG) {
-            const uint32_t n =
-                (is_row || is_col) ? full_cnt * 32u + partial_scaler.valid_reduce_dim_elements : cnt * 1024u;
-            const float inverse = 1.0f / static_cast<float>(n);
-            uint32_t inverse_bits = 0;
-            __builtin_memcpy(&inverse_bits, &inverse, sizeof(inverse_bits));
-            mul_unary_tile(0, inverse_bits);
-        }
-        post_reduce_op(0);
 
         tile_regs_commit();
         if (deferred_stream_pop > 0u) {
@@ -519,12 +689,14 @@ ALWI void reduce(
     constexpr bool explicitly_accumulate_via_add = algorithm == ReduceAlgorithm::AccumulateViaAdd;
     constexpr bool input_policy_supports_accumulate_via_add =
         input_policy != ReduceInputPolicy::WaitAndPopPerTile || reduce_dim != ReduceDim::REDUCE_COL;
-    constexpr bool auto_can_accumulate_via_add = algorithm == ReduceAlgorithm::Auto && reduce_type == PoolType::SUM &&
-                                                 input_policy_supports_accumulate_via_add &&
-                                                 (reconfig_mode == ReduceDataFormatReconfigMode::INPUT ||
-                                                  reconfig_mode == ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT) &&
-                                                 fp32_mode == ReduceFp32Mode::Fast &&
-                                                 reduce_format != DataFormat::Int32 && !is_accumulate_v<AccumulateT>;
+    constexpr bool accumulation_supports_accumulate_via_add =
+        !is_accumulate_v<AccumulateT> || input_policy == ReduceInputPolicy::BulkWaitBulkPop;
+    constexpr bool auto_can_accumulate_via_add =
+        algorithm == ReduceAlgorithm::Auto && reduce_type == PoolType::SUM &&
+        input_policy_supports_accumulate_via_add && accumulation_supports_accumulate_via_add &&
+        (reconfig_mode == ReduceDataFormatReconfigMode::INPUT ||
+         reconfig_mode == ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT) &&
+        fp32_mode == ReduceFp32Mode::Fast && reduce_format != DataFormat::Int32;
 
     if constexpr (explicitly_accumulate_via_add) {
         static_assert(
@@ -537,9 +709,12 @@ ALWI void reduce(
             fp32_mode != ReduceFp32Mode::Accurate,
             "AccumulateViaAdd does not support ReduceFp32Mode::Accurate; use ReduceTile for full-fp32 reduction");
         static_assert(
-            !is_accumulate_v<AccumulateT>,
-            "AccumulateViaAdd does not support cross-call Accumulate; use ReduceTile or reduce each block "
-            "independently");
+            !is_accumulate_v<AccumulateT> || reduce_type == PoolType::SUM,
+            "AccumulateViaAdd cross-call Accumulate supports SUM only; use reduce_mean with a whole-reduction "
+            "divisor for a cross-call mean");
+        static_assert(
+            accumulation_supports_accumulate_via_add,
+            "AccumulateViaAdd cross-call Accumulate requires BulkWaitBulkPop");
         static_assert(
             input_policy_supports_accumulate_via_add,
             "AccumulateViaAdd REDUCE_COL cannot use the contiguous WaitAndPopPerTile stream");
@@ -568,7 +743,8 @@ ALWI void reduce(
             output_dfb_id,
             input_policy,
             reconfig_mode,
-            PostReduceOp>(input_block_shape, input_memory_layout, partial_scaler, post_reduce_op);
+            AccumulateT,
+            PostReduceOp>(input_block_shape, input_memory_layout, partial_scaler, accumulate, post_reduce_op);
         return;
     }
 
@@ -581,6 +757,7 @@ ALWI void reduce(
             input_memory_layout.row_stride == 0 || input_memory_layout.row_stride == input_block_shape.cols;
         const bool tile_aligned = !partial_scaler.uses_partial() && partial_scaler.valid_reduce_dim_elements == 0;
         if (reduced_tiles >= ACCUMULATE_VIA_ADD_MIN_REDUCED_TILES && contiguous && tile_aligned) {
+            DeviceZoneScopedN("AUTO_ACCUMULATE_VIA_ADD");
             detail::reduce_accumulate_via_add<
                 reduce_type,
                 reduce_dim,
@@ -589,7 +766,8 @@ ALWI void reduce(
                 output_dfb_id,
                 input_policy,
                 reconfig_mode,
-                PostReduceOp>(input_block_shape, input_memory_layout, partial_scaler, post_reduce_op);
+                AccumulateT,
+                PostReduceOp>(input_block_shape, input_memory_layout, partial_scaler, accumulate, post_reduce_op);
             return;
         }
     }
@@ -1042,11 +1220,13 @@ template <
     ReduceInputPolicy input_policy,
     ReduceDataFormatReconfigMode reconfig_mode,
     ReduceFp32Mode fp32_mode,
-    ReduceAlgorithm algorithm>
+    ReduceAlgorithm algorithm,
+    typename AccumulateT>
 ALWI void reduce_mean(
     ReduceInputBlockShape input_block_shape,
     uint32_t n_reduced,
     ReduceInputMemoryLayout input_memory_layout,
+    AccumulateT accumulate,
     ReducePartialScaler partial_scaler) {
     ASSERT(n_reduced > 0);
     const float inverse = 1.0f / static_cast<float>(n_reduced);
@@ -1064,9 +1244,35 @@ ALWI void reduce_mean(
         algorithm>(
         input_block_shape,
         input_memory_layout,
-        NoAccumulation{},
+        accumulate,
         [inverse_bits](uint32_t dst) { mul_unary_tile(dst, inverse_bits); },
         partial_scaler);
+}
+
+template <
+    ReduceDim reduce_dim,
+    uint32_t input_dfb_id,
+    uint32_t scaler_dfb_id,
+    uint32_t output_dfb_id,
+    ReduceInputPolicy input_policy,
+    ReduceDataFormatReconfigMode reconfig_mode,
+    ReduceFp32Mode fp32_mode,
+    ReduceAlgorithm algorithm>
+ALWI void reduce_mean(
+    ReduceInputBlockShape input_block_shape,
+    uint32_t n_reduced,
+    ReduceInputMemoryLayout input_memory_layout,
+    ReducePartialScaler partial_scaler) {
+    reduce_mean<
+        reduce_dim,
+        input_dfb_id,
+        scaler_dfb_id,
+        output_dfb_id,
+        input_policy,
+        reconfig_mode,
+        fp32_mode,
+        algorithm,
+        NoAccumulation>(input_block_shape, n_reduced, input_memory_layout, NoAccumulation{}, partial_scaler);
 }
 
 }  // namespace compute_kernel_lib

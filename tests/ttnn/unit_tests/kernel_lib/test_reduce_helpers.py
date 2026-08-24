@@ -27,12 +27,14 @@ DIMS = ("row", "col", "scalar")
 POOLS = ("sum", "avg", "max", "min")
 POLICIES = ("stream", "bulk", "wait_upfront", "no_wait")
 RECONFIG_MODES = ("none", "input", "output", "input_and_output")
+RELOAD_MODES = ("fold", "copy_pairs", "copy_uniform", "copy_sfpu", "copy_zero")
 
 _DIM_ID = {name: idx for idx, name in enumerate(DIMS)}
 _POOL_ID = {name: idx for idx, name in enumerate(POOLS)}
 _POLICY_ID = {name: idx for idx, name in enumerate(POLICIES)}
 _RECONFIG_ID = {name: idx for idx, name in enumerate(RECONFIG_MODES)}
 _ALGORITHM_ID = {"auto": 0, "reduce_tile": 1, "accumulate_via_add": 2}
+_RELOAD_ID = {name: idx for idx, name in enumerate(RELOAD_MODES)}
 
 
 _REDUCE_KERNEL = r"""
@@ -53,7 +55,8 @@ template <
     uint32_t mean_id,
     uint32_t reconfig_id,
     uint32_t fp32_mode_id,
-    uint32_t accumulate_id>
+    uint32_t accumulate_id,
+    uint32_t reload_id>
 ALWI void run_reduce(
     compute_kernel_lib::ReduceInputBlockShape shape,
     compute_kernel_lib::ReduceInputMemoryLayout layout,
@@ -86,18 +89,78 @@ ALWI void run_reduce(
                             : ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
     constexpr ReduceFp32Mode fp32_mode =
         fp32_mode_id == 0u ? ReduceFp32Mode::Fast : ReduceFp32Mode::Accurate;
+    constexpr AccumulateReloadMode reload =
+        reload_id == 0u   ? AccumulateReloadMode::FoldViaAdd
+        : reload_id == 2u ? AccumulateReloadMode::CopySeedUniform
+        : reload_id == 3u ? AccumulateReloadMode::CopySeedSfpuAdd
+        : reload_id == 4u ? AccumulateReloadMode::CopySeedZeroPair
+                          : AccumulateReloadMode::CopySeedPairs;
 
     if constexpr (mean_id != 0u) {
-        reduce_mean<
+        if constexpr (accumulate_id != 0u) {
+            const uint32_t total_n_reduced = 2u * n_reduced;
+            reduce_mean<
+                dim,
+                cb_in,
+                cb_scaler,
+                cb_acc,
+                policy,
+                reconfig,
+                fp32_mode,
+                algorithm,
+                Accumulate>(
+                shape,
+                total_n_reduced,
+                layout,
+                Accumulate::at(cb_acc, 0).with_reload(reload),
+                partial);
+            const uint32_t row_pitch = layout.row_stride == 0u ? shape.cols : layout.row_stride;
+            const uint32_t in_tiles = shape.rows * row_pitch * shape.batches;
+            cb_reserve_back(cb_in, in_tiles);
+            cb_push_back(cb_in, in_tiles);
+            reduce_mean<
+                dim,
+                cb_in,
+                cb_scaler,
+                cb_out,
+                policy,
+                reconfig,
+                fp32_mode,
+                algorithm,
+                Accumulate>(
+                shape,
+                total_n_reduced,
+                layout,
+                Accumulate::at_last(cb_acc, 1).with_reload(reload),
+                partial);
+        } else {
+            reduce_mean<
+                dim,
+                cb_in,
+                cb_scaler,
+                cb_out,
+                policy,
+                reconfig,
+                fp32_mode,
+                algorithm>(shape, n_reduced, layout, partial);
+        }
+    } else if constexpr (accumulate_id != 0u) {
+        reduce<
+            pool,
             dim,
             cb_in,
             cb_scaler,
-            cb_out,
+            cb_acc,
             policy,
             reconfig,
             fp32_mode,
-            algorithm>(shape, n_reduced, layout, partial);
-    } else if constexpr (accumulate_id != 0u) {
+            algorithm,
+            Accumulate,
+            NoOp>(shape, layout, Accumulate::at(cb_acc, 0).with_reload(reload), NoOp{}, partial);
+        const uint32_t row_pitch = layout.row_stride == 0u ? shape.cols : layout.row_stride;
+        const uint32_t in_tiles = shape.rows * row_pitch * shape.batches;
+        cb_reserve_back(cb_in, in_tiles);
+        cb_push_back(cb_in, in_tiles);
         reduce<
             pool,
             dim,
@@ -109,7 +172,7 @@ ALWI void run_reduce(
             fp32_mode,
             algorithm,
             Accumulate,
-            NoOp>(shape, layout, Accumulate::at(cb_acc, 1), NoOp{}, partial);
+            NoOp>(shape, layout, Accumulate::at_last(cb_acc, 1).with_reload(reload), NoOp{}, partial);
     } else {
         reduce<
             pool,
@@ -144,6 +207,7 @@ void kernel_main() {
     constexpr uint32_t partial_mode_id = get_compile_time_arg_val(13);
     constexpr uint32_t mask_tile_idx = get_compile_time_arg_val(14);
     constexpr uint32_t accumulate_id = get_compile_time_arg_val(15);
+    constexpr uint32_t reload_id = get_compile_time_arg_val(16);
     constexpr uint32_t row_pitch = row_stride == 0u ? Wt : row_stride;
     constexpr uint32_t in_tiles = Ht * row_pitch * NC;
     constexpr bool pops_input = policy_id <= 1u;
@@ -185,7 +249,7 @@ void kernel_main() {
 
     cb_reserve_back(cb_in, in_tiles);
     cb_push_back(cb_in, in_tiles);
-    run_reduce<dim_id, pool_id, policy_id, algorithm_id, mean_id, reconfig_id, fp32_mode_id, accumulate_id>(
+    run_reduce<dim_id, pool_id, policy_id, algorithm_id, mean_id, reconfig_id, fp32_mode_id, accumulate_id, reload_id>(
         shape, layout, partial, n_reduced);
 }
 """
@@ -248,6 +312,20 @@ void kernel_main() {
         // runtime ASSERTs are disabled exercise the invalid numeric path instead of deadlocking.
         dataflow_kernel_lib::prepare_reduce_mask<cb_scaler, ReduceDim::REDUCE_ROW>(partial_elems);
     }
+}
+"""
+
+
+_ZERO_KERNEL = r"""
+#include <cstdint>
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+
+void kernel_main() {
+    constexpr uint32_t cb_scaler = 1;
+    dataflow_kernel_lib::prepare_reduce_scaler<
+        cb_scaler,
+        ckernel::PoolType::SUM,
+        ckernel::ReduceDim::REDUCE_ROW>(0.0f);
 }
 """
 
@@ -394,6 +472,7 @@ def _run_reduce(
     partial_mode="mask",
     mask_tile_idx=0,
     accumulate=False,
+    reload="copy_pairs",
 ):
     input_tensor, golden = _make_input(
         device,
@@ -449,12 +528,24 @@ def _run_reduce(
             {"mask": 0, "last_tile": 1, "only_tile": 2}[partial_mode],
             mask_tile_idx,
             int(accumulate),
+            _RELOAD_ID[reload],
         ],
         config=ttnn.ComputeConfigDescriptor(math_fidelity=math_fidelity, fp32_dest_acc_en=fp32_dest),
     )
 
     kernels = [compute]
-    if partial_elems:
+    if accumulate and reload == "copy_zero":
+        kernels.insert(
+            0,
+            ttnn.KernelDescriptor(
+                kernel_source=_ZERO_KERNEL,
+                source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+                core_ranges=_single_core(),
+                compile_time_args=[],
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
+        )
+    elif partial_elems:
         kernels.insert(
             0,
             ttnn.KernelDescriptor(
@@ -478,8 +569,10 @@ def _run_reduce(
         )
 
     result = ttnn.generic_op([input_tensor, output], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
+    if accumulate:
+        golden = golden * 2
     if pool == "avg" or use_mean:
-        golden = golden / n_reduced
+        golden = golden / (2 * n_reduced if accumulate and use_mean else n_reduced)
     return _read_values(result, dim), golden
 
 
@@ -933,11 +1026,106 @@ def test_accumulate_via_add_int32_inputs_are_specified_but_unsupported(device, d
     _assert_result(got, expected)
 
 
-@pytest.mark.parametrize("dim", DIMS)
-@pytest.mark.xfail(strict=True, reason="AccumulateViaAdd does not support cross-call Accumulate")
-def test_accumulate_via_add_cross_call_accumulation_is_specified_but_unsupported(device, dim):
-    got, expected = _run_reduce(device, dim=dim, accumulate=True)
+@pytest.mark.parametrize("reload", RELOAD_MODES)
+@pytest.mark.parametrize(
+    "dim,Ht,Wt,NC",
+    [
+        ("row", 2, 3, 2),
+        ("col", 4, 2, 1),
+        ("scalar", 2, 2, 1),
+    ],
+)
+def test_accumulate_via_add_cross_call_accumulation(device, dim, Ht, Wt, NC, reload):
+    got, expected = _run_reduce(
+        device,
+        dim=dim,
+        Ht=Ht,
+        Wt=Wt,
+        NC=NC,
+        accumulate=True,
+        reload=reload,
+    )
     _assert_result(got, expected)
+
+
+@pytest.mark.parametrize(
+    "dim,Ht,Wt,NC",
+    [
+        ("row", 2, 3, 1),
+        ("col", 3, 2, 1),
+        ("scalar", 2, 2, 1),
+    ],
+)
+def test_accumulate_via_add_cross_call_mean_finalizes_once(device, dim, Ht, Wt, NC):
+    got, expected = _run_reduce(
+        device,
+        dim=dim,
+        pool="sum",
+        Ht=Ht,
+        Wt=Wt,
+        NC=NC,
+        use_mean=True,
+        accumulate=True,
+    )
+    _assert_result(got, expected)
+
+
+@pytest.mark.parametrize("dim,Ht,Wt", [("row", 2, 3), ("col", 3, 2)])
+def test_accumulate_via_add_cross_call_partial_mask(device, dim, Ht, Wt):
+    got, expected = _run_reduce(
+        device,
+        dim=dim,
+        Ht=Ht,
+        Wt=Wt,
+        partial_elems=17,
+        accumulate=True,
+    )
+    _assert_result(got, expected)
+
+
+@pytest.mark.parametrize("dim,Ht,Wt,row_stride", [("row", 2, 3, 5), ("col", 3, 2, 4)])
+def test_accumulate_via_add_cross_call_padded_row_stride(device, dim, Ht, Wt, row_stride):
+    got, expected = _run_reduce(
+        device,
+        dim=dim,
+        Ht=Ht,
+        Wt=Wt,
+        row_stride=row_stride,
+        accumulate=True,
+    )
+    _assert_result(got, expected)
+
+
+@pytest.mark.parametrize(
+    "dim,Ht,Wt,NC",
+    [
+        ("row", 2, 8, 1),
+        ("col", 8, 2, 1),
+        ("scalar", 2, 4, 1),
+    ],
+)
+def test_reduce_algorithm_auto_cross_call_accumulation_uses_add_path(device, dim, Ht, Wt, NC):
+    auto, expected = _run_reduce(
+        device,
+        dim=dim,
+        algorithm="auto",
+        Ht=Ht,
+        Wt=Wt,
+        NC=NC,
+        accumulate=True,
+    )
+    explicit, explicit_expected = _run_reduce(
+        device,
+        dim=dim,
+        algorithm="accumulate_via_add",
+        Ht=Ht,
+        Wt=Wt,
+        NC=NC,
+        accumulate=True,
+    )
+    _assert_result(auto, expected)
+    _assert_result(explicit, explicit_expected)
+    torch.testing.assert_close(auto, explicit, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("partial_mode", ["last_tile", "only_tile"])

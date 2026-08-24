@@ -117,7 +117,7 @@ enum class ReduceInputPolicy { WaitAndPopPerTile, BulkWaitBulkPop, WaitUpfrontNo
  *   - an input policy supported by AccumulateViaAdd (all combinations except
  *     WaitAndPopPerTile with REDUCE_COL),
  *   - a contiguous, tile-aligned input block,
- *   - NoAccumulation, and
+ *   - either NoAccumulation or cross-call Accumulate with BulkWaitBulkPop, and
  *   - at least ACCUMULATE_VIA_ADD_MIN_REDUCED_TILES tiles per output.
  * Everything else stays on ReduceTile. In particular, callers using prepare_reduce_scaler with a
  * non-unit SUM scaler must select ReduceTile explicitly if they otherwise match the Auto fast path.
@@ -129,6 +129,21 @@ enum class ReduceInputPolicy { WaitAndPopPerTile, BulkWaitBulkPop, WaitUpfrontNo
 enum class ReduceAlgorithm { Auto, ReduceTile, AccumulateViaAdd };
 
 inline constexpr uint32_t ACCUMULATE_VIA_ADD_MIN_REDUCED_TILES = 8;
+
+/**
+ * @brief How AccumulateViaAdd folds a running cross-call accumulator into a later chunk.
+ *
+ * FoldViaAdd is the fastest option, but reads the accumulator through SrcA/SrcB and therefore
+ * requires an accumulator CB using UnpackToDestMode::Default. The CopySeed modes reload with
+ * copy_tile and are safe for an UnpackToDestFp32 accumulator as well.
+ *
+ * CopySeedPairs is the safe default: it handles an odd tile with one DEST-reuse add and then
+ * consumes the remaining tiles in pairs. CopySeedUniform uses one DEST-reuse add per tile.
+ * CopySeedSfpuAdd sums the new chunk separately and combines it with the accumulator in the SFPU
+ * (Wormhole/Blackhole only). CopySeedZeroPair pairs an odd tile with a zero tile supplied in the
+ * scaler CB; it is limited to aligned reductions because partial reductions use that CB for a mask.
+ */
+enum class AccumulateReloadMode { FoldViaAdd, CopySeedPairs, CopySeedUniform, CopySeedSfpuAdd, CopySeedZeroPair };
 
 // =============================================================================
 // Configuration Types
@@ -246,7 +261,7 @@ struct ReducePartialScaler {
 struct AccumulationConfig {
     // CB holding the running accumulator tile across reduce() iterations; see Accumulate below.
     uint32_t cb_accumulator = 0;
-    uint32_t dst_index = 0;  // DST register for accumulation (default: 0)
+    uint32_t dst_index = 0;  // DST register for ReduceTile accumulation; AccumulateViaAdd requires 0.
 
     static constexpr AccumulationConfig with_cb(uint32_t cb, uint32_t dst = 0) { return {cb, dst}; }
 };
@@ -284,18 +299,39 @@ struct AccumulationConfig {
  */
 struct Accumulate {
     AccumulationConfig config;
+    // AccumulateViaAdd only. CopySeedPairs is valid for both Default and UnpackToDestFp32
+    // accumulator CBs; FoldViaAdd is valid only for Default accumulator CBs.
+    AccumulateReloadMode reload = AccumulateReloadMode::CopySeedPairs;
     uint32_t iteration = 0;
+    // AccumulateViaAdd keeps a raw partial-sum tile between calls. Only the last call performs
+    // the within-tile collapse and post-reduce operation.
+    bool last = false;
 
-    explicit constexpr Accumulate(AccumulationConfig cfg, uint32_t iter = 0) : config(cfg), iteration(iter) {}
-    explicit constexpr Accumulate(uint32_t cb, uint32_t iter = 0) : config{cb, 0}, iteration(iter) {}
+    explicit constexpr Accumulate(AccumulationConfig cfg, uint32_t iter = 0, bool lst = false) :
+        config(cfg), iteration(iter), last(lst) {}
+    explicit constexpr Accumulate(uint32_t cb, uint32_t iter = 0, bool lst = false) :
+        config{cb, 0}, iteration(iter), last(lst) {}
 
     // Factory for concise call sites
     static constexpr Accumulate at(uint32_t cb, uint32_t iter, uint32_t dst = 0) {
         return Accumulate(AccumulationConfig{cb, dst}, iter);
     }
 
+    // Mark the final AccumulateViaAdd chunk, which collapses within the tile and writes the final output.
+    // ReduceTile ignores this flag because each of its chunks is already reduced before accumulation.
+    static constexpr Accumulate at_last(uint32_t cb, uint32_t iter, uint32_t dst = 0) {
+        return Accumulate(AccumulationConfig{cb, dst}, iter, true);
+    }
+
+    constexpr Accumulate with_reload(AccumulateReloadMode mode) const {
+        Accumulate result = *this;
+        result.reload = mode;
+        return result;
+    }
+
     // Convenience: check if this is first iteration (skip reload)
     constexpr bool is_first() const { return iteration == 0; }
+    constexpr bool is_last() const { return last; }
 };
 
 /**
@@ -506,8 +542,27 @@ ALWI void reduce(
  * @brief Mean reduction implemented as a SUM followed by an explicit caller-supplied 1/N.
  *
  * Unlike reduce<AVG>, n_reduced may describe a logical reduction containing partial tiles or an
- * otherwise caller-defined element count.
+ * otherwise caller-defined element count. With cross-call Accumulate, n_reduced must cover the
+ * whole logical reduction: AccumulateViaAdd applies the normalization only on the at_last() call.
  */
+template <
+    ReduceDim reduce_dim,
+    uint32_t input_dfb_id,
+    uint32_t scaler_dfb_id,
+    uint32_t output_dfb_id,
+    ReduceInputPolicy input_policy = ReduceInputPolicy::WaitAndPopPerTile,
+    ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+    ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast,
+    ReduceAlgorithm algorithm = ReduceAlgorithm::AccumulateViaAdd,
+    typename AccumulateT = NoAccumulation>
+ALWI void reduce_mean(
+    ReduceInputBlockShape input_block_shape,
+    uint32_t n_reduced,
+    ReduceInputMemoryLayout input_memory_layout = ReduceInputMemoryLayout::contiguous(),
+    AccumulateT accumulate = AccumulateT{},
+    ReducePartialScaler partial_scaler = ReducePartialScaler::none());
+
+// Compatibility overload for the pre-Accumulate API, where the fourth argument was the partial scaler.
 template <
     ReduceDim reduce_dim,
     uint32_t input_dfb_id,
@@ -520,8 +575,8 @@ template <
 ALWI void reduce_mean(
     ReduceInputBlockShape input_block_shape,
     uint32_t n_reduced,
-    ReduceInputMemoryLayout input_memory_layout = ReduceInputMemoryLayout::contiguous(),
-    ReducePartialScaler partial_scaler = ReducePartialScaler::none());
+    ReduceInputMemoryLayout input_memory_layout,
+    ReducePartialScaler partial_scaler);
 
 }  // namespace compute_kernel_lib
 
