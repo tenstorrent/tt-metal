@@ -199,11 +199,11 @@ def kimi_k3_hf_config(max_seq: int = 8192):
         # LatentMoE: the routed experts' reduced hidden dim, and the latent RMSNorm flag.
         routed_expert_hidden_size=KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE,
         latent_moe_use_norm=KimiK3Config.LATENT_MOE_USE_NORM,
-        # The checkpoint says "situ", but consumers of this field index ACT2FN with it, which has
-        # no "situ" entry. The device path selects SiTU out of band instead: the routed expert
-        # through RoutedExpertActivation, the shared expert and dense FFN through
-        # SHARED_EXPERT_ACTIVATION / DENSE_FFN_ACTIVATION.
-        hidden_act="silu",
+        # What the checkpoint actually uses, so a consumer that reads only this field still builds
+        # the right model. Reading it means branching on "situ" rather than indexing ACT2FN, which
+        # has no such entry -- KimiMLP, KimiBlockSparseMLP and the tests' _build_act_fn all do.
+        # ACT2FN is deliberately left unmutated: it is shared with every other model here.
+        hidden_act="situ",
         activation_situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
         activation_situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
     )
