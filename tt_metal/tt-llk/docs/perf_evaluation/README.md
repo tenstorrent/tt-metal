@@ -529,13 +529,59 @@ They are **bistable**, not jittery. Representative values across ten runs:
 | `perf_matmul` | 10k–28k cycles | 245–1,112 | 2.1–8.8% |
 | `perf_math_matmul` | 118k–218k cycles | 2,412–13,843 | 2.0–6.4% |
 
-Roughly a third show strong mixing — splits of 6/4, 7/3, 2/8 across ten runs — so
-the alternate state is not rare. The rest are 9/1 or 1/9.
+#### How often does a point sit in the alternate state?
 
-**The alternate values repeat across different points.** Several 165k–169k points
-all drop to about 158,7xx; several 184k points all rise to about 190,4xx.
-Different configurations, different runs, near-identical alternate value. That is
-a discrete state, not analogue variance.
+Of the 42 affected measurements, **14 had at least two runs in each state** —
+splits like six-and-four or seven-and-three out of ten. The other 28 had exactly
+one run of ten in the alternate state.
+
+That matters because a gate compares **one** run against **one** run. If a
+measurement sits in the alternate state with probability *p*, two independent runs
+disagree with probability `2p(1-p)`:
+
+| split across ten runs | chance two runs disagree |
+|---|--:|
+| six / four | **48%** |
+| seven / three | 42% |
+| eight / two | 32% |
+| nine / one | **18%** |
+
+So even the points we called rare will hand a gate two different answers roughly
+one time in five. This is not something a retry policy can paper over.
+
+#### The alternate value is shared between unrelated configurations
+
+This is the strongest evidence that it is a state rather than noise, and it is
+easiest to see in the numbers. Four `perf_math_matmul` configurations whose normal
+values differ from each other:
+
+| normal value | alternate value |
+|--:|--:|
+| 184,298 | 190,463 |
+| 184,323 | 190,471 |
+| 184,369 | 190,467 |
+| 185,056 | 190,511 |
+
+Those four configurations differ by **758 cycles** in their normal state. In the
+alternate state they differ by **48 cycles** — fifteen times tighter. The same
+happens in the other direction:
+
+| normal value | alternate value |
+|--:|--:|
+| 165,875 | 158,727 |
+| 165,786 | 158,895 |
+| 168,948 | 158,750 |
+| 168,975 | 158,750 |
+
+Normal values spread over 3,189 cycles; alternate values over 168 — nineteen times
+tighter. Two of them land on exactly the same number.
+
+Why that is decisive: if this were measurement noise, the error would scale with
+the thing being measured, and each configuration would deviate to its own value.
+Instead, configurations that are clearly doing different amounts of work all
+collapse onto one shared number. The alternate is not "the right answer plus an
+error" — it is a **different state the hardware enters**, and it costs about the
+same wherever it happens.
 
 ### 8.5 It is not the configuration
 
