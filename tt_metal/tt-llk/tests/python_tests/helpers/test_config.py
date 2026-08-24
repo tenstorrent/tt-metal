@@ -1051,10 +1051,15 @@ class TestConfig:
         Relative names keep the historical ``#include <sources/foo.cpp>`` form
         (resolved from ``tests/``). Absolute paths are quote-included so an
         out-of-tree driver does not have to live under ``tests/sources/``.
+
+        ``test_source_path`` is set in ``__init__``. Some in-tree callers
+        (the fuser) assign ``test_name`` later and leave ``test_source_path``
+        empty — fall back to ``test_name`` so ``#include <>`` is never emitted.
         """
-        if os.path.isabs(self.test_source_path):
-            return f'#include "{self.test_source_path}"\n'
-        return f"#include  <{self.test_source_path}>\n"
+        source = str(self.test_source_path or self.test_name)
+        if os.path.isabs(source):
+            return f'#include "{source}"\n'
+        return f"#include  <{source}>\n"
 
     def generate_variant_hash(self):
         NON_COMPILATION_ARGUMENTS = [
