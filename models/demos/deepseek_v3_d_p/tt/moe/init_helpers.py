@@ -24,11 +24,12 @@ from models.common.utility_functions import is_blackhole
 # Fabric packet payload limits (conservative round values below hardware maximums).
 MAX_PAYLOAD_SIZE_BH = 14 * 1024  # Blackhole hardware max ~15232 B
 MAX_PAYLOAD_SIZE_WH = 7 * 1024  # Wormhole hardware max ~7616 B
+CMB_FABRIC2D_ROUTING_INFO_BYTES = 64
 
 
-def get_max_payload_size(routing_info_size_in_bytes: int = 0) -> int:
+def get_max_payload_size() -> int:
     """Return the arch-appropriate fabric payload size. Deferred to avoid probing hardware at import time."""
-    return (MAX_PAYLOAD_SIZE_BH if is_blackhole() else MAX_PAYLOAD_SIZE_WH) + routing_info_size_in_bytes
+    return (MAX_PAYLOAD_SIZE_BH if is_blackhole() else MAX_PAYLOAD_SIZE_WH) + CMB_FABRIC2D_ROUTING_INFO_BYTES
 
 
 @dataclass
