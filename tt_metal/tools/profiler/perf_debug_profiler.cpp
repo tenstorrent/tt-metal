@@ -973,6 +973,73 @@ void PerfDebugProfiler::disarm_producers(
         n);
 }
 
+// Wait until every producer's ring is EMPTY, with the fillers still running. head is drainer-written and
+// tail is producer-written, so head == tail on every RISC means the consumer has taken everything published.
+//
+// This has to happen before anything stops draining. Quiescing the fillers first leaves the workers' rings
+// unserved while producers are still live -- dispatch cores keep emitting zones through device close, which
+// is the very case PROFILER_TERMINATE was added for -- and they park in ring_ensure_room for however long
+// that lasts. Measured: 100% of kimi's producer stalls sat inside the last ~130 ms of a 283 s capture, none
+// anywhere else in the run. Draining first removes the window instead of dropping the markers in it.
+bool PerfDebugProfiler::wait_producer_rings_drained(DeviceCtx& ctx, std::chrono::milliseconds budget) {
+    if (ctx.core_virt.empty()) {
+        return true;
+    }
+    auto& cluster = MetalContext::instance().get_cluster();
+    const auto& hal = MetalContext::instance().hal();
+    const uint64_t prof_l1 = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
+    const size_t n = ctx.n_worker_cores != 0 ? ctx.n_worker_cores : ctx.core_virt.size();
+    std::vector<uint8_t> drained(n, 0);
+    std::vector<uint32_t> ht(2 * kernel_profiler::PROFILER_SPSC_MAX_RISC, 0);
+    const auto dl = std::chrono::steady_clock::now() + budget;
+    size_t pending = n;
+    while (pending != 0 && std::chrono::steady_clock::now() < dl) {
+        pending = 0;
+        for (size_t ci = 0; ci < n; ci++) {
+            if (drained[ci] != 0) {
+                continue;
+            }
+            const auto [vx, vy] = ctx.core_virt[ci];
+            cluster.read_core(
+                ht.data(),
+                static_cast<uint32_t>(ht.size() * sizeof(uint32_t)),
+                tt_cxy_pair(ctx.chip_id, CoreCoord{vx, vy}),
+                prof_l1);
+            bool empty = true;
+            for (uint32_t r = 0; r < kNRisc; r++) {
+                if (ht[kernel_profiler::SPSC_RING_HEAD_0 + r] != ht[kernel_profiler::SPSC_RING_TAIL_0 + r]) {
+                    empty = false;
+                    break;
+                }
+            }
+            drained[ci] = empty ? 1u : 0u;
+            pending += empty ? 0u : 1u;
+        }
+    }
+    return pending == 0;
+}
+
+// Last resort, and the ONLY path that drops a marker: a producer still publishing after the drain budget
+// expired. Unblocking it is what keeps device close from wedging in wait_until_cores_done().
+void PerfDebugProfiler::disarm_producer_backpressure(DeviceCtx& ctx) {
+    if (ctx.core_virt.empty()) {
+        return;
+    }
+    auto& cluster = MetalContext::instance().get_cluster();
+    const auto& hal = MetalContext::instance().hal();
+    const uint64_t prof_l1 = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
+    const size_t n = ctx.n_worker_cores != 0 ? ctx.n_worker_cores : ctx.core_virt.size();
+    uint32_t one = 1;
+    for (size_t ci = 0; ci < n; ci++) {
+        const auto [vx, vy] = ctx.core_virt[ci];
+        cluster.write_core(
+            &one,
+            sizeof(uint32_t),
+            tt_cxy_pair(ctx.chip_id, CoreCoord{vx, vy}),
+            prof_l1 + kernel_profiler::PROFILER_TERMINATE * sizeof(uint32_t));
+    }
+}
+
 bool PerfDebugProfiler::boot_device(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     DeviceCtx& ctx,
@@ -2278,6 +2345,21 @@ void PerfDebugProfiler::stop() {
     // than at bring-up keeps the measurement out of the workload's way (a parked drainer is not draining) and
     // lets the zone-name harvest run against already-compiled kernels.
     fire_sync_events();
+
+    // Producers before consumers: let the rings empty while the fillers are still draining them, so no
+    // producer ever meets a stopped consumer. Applies to BOTH teardown paths below (the ordered role-split
+    // quiesce and the default one), which is why it sits above them.
+    for (auto& ctx : devices_) {
+        if (!wait_producer_rings_drained(ctx, std::chrono::seconds(2))) {
+            log_warning(
+                tt::LogMetal,
+                "[perf-debug profiler] Device {}: producers still publishing after the 2 s drain budget -- "
+                "unblocking ring back-pressure so device close cannot wedge; markers still in flight on those "
+                "cores are DROPPED",
+                ctx.chip_id);
+            disarm_producer_backpressure(ctx);
+        }
+    }
 
     // ---- ROLE SPLIT: quiesce in the right ORDER, before the per-DRISC teardown loop below ----
     //

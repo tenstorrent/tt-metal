@@ -175,6 +175,8 @@ private:
     // TT_METAL_DEVICE_PROFILER independently of us, they are lossless by design, and with no consumer they
     // block forever -- the workload wedges rather than merely losing its capture.
     void disarm_producers(const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t device_id);
+    bool wait_producer_rings_drained(DeviceCtx& ctx, std::chrono::milliseconds budget);
+    void disarm_producer_backpressure(DeviceCtx& ctx);
     bool boot_device(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         DeviceCtx& ctx,
