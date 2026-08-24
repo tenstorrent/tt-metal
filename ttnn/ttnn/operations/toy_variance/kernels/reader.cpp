@@ -1,46 +1,55 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Reader for toy_variance.
+// Reader for toy_variance (interleaved input, single core).
 //
 // Variance via Var(x) = E[(x - E[x])^2] is a two-pass algorithm:
-//   Pass 1: stream x  → compute mean
-//   Pass 2: stream x  → compute (x - mean)^2 → mean
+//   Pass 1: stream x  -> compute mean
+//   Pass 2: stream x  -> compute (x - mean)^2 -> mean
 //
-// The reader streams the input tensor TWICE through cb_in. Each pass pushes
-// tiles in the order the streaming reduce expects:
-//   for b in [0, NUM_BLOCKS): for ht in [0, Ht):
-//     for wt in [0, BLOCK_SIZE): tile_id = ht*Wt + b*BLOCK_SIZE + wt
+// The reader streams the input tensor TWICE through dfb::in_tiles. Each pass pushes tiles in the
+// order the streaming reduce expects:
+//   for b in [0, num_blocks): for ht in [0, Ht):
+//     for wt in [0, block_size): tile_id = ht*Wt + b*block_size + wt
 //
-// The scaler tile (1/N for SUM-reduce-as-mean) is pushed once at startup;
-// reduce<> waits on it but never pops, so the same tile serves both passes.
+// The scaler tile (1/N for SUM-reduce-as-mean) is pushed once at startup; reduce<> waits on it but
+// never pops, so the same tile serves both passes.
+//
+// Metal 2.0: every name below (`dfb::`, `args::`, `tensor::`) is generated from the ProgramSpec, so
+// this kernel spells no buffer index and no argument offset.
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t BLOCK_SIZE = get_arg(args::block_size);
+    constexpr uint32_t NUM_BLOCKS = get_arg(args::num_blocks);
+    constexpr uint32_t scaler_bits = get_arg(args::scaler_bits);  // 1/N as fp32 bits
+    constexpr bool HAS_PARTIAL_W = get_arg(args::has_partial_w) != 0;
+    constexpr uint32_t partial_w = get_arg(args::partial_w);  // valid positions in last W-tile
 
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t BLOCK_SIZE = get_compile_time_arg_val(2);
-    constexpr uint32_t NUM_BLOCKS = get_compile_time_arg_val(3);
-    constexpr uint32_t scaler_bits = get_compile_time_arg_val(4);  // 1/N as fp32 bits
-    constexpr uint32_t has_partial_w = get_compile_time_arg_val(5);
-    constexpr uint32_t partial_w = get_compile_time_arg_val(6);  // valid positions in last W-tile
-    constexpr auto src_args = TensorAccessorArgs<7>();
+    // The reduce helpers take a raw buffer id; DFBBindingToken converts to uint32_t constexpr,
+    // which is what lets a ProgramSpec kernel keep using the Gen1 compute/dataflow helper library.
+    constexpr uint32_t cb_scaler = dfb::scaler;
 
-    constexpr uint32_t cb_in = 0;
-    constexpr uint32_t cb_scaler = 2;
+    Noc noc;
+    DataflowBuffer dfb_in(dfb::in_tiles);
+    const auto acc_in = TensorAccessor(tensor::in);
+    const uint32_t tile_bytes = dfb_in.get_tile_size();
 
-    // Scaler = 1/N → SUM reduce produces means directly. For non-tile-aligned
-    // W, also emit a partial scaler tile that zeros out positions beyond
-    // partial_w; the compute kernel selects it for the last W-tile of the
-    // last block via ReducePartialScaler::with_partial().
+    // Scaler = 1/N -> SUM reduce produces means directly. For non-tile-aligned W, also emit a
+    // partial scaler tile that zeros out positions beyond partial_w; the compute kernel selects it
+    // for the last W-tile of the last block via ReducePartialScaler::with_partial().
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    if constexpr (has_partial_w) {
+    if constexpr (HAS_PARTIAL_W) {
         dataflow_kernel_lib::prepare_partial_reduce_scalers<
             cb_scaler,
             ckernel::PoolType::SUM,
@@ -51,19 +60,15 @@ void kernel_main() {
             scaler_f);
     }
 
-    uint32_t tile_bytes = get_tile_size(cb_in);
-    const auto accessor = TensorAccessor(src_args, src_addr, tile_bytes);
-
     for (uint32_t pass = 0; pass < 2; ++pass) {
         for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
             for (uint32_t ht = 0; ht < Ht; ++ht) {
                 for (uint32_t wt = 0; wt < BLOCK_SIZE; ++wt) {
-                    uint32_t tile_id = ht * Wt + b * BLOCK_SIZE + wt;
-                    cb_reserve_back(cb_in, 1);
-                    uint32_t l1_write_addr = get_write_ptr(cb_in);
-                    noc_async_read_tile(tile_id, accessor, l1_write_addr);
-                    noc_async_read_barrier();
-                    cb_push_back(cb_in, 1);
+                    const uint32_t tile_id = ht * Wt + b * BLOCK_SIZE + wt;
+                    dfb_in.reserve_back(1);
+                    noc.async_read(acc_in, dfb_in, tile_bytes, {.page_id = tile_id}, {.offset_bytes = 0});
+                    noc.async_read_barrier();
+                    dfb_in.push_back(1);
                 }
             }
         }
