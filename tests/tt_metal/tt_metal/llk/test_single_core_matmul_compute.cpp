@@ -365,7 +365,6 @@ bool single_tile_matmul(
     const uint32_t in1_tile_size = tt::tile_size(in1_fmt);
     const uint32_t out_tile_size = tt::tile_size(out_fmt);
 
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -373,29 +372,22 @@ bool single_tile_matmul(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::tt_metal::InterleavedBufferConfig dram_in0_config{
-        .device = device,
-        .size = in0_tile_size,
-        .page_size = in0_tile_size,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-    tt::tt_metal::InterleavedBufferConfig dram_in1_config{
-        .device = device,
-        .size = in1_tile_size,
-        .page_size = in1_tile_size,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-    tt::tt_metal::InterleavedBufferConfig dram_out_config{
-        .device = device,
-        .size = out_tile_size,
-        .page_size = out_tile_size,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-
     tt_metal::Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
-    auto input0_dram_buffer = CreateBuffer(dram_in0_config);
-    auto input1_dram_buffer = CreateBuffer(dram_in1_config);
-    auto output_dram_buffer = CreateBuffer(dram_out_config);
+    auto input0_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = in0_tile_size},
+        {.page_size = in0_tile_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
+    auto input1_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = in1_tile_size},
+        {.page_size = in1_tile_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
+    auto output_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = out_tile_size},
+        {.page_size = out_tile_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
 
     tt_metal::CreateCircularBuffer(
         program_,
@@ -448,8 +440,8 @@ bool single_tile_matmul(
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::detail::WriteToBuffer(input0_dram_buffer, stimulus.packed_input0);
-    tt_metal::detail::WriteToBuffer(input1_dram_buffer, stimulus.packed_input1);
+    distributed::EnqueueWriteMeshBuffer(cq, input0_dram_buffer, stimulus.packed_input0, /*blocking=*/true);
+    distributed::EnqueueWriteMeshBuffer(cq, input1_dram_buffer, stimulus.packed_input1, /*blocking=*/true);
 
     tt_metal::SetRuntimeArgs(
         program_,
@@ -470,7 +462,7 @@ bool single_tile_matmul(
     //                      Comparison Checking
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> dest_buffer_data;
-    tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    distributed::EnqueueReadMeshBuffer(cq, dest_buffer_data, output_dram_buffer, /*blocking=*/true);
     std::vector<float> dest_floats;
     if (out_fmt == tt::DataFormat::Fp8_e4m3) {
         dest_floats = fp8_to_floats(dest_buffer_data);
@@ -526,31 +518,22 @@ bool single_block_matmul(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    auto* device = mesh_device->get_devices()[0];
-
-    tt::tt_metal::InterleavedBufferConfig dram_config_0{
-        .device = device,
-        .size = in0_byte_size,
-        .page_size = in0_byte_size,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-    tt::tt_metal::InterleavedBufferConfig dram_config_1{
-        .device = device,
-        .size = in1_byte_size,
-        .page_size = in1_byte_size,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-    tt::tt_metal::InterleavedBufferConfig dram_config_out{
-        .device = device,
-        .size = out_byte_size,
-        .page_size = out_byte_size,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     tt_metal::Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-
-    auto input0_dram_buffer = CreateBuffer(dram_config_0);
-    auto input1_dram_buffer = CreateBuffer(dram_config_1);
-    auto output_dram_buffer = CreateBuffer(dram_config_out);
+    auto input0_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = in0_byte_size},
+        {.page_size = in0_byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
+    auto input1_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = in1_byte_size},
+        {.page_size = in1_byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
+    auto output_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = out_byte_size},
+        {.page_size = out_byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
 
     tt_metal::CreateCircularBuffer(
         program_,
@@ -603,8 +586,8 @@ bool single_block_matmul(
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::detail::WriteToBuffer(input0_dram_buffer, stimulus.packed_input0);
-    tt_metal::detail::WriteToBuffer(input1_dram_buffer, stimulus.packed_input1);
+    distributed::EnqueueWriteMeshBuffer(cq, input0_dram_buffer, stimulus.packed_input0, /*blocking=*/true);
+    distributed::EnqueueWriteMeshBuffer(cq, input1_dram_buffer, stimulus.packed_input1, /*blocking=*/true);
 
     tt_metal::SetRuntimeArgs(
         program_,
@@ -629,7 +612,7 @@ bool single_block_matmul(
     //                      Comparison Checking
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> dest_buffer_data;
-    tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    distributed::EnqueueReadMeshBuffer(cq, dest_buffer_data, output_dram_buffer, /*blocking=*/true);
     std::vector<float> dest_floats;
     // Tolerances under random U(-1, +1) stimulus. FP8 output: ~1/8
     // quantization plus deeper accumulation rounding for K>1. BF16 output
@@ -692,35 +675,25 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    auto* device = mesh_device->get_devices()[0];
-
-    tt::tt_metal::InterleavedBufferConfig dram_config_0{
-        .device = device,
-        .size = in0_total_size_bytes,
-        .page_size = in0_total_size_bytes,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-
-    tt::tt_metal::InterleavedBufferConfig dram_config_1{
-        .device = device,
-        .size = in1_total_size_bytes,
-        .page_size = in1_total_size_bytes,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-
-    tt::tt_metal::InterleavedBufferConfig dram_config_out{
-        .device = device,
-        .size = out_byte_size,
-        .page_size = out_byte_size,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     tt_metal::Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
-    auto input0_dram_buffer = CreateBuffer(dram_config_0);
+    auto input0_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = in0_total_size_bytes},
+        {.page_size = in0_total_size_bytes, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
     const uint32_t in0_dram_addr = input0_dram_buffer->address();
-    auto input1_dram_buffer = CreateBuffer(dram_config_1);
+    auto input1_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = in1_total_size_bytes},
+        {.page_size = in1_total_size_bytes, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
     const uint32_t in1_dram_addr = input1_dram_buffer->address();
-    auto output_dram_buffer = CreateBuffer(dram_config_out);
+    auto output_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = out_byte_size},
+        {.page_size = out_byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
     const uint32_t out_dram_addr = output_dram_buffer->address();
 
     uint32_t in0_id = 0;
@@ -916,8 +889,8 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::detail::WriteToBuffer(input0_dram_buffer, in0_stim.packed);
-    tt_metal::detail::WriteToBuffer(input1_dram_buffer, in1_stim.packed);
+    distributed::EnqueueWriteMeshBuffer(cq, input0_dram_buffer, in0_stim.packed, /*blocking=*/true);
+    distributed::EnqueueWriteMeshBuffer(cq, input1_dram_buffer, in1_stim.packed, /*blocking=*/true);
 
     tt_metal::SetRuntimeArgs(
         program_,
@@ -953,7 +926,7 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     //                      Comparison Checking
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> dest_buffer_data;
-    tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    distributed::EnqueueReadMeshBuffer(cq, dest_buffer_data, output_dram_buffer, /*blocking=*/true);
     std::vector<float> dest_floats;
     if (out_fmt == tt::DataFormat::Fp8_e4m3) {
         dest_floats = fp8_to_floats(dest_buffer_data);

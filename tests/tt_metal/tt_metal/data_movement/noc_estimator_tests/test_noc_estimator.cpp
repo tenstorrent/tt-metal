@@ -633,12 +633,11 @@ static bool run_dram_accessor(
 
     uint32_t num_pages = num_dram_banks;
 
-    InterleavedBufferConfig buf_config{
-        .device = device,
-        .size = (size_t)num_pages * bytes_per_txn,
-        .page_size = (uint32_t)bytes_per_txn,
-        .buffer_type = BufferType::DRAM};
-    auto dram_buffer = CreateBuffer(buf_config);
+    auto& cq = mesh_device->mesh_command_queue();
+    auto dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = (size_t)num_pages * bytes_per_txn},
+        {.page_size = (uint32_t)bytes_per_txn, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
 
     std::set<CoreRange> core_ranges;
     for (const auto& c : cores) {
@@ -671,7 +670,7 @@ static bool run_dram_accessor(
         (uint32_t)cfg.pattern,    // 6
         num_pages,                // 7
     };
-    TensorAccessorArgs(*dram_buffer).append_to(compile_args);
+    TensorAccessorArgs(dram_buffer).append_to(compile_args);
 
     auto kernel = CreateKernel(
         program,
@@ -704,7 +703,7 @@ static bool run_dram_accessor(
     for (uint32_t p = 0; p < num_pages; p++) {
         full_input.insert(full_input.end(), page_data.begin(), page_data.end());
     }
-    detail::WriteToBuffer(dram_buffer, full_input);
+    distributed::EnqueueWriteMeshBuffer(cq, dram_buffer, full_input, /*blocking=*/true);
     MetalContext::instance().get_cluster().dram_barrier(device->id());
 
     execute_program(mesh_device, std::move(program));
