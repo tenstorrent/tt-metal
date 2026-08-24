@@ -39,8 +39,6 @@ void kernel_main() {
     constexpr uint32_t scaler_bits = get_arg(args::scaler_bits);
     const uint32_t is_root = get_arg(args::is_root);
 
-    constexpr uint32_t cb_scaler = dfb::scaler;
-
     Noc noc;
     DataflowBuffer dfb_in(dfb::in_shard);
     DataflowBuffer dfb_mean_src(dfb::mean_src);
@@ -48,7 +46,7 @@ void kernel_main() {
     constexpr auto mc = MCAST_ARGS(mean_bcast);
 
     const float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+    dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
         scaler_f);
 
     // Credit the resident shard. No write -- the bytes are already there.
