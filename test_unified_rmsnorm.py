@@ -29,7 +29,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, single_core, unified_program
+from unified_harness import core_block, make_cb, single_core, split_evenly, unified_program
 
 KERNEL = "unified_kernels/rmsnorm.cpp"
 TILE = 32
@@ -42,7 +42,7 @@ def bf16_pair(v):
     return (bits << 16) | bits
 
 
-def run(device, ht, wt, unit_weight=False, seed=0):
+def run(device, ht, wt, unit_weight=False, seed=0, chunk=None, cores=1):
     torch.manual_seed(seed)
     H, W = ht * TILE, wt * TILE
 
@@ -67,22 +67,31 @@ def run(device, ht, wt, unit_weight=False, seed=0):
     tx, tw = to_dev(x), to_dev(w_t)
     tout = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, H, W]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram)
 
-    core_ranges, cores = single_core()
-    ct_args = [ht, wt]
+    # `chunk` is the rows-per-pass; ht is the whole tensor. Rows are independent, so this is
+    # both the L1 bound and the unit of work across cores. Default: the whole thing at once,
+    # which is what this kernel used to have to do.
+    hc = ht if chunk is None else chunk
+    assert ht % hc == 0, "the chunk height must divide the tensor's"
+    nchunks = ht // hc
+    ncores = min(cores, nchunks)
+    core_ranges, cores = core_block(ncores)
+    shares = split_evenly(nchunks, ncores)
+    ct_args = [hc, wt]
     for t in (tx, tw, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    rt_args = [tx.buffer_address(), tw.buffer_address(), tout.buffer_address(), bf16_pair(EPS)]
+    addrs = [tx.buffer_address(), tw.buffer_address(), tout.buffer_address(), bf16_pair(EPS)]
+    rt_args = {c: addrs + [begin, count] for c, (begin, count) in zip(cores, shares)}
 
     cbs = [
-        make_cb(CB["x"], core_ranges, num_pages=ht * wt),
+        make_cb(CB["x"], core_ranges, num_pages=hc * wt),
         make_cb(CB["w"], core_ranges, num_pages=wt),
         make_cb(CB["eps"], core_ranges, num_pages=1),
         make_cb(CB["inv_n"], core_ranges, num_pages=1),
-        make_cb(CB["sq"], core_ranges, num_pages=ht * wt),
-        make_cb(CB["mean"], core_ranges, num_pages=ht),
-        make_cb(CB["rsqrt"], core_ranges, num_pages=ht),
-        make_cb(CB["normed"], core_ranges, num_pages=ht * wt),
-        make_cb(CB["out"], core_ranges, num_pages=ht * wt),
+        make_cb(CB["sq"], core_ranges, num_pages=hc * wt),
+        make_cb(CB["mean"], core_ranges, num_pages=hc),
+        make_cb(CB["rsqrt"], core_ranges, num_pages=hc),
+        make_cb(CB["normed"], core_ranges, num_pages=hc * wt),
+        make_cb(CB["out"], core_ranges, num_pages=hc * wt),
     ]
 
     program = unified_program(
@@ -120,6 +129,56 @@ def main(argv=None):
             logger.info(f"H={ht * TILE:3d} W={wt * TILE:3d}  max|err|={e:.5f}  {'ok' if ok else 'FAIL'}")
             if not ok:
                 failed.append((ht, wt))
+
+        # Row chunking. Rows are normalised independently, so a chunk height is a pure
+        # decomposition and every one has to give the SAME answer, not merely a close one.
+        for ht, wt in ((8, 4), (4, 8)):
+            ref = None
+            for chunk in (ht, ht // 2, ht // 4, 1):
+                if ht % chunk:
+                    continue
+                got, want = run(device, ht, wt, chunk=chunk)[:2]
+                spread = 0.0 if ref is None else (got - ref).abs().max().item()
+                if ref is None:
+                    ref = got
+                ok = spread == 0.0
+                logger.info(
+                    f"H={ht * TILE} W={wt * TILE} chunk={chunk}: vs-whole={spread:.6f}  {'ok' if ok else 'FAIL'}"
+                )
+                if not ok:
+                    failed.append(f"chunk-{ht}-{wt}-{chunk}")
+
+        # The shape that could not be done at all before chunking: S=512 by d_model 2048 is
+        # 1024 tiles, and this kernel holds four blocks of them at once (x, sq, normed, out),
+        # so the whole thing resident would want 8MB. chunk=2 is 1MB; chunk=4 does not fit.
+        #
+        # Gated on relative L2, not max|err|: the abs bound above is calibrated for narrow
+        # rows and does not scale with the row width. Going from 128-wide rows to 2048-wide
+        # takes max|err| from 0.030 to 0.051 while rel-L2 only moves 0.0052 -> 0.0069, which
+        # is ordinary bf16 accumulation over 16x the terms and not a chunking artifact --
+        # chunk=1 and chunk=2 agree to the bit.
+        for ht, wt, chunk in ((16, 64, 1), (16, 64, 2), (8, 64, 1)):
+            got, want = run(device, ht, wt, chunk=chunk)[:2]
+            rel = ((got - want).norm() / want.norm()).item()
+            ok = rel <= 0.01
+            logger.info(
+                f"H={ht * TILE} W={wt * TILE} chunk={chunk} ({chunk * wt} tiles resident): "
+                f"rel-L2={rel:.5f}  {'ok' if ok else 'FAIL'}"
+            )
+            if not ok:
+                failed.append(f"wide-{ht}-{wt}-{chunk}")
+
+        # Chunks partitioned across cores.
+        for ht, wt, chunk, ncores in ((8, 4, 1, 4), (8, 4, 2, 2), (16, 64, 1, 8)):
+            got, want = run(device, ht, wt, chunk=chunk, cores=ncores)[:2]
+            rel = ((got - want).norm() / want.norm()).item()
+            ok = rel <= 0.01
+            logger.info(
+                f"H={ht * TILE} W={wt * TILE} chunk={chunk} cores={ncores}: rel-L2={rel:.5f}  "
+                f"{'ok' if ok else 'FAIL'}"
+            )
+            if not ok:
+                failed.append(f"mc-{ht}-{wt}-{ncores}")
 
         # weight == 1: every output row must have RMS 1. eps shifts it very slightly, so the
         # target is the exact value including eps rather than a bare 1.0.
