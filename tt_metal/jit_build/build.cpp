@@ -145,7 +145,8 @@ void JitBuildEnv::init(
     // Use explicitly configured SFPI first, then local development and system installations.
     // Ordered by precedence.
     std::vector<std::string> sfpi_roots;
-    if (const char* sfpi_root = std::getenv("SFPI_ROOT"); sfpi_root != nullptr && sfpi_root[0] != '\0') {
+    const std::string sfpi_root = parse_env<std::string>("SFPI_ROOT", "");
+    if (!sfpi_root.empty()) {
         sfpi_roots.emplace_back(sfpi_root);
     }
     sfpi_roots.emplace_back(this->root_ + "runtime/sfpi");
