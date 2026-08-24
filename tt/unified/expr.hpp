@@ -77,6 +77,8 @@ namespace expr {
 template <typename N>
 auto fluent_relu(const N& n);
 template <typename N>
+auto fluent_silu(const N& n);
+template <typename N>
 auto fluent_exp(const N& n);
 template <typename N>
 auto fluent_recip(const N& n);
@@ -88,6 +90,7 @@ auto fluent_rsqrt(const N& n);
 template <typename Self>
 struct Fluent {
     auto relu() const { return fluent_relu(self()); }
+    auto silu() const { return fluent_silu(self()); }
     auto exp() const { return fluent_exp(self()); }
     auto recip() const { return fluent_recip(self()); }
     auto sqrt() const { return fluent_sqrt(self()); }

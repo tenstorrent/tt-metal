@@ -426,6 +426,24 @@ struct ExpOp {
 // The `*_tile_init()` calls are inline rather than hoisted: they are cheap, and
 // metal kernels routinely re-init per use (see SFPU_OP_CHAIN_0 in
 // tests/.../compute/eltwise_sfpu.cpp). Worth hoisting if it shows in a profile.
+// SwiGLU's activation. Metal has it as one SFPU op rather than as sigmoid-then-multiply,
+// which is what makes it worth wiring: silu(x) * up spends one SFPU pass on the activation
+// instead of three (sigmoid, multiply by x, multiply by up).
+struct SiluOp {
+    static void apply(uint32_t src, uint32_t out) {
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+        (void)src;  // == out; SFPU unaries work in place
+        ckernel::silu_tile_init();
+        ckernel::silu_tile(out);
+#else
+        (void)src;
+        (void)out;
+#endif
+    }
+
+    static void apply_in_place(uint32_t slot) { apply(slot, slot); }
+};
+
 struct ReluOp {
     static void apply(uint32_t src, uint32_t out) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
@@ -913,8 +931,18 @@ struct ReduceNode : expr::Fluent<ReduceNode<S, Axis, Pool, Chain>> {
 };
 
 template <typename S, ReduceAxis A, ReducePool P, typename Chain>
+auto silu(const ReduceNode<S, A, P, Chain>& r) {
+    return ReduceNode<S, A, P, expr::chain_append_t<Chain, SiluOp>>{{}, r.in_cb, r.scaler_cb};
+}
+
+template <typename S, Axis A, ReducePool P, typename Chain>
 auto relu(const ReduceNode<S, A, P, Chain>& r) {
     return ReduceNode<S, A, P, expr::chain_append_t<Chain, ReluOp>>{{}, r.in_cb, r.scaler_cb};
+}
+
+template <typename Op, Axis A, typename SB, typename SV, typename Chain>
+auto silu(const BcastNode<Op, A, SB, SV, Chain>& b) {
+    return BcastNode<Op, A, SB, SV, expr::chain_append_t<Chain, SiluOp>>{{}, {}, b.block_cb, b.vec_cb};
 }
 
 template <typename Op, Axis A, typename SB, typename SV, typename Chain>
@@ -1065,6 +1093,11 @@ auto relu(const N& n) {
 }
 
 template <typename N, typename = std::enable_if_t<expr::is_expr<N>::value>>
+auto silu(const N& n) {
+    return expr::Un<SiluOp, N>{{}, n};
+}
+
+template <typename N, typename = std::enable_if_t<expr::is_expr<N>::value>>
 auto exp_(const N& n) {
     return expr::Un<ExpOp, N>{{}, n};
 }
@@ -1089,6 +1122,11 @@ auto rsqrt(const N& n) {
 // crash: it silently drops the fused add, so matmul(q, k).add(mask).relu() would come out
 // as relu(A@B). It was wrong that way until this comment existed. Making the addend part
 // of the node's TYPE would make the omission impossible rather than merely commented.
+template <typename SA, typename SB, TransposeB Tr, typename Chain>
+auto silu(const MatmulNode<SA, SB, Tr, Chain>& m) {
+    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, SiluOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb, m.addend_cb};
+}
+
 template <typename SA, typename SB, TransposeB Tr, typename Chain>
 auto relu(const MatmulNode<SA, SB, Tr, Chain>& m) {
     return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, ReluOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb, m.addend_cb};
@@ -1170,6 +1208,10 @@ namespace expr {
 template <typename N>
 auto fluent_relu(const N& n) {
     return relu(n);
+}
+template <typename N>
+auto fluent_silu(const N& n) {
+    return silu(n);
 }
 template <typename N>
 auto fluent_exp(const N& n) {

@@ -57,6 +57,9 @@
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/relu.h"
+// silu has no per-op header of its own: it is declared only in metal's umbrella
+// compute_kernel_api.h, so that is where SwiGLU's activation has to come from.
+#include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/compute_kernel_hw_startup.h"

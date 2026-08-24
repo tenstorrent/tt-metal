@@ -39,6 +39,10 @@ constexpr uint32_t kCbOut = 16;
 #define BN_APPLY(a, b) ((a) / (b))
 #elif defined(BN_MAX)
 #define BN_APPLY(a, b) (u::max_((a), (b)))
+#elif defined(BN_SILU_MUL)
+// SwiGLU's core: silu(gate) * up, one expression so the activation rides in DST with the
+// multiply rather than going out to L1 and back.
+#define BN_APPLY(a, b) (u::silu(a) * (b))
 #elif defined(BN_CHAIN)
 #define BN_APPLY(a, b) ((((a) + (b)) - (a)) * (b) / (a))
 #else
