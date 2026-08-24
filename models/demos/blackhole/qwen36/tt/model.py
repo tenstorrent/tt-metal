@@ -668,10 +668,7 @@ class Qwen36Model:
         x = self.embd(tok)  # [1, T, dim_frac] (hidden dim sharded across mesh)
         x = self._scatter_vision_tokens(x, token_ids, vision_tokens)
         x = ttnn.reshape(x, (1, 1, T, x.shape[-1]))
-        cos_t, sin_t = self._rope_tp_cos_sin_torch(0, T)
-        rep = ttnn.ReplicateTensorToMesh(self.device)
-        cos = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=rep)
-        sin = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=rep)
+        cos, sin = self._rope_tp_cos_sin_dev(0, T)
 
         for layer in self.layers:
             x = layer.forward(x, cos=cos, sin=sin, mode="prefill", chunk_size=128, valid_len=valid_len)
@@ -1103,6 +1100,23 @@ class Qwen36Model:
         cos = cos_t.reshape(1, 1, length, rd)
         sin = sin_t.reshape(1, 1, length, rd)
         return cos, sin
+
+    def _rope_tp_cos_sin_dev(self, start, length):
+        """Device cos/sin [1, 1, length, rope_width] -- the rope_tp shape, built without host trig.
+
+        rope.get_prefill_rot_mats slices the resident device tables and returns [1, length, W];
+        apply_partial_rope_prefill wants the 4D form that _rope_tp_cos_sin_torch produced, and a
+        3D tensor is read with batch == length ("Cos must have batch dim = 1 in prefill mode").
+        Adding the leading 1 is metadata-only while the values are untouched.
+
+        Bit-exact with the host path: the device tables and prefill_cos_sin_torch derive from the
+        same inv_freq -- verified max|diff| 0.0 at (start,length) (0,2048) (2048,2048) (4096,128)
+        (0,128) -- so the traced trace's cos/sin still match the eager path's byte for byte
+        (test_model_tp_long_prefill_traced asserts PCC 1.0 exactly).
+        """
+        rd = self.rope.rope_width
+        cos, sin = self.rope.get_prefill_rot_mats(start, length)
+        return ttnn.reshape(cos, (1, 1, length, rd)), ttnn.reshape(sin, (1, 1, length, rd))
 
     def _forward_prefill_chunk_tp(
         self, token_buf, cos_buf, sin_buf, chunk_start_idx_tensor, full_page_table, chunk_page_table
@@ -2190,22 +2204,8 @@ class Qwen36Model:
         # sliced to bucket; identity when the mask is zero). The caller stages the buffers
         # (prefill_masked_bucket -> _set_vision_merge). No-op until a trace is captured.
         x = self._apply_vision_merge(x, length=bucket)
-        # rope_tp cos/sin for absolute positions [chunk_start, chunk_start+bucket).
-        cos_t, sin_t = self._rope_tp_cos_sin_torch(chunk_start, bucket)
-        cos = ttnn.from_torch(
-            cos_t,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-        )
-        sin = ttnn.from_torch(
-            sin_t,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-        )
+        # rope_tp cos/sin for absolute positions [chunk_start, chunk_start+bucket), on device.
+        cos, sin = self._rope_tp_cos_sin_dev(chunk_start, bucket)
         full_pt = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
         blk0 = chunk_start // block_size
         blkN = num_blocks_in_seq(chunk_start + valid_len, block_size)
@@ -2539,21 +2539,16 @@ class Qwen36Model:
             ttnn.copy_host_to_device_tensor(cpt_host, self._chunk_page_table_buf)
 
             # M-RoPE-aware per-chunk cos/sin (slices the staged per-request table for multimodal;
-            # 1D RoPE for text). Updated into the persistent buffer per chunk via host->device copy,
-            # so it stays trace-safe.
-            cos_seq, sin_seq = self.rope.prefill_cos_sin_torch(cs, chunk_size)
-            cos_host = ttnn.from_torch(
-                cos_seq.unsqueeze(0).contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-            )
-            sin_host = ttnn.from_torch(
-                sin_seq.unsqueeze(0).contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-            )
-            ttnn.copy_host_to_device_tensor(cos_host, self._chunk_cos_buf)
-            ttnn.copy_host_to_device_tensor(sin_host, self._chunk_sin_buf)
+            # 1D RoPE for text). ON DEVICE: get_prefill_rot_mats slices the resident tables and
+            # returns the [1, chunk, rope_width] this buffer already holds, and ttnn.copy writes
+            # without changing the buffer's address, so the parked trace stays valid. Replaces
+            # per-chunk host trig + 2 from_torch + 2 uploads. Multimodal and Blackhole fall back to
+            # the host table inside get_prefill_rot_mats, so behaviour there is unchanged.
+            cos_dev, sin_dev = self.rope.get_prefill_rot_mats(cs, chunk_size)
+            ttnn.copy(cos_dev, self._chunk_cos_buf)
+            ttnn.copy(sin_dev, self._chunk_sin_buf)
+            ttnn.deallocate(cos_dev)
+            ttnn.deallocate(sin_dev)
 
             # Stage the trace-safe vision buffers: each chunk splices its own slice of the packed
             # vision rows (vis_row_offset = image tokens before cs); a chunk with no image tokens
@@ -2708,16 +2703,15 @@ class Qwen36Model:
             )
             ttnn.copy_host_to_device_tensor(cpt_host, self._chunk_page_table_buf)
 
-            cos_t, sin_t = self._rope_tp_cos_sin_torch(cs, chunk_size)
-            cos_host = ttnn.from_torch(
-                cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep
-            )
-            sin_host = ttnn.from_torch(
-                sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep
-            )
-            ttnn.copy_host_to_device_tensor(cos_host, self._chunk_cos_buf)
-            ttnn.copy_host_to_device_tensor(sin_host, self._chunk_sin_buf)
-            _host_refs += [tok_host, csi_host, cpt_host, cos_host, sin_host]
+            # ON DEVICE: slice the resident rope tables and ttnn.copy into the parked buffers.
+            # copy preserves their addresses, so the captured trace stays valid, and this replaces
+            # per-chunk host trig + 2 from_torch + 2 host->device uploads (32 chunks at 64k).
+            cos_dev, sin_dev = self._rope_tp_cos_sin_dev(cs, chunk_size)
+            ttnn.copy(cos_dev, self._chunk_cos_buf)
+            ttnn.copy(sin_dev, self._chunk_sin_buf)
+            ttnn.deallocate(cos_dev)
+            ttnn.deallocate(sin_dev)
+            _host_refs += [tok_host, csi_host, cpt_host]
 
             # Stage the hidden-sharded vision buffers: each chunk splices its own slice of the
             # packed vision rows (vis_row_offset = image tokens before cs); a chunk with no image
@@ -2939,10 +2933,7 @@ class Qwen36Model:
         x = self._scatter_vision_tokens(x, token_ids, vision_tokens)
         x = ttnn.reshape(x, (1, 1, T, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        cos_t, sin_t = self._rope_tp_cos_sin_torch(0, T)
-        rep = ttnn.ReplicateTensorToMesh(self.device)
-        cos = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=rep)
-        sin = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=rep)
+        cos, sin = self._rope_tp_cos_sin_dev(0, T)
         for layer in self.layers:
             x = layer.forward(
                 x,
@@ -3091,9 +3082,7 @@ class Qwen36Model:
         dn_layers = [layer.attention for layer in self.layers if not layer.is_full_attention]
         rep = ttnn.ReplicateTensorToMesh(self.device)
         # cos/sin for absolute positions [0, bucket) — shared by all users (single pass from pos 0).
-        cos_t, sin_t = self._rope_tp_cos_sin_torch(0, bucket)
-        cos = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=rep)
-        sin = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=rep)
+        cos, sin = self._rope_tp_cos_sin_dev(0, bucket)
         csi = ttnn.from_torch(
             torch.tensor([0], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
         )
