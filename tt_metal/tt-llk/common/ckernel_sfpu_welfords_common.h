@@ -611,60 +611,6 @@ sfpi_inline void _two_pass_clear_stats_()
     TTI_SFPLOADI(ckernel::p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, 0);
 }
 
-template <bool broadcast_result>
-sfpi_inline void _two_pass_horizontal_sum_pair_();
-
-#ifdef WELFORD_SFPU_GLOBAL_COMBINE
-template <std::uint32_t num_records>
-sfpi_inline void _two_pass_combine_global_stats_(std::uint32_t reciprocal_bits)
-{
-    static_assert(num_records > 1 && num_records <= 32);
-
-    constexpr std::uint32_t mean_tile_offset = 0;
-    constexpr std::uint32_t var_tile_offset  = 64;
-
-    // The reader packs the records into one 4x8 vector, repeats the first mean
-    // in the adjacent vector, and pads unused records with that anchor and zero variance.
-    TT_SFPLOAD(ckernel::p_sfpu::LREG0, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, mean_tile_offset);
-    TT_SFPLOAD(ckernel::p_sfpu::LREG1, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, 2);
-    TT_SFPLOAD(ckernel::p_sfpu::LREG2, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, var_tile_offset);
-    TTI_SFPMAD(ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG0, 1);
-    TTI_SFPNOP;
-    TTI_SFPMOV(0, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG4, 0);
-    TTI_SFPMAD(ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG2, ckernel::p_sfpu::LREG4, 0);
-
-    _two_pass_horizontal_sum_pair_<false>();
-    TT_SFPLOAD(ckernel::p_sfpu::LREG1, sfpi::SFPLOAD_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, 2);
-    if constexpr ((num_records & (num_records - 1)) == 0)
-    {
-        TTI_SFPLOADI(ckernel::p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, reciprocal_bits >> 16);
-    }
-    else
-    {
-        TT_SFPLOADI(ckernel::p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_UPPER, reciprocal_bits >> 16);
-        TT_SFPLOADI(ckernel::p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_LOWER, reciprocal_bits & 0xffff);
-    }
-
-    TTI_SFPMUL(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG3, 0);
-    TTI_SFPADD(ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG1, 0);
-    TTI_SFPMUL(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG0, 0);
-    TTI_SFPNOP;
-    TTI_SFPMAD(ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG4, 1);
-    TTI_SFPNOP;
-    sfpi::vFloat variance_sum = sfpi::l_reg[sfpi::LRegs::LReg4];
-    v_if (variance_sum < 0.0f)
-    {
-        variance_sum = 0.0f;
-    }
-    v_endif;
-    sfpi::l_reg[sfpi::LRegs::LReg4] = variance_sum;
-    TTI_SFPMUL(ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG4, 0);
-
-    TT_SFPSTORE(ckernel::p_sfpu::LREG1, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, mean_tile_offset);
-    TT_SFPSTORE(ckernel::p_sfpu::LREG4, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, var_tile_offset);
-}
-#endif
-
 template <bool dual_m2>
 sfpi_inline void _two_pass_store_mean_m2_to_dst_()
 {

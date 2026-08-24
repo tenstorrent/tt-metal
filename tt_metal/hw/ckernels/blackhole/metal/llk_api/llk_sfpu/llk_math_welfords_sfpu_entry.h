@@ -81,14 +81,6 @@ inline void llk_math_two_pass_sfpu_store_combined_mean_var_to_dst_raw(
         reciprocal_bits);
 }
 
-#ifdef WELFORD_SFPU_GLOBAL_COMBINE
-template <std::uint32_t num_records>
-inline void llk_math_two_pass_sfpu_combine_global_stats(std::uint32_t mean_dst_idx, std::uint32_t reciprocal_bits) {
-    _llk_math_welfords_sfpu_params_(
-        ckernel::sfpu::_two_pass_combine_global_stats_<num_records>, mean_dst_idx, reciprocal_bits);
-}
-#endif
-
 template <bool is_fp32_dest_acc_en>
 inline void llk_math_welfords_sfpu_reinit(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);

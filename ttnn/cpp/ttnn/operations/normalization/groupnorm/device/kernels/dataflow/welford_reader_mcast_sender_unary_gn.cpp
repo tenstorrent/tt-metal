@@ -352,10 +352,8 @@ void kernel_main() {
                 noc.async_read_barrier();
             }
 
-#ifdef WELFORD_SFPU_GLOBAL_COMBINE
-            pack_welford_stats_for_sfpu<num_mcast_cores, global_stride>(p_global_means, p_global_vars);
-#else
-            // Read mean and variance arrays from dfb_ex_global, then combine using Welford
+            // Read dfb_ex_global through read-typed views; the writes below reuse the write-typed pointers (same L1
+            // addresses).
             auto p_global_means_read = reinterpret_cast<stats_read_t*>(global_means_ptr);
             auto p_global_vars_read = reinterpret_cast<stats_read_t*>(global_vars_ptr);
             auto global_result =
@@ -365,7 +363,6 @@ void kernel_main() {
             // Write this to dfb_ex_global
             p_global_means[0] = global_result.mean;
             p_global_vars[0] = global_result.variance;
-#endif
 
 #ifdef GN_DISTRIBUTED_AG
             // Stage the DEVICE-GLOBAL stat (post intra-device combine) for the fabric AG — not the

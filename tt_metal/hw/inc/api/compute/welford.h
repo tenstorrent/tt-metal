@@ -141,13 +141,6 @@ ALWI void two_pass_stats_finalize_and_combine_to_face(
 }
 #endif
 
-#ifdef WELFORD_SFPU_GLOBAL_COMBINE
-template <std::uint32_t num_records>
-ALWI void two_pass_stats_combine_global_stats(std::uint32_t mean_dst_idx, std::uint32_t reciprocal_bits) {
-    MATH((llk_math_two_pass_sfpu_combine_global_stats<num_records>(mean_dst_idx, reciprocal_bits)));
-}
-#endif
-
 /**
  * @brief Performs a Welford's online algorithm update for mean and m2 on a tile in the DST register
  *

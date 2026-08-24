@@ -124,38 +124,3 @@ inline WelfordStats<std::uint16_t> combine_welford_stats(T means, T vars) {
 
     return result;
 }
-
-/**
- * @brief Pack equal-count BF16 statistics into the 4x8 vector layout consumed by
- *        one Blackhole SFPU load.
- *
- * Records beyond ARRAY_SIZE are padded with the anchor mean and zero variance,
- * so a centered-moment reduction over all 32 lanes produces the ARRAY_SIZE
- * result without predicates on the math core.
- */
-template <std::uint32_t ARRAY_SIZE, std::uint32_t STRIDE, typename T>
-inline void pack_welford_stats_for_sfpu(T means, T vars) {
-    static_assert(ARRAY_SIZE > 1 && ARRAY_SIZE <= 32, "SFPU global combine supports 2..32 records");
-    static_assert(
-        std::is_same_v<std::remove_volatile_t<std::remove_pointer_t<T>>, std::uint16_t>,
-        "T must be uint16_t* or volatile uint16_t*");
-
-    constexpr std::uint32_t sfpu_vector_width = 8;
-    constexpr std::uint32_t face_width = 16;
-    constexpr std::uint32_t max_records = 32;
-    const std::uint16_t anchor_mean = means[0];
-
-    // Iterate in source order: compacted destinations only overwrite source
-    // records that have already been consumed.
-    for (std::uint32_t lane = 0; lane < max_records; ++lane) {
-        const std::uint32_t tile_index = (lane / sfpu_vector_width) * face_width + 2 * (lane % sfpu_vector_width);
-        if (lane < ARRAY_SIZE) {
-            means[tile_index] = means[lane * STRIDE];
-            vars[tile_index] = vars[lane * STRIDE];
-        } else {
-            means[tile_index] = anchor_mean;
-            vars[tile_index] = 0;
-        }
-        means[tile_index + 1] = anchor_mean;
-    }
-}
