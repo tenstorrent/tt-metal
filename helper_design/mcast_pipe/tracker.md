@@ -1,7 +1,7 @@
 # Multicast family and chain-forwarding tracker
 
 Plan: [`plan.md`](plan.md)
-Status: Stages 1–4 complete; Stage 5 pending
+Status: Complete
 Last updated: 2026-08-24
 
 This is the execution record for the `McastFamily`/`McastGroup`, exact
@@ -167,16 +167,33 @@ Stage started from commit `e4828229deb`.
 
 ## Stage 5 — combined closeout
 
-- [ ] Run the complete helper host suite.
-- [ ] Run the complete helper device/wire suite sequentially.
-- [ ] Run final GroupNorm unit and nightly suites.
-- [ ] Run final Conv3D unit and nightly suites.
-- [ ] Confirm fresh JIT/source-audit coverage for all changed kernel faces.
-- [ ] Confirm no migrated operation still owns rectangle decomposition or chain
+- [x] Run the complete helper host suite.
+- [x] Run the complete helper device/wire suite sequentially.
+- [x] Run final GroupNorm unit and nightly suites.
+- [x] Run final Conv3D unit and nightly suites.
+- [x] Confirm fresh JIT/source-audit coverage for all changed kernel faces.
+- [x] Confirm no migrated operation still owns rectangle decomposition or chain
   topology.
-- [ ] Update helper API/version documentation and migration records.
-- [ ] Record final performance comparisons and any accepted variance.
-- [ ] Mark this tracker complete with final commit and evidence links.
+- [x] Update helper API/version documentation and migration records.
+- [x] Record final performance comparisons and any accepted variance.
+- [x] Mark this tracker complete with final commit and evidence links.
+
+The Stage 4 helper and Conv3D runs occurred after the last implementation
+change and therefore serve as their final Stage 5 gates. GroupNorm was rerun
+after the Stage 4 implementation commit. `MCAST_PIPE_API_VERSION` is 15 for the
+family, multi-rectangle, mandatory payload-receive destination/size, and chain
+extensions. This scoped tracker is the migration record for GroupNorm and
+Conv3D. Per the approved scope, the fleet-wide v14 rollout ledger and unrelated
+kernel migrations were not reconciled or restamped.
+
+### Stage commits
+
+- Plan: `b69341112dd` (`docs: plan mcast family and chain forwarding rollout`)
+- Family and multi-rectangle vertical slice: `afaff417f1c`
+- GroupNorm proof: `c6a19c93f0c`
+- Row-major chain transport: `e4828229deb`
+- Conv3D proof: `72b351f87aa`
+- Combined closeout: the commit containing this completed tracker
 
 ## Test evidence
 
@@ -222,6 +239,12 @@ unrecorded partial run.
 | 2026-08-24 | 4 | `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/kernel_lib/test_mcast_pipe_source_audit.py -q` | PASS | Full source audit: 35/35; validates one Conv3D family/wire and helper-owned exact-group transport. |
 | 2026-08-24 | 4 | `python -m tracy -r -m pytest 'tests/ttnn/unit_tests/operations/conv/test_conv3d.py::test_conv3d_weight_mcast_family[dense_weight_group]' -q` | PASS | Dense hardware-multicast case: Conv3D kernel duration 3,030 ns; report `generated/profiler/reports/2026_08_24_01_59_55/ops_perf_results_2026_08_24_01_59_55.csv`. |
 | 2026-08-24 | 4 | `python -m tracy -r -m pytest 'tests/ttnn/unit_tests/operations/conv/test_conv3d.py::test_conv3d_weight_mcast_family[irregular_weight_groups]' -q` | PASS | Irregular helper-chain case: Conv3D kernel duration 10,864 ns, consistent with the focused seven-trial 12,206 ns median; report `generated/profiler/reports/2026_08_24_02_00_17/ops_perf_results_2026_08_24_02_00_17.csv`. |
+| 2026-08-24 | 5 | `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/fused/test_group_norm.py -q` | PASS | Final committed-state unit run: 345 passed and 10 expected platform skips. |
+| 2026-08-24 | 5 | `scripts/run_safe_pytest.sh tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py -q` | PASS | Final committed-state DRAM unit run: 181 passed, 5 expected skips, and 1 expected xfail. |
+| 2026-08-24 | 5 | `scripts/run_safe_pytest.sh tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py -q` | PASS | Final committed-state nightly run: 203 passed and 6 expected platform skips. |
+| 2026-08-24 | 5 | `scripts/run_safe_pytest.sh tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm_DRAM.py -q` | PASS | Final committed-state DRAM nightly run: 257 passed and 111 expected unsupported/platform skips. |
+| 2026-08-24 | 5 | `scripts/run_safe_pytest.sh tests/ttnn/nightly/unit_tests/operations_compute_only/fused/test_group_norm.py -q` | PASS | Final compute-only validation: 8/8 passed. |
+| 2026-08-24 | 5 | `rg -n 'chain_(succ\|pred)\|weight_src_noc\|McastPassive\|first_.*mcast\|middle_.*mcast\|last_.*mcast\|mcast_bbox\|weights_three_rect\|conv3d_weight_share' <GroupNorm and Conv3D production roots>` | PASS | No matches: rectangle decomposition and chain topology are helper-owned in both migrated POCs. |
 
 ## Decisions and scope changes
 

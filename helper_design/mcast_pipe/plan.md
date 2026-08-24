@@ -1,6 +1,6 @@
 # Multicast families, exact receiver groups, and chain forwarding
 
-Status: agreed implementation plan
+Status: implemented and validated; see the completed execution tracker
 
 This plan extends the host and device `mcast_pipe` helpers so one semantic
 multicast stream can describe several exact receiver groups. It also makes an
