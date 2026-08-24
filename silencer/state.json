@@ -25,7 +25,8 @@
     "32028413134",
     "32053638633",
     32101971921,
-    32613186861
+    32613186861,
+    "32749061648"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -48,7 +49,8 @@
     "models-t2-unit-tests.yaml",
     "t3000-perf-tests.yaml",
     "single-card-ttnn-models-frequent-tests",
-    "models-t1-e2e-tests.yaml"
+    "models-t1-e2e-tests.yaml",
+    "t3000-integration-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -173,9 +175,23 @@
       "pr": null,
       "branch": "silencer/demote-rotary-embedding-seqlen-mismatch-warning-v2",
       "pattern": "rotary_embedding_llama sequence tile coverage mismatch",
+      "status": "resolved",
+      "notes": "Re-application of #52592, which was closed without merging (fix never landed). Warning reconfirmed still firing in models-t1-e2e-tests run 32613186861 jobs 97130138239/97130138280. Demoted log_warning->log_debug in rotary_embedding_llama_multi_core_program_factory.cpp decode path. Dispatched models-t1-e2e-tests (model=llama3.1-8b) for validation. | Resolved: PR #54126 already validated (run 32665870724, models-t1-e2e-tests, success; 0 occurrences confirmed with decode path exercised) and marked ready for review by a prior run. No further action needed.",
+      "number": 54126
+    },
+    {
+      "branch": "silencer/dedupe-fabric-config-unchanged-log",
+      "pattern": "Fabric config changed from {} to {}, reinitializing control plane - log_info fires unconditionally even when old==new value (61x across 3 jobs in one t3000-integration-tests run sample)",
+      "source_run_id": "32749061648",
+      "source_job_ids": [
+        "97504096179",
+        "97504096180",
+        "97504096239"
+      ],
+      "workflow": "t3000-integration-tests.yaml",
       "status": "pr-just-opened-dispatch-requested",
-      "notes": "Re-application of #52592, which was closed without merging (fix never landed). Warning reconfirmed still firing in models-t1-e2e-tests run 32613186861 jobs 97130138239/97130138280. Demoted log_warning->log_debug in rotary_embedding_llama_multi_core_program_factory.cpp decode path. Dispatched models-t1-e2e-tests (model=llama3.1-8b) for validation."
+      "note": "New PR opened this run in tt_metal/impl/context/metal_env.cpp: MetalEnvImpl::set_fabric_config() now only logs the 'changed' message at info when the fabric config value actually differs; otherwise logs at debug. Reinit call itself left unconditional/unchanged (pure logging fix). Dispatched t3000-integration-tests (model=tteager) on branch for validation."
     }
   ],
-  "backlog_cursor": "models-t1-e2e-tests.yaml scanned (run 32613186861); next: continue rotation to next untracked workflow"
+  "backlog_cursor": "t3000-integration-tests.yaml scanned (run 32749061648); next: continue rotation to next untracked workflow"
 }
