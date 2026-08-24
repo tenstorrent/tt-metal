@@ -400,12 +400,18 @@ class TtnnDiffusionDriveModel:
             self._forward_ttnn(features)
             self._forward_ttnn(features)
             bb.capture_backbone_trace(features["camera_feature"], features["lidar_feature"])
-            # Stage 8: also capture the perception forward as a second trace. Feed it
-            # a real sample from the (now captured) backbone trace so its fixed-address
-            # inputs are sized correctly. Its own double warm-up JITs any remaining
-            # kernel before begin_trace_capture.
-            bev_upscale, bev_feature, _ = bb.run_backbone_trace(features["camera_feature"], features["lidar_feature"])
-            self._perception.capture_trace(bev_upscale, bev_feature, features["status_feature"])
+            try:
+                # Stage 8: also capture the perception forward as a second trace. Feed it
+                # a real sample from the (now captured) backbone trace so its fixed-address
+                # inputs are sized correctly. Its own double warm-up JITs any remaining
+                # kernel before begin_trace_capture.
+                bev_upscale, bev_feature, _ = bb.run_backbone_trace(
+                    features["camera_feature"], features["lidar_feature"]
+                )
+                self._perception.capture_trace(bev_upscale, bev_feature, features["status_feature"])
+            except Exception:
+                bb.release_backbone_trace()
+                raise
         self._compiled = True
 
     def execute_compiled(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
