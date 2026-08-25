@@ -37,7 +37,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 2_000_000}], indirect=True),
+    pytest.mark.use_module_device({"l1_small_size": 24576, "trace_region_size": 2_000_000}),
 ]
 
 
@@ -148,7 +148,9 @@ def test_recurrent_chunk_scan_is_device_deterministic(device: ttnn.Device) -> No
         ttnn.deallocate(output)
 
 
-def test_recurrent_chunk_scan_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:
+def test_recurrent_chunk_scan_cache_hit_rebinds_fresh_tensors(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     case = _PRODUCTION_CASE
     host_a, state_a_host, inputs_a, state_a = _production_inputs(device, protocol_seed=1911, state_seed=1913)
     host_b, state_b_host, inputs_b, state_b = _production_inputs(device, protocol_seed=1912, state_seed=1914)
@@ -176,7 +178,9 @@ def test_recurrent_chunk_scan_cache_hit_rebinds_fresh_tensors(device: ttnn.Devic
     )
 
 
-def test_recurrent_chunk_scan_default_compute_config_matches_explicit_defaults(device: ttnn.Device) -> None:
+def test_recurrent_chunk_scan_default_compute_config_matches_explicit_defaults(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     case = _PRODUCTION_CASE
     _, _, inputs, state = _production_inputs(device, protocol_seed=817, state_seed=817)
     implicit = run_recurrent(inputs, state)
@@ -196,7 +200,9 @@ def test_recurrent_chunk_scan_default_compute_config_matches_explicit_defaults(d
         assert_bit_identical(ttnn.to_torch(implicit_tt), ttnn.to_torch(explicit_tt), name=f"{name} explicit defaults")
 
 
-def test_recurrent_chunk_scan_approximate_math_uses_distinct_accurate_program(device: ttnn.Device) -> None:
+def test_recurrent_chunk_scan_approximate_math_uses_distinct_accurate_program(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     case = _PRODUCTION_CASE
     host_inputs, host_state, inputs, state = _production_inputs(device, protocol_seed=818, state_seed=818)
     exact = run_recurrent(inputs, state)

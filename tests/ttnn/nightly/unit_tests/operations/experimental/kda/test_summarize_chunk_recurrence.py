@@ -36,7 +36,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 2_000_000}], indirect=True),
+    pytest.mark.use_module_device({"l1_small_size": 24576, "trace_region_size": 2_000_000}),
 ]
 
 
@@ -115,7 +115,9 @@ def test_summarize_chunk_recurrence_is_device_deterministic(device: ttnn.Device)
         ttnn.deallocate(output)
 
 
-def test_summarize_chunk_recurrence_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:
+def test_summarize_chunk_recurrence_cache_hit_rebinds_fresh_tensors(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     host_a, inputs_a = _production_protocol(device, seed=1911)
     host_b, inputs_b = _production_protocol(device, seed=1912)
     outputs_a = run_summary(inputs_a)
@@ -141,7 +143,9 @@ def test_summarize_chunk_recurrence_cache_hit_rebinds_fresh_tensors(device: ttnn
     )
 
 
-def test_summarize_chunk_recurrence_default_compute_config_matches_explicit_defaults(device: ttnn.Device) -> None:
+def test_summarize_chunk_recurrence_default_compute_config_matches_explicit_defaults(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     _, inputs = _production_protocol(device, seed=817)
     implicit = run_summary(inputs)
     entries = device.num_program_cache_entries()
@@ -160,7 +164,9 @@ def test_summarize_chunk_recurrence_default_compute_config_matches_explicit_defa
         assert_bit_identical(ttnn.to_torch(implicit_tt), ttnn.to_torch(explicit_tt), name=f"{name} explicit defaults")
 
 
-def test_summarize_chunk_recurrence_approximate_math_uses_distinct_accurate_program(device: ttnn.Device) -> None:
+def test_summarize_chunk_recurrence_approximate_math_uses_distinct_accurate_program(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     host_inputs, inputs = _production_protocol(device, seed=818)
     exact = run_summary(inputs)
     entries = device.num_program_cache_entries()
