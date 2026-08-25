@@ -426,6 +426,24 @@ void kernel_main() {
 
                 binop_with_scalar_tile_init();
                 mul_unary_tile(block_idx, scaler_bits);  // multiply by scaler
+
+                if constexpr (do_mask_w) {
+                    // Zero the vocab-padding lanes of the last tile so no gradient flows into
+                    // padded weight columns (exp(x - max) is nonzero there otherwise).
+                    if (col + block_idx + 1 == Wt) {
+                        // mask_tile requires the mask in the register right after the data
+                        // register. Wt % block_size == 0, so the last tile lands in the final
+                        // block_idx and that register is sum_exp_register; clobbering it is safe
+                        // because this tile has already consumed it and it is re-broadcast from
+                        // the CB at the start of every block.
+                        const uint32_t mask_register = block_idx + 1U;
+                        copy_tile_init(cb_mask);
+                        copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
+
+                        mask_tile_init();
+                        mask_tile(block_idx, mask_register);
+                    }
+                }
             }
             tile_regs_commit();
 

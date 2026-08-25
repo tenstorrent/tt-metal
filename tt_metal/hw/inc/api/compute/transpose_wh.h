@@ -96,7 +96,7 @@ transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LIN
 #ifndef ARCH_QUASAR
     PACK((llk_pack_hw_configure<is_fp32_dest_acc_en>(ocb)));
     PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<is_fp32_dest_acc_en, PackMode::Default>()));
+    PACK((llk_pack_dest_init<is_fp32_dest_acc_en, PackMode::Default>(ocb)));
 #else
     PACK((llk_pack_hw_configure<is_fp32_dest_acc_en>(ocb)));
     PACK((llk_pack_init(ocb)));

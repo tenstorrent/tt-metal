@@ -27,7 +27,7 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = 
 
     PACK((llk_pack_hw_configure<is_fp32_dest_acc_en>(ocb)));
     PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<is_fp32_dest_acc_en, PackMode::Default>()));
+    PACK((llk_pack_dest_init<is_fp32_dest_acc_en, PackMode::Default>(ocb)));
 
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(icb)));
     MATH((llk_math_pack_sync_init<is_fp32_dest_acc_en>()));

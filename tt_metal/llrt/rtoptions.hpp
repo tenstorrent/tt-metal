@@ -189,6 +189,17 @@ class RunTimeOptions {
     bool is_custom_fabric_mesh_graph_desc_path_set = false;
     std::string custom_fabric_mesh_graph_desc_path;
 
+    // Path to a Factory System Descriptor (FSD): the "as-built"/expected description of the cluster's
+    // topology, as opposed to the Physical System Descriptor (PSD) that tooling discovers live from the
+    // running hardware. Users supply it via `tt-run --factory-system-descriptor <path>`, which is
+    // plumbed to every rank as the TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH env var (env/RTOptions is the
+    // single source of truth for the path). It lets rank-binding generation map against the known-good
+    // factory topology instead of relying on live discovery, which is slow and can misbehave on
+    // partially reachable or degraded clusters. When provided, it also lets Fabric 2.0 statically
+    // reroute traffic around broken links.
+    // See https://github.com/tenstorrent/tt-metal/issues/52859 for the design and rollout.
+    std::string factory_system_descriptor_path;
+
     bool build_map_enabled = false;
 
     WatcherSettings watcher_settings;
@@ -767,6 +778,11 @@ public:
 
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
+
+    // Factory System Descriptor (FSD) path. Empty when unset.
+    bool has_factory_system_descriptor_path() const { return !factory_system_descriptor_path.empty(); }
+    const std::string& get_factory_system_descriptor_path() const { return factory_system_descriptor_path; }
+    void set_factory_system_descriptor_path(const std::string& path) { factory_system_descriptor_path = path; }
 
     bool get_log_kernels_compilation_commands() const { return log_kernels_compilation_commands; }
 
