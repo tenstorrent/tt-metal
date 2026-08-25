@@ -440,12 +440,13 @@ void launch_operation_with_adapter(
 
     // Stash factory identity after adapter work so nested function_end events cannot consume it.
     if (tt::tt_metal::GraphTracker::instance().is_enabled()) {
+        // Prefer the cached index; select only when the miss was not inserted (NO_DISPATCH).
         const std::size_t program_factory_index =
-            program_cache_hit
+            (is_program_cache_enabled && program_cache.contains(program_key))
                 ? program_cache.get(program_key).program_factory_index
                 : mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args).index();
-        auto program_factory = map_index_to_variant(
-            program_factory_index, mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args));
+        auto program_factory =
+            map_index_to_variant(program_factory_index, typename mesh_device_operation_t::program_factory_t{});
         const std::string_view factory_type = std::visit(
             [](auto&& alt) -> std::string_view { return ttsl::long_type_name<std::decay_t<decltype(alt)>>; },
             program_factory);

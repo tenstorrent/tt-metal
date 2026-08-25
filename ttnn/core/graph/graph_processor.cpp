@@ -32,6 +32,12 @@ using namespace tt::tt_metal;
 
 namespace {
 
+inline bool from_bool_param(const std::string& value) {
+    return (
+        (value.length() == 4) && ('t' == value[0] || 'T' == value[0]) && ('r' == value[0] || 'R' == value[0]) &&
+        ('u' == value[0] || 'U' == value[0]) && ('e' == value[0] || 'E' == value[0]));
+}
+
 std::string tensorMemoryLayoutToString(TensorMemoryLayout layout) {
     switch (layout) {
         case TensorMemoryLayout::INTERLEAVED: return "INTERLEAVED";
@@ -66,7 +72,7 @@ nlohmann::json to_json(const ttnn::graph::GraphProcessor::Vertex& data) {
         if (integer_params.contains(key)) {
             params_json[key] = std::stoll(value);
         } else if (boolean_params.contains(key)) {
-            params_json[key] = (value == "true");
+            params_json[key] = from_bool_param(value);
         } else {
             params_json[key] = value;
         }
@@ -567,7 +573,15 @@ void GraphProcessor::track_function_end_impl() {
         params[kProgramFactoryIndex] = std::to_string(pending_program_factory_->index);
         params[kProgramCacheHit] = pending_program_factory_->cache_hit ? "true" : "false";
         const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
-        if (!processors.empty() && processors.back().get() == this) {
+        // Reset after the last GraphProcessor copies.
+        bool last_graph_processor = true;
+        for (auto it = processors.rbegin(); it != processors.rend(); ++it) {
+            if (dynamic_cast<GraphProcessor*>(it->get()) != nullptr) {
+                last_graph_processor = (it->get() == this);
+                break;
+            }
+        }
+        if (last_graph_processor) {
             pending_program_factory_.reset();
         }
     }

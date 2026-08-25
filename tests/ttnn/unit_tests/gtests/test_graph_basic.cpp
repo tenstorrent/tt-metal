@@ -1128,6 +1128,46 @@ TEST_F(TestScopedGraphCapture, ProgramCacheHitStaysFalseInNoDispatch) {
     EXPECT_FALSE(softmax_nodes[1].at(ttnn::graph::kParams).at(ttnn::graph::kProgramCacheHit).get<bool>());
 }
 
+TEST_F(TestScopedGraphCapture, NestedCapturesShareProgramFactoryIdentity) {
+    const auto tensor_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto input_tensor = ttnn::create_device_tensor(tensor_spec, device_);
+
+    nlohmann::json inner_trace;
+    nlohmann::json outer_trace;
+    {
+        auto outer = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+        {
+            auto inner = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+            [[maybe_unused]] const auto output_tensor = ttnn::softmax(input_tensor, -1);
+            inner_trace = inner.end_graph_capture();
+        }
+        outer_trace = outer.end_graph_capture();
+    }
+
+    auto inner_nodes = function_starts_with_factory(inner_trace);
+    auto outer_nodes = function_starts_with_factory(outer_trace);
+    ASSERT_FALSE(inner_nodes.empty());
+    ASSERT_FALSE(outer_nodes.empty());
+    const auto& inner_params = inner_nodes[0].at(ttnn::graph::kParams);
+    const auto& outer_params = outer_nodes[0].at(ttnn::graph::kParams);
+    EXPECT_EQ(inner_params.at(ttnn::graph::kProgramFactoryType), outer_params.at(ttnn::graph::kProgramFactoryType));
+    EXPECT_EQ(inner_params.at(ttnn::graph::kProgramFactoryIndex), outer_params.at(ttnn::graph::kProgramFactoryIndex));
+    EXPECT_EQ(inner_params.at(ttnn::graph::kProgramCacheHit), outer_params.at(ttnn::graph::kProgramCacheHit));
+
+    nlohmann::json leak_trace;
+    {
+        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+        [[maybe_unused]] const auto unused = ttnn::create_device_tensor(tensor_spec, device_);
+        leak_trace = capture.end_graph_capture();
+    }
+    EXPECT_TRUE(function_starts_with_factory(leak_trace).empty());
+}
+
 TEST_F(TestScopedGraphCapture, ReportMetadataContainsCaptureTimeGitIdentity) {
     auto report_path = std::filesystem::temp_directory_path() / "test_git_identity_report.json";
     {
