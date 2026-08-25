@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -38,6 +39,13 @@ struct InboundSocketServiceSyncInputs {
     // The service's persistent backing tensor (read by the kernel). Supplies the
     // mesh device + per-shard spec; the output tensors mirror its spec.
     const Tensor& backing;
+
+    // Caller-owned persistent destinations, one per output. When set, the op writes
+    // into them and allocates nothing -- required for trace capture, which bakes the
+    // buffer addresses in as runtime args and patches nothing on replay. When unset
+    // the op allocates fresh outputs (eager path, unchanged).
+    std::optional<Tensor> tokens_out;
+    std::optional<Tensor> metadata_out;
 };
 
 }  // namespace ttnn::experimental::prim
