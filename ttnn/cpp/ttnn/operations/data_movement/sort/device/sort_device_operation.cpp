@@ -22,6 +22,31 @@ constexpr uint32_t SORT_WT_THRESHOLD = 64;
 // OOMs during program allocation.
 constexpr uint32_t SORT_WT_THRESHOLD_UINT16_ROW_MAJOR = 32;
 
+// Mergesort row-engine eligibility (issue #33492 roadmap): bfloat16 rows of padded width
+// 2048 or 4096 on Blackhole run a full per-row sort on the TopK XL SFPU kernels (fused
+// linearly-tagged keys — stability is structural, no comparator), one row per core.
+// STABLE AND UNSTABLE: the engine always produces the torch-stable permutation, which is a
+// strict superset of the unstable contract, so unstable cells ride it too (this retires the
+// issue #54043 CrossCore duplicate-index behavior at W=4096 and replaces the slow
+// single-core engine at W=2048). Blackhole-only because the TopK XL LLKs have no Wormhole
+// tree. The engine's fused tags live in 32-bit DEST words, so its natural index transport
+// is UINT32 (the u16-in-32-bit-DEST combination has no working pack path); where the public
+// contract is UINT16 — the unstable default at these widths — the WRITER RISC narrows
+// u32->u16 so the index dtype a caller sees never changes with routing. A caller who
+// preallocates UINT16 index tensors for a STABLE sort opts out to the previous routing in
+// select_program_factory (the stable contract at these widths is UINT32).
+static bool mergesort_row_engine_eligible(const SortDeviceOperation::tensor_args_t& tensor_args, uint32_t sort_w_dim) {
+    // W = 2048/4096 run fully in DEST; W >= 8192 run the L1-staged merge tree. The ceiling
+    // is the u16 tag identity limit: the fused word's 16 free bits address exactly 65536
+    // positions (max tag 0xFFFF at W = 65536, zero slack) — wider rows decline to the
+    // comparator engines.
+    constexpr uint32_t MERGESORT_MAX_W = 65536;
+    const bool w_is_pow2 = (sort_w_dim & (sort_w_dim - 1)) == 0;
+    return tensor_args.input_tensor.dtype() == DataType::BFLOAT16 &&
+           tensor_args.input_tensor.device()->arch() == tt::ARCH::BLACKHOLE && w_is_pow2 && sort_w_dim >= 2048 &&
+           sort_w_dim <= MERGESORT_MAX_W;
+}
+
 SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const bool is_row_major = (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR);
@@ -51,9 +76,58 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
     const uint32_t single_core_wt_threshold =
         (is_uint16 && is_row_major) ? SORT_WT_THRESHOLD_UINT16_ROW_MAJOR : SORT_WT_THRESHOLD;
 
+    // Mergesort row engine: eligible bf16 cells. Stable cells require UINT32 indices (the
+    // dtype the gate in compute_output_specs selects; a preallocated UINT16 index tensor
+    // falls back to the comparator engines). Unstable cells ride the engine with EITHER
+    // index dtype — the default UINT16 contract is served by writer-side u32->u16
+    // narrowing, a preallocated UINT32 tensor natively.
+    if (mergesort_row_engine_eligible(tensor_args, w_dim) && (!attributes.stable || index_dtype == DataType::UINT32)) {
+        return SortProgramFactoryMergesortRowParallel{};
+    }
+
     if (Wt <= single_core_wt_threshold) {
-        // Single-core implementation
-        return SortProgramFactorySingleRowSingleCore{};
+        // Small-Ht wide-tile reroute (#33492 roadmap, routing fix): the single-core factory
+        // processes one full tile-row's bitonic tile network per core per loop (all 32 tensor
+        // rows of a tile-row ride the SFPU lanes concurrently), so its wall time is
+        // ceil(Ht / num_cores) x T_sc(Wt) and the grid idles when Ht is small. The CrossCore
+        // factory splits the same tile-row's Wt tiles over ~Wt/2 cores and costs
+        // Ht x T_cc(Wt). Measured on p150a (tie-heavy bf16, Tracy device-kernel duration,
+        // n=10, spread < 0.5%):
+        //   Wt=64: T_sc 1982 us (stable) / 1562 (unstable) vs T_cc 170-186 / 150  (10-12x)
+        //   Wt=32: T_sc  805 (stable)                      vs T_cc  97          (8x)
+        //   Wt=16: T_sc  314 (stable)                      vs T_cc  66          (5x)
+        // Route to CrossCore only where it wins with margin: Ht <= Wt/8 keeps every routed
+        // cell >= 2x under the single-core wall at the measured ratios, and leaves large-Ht
+        // workloads (where per-core tile-row fanning is already optimal) untouched.
+        // STABLE ONLY: the CrossCore unstable exchange resolves ties positionally (raw
+        // SFPSWAP index tracking) and the two peers of a spanning tile pair merge with
+        // swapped operand order while keeping opposite halves, so on a tie both peers can
+        // emit the SAME index — duplicate indices inside tie groups, indices not a
+        // permutation (pre-existing CrossCore behavior wherever it serves unstable sorts;
+        // measured on silicon at W=512-4096 on plain randn, issue #54043; since the
+        // mergesort engine absorbed the bf16 cells, the residue on Blackhole is fp32
+        // unstable CrossCore widths only). Unstable cells that reach this branch (fp32)
+        // therefore keep the single-core engine, which moves
+        // value+index atomically per SFPSWAP and always emits a valid permutation. The
+        // stable comparator (topk_cmp_swap_stable_directional) is operand-order-independent
+        // and silicon-verified exact on the rerouted band. BLACKHOLE ONLY: the reroute was
+        // silicon-validated on p150a only (same posture as the mergesort row engine above);
+        // Wormhole keeps the previous routing untouched. UINT16 stays single-core (the
+        // CrossCore factory has no u16<->fp32 conversion path); ROW_MAJOR keeps the
+        // existing routing (the CrossCore RM path is unmeasured at these widths). The
+        // index-dtype contract in compute_output_specs is deliberately NOT
+        // routing-dependent: stable bf16 cells at Wt <= 64 keep UINT32 indices on both
+        // factories so the dtype a user sees never depends on Ht.
+        const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
+        const auto& pshape = tensor_args.input_tensor.padded_shape();
+        const uint32_t Ht = (pshape[0] * pshape[1] * pshape[2]) / tile_height;
+        const bool cross_core_wins_small_ht = attributes.stable && !is_uint16 && !is_row_major && Wt >= 16 &&
+                                              Ht <= Wt / 8 && device->arch() == tt::ARCH::BLACKHOLE;
+        if (!cross_core_wins_small_ht) {
+            // Single-core implementation
+            return SortProgramFactorySingleRowSingleCore{};
+        }
+        // Fall through to the CrossCore eligibility check below.
     }
     // UINT16 support in the CrossCore factory would require Float32 intermediate,
     // peer, and rm_value_output CBs (c_4, c_6, c_8, c_13) plus reader/writer
@@ -107,13 +181,19 @@ void SortDeviceOperation::validate_on_program_cache_miss(
     // select_program_factory routes UINT16 with Wt > SORT_WT_THRESHOLD to
     // MultiCore to work around that.
 
-    // Width must be a multiple of 64 regardless of layout.
+    // Width must be a power of two >= 64 regardless of layout: the bitonic
+    // engines have no j < Wt partner guard and truncate log2(Wt), so a
+    // non-power-of-two width (e.g. 192 — a multiple of 64) silently produces
+    // garbage rather than failing. The public ttnn.sort composite always pads
+    // the sort dim to the next power of two >= 64 with +/-inf sentinels, so
+    // this only rejects direct prim calls.
     // For TILE the relevant dimension is the padded width; for ROW_MAJOR it is
     // the logical width (padding was already applied in pre_sort_transform_tensor).
     const uint32_t checked_w = is_row_major ? input_lshape[-1] : input_pshape[-1];
     TT_FATAL(
-        checked_w % 64 == 0,
-        "Input shape inner dim {} must be a multiple of 64, pad with +/-infinity if necessary",
+        checked_w >= 64 && (checked_w & (checked_w - 1)) == 0,
+        "Input shape inner dim {} must be a power of two >= 64. Use ttnn.sort, which pads the sort dimension "
+        "with +/-infinity to the next power of two.",
         checked_w);
 
     // Height constraint: the kernel always works on TILE_HEIGHT (32) row groups.
@@ -121,6 +201,13 @@ void SortDeviceOperation::validate_on_program_cache_miss(
     // For ROW_MAJOR layout: pre_sort_transform_tensor in sort.cpp pads the H
     //   dimension automatically, so combined_h is always a multiple of 32 here.
     const uint32_t combined_h = input_pshape[0] * input_pshape[1] * input_pshape[2];
+    // Empty tensors must not reach a program factory: the mergesort factory
+    // derives its active-core count from the row count and would divide by
+    // zero; the other factories would build zero-work programs.
+    TT_FATAL(
+        combined_h > 0,
+        "Sort device op requires a non-empty input tensor (shape[0]*shape[1]*shape[2] must be > 0), got shape {}.",
+        input_pshape);
     TT_FATAL(
         combined_h % tt::constants::TILE_HEIGHT == 0,
         "Input combined height (shape[0]*shape[1]*shape[2] = {}) must be a multiple of 32.",
@@ -187,10 +274,32 @@ SortDeviceOperation::spec_return_value_t SortDeviceOperation::compute_output_spe
     // currently happens for:
     //   • FLOAT32 input (direct fp32 comparison)
     //   • UINT16 input  (uint16 int → fp32 via hardware unpack, exact 0..65535)
+    //   • stable BFLOAT16 on the SingleRowSingleCore factory (issue #33492): the fused-key
+    //     stable engine tags the value words with the true index and needs the 32-bit DEST; its
+    //     index tiles ride the proven UINT32 transport (the u16-index-in-32-bit-DEST combination
+    //     has no working pack path — the tile-size rationale above). The width guard uses the
+    //     single-core width threshold, NOT the exact factory routing: small-Ht cells inside this
+    //     width band may be rerouted to the CrossCore factory for speed (see
+    //     select_program_factory), and those keep UINT32 indices too so the index dtype a user
+    //     sees never depends on Ht. Wider stable sorts run the comparator on the DM-bound
+    //     factories with their ordinary index dtype.
     const bool input_is_fp32 = (tensor_args.input_tensor.dtype() == DataType::FLOAT32);
     const bool input_is_uint16 = (tensor_args.input_tensor.dtype() == DataType::UINT16);
+    const bool input_is_row_major = (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR);
+    const uint32_t sort_w_dim =
+        input_is_row_major ? tensor_args.input_tensor.logical_shape()[3] : tensor_args.input_tensor.padded_shape()[3];
+    const uint32_t sort_wt = sort_w_dim / tensor_args.input_tensor.tensor_spec().tile().get_width();
+    const bool stable_bf16_single_core =
+        attributes.stable && (tensor_args.input_tensor.dtype() == DataType::BFLOAT16) && (sort_wt <= SORT_WT_THRESHOLD);
+    // Mergesort row engine (Blackhole, stable bf16, W in {2048, 4096}): fused u16 tags in
+    // 32-bit DEST, so its indices are UINT32 for the same pack-path reason. W=2048 is
+    // already covered by the single-core gate above; this adds W=4096 on Blackhole.
+    // (stable only: unstable mergesort cells keep the pre-existing UINT16 contract, served
+    // by the writer-side narrowing — the public dtype never changes with routing.)
+    const bool stable_bf16_mergesort = attributes.stable && mergesort_row_engine_eligible(tensor_args, sort_w_dim);
     DataType index_dtype = DataType::UINT16;
-    if (output_shape[-1] >= std::numeric_limits<uint16_t>::max() || input_is_fp32 || input_is_uint16) {
+    if (output_shape[-1] >= std::numeric_limits<uint16_t>::max() || input_is_fp32 || input_is_uint16 ||
+        stable_bf16_single_core || stable_bf16_mergesort) {
         index_dtype = DataType::UINT32;
     }
 

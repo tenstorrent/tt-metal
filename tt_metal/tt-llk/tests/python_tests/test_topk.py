@@ -53,7 +53,9 @@ from helpers.utils import _RECORD_TEST_ORDER, passed_test
 NUM_STAGES = 2  # Values and Indices stage
 
 
-def transform_result_tensor_to_right_form(res_tensor, formats, K=32, input_dimensions=[32, 64]):
+def transform_result_tensor_to_right_form(
+    res_tensor, formats, K=32, input_dimensions=[32, 64]
+):
 
     # Cut the result tensor to the actual expected golden size. Ignore the rest.
     num_rows_tensor, num_cols_tensor = (
@@ -115,7 +117,9 @@ def prepare_input_tensor_for_topk(src_A, formats, input_dimensions=[32, 128]):
         indices_start_idx = row * num_cols_tensor + num_cols_tensor // NUM_STAGES
         indices_end_idx = indices_start_idx + num_cols_tensor // NUM_STAGES
 
-        uint16_indices = torch.arange(0, num_cols_tensor // NUM_STAGES, dtype=torch.int16).to(torch.uint16)
+        uint16_indices = torch.arange(
+            0, num_cols_tensor // NUM_STAGES, dtype=torch.int16
+        ).to(torch.uint16)
 
         src_A[indices_start_idx:indices_end_idx] = uint16_indices.view(src_A.dtype)
 
@@ -148,17 +152,27 @@ def validate_topk_indices(
 
     # Untilize both result and golden tensors to get them back to the original layout for easier(cleaner) comparison
     untilizer = get_golden_generator(UntilizeGolden)
-    res_tensor_untilized = untilizer(res_tensor, formats.output_format, [num_rows_tensor, num_cols_tensor])
-    golden_tensor_untilized = untilizer(golden_tensor, formats.output_format, [num_rows_tensor, num_cols_tensor])
-    original_input_tensor_untilized = untilizer(original_input_tensor, formats.input_format, input_dimensions)
+    res_tensor_untilized = untilizer(
+        res_tensor, formats.output_format, [num_rows_tensor, num_cols_tensor]
+    )
+    golden_tensor_untilized = untilizer(
+        golden_tensor, formats.output_format, [num_rows_tensor, num_cols_tensor]
+    )
+    original_input_tensor_untilized = untilizer(
+        original_input_tensor, formats.input_format, input_dimensions
+    )
 
     values_offset = 0
     indices_offset = num_cols_tensor // 2  # Indices stored in second half of row.
 
     for row_idx in range(input_dimensions[0]):
         for datum in range(K):  # Check top K values/indices for each row.
-            result_and_golden_value_idx = row_idx * num_cols_tensor + values_offset + datum
-            result_and_golden_index_idx = row_idx * num_cols_tensor + indices_offset + datum
+            result_and_golden_value_idx = (
+                row_idx * num_cols_tensor + values_offset + datum
+            )
+            result_and_golden_index_idx = (
+                row_idx * num_cols_tensor + indices_offset + datum
+            )
 
             # Values: interpret as float
             result_value = res_tensor_untilized[result_and_golden_value_idx].item()
@@ -166,18 +180,24 @@ def validate_topk_indices(
 
             # Indices: reinterpret float bits as uint16 as that's how we encoded them in the input tensor.
             result_index = (
-                res_tensor_untilized[result_and_golden_index_idx : result_and_golden_index_idx + 1]
+                res_tensor_untilized[
+                    result_and_golden_index_idx : result_and_golden_index_idx + 1
+                ]
                 .view(torch.uint16)
                 .item()
             )
             golden_index = (
-                golden_tensor_untilized[result_and_golden_index_idx : result_and_golden_index_idx + 1]
+                golden_tensor_untilized[
+                    result_and_golden_index_idx : result_and_golden_index_idx + 1
+                ]
                 .view(torch.uint16)
                 .item()
             )
 
             original_input_value_idx = row_idx * input_dimensions[1] + result_index
-            original_input_value = original_input_tensor_untilized[original_input_value_idx].item()
+            original_input_value = original_input_tensor_untilized[
+                original_input_value_idx
+            ].item()
 
             # Check if the result index actually points to the same value in the result tensor as in the input tensor.
             if result_value != original_input_value:
@@ -219,14 +239,18 @@ def validate_topk_indices(
     return True
 
 
-def get_value_tiles_from_topk_tensor(tensor: torch.Tensor, K: int = 32, input_dimensions=[32, 128]):
+def get_value_tiles_from_topk_tensor(
+    tensor: torch.Tensor, K: int = 32, input_dimensions=[32, 128]
+):
     # Get the value tiles from the topk result tensor. This is useful for validating the topk values separately from the indices,
     # since indices can differ in tie cases but values should still match.
 
     num_rows, num_cols = input_dimensions[0], K * NUM_STAGES  # K values + K indices
     num_tile_rows = num_rows // TILE_DIMENSIONS[0]
     num_tile_cols = num_cols // TILE_DIMENSIONS[1]
-    num_value_tiles_per_row = K // TILE_DIMENSIONS[1]  # Number of tiles that contain the top K values in each row.
+    num_value_tiles_per_row = (
+        K // TILE_DIMENSIONS[1]
+    )  # Number of tiles that contain the top K values in each row.
 
     tiles = []
 
@@ -258,8 +282,10 @@ def get_value_tiles_from_topk_tensor(tensor: torch.Tensor, K: int = 32, input_di
     # in the ttnn-level topk tests.
     K=[32],
     sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
-    # unstable / comparator-stable / fused-key-stable (packed [bf16|u16] keys, unstable network).
-    sort_mode=["unstable", "stable", "fused"],
+    # unstable / comparator-stable / fused-key-stable (packed [bf16|u16] keys, unstable
+    # network) / rank-stamped-stable (sign-conditioned local-rank tags in the value lo16,
+    # true indices riding index tracking, unstable network).
+    sort_mode=["unstable", "stable", "fused", "rank_stamped"],
 )
 def test_topk_sfpu(
     formats: InputOutputFormat,
@@ -270,6 +296,7 @@ def test_topk_sfpu(
 ):
     stable_sort = sort_mode == "stable"
     fused_stable = sort_mode == "fused"
+    rank_stamped = sort_mode == "rank_stamped"
 
     if input_dimensions == [32, 1024]:
         # For 32x1024 input we have observed some discrepancies in the topk values between hardware and golden.
@@ -279,7 +306,16 @@ def test_topk_sfpu(
     if fused_stable and input_dimensions[1] != 128:
         # The fused kernel path handles a single 2-tile slab per pipeline (TOPK_NUM_ITERATIONS == 1);
         # multi-iteration fused slabs need the packed-CB round-trip that lands with the ttnn milestone.
-        pytest.skip("Fused stable mode currently covers single-iteration widths (W == 128) only.")
+        pytest.skip(
+            "Fused stable mode currently covers single-iteration widths (W == 128) only."
+        )
+
+    if rank_stamped and input_dimensions[1] != 128:
+        # Rank tags do not survive this harness's bf16 L1 round-trip between iterations (the ttnn
+        # pipeline re-stamps inside the merge and moves value words through raw Float32 CBs).
+        pytest.skip(
+            "Rank-stamped stable mode covers single-iteration widths (W == 128) in this harness."
+        )
 
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -313,6 +349,7 @@ def test_topk_sfpu(
                 topk_sort_direction=sort_direction,
                 topk_stable_sort=stable_sort,
                 topk_fused_stable=fused_stable,
+                topk_rank_stamped=rank_stamped,
             ),
         ],
         runtimes=[
@@ -329,22 +366,30 @@ def test_topk_sfpu(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        # Fused keys are 32-bit words: values must be exact-widened into 32-bit DEST.
-        dest_acc=DestAccumulation.Yes if fused_stable else DestAccumulation.No,
+        # Fused / rank-stamped keys are 32-bit words: values must be exact-widened into 32-bit DEST.
+        dest_acc=(
+            DestAccumulation.Yes
+            if (fused_stable or rank_stamped)
+            else DestAccumulation.No
+        ),
         unpack_to_dest=False,
     )
 
     res_from_L1 = configuration.run().result
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
-    res_tensor = transform_result_tensor_to_right_form(res_tensor, formats, K, input_dimensions)
+    res_tensor = transform_result_tensor_to_right_form(
+        res_tensor, formats, K, input_dimensions
+    )
 
-    assert len(res_tensor) == len(golden_tensor), "Result tensor and golden tensor are not of the same length"
+    assert len(res_tensor) == len(
+        golden_tensor
+    ), "Result tensor and golden tensor are not of the same length"
 
     # TODO: Fix issue #1344 on tt-llk.
     if input_dimensions[1] == 128 and not _RECORD_TEST_ORDER:
-        # Fused mode promises the same torch-stable tie order as comparator-stable, so it gets the
-        # strict (no tie-escape) index comparison too.
+        # Fused and rank-stamped modes promise the same torch-stable tie order as
+        # comparator-stable, so they get the strict (no tie-escape) index comparison too.
         assert validate_topk_indices(
             res_tensor,
             golden_tensor,
@@ -352,7 +397,7 @@ def test_topk_sfpu(
             formats,
             input_dimensions,
             K,
-            stable_sort or fused_stable,
+            stable_sort or fused_stable or rank_stamped,
         )
 
     # Get value tiles from result and golden tensors
@@ -360,7 +405,9 @@ def test_topk_sfpu(
     golden_values = get_value_tiles_from_topk_tensor(golden_tensor, K, input_dimensions)
 
     # Validate topk values
-    assert passed_test(golden_values, res_values, formats.output_format, print_errors=True)
+    assert passed_test(
+        golden_values, res_values, formats.output_format, print_errors=True
+    )
 
 
 # =============================================================================
@@ -443,14 +490,18 @@ _CANON_INVARIANT_CLASSES = (
 
 # Special classes where the two golden hypotheses can diverge
 # (signed_zero, nan_payloads).
-_SPECIAL_CLASSES = tuple(name for name in ADVERSARIAL_STIMULI_CLASSES if name not in _CANON_INVARIANT_CLASSES)
+_SPECIAL_CLASSES = tuple(
+    name for name in ADVERSARIAL_STIMULI_CLASSES if name not in _CANON_INVARIANT_CLASSES
+)
 
 # Primary golden hypothesis for the comparator ("stable") engine on the
 # special classes. Flip this single line to "bitexact" if LLK-level
 # characterization shows the comparator sorts bit-exactly.
 _STABLE_SPECIAL_PRIMARY_GOLDEN = "canon"
 
-_ADVERSARIAL_CLASS_SEED = {name: 0xAD00 + 257 * i for i, name in enumerate(ADVERSARIAL_STIMULI_CLASSES)}
+_ADVERSARIAL_CLASS_SEED = {
+    name: 0xAD00 + 257 * i for i, name in enumerate(ADVERSARIAL_STIMULI_CLASSES)
+}
 
 
 def _bf16_bits_from_floats(values):
@@ -465,7 +516,9 @@ def _gather_u16(bits_u16, order):
 
 
 def _is_nan_bits(bits_i32):
-    return ((bits_i32 & _BF16_EXP_MASK) == _BF16_EXP_MASK) & ((bits_i32 & _BF16_MANT_MASK) != 0)
+    return ((bits_i32 & _BF16_EXP_MASK) == _BF16_EXP_MASK) & (
+        (bits_i32 & _BF16_MANT_MASK) != 0
+    )
 
 
 def _canon_bits(bits_u16):
@@ -531,7 +584,9 @@ def _adversarial_value_bits(stimuli_class, num_rows, w_values):
         # 6 negative tie levels; repeats sized to fill the row.
         levels = [-0.5, -1.0, -1.5, -2.0, -3.0, -4.0]
         counts = [11, 11, 11, 11, 10, 10]
-        base = _bf16_bits_from_floats([level for level, count in zip(levels, counts) for _ in range(count)])
+        base = _bf16_bits_from_floats(
+            [level for level, count in zip(levels, counts) for _ in range(count)]
+        )
     elif stimuli_class == "mixed_sign_ties":
         # +/- tie levels interleaved so opposite-sign ties sit adjacent.
         levels = [1.0, -1.0, 2.0, -2.0, 0.5, -0.5, 3.0, -3.0]
@@ -546,7 +601,9 @@ def _adversarial_value_bits(stimuli_class, num_rows, w_values):
         )
         # 16 distinct negative + 16 distinct positive normal fillers, so the
         # 32-strong canon-zero group straddles K in both sort directions.
-        fillers = [-1.0 - 0.25 * i for i in range(16)] + [1.0 + 0.25 * i for i in range(16)]
+        fillers = [-1.0 - 0.25 * i for i in range(16)] + [
+            1.0 + 0.25 * i for i in range(16)
+        ]
         base = torch.cat(
             [
                 torch.tensor(specials, dtype=torch.uint16),
@@ -587,7 +644,10 @@ def _adversarial_value_bits(stimuli_class, num_rows, w_values):
         raise ValueError(f"Unknown adversarial stimuli class: {stimuli_class}")
 
     if base.numel() != w_values:
-        raise ValueError(f"Class '{stimuli_class}' builds {base.numel()} values per row, " f"expected {w_values}.")
+        raise ValueError(
+            f"Class '{stimuli_class}' builds {base.numel()} values per row, "
+            f"expected {w_values}."
+        )
 
     rows = []
     for row in range(num_rows):
@@ -629,7 +689,7 @@ def _hex_row(bits_u16):
     input_dimensions=[[32, 128]],
     K=[32],
     sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
-    sort_mode=["stable", "fused"],
+    sort_mode=["stable", "fused", "rank_stamped"],
     stimuli_class=ADVERSARIAL_STIMULI_CLASSES,
 )
 def test_topk_sfpu_adversarial(
@@ -652,6 +712,7 @@ def test_topk_sfpu_adversarial(
     """
     stable_sort = sort_mode == "stable"
     fused_stable = sort_mode == "fused"
+    rank_stamped = sort_mode == "rank_stamped"
     descending = sort_direction == TopKSortDirection.Descending
 
     # Per-test seed for anything drawing from the global RNG (e.g. src_B);
@@ -693,6 +754,7 @@ def test_topk_sfpu_adversarial(
                 topk_sort_direction=sort_direction,
                 topk_stable_sort=stable_sort,
                 topk_fused_stable=fused_stable,
+                topk_rank_stamped=rank_stamped,
             ),
         ],
         runtimes=[
@@ -709,34 +771,46 @@ def test_topk_sfpu_adversarial(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        # Fused keys are 32-bit words: values must be exact-widened into 32-bit DEST.
-        dest_acc=DestAccumulation.Yes if fused_stable else DestAccumulation.No,
+        # Fused / rank-stamped keys are 32-bit words: values must be exact-widened into 32-bit DEST.
+        dest_acc=(
+            DestAccumulation.Yes
+            if (fused_stable or rank_stamped)
+            else DestAccumulation.No
+        ),
         unpack_to_dest=False,
     )
 
     res_from_L1 = configuration.run().result
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
-    res_tensor = transform_result_tensor_to_right_form(res_tensor, formats, K, input_dimensions)
+    res_tensor = transform_result_tensor_to_right_form(
+        res_tensor, formats, K, input_dimensions
+    )
 
     if _RECORD_TEST_ORDER:
         # Order-recording pass: results are not meaningful for strict checks.
         return
 
-    res_value_bits, res_indices = _extract_topk_values_and_indices(res_tensor, formats, num_rows, K)
+    res_value_bits, res_indices = _extract_topk_values_and_indices(
+        res_tensor, formats, num_rows, K
+    )
 
     # Goldens are computed on the bits the device actually received (the write
     # path quietizes sNaN payloads before they reach L1).
     as_written_bits = _model_write_path_bits(row_bits)
 
     for row in range(num_rows):
-        canon_exp_bits, canon_exp_idx = _canon_stable_golden(as_written_bits[row], K, descending)
+        canon_exp_bits, canon_exp_idx = _canon_stable_golden(
+            as_written_bits[row], K, descending
+        )
         goldens = {"canon": (canon_exp_bits, canon_exp_idx)}
 
         if stable_sort and stimuli_class in _SPECIAL_CLASSES:
             # Comparator engine on a special class: evaluate both hypotheses
             # so the failure message can say which one the silicon matches.
-            fb_exp_bits, fb_exp_idx = _bitexact_stable_golden(as_written_bits[row], K, descending)
+            fb_exp_bits, fb_exp_idx = _bitexact_stable_golden(
+                as_written_bits[row], K, descending
+            )
             goldens["bitexact"] = (_model_readback_bits(fb_exp_bits), fb_exp_idx)
             primary = _STABLE_SPECIAL_PRIMARY_GOLDEN
         else:
@@ -747,7 +821,8 @@ def test_topk_sfpu_adversarial(
             primary = "canon"
 
         matched = {
-            name: torch.equal(res_indices[row], exp_idx) and torch.equal(res_value_bits[row], exp_bits)
+            name: torch.equal(res_indices[row], exp_idx)
+            and torch.equal(res_value_bits[row], exp_bits)
             for name, (exp_bits, exp_idx) in goldens.items()
         }
         if matched[primary]:
@@ -758,7 +833,9 @@ def test_topk_sfpu_adversarial(
             f"direction={sort_direction.name} row={row} (primary golden: {primary})"
         ]
         for name, (exp_bits, exp_idx) in goldens.items():
-            lines.append(f"  golden '{name}': {'MATCHED' if matched[name] else 'mismatched'}")
+            lines.append(
+                f"  golden '{name}': {'MATCHED' if matched[name] else 'mismatched'}"
+            )
             lines.append(f"    expected indices:    {exp_idx.tolist()}")
             lines.append(f"    expected value bits: {_hex_row(exp_bits)}")
         lines.append(f"  result indices:    {res_indices[row].tolist()}")

@@ -95,9 +95,10 @@ inline void init_topk_addr_mod() {
  *
  * @note Run after the base SFPU init and before the topk execute stages.
  */
-template <bool APPROXIMATE, bool FUSED = false>
+template <bool APPROXIMATE, bool FUSED = false, bool RANK_STAMPED = false>
 inline void topk_init() {
     static_assert(!FUSED, "Fused-key TopK is not supported by the Quasar bitonic TopK path");
+    static_assert(!RANK_STAMPED, "Rank-stamped stable TopK is not ported to the Quasar bitonic TopK path");
     init_topk_addr_mod();
     init_topk();
 }
@@ -365,7 +366,12 @@ inline void bitonic_topk_ph3_st4_to_1(bool sort_dir) {
 // The BH implementation uses replay slots for load/store and phase bodies. Quasar keeps
 // the network inline because replayed SFPSWAP sequences do not preserve the ordering
 // this bitonic network requires.
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false, bool FUSED = false>
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    bool STABLE_SORT = false,
+    bool FUSED = false,
+    bool RANK_STAMPED = false>
 inline void calculate_bitonic_topk_phases_steps(
     const int initial_sort_dir,
     const int i_end_phase,
@@ -374,6 +380,7 @@ inline void calculate_bitonic_topk_phases_steps(
     const int i_start_step) {
     static_assert(!STABLE_SORT, "Stable TopK is not supported by the Quasar bitonic TopK path");
     static_assert(!FUSED, "Fused-key TopK is not supported by the Quasar bitonic TopK path");
+    static_assert(!RANK_STAMPED, "Rank-stamped stable TopK is not ported to the Quasar bitonic TopK path");
 
     // Per-call constants (don't depend on face/col/phase) — hoisted out of the (face, col) sweep.
     const bool single_phase = (i_start_phase == i_end_phase);
@@ -512,10 +519,19 @@ inline void calculate_bitonic_topk_phases_steps(
 // then store back via bitonic_topk_store8.
 //
 // Merge is short enough to stay inline.
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool top_min, bool STABLE_SORT = false, bool FUSED = false>
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    bool top_min,
+    bool STABLE_SORT = false,
+    bool FUSED = false,
+    bool RANK_STAMPED = false,
+    bool PRE_TAGGED = false>
 inline void calculate_bitonic_topk_merge(const int m_iter, const int k) {
     static_assert(!STABLE_SORT, "Stable TopK is not supported by the Quasar bitonic TopK path");
     static_assert(!FUSED, "Fused-key TopK is not supported by the Quasar bitonic TopK path");
+    static_assert(!RANK_STAMPED, "Rank-stamped stable TopK is not ported to the Quasar bitonic TopK path");
+    static_assert(!PRE_TAGGED, "Pre-tagged stable TopK is not ported to the Quasar bitonic TopK path");
 
     std::uint32_t dst_addr_offset = 0;
     for (int face = 0; face < 2; face++) {
@@ -577,11 +593,17 @@ inline void calculate_bitonic_topk_merge(const int m_iter, const int k) {
 // Rebuild: re-runs phase (logK-1) on a merged tile pair to reextract sorted runs.
 // A switch on `(logk - 1)` selects one of cases 0/1/2/3/default; each emits a
 // load/swap-sequence/store pattern inline for the same replay-safety reason as local sort.
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false, bool FUSED = false>
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    bool STABLE_SORT = false,
+    bool FUSED = false,
+    bool RANK_STAMPED = false>
 inline void calculate_bitonic_topk_rebuild(
     const bool initial_sort_dir, const int m_iter, const int k, const int logk, const int skip_second) {
     static_assert(!STABLE_SORT, "Stable TopK is not supported by the Quasar bitonic TopK path");
     static_assert(!FUSED, "Fused-key TopK is not supported by the Quasar bitonic TopK path");
+    static_assert(!RANK_STAMPED, "Rank-stamped stable TopK is not ported to the Quasar bitonic TopK path");
 
     // Per-call constants (don't depend on face/col) — hoisted out of the (face, col) sweep.
     const std::uint32_t total_datums_shift = (skip_second & 0x1);
@@ -728,6 +750,10 @@ inline void calculate_bitonic_topk_rebuild(
 // Defined so compute_kernel_api.h resolves the symbol on all architectures.
 inline void topk_uint16_prepare_value_tile_for_pack(std::uint32_t /*tile_index*/) {}
 inline void _topk_uint16_move_dest_tile_to_pack_half_(std::uint32_t /*tile_index*/) {}
+// Rank-stamped strip stub: the mode itself is static_asserted off on Quasar (see topk_init /
+// the network entries), so this is unreachable; it exists only so the arch-independent
+// compute API (topk_strip_rank_tags) compiles.
+inline void _topk_strip_rank_tags_(std::uint32_t /*dst_tile_index*/) {}
 
 }  // namespace sfpu
 }  // namespace ckernel

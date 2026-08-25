@@ -20,6 +20,7 @@
  * @param dest_dfb_index     Dataflow buffer id to store transposed tiles (destination buffer)
  * @param total_tiles       Number of tiles to process and transpose
  */
+template <bool strip_rank_tags = false>
 FORCE_INLINE void transpose_and_pack(
     const uint32_t input_dfb_index, const uint32_t dest_dfb_index, const uint32_t total_tiles) {
     DataflowBuffer input_dfb(input_dfb_index);
@@ -38,6 +39,11 @@ FORCE_INLINE void transpose_and_pack(
         // Transpose tile from WH to HW format
         tile_regs_acquire();
         transpose_tile(input_dfb_index, i, 0);
+        if constexpr (strip_rank_tags) {
+            // Rank-stamped values carry stale rank tags in their low 16 bits; clear them so the
+            // following Float32->bf16 pack is exact instead of RNE-rounding on tag bits.
+            ckernel::topk_strip_rank_tags(0);
+        }
         tile_regs_commit();
 
         dest_dfb.reserve_back(1);
@@ -137,10 +143,22 @@ void kernel_main() {
     constexpr uint32_t largest = get_arg(args::largest);            // 1 for largest K, 0 for smallest K
     constexpr bool stable_sort = get_arg(args::stable_sort) == 1;   // Ties keep the lowest index
 
+// Rank-stamped stable mode (factory-injected define): sort [bf16 value | local-rank tag] keys
+// with the unstable network while the true u32 indices ride the index-tracking swaps, instead of
+// running the index-aware comparator network on every compare. The stamp before each local sort
+// provides the torch-stable tie order; the value intermediates travel as raw Float32 tiles.
+#if defined(TOPK_RANK_STAMPED_STABLE) && TOPK_RANK_STAMPED_STABLE
+    constexpr bool rank_stamped = true;
+#else
+    constexpr bool rank_stamped = false;
+#endif
+    // The rank tag IS the stable tie-break; the network itself runs unstable in rank-stamped mode.
+    constexpr bool network_stable = stable_sort && !rank_stamped;
+
     // Initialize kernel components
     compute_kernel_hw_startup(input_val_dfb_index, input_ind_dfb_index, output_val_dfb_index);
-    ckernel::topk_tile_init();
-    if constexpr (stable_sort) {
+    ckernel::topk_tile_init<false, rank_stamped>();
+    if constexpr (network_stable) {
         // Tie-break polarity is a property of the GLOBAL sort order: for largest-first, equal values
         // keep the lower original index next to the larger-value position (descending mode). Set once;
         // it must never follow the per-call sort direction (idir), which alternates to build bitonic
@@ -271,6 +289,9 @@ void kernel_main() {
             // Insertion sort into result preparation buffer
             // Process each output tile position for insertion sort
             for (uint32_t index = 0; index < output_tiles; index++) {
+                // Cases A/B below overwrite `index` to exit the loop; the rank-stamp needs the
+                // cascade level this iteration actually processes.
+                const uint32_t cascade_level = index;
                 // Initialize variables for current insertion iteration
                 uint32_t incr = 1;                        // Default buffer advance increment
                 uint32_t transposed_offset = 0;           // Offset in transposed buffer (0 or 1)
@@ -356,7 +377,30 @@ void kernel_main() {
                 // Merge and sort 64 elements (32 existing + 32 new) using topk_local_sort
                 // Results: dest reg 0 = top 32 elements, dest reg 1 = bottom 32 elements
                 // largest flag determines ascending (0) vs descending (1) sort order
-                ckernel::topk_local_sort<stable_sort>(0, (int)!largest, end_phase);
+                if constexpr (rank_stamped) {
+                    // Chain-rank stamps: every tag in one insertion round is that element's
+                    // round-start CHAIN position (accumulator tile p = range [32p, 32p+32), the
+                    // fresh chunk = the top range), which is globally consistent with the true
+                    // (value, index) order — the accumulator chain is the (value, index)-sorted
+                    // prefix of everything seen, and the fresh chunk holds the highest indices in
+                    // ascending position order. Each 64-sort therefore compares distinct keys
+                    // whose tie order is the true index order, at every cascade level: the
+                    // accumulator side is re-stamped with its level's range when loaded, while a
+                    // loser tile's tags RIDE unchanged into the next level (raw Float32
+                    // transport), so a displaced OLD element still outranks NEWER accumulator
+                    // entries. The stamp also folds -0.0 into +0.0; every fresh datum passes
+                    // through exactly one stamp (level 0 / first sort) before its first compare.
+                    if (first_sort_from_transposed) {
+                        // Both tiles fresh (width chunks 0 and 1): plain positions [0, 64).
+                        ckernel::topk_stamp_local_positions<largest != 0>(0);
+                    } else {
+                        ckernel::topk_stamp_tile_rank_range<largest != 0>(0, 0, 32 * cascade_level);
+                        if (cascade_level == 0) {
+                            ckernel::topk_stamp_tile_rank_range<largest != 0>(0, 1, 32 * output_tiles);
+                        }
+                    }
+                }
+                ckernel::topk_local_sort<network_stable, false, rank_stamped>(0, (int)!largest, end_phase);
 
                 // Pack sorted results: dest reg 0 -> result buffer, dest reg 1 -> secondary buffer
                 tile_regs_commit();
@@ -410,7 +454,7 @@ void kernel_main() {
 
         // Transpose and pack final results to output buffers
         // Convert sorted results from HW back to WH format for output
-        transpose_and_pack(result_prep_val_dfb_index, output_val_dfb_index, output_tiles);
+        transpose_and_pack<rank_stamped>(result_prep_val_dfb_index, output_val_dfb_index, output_tiles);
         transpose_and_pack(result_prep_ind_dfb_index, output_ind_dfb_index, output_tiles);
     }  // core_loop loop
 }

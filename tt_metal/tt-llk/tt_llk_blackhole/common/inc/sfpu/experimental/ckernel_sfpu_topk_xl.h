@@ -844,7 +844,9 @@ inline void store8_rows_x2_unfused()
 // 2^(N-1)". Steps are run from largest to smallest.
 //
 // All swap directions are encoded by the choice of operand order to
-// `SFPSWAP` — `(a, b, MAX)` puts max(a, b) into `b` and min(a, b) into `a`.
+// `SFPSWAP` — `(a, b, MAX)` puts max(a, b) into `a` (VC, the first register
+// operand) and min(a, b) into `b` (VD, the second) — mod1=1 is the ISA's
+// SFPSWAP_MOD1_VEC_MIN_MAX: MAX lands in VC, min in VD (silicon-verified).
 // Flipping the operand order flips the sort direction.
 //
 // Special variants:
@@ -2105,6 +2107,290 @@ inline void _topk_xl_merge_(const std::uint32_t dst_index)
     ckernel_unpack_template::run(n_iters);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     set_dst_write_addr_offset(tile_offset + 0);
+}
+
+// =============================================================================
+//  Public entry: both-halves merge (full-sort merge level)
+// =============================================================================
+//
+// `_topk_xl_merge_` is a top-K reduction: it keeps the per-pair extremum half
+// and drops the other half (`store4_rows_top_only`). A full-sort merge level
+// must keep BOTH halves: for two adjacent sorted K-runs forming a bitonic
+// 2K-sequence, the distance-K compare-exchange leaves the elementwise-min
+// half and the elementwise-max half each bitonic, with every min-half element
+// <= every max-half element. `_topk_xl_rebuild_` on each half then yields a
+// fully sorted 2K-run in place. Fused [bf16|u16] payloads only.
+//
+// Direction: `ascending` selects which half lands in the FIRST run's tiles
+// (LREG0..3 store back to the load base):
+//   ascending  — min half at `dst_index`, max half one sequence further:
+//                rebuild both halves ascending => sorted ascending 2K-run.
+//   descending — max half first: rebuild both descending => descending run.
+// The two input runs must be sorted in opposite directions (either order),
+// exactly as `_topk_xl_merge_`'s callers already prepare them.
+//
+// Body: load16 (8) + sort_k (4) + store16 (8) = 20 instructions — 4 more
+// than the top-K merge body (the min-half stores it drops), so the merge
+// MOP program left by `_topk_xl_init_` (REPLAY(0, 16)) does not fit and a
+// REPLAY(0, 20) program is installed for the call and the merge program is
+// restored afterwards, preserving `_topk_xl_merge_`'s init-time invariant.
+inline void topk_mop_config_both_halves()
+{
+    constexpr int body_len              = 20;
+    constexpr std::uint32_t replay_body = lltt::replay_insn(0, body_len);
+    ckernel_unpack_template tmpl        = ckernel_unpack_template::lA(replay_body, TT_OP_NOP);
+    tmpl.program();
+}
+
+template <std::uint32_t K, bool APPROXIMATION_MODE>
+inline void _topk_xl_merge_both_halves_(const std::uint32_t dst_index, const bool ascending)
+{
+    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+
+    constexpr int num_tiles_per_sequence = (K == 2048) ? 2 : 1;
+    constexpr int row_scale_factor       = (K == 512) ? 1 : (K == 1024) ? 2 : 4;
+    constexpr int distance               = 64 * num_tiles_per_sequence; // fused
+    const std::uint32_t tile_offset      = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
+
+    constexpr int body_len = 20;
+    constexpr int n_iters  = row_scale_factor * 2;
+    static_assert(n_iters >= 2, "n_iters < 2 would skip the MOP firing of col=0");
+
+    topk_mop_config_both_halves();
+
+    // Record the loop body once into replay slots [0, body_len); the Exec-mode
+    // recording IS iter 0 of col=0. `bitonic_sort_len_k(true)` places the
+    // per-pair MIN in LREG0..3 (stored at the load base) and the MAX in
+    // LREG4..7 (stored at base+distance); `false` is the top-K merge's
+    // polarity (max at base).
+    load_replay_buf<Exec>(
+        0,
+        body_len,
+        [ascending]
+        {
+            load16_rows_x2<distance>();
+            bitonic_sort_len_k(ascending);
+            store16_rows_x2<distance, 16>();
+        });
+
+    // col=0: fire the remaining (n_iters - 1) iters via one MOP issue.
+    ckernel_unpack_template::run(n_iters - 1);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+    // Switch the Dst write pointer to the odd column group.
+    set_dst_write_addr_offset(tile_offset + 2);
+
+    // col=1: full n_iters worth of work, again as one MOP issue.
+    ckernel_unpack_template::run(n_iters);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    set_dst_write_addr_offset(tile_offset + 0);
+
+    // Restore the top-K merge MOP program `_topk_xl_init_` installed.
+    topk_mop_config<true>();
+}
+
+// =============================================================================
+//  Linear index stamp + linear index split (full-sort / mergesort leaves)
+// =============================================================================
+//
+// `_topk_xl_add_lsb_indices_` stamps each lane with its Dst-geometry
+// COORDINATE (row / tile / column bit fields). That is fine for top-K — the
+// tag only needs to be unique — but its numeric order is not the element
+// order, so a fused compare that tie-breaks on those bits cannot give a
+// STABLE sort. `_topk_xl_add_linear_indices_` stamps the element's LINEAR
+// position within the chunk instead (plus a chunk_base in the same 16 low
+// bits), so fused-tag order == original element order and every tie breaks
+// exactly as torch.sort(stable=True) requires — no decode pass needed, the
+// tag IS the global index for chunk_base = chunk * K.
+//
+// Sign conditioning: the network compares fused words in SIGN-MAGNITUDE
+// order, so for words whose value half is negative an ascending sort emits
+// equal-value tags LARGEST-magnitude-first — index-descending, anti-stable.
+// The stamp therefore complements the 16 tag bits of the tie class that
+// would come out reversed: negative words for ascending sorts,
+// non-negative words (zeros included — they sit on the positive side of
+// the sign-magnitude order) for descending sorts.
+// `_topk_xl_separate_indices_linear_` undoes the complement with the same
+// value-sign predicate, which survives the sort unchanged.
+//
+// Address/lane map (silicon-validated by the topk_xl full_sort LLK test):
+// the fused copy places chunk element e at SFPU load address A, lane l with
+//   e = 64 * (A >> 2) + 2 * l + ((A >> 1) & 1)
+// so one SFPLOAD covers a stride-2 lane iota (LTILEID), the {0,2} / {16,18}
+// address pairs sit at +0/+1/+256/+257, each +4 walk step advances the
+// positions by +64, and each +16 face-pair skip adds another +256.
+//
+// Reuses `_topk_xl_add_lsb_indices_init_`'s ADDR_MODs (+4 walk via
+// ADDR_MOD_6, +16 face-pair skip via ADDR_MOD_4). chunk_base must be a
+// multiple of K and < 65536 (the u16 tag ceiling).
+template <std::uint32_t K>
+inline void _topk_xl_add_linear_indices_(const std::uint32_t chunk_base, const bool complement_non_negative)
+{
+    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+    LLK_ASSERT((chunk_base % K) == 0 && chunk_base < 65536, "chunk_base must be a multiple of K below 2^16");
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+    // LREG12 (vConstIntPrgm0) = the 16-bit tag mask the conditional
+    // complement XORs against.
+    sfpi::vConstIntPrgm0 = 0x0000FFFF;
+
+    // LREG0..3 = linear positions of the four word groups the body loads:
+    // LTILEID is the per-lane stride-2 iota (0, 2, ..., 62).
+    TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG0, 0);
+    TT_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_USHORT, chunk_base);
+    TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(1, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(256, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(257, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+
+    // Body: load 4 word groups, OR the tags in, conditionally complement the
+    // tag bits by value sign, advance the tags, store back (last store's
+    // ADDR_MOD_6 carries the +4 walk). 28 instructions, recorded once —
+    // recording IS iter 0 — and replayed for the remaining iters.
+    load_replay_buf<Exec>(
+        0,
+        28,
+        [complement_non_negative]
+        {
+            TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+            TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
+            TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 16);
+            TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, 18);
+
+            TTI_SFPOR(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+            TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG5, 0);
+            TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG6, 0);
+            TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG7, 0);
+
+            if (complement_non_negative)
+            {
+                TTI_SFPSETCC(0, p_sfpu::LREG4, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+            }
+            else
+            {
+                TTI_SFPSETCC(0, p_sfpu::LREG4, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+            }
+            TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG4, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            if (complement_non_negative)
+            {
+                TTI_SFPSETCC(0, p_sfpu::LREG5, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+            }
+            else
+            {
+                TTI_SFPSETCC(0, p_sfpu::LREG5, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+            }
+            TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG5, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            if (complement_non_negative)
+            {
+                TTI_SFPSETCC(0, p_sfpu::LREG6, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+            }
+            else
+            {
+                TTI_SFPSETCC(0, p_sfpu::LREG6, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+            }
+            TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG6, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+            if (complement_non_negative)
+            {
+                TTI_SFPSETCC(0, p_sfpu::LREG7, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+            }
+            else
+            {
+                TTI_SFPSETCC(0, p_sfpu::LREG7, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+            }
+            TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG7, 0);
+            TTI_SFPENCC(3, 0, 0, 10);
+
+            TTI_SFPIADD(64, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPIADD(64, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPIADD(64, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPIADD(64, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+
+            TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+            TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
+            TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 16);
+            TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_6, 18);
+        });
+    for (int i = 1; i < 4; i++)
+    {
+        lltt::replay(0, 28);
+    }
+
+    constexpr int row_scale_factor = K == 512 ? 1 : K == 1024 ? 2 : 4;
+    for (int j = 1; j < row_scale_factor; j++)
+    {
+        // Skip a face pair (+16) and bump the positions by the +256 the skip
+        // represents on top of the +256 the previous four +64s advanced.
+        TTI_SFPLOAD(p_sfpu::LREG4, 10, ADDR_MOD_4, 0);
+        TTI_SFPIADD(256, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(256, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(256, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(256, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+
+        for (int i = 0; i < 4; i++)
+        {
+            lltt::replay(0, 28);
+        }
+    }
+}
+
+// ADDR_MOD_0 = +2 (one 32-lane word group) — the walk stride of
+// `_topk_xl_separate_indices_linear_`. Same slot the other post-reduction
+// phases use, re-programmed here so callers need no ordering against them.
+inline void _topk_xl_separate_indices_linear_init_()
+{
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 2},
+    }
+        .set(ADDR_MOD_0);
+}
+
+// Split a linearly-stamped fused K-run into a [bf16 value | 0] region (in
+// place) and a UINT32 index region at `indices_dst_offset` Dst units from the
+// run base, undoing the stamp's sign-conditioned complement. The index words
+// mirror the value words' rank interleave. `complement_non_negative` must
+// match the value passed to the stamp (i.e. the sort's descending flag).
+template <std::uint32_t K, std::uint32_t indices_dst_offset>
+inline void _topk_xl_separate_indices_linear_(const bool complement_non_negative)
+{
+    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+    constexpr std::uint32_t iterations = (K == 512 ? 1 : K == 1024 ? 2 : 4) * 16;
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+    sfpi::vConstIntPrgm0 = 0x0000FFFF;
+
+    load_replay_buf<Exec>(
+        0,
+        9,
+        [complement_non_negative]
+        {
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+            TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0); // LREG1 = stamped tag bits
+            TTI_SFPXOR(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);  // LREG0 = [bf16 value | 0]
+            if (complement_non_negative)
+            {
+                TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_GTE0);
+            }
+            else
+            {
+                TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+            }
+            TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0); // undo the complement
+            TTI_SFPENCC(3, 0, 0, 10);
+            TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, indices_dst_offset);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0);
+        });
+    for (std::uint32_t i = 1; i < iterations; i++)
+    {
+        lltt::replay(0, 9);
+    }
+
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
 // =============================================================================

@@ -223,6 +223,54 @@ ALWI void topk_xl_copy_tile(
 }
 
 /**
+ * Both-halves merge level (full-sort / mergesort schedules). Where topk_xl_merge
+ * keeps only the per-pair extremum half of two opposite-direction sorted K-runs,
+ * this keeps BOTH halves in place: `ascending` selects which half lands in the
+ * first run's tiles (true = min half first). A topk_xl_rebuild per half then
+ * yields the fully sorted 2K-run. Fused [bf16|u16] payloads only.
+ */
+template <uint32_t K>
+ALWI void topk_xl_merge_both_halves(uint32_t idst, bool ascending) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_merge_both_halves<K, APPROX>(idst, ascending)));
+}
+
+/**
+ * Linear (stability-carrying) index stamp for full-sort leaves. Stamps each
+ * fused word's low 16 bits with chunk_base + the element's LINEAR position in
+ * the chunk, so tag numeric order == element order and every fused-key tie
+ * breaks exactly as torch.sort(stable=True) requires. The tag bits of the tie
+ * class the sign-magnitude compare would reverse are complemented
+ * (non-negative words when `complement_non_negative`, i.e. descending sorts;
+ * negative words otherwise); topk_xl_separate_indices_linear undoes it.
+ * Uses topk_xl_add_lsb_indices_init's ADDR_MOD programming.
+ * chunk_base must be a multiple of K, below 65536.
+ */
+template <uint32_t K>
+ALWI void topk_xl_add_linear_indices(uint32_t idst, uint32_t chunk_base, bool complement_non_negative) {
+    MATH(
+        (llk_math_eltwise_unary_sfpu_topk_xl_add_linear_indices<K, APPROX>(idst, chunk_base, complement_non_negative)));
+}
+
+/**
+ * Initializes the linear index split (programs the ADDR_MOD_0 +2 walk).
+ */
+ALWI void topk_xl_separate_indices_linear_init() {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_linear_init<APPROX>()));
+}
+
+/**
+ * Splits a linearly-stamped fused K-run into a stripped [bf16|0] value region
+ * (in place) and a UINT32 index region `indices_dst_offset` Dst units from the
+ * run base, undoing the stamp's sign-conditioned complement.
+ * `complement_non_negative` must match the stamp call.
+ */
+template <uint32_t K, uint32_t indices_dst_offset>
+ALWI void topk_xl_separate_indices_linear(uint32_t idst, bool complement_non_negative) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_linear<K, APPROX, indices_dst_offset>(
+        idst, complement_non_negative)));
+}
+
+/**
  * Initializes the state for adding LSB indices to the topk_xl_copy_tile output.
  */
 ALWI void topk_xl_add_lsb_indices_init() { MATH((llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices_init())); }

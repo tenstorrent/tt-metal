@@ -78,10 +78,27 @@ void kernel_main() {
     // Compile time args
     constexpr uint32_t Wt = get_arg(args::Wt);
     constexpr bool descending = get_arg(args::descending);
-    constexpr bool stable =
-        get_arg(args::stable);  // TODO: In the future change LLK to have the option or add additional step with
-                                // checking values and indexes after the sorting
-                                // Issue: https://github.com/tenstorrent/tt-metal/issues/20625
+    // Comparator-stable network (issue #33492): on exact value ties the index tiles are
+    // compare-exchanged so equal values keep their original (ascending-index) order, matching
+    // torch.sort(stable=True) in both directions.
+    constexpr bool stable = get_arg(args::stable);
+
+// Fused-key stable mode (factory-injected define, issue #33492): at every network call the
+// value words are tagged with the TRUE u16 index in their free low 16 bits (sign-conditioned
+// complement from the GLOBAL descending order) and the plain UNSTABLE network sorts the
+// now-distinct tagged keys — indices are unique, so ties are impossible at the comparator and
+// stability holds by construction under any per-block direction pattern. The true index tiles
+// keep riding the index-tracking swaps exactly as in the comparator path, and the tags are
+// stripped before every value pack, so every CB and DRAM transport keeps its ordinary split
+// value/index formats (the indices ride the UINT32 transport the 32-bit-DEST rule selects).
+// Requires 32-bit DEST; bf16 values whose padded width fits the u16 tag ceiling only.
+#if defined(SORT_FUSED_STABLE_KEYS) && SORT_FUSED_STABLE_KEYS
+    constexpr bool fused_stable = true;
+#else
+    constexpr bool fused_stable = false;
+#endif
+    // The fused key IS the stable tie-break; the network itself runs unstable in fused mode.
+    constexpr bool network_stable = stable && !fused_stable;
 
     DataflowBuffer input_tensor_dfb(dfb::input_tensor);
     DataflowBuffer index_tensor_dfb(dfb::index_tensor);
@@ -124,9 +141,16 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb::rm_input, dfb::index_tensor, dfb::input_tensor);
 #else
     compute_kernel_hw_startup(dfb::input_tensor, dfb::input_tensor_transposed);
-    ckernel::topk_tile_init();
+    ckernel::topk_tile_init<false, fused_stable>();
     transpose_init(dfb::input_tensor);
 #endif
+
+    if constexpr (network_stable) {
+        // Tie-break polarity is a property of the GLOBAL sort order and is programmed exactly
+        // once: it must never follow the per-call sort direction (dir), which alternates below
+        // to build bitonic sequences. Survives the mid-kernel topk_tile_init re-inits.
+        ckernel::topk_set_stable_descending_mode(descending);
+    }
 
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         const bool ascending = !descending;
@@ -171,12 +195,12 @@ void kernel_main() {
             // for the init-cleanup rename and left to the sort kernel owners.
             // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
             compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::input_tensor_transposed);
-            ckernel::topk_tile_init();
+            ckernel::topk_tile_init<false, fused_stable>();
             transpose_init(dfb::input_tensor);
         }
 #endif
 
-        sort_Wt_tiles_row_to_bitonic_sequence(
+        sort_Wt_tiles_row_to_bitonic_sequence<network_stable, fused_stable, descending>(
             input_tensor_dfb,
             index_tensor_dfb,
             input_tensor_transposed_dfb,
@@ -233,11 +257,16 @@ void kernel_main() {
                         uint32_t tile_index_low = index_dest_start;
                         uint32_t tile_index_high = index_dest_end;
 
+                        if constexpr (fused_stable) {
+                            ckernel::topk_fuse_tile<descending>(0);
+                        }
                         if (sub == 1) {
                             // Use sort LLK only the last stage to sort the last pair of tiles - speed up
-                            ckernel::topk_local_sort(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
+                            ckernel::topk_local_sort<network_stable, false, fused_stable>(
+                                /*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                         } else {
-                            ckernel::topk_merge(/*idst=*/0, m_iter, /*k=*/64);
+                            ckernel::topk_merge</*idir=*/false, network_stable, false, fused_stable, fused_stable>(
+                                /*idst=*/0, m_iter, /*k=*/64);
 
                             if (dir) {
                                 // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
@@ -247,6 +276,13 @@ void kernel_main() {
                                 tile_index_low = index_dest_end;
                                 tile_index_high = index_dest_start;
                             }
+                        }
+
+                        if constexpr (fused_stable) {
+                            // Clear the tags so the value packs below are exact bf16 (the index
+                            // tiles rode the tracked swaps and pack through the ordinary path).
+                            ckernel::topk_strip_rank_tags(0);
+                            ckernel::topk_strip_rank_tags(1);
                         }
 
                         // UInt16-in-32b-DEST: mode-9 packer fixup before packing values (#50215).

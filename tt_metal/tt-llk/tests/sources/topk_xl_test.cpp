@@ -110,16 +110,39 @@ static_assert(
 // exclude those before rejecting the combination.
 static_assert(!TOPK_XL_LSB_ROW_MAJOR || !INDEX_OP_ROW_MAJOR || FUSED_REDUCE, "separate_indices_row_major decodes the coordinate add_lsb numbering");
 
+// Full-sort mode: two fused chunks, one both-halves merge level
+// (`_topk_xl_merge_both_halves_`), then a rebuild of EACH half — the packed
+// result is the fully sorted 2K-run as raw fused [bf16|u16] words across
+// 2 * TILES_PER_SEQ tiles. Exactly two full chunks: the merge level is the
+// unit under test, and the fused copy path's -inf padding would sort to the
+// wrong end for ascending runs, so partial tails are excluded.
+constexpr bool FULL_SORT = TOPK_XL_FULL_SORT;
+static_assert(!FULL_SORT || (TOPK_XL_NUM_CHUNKS == 2 && TOPK_XL_TAIL_ELEMENTS == TOPK_XL_K), "full_sort is exactly two full chunks");
+static_assert(!(FULL_SORT && FUSED_REDUCE), "full_sort is its own fused flow");
+
+// Linear-stamp full-sort mode: leaves are stamped with LINEAR positions
+// (chunk_base 0 / K, sign-conditioned complement for stability) instead of
+// the coordinate stamp, and after the rebuilds each half is split into a
+// stripped value region plus a UINT32 index region 2*TILES_PER_SEQ tiles
+// further along: [values0 | values1 | indices0 | indices1]. The packed
+// result is 4*TILES_PER_SEQ tiles. This is the exact leaf/output contract
+// of the ttnn.sort mergesort schedule.
+constexpr bool LINEAR_STAMP = TOPK_XL_LINEAR_STAMP;
+static_assert(!LINEAR_STAMP || FULL_SORT, "linear_stamp is a full_sort variant");
+
 // Second merge operand. `_topk_xl_merge_` reads it at a fixed distance from the
 // first: 64 dest units (one tile) per sequence-tile when fused, 128 (value +
-// index region) when unfused, so the slot stride follows the mode.
-constexpr std::uint32_t SLOT1 = (FUSED_REDUCE || FUSED_E2E) ? TILES_PER_SEQ : (2 * TILES_PER_SEQ);
+// index region) when unfused, so the slot stride follows the mode. The
+// full-sort flow keeps chunks fused and adjacent, like FUSED_REDUCE.
+constexpr std::uint32_t SLOT1 =
+    (FUSED_REDUCE || FUSED_E2E || FULL_SORT) ? TILES_PER_SEQ : (2 * TILES_PER_SEQ);
 
 // A lone chunk has nothing to merge with, but the row-major path still rebuilds it;
 // the fused path merges/rebuilds only when there is a second operand.
 // Both TRISCs use this: MATH issues the rebuild, UNPACK the SrcB dummy valid feeding it.
 // Fused variants leave TOPK_XL_INDEX_OP at its 0 default and ignore it, hence the !FUSED_REDUCE.
-constexpr bool REBUILD_LONE_CHUNK = !FUSED_REDUCE && !FUSED_E2E && INDEX_OP_ROW_MAJOR && TOPK_XL_NUM_CHUNKS == 1;
+constexpr bool REBUILD_LONE_CHUNK =
+    !FUSED_REDUCE && !FUSED_E2E && !FULL_SORT && INDEX_OP_ROW_MAJOR && TOPK_XL_NUM_CHUNKS == 1;
 
 constexpr std::uint32_t CHUNK_BASE_HI16 = (TOPK_XL_CHUNK_BASE >> 16) & 0xFFFF;
 constexpr std::uint32_t CHUNK_BASE_LO16 = TOPK_XL_CHUNK_BASE & 0xFFFF;
@@ -195,6 +218,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 _llk_unpack_set_srcb_dummy_valid_(); // rebuild(slot0)
             }
+            if (FULL_SORT && c > 0)
+            {
+                _llk_unpack_set_srcb_dummy_valid_(); // full sort: rebuild of the second half
+            }
         }
         if constexpr (REBUILD_LONE_CHUNK)
         {
@@ -261,6 +288,12 @@ template <std::uint32_t K, bool fused>
 inline void topk_xl_rebuild(std::uint32_t dst_index, bool ascending)
 {
     _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_rebuild_<K, fused>, dst_index, VectorMode::RC_custom, dst_index, ascending);
+}
+
+template <std::uint32_t K>
+inline void topk_xl_merge_both_halves(std::uint32_t dst_index, bool ascending)
+{
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_merge_both_halves_<K, false>, dst_index, VectorMode::RC_custom, dst_index, ascending);
 }
 
 inline void topk_xl_add_lsb_indices_init()
@@ -333,9 +366,15 @@ inline void topk_xl_separate_indices(std::uint32_t dst_index)
 }
 
 // Shared core: copy the chunk into `slot`, stamp indices, fused local-sort.
-// Marked noinline to avoid overflowing the code region.
+// Marked noinline to avoid overflowing the code region (one instantiation:
+// a second copy of the K=2048 local-sort body overflows TRISC1_CODE).
+// `stamp_core_one` lets the full-sort flow stamp a distinct core id per
+// chunk (0 for the first leaf, 1 for the second) so the packed fused words
+// carry an unambiguous (chunk, coordinate) provenance the checker can
+// decode; every other flow stamps the variant-wide TOPK_XL_CORE_ID.
 template <std::uint32_t K>
-__attribute__((noinline)) void copy_sort(std::uint32_t slot, std::uint32_t active_elements, bool ascending, std::uint32_t dst_format)
+__attribute__((noinline)) void copy_sort(
+    std::uint32_t slot, std::uint32_t active_elements, bool ascending, std::uint32_t dst_format, bool stamp_core_one = false)
 {
     ckernel::_llk_math_topk_xl_copy_init_(dst_format);
     for (std::uint32_t t = 0; t < TILES_PER_SEQ; t++)
@@ -344,7 +383,22 @@ __attribute__((noinline)) void copy_sort(std::uint32_t slot, std::uint32_t activ
     }
 
     topk_xl_add_lsb_indices_init();
-    topk_xl_add_lsb_indices<K, TOPK_XL_CORE_ID, TOPK_XL_LSB_ROW_MAJOR>(slot);
+    if constexpr (LINEAR_STAMP)
+    {
+        // Stamp linear positions: chunk_base K for the second leaf, complement
+        // the tags of the tie class the sign-magnitude compare would reverse
+        // (non-negative words for descending sorts, negative for ascending).
+        _llk_math_eltwise_unary_sfpu_params_(
+            ckernel::sfpu::_topk_xl_add_linear_indices_<K>, slot, VectorMode::RC_custom, stamp_core_one ? K : 0u, !TOPK_XL_ASCENDING);
+    }
+    else if (FULL_SORT && stamp_core_one)
+    {
+        topk_xl_add_lsb_indices<K, 1, TOPK_XL_LSB_ROW_MAJOR>(slot);
+    }
+    else
+    {
+        topk_xl_add_lsb_indices<K, TOPK_XL_CORE_ID, TOPK_XL_LSB_ROW_MAJOR>(slot);
+    }
 
     topk_xl_init<K, true>();
     if constexpr (SORT_MODE_EARLY_EXIT)
@@ -432,6 +486,14 @@ inline void topk_xl_reinit_after_copy(std::uint32_t dst_format)
     }
 }
 
+// Full-sort helpers, noinline so the K=2048 rebuild body is emitted once —
+// a second inline expansion overflows TRISC1_CODE.
+template <std::uint32_t K>
+__attribute__((noinline)) void full_sort_rebuild_half(std::uint32_t slot, bool ascending)
+{
+    topk_xl_rebuild<K, true /* fused */>(slot, ascending);
+}
+
 // Init + (optional) merge of slot1 into slot0 + rebuild, in either fused mode.
 // `fused` selects the whole merge/rebuild code family: operand distance, MOP body
 // length and iteration count all differ (see topk_mop_config / _topk_xl_merge_).
@@ -490,7 +552,39 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_math_wait_for_dest_available_<dest_sync>();
 
-        if constexpr (FUSED_E2E)
+        if constexpr (FULL_SORT)
+        {
+            // Full sort of 2K elements: leaf A ascending at slot0, leaf B
+            // descending at slot1 (adjacent, fused) — a bitonic 2K-sequence.
+            // One both-halves merge level + a rebuild per half leaves the
+            // fully sorted run (direction = TOPK_XL_ASCENDING) in tiles
+            // [SLOT0 .. SLOT0 + 2*TILES_PER_SEQ). Chunk ids ride bits [15:11].
+            copy_sort<TOPK_XL_K>(SLOT0, chunk_active_elements(0), true /* ascending */, math_format);
+            copy_sort<TOPK_XL_K>(
+                SLOT1, chunk_active_elements(1), false /* ascending */, math_format, true /* stamp_core_one */);
+
+            topk_xl_init<TOPK_XL_K, true>();
+            topk_xl_merge_both_halves<TOPK_XL_K>(SLOT0, TOPK_XL_ASCENDING);
+            full_sort_rebuild_half<TOPK_XL_K>(SLOT0, TOPK_XL_ASCENDING);
+            full_sort_rebuild_half<TOPK_XL_K>(SLOT0 + TILES_PER_SEQ, TOPK_XL_ASCENDING);
+
+            if constexpr (LINEAR_STAMP)
+            {
+                // Split both halves: value regions stripped in place, UINT32
+                // index regions 2*TILES_PER_SEQ tiles further along.
+                constexpr std::uint32_t indices_dst_offset = 2 * TILES_PER_SEQ * 64;
+                _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+                ckernel::sfpu::_topk_xl_separate_indices_linear_init_();
+                _llk_math_eltwise_unary_sfpu_params_(
+                    ckernel::sfpu::_topk_xl_separate_indices_linear_<TOPK_XL_K, indices_dst_offset>, SLOT0, VectorMode::RC_custom, !TOPK_XL_ASCENDING);
+                _llk_math_eltwise_unary_sfpu_params_(
+                    ckernel::sfpu::_topk_xl_separate_indices_linear_<TOPK_XL_K, indices_dst_offset>,
+                    SLOT0 + TILES_PER_SEQ,
+                    VectorMode::RC_custom,
+                    !TOPK_XL_ASCENDING);
+            }
+        }
+        else if constexpr (FUSED_E2E)
         {
             // Fused end-to-end: runtime chunk-id stamps, fused merge/rebuild,
             // then ONE global split -- plain or with a segment base.
@@ -604,9 +698,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::sfpu::_topk_xl_remove_msb_values_init_();
     }
 
-    // remove_msb: the in-place fused region [0|index] (TILES_PER_SEQ). Otherwise the
-    // value region then the index region (2*TILES_PER_SEQ).
-    constexpr std::uint32_t RESULT_TILES_PER_ROW = INDEX_OP_REMOVE_MSB ? TILES_PER_SEQ : (2 * TILES_PER_SEQ);
+    // remove_msb: the in-place fused region [0|index] (TILES_PER_SEQ). The
+    // linear-stamp full sort packs both value regions AND both index regions
+    // (4*TILES_PER_SEQ). Otherwise the value region then the index region
+    // (2*TILES_PER_SEQ).
+    constexpr std::uint32_t RESULT_TILES_PER_ROW = INDEX_OP_REMOVE_MSB ? TILES_PER_SEQ : (LINEAR_STAMP ? (4 * TILES_PER_SEQ) : (2 * TILES_PER_SEQ));
 
     for (std::uint32_t r = 0; r < TOPK_XL_NUM_ROWS; r++)
     {
@@ -625,7 +721,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(SLOT0 + t, L1_ADDRESS(params.buffer_Res[res++]));
         }
-        if constexpr (!INDEX_OP_REMOVE_MSB)
+        if constexpr (LINEAR_STAMP)
+        {
+            // Second value region + both index regions ([v0|v1|i0|i1]).
+            for (std::uint32_t t = TILES_PER_SEQ; t < 4 * TILES_PER_SEQ; t++)
+            {
+                _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(SLOT0 + t, L1_ADDRESS(params.buffer_Res[res++]));
+            }
+        }
+        else if constexpr (!INDEX_OP_REMOVE_MSB)
         {
             // Index region of slot0: Dest tiles [SLOT0 + TILES_PER_SEQ .. +2*TILES_PER_SEQ - 1].
             for (std::uint32_t t = 0; t < TILES_PER_SEQ; t++)

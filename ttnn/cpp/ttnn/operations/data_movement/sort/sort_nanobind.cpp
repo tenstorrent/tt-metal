@@ -38,7 +38,6 @@ void bind_sort_operation(nb::module_& mod) {
             List of ttnn.Tensor: A list containing two tensors: The first tensor contains the sorted values, the second tensor contains the indices of the original elements in the sorted order.
 
         Additional info:
-            * For now the `stable` argument is not supported.
 
         Note:
 
@@ -65,6 +64,31 @@ void bind_sort_operation(nb::module_& mod) {
                   - Layouts
                 * - UINT16, UINT32
                   - TILE, ROW_MAJOR
+
+            Index dtype is UINT16 by default and auto-promoted to UINT32 when any of the
+            following holds: the sort dim is >= 65535; the input dtype is FLOAT32 or UINT16;
+            or stable=True with a BFLOAT16 input at padded sort width <= 2048 (any device) or
+            at power-of-two padded sort width 2048..65536 on Blackhole (the mergesort row
+            engine; widths 512/1024 are raised to 2048 by an internal pad rider). The
+            Blackhole stable-BFLOAT16 promotion at padded widths 8192..32768 is a behavior
+            change from earlier releases, which returned UINT16 there. Preallocating UINT16
+            index tensors for a stable sort opts out to the comparator engines and keeps
+            UINT16. Unstable BFLOAT16 sorts keep UINT16 at every width. The composite early
+            exits (scalar, dim-size-1, and zero-size tensors, which return empty tensors
+            matching torch.sort) follow the same dtype rule.
+
+            NaN input is unsupported (undefined ordering) for BFLOAT16: the bfloat16 datapath
+            canonicalizes NaN to same-sign infinity before comparing, so NaN placement deviates
+            from torch.sort's NaN-last ordering. Mask or replace NaNs before sorting.
+
+            With stable=False, the returned indices always gather the sorted values from the
+            input but need not form a permutation within tie groups on the CrossCore path
+            (duplicate indices may appear inside a tie group; see issue #54043). On Blackhole,
+            BFLOAT16 sorts of power-of-two padded width 512..65536 are served by the mergesort
+            row engine, whose unstable output IS the torch-stable permutation — #54043 is
+            unreachable there. The residue remains for FLOAT32 unstable widths on the CrossCore
+            path and for non-Blackhole devices. Use stable=True when a true permutation is
+            required.
 
         Memory Support:
             - Interleaved: DRAM and L1

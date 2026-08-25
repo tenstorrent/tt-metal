@@ -47,13 +47,23 @@ uint32_t next_power_of_two(uint32_t n) {
 //      For ROW_MAJOR layout: pad the H dimension so that
 //      combined_h (shape[0]*shape[1]*shape[2]) is a multiple of TILE_HEIGHT.
 //   4. Pad the last dimension to the next power-of-two ≥ 2×TILE_WIDTH so the
-//      bitonic-sort kernel receives a valid Wt.
+//      bitonic-sort kernel receives a valid Wt. When pad_target_2048 is set
+//      (mergesort pad-to-2048 rider, issue #33492 roadmap item 2), a pow2
+//      width of 512 or 1024 is raised to 2048 instead so the row lands on the
+//      mergesort row engine (measured 2-13x faster than the engines serving
+//      those widths). Correctness of the raise leans on the engine being
+//      structurally STABLE: the ±inf pad sentinels carry linear tags >= the
+//      real width, so within a sentinel-vs-real tie class every real element
+//      sorts first, the sorted real data is exactly the row prefix, and the
+//      post-sort slice recovers it with in-range indices. Never port this
+//      raise to an engine that resolves ties positionally.
 Tensor pre_sort_transform_tensor(
     const Tensor& input_tensor,
     const int8_t dim,
     const bool is_dim_last_idx,
     const bool is_rank_le_4d,
-    const bool descending) {
+    const bool descending,
+    const bool pad_target_2048) {
     if (input_tensor.logical_shape() == ttnn::Shape{1}) {
         return input_tensor;
     }
@@ -113,6 +123,9 @@ Tensor pre_sort_transform_tensor(
     const auto current_shape = is_row_major ? padded_tensor.logical_shape() : padded_tensor.padded_shape();
     const auto last_dim = current_shape[-1];
     auto padded_last_dim = next_power_of_two(last_dim);
+    if (pad_target_2048 && (padded_last_dim == 512 || padded_last_dim == 1024)) {
+        padded_last_dim = 2048;
+    }
     if ((padded_last_dim == last_dim) && (last_dim > tt::constants::TILE_WIDTH)) {
         return padded_tensor;
     }
@@ -244,15 +257,21 @@ std::vector<Tensor> sort(
     const bool stable,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<std::tuple<Tensor&, Tensor&>> optional_output_tensors) {
-    TT_FATAL(!stable, "ttnn::sort: stable=True is not yet implemented.");
-
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
     const auto rank = input_tensor.logical_shape().rank();
 
     // FLOAT32 and UINT16 inputs require UINT32 indices: both run with
     // fp32_dest_acc_en=true in the sort kernel (device-side validation enforces
     // this for the non-early-exit path; keep early exits consistent).
-    const bool idx_is_uint32 = (input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::UINT16);
+    // Stable BFLOAT16 also returns UINT32: every on-device stable bf16 path at
+    // the tiny widths these early exits map to (padded Wt <= 64) runs a fused-key
+    // engine in 32-bit DEST whose index transport is UINT32 (see the
+    // stable_bf16_single_core gate in SortDeviceOperation::compute_output_specs,
+    // arch-independent), so the early-exit dtype must match or the index dtype a
+    // caller sees would depend on whether the early exit fired.
+    const bool idx_is_uint32 =
+        (input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::UINT16 ||
+         (stable && input_tensor.dtype() == DataType::BFLOAT16));
     const DataType index_dtype = idx_is_uint32 ? DataType::UINT32 : DataType::UINT16;
 
     // Check for early exit for scalar or empty tensors tensors
@@ -274,6 +293,25 @@ std::vector<Tensor> sort(
         rank);
 
     const int32_t normalized_dim = dim < 0 ? static_cast<int32_t>(rank) + dim : dim;
+
+    // Zero-size tensors: torch.sort returns empty values/indices of the input
+    // shape, so early-exit with empty tensors here. The prim's validate rejects
+    // empty tensors (its program factories cannot build zero-work programs; the
+    // mergesort factory derives its core count from the row count and would
+    // divide by zero) — that TT_FATAL stays as the backstop for direct prim
+    // callers. Checked after the dim-range validation above so an out-of-range
+    // dim still raises, matching torch.
+    if (original_lshape.volume() == 0) {
+        auto indices = ttnn::zeros_like(input_tensor, index_dtype);
+        if (operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
+                optional_output_tensors, original_lshape)) {
+            std::get<0>(*optional_output_tensors) = input_tensor;
+            std::get<1>(*optional_output_tensors) = indices;
+            return {std::get<0>(optional_output_tensors.value()), std::get<1>(optional_output_tensors.value())};
+        }
+        return {input_tensor, indices};
+    }
+
     if (original_lshape[normalized_dim] == 1) {
         auto indices = ttnn::zeros_like(input_tensor, index_dtype);
         if (operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
@@ -315,8 +353,22 @@ std::vector<Tensor> sort(
                                        ? ttnn::to_memory_config(input_tensor, ttnn::DRAM_MEMORY_CONFIG)
                                        : input_tensor;
 
-    Tensor padded_input_tensor =
-        dm::pre_sort_transform_tensor(transform_input, dim, is_dim_last_idx, is_rank_le_4d, descending);
+    // Mergesort pad-to-2048 rider (issue #33492 roadmap item 2): Blackhole bf16 rows whose
+    // pow2 width would be 512 or 1024 are padded to 2048 instead so they ride the mergesort
+    // row engine (stable AND unstable — the engine's stable permutation is a superset of the
+    // unstable contract). Gated off for the STABLE preallocated-UINT16-index caller, who
+    // deliberately opts out of the mergesort engine (its stable contract is UINT32 indices)
+    // and would otherwise just sort a 4x wider row on the comparator engines.
+    bool pad_target_2048 = false;
+    if (transform_input.dtype() == DataType::BFLOAT16 && transform_input.storage_type() == StorageType::DEVICE &&
+        transform_input.device()->arch() == tt::ARCH::BLACKHOLE) {
+        const bool stable_prealloc_u16_opt_out = stable && optional_output_tensors.has_value() &&
+                                                 std::get<1>(*optional_output_tensors).dtype() == DataType::UINT16;
+        pad_target_2048 = !stable_prealloc_u16_opt_out;
+    }
+
+    Tensor padded_input_tensor = dm::pre_sort_transform_tensor(
+        transform_input, dim, is_dim_last_idx, is_rank_le_4d, descending, pad_target_2048);
     const MemoryConfig device_op_mem_cfg = sort_mem_cfg.is_sharded() ? ttnn::DRAM_MEMORY_CONFIG : sort_mem_cfg;
 
     // Canonicalize any preallocated output tensors.
@@ -335,7 +387,10 @@ std::vector<Tensor> sort(
         preallocated_layout_mismatch = !values_layout_match || !indices_layout_match;
         if (!preallocated_layout_mismatch) {
             const auto canonicalize_output = [&](const Tensor& t) {
-                return dm::pre_sort_transform_tensor(t, dim, is_dim_last_idx, is_rank_le_4d, descending);
+                // Preallocated outputs must be canonicalized with the SAME pad target as the
+                // input so their padded shapes match the device op's expectation.
+                return dm::pre_sort_transform_tensor(
+                    t, dim, is_dim_last_idx, is_rank_le_4d, descending, pad_target_2048);
             };
             output_tensors[0] = canonicalize_output(out0);
             output_tensors[1] = canonicalize_output(out1);

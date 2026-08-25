@@ -579,6 +579,10 @@ class TOPK(TemplateParameter):
     # Fused-key stable mode: [bf16 value | u16 index] packed 32-bit keys sorted by the unstable
     # network (requires dest_acc=Yes; mutually exclusive with topk_stable_sort).
     topk_fused_stable: bool = False
+    # Rank-stamped stable mode: sign-conditioned local-rank tags in the value words' lo16, true
+    # indices riding index tracking; the unstable network sorts the tagged keys (requires
+    # dest_acc=Yes; mutually exclusive with both other stable modes).
+    topk_rank_stamped: bool = False
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -588,6 +592,7 @@ class TOPK(TemplateParameter):
             f"constexpr std::uint32_t TOPK_SORT_DIRECTION = {self.topk_sort_direction.value};",
             f"constexpr bool TOPK_STABLE_SORT = {str(self.topk_stable_sort).lower()};",
             f"constexpr bool TOPK_FUSED_STABLE = {str(self.topk_fused_stable).lower()};",
+            f"constexpr bool TOPK_RANK_STAMPED = {str(self.topk_rank_stamped).lower()};",
         ]
         return "\n".join(lines)
 
@@ -599,8 +604,9 @@ class TOPK(TemplateParameter):
             "std::uint32_t TOPK_SORT_DIRECTION;",
             "bool TOPK_STABLE_SORT;",
             "bool TOPK_FUSED_STABLE;",
+            "bool TOPK_RANK_STAMPED;",
         ]
-        return "\n".join(lines), "IIII??"
+        return "\n".join(lines), "IIII???"
 
 
 @dataclass
@@ -763,6 +769,8 @@ class TOPK_XL(TemplateParameter):
     sort_mode: TopKXLSortMode = TopKXLSortMode.Dispatch
     lsb_row_major: bool = False
     reinit_after_copy: bool = False
+    merge_both_halves: bool = False
+    linear_stamp: bool = False
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -783,6 +791,8 @@ class TOPK_XL(TemplateParameter):
             f"constexpr std::uint32_t TOPK_XL_SORT_MODE = {self.sort_mode.value};",
             f"constexpr bool TOPK_XL_LSB_ROW_MAJOR = {str(self.lsb_row_major).lower()};",
             f"constexpr bool TOPK_XL_REINIT_AFTER_COPY = {str(self.reinit_after_copy).lower()};",
+            f"constexpr bool TOPK_XL_FULL_SORT = {str(self.merge_both_halves).lower()};",
+            f"constexpr bool TOPK_XL_LINEAR_STAMP = {str(self.linear_stamp).lower()};",
         ]
         return "\n".join(lines)
 
