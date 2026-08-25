@@ -1257,6 +1257,123 @@ def test_fixed_line(device, grid_cols, grid_rows, num_blocks, payload_tiles):
     )
 
 
+# ======== FIXED LINE, LOOPBACK (src != dst): the sender lands its OWN copy ========
+# _run_fixed_line multicasts in place (src == dst), so SenderPipe never takes the loopback path and
+# the sender's own slot is correct whatever destination rectangle the host emitted. Here the sender
+# stages into a separate CB and multicasts into the landing CB, so an in-line sender only ends up with
+# the payload in its landing CB via loopback -- which requires the rectangle Mcast1D emits to CONTAIN
+# the sender. The sender's own DRAM slot is checked like every other core's, so a rectangle that
+# excludes the sender fails here (and only here).
+def _run_fixed_line_loopback(device, grid_cols, grid_rows, num_blocks, payload_tiles, starting_sender_index):
+    GC, GR, NB = grid_cols, grid_rows, num_blocks
+    page_bytes = TILE_BYTES
+    payload_pages = payload_tiles
+
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GC - 1, GR - 1))])
+
+    in_shape = [GR, NB, 32, 32 * payload_tiles]
+    payload = torch.zeros(in_shape, dtype=torch.float32)
+    for y in range(GR):
+        for b in range(NB):
+            payload[y, b] = float(y * NB + b + 1)
+    payload = payload.to(torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        payload, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    out_shape = [GC * GR * NB, 1, 32, 32 * payload_tiles]
+    output_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(out_shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    io_tensors = [input_tensor, output_tensor]
+
+    mc = ttnn.Mcast1D(
+        device,
+        grid,
+        ttnn.Mcast1DShape.PerRow,
+        sender_index=starting_sender_index,
+        config=ttnn.McastConfig(),
+    )
+    semaphores = mc.owned_semaphores()
+
+    # Two DISTINCT CBs: cb_src stages the DRAM block, cb_dst is the multicast landing region. cb_dst
+    # must exist on every core of the line so the one landing address is valid grid-wide.
+    cb_src, cb_dst = 0, 1
+    cbs = [
+        ttnn.CBDescriptor(
+            total_size=payload_pages * page_bytes,
+            core_ranges=grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=cb_src, data_format=ttnn.bfloat16, page_size=page_bytes)
+            ],
+        ),
+        ttnn.CBDescriptor(
+            total_size=payload_pages * page_bytes,
+            core_ranges=grid,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=cb_dst, data_format=ttnn.bfloat16, page_size=page_bytes)
+            ],
+        ),
+    ]
+
+    ct = [cb_src, cb_dst] + list(mc.compile_time_args()) + [NB, payload_pages, page_bytes]
+    ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+
+    rt = ttnn.RuntimeArgs()
+    for Y in range(GR):
+        for X in range(GC):
+            core = ttnn.CoreCoord(X, Y)
+            rt[X][Y] = [
+                input_tensor.buffer_address(),
+                Y * NB * payload_pages,
+                output_tensor.buffer_address(),
+                (Y * GC + X) * NB * payload_pages,
+                int(mc.is_sender(core)),
+            ] + list(mc.runtime_args(core))
+
+    k = ttnn.KernelDescriptor(
+        kernel_source=f"{KERNEL_DIR}/pipe_fixed_line_loopback.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=grid,
+        compile_time_args=ct,
+        runtime_args=rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+
+    pd = ttnn.ProgramDescriptor(kernels=[k], semaphores=semaphores, cbs=cbs)
+    output = ttnn.generic_op(io_tensors, pd)
+
+    torch_out = ttnn.to_torch(output).reshape(GC * GR * NB, 32, 32 * payload_tiles)
+    for Y in range(GR):
+        for X in range(GC):
+            is_sender = X == starting_sender_index
+            for b in range(NB):
+                slot = (Y * GC + X) * NB + b
+                who = "SENDER (loopback self-copy)" if is_sender else "receiver"
+                assert torch.equal(
+                    torch_out[slot].to(torch.float32), payload[Y, b].to(torch.float32)
+                ), f"core ({X},{Y}) block {b}, {who}: expected const {Y * NB + b + 1} -> dest-rect / loopback bug"
+    logger.info(
+        f"FIXED-LINE LOOPBACK GC={GC} GR={GR} NB={NB} pt={payload_tiles} sender_col={starting_sender_index}: "
+        f"PASS ({GC * GR * NB} slots correct)"
+    )
+
+
+# Sender column 0 and column GC-1 are the two EDGE placements; an interior column (1) is the third.
+# All three must land the sender's own copy, so all three must emit a rectangle containing the sender.
+@pytest.mark.parametrize("starting_sender_index", [0, 1, 3])
+def test_fixed_line_loopback(device, starting_sender_index):
+    _run_fixed_line_loopback(
+        device,
+        grid_cols=4,
+        grid_rows=2,
+        num_blocks=2,
+        payload_tiles=1,
+        starting_sender_index=starting_sender_index,
+    )
+
+
 # ======== RAW PIPE (no host helper): SenderPipe + ReceiverPipe constructed BY HAND in the kernel ========
 # Every other test in this file drives the mcast through the host helpers (Mcast1D/Mcast2D own the
 # semaphores + logical->virtual coord math + the wire) and decodes it kernel-side with McastArgs. This
