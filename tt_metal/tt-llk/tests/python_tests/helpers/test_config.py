@@ -782,6 +782,7 @@ class TestConfig:
         compile_producer: bool,
         stimuli_only: str = None,
         use_stimuli: str = None,
+        collect_only: bool = False,
     ):
         TestConfig.WORKER_ID = worker_id
 
@@ -840,12 +841,14 @@ class TestConfig:
             )
             golden_generators_module.get_golden_generator = get_golden_proxied
 
-        # Always have a fresh build when compiling. Under xdist, only the
-        # controller may remove the shared artifact tree; workers can already
-        # be compiling variants under it.
+        # Start compilation from a clean artifact directory. With xdist, only
+        # the controller can safely remove shared artifacts because workers may
+        # already be writing to them. Skip cleanup during test collection so a
+        # subsequent consumer run can reuse the existing build.
         if (
             TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]
             and worker_id == "master"
+            and not collect_only
         ):
             shutil.rmtree(TestConfig.ARTEFACTS_DIR.absolute(), ignore_errors=True)
 
