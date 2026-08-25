@@ -142,25 +142,25 @@ void JitBuildEnv::init(
         this->gpp_ = "";
     }
 
-    // Use local development SFPI first, then an externally configured installation.
+    // Use local sfpi for development
+    // Use system sfpi for production to avoid packaging it
     // Ordered by precedence.
-    std::vector<std::string> sfpi_roots;
-    sfpi_roots.emplace_back(this->root_ + "runtime/sfpi");
-    sfpi_roots.emplace_back(parse_env<std::string>("SFPI_ROOT", "/opt/tenstorrent/sfpi"));
+    const std::array<std::string, 2> sfpi_roots = {
+        this->root_ + "runtime/sfpi", parse_env<std::string>("SFPI_ROOT", "/opt/tenstorrent/sfpi")};
 
     bool sfpi_found = false;
-    for (const auto& sfpi_root : sfpi_roots) {
-        auto gxx = sfpi_root + "/compiler/bin/riscv-tt-elf-g++";
+    for (unsigned i = 0; i < 2; ++i) {
+        auto gxx = sfpi_roots[i] + "/compiler/bin/riscv-tt-elf-g++";
         if (std::filesystem::exists(gxx)) {
             this->gpp_ += gxx + " ";
-            this->gpp_include_dir_ = sfpi_root + "/include";
-            log_debug(tt::LogBuildKernels, "Using sfpi at {}", sfpi_root);
+            this->gpp_include_dir_ = sfpi_roots[i] + "/include";
+            log_debug(tt::LogBuildKernels, "Using {} sfpi at {}", i ? "system" : "local", sfpi_roots[i]);
             sfpi_found = true;
             break;
         }
     }
     if (!sfpi_found) {
-        TT_THROW("sfpi not found in any configured location: {}", fmt::format("{}", fmt::join(sfpi_roots, ", ")));
+        TT_THROW("sfpi not found at {} or {}", sfpi_roots[0], sfpi_roots[1]);
     }
 
     // Flags
