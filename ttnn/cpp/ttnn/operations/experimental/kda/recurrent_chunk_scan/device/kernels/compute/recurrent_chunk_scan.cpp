@@ -14,33 +14,47 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
+constexpr uint32_t largest_divisor_at_most(uint32_t value, uint32_t limit) {
+    for (uint32_t divisor = limit; divisor > 1; --divisor) {
+        if (value % divisor == 0) {
+            return divisor;
+        }
+    }
+    return 1;
+}
+
+template <uint32_t Mt, uint32_t Kt, uint32_t Nt, bool Tr>
 inline __attribute__((always_inline)) void matrix_multiply(
-    uint32_t a_id,
-    uint32_t b_id,
-    uint32_t output_id,
-    DataflowBuffer& output,
-    uint32_t rows,
-    uint32_t inner,
-    uint32_t columns,
-    bool transpose_b) {
-    output.reserve_back(rows * columns);
+    uint32_t a_id, uint32_t b_id, uint32_t output_id, DataflowBuffer& output) {
+    constexpr uint32_t dst_tiles =
+        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
+    constexpr uint32_t subblock_columns = largest_divisor_at_most(Nt, dst_tiles);
+    constexpr uint32_t subblock_rows = largest_divisor_at_most(Mt, dst_tiles / subblock_columns);
+    static_assert(subblock_rows * subblock_columns <= dst_tiles);
+
+    output.reserve_back(Mt * Nt);
     pack_reconfig_data_format(output_id);
     reconfig_data_format(b_id, a_id);
-    matmul_init(a_id, b_id, transpose_b ? 1 : 0);
-    for (uint32_t row = 0; row < rows; row++) {
-        for (uint32_t column = 0; column < columns; column++) {
+    matmul_block_init(a_id, b_id, Tr, subblock_columns, subblock_rows, Kt);
+    for (uint32_t row_start = 0; row_start < Mt; row_start += subblock_rows) {
+        for (uint32_t column_start = 0; column_start < Nt; column_start += subblock_columns) {
             tile_regs_acquire();
-            for (uint32_t index = 0; index < inner; index++) {
-                const uint32_t b_index = transpose_b ? (column * inner + index) : (index * columns + column);
-                matmul_tiles(a_id, b_id, row * inner + index, b_index, 0);
+            for (uint32_t k = 0; k < Kt; ++k) {
+                const uint32_t b_index = Tr ? column_start * Kt + k : k * Nt + column_start;
+                matmul_block(a_id, b_id, row_start * Kt + k, b_index, 0, Tr, subblock_columns, subblock_rows, Kt);
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, output_id, row * columns + column);
+            for (uint32_t row = 0; row < subblock_rows; ++row) {
+                for (uint32_t column = 0; column < subblock_columns; ++column) {
+                    pack_tile(
+                        row * subblock_columns + column, output_id, (row_start + row) * Nt + column_start + column);
+                }
+            }
             tile_regs_release();
         }
     }
-    output.push_back(rows * columns);
+    output.push_back(Mt * Nt);
 }
 
 inline __attribute__((always_inline)) void elementwise(
@@ -97,6 +111,7 @@ inline __attribute__((always_inline)) void multiply_by_decay(
     output.push_back(key_tiles * value_tiles);
 }
 
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
 inline __attribute__((always_inline)) void summary_step(
     DataflowBuffer& current_state,
     DataflowBuffer& destination,
@@ -108,34 +123,22 @@ inline __attribute__((always_inline)) void summary_step(
     DataflowBuffer& scratch,
     DataflowBuffer& value_new,
     DataflowBuffer& state_update,
-    DataflowBuffer& state_temporary,
-    uint32_t chunk_tiles,
-    uint32_t key_tiles,
-    uint32_t value_tiles) {
-    const uint32_t cv = chunk_tiles * value_tiles;
-    const uint32_t kv = key_tiles * value_tiles;
+    DataflowBuffer& state_temporary) {
+    constexpr uint32_t cv = Ct * Vt;
+    constexpr uint32_t kv = Kt * Vt;
     current_state.wait_front(kv);
-    matrix_multiply(dfb::kd, current_state.get_id(), dfb::scratch, scratch, chunk_tiles, key_tiles, value_tiles, false);
+    matrix_multiply<Ct, Kt, Vt, false>(dfb::kd, current_state.get_id(), dfb::scratch, scratch);
     scratch.wait_front(cv);
     elementwise(dfb::v_beta, dfb::scratch, dfb::value_new, value_new, cv, 1);
     value_new.wait_front(cv);
     scratch.pop_front(cv);
-    matrix_multiply(dfb::t_inv, dfb::value_new, dfb::scratch, scratch, chunk_tiles, chunk_tiles, value_tiles, false);
+    matrix_multiply<Ct, Ct, Vt, false>(dfb::t_inv, dfb::value_new, dfb::scratch, scratch);
     scratch.wait_front(cv);
     value_new.pop_front(cv);
-    matrix_multiply(
-        dfb::k_decay_transposed,
-        dfb::scratch,
-        dfb::state_update,
-        state_update,
-        key_tiles,
-        chunk_tiles,
-        value_tiles,
-        false);
+    matrix_multiply<Kt, Ct, Vt, false>(dfb::k_decay_transposed, dfb::scratch, dfb::state_update, state_update);
     state_update.wait_front(kv);
     scratch.pop_front(cv);
-    multiply_by_decay(
-        current_state.get_id(), dfb::final_decay, dfb::state_temporary, state_temporary, key_tiles, value_tiles);
+    multiply_by_decay(current_state.get_id(), dfb::final_decay, dfb::state_temporary, state_temporary, Kt, Vt);
     state_temporary.wait_front(kv);
     elementwise(dfb::state_temporary, dfb::state_update, destination.get_id(), destination, kv, 0);
     current_state.pop_front(kv);
@@ -184,7 +187,7 @@ TT_KERNEL void compute(uint32_t num_chunks) {
             t_inv.wait_front(cc);
             k_decay_transposed.wait_front(kc);
             final_decay.wait_front(Kt);
-            summary_step(
+            summary_step<Ct, Kt, Vt>(
                 current_b,
                 last ? final_state : state_ring,
                 kd,
@@ -195,11 +198,8 @@ TT_KERNEL void compute(uint32_t num_chunks) {
                 scratch,
                 value_new,
                 state_update,
-                state_temporary,
-                Ct,
-                Kt,
-                Vt);
-            summary_step(
+                state_temporary);
+            summary_step<Ct, Kt, Vt>(
                 current_ab,
                 last ? summary_raw : summary_ring,
                 kd,
@@ -210,10 +210,7 @@ TT_KERNEL void compute(uint32_t num_chunks) {
                 scratch,
                 value_new,
                 state_update,
-                state_temporary,
-                Ct,
-                Kt,
-                Vt);
+                state_temporary);
             kd.pop_front(ck);
             v_beta.pop_front(cv);
             t_inv.pop_front(cc);
@@ -231,7 +228,7 @@ TT_KERNEL void compute(uint32_t num_chunks) {
 
             kd.wait_front(ck);
             current_state.wait_front(kv);
-            matrix_multiply(dfb::kd, current_state.get_id(), dfb::scratch, scratch, Ct, Kt, Vt, false);
+            matrix_multiply<Ct, Kt, Vt, false>(dfb::kd, current_state.get_id(), dfb::scratch, scratch);
             scratch.wait_front(cv);
             kd.pop_front(ck);
             v_beta.wait_front(cv);
@@ -240,18 +237,18 @@ TT_KERNEL void compute(uint32_t num_chunks) {
             v_beta.pop_front(cv);
             scratch.pop_front(cv);
             t_inv.wait_front(cc);
-            matrix_multiply(dfb::t_inv, dfb::output_intermediate, dfb::value_new, value_new, Ct, Ct, Vt, false);
+            matrix_multiply<Ct, Ct, Vt, false>(dfb::t_inv, dfb::output_intermediate, dfb::value_new, value_new);
             value_new.wait_front(cv);
             t_inv.pop_front(cc);
             output_intermediate.pop_front(cv);
 
             q_decay.wait_front(ck);
-            matrix_multiply(
-                dfb::q_decay, current_state.get_id(), dfb::output_intermediate, output_intermediate, Ct, Kt, Vt, false);
+            matrix_multiply<Ct, Kt, Vt, false>(
+                dfb::q_decay, current_state.get_id(), dfb::output_intermediate, output_intermediate);
             output_intermediate.wait_front(cv);
             q_decay.pop_front(ck);
             intra.wait_front(cc);
-            matrix_multiply(dfb::intra, dfb::value_new, dfb::scratch, scratch, Ct, Ct, Vt, false);
+            matrix_multiply<Ct, Ct, Vt, false>(dfb::intra, dfb::value_new, dfb::scratch, scratch);
             scratch.wait_front(cv);
             intra.pop_front(cc);
             elementwise(dfb::output_intermediate, dfb::scratch, dfb::output, output, cv, 0);
@@ -259,8 +256,8 @@ TT_KERNEL void compute(uint32_t num_chunks) {
             scratch.pop_front(cv);
 
             k_decay_transposed.wait_front(kc);
-            matrix_multiply(
-                dfb::k_decay_transposed, dfb::value_new, dfb::state_update, state_update, Kt, Ct, Vt, false);
+            matrix_multiply<Kt, Ct, Vt, false>(
+                dfb::k_decay_transposed, dfb::value_new, dfb::state_update, state_update);
             state_update.wait_front(kv);
             k_decay_transposed.pop_front(kc);
             value_new.pop_front(cv);
