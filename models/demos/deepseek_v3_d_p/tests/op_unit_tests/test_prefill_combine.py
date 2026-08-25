@@ -10,6 +10,7 @@ PyTorch reference implementation when combining expert outputs back to token pos
 Uses torch-generated dispatch inputs to isolate the combine operation.
 """
 
+import os
 import sys
 from dataclasses import dataclass
 
@@ -293,6 +294,13 @@ def run_combine(
     if use_fp8_output:
         torch_output = torch_output.to(torch.float8_e4m3fn).to(torch.bfloat16)
 
+    # EXPERIMENT, not for commit: lets the Phase 4 SF_SLOTS sweep vary ring depth without a
+    # parametrize axis, so every point keeps the same test id and the device-time samples stay
+    # comparable. Unset reproduces the caller's value exactly.
+    _slots_override = os.getenv("TT_DS_SF_SLOTS")
+    if _slots_override:
+        staging_slots_per_stream = int(_slots_override)
+
     # Run ttnn combine
     staging_buffer = (
         make_combine_staging_buffer(
@@ -420,7 +428,10 @@ SINGLE_GLX_AND_PROXY_MESHES = _Test_Mesh(
     {
         # Ideally all would run torus XY, but some HW configurations like LB/QB cannot support
         # rings in all configurations. Pick fabric option as representative as possible.
-        (8, 4): ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        # A quad-member galaxy is one such configuration: its 8-axis wrap leaves the host for the
+        # neighbouring galaxy, so the axis is a line locally and a torus MGD fails to map onto it.
+        # Linear at extent 8 is also the deeper relay test -- 6 levels against the torus's 3.
+        (8, 4): ttnn.FabricConfig.FABRIC_2D,
         (8, 1): ttnn.FabricConfig.FABRIC_1D_RING,  # unexpectedly FABRIC_2D variants hang
         (4, 2): ttnn.FabricConfig.FABRIC_2D,
         (4, 1): ttnn.FabricConfig.FABRIC_1D_RING,  # unexpectedly FABRIC_2D variants hang
@@ -502,7 +513,7 @@ def _cross_product_conflated_cmb_test_dimensions():
     params = []
     for model_name, model_config_class, is_extended_model, test_meshes in COMBINE_MODELS:
         for target_mesh, fabric_cfg in test_meshes.target_meshes.items():
-            device_params = fabric_to_device_params(fabric_cfg)
+            device_params = fabric_to_device_params(fabric_cfg, payload_tail_bytes=COMBINE_SF_TAIL_BYTES)
             fabric_topo = _fabric_cfg_to_fabric_topo_for_cmb_op(fabric_cfg)
             topo_marker = _topo_marker(target_mesh, fabric_cfg)
             mesh_requirements_marker = pytest.mark.requires_mesh_topology(mesh_shape=target_mesh, topology=topo_marker)
@@ -611,6 +622,11 @@ def test_ttnn_combine(
         use_fp8_output,
         is_ci_env,
         is_ci_v2_env,
+        # EXPERIMENT, not for commit: matches the store-and-forward entrypoint's invocation count so
+        # the two can be compared warm-to-warm. With the default of 1 this test yields only a cold
+        # sample, and the relay path's first invocation is far slower than its steady state, so a
+        # one-versus-three comparison reads as a regression that is really a cold/warm mismatch.
+        invocations=3,
     )
 
 
@@ -653,7 +669,11 @@ def test_ttnn_combine_store_and_forward(
         dispatch_buffer_capacity_factor,
         num_links,
         topology,
-        True,  # predictable data: a routing bug reads as a specific wrong token, not noise
+        # Predictable inputs make a routing bug read as a specific wrong token rather than noise, which
+        # is worth having wherever the output is actually checked.  The perf scenarios do not check it,
+        # and run_combine skips predictable data on 8 or more chips, so tying this to run_pcc_check is
+        # what lets the perf geometry -- production top-k, full expert count -- run at all.
+        run_pcc_check,
         run_pcc_check,
         dispatched_buffer_layout,
         False,  # bf16 output
@@ -749,24 +769,62 @@ def test_ttnn_combine_store_and_forward_rejects(
 # The credit protocol is only exercised when a ring actually fills. At the default depth that may
 # never happen on a small test, so this pins the depth to the minimum the op accepts: every stream
 # is then permanently full and every token pays the credit round trip. It is also the shape a
-# deadlock would take, which is why it runs on the deepest local mesh with several invocations.
-@pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2")
+# deadlock would take, which is why it runs with several invocations.
+#
+# Both meshes matter and neither substitutes for the other, because credit pressure is per level
+# and the two meshes have very different level counts: extent 4 has 2 relay levels, extent 8 has 6.
+# Pinning every ring to its minimum on the deeper mesh is what puts a credit cycle across levels
+# within reach. Neither is a ring, so both still owe the cyclic case to a 32x4 quad run — on a line
+# the staging FIFOs are acyclic by chip position, which is exactly what the level index has to
+# supply on a ring.
+# The expert counts differ because experts_per_chip is num_routed_experts // num_devices and must
+# stay >= 1: 8 experts over 32 chips is zero, so the 8x4 case carries the same numbers the 8x4 pcc
+# scenario scales down to (32 experts, top-2). Note Blackhole skips any mesh that is not the whole
+# machine, so exactly one of these two runs on a given host.
 @pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [((4, 2), fabric_to_device_params(ttnn.FabricConfig.FABRIC_2D))],
-    indirect=True,
+    "mesh_device, device_params, topology, num_routed_experts, num_experts_per_tok",
+    [
+        pytest.param(
+            (4, 2),
+            fabric_to_device_params(ttnn.FabricConfig.FABRIC_2D),
+            ttnn.Topology.Linear,
+            8,
+            4,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="mesh-4x2",
+        ),
+        pytest.param(
+            (8, 4),
+            fabric_to_device_params(ttnn.FabricConfig.FABRIC_2D),
+            ttnn.Topology.Linear,
+            32,
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2link"])
-def test_ttnn_combine_store_and_forward_tight_rings(mesh_device, device_params, num_links, is_ci_env, is_ci_v2_env):
+def test_ttnn_combine_store_and_forward_tight_rings(
+    mesh_device,
+    device_params,
+    topology,
+    num_routed_experts,
+    num_experts_per_tok,
+    num_links,
+    is_ci_env,
+    is_ci_v2_env,
+):
     run_combine(
         mesh_device,
         128,
         7168,
-        8,
-        4,
+        num_routed_experts,
+        num_experts_per_tok,
         4,
         num_links,
-        ttnn.Topology.Linear,
+        topology,
         True,
         True,
         ttnn.TILE_LAYOUT,

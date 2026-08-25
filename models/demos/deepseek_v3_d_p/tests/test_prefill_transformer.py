@@ -151,7 +151,14 @@ def run_model(
     is_ci_v2_env,
     tokenizer,
     request,
+    use_store_and_forward=None,
 ):
+    # An env var rather than a parametrize axis: the A/B needs two runs that are identical in every
+    # other respect, including test id, so the two device-time samples are comparable. Defaults off,
+    # so an unset environment reproduces the pre-existing behaviour exactly.
+    if use_store_and_forward is None:
+        use_store_and_forward = os.getenv("TT_DS_COMBINE_STORE_AND_FORWARD") == "1"
+
     torch.manual_seed(42)
 
     if use_pretrained and not variant.supports_pretrained:
@@ -397,7 +404,9 @@ def run_model(
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,
         lm_head_is_column_parallel=True,
+        use_store_and_forward=use_store_and_forward,
     )
+    logger.info(f"combine store-and-forward: {'ON' if use_store_and_forward else 'off'}")
     ttnn.ReadDeviceProfiler(mesh_device)
     ttnn.synchronize_device(mesh_device)
 
@@ -854,7 +863,10 @@ def run_model(
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
-    [(SEQ_LEN_1K, 8), (SEQ_LEN_25K, 8)],
+    # 5K is the production chunked-prefill chunk size (5120 / sp_factor 8 = 640 tokens per chip),
+    # which is the geometry the MoE dispatch/combine perf captures were taken at. The kimi and glm
+    # entrypoints below already carry it.
+    [(SEQ_LEN_1K, 8), (SEQ_LEN_5K, 8), (SEQ_LEN_25K, 8)],
 )
 @pytest.mark.parametrize(
     "num_layers",

@@ -73,6 +73,17 @@ constexpr uint32_t EOS_BIAS = 1u << 30;
 // per-link numbers to sweep against.
 constexpr uint32_t BUMP_EVERY = 8;
 
+// How many staged pages one relay pass reads before it waits for any of them.  A page-at-a-time read
+// followed immediately by a barrier leaves the reader idle for the whole of each page's DRAM latency;
+// issuing the batch first overlaps those latencies.  Measured worth on an 8x4 line at extent 8, one
+// link: 2 pages beat 1 by 10%, which is real but only a tenth of the gap to the non-relaying path --
+// the reader is on the critical path, but its read latency is not the whole of why.
+// This only pays if the reader->writer queue can hold a batch: at queue depth 4 a batch of 2 was
+// SLOWER than no batching, because two free pages were rarely available and the pass paid the
+// gather cost for nothing.  The kernel caps each batch at the distance to the queue's circular wrap,
+// so no alignment between the two is required.
+constexpr uint32_t BATCH = 4;
+
 // Longest shortest-path hop count on the combine axis.
 constexpr uint32_t max_distance(uint32_t extent, bool is_ring) { return is_ring ? (extent / 2) : (extent - 1); }
 

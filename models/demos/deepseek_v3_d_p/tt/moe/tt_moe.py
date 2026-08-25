@@ -213,6 +213,8 @@ class TtMoe(LightweightModule):
         latent_use_norm: bool = True,
         rms_norm_eps: float = 1e-5,
         max_gate_seq_len_per_chip: Optional[int] = None,
+        use_store_and_forward: bool = False,
+        combine_staging_buffer=None,
     ):
         """
         Initialize TtMoe module.
@@ -449,6 +451,10 @@ class TtMoe(LightweightModule):
             num_links=self.row_num_links,
             topology=self.row_topology,
             init_zeros=False,
+            use_store_and_forward=use_store_and_forward,
+            # Injected, never allocated here: one buffer serves every layer, so allocating per MoE
+            # instance would multiply the DRAM by the layer count for no benefit.
+            staging_buffer=combine_staging_buffer,
         )
 
         # Build (group, chip, local_expert) -> global expert id table, sharded

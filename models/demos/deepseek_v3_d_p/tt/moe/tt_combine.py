@@ -101,6 +101,34 @@ def make_combine_staging_buffer(
     )
 
 
+def make_combine_staging_buffer_for_moe(
+    mesh_device,
+    emb_dim,
+    num_links,
+    topology,
+    output_dtype=ttnn.bfloat16,
+    slots_per_stream=16,
+):
+    """Allocate the shared staging buffer from TtMoe's per-axis num_links / topology arguments.
+
+    Combine runs on the row axis (cluster_axis=0), so only the row half of a per-axis tuple applies.
+    Callers allocating the buffer sit above TtMoe and would otherwise have to re-derive that
+    convention; keeping it here means the buffer and the op that reads it cannot disagree about
+    which axis they were sized for.
+    """
+    row_num_links = num_links[0] if isinstance(num_links, tuple) else num_links
+    row_topology = topology[0] if isinstance(topology, tuple) else topology
+    return make_combine_staging_buffer(
+        mesh_device,
+        emb_dim,
+        output_dtype=output_dtype,
+        num_links=row_num_links,
+        topology=row_topology,
+        cluster_axis=0,
+        slots_per_stream=slots_per_stream,
+    )
+
+
 class TtCombineModule(LightweightModule):
     """TTNN wrapper around the prefill_combine device operation.
 

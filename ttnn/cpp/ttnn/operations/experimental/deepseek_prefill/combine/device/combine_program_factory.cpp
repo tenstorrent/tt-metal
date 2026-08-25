@@ -173,9 +173,18 @@ SfPlan build_sf_plan(
         "queue header needs {} bytes but the DRAM alignment only affords {}",
         sf::HDR_WORDS * sizeof(uint32_t),
         plan.hdr_bytes);
-    // Two is the minimum that lets a read overlap a send; deeper only pays once several reads are
-    // in flight, which needs the batched path.
-    plan.ring_depth = 4;
+    // Two is the minimum that lets a read overlap a send.  Deeper than that exists for the batched
+    // relay path: a batch only forms when that many pages are free at once, and at depth 4 the
+    // writer plus the single-page control and injection pushes keep the queue too full for two to be
+    // free often enough to matter.
+    plan.ring_depth = 8;
+    // A batch has to fit at all; the kernel handles the circular wrap itself by capping each batch at
+    // the distance to it, so no alignment between the two is required.
+    TT_FATAL(
+        plan.ring_depth >= sf::BATCH,
+        "reader->writer queue depth {} cannot hold a relay batch of {}",
+        plan.ring_depth,
+        sf::BATCH);
 
     const auto& staging = tensor_args.staging_buffer.value();
     const uint32_t staging_pages = (uint32_t)staging.buffer()->num_pages();
@@ -759,6 +768,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         fabric_defines["SF_NEIGHBOUR"] = ccl::common::stringify(sf_plan.neighbour);
         fabric_defines["SF_HDR_BYTES"] = std::to_string(sf_plan.hdr_bytes);
         fabric_defines["SF_RING_DEPTH"] = std::to_string(sf_plan.ring_depth);
+        fabric_defines["SF_BATCH"] = std::to_string(sf::BATCH);
         fabric_defines["SF_NUM_CORES"] = std::to_string(num_cores);
         fabric_defines["SF_NO_NEIGHBOUR"] = std::to_string(SfPlan::NO_NEIGHBOUR);
     }
@@ -1113,6 +1123,28 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         std::map<std::string, std::string> writer_untilize_defines;
         writer_untilize_defines["IS_TILE_LAYOUT"] = is_tile_layout ? "1" : "0";
         writer_untilize_defines["INIT_ZEROS"] = init_zeros ? "1" : "0";
+        // Hop count from this chip to every chip, indexed by the linearized coord that row metadata
+        // already carries.  Precomputed here because the untilizer kernel knows its own coord but not
+        // the mesh shape or topology, and a table lookup keyed on metadata[0] costs it one load.
+        // Combine only ever communicates along one axis, so the distance is the axis distance --
+        // wrapped for a ring, plain for a line.
+        {
+            const auto& mv = mesh_device->get_view();
+            const uint32_t ax = operation_attributes.axis.value_or(0);
+            const uint32_t cols = mv.num_cols();
+            const uint32_t ext = ax == 0 ? mv.num_rows() : cols;
+            const bool ring = operation_attributes.topology == tt::tt_fabric::Topology::Ring;
+            const uint32_t self_pos = ax == 0 ? linearized_mesh_coord / cols : linearized_mesh_coord % cols;
+            const uint32_t total_chips = mv.num_rows() * cols;
+            std::vector<uint32_t> dist_lut(total_chips, 0);
+            for (uint32_t c = 0; c < total_chips; c++) {
+                const uint32_t c_pos = ax == 0 ? c / cols : c % cols;
+                const uint32_t raw = c_pos > self_pos ? c_pos - self_pos : self_pos - c_pos;
+                dist_lut[c] = ring ? std::min(raw, ext - raw) : raw;
+            }
+            writer_untilize_defines["FWD_DIST_LUT"] = ccl::common::stringify(dist_lut);
+            writer_untilize_defines["FWD_NUM_CHIPS"] = std::to_string(total_chips);
+        }
 
         tt::tt_metal::KernelDescriptor writer_untilize_kd;
         writer_untilize_kd.kernel_source =

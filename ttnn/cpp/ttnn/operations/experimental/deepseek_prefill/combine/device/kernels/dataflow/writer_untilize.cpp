@@ -116,6 +116,20 @@ void kernel_main() {
     constexpr uint32_t aligned_experts_tok_counter_page_size =
         get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 3);
     constexpr uint32_t read_batch_size = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 4);
+
+    // Order rows are handed to the network within one batch.
+    //   0 NATIVE          -- the untilizer's own expert/batch walk, no sort
+    //   1 FARTHEST_FIRST  -- descending distance; the effect the reference implementation reports
+    //   2 NEAREST_FIRST   -- ascending distance; a control that pays the same sort but inverts it
+    // Three modes rather than two on purpose: sorting is not free, so NATIVE alone cannot separate
+    // the ordering effect from the cost of ordering.  If FARTHEST and NEAREST land together, only
+    // the overhead was measured.
+#define FWD_ORDER_NATIVE 0
+#define FWD_ORDER_FARTHEST 1
+#define FWD_ORDER_NEAREST 2
+#ifndef SF_FWD_ORDER
+#define SF_FWD_ORDER FWD_ORDER_NATIVE
+#endif
     constexpr uint32_t cb_metadata_batch_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 5);
     CircularBuffer cb_metadata_batch(cb_metadata_batch_id);
     constexpr uint32_t num_experts_per_tok = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 6);
@@ -258,7 +272,47 @@ void kernel_main() {
             uint32_t untilize_read_ptr = cb_untilize.get_read_ptr();
             uint32_t metadata_read_ptr = cb_metadata_batch.get_read_ptr();
 
-            for (uint32_t t = 0; t < batch_count; t++) {
+            // Row visit order for this batch.  Identity unless a distance sort is selected.
+            uint8_t fwd_order[read_batch_size];
+            for (uint32_t i = 0; i < batch_count; i++) {
+                fwd_order[i] = (uint8_t)i;
+            }
+#if SF_FWD_ORDER != FWD_ORDER_NATIVE
+            {
+                constexpr uint32_t fwd_dist_lut[FWD_NUM_CHIPS] = FWD_DIST_LUT;
+                // Insertion sort: batch_count is at most read_batch_size (32), so the quadratic term
+                // is small and the pass is branch-predictable.  Stable, so rows at equal distance keep
+                // the untilizer's original order and only the across-distance ordering changes.
+                for (uint32_t i = 1; i < batch_count; i++) {
+                    const uint8_t cur = fwd_order[i];
+                    const volatile tt_l1_ptr uint32_t* md_cur = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
+                        metadata_read_ptr + cur * aligned_dispatched_metadata_page_size);
+                    const uint32_t d_cur = fwd_dist_lut[md_cur[0]];
+                    uint32_t j = i;
+                    while (j > 0) {
+                        const volatile tt_l1_ptr uint32_t* md_prev =
+                            reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
+                                metadata_read_ptr + fwd_order[j - 1] * aligned_dispatched_metadata_page_size);
+                        const uint32_t d_prev = fwd_dist_lut[md_prev[0]];
+#if SF_FWD_ORDER == FWD_ORDER_FARTHEST
+                        if (d_prev >= d_cur) {
+                            break;
+                        }
+#else
+                        if (d_prev <= d_cur) {
+                            break;
+                        }
+#endif
+                        fwd_order[j] = fwd_order[j - 1];
+                        j--;
+                    }
+                    fwd_order[j] = cur;
+                }
+            }
+#endif
+
+            for (uint32_t ti = 0; ti < batch_count; ti++) {
+                const uint32_t t = fwd_order[ti];
                 const volatile tt_l1_ptr uint32_t* metadata = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(
                     metadata_read_ptr + t * aligned_dispatched_metadata_page_size);
                 uint32_t dst_chip = metadata[0];

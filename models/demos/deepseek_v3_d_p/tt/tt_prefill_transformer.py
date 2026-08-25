@@ -24,6 +24,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reverse_reorder_tensor_chunks
+from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import make_combine_staging_buffer_for_moe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
@@ -146,6 +147,7 @@ class TtPrefillTransformer(LightweightModule):
         is_last_rank: bool = True,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
+        use_store_and_forward: bool = False,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -200,6 +202,27 @@ class TtPrefillTransformer(LightweightModule):
         # length so the block's flat KV slot (cache_user_id * layer_num + cache_layer_idx)
         # matches the per-rank cache sized to num_layers. With kv_only_last_layer, the last block is
         # built kv_only=True (only attn_norm + the KV branch of MLA).
+        # One staging buffer for every layer's combine. It holds no state across invocations, so
+        # per-layer allocation would multiply the DRAM by the layer count for nothing. Built here
+        # rather than in TtMoe because this is the only scope that spans all the layers sharing it.
+        # Returns None on a mesh too shallow for any relay to exist, which the combine module accepts
+        # as "path inert" rather than as a missing buffer.
+        # Sized on the ROUTED width, which is what combine moves -- for a latent MoE that is narrower
+        # than hidden_size, and a page sized on the wrong one still moves the right byte count while
+        # putting the routing tail at an offset the device does not read. Derived exactly as
+        # TtPrefillBlock derives it, so the two cannot diverge.
+        _routed_emb_dim = getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None) or config.hidden_size
+        self.combine_staging_buffer = (
+            make_combine_staging_buffer_for_moe(
+                mesh_device,
+                _routed_emb_dim,
+                num_links=num_links,
+                topology=topology,
+            )
+            if use_store_and_forward
+            else None
+        )
+
         self.layers = []
         for local_idx in range(num_layers):
             layer_idx = first_layer_idx + local_idx
@@ -235,6 +258,8 @@ class TtPrefillTransformer(LightweightModule):
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
                 sparse_kv_cache_format=sparse_kv_cache_format,
                 overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+                use_store_and_forward=use_store_and_forward,
+                combine_staging_buffer=self.combine_staging_buffer,
             )
             self.layers.append(layer)
 

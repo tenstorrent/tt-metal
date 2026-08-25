@@ -241,6 +241,11 @@ void kernel_main() {
     uint32_t sf_cred_pending[2][sf_levels] = {};
     uint32_t sf_arrived_pending[2][sf_levels] = {};
     uint32_t sf_transit_run = 0;
+    // Which page of the reader->writer queue the next push lands on.  Needed because a batch is
+    // written as one contiguous run: a bulk reserve that starts near the end of the queue wraps,
+    // and the wrapped pages are NOT contiguous with the first.  Single-page control and injection
+    // pushes leave the write pointer on any index, so batch alignment cannot be assumed.
+    uint32_t sf_cb_wr = 0;
 
     auto sf_arrived_raw = [&](uint32_t d, uint32_t r) {
         invalidate_l1_cache();
@@ -405,6 +410,7 @@ void kernel_main() {
             hdr[sf::HDR_INC_VALUE] = value;
             hdr[sf::HDR_INC_DIR] = d;
             cb_push_back(cb_route_info_id, 1);
+            sf_cb_wr = (sf_cb_wr + 1) % SF_RING_DEPTH;
         };
 
         // An arrival travels with the data it accounts for; a credit travels back against it, so it
@@ -430,59 +436,117 @@ void kernel_main() {
             return sf_closed(d, r) && sf_pool_rd[d][r - 1] == sf_total(d, r);
         };
 
-        // Relay a page one hop.  Which FIFO it came out of tells us everything: the direction, the
-        // outbound FIFO, and whether this hop is the last one.
-        auto sf_try_transit = [&]() {
-            for (uint32_t d = 0; d < 2; d++) {
-                for (uint32_t r = 1; r <= sf_levels; r++) {
+        // Relay up to SF_BATCH pages one hop.  Which FIFO a page came out of tells us everything:
+        // the direction, the outbound FIFO, and whether this hop is the last one.
+        //
+        // Every read is issued before any of them is waited on.  A read-then-barrier per page leaves
+        // the reader idle for the whole of each page's DRAM latency, and that is measurably the
+        // binding constraint -- the reader sits at 100% of the op's kernel duration while compute
+        // idles and DRAM bandwidth is far from saturated.
+        //
+        // Returns the number of pages moved, not a flag: the caller's fairness quantum counts relay
+        // steps against injections, so reporting a batch as a single step would let one relay pass
+        // starve the untilizers by up to SF_BATCH times as long.
+        constexpr uint32_t SF_BATCH_N = SF_BATCH;
+        constexpr uint32_t sf_queue_stride = sf_hdr_bytes + SF_PAGE_BYTES;
+        auto sf_try_transit = [&]() -> uint32_t {
+            uint32_t picked_d[SF_BATCH_N];
+            uint32_t picked_r[SF_BATCH_N];
+            uint32_t picked_page[SF_BATCH_N];
+            uint32_t n = 0;
+
+            // Never gather more pages than the queue can already take.  Blocking for a whole batch
+            // deadlocks: the writer frees these slots, but the writer can be waiting on a credit or
+            // arrival increment that only this reader emits -- and emitting one needs a slot of its
+            // own.  Capping at what is reservable right now keeps the single-page fallback, whose
+            // liveness the one-at-a-time path already relied on.
+            // Stop the batch at the wrap: past it the pages are not contiguous with the first.
+            uint32_t batch_cap = SF_RING_DEPTH - sf_cb_wr;
+            if (batch_cap > SF_BATCH_N) {
+                batch_cap = SF_BATCH_N;
+            }
+            while (batch_cap > 1 && !cb_pages_reservable_at_back(cb_route_info_id, batch_cap)) {
+                batch_cap--;
+            }
+
+            // No cross-pick accounting is needed here, and that is a property of the loop shape
+            // rather than luck: each (direction, level) is visited once per pass and yields at most
+            // one page, so every pick in a batch comes from a distinct source FIFO and targets a
+            // distinct downstream FIFO.  Two picks can therefore never contend for one source slot
+            // or one destination slot.  Widening this loop to take several pages from one FIFO would
+            // break that and would need explicit per-pick slot accounting -- which is exactly the
+            // kind of bug that keeps the traffic volume right and silently corrupts the contents.
+            for (uint32_t d = 0; d < 2 && n < batch_cap; d++) {
+                for (uint32_t r = 1; r <= sf_levels && n < batch_cap; r++) {
                     if (!sf_in_live(d, r) || sf_pool_rd[d][r - 1] == sf_total(d, r)) {
                         continue;
                     }
                     if (!sf_has_room(d, r - 1)) {
                         continue;  // downstream full: try another source rather than wait
                     }
-                    const uint32_t page = sf_base_page(d, r) + (sf_pool_rd[d][r - 1] & SF_SLOT_MASK);
-                    cb_reserve_back(cb_route_info_id, 1);
-                    const uint32_t cb_base = get_write_ptr(cb_route_info_id);
-                    const uint32_t payload = cb_base + sf_hdr_bytes;
-                    noc_async_read(
-                        sf_staging_gen.get_noc_addr(page), payload, aligned_output_page_size + sf::tail_bytes());
-                    noc_async_read_barrier();
-
-                    volatile tt_l1_ptr uint32_t* tail =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(payload + aligned_output_page_size);
-                    const uint32_t final_chip = tail[sf::TAIL_FINAL_DST_CHIP];
-                    // Reading an unwritten page means the arrival accounting is off by one, which
-                    // would otherwise show up as a single wrong token rather than as a failure.
-                    ASSERT(tail[sf::TAIL_MAGIC] == sf::MAGIC);
-                    // The level a page sits at must equal its real remaining distance.  Checking the
-                    // invariant beats checking a copy of it that every hop would have to re-stamp.
-                    // Hoisted out of ASSERT: the macro cannot carry the template argument commas.
-                    const uint32_t observed_hops =
-                        manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, final_chip);
-                    ASSERT(observed_hops == r);
-
-                    volatile tt_l1_ptr uint32_t* hdr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base);
-                    hdr[sf::HDR_ROUTE] = sf_dir_route[d];
-                    hdr[sf::HDR_DISTANCE] = 1;
-                    hdr[sf::HDR_DST_CHIP] = sf_neighbour[d];
-                    hdr[sf::HDR_INC_DIR] = d;
-                    if (r == 1) {
-                        hdr[sf::HDR_CMD] = sf::CMD_FINAL_WRITE;
-                        hdr[sf::HDR_PAGE_IDX] = tail[sf::TAIL_OUTPUT_PAGE_IDX];
-                    } else {
-                        hdr[sf::HDR_CMD] = sf::CMD_STAGE;
-                        hdr[sf::HDR_PAGE_IDX] = sf_base_page(d, r - 1) + (sf_staged[d][r - 2] & SF_SLOT_MASK);
-                        sf_staged[d][r - 2]++;
-                        sf_arrived_pending[d][r - 2]++;
-                    }
-                    cb_push_back(cb_route_info_id, 1);
-                    sf_pool_rd[d][r - 1]++;
-                    sf_cred_pending[d][r - 1]++;
-                    return true;
+                    picked_d[n] = d;
+                    picked_r[n] = r;
+                    picked_page[n] = sf_base_page(d, r) + (sf_pool_rd[d][r - 1] & SF_SLOT_MASK);
+                    n++;
                 }
             }
-            return false;
+            if (n == 0) {
+                return 0;
+            }
+
+            // One reserve for the whole batch.  These n pages are a contiguous run from the write
+            // pointer because batch_cap above stopped short of the wrap: a bulk reserve that crosses
+            // it hands back pages that are not adjacent to the first, and writing them as a run
+            // scribbles past the end of the queue.
+            cb_reserve_back(cb_route_info_id, n);
+            const uint32_t batch_base = get_write_ptr(cb_route_info_id);
+            for (uint32_t i = 0; i < n; i++) {
+                noc_async_read(
+                    sf_staging_gen.get_noc_addr(picked_page[i]),
+                    batch_base + i * sf_queue_stride + sf_hdr_bytes,
+                    aligned_output_page_size + sf::tail_bytes());
+            }
+            noc_async_read_barrier();
+
+            for (uint32_t i = 0; i < n; i++) {
+                const uint32_t d = picked_d[i];
+                const uint32_t r = picked_r[i];
+                const uint32_t cb_base = batch_base + i * sf_queue_stride;
+                const uint32_t payload = cb_base + sf_hdr_bytes;
+
+                volatile tt_l1_ptr uint32_t* tail =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(payload + aligned_output_page_size);
+                const uint32_t final_chip = tail[sf::TAIL_FINAL_DST_CHIP];
+                // Reading an unwritten page means the arrival accounting is off by one, which
+                // would otherwise show up as a single wrong token rather than as a failure.
+                ASSERT(tail[sf::TAIL_MAGIC] == sf::MAGIC);
+                // The level a page sits at must equal its real remaining distance.  Checking the
+                // invariant beats checking a copy of it that every hop would have to re-stamp.
+                // Hoisted out of ASSERT: the macro cannot carry the template argument commas.
+                const uint32_t observed_hops =
+                    manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, final_chip);
+                ASSERT(observed_hops == r);
+
+                volatile tt_l1_ptr uint32_t* hdr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base);
+                hdr[sf::HDR_ROUTE] = sf_dir_route[d];
+                hdr[sf::HDR_DISTANCE] = 1;
+                hdr[sf::HDR_DST_CHIP] = sf_neighbour[d];
+                hdr[sf::HDR_INC_DIR] = d;
+                if (r == 1) {
+                    hdr[sf::HDR_CMD] = sf::CMD_FINAL_WRITE;
+                    hdr[sf::HDR_PAGE_IDX] = tail[sf::TAIL_OUTPUT_PAGE_IDX];
+                } else {
+                    hdr[sf::HDR_CMD] = sf::CMD_STAGE;
+                    hdr[sf::HDR_PAGE_IDX] = sf_base_page(d, r - 1) + (sf_staged[d][r - 2] & SF_SLOT_MASK);
+                    sf_staged[d][r - 2]++;
+                    sf_arrived_pending[d][r - 2]++;
+                }
+                sf_pool_rd[d][r - 1]++;
+                sf_cred_pending[d][r - 1]++;
+            }
+            cb_push_back(cb_route_info_id, n);
+            sf_cb_wr = (sf_cb_wr + n) % SF_RING_DEPTH;
+            return n;
         };
 
         // Peek the head of each untilizer ring and only commit once the destination has room.  A row
@@ -554,6 +618,7 @@ void kernel_main() {
                     sf_arrived_pending[d][target_level - 1]++;
                 }
                 cb_push_back(cb_route_info_id, 1);
+                sf_cb_wr = (sf_cb_wr + 1) % SF_RING_DEPTH;
                 noc_semaphore_inc<true>(untilizer_credits_noc_addrs[c], 1);
                 return true;
             }
@@ -614,10 +679,12 @@ void kernel_main() {
         while (!sf_all_done()) {
             bool progressed = false;
             if (sf_transit_run < SF_INJ_QUANTUM) {
-                progressed = sf_try_transit();
-                if (progressed) {
-                    sf_transit_run++;
-                }
+                // Advance the quantum by the pages moved, not by one per pass: a batch counted as a
+                // single step would let the relay hold the reader for SF_BATCH times as many pages
+                // before the untilizers get a turn.
+                const uint32_t moved = sf_try_transit();
+                progressed = moved != 0;
+                sf_transit_run += moved;
             }
             if (!progressed) {
                 sf_transit_run = 0;

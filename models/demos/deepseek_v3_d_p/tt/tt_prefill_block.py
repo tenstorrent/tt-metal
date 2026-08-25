@@ -253,6 +253,8 @@ class TtPrefillBlock(LightweightModule):
         routing_use_l1_small_for_semaphores: bool = False,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
+        use_store_and_forward: bool = False,
+        combine_staging_buffer=None,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -365,6 +367,8 @@ class TtPrefillBlock(LightweightModule):
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
                 is_balanced=is_balanced,
                 overlap_shared_expert_with_dispatch=self.overlap_shared_expert_with_dispatch,
+                use_store_and_forward=use_store_and_forward,
+                combine_staging_buffer=combine_staging_buffer,
             )
         else:
             # emb_dim/hidden_dim default to DSv3/Kimi's 7168/18432 in TtFfn; pass the variant's real dims
@@ -407,6 +411,8 @@ class TtPrefillBlock(LightweightModule):
         routing_use_l1_small_for_semaphores=False,
         is_balanced=False,
         overlap_shared_expert_with_dispatch=True,
+        use_store_and_forward=False,
+        combine_staging_buffer=None,
     ):
         mesh_config = extract_mesh_config(mesh_device)
         sp_factor = mesh_device.shape[sp_axis]
@@ -465,6 +471,8 @@ class TtPrefillBlock(LightweightModule):
             overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
             routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
             is_balanced=is_balanced,
+            use_store_and_forward=use_store_and_forward,
+            combine_staging_buffer=combine_staging_buffer,
         )
 
     def set_trace_controller(self, controller):
