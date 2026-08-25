@@ -21,9 +21,6 @@ job stages the assets (``scripts/prepare_assets.py``) and sets
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
 import pytest
 import torch
 
@@ -42,36 +39,13 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     return (a @ b).item() / denom
 
 
-def _checkpoint_path() -> str | None:
-    data_root = os.environ.get("DD_DATA_ROOT", "/mnt/diffusion-drive")
-    candidates = [
-        os.environ.get("DD_CHECKPOINT_PATH"),  # explicit override
-        # scripts/prepare_assets.py target -- what the CI job stages.
-        str(Path(__file__).resolve().parents[2] / "data" / "diffusiondrive_navsim.pth"),
-        f"{data_root}/weights/diffusiondrive_navsim_88p1_PDMS.pth",  # staged eval layout
-    ]
-    return next((p for p in candidates if p and Path(p).exists()), None)
-
-
-def _assets_required() -> bool:
-    """CI sets DD_REQUIRE_ASSETS=1 after staging the assets."""
-    return os.environ.get("DD_REQUIRE_ASSETS", "").strip().lower() in ("1", "true", "yes", "on")
-
-
-def _missing_asset(reason: str) -> None:
-    """Skip locally, but fail in CI -- a gate that skips itself gates nothing."""
-    if _assets_required():
-        pytest.fail(f"{reason} (DD_REQUIRE_ASSETS=1 -- CI must stage this asset)")
-    pytest.skip(reason)
-
-
 @pytest.mark.timeout(1800)
-def test_checkpoint_trajectory_pcc(device, model_config) -> None:
+def test_checkpoint_trajectory_pcc(device, model_config, checkpoint_path, missing_asset) -> None:
     if model_config.plan_anchor_path is None:
-        _missing_asset("plan_anchor_path not set — run scripts/prepare_assets.py first")
-    ckpt = _checkpoint_path()
+        missing_asset("plan_anchor_path not set — run scripts/prepare_assets.py first")
+    ckpt = checkpoint_path
     if ckpt is None:
-        _missing_asset("real checkpoint not found — run scripts/prepare_assets.py or set DD_CHECKPOINT_PATH")
+        missing_asset("real checkpoint not found — run scripts/prepare_assets.py or set DD_CHECKPOINT_PATH")
 
     # Real trained weights, latent=False (the deployed eval config).
     ref_cfg = DiffusionDriveConfig(plan_anchor_path=model_config.plan_anchor_path, latent=False)

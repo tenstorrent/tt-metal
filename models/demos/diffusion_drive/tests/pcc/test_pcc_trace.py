@@ -18,9 +18,6 @@ match. Skips cleanly if the checkpoint or plan-anchor asset is absent (set
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
 import pytest
 import torch
 
@@ -39,22 +36,13 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     return (a @ b).item() / denom
 
 
-def _checkpoint_path() -> str | None:
-    data_root = os.environ.get("DD_DATA_ROOT", "/mnt/diffusion-drive")
-    candidates = [
-        os.environ.get("DD_CHECKPOINT_PATH"),
-        f"{data_root}/weights/diffusiondrive_navsim_88p1_PDMS.pth",
-    ]
-    return next((p for p in candidates if p and Path(p).exists()), None)
-
-
 @pytest.mark.timeout(1800)
-def test_backbone_trace_matches_eager(device, model_config) -> None:
+def test_backbone_trace_matches_eager(device, model_config, checkpoint_path, missing_asset) -> None:
     if model_config.plan_anchor_path is None:
-        pytest.skip("plan_anchor_path not set — run scripts/prepare_assets.py first")
-    ckpt = _checkpoint_path()
+        missing_asset("plan_anchor_path not set — run scripts/prepare_assets.py first")
+    ckpt = checkpoint_path
     if ckpt is None:
-        pytest.skip("real checkpoint not found — set DD_CHECKPOINT_PATH")
+        missing_asset("real checkpoint not found — run scripts/prepare_assets.py or set DD_CHECKPOINT_PATH")
 
     ref_cfg = DiffusionDriveConfig(plan_anchor_path=model_config.plan_anchor_path, latent=False)
     ref_model = load_model(ckpt, ref_cfg, device=torch.device("cpu")).eval()
