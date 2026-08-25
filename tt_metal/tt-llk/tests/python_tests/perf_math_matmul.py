@@ -5,6 +5,7 @@ from itertools import chain, product
 
 import pytest
 from helpers.format_config import DataFormat, is_dest_acc_needed
+from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
@@ -12,8 +13,14 @@ from helpers.llk_params import (
     PerfRunType,
     StochasticRounding,
 )
-from helpers.matmul_sweep import sweep_matmul, sweep_tiny_tiles_matmul
-from helpers.param_config import input_output_formats
+from helpers.matmul_sweep import (
+    MatmulConfig,
+    generate_face_layout_config_sweep,
+    generate_tile_dims,
+    skip_matmul_combination,
+    sweep_tiny_tiles_matmul,
+)
+from helpers.param_config import DEST_SYNC_TILE_LIMITS, input_output_formats
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
@@ -23,7 +30,9 @@ from helpers.test_variant_parameters import (
     IN_TILE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    NUM_BLOCKS,
     NUM_FACES,
+    NUM_TILES_IN_BLOCK,
     PARTIAL_FACE,
     THROTTLE_LEVEL,
     TILE_COUNT,
@@ -49,55 +58,148 @@ MATH_FIDELITIES = [
     MathFidelity.HiFi4,
 ]
 
-MATMUL_COMBINATIONS = sweep_matmul(
-    MATMUL_FORMATS,
-    DEST_ACC_MODES,
-    STOCHASTIC_ROUNDING_MODES,
-    DEST_SYNC_MODES,
-    math_matmul=True,
-)
+# Dest-fill RT x CT from dest capacity; KT 1 and 4 (long-K lives on perf_matmul).
+PERF_KT_DIMS = (1, 4)
+THROTTLE_LEVELS = (0, 5)
+DEST_HANDOFF_NUM_BLOCKS = 4
 
-TINY_TILES_MATMUL_COMBINATIONS = sweep_tiny_tiles_matmul(
-    MATMUL_FORMATS,
-    DEST_ACC_MODES,
-    STOCHASTIC_ROUNDING_MODES,
-    DEST_SYNC_MODES,
-    math_matmul=True,
-)
+
+def _dest_capacity(dest_sync, dest_acc) -> int:
+    return DEST_SYNC_TILE_LIMITS[dest_sync] // (
+        2 if dest_acc == DestAccumulation.Yes else 1
+    )
+
+
+def _dest_fill_rt_ct_pairs(max_tiles):
+    """Power-of-two (rt, ct) pairs that exactly fill dest."""
+    pairs = []
+    rt_dim = 1
+    while rt_dim <= max_tiles:
+        if max_tiles % rt_dim == 0:
+            pairs.append((rt_dim, max_tiles // rt_dim))
+        rt_dim *= 2
+    return pairs
+
+
+def _fits_tiny_perf_tile_shape(cfg) -> bool:
+    rt_dim = cfg.tile_dimensions.rt_dim
+    ct_dim = cfg.tile_dimensions.ct_dim
+    kt_dim = cfg.tile_dimensions.kt_dim
+    max_tiles = _dest_capacity(cfg.dest_sync, cfg.dest_acc)
+    return (
+        cfg.dst_index == 0 and rt_dim == 1 and kt_dim == 1 and ct_dim in (1, max_tiles)
+    )
+
+
+def generate_perf_matmul_combinations():
+    """Regular matmul: dest-filling RT x CT grids with KT in {1, 4}."""
+    combinations = []
+    bfloat16_formats = {DataFormat.Float16_b, DataFormat.Float32}
+
+    for fmt in MATMUL_FORMATS:
+        is_fpu_bfloat16 = (
+            fmt.input_format in bfloat16_formats
+            and fmt.output_format in bfloat16_formats
+        )
+        for dest_acc in DEST_ACC_MODES:
+            if is_dest_acc_needed(fmt) and dest_acc == DestAccumulation.No:
+                continue
+            if (
+                dest_acc == DestAccumulation.No
+                and fmt.input_format == DataFormat.Float16_b
+                and fmt.output_format == DataFormat.Float16
+            ):
+                continue
+
+            for dest_sync in DEST_SYNC_MODES:
+                max_tiles = _dest_capacity(dest_sync, dest_acc)
+                for stochastic_mode in STOCHASTIC_ROUNDING_MODES:
+                    for rt_dim, ct_dim in _dest_fill_rt_ct_pairs(max_tiles):
+                        for kt_dim in PERF_KT_DIMS:
+                            if skip_matmul_combination(
+                                stochastic_mode,
+                                dest_acc,
+                                is_fpu_bfloat16,
+                                kt_dim,
+                            ):
+                                continue
+                            tile_dims = generate_tile_dims(
+                                (
+                                    [rt_dim * TILE_DIM, kt_dim * TILE_DIM],
+                                    [kt_dim * TILE_DIM, ct_dim * TILE_DIM],
+                                )
+                            )
+                            for face_layout_config in generate_face_layout_config_sweep(
+                                math_matmul=True
+                            ):
+                                combinations.append(
+                                    MatmulConfig(
+                                        tile_dimensions=tile_dims,
+                                        face_layout_config=face_layout_config,
+                                        formats=fmt,
+                                        stochastic_rnd=stochastic_mode,
+                                        dst_index=0,
+                                        dest_sync=dest_sync,
+                                        dest_acc=dest_acc,
+                                    )
+                                )
+    return combinations
+
+
+MATMUL_COMBINATIONS = generate_perf_matmul_combinations()
+
+TINY_TILES_MATMUL_COMBINATIONS = [
+    cfg
+    for cfg in sweep_tiny_tiles_matmul(
+        MATMUL_FORMATS,
+        DEST_ACC_MODES,
+        STOCHASTIC_ROUNDING_MODES,
+        DEST_SYNC_MODES,
+        math_matmul=True,
+    )
+    if _fits_tiny_perf_tile_shape(cfg)
+]
 
 ALL_TEST_PARAMS = list(
     chain(
-        # Regular matmul combinations with all throttle levels
-        # ( Commented to reduce number of tests since CI fails with no free space left on device
-        #     (fidelity, combinations, throttle)
-        #     for fidelity, combinations, throttle in product(
-        #         MATH_FIDELITIES, MATMUL_COMBINATIONS, [1, 2, 3, 4, 5]
-        #     )
-        # ),
-        # Tiny tiles matmul combinations with throttle level 1 only
         (
-            (fidelity, combinations, 0)
-            for fidelity, combinations in product(
+            (fidelity, cfg, throttle, 1)
+            for fidelity, cfg, throttle in product(
+                MATH_FIDELITIES, MATMUL_COMBINATIONS, THROTTLE_LEVELS
+            )
+        ),
+        (
+            (fidelity, cfg, 0, 1)
+            for fidelity, cfg in product(
                 MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
             )
+        ),
+        (
+            (fidelity, cfg, 0, DEST_HANDOFF_NUM_BLOCKS)
+            for fidelity, cfg in product(MATH_FIDELITIES, MATMUL_COMBINATIONS)
+            if cfg.tile_dimensions.kt_dim == 1
         ),
     )
 )
 
 
 @pytest.mark.perf
-@pytest.mark.parametrize("math_fidelity,matmul_config,throttle", ALL_TEST_PARAMS)
+@pytest.mark.parametrize(
+    "math_fidelity,matmul_config,throttle,num_blocks", ALL_TEST_PARAMS
+)
 def test_perf_math_matmul(
     math_fidelity,
     matmul_config,
     throttle,
+    num_blocks,
     perf_report,
 ):
     """
     Performance test for matmul operations.
 
-    Includes both regular matmul (full 32x32 tiles) and tiny tiles matmul
-    (input 0 with rows: 1, 2, 4, 8, 16 and columns: 32, input 1 always 32x32).
+    Regular matmul uses dest-filling RT x CT grids sized to dest capacity, with
+    KT in {1, 4} and throttle 0 or 5. Tiny tiles cover ct=1 and dest-fill ct.
+    A dest-handoff slice repeats dest-fill blocks (NUM_BLOCKS=4, KT=1, throttle=0).
     """
     formats = matmul_config.formats
     in0_dimensions = matmul_config.tile_dimensions.in0_dimensions
@@ -125,7 +227,7 @@ def test_perf_math_matmul(
     )
 
     configuration = PerfConfig(
-        "sources/math_matmul_perf.cpp",
+        "sources/math_matmul_test.cpp",
         formats,
         run_types,
         templates=[
@@ -137,7 +239,12 @@ def test_perf_math_matmul(
             DEST_INDEX(matmul_config.dst_index),
             UNPACK_TRANS_FACES(transpose),
             UNPACK_TRANS_WITHIN_FACE(transpose),
-            TILE_COUNT(variant_tile_count),
+            TILE_COUNT(variant_tile_count * num_blocks),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(
+                matmul_config.tile_dimensions.rt_dim
+                * matmul_config.tile_dimensions.ct_dim
+            ),
             NUM_FACES(
                 num_faces, num_faces_in0, num_faces_in1
             ),  # In0 -> Input A, In1 -> Input B
@@ -168,7 +275,7 @@ def test_perf_math_matmul(
             formats.output_format,
             tile_count_A=matmul_config.tile_dimensions.tile_cnt_in0,
             tile_count_B=matmul_config.tile_dimensions.tile_cnt_in1,
-            tile_count_res=matmul_config.tile_dimensions.output_tile_cnt,
+            tile_count_res=matmul_config.tile_dimensions.output_tile_cnt * num_blocks,
         ),
         dest_acc=matmul_config.dest_acc,
     )

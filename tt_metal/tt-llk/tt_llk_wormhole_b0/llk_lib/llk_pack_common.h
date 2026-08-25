@@ -43,9 +43,11 @@ inline void _llk_packer_set_math_semaphore_()
 /**
  * @brief Finish a destination-register section: wait for pack, clear dest, and release math.
  *
- * Stalls until the pack completes, zeroes the just-packed dest region (all of dest for SyncFull, the
- * active half for SyncHalf), then signals the MATH_PACK semaphore. For SyncHalf it also flips the
- * dest-offset id and re-selects the packer dest registers so the next half can be packed.
+ * Stalls until the pack (and THCON, which owns the BFP exponent dest path) completes, zeroes the
+ * just-packed dest region (all of dest for SyncFull, the active half for SyncHalf), then signals the
+ * MATH_PACK semaphore. For SyncHalf it also flips the dest-offset id and re-selects the packer dest
+ * registers so the next half can be packed. Waiting on PACK alone is not enough for BFP pack from
+ * 16-bit dest: ZEROACC CLR_HALF can race lingering THCON dest reads while math writes the other half.
  *
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
@@ -56,7 +58,9 @@ inline void _llk_packer_set_math_semaphore_()
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_pack_dest_section_done_()
 {
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK); // wait for pack to finish
+    // PACK idle does not cover BFP exponent dest reads on THCON. ZEROACC CLR_HALF while those
+    // reads are still in flight deadlocks dest Half + 16-bit dest + BFP pack (perf LOOP_FACTOR>1).
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK | p_stall::THCON);
 
     if constexpr (Dst == DstSync::SyncFull)
     {
