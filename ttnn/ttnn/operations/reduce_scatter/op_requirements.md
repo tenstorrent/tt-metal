@@ -86,7 +86,7 @@ arrival static_assert then holds by construction). The 6 Ring×dim=2 golden cell
 tests still pass (cache-hit re-arm now exercises the wrap link too); `eval.verify_supported` clean
 (supported_pass = 12, xfail_expected = 12, loud categories 0).
 
-### [ ] Refinement 2 — dim=2 scatter
+### [x] Refinement 2 — dim=2 scatter
 
 **Goal**: add `2` to `SUPPORTED["dim"]`. For dim=2 the per-device slice is rows
 `[i·slice_Ht, (i+1)·slice_Ht)` of EVERY (batch, channel) plane, so the reduce reader's walk becomes

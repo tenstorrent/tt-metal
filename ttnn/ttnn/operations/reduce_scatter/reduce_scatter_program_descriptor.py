@@ -165,6 +165,7 @@ def _build_device_program(
         P,
         Wt,
         slice_Wt,
+        slice_Ht,
         S,
         g,
         dim,
@@ -284,6 +285,7 @@ def _build_device_program(
             g,
             Wt,
             slice_Wt,
+            slice_Ht,
             P,
             dim,
         ]
@@ -387,7 +389,7 @@ def create_mesh_program_descriptor(
     sem_bwd_addr: int,
 ) -> ttnn.MeshProgramDescriptor:
     """One ProgramDescriptor per mesh coordinate; ``dim`` is the CANONICAL (positive)
-    scatter dim (Phase-0: 3, gated upstream by SUPPORTED)."""
+    scatter dim (3 or 2, gated upstream by SUPPORTED)."""
     mesh_device = input_tensor.device()
     assert _num_line_devices(mesh_device) == num_devices
 
@@ -398,8 +400,14 @@ def create_mesh_program_descriptor(
 
     shape = list(input_tensor.shape)
     Wt = shape[3] // _TILE
+    Ht = shape[2] // _TILE
+    # Dim-aware slice quantities: the reduce reader uses slice_Wt for the dim=3 walk
+    # and slice_Ht for the dim=2 walk; the OTHER one is kernel-unused (validate()
+    # guarantees only shape[dim] is N*TILE-divisible, so the unused floor-division
+    # may legitimately be 0).
     slice_Wt = Wt // num_devices  # output tile-columns (dim=3 walk)
-    S = P // num_devices  # output tiles per device
+    slice_Ht = Ht // num_devices  # output tile-rows (dim=2 walk)
+    S = P // num_devices  # output tiles per device (dim-independent: P is a product)
     g = _granule(S)
 
     quantities = (
@@ -409,6 +417,7 @@ def create_mesh_program_descriptor(
         P,
         Wt,
         slice_Wt,
+        slice_Ht,
         S,
         g,
         dim,

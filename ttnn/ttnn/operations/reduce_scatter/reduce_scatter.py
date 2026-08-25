@@ -28,6 +28,10 @@ Refinement 1 adds Ring topology: the wrap link (device N-1 <-> device 0) closes
 the ring so every block travels the short way round — uniform per-direction
 send/arrival depths, same fabric config, behaviour selected by the ``topology``
 kwarg alone.
+Refinement 2 adds dim=2 scatter: device i keeps rows [i*slice_H, (i+1)*slice_H)
+of every (batch, channel) plane — a CT-selected walk in the reduce reader only
+(per-plane dense row-blocks hopping Ht*Wt between planes); relay, compute, and
+the dense writer are unchanged.
 """
 
 from __future__ import annotations
@@ -79,8 +83,10 @@ SUPPORTED = {
     # host-side depth table + wrap-link wiring, under the SAME FABRIC_1D config.
     "topology": [_Topology.Linear, _Topology.Ring],
     # Scatter dim, POSITIVE convention. Negative aliases are canonicalized BEFORE
-    # the membership test (-1 ≡ 3). dim=2 is a refinement candidate.
-    "dim": [3],
+    # the membership test (-1 ≡ 3, -2 ≡ 2). dim=3 slices tile-columns; dim=2
+    # (Refinement 2) slices tile-rows per (batch, channel) plane — the reduce
+    # reader's walk is CT-selected on dim, everything else is dim-agnostic.
+    "dim": [3, 2],
 }
 
 EXCLUSIONS: list = []
@@ -225,7 +231,7 @@ def reduce_scatter(
     Args:
         input_tensor: sharded across a MeshDevice line; each device holds one
             SAME-shape shard (distinct values). TILE_LAYOUT, interleaved.
-        dim: scatter dimension (Phase-0: 3; negative alias -1 accepted).
+        dim: scatter dimension, 3 or 2 (negative aliases -1/-2 accepted).
         topology: Linear (line relay; Phase-0) or Ring (wrap-link short-way
             relay; Refinement 1). Both run under FABRIC_1D.
         output_tensor: optional pre-allocated output (shape = shard with

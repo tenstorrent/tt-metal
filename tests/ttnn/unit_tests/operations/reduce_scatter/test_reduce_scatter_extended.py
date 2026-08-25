@@ -13,6 +13,8 @@ Coverage added here:
     and one tile-column past it (loud ValueError, the documented refinement seam).
   * float32 output_tensor path (acceptance covers bf16 only).
   * Loud-rejection edges: out-of-range dim, mismatched output_tensor spec.
+  * dim=2 with B > 1 (Refinement 2 Done-when): the per-batch plane restart of
+    the reduce reader's dim=2 walk on the golden (2,1,256,256) shape.
 
 Multi-device — drive via the multi-device runner (mesh MUST match the topology):
 
@@ -41,13 +43,13 @@ def _num_devices(mesh_device):
     return prod(tuple(mesh_device.shape))
 
 
-def _make_sharded_input(mesh_device, shard_shape, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+def _make_sharded_input(mesh_device, shard_shape, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG, dim=3):
     num_devices = _num_devices(mesh_device)
     torch.manual_seed(7)
     full = torch.randn((num_devices * shard_shape[0], *shard_shape[1:]), dtype=torch.float32)
     quantized = full.to(TORCH_DTYPE[dtype])
     summed = quantized.reshape(num_devices, *shard_shape).to(torch.float32).sum(dim=0).to(TORCH_DTYPE[dtype])
-    oracle_slices = list(torch.chunk(summed, num_devices, dim=3))
+    oracle_slices = list(torch.chunk(summed, num_devices, dim=dim))
     input_tensor = ttnn.from_torch(
         quantized,
         dtype=dtype,
@@ -60,10 +62,10 @@ def _make_sharded_input(mesh_device, shard_shape, dtype, memory_config=ttnn.DRAM
     return input_tensor, oracle_slices
 
 
-def _check_outputs(mesh_device, output_tensor, oracle_slices, shard_shape, dtype):
+def _check_outputs(mesh_device, output_tensor, oracle_slices, shard_shape, dtype, dim=3):
     num_devices = _num_devices(mesh_device)
     expected_shape = list(shard_shape)
-    expected_shape[3] //= num_devices
+    expected_shape[dim] //= num_devices
     output_shards = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(output_tensor)]
     assert len(output_shards) == num_devices
     for i, dev_out in enumerate(output_shards):
@@ -139,6 +141,20 @@ def test_reduce_scatter_output_tensor_float32(mesh_device, topology):
     ttnn.synchronize_device(mesh_device)
     assert returned.buffer_address() == preallocated.buffer_address()
     _check_outputs(mesh_device, returned, oracle_slices, shard_shape, ttnn.float32)
+
+
+@pytest.mark.parametrize("device_params, topology", [LINEAR], indirect=["device_params"])
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+def test_reduce_scatter_dim2_multibatch(mesh_device, topology):
+    """dim=2 correctness with B > 1 (Refinement 2 Done-when): device i keeps
+    rows [i*slice_H, (i+1)*slice_H) of EVERY batch plane — the reduce reader's
+    per-batch walk restart on the golden (2,1,256,256) shape (a cursor hoisted
+    out of the plane loop would silently read the wrong slice from batch 1 on)."""
+    shard_shape = (2, 1, 256, 256)
+    input_tensor, oracle_slices = _make_sharded_input(mesh_device, shard_shape, ttnn.bfloat16, dim=2)
+    output_tensor = reduce_scatter(input_tensor, dim=2, topology=topology)
+    ttnn.synchronize_device(mesh_device)
+    _check_outputs(mesh_device, output_tensor, oracle_slices, shard_shape, ttnn.bfloat16, dim=2)
 
 
 @pytest.mark.parametrize("device_params, topology", [LINEAR], indirect=["device_params"])

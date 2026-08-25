@@ -63,3 +63,36 @@
   non-regression, ring functional grid bf16/fp32 × {S=1, multi-tile, multi-batch, S=9 g=1},
   3-iteration cache-hit re-arm over the wrap link, output_tensor path, Linear↔Ring switch in one
   mesh session, ring precision metrics).
+
+## Refinement 2 — dim=2 scatter
+- **Date**: 2026-08-25
+- **What was done**: Added `2` to `SUPPORTED["dim"]`. The reduce reader's walk is now CT-selected
+  on dim ∈ {2, 3}, mirroring the adopted sibling's worked example
+  (`reduce_scatter_average_reduce_reader.cpp:77-86,115-145`): for dim=2 the per-device slice is
+  rows `[i·slice_Ht, (i+1)·slice_Ht)` of every (batch, channel) plane — walk width `Wt` (dense
+  full rows), base `slice_tile_offset(2, my_chip_id, 0, slice_Ht, Wt)`, per-plane
+  `bump_base(Ht·Wt)` with the run boundary tracked PER TILE inside the granule loop (the boundary
+  need not align with g; CB protocol untouched), all cursor state re-seeded per contribution
+  (walker base/offsets + tiles_in_channel) so every pass walks the identical slice (R11). The
+  walk order equals the output's row-major tile order plane-by-plane, so the relay kernels,
+  compute kernel, and dense writer are UNCHANGED. Host passes `slice_Ht` as a new reduce-reader
+  CT arg (accessor offset 11→12); `validate()` and `-2 ≡ 2` canonicalization already generalized.
+- **Accuracy achieved**: identical error budget to the dim=3 baseline (arithmetic untouched —
+  only the reduce reader's tile-id walk moved): bf16 worst-device PCC=0.9999953,
+  max_abs_err=0.0625 (3 ULP), rel_rms=0.0045; fp32 PCC=0.9999999, max_abs_err=0.0085,
+  rel_rms=0.0008 — on shapes [(1,1,256,64), (2,1,256,256)], N=4 Blackhole line,
+  fp32-accumulated oracle (test_dim2_precision_metrics).
+- **Golden test progress**: 24/24 registry cells passing (was 12/24), 0 xfails — TARGET fully
+  covered. `eval.verify_supported` clean: supported_pass=24, xfail_expected=0, xpass_drift=0,
+  supported_fail=0, xfail_wrong_mode=0 (generated/reduce_scatter_verify_r2/verifier_report.json).
+  Full non-regression sweep (unit + golden dirs): 119 passed, 0 xfailed on `bh_quietbox_1x4_hw`
+  (incl. dim=1 typed-refusal test still green).
+- **Issues encountered**: None — first silicon run of the dim=2 grid passed (33/33), including
+  the per-batch/per-channel plane restarts and the run-boundary-straddles-granule shape
+  (2,1,128,96): run=3 vs g=2.
+- **Tests added**: test_reduce_scatter_dim2.py (33 — dim=2 functional grid over Linear+Ring ×
+  bf16/fp32 × {S=1 minimal, single-plane run=g, B=2 run-straddles-granule, C=2 run-inside-granule,
+  golden multibatch (2,1,256,256), odd S=9 g=1}, dim=-2 alias, 2-iteration cache-hit re-arm on
+  both topologies, dim=3↔dim=2 switch in one mesh session, non-tile-aligned dim=2 rejection,
+  dim=2 precision metrics); test_reduce_scatter_extended.py grew
+  test_reduce_scatter_dim2_multibatch (the Done-when B>1 dim=2 case).
