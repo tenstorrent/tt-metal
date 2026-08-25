@@ -742,6 +742,42 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
+- name: DeepSeek-V3 unit tests
+  cmd: |
+    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
+    export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+    export MESH_DEVICE=T3K
+    fail=0
+    pytest --timeout 60 --durations=0 models/demos/deepseek_v3/tests/unit || fail=1
+    pytest --durations=0 models/demos/deepseek_v3/tests/test_rms_norm.py || fail=1
+    exit $fail
+  model: deepseek-v3
+  model_family: DeepSeek
+  skus:
+    wh_llmbox:
+      timeout: 22
+      tier: 1
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
+
+- name: DeepSeek-V3 module unit tests (host-side)
+  cmd: |
+    unset TT_METAL_WATCHER
+    export MESH_DEVICE=N150
+    pytest --durations=0 models/demos/deepseek_v3/tests -m t3k_compat \
+      --ignore=models/demos/deepseek_v3/tests/test_rms_norm.py \
+      --ignore=models/demos/deepseek_v3/tests/test_cache_specs_harness.py
+  model: deepseek-v3
+  model_family: DeepSeek
+  skus:
+    wh_n150:
+      timeout: 8
+      tier: 1
+  owner_id: U04N3GWH8F9 # Kartik Paigwar
+  team: models
+
 - name: GPT-OSS-120B (disaggregated prefill) unit tests
   # Single-card PCC units for the gpt_oss_d_p prefill package (standalone: random weights +
   # a self-contained torch reference, no HF_MODEL). Directory glob so the kv-cache / MoE tests

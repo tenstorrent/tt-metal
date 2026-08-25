@@ -356,10 +356,10 @@ models:
     bh_p300: 8
     bh_quietbox_2: 42
   unit:
-    wh_llmbox: 45
+    wh_llmbox: 25
     wh_galaxy_perf: 10
   unit_tier1:
-    wh_llmbox: 86
+    wh_llmbox: 100
     wh_n150: 110
     wh_galaxy: 235
     wh_galaxy_perf: 45
@@ -386,7 +386,7 @@ models:
     bh_p300: 30
     bh_quietbox_2: 21
   integration:
-    wh_llmbox: 30
+    wh_llmbox: 0
   perf:
     wh_galaxy_perf: 55
   device_perf:
