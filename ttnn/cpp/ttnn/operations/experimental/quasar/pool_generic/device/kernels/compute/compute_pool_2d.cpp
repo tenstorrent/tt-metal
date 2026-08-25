@@ -368,33 +368,46 @@ void kernel_main() {
                 const uint32_t curr_scratch_cb_id = scratch_cb_id_0;
                 DataflowBuffer curr_scratch_cb = scratch_cb_0;
 #endif
-                curr_scratch_cb.reserve_back(scratch_npages);
+                // Model A (wide-reduction fix): the scratch CB holds ONE contiguous full-width (in_ntiles_c)
+                // output stick, so reserve it ONCE per stick (on the first c-block) -- NOT per c-block.
+                // reader_pool_2d.cpp consumes one stick per output row: a single wait_front / full-row copy /
+                // pop_front(scratch_npages), treating row 0 of the entry as all channels. Reserving and pushing
+                // per c-block advances the CB write entry mid-stick, so each c-block's slice lands in a different
+                // entry (at a non-zero offset within it) and the reader sees in_nblocks_c entries for every one it
+                // pops. Each c-block packs its channel slice into this shared stick below; the whole stick is
+                // pushed once on the last c-block so the reader consumes exactly one stick per pop.
+                if (first_c_block) {
+                    curr_scratch_cb.reserve_back(scratch_npages);
+                }
                 // QSR fix (split-reader second stream): the top-of-kernel pack_untilize_dest_init targets
                 // scratch_cb_0 only, so odd (reader1) sticks packing into scratch_cb_1 used a packer
                 // descriptor still bound to scratch_cb_0 -> the pack landed nowhere and reader1 read an
                 // all-zero tile. Re-init the pack_untilize for THIS stick's scratch CB before packing so
                 // both scratch_cb_0 (even) and scratch_cb_1 (odd) get a valid, CB-matched descriptor.
-                // [DIAG] pack bounds (Bug 2 PACR0_TILE_INC 0x19): ntiles = tiles this pack_untilize_dest
-                // writes; cap = scratch CB byte capacity; npages/esz = its entry geometry. If
-                // ntiles*esz > cap (or ntiles exceeds what the scratch descriptor addresses) the pack tile
-                // increment crosses L1_LIMIT_ADDR -> fault. Printed BEFORE the pack so it flushes pre-fault.
                 // Pack this c-block into its channel slice of the shared full-width stick. full_ct_dim =
-                // in_ntiles_c makes the untilize row stride span the whole in_ntiles_c-tile-wide stick
-                // (llk_pack_untilize stride_offset_0 = num_faces_c_dim * FULL_CT_DIM); block_c_index places the
-                // slice so the c-blocks tile contiguously (l1 tile offset = block_c_index * block_ct_dim):
-                //   c0 -> block_c_index 0            -> tiles 0..3
-                //   c1 -> block_c_index 4/2 = 2      -> tiles 4..5
+                // in_ntiles_c makes the untilize row stride span the whole in_ntiles_c-tile-wide stick, and
+                // block_c_index places the slice (llk_pack_untilize: l1_tile_idx = base_l1 + block_rt *
+                // y_stride + block_c_index * block_ct_dim). For in_ntiles_c = 12, MAX_TILES_PER_REDUCTION = 8:
+                //   c0 -> width 8, block_c_index 0            -> tiles 0..7
+                //   c1 -> width 4, block_c_index (1*8)/4 = 2  -> tiles 8..11
+                // NOTE: the offset is expressed in units of block_ct_dim, so the last (narrow) block only
+                // lands correctly when partial_iter_output_tiles divides c_i * max_tiles_per_iter. It does
+                // not for in_ntiles_c % MAX_TILES_PER_REDUCTION in {3,5,6,7}: e.g. in_ntiles_c = 11 gives
+                // 8/3 = 2 -> tiles 6..8, overwriting c0's tail and leaving 9..10 stale.
                 // Init width must equal pack width per c-block (pack_untilize.h contract), so init per c-block.
                 if (last_c_block) {
-                    pack_untilize_dest_init<partial_iter_output_tiles>(curr_scratch_cb_id);
-                    pack_untilize_dest<partial_iter_output_tiles>(curr_scratch_cb_id, 1, 0);
+                    pack_untilize_dest_init<partial_iter_output_tiles, in_ntiles_c>(curr_scratch_cb_id);
+                    pack_untilize_dest<partial_iter_output_tiles, in_ntiles_c>(
+                        curr_scratch_cb_id, 1, (c_i * max_tiles_per_iter) / partial_iter_output_tiles);
                 } else {
-                    pack_untilize_dest_init<max_tiles_per_iter>(curr_scratch_cb_id);
-                    pack_untilize_dest<max_tiles_per_iter>(curr_scratch_cb_id, 1, 0);
+                    pack_untilize_dest_init<max_tiles_per_iter, in_ntiles_c>(curr_scratch_cb_id);
+                    pack_untilize_dest<max_tiles_per_iter, in_ntiles_c>(curr_scratch_cb_id, 1, c_i);
                 }
                 tile_regs_release();
 
-                curr_scratch_cb.push_back(scratch_npages);  // hand off to the DM reader, which writes the output
+                if (last_c_block) {
+                    curr_scratch_cb.push_back(scratch_npages);  // hand off to the DM reader, which writes the output
+                }
 #else
                 // Production RM path: narrow pack straight into out_cb (already reserved above). Pair the
                 // pack-untilize init with a matching width per c-block (same contract as the scratch path).
