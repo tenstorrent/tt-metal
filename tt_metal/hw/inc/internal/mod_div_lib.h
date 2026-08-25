@@ -20,6 +20,10 @@ inline __attribute__((always_inline)) uint32_t fast_udiv_20(uint32_t n) {
     return (((uint64_t)n * 0xCCCCCCCD) >> 32) >> 4;
 }
 
+inline __attribute__((always_inline)) uint32_t fast_udiv_28(uint32_t n) {
+    return (((uint64_t)n * 0x92492493) >> 32) >> 4;
+}
+
 inline __attribute__((always_inline)) uint32_t fast_udiv_48(uint32_t n) {
     return (((uint64_t)n * 0xAAAAAAAB) >> 32) >> 5;
 }
@@ -93,6 +97,8 @@ inline __attribute__((always_inline)) uint32_t udivsi3_const_divisor(uint32_t n)
     } else if constexpr (d == 20) {
         // fast divide for 20 divisor
         return fast_udiv_20(n);
+    } else if constexpr (d == 28) {
+        return fast_udiv_28(n);
     } else if constexpr (d == 48) {
         return fast_udiv_48(n);
     } else if constexpr (d == 56) {
