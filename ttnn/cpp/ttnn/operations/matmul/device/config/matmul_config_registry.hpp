@@ -7,6 +7,10 @@
 #include <cstdint>
 #include <optional>
 
+#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/tile.hpp>
+
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
@@ -30,14 +34,54 @@ enum class ResolutionReason {
     Disabled,
     IneligibleOperationDomain,
     MalformedOperationSemantics,
+    InconsistentIoContract,
     ExplicitOverride,
     UnsupportedSemantics,
     EmptyRegistry,
     CertifiedMatch,
 };
 
+enum class IoContractStatus {
+    Resolved,
+    OptionalOutputMemoryMismatch,
+    OptionalOutputDtypeMismatch,
+    OutputTileConflict,
+    InvalidTransposeTile,
+};
+
+struct OptionalOutputContract {
+    tt::tt_metal::MemoryConfig memory_config;
+    tt::tt_metal::DataType dtype;
+    tt::tt_metal::Tile tile;
+};
+
+struct IoContractRequest {
+    tt::tt_metal::DataType input_a_dtype;
+    tt::tt_metal::Tile input_a_tile;
+    tt::tt_metal::Tile input_b_tile;
+    tt::tt_metal::MemoryConfig requested_output_memory_config;
+    std::optional<tt::tt_metal::DataType> requested_output_dtype = std::nullopt;
+    std::optional<tt::tt_metal::Tile> requested_output_tile = std::nullopt;
+    std::optional<OptionalOutputContract> optional_output = std::nullopt;
+    bool transpose_a = false;
+    bool transpose_b = false;
+};
+
+struct ResolvedMatmulIoContract {
+    IoContractStatus status;
+    tt::tt_metal::MemoryConfig output_memory_config;
+    tt::tt_metal::DataType output_dtype;
+    tt::tt_metal::Tile output_tile;
+    bool uses_optional_output = false;
+};
+
+// Resolve only caller-known I/O facts. Conflicts are returned as typed status so
+// Shadow can observe without changing legacy validation order or exceptions.
+ResolvedMatmulIoContract resolve_matmul_io_contract(const IoContractRequest& request);
+
 struct Eligibility {
     CallSemantics call;
+    IoContractStatus io_contract_status = IoContractStatus::Resolved;
     bool has_program_config = false;
     bool has_compute_kernel_config = false;
     bool has_user_core_grid = false;
@@ -57,12 +101,24 @@ struct Eligibility {
 struct Recipe {
     MatmulProgramConfig program_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    // Duplicated native state is selected explicitly rather than inferred from
+    // one program-config alternative at the call site.
+    bool untilize_out = false;
 };
 
 struct Resolution {
     ResolutionReason reason = ResolutionReason::Disabled;
     std::optional<Recipe> recipe = std::nullopt;
 };
+
+enum class ExecutionAction { Fallback, ObserveOnly, ApplyRecipe };
+
+// A certified Shadow hit is observable but never mutates execution parameters.
+ExecutionAction execution_action(Mode mode, const Resolution& resolution) noexcept;
+
+// Every recipe carries one effective untilize_out value. It must agree with the
+// duplicated field in the 1D config, and must be false for all other families.
+bool has_consistent_untilize_out(const Recipe& recipe) noexcept;
 
 // Startup-frozen rollout control is added with the generated table. The first
 // plumbing change is deliberately and unconditionally Off in production.

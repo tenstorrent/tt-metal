@@ -231,10 +231,29 @@ static ttnn::Tensor bound_matmul(
     }
 
     if constexpr (registry::current_mode() != registry::Mode::Off) {
+        const auto io_contract = registry::resolve_matmul_io_contract(
+            registry::IoContractRequest{
+                .input_a_dtype = input_tensor_a.dtype(),
+                .input_a_tile = input_tensor_a.tensor_spec().tile(),
+                .input_b_tile = input_tensor_b.tensor_spec().tile(),
+                .requested_output_memory_config = parameters.output_mem_config,
+                .requested_output_dtype = parameters.output_dtype,
+                .requested_output_tile = parameters.output_tile,
+                .optional_output = optional_output_tensor.has_value()
+                                       ? std::make_optional(
+                                             registry::OptionalOutputContract{
+                                                 .memory_config = optional_output_tensor->memory_config(),
+                                                 .dtype = optional_output_tensor->dtype(),
+                                                 .tile = optional_output_tensor->tensor_spec().tile()})
+                                       : std::nullopt,
+                .transpose_a = parameters.transpose_a,
+                .transpose_b = parameters.transpose_b,
+            });
         const auto registry_resolution = registry::resolve(
             registry::current_mode(),
             registry::Eligibility{
                 .call = call_semantics,
+                .io_contract_status = io_contract.status,
                 .has_program_config = parameters.program_config.has_value(),
                 .has_compute_kernel_config = parameters.compute_kernel_config.has_value(),
                 .has_user_core_grid = parameters.user_core_coord.has_value(),
@@ -250,13 +269,14 @@ static ttnn::Tensor bound_matmul(
                 .transpose_a = parameters.transpose_a,
                 .transpose_b = parameters.transpose_b,
             });
-        if (registry_resolution.recipe.has_value()) {
+        if (registry::execution_action(registry::current_mode(), registry_resolution) ==
+            registry::ExecutionAction::ApplyRecipe) {
+            TT_FATAL(
+                registry::has_consistent_untilize_out(registry_resolution.recipe.value()),
+                "Certified matmul registry recipe has inconsistent untilize_out state");
             parameters.program_config = registry_resolution.recipe->program_config;
             parameters.compute_kernel_config = registry_resolution.recipe->compute_kernel_config;
-            parameters.untilize_out =
-                std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(
-                    parameters.program_config.value()) &&
-                std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(parameters.program_config.value()).untilize_out;
+            parameters.untilize_out = registry_resolution.recipe->untilize_out;
         }
     }
 
