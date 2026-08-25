@@ -33,9 +33,9 @@ using ttnn::operations::data_movement::untilize_codegen::usable_l1_bytes;
 
 std::string kernel_path(const char* name) { return std::string(kKernelDir) + "/" + name; }
 
-// Mirrors spec.py's _needs_dst_accum: 32-bit datums need 32-bit DEST accumulation in
-// pack_untilize. Always false for this port's supported_by_codegen scope (bf16/bf8_b only);
-// kept general to stay a faithful transliteration of the source builder.
+// 32-bit datums need 32-bit DEST accumulation in pack_untilize. Always false for the current
+// supported_by_codegen scope (bf16/bf8_b only); kept general so widening that scope does not
+// need this rule rediscovered.
 bool needs_dst_accum(DataType dtype) {
     return dtype == DataType::FLOAT32 || dtype == DataType::INT32 || dtype == DataType::UINT32;
 }
@@ -62,11 +62,10 @@ struct CbPlan {
 // Mirrors codegen_common.factory.cb_policy.plan_cb_depths exactly: 3-tier asymmetric CB
 // depth selection (double-buffer both -> double-buffer input only -> single-buffer both),
 // budgeted against the device's actual usable-L1 (queried, not a hardcoded constant -- see
-// usable_l1_bytes()). The Python source has no 4th "chunked" tier -- it raises when even the
-// single-buffer plan overflows, because the caller (ops/untilize/untilize.py's wide-tensor
-// guard, transcribed into supported_by_codegen's wide-chunk-threshold check) is expected to
-// have already routed such shapes away from this builder entirely. Fail the same way rather
-// than inventing an untraceable fallback depth.
+// usable_l1_bytes()). There is deliberately no 4th "chunked" tier: this raises when even the
+// single-buffer plan overflows, because supported_by_codegen's wide-chunk-threshold check is
+// expected to have already routed such shapes to native. Fail loudly rather than inventing a
+// fallback depth that would mask a hole in that gate.
 CbPlan plan_cb_depths(const IDevice* device, uint32_t pages_per_unit, uint32_t page_size, uint32_t block_units) {
     uint64_t p = pages_per_unit;
     uint64_t ts = page_size;
@@ -94,8 +93,8 @@ CbPlan plan_cb_depths(const IDevice* device, uint32_t pages_per_unit, uint32_t p
     return CbPlan{};
 }
 
-// Mirrors spec.py's _choose_2d_ncol: largest divisor of wt (>=2) so that every tile-row x
-// column-block unit still gets its own core; returns 1 ("don't use the 2D path") otherwise.
+// Largest divisor of wt (>=2) such that every tile-row x column-block unit still gets its own
+// core; returns 1 ("don't use the 2D path") otherwise.
 uint32_t choose_2d_ncol(uint32_t total_tile_rows, uint32_t wt, uint32_t valid_cores) {
     if (total_tile_rows >= valid_cores || wt < 2) {
         return 1;
@@ -143,8 +142,8 @@ KernelDescriptor make_reader(const CoreRangeSet& cores, Buffer* in_buf, uint32_t
         {"seq_id", kSeqIdentity},
         {"cb_id", kCbIn},
         {"batch", read_batch},
-        // reader_tile_interleaved_unified reads get_named_compile_time_arg_val("src_page_pitch");
-        // builder_utils injects it (0 = use the accessor's page size). Absent -> JIT compile fails.
+        // reader_tile_interleaved_unified reads get_named_compile_time_arg_val("src_page_pitch")
+        // unconditionally (0 = use the accessor's page size). Absent -> JIT compile fails.
         {"src_page_pitch", 0},
     };
     reader.config = ReaderConfigDescriptor{};
@@ -225,9 +224,8 @@ ProgramDescriptor build_main_split(const CommonArgs& a, uint32_t wt, uint32_t to
     emit_group(cg1, tpc1);
     emit_group(cg2, tpc2);
 
-    // Kernel order [reader, writer, compute...] mirrors spec.py's build_untilize_tile: the
-    // single-compute case reorders assemble()'s [reader, compute, writer] back to legacy order,
-    // and the cliff case builds its kernel list in legacy order directly.
+    // Kernel order is [reader, writer, compute...] on both the single-compute and cliff cases --
+    // the legacy order the rest of the untilize stack expects, not [reader, compute, writer].
     desc.kernels.push_back(std::move(reader));
     desc.kernels.push_back(std::move(writer));
     if (cg2.empty()) {
@@ -352,10 +350,9 @@ ProgramDescriptor build_2d_column(const CommonArgs& a, uint32_t wt, uint32_t tot
     return desc;
 }
 
-// Mirrors spec.py's _count_valid_sticks: counts sticks in [start, start+count) whose position
-// within a `batch_h`-sized physical batch falls below `valid_per_batch`. The with-unpadding
-// writer's running out_page_offset needs this to skip padding rows and land on the same compact
-// stick numbering the reference (build_untilize_with_unpadding) produces.
+// Counts sticks in [start, start+count) whose position within a `batch_h`-sized physical batch
+// falls below `valid_per_batch`. The with-unpadding writer's running out_page_offset needs this to
+// skip padding rows and land on a compact stick numbering.
 uint32_t count_valid_sticks(uint32_t start, uint32_t count, uint32_t batch_h, uint32_t valid_per_batch) {
     if (valid_per_batch == 0 || batch_h == 0) {
         return count;
@@ -413,8 +410,8 @@ ProgramDescriptor build_with_unpadding(
     writer.compile_time_args.push_back(wt);
     writer.config = WriterConfigDescriptor{};
 
-    // out_page_offset is a running accumulator carried across cores in ascending order (mirrors
-    // spec.py's stateful `_state["off"]` closure, invoked once per core by emit_per_core_rt).
+    // out_page_offset is a running accumulator carried across cores in ascending order, so the
+    // groups below must be emitted in that order.
     uint32_t assigned = 0;
     uint32_t out_page_offset = 0;
     auto emit_group = [&](const CoreRangeSet& group, uint32_t wpc) {

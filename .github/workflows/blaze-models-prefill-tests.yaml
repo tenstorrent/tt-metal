@@ -169,7 +169,10 @@ jobs:
     # into expected-jobs so legs that produced no ai_job_summary artifact are
     # reconciled as infra failures rather than silently dropped.
     needs: [Galaxy-Blaze-models-prefill, Galaxy-Blaze-models-prefill-SDPA-Perf-tests, Galaxy-Blaze-models-prefill-sc4]
-    if: always() && !cancelled()
+    # Reports on a run that failed — the case the summary exists for — but not
+    # on one that was cancelled: an aborted run has no outcome to summarize, and
+    # asking for one spends an LLM call to say it stopped early.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

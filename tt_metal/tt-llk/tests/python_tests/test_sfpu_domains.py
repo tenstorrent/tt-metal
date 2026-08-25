@@ -31,6 +31,7 @@ from helpers.llk_params import (
 from helpers.sfpu_domains import (
     GENERATED_NAN_SIGN_OPS,
     Operand,
+    edge_pair_values,
     edge_values,
     for_op,
     generated_nan_sign_is_asserted,
@@ -400,7 +401,7 @@ _QUASAR_INT_BINARY_ALIASES = {
     MathOperation.SfpuLeInt: MathOperation.SfpuElwLe,
     MathOperation.SfpuGeInt: MathOperation.SfpuElwGe,
     # The int multiply is spelled MUL on Quasar and reaches _mul_int32_; on WH/BH the same kernel
-    # is MUL_INT32, which SfpuMulInt32 drives (test_sfpu_binary_int_uniform).
+    # is MUL_INT32, which SfpuMulInt32 drives (test_eltwise_binary_sfpu_int_uniform).
     MathOperation.SfpuElwmulInt: MathOperation.SfpuMulInt32,
 }
 
@@ -443,9 +444,9 @@ def test_int_comparison_aliases_are_driven_at_int32():
     stop being driven on an integer format, the four Quasar members lose their proxy coverage
     silently.
     """
-    import test_sfpu_binary
+    import test_eltwise_binary_sfpu
 
-    driven = set(test_sfpu_binary._INT_COMPARISON_OPS)
+    driven = set(test_eltwise_binary_sfpu._INT_COMPARISON_OPS)
     expected = {
         MathOperation.SfpuElwLt,
         MathOperation.SfpuElwGt,
@@ -465,20 +466,20 @@ def test_int_comparison_aliases_are_driven_at_int32():
 def test_every_float_binary_op_is_classified_for_cat_b():
     """Enrolled or recorded-as-not-ready, for every float op the binary sweep can drive.
 
-    Totality, in the same spirit as test_sfpu_binary's three stimulus-source sets: an op that is in
+    Totality, in the same spirit as test_eltwise_binary_sfpu's three stimulus-source sets: an op that is in
     neither dict keeps cat B switched off while looking, to a reader, as though it had been
     considered. The count is not pinned -- only the partition -- so adding a binary op is a
     one-line decision rather than a test edit.
     """
-    import test_sfpu_binary
+    import test_eltwise_binary_sfpu
     from helpers.sfpu_domains import (
         _BINARY_SPECIALS_NOT_READY,
         BINARY_SPECIALS_READY_OPS,
     )
 
     candidates = (
-        test_sfpu_binary._CLASSIFIED_STIMULI_OPS
-        - test_sfpu_binary._INT_DRIVEN_BINARY_OPS
+        test_eltwise_binary_sfpu._CLASSIFIED_STIMULI_OPS
+        - test_eltwise_binary_sfpu._INT_DRIVEN_BINARY_OPS
     )
     classified = set(BINARY_SPECIALS_READY_OPS) | set(_BINARY_SPECIALS_NOT_READY)
     unclassified = sorted(op.name for op in candidates - classified)
@@ -591,10 +592,10 @@ def test_exp_with_base_ceiling_is_currently_unreachable():
     If this fails because ExpWithBase joined the broad profile, that is the good outcome: the
     ceiling now fires, and what wants re-checking is the accurate path's own domain.
     """
-    import test_sfpu_unary
+    import test_eltwise_unary_sfpu
 
-    assert MathOperation.ExpWithBase in test_sfpu_unary.STANDARD_SWEEP_OPS
-    assert MathOperation.ExpWithBase not in test_sfpu_unary.BROAD_SWEEP_OPS
+    assert MathOperation.ExpWithBase in test_eltwise_unary_sfpu.STANDARD_SWEEP_OPS
+    assert MathOperation.ExpWithBase not in test_eltwise_unary_sfpu.BROAD_SWEEP_OPS
     accurate = for_op(
         MathOperation.ExpWithBase,
         DataFormat.Float32,
@@ -1074,6 +1075,45 @@ def test_zero_pole_probes_are_not_loosened(op):
         op, DataFormat.Float32, DataFormat.Float32, dest_acc=DestAccumulation.No
     )
     assert min(abs(v) for v in probes if v != 0.0) == 2 * 2**-23
+
+
+def _is_negative_zero(value: float) -> bool:
+    return value == 0.0 and math.copysign(1.0, value) < 0.0
+
+
+def test_pow_edge_pairs_include_negative_zero_exponent():
+    """The setsgn(pow, 0) guard is only as good as the pairs that would fail without it.
+
+    The hardware sweep's both_zero class keys on a == 0 and b == 0, which +0.0 satisfies
+    on its own, so a sweep that never generated exponent -0.0 would stay green after
+    dropping setsgn. Pin the stimulus here, host-side: Float32 dest_acc=Yes is the
+    pipeline that actually delivers a signed zero, and the cartesian product must
+    include a positive base, a negative base, and a zero base against that exponent.
+    """
+    pairs = edge_pair_values(
+        MathOperation.SfpuElwpow,
+        DataFormat.Float32,
+        DataFormat.Float32,
+        dest_acc=DestAccumulation.Yes,
+    )
+    neg_zero_bases = [a for a, b in pairs if _is_negative_zero(b)]
+    assert neg_zero_bases, (
+        "SfpuElwpow edge pairs must include exponent -0.0 on the pipeline that "
+        "delivers a signed zero; otherwise test_sfpu_binary_edges cannot catch a "
+        "regression that drops setsgn(pow, 0)"
+    )
+    assert any(a > 0.0 for a in neg_zero_bases), neg_zero_bases
+    assert any(a < 0.0 for a in neg_zero_bases), neg_zero_bases
+    assert any(a == 0.0 for a in neg_zero_bases), neg_zero_bases
+
+    # The datacopy path flattens -0.0, so claiming the pair there would be false coverage.
+    flattened = edge_pair_values(
+        MathOperation.SfpuElwpow,
+        DataFormat.Float16_b,
+        DataFormat.Float16_b,
+        dest_acc=DestAccumulation.No,
+    )
+    assert not any(_is_negative_zero(b) for _, b in flattened)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

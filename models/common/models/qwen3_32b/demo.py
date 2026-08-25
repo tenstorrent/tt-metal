@@ -32,7 +32,6 @@ import torch
 from transformers import AutoConfig, AutoModelForCausalLM
 
 import ttnn
-from models.common.models.executor import make_contiguous_page_table
 from models.common.models.qwen3_32b.executor import (
     EagerQwen3_32BExecutor,
     TracedQwen3_32BExecutor,
@@ -42,6 +41,7 @@ from models.common.models.qwen3_32b.executor import (
 from models.common.models.qwen3_32b.generator import greedy_argmax_from_logits, greedy_decode_one_step
 from models.common.models.qwen3_32b.model import Qwen3_32B
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
+from models.common.tests.demos.run_helpers import make_contiguous_page_table
 from models.common.utility_functions import comp_pcc
 
 
