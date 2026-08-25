@@ -516,3 +516,76 @@ def test_a_preparer_with_many_arguments_is_still_used():
     assert find_input_preparer(src, 0) == "prep"
     out, _ = inject_stage_marks(src)
     assert "bind=prep" in next(l for l in out.splitlines() if "mark_stages_in_scope" in l)
+
+
+# --- the preparer is CALLED the way it asks to be, not the way I assumed --------------------------
+
+
+def _pipe_stub():
+    import types as _t
+
+    return _t.new_class("P", (), {}, lambda ns: ns.update(PIPELINE_STAGES=["a"], a_trace_step=lambda self: None))()
+
+
+def _mark(monkeypatch, bind, scope_extra=None):
+    import io
+    import sys as _sys
+    import types as _t
+    from contextlib import redirect_stderr, redirect_stdout
+
+    stub = _t.ModuleType("ttnn")
+    stub.synchronize_device = lambda d: None
+    monkeypatch.setitem(_sys.modules, "ttnn", stub)
+    from agent import stage_marks as sm
+
+    monkeypatch.setattr(sm, "signpost", lambda n: None)
+    scope = {"p": _pipe_stub()}
+    scope.update(scope_extra or {})
+    err = io.StringIO()
+    with redirect_stderr(err), redirect_stdout(io.StringIO()):
+        n = sm.mark_stages_in_scope(scope, device=object(), bind=bind)
+    return n, err.getvalue()
+
+
+def test_a_two_argument_preparer_is_given_its_second_argument(monkeypatch):
+    """Removing the one-argument RULE was not enough: the call was still bind(pipe), so the preparer
+    was found and then raised `missing 1 required positional argument`. Run 35's shape exactly."""
+    seen = {}
+
+    def two(pipe, batch):
+        seen["batch"] = batch
+
+    n, err = _mark(monkeypatch, two, {"batch": "REAL"})
+    assert seen == {"batch": "REAL"}, err
+    assert "raised" not in err
+
+
+def test_optional_parameters_are_left_to_their_defaults(monkeypatch):
+    seen = {}
+
+    def four(pipe, batch, head, layers=None):
+        seen["got"] = (batch, head, layers)
+
+    _mark(monkeypatch, four, {"batch": "B", "head": "audio"})
+    assert seen["got"] == ("B", "audio", None)
+
+
+def test_a_required_parameter_the_scope_lacks_is_named(monkeypatch):
+    """Reported by name rather than guessed at -- the caller can see what the scope would need."""
+
+    def needs(pipe, nowhere_to_be_found):
+        raise AssertionError("must not be called")
+
+    _, err = _mark(monkeypatch, needs)
+    assert "nowhere_to_be_found" in err and "does not contain" in err
+
+
+def test_the_pipeline_is_always_the_first_argument(monkeypatch):
+    """Whatever the rest are, the thing being prepared is what the preparer is handed first."""
+    seen = {}
+
+    def two(pipe, batch):
+        seen["pipe_first"] = hasattr(pipe, "PIPELINE_STAGES")
+
+    _mark(monkeypatch, two, {"batch": 1})
+    assert seen.get("pipe_first") is True

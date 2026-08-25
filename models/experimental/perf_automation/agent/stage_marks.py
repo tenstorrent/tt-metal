@@ -271,6 +271,49 @@ def _scopes_visible_at(tree, line: int) -> set:
     return out
 
 
+def _call_preparer(bind, pipe, scope: dict):
+    """Call the test's preparer, filling whatever it asks for from the live scope.
+
+    DERIVED, NOT ASSUMED. This used to call bind(pipe) and the finder therefore required a
+    single-parameter function -- a rule about shape, and shape is what the generator varies. One test
+    wrote _bind_stage_inputs(pipe); the next wrote _patch_trace_inputs(pipe, batch). Removing the rule
+    without changing the call only moved the failure: the preparer was found and then raised
+    TypeError: missing 1 required positional argument.
+
+    The pipeline goes first because that is the one argument the preparer must take -- it is the thing
+    being prepared. Every other parameter is looked up BY NAME in the scope the marks were handed,
+    which is the locals() of the function that just ran the model, so the real batch, inputs or head
+    the eager pass used are exactly what is there. A parameter with a default that is not in scope is
+    left to its default; one without is reported by name rather than guessed at.
+    """
+    import inspect
+
+    try:
+        params = list(inspect.signature(bind).parameters.values())
+    except (TypeError, ValueError):
+        return bind(pipe)  # unintrospectable: the single-argument form is the only thing to try
+    args, missing = [], []
+    for i, prm in enumerate(params):
+        if prm.kind in (prm.VAR_POSITIONAL, prm.VAR_KEYWORD):
+            continue
+        if i == 0:
+            args.append(pipe)
+            continue
+        if prm.name in scope:
+            args.append(scope[prm.name])
+        elif prm.default is not prm.empty:
+            break  # the rest are optional; let the preparer use its own defaults
+        else:
+            missing.append(prm.name)
+    if missing:
+        raise TypeError(
+            "%s needs %s, which the profiled scope does not contain (it has: %s)"
+            % (getattr(bind, "__name__", "the preparer"), ", ".join(missing),
+               ", ".join(sorted(k for k in scope if not k.startswith("__"))[:12]))
+        )
+    return bind(*args)
+
+
 def mark_stages_in_scope(scope: dict, device, bind=None) -> int:
     """Mark each stage of whatever pipeline is live in `scope`. Returns how many were marked.
 
@@ -290,7 +333,7 @@ def mark_stages_in_scope(scope: dict, device, bind=None) -> int:
         return 0
     if callable(bind):
         try:
-            bind(pipe)
+            _call_preparer(bind, pipe, scope)
         except Exception as exc:  # noqa: BLE001
             # Not fatal: the pipeline's own hooks may still work, and perf_adapter now skips only the
             # stages that cannot prepare themselves.
