@@ -69,14 +69,18 @@ public:
 
 class QueryOpConstraintsMockDevice : public ::testing::Test {
 protected:
+#ifdef TT_MATMUL_REGISTRY_TEST_LSAN_ACTIVE
+    std::optional<ScopedLeakTrackingDisable> suppress_mock_runtime_process_global_leaks_;
+#endif
     std::unique_ptr<MetalEnv> mock_env_;
     std::shared_ptr<distributed::MeshDevice> mock_device_;
 
     void SetUp() override {
 #ifdef TT_MATMUL_REGISTRY_TEST_LSAN_ACTIVE
         // OpenMPI/PMIx intentionally retain process-global discovery state.
-        // Suppress only mock-environment startup; registry calls remain checked.
-        const ScopedLeakTrackingDisable suppress_process_global_leaks;
+        // This mock fixture validates behavior; the separate registry contract
+        // binary retains leak detection for the registry runtime itself.
+        suppress_mock_runtime_process_global_leaks_.emplace();
 #endif
         mock_env_ = std::make_unique<MetalEnv>(
             MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)));
@@ -93,6 +97,9 @@ protected:
     void TearDown() override {
         mock_device_.reset();
         mock_env_.reset();
+#ifdef TT_MATMUL_REGISTRY_TEST_LSAN_ACTIVE
+        suppress_mock_runtime_process_global_leaks_.reset();
+#endif
     }
 };
 
