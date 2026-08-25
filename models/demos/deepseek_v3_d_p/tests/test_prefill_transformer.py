@@ -29,7 +29,6 @@ from pathlib import Path
 import pytest
 import torch
 from loguru import logger
-from transformers import PreTrainedConfig
 
 import ttnn
 from conftest import is_galaxy
@@ -1349,13 +1348,6 @@ def test_mistral4_prefill_transformer(
     # pretrained rows, which load and free one layer at a time.
     if not use_pretrained and num_layers > 2:
         pytest.skip(f"random weights at {num_layers} layers would need ~{num_layers * 6.5:.0f} GB of host RAM")
-
-    # Random weights mean building the reference model from the config, and transformers refuses a
-    # config that is not a PreTrainedConfig. A variant whose config_builder hand-builds a namespace
-    # (config_builder_overrides_checkpoint) has no random-weight path at all as a result; the
-    # pretrained rows cover the same ground, so skip rather than fail inside transformers.
-    if not use_pretrained and not isinstance(config_only, PreTrainedConfig):
-        pytest.skip(f"{variant.name}: config_builder returns {type(config_only).__name__}, not a PreTrainedConfig")
 
     run_model(
         variant,
