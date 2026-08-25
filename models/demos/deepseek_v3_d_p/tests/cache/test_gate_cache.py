@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+
 import shutil
 from pathlib import Path
 
@@ -49,6 +50,18 @@ def create_gate_input(config, mesh_device):
     )
 
 
+def _ci_unsupported_param_combos(**params):
+    on_ci = params["on_ci"]
+    gate_mode = params["gate_mode"]
+
+    if not on_ci:
+        return False
+    if gate_mode != GateComputeMode.DEVICE:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [

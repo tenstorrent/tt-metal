@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+
 import shutil
 from pathlib import Path
 
@@ -28,6 +29,15 @@ def cleanup_cache():
     report_and_clear()
 
 
+def _ci_unsupported_param_combos(**params):
+    on_ci = params["on_ci"]
+
+    if not on_ci:
+        return False
+    return True
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [

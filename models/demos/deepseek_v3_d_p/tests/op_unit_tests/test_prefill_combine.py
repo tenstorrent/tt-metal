@@ -432,8 +432,7 @@ def _unsupported_param_combos(**params):
     use_predictable_data = params["use_predictable_data"]
     use_fp8_output = params["use_fp8_output"]
     dispatched_buffer_layout = params["dispatched_buffer_layout"]
-    is_ci_env = params["is_ci_env"]
-    is_ci_v2_env = params["is_ci_v2_env"]
+    on_ci = params["on_ci"]
     is_bh = params["is_bh"]
 
     # This function is called before test cases are fully formed, so 'mesh_device' here, unlike in the test_ttnn_combine
@@ -466,7 +465,7 @@ def _unsupported_param_combos(**params):
         return True
 
     # ROW_MAJOR perf coverage is redundant in CI; TILE (all paths) and ROW_MAJOR PCC still run.
-    if (is_ci_env or is_ci_v2_env) and not run_pcc_check and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
+    if on_ci and not run_pcc_check and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
         return True
 
     # Otherwise don't uncollect the test case. Keep it.

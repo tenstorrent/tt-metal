@@ -108,6 +108,19 @@ FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
 ]
 
 
+def pytest_addoption(parser):
+    try:
+        parser.addoption(
+            "--wrapper-invocation",
+            action="store_true",
+            default=False,
+            help="Set by wrapper tests on the child pytest they spawn: every uncollect_if trim "
+            "is bypassed, so the wrapper's -k filter fully owns the selection.",
+        )
+    except ValueError:
+        pass
+
+
 def pytest_configure(config):
     """Register custom markers."""
     config.addinivalue_line(
@@ -119,11 +132,11 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "uncollect_if(pred): deselect parametrized cases for which pred(**params) returns True. "
-        "pred receives the test's collection-time param values as keyword args, plus is_ci_env / is_ci_v2_env.",
+        "pred receives the test's collection-time param values as keyword args, plus on_ci / is_bh.",
     )
 
 
-def _test_defined_uncollection(items, is_ci_env, is_ci_v2_env):
+def _test_defined_uncollection(items, on_ci):
     kept = []
     is_bh = is_blackhole()
     for item in items:
@@ -133,8 +146,7 @@ def _test_defined_uncollection(items, is_ci_env, is_ci_v2_env):
             continue
         params = dict(getattr(getattr(item, "callspec", None), "params", {}))
         # Values the predicate wants that come from fixtures, not parametrization.
-        params.setdefault("is_ci_env", is_ci_env)
-        params.setdefault("is_ci_v2_env", is_ci_v2_env)
+        params.setdefault("on_ci", on_ci)
         params.setdefault("is_bh", is_bh)
         if not marker.kwargs["pred"](**params):
             kept.append(item)
@@ -155,11 +167,13 @@ def pytest_collection_modifyitems(config, items):
     set PREFILL_TORUS_XY_CERTIFIED=1 and TT_MESH_GRAPH_DESC_PATH. Native Nx1 ring proxies use
     Fabric2D TorusY and 1xN ring proxies use TorusX; non-ring local shapes remain unwrapped Fabric2D.
     """
-    is_ci_env = os.getenv("CI") == "true"
-    is_ci_v2_env = "TT_GH_CI_INFRA" in os.environ
-    items[:] = _test_defined_uncollection(items, is_ci_env, is_ci_v2_env)
+    on_ci = os.getenv("CI") == "true" or "TT_GH_CI_INFRA" in os.environ
 
-    on_ci = is_ci_env or is_ci_v2_env
+    # A wrapper's child pytest owns its own selection through -k; trimming it here would
+    # hide exactly the cases the wrapper exists to measure.
+    if not config.getoption("--wrapper-invocation"):
+        items[:] = _test_defined_uncollection(items, on_ci)
+
     torus_xy_certified = os.getenv("PREFILL_TORUS_XY_CERTIFIED") == "1"
     torus_xy_fabric = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
     ring_or_torus_fabrics = {
@@ -292,7 +306,9 @@ def pytest_collection_modifyitems(config, items):
             if mesh_shape in allowed_fabric_dct.keys():
                 allowed_fabric_cfgs = allowed_fabric_dct[mesh_shape]
 
-        if requested_fabric_cfg not in allowed_fabric_cfgs:
+        # A case with no device_params fabric never opens a fabric, so it cannot request an
+        # unfeasible mesh/fabric combination — only device-count matching below applies to it.
+        if requested_fabric_cfg is not None and requested_fabric_cfg not in allowed_fabric_cfgs:
             item.add_marker(
                 pytest.mark.skip(
                     reason="requested combination of fabric config and mesh, unfeasible on the given hardware"

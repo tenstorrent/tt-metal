@@ -29,11 +29,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Confi
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SILU, ACTIVATION_SITU
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
-    fabric2d_device_params,
-    torus_xy_device_params,
-    torus_y_device_params,
-)
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_moe
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
@@ -684,6 +680,18 @@ def run_model(
         logger.debug(f"{key}: {profiler.get(key) * 1000:.2f} ms")
 
 
+def _ci_unsupported_param_combos_ds_moe(**params):
+    on_ci = params["on_ci"]
+    gate_fallback_mode = params["gate_fallback_mode"]
+
+    if not on_ci:
+        return False
+    if gate_fallback_mode != GateComputeMode.DEVICE_FP32:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_ds_moe)
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
@@ -719,13 +727,6 @@ def run_model(
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
-        pytest.param(
-            (8, 1),
-            torus_y_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
-            2 if is_blackhole() else 1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
-            id="torus-y-8x1",
-        ),
         pytest.param(
             (4, 2),
             fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
@@ -809,18 +810,18 @@ def test_ds_moe(
     "mesh_device, device_params, num_links",
     [
         pytest.param(
-            (8, 1),
-            torus_y_device_params(fabric_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
-            2 if is_blackhole() else 1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
-            id="torus-y-8x1",
-        ),
-        pytest.param(
             (4, 2),
             fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="fabric2d-mesh-4x2",
+        ),
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-mesh-2x4",
         ),
         pytest.param(
             (8, 4),

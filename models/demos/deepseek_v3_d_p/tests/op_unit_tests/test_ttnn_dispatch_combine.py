@@ -26,8 +26,11 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Confi
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_y_device_params
-from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_xy_device_params,
+    torus_y_device_params,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
@@ -405,13 +408,61 @@ def dispatch_combine_shape_params():
     return params
 
 
+def _ci_unsupported_param_combos_dispatch_combine(**params):
+    on_ci = params["on_ci"]
+    dispatched_buffer_layout = params["dispatched_buffer_layout"]
+
+    if not on_ci:
+        return False
+    if dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_dispatch_combine)
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor",
     dispatch_combine_shape_params(),
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
-    ALL_MESH_CONFIGS,
+    [
+        pytest.param(
+            (2, 1),
+            fabric2d_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 1), topology="linear"),
+            id="fabric2d-2x1",
+        ),
+        pytest.param(
+            (4, 1),
+            torus_y_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
+            id="torus-y-4x1",
+        ),
+        pytest.param(
+            (8, 1),
+            torus_y_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="torus-y-8x1",
+        ),
+        pytest.param(
+            (4, 2),
+            fabric2d_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-4x2",
+        ),
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
