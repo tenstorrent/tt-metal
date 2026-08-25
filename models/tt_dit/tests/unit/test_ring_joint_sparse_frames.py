@@ -73,6 +73,13 @@ _MESH_TOPOLOGY_GALAXY = pytest.mark.parametrize(
     indirect=["mesh_device", "device_params"],
 )
 
+_MESH_TOPOLOGY_EXP = pytest.mark.parametrize(
+    _MESH_TOPOLOGY_ARGS,
+    [[(4, 8), 2, 1, 8, 0, 4, _RING, ttnn.Topology.Ring]],
+    ids=["bh_4x8_sp8tp4_ring"],
+    indirect=["mesh_device", "device_params"],
+)
+
 
 # ---------------------------------------------------------------------------
 # Helpers: build the windowed sparse_frame_mask pattern + torch reference.
@@ -195,6 +202,7 @@ def _run_sparse_frames_op(
     sparse_frames_enabled: bool = True,
     force_allow_all: bool = False,
     allow_override: torch.Tensor | None = None,
+    use_exp: bool = False,
 ):
     """Build small Q/K/V, run the ring op with sparse computation enabled, compare to a pytorch ref."""
 
@@ -245,7 +253,10 @@ def _run_sparse_frames_op(
 
     # ------- Set up the ring op on device --------------------------------
     full_compute_grid = mesh_device.compute_with_storage_grid_size()
-    sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
+    if use_exp:
+        sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y)
+    else:
+        sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
     ccl_core_grid_offset = (0, full_compute_grid.y - 1)
 
     ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -258,7 +269,9 @@ def _run_sparse_frames_op(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
-    ccl_sem = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
+    ccl_sem = [
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_links if use_exp else 2)
+    ]
 
     # Sharding: seq on sp_axis, heads on tp_axis (standard video-DiT sparse-attention layout).
     input_shard_dims = [None, None]
@@ -325,32 +338,60 @@ def _run_sparse_frames_op(
         packer_l1_acc=False,
     )
 
-    tt_out, _tt_joint, _tt_lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
-        tt_Q,
-        tt_K,
-        tt_V,
-        None,
-        None,
-        None,
-        persistent_output_buffer_k=persistent_output_buffer_k,
-        persistent_output_buffer_v=persistent_output_buffer_v,
-        joint_strategy="rear",
-        logical_n=real_n,  # true un-padded sequence length; padded region is beyond
-        program_config=program_config,
-        compute_kernel_config=compute_kernel_config,
-        dim=2,
-        multi_device_global_semaphore=ccl_sem,
-        num_links=num_links,
-        cluster_axis=sp_axis,
-        mesh_device=mesh_device,
-        topology=all_gather_topology,
-        subdevice_id=worker_sub_device_id,
-        ccl_core_grid_offset=ccl_core_grid_offset,
-        is_causal=False,
-        tokens_per_frame=tokens_per_frame if sparse_frames_enabled else None,
-        num_frames_padded=num_frames_padded if sparse_frames_enabled else None,
-        sparse_frame_mask=sparse_frame_mask,
-    )
+    if use_exp:
+        tt_out, _tt_joint, _tt_lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
+            tt_Q,
+            tt_K,
+            tt_V,
+            None,
+            None,
+            None,
+            persistent_output_buffer_k=persistent_output_buffer_k,
+            persistent_output_buffer_v=persistent_output_buffer_v,
+            joint_strategy="rear",
+            logical_n=real_n,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=ccl_sem,
+            num_links=num_links,
+            cluster_axis=sp_axis,
+            mesh_device=mesh_device,
+            topology=all_gather_topology,
+            subdevice_id=worker_sub_device_id,
+            num_workers_per_link=5,
+            num_buffers_per_channel=32,
+            tokens_per_frame=tokens_per_frame if sparse_frames_enabled else None,
+            num_frames_padded=num_frames_padded if sparse_frames_enabled else None,
+            sparse_frame_mask=sparse_frame_mask,
+        )
+    else:
+        tt_out, _tt_joint, _tt_lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            tt_Q,
+            tt_K,
+            tt_V,
+            None,
+            None,
+            None,
+            persistent_output_buffer_k=persistent_output_buffer_k,
+            persistent_output_buffer_v=persistent_output_buffer_v,
+            joint_strategy="rear",
+            logical_n=real_n,  # true un-padded sequence length; padded region is beyond
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=ccl_sem,
+            num_links=num_links,
+            cluster_axis=sp_axis,
+            mesh_device=mesh_device,
+            topology=all_gather_topology,
+            subdevice_id=worker_sub_device_id,
+            ccl_core_grid_offset=ccl_core_grid_offset,
+            is_causal=False,
+            tokens_per_frame=tokens_per_frame if sparse_frames_enabled else None,
+            num_frames_padded=num_frames_padded if sparse_frames_enabled else None,
+            sparse_frame_mask=sparse_frame_mask,
+        )
 
     # Gather output back (sharded seq on sp, heads on tp).
     tt_out = ttnn.to_layout(tt_out, ttnn.ROW_MAJOR_LAYOUT)
@@ -758,4 +799,44 @@ class TestSparseFramesRing:
             all_gather_topology=all_gather_topology,
             sparse_frames_enabled=True,
             allow_override=allow,
+        )
+
+    @pytest.mark.skipif(
+        ttnn.cluster.get_cluster_type() != ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+        reason="exp_ring_joint_scaled_dot_product_attention requires a Blackhole Galaxy cluster",
+    )
+    @_MESH_TOPOLOGY_EXP
+    def test_exp_avatar_sr_1080p(
+        self,
+        mesh_device,
+        num_links,
+        sp_axis,
+        sp_factor,
+        tp_axis,
+        tp_factor,
+        device_params,
+        all_gather_topology,
+        reset_seeds,
+    ):
+        nf = 22
+        tpf = 2560
+        _run_sparse_frames_op(
+            mesh_device=mesh_device,
+            sp_axis=sp_axis,
+            sp_factor=sp_factor,
+            tp_axis=tp_axis,
+            tp_factor=tp_factor,
+            num_links=num_links,
+            num_frames_real=nf,
+            num_frames_padded=nf,
+            tokens_per_frame=tpf,
+            b=1,
+            nh=40,
+            d=128,
+            window=5,
+            add_last_frame=True,
+            all_gather_topology=all_gather_topology,
+            q_chunk_size_tokens=640,
+            k_chunk_size_tokens=320,
+            use_exp=True,
         )
