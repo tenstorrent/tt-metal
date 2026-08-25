@@ -2512,7 +2512,6 @@ static const std::vector<uint32_t>& __emule_fabric_walk(uint32_t src, tt::tt_fab
 //   base + slot * SLOT_SIZE + (addr & L1_SLOT_MASK)
 // which is exactly what Core::l1_ptr does for a WORKER. Only WORKER cores are reachable this way;
 // DRAM lives in per-channel private mmaps that are not part of the shared segment.
-// See tt-emule docs/fabric-ccl-emulation.md.
 static std::mutex g_peer_seg_mu;
 struct EmulePeerSegment {
     uint8_t* base = nullptr;
@@ -2657,17 +2656,17 @@ static uint8_t* __emule_fabric_resolve_peer(uint32_t dst_chip, uint64_t noc_addr
                 chip_info.harvesting_masks.eth_harvesting_mask = (*peer_mask >> 40) & field_mask;
                 auto soc = std::make_unique<tt::umd::SocDescriptor>(
                     std::make_shared<tt::umd::SocArchDescriptor>(local->get_soc_descriptor().arch), chip_info);
-                const auto cores = soc->get_cores(tt::CoreType::TENSIX, CoordSystem::TRANSLATED);
-                const size_t bytes = cores.size() * tt_emule::L1Pool::SLOT_SIZE;
+                // Same builder SWEmuleChip's ctor uses, so the layout this rank derives for a peer
+                // chip cannot drift from the one the owning rank actually allocated.
+                auto slot_of = tt::umd::build_worker_slot_map(*soc);
+                const size_t bytes = slot_of.size() * tt_emule::L1Pool::SLOT_SIZE;
                 auto* base = static_cast<uint8_t*>(tt_emule::chip_store_attach_peer(
                     info->asic_id, *peer_mask, bytes, tt_emule::L1Pool::SLOT_SIZE));
                 if (base != nullptr) {
                     auto segment = std::make_unique<EmulePeerSegment>();
                     segment->base = base;
                     segment->soc = std::move(soc);
-                    for (size_t i = 0; i < cores.size(); ++i) {
-                        segment->slot_of[tt_xy_pair(cores[i].x, cores[i].y)] = i;
-                    }
+                    segment->slot_of = std::move(slot_of);
                     peer = g_peer_seg.emplace(dst_chip, std::move(segment)).first->second.get();
                 }
             }
