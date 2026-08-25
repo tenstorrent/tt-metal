@@ -33,16 +33,16 @@ tiled copy path, which already uses 110 workers.
 
 ## Synchronized trace-wall results
 
-Medians below use 20 samples of 100 trace replays. Times are milliseconds.
+Medians below use 20 samples of 100 trace replays. Adapter times are microseconds.
 
-| Layout | Direction | Conv baseline | Conv prototype | Speedup | Combined baseline | Combined prototype | Layer overhead |
+| Layout | Direction | Conv baseline (µs) | Conv prototype (µs) | Speedup | Combined baseline (µs) | Combined prototype (µs) | Layer overhead |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| SP1xTP8 | export | 0.027374 | 0.009022 | 3.03x | 0.035402 | 0.014961 | 0.154% |
-| SP1xTP8 | import | 0.036236 | 0.008885 | 4.08x | 0.044923 | 0.014835 | 0.153% |
-| SP2xTP4 | export | 0.048952 | 0.009955 | 4.92x | 0.061719 | 0.024179 | 0.250% |
-| SP2xTP4 | import | 0.069749 | 0.009657 | 7.22x | 0.082582 | 0.018192 | 0.188% |
-| SP4xTP2 | export | 0.094331 | 0.011974 | 7.88x | 0.114825 | 0.028582 | 0.283% |
-| SP4xTP2 | import | 0.133946 | 0.011349 | 11.80x | 0.154892 | 0.028045 | 0.277% |
+| SP1xTP8 | export | 27.374 | 9.022 | 3.03x | 35.402 | 14.961 | 0.154% |
+| SP1xTP8 | import | 36.236 | 8.885 | 4.08x | 44.923 | 14.835 | 0.153% |
+| SP2xTP4 | export | 48.952 | 9.955 | 4.92x | 61.719 | 24.179 | 0.250% |
+| SP2xTP4 | import | 69.749 | 9.657 | 7.22x | 82.582 | 18.192 | 0.188% |
+| SP4xTP2 | export | 94.331 | 11.974 | 7.88x | 114.825 | 28.582 | 0.283% |
+| SP4xTP2 | import | 133.946 | 11.349 | 11.80x | 154.892 | 28.045 | 0.277% |
 
 Layer medians were 9.7115, 9.6619, and 10.1171 ms for SP1xTP8, SP2xTP4,
 and SP4xTP2 respectively. The corresponding baseline medians were 9.7171,
