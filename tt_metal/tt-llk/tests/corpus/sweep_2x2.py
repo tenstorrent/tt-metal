@@ -461,6 +461,21 @@ KNOBS = {
     # +215% -> +3.6% under the licensed 2x2 in lane CY evidence).
     "lut-select-leaf-ext": "-mtt-tensix-optimize-lut-select "
     "-mtt-tensix-optimize-lut-select-leaf-ext -ffinite-math-only",
+    # GU (fp16-6entry-lut, 2026-08-25): the FP16 six-entry SFPLUTFP32
+    # TABLE1/TABLE2 selection surface — six-range affine magnitude
+    # dispatch trees over the architectural 0.5/1/1.5/2/{3,4} boundaries
+    # with LUT16-exact compile-time coefficients form ONE SFPLUTFP32
+    # (mod0 2/3, +4 sign-retain), the hand gelu/sigmoid kernels' exact
+    # instruction.  Under on-plus the parent lut-select token is already
+    # IN the reviewed ON set (deduped).  UNLIKE lut-select-leaf-ext this
+    # knob needs NO -ffinite-math-only and NO leaf extension: the target
+    # bodies are all-affine and the tree<->LUT delivery is certified
+    # BIT-EXACT on BH for all 2^32 inputs (laneGU-evidence-20260825/
+    # admission-proofs/), so the paired CRAQ legs are expected to PASS
+    # bit-exactly.  Target rows: geluappx-fresh (TABLE1 mod0 2),
+    # sigmoidlut-fresh + tanhlut-fresh (TABLE2 mod0 7).
+    "lut-select-fp16": "-mtt-tensix-optimize-lut-select "
+    "-mtt-tensix-optimize-lut-select-fp16",
     # CN (representation-propagation): bit-involution pair cancellation
     # on audited choose-webs; corpus 0-changed at the CN gate (fire
     # evidence lives in the dg twins) — the knob leg surfaces any pin-14
@@ -679,6 +694,7 @@ KNOB_MODES = {
     "replay-loop-unroll": "on-plus",
     "int-abs": "on-plus",
     "lut-select-leaf-ext": "on-plus",
+    "lut-select-fp16": "on-plus",
     "repr-prop": "on-plus",
     # pin-15 crown-jewel booking flags (lane DZ): shapes only materialize
     # on the reviewed-ON baseline (the allocator/scheduler act on the
