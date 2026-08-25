@@ -17,7 +17,8 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads(
     uint32_t num_q_heads,
     std::optional<uint32_t> num_kv_heads,
     bool transpose_k_heads,
-    const std::optional<MemoryConfig>& memory_config,
+    bool kv_tied = false,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors = std::nullopt);
 
 }  // namespace ttnn::experimental

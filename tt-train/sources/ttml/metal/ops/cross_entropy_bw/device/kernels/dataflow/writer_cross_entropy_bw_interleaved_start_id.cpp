@@ -22,12 +22,17 @@ void kernel_main() {
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);  // number of tiles in inner dimension
     constexpr uint32_t scaler_bits = get_compile_time_arg_val(2);
+    constexpr uint32_t mask_w = get_compile_time_arg_val(3);
+
+    // Logical inner-dim size; matches the fw reader's out-of-range convention so that
+    // targets in [num_inner, padded_W) never patch a gradient into a vocab-padding lane.
+    constexpr uint32_t num_inner = (Wt - 1U) * TILE_WIDTH + (mask_w == 0U ? TILE_WIDTH : mask_w);
 
     constexpr uint32_t onetile = 1U;
 
     const float scaler = uint32_to_float(scaler_bits);
     const uint32_t tile_bytes = get_tile_size(cb_output_idx);
-    constexpr auto output_args = TensorAccessorArgs<3>();
+    constexpr auto output_args = TensorAccessorArgs<4>();
     const auto output_addr_generator = TensorAccessor(output_args, output_addr);
 
     uint32_t end_row = start_row + num_rows_to_process;
@@ -57,6 +62,11 @@ void kernel_main() {
             while (target_indices_idx < TILE_HEIGHT) {
                 uint32_t h = indices[target_indices_idx];
                 uint32_t target_value = target_indexes_l1_ptr[h];
+                // Indices are sorted, so once one target is out of the logical vocab range
+                // every remaining one is too.
+                if (target_value >= num_inner) {
+                    break;
+                }
                 uint32_t tile_idx = target_value / TILE_WIDTH;
                 if (tile_idx >= c + block_size) {
                     break;
