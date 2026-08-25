@@ -3,7 +3,7 @@ from typing import NamedTuple, Optional
 import ttnn
 import torch
 
-from .common import DeepSeekV4Module, _profile, _region
+from .common import FULL_TILE, SINGLE_USER_TILE, DeepSeekV4Module, _profile, _region, with_shard_height
 from .decode_prefetch import check_decode_layout, decode_prefetch_page_bytes, make_decode_prefetch_buffers
 from .layers import Linear, LinearDecode
 from .l1_weights import packed_weight_spec
@@ -546,6 +546,8 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         the knob to turn when the op's static CBs collide with the L1 buffers live at the
         call; the cost is one extra chip-wide gather/broadcast barrier per block.
         """
+        x_tok_single_tile_memory_config = with_shard_height(x_tok.memory_config(), 1)
+        x_tok = ttnn.tilize(x_tok, tile=SINGLE_USER_TILE, memory_config=x_tok_single_tile_memory_config)
         out = ttnn.experimental.deepseek.moe.fused_experts(
             x_tok,
             routing_indices=routing.indices,
@@ -560,6 +562,8 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
             routing_eps=self.routing_eps,
             experts_block_size=self.experts_block_size,
         )  # [1, 1, H]
+        out_full_tile_memory_config = with_shard_height(out.memory_config(), 32)
+        out = ttnn.tilize(out, tile=FULL_TILE, memory_config=out_full_tile_memory_config)
         return ttnn.reshape(out, [1, 1, 1, self.hidden])
 
     def _token_routing(self, routing: SparseRouting, i: int) -> SparseRouting:

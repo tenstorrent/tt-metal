@@ -2,13 +2,10 @@ from typing import Optional
 
 import ttnn
 
-from .common import DeepSeekV4Module, _profile, width_sharded_l1_config, with_shard_height
+from .common import DeepSeekV4Module, _profile, width_sharded_l1_config, with_shard_height, SINGLE_USER_TILE, FULL_TILE
 from .l1_weights import packed_weight_spec
 from .layers import Linear, LinearDecode, _rms_norm_unweighted
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _memo
-
-SINGLE_USER_TILE = ttnn.Tile((1, 32))
-FULL_TILE = ttnn.Tile((32, 32))
 
 
 class DeepSeekV4HyperConnection(DeepSeekV4Module):

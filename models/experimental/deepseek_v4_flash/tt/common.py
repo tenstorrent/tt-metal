@@ -4,6 +4,14 @@ from typing import Any
 
 import ttnn
 
+# The single-user tile is a 1x32 tile that is used when batch size = 1.
+# This avoids the overhead of having 31 rows of padding, reducing size of activations & CBs 32 times.
+SINGLE_USER_TILE = ttnn.Tile((1, 32))
+
+# The full tile is a 32x32 tile that is used by default. For batch = 1, usage of this tile must be eliminated.
+FULL_TILE = ttnn.Tile((32, 32))
+
+
 # ``ttnn.ReadDeviceProfiler`` is a host call that syncs the device; it must never
 # run inside a ``ttnn`` trace capture (which records device ops only and forbids
 # host round-trips / syncs mid-capture). The traced decode path reuses several of
