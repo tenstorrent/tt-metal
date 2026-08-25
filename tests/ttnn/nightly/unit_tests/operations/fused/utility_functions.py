@@ -2,18 +2,89 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Determinism wrappers for the fused (norm / softmax) op tests.
+"""Shared helpers for the fused (norm / softmax) op tests.
 
-Each ``ttnn_<op>`` helper runs ``ttnn.<op>`` twice with the same inputs, asserts
-the two runs produce identical outputs, and returns the first one (a drop-in
-replacement for the original ``ttnn.<op>`` call).
+Determinism wrappers: each ``ttnn_<op>`` helper runs ``ttnn.<op>`` twice with the
+same inputs, asserts the two runs produce identical outputs, and returns the first
+one (a drop-in replacement for the original ``ttnn.<op>`` call).
 
 In-place ops mutate their input tensor, so the ``*_in_place`` helpers clone the
 input before each run to give both runs identical inputs.
+
+Also holds the shared ``test_id`` x gamma/beta dtype grid used by the mix-precision
+layernorm tests (see ``MIX_PRECISION_TEST_IDS``).
 """
 
 import torch
 import ttnn
+
+
+# ---------------------------------------------------------------------------
+# Shared test_id x gamma/beta dtype grid for the mix-precision layernorm tests.
+#
+# These tests used to cross a standalone ``gamma_dtype`` axis with ``test_id``, which doubled
+# every grid. The gamma/beta dtype is independent of every other axis in those grids:
+#
+#   * the gamma/beta CB data format is derived solely from the gamma/beta tensor dtype
+#     (sharded_layernorm_factory_helpers.cpp, layernorm_op_multi_core.cpp) -- it is never
+#     combined with the input dtype, the welford mode or the shard orientation;
+#   * it feeds only tile size and CB creation;
+#   * validation checks only that it is FLOAT32 or BFLOAT16 (layernorm_device_operation.cpp),
+#     with no cross-check against the input dtype;
+#   * the tolerances never branch on it.
+#
+# The reader-kernel switch ``use_row_major_kernel`` keys on gamma *layout*, not dtype, so a
+# ``gamma_layout`` axis does interact and must stay crossed where it appears. This is the same
+# de-crossing that #53549 applied to the axis under its ``gb_dtype`` name.
+#
+# The dtype is fused into ``test_id`` rather than pinned to a single value, alternating so both
+# formats appear in every {LN, RMSN} x {G, GB} x {residual, no residual} category:
+#
+#   test_id   0     1      2       3      4       5        6    7     8      9     10     11
+#   name      LN    LN_G   LN_GB   RMSN   RMSN_G  RMSN_GB  LN   LN_G  LN_GB  RMSN  RMSN_G RMSN_GB
+#             |<---------- residual (add_*) ---------->|   |<--------- no residual --------->|
+#   gamma     bf16  bf16   fp32    fp32   fp32    bf16     bf16 fp32  bf16   fp32  bf16   fp32
+#
+# ``test_id % 3 == 0`` (0, 3, 6, 9) passes no gamma/beta to the op at all, so its entry only
+# affects host-side tensor construction.
+# ---------------------------------------------------------------------------
+
+_MIX_PRECISION_TEST_ID_NAMES = (
+    "add_LN",
+    "add_LN_G",
+    "add_LN_GB",
+    "add_RMSN",
+    "add_RMSN_G",
+    "add_RMSN_GB",
+    "LN",
+    "LN_G",
+    "LN_GB",
+    "RMSN",
+    "RMSN_G",
+    "RMSN_GB",
+)
+
+_MIX_PRECISION_GAMMA_DTYPES = (
+    ttnn.bfloat16,  # 0  add_LN     (no gamma passed)
+    ttnn.bfloat16,  # 1  add_LN_G
+    ttnn.float32,  # 2  add_LN_GB
+    ttnn.float32,  # 3  add_RMSN   (no gamma passed)
+    ttnn.float32,  # 4  add_RMSN_G
+    ttnn.bfloat16,  # 5  add_RMSN_GB
+    ttnn.bfloat16,  # 6  LN        (no gamma passed)
+    ttnn.float32,  # 7  LN_G
+    ttnn.bfloat16,  # 8  LN_GB
+    ttnn.float32,  # 9  RMSN      (no gamma passed)
+    ttnn.bfloat16,  # 10 RMSN_G
+    ttnn.float32,  # 11 RMSN_GB
+)
+
+# Parametrize as ``"test_id, gamma_dtype"`` so the node id still names the dtype that ran.
+MIX_PRECISION_TEST_IDS = tuple(enumerate(_MIX_PRECISION_GAMMA_DTYPES))
+MIX_PRECISION_TEST_ID_NAMES = tuple(
+    f"{name}-{'gb_fp32' if dtype == ttnn.float32 else 'gb_bf16'}"
+    for name, dtype in zip(_MIX_PRECISION_TEST_ID_NAMES, _MIX_PRECISION_GAMMA_DTYPES)
+)
 
 
 def _run_twice(op, *args, **kwargs):
