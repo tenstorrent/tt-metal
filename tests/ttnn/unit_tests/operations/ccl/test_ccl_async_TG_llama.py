@@ -425,9 +425,9 @@ def fit_core_grid_to_device(mesh_device, shard_grid):
     """Use the preferred grid when the device has it, else let the device place the cores."""
     if shard_grid is None:
         return None
+    last_core = shard_grid.bounding_box().end
     device_grid = mesh_device.compute_with_storage_grid_size()
-    preferred = shard_grid.bounding_box().grid_size()
-    if preferred.x <= device_grid.x and preferred.y <= device_grid.y:
+    if last_core.x < device_grid.x and last_core.y < device_grid.y:
         return shard_grid
     return ttnn.num_cores_to_corerangeset(shard_grid.num_cores(), device_grid, row_wise=True)
 
