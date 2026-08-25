@@ -236,6 +236,16 @@ nonzero on any RED (correctness failure, CRAQ gate, win→loss flip vs the
 baseline).  `REPORT.md`, `SCOREBOARD.md`, `scoreboard.{json,tsv}` and
 `SHA256SUMS` land in the evidence root.
 
+Default-off flags whose effect depends on the reviewed-ON pipeline are
+registered as `on-plus` knobs: the `off` leg is exactly reviewed ON and the
+`knob` leg is reviewed ON plus the flag.  In particular,
+`replay-hoist-completion-guard` books
+`-mtt-tensix-replay-hoist-completion-guard` this way; it is deliberately not
+in `ON_FLAGS`.  Before promotion, run knob attribution over the full registry
+(including byte-identical main rows by registering every runnable row in
+`--knob-silicon-rows`), adjudicate every changed TU, then run paired CRAQ and
+correctness-before-performance silicon on its named target and controls.
+
 Post-review hardening (PULL_ANALYSIS-20260817 §4, D2–D6):
 
 * **Hash-matched resume** — cached device cells are reused only when their

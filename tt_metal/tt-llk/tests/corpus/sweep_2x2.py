@@ -467,6 +467,13 @@ KNOBS = {
     "latency-schedule": "-mtt-tensix-optimize-latency-schedule",
     "dst-iteration-fusion": "-mtt-tensix-optimize-dst-iteration-fusion",
     "replay-hoist": "-mtt-tensix-optimize-replay-hoist",
+    # Default-off profitability guard for replay capture hoisting.  The
+    # guard prices the complete hoisted-record delivery, so its useful
+    # shapes exist only after the reviewed-ON replay pipeline has formed
+    # them.  Keep this as an on-plus booking knob (plain ON vs ON+guard)
+    # until a full-corpus changed-TU census plus paired CRAQ/device evidence
+    # justifies a separately reviewed ON-set promotion.
+    "replay-hoist-completion-guard": ("-mtt-tensix-replay-hoist-completion-guard"),
     "invariant-loadi": "-mtt-tensix-optimize-invariant-loadi",
     "dst-autoincr": "-mtt-tensix-optimize-dst-autoincr",
     "macro-planner": "-mtt-tensix-macro-planner",
@@ -723,6 +730,10 @@ KNOB_MODES = {
     "crossloop-hoist": "drop-one",
     "crosscall-hoist": "drop-one",
     "drain-schedule": "drop-one",
+    # The completion guard is default-off and depends on replay-hoist,
+    # already present in reviewed-ON.  A solo OFF-vs-OFF+guard leg would be
+    # structurally blind; book it as plain ON vs ON+guard.
+    "replay-hoist-completion-guard": "on-plus",
     "replay-loop-unroll": "on-plus",
     "int-abs": "on-plus",
     "lut-select-leaf-ext": "on-plus",

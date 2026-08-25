@@ -159,6 +159,34 @@ for knob in ON_PLUS_EXPECTED:
         legs,
     )
 
+# The replay completion profitability guard is intentionally a DEFAULT-OFF
+# booking knob.  Its proof acts on shapes produced by replay-hoist in the
+# reviewed ON pipeline, so the only meaningful A/B is ON vs ON+guard.
+_completion_knob = "replay-hoist-completion-guard"
+_completion_flag = "-mtt-tensix-replay-hoist-completion-guard"
+_completion_legs = sweep.knob_legs(_completion_knob)
+check(
+    "replay completion guard: exact flag and on-plus mode",
+    sweep.KNOBS.get(_completion_knob) == _completion_flag
+    and sweep.knob_mode(_completion_knob) == "on-plus",
+    {
+        "flag": sweep.KNOBS.get(_completion_knob),
+        "mode": sweep.knob_mode(_completion_knob),
+    },
+)
+check(
+    "replay completion guard: legs are exactly ON vs ON+guard",
+    dict(_completion_legs)["off"] == sweep.ON_FLAGS
+    and dict(_completion_legs)["knob"].split() == ON_TOKENS + [_completion_flag]
+    and [name for name, _ in _completion_legs] == ["off", "knob"],
+    _completion_legs,
+)
+check(
+    "replay completion guard: not promoted into reviewed ON",
+    _completion_flag not in ON_TOKENS,
+    sweep.ON_FLAGS,
+)
+
 # lut-select-leaf-ext's parent lut-select token is already IN the ON set:
 # on-plus must DEDUPE it (append only leaf-ext + license), never double it.
 _lleg = dict(sweep.knob_legs("lut-select-leaf-ext"))["knob"].split()
