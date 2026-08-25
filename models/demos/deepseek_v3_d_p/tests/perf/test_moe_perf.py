@@ -39,8 +39,10 @@ def test_deepseek_v3_moe_perf_loudbox():
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_2X4_HOST64,
-        # Stale: carried over from the retired 8x1 TorusY proxy; recalibrate on 2x4 Fabric2D.
-        expected_ns_8x1=15_393_888,
+        # Calibrated 2026-08-25 on the 2x4 Fabric2D host-64 proxy that replaced the 8x1 TorusY
+        # one. Mean of two CI LoudBox runs (7.379, 7.525 ms); they straddle this at +/-0.98%,
+        # so the 3% margin below carries roughly 3x the observed run-to-run spread.
+        expected_ns_8x1=7_451_797,
         model_name_8x1="deepseek_v3_moe_lb_2x4_host64_dispatch_combine",
         command_2x4=_CMD_2X4,
         expected_ns_2x4=15_945_512,
