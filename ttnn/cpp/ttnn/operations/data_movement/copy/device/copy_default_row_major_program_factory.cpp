@@ -4,7 +4,9 @@
 
 #include "copy_device_operation.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <numeric>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
@@ -26,6 +28,10 @@ constexpr const char* KERNEL_READER =
     "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/redistribute_pages_row_major_reader.cpp";
 constexpr const char* KERNEL_WRITER =
     "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/redistribute_pages_row_major_writer.cpp";
+constexpr const char* KERNEL_PARALLEL_READER =
+    "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/redistribute_pages_row_major_parallel_reader.cpp";
+constexpr const char* KERNEL_PARALLEL_WRITER =
+    "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/redistribute_pages_row_major_parallel_writer.cpp";
 
 }  // namespace
 
@@ -60,19 +66,94 @@ ProgramDescriptor CopyDeviceOperation::DefaultRowMajor::create_descriptor(
         elements_per_output_page = output_shard_width;
     }
 
+    auto* device = input.device();
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    const uint32_t total_logical_rows = input.logical_volume() / input.logical_shape()[-1];
+
+    // The legacy path assigns whole logical rows to cores. Wide, short tensors such as [1, 3, W] consequently use
+    // only three cores even when a sharded endpoint contains hundreds of independently addressable pages. When input
+    // and output page boundaries share an aligned unit, distribute those units instead.
+    constexpr uint32_t MAX_SUBBLOCK_SIZE_BYTES = 65536 * 4;
+    const uint32_t common_page_elements = std::gcd(elements_per_input_page, elements_per_output_page);
+    const uint32_t common_page_bytes = common_page_elements * bytes_per_element;
+    const uint32_t required_alignment = std::max(input.buffer()->alignment(), output.buffer()->alignment());
+    const bool can_parallelize_pages = common_page_elements < elements_per_tensor_row &&
+                                       common_page_bytes <= MAX_SUBBLOCK_SIZE_BYTES &&
+                                       common_page_bytes % required_alignment == 0;
+
+    if (can_parallelize_pages) {
+        const auto cb_index = tt::CBIndex::c_0;
+        const uint32_t units_per_row = tt::div_up(elements_per_tensor_row, common_page_elements);
+        const uint32_t total_units = total_logical_rows * units_per_row;
+        auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_units);
+        std::vector<CoreCoord> ordered_cores = corerange_to_cores(all_cores, num_cores, true);
+        const uint32_t aligned_unit_bytes = tt::align(common_page_bytes, required_alignment);
+
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 2 * aligned_unit_bytes,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_index),
+                .data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype()),
+                .page_size = aligned_unit_bytes,
+            }}},
+        });
+
+        KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
+            static_cast<uint32_t>(cb_index),
+            units_per_row,
+            num_input_pages_in_row,
+            elements_per_input_page,
+            elements_per_tensor_row,
+            common_page_elements,
+            static_cast<uint32_t>(bytes_per_element)};
+        tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+        KernelDescriptor::CompileTimeArgs writer_compile_time_args = {
+            static_cast<uint32_t>(cb_index),
+            units_per_row,
+            num_output_pages_in_row,
+            elements_per_output_page,
+            elements_per_tensor_row,
+            common_page_elements,
+            static_cast<uint32_t>(bytes_per_element)};
+        tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+
+        KernelDescriptor reader_desc;
+        reader_desc.kernel_source = KERNEL_PARALLEL_READER;
+        reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        reader_desc.core_ranges = all_cores;
+        reader_desc.compile_time_args = std::move(reader_compile_time_args);
+        reader_desc.config = ReaderConfigDescriptor{};
+        KernelDescriptor writer_desc;
+        writer_desc.kernel_source = KERNEL_PARALLEL_WRITER;
+        writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        writer_desc.core_ranges = all_cores;
+        writer_desc.compile_time_args = std::move(writer_compile_time_args);
+        writer_desc.config = WriterConfigDescriptor{};
+
+        uint32_t start_unit = 0;
+        for (const auto& core : ordered_cores) {
+            uint32_t units_to_process = units_per_core_group_1;
+            if (core_group_2.contains(core)) {
+                units_to_process = units_per_core_group_2;
+            }
+            reader_desc.emplace_runtime_args(core, {input.buffer(), start_unit, units_to_process});
+            writer_desc.emplace_runtime_args(core, {output.buffer(), start_unit, units_to_process});
+            start_unit += units_to_process;
+        }
+
+        desc.kernels.push_back(std::move(reader_desc));
+        desc.kernels.push_back(std::move(writer_desc));
+        return desc;
+    }
+
     const auto input_pages_cb_index = tt::CBIndex::c_0;
     const auto output_page_cb_index = tt::CBIndex::c_1;
-
-    auto* device = input.device();
-
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-
-    const uint32_t total_logical_rows = input.logical_volume() / input.logical_shape()[-1];
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_logical_rows);
     std::vector<CoreCoord> ordered_cores = corerange_to_cores(all_cores, num_cores, true);
 
-    constexpr uint32_t MAX_SUBBLOCK_SIZE_BYTES = 65536 * 4;  // Chosen empirically to prevent large row OOM CB error
     uint32_t input_page_size = input.buffer()->page_size();
     uint32_t aligned_output_page_size =
         output.buffer()->aligned_page_size();  // Since we are double buffering, the output page_size must be aligned so
