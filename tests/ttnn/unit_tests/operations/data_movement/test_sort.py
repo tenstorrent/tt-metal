@@ -1408,10 +1408,11 @@ def test_sort_unstable_stable_cache_alternation(device):
 
 @pytest.mark.xfail(
     strict=False,
-    reason="pre-existing: CrossCore ROW_MAJOR inputs with more than 32 rows return wrong "
-    "VALUES for every tile-row block after the first (indices stay a valid permutation; "
-    "TILE layout unaffected; reproduces with stable=True and stable=False alike, so it "
-    "is unrelated to the #54043 comparator pin)",
+    reason="https://github.com/tenstorrent/tt-metal/issues/54309: pre-existing — CrossCore "
+    "ROW_MAJOR inputs with more than 32 rows return wrong VALUES for every tile-row block "
+    "after the first (indices stay a valid permutation; TILE layout unaffected; reproduces "
+    "with stable=True and stable=False alike, so it is unrelated to the #54043 comparator "
+    "pin). Non-strict: the cell passes on grids that route W=4096 away from CrossCore.",
 )
 @pytest.mark.parametrize("descending", [False, True])
 def test_sort_unstable_row_major_multi_tile_row_values(descending, device):
