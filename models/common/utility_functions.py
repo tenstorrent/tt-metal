@@ -492,6 +492,17 @@ def comp_pcc(golden, calculated, pcc=0.99, rtol=1e-05, atol=1e-04):
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
 
+    # PCC is undefined for constant tensors, so the two checks below fall back to
+    # allclose. The caller's default rtol/atol are fp32-grade and unreachable for a
+    # lower-precision dtype: bfloat16 carries eps = 2^-7, so a single-element
+    # bfloat16 result that agrees with torch to within 2 ULP still fails the
+    # fallback and gets reported as PCC 0.0. Widen the fallback bound to the
+    # precision the compared dtype actually carries, never tightening it below what
+    # the caller asked for. A wrong golden on a constant tensor is off by orders of
+    # magnitude rather than a few ULP, so it is still caught.
+    _dtype_tol = 4 * torch.finfo(golden.dtype).eps if golden.dtype.is_floating_point else 0.0
+    fallback_rtol, fallback_atol = max(rtol, _dtype_tol), max(atol, _dtype_tol)
+
     if torch.all(torch.isnan(golden)) and torch.all(torch.isnan(calculated)):
         logger.warning("Both tensors are 'nan'")
         return True, 1.0
@@ -505,7 +516,7 @@ def comp_pcc(golden, calculated, pcc=0.99, rtol=1e-05, atol=1e-04):
     # within the caller's tolerances.
     if torch.any(golden.bool()) != torch.any(calculated.bool()):
         logger.warning("One tensor is all zero. PCC undefined; falling back to allclose.")
-        result = torch.allclose(golden, calculated, rtol=rtol, atol=atol)
+        result = torch.allclose(golden, calculated, rtol=fallback_rtol, atol=fallback_atol)
         return result, float(result)
 
     golden = torch.squeeze(golden).flatten()
@@ -561,7 +572,7 @@ def comp_pcc(golden, calculated, pcc=0.99, rtol=1e-05, atol=1e-04):
     # Fall back to allclose rather than returning a misleading 1.0.
     if math.isnan(cal_pcc):
         logger.warning("PCC is NaN (zero variance / constant tensor). Falling back to allclose check.")
-        result = torch.allclose(golden, calculated, rtol=rtol, atol=atol)
+        result = torch.allclose(golden, calculated, rtol=fallback_rtol, atol=fallback_atol)
         return result, float(result)
 
     return cal_pcc >= pcc, cal_pcc
