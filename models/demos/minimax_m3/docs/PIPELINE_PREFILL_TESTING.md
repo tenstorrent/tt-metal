@@ -2,6 +2,8 @@
 
 Multi-galaxy pipeline-parallel prefill for MiniMax-M3 via the common prefill runner. Serving is always
 request mode (runner + producer); accuracy (KV PCC) and throughput differ only in the producer flags.
+A single galaxy carved into sub-meshes runs the same machinery — see
+[Intragalaxy pipeline](#intragalaxy-pipeline-single-galaxy-carved-into-sub-meshes).
 
 ## Setup
 
@@ -159,6 +161,83 @@ python -m models.demos.deepseek_v3_d_p.scripts.plot_pipeline_trace \
 
 Hold `PREFILL_CHUNK_SIZE`, the trace, and per-stage `NUM_USERS` fixed across runs; compare `E2E_CLOCK`
 (per rank) or `parse_iteration_times.py`.
+
+## Intragalaxy pipeline (single galaxy carved into sub-meshes)
+
+The same rank/stage machinery runs on ONE 8×4 galaxy split into Z-linked sub-meshes:
+2 stages of [4,4] (30 layers each, `pipeline_prefill_request_intragalaxy_2rank.yaml`) or 4 stages of
+[2,4] (15 layers each, `..._intragalaxy_4rank.yaml`), both under
+`models/demos/common/prefill/runners/topology_configuration/`. All ranks are co-located, so shell
+exports reach every rank and no binding copy is needed for the manifest.
+
+Three prerequisites specific to this mode:
+
+- **Per-mesh-shape weight cache.** The tilized cache is keyed by mesh shape — the sub-meshes need
+  `tensor_cache_bfp8_MeshShape([4, 4])` / `([2, 4])`, which the default checkpoint dir does not carry
+  (populating takes ~1 h per shape, once; the ranks populate their own slices in parallel). Point
+  `TT_CACHE_PATH` at a root that has them — both shapes are currently populated at
+  `/data/zbaczewski/m3_pp_cache` (its `[8, 4]` dir is empty, so do NOT use it for whole-galaxy runs).
+- **PRTE slot fix.** Multi-rank on one host under a Slurm allocation fails with "All nodes which are
+  allocated for this job are already filled" (the galaxy advertises `CPUTot=1`). Before launching:
+  ```bash
+  unset $(env | sed -n 's/^\(SLURM[^=]*\)=.*/\1/p')
+  export PRTE_MCA_ras="^slurm" PRTE_MCA_plm="^slurm"
+  ```
+- **Raise RLIMIT_NPROC first.** The limit is per-user node-wide and a live multi-rank runner's threads
+  exhaust it — a later terminal then can't even fork. Make `ulimit -u <big>` (e.g. `2318144`) the FIRST
+  line of every terminal/step on the node.
+
+### Perf
+
+Same two-process flow as multi-galaxy; both terminals are on the one node. The producer's transport env
+must match the SUB-MESH: `PREFILL_SP=4` (2-stage) or `PREFILL_SP=2` (4-stage), `PREFILL_TP=4`.
+
+```bash
+# 2-stage runner
+TT_CACHE_PATH=<pp-cache-root> PREFILL_MANIFEST=models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json \
+  ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+  models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_intragalaxy_2rank.yaml \
+  $(hostname -s):2 2>&1 | tee pp_intra2.log
+
+# 4-stage runner
+TT_CACHE_PATH=<pp-cache-root> PREFILL_MANIFEST=models/demos/minimax_m3/tt/runners/manifests/minimax_m3.json \
+  ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+  models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_intragalaxy_4rank.yaml \
+  $(hostname -s):4 2>&1 | tee pp_intra4.log
+```
+
+The producer command is the multi-galaxy one with `PREFILL_SP=4` (2-stage) / `PREFILL_SP=2` (4-stage) —
+same plot/readout (`parse_iteration_times.py`, `plot_pipeline_trace`).
+
+### Accuracy — KV PCC (merged mock)
+
+Ready-made manifests (10240 ISL, 2 chunks/slot; the merged-mock env, table on shared storage, producer
+PCC threshold set to M3's 0.88 gate):
+
+```bash
+# 2-stage
+TT_CACHE_PATH=<pp-cache-root> ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+  models/demos/minimax_m3/tt/runners/manifests/m3_binding_mock_migration_intragalaxy_2rank.yaml $(hostname -s):2
+python -m models.demos.common.prefill.runners.prefill_producer \
+  --manifest models/demos/minimax_m3/tt/runners/manifests/m3_producer_mock_migration_2rank.yaml
+
+# 4-stage
+TT_CACHE_PATH=<pp-cache-root> ./models/demos/common/prefill/runners/run_pipeline_prefill.sh \
+  models/demos/minimax_m3/tt/runners/manifests/m3_binding_mock_migration_intragalaxy_4rank.yaml $(hostname -s):4
+PREFILL_SP=2 python -m models.demos.common.prefill.runners.prefill_producer \
+  --manifest models/demos/minimax_m3/tt/runners/manifests/m3_producer_mock_migration_2rank.yaml
+```
+
+**Expect:** rank 0 logs the merged 60-layer 9-config table; each rank writes a rank-scoped device map
+(`/tmp/m3_kv_device_map_r<rank>.json`, merged by the producer); per-layer K/V/index_k over
+`60/60 local layers`, then `KV cache PCC PASSED`.
+
+### Loopback migration (real endpoint + worker)
+
+The intragalaxy 2-stage loopback-migration gate (P2) — endpoint, 2-rank runner, migration driver with
+`--verify-migration both` — is documented next to the manifests in
+`models/demos/minimax_m3/tt/runners/PREFILL_MIGRATION_TESTING.md` (Gates P0/P1/P2). Validated 2026-08-25:
+source PCC 60/60 layers, dst==src byte-identical over all 345600 chunks, migrated slots ≥ 0.88 vs golden.
 
 ## Env knobs
 
