@@ -432,13 +432,9 @@ def _run_sharded_norm_ulp(device, norm, w, num_cores_w, distribution, dtype, use
     _assert_sharded_norm_ulp(golden, actual, dtype, f"ttnn.{norm} ULP (sharded)", spec, f"[{spec}]")
 
 
-# The sharded padding tests are restricted to small-range distributions. The near-zero atol
-# tolerance scales with the golden's value range, so a wide-range distribution (e.g. wide_uniform,
-# ±1e3) inflates the tolerance enough to absorb the error from normalizing over padded columns.
-# normal and centered_uniform both keep the range near unity, so PAD_VALUE-contaminated statistics
-# are caught either way -- the two are interchangeable for the property under test. They are
-# therefore rotated across the width axis rather than crossed with it, which keeps both
-# distributions exercised on every test while halving the case count.
+# The sharded padding tests are restricted to small-range distributions.
+# normal and centered_uniform are rotated across the width axis rather than crossed with it,
+# which keeps both distributions exercised on every test while halving the case count.
 _SHARDED_DISTRIBUTIONS = ("normal", "centered_uniform")
 
 
