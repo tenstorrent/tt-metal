@@ -192,7 +192,9 @@ jobs:
     # platform-independent, so without it both platforms file duplicate tickets
     # (search-then-create is not atomic).
     needs: [build-artifact, determine-test-skus]
-    if: ${{ github.ref == 'refs/heads/stable' && inputs.platform == inputs.main-platform }}
+    if: >-
+      ${{ (github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v'))
+          && inputs.platform == inputs.main-platform }}
     runs-on: ubuntu-slim
     continue-on-error: true
     outputs:
@@ -308,7 +310,7 @@ jobs:
     # explicitly: the sha check alone makes this stable-only by accident, since
     # always() defeats skip-propagation and the empty output is the only brake.
     if: >-
-      ${{ always() && github.ref == 'refs/heads/stable'
+      ${{ always() && (github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v'))
           && inputs.platform == inputs.main-platform
           && needs.check-rtl-sim-status.outputs.sha != '' }}
     runs-on: ubuntu-slim

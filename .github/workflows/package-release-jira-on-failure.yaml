@@ -21,11 +21,6 @@ on:
       - "Package and release"
     types:
       - completed
-    # Only real releases. Package and release also runs on main (cron dev
-    # release) and on feature branches via dispatch; those failures are CI
-    # noise and must not reach the RELEASE board.
-    branches:
-      - stable
   workflow_dispatch:
     inputs:
       run-id:
@@ -65,16 +60,22 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          # Resolve the run's branch from the run itself, so the manual-dispatch
-          # path is gated too -- the `branches:` filter above does not apply to
-          # workflow_dispatch, and the job-level `if` cannot see a dispatched
-          # run's ref.
+          # Only real releases reach the RELEASE board. Package and release also
+          # runs on main (cron dev release) and on feature branches via dispatch;
+          # those failures are CI noise. Release refs are `stable` and the
+          # version tags, matching release-build-test-publish.yaml.
+          #
+          # Resolved from the run itself rather than the trigger, because
+          # `on.workflow_run.branches` cannot express tags and does not apply to
+          # workflow_dispatch at all. One check, both entry points.
           BRANCH=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .head_branch)
-          if [ "$BRANCH" != "stable" ]; then
-            echo "::notice::run $RUN_ID is on '$BRANCH', not stable; nothing to file."
-            echo "file=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          case "$BRANCH" in
+            stable|v[0-9]*) ;;
+            *)
+              echo "::notice::run $RUN_ID is on '$BRANCH', not a release ref; nothing to file."
+              echo "file=false" >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+          esac
 
           # Failed job names (optionally filtered to the watched set). Capture
           # first: a gh failure inside <(...) would leave `failed` empty and be
