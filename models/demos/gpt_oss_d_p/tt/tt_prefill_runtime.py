@@ -102,7 +102,7 @@ class TtPrefillRuntime:
         self.hf_config = hf_config
         self.config = config
 
-self.chunk_sizes = resolve_chunk_sizes(
+        self.chunk_sizes = resolve_chunk_sizes(
             config.default_chunk_size, config.additional_chunk_sizes, config.max_seq_len
         )
         self.max_chunk_size = self.chunk_sizes[0]
