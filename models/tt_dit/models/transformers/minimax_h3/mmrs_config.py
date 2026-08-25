@@ -47,17 +47,19 @@ from ....utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs
 _K = 3584
 _N = 5376
 
-# Only M=4768 (5s) was swept. Every other M reuses that blocking rather than being swept: K and N are
-# fixed by the architecture, and M only sets how many blocks each core walks through, so the block
-# *shape* has little reason to change with it. Sweeping per duration is also expensive -- warmup
-# compiles one program per combo and compile time grows with M, putting M=9216 at ~75 min against ~9
-# min at M=4768. What actually matters is that the fused op beats the unfused matmul + reduce-scatter +
-# addcmul at each duration, and the block perf test measures that directly; see the perf log.
-# Reswept 2026-08-24 under the windowed L1 handoff (the fused op now hands the MM output to the
-# RS through a rolling 2-block L1 window by default): M8/K7/N7 sb(4,1) at 992.3 us vs 1.313 ms for
-# the DRAM-era M4/K8/N14 blocking above (-24%). Mt_per_core=19, so M_block=8 leaves 3 blocks and
-# the window rotates.
-_SWEPT_BLOCKING = FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 7, 7, 4, 1, None, 1)
+# Per-M entries for the Ms that have been swept at their own shape; any other M reuses the
+# nearest swept blocking (below). Earlier revisions of this file keyed everything off M=4768
+# ("5s@768P"), but that M is not a shape the current H3 sharding actually produces per device,
+# and its blocking traces back to the DRAM-handoff-era sweep -- removed rather than carried
+# forward.
+#
+# M=3424 (the current run's per-device ff2 M) swept 2026-08-25 under the windowed L1 handoff,
+# across all three candidate grids -- 12x8 still wins: 755.6 us vs 804.2 at 12x7 and 856.8 at
+# 12x9. Mt_per_core = 107/12 -> 9, so M_block=8 leaves 2 blocks and the window rotates.
+_SWEPT_BLOCKINGS = {
+    3424: FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 2, 8, 2, 2, None, 1),
+}
+_SWEPT_BLOCKING = _SWEPT_BLOCKINGS[3424]  # fallback for unswept Ms
 
 _DEVICE_GRID = ttnn.CoreCoord(12, 10)
 
@@ -93,4 +95,4 @@ def register_mmrs_config(m: int, k: int, n: int) -> None:
     if not has_mmrs_config(m, k, n):
         msg = f"No fused MMRS blocking for (M, K, N) = ({m}, {k}, {n}); gate on has_mmrs_config first"
         raise ValueError(msg)
-    register_fused_mmrs_configs({_DEVICE_GRID: {(m, _K, _N): _SWEPT_BLOCKING}})
+    register_fused_mmrs_configs({_DEVICE_GRID: {(m, _K, _N): _SWEPT_BLOCKINGS.get(m, _SWEPT_BLOCKING)}})
