@@ -230,9 +230,7 @@ def _cache_natural(tt_cache, mesh_device, chunk_size_global, tp_shard_kv=False, 
     return nat
 
 
-def _collect_index_cache_natural(
-    tt_index_kv_cache, mesh_device, config, chunk, tp_shard_kv=False, cache_batch_idx=0
-):
+def _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk, tp_shard_kv=False, cache_batch_idx=0):
     """Read the block-cyclic indexer key cache back to a natural-order [S, index_head_dim] tensor in the
     CPU reference's RoPE frame, so it can be PCC'd against SparseMLAReference.index_cache.
 

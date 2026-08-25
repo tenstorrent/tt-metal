@@ -161,6 +161,7 @@ ttnn::Tensor ring_indexer_score_dsa(
     std::optional<uint32_t> kv_len = std::nullopt,
     std::optional<uint32_t> seq_subshard_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
-    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
+    bool block_cyclic_tp_sharded = false);
 
 }  // namespace ttnn::experimental
