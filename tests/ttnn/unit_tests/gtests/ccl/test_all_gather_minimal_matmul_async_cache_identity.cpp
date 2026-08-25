@@ -18,7 +18,9 @@ namespace {
 std::size_t hash_attributes(
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
     std::optional<tt::tt_metal::DataType> output_dtype,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config) {
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    std::optional<float> fused_ternary_scalar = std::nullopt,
+    ttnn::ccl::Topology fsdp_topology = ttnn::ccl::Topology::Ring) {
     const std::optional<ttnn::GlobalSemaphore> barrier_semaphore = std::nullopt;
     const ttnn::experimental::prim::AllGatherMinimalMatmulAsyncParams attributes{
         /*config=*/std::nullopt,
@@ -36,14 +38,14 @@ std::size_t hash_attributes(
         /*force_transpose=*/false,
         /*num_workers_per_link=*/1,
         /*num_buffers_per_channel=*/1,
-        /*fused_ternary_scalar=*/std::nullopt,
+        fused_ternary_scalar,
         /*chunks=*/1,
         /*dim=*/-1,
         /*fsdp_cluster_axis=*/std::nullopt,
         /*fsdp_ring_size=*/1,
         /*fsdp_semaphore=*/{},
         /*using_persistent_weight_buffer=*/false,
-        ttnn::ccl::Topology::Ring};
+        fsdp_topology};
     return ttsl::hash::hash_objects_with_default_seed(attributes);
 }
 
@@ -65,6 +67,15 @@ TEST(AllGatherMinimalMatmulAsync, CompileAffectingAttributesHaveDistinctProgramC
     auto changed_compute_config = default_compute_config;
     changed_compute_config.math_approx_mode = !changed_compute_config.math_approx_mode;
     EXPECT_NE(hash_attributes(std::nullopt, std::nullopt, changed_compute_config), baseline_hash);
+
+    const auto positive_zero_hash = hash_attributes(std::nullopt, std::nullopt, default_compute_config, +0.0F);
+    EXPECT_NE(positive_zero_hash, baseline_hash);
+    EXPECT_NE(hash_attributes(std::nullopt, std::nullopt, default_compute_config, -0.0F), positive_zero_hash);
+    EXPECT_NE(hash_attributes(std::nullopt, std::nullopt, default_compute_config, 1.0F), positive_zero_hash);
+
+    EXPECT_NE(
+        hash_attributes(std::nullopt, std::nullopt, default_compute_config, std::nullopt, ttnn::ccl::Topology::Linear),
+        baseline_hash);
 }
 
 }  // namespace

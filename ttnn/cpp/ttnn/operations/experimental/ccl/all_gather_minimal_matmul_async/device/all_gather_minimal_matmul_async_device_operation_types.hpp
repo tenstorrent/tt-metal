@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <bit>
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -116,6 +117,7 @@ struct AllGatherMinimalMatmulAsyncParams {
         "config",
         "fused_activation",
         "output_dtype",
+        "fused_ternary_scalar_bits",
         "compute_kernel_config",
         "chunks",
         "dim",
@@ -123,6 +125,7 @@ struct AllGatherMinimalMatmulAsyncParams {
         "fsdp_cluster_axis",
         "fsdp_ring_size",
         "using_persistent_weight_buffer",
+        "fsdp_topology",
         "fuse_swiglu");
 
     auto attribute_values() const {
@@ -141,7 +144,11 @@ struct AllGatherMinimalMatmulAsyncParams {
             // disengaged optionals from aliasing engaged zero-valued enums such as BFLOAT16 and EXP.
             std::make_tuple(
                 std::make_pair(this->fused_activation.has_value(), this->fused_activation),
-                std::make_pair(this->output_dtype.has_value(), this->output_dtype)),
+                std::make_pair(this->output_dtype.has_value(), this->output_dtype),
+                std::make_pair(
+                    this->fused_ternary_scalar.has_value(),
+                    this->fused_ternary_scalar.has_value() ? std::bit_cast<uint32_t>(this->fused_ternary_scalar.value())
+                                                           : 0U)),
             std::forward_as_tuple(
                 this->compute_kernel_config,
                 this->chunks,
@@ -150,6 +157,7 @@ struct AllGatherMinimalMatmulAsyncParams {
                 this->fsdp_cluster_axis,
                 this->fsdp_ring_size,
                 this->using_persistent_weight_buffer,
+                this->fsdp_topology,
                 this->fuse_swiglu));
     }
 };
