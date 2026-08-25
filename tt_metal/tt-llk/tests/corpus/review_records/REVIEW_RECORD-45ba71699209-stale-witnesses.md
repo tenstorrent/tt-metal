@@ -131,7 +131,7 @@ Post-quarantine installed-pin validation was:
 
 ```sh
 python3 witness_preflight.py \
-  --work /tmp/pin29-witness-on26.aEoB4N \
+  --work /tmp/pin29-witness-on26-final.sFFxTg \
   --tt-metal-home /home/ttuser/sfpi-uplift/tt-metal
 ```
 
@@ -140,10 +140,13 @@ It resolved cc1plus
 and returned `ALL GREEN`: 9 active rows present from seven production compile
 groups.  `conf_lint.sh` returned GREEN with all three quarantined rows
 structurally valid, absent from ON, and absent from the reviewed table.  The
-config and witness selftests additionally bind the shipping state to exactly
-26 positive ON flags, nine active rows, and one quarantined row for each named
-flag, while the generic R10 mutation cases prove that reinserting a
-quarantined flag into ON or dual-listing it is rejected.
+Config, witness, and knob sample-guard selftests additionally bind the shipping
+state to exactly 26 positive ON flags, nine active rows, and one quarantined
+row for each named flag, while the generic R10 mutation cases prove that
+reinserting a quarantined flag into ON or dual-listing it is rejected.  The
+final run above includes sample-guard commit `ce79bae34e`; its knob test now
+uses the surviving drain-schedule drop-one vehicle and asserts all three
+quarantined knobs are absent while their negative OFF tokens remain.
 
 This closes the witness-table blocker without hiding the safety hardening.
 The final 26-flag classifier, completion-guard census, correctness/CRAQ, and
