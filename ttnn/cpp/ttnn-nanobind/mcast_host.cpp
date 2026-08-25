@@ -135,7 +135,7 @@ void py_module(nb::module_& mod) {
             "runtime_args",
             &kh::Mcast1D::runtime_args,
             nb::arg("core"),
-            R"doc(Per-core runtime args. Fixed: 4 words (sender -> dest rect, receiver -> [sender_x, sender_y, 0, 0]); an interior fixed sender's rect is the full line and excludes the source in the device pipe. Rotating: 4 + 2*num_senders() words (full-line rect, then one sender coord pair per round).)doc")
+            R"doc(Per-core runtime args. Fixed: 4 words (sender -> dest rect, receiver -> [sender_x, sender_y, 0, 0]); a fixed sender's rect is always the full receiver line; the device pipe excludes an in-line source. Rotating: 4 + 2*num_senders() words (full-line rect, then one sender coord pair per round).)doc")
         .def("is_sender", &kh::Mcast1D::is_sender, nb::arg("core"))
         .def("num_receivers", &kh::Mcast1D::num_receivers, nb::arg("core"))
         .def(
