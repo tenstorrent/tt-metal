@@ -456,9 +456,17 @@ constexpr uint32_t to_u32(Dst s) noexcept;
 enum class BinaryFpuOp : uint8_t { Add, Sub, Mul };
 
 /// DestReuseBinary side selector.
+// MIXED-DTYPE CAVEAT: prefer DEST_TO_SRCB when the reuse operand's dtype differs from the
+// previous chain element's. The init path (detail::binary_reuse_dest_init in
+// tt_metal/hw/inc/api/compute/eltwise_binary.h:55) is documented as "a single-operand
+// (SrcA-only) reconfigure" and reaches the hardware through llk_unpack_A_init(icb0) for BOTH
+// directions, so DEST_TO_SRCA can leave unpacker A holding the PREVIOUS element's format and
+// trip an LLK format assert (observed: an fp32 statistic following a bf16 activation).
+// DEST_TO_SRCA is safe when the reuse operand shares the previous element's srcA format --
+// which is why examples/compute_fusion, whose operands are same-format, never exposes this.
 enum class DestReuseType : uint8_t {
-    DEST_TO_SRCA,  // CB → srcb, DEST → srca
-    DEST_TO_SRCB,  // CB → srca, DEST → srcb
+    DEST_TO_SRCA,  // CB → srcb, DEST → srca  (see mixed-dtype caveat above)
+    DEST_TO_SRCB,  // CB → srca, DEST → srcb  (safe default for a mixed-dtype chain)
 };
 
 // =============================================================================
