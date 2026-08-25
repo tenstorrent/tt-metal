@@ -20,6 +20,10 @@ MMSignalAggregatorMode = ttnn._ttnn.operations.experimental.ccl_experimental.MMS
 
 
 def _preprocess_collective_golden_inputs(function_args, function_kwargs):
+    """Convert a collective mesh input into per-device Torch shards.
+    Adds mesh shape and shard-mode metadata for global golden preprocessing.
+    """
+
     input_tensor = function_args[0] if function_args else function_kwargs["input_tensor"]
     input_tensors = [ttnn.to_torch(tensor) for tensor in ttnn.get_device_tensors(input_tensor)]
     mesh_shape = tuple(input_tensor.device().shape)
@@ -36,6 +40,10 @@ def _preprocess_collective_golden_inputs(function_args, function_kwargs):
 
 
 def _get_first_collective_group(input_tensors, mesh_shape, cluster_axis):
+    """Select the first collective group along the requested mesh axis.
+    Returns every input when no cluster axis restricts the group.
+    """
+
     if cluster_axis is None:
         return input_tensors
 
@@ -163,6 +171,10 @@ ttnn.attach_golden_function(
 
 
 def _mesh_coordinate_to_index(coordinate, mesh_shape):
+    """Convert a row-major mesh coordinate to its flat device index.
+    Uses each mesh dimension as the radix for the corresponding coordinate.
+    """
+
     index = 0
     for value, dimension in zip(coordinate, mesh_shape):
         index = index * dimension + int(value)
@@ -285,6 +297,10 @@ ttnn.attach_golden_function(ttnn.all_to_all_combine, golden_function=_golden_fun
 
 
 def _preprocess_reduce_to_root_golden_inputs(function_args, function_kwargs):
+    """Convert reduce-to-root state tensors into per-device Torch shards.
+    Preserves their shared mesh shape for local and global golden execution.
+    """
+
     function_args = list(function_args)
     function_kwargs = dict(function_kwargs)
     input_names = ("input_tensor_l", "input_tensor_s", "input_tensor_m")

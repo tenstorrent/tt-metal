@@ -13,6 +13,10 @@ __all__ = []
 
 
 def _preprocess_binary_golden_function_inputs(function_args, function_kwargs):
+    """Normalize binary golden arguments and retain TT dtype metadata.
+    Records aliases so global comparison can reconstruct canonical keyword names.
+    """
+
     function_args = tuple(function_args)
     original_kwargs = function_kwargs
     golden_args, golden_kwargs = ttnn.decorators.default_preprocess_golden_function_inputs(
@@ -55,6 +59,10 @@ def _set_binary_scalar_comparison_config(
     _ttnn_input_tensor_a_dtype=None,
     _ttnn_output_tensor_dtype=None,
 ):
+    """Configure scalar binary comparisons for low-precision output contracts.
+    Selects BF8 allclose tolerances or a degenerate-case ULP threshold.
+    """
+
     import torch
 
     if _ttnn_input_tensor_a_dtype == ttnn.bfloat8_b or _ttnn_output_tensor_dtype == ttnn.bfloat8_b:
@@ -74,6 +82,10 @@ def _set_binary_scalar_comparison_config(
 
 
 def _copy_inplace_golden_result(input_tensor_a, output_tensor):
+    """Copy a computed golden result back to its caller-visible input alias.
+    Propagates or clears the attached comparison policy with the result.
+    """
+
     # Positional in-place operations mutate the first operand even though their host arithmetic is out of place.
     # Copy the computed value and its comparison contract back so the global golden follows the caller-visible alias.
     input_tensor_a.copy_(output_tensor)
@@ -96,6 +108,10 @@ def apply_activations(tensor, activations, reference_tensor=None):
         )
 
     def compare_zero(value, torch_function):
+        """Compare tensor values with zero using dtype-compatible semantics.
+        Widens unsupported unsigned Torch dtypes before applying the comparison.
+        """
+
         if integer_golden.is_unsigned_dtype(value.dtype):
             return integer_golden.compare(value, 0, torch_function)
         return torch_function(value, 0)
@@ -569,6 +585,10 @@ ttnn.attach_golden_function(ttnn.assign, golden_function=_golden_function_assign
 
 
 def _preprocess_broadcast_golden_inputs(function_args, function_kwargs):
+    """Convert a mesh broadcast input into per-device Torch shards.
+    Adds mesh metadata required by local and global golden comparison paths.
+    """
+
     input_tensor = function_args[0] if function_args else function_kwargs["input_tensor"]
     input_tensors = [ttnn.to_torch(tensor) for tensor in ttnn.get_device_tensors(input_tensor)]
 

@@ -12,6 +12,10 @@ __all__ = []
 
 
 def _prepare_input_for_backward(input_tensor):
+    """Enable autograd on a detached comparison-mode input tensor.
+    Preserves tensors that already require gradients for backward goldens.
+    """
+
     if not input_tensor.requires_grad:
         # Backward operations call backward() and return input_tensor.grad.
         # Comparison-mode inputs are detached Torch tensors, so enable gradients locally.
@@ -20,6 +24,10 @@ def _prepare_input_for_backward(input_tensor):
 
 
 def _to_float32_with_bfloat16_daz(tensor):
+    """Convert a tensor to Float32 while modeling BF16 denormals-as-zero.
+    Leaves non-BF16 values unchanged apart from the dtype conversion.
+    """
+
     import torch
 
     result = tensor.to(torch.float32)
@@ -33,6 +41,10 @@ def _to_float32_with_bfloat16_daz(tensor):
 
 
 def _round_with_bfloat16_ftz(tensor, output_dtype):
+    """Round a tensor to its output dtype with BF16 flush-to-zero behavior.
+    Applies subnormal flushing only when the requested output is BF16.
+    """
+
     import torch
 
     if output_dtype != torch.bfloat16:

@@ -4,12 +4,20 @@
 
 
 def is_unsigned_dtype(dtype):
+    """Return whether a Torch dtype needs widened unsigned emulation.
+    Recognizes the UInt16 and UInt32 dtypes unsupported by relevant kernels.
+    """
+
     import torch
 
     return dtype in (torch.uint16, torch.uint32)
 
 
 def _bit_width(dtype):
+    """Return the storage width of a supported unsigned Torch dtype.
+    Raises for dtypes outside the UInt16 and UInt32 golden contract.
+    """
+
     import torch
 
     if dtype == torch.uint16:
@@ -20,16 +28,28 @@ def _bit_width(dtype):
 
 
 def _mask(dtype):
+    """Build the all-ones bit mask for an unsigned dtype.
+    Uses the dtype storage width to preserve hardware wraparound semantics.
+    """
+
     return (1 << _bit_width(dtype)) - 1
 
 
 def _to_wide(value):
+    """Widen tensor operands to Int64 for supported Torch arithmetic.
+    Leaves scalar values unchanged for callers that handle scalar conversion.
+    """
+
     import torch
 
     return value.to(torch.int64) if torch.is_tensor(value) else value
 
 
 def _to_unsigned_scalar(value, dtype):
+    """Normalize a scalar to the bit pattern of an unsigned dtype.
+    Truncates floating values before applying width-limited wraparound.
+    """
+
     import torch
 
     if isinstance(value, float):
@@ -38,6 +58,10 @@ def _to_unsigned_scalar(value, dtype):
 
 
 def _to_unsigned_operand(value, dtype):
+    """Convert tensor or scalar operands to the widened arithmetic form.
+    Materializes scalars as Int64 tensors for shared Torch operator paths.
+    """
+
     import torch
 
     if torch.is_tensor(value):
@@ -48,23 +72,39 @@ def _to_unsigned_operand(value, dtype):
 
 
 def restore_unsigned(result, dtype):
+    """Restore a widened result to the requested unsigned dtype.
+    Masks high bits before casting to reproduce hardware wraparound.
+    """
+
     import torch
 
     return torch.bitwise_and(result, _mask(dtype)).to(dtype)
 
 
 def binary(input_tensor_a, input_tensor_b, torch_function):
+    """Apply a binary Torch function with unsigned integer semantics.
+    Widens both operands and restores the result to the first input's dtype.
+    """
+
     dtype = input_tensor_a.dtype
     result = torch_function(_to_wide(input_tensor_a), _to_unsigned_operand(input_tensor_b, dtype))
     return restore_unsigned(result, dtype)
 
 
 def compare(input_tensor_a, input_tensor_b, torch_function):
+    """Apply a relational Torch function to widened unsigned operands.
+    Returns the comparison result without unsigned width restoration.
+    """
+
     dtype = input_tensor_a.dtype
     return torch_function(_to_wide(input_tensor_a), _to_unsigned_operand(input_tensor_b, dtype))
 
 
 def logical(input_tensor_a, input_tensor_b, torch_function):
+    """Apply a logical Torch function to unsigned operand truth values.
+    Interprets each tensor lane and scalar operand as true when nonzero.
+    """
+
     import torch
 
     lhs = _to_wide(input_tensor_a) != 0
@@ -73,10 +113,18 @@ def logical(input_tensor_a, input_tensor_b, torch_function):
 
 
 def logical_not(input_tensor):
+    """Compute logical-not for an unsigned tensor.
+    Returns true for zero lanes after widening the input.
+    """
+
     return _to_wide(input_tensor) == 0
 
 
 def clamp(input_tensor, min_value=None, max_value=None):
+    """Clamp an unsigned tensor using width-normalized scalar bounds.
+    Restores the clamped result to the input dtype with wraparound masking.
+    """
+
     import torch
 
     dtype = input_tensor.dtype
@@ -86,6 +134,10 @@ def clamp(input_tensor, min_value=None, max_value=None):
 
 
 def power(input_tensor, exponent, reverse=False):
+    """Evaluate unsigned power or reverse-power in widened precision.
+    Truncates floating results and restores the input dtype with wraparound.
+    """
+
     import torch
 
     dtype = input_tensor.dtype
@@ -101,6 +153,10 @@ def power(input_tensor, exponent, reverse=False):
 
 
 def shift(input_tensor, shift_amount, torch_function):
+    """Apply a widened unsigned shift with zero-on-invalid semantics.
+    Accepts scalar or tensor counts and restores the input dtype afterward.
+    """
+
     import torch
 
     dtype = input_tensor.dtype
@@ -122,6 +178,10 @@ def shift(input_tensor, shift_amount, torch_function):
 
 
 def right_shift(input_tensor, shift_amount):
+    """Model unary SFPU right-shift behavior for unsigned tensors.
+    Clamps nonnegative counts to 31 and treats UInt32 lanes as signed patterns.
+    """
+
     import torch
 
     dtype = input_tensor.dtype
@@ -147,6 +207,10 @@ def right_shift(input_tensor, shift_amount):
 
 
 def addcmul(input_tensor_a, input_tensor_b, input_tensor_c, value):
+    """Evaluate unsigned addcmul in widened integer precision.
+    Normalizes the scalar multiplier and restores hardware wraparound.
+    """
+
     dtype = input_tensor_a.dtype
     scalar = _to_unsigned_scalar(value, dtype)
     result = _to_wide(input_tensor_a) + scalar * _to_wide(input_tensor_b) * _to_wide(input_tensor_c)

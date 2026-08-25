@@ -551,6 +551,10 @@ ttnn.attach_golden_function(ttnn.to_dtype, golden_function=_golden_function)
 
 
 def _preprocess_typecast_golden_function_inputs(function_args, function_kwargs):
+    """Preserve TT storage metadata required by typecast golden evaluation.
+    Records source dtype, host placement, and architecture beside Torch inputs.
+    """
+
     # Default preprocessing erases TT storage, dtype, and device details when it creates a Torch tensor.
     # Retain them so the golden can select the same host or architecture-specific integer conversion.
     input_tensor = function_args[0] if function_args else function_kwargs["input_tensor"]

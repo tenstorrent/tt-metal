@@ -251,6 +251,10 @@ def _golden_function_tanh(input_tensor, *args, **kwargs):
 
 
 def _preprocess_hyperbolic_golden_inputs(function_args, function_kwargs):
+    """Preserve block-float input identity for hyperbolic goldens.
+    Adds a BF8 flag so output comparison selects the intended policy.
+    """
+
     input_tensor = function_args[0] if function_args else function_kwargs["input_tensor"]
     golden_args, golden_kwargs = ttnn.decorators.default_preprocess_golden_function_inputs(
         function_args, function_kwargs
@@ -305,6 +309,10 @@ ttnn.attach_golden_function(
 
 
 def _preprocess_gelu_golden_inputs(function_args, function_kwargs):
+    """Prepare GELU golden inputs and identify device-specific variants.
+    Marks FastLut and approximate modes to skip unsupported generic comparison.
+    """
+
     golden_args, golden_kwargs = ttnn.decorators.default_preprocess_golden_function_inputs(
         function_args, function_kwargs
     )
@@ -353,6 +361,10 @@ ttnn.attach_golden_function(ttnn.softplus, golden_function=_golden_function_soft
 
 
 def _preprocess_inverse_trig_golden_inputs(function_args, function_kwargs):
+    """Preserve block-float input identity for inverse-trigonometric goldens.
+    Adds a BF8 flag used to select out-of-domain comparison behavior.
+    """
+
     input_tensor = function_args[0] if function_args else function_kwargs["input_tensor"]
     golden_args, golden_kwargs = ttnn.decorators.default_preprocess_golden_function_inputs(
         function_args, function_kwargs

@@ -23,14 +23,18 @@ from ttnn.trace_allocation_config import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_TR
 
 @dataclasses.dataclass(frozen=True)
 class GoldenComparisonConfig:
-    method: str
-    scope: str = "degenerate"
-    ulp_threshold: float | None = None
-    rtol: float = 1e-5
-    atol: float = 1e-4
-    equal_nan: bool = True
-    nonfinite: str = "strict"
-    mask: object | None = None
+    """Defines a per-tensor comparison policy for golden outputs.
+    Controls the metric, applicability, tolerances, and compared elements.
+    """
+
+    method: str  # Comparison metric: "ulp", "allclose", or "skip".
+    scope: str = "degenerate"  # Apply only to degenerate PCC cases or to "all" outputs.
+    ulp_threshold: float | None = None  # Maximum ULP distance accepted by the ULP metric.
+    rtol: float = 1e-5  # Relative tolerance used by the allclose metric.
+    atol: float = 1e-4  # Absolute tolerance used by the allclose metric.
+    equal_nan: bool = True  # Whether matching NaN positions compare as equal.
+    nonfinite: str = "strict"  # Policy for nonfinite values: "strict" or "mask".
+    mask: object | None = None  # Optional boolean tensor selecting elements to compare.
 
 
 def set_golden_comparison_config(
@@ -45,6 +49,10 @@ def set_golden_comparison_config(
     nonfinite="strict",
     mask=None,
 ):
+    """Attach a validated comparison policy to a Torch golden tensor.
+    Returns the same tensor so golden implementations can configure results inline.
+    """
+
     import torch
 
     if not isinstance(tensor, torch.Tensor):
@@ -74,6 +82,10 @@ def set_golden_comparison_config(
 
 
 def _copy_golden_comparison_config(source, destination):
+    """Copy an attached golden comparison policy between tensors.
+    Leaves the destination unchanged when the source has no policy.
+    """
+
     comparison_config = getattr(source, "_ttnn_comparison_config", None)
     if comparison_config is not None:
         destination._ttnn_comparison_config = comparison_config
@@ -138,6 +150,10 @@ def compare_tensors_using_pcc(
         flattened_output = comparison_output.reshape(-1)
 
         def is_constant(flattened_tensor):
+            """Return whether a flattened tensor contains one repeated value.
+            Treats empty and all-NaN tensors as constant for PCC routing.
+            """
+
             if flattened_tensor.numel() == 0:
                 return True
             first_value = flattened_tensor[0]
@@ -360,6 +376,10 @@ def get_all_tensors(object_value):
 
 
 def should_compare_tensor_outputs(golden_outputs, outputs):
+    """Return whether either output structure contains tensor values.
+    Selects the tensor comparison path when one side exposes tensors.
+    """
+
     # Keep tensor and scalar comparison paths separate so each can preserve its report contract.
     golden_has_tensors = bool(get_all_tensors(golden_outputs))
     output_has_tensors = bool(get_all_tensors(outputs))
@@ -367,6 +387,10 @@ def should_compare_tensor_outputs(golden_outputs, outputs):
 
 
 def should_compare_scalar_outputs(golden_outputs, outputs):
+    """Return whether both outputs are scalar numeric values.
+    Selects scalar comparison only when neither side requires tensor handling.
+    """
+
     import numbers
 
     return isinstance(golden_outputs, numbers.Number) and isinstance(outputs, numbers.Number)
@@ -375,6 +399,10 @@ def should_compare_scalar_outputs(golden_outputs, outputs):
 def compare_scalar_outputs(
     python_fully_qualified_name, golden_output, output, desired_pcc, level, fail_on_bad_comparison
 ):
+    """Compare scalar operation output and record tensor-compatible metadata.
+    Uses exact equality for integers and allclose semantics for other numbers.
+    """
+
     import numbers
     import torch
 
@@ -654,9 +682,17 @@ def default_preprocess_golden_function_inputs(function_args, function_kwargs):
 
 
 def prepare_backward_golden_inputs(function_args_and_kwargs):
+    """Prepare nested Torch inputs for comparison-mode backward goldens.
+    Clears gradients and enables autograd on floating-point and complex tensors.
+    """
+
     import torch
 
     def prepare(object_value):
+        """Recursively enable autograd on eligible tensors in an input structure.
+        Preserves list, tuple, and dictionary containers while replacing their values.
+        """
+
         if isinstance(object_value, torch.Tensor) and (
             object_value.dtype.is_floating_point or object_value.dtype.is_complex
         ):
@@ -706,6 +742,10 @@ TENSOR_IDS_PRODUCED_BY_OPERATION = set()
 
 
 def _decompose_global_golden_mesh_tensor(input_tensor, golden_tensor):
+    """Decompose a global golden tensor into mesh-aligned device shards.
+    Replicates unsharded values and validates reconstructed shard shapes.
+    """
+
     import math
     import torch
 
