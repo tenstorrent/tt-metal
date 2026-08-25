@@ -238,7 +238,7 @@ ALWI void reload_accumulator_if_needed(
                 (reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW && !is_sfpu);
 
             reconfig_data_format_srca(prev_srca_cb, accumulate.config.cb_accumulator);
-            copy_tile_to_dst_init_short(
+            copy_init(
                 accumulate.config.cb_accumulator,
                 /*transpose_of_faces=*/0,
                 /*transpose_within_16x16_face=*/reload_within_face_transpose ? 1u : 0u);
@@ -251,7 +251,7 @@ ALWI void reload_accumulator_if_needed(
             if constexpr (is_sfpu) {
                 // Point SrcA back at the input for the next fold; the caller does the fold init.
                 reconfig_data_format_srca(accumulate.config.cb_accumulator, input_dfb_id);
-                copy_tile_to_dst_init_short(input_dfb_id);
+                copy_init(input_dfb_id);
             } else {
                 reduce_init_short_with_dt<reduce_type, reduce_dim>(
                     accumulate.config.cb_accumulator, input_dfb_id, scaler_dfb_id);
@@ -395,8 +395,10 @@ ALWI void reduce(
     }
     // Initialization
     if constexpr (is_sfpu) {
-        init_sfpu(input_dfb_id, output_dfb_id);
-        copy_tile_to_dst_init_short(input_dfb_id);
+        // The datacopy path into DEST; the one compute_kernel_hw_startup in kernel_main plus the
+        // reconfig above already established the HW config, so this only re-points the unpacker
+        // (replaces the old init_sfpu + copy_tile_to_dst_init_short, which redid a full hw config).
+        copy_init(input_dfb_id);
     } else {
         reduce_init<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id, output_dfb_id);
     }
