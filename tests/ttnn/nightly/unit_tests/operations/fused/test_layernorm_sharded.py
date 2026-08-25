@@ -18,6 +18,9 @@ from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
     MIX_PRECISION_TEST_ID_NAMES,
 )
 
+# Module-scoped device: every test here shares one device configuration
+pytestmark = pytest.mark.use_module_device
+
 
 def rms_norm(x, dim, gamma, beta, eps):
     return x * torch.rsqrt(x.pow(2).mean([-i for i in range(1, len(dim) + 1)], keepdim=True) + eps) * gamma + beta

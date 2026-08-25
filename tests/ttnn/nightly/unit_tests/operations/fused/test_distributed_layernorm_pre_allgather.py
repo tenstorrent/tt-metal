@@ -18,6 +18,8 @@ from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
     ttnn_layer_norm_post_all_gather,
 )
 
+# Module-scoped device: every test here shares one device configuration
+pytestmark = pytest.mark.use_module_device
 
 TEST_PADDING_VALUE = -42
 
@@ -457,6 +459,9 @@ def test_layernorm_part_1_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
 
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
+    entries_before = device.num_program_cache_entries()
+    entries_after_first_run = None
+
     for i in range(2):
         if i > 0:
             dummy_tensors.append(
@@ -469,9 +474,15 @@ def test_layernorm_part_1_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
                 )
             )
         run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device)
+        if i == 0:
+            entries_after_first_run = device.num_program_cache_entries()
 
-    assert device.num_program_cache_entries() == 1, "Program cache should have only one entry" + str(
-        device.num_program_cache_entries()
+    assert (
+        entries_after_first_run - entries_before <= 1
+    ), f"First run added more than one program cache entry: {entries_before} -> {entries_after_first_run}"
+    assert device.num_program_cache_entries() == entries_after_first_run, (
+        f"Second identical run added a program cache entry: "
+        f"{entries_after_first_run} -> {device.num_program_cache_entries()}"
     )
 
 

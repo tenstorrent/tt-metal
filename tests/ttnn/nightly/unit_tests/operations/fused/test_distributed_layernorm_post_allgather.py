@@ -17,6 +17,9 @@ from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
     ttnn_layer_norm_post_all_gather,
 )
 
+# Module-scoped device: every test here shares one device configuration
+pytestmark = pytest.mark.use_module_device
+
 
 def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
     if is_rmsnorm:
@@ -236,6 +239,9 @@ def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
     dram_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     fp32_enabled = dtype == ttnn.float32  # FP32 requires fp32_dest_acc_en
 
+    entries_before = device.num_program_cache_entries()
+    entries_after_first_run = None
+
     for i in range(2):
         if i > 0:
             dummy_tensors.append(
@@ -250,9 +256,15 @@ def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
         run_layernorm_part_2(
             inp_shape, n_devices, is_rmsnorm, dtype, dtype, device, gamma_beta_dtype=dtype, fp32_enabled=fp32_enabled
         )
+        if i == 0:
+            entries_after_first_run = device.num_program_cache_entries()
 
-    assert device.num_program_cache_entries() == 1, "Program cache should have only one entry" + str(
-        device.num_program_cache_entries()
+    assert (
+        entries_after_first_run - entries_before <= 1
+    ), f"First run added more than one program cache entry: {entries_before} -> {entries_after_first_run}"
+    assert device.num_program_cache_entries() == entries_after_first_run, (
+        f"Second identical run added a program cache entry: "
+        f"{entries_after_first_run} -> {device.num_program_cache_entries()}"
     )
 
 

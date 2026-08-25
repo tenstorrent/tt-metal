@@ -19,6 +19,9 @@ from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
     MIX_PRECISION_TEST_ID_NAMES,
 )
 
+# Module-scoped device: every test here shares one device configuration
+pytestmark = pytest.mark.use_module_device
+
 TEST_PADDING_VALUE = -42
 
 
