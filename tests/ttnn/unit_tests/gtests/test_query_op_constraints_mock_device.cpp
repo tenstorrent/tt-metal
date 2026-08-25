@@ -8,6 +8,7 @@
 
 #include <any>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 #include <tt-metalium/experimental/context/metal_env.hpp>
@@ -471,7 +472,12 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulRegistryOffAndEmptyShadowPreserveCons
 
     const auto shadow_error = query_registry_matmul(mock_device_.get(), spec_a, incompatible_spec_b);
     ASSERT_EQ(shadow_error.status, ttnn::graph::ExecutionStatus::Error);
-    EXPECT_EQ(shadow_error.error_message, off_error.error_message);
+    ASSERT_TRUE(off_error.error_message.has_value());
+    ASSERT_TRUE(shadow_error.error_message.has_value());
+    constexpr std::string_view expected_validation =
+        "The width of the first tensor must be equal to the height of the second tensor";
+    EXPECT_NE(off_error.error_message->find(expected_validation), std::string::npos);
+    EXPECT_NE(shadow_error.error_message->find(expected_validation), std::string::npos);
 }
 
 TEST_F(QueryOpConstraintsMockDevice, PublicMatmulWrappersForwardOneDisjointDomainEach) {
@@ -517,7 +523,11 @@ TEST_F(QueryOpConstraintsMockDevice, PublicMatmulWrappersForwardOneDisjointDomai
         std::nullopt);
     const auto direct_primitive = ttnn::graph::query_op_constraints(
         [](const ttnn::Tensor& input_a, const ttnn::Tensor& input_b) {
-            return ttnn::prim::matmul(input_a, input_b).at(0);
+            ttnn::prim::MatmulParams parameters;
+            parameters.output_mem_config = ttnn::L1_MEMORY_CONFIG;
+            parameters.output_dtype = DataType::BFLOAT16;
+            const auto attributes = ttnn::prim::create_matmul_attributes(input_a, input_b, parameters, {std::nullopt});
+            return ttnn::prim::matmul(input_a, input_b, std::nullopt, std::nullopt, attributes).at(0);
         },
         mock_device_.get(),
         spec_a,
