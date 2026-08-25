@@ -542,16 +542,16 @@ jobs:
       - ttsim-sanity-tests
       - runtime-sim-sanity-tests
       - blackhole-multi-card-fast-sanity-tests
-    # always(): a cancelled run still reports on the legs that finished. A
-    # cancelled child contributes no expected-jobs, so its unfinished legs are
-    # not stubbed as infra failures.
+    # Reports on a run that failed — the case the summary exists for — but not
+    # on one that was cancelled: an aborted run has no outcome to summarize, and
+    # asking for one spends an LLM call to say it stopped early.
     #
     # A caller that invokes this workflow twice per run (sanity-tests-debug)
     # passes false, so the two reports don't collide on the artifact name.
     # The github.workflow arm covers this workflow's own push/schedule triggers,
     # where the `inputs` context is empty and the default above never applies;
     # it is the caller's workflow name for a workflow_call, so it is false there.
-    if: ${{ always() && (inputs.publish-run-summary || github.workflow == 'Sanity tests') }}
+    if: ${{ !cancelled() && (inputs.publish-run-summary || github.workflow == 'Sanity tests') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

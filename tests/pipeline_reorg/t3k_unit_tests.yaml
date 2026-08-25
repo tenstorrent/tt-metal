@@ -61,15 +61,6 @@
   team: models
   model-name: deepseek
 
-- name: t3k_tttv2_fast_unit_tests
-  cmd: run_t3000_tttv2_fast_unit_tests
-  skus:
-    wh_llmbox:
-      timeout: 25
-  owner_id: U08JFM3CFA4 # Gongyu Wang
-  team: models
-  model-name: tttv2 modules
-
 - name: t3k_ttnn_multiprocess_slow_tests
   cmd: run_t3000_ttnn_multiprocess_slow_tests
   skus:

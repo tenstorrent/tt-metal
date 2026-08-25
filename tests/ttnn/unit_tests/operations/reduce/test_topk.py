@@ -472,10 +472,101 @@ def test_topk_multicore_local_write_correctness(largest, device):
 
 
 @pytest.mark.parametrize(
+    "H, W, k",
+    (
+        (32, 1024, 32),  # smallest newly-eligible width; crashed pre-fix on grids with lp2(cores) > W/32
+        (32, 1024, 64),
+        (32, 2048, 32),  # the measured ~4x cell class
+        (32, 2048, 64),
+        (32, 4096, 32),  # composite-routed by default on BH; sub_core_grids pins the stock path here
+        (64, 4096, 64),  # two tile rows: upper edge of the Ht-aware gate
+    ),
+)
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk_low_tile_row_multicore(H, W, k, largest, device):
+    """
+    Device coverage for the Ht-aware multi-core eligibility domain: pow2 widths in
+    [multi_core_low_ht_min_width=1024, multi_core_min_width=8192) with <= 2 tile rows route to
+    TopKMultiCoreProgramFactory (select_program_factory requirement #1's low-tile-row arm). Before
+    the eligibility change these shapes ran single-core; W=1024 additionally used to crash inside
+    find_topk_core_config on grids where largest_power_of_two(max_cores) > W/32 truncated the
+    starting split size to zero (e.g. Blackhole 13x10). Checks both the top-k value set per row and
+    that the returned indices really address the returned values in the input.
+
+    sub_core_grids (the device's full compute grid, so the device op sees the same grid as the
+    default) is passed to decline the Blackhole composite router: at pow2 W in [4096, 8192) with
+    largest=True the router otherwise takes the cell (the composite measured faster there — see
+    should_route_to_topk_large_indices in topk.cpp), and this test targets the stock
+    multi-core factory specifically.
+    """
+    torch.manual_seed(2005)
+    grid = device.compute_with_storage_grid_size()
+    full_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+    t = torch.randn((1, 1, H, W), dtype=torch.bfloat16)
+    x = ttnn.from_torch(t, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    v, i = ttnn.topk(x, k, dim=-1, largest=largest, sorted=True, sub_core_grids=full_grid)
+    ttnn.synchronize_device(device)
+
+    got_v = ttnn.to_torch(v).float()
+    got_i = ttnn.to_torch(i, dtype=torch.int64)
+    ref_v, _ = torch.topk(t.float(), k, dim=-1, largest=largest, sorted=True)
+
+    # Order-insensitive top-k value set per row (bf16 ties may be permuted).
+    got_s = got_v.sort(dim=-1, descending=True).values
+    ref_s = ref_v.sort(dim=-1, descending=True).values
+    assert torch.allclose(
+        got_s, ref_s, atol=1e-2
+    ), f"low-Ht multicore topk values mismatch: max_diff={(got_s - ref_s).abs().max():.4f}"
+
+    # Indices must address the returned values exactly (both come from the input untouched).
+    gathered = torch.gather(t.float(), -1, got_i)
+    assert torch.equal(gathered, got_v), "low-Ht multicore topk indices do not point at returned values"
+
+
+@pytest.mark.parametrize(
+    "H, W, k",
+    (
+        (32, 4096, 32),  # 1 tile row
+        (64, 4096, 64),  # 2 tile rows
+    ),
+)
+def test_topk_w4096_low_ht_default_routes_to_composite(H, W, k, device):
+    """
+    Correctness lock for the pow2 [small_k_route_min_padded_width=4096, multi_core_min_width=8192)
+    low-tile-row cell with DEFAULT args on Blackhole: the composite router takes it (measured faster
+    than the stock multi-core bitonic — see should_route_to_topk_large_indices in topk.cpp), even
+    though the cell is structurally eligible for stock multi-core since the Ht-aware gate. On
+    non-Blackhole archs the same call exercises the stock multi-core path instead; the assertions
+    hold either way.
+    """
+    torch.manual_seed(2005)
+    t = torch.randn((1, 1, H, W), dtype=torch.bfloat16)
+    x = ttnn.from_torch(t, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    v, i = ttnn.topk(x, k, dim=-1, largest=True, sorted=True)
+    ttnn.synchronize_device(device)
+
+    got_v = ttnn.to_torch(v).float()
+    got_i = ttnn.to_torch(i, dtype=torch.int64)
+    ref_v, _ = torch.topk(t.float(), k, dim=-1, largest=True, sorted=True)
+
+    # Order-insensitive top-k value set per row (bf16 ties may be permuted).
+    got_s = got_v.sort(dim=-1, descending=True).values
+    ref_s = ref_v.sort(dim=-1, descending=True).values
+    assert torch.allclose(
+        got_s, ref_s, atol=1e-2
+    ), f"routed W=4096 low-Ht topk values mismatch: max_diff={(got_s - ref_s).abs().max():.4f}"
+
+    # Indices must address the returned values exactly.
+    gathered = torch.gather(t.float(), -1, got_i)
+    assert torch.equal(gathered, got_v), "routed W=4096 low-Ht topk indices do not point at returned values"
+
+
+@pytest.mark.parametrize(
     "N, C, H, W, dim, k",
     (
         (1, 1, 32, 64, 3, 32),  # small dim -> single-core path
-        (1, 1, 32, 4096, 3, 32),  # larger dim, still single-core
+        (1, 1, 32, 4224, 3, 32),  # larger dim, non-pow2 -> genuinely single-core
+        (1, 1, 32, 4096, 3, 32),  # pow2 low-tile-row dim -> multi-core path (Ht-aware gate)
         (1, 1, 32, 8192, 3, 50),  # power-of-2 dim, k<=64 -> multi-core path (32-bit indices)
     ),
 )
