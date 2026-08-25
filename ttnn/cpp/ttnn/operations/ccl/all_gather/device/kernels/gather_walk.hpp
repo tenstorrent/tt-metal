@@ -35,9 +35,15 @@
 // packet gives xfer == 1, which is plain ascending order.
 ////////////////////////////////////////////////////////////////
 
-// Chunks in one transfer: the most that fits both a packet and a single NOC command.
-constexpr uint32_t chunks_per_transfer(uint32_t packet_size, uint32_t chunk_size) {
-    const uint32_t cap = packet_size < NOC_MAX_BURST_SIZE ? packet_size : NOC_MAX_BURST_SIZE;
+// Chunks in one transfer: the most that fits a packet, a single NOC command, and the host's run
+// cap (0 = no cap). A cap trades packet fill for DRAM bank spread. Hardware already bounds a
+// transfer at min(fabric packet, NOC_MAX_BURST_SIZE) -- 7616 B on Wormhole, 15232 B on Blackhole --
+// so a host cap only bites below that figure.
+constexpr uint32_t chunks_per_transfer(uint32_t packet_size, uint32_t chunk_size, uint32_t run_cap_bytes = 0) {
+    uint32_t cap = packet_size < NOC_MAX_BURST_SIZE ? packet_size : NOC_MAX_BURST_SIZE;
+    if (run_cap_bytes != 0 && run_cap_bytes < cap) {
+        cap = run_cap_bytes;
+    }
     return cap < chunk_size ? 1u : cap / chunk_size;
 }
 

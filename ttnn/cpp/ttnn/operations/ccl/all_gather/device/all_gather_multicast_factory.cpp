@@ -226,13 +226,13 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // layout is special-cased here.
     ////////////////////////////////////////////////////////////////
 
-    const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
     const auto arch = input_tensor.device()->arch();
 
     // --- Copy mode ---
     // The kernel always reads whole *aligned* input pages into L1 (required by the input's NoC
     // read alignment, DRAM or L1) but writes at output *content* (unaligned) granularity -- which is
     // why chunk sizing differs by the three modes above.
+    const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
     const uint32_t input_unaligned_page_size = input_tensor.buffer()->page_size();
     const uint32_t output_unaligned_page_size = output_tensor.buffer()->page_size();
     // matched/concat write a whole aligned input page (== L1 read stride) into an output slot;
@@ -290,6 +290,31 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     // Circular Buffer and Kernel creation
     ////////////////////////////////////////////////////////////////
 
+    // --- Per-arch tuning ---
+    // Sweep results, each arch at a single axis length (Wormhole 8 devices, Blackhole 4). Two CB entries is
+    // the floor on any arch: the reader runs one entry ahead of the sender, so a single entry deadlocks.
+    // Defaults are the fallback for an uncalibrated arch.
+    uint32_t cb_depth = 2;
+    uint32_t packets_per_cb_entry = 1;
+    uint32_t run_cap_bytes = 0;
+    if (arch == tt::ARCH::WORMHOLE_B0) {
+        // Depth is also the reader's in-flight trid count, but deeper is perf-neutral here, so keep the L1.
+        cb_depth = 2;
+        // Packing several packets per entry amortises the reader/sender CB handshake, which is what the
+        // store-and-forward writer wants -- but here the reader sends the packets itself, off transaction
+        // ids and with no per-entry flush to stall on, so a one-packet entry just pipelines finer and wins
+        // on a line and on small row-major pages.
+        packets_per_cb_entry = 1;
+        // No run cap: the sweeps put the best run length at the hardware ceiling (7616 B), so any value
+        // settable here is already above it and would only cost payload.
+    } else if (arch == tt::ARCH::BLACKHOLE) {
+        cb_depth = 3;
+        packets_per_cb_entry = 4;  // unicast wants 1 here; every cell was swept on its own
+        // Past ~8 KB a run gains little packet fill but keeps the walk in one DRAM bank longer. Only chunks
+        // big enough to still span a few runs are worth capping; below that the packet's own limit wins.
+        run_cap_bytes = output_chunk_size >= 1024 ? 8192 : 0;
+    }
+
     // --- CB sizing ---
     // A CB entry holds a whole number of packet loads, and of input pages (split) or output pages
     // (concat), so the entry boundary never cuts a page; one of those two counts is always 1. A packet
@@ -298,20 +323,11 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     uint32_t chunks_per_packet = std::max(1u, packet_size / output_chunk_size);
     chunks_per_packet = std::max(chunks_per_group, (chunks_per_packet / chunks_per_group) * chunks_per_group);
     uint32_t cb_page_size = chunks_per_packet * output_chunk_size;
-    // Two entries: one filling while the other is sent, and two is the floor -- the reader runs one entry
-    // ahead of the sender, so a single entry deadlocks. Depth is also the reader's in-flight trid count,
-    // but deeper is perf-neutral on Wormhole, so keep the L1 instead.
-    const uint32_t cb_depth = (arch == tt::ARCH::BLACKHOLE) ? 3 : 2;
-
-    // Packets per CB entry. Packing several amortises the reader/sender CB handshake, which is what the
-    // store-and-forward writer wants -- but here the reader sends the packets itself, off transaction ids
-    // and with no per-entry flush to stall on, so a one-packet entry just pipelines finer and wins on a
-    // line and on small row-major pages. An integer multiplier preserves the whole-packet and whole-page
-    // properties above. Wormhole takes 1, so the packing below (and its warning) is Blackhole-only.
-    const uint32_t ideal_multiplier = (arch == tt::ARCH::BLACKHOLE) ? 4 : 1;
+    // An integer multiplier preserves the whole-packet and whole-page properties above. The clamp is
+    // defensive: it holds whatever packets_per_cb_entry is tuned to, including 1.
     const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
-    const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * cb_page_size), 1u, ideal_multiplier);
-    if (multiplier < ideal_multiplier) {
+    const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * cb_page_size), 1u, packets_per_cb_entry);
+    if (multiplier < packets_per_cb_entry) {
         log_warning(
             tt::LogOp,
             "CircularBuffer depth reduced due to L1 pressure (only {} B available), performance may regress.",
@@ -326,16 +342,6 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         tt::tt_metal::CircularBufferConfig(cb_depth * cb_page_size, {{cb0_id, df}}).set_page_size(cb0_id, cb_page_size);
 
     CreateCircularBuffer(program, worker_core_range, cb_src0_config);
-
-    // Longest run the walk may emit, in chunks. Hardware already caps a transfer at min(fabric packet,
-    // NOC_MAX_BURST_SIZE): 7616 B on Wormhole and 15232 B on Blackhole. The sweeps put the best run length
-    // near Wormhole's figure, so only Blackhole needs a cap -- any value settable on Wormhole is already
-    // above its ceiling. Past ~8 KB a run gains little packet fill but makes the walk revisit the same DRAM
-    // bank for longer. Only capping pages large enough to still span a few chunks pays off; with small pages
-    // the longest run the packet allows is what wins.
-    constexpr uint32_t max_run_bytes = 8192;
-    const bool cap_runs = arch == tt::ARCH::BLACKHOLE && output_chunk_size >= 1024;
-    const uint32_t xfer_cap = cap_runs ? std::max(1u, max_run_bytes / output_chunk_size) : 0xFFFFFFFFu;
 
     // KERNEL CREATION
     // Reader (covers forward directions E-line + S-rect)
@@ -352,7 +358,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         load_balance_across_alt_routes,  // load_balance_across_alt_routes
         (e_hops > 0) + (s_hops > 0),     // num_connections
         do_init_barrier,                 // do_init_barrier
-        xfer_cap,                        // max run length in chunks
+        run_cap_bytes,                   // longest run the walk may emit; 0 = no cap
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
@@ -369,7 +375,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         load_balance_across_alt_routes,  // load_balance_across_alt_routes
         (w_hops > 0) + (n_hops > 0),     // num_connections
         do_init_barrier,                 // do_init_barrier
-        xfer_cap,                        // max run length in chunks
+        run_cap_bytes,                   // longest run the walk may emit; 0 = no cap
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 

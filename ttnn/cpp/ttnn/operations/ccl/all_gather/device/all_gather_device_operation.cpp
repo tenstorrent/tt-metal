@@ -242,17 +242,11 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         const auto& input_tensor = tensor_args.input_tensor;
         const uint32_t axis = args.get_1d_axis();
         const bool is_ring = tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis]);
-        const uint64_t in_page = input_tensor.tensor_spec().compute_page_size_bytes();
-        const uint64_t out_page = args.output_spec.compute_page_size_bytes();
-        const uint64_t txn = std::min(in_page, out_page);  // NOC transaction size
-        // Bytes of the gathered output crossing one link -- the same quantity both factories compute, so
-        // the thresholds here and there are comparable. Scaled by device count because a link carries more
-        // devices' data as the axis grows; each arch was swept at a single axis length (Wormhole 8 devices,
-        // Blackhole 4), so that scaling is a model, not a measurement.
-        // Blackhole was fitted on tile only, Wormhole on tile and row-major.
+        // Packed bytes of the gathered output crossing one link -- the same expression both factories use,
+        // so the thresholds here and there are comparable. Each arch was swept at a single axis length
+        // (Wormhole 8 devices, Blackhole 4); nothing checks the thresholds carry to other lengths.
         const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
-        const uint64_t per_link_bytes =
-            input_tensor.physical_volume() * input_tensor.element_size() * args.num_devices / num_links;
+        const uint64_t per_link_bytes = args.output_spec.compute_packed_buffer_size_bytes() / num_links;
 
         switch (input_tensor.device()->arch()) {
             case tt::ARCH::WORMHOLE_B0: {
@@ -272,13 +266,16 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                 break;
             }
             case tt::ARCH::BLACKHOLE: {
-                // Factory-vs-factory sweep. How long unicast's extra store-and-forward hop takes to pay for
-                // itself is what sets both boundaries, so a ring -- which halves that hop count by pulling
-                // from both sides -- switches far earlier than a line.
+                // Factory-vs-factory sweep, fitted on tile only. How long unicast's extra store-and-forward
+                // hop takes to pay for itself is what sets both boundaries, so a ring -- which halves that
+                // hop count by pulling from both sides -- switches far earlier than a line.
                 if (is_ring) {
                     // Unicast wins almost everywhere. Multicast only holds on where the op is pure overhead
                     // rather than transfer: a small volume moved as small pages.
-                    use_unicast = per_link_bytes > 64 * 1024 || txn > 1024;
+                    const uint64_t page = std::min(
+                        input_tensor.tensor_spec().compute_page_size_bytes(),
+                        args.output_spec.compute_page_size_bytes());
+                    use_unicast = per_link_bytes > 64 * 1024 || page > 1024;
                 } else {
                     // One inbound link, so unicast trails until the volume is large enough for its
                     // bandwidth edge to cover the hops. Page size does not move this boundary.
