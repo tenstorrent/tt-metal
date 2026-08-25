@@ -121,9 +121,9 @@ void kernel_main() {
 
         // sin_interm = rotated * sin  (broadcast sin's single row across all input rows if cos_bcast)
         if constexpr (cos_bcast) {
-            mul_bcast_rows_init_short(rotated_interm_cb, sin_cb);
+            mul_bcast_rows_init(rotated_interm_cb, sin_cb);
         } else {
-            mul_tiles_init(rotated_interm_cb, sin_cb);
+            mul_init(rotated_interm_cb, sin_cb);
         }
         sin_interm_cb_obj.reserve_back(rope_local);
         for (uint32_t base = 0; base < rope_local; base += kDstBatch) {
@@ -150,7 +150,7 @@ void kernel_main() {
         if constexpr (cos_bcast) {
             mul_bcast_rows_init(in_cb, cos_cb);
         } else {
-            mul_tiles(in_cb, cos_cb);
+            mul_init(in_cb, cos_cb);
         }
         cos_interm_cb_obj.reserve_back(rope_local);
         for (uint32_t base = 0; base < rope_local; base += kDstBatch) {
