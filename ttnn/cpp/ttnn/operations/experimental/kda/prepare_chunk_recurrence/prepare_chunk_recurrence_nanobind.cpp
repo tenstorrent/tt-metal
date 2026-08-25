@@ -26,10 +26,6 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
             g (ttnn.Tensor): Flat per-key log decays ``[1, T, H*K]`` in BFLOAT16.
             beta (ttnn.Tensor): Per-token update strengths ``[H, N, 32, 1]`` in
                 FLOAT32, where ``N = T / 32``.
-            eye (ttnn.Tensor): Identity constant ``[1, 1, 32, 32]`` in FLOAT32.
-            tril (ttnn.Tensor): Lower-triangular constant ``[1, 1, 32, 32]`` in
-                FLOAT32.
-            ones (ttnn.Tensor): Ones constant ``[1, 1, 32, 32]`` in FLOAT32.
             num_heads (int): Number of heads ``H``. Flat Q/K/G and V widths must be
                 divisible by ``H``.
 
@@ -65,9 +61,6 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
         nb::arg("v").noconvert(),
         nb::arg("g").noconvert(),
         nb::arg("beta").noconvert(),
-        nb::arg("eye").noconvert(),
-        nb::arg("tril").noconvert(),
-        nb::arg("ones").noconvert(),
         nb::arg("num_heads"),
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),

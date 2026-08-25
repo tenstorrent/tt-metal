@@ -66,10 +66,7 @@ def _host_inputs(
     v = (0.2 * torch.randn(1, sequence, num_heads * value_dim, generator=generator)).to(torch.bfloat16).float()
     g = (-0.001 - 0.05 * torch.rand(1, sequence, num_heads * key_dim, generator=generator)).to(torch.bfloat16).float()
     beta = torch.sigmoid(torch.randn(num_heads, num_chunks, CHUNK_SIZE, 1, generator=generator)).float()
-    eye = torch.eye(CHUNK_SIZE, dtype=torch.float32).reshape(1, 1, CHUNK_SIZE, CHUNK_SIZE)
-    tril = torch.tril(torch.ones(CHUNK_SIZE, CHUNK_SIZE, dtype=torch.float32)).reshape(1, 1, CHUNK_SIZE, CHUNK_SIZE)
-    ones = torch.ones(1, 1, CHUNK_SIZE, CHUNK_SIZE, dtype=torch.float32)
-    return q, k, v, g, beta, eye, tril, ones
+    return q, k, v, g, beta
 
 
 def _reshape_flat(tensor: torch.Tensor, num_heads: int, num_chunks: int, dim: int) -> torch.Tensor:
@@ -353,7 +350,7 @@ def test_prepare_chunk_recurrence_production_performance(device: ttnn.Device) ->
     )
 
 
-@pytest.mark.parametrize("host_index", range(8))
+@pytest.mark.parametrize("host_index", range(5))
 def test_prepare_chunk_recurrence_rejects_host_inputs(
     device: ttnn.Device,
     expect_error: Callable,
@@ -365,7 +362,7 @@ def test_prepare_chunk_recurrence_rejects_host_inputs(
     inputs[host_index] = ttnn.from_torch(host_inputs[host_index], dtype=dtype, layout=ttnn.TILE_LAYOUT)
     with expect_error(
         RuntimeError,
-        f"{('q', 'k', 'v', 'g', 'beta', 'eye', 'tril', 'ones')[host_index]} must be an allocated device tensor",
+        f"{('q', 'k', 'v', 'g', 'beta')[host_index]} must be an allocated device tensor",
     ):
         _run(tuple(inputs), 2)
 
@@ -384,7 +381,6 @@ def test_prepare_chunk_recurrence_rejects_host_inputs(
         ("key_alignment", "K and V must be positive and tile aligned"),
         ("value_alignment", "K and V must be positive and tile aligned"),
         ("beta", "beta shape must be"),
-        ("eye", "eye shape must be"),
         ("sharded", "q must use interleaved memory"),
     ],
 )
@@ -423,8 +419,6 @@ def test_prepare_chunk_recurrence_rejects_invalid_inputs(
         inputs[2] = _to_device(torch.randn(1, 64, 96).to(torch.bfloat16).float(), device, ttnn.bfloat16)
     elif case == "beta":
         inputs[4] = _to_device(host_inputs[4][:, :1], device, ttnn.float32)
-    elif case == "eye":
-        inputs[5] = _to_device(torch.eye(64).reshape(1, 1, 64, 64), device, ttnn.float32)
     elif case == "sharded":
         shard_spec = ttnn.ShardSpec(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
@@ -456,8 +450,8 @@ def test_prepare_chunk_recurrence_rejects_invalid_options(device: ttnn.Device, e
         _run(inputs, 2, memory_config=sharded)
 
 
-@pytest.mark.parametrize("removed_keyword", ["chunk_size", "v_flat", "normalize_qk", "scale"])
-def test_prepare_chunk_recurrence_does_not_expose_prototype_modes(
+@pytest.mark.parametrize("removed_keyword", ["eye", "tril", "ones", "chunk_size", "v_flat", "normalize_qk", "scale"])
+def test_prepare_chunk_recurrence_does_not_expose_removed_arguments(
     device: ttnn.Device,
     expect_error: Callable,
     removed_keyword: str,

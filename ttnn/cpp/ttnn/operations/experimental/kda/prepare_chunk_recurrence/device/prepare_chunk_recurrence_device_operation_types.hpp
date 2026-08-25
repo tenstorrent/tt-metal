@@ -27,9 +27,6 @@ struct PrepareChunkRecurrenceInputs {
     Tensor v;
     Tensor g;
     Tensor beta;
-    Tensor eye;
-    Tensor tril;
-    Tensor ones;
 };
 
 }  // namespace ttnn::experimental::prim

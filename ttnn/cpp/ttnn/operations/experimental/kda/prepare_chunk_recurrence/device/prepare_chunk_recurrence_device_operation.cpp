@@ -40,25 +40,10 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     check_layout(in.beta, Layout::TILE, operation_name, "beta");
     check_dtype(in.beta, DataType::FLOAT32, operation_name, "beta");
     check_interleaved(in.beta, operation_name, "beta");
-    check_allocated_device_tensor(in.eye, operation_name, "eye");
-    check_layout(in.eye, Layout::TILE, operation_name, "eye");
-    check_dtype(in.eye, DataType::FLOAT32, operation_name, "eye");
-    check_interleaved(in.eye, operation_name, "eye");
-    check_allocated_device_tensor(in.tril, operation_name, "tril");
-    check_layout(in.tril, Layout::TILE, operation_name, "tril");
-    check_dtype(in.tril, DataType::FLOAT32, operation_name, "tril");
-    check_interleaved(in.tril, operation_name, "tril");
-    check_allocated_device_tensor(in.ones, operation_name, "ones");
-    check_layout(in.ones, Layout::TILE, operation_name, "ones");
-    check_dtype(in.ones, DataType::FLOAT32, operation_name, "ones");
-    check_interleaved(in.ones, operation_name, "ones");
     check_same_device(in.q, in.k, operation_name, "k");
     check_same_device(in.q, in.v, operation_name, "v");
     check_same_device(in.q, in.g, operation_name, "g");
     check_same_device(in.q, in.beta, operation_name, "beta");
-    check_same_device(in.q, in.eye, operation_name, "eye");
-    check_same_device(in.q, in.tril, operation_name, "tril");
-    check_same_device(in.q, in.ones, operation_name, "ones");
     check_output_interleaved(attrs.output_mem_config, operation_name);
     check_compute_config(attrs.compute_kernel_config, operation_name);
 
@@ -96,10 +81,6 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
         beta_shape.rank() == 4 && beta_shape[0] == attrs.num_heads && beta_shape[1] == attrs.num_chunks &&
             beta_shape[2] == tt::constants::TILE_HEIGHT && beta_shape[3] == 1,
         "prepare_chunk_recurrence: beta shape must be [num_heads, num_chunks, 32, 1]");
-    const Shape constant_shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
-    TT_FATAL(in.eye.logical_shape() == constant_shape, "prepare_chunk_recurrence: eye shape must be [1, 1, 32, 32]");
-    TT_FATAL(in.tril.logical_shape() == constant_shape, "prepare_chunk_recurrence: tril shape must be [1, 1, 32, 32]");
-    TT_FATAL(in.ones.logical_shape() == constant_shape, "prepare_chunk_recurrence: ones shape must be [1, 1, 32, 32]");
     constexpr uint32_t allowed_bf16_mask = 0x37;
     TT_FATAL(
         (attrs.output_bf16_mask & ~allowed_bf16_mask) == 0,
@@ -143,9 +124,6 @@ std::vector<Tensor> prepare_chunk_recurrence(
     const Tensor& v,
     const Tensor& g,
     const Tensor& beta,
-    const Tensor& eye,
-    const Tensor& tril,
-    const Tensor& ones,
     uint32_t num_heads,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
@@ -174,8 +152,7 @@ std::vector<Tensor> prepare_chunk_recurrence(
             .output_bf16_mask = output_bf16_mask,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
-        PrepareChunkRecurrenceInputs{
-            .q = q, .k = k, .v = v, .g = g, .beta = beta, .eye = eye, .tril = tril, .ones = ones});
+        PrepareChunkRecurrenceInputs{.q = q, .k = k, .v = v, .g = g, .beta = beta});
 }
 
 }  // namespace ttnn::experimental::prim

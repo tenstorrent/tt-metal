@@ -14,9 +14,6 @@ std::vector<ttnn::Tensor> prepare_chunk_recurrence(
     const ttnn::Tensor& v,
     const ttnn::Tensor& g,
     const ttnn::Tensor& beta,
-    const ttnn::Tensor& eye,
-    const ttnn::Tensor& tril,
-    const ttnn::Tensor& ones,
     uint32_t num_heads,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
@@ -28,9 +25,6 @@ std::vector<ttnn::Tensor> prepare_chunk_recurrence(
     check_allocated_device_tensor(v, operation_name, "v");
     check_allocated_device_tensor(g, operation_name, "g");
     check_allocated_device_tensor(beta, operation_name, "beta");
-    check_allocated_device_tensor(eye, operation_name, "eye");
-    check_allocated_device_tensor(tril, operation_name, "tril");
-    check_allocated_device_tensor(ones, operation_name, "ones");
     const auto output_memory_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     TT_FATAL(num_heads > 0, "prepare_chunk_recurrence: num_heads must be positive");
     constexpr uint32_t allowed_bf16_mask = 0x37;
@@ -47,7 +41,7 @@ std::vector<ttnn::Tensor> prepare_chunk_recurrence(
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);
     return ttnn::experimental::prim::prepare_chunk_recurrence(
-        q, k, v, g, beta, eye, tril, ones, num_heads, output_memory_config, kernel_config, output_bf16_mask);
+        q, k, v, g, beta, num_heads, output_memory_config, kernel_config, output_bf16_mask);
 }
 
 }  // namespace ttnn::experimental::kda

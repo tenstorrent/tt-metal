@@ -85,9 +85,6 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     const auto& v = in.v.mesh_tensor();
     const auto& g = in.g.mesh_tensor();
     const auto& beta = in.beta.mesh_tensor();
-    const auto& eye = in.eye.mesh_tensor();
-    const auto& tril = in.tril.mesh_tensor();
-    const auto& ones = in.ones.mesh_tensor();
     const auto& device = q.device();
     const auto arch = device.arch();
 
@@ -145,9 +142,6 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     const m2::TensorParamName V_TENSOR{"v"};
     const m2::TensorParamName G_TENSOR{"g"};
     const m2::TensorParamName BETA_TENSOR{"beta"};
-    const m2::TensorParamName EYE_TENSOR{"eye"};
-    const m2::TensorParamName TRIL_TENSOR{"tril"};
-    const m2::TensorParamName ONES_TENSOR{"ones"};
     const m2::TensorParamName V_BETA_OUTPUT{"v_beta_output"};
     const m2::TensorParamName KD_OUTPUT{"kd_output"};
     const m2::TensorParamName Q_DECAY_OUTPUT{"q_decay_output"};
@@ -238,9 +232,6 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::TensorBinding{V_TENSOR, "v"},
                 m2::TensorBinding{G_TENSOR, "g"},
                 m2::TensorBinding{BETA_TENSOR, "beta"},
-                m2::TensorBinding{EYE_TENSOR, "eye"},
-                m2::TensorBinding{TRIL_TENSOR, "tril"},
-                m2::TensorBinding{ONES_TENSOR, "ones"},
             },
         .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count", "NC", "HV", "Hk"}},
@@ -409,9 +400,6 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::TensorParameter{.unique_id = V_TENSOR, .spec = v.tensor_spec()},
                 m2::TensorParameter{.unique_id = G_TENSOR, .spec = g.tensor_spec()},
                 m2::TensorParameter{.unique_id = BETA_TENSOR, .spec = beta.tensor_spec()},
-                m2::TensorParameter{.unique_id = EYE_TENSOR, .spec = eye.tensor_spec()},
-                m2::TensorParameter{.unique_id = TRIL_TENSOR, .spec = tril.tensor_spec()},
-                m2::TensorParameter{.unique_id = ONES_TENSOR, .spec = ones.tensor_spec()},
                 m2::TensorParameter{.unique_id = V_BETA_OUTPUT, .spec = outputs[0].mesh_tensor().tensor_spec()},
                 m2::TensorParameter{.unique_id = KD_OUTPUT, .spec = outputs[1].mesh_tensor().tensor_spec()},
                 m2::TensorParameter{.unique_id = Q_DECAY_OUTPUT, .spec = outputs[2].mesh_tensor().tensor_spec()},
@@ -431,9 +419,6 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         {V_TENSOR, v},
         {G_TENSOR, g},
         {BETA_TENSOR, beta},
-        {EYE_TENSOR, eye},
-        {TRIL_TENSOR, tril},
-        {ONES_TENSOR, ones},
         {V_BETA_OUTPUT, outputs[0].mesh_tensor()},
         {KD_OUTPUT, outputs[1].mesh_tensor()},
         {Q_DECAY_OUTPUT, outputs[2].mesh_tensor()},
