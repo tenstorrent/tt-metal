@@ -931,6 +931,13 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
             mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + 6, num_cores_write_back);
         }
 
+        // A worker can legitimately have no output storage shard to reshard, for example when the reader count exceeds
+        // the output shard count. The kernel still materializes its fixed writer-argument views before the zero-count
+        // write-back loop, so provide neutral placeholders for those slots.
+        if (mm_in1_sender_writer_args.size() < 11) {
+            mm_in1_sender_writer_args.resize(11, 0);
+        }
+
         // Build variant args: positions [1] and [2] are buffer addresses
         std::vector<std::variant<uint32_t, std::reference_wrapper<const tt::tt_metal::MeshTensor>>> in1_writer_args(
             mm_in1_sender_writer_args.begin(), mm_in1_sender_writer_args.end());
@@ -941,10 +948,6 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         auto& in1_kernel_desc = reader_assignment.worker_index == 0 ? in1_sender_writer_kernel_desc
                                                                     : in1_sender_writer_other_noc_kernel_desc;
         in1_kernel_desc.emplace_runtime_args(core, in1_writer_args);
-        TT_FATAL(
-            mm_in1_sender_writer_args.size() >= 11,
-            "Kernel requires at least 11 runtime args, got {}",
-            mm_in1_sender_writer_args.size());
     }
 
     TT_FATAL(
