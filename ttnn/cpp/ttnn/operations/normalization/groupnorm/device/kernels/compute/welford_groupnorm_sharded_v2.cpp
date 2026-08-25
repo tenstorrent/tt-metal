@@ -175,11 +175,14 @@ void kernel_main() {
         uint32_t tile_id = b * block_hw;
         dfb_ex_partial.reserve_back(2);
         if constexpr (welford_fp32_alias) {
-            // Reconfigure the transpose op for the alias buffer index consumed by the
-            // welford loop below.
+            // Tilize / hw_startup programmed unpacker A from the Default-mode input CB
+            // (fp32 L1 → TF32 dst). The welford alias is UnpackToDestFp32 (dst Float32).
+            // transpose_init only inits and asserts the HW already matches; reconfig first.
 #ifdef TILIZE_IN
+            reconfig_data_format_srca(dfb_in_welford_id);
             transpose_init(dfb_in_welford_id);
 #else
+            reconfig_data_format_srca(dfb_in0_welford_id);
             transpose_init(dfb_in0_welford_id);
 #endif
         } else {

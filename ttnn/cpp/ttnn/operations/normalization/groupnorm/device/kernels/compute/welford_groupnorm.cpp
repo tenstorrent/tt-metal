@@ -225,11 +225,14 @@ void kernel_main() {
 #endif
 
     if constexpr (welford_unpack_fp32_active) {
-        // Reconfigure the transpose op for the welford intake CB. The factory marks this CB
-        // with UnpackToDestFp32: c_29 in the TILIZE_IN branch, c_19 in the non-TILIZE_IN alias branch.
+        // Tilize / hw_startup programmed unpacker A from the Default-mode input CB
+        // (fp32 L1 → TF32 dst). The welford intake CB is UnpackToDestFp32 (dst Float32).
+        // transpose_init only inits and asserts the HW already matches; reconfig first.
 #ifdef TILIZE_IN
+        reconfig_data_format_srca(dfb_in_id);
         transpose_init(dfb_in_id);
 #else
+        reconfig_data_format_srca(dfb_in0_welford_id);
         transpose_init(dfb_in0_welford_id);
 #endif
     }
