@@ -68,7 +68,7 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
 
     if constexpr (summary_pair) {
         auto seed_identity = [&](DataflowBuffer& buffer) {
-            constexpr uint32_t one_fp32 = 0x3F800000;
+            constexpr uint32_t one_fp32 = __builtin_bit_cast(uint32_t, 1.0F);
             constexpr uint32_t face_elements = 16 * 16;
             constexpr uint32_t tile_elements = 4 * face_elements;
             buffer.reserve_back(kv);
