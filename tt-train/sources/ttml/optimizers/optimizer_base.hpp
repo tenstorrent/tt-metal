@@ -44,6 +44,13 @@ public:
     virtual void print_stats() const;
 
 protected:
+    // ``initial_lr`` is always serialized with the optimizer state dict
+    // (mirroring PyTorch, where ``param_group["initial_lr"]`` rides along in
+    // ``optimizer.state_dict()``) and is required on load. Concrete optimizers
+    // call these from their get_state_dict / set_state_dict overrides.
+    void save_initial_lr(serialization::StateDict& dict) const;
+    void restore_initial_lr(const serialization::StateDict& dict);
+
     serialization::NamedParameters m_parameters;
 
 private:

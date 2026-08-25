@@ -28,10 +28,16 @@ public:
     void step() override {};
 
     [[nodiscard]] serialization::StateDict get_state_dict() const override {
-        return {};
+        serialization::StateDict dict;
+        dict["lr"] = m_lr;
+        save_initial_lr(dict);
+        return dict;
     }
 
-    void set_state_dict(const serialization::StateDict &dict) override {};
+    void set_state_dict(const serialization::StateDict &dict) override {
+        m_lr = serialization::get_value_type<float>(dict, "lr");
+        restore_initial_lr(dict);
+    }
 
     [[nodiscard]] size_t get_steps() const override {
         return {};
@@ -733,4 +739,40 @@ TEST(LambdaSchedulerTest, BaseLrPersistsWhenResumedOptimizerHasDecayedLr) {
     src.step();
     dst.step();
     EXPECT_FLOAT_EQ(src.get_last_lr(), dst.get_last_lr());
+}
+
+// ----------------------------------
+// Optimizer initial_lr serialization
+// (mirrors PyTorch, where param_group["initial_lr"] rides along in
+// optimizer.state_dict())
+// ----------------------------------
+TEST(OptimizerInitialLrTest, StateDictAlwaysContainsInitialLr) {
+    // Before any scheduler attaches, the base LR is simply the current LR.
+    ttml::optimizers::MockOptimizer optimizer(1.0F);
+    auto state = optimizer.get_state_dict();
+    ASSERT_TRUE(state.contains("initial_lr"));
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(state, "initial_lr"), 1.0F);
+}
+
+TEST(OptimizerInitialLrTest, InitialLrSurvivesOptimizerStateDictRoundTrip) {
+    // Source run: a scheduler attaches (recording initial_lr = 1.0) and the
+    // LR later decays before the checkpoint is taken.
+    ttml::optimizers::MockOptimizer src(1.0F);
+    ttml::schedulers::LinearScheduler src_sched(&src, /*start_factor=*/0.5F, /*end_factor=*/1.0F, /*total_steps=*/10);
+    src.set_lr(0.25F);  // simulate decay before checkpointing
+    auto state = src.get_state_dict();
+    ASSERT_TRUE(state.contains("initial_lr"));
+    EXPECT_FLOAT_EQ(ttml::serialization::get_value_type<float>(state, "initial_lr"), 1.0F);
+
+    // Resume into a fresh optimizer BEFORE any scheduler attaches (the usual
+    // restore order). The decayed LR is restored...
+    ttml::optimizers::MockOptimizer dst(0.999F);
+    dst.set_state_dict(state);
+    EXPECT_FLOAT_EQ(dst.get_lr(), 0.25F);
+
+    // ...and a brand-new scheduler attached afterwards must use the ORIGINAL
+    // base LR from the checkpoint, not the decayed one.
+    EXPECT_FLOAT_EQ(dst.get_initial_lr(), 1.0F);
+    ttml::schedulers::StepScheduler dst_sched(&dst, /*step_size=*/10, /*gamma=*/0.1F);
+    EXPECT_FLOAT_EQ(dst.get_lr(), 1.0F);
 }

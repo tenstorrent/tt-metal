@@ -45,11 +45,13 @@ void RemoteOptimizer::step() {
 serialization::StateDict RemoteOptimizer::get_state_dict() const {
     serialization::StateDict dict;
     dict["steps"] = m_steps;
+    save_initial_lr(dict);
     return dict;
 }
 
 void RemoteOptimizer::set_state_dict(const serialization::StateDict& dict) {
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
+    restore_initial_lr(dict);
 }
 
 size_t RemoteOptimizer::get_steps() const {

@@ -1200,5 +1200,56 @@ class TestSequentialSchedulerStateDict:
             assert dst.get_last_lr() == pytest.approx(final_lr, abs=1e-12)
 
 
+# ---------------------------------------------------------------------------
+# Optimizer initial_lr serialization
+#
+# Mirrors PyTorch, where ``param_group["initial_lr"]`` (recorded when the
+# first scheduler attaches) rides along in ``optimizer.state_dict()`` so a
+# scheduler attached after resuming a checkpoint still sees the original base
+# LR rather than the decayed one. Unlike PyTorch's open param-group dicts,
+# TTML always writes the key (falling back to the current LR when no
+# scheduler has attached) and requires it when loading a state dict.
+# ---------------------------------------------------------------------------
+
+
+class TestOptimizerInitialLrStateDict:
+    def test_state_dict_always_contains_initial_lr(self):
+        # Before any scheduler attaches, the base LR is simply the current LR.
+        opt = _make_opt()
+        assert opt.get_state_dict()["initial_lr"] == pytest.approx(BASE_LR, abs=1e-8)
+
+    def test_state_dict_records_initial_lr_once_scheduler_attaches(self):
+        opt = _make_opt()
+        LinearScheduler(opt, 0.5, 1.0, 10)  # records initial_lr; LR becomes BASE_LR * 0.5
+        state = opt.get_state_dict()
+        assert state["initial_lr"] == pytest.approx(BASE_LR, abs=1e-8)
+        assert state["lr"] == pytest.approx(BASE_LR * 0.5, abs=1e-8)
+
+    def test_initial_lr_survives_optimizer_state_dict_round_trip(self):
+        # Source run: scheduler attaches (records initial_lr), LR decays
+        # mid-warmup, then the optimizer is checkpointed.
+        src = _make_opt()
+        sched = LinearScheduler(src, 0.5, 1.0, 10)
+        for _ in range(3):
+            sched.step()
+        decayed_lr = src.get_lr()
+        assert decayed_lr < BASE_LR
+        state = src.get_state_dict()
+        assert state["initial_lr"] == pytest.approx(BASE_LR, abs=1e-8)
+
+        # Resume into a fresh optimizer (deliberately different construction
+        # LR) BEFORE any scheduler attaches — the usual restore order.
+        dst = _make_opt(0.999)
+        dst.set_state_dict(state)
+        assert dst.get_lr() == pytest.approx(decayed_lr, abs=1e-8)
+        assert dst.get_initial_lr() == pytest.approx(BASE_LR, abs=1e-8)
+
+        # A brand-new scheduler attached after resume uses the ORIGINAL base
+        # LR: StepScheduler applies base_lr at construction, so the optimizer
+        # LR snaps back to BASE_LR, not the decayed checkpoint LR.
+        StepScheduler(dst, step_size=10, gamma=0.1)
+        assert dst.get_lr() == pytest.approx(BASE_LR, abs=1e-8)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
