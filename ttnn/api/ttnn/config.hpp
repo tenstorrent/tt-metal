@@ -5,6 +5,7 @@
 #pragma once
 
 #include <filesystem>
+#include <cstdint>
 #include <iosfwd>
 #include <optional>
 #include <reflect>
@@ -17,6 +18,17 @@
 
 namespace ttnn {
 
+enum class MatmulRegistryMode : std::uint8_t { Off, Shadow, On };
+
+constexpr std::string_view to_string(const MatmulRegistryMode mode) {
+    switch (mode) {
+        case MatmulRegistryMode::Off: return "off";
+        case MatmulRegistryMode::Shadow: return "shadow";
+        case MatmulRegistryMode::On: return "on";
+    }
+    return "invalid";
+}
+
 namespace core {
 
 struct Config {
@@ -26,6 +38,9 @@ struct Config {
         std::filesystem::path tmp_dir = "/tmp/ttnn";
         bool enable_model_cache = false;
         bool enable_fast_runtime_mode = true;
+        // Snapshotted on the first public matmul dispatch and immutable after
+        // that point.  Mutating CONFIG later does not alter registry behavior.
+        MatmulRegistryMode matmul_registry_mode = MatmulRegistryMode::Off;
         // Re-validate Metal 2.0 program args on the cache-hit fast path (Update{Tensor,ProgramRun}Args).
         // The cache-miss build path always validates. Off by default; CI turns it on.
         bool validate_program_args = false;
@@ -109,4 +124,11 @@ struct fmt::formatter<ttnn::Config> {
 
     // Defined in config.cpp.
     auto format(const ttnn::Config& config, format_context& ctx) const -> format_context::iterator;
+};
+
+template <>
+struct fmt::formatter<ttnn::MatmulRegistryMode> : fmt::formatter<std::string_view> {
+    auto format(const ttnn::MatmulRegistryMode mode, format_context& ctx) const -> format_context::iterator {
+        return fmt::formatter<std::string_view>::format(ttnn::to_string(mode), ctx);
+    }
 };

@@ -28,6 +28,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tile.hpp>
 #include "tt_stl/caseless_comparison.hpp"
+#include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn-nanobind/nanobind_helpers.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -61,6 +62,8 @@ void py_module_types(nb::module_& mod) { nb::class_<ttnn::Config>(mod, "Config")
 
 void py_module(nb::module_& mod) {
     namespace lightmetal = tt::tt_metal::experimental::lightmetal;
+
+    export_enum<ttnn::MatmulRegistryMode>(mod, "MatmulRegistryMode", nb::is_arithmetic());
 
     auto py_config = static_cast<nb::class_<ttnn::Config>>(mod.attr("Config"));
     py_config.def(nb::init<const ttnn::Config&>()).def("__repr__", [](const ttnn::Config& config) {

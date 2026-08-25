@@ -230,9 +230,10 @@ static ttnn::Tensor bound_matmul(
             input_tensor_b.logical_shape());
     }
 
-    if constexpr (registry::current_mode() != registry::Mode::Off) {
-        const auto io_contract = registry::resolve_matmul_io_contract(
-            registry::IoContractRequest{
+    const auto registry_mode = registry::current_mode();
+    if (registry_mode != registry::Mode::Off) {
+        try {
+            const auto io_contract = registry::resolve_matmul_io_contract(registry::IoContractRequest{
                 .input_a_dtype = input_tensor_a.dtype(),
                 .input_a_tile = input_tensor_a.tensor_spec().tile(),
                 .input_b_tile = input_tensor_b.tensor_spec().tile(),
@@ -240,18 +241,15 @@ static ttnn::Tensor bound_matmul(
                 .requested_output_dtype = parameters.output_dtype,
                 .requested_output_tile = parameters.output_tile,
                 .optional_output = optional_output_tensor.has_value()
-                                       ? std::make_optional(
-                                             registry::OptionalOutputContract{
-                                                 .memory_config = optional_output_tensor->memory_config(),
-                                                 .dtype = optional_output_tensor->dtype(),
-                                                 .tile = optional_output_tensor->tensor_spec().tile()})
+                                       ? std::make_optional(registry::OptionalOutputContract{
+                                             .memory_config = optional_output_tensor->memory_config(),
+                                             .dtype = optional_output_tensor->dtype(),
+                                             .tile = optional_output_tensor->tensor_spec().tile()})
                                        : std::nullopt,
                 .transpose_a = parameters.transpose_a,
                 .transpose_b = parameters.transpose_b,
             });
-        const auto registry_resolution = registry::resolve(
-            registry::current_mode(),
-            registry::Eligibility{
+            const auto eligibility = registry::Eligibility{
                 .call = call_semantics,
                 .io_contract_status = io_contract.status,
                 .has_program_config = parameters.program_config.has_value(),
@@ -263,20 +261,125 @@ static ttnn::Tensor bound_matmul(
                 .has_output_tile = parameters.output_tile.has_value(),
                 .has_global_cb = parameters.global_cb.has_value(),
                 .has_sub_device = parameters.sub_device_id.has_value(),
+                .has_bcast_batch = parameters.bcast_batch.has_value(),
+                .untilize_out = parameters.untilize_out,
                 .input_a_sharded = input_tensor_a.is_sharded(),
                 .input_b_sharded = input_tensor_b.is_sharded(),
+                .output_sharded = io_contract.output_memory_config.is_sharded(),
                 .input_b_batched = parameters.user_run_batched,
                 .transpose_a = parameters.transpose_a,
                 .transpose_b = parameters.transpose_b,
-            });
-        if (registry::execution_action(registry::current_mode(), registry_resolution) ==
-            registry::ExecutionAction::ApplyRecipe) {
-            TT_FATAL(
-                registry::has_consistent_untilize_out(registry_resolution.recipe.value()),
-                "Certified matmul registry recipe has inconsistent untilize_out state");
-            parameters.program_config = registry_resolution.recipe->program_config;
-            parameters.compute_kernel_config = registry_resolution.recipe->compute_kernel_config;
-            parameters.untilize_out = registry_resolution.recipe->untilize_out;
+            };
+
+            std::optional<registry::MatmulRegistryRequest> registry_request;
+            try {
+                const auto* device_a = input_tensor_a.device();
+                const auto* device_b = input_tensor_b.device();
+                if (input_tensor_a.logical_shape().rank() == 2 && input_tensor_b.logical_shape().rank() == 2 &&
+                    device_a != nullptr && device_a == device_b && device_a->num_devices() == 1) {
+                    const auto a_logical =
+                        utilities::get_matmul_tensor_logical_shape(input_tensor_a, parameters.transpose_a);
+                    const auto b_logical =
+                        utilities::get_matmul_tensor_logical_shape(input_tensor_b, parameters.transpose_b);
+                    const auto a_padded =
+                        utilities::get_matmul_tensor_padded_shape(input_tensor_a, parameters.transpose_a);
+                    const auto b_padded =
+                        utilities::get_matmul_tensor_padded_shape(input_tensor_b, parameters.transpose_b);
+                    if (a_logical[-1] == b_logical[-2] && a_padded[-1] == b_padded[-2]) {
+                        const auto tensor_request = [](const ttnn::Tensor& tensor) {
+                            const auto& tile = tensor.tensor_spec().tile();
+                            const auto& memory_config = tensor.memory_config();
+                            return registry::TensorRequest{
+                                .dtype = tensor.dtype(),
+                                .layout = tensor.layout(),
+                                .memory_layout = memory_config.memory_layout(),
+                                .buffer_type = memory_config.buffer_type(),
+                                .tile_height = tile.get_height(),
+                                .tile_width = tile.get_width(),
+                            };
+                        };
+                        const auto grid = device_a->compute_with_storage_grid_size();
+                        std::optional<std::uint32_t> activation_op;
+                        std::vector<std::uint32_t> activation_params;
+                        if (parameters.user_fused_activation.has_value()) {
+                            activation_op = static_cast<std::uint32_t>(parameters.user_fused_activation->op_type);
+                            activation_params.reserve(parameters.user_fused_activation->params.size());
+                            for (const auto parameter : parameters.user_fused_activation->params) {
+                                activation_params.push_back(std::bit_cast<std::uint32_t>(parameter));
+                            }
+                        }
+                        registry_request = registry::MatmulRegistryRequest{
+                            .schema_version = 1,
+                            .call = call_semantics,
+                            .workload =
+                                registry::WorkloadRequest{
+                                    .logical_m = a_logical[-2],
+                                    .logical_k = a_logical[-1],
+                                    .logical_n = b_logical[-1],
+                                    .padded_m = a_padded[-2],
+                                    .padded_k = a_padded[-1],
+                                    .padded_n = b_padded[-1],
+                                },
+                            .input_a = tensor_request(input_tensor_a),
+                            .input_b = tensor_request(input_tensor_b),
+                            .output =
+                                registry::TensorRequest{
+                                    .dtype = io_contract.output_dtype,
+                                    .layout = tt::tt_metal::Layout::TILE,
+                                    .memory_layout = io_contract.output_memory_config.memory_layout(),
+                                    .buffer_type = io_contract.output_memory_config.buffer_type(),
+                                    .tile_height = io_contract.output_tile.get_height(),
+                                    .tile_width = io_contract.output_tile.get_width(),
+                                },
+                            .device =
+                                registry::DeviceRequest{
+                                    .architecture = static_cast<std::uint32_t>(device_a->arch()),
+                                    .device_count = static_cast<std::uint32_t>(device_a->num_devices()),
+                                    .mesh_rows = static_cast<std::uint32_t>(device_a->num_rows()),
+                                    .mesh_cols = static_cast<std::uint32_t>(device_a->num_cols()),
+                                    .compute_grid_x = grid.x,
+                                    .compute_grid_y = grid.y,
+                                },
+                            .transpose_a = parameters.transpose_a,
+                            .transpose_b = parameters.transpose_b,
+                            .has_bias = bias.has_value(),
+                            .has_activation = parameters.user_fused_activation.has_value(),
+                            .untilize_out = parameters.untilize_out,
+                            .bcast_batch = parameters.bcast_batch,
+                            .run_batched = parameters.user_run_batched,
+                            .activation_op = activation_op,
+                            .activation_param_f32_bits = std::move(activation_params),
+                        };
+                    }
+                }
+            } catch (...) {
+                // Shadow and On must preserve the legacy validation and exception
+                // path when a complete exact request cannot be materialized.
+                registry_request.reset();
+            }
+
+            const auto registry_resolution =
+                registry_request.has_value()
+                    ? registry::resolve(registry_mode, registry_request.value(), eligibility)
+                    : registry::Resolution{.reason = registry::ResolutionReason::IncompleteRequest};
+            auto registry_action = registry::execution_action(registry_mode, registry_resolution);
+            if (registry_action == registry::ExecutionAction::ApplyRecipe) {
+                try {
+                    auto candidate_parameters = parameters;
+                    candidate_parameters.program_config = registry_resolution.recipe->program_config;
+                    candidate_parameters.compute_kernel_config = registry_resolution.recipe->compute_kernel_config;
+                    candidate_parameters.untilize_out = registry_resolution.recipe->untilize_out;
+                    parameters = std::move(candidate_parameters);
+                } catch (...) {
+                    // A materialization failure is a safe fallback, never a new
+                    // registry-originated exception or a partially applied recipe.
+                    registry_action = registry::ExecutionAction::Fallback;
+                }
+            }
+            registry::record_resolution(registry_mode, call_semantics.domain, registry_resolution, registry_action);
+        } catch (...) {
+            // Registry observation and lookup are optional. Any failure before
+            // a recipe is atomically materialized preserves the legacy path.
         }
     }
 
