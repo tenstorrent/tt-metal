@@ -16,12 +16,16 @@ Causal masking makes those the same function, so they must agree.
 Conditioning and the speaker embedding are computed once on device and handed to BOTH sides, so
 Blocks 1 and 2 are inputs here rather than results -- test_cond_pcc and test_speaker_pcc own those.
 
-Three axes are crossed, because each selects different device work: prompt length (the prefill
+English crosses three axes, because each selects different device work: prompt length (the prefill
 program and the fill_cache split), seed (a different path through the decoder), and reference-clip
 length (the conditioning conv shapes). Texts are ordinary prose, one per prefill bucket `generate`
-can reach, and never repeated -- repeated input makes the model degenerate. Decode is uncapped, so
-each request runs the cache out to the model's stop or the 605-code limit, the occupancy axis BUG-1
-lived on.
+can reach, and never repeated -- repeated input makes the model degenerate. Decode is uncapped
+there, so each request runs the cache out to the model's stop or the 605-code limit, the occupancy
+axis BUG-1 lived on.
+
+Every other language then gets one capped pass. Nothing after the tokenizer is language-aware -- the
+device sees token ids -- so re-sweeping the shape axes per language would buy nothing; what a
+language pass adds is that ITS ids decode to the latents the CPU computes for them.
 
 Each vocoder bucket reached also gets a waveform check, since no other gate drives the vocoder with
 a real request's latents; both sides get the DEVICE's latents there, so it isolates the vocoder and
@@ -39,10 +43,13 @@ import torch
 from transformers import GPT2Model  # noqa: F401
 
 from models.common.utility_functions import comp_pcc
+from models.experimental.xtts_v2.frontend import SUPPORTED_LANGUAGES
 from models.experimental.xtts_v2.reference.xtts_gpt_ref import build_reference, reference_forward
 from models.experimental.xtts_v2.reference.xtts_hifigan_ref import HifiganReference
+from models.experimental.xtts_v2.tests.language_corpus import SENTENCES
 from models.experimental.xtts_v2.tt.ttnn_xtts_gpt_decode import _prefill_tiles
 from models.experimental.xtts_v2.tt.ttnn_xtts_model import (
+    GPT_MAX_AUDIO,
     HOP,
     START_AUDIO_TOKEN,
     XttsV2,
@@ -59,8 +66,12 @@ SEEDS = (0, 1, 2)  # each draw walks a different path through the decoder
 CLIP_SECONDS = (6.0, 4.0)  # a clip's LENGTH picks the conditioning conv shapes, not its content
 MIN_DEPTH = 900  # some run must take the cache near the model's 1042-position ceiling
 # Which vocoder buckets get reached is a sampling outcome, so this only guards against the set
-# collapsing -- the buckets covered are named in the result. test_vocoder_request_path gates all 7.
+# collapsing; the buckets covered are named in the result. test_vocoder_request_path gates them all.
 MIN_VOC_BUCKETS = 5
+# Every language gets one pass. Nothing after the tokenizer is language-aware -- the device sees
+# token ids -- so what this adds over the English sweep is that each language's ids decode to the
+# latents the CPU computes for them. Capped, because the shapes are already swept above.
+LANG_SEED, LANG_MAX_NEW = 0, 120
 
 # One text per prefill bucket generate() can reach (prompts of 42..429 tokens -> 64..512 rows).
 TEXTS = {
@@ -107,11 +118,21 @@ def run_teacher_forced_pcc(verbose=True):
         voc_ref = HifiganReference()
         scored, wav_scored, no_codes, buckets, deepest = [], [], [], set(), 0
         voc_done = set()
-        for (name, text), (secs, voice), seed in itertools.product(TEXTS.items(), voices, SEEDS):
-            label = f"{name}/{secs:g}s/seed{seed}"
-            wav = tts.generate(text, voice, seed=seed)
+        # English sweeps the three shape axes; the other languages each get one pass.
+        cases = [
+            (f"{name}/{secs:g}s/seed{seed}", text, "en", voice, seed, GPT_MAX_AUDIO)
+            for (name, text), (secs, voice), seed in itertools.product(TEXTS.items(), voices, SEEDS)
+        ] + [
+            (f"lang:{lang}", SENTENCES[lang][0], lang, voices[0][1], LANG_SEED, LANG_MAX_NEW)
+            for lang in SUPPORTED_LANGUAGES
+            if lang != "en"
+        ]
+        langs = set()
+        for label, text, lang, voice, seed, cap in cases:
+            wav = tts.generate(text, voice, language=lang, seed=seed, max_new_tokens=cap)
             codes, dev = tts.last_generation["codes"], tts.last_generation["latents"]
-            prefix = assemble_prompt(tts.tokenizer.encode(text, "en"), voice.gpt_cond_latent, tts.tables)
+            prefix = assemble_prompt(tts.tokenizer.encode(text, lang), voice.gpt_cond_latent, tts.tables)
+            langs.add(lang)
             P = prefix.shape[1]
             buckets.add(32 * _prefill_tiles(P, n_head, n_cores))
             if not codes:  # rare and legitimate: the first sampled code was STOP (see generate)
@@ -145,14 +166,16 @@ def run_teacher_forced_pcc(verbose=True):
     worst_label, _, worst_pcc = min(scored, key=lambda r: r[2])
     worst_wav, _, worst_wav_pcc = min(wav_scored, key=lambda r: r[2])
     failed = [label for label, ok, _ in scored + wav_scored if not ok]
-    covered = len(buckets) == len(TEXTS)  # one distinct prefill bucket per text, as chosen
+    covered = len(buckets) >= len(TEXTS)  # the English texts alone span one bucket each
+    all_langs = langs == set(SUPPORTED_LANGUAGES)
     msg = (
-        f"{len(scored)} runs over prefill buckets {sorted(buckets)}, deepest cache {deepest}; "
+        f"{len(scored)} runs over {len(langs)} languages and prefill buckets {sorted(buckets)}, "
+        f"deepest cache {deepest}; "
         f"worst latents {worst_label} pcc {worst_pcc}; "
         f"{len(wav_scored)} vocoder buckets {sorted(voc_done)}, worst waveform {worst_wav} "
         f"pcc {worst_wav_pcc}; failed: {failed}" + (f"; no codes: {no_codes}" if no_codes else "")
     )
-    return not failed and covered and deepest >= MIN_DEPTH and len(voc_done) >= MIN_VOC_BUCKETS, msg
+    return (not failed and covered and all_langs and deepest >= MIN_DEPTH and len(voc_done) >= MIN_VOC_BUCKETS), msg
 
 
 def test_model_teacher_forced_pcc():
