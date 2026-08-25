@@ -348,7 +348,24 @@ def mark_stages_in_scope(scope: dict, device, bind=None) -> int:
     except Exception as exc:  # noqa: BLE001
         _no_marks("perf_adapter is not importable here (%s)" % type(exc).__name__)
         return 0
-    return mark_stages(_PSA(lambda _d: pipe), device)
+    # THE CAPTURES THE MODEL DECLARES BUT DOES NOT SHIP. A pipeline's <stage>_trace_inputs() reads the
+    # golden tensors a bring-up capture wrote; those are large and uncommitted, so on a tree that has
+    # never run that capture every stage raises FileNotFoundError and the split is lost. The manifest
+    # beside them IS committed and declares every shape, and a timing measurement does not read the
+    # values -- so the missing file is supplied from its own description. Installed only around this
+    # walk, and only for files that do not exist.
+    _restore = None
+    try:
+        from .captured_stub import install as _install_stub
+
+        _restore = _install_stub()
+    except Exception:  # noqa: BLE001 -- a stand-in that cannot be installed must not cost the marks
+        _restore = None
+    try:
+        return mark_stages(_PSA(lambda _d: pipe), device)
+    finally:
+        if _restore is not None:
+            _restore()
 
 
 # --- deterministic injection into the generated perf test ----------------------------------------
