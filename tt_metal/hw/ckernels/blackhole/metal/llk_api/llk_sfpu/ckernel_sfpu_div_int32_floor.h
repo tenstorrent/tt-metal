@@ -66,6 +66,13 @@ sfpi_inline void calculate_div_int32_body(
     // Compute remainder.
     sfpi::vInt r = a - qb;
     sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
+    // When |a| == 2**31 and the coarse quotient collapses to zero (qb == 0),
+    // abs(r) leaves the magnitude word 0x80000000 unchanged, which converts to
+    // -0.0f here -- the same hazard guarded against for b_f and a_f above
+    // (#51476). Clamp to +2**31 so the residual correction below can recover
+    // the full quotient.
+    v_if(r_f < 0.0f) { r_f = 0x1.0p31f; }
+    v_endif;
 
     // Compute correction value in float32.
     sfpi::vFloat correction_f = r_f * inv_b_f;
@@ -80,7 +87,13 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vInt tmp = tmp_lo + tmp_hi;
 
     // Apply correction and adjust remainder.
-    v_if(r < 0) {
+    // Only a genuine negative remainder means q was an over-estimate. The
+    // magnitude word 0x80000000 (reachable when |a| == 2**31 and qb collapses
+    // to zero, #51476) also reads as negative in two's complement, but its
+    // true remainder is +2**31, so it must take the under-estimate branch.
+    // Testing `r - 1` distinguishes the two: 0x80000000 - 1 wraps to
+    // 0x7fffffff while any genuine negative stays negative.
+    v_if(r < 0 && (r - 1) < 0) {
         q -= correction;
         r += tmp;
     }
