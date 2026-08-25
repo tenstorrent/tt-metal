@@ -9,10 +9,21 @@
 #include <thread>
 #include <variant>
 
+#include <tt_stl/reflection.hpp>
+
 #include "ttnn/operations/matmul/device/config/matmul_config_registry.hpp"
 
 namespace ttnn::operations::matmul::registry {
 namespace {
+
+template <typename T>
+concept HasRegistryEntryId = requires(T value) { value.registry_entry_id; };
+
+template <typename T>
+concept HasRegistryMode = requires(T value) { value.registry_mode; };
+
+static_assert(!HasRegistryEntryId<ttnn::prim::MatmulParams>);
+static_assert(!HasRegistryMode<ttnn::prim::MatmulParams>);
 
 using tt::tt_metal::BufferType;
 using tt::tt_metal::DataType;
@@ -112,6 +123,20 @@ Resolution resolve_with(const Mode mode, const Eligibility& eligibility) {
     return resolve(mode, request, eligibility);
 }
 
+std::size_t resolver_invocations = 0;
+CallSemantics resolver_observed_call;
+
+Resolution counting_certified_resolver(
+    const Mode /*mode*/, const MatmulRegistryRequest& request, const Eligibility& eligibility) noexcept {
+    static const auto recipe = basic_recipe();
+    ++resolver_invocations;
+    resolver_observed_call = eligibility.call;
+    if (request.call != eligibility.call) {
+        return {.reason = ResolutionReason::InconsistentRequest};
+    }
+    return {.reason = ResolutionReason::CertifiedMatch, .recipe = &recipe};
+}
+
 TEST(MatmulConfigRegistry, ModeFreezesAtFirstUse) {
     const auto original = ttnn::CONFIG.get<"matmul_registry_mode">();
     reset_startup_mode_for_testing();
@@ -166,6 +191,70 @@ TEST(MatmulConfigRegistry, EmptyOnTableFallsBack) {
         resolve_with(Mode::On, Eligibility{.call = CallSemantics{.domain = OperationDomain::DenseMatmul}});
     EXPECT_EQ(result.reason, ResolutionReason::EmptyRegistry);
     EXPECT_EQ(result.recipe, nullptr);
+}
+
+TEST(MatmulConfigRegistry, PublicOperationCallSemanticsAreDisjointAndExact) {
+    EXPECT_EQ(dense_matmul_call_semantics().domain, OperationDomain::DenseMatmul);
+    EXPECT_FALSE(dense_matmul_call_semantics().alpha_f32_bits.has_value());
+    EXPECT_FALSE(dense_matmul_call_semantics().beta_f32_bits.has_value());
+
+    EXPECT_EQ(linear_call_semantics().domain, OperationDomain::Linear);
+    EXPECT_FALSE(linear_call_semantics().alpha_f32_bits.has_value());
+    EXPECT_FALSE(linear_call_semantics().beta_f32_bits.has_value());
+
+    const auto addmm = addmm_call_semantics(1.0F, -0.0F);
+    EXPECT_EQ(addmm.domain, OperationDomain::Addmm);
+    EXPECT_EQ(addmm.alpha_f32_bits, 0x3f800000U);
+    EXPECT_EQ(addmm.beta_f32_bits, 0x80000000U);
+}
+
+TEST(MatmulConfigRegistry, DispatchCardinalityAndCacheIdentityAreModeSafe) {
+    const auto request = exact_request();
+    const auto eligibility = Eligibility{.call = request.call};
+    ttnn::prim::MatmulParams legacy_parameters;
+    legacy_parameters.output_dtype = DataType::FLOAT32;
+    const auto legacy_hash = ttsl::hash::hash_objects_with_default_seed(legacy_parameters);
+
+    resolver_invocations = 0;
+    const auto off =
+        resolve_for_dispatch(Mode::Off, request, eligibility, legacy_parameters, &counting_certified_resolver);
+    EXPECT_EQ(resolver_invocations, 0);
+    EXPECT_EQ(off.resolution.reason, ResolutionReason::Disabled);
+    EXPECT_EQ(off.action, ExecutionAction::Fallback);
+    EXPECT_FALSE(off.materialized_parameters.has_value());
+    EXPECT_EQ(ttsl::hash::hash_objects_with_default_seed(legacy_parameters), legacy_hash);
+
+    resolver_invocations = 0;
+    const auto shadow =
+        resolve_for_dispatch(Mode::Shadow, request, eligibility, legacy_parameters, &counting_certified_resolver);
+    EXPECT_EQ(resolver_invocations, 1);
+    EXPECT_EQ(resolver_observed_call, dense_matmul_call_semantics());
+    EXPECT_EQ(shadow.action, ExecutionAction::ObserveOnly);
+    EXPECT_FALSE(shadow.materialized_parameters.has_value());
+    EXPECT_EQ(ttsl::hash::hash_objects_with_default_seed(legacy_parameters), legacy_hash);
+
+    resolver_invocations = 0;
+    const auto on =
+        resolve_for_dispatch(Mode::On, request, eligibility, legacy_parameters, &counting_certified_resolver);
+    EXPECT_EQ(resolver_invocations, 1);
+    EXPECT_EQ(on.action, ExecutionAction::ApplyRecipe);
+    ASSERT_TRUE(on.materialized_parameters.has_value());
+    EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(on.materialized_parameters.value()), legacy_hash);
+    EXPECT_EQ(ttsl::hash::hash_objects_with_default_seed(legacy_parameters), legacy_hash);
+}
+
+TEST(MatmulConfigRegistry, DispatchDoesNotResolveAnIncompleteRequest) {
+    const auto eligibility = Eligibility{.call = dense_matmul_call_semantics()};
+    const ttnn::prim::MatmulParams legacy_parameters;
+    resolver_invocations = 0;
+
+    const auto result =
+        resolve_for_dispatch(Mode::On, std::nullopt, eligibility, legacy_parameters, &counting_certified_resolver);
+
+    EXPECT_EQ(resolver_invocations, 0);
+    EXPECT_EQ(result.resolution.reason, ResolutionReason::IncompleteRequest);
+    EXPECT_EQ(result.action, ExecutionAction::Fallback);
+    EXPECT_FALSE(result.materialized_parameters.has_value());
 }
 
 TEST(MatmulConfigRegistry, ResolvesDefaultOutputContractFromInputA) {

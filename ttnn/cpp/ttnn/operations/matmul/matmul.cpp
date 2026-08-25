@@ -233,7 +233,8 @@ static ttnn::Tensor bound_matmul(
     const auto registry_mode = registry::current_mode();
     std::optional<ttnn::prim::MatmulParams> registry_parameters;
     if (registry_mode != registry::Mode::Off) {
-        auto registry_resolution = registry::Resolution{.reason = registry::ResolutionReason::IncompleteRequest};
+        auto eligibility = registry::Eligibility{.call = call_semantics};
+        std::optional<registry::MatmulRegistryRequest> registry_request;
         try {
             const auto io_contract = registry::resolve_matmul_io_contract(registry::IoContractRequest{
                 .input_a_dtype = input_tensor_a.dtype(),
@@ -251,7 +252,7 @@ static ttnn::Tensor bound_matmul(
                 .transpose_a = parameters.transpose_a,
                 .transpose_b = parameters.transpose_b,
             });
-            const auto eligibility = registry::Eligibility{
+            eligibility = registry::Eligibility{
                 .call = call_semantics,
                 .io_contract_status = io_contract.status,
                 .has_program_config = parameters.program_config.has_value(),
@@ -273,7 +274,6 @@ static ttnn::Tensor bound_matmul(
                 .transpose_b = parameters.transpose_b,
             };
 
-            std::optional<registry::MatmulRegistryRequest> registry_request;
             const auto* device_a = input_tensor_a.device();
             const auto* device_b = input_tensor_b.device();
             if (input_tensor_a.logical_shape().rank() == 2 && input_tensor_b.logical_shape().rank() == 2 &&
@@ -351,19 +351,17 @@ static ttnn::Tensor bound_matmul(
                     };
                 }
             }
-            registry_resolution = registry_request.has_value()
-                                      ? registry::resolve(registry_mode, registry_request.value(), eligibility)
-                                      : registry::Resolution{.reason = registry::ResolutionReason::IncompleteRequest};
         } catch (...) {
             // Observation and request construction may inspect tensors before
             // legacy validators do. Preserve legacy exception timing if they
             // cannot form an exact request. Recipe materialization remains
             // outside this catch and intentionally propagates failures.
         }
-        const auto registry_action = registry::execution_action(registry_mode, registry_resolution);
-        registry_parameters =
-            registry::materialize_parameters_for_execution(registry_mode, registry_resolution, parameters);
-        registry::record_resolution(registry_mode, call_semantics.domain, registry_resolution, registry_action);
+        auto registry_dispatch =
+            registry::resolve_for_dispatch(registry_mode, registry_request, eligibility, parameters);
+        registry_parameters = std::move(registry_dispatch.materialized_parameters);
+        registry::record_resolution(
+            registry_mode, call_semantics.domain, registry_dispatch.resolution, registry_dispatch.action);
     }
 
     // On uses one complete temporary object. Shadow and every fallback retain
@@ -550,7 +548,7 @@ Tensor matmul(
         input_tensor_a,
         input_tensor_b,
         /*bias=*/std::nullopt,
-        registry::CallSemantics{.domain = registry::OperationDomain::DenseMatmul},
+        registry::dense_matmul_call_semantics(),
         matmul_params,
         optional_output_tensor);
 }
@@ -593,12 +591,7 @@ Tensor linear(
         global_cb,
         sub_device_id};
     return bound_matmul(
-        input_tensor_a,
-        input_tensor_b,
-        bias,
-        registry::CallSemantics{.domain = registry::OperationDomain::Linear},
-        matmul_params,
-        optional_output_tensor);
+        input_tensor_a, input_tensor_b, bias, registry::linear_call_semantics(), matmul_params, optional_output_tensor);
 }
 
 std::vector<Tensor> matmul_batched_weights(
@@ -723,10 +716,7 @@ Tensor addmm(
         mat1_tensor,
         mat2_tensor,
         std::nullopt,
-        registry::CallSemantics{
-            .domain = registry::OperationDomain::Addmm,
-            .alpha_f32_bits = std::bit_cast<std::uint32_t>(alpha),
-            .beta_f32_bits = std::bit_cast<std::uint32_t>(beta)},
+        registry::addmm_call_semantics(alpha, beta),
         matmul_params,
         optional_output_tensor);
 

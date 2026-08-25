@@ -5,6 +5,7 @@
 #include "ttnn/operations/matmul/device/config/matmul_config_registry.hpp"
 
 #include <atomic>
+#include <bit>
 #include <utility>
 
 #include "ttnn/operation.hpp"
@@ -70,6 +71,13 @@ Mode current_mode() noexcept {
 }
 
 void reset_startup_mode_for_testing() noexcept { frozen_mode.store(kModeUninitialized, std::memory_order_release); }
+
+CallSemantics addmm_call_semantics(const float alpha, const float beta) noexcept {
+    return CallSemantics{
+        .domain = OperationDomain::Addmm,
+        .alpha_f32_bits = std::bit_cast<std::uint32_t>(alpha),
+        .beta_f32_bits = std::bit_cast<std::uint32_t>(beta)};
+}
 
 ResolvedMatmulIoContract resolve_matmul_io_contract(const IoContractRequest& request) {
     auto output_memory_config = request.requested_output_memory_config;
@@ -229,6 +237,25 @@ static Resolution resolve_impl(
 
 Resolution resolve(const Mode mode, const MatmulRegistryRequest& request, const Eligibility& eligibility) noexcept {
     return resolve_impl(mode, request, eligibility, nullptr, nullptr);
+}
+
+DispatchResult resolve_for_dispatch(
+    const Mode mode,
+    const std::optional<MatmulRegistryRequest>& request,
+    const Eligibility& eligibility,
+    const ttnn::prim::MatmulParams& legacy_parameters,
+    const ResolverFunction resolver) {
+    auto resolution = Resolution{.reason = ResolutionReason::Disabled};
+    if (mode != Mode::Off) {
+        resolution = request.has_value() && resolver != nullptr
+                         ? resolver(mode, request.value(), eligibility)
+                         : Resolution{.reason = ResolutionReason::IncompleteRequest};
+    }
+
+    const auto action = execution_action(mode, resolution);
+    auto materialized_parameters = materialize_parameters_for_execution(mode, resolution, legacy_parameters);
+    return DispatchResult{
+        .resolution = resolution, .action = action, .materialized_parameters = std::move(materialized_parameters)};
 }
 
 Resolution resolve_with_synthetic_candidate_for_testing(

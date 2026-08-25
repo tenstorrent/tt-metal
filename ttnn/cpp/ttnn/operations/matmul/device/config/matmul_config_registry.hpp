@@ -37,6 +37,14 @@ struct CallSemantics {
     bool operator==(const CallSemantics&) const = default;
 };
 
+// Public wrappers use these constructors instead of spelling domains inline.
+// Direct primitive, batched-weight, sparse, and CCL paths do not call them.
+constexpr CallSemantics dense_matmul_call_semantics() noexcept {
+    return CallSemantics{.domain = OperationDomain::DenseMatmul};
+}
+constexpr CallSemantics linear_call_semantics() noexcept { return CallSemantics{.domain = OperationDomain::Linear}; }
+CallSemantics addmm_call_semantics(float alpha, float beta) noexcept;
+
 enum class ResolutionReason {
     Disabled,
     IneligibleOperationDomain,
@@ -213,6 +221,23 @@ void reset_startup_mode_for_testing() noexcept;
 // Device-free admission and empty production-table lookup. B1 replaces the
 // empty stub with exact POD descriptor lookup, not a table of native Recipes.
 Resolution resolve(Mode mode, const MatmulRegistryRequest& request, const Eligibility& eligibility) noexcept;
+
+using ResolverFunction = Resolution (*)(Mode, const MatmulRegistryRequest&, const Eligibility&) noexcept;
+
+struct DispatchResult {
+    Resolution resolution;
+    ExecutionAction action = ExecutionAction::Fallback;
+    std::optional<ttnn::prim::MatmulParams> materialized_parameters = std::nullopt;
+};
+
+// The single dispatch gate. Off never calls the resolver. Shadow and On call it
+// at most once, and only On may produce a separate materialized parameter set.
+DispatchResult resolve_for_dispatch(
+    Mode mode,
+    const std::optional<MatmulRegistryRequest>& request,
+    const Eligibility& eligibility,
+    const ttnn::prim::MatmulParams& legacy_parameters,
+    ResolverFunction resolver = &resolve);
 
 // Device-free synthetic-hit seam used to prove exact-key, Shadow, and On
 // behavior while the generated production table remains empty.
