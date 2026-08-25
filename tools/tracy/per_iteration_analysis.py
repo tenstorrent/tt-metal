@@ -65,6 +65,13 @@ class IterationMetrics:
     math_util_avg: float = 0.0
     num_cores: int = 0
     duration_cycles: int = 0
+    # NoC/DRAM metrics come from simulating this iteration's NoC trace slice through tt-npe
+    # (there is no hardware counter for them). None => not measured, which is distinct from
+    # zero: it means either tt-npe was unavailable or the slice had no NoC events at all.
+    noc_util: Optional[float] = None
+    mcast_noc_util: Optional[float] = None
+    dram_bw_util: Optional[float] = None
+    congestion_impact: Optional[float] = None
 
 
 def parse_device_log(log_path: Path) -> Tuple[Dict[str, Any], pd.DataFrame]:
@@ -262,8 +269,15 @@ def aggregate_iterations(iterations: List[Dict]) -> List[IterationMetrics]:
     return summaries
 
 
-def analyze_per_iteration_metrics(log_dir: Path) -> List[IterationMetrics]:
-    """Main entry point: analyze profiler logs and return per-iteration metrics."""
+def analyze_per_iteration_metrics(
+    log_dir: Path,
+    noc_trace_dir: Optional[Path] = None,
+) -> List[IterationMetrics]:
+    """Main entry point: analyze profiler logs and return per-iteration metrics.
+
+    If ``noc_trace_dir`` is given (and tt-npe is importable), NoC traces there are sliced on
+    ITERATION boundaries and simulated, adding NoC/DRAM columns to each row.
+    """
     log_dir = Path(log_dir)
 
     # Find profile_log_device.csv
@@ -301,7 +315,103 @@ def analyze_per_iteration_metrics(log_dir: Path) -> List[IterationMetrics]:
     summaries = aggregate_iterations(iterations)
     logger.info(f"Aggregated to {len(summaries)} (device, iteration) summaries")
 
+    if noc_trace_dir is not None:
+        noc_metrics = collect_noc_metrics(Path(noc_trace_dir))
+        if noc_metrics:
+            matched = attach_noc_metrics(summaries, noc_metrics)
+            logger.info(f"Attached NoC/DRAM metrics to {matched}/{len(summaries)} rows")
+
     return summaries
+
+
+def collect_noc_metrics(noc_trace_dir: Path) -> Dict[Tuple[int, int], Dict[str, Optional[float]]]:
+    """Merge NoC traces across devices, slice by ITERATION, and simulate each slice.
+
+    Reuses tt-npe's own fabric merge so multi-device traces are combined exactly as the
+    standard per-op flow does; zone markers survive that merge, which is what makes slicing
+    the merged file possible.
+    """
+    try:
+        from noc_per_iteration import ITERATION_ZONE, analyze_noc_per_iteration, import_npe
+    except ImportError:
+        from tracy.noc_per_iteration import ITERATION_ZONE, analyze_noc_per_iteration, import_npe
+
+    npe, TopologyGraph = import_npe()
+    if npe is None:
+        return {}
+
+    topology = noc_trace_dir / "topology.json"
+    if not topology.exists():
+        logger.warning(f"No topology.json in {noc_trace_dir}; cannot run tt-npe")
+        return {}
+
+    merged = sorted(noc_trace_dir.glob("noc_trace*_merged.json"))
+    if not merged:
+        merged = _merge_noc_traces(noc_trace_dir, topology, TopologyGraph)
+    if not merged:
+        logger.warning(f"No NoC traces to analyze in {noc_trace_dir}")
+        return {}
+
+    combined: Dict[Tuple[int, int], Dict[str, Optional[float]]] = {}
+    for merged_trace in merged:
+        combined.update(
+            analyze_noc_per_iteration(
+                merged_trace=merged_trace,
+                topology_json=topology,
+                output_dir=noc_trace_dir,
+                zone_name=ITERATION_ZONE,
+            )
+        )
+    return combined
+
+
+def _merge_noc_traces(noc_trace_dir: Path, topology: Path, TopologyGraph) -> List[Path]:
+    """Fabric-merge the per-device traces using tt-npe's own merger."""
+    try:
+        from fabric_post_process import process_traces
+    except ImportError:
+        logger.warning("tt-npe's fabric_post_process unavailable; cannot merge NoC traces")
+        return []
+
+    per_device = [p for p in sorted(noc_trace_dir.glob("noc_trace*.json")) if "_merged" not in p.name]
+    if not per_device:
+        return []
+
+    out = noc_trace_dir / "noc_trace_iterations_merged.json"
+    try:
+        process_traces(TopologyGraph(str(topology)), [str(p) for p in per_device], str(out), True, True)
+    except Exception as e:
+        logger.error(f"Fabric merge failed: {e!r}")
+        return []
+    return [out] if out.exists() else []
+
+
+def _fmt_optional(value: Optional[float]) -> str:
+    """Render an optional metric: blank when not measured, never 'nan'."""
+    return "" if value is None else f"{value:.2f}"
+
+
+def _pct(value: Optional[float]) -> str:
+    """Render an optional metric for the console table; '-' when not measured."""
+    return "-" if value is None else f"{value:.2f}%"
+
+
+def attach_noc_metrics(
+    summaries: List[IterationMetrics],
+    noc_metrics: Dict[Tuple[int, int], Dict[str, Optional[float]]],
+) -> int:
+    """Join tt-npe per-iteration results onto the perf-counter rows by (device, iteration)."""
+    matched = 0
+    for s in summaries:
+        metrics = noc_metrics.get((s.device_id, s.iteration))
+        if not metrics:
+            continue
+        s.noc_util = metrics.get("noc_util")
+        s.mcast_noc_util = metrics.get("mcast_noc_util")
+        s.dram_bw_util = metrics.get("dram_bw_util")
+        s.congestion_impact = metrics.get("congestion_impact")
+        matched += 1
+    return matched
 
 
 def write_csv(summaries: List[IterationMetrics], output_path: Path) -> None:
@@ -320,6 +430,10 @@ def write_csv(summaries: List[IterationMetrics], output_path: Path) -> None:
         "math_util_avg",
         "num_cores",
         "duration_cycles",
+        "noc_util",
+        "mcast_noc_util",
+        "dram_bw_util",
+        "congestion_impact",
     ]
     with open(output_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -340,6 +454,11 @@ def write_csv(summaries: List[IterationMetrics], output_path: Path) -> None:
                     "math_util_avg": f"{s.math_util_avg:.2f}",
                     "num_cores": s.num_cores,
                     "duration_cycles": s.duration_cycles,
+                    # Blank, not "nan"/"0": an unmeasured iteration must not read as an idle one.
+                    "noc_util": _fmt_optional(s.noc_util),
+                    "mcast_noc_util": _fmt_optional(s.mcast_noc_util),
+                    "dram_bw_util": _fmt_optional(s.dram_bw_util),
+                    "congestion_impact": _fmt_optional(s.congestion_impact),
                 }
             )
     logger.info(f"Wrote {len(summaries)} rows to {output_path}")
@@ -361,9 +480,12 @@ def print_summary(summaries: List[IterationMetrics]) -> None:
 
     for device_id, device_summaries in sorted(by_device.items()):
         print(f"\nDevice {device_id} ({len(device_summaries)} iterations):")
-        print("-" * 90)
-        print(f"{'Iter':<6} {'FPU Avg':>10} {'SFPU Avg':>10} {'MATH Avg':>10} {'Cores':>8} {'Cycles':>15}")
-        print("-" * 90)
+        print("-" * 116)
+        print(
+            f"{'Iter':<6} {'FPU Avg':>10} {'SFPU Avg':>10} {'MATH Avg':>10} "
+            f"{'NoC Util':>10} {'DRAM BW':>10} {'Cong':>8} {'Cores':>8} {'Cycles':>15}"
+        )
+        print("-" * 116)
 
         for s in sorted(device_summaries, key=lambda x: x.iteration):
             print(
@@ -371,6 +493,9 @@ def print_summary(summaries: List[IterationMetrics]) -> None:
                 f"{s.fpu_util_avg:>9.2f}% "
                 f"{s.sfpu_util_avg:>9.2f}% "
                 f"{s.math_util_avg:>9.2f}% "
+                f"{_pct(s.noc_util):>10} "
+                f"{_pct(s.dram_bw_util):>10} "
+                f"{_pct(s.congestion_impact):>8} "
                 f"{s.num_cores:>8} "
                 f"{s.duration_cycles:>15,}"
             )
@@ -405,6 +530,16 @@ def main():
         help="Directory containing profile_log_device.csv",
     )
     parser.add_argument("-o", "--output", type=Path, default=Path("per_iteration_metrics.csv"))
+    parser.add_argument(
+        "--noc-trace-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Directory of NoC traces (plus topology.json) to slice per iteration and simulate "
+            "with tt-npe, adding NoC/DRAM columns. Requires tt-npe on PYTHONPATH "
+            "(branch snadeem/blaze_layer_support_v2 - main rejects FABRIC_2D_TORUS_X)."
+        ),
+    )
     parser.add_argument("--no-summary", action="store_true")
     parser.add_argument("-v", "--verbose", action="store_true")
 
@@ -417,7 +552,7 @@ def main():
         logger.remove()
         logger.add(sys.stderr, level="INFO")
 
-    summaries = analyze_per_iteration_metrics(args.log_dir)
+    summaries = analyze_per_iteration_metrics(args.log_dir, noc_trace_dir=args.noc_trace_dir)
 
     if not summaries:
         return 1

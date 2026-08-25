@@ -43,11 +43,11 @@ from loguru import logger
 # Import from sibling modules
 try:
     from tracy.common import PROFILER_LOGS_DIR, PROFILER_ARTIFACTS_DIR
-    from tracy.per_iteration_analysis import analyze_profiler_logs, write_csv, print_summary
+    from tracy.per_iteration_analysis import analyze_per_iteration_metrics, write_csv, print_summary
 except ImportError:
     sys.path.insert(0, str(Path(__file__).parent))
     from common import PROFILER_LOGS_DIR, PROFILER_ARTIFACTS_DIR
-    from per_iteration_analysis import analyze_profiler_logs, write_csv, print_summary
+    from per_iteration_analysis import analyze_per_iteration_metrics, write_csv, print_summary
 
 
 # Perf counter group bit positions (from __main__.py)
@@ -235,8 +235,17 @@ Examples:
         logger.error(f"Profiler log directory not found: {log_dir}")
         return 1
 
+    # NoC traces were written here by setup_profiler_environment(); feed them to the analysis
+    # so each ITERATION gets its own tt-npe simulation.
+    noc_trace_dir = None
+    if args.collect_noc_traces:
+        noc_trace_dir = (args.output_dir or PROFILER_ARTIFACTS_DIR) / "noc_traces"
+        if not noc_trace_dir.exists():
+            logger.warning(f"NoC traces requested but {noc_trace_dir} does not exist; skipping NoC analysis")
+            noc_trace_dir = None
+
     logger.info(f"Analyzing profiler logs in: {log_dir}")
-    metrics = analyze_profiler_logs(log_dir)
+    metrics = analyze_per_iteration_metrics(log_dir, noc_trace_dir=noc_trace_dir)
 
     if not metrics:
         logger.warning("No metrics extracted from profiler logs")
