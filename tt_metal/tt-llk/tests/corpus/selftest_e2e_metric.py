@@ -450,7 +450,86 @@ with tempfile.TemporaryDirectory() as td:
         str(v["verdicts"]),
     )
 
-# ---------------- 5. ES-F1: timeout scan, poisoned marking, flush+verify ----------------
+# ---------------- 5. new-row no-baseline acceptance ----------------
+
+with tempfile.TemporaryDirectory() as td:
+    td = pathlib.Path(td)
+    sw = mk_sweep(td / "ev")
+
+    # A first KERNEL measurement has no history against which the ordinary
+    # flip/drift checks can fire.  Its absolute vs-hand band is therefore an
+    # acceptance input: WIN/PARITY are green, LOSS is red.
+    new_results = {}
+    for label, pct, expected_rag, expected_col in (
+        ("win", -1.0, "GREEN", "ok"),
+        ("parity", 0.5, "GREEN", "ok"),
+        ("loss", 0.51, "RED", "RED"),
+    ):
+        res = mk_result(
+            f"new_{label}",
+            {"sem_on": 100.0 + pct, "hand_on": 100.0},
+            {"sem_on": 10000.0 + 100.0 * pct, "hand_on": 10000.0},
+            vs_hand_pct=pct,
+            kernel_vs_hand_pct=pct,
+        )
+        new_results[label] = res
+        v = sw._row_verdict(res, {}, {}, {}, {}, {})
+        band = label.upper()
+        check(
+            f"new row without baseline: {band} has {expected_rag} acceptance",
+            v["rag"] == expected_rag
+            and v["col"] == expected_col
+            and any(f"NEW ROW {band} vs hand" in x for x in v["verdicts"]),
+            str(v),
+        )
+
+    payload = sw._emit_row_verdict(new_results["loss"])
+    report_rag = sw.report([new_results["loss"]], [])
+    report = (sw.ev / "REPORT.md").read_text()
+    check(
+        "new no-baseline LOSS is RED in streamed row and final report",
+        payload["rag"] == "RED"
+        and payload["verdict"] == "RED"
+        and "NEW ROW LOSS vs hand" in payload["report_row"]
+        and report_rag == "RED"
+        and "## Overall: RED" in report,
+        str((payload, report_rag, report)),
+    )
+
+    # Existing baseline-present LOSS behavior remains transition/drift based:
+    # a stable established loss is not reclassified as a new-row RED.
+    res = mk_result(
+        "anchored_loss",
+        {"sem_off": 100.0, "sem_on": 101.0, "hand_on": 100.0},
+        {"sem_off": 10000.0, "sem_on": 10100.0, "hand_on": 10000.0},
+        causal_pct=1.0,
+        vs_hand_pct=1.0,
+        kernel_causal_pct=1.0,
+        kernel_vs_hand_pct=1.0,
+    )
+    cid = "cid__anchored_loss"
+    dscope = "TILE_LOOP_MATH_ISOLATE_PER_TILE"
+    kscope = "KERNEL_MATH_ISOLATE_E2E"
+    dbase = {
+        (cid, dscope, "anchored_loss:sem_off"): [100.0],
+        (cid, dscope, "anchored_loss:sem_on"): [101.0],
+        (cid, dscope, "anchored_loss:hand_on"): [100.0],
+    }
+    kbase = {
+        (cid, kscope, "anchored_loss:sem_off"): [10000.0],
+        (cid, kscope, "anchored_loss:sem_on"): [10100.0],
+        (cid, kscope, "anchored_loss:hand_on"): [10000.0],
+    }
+    v = sw._row_verdict(res, dbase, {}, {}, kbase, {})
+    check(
+        "baseline-present stable LOSS keeps existing drift policy",
+        v["rag"] == "GREEN"
+        and v["col"] == "ok"
+        and not any("NEW ROW" in x for x in v["verdicts"]),
+        str(v),
+    )
+
+# ---------------- 6. ES-F1: timeout scan, poisoned marking, flush+verify ----------------
 
 with tempfile.TemporaryDirectory() as td:
     td = pathlib.Path(td)

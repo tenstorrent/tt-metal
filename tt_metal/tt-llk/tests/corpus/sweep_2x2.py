@@ -5071,6 +5071,13 @@ exit $RC
                 for k in kbaseline
             )
         )
+        has_diag_anchor = (r["corpus_id"], scope, cls_op) in base_classes or any(
+            k[0] == r["corpus_id"]
+            and k[1] == scope
+            and (cls_op is None or k[2].startswith(cls_op + ":"))
+            for k in baseline
+        )
+        has_any_baseline_anchor = has_kernel_anchor or has_diag_anchor
         expected_kernel = (
             kbase_classes.get((r["corpus_id"], kscope, cls_op)) if kscope else None
         ) or (self._derived_class(kbaseline, r, scope=kscope) if kscope else None)
@@ -5367,6 +5374,26 @@ exit $RC
             scope,
             demote=has_kernel_anchor,
         )
+        # A newly measured row has no historical transition/drift check to
+        # trip.  That must not make an absolute LOSS vs hand acceptance-
+        # GREEN: the first binopscalar measurement was +5.61% at KERNEL yet
+        # reported "ok"/Overall GREEN solely because both baseline maps were
+        # empty.  KERNEL WIN/PARITY new rows remain GREEN; a fully measured
+        # KERNEL LOSS is RED until an owner deliberately books an anchor.
+        current_vs_hand = r.get("kernel_vs_hand_pct")
+        current_class = self._row_class(r)
+        if (
+            not has_any_baseline_anchor
+            and isinstance(current_vs_hand, (int, float))
+            and current_class in ("WIN", "PARITY", "LOSS")
+        ):
+            tag = "RED" if current_class == "LOSS" else "GREEN"
+            verdicts.append(
+                f"NEW ROW {current_class} vs hand {current_vs_hand:+.2f}% "
+                f"(no baseline anchor): {tag}"
+            )
+            if tag == "RED":
+                rag = "RED"
         if r["op"] in prev and "causal_pct" in r and "causal_pct" in prev[r["op"]]:
             verdicts.append(
                 f"prev-run causal {prev[r['op']]['causal_pct']:+.2f}%→{r['causal_pct']:+.2f}%"
