@@ -7,7 +7,7 @@ no device:
 
   1. KNOB-LEG MODES (harness gap 1): knob_legs() produces EXACT flag lists —
      solo knobs keep the historical OFF vs OFF+flag shape; drop-one knobs
-     (replay-exec-record, planner-residency, init-hoist) get reviewed-ON
+     (replay-exec-record, planner-residency, drain-schedule) get reviewed-ON
      minus exactly their flag token(s) vs the full reviewed-ON set; on-plus
      knobs (replay-loop-unroll, int-abs, lut-select-leaf-ext, repr-prop —
      the default-off booking flags) get plain reviewed-ON vs reviewed-ON
@@ -15,8 +15,9 @@ no device:
      drop-one flag outside the ON set refuses loudly, and an on-plus flag
      entirely inside it refuses loudly (mirror images); attribute_knobs and
      knob_silicon build their legs from knob_legs (no site left on the old
-     hardcoded solo shape); init-hoist HAS a knob row (it had none) and is
-     drop-one (laneCJ census-timing fact: solo init-hoist ALWAYS refuses).
+     hardcoded solo shape).  Pin-29's proof-backed crosscall/crossloop/init
+     quarantine removes those knob rows and positive ON tokens while keeping
+     their explicit negative OFF tokens.
   2. EQZ-CLASS SEM LEG (harness gap 2): a fresh-body row (fresh_cpp sem
      nodes) whose sem OFF/ON pair is byte-identical MEASURES one physical
      sem leg that fills both sem cells (the hand OFF==ON rule verbatim) and
@@ -63,18 +64,38 @@ def check(name, cond, detail=""):
 
 # ---------------- 1. knob-leg modes ----------------
 
-DROP_ONE_EXPECTED = ("replay-exec-record", "planner-residency", "init-hoist")
+DROP_ONE_EXPECTED = ("replay-exec-record", "planner-residency", "drain-schedule")
 
 check(
     "knob modes: the three dependent/service knobs are drop-one",
     all(sweep.knob_mode(k) == "drop-one" for k in DROP_ONE_EXPECTED),
     {k: sweep.knob_mode(k) for k in DROP_ONE_EXPECTED},
 )
+QUARANTINED_KNOBS = {
+    "init-hoist": "-mtt-tensix-optimize-init-hoist",
+    "crossloop-hoist": "-mtt-tensix-optimize-crossloop-hoist",
+    "crosscall-hoist": "-mtt-tensix-optimize-crosscall-hoist",
+}
 check(
-    "knob modes: init-hoist HAS a knob row (gap: it had none)",
-    "init-hoist" in sweep.KNOBS
-    and sweep.KNOBS["init-hoist"] == "-mtt-tensix-optimize-init-hoist",
-    sweep.KNOBS.get("init-hoist"),
+    "knob modes: pin-29 quarantined knobs are absent from KNOBS/MODES/ON",
+    all(k not in sweep.KNOBS and k not in sweep.KNOB_MODES for k in QUARANTINED_KNOBS)
+    and all(flag not in sweep.ON_FLAGS.split() for flag in QUARANTINED_KNOBS.values()),
+    {
+        k: {
+            "knob": sweep.KNOBS.get(k),
+            "mode": sweep.KNOB_MODES.get(k),
+            "on": flag in sweep.ON_FLAGS.split(),
+        }
+        for k, flag in QUARANTINED_KNOBS.items()
+    },
+)
+check(
+    "knob modes: quarantined compiler options stay explicitly OFF",
+    all(
+        "-mno-" + flag.removeprefix("-m") in sweep.OFF_FLAGS.split()
+        for flag in QUARANTINED_KNOBS.values()
+    ),
+    sweep.OFF_FLAGS,
 )
 check(
     "knob modes: every KNOB_MODES key is a KNOBS key, values legal",
@@ -304,10 +325,10 @@ with tempfile.TemporaryDirectory() as td:
     )
     check(
         "attribute_knobs: drop-one knob leg spec comes from knob_legs "
-        "(init-hoist: ON-minus-flag vs full ON)",
-        seen_legs.get("knobs/init-hoist") == sweep.knob_legs("init-hoist")
-        and dict(seen_legs["knobs/init-hoist"])["knob"] == sweep.ON_FLAGS,
-        seen_legs.get("knobs/init-hoist"),
+        "(drain-schedule: ON-minus-flag vs full ON)",
+        seen_legs.get("knobs/drain-schedule") == sweep.knob_legs("drain-schedule")
+        and dict(seen_legs["knobs/drain-schedule"])["knob"] == sweep.ON_FLAGS,
+        seen_legs.get("knobs/drain-schedule"),
     )
     check(
         "attribute_knobs: every KNOBS knob got exactly its knob_legs spec",
@@ -475,18 +496,19 @@ with tempfile.TemporaryDirectory() as td:
             "op": "kop2",
             "selector": "sem-perf",
             "status": "OK",
-            "firing_knobs": ["init-hoist", "ccmask", "replay-loop-unroll"],
+            "firing_knobs": ["drain-schedule", "ccmask", "replay-loop-unroll"],
         },
     )
     out = json.loads((sw2.ev / "kop2" / "knob-silicon.json").read_text())
     check(
         "knob_silicon: drop-one knob's legs/flags come from knob_legs "
         "(entry records mode + both flag sets)",
-        seen2.get("knobs/init-hoist") == sweep.knob_legs("init-hoist")
-        and out["init-hoist"]["flags"] == sweep.ON_FLAGS
-        and out["init-hoist"]["off_flags"] == dict(sweep.knob_legs("init-hoist"))["off"]
-        and out["init-hoist"]["mode"] == "drop-one",
-        out.get("init-hoist"),
+        seen2.get("knobs/drain-schedule") == sweep.knob_legs("drain-schedule")
+        and out["drain-schedule"]["flags"] == sweep.ON_FLAGS
+        and out["drain-schedule"]["off_flags"]
+        == dict(sweep.knob_legs("drain-schedule"))["off"]
+        and out["drain-schedule"]["mode"] == "drop-one",
+        out.get("drain-schedule"),
     )
     check(
         "knob_silicon: solo knob entry keeps the historical flag shape",
@@ -506,7 +528,7 @@ with tempfile.TemporaryDirectory() as td:
     )
     check(
         "knob_silicon: byte-identical knob pair still refuses (no device run)",
-        out["init-hoist"]["status"] == "REFUSAL_BYTE_IDENTICAL"
+        out["drain-schedule"]["status"] == "REFUSAL_BYTE_IDENTICAL"
         and out["ccmask"]["status"] == "REFUSAL_BYTE_IDENTICAL"
         and out["replay-loop-unroll"]["status"] == "REFUSAL_BYTE_IDENTICAL",
         out,
