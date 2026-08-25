@@ -708,8 +708,8 @@ inline void generate_neighborhood_gather_mask_for_q_chunk(
     // position: strided W-SP keeps a LOCAL box whose columns still need the per-element halo test.
     const bool single_window =
         neighborhood_box_is_single_window(box, nb_T, nb_H, nb_W, nb_kt, nb_kh, nb_kw) && (nb_bt != 0 || nb_W_full == 0);
-    const uint32_t n_packed_seqtiles = (n_box + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
-    uint32_t n_packed_chunks = (n_packed_seqtiles + Sk_chunk_t - 1) / Sk_chunk_t;
+    const uint32_t n_packed_t = (n_box + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+    uint32_t n_packed_chunks = (n_packed_t + Sk_chunk_t - 1) / Sk_chunk_t;
     if (n_packed_chunks == 0) {
         n_packed_chunks = 1;
     }
