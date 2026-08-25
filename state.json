@@ -1,6 +1,6 @@
 {
-  "last_run": "2026-08-24T13:00:00Z",
-  "run_id": 32762362709,
+  "last_run": "2026-08-25T00:33:00Z",
+  "run_id": 32793663203,
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -25,7 +25,11 @@
     },
     "53690": {
       "issue": 53655,
-      "status": "CI green (PR Gate Status success); mergeable_state=blocked (review required); awaiting nvelickovicTT's extra Sanity/L2/BH-e2e runs and pmilenkovicTT reply on 4th file path"
+      "status": "CI green; mergeable_state=blocked; pmilenkovicTT confirmed 4th file doesn't exist (retired in #52747), ncvetkovicTT test-coverage objection resolved; awaiting nvelickovicTT's manual Sanity/L2/BH-e2e runs and maintainer merge decision"
+    },
+    "54223_pad_float32": {
+      "issue": 54223,
+      "status": "opened this run (fix PR, branch repo-assist/fix-issue-54223-pad-float32-pack); adds missing FLOAT32 case (std::bit_cast) to pad_tile_program_factory.cpp, mirrors already-correct multicore factory; CI triggered, outcome unknown yet, check next run"
     }
   },
   "issues_labeled": [
@@ -112,11 +116,15 @@
     "53969": "fix in open PR #53970 (reporter kinginu, backward ops memory_config passthrough)",
     "53963": "fix in open PR #53965 (reporter kinginu, unary program cache key dtype)",
     "53908": "fix in open PR #53909 (reporter kinginu, unary SFPU comparisons)",
-    "53699": "fixed by merged PR #53749 (repo-assist); issue closed, no further action"
+    "53699": "fixed by merged PR #53749 (repo-assist); issue closed, no further action",
+    "54241": "atan2 IEEE-754, reporter has own PR #54240",
+    "54234": "Metal2.0 DFB sizing, already has PR #54237"
   },
   "dropped_fix_targets": {
     "51845": "maintainer jasondavies rejected both proposed remedies 2026-08-05 -- do not attempt fix",
-    "53055": "reporter (maintainer ncvetkovicTT) deliberately deferred fix pending directed test -- filed as documentation, not an action item"
+    "53055": "reporter (maintainer ncvetkovicTT) deliberately deferred fix pending directed test -- filed as documentation, not an action item",
+    "54235": "ternary Metal2.0 cache-key analysis, too architectural, needs ops-team decision",
+    "54232": "TensorParameterRelaxation, too architectural"
   },
   "watch_prs": {
     "52237": "fixes #52233, watch for merge",
@@ -297,6 +305,11 @@
     "54045": "2026-08-22: confirmed div_sfpu double-rounding claim against current ckernel_sfpu_binop_with_unary.h:41-43"
   },
   "run_history": [
+    {
+      "run_id": 32793663203,
+      "time": "2026-08-25T00:33:00Z",
+      "summary": "..."
+    },
     {
       "run_id": 32762362709,
       "date": "2026-08-24T13:00:00Z",
