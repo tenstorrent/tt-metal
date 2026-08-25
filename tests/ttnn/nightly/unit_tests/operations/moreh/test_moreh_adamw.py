@@ -222,6 +222,8 @@ def test_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, ttnn_dt
 @pytest.mark.parametrize("step", [8])
 def test_moreh_adamw_callback(shape, lr, betas, eps, weight_decay, amsgrad, step, device):
     torch.manual_seed(2024)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device)
@@ -439,6 +441,8 @@ def test_moreh_adamw_inplace_cache_hit(shape, lr, betas, eps, weight_decay, amsg
 @pytest.mark.parametrize("amsgrad", [True])
 def test_moreh_adamw_cache(shape, lr, betas, eps, weight_decay, amsgrad, device):
     torch.manual_seed(2024)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for step in range(1, 5):
         run_moreh_adamw(shape, lr, betas, eps, weight_decay, amsgrad, step, device)
@@ -450,6 +454,8 @@ def test_moreh_adamw_cache(shape, lr, betas, eps, weight_decay, amsgrad, device)
     for i in range(1, 4):
         assert num_program_cache_entries_list[0] == num_program_cache_entries_list[i]
 
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for _ in range(4):
         # generate a new lr between (0, 1)

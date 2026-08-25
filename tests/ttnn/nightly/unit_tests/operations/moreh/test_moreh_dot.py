@@ -118,6 +118,8 @@ def test_moreh_dot(input_shape, dtype, device):
 def test_moreh_matmul_1d_callback(input_shape, dtype, device):
     torch.manual_seed(3072)
 
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     for i in range(2):
         run_moreh_dot_test(input_shape, dtype, device)
         torch_dummy = torch.randn([32, 32])

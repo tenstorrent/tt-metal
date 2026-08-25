@@ -316,6 +316,8 @@ def test_moreh_cumsum_backward_callback(input_shape, dim, device):
         # test for equivalance
         rtol = atol = 0.1
 
+        # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+        device.clear_program_cache()
         for i in range(2):
             tt_input_grad_cpu = ttnn.to_torch(ttnn.operations.moreh.cumsum_backward(tt_output_grad, dim))
 

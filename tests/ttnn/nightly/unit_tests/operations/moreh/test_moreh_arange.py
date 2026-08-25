@@ -114,6 +114,8 @@ def test_arange(start_end_step, optional_output, dtype, tilized, device):
 def test_arange_callback(start_end_step, optional_output, dtype, device):
     """Test arange functionality with callback and program cache validation."""
     torch.manual_seed(2024)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_arange(start_end_step, optional_output, dtype, True, device)

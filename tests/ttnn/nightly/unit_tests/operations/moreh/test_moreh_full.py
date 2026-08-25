@@ -112,6 +112,8 @@ def test_full_float(device, input_shape, fill_value, dtype, layout):
     ],
 )
 def test_full_callback(device, input_shape, fill_value, layout):
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     for i in range(2):
         torch_output = torch.full(input_shape, fill_value, dtype=torch.int32)
 
@@ -396,6 +398,8 @@ def test_moreh_full_callback_nd_sharded(
     )
     sharded_mem_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=nd_shard_spec)
 
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     for i in range(2):
         torch_output = torch.full(input_shape, fill_value, dtype=torch.int32)
 
@@ -740,6 +744,8 @@ def test_moreh_full_callback_legacy_sharded(
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     sharded_mem_config = ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, shard_spec)
 
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     for i in range(2):
         torch_output = torch.full(input_shape, fill_value, dtype=torch.int32)
 

@@ -194,6 +194,8 @@ def test_moreh_nll_loss_callback(shape, reduction, device):
     torch.manual_seed(0)
     ignore_index = 0
 
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(4):
         if i < 2:
@@ -208,6 +210,9 @@ def test_moreh_nll_loss_callback(shape, reduction, device):
         num_program_cache_entries_list.append(device.num_program_cache_entries())
 
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    # Guard that the op registers cached programs at all; the equality checks alone
+    # would still pass even if it never does.
+    assert num_program_cache_entries_list[0] > 0
     assert (
         num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
         and num_program_cache_entries_list[2] == num_program_cache_entries_list[3]
@@ -273,6 +278,8 @@ def test_moreh_nll_loss_backward_test_callback(shape, reduction_mean, device):
 
     ignore_index = 0
 
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(4):
         if i < 2:
@@ -287,6 +294,9 @@ def test_moreh_nll_loss_backward_test_callback(shape, reduction_mean, device):
         num_program_cache_entries_list.append(device.num_program_cache_entries())
 
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    # Guard that the op registers cached programs at all; the equality checks alone
+    # would still pass even if it never does.
+    assert num_program_cache_entries_list[0] > 0
     assert (
         num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
         and num_program_cache_entries_list[2] == num_program_cache_entries_list[3]

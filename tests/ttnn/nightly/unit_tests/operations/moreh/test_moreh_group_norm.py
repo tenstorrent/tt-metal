@@ -330,6 +330,8 @@ def test_moreh_group_norm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, d
 )
 def test_moreh_group_norm_callback(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device):
     torch.manual_seed(2024)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_test_moreh_group_norm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device)
@@ -538,6 +540,8 @@ def test_moreh_group_norm_backward_callback(
     device,
 ):
     torch.manual_seed(2024)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_test_moreh_group_norm_backward(

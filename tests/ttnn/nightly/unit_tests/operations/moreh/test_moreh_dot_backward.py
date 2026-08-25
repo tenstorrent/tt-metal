@@ -181,6 +181,8 @@ def test_moreh_dot_backward_callback(
     requires_grad,
     device,
 ):
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_in_cache = []
     for i in range(2):
         run_moreh_dot_backward(input_shape, requires_grad, device)

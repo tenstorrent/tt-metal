@@ -255,6 +255,8 @@ def test_moreh_bmm_callback(shape, device):
     AssertionError: If the number of program cache entries differs between runs with the same settings.
     """
     torch.manual_seed(2024)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_bmm(shape, True, True, device)
@@ -334,6 +336,8 @@ def test_moreh_bmm_backward_callback(requires_grad, device):
     AssertionError: If the number of program cache entries differs between runs with the same settings.
     """
     torch.manual_seed(2024)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_bmm_backward([7, 511, 313, 765], requires_grad, True, device)

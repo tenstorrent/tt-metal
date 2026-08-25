@@ -79,6 +79,8 @@ def test_fold(device, input_shape, output_size, kernel_size, dilation, padding, 
 )
 def test_fold_callback(device, input_shape, output_size, kernel_size, dilation, padding, stride, dtype):
     torch.manual_seed(0)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_fold_test(device, input_shape, output_size, kernel_size, dilation, padding, stride, dtype)

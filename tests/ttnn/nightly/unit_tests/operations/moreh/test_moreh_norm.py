@@ -557,6 +557,8 @@ def test_moreh_norm_callback(dim_rtol_atol, keepdim, device, is_linalg_vector_no
     """
     torch.manual_seed(2024)
     dim, rtol, atol = dim_rtol_atol
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_norm(
@@ -693,6 +695,8 @@ def test_moreh_norm_backward_callback(dim_rtol_atol, keepdim, device, is_linalg_
     """
     torch.manual_seed(2024)
     dim, rtol, atol = dim_rtol_atol
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_norm_backward(
