@@ -174,7 +174,9 @@ struct StatsSnapshot {
     std::uint64_t certified_hits = 0;
     std::uint64_t shadow_would_hits = 0;
     std::uint64_t selected_hits = 0;
-    std::uint64_t completed_hits = 0;
+    // The asynchronous public launch returned without throwing. This is not a
+    // device synchronization or silicon-correctness signal.
+    std::uint64_t launch_completed_hits = 0;
     std::uint64_t fallbacks = 0;
     std::uint64_t circuit_breaker_activations = 0;
     bool circuit_broken = false;
@@ -182,7 +184,7 @@ struct StatsSnapshot {
 };
 
 void record_resolution(Mode mode, const Resolution& resolution, ExecutionAction action) noexcept;
-void record_completed_hit() noexcept;
+void record_launch_completed_hit() noexcept;
 StatsSnapshot stats_snapshot() noexcept;
 void reset_stats_for_testing() noexcept;
 

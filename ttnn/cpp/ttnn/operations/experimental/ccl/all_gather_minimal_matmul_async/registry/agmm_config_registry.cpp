@@ -20,7 +20,7 @@ struct AtomicStats {
     std::atomic<std::uint64_t> certified_hits{0};
     std::atomic<std::uint64_t> shadow_would_hits{0};
     std::atomic<std::uint64_t> selected_hits{0};
-    std::atomic<std::uint64_t> completed_hits{0};
+    std::atomic<std::uint64_t> launch_completed_hits{0};
     std::atomic<std::uint64_t> fallbacks{0};
     std::atomic<std::uint64_t> circuit_breaker_activations{0};
     std::array<std::atomic<std::uint64_t>, kResolutionReasonCount> reasons{};
@@ -308,13 +308,12 @@ MaterializationResult materialize_recipe(const compact::EntryDescriptor& descrip
     }
 
     const auto& config = descriptor.replay.config;
-    const auto maximum_subblock_area =
-        descriptor.replay.compute_kernel_config.fp32_dest_acc_en ? std::uint32_t{4} : std::uint32_t{8};
     if (config.m_block_size == 0 || config.k_block_size == 0 || config.n_block_size == 0 || config.subblock_h == 0 ||
         config.subblock_w == 0 || config.compute_grid_x == 0 || config.compute_grid_y == 0 ||
         config.compute_grid_x < 2 || config.compute_grid_y < 2 ||
-        config.subblock_h > maximum_subblock_area / config.subblock_w || config.m_block_size % config.subblock_h != 0 ||
-        config.n_block_size % config.subblock_w != 0 || config.compute_grid_x > descriptor.key.device.compute_grid_x ||
+        (descriptor.key.operation.fuse_swiglu && config.n_block_size % 2 != 0) ||
+        config.m_block_size % config.subblock_h != 0 || config.n_block_size % config.subblock_w != 0 ||
+        config.compute_grid_x > descriptor.key.device.compute_grid_x ||
         config.compute_grid_y > descriptor.key.device.compute_grid_y) {
         return {.status = MaterializationStatus::InvalidProgramConfig};
     }
@@ -356,6 +355,17 @@ MaterializationResult materialize_recipe(const compact::EntryDescriptor& descrip
     }
 
     const auto& kernel = descriptor.replay.compute_kernel_config;
+    const auto materialized_kernel = DeviceComputeKernelConfig{
+        .math_fidelity = fidelity,
+        .math_approx_mode = kernel.math_approx_mode,
+        .fp32_dest_acc_en = kernel.fp32_dest_acc_en,
+        .packer_l1_acc = kernel.packer_l1_acc,
+        .dst_full_sync_en = kernel.dst_full_sync_en,
+        .throttle_level = throttle};
+    const auto maximum_subblock_area = get_dest_reg_count(materialized_kernel);
+    if (config.subblock_h > maximum_subblock_area / config.subblock_w) {
+        return {.status = MaterializationStatus::InvalidProgramConfig};
+    }
     return MaterializationResult{
         .status = MaterializationStatus::Success,
         .recipe = Recipe{
@@ -367,13 +377,7 @@ MaterializationResult materialize_recipe(const compact::EntryDescriptor& descrip
                     .subblock_h = config.subblock_h,
                     .subblock_w = config.subblock_w,
                     .compute_with_storage_grid_size = {config.compute_grid_x, config.compute_grid_y}},
-            .compute_kernel_config = DeviceComputeKernelConfig{
-                .math_fidelity = fidelity,
-                .math_approx_mode = kernel.math_approx_mode,
-                .fp32_dest_acc_en = kernel.fp32_dest_acc_en,
-                .packer_l1_acc = kernel.packer_l1_acc,
-                .dst_full_sync_en = kernel.dst_full_sync_en,
-                .throttle_level = throttle}}};
+            .compute_kernel_config = materialized_kernel}};
 }
 
 ResolutionReason preflight(const Eligibility& eligibility) noexcept {
@@ -502,7 +506,7 @@ void record_resolution(const Mode mode, const Resolution& resolution, const Exec
     }
 }
 
-void record_completed_hit() noexcept { stats.completed_hits.fetch_add(1, std::memory_order_relaxed); }
+void record_launch_completed_hit() noexcept { stats.launch_completed_hits.fetch_add(1, std::memory_order_relaxed); }
 
 StatsSnapshot stats_snapshot() noexcept {
     StatsSnapshot snapshot;
@@ -514,7 +518,7 @@ StatsSnapshot stats_snapshot() noexcept {
     snapshot.certified_hits = stats.certified_hits.load(std::memory_order_relaxed);
     snapshot.shadow_would_hits = stats.shadow_would_hits.load(std::memory_order_relaxed);
     snapshot.selected_hits = stats.selected_hits.load(std::memory_order_relaxed);
-    snapshot.completed_hits = stats.completed_hits.load(std::memory_order_relaxed);
+    snapshot.launch_completed_hits = stats.launch_completed_hits.load(std::memory_order_relaxed);
     snapshot.fallbacks = stats.fallbacks.load(std::memory_order_relaxed);
     snapshot.circuit_breaker_activations = stats.circuit_breaker_activations.load(std::memory_order_relaxed);
     snapshot.circuit_broken = is_circuit_broken();
@@ -529,7 +533,7 @@ void reset_stats_for_testing() noexcept {
     stats.certified_hits.store(0, std::memory_order_relaxed);
     stats.shadow_would_hits.store(0, std::memory_order_relaxed);
     stats.selected_hits.store(0, std::memory_order_relaxed);
-    stats.completed_hits.store(0, std::memory_order_relaxed);
+    stats.launch_completed_hits.store(0, std::memory_order_relaxed);
     stats.fallbacks.store(0, std::memory_order_relaxed);
     stats.circuit_breaker_activations.store(0, std::memory_order_relaxed);
     for (auto& reason : stats.reasons) {
@@ -551,7 +555,7 @@ SelectedExecutionGuard::~SelectedExecutionGuard() noexcept {
     if (std::uncaught_exceptions() > uncaught_exceptions_) {
         circuit_break();
     } else {
-        record_completed_hit();
+        record_launch_completed_hit();
     }
 }
 

@@ -290,7 +290,7 @@ TEST_F(AgmmRegistryTest, SelectedExecutionExceptionIsNotRetriedAndCircuitBreaks)
     EXPECT_THROW(throw_during_selected_execution(launches), std::runtime_error);
     EXPECT_EQ(launches.load(), 1U);
     EXPECT_TRUE(registry::is_circuit_broken());
-    EXPECT_EQ(registry::stats_snapshot().completed_hits, 0U);
+    EXPECT_EQ(registry::stats_snapshot().launch_completed_hits, 0U);
 }
 
 TEST_F(AgmmRegistryTest, MaterializerRejectsShapeTileGridAndBlockTampering) {
@@ -310,13 +310,46 @@ TEST_F(AgmmRegistryTest, MaterializerRejectsShapeTileGridAndBlockTampering) {
     EXPECT_EQ(registry::materialize_recipe(entry).status, registry::MaterializationStatus::InvalidProgramConfig);
 }
 
-TEST_F(AgmmRegistryTest, TelemetrySeparatesSelectedFromCompletedAndUsesNamedReasons) {
+TEST_F(AgmmRegistryTest, MaterializerRejectsOddSwiGluNBlockBeforeLaunch) {
+    auto entry = valid_entry();
+    entry.key.operation.fuse_swiglu = true;
+    entry.replay.config.n_block_size = 3;
+    entry.replay.config.subblock_w = 1;
+
+    EXPECT_EQ(registry::materialize_recipe(entry).status, registry::MaterializationStatus::InvalidProgramConfig);
+}
+
+TEST_F(AgmmRegistryTest, MaterializerUsesFullDestinationRegisterCapacity) {
+    auto entry = valid_entry();
+    entry.replay.config.m_block_size = 2;
+    entry.replay.config.n_block_size = 4;
+    entry.replay.config.subblock_h = 2;
+    entry.replay.config.subblock_w = 4;
+
+    // fp32 accumulation has four 32x32 destination tiles in half-sync mode.
+    entry.replay.compute_kernel_config.dst_full_sync_en = false;
+    EXPECT_EQ(registry::materialize_recipe(entry).status, registry::MaterializationStatus::InvalidProgramConfig);
+
+    // Full-sync uses the entire destination register and therefore admits all eight tiles.
+    entry.replay.compute_kernel_config.dst_full_sync_en = true;
+    EXPECT_EQ(registry::materialize_recipe(entry).status, registry::MaterializationStatus::Success);
+
+    // Non-fp32 full-sync exposes sixteen tiles through the shared hardware contract.
+    entry.replay.config.m_block_size = 4;
+    entry.replay.config.subblock_h = 4;
+    entry.replay.compute_kernel_config.fp32_dest_acc_en = false;
+    EXPECT_EQ(registry::materialize_recipe(entry).status, registry::MaterializationStatus::Success);
+    entry.replay.compute_kernel_config.dst_full_sync_en = false;
+    EXPECT_EQ(registry::materialize_recipe(entry).status, registry::MaterializationStatus::InvalidProgramConfig);
+}
+
+TEST_F(AgmmRegistryTest, TelemetrySeparatesSelectedFromLaunchCompletedAndUsesNamedReasons) {
     const auto resolution =
         registry::Resolution{.reason = registry::ResolutionReason::CertifiedMatch, .descriptor = &selected_descriptor};
     registry::record_resolution(Mode::On, resolution, registry::ExecutionAction::ApplyRecipe);
     auto snapshot = registry::stats_snapshot();
     EXPECT_EQ(snapshot.selected_hits, 1U);
-    EXPECT_EQ(snapshot.completed_hits, 0U);
+    EXPECT_EQ(snapshot.launch_completed_hits, 0U);
     EXPECT_EQ(snapshot.reasons[static_cast<std::size_t>(registry::ResolutionReason::CertifiedMatch)], 1U);
     EXPECT_EQ(registry::resolution_reason_name(registry::ResolutionReason::CertifiedMatch), "certified_match");
 
@@ -325,7 +358,7 @@ TEST_F(AgmmRegistryTest, TelemetrySeparatesSelectedFromCompletedAndUsesNamedReas
         const registry::SelectedExecutionGuard guard(&selected);
     }
     snapshot = registry::stats_snapshot();
-    EXPECT_EQ(snapshot.completed_hits, 1U);
+    EXPECT_EQ(snapshot.launch_completed_hits, 1U);
 }
 
 }  // namespace

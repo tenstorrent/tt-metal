@@ -58,5 +58,7 @@ and compatibility digests are generated into the runtime build.
 recipe. `On` resolves and materializes at most once. Once a selected public
 launch begins there is no baseline retry path: an execution exception propagates
 with existing operation semantics, opens the circuit breaker, and does not
-increment `completed_hits`. `selected_hits` and `completed_hits` are separate so
-rollout tooling cannot mistake an attempted recipe for a successful one.
+increment `launch_completed_hits`. `selected_hits` and `launch_completed_hits`
+are separate. The latter means only that the asynchronous public launch API
+returned without throwing; it is not a device synchronization, execution
+completion, PCC, or silicon-correctness signal.

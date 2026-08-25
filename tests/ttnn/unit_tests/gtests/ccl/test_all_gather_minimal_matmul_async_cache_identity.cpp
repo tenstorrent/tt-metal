@@ -20,7 +20,9 @@ std::size_t hash_attributes(
     std::optional<tt::tt_metal::DataType> output_dtype,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<float> fused_ternary_scalar = std::nullopt,
-    ttnn::ccl::Topology fsdp_topology = ttnn::ccl::Topology::Ring) {
+    ttnn::ccl::Topology fsdp_topology = ttnn::ccl::Topology::Ring,
+    std::optional<uint32_t> cluster_axis = std::nullopt,
+    std::optional<uint32_t> fsdp_cluster_axis = std::nullopt) {
     const std::optional<ttnn::GlobalSemaphore> barrier_semaphore = std::nullopt;
     const ttnn::experimental::prim::AllGatherMinimalMatmulAsyncParams attributes{
         /*config=*/std::nullopt,
@@ -32,7 +34,7 @@ std::size_t hash_attributes(
         /*ring_size=*/2,
         ttnn::ccl::Topology::Ring,
         /*semaphore=*/{},
-        /*cluster_axis=*/std::nullopt,
+        cluster_axis,
         barrier_semaphore,
         /*using_persistent_buffers=*/false,
         /*force_transpose=*/false,
@@ -41,7 +43,7 @@ std::size_t hash_attributes(
         fused_ternary_scalar,
         /*chunks=*/1,
         /*dim=*/-1,
-        /*fsdp_cluster_axis=*/std::nullopt,
+        fsdp_cluster_axis,
         /*fsdp_ring_size=*/1,
         /*fsdp_semaphore=*/{},
         /*using_persistent_weight_buffer=*/false,
@@ -75,6 +77,25 @@ TEST(AllGatherMinimalMatmulAsync, CompileAffectingAttributesHaveDistinctProgramC
 
     EXPECT_NE(
         hash_attributes(std::nullopt, std::nullopt, default_compute_config, std::nullopt, ttnn::ccl::Topology::Linear),
+        baseline_hash);
+    EXPECT_NE(
+        hash_attributes(
+            std::nullopt,
+            std::nullopt,
+            default_compute_config,
+            std::nullopt,
+            ttnn::ccl::Topology::Ring,
+            /*cluster_axis=*/0),
+        baseline_hash);
+    EXPECT_NE(
+        hash_attributes(
+            std::nullopt,
+            std::nullopt,
+            default_compute_config,
+            std::nullopt,
+            ttnn::ccl::Topology::Ring,
+            std::nullopt,
+            /*fsdp_cluster_axis=*/0),
         baseline_hash);
 }
 
