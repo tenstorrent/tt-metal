@@ -121,12 +121,13 @@ four boolean commands on every decode:
 - `reload_sampling_params`: upload sampling configuration.
 - `reset_sampling_state`: rebuild mutable penalty/RNG state for the layout.
 
-The plugin also sends `slot_remap` as layout data on every version-1 decode,
-including host-sampling steps. `slot_remap[i] = j` means every persistent state
-owned by new slot `i` must take the continuing request state from old slot `j`
-before the forward reads it. This is broader than sampler state: recurrent or
-convolution state indexed by decode slot must be remapped too. Stateless
-adapters accept and may ignore the value.
+When a version-1 layout transition produces a non-identity `slot_remap`, the
+plugin sends it in either sampling mode, including host-sampling steps.
+`slot_remap[i] = j` means every persistent state owned by new slot `i` must take
+the continuing request state from old slot `j` before the forward reads it.
+This is broader than sampler state: recurrent or convolution state indexed by
+decode slot must be remapped too. Stateless adapters accept and may ignore the
+value.
 
 There are two distinct ways to implement this incompletely:
 
@@ -138,12 +139,21 @@ There are two distinct ways to implement this incompletely:
    host sampling. A later switch back to device sampling then resumes the wrong
    request's state.
 
-Every slot-owning subsystem must therefore consume the remap exactly once on
-every accepted version-1 decode. State read by the forward is remapped before
-that read. A dormant sampler may consume it after successful decode/readback,
-which preserves retry safety because slot remaps are non-idempotent. An
+Every slot-owning subsystem must therefore consume each supplied remap exactly
+once on the accepted version-1 decode that carries it. State read by the
+forward is remapped before that read. A dormant sampler may consume it after
+successful decode/readback, which preserves retry safety because slot remaps
+are non-idempotent. An
 authoritative rebuild may replace the remap for that subsystem; inactivity may
 not. Version-0 adapters retain their historical remap behavior unchanged.
+
+State that is not addressable by vLLM slot cannot be remapped. Unseeded
+on-device RNG is the known exception: its state lives in per-core hardware PRNG
+registers with no slot-to-slot move primitive. A commanded
+`reset_sampling_state` therefore reinitializes it instead. Explicitly seeded,
+slot-addressable counters still follow the request through `slot_remap`. Any
+additional exception must be documented beside the code that skips it and must
+be physically unmovable, not merely inconvenient to move.
 
 Generators execute these commands without adding page-table comparisons,
 sampling-mode checks, or model-specific forced reloads. The corresponding
@@ -187,8 +197,8 @@ A model wrapper may opt in only if all of the following hold:
 If any item is unsupported, leave the capability absent or `False`. vLLM will
 disable async scheduling and issue a full input reload for every decode. The
 authoritative mode definitions, transition matrix, and correctness invariant
-live in the paired vLLM plugin document
-`plugins/vllm-tt-plugin/docs/decode-reload-contract.md`.
+live in the paired standalone plugin document
+[`docs/DECODE_RELOAD_CONTRACT.md`](https://github.com/tenstorrent/vllm-tt-plugin/blob/main/docs/DECODE_RELOAD_CONTRACT.md).
 
 ## Pitfalls
 
