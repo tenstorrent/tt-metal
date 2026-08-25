@@ -84,7 +84,7 @@ ttnn:
     bh_quietbox_2: 65
     bh_p300: 15
     wh_llmbox_civ2: 40
-    sim_wh_n150: 695  # +15 for trace allocation tracker simulator coverage
+    sim_wh_n150: 715  # +15 for trace allocation tracker; +20 for ttnn reduce group simulator timeout
     sim_bh_p150: 680
   unit:
     wh_llmbox: 50

@@ -256,7 +256,7 @@
     bh_p150b_civ2:
       timeout: 40
     sim_wh_n150:
-      timeout: 40
+      timeout: 60
     sim_bh_p150:
       timeout: 40
   team: ttnn
