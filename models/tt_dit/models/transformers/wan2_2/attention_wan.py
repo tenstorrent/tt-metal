@@ -165,7 +165,6 @@ class WanAttention(Module):
             and self.ccl_manager is not None
             and self.ccl_manager.num_links == 2  # op requires exactly 2 links
             and self.ccl_manager.topology == ttnn.Topology.Ring
-            and os.environ.get("TT_DIT_EXP_RING_SDPA", "1") != "0"
         )
         self.exp_ring_k_chunk_size = ring_sdpa_chunk_size[1]  # shape-independent
         self.exp_ring_full_grid = full_grid  # the exp op reserves the CCL column itself
