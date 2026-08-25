@@ -249,7 +249,7 @@ def generate_on_tt(
     yields distinct samples -- that is what makes pass@k > 1 meaningful.
     """
     parent_mesh = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(1, 1),
+        mesh_shape=ttnn.MeshShape(1, 4),
         offset=ttnn.MeshCoordinate(0, 0),
     )
 
@@ -423,10 +423,6 @@ def main() -> None:
     tag_strings = (reasoning_open, reasoning_close, ANSWER_OPEN, ANSWER_CLOSE)
     fmt_re = strict_format_re(reasoning_open, reasoning_close)
 
-    # Pin fabric config once, before opening any mesh device. Matches the
-    # training example so the worker's on-device paths behave identically.
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
-
     # -- dataset --
     print(f"Loading GSM8K {args.split} split...")
     ds = load_dataset("openai/gsm8k", "main")[args.split]
@@ -445,6 +441,27 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, trust_remote_code=True)
     prompt_texts = build_prompt_texts(tokenizer, questions, reasoning_open, reasoning_close)
     prompts_token_ids = [tokenizer(t, add_special_tokens=False)["input_ids"] for t in prompt_texts]
+
+    # -- preflight: boot every worker once with empty prompts so a bad model
+    #    (missing LOCAL_HF_PARAMS entry, unreachable repo, incompatible config)
+    #    fails immediately instead of after 15+ min of generation on earlier
+    #    models. Reuses generate_on_tt with prompts_token_ids=[] -- the worker
+    #    is constructed (weights load, tt cache is populated) and torn down;
+    #    no generate() call happens. Subsequent full-eval reloads pick up the
+    #    already-materialized tt weight cache, so the extra cost is small.
+    print("\n=== Preflight: loading every model once to catch boot failures early ===")
+    for path, display in models:
+        print(f"[preflight] {display} ({path})")
+        generate_on_tt(
+            model_path=path,
+            prompts_token_ids=[],
+            n_samples=1,
+            max_new_tokens=1,
+            temperature=args.temperature,
+            max_batch_size=args.max_batch_size,
+            max_seq_len=args.max_seq_len,
+        )
+    print("[preflight] all models loaded successfully")
 
     # -- generate + score per model --
     ks = [k for k in (1, 2, 4, 8, 16) if k <= args.n_samples]
