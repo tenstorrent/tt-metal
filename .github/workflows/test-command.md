@@ -429,21 +429,43 @@ comment, or your memory of the diff. Never dispatch `main`, `master`, or a relea
 
 Post exactly one comment. Keep it short enough to read at a glance:
 
-- **What you dispatched** — a table of pipeline, the platform narrowing you applied, and a
-  one-line reason.
+- **What you dispatched** — one row per pipeline: a status badge (below), the platform
+  narrowing you applied, and a one-line reason.
 - **The ref** every dispatch targeted, stated explicitly so it is auditable.
 - **What you deliberately skipped** and why, when a reader might expect it — especially
   anything you dropped to stay under the cap of 8.
 - If you dispatched **nothing**, say so plainly and give the reason (docs-only change,
-  fork PR, nothing reachable by the optional pipelines). Do not pad it.
+  fork PR, nothing reachable by the optional pipelines). Do not pad it. No badges in that
+  case — a badge for a pipeline you did not launch is worse than no badge.
 
-**Do not try to link the individual runs, and do not state a run ID, run URL, or start
-time.** You are writing this comment *before* any dispatch has happened: your comment and
-your dispatches are both queued as outputs of this turn and are only carried out
-afterwards, so no run exists yet and no run ID has been assigned. Anything you write in
-that shape would be invented. Name the pipelines instead, and point the reader at the
-repository's [Actions tab](${{ github.server_url }}/${{ github.repository }}/actions) —
-the runs appear there within a minute or so, filtered by the branch you named above.
+### Status badges
+
+Emit one badge per dispatched pipeline, linked to that pipeline's runs filtered to this
+branch. Substituting the workflow's **filename** and the branch from `pr-head-ref.txt`:
+
+```
+[![](${{ github.server_url }}/${{ github.repository }}/actions/workflows/<file>.yaml/badge.svg?branch=<branch>)](${{ github.server_url }}/${{ github.repository }}/actions/workflows/<file>.yaml?query=branch:<branch>)
+```
+
+This is the same badge-plus-filtered-link convention `pr-description-inject-branch-name.yaml`
+already uses for the always-on pipelines, so the two read as one system. The badge image is
+re-rendered by GitHub on every page load, so it reports the *live* status of that pipeline
+on this branch — queued, passing, or failing — and keeps doing so long after this comment
+is written. Clicking it lands on that pipeline's runs for this branch.
+
+Both values are known to you right now: the filename is the allowlist entry plus `.yaml`,
+and the branch is the file you already read. Nothing here needs a run ID.
+
+**Do not state a run ID, a run URL, or a start time.** You are writing this comment
+*before* any dispatch has happened — your comment and your dispatches are both outputs of
+this turn and are only carried out afterwards, so no run exists yet and no ID has been
+assigned. Anything in that shape would be invented. The badge is what makes that
+unnecessary: it resolves the run on the reader's behalf, later, from facts you do have.
+
+For the same reason a badge may read **"no status"** for the first minute or so, before the
+run is created — and if that pipeline ran on this branch previously, it will briefly show
+that older result instead. Add one line under the table saying badges go live shortly after
+posting, so nobody reads a cold badge as a failure to launch.
 
 Close by noting that these are optional pipelines: they do not gate the PR, and a failure
 here means the change needs another look, not that the PR is blocked from merging.
