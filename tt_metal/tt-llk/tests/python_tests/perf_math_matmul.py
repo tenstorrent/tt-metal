@@ -99,6 +99,8 @@ def generate_perf_matmul_combinations():
         for dest_acc in DEST_ACC_MODES:
             if is_dest_acc_needed(fmt) and dest_acc == DestAccumulation.No:
                 continue
+            if fmt.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+                continue
             if (
                 dest_acc == DestAccumulation.No
                 and fmt.input_format == DataFormat.Float16_b
@@ -143,6 +145,29 @@ def generate_perf_matmul_combinations():
 
 MATMUL_COMBINATIONS = generate_perf_matmul_combinations()
 
+
+def _handoff_combinations():
+    """One dest-full geometry for section handoff (not a cartesian of all dest-fill).
+
+    Isolate run types do not model multi-block dest handshake, so the test uses
+    L1_TO_L1 only when num_blocks > 1.
+    """
+    for cfg in MATMUL_COMBINATIONS:
+        if (
+            cfg.tile_dimensions.kt_dim == 1
+            and cfg.dest_sync == DestSync.Half
+            and cfg.dest_acc == DestAccumulation.No
+            and cfg.formats.input_format == DataFormat.Float16_b
+            and cfg.formats.output_format == DataFormat.Float16_b
+            and cfg.face_layout_config.unpack_transpose_faces == Transpose.No
+            and cfg.tile_dimensions.ct_dim == 1
+            and cfg.tile_dimensions.rt_dim
+            == _dest_capacity(cfg.dest_sync, cfg.dest_acc)
+        ):
+            return [cfg]
+    return []
+
+
 TINY_TILES_MATMUL_COMBINATIONS = [
     cfg
     for cfg in sweep_tiny_tiles_matmul(
@@ -153,6 +178,9 @@ TINY_TILES_MATMUL_COMBINATIONS = [
         math_matmul=True,
     )
     if _fits_tiny_perf_tile_shape(cfg)
+    and not (
+        cfg.formats.input_format.is_32_bit() and cfg.dest_acc == DestAccumulation.No
+    )
 ]
 
 ALL_TEST_PARAMS = list(
@@ -171,8 +199,7 @@ ALL_TEST_PARAMS = list(
         ),
         (
             (fidelity, cfg, 0, DEST_HANDOFF_NUM_BLOCKS)
-            for fidelity, cfg in product(MATH_FIDELITIES, MATMUL_COMBINATIONS)
-            if cfg.tile_dimensions.kt_dim == 1
+            for fidelity, cfg in product((MathFidelity.LoFi,), _handoff_combinations())
         ),
     )
 )
@@ -207,13 +234,22 @@ def test_perf_math_matmul(
     if is_dest_acc_needed(formats) and matmul_config.dest_acc == DestAccumulation.No:
         pytest.skip("Dest accumulation must be enabled for this format")
 
-    run_types = [
-        PerfRunType.L1_TO_L1,
-        PerfRunType.UNPACK_ISOLATE,
-        PerfRunType.MATH_ISOLATE,
-        PerfRunType.PACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
-    ]
+    if (
+        formats.input_format.is_32_bit()
+        and matmul_config.dest_acc == DestAccumulation.No
+    ):
+        pytest.skip("32-bit inputs require dest accumulation")
+
+    if num_blocks > 1:
+        run_types = [PerfRunType.L1_TO_L1]
+    else:
+        run_types = [
+            PerfRunType.L1_TO_L1,
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.MATH_ISOLATE,
+            PerfRunType.PACK_ISOLATE,
+            PerfRunType.L1_CONGESTION,
+        ]
 
     variant_tile_count = (
         matmul_config.tile_dimensions.rt_dim

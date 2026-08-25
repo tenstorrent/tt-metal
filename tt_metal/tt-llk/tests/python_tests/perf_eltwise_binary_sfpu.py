@@ -33,8 +33,9 @@ from helpers.test_variant_parameters import (
 
 
 def get_dest_accum_modes(formats):
+    # Int32 binary SFPU kernels use a 32-bit dest (functional pins dest_acc=Yes).
     if formats.input_format.is_32_bit() and formats.input_format.is_integer():
-        return [DestAccumulation.No]
+        return [DestAccumulation.Yes]
     return [DestAccumulation.Yes, DestAccumulation.No]
 
 
@@ -148,7 +149,8 @@ def test_perf_eltwise_binary_sfpu_float(
         MathOperation.SfpuElwLogicalRightShift,
         MathOperation.SfpuElwadd,
         MathOperation.SfpuElwsub,
-        MathOperation.SfpuGtInt,
+        # Int comparisons share calculate_binary_comp_int32; GT_INT is Quasar-only.
+        MathOperation.SfpuElwGt,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
     loop_factor=[

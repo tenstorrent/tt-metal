@@ -12,7 +12,6 @@ from helpers.llk_params import (
     DestSync,
     MathFidelity,
     MathOperation,
-    PerfRunType,
     Transpose,
 )
 from helpers.param_config import (
@@ -21,7 +20,7 @@ from helpers.param_config import (
     parametrize,
     select_perf_tile_sizes,
 )
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
@@ -36,14 +35,6 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tile_shape import construct_tile_shape
 from test_eltwise_binary import ALL_TILE_DIMENSIONS, _get_valid_tile_dimensions
-
-_ALL_PERF_RUN_TYPES = [
-    PerfRunType.L1_TO_L1,
-    PerfRunType.UNPACK_ISOLATE,
-    PerfRunType.MATH_ISOLATE,
-    PerfRunType.PACK_ISOLATE,
-    PerfRunType.L1_CONGESTION,
-]
 
 
 def _perf_tile_dimensions(transpose_srca, broadcast_type):
@@ -102,16 +93,10 @@ def test_perf_eltwise_binary(
         input_dimensions[1] // tile_shape.total_col_dim()
     )
 
-    # Isolates assume NONE-broadcast dvalid accounting in the dedicated perf kernel.
-    if broadcast_type == BroadcastType.None_ and transpose_srca == Transpose.No:
-        run_types = _ALL_PERF_RUN_TYPES
-    else:
-        run_types = [PerfRunType.L1_TO_L1]
-
     configuration = PerfConfig(
         "sources/eltwise_binary_fpu_perf.cpp",
         formats,
-        run_types=run_types,
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),

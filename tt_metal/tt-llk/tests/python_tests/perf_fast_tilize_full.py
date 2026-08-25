@@ -35,17 +35,18 @@ _CROSS_FORMATS = [
     InputOutputFormat(DataFormat.Float32, DataFormat.Bfp8_b),
     InputOutputFormat(DataFormat.Float32, DataFormat.Bfp4_b),
 ]
-_FAST_TILIZE_FULL_CASES = [(fmt, 1, ct) for fmt in _SAME_FORMATS for ct in [2, 8]] + [
-    (fmt, 1, ct) for fmt in _CROSS_FORMATS for ct in [2, 8]
-]
+_FAST_TILIZE_FULL_FORMATS = list(_SAME_FORMATS) + _CROSS_FORMATS
 
 
 @pytest.mark.perf
 @skip_for_wormhole
 @skip_for_quasar
-@parametrize(formats_rt_ct=_FAST_TILIZE_FULL_CASES)
-def test_perf_fast_tilize_full(perf_report, formats_rt_ct):
-    formats, rt_dim, ct_dim = formats_rt_ct
+@parametrize(
+    formats=_FAST_TILIZE_FULL_FORMATS,
+    rt_dim=[1],
+    ct_dim=[2, 8],
+)
+def test_perf_fast_tilize_full(perf_report, formats, rt_dim, ct_dim):
     _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim)
 
 

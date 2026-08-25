@@ -72,6 +72,7 @@ def matmul_combos(
         for fmt in formats
         for acc in dest_acc
         for sync in DEST_SYNC_MODES
+        if not (fmt.input_format.is_32_bit() and acc == DestAccumulation.No)
     )
     dimensions = {
         max_tiles: generate_dest_corner_combinations(max_tiles, kt_dims=KT_DIMS)
@@ -83,6 +84,7 @@ def matmul_combos(
         for format in formats
         for accumulation in dest_acc
         for dest_sync in DEST_SYNC_MODES
+        if not (format.input_format.is_32_bit() and accumulation == DestAccumulation.No)
         for dims in dimensions[_dest_bank_max_tiles(format, accumulation, dest_sync)]
     ]
 
@@ -117,6 +119,9 @@ def test_perf_matmul(
 
     if is_dest_acc_needed(formats) and dest_acc == DestAccumulation.No:
         pytest.skip("Dest accumulation must be enabled for this format")
+
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        pytest.skip("32-bit inputs require dest accumulation")
 
     run_types = [
         PerfRunType.L1_TO_L1,
