@@ -39,9 +39,9 @@ env:
 
 jobs:
   file-jira:
-    # Failed run, or a manual dispatch for testing. The stable check lives in
-    # the collect step below, which resolves the branch from the run itself so
-    # both paths are covered.
+    # Failed run, or a manual dispatch for testing. The release-ref check lives
+    # in the collect step below, which resolves the branch from the run itself
+    # so both paths are covered.
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure' }}
     runs-on: ubuntu-latest
     steps:
