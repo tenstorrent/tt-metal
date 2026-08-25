@@ -333,10 +333,26 @@ class PipelineStageAdapter:
                 # back to the generic None/prompt_ids path for pipelines that don't expose it (a stage
                 # whose trace_setup self-derives, or a text model driven by prompt_ids).
                 _tin = getattr(p, "%s_trace_inputs" % name, None)
-                if callable(_tin):
-                    setup(_tin())
-                else:
-                    self._call_with_inputs(setup, None)
+                # ONE STAGE THAT CANNOT PRODUCE ITS INPUTS MUST NOT COST THE OTHERS THEIR STAGE.
+                # This was unguarded, so a single hook that raised took the whole adapter down and
+                # every stage lost its boundary. Measured: voxtral's encode_trace_inputs torch.loads a
+                # captured golden tensor, and on a tree without one it raised FileNotFoundError --
+                # taking prefill and decode with it, though both derive their own inputs and needed
+                # nothing from disk. The run then had no per-stage split at all rather than two of
+                # three, and the roofline shared one math-fidelity peak across every stack.
+                try:
+                    if callable(_tin):
+                        setup(_tin())
+                    else:
+                        self._call_with_inputs(setup, None)
+                except Exception as exc:  # noqa: BLE001
+                    print(
+                        "  [perf-adapter] stage %r cannot prepare its own inputs (%s: %s); it gets no "
+                        "stage, the others are unaffected" % (name, type(exc).__name__, str(exc)[:120]),
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    continue
             # Propagate self_traced: a pipeline that OWNS its capture must be timed natively, never
             # wrapped in a second begin_trace_capture. The decode fallback below already does this;
             # omitting it here meant declaring PIPELINE_STAGES turned a working self-traced pipeline

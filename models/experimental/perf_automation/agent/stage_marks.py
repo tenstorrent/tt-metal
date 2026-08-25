@@ -175,22 +175,80 @@ def find_pipeline_in_scope(scope: dict):
     return found[0][1]
 
 
-def mark_stages_in_scope(scope: dict, device) -> int:
+# The seam perf_adapter drives a stage through. Named once here because the injector recognises the
+# test's input preparer BY IT -- a function that assigns these is preparing stages, whatever it is
+# called -- and nothing else in this file may name a generated identifier.
+_STAGE_INPUT_HOOK = "_trace_inputs"
+
+
+def find_input_preparer(text: str) -> str:
+    """The name of the test's own stage-input preparer, or "".
+
+    STRUCTURAL, like everything else here. A pipeline's <stage>_trace_inputs() reads the captured
+    golden tensors the bring-up wrote; a model being optimised for the first time has none, and
+    nobody should have to hand one over. The generated test already solves that for the timing path
+    by pointing those hooks at a real batch it builds from the demo -- so the marks reuse it instead
+    of asking for a file.
+
+    Found by what it DOES: a function that assigns attributes ending in the hook suffix. The suffix
+    is perf_adapter's contract, not the generator's spelling, so a test that calls this
+    `_bind_stage_inputs`, `_wire_inputs` or anything else is recognised the same way.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return ""
+    best = ""
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if len(node.args.args) != 1:
+            continue  # it takes the pipeline, and only that
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Assign) and any(
+                isinstance(t, ast.Attribute) and t.attr.endswith(_STAGE_INPUT_HOOK) for t in sub.targets
+            ):
+                if not best:
+                    best = node.name
+                break
+    return best
+
+
+def mark_stages_in_scope(scope: dict, device, bind=None) -> int:
     """Mark each stage of whatever pipeline is live in `scope`. Returns how many were marked.
 
     The scope is the locals() of the function that built the model, so the pipeline is already
-    constructed: no builder, no second build, and nothing that has to be in scope by name."""
+    constructed: no builder, no second build, and nothing that has to be in scope by name.
+
+    `bind` is the test's own preparer, when it has one. A pipeline's <stage>_trace_inputs() hooks
+    read the captured golden tensors the bring-up wrote, and a tree that never ran that capture has
+    none -- voxtral's encode raised FileNotFoundError on a pristine checkout. The generated test
+    already solves this for the timing path by pointing those hooks at a real batch built from the
+    demo, so the marks use the SAME preparation rather than requiring a data file nobody ships with a
+    new model. Absent, the pipeline's own hooks are used, which is correct for a model that needs no
+    preparation."""
     pipe = find_pipeline_in_scope(scope)
     if pipe is None:
         _no_marks("no object in scope exposes PIPELINE_STAGES or <stage>_trace_step hooks")
         return 0
+    if callable(bind):
+        try:
+            bind(pipe)
+        except Exception as exc:  # noqa: BLE001
+            # Not fatal: the pipeline's own hooks may still work, and perf_adapter now skips only the
+            # stages that cannot prepare themselves.
+            print(
+                "  [stage-marks] the test's input preparer raised (%s: %s); falling back to the "
+                "pipeline's own hooks" % (type(exc).__name__, str(exc)[:120]),
+                file=sys.stderr,
+                flush=True,
+            )
     try:
         from .perf_adapter import PipelineStageAdapter as _PSA
     except Exception as exc:  # noqa: BLE001
         _no_marks("perf_adapter is not importable here (%s)" % type(exc).__name__)
         return 0
-    adapter = _PSA(lambda _d: pipe)
-    return mark_stages(adapter, device)
+    return mark_stages(_PSA(lambda _d: pipe), device)
 
 
 # --- deterministic injection into the generated perf test ----------------------------------------
@@ -240,7 +298,7 @@ _MARK_PASS_TEMPLATE = """{i}# --- per-stage marks (injected) -------------------
 {i}try:
 {i}    from models.experimental.perf_automation.agent import stage_marks as _tt_sm2
 
-{i}    _tt_sm2.mark_stages_in_scope(locals(), device)
+{i}    _tt_sm2.mark_stages_in_scope(locals(), device{bind})
 {i}except Exception as _tt_e2:  # noqa: BLE001
 {i}    print("STAGE_MARKS_SKIPPED=%r" % (_tt_e2,), flush=True)
 """
@@ -434,7 +492,8 @@ def inject_stage_marks(text: str) -> tuple:
     if end2 is None:
         return text, "lost the body of %s() after bracketing" % fname
     o = out.splitlines(keepends=True)
-    o.insert(end2, _MARK_PASS_TEMPLATE.format(i=find2))
+    _prep = find_input_preparer(text)
+    o.insert(end2, _MARK_PASS_TEMPLATE.format(i=find2, bind=(", bind=%s" % _prep) if _prep else ""))
     return "".join(o), "injected at line %d, per-stage pass in %s()" % (k + 1, fname)
 
 

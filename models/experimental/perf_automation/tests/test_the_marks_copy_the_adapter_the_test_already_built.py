@@ -225,3 +225,137 @@ def test_a_module_level_flag_is_carried_into_the_function():
     from agent.stage_marks import reachable_bare_calls
 
     assert [n for _, _, n in reachable_bare_calls(_src())] == ["_eager_forward"]
+
+
+# --- the stage inputs, without asking anyone for a data file -------------------------------------
+
+
+_WITH_PREPARER = '''import os
+
+PERF_BATCH = 8
+_PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
+
+
+def %(prep)s(pipe):
+    pipe.encode%(hook)s = lambda: 1
+    pipe.decode%(hook)s = lambda: 2
+
+
+def test_main_perf(device_params, device):
+    def _eager_forward():
+        pipe = build_pipeline(device)
+        return pipe.run()
+
+    def _traced_forward():
+        p = build_pipeline(device)
+        %(prep)s(p)
+        measure_adapter(PipelineStageAdapter(_b, _ids, batch=PERF_BATCH), device)
+
+    _PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
+    if _PERF_TRACE and not _PROFILING:
+        _traced_forward()
+    else:
+        _eager_forward()
+'''
+
+
+def _with_preparer(prep="_bind_stage_inputs", hook="_trace_inputs"):
+    return _WITH_PREPARER % {"prep": prep, "hook": hook}
+
+
+def test_the_preparer_is_found_by_what_it_does_not_by_its_name():
+    """A pipeline's <stage>_trace_inputs() reads captured golden tensors the bring-up wrote. A model
+    being optimised for the first time has none, and nobody should hand one over. The generated test
+    already solves that for the timing path by pointing those hooks at a real batch it builds from
+    the demo -- so the marks reuse it. Found by the hook suffix, which is perf_adapter's contract."""
+    from agent.stage_marks import find_input_preparer
+
+    assert find_input_preparer(_with_preparer()) == "_bind_stage_inputs"
+    assert find_input_preparer(_with_preparer(prep="_wire_up")) == "_wire_up"
+
+
+def test_a_test_with_no_preparer_gets_no_bind_argument():
+    """Correct for a pipeline whose hooks need no preparation -- not every model captures tensors."""
+    from agent.stage_marks import find_input_preparer
+
+    src = _with_preparer().replace("_trace_inputs", "_something_else")
+    assert find_input_preparer(src) == ""
+    out, _ = inject_stage_marks(src)
+    line = next(l for l in out.splitlines() if "mark_stages_in_scope" in l)
+    assert "bind=" not in line, line
+
+
+def test_the_marks_are_handed_the_preparer():
+    out, why = inject_stage_marks(_with_preparer())
+    assert "per-stage pass in _eager_forward()" in why, why
+    ast.parse(out)
+    line = next(l for l in out.splitlines() if "mark_stages_in_scope" in l)
+    assert "bind=_bind_stage_inputs" in line, line
+
+
+def test_the_pipeline_is_prepared_before_it_is_marked(monkeypatch):
+    """The regression: the marks took the pipeline out of the EAGER scope, where the test has not
+    pointed its hooks at real inputs yet -- so encode fell back to torch.load of a _captured file
+    that does not exist on a pristine tree, and the whole pass died with FileNotFoundError."""
+    import sys as _sys
+    import types as _types
+
+    stub = _types.ModuleType("ttnn")
+    stub.synchronize_device = lambda d: None
+    monkeypatch.setitem(_sys.modules, "ttnn", stub)
+    from agent import stage_marks as sm
+
+    seen = {}
+
+    class _P:
+        PIPELINE_STAGES = ["decode"]
+
+        def decode_trace_step(self):
+            return None
+
+    pipe = _P()
+
+    def _prep(p):
+        seen["prepared"] = p is pipe
+
+    monkeypatch.setattr(sm, "signpost", lambda n: None)
+    sm.mark_stages_in_scope({"pipe": pipe}, device=object(), bind=_prep)
+    assert seen.get("prepared") is True, "the marks ran against an unprepared pipeline"
+
+
+def test_a_preparer_that_raises_does_not_stop_the_marks(monkeypatch, capsys):
+    """Its own hooks may still work, and one stage that cannot prepare no longer costs the others."""
+    import sys as _sys
+    import types as _types
+
+    stub = _types.ModuleType("ttnn")
+    stub.synchronize_device = lambda d: None
+    monkeypatch.setitem(_sys.modules, "ttnn", stub)
+    from agent import stage_marks as sm
+
+    class _P:
+        PIPELINE_STAGES = ["decode"]
+
+        def decode_trace_step(self):
+            return None
+
+    monkeypatch.setattr(sm, "signpost", lambda n: None)
+
+    def _boom(_p):
+        raise RuntimeError("no clips")
+
+    sm.mark_stages_in_scope({"pipe": _P()}, device=object(), bind=_boom)
+    assert "falling back to the pipeline's own hooks" in capsys.readouterr().err
+
+
+def test_one_stage_that_cannot_prepare_does_not_cost_the_others():
+    """perf_adapter's setup(_tin()) was unguarded: voxtral's encode torch.loads a captured tensor,
+    and on a tree without one it took prefill and decode down with it -- both of which derive their
+    own inputs and needed nothing from disk."""
+    from pathlib import Path as _Path
+
+    src = (_Path(__file__).resolve().parents[1] / "agent" / "perf_adapter.py").read_text()
+    i = src.index("_tin = getattr(p,")
+    window = src[i : i + 2600]
+    assert "except Exception" in window and "continue" in window, "a failing stage is still fatal"
+    assert "the others are unaffected" in window
