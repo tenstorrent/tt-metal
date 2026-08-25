@@ -259,7 +259,7 @@ SharedMemoryStatsProvider::~SharedMemoryStatsProvider() {
         // next instead of leaving its allocations in the totals permanently.
         for (auto& slot : region_->processes) {
             if (slot.pid.load(std::memory_order_relaxed) == my_pid) {
-                release_process_slot(slot);
+                release_process_slot(slot, my_pid);
                 break;
             }
         }
@@ -638,7 +638,8 @@ DeviceMemoryRegion::ProcessStats* SharedMemoryStatsProvider::claim_own_pid_entry
     return nullptr;
 }
 
-void SharedMemoryStatsProvider::release_process_slot(DeviceMemoryRegion::ProcessStats& slot) {
+void SharedMemoryStatsProvider::release_process_slot(
+    DeviceMemoryRegion::ProcessStats& slot, pid_t expected_owner) {
     if (!region_) {
         return;
     }
@@ -654,13 +655,19 @@ void SharedMemoryStatsProvider::release_process_slot(DeviceMemoryRegion::Process
     // new process while its counters are still being cleared. The loser of the CAS returns
     // without doing anything, which also stops it from clearing a slot that the winner has
     // already handed to somebody else.
-    pid_t owner = slot.pid.load(std::memory_order_acquire);
-    if (owner <= 0) {
-        return;  // already free, or another party owns the release
+    // CAS from the pid the caller decided about, NOT from whatever the slot holds now. Reading
+    // it here instead let a second reaper of one dead slot clear the live process that had
+    // claimed the slot in the meantime: two reapers both see dead pid D, the first releases it,
+    // a new process claims the freed slot, and the second then clears that new process's slot
+    // and decremented the counts for it. The victim stayed attached and counted while owning
+    // nothing, which is the reference_count-above-slots mismatch this used to produce.
+    if (expected_owner <= 0) {
+        return;
     }
+    pid_t owner = expected_owner;
     if (!slot.pid.compare_exchange_strong(
             owner, SHM_SLOT_RELEASING, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-        return;
+        return;  // no longer that process's slot: released and re-claimed since the decision
     }
 
     // Subtract this slot's contribution from the device-wide totals before dropping it.
@@ -737,7 +744,7 @@ size_t SharedMemoryStatsProvider::reap_dead_processes() {
             "Reclaiming SHM slot of dead pid {} for asic_id=0x{:x} (process exited without cleanup)",
             pid,
             asic_id_);
-        release_process_slot(slot);
+        release_process_slot(slot, pid);
         reaped++;
     }
     return reaped;

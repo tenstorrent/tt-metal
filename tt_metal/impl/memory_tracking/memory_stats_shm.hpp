@@ -274,7 +274,11 @@ private:
     // Helper: subtract a slot's bytes from the device-wide totals, then zero the slot and
     // drop the attached count. Every aggregate mutation in this class is a delta like this
     // one; see saturating_sub.
-    void release_process_slot(DeviceMemoryRegion::ProcessStats& slot);
+    // Release `slot`, which must be believed to belong to `expected_owner`. Conditional on that
+    // pid: between deciding a slot is releasable and getting here it can have been released by
+    // somebody else and re-claimed by a live process, and clearing that process's slot would
+    // strand it -- attached, counted, and reporting nothing.
+    void release_process_slot(DeviceMemoryRegion::ProcessStats& slot, pid_t expected_owner);
 
     // Helper: subtract without wrapping, for the unsigned shared counters.
     static void saturating_sub(std::atomic<uint64_t>& counter, uint64_t amount);

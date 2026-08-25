@@ -22,6 +22,7 @@
 // coverage.
 
 #include <fcntl.h>
+#include <poll.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -72,6 +73,20 @@ struct HeaderCounts {
     uint32_t reference_count = 0;
     uint32_t num_active_processes = 0;
 };
+
+// Bounded read: a child that wedges must fail this test, not hang the suite. fork() in this
+// binary happens after other fixtures have opened devices and started threads, so a child can
+// inherit a mutex held by a thread that does not exist in it -- see the note on the disabled
+// test below.
+bool read_with_timeout(int fd, char& out, int timeout_ms) {
+    struct pollfd pfd {};
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    if (poll(&pfd, 1, timeout_ms) != 1) {
+        return false;
+    }
+    return read(fd, &out, 1) == 1;
+}
 
 // Every raw pid in the table, negatives included, for diagnosing a mismatch.
 std::string dump_raw_pids(uint64_t asic_id) {
@@ -399,19 +414,23 @@ TEST_F(ShmMemoryTrackingMultiProcess, ConcurrentAttachDoesNotLoseAllocations) {
 //
 // The race needs real concurrency, so the children are held at a barrier and released together;
 // the assertion is the invariant rather than the bug, so this can never fail spuriously.
-// DISABLED: reproduces an anomaly that is NOT yet root-caused, so it must not gate CI.
+// DISABLED: not CI-safe, for a reason unrelated to what it checks. It forks in a binary where
+// earlier fixtures have opened devices and started threads, and a forked child inherits their
+// mutexes without the threads that hold them -- the provider's own logging is enough to wedge
+// one. Run alone it passes (6/6, and 10/10 over eight rounds each); run after the device tests
+// it can hang, so it stays off until it lives in a binary that has not touched a device. The
+// reads are bounded so that enabling it fails rather than hangs.
 //
-// With the CAS-guarded release in place this fails intermittently -- roughly one round in ten,
-// varying which round -- with reference_count one HIGHER than the number of occupied slots, and
-// the child that is missing a slot reporting that it never owned one after attaching. A claim
-// increments the count only after winning the CAS on a free slot, so a count without a slot
-// means a claimed slot lost its pid; tracing every release showed only correct self-releases
-// and one reap of the planted dead slot, so the mechanism is still unidentified.
+// It earned its place regardless: it is what found the bug below, and the ablation is in the
+// commit -- release-from-load 0/3 pass, unguarded 1/3, release-from-decided-pid 3/3.
 //
-// Against an UNGUARDED release (no CAS to SHM_SLOT_RELEASING) it fails on round 0 every time,
-// which is the double-decrement this guard exists to prevent -- so the guard is doing something,
-// it is simply not the whole story. Enable with --gtest_also_run_disabled_tests when picking
-// this up.
+// Two attachers can decide to reap the same dead slot at once. Guarding that needs two things,
+// and this test failed until both were in place: only the winner of a CAS may clear the slot and
+// move the counts, and the CAS must be from the pid the caller decided about rather than from
+// whatever the slot holds when the release runs. Without the second, the loser of the first race
+// cleared whichever live process had since claimed the freed slot, stranding it -- attached and
+// counted, owning nothing -- which showed up as reference_count reading above the number of
+// occupied slots.
 TEST_F(ShmMemoryTrackingMultiProcess, DISABLED_ConcurrentAttachersDoNotMiscountAfterReapingADeadSlot) {
     constexpr int kAttachers = 6;
     constexpr int kRounds = 8;
@@ -484,7 +503,8 @@ TEST_F(ShmMemoryTrackingMultiProcess, DISABLED_ConcurrentAttachersDoNotMiscountA
         }
         for (int i = 0; i < kAttachers; i++) {
             char token = 0;
-            ASSERT_EQ(read(done[0], &token, 1), 1);
+            ASSERT_TRUE(read_with_timeout(done[0], token, 10000))
+                << "round " << round << ": an attacher never reported in (see the fork-safety note)";
             EXPECT_EQ(token, 'y') << "round " << round << ": an attacher attached without owning a slot";
         }
 
