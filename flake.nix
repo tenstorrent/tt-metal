@@ -135,6 +135,7 @@
             echo "TT-Metal dev shell active"
             echo "Compiler: $(command -v clang++-20)"
             echo "SFPI:     $SFPI_ROOT"
+            echo "Build:    ./build_metal.sh --use-system-sfpi"
             echo "MPI C:    $(command -v mpicc)"
             echo "Python:   $(command -v python)"
           '';

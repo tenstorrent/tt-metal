@@ -60,12 +60,9 @@ set_property(
 # this script sets a bunch of variables of the form SFPI_snake_case_name
 include(${SFPI_BASE}/sfpi-version.cmake)
 
-if(SFPI_ROOT)
-    # Use an explicitly provided SFPI installation, such as a Nix store path.
+if(TT_USE_SYSTEM_SFPI)
+    # Use an externally provided SFPI installation.
     set(SFPI_DIR "${SFPI_ROOT}")
-elseif(TT_USE_SYSTEM_SFPI)
-    # we'll use the system's version
-    set(SFPI_DIR "/opt/tenstorrent/sfpi")
 elseif(NOT "${SFPI_hash}" STREQUAL "")
     # download a toolchain
     include(FetchContent)
@@ -129,7 +126,7 @@ message(STATUS "Using SFPI compiler: ${GPP_CMD} ${GPP_VERSION}")
 # check this is the version we want (the system version might be wrong)
 string(REGEX REPLACE "^\\([^:]+:([^[)]+)(\\[[0-9]+\\])?\\) .*$" "\\1" GPP_VERSION ${GPP_VERSION})
 if(NOT ${GPP_VERSION} STREQUAL "${SFPI_version}")
-    if(TT_USE_SYSTEM_SFPI OR SFPI_ROOT)
+    if(TT_USE_SYSTEM_SFPI)
         message(FATAL_ERROR "Provided SFPI version ${GPP_VERSION} does not match required version ${SFPI_version}.")
     else()
         message(FATAL_ERROR "SFPI packaging malfunction, ${SFPI_version} delivers ${GPP_VERSION}")

@@ -142,15 +142,11 @@ void JitBuildEnv::init(
         this->gpp_ = "";
     }
 
-    // Use explicitly configured SFPI first, then local development and system installations.
+    // Use local development SFPI first, then an externally configured installation.
     // Ordered by precedence.
     std::vector<std::string> sfpi_roots;
-    const std::string sfpi_root = parse_env<std::string>("SFPI_ROOT", "");
-    if (!sfpi_root.empty()) {
-        sfpi_roots.emplace_back(sfpi_root);
-    }
     sfpi_roots.emplace_back(this->root_ + "runtime/sfpi");
-    sfpi_roots.emplace_back("/opt/tenstorrent/sfpi");
+    sfpi_roots.emplace_back(parse_env<std::string>("SFPI_ROOT", "/opt/tenstorrent/sfpi"));
 
     bool sfpi_found = false;
     for (const auto& sfpi_root : sfpi_roots) {
