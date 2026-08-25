@@ -5,6 +5,10 @@
 # fetched 2026-08-20). These are XTTS's own text-cleaning tables: the model was trained on their
 # output, so anything else changes the tokens the GPT sees.
 #
+# One change that is not a deletion:
+#   * upstream asks num2words for language "cz", which is not a registered code, so every Czech
+#     number path raises. The code is "cs"; with that corrected, cardinals, decimals and currency
+#     all work. Ordinals remain unsupported by num2words itself.
 # Changes from upstream, all deletions:
 #   * split_sentence / get_spacy_lang dropped -- they are upstream's optional text splitter and
 #     the only users of spacy. Sentence splitting is the caller's job here.
@@ -439,12 +443,12 @@ def _remove_dots(m):
 
 def _expand_decimal_point(m, lang="en"):
     amount = m.group(1).replace(",", ".")
-    return num2words(float(amount), lang=lang if lang != "cs" else "cz")
+    return num2words(float(amount), lang=lang)
 
 
 def _expand_currency(m, lang="en", currency="USD"):
     amount = float((re.sub(r"[^\d.]", "", m.group(0).replace(",", "."))))
-    full_amount = num2words(amount, to="currency", currency=currency, lang=lang if lang != "cs" else "cz")
+    full_amount = num2words(amount, to="currency", currency=currency, lang=lang)
 
     and_equivalents = {
         "en": ", ",
@@ -472,11 +476,11 @@ def _expand_currency(m, lang="en", currency="USD"):
 
 
 def _expand_ordinal(m, lang="en"):
-    return num2words(int(m.group(1)), ordinal=True, lang=lang if lang != "cs" else "cz")
+    return num2words(int(m.group(1)), ordinal=True, lang=lang)
 
 
 def _expand_number(m, lang="en"):
-    return num2words(int(m.group(0)), lang=lang if lang != "cs" else "cz")
+    return num2words(int(m.group(0)), lang=lang)
 
 
 def expand_numbers_multilingual(text, lang="en"):
