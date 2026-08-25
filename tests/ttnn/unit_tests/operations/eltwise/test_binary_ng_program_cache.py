@@ -707,7 +707,8 @@ def test_ng_scalar_dram_sharded_cache_miss_across_page_counts(device, isolate_pr
             ttnn.float32,
             marks=pytest.mark.xfail(
                 strict=True,
-                reason="issue #54138: ttnn.where with a preallocated float32 output silently ignores the "
+                reason="https://github.com/tenstorrent/tt-metal/issues/54138 -- ttnn.where with a preallocated "
+                "float32 output silently ignores the "
                 "predicate and returns t_true. Reproduces on a SINGLE call against a cold program cache, "
                 "so this is a plain correctness bug rather than the cache-key collision finding #3 "
                 "describes. Unfixed; see the docstring. strict so that fixing it fails here and forces "

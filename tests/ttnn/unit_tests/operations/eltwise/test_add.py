@@ -645,3 +645,42 @@ def test_add_col_bcast_dram_sharded_input(device):
     tt_out = ttnn.add(tt_a, tt_b)
 
     assert_with_pcc(torch_a + torch_b, ttnn.to_torch(tt_out), 0.999)
+
+
+def test_add_scalar_sharded_output_grid_differs_from_input(device):
+    """REGRESSION (https://github.com/tenstorrent/tt-metal/issues/54138): the native path aliases the
+    OUTPUT's buffer as a circular buffer while deriving per-core work from A's shard, so A and C must
+    agree on their shard spec. is_native_L1_sharding's identical-shape branch rejects a grid mismatch,
+    but the scalar and subtile-broadcast branches did not -- an even L1 input with an even L1 output on
+    a DIFFERENT grid was accepted as native, and the output then gets addressed on cores where it is not
+    allocated.
+
+    Measured on Wormhole before the fix: this HANGS the device (the run had to be killed and the card
+    reset), rather than returning a wrong answer. Declining routes it through the TensorAccessor path,
+    which handles the mismatch.
+
+    Note the common case is unaffected: when no output memory config is supplied it is derived from A's,
+    so the specs match and the op still takes the native path."""
+    torch.manual_seed(0)
+    shape = [1, 1, 128, 128]
+
+    a_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    a_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(a_grid, [32, 128], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    # Same tensor, same layout, both even -- only the grid and shard height differ.
+    c_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    c_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(c_grid, [64, 128], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    torch_a = torch.rand(shape, dtype=torch.bfloat16)
+    tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=a_mem)
+
+    tt_out = ttnn.add(tt_a, 1.5, memory_config=c_mem)
+
+    assert_with_pcc(torch_a + 1.5, ttnn.to_torch(tt_out), 0.999)
