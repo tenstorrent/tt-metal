@@ -751,6 +751,132 @@ def test_rm_reduce_h_axis_split(device, reduce_op, fast_and_approximate_mode, ou
     )
 
 
+def _tile_split_metrics(dtype, reduce_op, fast_and_approximate_mode):
+    if dtype == ttnn.float32:
+        # Only mean has an accurate fp32 SFPU reduce; the FPU path truncates to TF32, roughly
+        # doubling the relative error at these depths.
+        rtol = 0.002 if (reduce_op == "mean" and not fast_and_approximate_mode) else 0.004
+        return dict(pcc_threshold=0.999, rtol=rtol, atol=1e-3, frobenius_threshold=0.003, check_ulp=False)
+    # For bf16 the observed relative error saturates at ~0.008 for every shape below, which is the
+    # output dtype's own quantization step (2^-7) and not reduce error: stage 1 accumulates into
+    # FP32 partials either way, and only the final pack is bf16.
+    #
+    # The bf16 PCC threshold is loose for a structural reason, not because the results are: reducing
+    # torch.rand over thousands of rows concentrates the output around a constant (mean lands at
+    # 0.5 +/- 0.005), and bf16's step at that magnitude is 0.0039 -- the quantization noise is the
+    # same size as the signal PCC correlates against, so a bit-perfect kernel scores ~0.978.
+    # Switching the input to randn fixes PCC and breaks relative error instead (results pass through
+    # zero, so max rtol exceeds 1 even in fp32). Relative error and Frobenius stay tight and carry
+    # the check here; 0.97 matches the bf16 threshold the nightly RM split test uses for the same
+    # reason.
+    return dict(pcc_threshold=0.97, rtol=0.01, atol=0.01, frobenius_threshold=0.004, check_ulp=False)
+
+
+# Shapes that take the TILE H-axis split: Ht >= 32 (the TILE threshold) and NC*Wt below the core
+# count, so the un-split path would leave most of the grid idle. All of them also have
+# num_h_slices * slice_Ht > Ht on both a 64-core WH and a 130-core BH grid, so the reader's
+# past-the-end slices (identity zeros) are exercised too.
+_TILE_H_SPLIT_SHAPES = [
+    (1, 1, 3136, 144),  # EfficientNetB0 global-pool; Ht=98, Wt=5
+    (1, 1, 3216, 128),  # Ht=101, non-aligned H
+    (1, 1, 1064, 256),  # Ht=34, wide Wt=8, near the threshold, non-aligned H
+    (2, 3, 1024, 40),  # NC=6, Ht=32 — exactly at the threshold
+    (1, 1, 3136, 145),  # non-aligned W → the RM writer's last-tile clamp
+]
+
+
+@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("fast_and_approximate_mode", [False, True])
+@pytest.mark.parametrize(
+    "output_layout", [None, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["default", "rm", "tile"]
+)
+@pytest.mark.parametrize("shape", _TILE_H_SPLIT_SHAPES)
+def test_tile_reduce_h_axis_split(device, reduce_op, dtype, fast_and_approximate_mode, output_layout, shape):
+    """H reduce on tall TILE input — stage 1 keeps the tiled reader/compute but emits ROW_MAJOR FP32
+    partials, stage 2 is the dense RM H collapse."""
+    if fast_and_approximate_mode and reduce_op != "mean":
+        pytest.skip("fast_and_approximate_mode only affects mean")
+    torch.manual_seed(0)
+    torch_input = torch.rand(shape, dtype=_torch_dtype(dtype))
+    torch_ref = _golden(torch_input, reduce_op, dim=-2, keepdim=False)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    assert tt_input.layout == ttnn.TILE_LAYOUT
+
+    ttnn_op = _OPS[reduce_op][1]
+    op_kwargs = {"dim": -2, "keepdim": False, "output_layout": output_layout}
+    if reduce_op == "mean":
+        op_kwargs["fast_and_approximate_mode"] = fast_and_approximate_mode
+    tt_output = ttnn_op(tt_input, **op_kwargs)
+    # A TILE input defaults to TILE output: stage 1's ROW_MAJOR partials must not leak out as the
+    # op's natural layout the way they do on the RM path.
+    assert tt_output.layout == (output_layout or ttnn.TILE_LAYOUT)
+    output = ttnn.to_torch(tt_output)
+
+    assert_numeric_metrics(torch_ref, output, **_tile_split_metrics(dtype, reduce_op, fast_and_approximate_mode))
+
+
+@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("shape", _TILE_H_SPLIT_SHAPES)
+def test_tile_reduce_h_axis_split_padding_poisoned(device, reduce_op, dtype, shape):
+    """Same shapes with the implicit tile padding pre-filled with a large negative value.
+
+    The reduce re-zeroes implicit padding itself (fill_implicit_tile_padding in
+    generic_reductions.cpp), so what this pins down is that the split path does not bypass that
+    fill — not the reader's past-the-end slices, which are covered by the shapes themselves.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.rand(shape, dtype=_torch_dtype(dtype))
+    torch_ref = _golden(torch_input, reduce_op, dim=-2, keepdim=False)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_input = ttnn.fill_implicit_tile_padding(tt_input, -42.0)
+
+    tt_output = _OPS[reduce_op][1](tt_input, dim=-2, keepdim=False)
+    assert tt_output.layout == ttnn.TILE_LAYOUT
+    output = ttnn.to_torch(tt_output)
+
+    assert_numeric_metrics(torch_ref, output, **_tile_split_metrics(dtype, reduce_op, False))
+
+
+@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "shape_or_grid_width",
+    [
+        (1, 1, 256, 64),  # Ht=8, far below either split threshold
+        (1, 1, 512, 32),  # Ht=16: splits under the RM threshold, must not under the TILE one (32)
+        "grid_wide",  # Ht=32 (above the threshold) but NC*Wt == grid_cores, so there is nothing to fill
+    ],
+)
+def test_tile_reduce_h_no_split_unchanged(device, reduce_op, dtype, shape_or_grid_width):
+    """Shapes the TILE H-axis split must decline. Regression cover for the un-split reader branch,
+    whose compile-time arg layout shifted when the split slots were added."""
+    if shape_or_grid_width == "grid_wide":
+        grid = device.compute_with_storage_grid_size()
+        # W = 32 * grid_cores makes Wt == grid_cores, so col_groups >= grid_cores whatever the part
+        # is harvested down to. Do not hardcode a width: a literal that starves a 64-core Wormhole
+        # still splits on a 130-core Blackhole.
+        shape = (1, 1, 1024, 32 * grid.x * grid.y)
+        if dtype == ttnn.float32:
+            pytest.skip("grid-wide shape is only run in bfloat16 to keep the tensor small")
+    else:
+        shape = shape_or_grid_width
+
+    torch.manual_seed(0)
+    torch_input = torch.rand(shape, dtype=_torch_dtype(dtype))
+    torch_ref = _golden(torch_input, reduce_op, dim=-2, keepdim=False)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = _OPS[reduce_op][1](tt_input, dim=-2, keepdim=False)
+    assert tt_output.layout == ttnn.TILE_LAYOUT
+    output = ttnn.to_torch(tt_output)
+
+    assert_numeric_metrics(torch_ref, output, **_tile_split_metrics(dtype, reduce_op, False))
+
+
 # Block-float formats only exist in TILE layout: an RM output would have to widen to BFLOAT16, so
 # sum/mean reject the request instead of silently changing the dtype.
 @pytest.mark.parametrize("reduce_op", ["mean", "sum"])
