@@ -38,6 +38,28 @@ void InboundSocketServiceSyncOperation::validate_on_program_cache_miss(
             "inbound_socket_service_sync: metadata_size_bytes must be a multiple of 4 (uint32-aligned), got {}",
             args.metadata_size_bytes);
     }
+
+    // Optional persistent destinations. The kernel's page count and page size come
+    // from the backing, but it addresses through the destination's own accessor, so a
+    // short destination silently writes past its end. Checked on every call (not just
+    // the miss): these are per-call args, and cache hits land here too.
+    // (launch() already enforces on-device + allocated for all tensor_args.)
+    if (tensor_args.tokens_out.has_value()) {
+        TT_FATAL(
+            tensor_args.tokens_out->tensor_spec() == backing.tensor_spec(),
+            "inbound_socket_service_sync: tokens_out spec must match the service backing per-shard spec (the kernel "
+            "copies it page-for-page)");
+    }
+    if (tensor_args.metadata_out.has_value()) {
+        TT_FATAL(
+            args.metadata_size_bytes > 0,
+            "inbound_socket_service_sync: metadata_out requires metadata_size_bytes > 0; the metadata path is compiled "
+            "out of the kernel, so nothing would ever be written to it");
+        TT_FATAL(
+            tensor_args.metadata_out->tensor_spec() == compute_output_specs(args, tensor_args)[1],
+            "inbound_socket_service_sync: metadata_out spec must be [1, 1, 1, metadata_size_bytes / 4] uint32 "
+            "ROW_MAJOR interleaved DRAM");
+    }
 }
 
 InboundSocketServiceSyncOperation::spec_return_value_t InboundSocketServiceSyncOperation::compute_output_specs(
@@ -62,8 +84,15 @@ InboundSocketServiceSyncOperation::tensor_return_value_t InboundSocketServiceSyn
     auto* device = tensor_args.backing.device();
     std::vector<Tensor> outputs;
     outputs.reserve(specs.size());
-    for (const auto& spec : specs) {
-        outputs.push_back(create_device_tensor(spec, device));
+    // Reuse the caller's persistent destination where supplied, else allocate.
+    // Returning a tensor also carried in tensor_args is the in-place aliasing
+    // resolve_bindings recognises, so the cache-hit fast path still applies (same
+    // shape as outbound_socket_service_sync handing back its service backing).
+    outputs.push_back(
+        tensor_args.tokens_out.has_value() ? *tensor_args.tokens_out : create_device_tensor(specs[0], device));
+    if (args.metadata_size_bytes > 0) {
+        outputs.push_back(
+            tensor_args.metadata_out.has_value() ? *tensor_args.metadata_out : create_device_tensor(specs[1], device));
     }
     return outputs;
 }
@@ -81,7 +110,11 @@ namespace {
 // receiver-side getters (only the address return width differs, absorbed by the
 // static_casts below).
 template <typename ServiceT>
-std::vector<ttnn::Tensor> inbound_socket_service_sync_impl(const ServiceT& service, uint32_t metadata_size_bytes) {
+std::vector<ttnn::Tensor> inbound_socket_service_sync_impl(
+    const ServiceT& service,
+    uint32_t metadata_size_bytes,
+    const std::optional<ttnn::Tensor>& tokens_out,
+    const std::optional<ttnn::Tensor>& metadata_out) {
     using OperationType = ttnn::experimental::prim::InboundSocketServiceSyncOperation;
 
     const auto& backing = service.get_backing_tensor();
@@ -114,19 +147,26 @@ std::vector<ttnn::Tensor> inbound_socket_service_sync_impl(const ServiceT& servi
         }
     }
 
-    return ttnn::device_operation::launch<OperationType>(attrs, OperationType::tensor_args_t{backing});
+    return ttnn::device_operation::launch<OperationType>(
+        attrs, OperationType::tensor_args_t{backing, tokens_out, metadata_out});
 }
 
 }  // namespace
 
 std::vector<ttnn::Tensor> inbound_socket_service_sync(
-    const tt::tt_metal::H2DStreamService& service, uint32_t metadata_size_bytes) {
-    return inbound_socket_service_sync_impl(service, metadata_size_bytes);
+    const tt::tt_metal::H2DStreamService& service,
+    uint32_t metadata_size_bytes,
+    const std::optional<ttnn::Tensor>& tokens_out,
+    const std::optional<ttnn::Tensor>& metadata_out) {
+    return inbound_socket_service_sync_impl(service, metadata_size_bytes, tokens_out, metadata_out);
 }
 
 std::vector<ttnn::Tensor> inbound_socket_service_sync(
-    const ttnn::D2DStreamServiceReceiver& service, uint32_t metadata_size_bytes) {
-    return inbound_socket_service_sync_impl(service, metadata_size_bytes);
+    const ttnn::D2DStreamServiceReceiver& service,
+    uint32_t metadata_size_bytes,
+    const std::optional<ttnn::Tensor>& tokens_out,
+    const std::optional<ttnn::Tensor>& metadata_out) {
+    return inbound_socket_service_sync_impl(service, metadata_size_bytes, tokens_out, metadata_out);
 }
 
 }  // namespace ttnn::prim

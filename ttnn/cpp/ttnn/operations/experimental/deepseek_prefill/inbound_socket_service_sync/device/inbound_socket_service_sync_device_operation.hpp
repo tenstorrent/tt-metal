@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <variant>
 #include <vector>
 
@@ -47,13 +48,23 @@ namespace ttnn::prim {
 // Launch helper. Snapshots the per-coord service state out of `service`, then
 // runs the device operation (which builds-once / caches the program).
 // Returns [tokens] or [tokens, metadata] (when metadata_size_bytes > 0).
+//
+// `tokens_out` / `metadata_out` are optional caller-owned persistent
+// destinations; see InboundSocketServiceSyncInputs. Pass them to make the
+// dispatch trace-capturable, omit them for the allocate-per-call eager path.
 std::vector<ttnn::Tensor> inbound_socket_service_sync(
-    const tt::tt_metal::H2DStreamService& service, uint32_t metadata_size_bytes);
+    const tt::tt_metal::H2DStreamService& service,
+    uint32_t metadata_size_bytes,
+    const std::optional<ttnn::Tensor>& tokens_out = std::nullopt,
+    const std::optional<ttnn::Tensor>& metadata_out = std::nullopt);
 
 // Same op, draining a D2DStreamServiceReceiver's backing tensor (disaggregated-
 // prefill device->device path). The receiver exposes the same getters as
 // H2DStreamService, so it runs the identical device operation.
 std::vector<ttnn::Tensor> inbound_socket_service_sync(
-    const ttnn::D2DStreamServiceReceiver& service, uint32_t metadata_size_bytes);
+    const ttnn::D2DStreamServiceReceiver& service,
+    uint32_t metadata_size_bytes,
+    const std::optional<ttnn::Tensor>& tokens_out = std::nullopt,
+    const std::optional<ttnn::Tensor>& metadata_out = std::nullopt);
 
 }  // namespace ttnn::prim
