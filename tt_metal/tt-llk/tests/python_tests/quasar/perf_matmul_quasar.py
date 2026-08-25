@@ -9,7 +9,6 @@ from quasar.test_matmul_quasar import (
     matmul_dest_acc_modes,
     matmul_dest_sync_modes,
     matmul_dimensions,
-    matmul_enable_direct_indexing,
     matmul_implied_math_formats,
     matmul_math_fidelities,
     matmul_register_format_hints,
@@ -34,7 +33,7 @@ from quasar.test_matmul_quasar import test_matmul as run_matmul
         format, is_perf=True
     ),
     register_format_hint=matmul_register_format_hints,
-    enable_direct_indexing=matmul_enable_direct_indexing,
+    enable_direct_indexing=[True, False],
     transpose=[Transpose.No],
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
