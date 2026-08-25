@@ -11,8 +11,11 @@ LambdaScheduler::LambdaScheduler(optimizers::OptimizerBase *optimizer, std::func
     LRSchedulerBase(optimizer),
     m_lr_lambda(std::move(lr_lambda)),
     m_last_step(0),
-    m_base_lr(optimizer->get_lr()),
-    m_last_lr(optimizer->get_lr()) {
+    m_base_lr(optimizer->get_initial_lr()),
+    m_last_lr(m_base_lr) {
+    // Mirror PyTorch's LambdaLR, which applies lr_lambda(0) at construction.
+    m_last_lr = m_base_lr * m_lr_lambda(0);
+    optimizer->set_lr(m_last_lr);
 }
 void LambdaScheduler::step() {
     m_last_step += 1;

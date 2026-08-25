@@ -60,12 +60,32 @@ class OptimParamSetter:
 # ---------------------------------------------------------------------------
 
 
+def _initial_lr(optimizer) -> float:
+    """Base LR shared by every scheduler attached to ``optimizer``.
+
+    Mirrors PyTorch's ``param_group["initial_lr"]``: the optimizer records its
+    LR the first time a scheduler reads it, so a scheduler constructed after an
+    earlier one has already scaled ``get_lr()`` at construction (e.g. a chained
+    warmup + decay pair) still sees the original base LR. Falls back to the
+    live LR for optimizers that don't expose ``get_initial_lr``.
+    """
+    get_initial = getattr(optimizer, "get_initial_lr", None)
+    if get_initial is not None:
+        return get_initial()
+    return optimizer.get_lr()
+
+
 class _SchedulerBase:
     def __init__(self, optimizer):
         self._optimizer = optimizer
-        self._base_lr = optimizer.get_lr()
+        self._base_lr = _initial_lr(optimizer)
         self._last_step = 0
         self._last_lr = self._base_lr
+
+    def _apply_initial_lr(self, lr: float):
+        """Write the construction-time LR, mirroring PyTorch's initial step."""
+        self._optimizer.set_lr(lr)
+        self._last_lr = lr
 
     def step(self):
         raise NotImplementedError
@@ -96,6 +116,8 @@ class CosineAnnealingScheduler(_SchedulerBase):
         super().__init__(optimizer)
         self._T_max = T_max
         self._eta_min = eta_min
+        # At step 0 the cosine factor is 1, so the LR is (re)set to the base LR.
+        self._apply_initial_lr(self._base_lr)
 
     def step(self):
         self._last_step += 1
@@ -126,6 +148,8 @@ class StepScheduler(_SchedulerBase):
         super().__init__(optimizer)
         self._step_size = step_size
         self._gamma = gamma
+        # At step 0 the factor is gamma**0 == 1, so the LR is (re)set to the base LR.
+        self._apply_initial_lr(self._base_lr)
 
     def step(self):
         self._last_step += 1
@@ -150,10 +174,20 @@ class LinearScheduler(_SchedulerBase):
     def __init__(self, optimizer, start_factor: float, end_factor: float, total_steps: int):
         if total_steps <= 0:
             raise ValueError(f"total_steps = {total_steps} must be greater than zero.")
+        # Bounds match PyTorch's LinearLR. start_factor == 0 is rejected because
+        # the factor is applied at construction, so it would make the first
+        # optimizer step a no-op (LR = 0).
+        if start_factor > 1.0 or start_factor <= 0:
+            raise ValueError("Starting multiplicative factor expected to be greater than 0 and less or equal to 1.")
+        if end_factor > 1.0 or end_factor < 0:
+            raise ValueError("Ending multiplicative factor expected to be between 0 and 1.")
         super().__init__(optimizer)
         self._start_factor = start_factor
         self._end_factor = end_factor
         self._total_steps = total_steps
+        # Mirror PyTorch, which applies start_factor at construction: the LR
+        # used before the first step() is already base_lr * start_factor.
+        self._apply_initial_lr(self._base_lr * start_factor)
 
     def step(self):
         self._last_step += 1
@@ -181,6 +215,8 @@ class LambdaScheduler(_SchedulerBase):
     def __init__(self, optimizer, lr_lambda):
         super().__init__(optimizer)
         self._lr_lambda = lr_lambda
+        # Mirror PyTorch's LambdaLR, which applies lr_lambda(0) at construction.
+        self._apply_initial_lr(self._base_lr * lr_lambda(0))
 
     def step(self):
         self._last_step += 1
@@ -240,6 +276,12 @@ class SequentialScheduler(_SchedulerBase):
         self._milestones = list(milestones)
         self._current_scheduler_index = 0
         self._current_step_in_scheduler = 0
+        # The children were constructed back-to-back on the same optimizer, so
+        # the optimizer currently holds the LAST child's construction-time LR.
+        # Only the first child is active; restore its initial LR. Mirrors
+        # PyTorch's SequentialLR, which resets the LR to initial_lr and redoes
+        # the initial step of the first scheduler only.
+        self._apply_initial_lr(self._schedulers[0].get_last_lr())
 
     def step(self):
         if self._current_scheduler_index >= len(self._schedulers):

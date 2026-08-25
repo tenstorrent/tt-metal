@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "serialization/serializable.hpp"
 
 namespace ttml::optimizers {
@@ -32,10 +34,20 @@ public:
     virtual void set_lr(float lr) = 0;
     [[nodiscard]] virtual float get_lr() const = 0;
 
+    // LR recorded the first time this is called, mirroring PyTorch's
+    // ``param_group["initial_lr"]`` (set once via ``setdefault``). Schedulers
+    // read their base LR from here so that several schedulers attached to the
+    // same optimizer (e.g. a warmup/decay chain) share one base even after an
+    // earlier scheduler has already scaled ``get_lr()`` at construction.
+    [[nodiscard]] float get_initial_lr();
+
     virtual void print_stats() const;
 
 protected:
     serialization::NamedParameters m_parameters;
+
+private:
+    std::optional<float> m_initial_lr;
 };
 
 }  // namespace ttml::optimizers

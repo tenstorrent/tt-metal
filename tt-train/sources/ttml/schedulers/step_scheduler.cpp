@@ -15,10 +15,14 @@ StepScheduler::StepScheduler(optimizers::OptimizerBase *optimizer, size_t step_s
     m_step_size(step_size),
     m_gamma(gamma),
     m_last_step(0),
-    m_base_lr(optimizer->get_lr()),
+    m_base_lr(optimizer->get_initial_lr()),
     m_last_lr(m_base_lr) {
     TT_FATAL(step_size > 0, "step_size = {} must be greater than zero.", step_size);
     TT_FATAL(gamma > 0.0f, "gamma = {} must be greater than zero.", gamma);
+
+    // Mirror PyTorch's construction-time initial step: at step 0 the factor is
+    // gamma^0 == 1, so the LR is (re)set to the base LR.
+    optimizer->set_lr(m_last_lr);
 }
 void StepScheduler::step() {
     m_last_step += 1;

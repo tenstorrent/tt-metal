@@ -12,6 +12,13 @@ namespace ttml::optimizers {
 OptimizerBase::OptimizerBase(serialization::NamedParameters&& parameters) : m_parameters(std::move(parameters)) {
 }
 
+float OptimizerBase::get_initial_lr() {
+    if (!m_initial_lr.has_value()) {
+        m_initial_lr = get_lr();
+    }
+    return *m_initial_lr;
+}
+
 void OptimizerBase::print_stats() const {
     fmt::print("\n\nOptimization parameters values and gradients:\n");
     for (const auto& [name, tensor] : m_parameters) {

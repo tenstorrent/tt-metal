@@ -47,6 +47,14 @@ SequentialScheduler::SequentialScheduler(
             throw std::invalid_argument("Null scheduler provided to SequentialScheduler.");
         }
     }
+
+    // The children were constructed back-to-back on the same optimizer, so the
+    // optimizer currently holds the LAST child's construction-time LR. Only the
+    // first child is active; restore its initial LR. Mirrors PyTorch's
+    // SequentialLR, which resets the LR to initial_lr and redoes the initial
+    // step of the first scheduler only.
+    m_last_lr = m_schedulers.front()->get_last_lr();
+    optimizer->set_lr(m_last_lr);
 }
 void SequentialScheduler::step() {
     if (m_current_scheduler_index >= m_schedulers.size()) {
