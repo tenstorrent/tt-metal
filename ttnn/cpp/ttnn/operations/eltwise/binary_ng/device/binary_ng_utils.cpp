@@ -769,22 +769,15 @@ bool is_native_L1_sharding(
         return false;
     }
 
-    // Native sharding aliases the operands' own buffers as circular buffers, which Metal permits only for
-    // L1: a DRAM-backed buffer that reaches this path dies on "Only L1 buffers can have an associated
-    // circular buffer!", a message naming neither the op nor sharding nor the unsupported combination.
-    // The identical-shape branch below rejects DRAM explicitly, but the scalar and subtile-broadcast
-    // branches did not, so they accepted DRAM-sharded tensors as "native L1" (issue #54138). This
-    // predicate is a router, not a validator -- declining sends the op down the TensorAccessor path,
-    // which already serves DRAM-sharded tensors.
+    // Native sharding aliases operand buffers as circular buffers, which Metal permits only for L1. This
+    // predicate is a router, not a validator: declining sends the op to the TensorAccessor path, which
+    // serves DRAM-sharded tensors.
     const bool a_is_l1 = a.memory_config().buffer_type() == BufferType::L1;
     const bool c_is_l1 = c.buffer_type() == BufferType::L1;
 
-    // The native path also aliases the OUTPUT's buffer as a circular buffer while deriving per-core work
-    // from a's shard, so a and c must agree on their shard spec or the output is addressed on cores where
-    // it is not allocated. The identical-shape branch below already rejects a grid mismatch; these two
-    // branches did not, and an even L1 output on a different grid HANGS the device. Declining is safe --
-    // the TensorAccessor path handles the mismatch. When no output memory config is supplied it is
-    // derived from a's, so the common case still takes the native path.
+    // Per-core work comes from a's shard while the output buffer is aliased as a CB, so a and c must
+    // agree or the output is addressed on cores where it is not allocated -- which hangs the device. An
+    // unsupplied output config is derived from a's, so the common case still matches.
     const bool c_shard_matches_a = c.shard_spec().has_value() && a.memory_config().shard_spec().has_value() &&
                                    *c.shard_spec() == *a.memory_config().shard_spec();
 
@@ -802,10 +795,7 @@ bool is_native_L1_sharding(
     bool a_is_sharded = a.memory_config().is_sharded();
     bool b_is_sharded = b->memory_config().is_sharded();
     bool a_not_broadcast = (output_shape == a.logical_shape());
-    // Named for what it now gates: `a` is sharded, unbroadcast and even, AND it and the output are both
-    // L1-resident and share a shard spec, so the subtile-broadcast branch below may alias them as
-    // circular buffers. That branch is its only consumer, and was the second of the two that used to
-    // reach the globally-allocated-CB path without either check (issue #54138).
+    // Gates the subtile-broadcast branch below, its only consumer.
     bool a_native_cb_eligible =
         a_is_sharded && a_not_broadcast && !is_uneven(a) && a_is_l1 && c_is_l1 && c_shard_matches_a;
 

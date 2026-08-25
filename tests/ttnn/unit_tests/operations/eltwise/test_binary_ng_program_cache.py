@@ -512,34 +512,22 @@ def test_ng_cache_correctness_broadcast_repeated(device, isolate_program_cache):
 
 
 def test_ng_scalar_sharded_cache_miss_when_evenness_flips(device, isolate_program_cache):
-    """REGRESSION (issue #54138, finding #2): the tensor+scalar overload of binary_ng never populates
-    a_/b_/c_shard_volume -- binary_ng_device_operation.cpp hardcodes all three to nullopt at the
-    attribute construction site, whereas the tensor-tensor overload patches them in immediately after
-    constructing its attributes. At the time the issue was filed those three were the key's only
-    shape-derived members, so on the scalar path the key carried no shape information whatsoever.
+    """REGRESSION: the scalar overload must key on shape, because the native-vs-accessor regime is a
+    compile-time decision that flips with is_uneven and no runtime re-application can repair it.
 
-    Meanwhile the native-vs-accessor regime IS shape-dependent: is_native_L1_sharding()'s scalar branch
-    returns !is_uneven(a), and that decision is baked into the program as compile-time kernel defines
-    that no runtime re-application can repair.
-
-    This test holds ONE explicit ShardSpec constant so every key field is identical across both calls
-    (a.dtype, a.memory_config, b absent, and attributes.memory_config, which falls back to a's config
-    when no memory_config or output tensor is supplied). Only the tensor height changes, which flips
-    is_uneven:
+    ONE explicit ShardSpec held constant, so every other key field is identical across both calls. Only
+    the height changes, which flips evenness:
 
         512 rows / shard height 64 -> 8 exact shards  -> even   -> native regime compiled
         480 rows / shard height 64 -> 7 full + 1 of 32 -> uneven -> needs the accessor regime
 
-    The two calls therefore require DIFFERENT programs while colliding on one cache entry. Before any fix
-    this hung the device: the reused native-regime program busy-waits on an uneven shape, ignoring SIGINT
-    and needing a tt-smi reset.
+    Pre-fix this HUNG the device -- the reused native program busy-waits on an uneven shape, ignores
+    SIGINT and needs a card reset. Expect that, not a wrong answer, if it regresses.
 
-    Honest scope note: this test no longer isolates the shard-volume fix. Because `a` is sharded, the shape
-    in pages added to tensor_args_t::to_hash() for finding #1 also separates these two shapes (16x4 pages
-    vs 15x4), and evenness and shape in pages are perfectly correlated on this path anyway -- the shard
-    height is a whole number of tiles, so equal shapes in pages imply equal evenness. The test would pass with the
-    shard-volume change reverted. It is kept as an end-to-end guard on the regime flip, not as proof that
-    the volumes are what separate the two entries."""
+    Scope caveat: this does not isolate the shard-volume fix. `a` is sharded, so the shape in pages in
+    to_hash() separates these shapes too, and evenness and page count are correlated anyway (the shard
+    height is a whole number of tiles). It would pass with the shard-volume change reverted; it is an
+    end-to-end guard on the regime flip, not proof of what separates the entries."""
     shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))])
     shard_spec = ttnn.ShardSpec(shard_grid, [64, 128], ttnn.ShardOrientation.ROW_MAJOR)
     mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
@@ -640,42 +628,20 @@ def test_ng_scalar_interleaved_memcfg_with_sharded_output_cache_miss(device, iso
 
 
 def test_ng_scalar_dram_sharded_cache_miss_across_page_counts(device, isolate_program_cache):
-    """REGRESSION (issue #54138, finding #1) -- distinct from finding #2 above, and NOT fixed by it.
+    """REGRESSION: on the accessor path the cache key must carry each sharded operand's shape in pages.
 
-    The shard volumes that #2 populates encode the SHARD's extent (shard_spec.numel() / tile_hw), not the
-    tensor's, so with one ShardSpec held constant they are identical at every tensor shape. What #2's fix
-    discriminates is populated-vs-nullopt, i.e. the native path from the accessor path. Within the
-    accessor path the key still carries no shape information whatsoever.
-
-    That matters because the two paths differ in what a cache hit can repair. On the native path
-    override_runtime_arguments re-derives every per-core arg from the live tensors, so a shape change is
-    handled. On the accessor path nothing does: tensor_shape_in_pages is a common runtime arg (binary_ng
-    requests ArgConfig::RuntimeTensorShape) but override_runtime_arguments never calls
-    GetCommonRuntimeArgs, and rank/num_banks/shard_shape/bank_coords are compile-time.
-
-    A DRAM-sharded input takes the accessor path (is_native_L1_sharding declines on buffer type), so with
-    one ShardSpec held constant these two shapes share a cache entry while needing different geometry:
+    A DRAM-sharded input takes that path, so with one ShardSpec held constant these two shapes share
+    every other key field while needing different accessor geometry:
 
         [1,1, 64,128] -> 2 shards,  8 pages
         [1,1,128,128] -> 4 shards, 16 pages
 
-    Measured on Wormhole with the DRAM routing fix applied (before it, this configuration threw Metal's
-    circular-buffer error instead of reaching the accessor). Small-then-big: the SECOND call is a cache
-    hit and returns PCC 0.179 with exactly 8192/16384 elements wrong -- half. This configuration squeezes
-    to rank 1, so tensor_shape_in_pages is Shape([8]) for the small tensor and Shape([16]) for the big
-    one; reusing the baked 8 means page ids 8..15 decompose modulo 8 and the tensor's second half
-    re-reads its first half. It corrupts silently: no hang, no throw.
+    Pre-fix the second call was a cache hit returning PCC 0.179 with exactly half the output wrong.
 
-    The order matters. Big-then-small is correct by accident, because every page id of the smaller tensor
-    already falls below the larger baked radix (page_id % 16 == page_id % 8 for page_id < 8). Only
-    small-then-big exposes it, which is one reason this went unreproduced.
+    ORDER MATTERS -- do not reverse these calls. Big-then-small passes vacuously, because every page id
+    of the smaller tensor already falls below the larger baked radix. Only small-then-big exposes it.
 
-    Fixed by hashing BufferDistributionSpec::tensor_shape_in_pages() for sharded operands in
-    tensor_args_t::to_hash(). That is what the accessor actually consumes, and it is already squeezed, so
-    shapes that squeeze together -- which genuinely can share a program -- still share a cache entry,
-    while shapes with distinct tensor shapes in pages get their own. A common-runtime-arg refresh would NOT have
-    been sufficient: it repairs tensor_shape_in_pages while leaving the compile-time bank table and the
-    regime #if wrong, which is a partial repair that is harder to detect than the original bug."""
+    Requires the DRAM routing fix to reach the accessor at all; without it the config throws instead."""
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
     shard_spec = ttnn.ShardSpec(core_grid, [32, 128], ttnn.ShardOrientation.ROW_MAJOR)
     mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, shard_spec)
