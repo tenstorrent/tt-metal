@@ -742,8 +742,22 @@ void kernel_main() {
             if (stop_seen_at == 0) {
                 stop_seen_at = get_timestamp();
                 words_at_stop = total_words;
-            } else if (frames == frames_at_stop_check || get_timestamp() - stop_seen_at > kStopDrainCycles) {
-                break;
+            } else {
+                // A sweep that moves nothing is NOT proof a peer's ring is empty -- a momentary credit
+                // starvation is indistinguishable -- and exiting there strands whatever is still in that
+                // ring: the filler then blocks in RING-WAIT forever, never reaching its own stop check,
+                // and the workload wedges with the ring pinned full. Only the peer's retire flag proves
+                // it is drained, and waiting is self-clearing (draining is what unblocks the filler).
+                bool all_retired = true;
+                for (uint32_t p = 0; p < kNPeer; p++) {
+                    if (!peer_retired[p]) {
+                        all_retired = false;
+                    }
+                }
+                if ((all_retired && frames == frames_at_stop_check) ||
+                    get_timestamp() - stop_seen_at > kStopDrainCycles) {
+                    break;
+                }
             }
             frames_at_stop_check = frames;
             stop_sweeps++;
