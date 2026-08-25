@@ -37,9 +37,127 @@ struct AtomicDomainStats {
 
 std::array<AtomicDomainStats, kOperationDomainCount> stats;
 std::array<std::atomic<bool>, kOperationDomainCount> circuit_breakers{};
+std::array<std::atomic<std::uint64_t>, kDistributedMatmulClassCount> distributed_observations{};
 
 constexpr std::size_t index(const OperationDomain domain) { return static_cast<std::size_t>(domain); }
 constexpr std::size_t index(const ResolutionReason reason) { return static_cast<std::size_t>(reason); }
+constexpr std::size_t index(const DistributedMatmulClass classification) {
+    return static_cast<std::size_t>(classification);
+}
+
+bool spans_equal(const std::span<const std::uint32_t> lhs, const std::span<const std::uint32_t> rhs) noexcept {
+    return lhs.size() == rhs.size() && std::equal(lhs.begin(), lhs.end(), rhs.begin());
+}
+
+bool coordinate_equal(
+    const tt::tt_metal::distributed::MeshCoordinate& lhs,
+    const tt::tt_metal::distributed::MeshCoordinate& rhs) noexcept {
+    const auto lhs_coords = lhs.coords();
+    const auto rhs_coords = rhs.coords();
+    return lhs_coords.size() == rhs_coords.size() &&
+           std::equal(lhs_coords.begin(), lhs_coords.end(), rhs_coords.begin());
+}
+
+bool coordinate_spans_equal(
+    const std::span<const tt::tt_metal::distributed::MeshCoordinate> lhs,
+    const std::span<const tt::tt_metal::distributed::MeshCoordinate> rhs) noexcept {
+    if (lhs.size() != rhs.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < lhs.size(); ++i) {
+        if (!coordinate_equal(lhs[i], rhs[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool is_exact_bh32_coordinate_order(
+    const std::span<const tt::tt_metal::distributed::MeshCoordinate> coordinates) noexcept {
+    constexpr std::size_t rows = 8;
+    constexpr std::size_t cols = 4;
+    if (coordinates.size() != rows * cols) {
+        return false;
+    }
+    for (std::size_t i = 0; i < coordinates.size(); ++i) {
+        const auto values = coordinates[i].coords();
+        if (values.size() != 2 || values[0] != i / cols || values[1] != i % cols) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool is_exact_bh32_tensor_coordinates(const DistributedTensorView& tensor) noexcept {
+    return is_exact_bh32_coordinate_order(tensor.mesh_coordinates) &&
+           coordinate_spans_equal(tensor.mesh_coordinates, tensor.storage_coordinates);
+}
+
+bool is_replicate(const tt::tt_metal::distributed::MeshMapperConfig::Placement& placement) noexcept {
+    return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placement);
+}
+
+bool is_shard(const tt::tt_metal::distributed::MeshMapperConfig::Placement& placement, const int tensor_dim) noexcept {
+    const auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&placement);
+    return shard != nullptr && shard->dim == tensor_dim;
+}
+
+bool is_exact_8x4_distribution(const DistributedTensorView& tensor) noexcept {
+    constexpr std::array<std::uint32_t, 2> expected{8, 4};
+    return spans_equal(tensor.distribution_shape, expected);
+}
+
+bool is_exact_replicated_32_distribution(const DistributedTensorView& tensor) noexcept {
+    constexpr std::array<std::uint32_t, 1> expected{32};
+    return spans_equal(tensor.distribution_shape, expected) && tensor.placements.size() == 1 &&
+           is_replicate(tensor.placements[0]);
+}
+
+bool has_exact_local_tensor_contract(const DistributedTensorView& tensor, const bool is_input_a) noexcept {
+    const bool supported_dtype = is_input_a ? tensor.dtype == tt::tt_metal::DataType::BFLOAT16
+                                            : tensor.dtype == tt::tt_metal::DataType::BFLOAT16 ||
+                                                  tensor.dtype == tt::tt_metal::DataType::BFLOAT8_B ||
+                                                  tensor.dtype == tt::tt_metal::DataType::BFLOAT4_B;
+    return supported_dtype && tensor.layout == tt::tt_metal::Layout::TILE &&
+           tensor.memory_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+           tensor.buffer_type == tt::tt_metal::BufferType::DRAM;
+}
+
+bool has_exact_bare_matmul_call_contract(const DistributedMatmulObservation& observation) noexcept {
+    return observation.domain == OperationDomain::DenseMatmul && observation.tensors_share_device &&
+           observation.device_count == 32 && observation.device_mesh_shape.size() == 2 &&
+           observation.device_mesh_shape[0] == 8 && observation.device_mesh_shape[1] == 4 && !observation.transpose_a &&
+           !observation.transpose_b && !observation.has_bias && !observation.has_activation &&
+           !observation.has_program_config && !observation.has_compute_kernel_config &&
+           !observation.has_user_core_grid && !observation.has_output_dtype && !observation.has_optional_output &&
+           !observation.has_output_tile && !observation.has_global_cb && !observation.has_sub_device &&
+           !observation.has_bcast_batch && !observation.untilize_out && !observation.run_batched &&
+           observation.output_is_dram_interleaved && has_exact_local_tensor_contract(observation.input_a, true) &&
+           has_exact_local_tensor_contract(observation.input_b, false) &&
+           is_exact_bh32_tensor_coordinates(observation.input_a) &&
+           is_exact_bh32_tensor_coordinates(observation.input_b) &&
+           coordinate_spans_equal(observation.input_a.mesh_coordinates, observation.input_b.mesh_coordinates);
+}
+
+bool is_exact_dp_rank_distinct_v1(const DistributedMatmulObservation& observation) noexcept {
+    const auto& a = observation.input_a;
+    const auto& b = observation.input_b;
+    return a.logical_shape.size() == 4 && a.logical_shape[0] == 1 && a.logical_shape[1] == 1 &&
+           a.logical_shape[2] > 0 && a.logical_shape[3] > 0 && b.logical_shape.size() == 2 &&
+           b.logical_shape[0] == a.logical_shape[3] && b.logical_shape[1] > 0 && is_exact_8x4_distribution(a) &&
+           a.placements.size() == 2 && is_shard(a.placements[0], 0) && is_shard(a.placements[1], 1) &&
+           is_exact_replicated_32_distribution(b);
+}
+
+bool is_exact_tpn_sp_m_tp_n_v1(const DistributedMatmulObservation& observation) noexcept {
+    const auto& a = observation.input_a;
+    const auto& b = observation.input_b;
+    return a.logical_shape.size() == 2 && a.logical_shape[0] > 0 && a.logical_shape[1] > 0 &&
+           b.logical_shape.size() == 2 && b.logical_shape[0] == a.logical_shape[1] && b.logical_shape[1] > 0 &&
+           is_exact_8x4_distribution(a) && is_exact_8x4_distribution(b) && a.placements.size() == 2 &&
+           b.placements.size() == 2 && is_shard(a.placements[0], 0) && is_replicate(a.placements[1]) &&
+           is_replicate(b.placements[0]) && is_shard(b.placements[1], 1);
+}
 
 ResolutionReason compatibility_reason(const CompatibilityStatus status) noexcept {
     switch (status) {
@@ -193,6 +311,33 @@ std::optional<tt::tt_metal::Tile> transpose_matmul_tile(const tt::tt_metal::Tile
 }
 
 }  // namespace
+
+std::string_view distributed_matmul_class_name(const DistributedMatmulClass classification) noexcept {
+    switch (classification) {
+        case DistributedMatmulClass::NotDistributed: return "not_distributed";
+        case DistributedMatmulClass::DpRankDistinctV1: return "distributed.dp.rank_distinct_v1";
+        case DistributedMatmulClass::TpnSpMTpNV1: return "distributed.tpn.sp_m_tp_n_v1";
+        case DistributedMatmulClass::Unknown: return "distributed.unknown";
+        case DistributedMatmulClass::Count: return "count";
+    }
+    return "distributed.unknown";
+}
+
+DistributedMatmulClass classify_distributed_matmul(const DistributedMatmulObservation& observation) noexcept {
+    if (observation.device_count <= 1) {
+        return DistributedMatmulClass::NotDistributed;
+    }
+    if (!has_exact_bare_matmul_call_contract(observation)) {
+        return DistributedMatmulClass::Unknown;
+    }
+    if (is_exact_dp_rank_distinct_v1(observation)) {
+        return DistributedMatmulClass::DpRankDistinctV1;
+    }
+    if (is_exact_tpn_sp_m_tp_n_v1(observation)) {
+        return DistributedMatmulClass::TpnSpMTpNV1;
+    }
+    return DistributedMatmulClass::Unknown;
+}
 
 std::string_view resolution_reason_name(const ResolutionReason reason) noexcept {
     switch (reason) {
@@ -851,6 +996,13 @@ void record_resolution(
     }
 }
 
+void record_distributed_observation(const Mode mode, const DistributedMatmulClass classification) noexcept {
+    if (mode == Mode::Off || index(classification) >= distributed_observations.size()) {
+        return;
+    }
+    distributed_observations[index(classification)].fetch_add(1, std::memory_order_relaxed);
+}
+
 void record_completed_hit(const OperationDomain domain) noexcept {
     if (index(domain) < stats.size()) {
         stats[index(domain)].completed_hits.fetch_add(1, std::memory_order_relaxed);
@@ -895,6 +1047,10 @@ StatsSnapshot stats_snapshot() noexcept {
             destination.reasons[reason] = source.reasons[reason].load(std::memory_order_relaxed);
         }
     }
+    for (std::size_t classification = 0; classification < distributed_observations.size(); ++classification) {
+        snapshot.distributed_observations[classification] =
+            distributed_observations[classification].load(std::memory_order_relaxed);
+    }
     return snapshot;
 }
 
@@ -910,6 +1066,9 @@ void reset_stats_for_testing() noexcept {
         for (auto& reason : domain.reasons) {
             reason.store(0, std::memory_order_relaxed);
         }
+    }
+    for (auto& observation : distributed_observations) {
+        observation.store(0, std::memory_order_relaxed);
     }
 }
 

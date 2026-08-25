@@ -13,6 +13,8 @@
 #include <utility>
 
 #include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/tile.hpp>
 
@@ -81,6 +83,63 @@ bool fail_closed_trace_capture_active(Mode mode, std::optional<bool> observed_ac
 
 inline constexpr std::size_t kOperationDomainCount = 4;
 inline constexpr std::size_t kResolutionReasonCount = static_cast<std::size_t>(ResolutionReason::Count);
+
+// Observation-only classification of the two exact 32-device bare-matmul
+// layouts measured by tt-matmul-codegen. This is deliberately separate from
+// the compact one-chip registry schema: it neither selects a recipe nor changes
+// any execution parameter, program-cache key, or profiler operation name.
+enum class DistributedMatmulClass : std::uint8_t {
+    NotDistributed,
+    DpRankDistinctV1,
+    TpnSpMTpNV1,
+    Unknown,
+    Count,
+};
+
+inline constexpr std::size_t kDistributedMatmulClassCount = static_cast<std::size_t>(DistributedMatmulClass::Count);
+
+std::string_view distributed_matmul_class_name(DistributedMatmulClass classification) noexcept;
+
+struct DistributedTensorView {
+    std::span<const std::uint32_t> logical_shape;
+    tt::tt_metal::DataType dtype;
+    tt::tt_metal::Layout layout;
+    tt::tt_metal::TensorMemoryLayout memory_layout;
+    tt::tt_metal::BufferType buffer_type;
+    std::span<const std::uint32_t> distribution_shape;
+    std::span<const tt::tt_metal::distributed::MeshMapperConfig::Placement> placements;
+    std::span<const tt::tt_metal::distributed::MeshCoordinate> mesh_coordinates;
+    std::span<const tt::tt_metal::distributed::MeshCoordinate> storage_coordinates;
+};
+
+struct DistributedMatmulObservation {
+    OperationDomain domain = OperationDomain::IneligibleSharedCaller;
+    bool tensors_share_device = false;
+    std::uint32_t device_count = 0;
+    std::span<const std::uint32_t> device_mesh_shape;
+    DistributedTensorView input_a;
+    DistributedTensorView input_b;
+    bool transpose_a = false;
+    bool transpose_b = false;
+    bool has_bias = false;
+    bool has_activation = false;
+    bool has_program_config = false;
+    bool has_compute_kernel_config = false;
+    bool has_user_core_grid = false;
+    bool has_output_dtype = false;
+    bool has_optional_output = false;
+    bool has_output_tile = false;
+    bool has_global_cb = false;
+    bool has_sub_device = false;
+    bool has_bcast_batch = false;
+    bool untilize_out = false;
+    bool run_batched = false;
+    bool output_is_dram_interleaved = false;
+};
+
+// Pure, allocation-free and fail-closed. Anything outside the exact explored
+// layouts is Unknown; a device_count of zero or one is NotDistributed.
+DistributedMatmulClass classify_distributed_matmul(const DistributedMatmulObservation& observation) noexcept;
 
 enum class IoContractStatus {
     Resolved,
@@ -432,12 +491,16 @@ struct StatsSnapshot {
     compact::TableMetadata table_metadata{};
     std::size_t entry_count = 0;
     std::array<DomainStatsSnapshot, kOperationDomainCount> domains{};
+    std::array<std::uint64_t, kDistributedMatmulClassCount> distributed_observations{};
 };
 
 // Telemetry cardinality is bounded by fixed domain and reason enums. Request
 // dimensions and identifiers are deliberately never retained.
 void record_resolution(
     Mode mode, OperationDomain domain, const Resolution& resolution, ExecutionAction action) noexcept;
+// No-op in Off. Counts public host calls only: trace replay does not re-enter
+// bound_matmul, so replay cannot inflate these bounded-cardinality counters.
+void record_distributed_observation(Mode mode, DistributedMatmulClass classification) noexcept;
 void record_completed_hit(OperationDomain domain) noexcept;
 StatsSnapshot stats_snapshot() noexcept;
 

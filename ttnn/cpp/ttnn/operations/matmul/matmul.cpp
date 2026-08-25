@@ -362,6 +362,83 @@ registry::RegistryRequestInspection registry::inspect_registry_request(
     return inspection;
 }
 
+static registry::DistributedMatmulClass classify_distributed_matmul_call(
+    const ttnn::Tensor& input_tensor_a,
+    const ttnn::Tensor& input_tensor_b,
+    const bool has_bias,
+    const registry::CallSemantics call_semantics,
+    const ttnn::prim::MatmulParams& parameters,
+    const std::optional<ttnn::Tensor>& optional_output_tensor) noexcept {
+    try {
+        const auto* device_a = input_tensor_a.device();
+        const auto* device_b = input_tensor_b.device();
+        const std::uint32_t device_count =
+            device_a == nullptr ? 0 : static_cast<std::uint32_t>(device_a->num_devices());
+        if (device_count <= 1) {
+            return registry::DistributedMatmulClass::NotDistributed;
+        }
+        if (device_b == nullptr) {
+            return registry::DistributedMatmulClass::Unknown;
+        }
+
+        const auto tensor_view = [](const ttnn::Tensor& tensor) {
+            const auto& logical_shape = tensor.logical_shape();
+            const auto& topology = tensor.tensor_topology();
+            const auto& distribution_shape = topology.distribution_shape();
+            const auto& placements = topology.placements();
+            const auto& mesh_coordinates = topology.mesh_coords();
+            const auto storage_coordinates = tensor.device_storage().get_coords();
+            return registry::DistributedTensorView{
+                .logical_shape = std::span<const std::uint32_t>(logical_shape.begin(), logical_shape.end()),
+                .dtype = tensor.dtype(),
+                .layout = tensor.layout(),
+                .memory_layout = tensor.memory_config().memory_layout(),
+                .buffer_type = tensor.memory_config().buffer_type(),
+                .distribution_shape =
+                    std::span<const std::uint32_t>(distribution_shape.begin(), distribution_shape.end()),
+                .placements = std::span<const tt::tt_metal::distributed::MeshMapperConfig::Placement>(
+                    placements.data(), placements.size()),
+                .mesh_coordinates = std::span<const tt::tt_metal::distributed::MeshCoordinate>(
+                    mesh_coordinates.data(), mesh_coordinates.size()),
+                .storage_coordinates = std::span<const tt::tt_metal::distributed::MeshCoordinate>(
+                    storage_coordinates.data(), storage_coordinates.size()),
+            };
+        };
+
+        const auto& device_shape = device_a->shape();
+        return registry::classify_distributed_matmul(registry::DistributedMatmulObservation{
+            .domain = call_semantics.domain,
+            .tensors_share_device = device_a == device_b,
+            .device_count = device_count,
+            .device_mesh_shape = std::span<const std::uint32_t>(device_shape.begin(), device_shape.end()),
+            .input_a = tensor_view(input_tensor_a),
+            .input_b = tensor_view(input_tensor_b),
+            .transpose_a = parameters.transpose_a,
+            .transpose_b = parameters.transpose_b,
+            .has_bias = has_bias,
+            .has_activation = parameters.user_fused_activation.has_value(),
+            .has_program_config = parameters.program_config.has_value(),
+            .has_compute_kernel_config = parameters.compute_kernel_config.has_value(),
+            .has_user_core_grid = parameters.user_core_coord.has_value(),
+            .has_output_dtype = parameters.output_dtype.has_value(),
+            .has_optional_output = optional_output_tensor.has_value(),
+            .has_output_tile = parameters.output_tile.has_value(),
+            .has_global_cb = parameters.global_cb.has_value(),
+            .has_sub_device = parameters.sub_device_id.has_value(),
+            .has_bcast_batch = parameters.bcast_batch.has_value(),
+            .untilize_out = parameters.untilize_out,
+            .run_batched = parameters.user_run_batched,
+            .output_is_dram_interleaved =
+                parameters.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+                parameters.output_mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM,
+        });
+    } catch (...) {
+        // Topology inspection is observation-only and must preserve all legacy
+        // validation/exception timing. Any unavailable fact fails closed.
+        return registry::DistributedMatmulClass::Unknown;
+    }
+}
+
 static ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
@@ -380,6 +457,10 @@ static ttnn::Tensor bound_matmul(
     const auto registry_mode = registry::current_mode();
     std::optional<ttnn::prim::MatmulParams> registry_parameters;
     if (registry_mode != registry::Mode::Off) {
+        registry::record_distributed_observation(
+            registry_mode,
+            classify_distributed_matmul_call(
+                input_tensor_a, input_tensor_b, bias.has_value(), call_semantics, parameters, optional_output_tensor));
         std::optional<bool> observed_trace_capture_active;
         try {
             if (auto* device = input_tensor_a.device(); device != nullptr) {

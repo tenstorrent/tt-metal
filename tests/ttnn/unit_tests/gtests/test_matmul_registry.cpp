@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <thread>
 #include <variant>
+#include <vector>
 
 #include <tt_stl/reflection.hpp>
 
@@ -80,6 +81,252 @@ Recipe basic_recipe() {
         .compute_kernel_config = DeviceComputeKernelConfig{},
         .untilize_out = false,
     };
+}
+
+using Placement = tt::tt_metal::distributed::MeshMapperConfig::Placement;
+using Replicate = tt::tt_metal::distributed::MeshMapperConfig::Replicate;
+using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
+using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
+
+struct DistributedTensorFixture {
+    std::vector<std::uint32_t> logical_shape;
+    DataType dtype = DataType::BFLOAT16;
+    tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE;
+    TensorMemoryLayout memory_layout = TensorMemoryLayout::INTERLEAVED;
+    BufferType buffer_type = BufferType::DRAM;
+    std::vector<std::uint32_t> distribution_shape;
+    std::vector<Placement> placements;
+    std::vector<MeshCoordinate> mesh_coordinates;
+    std::vector<MeshCoordinate> storage_coordinates;
+
+    DistributedTensorView view() const {
+        return {
+            .logical_shape = logical_shape,
+            .dtype = dtype,
+            .layout = layout,
+            .memory_layout = memory_layout,
+            .buffer_type = buffer_type,
+            .distribution_shape = distribution_shape,
+            .placements = placements,
+            .mesh_coordinates = mesh_coordinates,
+            .storage_coordinates = storage_coordinates,
+        };
+    }
+};
+
+std::vector<MeshCoordinate> bh32_coordinates() {
+    std::vector<MeshCoordinate> coordinates;
+    coordinates.reserve(32);
+    for (std::uint32_t row = 0; row < 8; ++row) {
+        for (std::uint32_t col = 0; col < 4; ++col) {
+            coordinates.emplace_back(row, col);
+        }
+    }
+    return coordinates;
+}
+
+struct DistributedObservationFixture {
+    std::array<std::uint32_t, 2> device_mesh_shape{8, 4};
+    DistributedTensorFixture a;
+    DistributedTensorFixture b;
+
+    DistributedMatmulObservation observation() const {
+        return {
+            .domain = OperationDomain::DenseMatmul,
+            .tensors_share_device = true,
+            .device_count = 32,
+            .device_mesh_shape = device_mesh_shape,
+            .input_a = a.view(),
+            .input_b = b.view(),
+            .output_is_dram_interleaved = true,
+        };
+    }
+};
+
+DistributedObservationFixture dp_observation_fixture() {
+    const auto coordinates = bh32_coordinates();
+    return {
+        .a =
+            DistributedTensorFixture{
+                .logical_shape = {1, 1, 9472, 5120},
+                .distribution_shape = {8, 4},
+                .placements = {Shard{0}, Shard{1}},
+                .mesh_coordinates = coordinates,
+                .storage_coordinates = coordinates,
+            },
+        .b =
+            DistributedTensorFixture{
+                .logical_shape = {5120, 3840},
+                .distribution_shape = {32},
+                .placements = {Replicate{}},
+                .mesh_coordinates = coordinates,
+                .storage_coordinates = coordinates,
+            },
+    };
+}
+
+DistributedObservationFixture tpn_observation_fixture() {
+    const auto coordinates = bh32_coordinates();
+    return {
+        .a =
+            DistributedTensorFixture{
+                .logical_shape = {9472, 5120},
+                .distribution_shape = {8, 4},
+                .placements = {Shard{0}, Replicate{}},
+                .mesh_coordinates = coordinates,
+                .storage_coordinates = coordinates,
+            },
+        .b =
+            DistributedTensorFixture{
+                .logical_shape = {5120, 3840},
+                .distribution_shape = {8, 4},
+                .placements = {Replicate{}, Shard{1}},
+                .mesh_coordinates = coordinates,
+                .storage_coordinates = coordinates,
+            },
+    };
+}
+
+TEST(MatmulConfigRegistry, DistributedClassifierNamesAreStableAndBounded) {
+    EXPECT_EQ(distributed_matmul_class_name(DistributedMatmulClass::NotDistributed), "not_distributed");
+    EXPECT_EQ(
+        distributed_matmul_class_name(DistributedMatmulClass::DpRankDistinctV1), "distributed.dp.rank_distinct_v1");
+    EXPECT_EQ(distributed_matmul_class_name(DistributedMatmulClass::TpnSpMTpNV1), "distributed.tpn.sp_m_tp_n_v1");
+    EXPECT_EQ(distributed_matmul_class_name(DistributedMatmulClass::Unknown), "distributed.unknown");
+    EXPECT_EQ(kDistributedMatmulClassCount, 4);
+}
+
+TEST(MatmulConfigRegistry, DistributedClassifierRecognizesOnlyExactExploredBh32Layouts) {
+    auto dp = dp_observation_fixture();
+    auto tpn = tpn_observation_fixture();
+    EXPECT_EQ(classify_distributed_matmul(dp.observation()), DistributedMatmulClass::DpRankDistinctV1);
+    EXPECT_EQ(classify_distributed_matmul(tpn.observation()), DistributedMatmulClass::TpnSpMTpNV1);
+
+    for (const auto dtype : {DataType::BFLOAT16, DataType::BFLOAT8_B, DataType::BFLOAT4_B}) {
+        dp.b.dtype = dtype;
+        tpn.b.dtype = dtype;
+        EXPECT_EQ(classify_distributed_matmul(dp.observation()), DistributedMatmulClass::DpRankDistinctV1);
+        EXPECT_EQ(classify_distributed_matmul(tpn.observation()), DistributedMatmulClass::TpnSpMTpNV1);
+    }
+
+    auto one_chip = dp.observation();
+    one_chip.device_count = 1;
+    EXPECT_EQ(classify_distributed_matmul(one_chip), DistributedMatmulClass::NotDistributed);
+    one_chip.device_count = 0;
+    EXPECT_EQ(classify_distributed_matmul(one_chip), DistributedMatmulClass::NotDistributed);
+}
+
+TEST(MatmulConfigRegistry, DistributedClassifierRejectsEveryNonBareCallAxis) {
+    const auto fixture = dp_observation_fixture();
+    const auto expect_unknown = [](const DistributedMatmulObservation& observation) {
+        EXPECT_EQ(classify_distributed_matmul(observation), DistributedMatmulClass::Unknown);
+    };
+
+    auto changed = fixture.observation();
+    changed.domain = OperationDomain::Linear;
+    expect_unknown(changed);
+    changed = fixture.observation();
+    changed.tensors_share_device = false;
+    expect_unknown(changed);
+    changed = fixture.observation();
+    changed.device_count = 31;
+    expect_unknown(changed);
+    changed = fixture.observation();
+    changed.transpose_a = true;
+    expect_unknown(changed);
+    changed = fixture.observation();
+    changed.transpose_b = true;
+    expect_unknown(changed);
+    changed = fixture.observation();
+    changed.has_bias = true;
+    expect_unknown(changed);
+    changed = fixture.observation();
+    changed.has_activation = true;
+    expect_unknown(changed);
+    changed = fixture.observation();
+    changed.has_program_config = true;
+    expect_unknown(changed);
+    changed = fixture.observation();
+    changed.has_compute_kernel_config = true;
+    expect_unknown(changed);
+    changed = fixture.observation();
+    changed.has_user_core_grid = true;
+    expect_unknown(changed);
+    changed = fixture.observation();
+    changed.has_output_dtype = true;
+    expect_unknown(changed);
+    changed = fixture.observation();
+    changed.has_optional_output = true;
+    expect_unknown(changed);
+    changed = fixture.observation();
+    changed.has_output_tile = true;
+    expect_unknown(changed);
+    changed = fixture.observation();
+    changed.has_global_cb = true;
+    expect_unknown(changed);
+    changed = fixture.observation();
+    changed.has_sub_device = true;
+    expect_unknown(changed);
+    changed = fixture.observation();
+    changed.has_bcast_batch = true;
+    expect_unknown(changed);
+    changed = fixture.observation();
+    changed.untilize_out = true;
+    expect_unknown(changed);
+    changed = fixture.observation();
+    changed.run_batched = true;
+    expect_unknown(changed);
+    changed = fixture.observation();
+    changed.output_is_dram_interleaved = false;
+    expect_unknown(changed);
+}
+
+TEST(MatmulConfigRegistry, DistributedClassifierRejectsUnexploredTensorContracts) {
+    const auto expect_dp_unknown = [](const auto& mutate) {
+        auto fixture = dp_observation_fixture();
+        mutate(fixture);
+        EXPECT_EQ(classify_distributed_matmul(fixture.observation()), DistributedMatmulClass::Unknown);
+    };
+    const auto expect_tpn_unknown = [](const auto& mutate) {
+        auto fixture = tpn_observation_fixture();
+        mutate(fixture);
+        EXPECT_EQ(classify_distributed_matmul(fixture.observation()), DistributedMatmulClass::Unknown);
+    };
+
+    expect_dp_unknown([](auto& f) { f.device_mesh_shape = {4, 8}; });
+    expect_dp_unknown([](auto& f) { f.a.logical_shape = {1, 9472, 5120}; });
+    expect_dp_unknown([](auto& f) { f.a.logical_shape[0] = 2; });
+    expect_dp_unknown([](auto& f) { f.b.logical_shape[0]++; });
+    expect_dp_unknown([](auto& f) { f.a.distribution_shape = {32}; });
+    expect_dp_unknown([](auto& f) { f.a.placements = {Shard{0}, Replicate{}}; });
+    expect_dp_unknown([](auto& f) { f.b.placements = {Shard{1}}; });
+    expect_tpn_unknown([](auto& f) { f.a.logical_shape = {1, 1, 9472, 5120}; });
+    expect_tpn_unknown([](auto& f) { f.b.logical_shape[0]++; });
+    expect_tpn_unknown([](auto& f) { f.a.placements = {Replicate{}, Shard{0}}; });
+    expect_tpn_unknown([](auto& f) { f.b.placements = {Shard{1}, Replicate{}}; });
+    expect_tpn_unknown([](auto& f) { f.b.placements = {Replicate{}, Shard{0}}; });
+
+    for (const auto bad_dtype : {DataType::FLOAT32, DataType::UINT32}) {
+        expect_dp_unknown([bad_dtype](auto& f) { f.a.dtype = bad_dtype; });
+        expect_tpn_unknown([bad_dtype](auto& f) { f.b.dtype = bad_dtype; });
+    }
+    expect_dp_unknown([](auto& f) { f.a.layout = tt::tt_metal::Layout::ROW_MAJOR; });
+    expect_dp_unknown([](auto& f) { f.b.memory_layout = TensorMemoryLayout::WIDTH_SHARDED; });
+    expect_dp_unknown([](auto& f) { f.b.buffer_type = BufferType::L1; });
+}
+
+TEST(MatmulConfigRegistry, DistributedClassifierRejectsPartialMismatchedOrReorderedCoordinates) {
+    const auto expect_unknown = [](const auto& mutate) {
+        auto fixture = tpn_observation_fixture();
+        mutate(fixture);
+        EXPECT_EQ(classify_distributed_matmul(fixture.observation()), DistributedMatmulClass::Unknown);
+    };
+    expect_unknown([](auto& f) { f.a.mesh_coordinates.pop_back(); });
+    expect_unknown([](auto& f) { f.a.storage_coordinates.pop_back(); });
+    expect_unknown([](auto& f) { std::swap(f.a.mesh_coordinates[0], f.a.mesh_coordinates[1]); });
+    expect_unknown([](auto& f) { std::swap(f.b.mesh_coordinates[0], f.b.mesh_coordinates[1]); });
+    expect_unknown([](auto& f) { std::swap(f.b.storage_coordinates[0], f.b.storage_coordinates[1]); });
+    expect_unknown([](auto& f) { f.a.mesh_coordinates[31] = MeshCoordinate(0, 0); });
 }
 
 TEST(MatmulConfigRegistry, CompactLookupIsExactNonOwningAndSidebandIndependent) {
@@ -1438,6 +1685,12 @@ TEST(MatmulConfigRegistry, TelemetryIsBoundedAndResettable) {
         OperationDomain::Linear,
         Resolution{.reason = ResolutionReason::EmptyRegistry},
         ExecutionAction::Fallback);
+    record_distributed_observation(Mode::Off, DistributedMatmulClass::DpRankDistinctV1);
+    record_distributed_observation(Mode::Shadow, DistributedMatmulClass::DpRankDistinctV1);
+    record_distributed_observation(Mode::On, DistributedMatmulClass::TpnSpMTpNV1);
+    record_distributed_observation(Mode::Shadow, DistributedMatmulClass::Unknown);
+    record_distributed_observation(Mode::Shadow, DistributedMatmulClass::NotDistributed);
+    record_distributed_observation(Mode::On, DistributedMatmulClass::Count);
 
     auto snapshot = stats_snapshot();
     const auto& dense = snapshot.domains[static_cast<std::size_t>(OperationDomain::DenseMatmul)];
@@ -1451,10 +1704,15 @@ TEST(MatmulConfigRegistry, TelemetryIsBoundedAndResettable) {
     const auto& addmm = snapshot.domains[static_cast<std::size_t>(OperationDomain::Addmm)];
     EXPECT_EQ(addmm.selected_hits, 1);
     EXPECT_EQ(addmm.completed_hits, 1);
+    EXPECT_EQ(snapshot.distributed_observations[static_cast<std::size_t>(DistributedMatmulClass::DpRankDistinctV1)], 1);
+    EXPECT_EQ(snapshot.distributed_observations[static_cast<std::size_t>(DistributedMatmulClass::TpnSpMTpNV1)], 1);
+    EXPECT_EQ(snapshot.distributed_observations[static_cast<std::size_t>(DistributedMatmulClass::Unknown)], 1);
+    EXPECT_EQ(snapshot.distributed_observations[static_cast<std::size_t>(DistributedMatmulClass::NotDistributed)], 1);
 
     reset_stats_for_testing();
     snapshot = stats_snapshot();
     EXPECT_EQ(snapshot.domains[static_cast<std::size_t>(OperationDomain::DenseMatmul)].resolution_attempts, 0);
+    EXPECT_TRUE(std::ranges::all_of(snapshot.distributed_observations, [](const auto count) { return count == 0; }));
 }
 
 TEST(MatmulConfigRegistry, SelectedPublicExecutionErrorCircuitBreaksWithoutCompletionOrRetry) {
