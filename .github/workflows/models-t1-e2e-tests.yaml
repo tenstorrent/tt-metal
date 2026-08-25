@@ -31,6 +31,7 @@ on:
           - ltx-2.3-fast-t2v
           - ltx-2.3-pro-i2v
           - ltx-2.3-fast-i2v
+          - deepseek-v3
           - deepseek-v3-b1
           - z-image-turbo
           - resnet50
