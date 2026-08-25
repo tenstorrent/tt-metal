@@ -368,14 +368,13 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
         socket_data.config_buffer_address = config_buffer->address();
         socket_data.data_buffer_address = is_sender ? 0 : socket->get_data_buffer()->address();
         socket_data.fifo_size = socket->get_config().socket_mem_config.fifo_size;
-        socket_data.sender_md_size_bytes = sender_size.md_size_bytes;
+        socket_data.bytes_acked_offset_bytes = sender_size.md_size_bytes;
         socket_data.bytes_acked_stride_bytes = sender_size.ack_size_bytes;
 
         auto* mesh_device = socket->get_mesh_device();
         const auto local_ep = socket->get_socket_endpoint_type();
         const auto peer_ep = is_sender ? distributed::SocketEndpoint::RECEIVER : distributed::SocketEndpoint::SENDER;
-        // One entry per local core: a sender core feeding several downstreams collects several peers
-        // here, rather than repeating the core once per downstream.
+        // One entry per local core; a sender core feeding several downstreams collects several peers.
         std::map<std::tuple<uint32_t, uint32_t, uint32_t>, inspector::MeshSocketLocalCoreData> by_core;
         for (const auto& conn : socket->get_config().socket_connection_config) {
             const auto& local_core = is_sender ? conn.sender_core : conn.receiver_core;
@@ -390,7 +389,7 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
             auto local_node = socket->get_fabric_node_id(local_ep, local_core.device_coord);
             auto peer_node = socket->get_fabric_node_id(peer_ep, peer_core.device_coord);
 
-            // The socket config carries one mesh id per side, so every connection agrees on these.
+            // One mesh id per side, so every connection agrees.
             socket_data.local_mesh_id = *local_node.mesh_id;
             socket_data.peer_mesh_id = *peer_node.mesh_id;
 
@@ -398,7 +397,7 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
                 static_cast<uint32_t>(local_device->id()),
                 static_cast<uint32_t>(local_core.core_coord.x),
                 static_cast<uint32_t>(local_core.core_coord.y));
-            // Reassigned per connection, but every connection on a core agrees on these.
+            // Every connection on this core agrees on these.
             auto& core_data = by_core[core_key];
             core_data.chip_id = local_device->id();
             core_data.core.core_x = local_core.core_coord.x;

@@ -67,11 +67,11 @@ struct MeshSocketRecord {
     isSender @0 :Bool;
     configBufferAddress @1 :UInt64;
     dataBufferAddress @2 :UInt64;
-    localCores @3 :List(MeshSocketLocalCore);  # only the cores this rank owns, one entry each
+    localCores @3 :List(MeshSocketLocalCore);  # only the cores this rank owns
     fifoSize @4 :UInt64;
-    senderMdSizeBytes @5 :UInt32;
+    bytesAckedOffsetBytes @5 :UInt32;  # config_addr + this = bytes_acked_array[0]
     bytesAckedStrideBytes @6 :UInt32;
-    # Mesh ids come from the socket config, so they are one per socket rather than per core.
+    # One mesh id per side, so these are per socket, not per core.
     localMeshId @7 :UInt32;       # cross-rank stitch key for this side
     peerMeshId @8 :UInt32;        # matches the peer rank's localMeshId
 }

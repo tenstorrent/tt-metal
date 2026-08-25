@@ -6,7 +6,7 @@
 """Triage hang app: wedges MeshSockets so dump_mesh_sockets has live flow-control state to read.
 
 Needs two chips (n300). Builds a socket pair in each direction and drives exactly one half of each,
-so a single triage run sees four endpoints in two distinct flow-control states:
+so a single triage run sees four socket cores in two distinct flow-control states:
 
     dev0 -> dev1   send_async with no matching recv_async. The sender pushes until the fifo is full,
                    then wedges in socket_reserve_pages waiting for acks that never come, so this
@@ -16,7 +16,7 @@ so a single triage run sees four endpoints in two distinct flow-control states:
                    stays at zero (starvation).
 
 It also creates a third socket whose single sender core feeds two receiver cores, so the dump has a
-multi-downstream endpoint to report. No op is dispatched on it; it exists only to be inspected.
+multi-downstream core to report. No op is dispatched on it; it exists only to be inspected.
 
 Note both dispatches target dev0, and dispatch is in-order per device, so the recv program actually
 queues behind the wedged sender and never launches. That does not change what triage sees: a starved
@@ -38,8 +38,8 @@ FWD_SENDER_CORE = ttnn.CoreCoord(0, 0)  # on dev0
 FWD_RECEIVER_CORE = ttnn.CoreCoord(1, 1)  # on dev1
 REV_SENDER_CORE = ttnn.CoreCoord(2, 2)  # on dev1
 REV_RECEIVER_CORE = ttnn.CoreCoord(3, 3)  # on dev0
-# One sender core feeding two receivers, so a triage run sees a multi-downstream endpoint. No op is
-# dispatched on it: the Inspector records a socket when it is created, not when it is used.
+# One sender core feeding two receivers. No op is dispatched on it: the Inspector records a socket
+# when it is created, not when it is used.
 FANOUT_SENDER_CORE = ttnn.CoreCoord(4, 4)  # on dev0
 FANOUT_RECEIVER_CORES = (ttnn.CoreCoord(5, 5), ttnn.CoreCoord(6, 6))  # on dev1
 HOLD_SECONDS = 1800

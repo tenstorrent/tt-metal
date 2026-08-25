@@ -174,7 +174,7 @@ void Data::rpc_get_sockets(rpc::Inspector::GetSocketsResults::Builder& results) 
         socket.setConfigBufferAddress(socket_data.config_buffer_address);
         socket.setDataBufferAddress(socket_data.data_buffer_address);
         socket.setFifoSize(socket_data.fifo_size);
-        socket.setSenderMdSizeBytes(socket_data.sender_md_size_bytes);
+        socket.setBytesAckedOffsetBytes(socket_data.bytes_acked_offset_bytes);
         socket.setBytesAckedStrideBytes(socket_data.bytes_acked_stride_bytes);
         socket.setLocalMeshId(socket_data.local_mesh_id);
         socket.setPeerMeshId(socket_data.peer_mesh_id);

@@ -167,7 +167,7 @@ void Logger::log_mesh_socket_created(
         return;
     }
     try {
-        // Keyed by the config buffer pointer, the same identity the socket map and the mesh buffer log use.
+        // Keyed by config buffer pointer, matching the mesh buffer log.
         mesh_sockets_ostream << "- mesh_socket_created:\n";
         mesh_sockets_ostream << "    id: " << reinterpret_cast<uintptr_t>(config_buffer) << "\n";
         mesh_sockets_ostream << "    is_sender: " << (socket_data.is_sender ? "true" : "false") << "\n";
@@ -201,7 +201,6 @@ void Logger::log_mesh_socket_destroyed(
         return;
     }
     try {
-        // Address is repeated so a reader can pair events without holding every create in memory.
         mesh_sockets_ostream << "- mesh_socket_destroyed:\n";
         mesh_sockets_ostream << "    id: " << reinterpret_cast<uintptr_t>(config_buffer) << "\n";
         mesh_sockets_ostream << "    config_buffer_address: " << socket_data.config_buffer_address << "\n";

@@ -8,23 +8,17 @@ Usage:
     dump_mesh_sockets
 
 Description:
-    Dumps raw MeshSocket flow-control metadata from the L1 config buffers, one row per core.
-    Cores come from the Inspector getSockets RPC. MeshSocket only.
+    MeshSocket flow-control state from the L1 config buffers, one row per core owned by this rank.
+    Cores come from the Inspector getSockets RPC. Coordinates are logical, and a core whose config
+    buffer could not be read gets no row.
 
-    A socket pair has a sender side and a receiver side, each with its own config buffer. A side owns
-    one or more local cores, and each core gets its own row. Role says which side, and columns that
-    live in the other side's buffer are N/A. To join the two halves of a socket, match a sender row's
-    Downstream Addr against a receiver row's Config Addr; that pairs the sockets, not the individual
-    cores, and works the same on one host or across ranks, where a rank only ever sees its own cores.
-    A sender core feeding several downstreams gets one row per downstream, numbered in Downstream #,
-    and the Peer column names the core each row describes. All core coordinates are logical. A core
-    whose config buffer could not be read gets no row.
+    Columns living in the other side's buffer read N/A. A sender core feeding several downstreams
+    gets one row each, numbered in Downstream #, with Peer naming the core that row describes.
+    Match a sender's Downstream Addr to a receiver's Config Addr to pair the two halves of a socket
+    (sockets, not cores). Node is a fabric node id, the one chip name shared across ranks; a peer on
+    this host shows its device id instead.
 
-    Node is this core's own fabric node id, the one chip name that is identical on every rank. A
-    peer on this host shows as its device id, matching the Dev column; a peer on another rank shows as
-    a fabric node id, which you match against the Node column of that rank's output.
-
-    Counter columns, by where the value is read from:
+    Counter columns, by source:
 
       sent@snd    sender bytes_sent                                    kernel frame
       acked@snd   sender_socket_md.bytes_acked_array[i]                L1, written by the receiver
@@ -33,11 +27,9 @@ Description:
       acked@rcv   receiver bytes_acked                                 kernel frame
       rd_addr     receiver read_ptr, absolute L1 address               kernel frame
 
-    The L1 copies of the counters a kernel owns are only refreshed by update_socket_config at kernel
-    exit, so they hold where the previous invocation finished. The current values are read instead from
-    the SocketSenderInterface / SocketReceiverInterface local in the kernel's frame, matched on
-    config_addr. That halts the core. A column reads ? when the frame could not be walked or
-    the local was optimized out.
+    A kernel flushes its own counters to L1 only at exit, so live values are read from its
+    Socket{Sender,Receiver}Interface local, matched on config_addr. This halts the core. A column
+    reads ? when no kernel was running there or the local was optimized out.
 
 Owner:
     onenezicTT
@@ -117,7 +109,7 @@ class SocketCore:
     location: OnChipCoordinate
     node: str  # this core's own fabric node id
     config_addr: int
-    md_size: int
+    acked_offset: int
     acked_stride: int
     peers: list[Peer] = field(default_factory=list)
     md: ReceiverMd | SenderMd | None = None
@@ -151,7 +143,7 @@ def read_md(core: SocketCore) -> ReceiverMd | SenderMd:
     sent, n_down, wr, dstr_config_addr, _dstr_fifo, fifo, is_d2h = struct.unpack(
         SEND_FMT, read_from_device(core.location, core.config_addr, num_bytes=struct.calcsize(SEND_FMT))
     )
-    acked_base = core.config_addr + core.md_size
+    acked_base = core.config_addr + core.acked_offset
     acked = [
         struct.unpack("<I", read_from_device(core.location, acked_base + i * core.acked_stride, num_bytes=4))[0]
         for i in range(max(n_down, 1))
@@ -180,7 +172,7 @@ def read_interface(core: SocketCore, callstack_provider: CallstackProvider) -> d
                 if var.value is None:
                     continue
                 try:
-                    # A kernel holding an array of interfaces keeps them out of reach of get_member.
+                    # get_member cannot index into an array of interfaces.
                     candidates = [var.value[i] for i in range(len(var.value))]
                 except Exception:
                     candidates = [var.value]
@@ -229,7 +221,7 @@ def discover(inspector_data, id_mapping, run_checks) -> list[SocketCore]:
                     location=OnChipCoordinate(int(e.core.coreX), int(e.core.coreY), "logical", device, "tensix"),
                     node=node_label(int(s.localMeshId), int(e.core.fabricChipId)),
                     config_addr=int(s.configBufferAddress),
-                    md_size=int(s.senderMdSizeBytes),
+                    acked_offset=int(s.bytesAckedOffsetBytes),
                     acked_stride=int(s.bytesAckedStrideBytes),
                     peers=[
                         Peer(
@@ -312,7 +304,7 @@ def run(args, context: Context):
             try:
                 core.md = read_md(core)
             except TimeoutDeviceRegisterError:
-                raise  # let run_per_device_check mark the device (and its remotes) broken
+                raise  # let run_per_device_check mark the device broken
             except Exception as e:
                 log_warning_location(core.location, f"{core.role} socket config buffer 0x{core.config_addr:x}: {e}")
                 continue

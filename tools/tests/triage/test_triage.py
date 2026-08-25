@@ -39,7 +39,6 @@ HANG_APP_TTNN_ADD_INTEGERS = (
 )
 HANG_APP_MESH_SOCKET = "tools/tests/triage/hang_apps/mesh_socket_hang/mesh_socket_hang.py"
 
-# Passed to the hang app and asserted on below, so it lives in exactly one place.
 MESH_SOCKET_FIFO_SIZE = 8192
 
 HANG_APP_EXPECTED_RESULTS = {
@@ -636,7 +635,7 @@ class TestTriage:
             HANG_APP_MESH_SOCKET,
             [str(MESH_SOCKET_FIFO_SIZE)],
             {"min_devices": 2, "expect_running": True},
-            15,  # measured launch-to-wedged: ~3.5s on a warm kernel cache, ~10s cold
+            15,
         ),
     ],
     indirect=True,
@@ -653,7 +652,7 @@ class TestMeshSocketTriage:
         result = run_script(
             script_path=os.path.join(triage_home, "dump_mesh_sockets.py"),
             context=self.exalens_context,
-            argv=[],  # otherwise docopt parses pytest's own argv
+            argv=[],
             return_result=True,
         )
         assert not FAILURE_CHECKS, f"dump_mesh_sockets.py failed with: {FAILURE_CHECKS}"
@@ -665,7 +664,7 @@ class TestMeshSocketTriage:
         receivers = [row for row in rows if row.role == "receiver"]
 
         # One 1:1 socket pair each way, plus a fan-out sender feeding two receiver cores. The fan-out
-        # sender is a single endpoint, so it contributes one row per downstream.
+        # sender is a single core, so it contributes one row per downstream.
         pair_senders = [row for row in senders if row.num_downstreams == 1]
         fanout_senders = [row for row in senders if row.num_downstreams == 2]
         assert len(pair_senders) == 2, f"Expected 2 paired sender rows, got {len(pair_senders)}"
@@ -681,12 +680,12 @@ class TestMeshSocketTriage:
                 assert (row.sent_at_sender, row.acked_at_sender, row.write_ptr) == (None, None, None)
                 assert (row.downstream_config_addr, row.downstream, row.num_downstreams) == (None, None, None)
             assert row.fifo_size == MESH_SOCKET_FIFO_SIZE
-            # Every endpoint is on this host, so each names its peer by device id.
+            # Every core is on this host, so each names its peer by device id.
             assert row.peer.startswith("dev"), f"Expected a device id for a local peer, got {row.peer}"
-            # Node is the endpoint's own fabric node, so it agrees with the device the row came from.
+            # Node is the core's own fabric node, so it agrees with the device the row came from.
             assert row.node == f"chip{device_of[id(row)]}/mesh0"
 
-        # The fan-out rows come from one endpoint, so they share its core and config buffer and differ
+        # The fan-out rows come from one core, so they share its config buffer and differ
         # only in which downstream they describe.
         assert len({r.config_addr for r in fanout_senders}) == 1, "Fan-out rows should share one config buffer"
         assert len({str(r.location) for r in fanout_senders}) == 1, "Fan-out rows should share one core"

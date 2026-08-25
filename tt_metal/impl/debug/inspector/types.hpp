@@ -77,7 +77,7 @@ struct MeshSocketData {
     uint64_t config_buffer_address{};
     uint64_t data_buffer_address{};
     uint64_t fifo_size{};
-    uint32_t sender_md_size_bytes{};
+    uint32_t bytes_acked_offset_bytes{};
     uint32_t bytes_acked_stride_bytes{};
     uint32_t local_mesh_id{};
     uint32_t peer_mesh_id{};
