@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 
 from fuser.fpu_node import FpuNode
 from helpers.format_config import DataFormat
-from helpers.llk_params import EltwiseBinaryReuseDestType
 
 if TYPE_CHECKING:
     from fuser.fuser_config import GlobalConfig
@@ -91,39 +90,30 @@ def configure_unpack(
         code += "\n);\n"
 
     if srcb_changed:
-        if compute_node.reuse_dest is EltwiseBinaryReuseDestType.DEST_TO_SRCA:
-            srcb_tile_size = compute_node.src_a.tile_size
-        elif compute_node.src_b is not None:
-            srcb_tile_size = compute_node.src_b.tile_size
-        else:
-            srcb_tile_size = None
+        operand_b = (
+            compute_node.src_b if compute_node.src_b is not None else compute_node.src_a
+        )
+        srcb_tile_size = operand_b.tile_size
+        new_face_r_dim_b = operand_b.tile_shape.face_r_dim
+        new_num_faces_b = operand_b.tile_shape.total_num_faces()
 
-        if srcb_tile_size is not None:
-            if compute_node.src_b is not None:
-                new_face_r_dim_b = compute_node.src_b.tile_shape.face_r_dim
-                new_num_faces_b = compute_node.src_b.tile_shape.total_num_faces()
-            else:
-                new_face_r_dim_b = compute_node.src_a.tile_shape.face_r_dim
-                new_num_faces_b = compute_node.src_a.tile_shape.total_num_faces()
-
-            to_from_int8 = (
-                "true"
-                if old_B_src.needs_int8_math_config()
-                or new_B_src.needs_int8_math_config()
-                else "false"
-            )
-            dim_stride = (
-                "p_dim_stride_target::FACE_ROW_MAJOR"
-                if srcb_tile_changed
-                else "p_dim_stride_target::IGNORE"
-            )
-            code += (
-                f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, {dim_stride}, {to_from_int8}>(\n"
-                f"    {new_B_src.cpp_underlying_value}, {new_B_dst.cpp_underlying_value}, {srcb_tile_size}"
-            )
-            if srcb_tile_changed:
-                code += f", {new_face_r_dim_b}, {new_num_faces_b}"
-            code += "\n);\n"
+        to_from_int8 = (
+            "true"
+            if old_B_src.needs_int8_math_config() or new_B_src.needs_int8_math_config()
+            else "false"
+        )
+        dim_stride = (
+            "p_dim_stride_target::FACE_ROW_MAJOR"
+            if srcb_tile_changed
+            else "p_dim_stride_target::IGNORE"
+        )
+        code += (
+            f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, {dim_stride}, {to_from_int8}>(\n"
+            f"    {new_B_src.cpp_underlying_value}, {new_B_dst.cpp_underlying_value}, {srcb_tile_size}"
+        )
+        if srcb_tile_changed:
+            code += f", {new_face_r_dim_b}, {new_num_faces_b}"
+        code += "\n);\n"
 
     return code
 

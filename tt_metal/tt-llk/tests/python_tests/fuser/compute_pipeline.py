@@ -377,18 +377,27 @@ class ComputePipeline:
         golden_type: GoldenType,
     ):
         first_fpu = next(
-            (op for op in self.math_nodes if isinstance(op, FpuNode)), None
+            (
+                op
+                for op in self.math_nodes
+                if isinstance(op, FpuNode) and op.src_a is not None
+            ),
+            None,
         )
         if first_fpu is not None:
             tensor_a = torch.zeros(first_fpu.src_a.dimensions)
-            tensor_b = torch.zeros(first_fpu.src_b.dimensions)
+            tensor_b = torch.zeros(
+                first_fpu.src_b.dimensions
+                if first_fpu.src_b is not None
+                else first_fpu.src_a.dimensions
+            )
         else:
             tensor_a = torch.zeros(operation.max_output_dimensions)
             tensor_b = torch.zeros(operation.max_output_dimensions)
         tensor_dst = torch.zeros(operation.max_output_dimensions)
         for op in self.math_nodes:
             config.sentinel.configure_golden(config, operation, op)
-            if isinstance(op, FpuNode):
+            if isinstance(op, FpuNode) and op.src_a is not None:
                 input_tensor_a = (
                     op.src_a.raw_data
                     if golden_type == GoldenType.L1_GOLDEN

@@ -18,6 +18,8 @@ from fuser.validator import (
     DATACOPY_TILE_32X32_ONLY,
     DEST_TO_SRCA_NEEDS_ACC,
     ELTWISE_DIMS,
+    IN0_REQUIRED,
+    IN1_REQUIRED,
     INT32_NEEDS_UNPACK_TO_DEST,
     L1_ACC_FORMAT_SUPPORTED,
     LOFI_ONLY,
@@ -83,39 +85,39 @@ from .unpacker.unpack_ab import UnpackerAB
 UNPACKER_MAP = {
     "UnpackerA": (
         lambda s: UnpackerA(),
-        [INT32_NEEDS_UNPACK_TO_DEST, NO_TRANSPOSE_UNPACK_TO_DEST],
+        [IN0_REQUIRED, INT32_NEEDS_UNPACK_TO_DEST, NO_TRANSPOSE_UNPACK_TO_DEST],
     ),
     "UnpackerAB": (
         lambda s: UnpackerAB(),
-        [SCALAR_BCAST_NO_TRANSPOSE_FACES],
+        [IN0_REQUIRED, IN1_REQUIRED, SCALAR_BCAST_NO_TRANSPOSE_FACES],
     ),
     "UnpackerTilizeA": (
         lambda s: UnpackerTilizeA(),
-        [NO_BROADCAST, NO_TRANSPOSE],
+        [IN0_REQUIRED, NO_BROADCAST, NO_TRANSPOSE],
     ),
     "MatmulUnpacker": (
         lambda s: MatmulUnpacker(),
-        [NO_TRANSPOSE_FACES],
+        [IN0_REQUIRED, IN1_REQUIRED, NO_TRANSPOSE_FACES],
     ),
     "ReduceUnpacker": (
         lambda s: ReduceUnpacker(s.reduce_dim, s.reduce_pool),
-        None,
+        [IN0_REQUIRED, IN1_REQUIRED],
     ),
     "ReduceBlockMaxUnpacker": (
         lambda s: ReduceBlockMaxUnpacker(),
-        None,
+        [IN0_REQUIRED, IN1_REQUIRED],
     ),
     "ReduceBlockMaxRuntimeUnpacker": (
         lambda s: ReduceBlockMaxRuntimeUnpacker(),
-        None,
+        [IN0_REQUIRED, IN1_REQUIRED],
     ),
     "SubBcastColCustomUnpacker": (
         lambda s: SubBcastColCustomUnpacker(),
-        None,
+        [IN0_REQUIRED, IN1_REQUIRED],
     ),
     "TransposeDestUnpacker": (
         lambda s: TransposeDestUnpacker(),
-        None,
+        [],
     ),
 }
 
