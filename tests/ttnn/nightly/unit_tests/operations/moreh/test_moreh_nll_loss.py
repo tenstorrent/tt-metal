@@ -11,8 +11,6 @@ from loguru import logger
 
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
-    compute_kernel_options,
-    compute_kernel_ids,
     to_torch,
     to_ttnn,
 )
@@ -215,18 +213,23 @@ def test_moreh_nll_loss_callback(shape, reduction, device):
     )
 
 
+# fp32_dest_acc_en selects the intermediate CB format, so it is part of every kernel's compile key,
+# not just the compute kernel's. Crossing it with every shape compiles each shape twice. Pair the
+# two axes instead: every shape runs the default path, and the fp32 dest-accumulate path runs on the
+# 2d shape.
 @pytest.mark.parametrize(
-    "shape",
+    "shape, compute_kernel_options",
     [
-        [5, 10],
-        [10, 20, 30],
-        [10, 20, 30, 40],
+        ([5, 10], False),
+        ([5, 10], True),
+        ([10, 20, 30], False),
+        ([10, 20, 30, 40], False),
     ],
+    ids=["shape=2d", "shape=2d-fp32", "shape=3d", "shape=4d"],
 )
 @pytest.mark.parametrize("ignore_index", [1])
 @pytest.mark.parametrize("reduction", ["mean", "sum"])
 @pytest.mark.parametrize("none_weight", [True, False])
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_moreh_nll_loss_compute_kernel_options(
     shape, ignore_index, reduction, none_weight, compute_kernel_options, device, ttnn_dtype
@@ -294,16 +297,21 @@ def test_moreh_nll_loss_backward_test_callback(shape, reduction_mean, device):
     )
 
 
+# fp32_dest_acc_en selects the intermediate CB format, so it is part of every kernel's compile key,
+# not just the compute kernel's. Crossing it with every shape compiles each shape twice. Pair the
+# two axes instead: every shape runs the default path, and the fp32 dest-accumulate path runs on the
+# 2d shape.
 @pytest.mark.parametrize(
-    "shape",
+    "shape, compute_kernel_options",
     [
-        [5, 10],
-        [10, 20, 30, 40],
+        ([5, 10], False),
+        ([5, 10], True),
+        ([10, 20, 30, 40], False),
     ],
+    ids=["shape=2d", "shape=2d-fp32", "shape=4d"],
 )
 @pytest.mark.parametrize("reduction_mean", [True, False])
 @pytest.mark.parametrize("none_weight", [True, False])
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_moreh_nll_loss_backward_compute_kernel_options(
     shape, reduction_mean, none_weight, compute_kernel_options, ttnn_dtype, device

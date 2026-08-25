@@ -133,17 +133,23 @@ def run_moreh_softmin_backward_test(
     assert passing
 
 
+# fp32_dest_acc_en selects the intermediate CB format, so it is part of every kernel's compile key,
+# not just the compute kernel's. Crossing it with every shape compiles each shape twice. Pair the
+# two axes instead: every shape runs the default path, and the fp32 dest-accumulate path runs on one
+# shape per factory.
 @pytest.mark.parametrize(
-    "shape_dim",
+    "shape_dim, compute_kernel_options",
     [
-        [[32, 32], 1],  # single tile
-        [[3, 32, 32 * 5], 2],  # mutiple tile with dim W
-        [[5, 6, 32, 32], 3],  # multiple cores
-        [[10, 20, 32 * 3, 32 * 5], 3],  # multiple tiles per core
-        [[32, 32], 0],  # single tile
-        [[3, 32 * 5, 32], 1],  # mutiple tile with dim H
-        [[5, 6, 32, 32], 2],  # multiple cores
-        [[10, 20, 32 * 3, 32 * 5], 2],  # multiple tiles per core
+        ([[32, 32], 1], False),  # single tile
+        ([[32, 32], 1], True),  # fp32 dest-acc
+        ([[3, 32, 32 * 5], 2], False),  # mutiple tile with dim W
+        ([[5, 6, 32, 32], 3], False),  # multiple cores
+        ([[10, 20, 32 * 3, 32 * 5], 3], False),  # multiple tiles per core
+        ([[32, 32], 0], False),  # single tile
+        ([[32, 32], 0], True),  # fp32 dest-acc
+        ([[3, 32 * 5, 32], 1], False),  # mutiple tile with dim H
+        ([[5, 6, 32, 32], 2], False),  # multiple cores
+        ([[10, 20, 32 * 3, 32 * 5], 2], False),  # multiple tiles per core
     ],
 )
 @pytest.mark.parametrize(
@@ -153,7 +159,6 @@ def run_moreh_softmin_backward_test(
         ttnn.bfloat8_b,
     ],
 )
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_softmin_for_dim_hw(shape_dim, dtype, compute_kernel_options, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
@@ -202,13 +207,19 @@ def test_softmin_large_algorithm_for_dim_hw(shape_dim, dtype, compute_kernel_opt
     )
 
 
+# fp32_dest_acc_en selects the intermediate CB format, so it is part of every kernel's compile key,
+# not just the compute kernel's. Crossing it with every shape compiles each shape twice. Pair the
+# two axes instead: every shape runs the default path, and the fp32 dest-accumulate path runs on one
+# shape per factory.
 @pytest.mark.parametrize(
-    "shape_dim",
+    "shape_dim, compute_kernel_options",
     [
-        [[1, 1, 10, 15], 3],  # single tile
-        [[1, 1, 10, 32 * 2 + 10], 3],  # mutiple tile with dim
-        [[1, 1, 15, 10], 2],  # single tile
-        [[1, 1, 32 * 2 + 10, 32], 2],  # mutiple tile with dim
+        ([[1, 1, 10, 15], 3], False),  # single tile
+        ([[1, 1, 10, 15], 3], True),  # fp32 dest-acc
+        ([[1, 1, 10, 32 * 2 + 10], 3], False),  # mutiple tile with dim
+        ([[1, 1, 15, 10], 2], False),  # single tile
+        ([[1, 1, 15, 10], 2], True),  # fp32 dest-acc
+        ([[1, 1, 32 * 2 + 10, 32], 2], False),  # mutiple tile with dim
     ],
 )
 @pytest.mark.parametrize(
@@ -217,7 +228,6 @@ def test_softmin_large_algorithm_for_dim_hw(shape_dim, dtype, compute_kernel_opt
         ttnn.bfloat16,
     ],
 )
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_softmin_not_multiple_of_32_for_dim_hw(shape_dim, dtype, compute_kernel_options, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
@@ -236,15 +246,21 @@ def test_softmin_not_multiple_of_32_for_dim_hw(shape_dim, dtype, compute_kernel_
     )
 
 
+# fp32_dest_acc_en selects the intermediate CB format, so it is part of every kernel's compile key,
+# not just the compute kernel's. Crossing it with every shape compiles each shape twice. Pair the
+# two axes instead: every shape runs the default path, and the fp32 dest-accumulate path runs on one
+# shape per factory.
 @pytest.mark.parametrize(
-    "shape_dim",
+    "shape_dim, compute_kernel_options",
     [
-        [[1, 15, 32, 32], 1],  # single tile c
-        [[1, 15, 32 * 7, 32 * 5], 1],  # mutiple cores
-        [[109, 15, 32, 32], 1],  # mutiple tiles per cores
-        [[15, 1, 32, 32], 0],  # single tile n
-        [[15, 1, 32 * 7, 32 * 5], 0],  # mutiple cores
-        [[15, 109, 32 * 2, 32 * 2], 0],  # mutiple tiles per cores
+        ([[1, 15, 32, 32], 1], False),  # single tile c
+        ([[1, 15, 32, 32], 1], True),  # fp32 dest-acc
+        ([[1, 15, 32 * 7, 32 * 5], 1], False),  # mutiple cores
+        ([[109, 15, 32, 32], 1], False),  # mutiple tiles per cores
+        ([[15, 1, 32, 32], 0], False),  # single tile n
+        ([[15, 1, 32, 32], 0], True),  # fp32 dest-acc
+        ([[15, 1, 32 * 7, 32 * 5], 0], False),  # mutiple cores
+        ([[15, 109, 32 * 2, 32 * 2], 0], False),  # mutiple tiles per cores
     ],
 )
 @pytest.mark.parametrize(
@@ -253,7 +269,6 @@ def test_softmin_not_multiple_of_32_for_dim_hw(shape_dim, dtype, compute_kernel_
         ttnn.bfloat16,
     ],
 )
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_softmin_for_dim_nc(shape_dim, dtype, compute_kernel_options, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
@@ -272,17 +287,23 @@ def test_softmin_for_dim_nc(shape_dim, dtype, compute_kernel_options, device):
     )
 
 
+# fp32_dest_acc_en selects the intermediate CB format, so it is part of every kernel's compile key,
+# not just the compute kernel's. Crossing it with every shape compiles each shape twice. Pair the
+# two axes instead: every shape runs the default path, and the fp32 dest-accumulate path runs on one
+# shape per factory.
 @pytest.mark.parametrize(
-    "shape_dim",
+    "shape_dim, compute_kernel_options",
     [
-        [[32, 32], 1],  # single tile
-        [[3, 32, 32 * 5], 2],  # mutiple tile with dim W
-        [[5, 6, 32, 32], 3],  # multiple cores
-        [[10, 20, 32 * 3, 32 * 5], 3],  # multiple tiles per core
-        [[32, 32], 0],  # single tile
-        [[3, 32 * 5, 32], 1],  # mutiple tile with dim H
-        [[5, 6, 32, 32], 2],  # multiple cores
-        [[10, 20, 32 * 3, 32 * 5], 2],  # multiple tiles per core
+        ([[32, 32], 1], False),  # single tile
+        ([[32, 32], 1], True),  # fp32 dest-acc
+        ([[3, 32, 32 * 5], 2], False),  # mutiple tile with dim W
+        ([[5, 6, 32, 32], 3], False),  # multiple cores
+        ([[10, 20, 32 * 3, 32 * 5], 3], False),  # multiple tiles per core
+        ([[32, 32], 0], False),  # single tile
+        ([[32, 32], 0], True),  # fp32 dest-acc
+        ([[3, 32 * 5, 32], 1], False),  # mutiple tile with dim H
+        ([[5, 6, 32, 32], 2], False),  # multiple cores
+        ([[10, 20, 32 * 3, 32 * 5], 2], False),  # multiple tiles per core
     ],
 )
 @pytest.mark.parametrize(
@@ -292,7 +313,6 @@ def test_softmin_for_dim_nc(shape_dim, dtype, compute_kernel_options, device):
         ttnn.bfloat8_b,
     ],
 )
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_softmin_backward_for_dim_hw(shape_dim, dtype, compute_kernel_options, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
@@ -343,13 +363,19 @@ def test_softmin_backward_large_algorithmfor_dim_hw(shape_dim, dtype, compute_ke
     )
 
 
+# fp32_dest_acc_en selects the intermediate CB format, so it is part of every kernel's compile key,
+# not just the compute kernel's. Crossing it with every shape compiles each shape twice. Pair the
+# two axes instead: every shape runs the default path, and the fp32 dest-accumulate path runs on one
+# shape per factory.
 @pytest.mark.parametrize(
-    "shape_dim",
+    "shape_dim, compute_kernel_options",
     [
-        [[1, 1, 10, 15], 3],  # single tile
-        [[1, 1, 10, 32 * 2 + 10], 3],  # mutiple tile with dim
-        [[1, 1, 15, 10], 2],  # single tile
-        [[1, 1, 32 * 2 + 10, 32], 2],  # mutiple tile with dim
+        ([[1, 1, 10, 15], 3], False),  # single tile
+        ([[1, 1, 10, 15], 3], True),  # fp32 dest-acc
+        ([[1, 1, 10, 32 * 2 + 10], 3], False),  # mutiple tile with dim
+        ([[1, 1, 15, 10], 2], False),  # single tile
+        ([[1, 1, 15, 10], 2], True),  # fp32 dest-acc
+        ([[1, 1, 32 * 2 + 10, 32], 2], False),  # mutiple tile with dim
     ],
 )
 @pytest.mark.parametrize(
@@ -358,7 +384,6 @@ def test_softmin_backward_large_algorithmfor_dim_hw(shape_dim, dtype, compute_ke
         ttnn.bfloat16,
     ],
 )
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, dtype, compute_kernel_options, device):
     shape, dim = shape_dim
     torch.manual_seed(0)
@@ -377,15 +402,21 @@ def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, dtype, comput
     )
 
 
+# fp32_dest_acc_en selects the intermediate CB format, so it is part of every kernel's compile key,
+# not just the compute kernel's. Crossing it with every shape compiles each shape twice. Pair the
+# two axes instead: every shape runs the default path, and the fp32 dest-accumulate path runs on one
+# shape per factory.
 @pytest.mark.parametrize(
-    "shape_dim",
+    "shape_dim, compute_kernel_options",
     [
-        [[1, 15, 32, 32], 1],  # single tile c
-        [[1, 15, 32 * 7, 32 * 5], 1],  # mutiple cores
-        [[109, 15, 32, 32], 1],  # mutiple tiles per cores
-        [[15, 1, 32, 32], 0],  # single tile n
-        [[15, 1, 32 * 7, 32 * 5], 0],  # mutiple cores
-        [[15, 109, 32 * 2, 32 * 2], 0],  # mutiple tiles per cores
+        ([[1, 15, 32, 32], 1], False),  # single tile c
+        ([[1, 15, 32, 32], 1], True),  # fp32 dest-acc
+        ([[1, 15, 32 * 7, 32 * 5], 1], False),  # mutiple cores
+        ([[109, 15, 32, 32], 1], False),  # mutiple tiles per cores
+        ([[15, 1, 32, 32], 0], False),  # single tile n
+        ([[15, 1, 32, 32], 0], True),  # fp32 dest-acc
+        ([[15, 1, 32 * 7, 32 * 5], 0], False),  # mutiple cores
+        ([[15, 109, 32 * 2, 32 * 2], 0], False),  # mutiple tiles per cores
     ],
 )
 @pytest.mark.parametrize(
@@ -394,7 +425,6 @@ def test_softmin_backward_not_multiple_of_32_for_dim_hw(shape_dim, dtype, comput
         ttnn.bfloat16,
     ],
 )
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_softmin_backward_for_dim_nc(shape_dim, dtype, compute_kernel_options, device):
     shape, dim = shape_dim
     torch.manual_seed(0)

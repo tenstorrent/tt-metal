@@ -76,9 +76,11 @@ def get_tensors(
         tensors[1] = tensors[1].reshape(-1)
 
     ttnn_tensors = [
-        ttnn.from_torch(tensor, device=device, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT)
-        if tensor is not None
-        else None
+        (
+            ttnn.from_torch(tensor, device=device, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT)
+            if tensor is not None
+            else None
+        )
         for tensor in tensors
     ]
 
@@ -158,21 +160,26 @@ def moreh_linear(shapes, has_bias, has_output, compute_kernel_config, device, np
     return passing
 
 
+# fp32_dest_acc_en selects the intermediate CB format, so it is part of every kernel's compile key,
+# not just the compute kernel's. Crossing it with every shape compiles each shape twice. Pair the
+# two axes instead: every shape runs the default path, and the fp32 dest-accumulate path runs on one
+# shape per kernel class.
 @pytest.mark.parametrize(
-    "shapes",
+    "shapes, compute_kernel_options",
     (
         # input, weight, bias(1d or scalar), output
-        ([31, 31], [30, 31], [1, 30], [31, 30]),
-        ([4, 4, 2, 31], [30, 31], [1, 30], [4, 4, 2, 30]),
-        ([2, 2047], [1023, 2047], [1, 1023], [2, 1023]),
-        ([32, 64], [1024, 64], [1, 1024], [32, 1024]),
-        ([3, 32, 1023], [2047, 1023], [1, 2047], [3, 32, 2047]),
-        ([2, 4, 4, 1024], [2047, 1024], [1, 2047], [2, 4, 4, 2047]),
-        ([2, 1, 2, 3, 2, 2, 96, 95], [511, 95], [1, 511], [2, 1, 2, 3, 2, 2, 96, 511]),
+        (([31, 31], [30, 31], [1, 30], [31, 30]), False),
+        (([31, 31], [30, 31], [1, 30], [31, 30]), True),  # fp32 dest-acc
+        (([4, 4, 2, 31], [30, 31], [1, 30], [4, 4, 2, 30]), False),
+        (([2, 2047], [1023, 2047], [1, 1023], [2, 1023]), False),
+        (([32, 64], [1024, 64], [1, 1024], [32, 1024]), False),
+        (([32, 64], [1024, 64], [1, 1024], [32, 1024]), True),  # fp32 dest-acc
+        (([3, 32, 1023], [2047, 1023], [1, 2047], [3, 32, 2047]), False),
+        (([2, 4, 4, 1024], [2047, 1024], [1, 2047], [2, 4, 4, 2047]), False),
+        (([2, 1, 2, 3, 2, 2, 96, 95], [511, 95], [1, 511], [2, 1, 2, 3, 2, 2, 96, 511]), False),
     ),
 )
 @pytest.mark.parametrize("has_bias", [False, True])
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 @pytest.mark.parametrize("npu_dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["BFP8", "BFP16"])
 def test_moreh_linear(shapes, has_bias, compute_kernel_options, npu_dtype, device):
     if npu_dtype == ttnn.bfloat8_b:
@@ -317,24 +324,30 @@ def moreh_linear_backward(
     return passing
 
 
+# fp32_dest_acc_en selects the intermediate CB format, so it is part of every kernel's compile key,
+# not just the compute kernel's. Crossing it with every shape compiles each shape twice. Pair the
+# two axes instead: every shape runs the default path, and the fp32 dest-accumulate path runs on one
+# shape per kernel class.
 @pytest.mark.parametrize(
-    "shapes",
+    "shapes, compute_kernel_options",
     (
         # input, weight, bias(1d or scalar), output
-        ([31, 31], [30, 31], [1, 30], [31, 30]),
-        ([31, 31], [30, 31], [1, 1], [31, 30]),
-        ([4, 4, 2, 31], [30, 31], [1, 30], [4, 4, 2, 30]),
-        ([4, 4, 2, 31], [30, 31], [1, 1], [4, 4, 2, 30]),
-        ([2, 2047], [1023, 2047], [1, 1023], [2, 1023]),
-        ([2, 2047], [1023, 2047], [1, 1], [2, 1023]),
-        ([32, 64], [1024, 64], [1, 1024], [32, 1024]),
-        ([32, 64], [1024, 64], [1, 1], [32, 1024]),
-        ([3, 32, 1023], [1536, 1023], [1, 1536], [3, 32, 1536]),
-        ([3, 32, 1023], [1536, 1023], [1, 1], [3, 32, 1536]),
-        ([2, 4, 4, 1024], [1536, 1024], [1, 1536], [2, 4, 4, 1536]),
-        ([2, 4, 4, 1024], [1200, 1024], [1, 1], [2, 4, 4, 1200]),
-        ([2, 1, 2, 1, 2, 2, 96, 95], [127, 95], [1, 1], [2, 1, 2, 1, 2, 2, 96, 127]),
-        ([2, 1, 2, 3, 2, 2, 96, 95], [127, 95], [1, 127], [2, 1, 2, 3, 2, 2, 96, 127]),
+        (([31, 31], [30, 31], [1, 30], [31, 30]), False),
+        (([31, 31], [30, 31], [1, 30], [31, 30]), True),  # fp32 dest-acc
+        (([31, 31], [30, 31], [1, 1], [31, 30]), False),
+        (([4, 4, 2, 31], [30, 31], [1, 30], [4, 4, 2, 30]), False),
+        (([4, 4, 2, 31], [30, 31], [1, 1], [4, 4, 2, 30]), False),
+        (([2, 2047], [1023, 2047], [1, 1023], [2, 1023]), False),
+        (([2, 2047], [1023, 2047], [1, 1], [2, 1023]), False),
+        (([32, 64], [1024, 64], [1, 1024], [32, 1024]), False),
+        (([32, 64], [1024, 64], [1, 1024], [32, 1024]), True),  # fp32 dest-acc
+        (([32, 64], [1024, 64], [1, 1], [32, 1024]), False),
+        (([3, 32, 1023], [1536, 1023], [1, 1536], [3, 32, 1536]), False),
+        (([3, 32, 1023], [1536, 1023], [1, 1], [3, 32, 1536]), False),
+        (([2, 4, 4, 1024], [1536, 1024], [1, 1536], [2, 4, 4, 1536]), False),
+        (([2, 4, 4, 1024], [1200, 1024], [1, 1], [2, 4, 4, 1200]), False),
+        (([2, 1, 2, 1, 2, 2, 96, 95], [127, 95], [1, 1], [2, 1, 2, 1, 2, 2, 96, 127]), False),
+        (([2, 1, 2, 3, 2, 2, 96, 95], [127, 95], [1, 127], [2, 1, 2, 3, 2, 2, 96, 127]), False),
     ),
 )
 @pytest.mark.parametrize(
@@ -346,7 +359,6 @@ def moreh_linear_backward(
     ),
 )
 @pytest.mark.parametrize("requires_bias_grad", [True, False])
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 @pytest.mark.parametrize("npu_dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["BFP8", "BFP16"])
 def test_moreh_linear_backward(shapes, requires_grads, requires_bias_grad, compute_kernel_options, npu_dtype, device):
     if npu_dtype == ttnn.bfloat8_b:
@@ -431,7 +443,7 @@ def test_moreh_bias_backward_fp32(shapes, device):
     tt_bias, torch_bias, tt_bias_grad = get_bias_tensors(
         bias_shape, requires_bias_grad, device, torch_dtype=cpu_dtype, ttnn_dtype=npu_dtype, use_randint=False
     )
-    (_, _, _, _, tt_input_grad_fp32, _, _, _, _) = get_tensors(
+    _, _, _, _, tt_input_grad_fp32, _, _, _, _ = get_tensors(
         input_shape,
         weight_shape,
         output_shape,
@@ -443,7 +455,7 @@ def test_moreh_bias_backward_fp32(shapes, device):
         torch_dtype=cpu_dtype,
         use_randint=False,
     )
-    (_, _, tt_bias_grad_fp32) = get_bias_tensors(
+    _, _, tt_bias_grad_fp32 = get_bias_tensors(
         bias_shape, requires_bias_grad, device, torch_dtype=cpu_dtype, ttnn_dtype=npu_dtype, use_randint=False
     )
     ## tt linear backward (fp32 mode)

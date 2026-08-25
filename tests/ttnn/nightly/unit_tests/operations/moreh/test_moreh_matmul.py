@@ -231,35 +231,49 @@ def moreh_matmul_backward(params, requires_grad, device, dtype=ttnn.bfloat16, us
         assert tt_other_grad is None
 
 
+# fp32_dest_acc_en selects the intermediate CB format, so it is part of every kernel's compile key,
+# not just the compute kernel's. Crossing it with every shape compiles each shape twice. Pair the
+# two axes instead: every shape runs the default path, and the fp32 dest-accumulate path runs on one
+# shape per kernel class.
 @pytest.mark.parametrize(
-    "params",
+    "params, compute_kernel_options",
     (
         # input, other, output shape, transpose input, other
-        ([32, 32], [32, 32], [32, 32], False, False),  # single-core
-        ([1024, 128], [128, 1024], [1024, 1024], False, False),  # multi-core
-        ([128, 1024], [128, 1024], [1024, 1024], True, False),  # input transpose
-        ([1024, 128], [1024, 128], [1024, 1024], False, True),  # other transpose
-        ([128, 1024], [1024, 128], [1024, 1024], True, True),  # input, other transpose
-        ([1020, 310], [310, 1020], [1020, 1020], False, False),  # input, other mask
-        ([128, 1020], [128, 1024], [1020, 1024], True, False),  # input mask, transpose
-        ([1024, 128], [1020, 128], [1024, 1020], False, True),  # other mask, transpose
-        ([310, 1020], [1020, 310], [1020, 1020], True, True),  # input, other mask, transpose
-        ([3, 1, 2, 1, 4, 1, 319, 95], [4, 2, 95, 470], [3, 1, 2, 1, 4, 2, 319, 470], False, False),  # batched matmul
-        ([2, 319, 95], [2, 1, 3, 4, 1, 95, 470], [2, 1, 3, 4, 2, 319, 470], False, False),  # batched matmul
-        ([3, 1, 2, 1, 4, 1, 95, 319], [4, 2, 95, 470], [3, 1, 2, 1, 4, 2, 319, 470], True, False),  # batched matmul
-        ([2, 319, 95], [2, 1, 3, 4, 1, 470, 95], [2, 1, 3, 4, 2, 319, 470], False, True),  # batched matmul
+        (([32, 32], [32, 32], [32, 32], False, False), False),  # single-core
+        (([32, 32], [32, 32], [32, 32], False, False), True),  # fp32 dest-acc
+        (([1024, 128], [128, 1024], [1024, 1024], False, False), False),  # multi-core
+        (([128, 1024], [128, 1024], [1024, 1024], True, False), False),  # input transpose
+        (([1024, 128], [1024, 128], [1024, 1024], False, True), False),  # other transpose
+        (([128, 1024], [1024, 128], [1024, 1024], True, True), False),  # input, other transpose
+        (([1020, 310], [310, 1020], [1020, 1020], False, False), False),  # input, other mask
+        (([1020, 310], [310, 1020], [1020, 1020], False, False), True),  # fp32 dest-acc
+        (([128, 1020], [128, 1024], [1020, 1024], True, False), False),  # input mask, transpose
+        (([1024, 128], [1020, 128], [1024, 1020], False, True), False),  # other mask, transpose
+        (([310, 1020], [1020, 310], [1020, 1020], True, True), False),  # input, other mask, transpose
         (
-            [2, 3, 1, 2, 3, 2, 64, 64],
-            [2, 1, 4, 2, 1, 2, 64, 64],
-            [2, 3, 4, 2, 3, 2, 64, 64],
+            ([3, 1, 2, 1, 4, 1, 319, 95], [4, 2, 95, 470], [3, 1, 2, 1, 4, 2, 319, 470], False, False),
             False,
+        ),  # batched matmul
+        (([2, 319, 95], [2, 1, 3, 4, 1, 95, 470], [2, 1, 3, 4, 2, 319, 470], False, False), False),  # batched matmul
+        (
+            ([3, 1, 2, 1, 4, 1, 95, 319], [4, 2, 95, 470], [3, 1, 2, 1, 4, 2, 319, 470], True, False),
+            False,
+        ),  # batched matmul
+        (([2, 319, 95], [2, 1, 3, 4, 1, 470, 95], [2, 1, 3, 4, 2, 319, 470], False, True), False),  # batched matmul
+        (
+            (
+                [2, 3, 1, 2, 3, 2, 64, 64],
+                [2, 1, 4, 2, 1, 2, 64, 64],
+                [2, 3, 4, 2, 3, 2, 64, 64],
+                False,
+                False,
+            ),
             False,
         ),  # batched matmul
     ),
 )
 @pytest.mark.parametrize("use_randint", [True, False])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfloat8_b", "bfloat16"])
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_moreh_matmul(params, dtype, use_randint, compute_kernel_options, device):
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
     if dtype == ttnn.bfloat8_b:
@@ -268,25 +282,35 @@ def test_moreh_matmul(params, dtype, use_randint, compute_kernel_options, device
     assert passing
 
 
+# fp32_dest_acc_en selects the intermediate CB format, so it is part of every kernel's compile key,
+# not just the compute kernel's. Crossing it with every shape compiles each shape twice. Pair the
+# two axes instead: every shape runs the default path, and the fp32 dest-accumulate path runs on one
+# shape per kernel class.
 @pytest.mark.parametrize(
-    "params",
+    "params, compute_kernel_options",
     (
         # input, other, output shape, transpose input, other
-        ([32, 32], [32, 32], [32, 32], False, False),  # single-core
-        ([3, 1, 2, 1, 4, 1, 95, 319], [4, 2, 95, 470], [3, 1, 2, 1, 4, 2, 319, 470], True, False),  # batched matmul
-        ([2, 319, 95], [2, 1, 3, 4, 1, 470, 95], [2, 1, 3, 4, 2, 319, 470], False, True),  # batched matmul
+        (([32, 32], [32, 32], [32, 32], False, False), False),  # single-core
+        (([32, 32], [32, 32], [32, 32], False, False), True),  # fp32 dest-acc
         (
-            [2, 3, 1, 2, 3, 2, 64, 64],
-            [2, 1, 4, 2, 1, 2, 64, 64],
-            [2, 3, 4, 2, 3, 2, 64, 64],
+            ([3, 1, 2, 1, 4, 1, 95, 319], [4, 2, 95, 470], [3, 1, 2, 1, 4, 2, 319, 470], True, False),
             False,
+        ),  # batched matmul
+        (([2, 319, 95], [2, 1, 3, 4, 1, 470, 95], [2, 1, 3, 4, 2, 319, 470], False, True), False),  # batched matmul
+        (
+            (
+                [2, 3, 1, 2, 3, 2, 64, 64],
+                [2, 1, 4, 2, 1, 2, 64, 64],
+                [2, 3, 4, 2, 3, 2, 64, 64],
+                False,
+                False,
+            ),
             False,
         ),  # batched matmul
     ),
 )
 @pytest.mark.parametrize("use_randint", [True, False])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfloat8_b", "bfloat16"])
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_moreh_matmul_wo_output(params, use_randint, dtype, compute_kernel_options, device):
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
     if dtype == ttnn.bfloat8_b:

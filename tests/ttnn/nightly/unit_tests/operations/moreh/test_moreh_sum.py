@@ -124,7 +124,7 @@ def get_backward_tensors(
 
 
 def moreh_sum(input_shape, dim, keepdim, use_provide_output, compute_kernel_options, device, dtype=ttnn.bfloat16):
-    (tt_input, tt_output, _, _, torch_input) = get_tensors(input_shape, dim, device, keepdim=keepdim, npu_dtype=dtype)
+    tt_input, tt_output, _, _, torch_input = get_tensors(input_shape, dim, device, keepdim=keepdim, npu_dtype=dtype)
     torch_output = torch.sum(torch_input, dim, keepdim)
 
     if not use_provide_output:
@@ -166,28 +166,53 @@ def moreh_sum(input_shape, dim, keepdim, use_provide_output, compute_kernel_opti
         "3, 2, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 10 - 1",
     ],
 )
+# fp32_dest_acc_en selects the intermediate CB format, so it is part of every kernel's compile key,
+# not just the compute kernel's. Crossing it with all 15 dim combinations compiles each of them
+# twice. Pair the two axes instead: every dim runs the default path, and the fp32 dest-accumulate
+# path runs on one dim per reduction factory (NC, H, W).
 @pytest.mark.parametrize(
-    "dim",
+    "dim, compute_kernel_options",
     (
-        None,
-        0,
-        1,
-        2,
-        3,
-        [],
-        [0, 1],
-        [0, 1, 2],
-        [0, 1, 2, 3],
-        [0, 1, 3],
-        [0, 2, 3],
-        [1, 2],
-        [1, 2, 3],
-        [1, 3],
-        [2, 3],
+        (None, False),
+        (0, False),
+        (0, True),
+        (1, False),
+        (2, False),
+        (2, True),
+        (3, False),
+        (3, True),
+        ([], False),
+        ([0, 1], False),
+        ([0, 1, 2], False),
+        ([0, 1, 2, 3], False),
+        ([0, 1, 3], False),
+        ([0, 2, 3], False),
+        ([1, 2], False),
+        ([1, 2, 3], False),
+        ([1, 3], False),
+        ([2, 3], False),
     ),
-    ids=["None", "0", "1", "2", "3", "[]", "0,1", "0,1,2", "0,1,2,3", "0,1,3", "0,2,3", "1,2", "1,2,3", "1,3", "2,3"],
+    ids=[
+        "None",
+        "0",
+        "0-fp32",
+        "1",
+        "2",
+        "2-fp32",
+        "3",
+        "3-fp32",
+        "[]",
+        "0,1",
+        "0,1,2",
+        "0,1,2,3",
+        "0,1,3",
+        "0,2,3",
+        "1,2",
+        "1,2,3",
+        "1,3",
+        "2,3",
+    ],
 )
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 @pytest.mark.parametrize("keepdim", [True, False], ids=["keepdim-true", "keepdim-false"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bfloat16", "bfloat8_b"])
 def test_moreh_sum(input_shape, dim, keepdim, compute_kernel_options, dtype, device):
@@ -293,7 +318,7 @@ def test_moreh_sum_fp32_dest_acc(input_shape, dim, compute_kernel_options, devic
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    (tt_input, tt_output, _, torch_output_shape, torch_input) = get_tensors(
+    tt_input, tt_output, _, torch_output_shape, torch_input = get_tensors(
         input_shape, dim, device, use_randint=False, keepdim=True
     )
     torch_input = torch_input.float()
@@ -323,10 +348,10 @@ def moreh_sum_backward(
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    (tt_input, _, tt_output_shape, torch_output_shape, torch_input) = get_tensors(
+    tt_input, _, tt_output_shape, torch_output_shape, torch_input = get_tensors(
         input_shape, dim, device, keepdim=keepdim, npu_dtype=dtype
     )
-    (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(
+    tt_output_grad, tt_input_grad, torch_output_grad = get_backward_tensors(
         tt_output_shape, torch_output_shape, input_shape, device, npu_dtype=dtype
     )
 
@@ -468,10 +493,10 @@ def test_moreh_sum_backward_fp32_dest_acc(input_shape, dim, compute_kernel_optio
 
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
 
-    (tt_input, _, tt_output_shape, torch_output_shape, torch_input) = get_tensors(
+    tt_input, _, tt_output_shape, torch_output_shape, torch_input = get_tensors(
         input_shape, dim, device, use_randint=False
     )
-    (tt_output_grad, tt_input_grad, torch_output_grad) = get_backward_tensors(
+    tt_output_grad, tt_input_grad, torch_output_grad = get_backward_tensors(
         tt_output_shape, torch_output_shape, input_shape, device, use_randint=False
     )
 
@@ -535,7 +560,7 @@ def test_moreh_sum_integer(input_shape, dim, data_type, device):
     torch.manual_seed(3072)
 
     compute_kernel_config = get_compute_kernel_options(True)
-    (tt_input, tt_output, tt_output_shape, _, torch_input) = get_tensors(
+    tt_input, tt_output, tt_output_shape, _, torch_input = get_tensors(
         input_shape, dim, device, use_randint=True, keepdim=True, npu_dtype=data_type, cpu_dtype=torch.int64
     )
 
@@ -574,7 +599,7 @@ def test_moreh_sum_large_integer_magnitude(input_shape, dim, device):
     torch.manual_seed(3072)
 
     compute_kernel_config = get_compute_kernel_options(True)
-    (tt_input, tt_output, tt_output_shape, _, torch_input) = get_tensors(
+    tt_input, tt_output, tt_output_shape, _, torch_input = get_tensors(
         input_shape,
         dim,
         device,

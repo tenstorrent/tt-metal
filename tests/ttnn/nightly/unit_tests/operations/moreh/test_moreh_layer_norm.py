@@ -567,14 +567,19 @@ def test_moreh_layer_norm_backward_with_gamma_or_beta(input_shape_normalized_dim
     [False, True],
     ids=["elementwise_affine=False", "elementwise_affine=True"],
 )
+# fp32_dest_acc_en selects the intermediate CB format, so it is part of every kernel's compile key,
+# not just the compute kernel's. Crossing it with every shape compiles each shape twice. Pair the
+# two axes instead: every shape runs the default path, and the fp32 dest-accumulate path runs on the
+# 2d shape.
 @pytest.mark.parametrize(
-    "input_shape_normalized_dims",
+    "input_shape_normalized_dims, compute_kernel_options",
     [
-        ([TILE_HEIGHT - 15, TILE_WIDTH + 2], 2),
-        ([4, 8, 3 * TILE_HEIGHT + 15, 4 * TILE_WIDTH - 15], 4),
+        (([TILE_HEIGHT - 15, TILE_WIDTH + 2], 2), False),
+        (([TILE_HEIGHT - 15, TILE_WIDTH + 2], 2), True),
+        (([4, 8, 3 * TILE_HEIGHT + 15, 4 * TILE_WIDTH - 15], 4), False),
     ],
+    ids=["2d", "2d-fp32", "4d"],
 )
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_moreh_layer_norm_compute_kernel_options(
     input_shape_normalized_dims, elementwise_affine, eps, compute_kernel_options, dtype, device
 ):
@@ -601,14 +606,19 @@ def test_moreh_layer_norm_compute_kernel_options(
     [False, True],
     ids=["elementwise_affine=False", "elementwise_affine=True"],
 )
+# fp32_dest_acc_en selects the intermediate CB format, so it is part of every kernel's compile key,
+# not just the compute kernel's. Crossing it with every shape compiles each shape twice. Pair the
+# two axes instead: every shape runs the default path, and the fp32 dest-accumulate path runs on the
+# 2d shape.
 @pytest.mark.parametrize(
-    "input_shape_normalized_dims",
+    "input_shape_normalized_dims, compute_kernel_options",
     [
-        ([TILE_HEIGHT, TILE_WIDTH], 2),  # test 2d
-        ([6, 2 * TILE_HEIGHT, 2 * TILE_WIDTH], 2),  # test 3d
+        (([TILE_HEIGHT, TILE_WIDTH], 2), False),
+        (([TILE_HEIGHT, TILE_WIDTH], 2), True),
+        (([6, 2 * TILE_HEIGHT, 2 * TILE_WIDTH], 2), False),
     ],
+    ids=["2d", "2d-fp32", "3d"],
 )
-@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
 def test_moreh_layer_norm_backward_compute_kernel_options(
     input_shape_normalized_dims, elementwise_affine, eps, compute_kernel_options, dtype, device
 ):
