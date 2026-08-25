@@ -47,7 +47,7 @@ uint32_t get_worker_noc_hop_distance(
     return noc_hop_distance(
         dev->physical_worker_core_from_logical_core(logical_src),
         dev->physical_worker_core_from_logical_core(logical_dst),
-        dev->grid_size(),
+        device->grid_size(),
         noc);
 }
 
@@ -66,8 +66,8 @@ CoreCoord get_closest_worker_to_eth_core(
     IDevice* device, const CoreCoord& logical_eth_core, NOC noc, uint32_t& noc_hops) {
     auto* dev = concrete_device(device);
     const auto eth_core = dev->physical_eth_core_from_logical_core(logical_eth_core);
-    const auto grid_size = dev->grid_size();
-    const auto worker_grid_size = dev->compute_with_storage_grid_size();
+    const auto grid_size = device->grid_size();
+    const auto worker_grid_size = device->compute_with_storage_grid_size();
 
     CoreCoord closest = CoreCoord{0, 0};
     uint32_t min_hops_so_far = std::numeric_limits<uint32_t>::max();
