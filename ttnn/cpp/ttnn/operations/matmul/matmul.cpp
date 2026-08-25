@@ -428,7 +428,8 @@ static ttnn::Tensor bound_matmul(
     if (input_tensor_a.is_sharded() || input_tensor_b.is_sharded()) {
         TT_FATAL(
             !execution_parameters.user_fused_activation.has_value(),
-            "Sharded matmul run with {} activation: this should be placed in the program config's fused_activation "
+            "Sharded matmul run with {} activation: this should be placed in the program config's "
+            "fused_activation "
             "field",
             execution_parameters.user_fused_activation.value().op_type);
     }
@@ -505,13 +506,15 @@ static ttnn::Tensor bound_matmul(
     auto attributes = ttnn::prim::create_matmul_attributes(
         input_tensor_a_adjusted, input_tensor_b_adjusted, execution_parameters, {optional_output_tensor});
 
-    auto output_tensor = ttnn::prim::matmul(
-                             input_tensor_a_adjusted,
-                             input_tensor_b_adjusted,
-                             post_process_bias ? std::nullopt : bias,
-                             optional_output_tensor,
-                             attributes)
-                             .at(0);
+    auto output_tensor = registry::execute_selected_call_once(registry_execution_observer, [&] {
+        return ttnn::prim::matmul(
+                   input_tensor_a_adjusted,
+                   input_tensor_b_adjusted,
+                   post_process_bias ? std::nullopt : bias,
+                   optional_output_tensor,
+                   attributes)
+            .at(0);
+    });
 
     if (input_tensor_b.logical_shape().rank() == 1) [[unlikely]] {
         output_tensor = ttnn::reshape(
@@ -772,30 +775,32 @@ Tensor addmm(
     bool registry_selected = false;
     const registry::SelectedExecutionGuard registry_execution_observer(
         registry::OperationDomain::Addmm, &registry_selected);
-    auto out_tensor = bound_matmul(
-        mat1_tensor,
-        mat2_tensor,
-        std::nullopt,
-        registry::addmm_call_semantics(alpha, beta),
-        matmul_params,
-        optional_output_tensor,
-        &registry_selected);
+    return registry::execute_selected_call_once(registry_execution_observer, [&] {
+        auto out_tensor = bound_matmul(
+            mat1_tensor,
+            mat2_tensor,
+            std::nullopt,
+            registry::addmm_call_semantics(alpha, beta),
+            matmul_params,
+            optional_output_tensor,
+            &registry_selected);
 
-    if (alpha != 1.0) {
-        multiply_(out_tensor, alpha);
-    }
-
-    if (beta != 0.0) {
-        auto add_tensor = beta != 1.0 ? multiply(input_tensor, beta, out_tensor.dtype()) : input_tensor;
-        // The matmul output dtype can differ from input_tensor's dtype when `dtype` overrides it.
-        // binary_ng's in-place add requires both operands to share a dtype
-        if (add_tensor.dtype() != out_tensor.dtype()) {
-            add_tensor = ttnn::typecast(add_tensor, out_tensor.dtype());
+        if (alpha != 1.0) {
+            multiply_(out_tensor, alpha);
         }
-        add_(out_tensor, add_tensor);
-    }
 
-    return out_tensor;
+        if (beta != 0.0) {
+            auto add_tensor = beta != 1.0 ? multiply(input_tensor, beta, out_tensor.dtype()) : input_tensor;
+            // The matmul output dtype can differ from input_tensor's dtype when `dtype` overrides it.
+            // binary_ng's in-place add requires both operands to share a dtype
+            if (add_tensor.dtype() != out_tensor.dtype()) {
+                add_tensor = ttnn::typecast(add_tensor, out_tensor.dtype());
+            }
+            add_(out_tensor, add_tensor);
+        }
+
+        return out_tensor;
+    });
 }
 
 Tensor sparse_matmul(

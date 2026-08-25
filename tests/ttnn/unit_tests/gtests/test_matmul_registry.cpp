@@ -1413,17 +1413,28 @@ TEST(MatmulConfigRegistry, TelemetryIsBoundedAndResettable) {
 TEST(MatmulConfigRegistry, SelectedPublicExecutionErrorCircuitBreaksWithoutCompletionOrRetry) {
     reset_stats_for_testing();
     reset_circuit_breakers_for_testing();
+    const auto request = exact_request();
+    const auto eligibility = Eligibility{.call = request.call};
     const auto recipe = basic_recipe();
-    const auto selected = Resolution{.reason = ResolutionReason::CertifiedMatch, .recipe = &recipe};
-    record_resolution(Mode::On, OperationDomain::DenseMatmul, selected, ExecutionAction::ApplyRecipe);
+    const auto selected = resolve_with_synthetic_candidate_for_testing(Mode::On, request, eligibility, request, recipe);
+    ASSERT_EQ(selected.reason, ResolutionReason::CertifiedMatch);
+    ASSERT_EQ(execution_action(Mode::On, selected), ExecutionAction::ApplyRecipe);
+    ttnn::prim::MatmulParams legacy;
+    const auto materialized = materialize_parameters_for_execution(Mode::On, selected, legacy);
+    ASSERT_TRUE(materialized.has_value());
+    record_resolution(Mode::On, request.call.domain, selected, ExecutionAction::ApplyRecipe);
 
-    EXPECT_THROW(
-        {
-            bool applied = true;
-            const SelectedExecutionGuard guard(OperationDomain::DenseMatmul, &applied);
+    bool applied = materialized.has_value();
+    std::size_t execution_attempts = 0;
+    const auto public_wrapper = [&]() -> int {
+        const SelectedExecutionGuard guard(OperationDomain::DenseMatmul, &applied);
+        return execute_selected_call_once(guard, [&]() -> int {
+            ++execution_attempts;
             throw std::runtime_error("injected public execution failure");
-        },
-        std::runtime_error);
+        });
+    };
+    EXPECT_THROW(public_wrapper(), std::runtime_error);
+    EXPECT_EQ(execution_attempts, 1);
 
     const auto snapshot = stats_snapshot();
     const auto& dense = snapshot.domains[static_cast<std::size_t>(OperationDomain::DenseMatmul)];
@@ -1435,6 +1446,44 @@ TEST(MatmulConfigRegistry, SelectedPublicExecutionErrorCircuitBreaksWithoutCompl
     EXPECT_EQ(
         resolve_with(Mode::On, Eligibility{.call = dense_matmul_call_semantics()}).reason,
         ResolutionReason::CircuitBroken);
+
+    reset_circuit_breakers_for_testing();
+    reset_stats_for_testing();
+}
+
+TEST(MatmulConfigRegistry, SelectedPublicExecutionSucceedsExactlyOnceAndRecordsCompletion) {
+    reset_stats_for_testing();
+    reset_circuit_breakers_for_testing();
+    const auto request = exact_request();
+    const auto eligibility = Eligibility{.call = request.call};
+    const auto recipe = basic_recipe();
+    const auto selected = resolve_with_synthetic_candidate_for_testing(Mode::On, request, eligibility, request, recipe);
+    ASSERT_EQ(selected.reason, ResolutionReason::CertifiedMatch);
+    ASSERT_EQ(execution_action(Mode::On, selected), ExecutionAction::ApplyRecipe);
+    ttnn::prim::MatmulParams legacy;
+    const auto materialized = materialize_parameters_for_execution(Mode::On, selected, legacy);
+    ASSERT_TRUE(materialized.has_value());
+    record_resolution(Mode::On, request.call.domain, selected, ExecutionAction::ApplyRecipe);
+
+    bool applied = materialized.has_value();
+    std::size_t execution_attempts = 0;
+    const auto public_wrapper = [&] {
+        const SelectedExecutionGuard guard(OperationDomain::DenseMatmul, &applied);
+        return execute_selected_call_once(guard, [&] {
+            ++execution_attempts;
+            return 17;
+        });
+    };
+    EXPECT_EQ(public_wrapper(), 17);
+    EXPECT_EQ(execution_attempts, 1);
+
+    const auto snapshot = stats_snapshot();
+    const auto& dense = snapshot.domains[static_cast<std::size_t>(OperationDomain::DenseMatmul)];
+    EXPECT_EQ(dense.resolution_attempts, 1);
+    EXPECT_EQ(dense.selected_hits, 1);
+    EXPECT_EQ(dense.completed_hits, 1);
+    EXPECT_EQ(dense.circuit_breaker_activations, 0);
+    EXPECT_FALSE(dense.circuit_broken);
 
     reset_circuit_breakers_for_testing();
     reset_stats_for_testing();

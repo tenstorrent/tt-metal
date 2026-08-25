@@ -10,6 +10,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <utility>
 
 #include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
@@ -453,6 +454,15 @@ private:
     const bool* selected_;
     int uncaught_exceptions_;
 };
+
+// The public wrappers hand their selected execution to this one-shot boundary.
+// There is intentionally no fallback callable: once a certified recipe is
+// selected, an execution error propagates and the surrounding guard
+// circuit-breaks the domain instead of retrying the public operation.
+template <typename Callable>
+decltype(auto) execute_selected_call_once(const SelectedExecutionGuard&, Callable&& callable) {
+    return std::forward<Callable>(callable)();
+}
 
 // Test only: callers must ensure no concurrent recording is in flight.
 void reset_stats_for_testing() noexcept;

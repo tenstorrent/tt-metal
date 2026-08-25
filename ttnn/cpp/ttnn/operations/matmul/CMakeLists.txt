@@ -165,6 +165,9 @@ target_include_directories(
     ttnn_op_matmul
     PRIVATE
         ${FixmeOpIncDirs}
+        # The attestation provider consumes internal MetalContext/Cluster state.
+        # Their private headers use paths rooted at tt_metal internally.
+        ${PROJECT_SOURCE_DIR}/tt_metal
         ${MATMUL_REGISTRY_BUILD_ATTESTATION_DIR}
         ${MATMUL_REGISTRY_GENERATED_DIR}
 )
