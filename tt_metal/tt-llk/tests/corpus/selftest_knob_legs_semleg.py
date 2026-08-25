@@ -7,7 +7,7 @@ no device:
 
   1. KNOB-LEG MODES (harness gap 1): knob_legs() produces EXACT flag lists —
      solo knobs keep the historical OFF vs OFF+flag shape; drop-one knobs
-     (replay-exec-record, planner-residency, drain-schedule) get reviewed-ON
+     (replay-exec-record, planner-residency, init-hoist) get reviewed-ON
      minus exactly their flag token(s) vs the full reviewed-ON set; on-plus
      knobs (replay-loop-unroll, int-abs, lut-select-leaf-ext, repr-prop —
      the default-off booking flags) get plain reviewed-ON vs reviewed-ON
@@ -15,9 +15,7 @@ no device:
      drop-one flag outside the ON set refuses loudly, and an on-plus flag
      entirely inside it refuses loudly (mirror images); attribute_knobs and
      knob_silicon build their legs from knob_legs (no site left on the old
-     hardcoded solo shape).  Pin-29's proof-backed crosscall/crossloop/init
-     quarantine removes those knob rows and positive ON tokens while keeping
-     their explicit negative OFF tokens.
+     hardcoded solo shape); init-hoist has a knob row and is drop-one.
   2. EQZ-CLASS SEM LEG (harness gap 2): a fresh-body row (fresh_cpp sem
      nodes) whose sem OFF/ON pair is byte-identical MEASURES one physical
      sem leg that fills both sem cells (the hand OFF==ON rule verbatim) and
@@ -64,38 +62,17 @@ def check(name, cond, detail=""):
 
 # ---------------- 1. knob-leg modes ----------------
 
-DROP_ONE_EXPECTED = ("replay-exec-record", "planner-residency", "drain-schedule")
+DROP_ONE_EXPECTED = ("replay-exec-record", "planner-residency", "init-hoist")
 
 check(
     "knob modes: the three dependent/service knobs are drop-one",
     all(sweep.knob_mode(k) == "drop-one" for k in DROP_ONE_EXPECTED),
     {k: sweep.knob_mode(k) for k in DROP_ONE_EXPECTED},
 )
-QUARANTINED_KNOBS = {
-    "init-hoist": "-mtt-tensix-optimize-init-hoist",
-    "crossloop-hoist": "-mtt-tensix-optimize-crossloop-hoist",
-    "crosscall-hoist": "-mtt-tensix-optimize-crosscall-hoist",
-}
 check(
-    "knob modes: pin-29 quarantined knobs are absent from KNOBS/MODES/ON",
-    all(k not in sweep.KNOBS and k not in sweep.KNOB_MODES for k in QUARANTINED_KNOBS)
-    and all(flag not in sweep.ON_FLAGS.split() for flag in QUARANTINED_KNOBS.values()),
-    {
-        k: {
-            "knob": sweep.KNOBS.get(k),
-            "mode": sweep.KNOB_MODES.get(k),
-            "on": flag in sweep.ON_FLAGS.split(),
-        }
-        for k, flag in QUARANTINED_KNOBS.items()
-    },
-)
-check(
-    "knob modes: quarantined compiler options stay explicitly OFF",
-    all(
-        "-mno-" + flag.removeprefix("-m") in sweep.OFF_FLAGS.split()
-        for flag in QUARANTINED_KNOBS.values()
-    ),
-    sweep.OFF_FLAGS,
+    "knob modes: init-hoist HAS a knob row",
+    sweep.KNOBS.get("init-hoist") == "-mtt-tensix-optimize-init-hoist",
+    sweep.KNOBS.get("init-hoist"),
 )
 check(
     "knob modes: every KNOB_MODES key is a KNOBS key, values legal",
@@ -180,44 +157,19 @@ for knob in ON_PLUS_EXPECTED:
         legs,
     )
 
-# The replay completion profitability guard is intentionally a DEFAULT-OFF
-# booking knob.  Its proof acts on shapes produced by replay-hoist in the
-# reviewed ON pipeline, so the only meaningful A/B is ON vs ON+guard.
-_completion_knob = "replay-hoist-completion-guard"
-_completion_flag = "-mtt-tensix-replay-hoist-completion-guard"
-_completion_legs = sweep.knob_legs(_completion_knob)
-check(
-    "replay completion guard: exact flag and on-plus mode",
-    sweep.KNOBS.get(_completion_knob) == _completion_flag
-    and sweep.knob_mode(_completion_knob) == "on-plus",
-    {
-        "flag": sweep.KNOBS.get(_completion_knob),
-        "mode": sweep.knob_mode(_completion_knob),
-    },
-)
-check(
-    "replay completion guard: legs are exactly ON vs ON+guard",
-    dict(_completion_legs)["off"] == sweep.ON_FLAGS
-    and dict(_completion_legs)["knob"].split() == ON_TOKENS + [_completion_flag]
-    and [name for name, _ in _completion_legs] == ["off", "knob"],
-    _completion_legs,
-)
-check(
-    "replay completion guard: not promoted into reviewed ON",
-    _completion_flag not in ON_TOKENS,
-    sweep.ON_FLAGS,
-)
-
 # Explicit knob filters are evidence requests: preserve order, and reject a
 # typo or duplicate rather than silently shrinking/de-duplicating the census.
+_filter_knob = "replay-hoist"
+_census_knob = _filter_knob
+_census_legs = sweep.knob_legs(_census_knob)
 check(
     "knob filter: exact validated selection preserves user order",
-    sweep.validate_requested_names([_completion_knob, "ccmask"], sweep.KNOBS, "--knobs")
-    == (_completion_knob, "ccmask"),
+    sweep.validate_requested_names([_filter_knob, "ccmask"], sweep.KNOBS, "--knobs")
+    == (_filter_knob, "ccmask"),
 )
 for _label, _values, _needle in (
     ("unknown", ["not-a-knob"], "unknown names in --knobs"),
-    ("duplicate", [_completion_knob, _completion_knob], "duplicate names in --knobs"),
+    ("duplicate", [_filter_knob, _filter_knob], "duplicate names in --knobs"),
 ):
     try:
         sweep.validate_requested_names(_values, sweep.KNOBS, "--knobs")
@@ -325,10 +277,10 @@ with tempfile.TemporaryDirectory() as td:
     )
     check(
         "attribute_knobs: drop-one knob leg spec comes from knob_legs "
-        "(drain-schedule: ON-minus-flag vs full ON)",
-        seen_legs.get("knobs/drain-schedule") == sweep.knob_legs("drain-schedule")
-        and dict(seen_legs["knobs/drain-schedule"])["knob"] == sweep.ON_FLAGS,
-        seen_legs.get("knobs/drain-schedule"),
+        "(init-hoist: ON-minus-flag vs full ON)",
+        seen_legs.get("knobs/init-hoist") == sweep.knob_legs("init-hoist")
+        and dict(seen_legs["knobs/init-hoist"])["knob"] == sweep.ON_FLAGS,
+        seen_legs.get("knobs/init-hoist"),
     )
     check(
         "attribute_knobs: every KNOBS knob got exactly its knob_legs spec",
@@ -340,7 +292,7 @@ with tempfile.TemporaryDirectory() as td:
     # strict census (a clean IDENTICAL main pair no longer hides the on-plus
     # comparison behind the historical cost pregate).
     sw_filter = mk_sweep(td / "ev-filter")
-    sw_filter.knobs = (_completion_knob,)
+    sw_filter.knobs = (_census_knob,)
     sw_filter.knob_census_mode = True
     filter_seen = []
 
@@ -355,16 +307,15 @@ with tempfile.TemporaryDirectory() as td:
         row_filter, {"sem-perf": {"status": "OK", "all": "IDENTICAL"}}
     )
     check(
-        "knob filter: exactly the selected completion guard runs on a clean "
-        "main-identical row",
-        filter_seen == [(f"knobs/{_completion_knob}", _completion_legs)]
+        "knob filter: exactly the selected knob runs on a clean " "main-identical row",
+        filter_seen == [(f"knobs/{_census_knob}", _census_legs)]
         and filter_att.get("status") == "OK",
         (filter_seen, filter_att),
     )
 
     # The coverage assertion counts final keyed evidence, not loop calls.
     sw_census = mk_sweep(td / "ev-census")
-    sw_census.knobs = (_completion_knob,)
+    sw_census.knobs = (_census_knob,)
     sw_census.knob_census_mode = True
     sw_census.info = {"cc1plus_sha256": "c" * 64, "tt_metal_head": "tree"}
     sw_census.registry_runnable_ops = ("census-a", "census-b")
@@ -379,7 +330,7 @@ with tempfile.TemporaryDirectory() as td:
         (op_root / "knob-attribution.json").write_text(
             json.dumps({"op": op, "status": "OK"}) + "\n"
         )
-        verdict_root = op_root / "knobs" / _completion_knob / "sem-perf"
+        verdict_root = op_root / "knobs" / _census_knob / "sem-perf"
         verdict_root.mkdir(parents=True)
         (verdict_root / "verdict.json").write_text(
             json.dumps(
@@ -405,12 +356,7 @@ with tempfile.TemporaryDirectory() as td:
         census,
     )
     (
-        sw_census.ev
-        / "census-b"
-        / "knobs"
-        / _completion_knob
-        / "sem-perf"
-        / "verdict.json"
+        sw_census.ev / "census-b" / "knobs" / _census_knob / "sem-perf" / "verdict.json"
     ).unlink()
     census_incomplete = sw_census.emit_knob_census(census_rows)
     check(
@@ -418,7 +364,7 @@ with tempfile.TemporaryDirectory() as td:
         not census_incomplete["complete"]
         and census_incomplete["verdict_count"] == 1
         and census_incomplete["missing_verdicts"]
-        == [{"op": "census-b", "knob": _completion_knob}]
+        == [{"op": "census-b", "knob": _census_knob}]
         and any("explicit knob census incomplete" in red for red in sw_census.reds),
         census_incomplete,
     )
@@ -496,19 +442,18 @@ with tempfile.TemporaryDirectory() as td:
             "op": "kop2",
             "selector": "sem-perf",
             "status": "OK",
-            "firing_knobs": ["drain-schedule", "ccmask", "replay-loop-unroll"],
+            "firing_knobs": ["init-hoist", "ccmask", "replay-loop-unroll"],
         },
     )
     out = json.loads((sw2.ev / "kop2" / "knob-silicon.json").read_text())
     check(
         "knob_silicon: drop-one knob's legs/flags come from knob_legs "
         "(entry records mode + both flag sets)",
-        seen2.get("knobs/drain-schedule") == sweep.knob_legs("drain-schedule")
-        and out["drain-schedule"]["flags"] == sweep.ON_FLAGS
-        and out["drain-schedule"]["off_flags"]
-        == dict(sweep.knob_legs("drain-schedule"))["off"]
-        and out["drain-schedule"]["mode"] == "drop-one",
-        out.get("drain-schedule"),
+        seen2.get("knobs/init-hoist") == sweep.knob_legs("init-hoist")
+        and out["init-hoist"]["flags"] == sweep.ON_FLAGS
+        and out["init-hoist"]["off_flags"] == dict(sweep.knob_legs("init-hoist"))["off"]
+        and out["init-hoist"]["mode"] == "drop-one",
+        out.get("init-hoist"),
     )
     check(
         "knob_silicon: solo knob entry keeps the historical flag shape",
@@ -528,7 +473,7 @@ with tempfile.TemporaryDirectory() as td:
     )
     check(
         "knob_silicon: byte-identical knob pair still refuses (no device run)",
-        out["drain-schedule"]["status"] == "REFUSAL_BYTE_IDENTICAL"
+        out["init-hoist"]["status"] == "REFUSAL_BYTE_IDENTICAL"
         and out["ccmask"]["status"] == "REFUSAL_BYTE_IDENTICAL"
         and out["replay-loop-unroll"]["status"] == "REFUSAL_BYTE_IDENTICAL",
         out,
@@ -586,11 +531,11 @@ with tempfile.TemporaryDirectory() as td:
             {
                 "selector": "sem-perf",
                 "status": "OK",
-                "firing_knobs": [_completion_knob],
+                "firing_knobs": [_census_knob],
             },
         )
         evidence = json.loads((sw_case.ev / name / "knob-silicon.json").read_text())[
-            _completion_knob
+            _census_knob
         ]
         return sw_case, calls, evidence
 

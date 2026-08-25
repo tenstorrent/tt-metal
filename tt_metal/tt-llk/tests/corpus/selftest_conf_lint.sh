@@ -16,10 +16,6 @@
 #  10. (R8) a measured corpus row wired into the ops TSV -> GREEN;
 #  11. (R8) a measured corpus row with NO ops TSV row -> RED (the
 #      welford/recip/bcast/mul_int omission class).
-#  12. the shipping pin-29 quarantine is exact: ON has 26 positive flags,
-#      the three reviewed-away flags occur once each in the R10 table and
-#      nowhere in ON/R9 (the generic R10 mutation tests below prove the
-#      linter rejects violating either condition).
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 LINT="$HERE/conf_lint.sh"
@@ -130,28 +126,6 @@ check "non-64-hex sim pin refuses RED" 1 $?
 check "checked-in conf+baseline lint GREEN" 0 $?
 grep -q "conf-lint: GREEN" "$TMP/out8.log" || { echo "SELFTEST FAIL: shipping-state lint did not report GREEN"; overall=1; }
 
-# 8b. Pin-29's exact proof-backed quarantine: mechanically bind the reviewed
-# 26-flag ON set to the three preserved R10 rows.  This complements checks
-# 16-18, which mutate fixtures through the real linter to prove enforcement.
-SHIP_CONF="$HERE/sweep_2x2.conf"
-SHIP_SWEEP="$HERE/sweep_2x2.py"
-SHIP_ON=$(awk '/^ON_FLAGS = \(/{f=1;next} f&&/^\)/{f=0} f' "$SHIP_SWEEP")
-SHIP_R9=$(awk '/^_REVIEWED_FIRE_WITNESSES="/{f=1;next} f&&/^"[[:space:]]*$/{f=0;next} f' "$SHIP_CONF")
-SHIP_R10=$(awk '/^_QUARANTINED_FIRE_WITNESSES="/{f=1;next} f&&/^"[[:space:]]*$/{f=0;next} f' "$SHIP_CONF")
-ship_q_rc=0
-[ "$(printf '%s\n' "$SHIP_ON" | grep -c '^[[:space:]]*"-mtt-tensix-')" -eq 26 ] || ship_q_rc=1
-[ "$(printf '%s\n' "$SHIP_R10" | grep -c '^-mtt-tensix-')" -eq 3 ] || ship_q_rc=1
-for qflag in \
-  -mtt-tensix-optimize-init-hoist \
-  -mtt-tensix-optimize-crossloop-hoist \
-  -mtt-tensix-optimize-crosscall-hoist
-do
-  printf '%s\n' "$SHIP_ON" | grep -qF -- "\"$qflag " && ship_q_rc=1
-  printf '%s\n' "$SHIP_R9" | grep -qF -- "$qflag|" && ship_q_rc=1
-  [ "$(printf '%s\n' "$SHIP_R10" | grep -cF -- "$qflag|")" -eq 1 ] || ship_q_rc=1
-done
-check "shipping ON-26 excludes exactly the three singly quarantined flags" 0 "$ship_q_rc"
-
 # 9. R7 LLK-pristine: a bogus upstream base -> RED (base must be a real commit)
 sed 's/^_REVIEWED_LLK_UPSTREAM_BASE=.*/_REVIEWED_LLK_UPSTREAM_BASE=1111111111111111111111111111111111111111/' \
   "$TMP/ok.conf" > "$TMP/badllkbase.conf"
@@ -248,7 +222,7 @@ grep -q "quarantine violated" "$TMP/out17.log" || { echo "SELFTEST FAIL: quarant
 grep -q "appears in BOTH" "$TMP/out17.log" || { echo "SELFTEST FAIL: both-tables RED lacks the dual-listing diagnosis"; overall=1; }
 
 if [ "$overall" -eq 0 ]; then
-  echo "conf-lint self-test: ALL GREEN (coherent->GREEN, stale-prose->RED, stale-(CURRENT)->RED, dup-(CURRENT)->RED, stale-anchor->RED, no-anchor->RED, bad-sim-pin->RED, shipping-state+exact-ON26-quarantine->GREEN, bogus-llk-base->RED, R8-wired->GREEN, R8-unwired->RED, R9 missing/malformed/non-ON/dup->RED, R10 quarantine ok->GREEN / ON-set-violation+both-tables->RED)"
+  echo "conf-lint self-test: ALL GREEN (coherent->GREEN, stale-prose->RED, stale-(CURRENT)->RED, dup-(CURRENT)->RED, stale-anchor->RED, no-anchor->RED, bad-sim-pin->RED, shipping-state->GREEN, bogus-llk-base->RED, R8-wired->GREEN, R8-unwired->RED, R9 missing/malformed/non-ON/dup->RED, R10 quarantine ok->GREEN / ON-set-violation+both-tables->RED)"
 else
   echo "conf-lint self-test: FAILED"
 fi

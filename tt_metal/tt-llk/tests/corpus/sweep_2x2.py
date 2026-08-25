@@ -349,16 +349,14 @@ ON_FLAGS = (
     # sfpi-gcc counted-row-formation-*).  MERGE-ORDER: this line lands
     # only with the pin cycle whose toolchain accepts the flag.
     "-mtt-tensix-optimize-counted-row-formation "
-    # PIN-29 PROOF-BACKED RE-QUARANTINE: crosscall-hoist,
-    # crossloop-hoist, and init-hoist remain valid default-off compiler
-    # options, but their positive tokens are absent from this reviewed ON
-    # set.  Final entry/MOP hardening refuses every member of their complete
-    # pre-hardening production fire inventory, so no honest R9 witness
-    # exists.  Their exact historical rows are preserved under conf R10 in
-    # _QUARANTINED_FIRE_WITNESSES; proof and evidence consequences:
-    # review_records/REVIEW_RECORD-45ba71699209-stale-witnesses.md.
-    # PROMOTED 2026-08-23/24 (owner order "promote the knobs", pin-26 union
-    # 6781b2063277 plus lane GJ): the four knobs with completed silicon A/B
+    # Pin-28 reviewed hoist family.  These positive tokens and their R9
+    # witnesses remain active until an owner-ratified pin ceremony changes
+    # the entry/linkage contract or the reviewed ON set.
+    "-mtt-tensix-optimize-crosscall-hoist "
+    "-mtt-tensix-optimize-crossloop-hoist "
+    "-mtt-tensix-optimize-init-hoist "
+    # PROMOTED 2026-08-23 (owner order "promote the knobs", pin-26 union
+    # 6781b2063277): the three knobs with completed silicon A/B
     # books.
     #   window-pairing (lane FT): mulint32-fresh KERNEL -11.32%
     #     (device-golden, knob leg = exactly ONE changed TU corpus-wide);
@@ -372,14 +370,8 @@ ON_FLAGS = (
     # Promotion gates: R9 union witnesses added and union-verified on the
     # installed pin-26 binary; ON-28-vs-ON-25 leg byte-compare adjudicated
     # (delta = exactly the lane-proven TU sets); KNOB_MODES flipped
-    # on-plus -> drop-one for all four (their tokens are now ON-set).
+    # on-plus -> drop-one for all three (their tokens are now ON-set).
     "-mtt-tensix-optimize-window-pairing "
-    # Lane GJ, promoted 2026-08-24 after a correctness-gated BH p150 A/B:
-    # mulint32-fresh 38669 -> 35077.7 cycles (-9.29%), versus-hand
-    # LOSS -> WIN; exactly one corpus TU changed, its paired CRAQ passed,
-    # and three no-fire controls stayed byte-identical.  The stride proof
-    # remains generic and fail-closed.
-    "-mtt-tensix-optimize-window-pairing-stride "
     "-mtt-tensix-optimize-replay-record-hoist "
     "-mtt-tensix-optimize-lreg-alloc"
     # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
@@ -415,13 +407,6 @@ KNOBS = {
     "latency-schedule": "-mtt-tensix-optimize-latency-schedule",
     "dst-iteration-fusion": "-mtt-tensix-optimize-dst-iteration-fusion",
     "replay-hoist": "-mtt-tensix-optimize-replay-hoist",
-    # Default-off profitability guard for replay capture hoisting.  The
-    # guard prices the complete hoisted-record delivery, so its useful
-    # shapes exist only after the reviewed-ON replay pipeline has formed
-    # them.  Keep this as an on-plus booking knob (plain ON vs ON+guard)
-    # until a full-corpus changed-TU census plus paired CRAQ/device evidence
-    # justifies a separately reviewed ON-set promotion.
-    "replay-hoist-completion-guard": ("-mtt-tensix-replay-hoist-completion-guard"),
     "invariant-loadi": "-mtt-tensix-optimize-invariant-loadi",
     "dst-autoincr": "-mtt-tensix-optimize-dst-autoincr",
     "macro-planner": "-mtt-tensix-macro-planner",
@@ -441,8 +426,11 @@ KNOBS = {
     "const-remat": "-mtt-tensix-optimize-const-remat",
     "const-residency": "-mtt-tensix-optimize-const-residency",
     "counted-row-formation": "-mtt-tensix-optimize-counted-row-formation",
-    # Pin-29 quarantined crosscall/crossloop/init flags carry no knob row:
-    # a weekly attribution leg must not exercise a quarantined option.
+    # Pin-28 reviewed hoist attribution rows.  All three are dependent on
+    # the reviewed ON pipeline and therefore use drop-one mode below.
+    "crosscall-hoist": "-mtt-tensix-optimize-crosscall-hoist",
+    "crossloop-hoist": "-mtt-tensix-optimize-crossloop-hoist",
+    "init-hoist": "-mtt-tensix-optimize-init-hoist",
     # ---- pin-14 NEW default-off flags: knob legs ONLY.  Deliberately
     # NOT in the reviewed ON set — the weekly measures each on its
     # target rows (attribution on every changed row; silicon legs on the
@@ -684,13 +672,10 @@ def validate_requested_rows_active(values, active):
 KNOB_MODES = {
     "replay-exec-record": "drop-one",
     "planner-residency": "drop-one",
-    # drain-schedule is an ON-set dependent/service pass whose solo base is
-    # structurally blind; retain its reviewed drop-one attribution.
+    "init-hoist": "drop-one",
+    "crossloop-hoist": "drop-one",
+    "crosscall-hoist": "drop-one",
     "drain-schedule": "drop-one",
-    # The completion guard is default-off and depends on replay-hoist,
-    # already present in reviewed-ON.  A solo OFF-vs-OFF+guard leg would be
-    # structurally blind; book it as plain ON vs ON+guard.
-    "replay-hoist-completion-guard": "on-plus",
     "replay-loop-unroll": "on-plus",
     "int-abs": "on-plus",
     "lut-select-leaf-ext": "on-plus",
@@ -724,9 +709,9 @@ KNOB_MODES = {
     # ON-set planner emission places one.  PROMOTED into the ON set
     # 2026-08-23 — drop-one from here (was on-plus while a booking knob).
     "window-pairing": "drop-one",
-    # GJ window-pairing-stride: promoted into the ON set 2026-08-24 after
-    # the lane-GJ correctness-gated silicon book; drop-one from here.
-    "window-pairing-stride": "drop-one",
+    # GJ window-pairing-stride remains a default-off on-plus knob at pin-28;
+    # promotion requires an R9 witness and ON-vs-ON attribution ceremony.
+    "window-pairing-stride": "on-plus",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----

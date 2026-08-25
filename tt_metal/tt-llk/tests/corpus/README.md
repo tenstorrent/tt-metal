@@ -238,13 +238,11 @@ baseline).  `REPORT.md`, `SCOREBOARD.md`, `scoreboard.{json,tsv}` and
 
 Default-off flags whose effect depends on the reviewed-ON pipeline are
 registered as `on-plus` knobs: the `off` leg is exactly reviewed ON and the
-`knob` leg is reviewed ON plus the flag.  In particular,
-`replay-hoist-completion-guard` books
-`-mtt-tensix-replay-hoist-completion-guard` this way; it is deliberately not
-in `ON_FLAGS`.  Before promotion, run knob attribution over the full registry
-with `--knobs replay-hoist-completion-guard`, adjudicate every changed TU,
-then run paired CRAQ and correctness-before-performance silicon on its named
-target and controls.  An explicit `--knobs name[,name...]` list is validated
+`knob` leg is reviewed ON plus the flag.  Registration is coupled to the
+reviewed compiler pin accepting the option.  The replay-hoist completion guard
+therefore remains deferred while pin-28 is current and is intentionally absent
+from `KNOBS`; it can be booked only in the future pin ceremony that accepts its
+flag.  An explicit `--knobs name[,name...]` list is validated
 for unknown and duplicate names, bypasses the historical changed-main-pair
 cost pregate for every runnable row selected in the run, and writes the
 strict machine-readable `KNOB-CENSUS.json`; a missing, stale, or malformed
