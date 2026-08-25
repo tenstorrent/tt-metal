@@ -45,7 +45,6 @@ optimizer:
 
 training:
   seed: 42
-  dtype: bfloat16
   gradient_checkpointing: true
   conv3d_patch_embed: false
   batch: 1

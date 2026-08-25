@@ -32,7 +32,6 @@ SUBFOLDER = {"high": "transformer", "low": "transformer_2"}
 class Config:
     MODEL_ID: str = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
 
-    DTYPE: str = "bfloat16"
     VAE_DTYPE: str = "bfloat16"
     GRADIENT_CHECKPOINTING: bool = True
     # Patch-embed the raw latent with ttnn.experimental.conv3d instead of host patchify plus
