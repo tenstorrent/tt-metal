@@ -32,7 +32,6 @@ on:
           - llama3.2-90b-vision
           - llama3.2-90b
           - mixtral
-          - grok
           - unet shallow
           - qwen25_vl
           - gemma3-small
@@ -46,7 +45,6 @@ on:
           - tteager
           - ethernet
           - trace stress
-          - deepseek-modules
       t3000-e2e:
         required: false
         type: boolean

@@ -758,6 +758,55 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                             Mt,
                             per_core_M,
                             num_blocks_y);
+                    } else {
+                        TT_FATAL(
+                            num_blocks_x == 1,
+                            "{}: mcast_in1 requires N ({}) to fit within a single per_core_N block ({}), got "
+                            "num_blocks_x={}. A single in1 sender multicasts one per_core_N-wide weight slice to "
+                            "the whole grid, so multi-column N is not supported here; use "
+                            "MatmulMultiCoreReuseMultiCastProgramConfig (the 2D factory) for multi-column N.",
+                            config_name,
+                            Nt,
+                            per_core_N,
+                            num_blocks_x);
+                        const uint32_t logical_blocks_w = ((Nt - 1) / program_config.out_block_w) + 1;
+                        const uint32_t physical_blocks_w = per_core_N / program_config.out_block_w;
+                        TT_FATAL(
+                            logical_blocks_w == physical_blocks_w,
+                            "{}: mcast_in1 requires the logical N tail to be in the final internal W block; "
+                            "got N={}, per_core_N={}, out_block_w={} (logical blocks={}, physical blocks={}). "
+                            "Reduce per_core_N or increase out_block_w.",
+                            config_name,
+                            Nt,
+                            per_core_N,
+                            program_config.out_block_w,
+                            logical_blocks_w,
+                            physical_blocks_w);
+                        if (num_blocks_y == 1) {
+                            const uint32_t logical_blocks_h = ((Mt - 1) / program_config.out_block_h) + 1;
+                            const uint32_t physical_blocks_h = per_core_M / program_config.out_block_h;
+                            TT_FATAL(
+                                logical_blocks_h == physical_blocks_h,
+                                "{}: a single-Y mcast_in1 sender requires the logical M tail to be in the final "
+                                "internal H block; got M={}, per_core_M={}, out_block_h={} (logical blocks={}, "
+                                "physical blocks={}). Reduce per_core_M or increase out_block_h.",
+                                config_name,
+                                Mt,
+                                per_core_M,
+                                program_config.out_block_h,
+                                logical_blocks_h,
+                                physical_blocks_h);
+                            TT_FATAL(
+                                Mt % program_config.out_block_h == 0 || physical_blocks_h == 1,
+                                "{}: a single-Y mcast_in1 sender supports a partial final H block only when "
+                                "per_core_M contains one internal H block; got M={}, per_core_M={}, out_block_h={} "
+                                "(physical blocks={}).",
+                                config_name,
+                                Mt,
+                                per_core_M,
+                                program_config.out_block_h,
+                                physical_blocks_h);
+                        }
                     }
                     check_output_shard_grid_within_extent(output_mem_config, grid, config_name);
                 }
@@ -2518,7 +2567,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                                          ProgramConfigType,
                                          operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
                     const auto M =
-                        operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/true);
+                        operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, program_config.fuse_batch);
                     const auto N = operations::matmul::utilities::get_N_dim(b_shape_padded, in1_tile);
                     uint32_t per_core_M = program_config.per_core_M;
                     uint32_t per_core_N = program_config.per_core_N;

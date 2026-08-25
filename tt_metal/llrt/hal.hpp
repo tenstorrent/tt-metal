@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "tt_memory.h"
+#include "hostdev/debug_ring_buffer_common.h"
 #include "hal/generated/dev_msgs.hpp"                // IWYU pragma: export
 #include "hal/generated/fabric_telemetry.hpp"        // IWYU pragma: export
 #include "hal/generated/realtime_profiler_msgs.hpp"  // IWYU pragma: export
@@ -306,6 +307,11 @@ public:
     virtual std::vector<std::string> srcs(const Params& params) const = 0;
     // Returns a string of common flags to be added to compiler and linker command lines.
     virtual std::string common_flags(const Params& params) const = 0;
+    // Returns the compiler flags that enable RISC-V Vector (Zve32f) code generation for an
+    // opt-in kernel compile on this processor (see ComputeConfig::enable_trisc2_rvv), or an
+    // empty string when the processor has no vector unit / the arch does not support it.
+    // Applied per kernel at recipe-export time, never to firmware or default kernel builds.
+    virtual std::string rvv_compile_flags(const Params& /*params*/) const { return {}; }
     // Returns the path to the linker script, relative to the tt-metal root.
     virtual std::string linker_script(const Params& params) const = 0;
     // Returns a string of linker flags to be added to linker command line.
@@ -441,6 +447,15 @@ public:
         bool enable_blackhole_dram_programmable_cores = false);
 
     tt::ARCH get_arch() const { return arch_; }
+
+    bool has_mpsc_ring_buffer() const { return arch_ == tt::ARCH::QUASAR || arch_ == tt::ARCH::BLACKHOLE; }
+    uint32_t get_ring_buffer_capacity() const {
+        switch (arch_) {
+            case tt::ARCH::QUASAR: return DEBUG_RING_BUFFER_MPSC_ELEMENTS_QUASAR;
+            case tt::ARCH::BLACKHOLE: return DEBUG_RING_BUFFER_MPSC_ELEMENTS_BLACKHOLE;
+            default: return DEBUG_RING_BUFFER_SPSC_ELEMENTS;
+        }
+    }
 
     // Returns the NoC topology type (MESH or TORUS)
     NoCTopologyType get_noc_topology() const { return noc_topology_; }

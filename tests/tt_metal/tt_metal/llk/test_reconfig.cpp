@@ -33,6 +33,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -116,44 +117,37 @@ bool single_core_reconfig(
     tt_metal::Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
 
-    tt::tt_metal::InterleavedBufferConfig dram_config_bfp16b{
-        .device = device,
-        .size = dram_buffer_size_bfp16b,
-        .page_size = dram_buffer_size_bfp16b,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-
-    tt::tt_metal::InterleavedBufferConfig dram_config_bfp8b{
-        .device = device,
-        .size = dram_buffer_size_bfp8b,
-        .page_size = dram_buffer_size_bfp8b,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-
-    tt::tt_metal::InterleavedBufferConfig dram_config_out0{
-        .device = device,
-        .size = dram_buffer_size_out0,
-        .page_size = dram_buffer_size_out0,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig dram_config_bfp16b{
+        .page_size = dram_buffer_size_bfp16b, .buffer_type = tt::tt_metal::BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig dram_config_bfp8b{
+        .page_size = dram_buffer_size_bfp8b, .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     // This will be srcB in Bfp8_b
-    auto input0_dram_buffer = CreateBuffer(dram_config_bfp8b);
+    auto input0_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = dram_buffer_size_bfp8b}, dram_config_bfp8b, mesh_device.get());
     uint32_t input0_dram_byte_address = input0_dram_buffer->address();
 
     // This will be srcA in Float16_b
-    auto input1_dram_buffer = CreateBuffer(dram_config_bfp16b);
+    auto input1_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = dram_buffer_size_bfp16b}, dram_config_bfp16b, mesh_device.get());
     uint32_t input1_dram_byte_address = input1_dram_buffer->address();
 
     // This will be DEST in Float16_b
-    auto input2_dram_buffer = CreateBuffer(dram_config_bfp16b);
+    auto input2_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = dram_buffer_size_bfp16b}, dram_config_bfp16b, mesh_device.get());
     uint32_t input2_dram_byte_address = input2_dram_buffer->address();
 
     // This will be Output0 in Float32 or Float16_b depending on fp32_dest_acc_en
-    auto output0_dram_buffer = CreateBuffer(dram_config_out0);
+    auto output0_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = dram_buffer_size_out0},
+        {.page_size = dram_buffer_size_out0, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
     uint32_t output0_dram_byte_address = output0_dram_buffer->address();
 
     // This will be Output1 in Bfp8_b
-    auto output1_dram_buffer = CreateBuffer(dram_config_bfp8b);
+    auto output1_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = dram_buffer_size_bfp8b}, dram_config_bfp8b, mesh_device.get());
     uint32_t output1_dram_byte_address = output1_dram_buffer->address();
 
     tt_metal::CircularBufferConfig l1_input0_cb_config =
@@ -293,9 +287,9 @@ bool single_core_reconfig(
     // ////////////////////////////////////////////////////////////////////////////
     // //                      Compile and Execute Application
     // ////////////////////////////////////////////////////////////////////////////
-    tt_metal::detail::WriteToBuffer(input0_dram_buffer, src0_vec);
-    tt_metal::detail::WriteToBuffer(input1_dram_buffer, src1_vec);
-    tt_metal::detail::WriteToBuffer(input2_dram_buffer, src2_vec);
+    distributed::EnqueueWriteMeshBuffer(cq, input0_dram_buffer, src0_vec, /*blocking=*/true);
+    distributed::EnqueueWriteMeshBuffer(cq, input1_dram_buffer, src1_vec, /*blocking=*/true);
+    distributed::EnqueueWriteMeshBuffer(cq, input2_dram_buffer, src2_vec, /*blocking=*/true);
 
     static constexpr uint32_t k_input0_dram_bank_id = 0;
     static constexpr uint32_t k_input1_dram_bank_id = 0;
@@ -339,8 +333,8 @@ bool single_core_reconfig(
     // ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> dest0_buffer_data(src1_vec.size());
     std::vector<uint32_t> dest1_buffer_data(src0_vec.size());
-    tt_metal::detail::ReadFromBuffer(output0_dram_buffer, dest0_buffer_data);
-    tt_metal::detail::ReadFromBuffer(output1_dram_buffer, dest1_buffer_data);
+    distributed::EnqueueReadMeshBuffer(cq, dest0_buffer_data, output0_dram_buffer, /*blocking=*/true);
+    distributed::EnqueueReadMeshBuffer(cq, dest1_buffer_data, output1_dram_buffer, /*blocking=*/true);
 
     pass &= is_close_packed_vectors<bfloat16, uint32_t>(
         dest0_buffer_data, packed_golden0, [&](const bfloat16& a, const bfloat16& b) {
@@ -622,8 +616,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     };
     experimental::SetProgramRunArgs(program, params);
 
-    auto* dev = mesh_device->get_devices()[0];
-    tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> dest_buffer_data;
     distributed::ReadShard(cq, dest_buffer_data, out_dram, zero_coord, false);
@@ -977,8 +970,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     };
     experimental::SetProgramRunArgs(program, params);
 
-    auto* dev = mesh_device->get_devices()[0];
-    tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> out0_data;
     std::vector<uint32_t> out1_data;

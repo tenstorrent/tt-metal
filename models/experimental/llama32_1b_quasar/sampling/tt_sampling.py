@@ -432,10 +432,8 @@ class TTSampling(LightweightModule):
         return ttnn.all_gather(
             tensor,
             dim=dim,
-            num_links=num_links,
             memory_config=memory_config,
             cluster_axis=cluster_axis,
-            topology=ttnn.Topology.Linear,
         )
 
     def _get_sampling_cluster_axis(self):
