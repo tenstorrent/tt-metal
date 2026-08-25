@@ -1031,7 +1031,9 @@ GN_INTERLEAVED_SHAPES = [
     ],
     ids=[
         "legacy-bf16-gb_bf16",
+        "legacy-bf16-gb_fp32",
         "legacy-fp32-gb_fp32",
+        "legacy-fp32-gb_bf16",
         "welford_normal-bf16-gb_fp32",
         "welford_normal-fp32-gb_bf16",
         "welford_reciprocal-bf16-gb_bf16",
