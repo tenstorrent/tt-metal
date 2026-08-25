@@ -104,7 +104,7 @@ std::string fds_tests_skip_reason(IDevice* dev) {
 }
 
 std::string fds_kernel_path(const std::string& kernel_name) {
-    return OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/misc/" + kernel_name;
+    return OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/misc/fds/" + kernel_name;
 }
 
 const CoreRangeSet kSingleWorkerCore(CoreRange({0, 0}, {0, 0}));
