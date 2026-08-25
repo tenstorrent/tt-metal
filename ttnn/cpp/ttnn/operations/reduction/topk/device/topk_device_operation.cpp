@@ -280,6 +280,15 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
                 output_tensor1_dtype == DataType::INT32,
             "Preallocated indices tensor must be UINT16, UINT32, or INT32 got: {}",
             output_tensor1_dtype);
+        // The preallocated indices tensor sets the index width for the whole op. A 16-bit one
+        // on an input that needs 32 bits wraps past 65535 and returns the wrong columns.
+        const DataType required_dtype = required_index_dtype(input_tensor, args.dim);
+        const bool indices_too_narrow = output_tensor1_dtype == DataType::UINT16 && required_dtype != DataType::UINT16;
+        TT_FATAL(
+            !indices_too_narrow,
+            "Preallocated indices tensor must be {} for this input, got: {}",
+            required_dtype,
+            output_tensor1_dtype);
         TT_FATAL(
             output_tensor0_dtype == input_tensor_dtype,
             "Preallocated output tensor dtype must match input tensor dtype. Got output: {}, input: {}",
