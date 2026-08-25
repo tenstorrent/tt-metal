@@ -56,8 +56,8 @@ def test_demo_resolves_central_trace_region_size_for_each_supported_sku():
     source = ast.unparse(_function("_ttnn_mesh_device_param_from_env"))
     assert "resolve_trace_region_size('llama3.3-70b', env)" in source
     assert '"trace_region_size": 50_000_000' not in _DEMO_SOURCE
-    assert resolve_trace_region_size("llama3.3-70b", "T3K") == 90_000_000
-    assert resolve_trace_region_size("llama3.3-70b", "P150x4") == 96_000_000
+    assert resolve_trace_region_size("llama3.3-70b", "T3K") == 120_000_000
+    assert resolve_trace_region_size("llama3.3-70b", "P150x4") == 224_000_000
 
 
 def test_demo_collects_physical_p150x4_without_adding_unmeasured_perf_targets():
