@@ -101,7 +101,9 @@ def main():
     parser.add_argument("--ref", required=True, help="Reference voice clip (.wav or torch-saved .pt)")
     parser.add_argument("--out", default="out.wav", help="Output wav path (default: out.wav)")
     parser.add_argument("--seed", type=int, default=None, help="Sampling seed (default: random)")
-    parser.add_argument("--language", default="en", help="Language code (default: en; only en is supported)")
+    parser.add_argument(
+        "--language", default="en", help="Language code (default: en; see frontend.SUPPORTED_LANGUAGES)"
+    )
     parser.add_argument("--ckpt", default=None, help="XTTS-v2 model.pth (default: $XTTS_CKPT, else HF hub)")
     parser.add_argument("--sr", type=int, default=22050, help="Sample rate for .pt refs without one (default: 22050)")
     args = parser.parse_args()

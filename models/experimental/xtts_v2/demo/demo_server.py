@@ -41,7 +41,9 @@ def main():
         default=DEFAULT_SEED,
         help=f"Base sampling seed (default: {DEFAULT_SEED}); utterance i uses seed + i so repeats vary",
     )
-    parser.add_argument("--language", default="en", help="Language code (default: en; only en is supported)")
+    parser.add_argument(
+        "--language", default="en", help="Language code (default: en; see frontend.SUPPORTED_LANGUAGES)"
+    )
     parser.add_argument("--ckpt", default=None, help="XTTS-v2 model.pth (default: $XTTS_CKPT, else HF hub)")
     parser.add_argument("--output-dir", default=OUTPUT_DIR, help=f"Wav output directory (default: {OUTPUT_DIR})")
     args = parser.parse_args()

@@ -22,19 +22,19 @@ DSP building blocks (`sinc_resample`, `melscale_fbanks`, `mel_spectrogram`) reim
 exact torchaudio functions coqui calls (torchaudio is not in tt-metal's env). They are pure
 torch and deterministic.
 
-Language support: **en only** for text normalization. The BPE step itself (vocab.json) is
-multilingual, but coqui's cleaner tables (abbreviations/symbols/ordinals per language, plus
-zh/ja/ko transliteration) are transcribed only for "en" — extend from
-TTS/tts/layers/xtts/tokenizer.py when another language is needed. Number expansion needs the
-`num2words` package (tiny, pure python); without it, texts containing digits raise.
+Language support: the 13 in SUPPORTED_LANGUAGES. Cleaning comes from coqui_cleaners.py, which
+is vendored from coqui rather than transcribed — the model was trained on those tables' output.
+zh/ja/ko each need a transliteration package and are refused by name; cs is blocked by a
+num2words gap (see CLEANED_LANGUAGES). Number expansion needs `num2words` (tiny, pure python).
 """
 
 import math
 import os
-import re
 
 import torch
 import torch.nn.functional as F
+
+from models.experimental.xtts_v2.reference.coqui.cleaners import basic_cleaners, multilingual_cleaners
 
 # ---------------------------------------------------------------------------------------
 # DSP building blocks (torchaudio-equivalent, pure torch)
@@ -234,121 +234,32 @@ def speaker_logmel(audio, sr: int):
 
 
 # ---------------------------------------------------------------------------------------
-# Block 0: tokenizer (coqui VoiceBpeTokenizer, en cleaners only)
+# Block 0: tokenizer (coqui VoiceBpeTokenizer). Cleaning comes from coqui_cleaners, vendored
+# verbatim: the model was trained on those tables' output, so a rewrite risks token drift.
 # ---------------------------------------------------------------------------------------
 
-# TTS/tts/layers/xtts/tokenizer.py `_abbreviations["en"]`
-_EN_ABBREVIATIONS = [
-    (re.compile(rf"\b{abbr}\.", re.IGNORECASE), full)
-    for abbr, full in [
-        ("mrs", "misess"),
-        ("mr", "mister"),
-        ("dr", "doctor"),
-        ("st", "saint"),
-        ("co", "company"),
-        ("jr", "junior"),
-        ("maj", "major"),
-        ("gen", "general"),
-        ("drs", "doctors"),
-        ("rev", "reverend"),
-        ("lt", "lieutenant"),
-        ("hon", "honorable"),
-        ("sgt", "sergeant"),
-        ("capt", "captain"),
-        ("esq", "esquire"),
-        ("ltd", "limited"),
-        ("col", "colonel"),
-        ("ft", "fort"),
-    ]
-]
-
-# TTS/tts/layers/xtts/tokenizer.py `_symbols_multilingual["en"]`
-_EN_SYMBOLS = [
-    (re.compile(re.escape(sym), re.IGNORECASE), rep)
-    for sym, rep in [
-        ("&", " and "),
-        ("@", " at "),
-        ("%", " percent "),
-        ("#", " hash "),
-        ("$", " dollar "),
-        ("£", " pound "),
-        ("°", " degree "),
-    ]
-]
-
-_EN_ORDINAL_RE = re.compile(r"([0-9]+)(st|nd|rd|th)")
-_NUMBER_RE = re.compile(r"[0-9]+")
-_COMMA_NUMBER_RE = re.compile(r"\b\d{1,3}(,\d{3})*(\.\d+)?\b")
-_DECIMAL_RE = re.compile(r"([0-9]+[.,][0-9]+)")
-_CURRENCY_RE = {
-    "USD": re.compile(r"((\$[0-9\.\,]*[0-9]+)|([0-9\.\,]*[0-9]+\$))"),
-    "GBP": re.compile(r"((£[0-9\.\,]*[0-9]+)|([0-9\.\,]*[0-9]+£))"),
-    "EUR": re.compile(r"(([0-9\.\,]*[0-9]+€)|((€[0-9\.\,]*[0-9]+)))"),
+# Languages whose cleaning needs nothing beyond num2words.
+# cs is absent: upstream asks num2words for "cz", which does not exist, and num2words has no
+# Czech ordinals — while upstream's cs pattern makes a bare "3." one.
+CLEANED_LANGUAGES = ("ar", "de", "en", "es", "fr", "hu", "it", "nl", "pl", "pt", "ru", "tr")
+# hi has no cleaner tables upstream either — it gets lowercase + whitespace only.
+BASIC_LANGUAGES = ("hi",)
+# Each needs a transliteration package before its text reaches the BPE, so they are refused by
+# name rather than silently mis-tokenized.
+NEEDS_PACKAGE = {
+    "zh": "pypinyin, plus coqui's zh_num2words for number expansion",
+    "ja": "cutlet (which pulls in fugashi and a ~50 MB unidic dictionary)",
+    "ko": "hangul_romanize",
 }
-_WHITESPACE_RE = re.compile(r"\s+")
-
-
-def _num2words(*args, **kwargs):
-    try:
-        from num2words import num2words
-    except ImportError as e:
-        raise ImportError(
-            "text contains digits; number expansion needs the `num2words` package "
-            "(pip install num2words — pure python, no further deps)"
-        ) from e
-    return num2words(*args, **kwargs)
-
-
-def _expand_currency_en(m, currency):
-    amount = float(re.sub(r"[^\d.]", "", m.group(0).replace(",", ".")))
-    full = _num2words(amount, to="currency", currency=currency, lang="en")
-    if amount.is_integer():
-        last_and = full.rfind(", ")
-        if last_and != -1:
-            full = full[:last_and]
-    return full
-
-
-def _expand_numbers_en(text):
-    """TTS/tts/layers/xtts/tokenizer.py expand_numbers_multilingual, lang="en"."""
-    if not _NUMBER_RE.search(text):
-        return text  # avoid the num2words import for digit-free text
-    text = _COMMA_NUMBER_RE.sub(lambda m: m.group(0).replace(",", ""), text)
-    try:
-        text = _CURRENCY_RE["GBP"].sub(lambda m: _expand_currency_en(m, "GBP"), text)
-        text = _CURRENCY_RE["USD"].sub(lambda m: _expand_currency_en(m, "USD"), text)
-        text = _CURRENCY_RE["EUR"].sub(lambda m: _expand_currency_en(m, "EUR"), text)
-    except ImportError:
-        raise
-    except Exception:
-        pass  # coqui swallows currency-expansion failures; the number res below still apply
-    text = _DECIMAL_RE.sub(lambda m: _num2words(float(m.group(1).replace(",", ".")), lang="en"), text)
-    text = _EN_ORDINAL_RE.sub(lambda m: _num2words(int(m.group(1)), ordinal=True, lang="en"), text)
-    text = _NUMBER_RE.sub(lambda m: _num2words(int(m.group(0)), lang="en"), text)
-    return text
-
-
-def clean_text_en(text):
-    """coqui multilingual_cleaners(text, "en"): strip double quotes, lowercase, expand
-    numbers/abbreviations/symbols, collapse whitespace. Idempotent on its own output."""
-    text = text.replace('"', "")
-    text = text.lower()
-    text = _expand_numbers_en(text)
-    for regex, replacement in _EN_ABBREVIATIONS:
-        text = regex.sub(replacement, text)
-    for regex, replacement in _EN_SYMBOLS:
-        text = regex.sub(replacement, text)
-    text = text.strip()  # coqui expand_symbols_multilingual ends with .strip()
-    text = _WHITESPACE_RE.sub(" ", text)
-    return text
+SUPPORTED_LANGUAGES = CLEANED_LANGUAGES + BASIC_LANGUAGES
 
 
 class XttsTokenizer:
     """coqui VoiceBpeTokenizer on the checkpoint's vocab.json (a HF `tokenizers` file).
 
-    encode(): clean -> "[en]" language tag -> " " -> "[SPACE]" -> BPE ids. Matches coqui's
+    encode(): clean -> "[lang]" tag -> " " -> "[SPACE]" -> BPE ids. Matches coqui's
     Xtts.inference tokenization (which also does sent.strip().lower() first — .lower() is
-    already part of the cleaner). en only; extend clean_text_* tables for other languages."""
+    already part of the cleaner)."""
 
     CHAR_LIMIT_EN = 250  # coqui warns (and audio may truncate) past this
 
@@ -358,13 +269,15 @@ class XttsTokenizer:
         self.tokenizer = Tokenizer.from_file(vocab_file)
 
     def encode(self, text, lang="en"):
-        lang = lang.split("-")[0]
-        if lang != "en":
-            raise NotImplementedError(
-                f"only 'en' normalization is transcribed (got {lang!r}); add the language's "
-                "cleaner tables from coqui TTS/tts/layers/xtts/tokenizer.py"
-            )
-        text = clean_text_en(text.strip())
+        lang = lang.split("-")[0]  # drop the region: "pt-br" -> "pt"
+        if lang in NEEDS_PACKAGE:
+            raise NotImplementedError(f"language {lang!r} needs {NEEDS_PACKAGE[lang]}")
+        if lang in CLEANED_LANGUAGES:
+            text = multilingual_cleaners(text.strip(), lang)
+        elif lang in BASIC_LANGUAGES:
+            text = basic_cleaners(text.strip())
+        else:
+            raise NotImplementedError(f"language {lang!r} is not one of {SUPPORTED_LANGUAGES}")
         text = f"[{lang}]{text}"
         text = text.replace(" ", "[SPACE]")
         return self.tokenizer.encode(text).ids

@@ -5,9 +5,9 @@
 
 Zero-shot voice-cloning text-to-speech ([coqui/XTTS-v2](https://huggingface.co/coqui/XTTS-v2))
 on Tenstorrent hardware. XTTS-v2 clones a voice from a few seconds of reference audio and
-speaks arbitrary text in it; the upstream model supports 17 languages, but this TTNN
-implementation currently ships with an **English-only** text front-end (see
-[Known limitations](#known-limitations)). Output is 24 kHz audio.
+speaks arbitrary text in it; the upstream model supports 17 languages, of which this TTNN
+implementation ships **13** (see [Known limitations](#known-limitations)). Output is 24 kHz
+audio.
 
 ## Hardware
 
@@ -119,9 +119,12 @@ first-ever run when kernels build from scratch.
 
 ## Known limitations
 
-- **English-only text normalization.** The BPE vocab is multilingual, but the cleaner
-  tables (abbreviations, symbols, ordinals, number expansion) are transcribed only for
-  `en` — extend `frontend.py` for other languages.
+- **13 of 17 languages.** `ar de en es fr hu it nl pl pt ru tr` get coqui's full cleaning
+  (abbreviations, symbols, ordinals, number expansion) and `hi` gets lowercase + whitespace,
+  from the vendored `coqui_cleaners.py`. The other four are refused by name: `zh` needs
+  `pypinyin`, `ja` needs `cutlet` (~50 MB of dictionary), `ko` needs `hangul_romanize`, and
+  `cs` is blocked upstream — coqui asks `num2words` for language `"cz"`, which does not exist,
+  and `num2words` has no Czech ordinals.
 - **Model hard caps:** text ≤ 402 GPT tokens per utterance; audio ≤ 605 codes ≈ ~28 s of
   speech per utterance. Text needing more than that is cut off **mid-sentence** — the model
   stops wherever it has got to, and the rest is never spoken. Chunk long input by sentence.
