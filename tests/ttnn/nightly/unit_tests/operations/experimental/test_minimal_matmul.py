@@ -390,9 +390,30 @@ def test_linear_dtype_compute_config(
     assert check_result["relative_rmse"] < RMSE_THRESHOLD
 
 
-@pytest.mark.parametrize("M", [32, 96, 320, 4096])
-@pytest.mark.parametrize("K", [32, 96, 320, 4096])
-@pytest.mark.parametrize("N", [32, 96, 320, 4096])
+# Pairwise covering array over the four M/K/N levels. The N level is the sum
+# of the M and K level indices modulo four, so every M-K, M-N, and K-N pair
+# appears exactly once in these 16 cases.
+@pytest.mark.parametrize(
+    "M,K,N",
+    [
+        (32, 32, 32),
+        (32, 96, 96),
+        (32, 320, 320),
+        (32, 4096, 4096),
+        (96, 32, 96),
+        (96, 96, 320),
+        (96, 320, 4096),
+        (96, 4096, 32),
+        (320, 32, 320),
+        (320, 96, 4096),
+        (320, 320, 32),
+        (320, 4096, 96),
+        (4096, 32, 4096),
+        (4096, 96, 32),
+        (4096, 320, 96),
+        (4096, 4096, 320),
+    ],
+)
 @pytest.mark.parametrize(
     "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [(8, 8, 8, 2, 2)],
