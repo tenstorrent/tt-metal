@@ -31,7 +31,9 @@ class MistralSmall4Adapter(MLAPrefillAdapter):
     # No shared prefill TTNN cache exists for Mistral yet; set PREFILL_TTNN_CACHE (serving) or
     # TT_MISTRAL4_PREFILL_TTNN_CACHE (tests) to a writable dir.
     ttnn_cache_default = ""
-    default_gate_mode = "DEVICE_FP32"  # single expert group (n_group = 1)
+    # softmax -> top-4 -> renormalise. moe_grouped_topk's parse_score_func takes only sigmoid /
+    # sqrtsoftplus, so the sigmoid gate applies a wrong affinity silently whatever the grouping.
+    default_gate_mode = "GPT_DEVICE"
     prefill_trace_default = None  # no golden trace recorded yet; pass one via PREFILL_TRACE_DIR
 
     # Single expert group + device gate: route routing-all-gather semaphores to L1_SMALL. Routing
