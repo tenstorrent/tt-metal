@@ -6,7 +6,6 @@
 
 #include "internal/dataflow/dataflow_api_common.h"
 #include "internal/dataflow/dataflow_cmd_bufs.h"
-// Arch-specific (resolved by the HAL's per-arch include roots, like noc_parameters.h).
 #include "noc_address_backend.h"
 #include "api/debug/assert.h"
 #include "internal/debug/sanitize.h"
@@ -224,18 +223,6 @@ std::uint64_t get_noc_addr_helper(std::uint32_t noc_xy, std::uint32_t addr) {
     return noc_address_backend::packed_worker_address(noc_xy, addr);
 }
 
-namespace interleaved_addr_gen {
-
-// Full NOC address for `addr` inside bank `bank_index`. This is the single
-// place the bank -> NOC destination mapping happens for the address
-// generators below.
-template <bool DRAM>
-FORCE_INLINE uint64_t get_bank_noc_addr(uint32_t bank_index, uint32_t addr, uint8_t noc = noc_index) {
-    return noc_address_backend::bank_address<DRAM>(bank_index, addr, noc);
-}
-
-}  // namespace interleaved_addr_gen
-
 uint64_t get_dram_noc_addr(
     const uint32_t id,
     const uint32_t page_size,
@@ -247,7 +234,7 @@ uint64_t get_dram_noc_addr(
     uint32_t addr =
         (bank_offset_index * align_power_of_2(page_size, interleaved_addr_gen::get_allocator_alignment<true>())) +
         bank_base_address + offset + bank_to_dram_offset[bank_index];
-    return interleaved_addr_gen::get_bank_noc_addr<true>(bank_index, addr, noc);
+    return noc_address_backend::bank_address<true>(bank_index, addr, noc);
 }
 
 uint64_t get_l1_noc_addr(
@@ -261,7 +248,7 @@ uint64_t get_l1_noc_addr(
     uint32_t addr =
         (bank_offset_index * align_power_of_2(page_size, interleaved_addr_gen::get_allocator_alignment<false>())) +
         bank_base_address + offset + bank_to_dram_offset[bank_index];
-    return interleaved_addr_gen::get_bank_noc_addr<false>(bank_index, addr, noc);
+    return noc_address_backend::bank_address<false>(bank_index, addr, noc);
 }
 
 uint64_t get_system_memory_noc_addr(
@@ -306,7 +293,7 @@ struct InterleavedAddrGen {
         uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
         uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
         uint32_t addr = this->get_addr(id, bank_offset_index, bank_index, offset);
-        return interleaved_addr_gen::get_bank_noc_addr<DRAM>(bank_index, addr, noc);
+        return noc_address_backend::bank_address<DRAM>(bank_index, addr, noc);
     }
 };
 
@@ -337,7 +324,7 @@ struct InterleavedPow2AddrGen {
         uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
         uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
         uint32_t addr = this->get_addr(id, bank_offset_index, bank_index, offset);
-        return interleaved_addr_gen::get_bank_noc_addr<DRAM>(bank_index, addr, noc);
+        return noc_address_backend::bank_address<DRAM>(bank_index, addr, noc);
     }
 };
 
@@ -364,7 +351,7 @@ struct InterleavedAddrGenFast {
         uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
         uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
         uint32_t addr = this->get_addr(id, bank_offset_index, bank_index, offset);
-        return interleaved_addr_gen::get_bank_noc_addr<DRAM>(bank_index, addr, noc);
+        return noc_address_backend::bank_address<DRAM>(bank_index, addr, noc);
     }
 };
 
@@ -395,7 +382,7 @@ struct InterleavedPow2AddrGenFast {
         uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<DRAM>(id);
         uint32_t bank_index = interleaved_addr_gen::get_bank_index<DRAM>(id, bank_offset_index);
         uint32_t addr = this->get_addr(id, bank_offset_index, bank_index, offset);
-        return interleaved_addr_gen::get_bank_noc_addr<DRAM>(bank_index, addr, noc);
+        return noc_address_backend::bank_address<DRAM>(bank_index, addr, noc);
     }
 };
 

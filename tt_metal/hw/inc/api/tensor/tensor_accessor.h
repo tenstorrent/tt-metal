@@ -17,8 +17,6 @@
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "internal/dataflow/dataflow_api_addrgen.h"
-// Arch-specific (resolved by the HAL's per-arch include roots); host builds
-// (e.g. the accessor unit tests) provide a mock instead.
 #include "noc_address_backend.h"
 #endif
 
@@ -38,7 +36,7 @@ uint64_t get_dram_bank_base_offset(uint32_t bank_id, uint8_t noc) {
     uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<true>(bank_id);
     uint32_t bank_index = interleaved_addr_gen::get_bank_index<true>(bank_id, bank_offset_index);
     uint32_t bank_offset = interleaved_addr_gen::get_bank_offset<true>(bank_index);
-    return interleaved_addr_gen::get_bank_noc_addr<true>(bank_index, bank_offset, noc);
+    return noc_address_backend::bank_address<true>(bank_index, bank_offset, noc);
 }
 #endif
 }  // namespace tensor_accessor

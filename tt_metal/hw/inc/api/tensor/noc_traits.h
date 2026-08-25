@@ -6,7 +6,6 @@
 
 #include "api/dataflow/noc.h"
 #include "api/tensor/tensor_accessor.h"
-// Arch-specific (resolved by the HAL's per-arch include roots).
 #include "noc_address_backend.h"
 
 // TODO(#29597): The traits classes for TensorAccessor and related classes could be moved to tensor_accessor.h

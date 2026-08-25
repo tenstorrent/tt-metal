@@ -6,7 +6,6 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "internal/debug/noc_zero_guard.h"
-// Arch-specific (resolved by the HAL's per-arch include roots).
 #include "noc_address_backend.h"
 template <typename DSpecT>
 class TensorAccessor;

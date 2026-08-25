@@ -206,8 +206,6 @@ void wait_for_go_message() {
 }
 
 #if !defined(COMPILE_FOR_TRISC)
-// TRISCs are not NoC initiators; the address backend is data-movement-only.
-// Arch-specific (resolved by the HAL's per-arch include roots, like noc_parameters.h).
 #include "noc_address_backend.h"
 
 FORCE_INLINE uint64_t calculate_dispatch_addr(volatile go_msg_t* go_message_in) {
