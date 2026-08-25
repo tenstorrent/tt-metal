@@ -792,23 +792,55 @@ fused_mmrs_configs = {
 }
 
 
+_logged_mmrs_rule_signatures = set()
+
+
 def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
-    config = fused_mmrs_configs.get(device_core_grid, {})
-    if len(config) == 0:
-        logger.warning(f"No known fused MM/RS config for {device_core_grid} core grid, using default")
-    elif (M, K, N) not in config:
+    """Resolve the fused MM+RS parameter dict for a shape.
+
+    Precedence -- anything measured or explicit wins:
+      1. A swept ``(M, K, N)`` table entry (``fused_mmrs_configs``, including entries added via
+         ``register_fused_mmrs_configs``).
+      2. The v2.3 rule engine (`utils/mmrs_rules.py`) -- always the 12x8 matmul grid with the
+         reduce-scatter above it; blind-validated within 5% of the swept optimum on ~90% of
+         shapes across five ff2 families. Blackhole 12x10 only; the rules were fitted against
+         Blackhole L1, and unaligned M stays off them (the RS output height must be tile-aligned).
+      3. The warned generic default, which puts the matmul on an 8x7 grid at subblock 1x1 -- on a
+         larger device drastically slower than the unfused matmul + reduce-scatter it replaces,
+         so the fusion reads as a regression: sweep the shape instead.
+
+    On a rule hit, an info log prints the config as a paste-able table entry: sweep the shape
+    with `sweep_mm_block_sizes.py` (use case ``mmrs``) and paste the winner into
+    ``fused_mmrs_configs`` (or register it from a model table) to override the rules permanently.
+    """
+    table = fused_mmrs_configs.get(device_core_grid, {})
+    config = table.get((M, K, N))
+
+    if config is None and is_blackhole() and M % 32 == 0:
+        from .mmrs_rules import pick_v23
+
+        v23 = pick_v23(M, K, N, full_grid=(device_core_grid.x, device_core_grid.y))
+        if v23 is not None:
+            m_blk, k_blk, n_blk = v23["blocks"]
+            sub_h, sub_w = v23["subblock"]
+            signature = (M, K, N, device_core_grid.x, device_core_grid.y)
+            if signature not in _logged_mmrs_rule_signatures:
+                logger.info(
+                    f"MMRS v2.3 rule config for (M, K, N) = ({M}, {K}, {N}): "
+                    f"FusedMMRSConfig(ttnn.CoreCoord{v23['mm_grid']}, "
+                    f"{m_blk}, {k_blk}, {n_blk}, {sub_h}, {sub_w}, None, 1)  "
+                    f"# paste into fused_mmrs_configs after sweeping to override"
+                )
+                _logged_mmrs_rule_signatures.add(signature)
+            config = FusedMMRSConfig(ttnn.CoreCoord(*v23["mm_grid"]), m_blk, k_blk, n_blk, sub_h, sub_w, None, 1)
+
+    if config is None:
         logger.warning(
-            f"No known fused MM/RS config for (M, K, N) = ({M}, {K}, {N}) on {device_core_grid} core grid, using default"
+            f"No fused MM/RS config for (M, K, N) = ({M}, {K}, {N}) on {device_core_grid} core grid "
+            "and the rule engine does not cover it; using default, which is likely slower than not "
+            "fusing at all"
         )
-    elif (M, K, N) not in config:
-        # Worth a warning even though the grid is known: the default puts the matmul on an 8x7 grid at
-        # subblock 1x1, so on a larger device it is drastically slower than the unfused
-        # matmul + reduce-scatter it is meant to replace, and the fusion reads as a regression.
-        logger.warning(
-            f"No known best MM/RS blocking for (M, K, N) = ({M}, {K}, {N}) on {device_core_grid} core grid; "
-            "using default, which is likely slower than not fusing at all"
-        )
-    config = config.get((M, K, N), default_fused_mmrs_config)
+        config = default_fused_mmrs_config
     return config.get_params(device_core_grid, num_links, M=M)
 
 
