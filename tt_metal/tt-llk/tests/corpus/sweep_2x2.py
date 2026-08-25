@@ -616,6 +616,29 @@ KNOBS = {
     # 36788).  roundingops / lcm-fresh / recip = measured honest
     # no-fire (knob-attribution byte-identical, laneGJ evidence).
     "window-pairing-stride": "-mtt-tensix-optimize-window-pairing-stride",
+    # GP (crossrow-pairing): the FI-3c cross-row pairing mechanism
+    # (sfpi-gcc agent/crossrow-pairing).  A capturable single-row Dst
+    # loop (constant-address no-increment load/store pair, flat
+    # structured-CC atoms closed by the word-exact all-lanes restore,
+    # one trailing typed TTINCRWC row step, canonical countdown from a
+    # proven even constant) pairs two consecutive iterations into ONE
+    # doubled row: the copy's Dst accesses rebase to the static offset
+    # the removed interior row step would have supplied, the shared
+    # trailing step doubles, the countdown halves, ambient-rooted
+    # rename webs break allocator false recurrences (fresh roots inside
+    # a CC atom refuse: crossrow-pairing-rename-cc-domain), and pure
+    # spans of the two rows list-schedule together while CC atoms stay
+    # indivisible (the CC-state-equality placement proof).  The doubled
+    # row keeps the counted-loop capture shape, so delivery stays
+    # record-plus-launch with launches HALVED.  Booking A/B = (ON-28 +
+    # flag) vs plain ON-28.  Target row: roundingops (the laneGJ
+    # AUTOPSY arithmetic: 1.19 cy/row x 4096 rows = 4871 cy of modeled
+    # mad->setcc distance-1 stall + seam that no single-row mechanism
+    # can fill — capture rotation's fillers are all CC-bearing there).
+    # mulint32-fresh / lcm-fresh / recip = expected honest no-fire
+    # controls (macro-planner row / RecMII-saturated + 10-live>8 /
+    # already-paired window).
+    "crossrow-pairing": "-mtt-tensix-optimize-crossrow-pairing",
 }
 
 
@@ -712,6 +735,12 @@ KNOB_MODES = {
     # GJ window-pairing-stride remains a default-off on-plus knob at pin-28;
     # promotion requires an R9 witness and ON-vs-ON attribution ceremony.
     "window-pairing-stride": "on-plus",
+    # GP crossrow-pairing: default-off Init(0) booking knob; the pairing
+    # phase runs before the region schedulers and composes with the
+    # ON-28 replay capture (record + halved launches).  on-plus while a
+    # booking knob; promotion requires an R9 witness and ON-vs-ON
+    # attribution ceremony.
+    "crossrow-pairing": "on-plus",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
