@@ -637,7 +637,22 @@ KNOBS = {
     # can fill — capture rotation's fillers are all CC-bearing there).
     # mulint32-fresh / lcm-fresh / recip = expected honest no-fire
     # controls (macro-planner row / RecMII-saturated + 10-live>8 /
-    # already-paired window).
+    # already-paired window).  MEASURED (headline-laneGP-20260825b, BH
+    # p150, 3 reps, corr-before-perf, device-golden corr GREEN both
+    # arms): roundingops/ceil-fresh FIRE (launches 62 -> 30, window
+    # 0,14 -> 0,28) but KERNEL 66967.3 -> 66964.0 = -0.00% -- the row
+    # is execution-bound and the modeled II 32 -> 30 does not transfer
+    # (TILE_LOOP diag flat too); the +7.92 gap needs the Rule-B
+    # preservation-seed rename (round-cc-modulo DESIGN-V2) before the
+    # interleave can shorten the real chain.  sigmoidappx fresh:
+    # KERNEL 38792 -> 26663 = -31.27%, vs-hand +31.75% -> -9.44%
+    # (LOSS -> WIN); at plain ON-28 the sigmoid_appx fresh loop had NO
+    # replay delivery at all (replay_launch_off=0) and the paired row
+    # flips it into a captured record + 15 launches (REPLAY_LAUNCH
+    # classification) on top of the interleave.  relu / mulint32-fresh
+    # / lcm-fresh / recip selector TUs byte-identical = measured honest
+    # no-fire.  Controls hold (hardsigmoid-fresh +0.89,
+    # blaze-sdpareducerow-max-t8 +0.97).
     "crossrow-pairing": "-mtt-tensix-optimize-crossrow-pairing",
 }
 
