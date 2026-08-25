@@ -444,35 +444,6 @@ class DST_WRITE_ADDR_OFFSET(TemplateParameter):
 
 
 @dataclass
-class REDUCE_PASSES(TemplateParameter):
-    """Re-entry configuration for ``mul_reduce_scalar_reenter_test.cpp``.
-
-    ``REDUCE_PASSES``       how many times to re-run the whole multiply+reduce sequence
-                            over the same input, re-issuing the inits the chunked compute
-                            API re-issues per batch. 1 collapses to the non-chunked
-                            sequence and is the control; 2 is the re-entry question.
-    ``SINGLE_DEST_SECTION`` whether all passes share one DEST section. True is what
-                            ``mul_reduce_scalar_chunked_tile`` actually does -- the caller
-                            acquires DST once and every batch re-enters inside it, with no
-                            pack handshake between -- so only the final scalar is packed.
-                            False puts a full section boundary between passes, which lets
-                            each scalar be packed and compared but re-establishes more
-                            state than the chunked form does.
-    """
-
-    passes: int = 1
-    single_dest_section: bool = False
-
-    def convert_to_cpp(self) -> str:
-        return "\n".join(
-            [
-                f"constexpr std::uint32_t REDUCE_PASSES = {self.passes}u;",
-                f"constexpr bool SINGLE_DEST_SECTION = {str(self.single_dest_section).lower()};",
-            ]
-        )
-
-
-@dataclass
 class PACK_NUM_TILES(TemplateParameter):
     """Tile count for the block/per-tile pack drivers.
 
@@ -980,49 +951,6 @@ class TOPK_XL(TemplateParameter):
             f"constexpr bool TOPK_XL_REINIT_AFTER_COPY = {str(self.reinit_after_copy).lower()};",
         ]
         return "\n".join(lines)
-
-
-@dataclass
-class CUSTOM_MM_FLAGS(TemplateParameter):
-    """The three template flags the plain ``custom_mm`` family forwards.
-
-    ``transpose``  acts on in1 -- after the family's operand swap, the full 32x32 tiles in
-                   SrcA. Unpack turns on Haloize (within-face 16x16 transpose) and math swaps
-                   the SrcA face traversal, so each tile arrives transposed. Per-TILE, not a
-                   transpose of the whole operand.
-    ``split_acc``  moves the inner dimension's partials to Dest rows 8/24 instead of
-                   accumulating in place at 0/16 (ADDR_MOD_1 dest increment 1024-8).
-    ``finalize``   replaces the last MOP iteration with the replay that ELWADDs those partials
-                   back together, i.e. the other half of ``split_acc``. ``(True, True)`` must
-                   reproduce the plain result; ``finalize`` without ``split_acc`` would merge
-                   rows that are not partials.
-    ``read_transposed``
-                   a different flag from ``transpose``, and easy to conflate with it: it
-                   transposes nothing, it changes the ORDER the unpacker reads in1 tiles out of
-                   L1. The MOP steps ``kt_dim * tile_size`` between tiles of a row and then
-                   winds back, so the caller's tiles are expected in ``[ct][kt]`` order instead
-                   of ``[kt][ct]``. Same golden, different L1 layout.
-    """
-
-    transpose: bool = False
-    split_acc: bool = False
-    finalize: bool = False
-    read_transposed: bool = False
-
-    def convert_to_cpp(self) -> str:
-        if self.finalize and not self.split_acc:
-            raise ValueError(
-                "finalize merges split_acc partials; finalize=True with split_acc=False "
-                "would ELWADD rows that are not partials"
-            )
-        return "\n".join(
-            [
-                f"constexpr bool CUSTOM_MM_TRANSPOSE = {str(self.transpose).lower()};",
-                f"constexpr bool CUSTOM_MM_SPLIT_ACC = {str(self.split_acc).lower()};",
-                f"constexpr bool CUSTOM_MM_FINALIZE = {str(self.finalize).lower()};",
-                f"constexpr bool CUSTOM_MM_READ_TRANSPOSED = {str(self.read_transposed).lower()};",
-            ]
-        )
 
 
 @dataclass
