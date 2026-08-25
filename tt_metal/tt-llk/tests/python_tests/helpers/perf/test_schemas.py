@@ -278,7 +278,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_fused": "perf_fused"},
     },
     "perf_math_matmul": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "c_dimm",
             "dest_acc",
@@ -299,9 +299,11 @@ PERF_TEST_SCHEMAS = {
             "loop_factor",
             "marker",
             "math_fidelity",
+            "num_blocks",
             "num_faces",
             "num_faces_A",
             "num_faces_B",
+            "num_tiles_in_block",
             "partial_a",
             "partial_b",
             "partial_face_math",
