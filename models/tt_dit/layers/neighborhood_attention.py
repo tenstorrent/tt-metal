@@ -402,6 +402,16 @@ def _cached_sharded_plan(volume, context_window, stride, brick, resident, shard_
         mesh_axes=[sp_axis, None, None, None],
     )
     first["query_chunk_bricks"] = query_chunk_bricks
+
+    from loguru import logger
+
+    logger.info(
+        f"[neighborhood] W-SHARDED x{shard_count}: volume={volume} resident={resident} "
+        f"window={context_window} stride={stride} brick={brick} chunk={query_chunk_bricks} bricks "
+        f"({first['bricks_per_query_chunk'] * SITES_PER_BRICK} queries) "
+        f"gather={first['gather_brick_count']} tiles "
+        f"({first['gather_brick_count'] / first['bricks_per_query_chunk']:.2f} keys/query)"
+    )
     # Generated on device: the uploaded regime sets are enumerated against a single shard origin,
     # and here every shard has its own.
     first["interior_mask_tensor"] = None
