@@ -7,19 +7,24 @@
 // Legacy XY NoC address backend: addresses carry raw (x, y) coordinates in the
 // bits above NOC_ADDR_COORD_SHIFT. Each function expands to exactly the
 // expression it replaced at its call sites (verified by object-code
-// comparison). Include through internal/dataflow/noc_address_backend.h, which
-// selects the active backend; call sites use the backend-neutral
-// noc_address_backend alias, never this namespace directly.
+// comparison). Include through the arch-selected "noc_address_backend.h"
+// wrapper (internal/tt-1xx/ or internal/tt-2xx/quasar/), which sets the
+// backend-neutral noc_address_backend alias call sites use; never include or
+// name this namespace directly.
+//
+// No defaulted noc parameter here on purpose: callers always pass it, and a
+// noc_index default would break translation units where the global is not
+// declared at this point (e.g. DRISC firmware).
 
 #include <cstdint>
 
 namespace noc_address_backend_xy {
 
-FORCE_INLINE uint64_t worker(uint32_t x, uint32_t y, uint32_t local_address, uint8_t noc = noc_index) {
+FORCE_INLINE uint64_t worker(uint32_t x, uint32_t y, uint32_t local_address, uint8_t noc) {
     return NOC_XY_ADDR(DYNAMIC_NOC_X(noc, x), DYNAMIC_NOC_Y(noc, y), local_address);
 }
 
-FORCE_INLINE uint64_t local(uint32_t local_address, uint8_t noc = noc_index) {
+FORCE_INLINE uint64_t local(uint32_t local_address, uint8_t noc) {
     return NOC_XY_ADDR(my_x[noc], my_y[noc], local_address);
 }
 
@@ -33,7 +38,7 @@ FORCE_INLINE uint64_t multicast_descriptor(
     uint32_t end_x,
     uint32_t end_y,
     uint32_t local_address,
-    uint8_t noc = noc_index) {
+    uint8_t noc) {
     return NOC_MULTICAST_ADDR(
         DYNAMIC_NOC_X(noc, start_x),
         DYNAMIC_NOC_Y(noc, start_y),
@@ -43,7 +48,7 @@ FORCE_INLINE uint64_t multicast_descriptor(
 }
 
 template <bool DRAM>
-FORCE_INLINE uint64_t bank(uint32_t bank_index, uint32_t local_address, uint8_t noc = noc_index) {
+FORCE_INLINE uint64_t bank(uint32_t bank_index, uint32_t local_address, uint8_t noc) {
     uint32_t packed_xy;
     if constexpr (DRAM) {
         packed_xy = dram_bank_to_noc_xy[noc][bank_index];
@@ -53,13 +58,9 @@ FORCE_INLINE uint64_t bank(uint32_t bank_index, uint32_t local_address, uint8_t 
     return packed_worker(packed_xy, local_address);
 }
 
-FORCE_INLINE uint64_t dram_bank(uint32_t bank_index, uint32_t local_address, uint8_t noc = noc_index) {
-    return bank<true>(bank_index, local_address, noc);
-}
-
 FORCE_INLINE uint32_t local_address(uint64_t address) { return static_cast<uint32_t>(address); }
 
-FORCE_INLINE bool is_local(uint64_t address, uint8_t noc = noc_index) {
+FORCE_INLINE bool is_local(uint64_t address, uint8_t noc) {
     uint32_t x = NOC_UNICAST_ADDR_X(address);
     uint32_t y = NOC_UNICAST_ADDR_Y(address);
     return x == my_x[noc] && y == my_y[noc];
@@ -70,7 +71,7 @@ FORCE_INLINE uint64_t dispatch(uint8_t x, uint8_t y, uint32_t local_address) {
     return NOC_XY_ADDR(NOC_X(x), NOC_Y(y), local_address);
 }
 
-FORCE_INLINE uint64_t system_memory(uint32_t local_address, uint8_t noc = noc_index) {
+FORCE_INLINE uint64_t system_memory(uint32_t local_address, uint8_t noc) {
     uint64_t pcie_core_noc_encoding =
         uint64_t(NOC_XY_PCIE_ENCODING(DYNAMIC_NOC_X(noc, PCIE_NOC_X), DYNAMIC_NOC_Y(noc, PCIE_NOC_Y)));
     return pcie_core_noc_encoding | local_address;
