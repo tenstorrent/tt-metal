@@ -845,6 +845,13 @@ class _NeighborhoodAttention3D(Module):
             return ttnn.reshape(x, (grid.batch, heads, sites_local, cfg.head_dim))
 
         flat_seq = self.flat_seq and sharded and self.tp_proj and heads == 1
+        # The bricked op re-bricks the sites itself, so the flat (B, NH, S, HD) sequence buys it
+        # nothing and its 4-D branch has to reconstruct the volume shape anyway. Keeping it on
+        # to_volume is one less layout to be wrong about while the TP path is being brought up;
+        # DIFFVAE_BRICKED_FLAT=1 hands it the flat form instead, so the two can be raced without
+        # a source edit. Only reachable under tp_proj with one head left, i.e. TP_HEADS=1.
+        if flat_seq and self.na3d_backend == "bricked_sp_w_sharded":
+            flat_seq = os.environ.get("DIFFVAE_BRICKED_FLAT") == "1"
         prep = to_flat if flat_seq else to_volume
 
         # Built and consumed one at a time. Holding q, k and v plus each one's untilized copy
@@ -902,6 +909,8 @@ class _NeighborhoodAttention3D(Module):
                 sp_axis=self.sp_axis,
                 ccl_manager=self.ccl_manager,
                 scale=1.0,
+                tp_axis=self.tp_axis,
+                heads_presharded=self.tp_proj,
             )
         elif sharded:
             out = neighborhood_attention_3d_op_sp_w_sharded(
