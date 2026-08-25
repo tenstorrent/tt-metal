@@ -1,0 +1,1 @@
+{"note":"PR #54224 (silencer/dedupe-fabric-config-unchanged-log): validation run 32777011156 (t3000-integration-tests) t3k_tteager_tests job 97592803922 completed/success. changed-log fired once (real transition), 24 same-value re-opens did not re-fire it. Commented outcome and marked ready for review (2026-08-25).","date":"2026-08-25"}
