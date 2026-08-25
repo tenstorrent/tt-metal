@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
 """Tests for canonical cluster-health label migration."""
 
 from __future__ import annotations
