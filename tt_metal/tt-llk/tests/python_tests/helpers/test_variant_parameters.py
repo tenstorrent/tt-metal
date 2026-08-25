@@ -1881,36 +1881,6 @@ class SDPA_REDUCE_ROW_POOL(TemplateParameter):
 
 
 @dataclass
-class RMSNORM_CLEAR_DEST(TemplateParameter):
-    """Compile-time clear_dest flag for the experimental rmsnorm bcast-scalar
-    dest-reuse LLK. Emits ``constexpr bool CLEAR_DEST = <true|false>;`` consumed by
-    sources/rmsnorm_bcast_scalar_dest_reuse_test.cpp as the last template arg of
-    ``_llk_math_rmsnorm_bcast_scalar_dest_reuse_`` (drives the ZEROACC clear-half/all
-    path in the header)."""
-
-    clear_dest: bool = False
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr bool CLEAR_DEST = {str(self.clear_dest).lower()};"
-
-
-@dataclass
-class RMSNORM_UNPACK_FULL_TRANSPOSE(TemplateParameter):
-    """Blaze-only compile-time transpose flag for the experimental rmsnorm
-    bcast-scalar dest-reuse LLK. Emits
-    ``constexpr bool UNPACK_FULL_TRANSPOSE = <true|false>;`` consumed by
-    sources/rmsnorm_bcast_scalar_dest_reuse_test.cpp; it drives both
-    transpose_of_faces and within_face_16x16_transpose of
-    ``_llk_unpack_A_rmsnorm_init_`` (the LLK's transpose path supports
-    num_tiles==1 / num_faces==4 only)."""
-
-    unpack_full_transpose: bool = False
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr bool UNPACK_FULL_TRANSPOSE = {str(self.unpack_full_transpose).lower()};"
-
-
-@dataclass
 class MUL_REDUCE_SCALAR_CHUNK_SIZE(RuntimeParameter):
     chunk_size: int = 0
 
