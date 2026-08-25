@@ -169,6 +169,7 @@ Tensor argmax(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
     bool use_rvv,
+    bool use_sfpu,
     std::optional<Tensor> optional_maxval_tensor) {
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
 
@@ -203,12 +204,14 @@ Tensor argmax(
     // no-op through the host-side fallback, which would bypass the RVV
     // eligibility checks and leave a supplied maxval_tensor untouched (stale).
     TT_FATAL(
-        !optional_maxval_tensor.has_value() || use_rvv,
-        "argmax: the max-value output tensor (maxval_tensor) is only supported with use_rvv=True");
-    if (use_rvv) {
+        !optional_maxval_tensor.has_value() || use_rvv || use_sfpu,
+        "argmax: the max-value output tensor (maxval_tensor) is only supported with use_rvv=True or use_sfpu=True");
+    TT_FATAL(!(use_rvv && use_sfpu), "argmax: use_rvv and use_sfpu are mutually exclusive");
+    if (use_rvv || use_sfpu) {
         TT_FATAL(
             rank > 0 && input_tensor.logical_volume() > 0,
-            "argmax: use_rvv=True supports only non-empty tensors of rank >= 1 (got rank {}, logical volume {})",
+            "argmax: use_rvv=True / use_sfpu=True support only non-empty tensors of rank >= 1 (got rank {}, logical "
+            "volume {})",
             rank,
             input_tensor.logical_volume());
     }
@@ -251,11 +254,14 @@ Tensor argmax(
         return preallocated_tensor;
     }
 
-    // Opt-in RVV path: TILE-layout last-dim argmax scanned on the pack RISC's
-    // vector unit (Blackhole). Takes TILE input DIRECTLY — no to_layout /
-    // untilize hop — and optionally returns the max values alongside the
-    // indices. Eligibility is validated by the device op.
-    if (use_rvv) {
+    // Opt-in RVV / SFPU paths: TILE-layout last-dim argmax (Blackhole). Both
+    // take TILE input DIRECTLY — no to_layout / untilize hop — and optionally
+    // return the max values alongside the indices. use_rvv scans on the pack
+    // RISC's vector unit (single core, fastest at B == 1); use_sfpu reduces
+    // all 32 rows of each tile-row in one lane-parallel SFPU pass and runs
+    // multicore (flat in B, the batch-shape path). Eligibility is validated
+    // by the device op.
+    if (use_rvv || use_sfpu) {
         // The reader kernel derives its output paging from the preallocated
         // tensor, so a wrong logical shape means unwritten results or writes
         // past the tensor's page count — reject it up front.
@@ -275,7 +281,8 @@ Tensor argmax(
             sub_core_grids,
             output_memory_config,
             std::move(optional_output_tensor),
-            /*use_rvv=*/true,
+            use_rvv,
+            use_sfpu,
             std::move(optional_maxval_tensor));
     }
 

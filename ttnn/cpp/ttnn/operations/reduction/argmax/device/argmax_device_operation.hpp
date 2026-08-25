@@ -30,13 +30,32 @@ struct ArgMaxRvvTileProgramFactory {
         const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
 };
 
+// Opt-in TILE-layout last-dim argmax on the SFPU (Blackhole). Lane-parallel
+// phase 1 reduces every tile of a 32-row tile-row to one (max value, winning
+// tile) candidate per column in DST; a scalar phase 2 on the dataflow RISC
+// finishes each row with 32 lexicographic compares. All 32 rows of a tile-row
+// are reduced in the same pass, so batch shapes cost the same as B == 1.
+// Multicore: the reduction dim's tiles are split across cores, each core
+// producing per-row candidates that a gather core merges (per-row scalar
+// compares — no cross-core tile reduce). Returns indices and (optionally)
+// max values. Semantics are IEEE-compare behind the SFPU's bf16
+// special-value gasket, documented in detail in
+// kernels/argmax_sfpu_tile_compute.cpp.
+struct ArgMaxSfpuTileProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
+};
+
 struct ArgMaxDeviceOperation {
     using operation_attributes_t = ArgmaxParams;
     using tensor_args_t = ArgmaxInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t =
-        std::variant<ArgMaxSingleCoreProgramFactory, ArgMaxMultiCoreProgramFactory, ArgMaxRvvTileProgramFactory>;
+    using program_factory_t = std::variant<
+        ArgMaxSingleCoreProgramFactory,
+        ArgMaxMultiCoreProgramFactory,
+        ArgMaxRvvTileProgramFactory,
+        ArgMaxSfpuTileProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -56,6 +75,7 @@ ttnn::Tensor argmax(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt,
     bool use_rvv = false,
+    bool use_sfpu = false,
     std::optional<ttnn::Tensor> optional_maxval_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

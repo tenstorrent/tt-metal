@@ -31,9 +31,25 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
                     a Zve32f vector unit ("RVV"); with ``use_rvv=True`` the last-dim argmax reduction runs there,
                     reading TILE layout directly (no untilize needed). Requires BFLOAT16 input whose last dim is a
                     multiple of the tile width (32). Default: ``False``.
+                use_sfpu (bool, optional): Opt-in Blackhole-only path; mutually exclusive with ``use_rvv``. Runs the
+                    last-dim argmax on the SFPU (the Tensix vector FPU), reading TILE layout directly. All 32 rows of
+                    a tile-row are reduced in one lane-parallel pass, so batch shapes (B rows per tile-row) cost the
+                    same as B=1; the reduction dim is additionally split across cores (multicore), with a per-row
+                    scalar merge on a gather core. Pass a single-core ``sub_core_grids`` to force single-core.
+                    Requires BFLOAT16 input whose last dim is a multiple of the tile width (32).
+
+                    SEMANTICS (measured on silicon, documented divergence — the same divergence class the existing
+                    NC-dim compute path ships vs the scalar readers): the compare is IEEE-on-fp32 behind a bf16
+                    special-value gasket rather than the scalar readers' bit-pattern total order. Concretely:
+                    NaN behaves as same-signed infinity (a NaN row-max yields the NaN's index but max value +inf
+                    ``0x7F80``, not the NaN payload; -NaN never wins); -0 flushes to +0 in the max-value output and
+                    +0/-0 compare equal (first zero's index is kept); denormals flush to zero before the compare;
+                    max values below ~2^-118 carry a +2^-127 additive pack bias. All finite normal data — including
+                    every exact tie — matches the incumbent bit-for-bit (smallest index wins ties).
+                    Default: ``False``.
                 maxval_tensor (ttnn.Tensor, optional): Preallocated BFLOAT16 ROW_MAJOR tensor with the same logical
-                    shape as the index output. Only with ``use_rvv=True``: receives the winning max VALUES, so greedy
-                    sampling does not need a separate ``ttnn.max``. Default: ``None``.
+                    shape as the index output. Only with ``use_rvv=True`` or ``use_sfpu=True``: receives the winning
+                    max VALUES, so greedy sampling does not need a separate ``ttnn.max``. Default: ``None``.
 
             Supported:
 
@@ -75,6 +91,7 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_tensor") = nb::none(),
         nb::arg("use_rvv") = false,
+        nb::arg("use_sfpu") = false,
         nb::arg("maxval_tensor") = nb::none());
 }
 

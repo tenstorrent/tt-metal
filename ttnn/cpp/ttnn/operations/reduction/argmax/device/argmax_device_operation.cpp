@@ -82,6 +82,10 @@ ArgMaxDeviceOperation::program_factory_t ArgMaxDeviceOperation::select_program_f
         // Eligibility is enforced in validate_on_program_cache_miss.
         return ArgMaxRvvTileProgramFactory{};
     }
+    if (args.use_sfpu) {
+        // Eligibility is enforced in validate_on_program_cache_miss.
+        return ArgMaxSfpuTileProgramFactory{};
+    }
     if (uses_multicore_path(args, tensor_args)) {
         return ArgMaxMultiCoreProgramFactory{};
     }
@@ -232,9 +236,51 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
             tile_w);
     }
 
+    // SFPU TILE last-dim path eligibility — like use_rvv, this is opt-in, so
+    // requesting it with an unsupported configuration is a hard error rather
+    // than a silent fallback.
+    TT_FATAL(!(args.use_rvv && args.use_sfpu), "argmax: use_rvv and use_sfpu are mutually exclusive");
+    if (args.use_sfpu) {
+        // Blackhole-only for now: the path's special-value semantics (the
+        // NaN-as-infinity / flush-to-zero gasket documented in
+        // argmax_sfpu_tile_compute.cpp) are silicon-validated on Blackhole.
+        // Nothing in the kernels is architecturally Blackhole-specific;
+        // enabling Wormhole is a follow-up gated on re-running the
+        // special-value battery there.
+        TT_FATAL(
+            tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE,
+            "argmax use_sfpu=true is currently supported on Blackhole only");
+        TT_FATAL(input_layout == Layout::TILE, "argmax use_sfpu=true requires TILE layout input, got {}", input_layout);
+        TT_FATAL(
+            input_tensor_a.dtype() == DataType::BFLOAT16,
+            "argmax use_sfpu=true requires BFLOAT16 input, got {}",
+            input_tensor_a.dtype());
+        TT_FATAL(args.dim.has_value(), "argmax use_sfpu=true requires an explicit dim (last dim)");
+        const int32_t rank = static_cast<int32_t>(input_tensor_a.logical_shape().rank());
+        const int32_t normalized_dim = normalize_dim(static_cast<int32_t>(args.dim.value()), rank);
+        TT_FATAL(
+            normalized_dim == rank - 1,
+            "argmax use_sfpu=true supports only last-dim reduction, got dim={} (normalized={}) for rank {}",
+            args.dim.value(),
+            normalized_dim,
+            rank);
+        const uint32_t tile_w = input_tensor_a.tensor_spec().tile().get_width();
+        const uint32_t tile_h = input_tensor_a.tensor_spec().tile().get_height();
+        TT_FATAL(tile_w == 32 && tile_h == 32, "argmax use_sfpu=true requires standard 32x32 tiles");
+        const auto& logical_shape = input_tensor_a.logical_shape();
+        TT_FATAL(
+            logical_shape[-1] % tile_w == 0,
+            "argmax use_sfpu=true requires the reduction dim ({}) to be a multiple of the tile width {} "
+            "(no width padding)",
+            logical_shape[-1],
+            tile_w);
+    }
+
     const auto& optional_maxval = tensor_args.optional_maxval_tensor;
     if (optional_maxval.has_value()) {
-        TT_FATAL(args.use_rvv, "argmax max-value output is only produced by the use_rvv=true path");
+        TT_FATAL(
+            args.use_rvv || args.use_sfpu,
+            "argmax max-value output is only produced by the use_rvv=true / use_sfpu=true paths");
         const auto& maxval = optional_maxval.value();
         TT_FATAL(is_device_tensor(maxval), "argmax max-value tensor must be allocated on device");
         // Device affinity: the program is launched from the input tensor, so a
@@ -290,6 +336,7 @@ ttnn::Tensor argmax(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::Tensor> optional_output_tensor,
     bool use_rvv,
+    bool use_sfpu,
     std::optional<ttnn::Tensor> optional_maxval_tensor) {
     return ttnn::device_operation::launch<ArgMaxDeviceOperation>(
         ArgMaxDeviceOperation::operation_attributes_t{
@@ -299,6 +346,7 @@ ttnn::Tensor argmax(
             .sub_core_grids = sub_core_grids,
             .output_mem_config = output_mem_config,
             .use_rvv = use_rvv,
+            .use_sfpu = use_sfpu,
         },
         ArgMaxDeviceOperation::tensor_args_t{
             .input = input,
