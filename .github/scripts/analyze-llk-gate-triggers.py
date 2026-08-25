@@ -81,6 +81,39 @@ def triggers_llk_gate(files):
     return False
 
 
+def calculate_cascade_effect(commits, triggered_positions):
+    """Calculate how many LLK test suite runs occur due to cascade effect.
+
+    When an LLK commit is queued in the merge queue, all subsequent commits
+    inherit those LLK changes and run the LLK test suite until the LLK PR
+    lands (i.e., until the next LLK commit).
+
+    Args:
+        commits: List of all commit hashes
+        triggered_positions: List of indices where LLK commits appear
+
+    Returns:
+        Total number of LLK test suite runs due to cascade effect
+    """
+    if not triggered_positions:
+        return 0
+
+    total_runs = 0
+    for i, llk_pos in enumerate(triggered_positions):
+        # Find the next LLK commit (or end of list)
+        if i + 1 < len(triggered_positions):
+            next_llk_pos = triggered_positions[i + 1]
+        else:
+            next_llk_pos = len(commits)
+
+        # Commits between this LLK and next LLK (inclusive of this LLK, exclusive of next)
+        # All of these run the LLK suite
+        run_count = next_llk_pos - llk_pos
+        total_runs += run_count
+
+    return total_runs
+
+
 def main():
     parser = argparse.ArgumentParser(description="Analyze what % of main commits trigger the LLK PR gate")
     parser.add_argument("--since", default="2026-07-01", help="Start date for analysis (default: 2026-07-01)")
@@ -92,11 +125,13 @@ def main():
 
     commits = get_commits(since=args.since, until=args.until)
     triggered_commits = []
+    triggered_positions = []
 
     for i, commit in enumerate(commits):
         files = get_files_changed(commit)
         if triggers_llk_gate(files):
             triggered_commits.append(commit)
+            triggered_positions.append(i)
             if args.verbose:
                 # Show which files triggered it
                 triggering_files = [f for f in files if triggers_llk_gate([f])]
@@ -106,22 +141,38 @@ def main():
         if (i + 1) % 50 == 0:
             print(f"  Processed {i + 1}/{len(commits)}...", flush=True)
 
+    # Calculate cascade effect
+    cascade_total = calculate_cascade_effect(commits, triggered_positions)
+
     print()
     print("=" * 70)
     print("LLK PR Gate Trigger Analysis")
     print("=" * 70)
-    print(f"Date range:        {args.since} to {args.until}")
-    print(f"Total commits:     {len(commits)}")
-    print(f"Triggered LLK gate: {len(triggered_commits)}")
-    print(f"Percentage:        {len(triggered_commits) / len(commits) * 100:.1f}%")
+    print(f"Date range:              {args.since} to {args.until}")
+    print(f"Total commits:           {len(commits)}")
+    print()
+    print("Trigger Metric (file-based):")
+    print(f"  Commits triggering gate: {len(triggered_commits)}")
+    print(f"  Percentage:              {len(triggered_commits) / len(commits) * 100:.1f}%")
+    print()
+    print("Cascade Metric (merge queue effect):")
+    print(f"  LLK suite runs (cascade): {cascade_total}")
+    print(f"  Percentage of commits:    {cascade_total / len(commits) * 100:.1f}%")
+    print(f"  Average runs per LLK:     {cascade_total / len(triggered_commits) if triggered_commits else 0:.1f}")
     print("=" * 70)
     print()
     print("Interpretation:")
     print(
-        f"  Only {len(triggered_commits)}/{len(commits)} commits ({len(triggered_commits)/len(commits)*100:.1f}%) modified"
+        f"  • {len(triggered_commits)}/{len(commits)} commits ({len(triggered_commits)/len(commits)*100:.1f}%) directly modified"
     )
-    print("  LLK-specific code and triggered the LLK PR gate. The remaining commits")
-    print("  modified other parts of the codebase (ops, models, ttnn, etc.).")
+    print("    LLK-specific code and triggered the LLK PR gate.")
+    print()
+    print(f"  • Due to cascade effect in the merge queue, the LLK test suite")
+    print(f"    actually runs {cascade_total} times ({cascade_total/len(commits)*100:.1f}% of all commits).")
+    print()
+    print("  • The cascade effect multiplies the gate trigger count because")
+    print(f"    subsequent commits inherit LLK changes while the LLK PR is")
+    print(f"    queued, waiting to land on main.")
 
 
 if __name__ == "__main__":

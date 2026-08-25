@@ -41,35 +41,69 @@ These patterns are defined in [.github/scripts/utils/find-changed-files.sh](.git
 
 ## Historical Results
 
-Analysis of commits to main by month:
+### Two Metrics: Direct Trigger vs. Cascade Effect
 
-| Month | Total Commits | LLK Gate Triggered | Percentage |
-|-------|:-------------:|:------------------:|:----------:|
+There are two important metrics for understanding LLK test execution frequency:
+
+1. **Direct Trigger**: How many commits directly modified LLK code?
+2. **Cascade Effect**: How many times does the LLK suite actually run, considering that queued LLK commits cause all subsequent commits to inherit their changes?
+
+#### Analysis by Month
+
+| Month | Total Commits | Direct Triggers | Cascade Runs |
+|-------|:-------------:|:----------------:|:------------:|
 | May 2026   | — | — | — |
 | June 2026  | — | — | — |
-| **July 2026**  | **165** | **17** | **10.3%** |
+| **July 2026**  | **165** | **17 (10.3%)** | **165 (100%)** |
 
 **Notes:**
 - May and June data unavailable (commits not present in current main history)
 - July 2026 covers July 8–14 (commit history range on main)
-- Only **10.3%** of commits that landed on main triggered the LLK PR gate
-- The remaining **89.7%** modified code in ops, models, ttnn, or other areas
 
-### Key Finding
+### Key Findings
 
-Of the 165 commits in the analyzed period:
-- **17 commits** modified LLK-specific code (wormhole, blackhole, common, SFPI, unit tests, or CI)
-- **148 commits** did not modify LLK code and therefore **did not trigger the LLK PR gate**
+#### Direct Trigger Metric
+- Only **17 out of 165 commits (10.3%)** directly modified LLK-specific code
+- The remaining **148 commits (89.7%)** modified code in ops, models, ttnn, or other areas
+- These non-LLK commits would NOT trigger the LLK gate if run independently
 
-This sparse trigger rate (10.3%) means the LLK gate has significant capacity headroom. When an LLK commit does land, we can afford more comprehensive testing on that specific merge without impacting overall CI throughput.
+#### Cascade Effect Metric
+- Due to merge queue cascading, **165 out of 165 commits (100%)** end up running the LLK test suite
+- **Average**: Each LLK commit causes **9.7** subsequent commits to inherit and run its LLK changes
+- **Multiplier**: The cascade effect magnifies the trigger count by **9.7x**
+
+### What This Means
+
+When an LLK commit is queued in the merge queue:
+1. It triggers the LLK tests immediately
+2. All subsequent commits inherit those LLK changes **while waiting for the LLK PR to land**
+3. Each of those commits also runs the full LLK test suite
+4. This continues until the next LLK commit lands and replaces the inherited changes
+
+**Result:** In July, even though only 10.3% of commits directly touched LLK code, 100% of commits ended up running the LLK suite due to this cascade behavior.
+
+### Budget Impact
+
+The cascade effect is the real metric for resource budgeting:
+- **Not just 17 LLK test runs per month**, but effectively **165 runs**
+- This represents significant CI resource utilization
+- Understanding this cascade behavior is essential for justifying LLK test capacity and scope
 
 ## Usage for Budget Arguments
 
-When requesting more LLK test capacity or arguing for increased test scope:
+### Direct Trigger Argument
+When requesting more LLK test capacity:
 
-> "In the past month, only X% of merges to main triggered the LLK PR gate.
-> This means we can afford more comprehensive testing on those X% of merges
-> without impacting overall CI throughput or merge latency."
+> "Only 10% of merges directly modify LLK code.
+> We can afford more thorough testing without burdening non-LLK commits."
+
+### Cascade Effect Argument
+When understanding the true resource impact:
+
+> "Due to merge queue cascading, LLK commits cause 100% of subsequent commits
+> to run the LLK test suite while queued. This 10x multiplier means we're
+> investing significant CI resources. We should ensure that investment is
+> well-scoped and effective."
 
 ## Related Files
 
