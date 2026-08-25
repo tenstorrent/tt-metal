@@ -72,6 +72,8 @@ There are two important metrics for understanding LLK test execution frequency:
 - **Average**: Each LLK commit causes **9.7** subsequent commits to inherit and run its LLK changes
 - **Multiplier**: The cascade effect magnifies the trigger count by **9.7x**
 
+**Important caveat:** This 100% assumes the first commit in the period is an LLK commit. If non-LLK commits appear *before* the first LLK commit, those commits would not run the LLK suite. In July 2026, the first analyzed commit (position 0) is an LLK commit, which is why cascade coverage reaches 100%.
+
 ### What This Means
 
 When an LLK commit is queued in the merge queue:
