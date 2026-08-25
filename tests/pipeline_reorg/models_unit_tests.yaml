@@ -634,6 +634,9 @@
     unset TT_METAL_WATCHER  # blocked by #50886
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
     export QWEN_BH_PREFETCHER=1  # opt-in BH dram_prefetcher path (no-op on WH)
+    pytest --timeout 60 models/tt_transformers/tests/test_attention_utils.py
+    pytest --timeout 60 models/tt_transformers/tests/test_distributed_norm_utils.py
+    pytest --timeout 60 models/tt_transformers/tests/test_model_config_utils.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp_prefill.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_attention.py
