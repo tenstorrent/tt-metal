@@ -24,8 +24,8 @@ Round-2 regression cases (each is a verifier reproduction recipe):
  11. YELLOW rows show verdict column 'YELLOW', never 'ok';
  12. _device_job cache: expected_texts=None never reuses; a changed node id
      or extra_env (jobkey) never reuses; a keyed hash-matched cache reuses;
- 13. the BH CRAQ silicon gate rejects verdicts keyed to another
-     cc1plus/simulator/tt-metal head, accepts this run's keys;
+ 13. the BH CRAQ silicon gate requires the exact populated correctness-
+     selector set and rejects partial/extra/duplicate/status/key failures;
  14. ops-load validation: a perf selector without its correctness selector
      fails loudly.
 
@@ -516,9 +516,11 @@ def main():
         want_reuse=False,
     )
 
-    # 13. BH CRAQ silicon gate is KEYED: a legs-all-PASS verdict from another
-    #     cc1plus/simulator/tree must not open it (verifier recipe: seeded
-    #     stale verdict opened the gate for 14 device jobs).
+    # 13. BH CRAQ silicon gate is COMPLETE and KEYED: every populated
+    #     correctness selector must have exactly one matching BH verdict,
+    #     and a legs-all-PASS verdict from another cc1plus/simulator/tree
+    #     must not open it (verifier recipe: a sem-only partial reduce-sdpa
+    #     root previously opened the row before hand-corr had run).
     def gate_sweep(name):
         sw = object.__new__(Sweep)
         sim_dir = tmp / name / "sim"
@@ -538,13 +540,15 @@ def main():
 
     def gate_case(name, verdict, want_open):
         sw, sim_sha = gate_sweep(name)
-        verdict = dict(verdict, sim_sha_actual=sim_sha)
+        verdict = dict(verdict)
         vd = sw.ev / "gateop" / "craq" / "sem-corr-bh"
         vd.mkdir(parents=True)
         if verdict.get("sim_sha256") == "USE_ACTUAL":
             verdict["sim_sha256"] = sim_sha
         vd.joinpath("verdict.json").write_text(json.dumps(verdict))
-        got = sw._bh_craq_gate({"op": "gateop"})
+        got = sw._bh_craq_gate(
+            {"op": "gateop", "nodes": {"sem-corr": "sem-node", "hand-corr": ""}}
+        )
         ok = got == want_open
         print(
             f"SELFTEST {'PASS' if ok else 'FAIL'}: {name} "
@@ -554,7 +558,12 @@ def main():
         if not ok:
             failures.append(name)
 
-    legs_pass = {"legs": {"off": "PASS", "on": "PASS"}, "status": "OK"}
+    legs_pass = {
+        "selector": "sem-corr",
+        "arch": "bh",
+        "legs": {"off": "PASS", "on": "PASS"},
+        "status": "OK",
+    }
     gate_case(
         "gate: stale-key verdict never opens the gate",
         dict(
@@ -592,6 +601,124 @@ def main():
         want_open=False,
     )
 
+    def pair_gate_case(name, verdicts, want_open):
+        sw, sim_sha = gate_sweep(name)
+        for dirname, original in verdicts.items():
+            verdict = dict(original)
+            if verdict.get("sim_sha256") == "USE_ACTUAL":
+                verdict["sim_sha256"] = sim_sha
+            vd = sw.ev / "reduce-sdpa" / "craq" / dirname
+            vd.mkdir(parents=True)
+            vd.joinpath("verdict.json").write_text(json.dumps(verdict))
+        row = {
+            "op": "reduce-sdpa",
+            "nodes": {"sem-corr": "sem-node", "hand-corr": "hand-node"},
+        }
+        got = sw._bh_craq_gate(row)
+        ok = got == want_open
+        print(
+            f"SELFTEST {'PASS' if ok else 'FAIL'}: {name} "
+            f"(gate={'open' if got else 'closed'}, expected "
+            f"{'open' if want_open else 'closed'})"
+        )
+        if not ok:
+            failures.append(name)
+
+    keyed_sem = dict(
+        legs_pass,
+        cc1plus_sha256="cc1-this-run",
+        sim_sha256="USE_ACTUAL",
+        tt_metal_head="head-this-run",
+    )
+    keyed_hand = dict(keyed_sem, selector="hand-corr")
+    pair_gate_case(
+        "gate: sem-only reduce-sdpa partial verdict set never opens",
+        {"sem-corr-bh": keyed_sem},
+        want_open=False,
+    )
+    pair_gate_case(
+        "gate: complete sem+hand correctness verdict set opens",
+        {"sem-corr-bh": keyed_sem, "hand-corr-bh": keyed_hand},
+        want_open=True,
+    )
+    pair_gate_case(
+        "gate: extra BH selector verdict never opens",
+        {
+            "sem-corr-bh": keyed_sem,
+            "hand-corr-bh": keyed_hand,
+            "other-corr-bh": dict(keyed_sem, selector="other-corr"),
+        },
+        want_open=False,
+    )
+    pair_gate_case(
+        "gate: duplicate selector payload never opens",
+        {"sem-corr-bh": keyed_sem, "hand-corr-bh": keyed_sem},
+        want_open=False,
+    )
+    pair_gate_case(
+        "gate: non-OK verdict status never opens",
+        {
+            "sem-corr-bh": keyed_sem,
+            "hand-corr-bh": dict(keyed_hand, status="SKIP_NO_SIMULATOR"),
+        },
+        want_open=False,
+    )
+    pair_gate_case(
+        "gate: partial OFF-only leg set never opens",
+        {
+            "sem-corr-bh": keyed_sem,
+            "hand-corr-bh": dict(keyed_hand, legs={"off": "PASS"}),
+        },
+        want_open=False,
+    )
+    pair_gate_case(
+        "gate: wrong compiler pin never opens",
+        {
+            "sem-corr-bh": keyed_sem,
+            "hand-corr-bh": dict(keyed_hand, cc1plus_sha256="cc1-OLD"),
+        },
+        want_open=False,
+    )
+    pair_gate_case(
+        "gate: wrong simulator pin never opens",
+        {
+            "sem-corr-bh": keyed_sem,
+            "hand-corr-bh": dict(keyed_hand, sim_sha256="sim-OLD"),
+        },
+        want_open=False,
+    )
+    pair_gate_case(
+        "gate: wrong tt-metal head never opens",
+        {
+            "sem-corr-bh": keyed_sem,
+            "hand-corr-bh": dict(keyed_hand, tt_metal_head="head-OLD"),
+        },
+        want_open=False,
+    )
+    pair_gate_case(
+        "gate: wrong-arch verdict payload never opens",
+        {
+            "sem-corr-bh": keyed_sem,
+            "hand-corr-bh": dict(keyed_hand, arch="wh"),
+        },
+        want_open=False,
+    )
+    pair_gate_case(
+        "gate: WH verdict cannot substitute for missing BH hand verdict",
+        {"sem-corr-bh": keyed_sem, "hand-corr-wh": dict(keyed_hand, arch="wh")},
+        want_open=False,
+    )
+    pair_gate_case(
+        "gate: complete BH pair stays open when requested WH evidence exists",
+        {
+            "sem-corr-bh": keyed_sem,
+            "hand-corr-bh": keyed_hand,
+            "sem-corr-wh": dict(keyed_sem, arch="wh"),
+            "hand-corr-wh": dict(keyed_hand, arch="wh"),
+        },
+        want_open=True,
+    )
+
     # 14. ops-load validation: a perf selector without its correctness
     #     selector must fail loudly at load time.
     ops_fixture = tmp / "bad_ops.tsv"
@@ -623,7 +750,7 @@ def main():
         "win→win=GREEN, INVALID_MARKER=RED, all-None=INVALID_METRIC RED, "
         "uniform-slowdown=RED, refusal-hand-regression=RED, "
         "win→parity=RED(default)/YELLOW(override), loss-growth=RED, "
-        "YELLOW column, device-job cache keying, keyed CRAQ gate, "
+        "YELLOW column, device-job cache keying, complete+keyed CRAQ gate, "
         "ops-load perf-requires-corr)"
     )
     return 0

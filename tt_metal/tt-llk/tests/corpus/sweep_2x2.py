@@ -2563,33 +2563,57 @@ class Sweep:
     def _bh_craq_gate(self, row):
         """Keyed silicon gate (adversarial finding sweep_2x2.py:1341).
 
-        The gate trusts only BH CRAQ verdicts whose cc1plus + simulator +
-        tt-metal keys match THIS run — legs==PASS alone would let a
-        `--phases silicon` resume open the gate with greens earned by an
-        older compiler/simulator/tree.  A SKIP_NO_SIMULATOR verdict (no
-        legs) never opens it.
+        The gate requires EXACTLY one BH CRAQ verdict for every populated
+        correctness selector in the row, and trusts it only when its
+        selector/arch/status payload and cc1plus + simulator + tt-metal keys
+        match THIS run.  Exact selector-set equality matters on a resumed
+        root: accepting merely "some green BH verdict" lets a sem-only
+        partial run open a row whose hand-corr half was never checked.
+        WH verdicts remain additional architecture evidence for rows whose
+        craq_archs requests them; BH silicon admission is deliberately keyed
+        only to the complete BH correctness-selector set.  A
+        SKIP_NO_SIMULATOR verdict (no legs) never opens it.
         """
         craq_dir = self.ev / row["op"] / "craq"
         if not craq_dir.is_dir():
             return False
         sim = self._staged_sim("bh")
         sim_sha = sha256(sim) if sim and sim.is_file() else ""
-        verdicts = [
-            json.loads(p.read_text())
-            for p in sorted(craq_dir.glob("*-bh/verdict.json"))
-        ]
-        if not verdicts:
+        expected = {
+            f"{sel}-bh": sel
+            for sel in ("sem-corr", "hand-corr")
+            if row.get("nodes", {}).get(sel)
+        }
+        paths = sorted(craq_dir.glob("*-bh/verdict.json"))
+        if not expected or {p.parent.name for p in paths} != set(expected):
             return False
-        for v in verdicts:
-            if not (v.get("legs") and all(x == "PASS" for x in v["legs"].values())):
+        expected_legs = {"default"} if row.get("kind") == "pinpair" else {"off", "on"}
+        seen_selectors = set()
+        for p in paths:
+            try:
+                v = json.loads(p.read_text())
+            except (OSError, ValueError):
                 return False
+            selector = expected[p.parent.name]
+            legs = v.get("legs")
+            if (
+                v.get("selector") != selector
+                or selector in seen_selectors
+                or v.get("arch") != "bh"
+                or v.get("status") != "OK"
+                or not isinstance(legs, dict)
+                or set(legs) != expected_legs
+                or not all(x == "PASS" for x in legs.values())
+            ):
+                return False
+            seen_selectors.add(selector)
             if (
                 v.get("cc1plus_sha256") != self.info["cc1plus_sha256"]
                 or v.get("sim_sha256") != sim_sha
                 or v.get("tt_metal_head") != self.info["tt_metal_head"]
             ):
                 return False
-        return True
+        return seen_selectors == set(expected.values())
 
     def _load_keyed_classification(self, row, sel):
         """Classification evidence for (row, sel) valid for THIS run's keys,
