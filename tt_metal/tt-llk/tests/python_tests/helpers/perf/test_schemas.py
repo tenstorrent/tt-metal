@@ -237,6 +237,14 @@ PERF_TEST_SCHEMAS = {
         ],
         "aliases": {},
     },
+    "perf_fused": {
+        "version": 1,
+        "columns": [
+            "loop_factor",
+            "marker",
+        ],
+        "aliases": {},
+    },
     "perf_math_matmul": {
         "version": 2,
         "columns": [
@@ -803,6 +811,14 @@ PERF_TEST_SCHEMAS_QSR = {
             "tile_cnt",
             "unpack_to_dest",
             "unpacker_engine_sel",
+        ],
+        "aliases": {},
+    },
+    "perf_fused_quasar": {
+        "version": 1,
+        "columns": [
+            "loop_factor",
+            "marker",
         ],
         "aliases": {},
     },
