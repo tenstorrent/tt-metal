@@ -47,26 +47,22 @@ constexpr std::uint32_t TOTAL_TILES = NUM_CYCLES * NUM_LOOPS;
 
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
     const std::shared_ptr<distributed::MeshDevice>& mesh_device = this->devices_.at(0);
-    IDevice* dev = mesh_device->get_devices()[0];
+    auto& cq = mesh_device->mesh_command_queue();
     const experimental::NodeCoord node{0, 0};
 
     const std::uint32_t single_tile_size = 2 * 1024;  // Float16_b 32x32 tile
 
-    InterleavedBufferConfig src0_config{
-        .device = dev,
-        .size = single_tile_size * TILES_STREAMED_PER_INPUT,
-        .page_size = single_tile_size,
-        .buffer_type = BufferType::DRAM};
-    auto src0_dram_buffer = CreateBuffer(src0_config);
-    auto src1_dram_buffer = CreateBuffer(src0_config);
-    auto src2_dram_buffer = CreateBuffer(src0_config);
+    distributed::ReplicatedBufferConfig src_global_config{.size = single_tile_size * TILES_STREAMED_PER_INPUT};
+    distributed::DeviceLocalBufferConfig src_local_config{
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM};
+    auto src0_dram_buffer = distributed::MeshBuffer::create(src_global_config, src_local_config, mesh_device.get());
+    auto src1_dram_buffer = distributed::MeshBuffer::create(src_global_config, src_local_config, mesh_device.get());
+    auto src2_dram_buffer = distributed::MeshBuffer::create(src_global_config, src_local_config, mesh_device.get());
 
-    InterleavedBufferConfig dst_config{
-        .device = dev,
-        .size = single_tile_size * TOTAL_TILES,
-        .page_size = single_tile_size,
-        .buffer_type = BufferType::DRAM};
-    auto dst_dram_buffer = CreateBuffer(dst_config);
+    auto dst_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = single_tile_size * TOTAL_TILES},
+        {.page_size = single_tile_size, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
 
     const experimental::DFBSpecName IN0_DFB{"in0_dfb"};
     const experimental::DFBSpecName IN1_DFB{"in1_dfb"};
@@ -192,14 +188,16 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
     std::vector<std::uint32_t> src0_vec = make_streamed(0xC0FFEE);
     std::vector<std::uint32_t> src1_vec = make_streamed(0xDEAD01);
     std::vector<std::uint32_t> src2_vec = make_streamed(0xBEEF02);
-    tt::tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
-    tt::tt_metal::detail::WriteToBuffer(src1_dram_buffer, src1_vec);
-    tt::tt_metal::detail::WriteToBuffer(src2_dram_buffer, src2_vec);
+    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/true);
+    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, /*blocking=*/true);
+    distributed::EnqueueWriteMeshBuffer(cq, src2_dram_buffer, src2_vec, /*blocking=*/true);
 
-    const std::uint32_t src_aligned_page_size = static_cast<std::uint32_t>(src0_dram_buffer->aligned_page_size());
-    const std::uint32_t dst_aligned_page_size = static_cast<std::uint32_t>(dst_dram_buffer->aligned_page_size());
+    const std::uint32_t src_aligned_page_size =
+        static_cast<std::uint32_t>(src0_dram_buffer->get_reference_buffer()->aligned_page_size());
+    const std::uint32_t dst_aligned_page_size =
+        static_cast<std::uint32_t>(dst_dram_buffer->get_reference_buffer()->aligned_page_size());
 
-    auto reader_run_args = [&](const std::shared_ptr<Buffer>& buf) {
+    auto reader_run_args = [&](const std::shared_ptr<distributed::MeshBuffer>& buf) {
         return experimental::MakeRuntimeArgsForSingleNode(
             node,
             {{"src_addr", buf->address()},
@@ -231,7 +229,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
     LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<std::uint32_t> result_vec;
-    tt::tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
 
     // Output order = pack order: per outer loop, in0's whole block, then in1's, then in2's (blocked).
     // Within a loop, cycle i copies tile (i % TILES_PER_INPUT) of input (i / TILES_PER_INPUT), taken from
