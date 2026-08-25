@@ -14,6 +14,17 @@ redundant open PRs, functional bugs, missing tests, infra problems.
 
 PRs by state: **open** — 53130, 53361, 52720, 52646 (draft). **merged** — everything else.
 
+## At a glance
+
+| §  | Category            | Count | Of which                                                                 |
+|----|---------------------|-------|--------------------------------------------------------------------------|
+| 1  | Redundant open PRs  | **4** | 3 to drop/fold (52646, the 53130↔53361 sampling dup, 52720's compressed cpp) + 1 orphan golden generator |
+| 2  | Functional bugs     | **9** | 5 re-confirm the report's defects (C1, C2, C4, C5, C6) + 4 new (`sum_reduce_scalar`, `sdpa_reduce_row` Sum, `softmax_k` fp32, `recip_init`) |
+| 3  | Missing tests       | **6** | incl. 4 orphan LLKs with live ttnn callers; + 3 minor gaps                |
+| 4  | Infra problems      | **8** | 1 merge-collision, 1 test that masks a bug, 2 `skip` that should be `xfail` |
+
+3 non-findings that looked like bugs but aren't are recorded at the end of §2.
+
 ---
 
 ## 1. Redundant open PRs
