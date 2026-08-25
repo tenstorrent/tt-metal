@@ -1410,6 +1410,36 @@ TEST(MatmulConfigRegistry, TelemetryIsBoundedAndResettable) {
     EXPECT_EQ(snapshot.domains[static_cast<std::size_t>(OperationDomain::DenseMatmul)].resolution_attempts, 0);
 }
 
+TEST(MatmulConfigRegistry, SelectedPublicExecutionErrorCircuitBreaksWithoutCompletionOrRetry) {
+    reset_stats_for_testing();
+    reset_circuit_breakers_for_testing();
+    const auto recipe = basic_recipe();
+    const auto selected = Resolution{.reason = ResolutionReason::CertifiedMatch, .recipe = &recipe};
+    record_resolution(Mode::On, OperationDomain::DenseMatmul, selected, ExecutionAction::ApplyRecipe);
+
+    EXPECT_THROW(
+        {
+            bool applied = true;
+            const SelectedExecutionGuard guard(OperationDomain::DenseMatmul, &applied);
+            throw std::runtime_error("injected public execution failure");
+        },
+        std::runtime_error);
+
+    const auto snapshot = stats_snapshot();
+    const auto& dense = snapshot.domains[static_cast<std::size_t>(OperationDomain::DenseMatmul)];
+    EXPECT_EQ(dense.resolution_attempts, 1);
+    EXPECT_EQ(dense.selected_hits, 1);
+    EXPECT_EQ(dense.completed_hits, 0);
+    EXPECT_EQ(dense.circuit_breaker_activations, 1);
+    EXPECT_TRUE(dense.circuit_broken);
+    EXPECT_EQ(
+        resolve_with(Mode::On, Eligibility{.call = dense_matmul_call_semantics()}).reason,
+        ResolutionReason::CircuitBroken);
+
+    reset_circuit_breakers_for_testing();
+    reset_stats_for_testing();
+}
+
 TEST(MatmulConfigRegistry, EveryTelemetryReasonHasAStableUniqueName) {
     std::array<std::string_view, kResolutionReasonCount> names;
     for (std::size_t index = 0; index < names.size(); ++index) {

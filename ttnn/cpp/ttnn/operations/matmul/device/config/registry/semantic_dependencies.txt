@@ -5,7 +5,7 @@
 tt_metal/api/tt-metalium/cluster.hpp
 tt_metal/api/tt-metalium/experimental/inspector.hpp
 tt_metal/api/tt-metalium/mesh_device.hpp
-tt_metal/distributed/mesh_device_impl.hpp
+tt_metal/impl/context/context_types.hpp
 tt_metal/impl/context/metal_context.hpp
 tt_metal/impl/debug/inspector/inspector.cpp
 tt_metal/impl/debug/inspector/inspector.hpp

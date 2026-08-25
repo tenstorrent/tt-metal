@@ -434,6 +434,26 @@ void record_resolution(
 void record_completed_hit(OperationDomain domain) noexcept;
 StatsSnapshot stats_snapshot() noexcept;
 
+// Public wrapper scope guard. A selected operation records completion only
+// after its full public post-processing path returns. An exception propagates
+// unchanged, circuit-breaks the domain, and is never retried with a baseline
+// configuration inside the same public call.
+class SelectedExecutionGuard {
+public:
+    SelectedExecutionGuard(OperationDomain domain, const bool* selected) noexcept;
+    ~SelectedExecutionGuard() noexcept;
+
+    SelectedExecutionGuard(const SelectedExecutionGuard&) = delete;
+    SelectedExecutionGuard& operator=(const SelectedExecutionGuard&) = delete;
+    SelectedExecutionGuard(SelectedExecutionGuard&&) = delete;
+    SelectedExecutionGuard& operator=(SelectedExecutionGuard&&) = delete;
+
+private:
+    OperationDomain domain_;
+    const bool* selected_;
+    int uncaught_exceptions_;
+};
+
 // Test only: callers must ensure no concurrent recording is in flight.
 void reset_stats_for_testing() noexcept;
 

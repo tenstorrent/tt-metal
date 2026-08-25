@@ -7,7 +7,7 @@
 #include <tt-metalium/cluster.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
-#include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/impl/context/context_types.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
@@ -32,7 +32,7 @@ DeviceAttestationResult production_device_attestation(const tt::tt_metal::distri
             return {.status = DeviceAttestationStatus::NotOneChip};
         }
         const auto chip_id = static_cast<tt::ChipId>(device_ids.front());
-        auto& context = tt::tt_metal::MetalContext::instance(device.impl().get_context_id());
+        auto& context = tt::tt_metal::MetalContext::instance(tt::tt_metal::extract_context_id(&device));
         const auto& cluster = context.get_cluster();
 
         AttestationBoardClass board_class;

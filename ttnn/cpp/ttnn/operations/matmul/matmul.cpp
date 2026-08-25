@@ -6,7 +6,6 @@
 
 #include <array>
 #include <bit>
-#include <exception>
 #include <numeric>
 #include <variant>
 
@@ -90,32 +89,6 @@ Tensor handle_zero_volume_matmul(
 }
 
 }  // namespace detail
-
-namespace {
-
-class RegistryExecutionObserver {
-public:
-    RegistryExecutionObserver(const registry::OperationDomain domain, const bool* selected) noexcept :
-        domain_(domain), selected_(selected), uncaught_exceptions_(std::uncaught_exceptions()) {}
-
-    ~RegistryExecutionObserver() noexcept {
-        if (selected_ == nullptr || !*selected_) {
-            return;
-        }
-        if (std::uncaught_exceptions() > uncaught_exceptions_) {
-            registry::circuit_break_domain(domain_);
-        } else {
-            registry::record_completed_hit(domain_);
-        }
-    }
-
-private:
-    registry::OperationDomain domain_;
-    const bool* selected_;
-    int uncaught_exceptions_;
-};
-
-}  // namespace
 
 std::optional<UnaryWithParam> get_fused_activation(const std::optional<const Activation>& activation) {
     if (!activation.has_value()) {
@@ -445,7 +418,7 @@ static ttnn::Tensor bound_matmul(
     if (external_registry_selected != nullptr) {
         *external_registry_selected = registry_selected;
     }
-    const RegistryExecutionObserver registry_execution_observer(
+    const registry::SelectedExecutionGuard registry_execution_observer(
         call_semantics.domain, external_registry_selected == nullptr ? &registry_selected : nullptr);
 
     // On uses one complete temporary object. Shadow and every fallback retain
@@ -797,7 +770,8 @@ Tensor addmm(
         /*global_cb=*/std::nullopt,
         /*sub_device_id=*/std::nullopt};
     bool registry_selected = false;
-    const RegistryExecutionObserver registry_execution_observer(registry::OperationDomain::Addmm, &registry_selected);
+    const registry::SelectedExecutionGuard registry_execution_observer(
+        registry::OperationDomain::Addmm, &registry_selected);
     auto out_tensor = bound_matmul(
         mat1_tensor,
         mat2_tensor,

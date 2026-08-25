@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <exception>
 #include <limits>
 #include <utility>
 
@@ -838,6 +839,20 @@ void record_resolution(
 void record_completed_hit(const OperationDomain domain) noexcept {
     if (index(domain) < stats.size()) {
         stats[index(domain)].completed_hits.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+SelectedExecutionGuard::SelectedExecutionGuard(const OperationDomain domain, const bool* selected) noexcept :
+    domain_(domain), selected_(selected), uncaught_exceptions_(std::uncaught_exceptions()) {}
+
+SelectedExecutionGuard::~SelectedExecutionGuard() noexcept {
+    if (selected_ == nullptr || !*selected_) {
+        return;
+    }
+    if (std::uncaught_exceptions() > uncaught_exceptions_) {
+        circuit_break_domain(domain_);
+    } else {
+        record_completed_hit(domain_);
     }
 }
 
