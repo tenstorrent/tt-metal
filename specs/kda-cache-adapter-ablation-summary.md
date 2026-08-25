@@ -19,13 +19,14 @@ K3 disaggregated-decode contract on SP1xTP8, SP2xTP4, and SP4xTP2?
 
 ## Results
 
-Medians in milliseconds; percentages are relative to the real KDA-layer median.
+Adapter medians are in microseconds; layer medians remain in milliseconds.
+Percentages are relative to the real KDA-layer median.
 
-| Layout | Layer | Export S | Export conv | Export total | Import S | Import conv | Import total |
+| Layout | Layer (ms) | Export S (µs) | Export conv (µs) | Export total (µs) | Import S (µs) | Import conv (µs) | Import total (µs) |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| SP1xTP8 | 9.7171 | 0.0125 | 0.0274 | 0.0354 (0.364%) | 0.0116 | 0.0362 | 0.0449 (0.462%) |
-| SP2xTP4 | 9.6486 | 0.0163 | 0.0490 | 0.0617 (0.640%) | 0.0162 | 0.0697 | 0.0826 (0.856%) |
-| SP4xTP2 | 10.1103 | 0.0236 | 0.0943 | 0.1148 (1.136%) | 0.0238 | 0.1339 | 0.1549 (1.532%) |
+| SP1xTP8 | 9.7171 | 12.5 | 27.4 | 35.4 (0.364%) | 11.6 | 36.2 | 44.9 (0.462%) |
+| SP2xTP4 | 9.6486 | 16.3 | 49.0 | 61.7 (0.640%) | 16.2 | 69.7 | 82.6 (0.856%) |
+| SP4xTP2 | 10.1103 | 23.6 | 94.3 | 114.8 (1.136%) | 23.8 | 133.9 | 154.9 (1.532%) |
 
 All three layouts passed. Output PCC was 0.999902–0.999905, and both cache
 components were bit-identical after round trip. Recommendation: use preallocated,
