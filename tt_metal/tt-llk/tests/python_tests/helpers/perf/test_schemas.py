@@ -240,6 +240,14 @@ PERF_TEST_SCHEMAS = {
             "perf_fast_untilize_baseline_compare": "perf_fast_untilize_baseline_compare"
         },
     },
+    "perf_fused": {
+        "version": 1,
+        "columns": [
+            "loop_factor",
+            "marker",
+        ],
+        "aliases": {},
+    },
     "perf_math_matmul": {
         "version": 3,
         "columns": [
@@ -784,6 +792,14 @@ PERF_TEST_SCHEMAS_QSR = {
         "test_name_aliases": {
             "perf_eltwise_unary_sfpu_quasar": "perf_eltwise_unary_sfpu_quasar"
         },
+    },
+    "perf_fused_quasar": {
+        "version": 1,
+        "columns": [
+            "loop_factor",
+            "marker",
+        ],
+        "aliases": {},
     },
     "perf_matmul_quasar": {
         "version": 3,
