@@ -173,13 +173,22 @@ Use when no suitable warm tree exists or the fix adds files:
 
 ```bash
 cd "$WORKTREE_DIR"
-export CCACHE_DIR="${CCACHE_DIR:-$HOME/.codegen/ccache}"
-./build_metal.sh --enable-ccache --build-metal-tests 2>&1 | tee -a "$LOG_DIR/metal_build.log" \
+export CCACHE_DIR="${CCACHE_DIR:-/localdev/$USER/ccache}"
+export CCACHE_BASEDIR="$WORKTREE_DIR"
+./build_metal.sh --enable-ccache --build-metal-tests --configure-only 2>&1 \
+  | tee -a "$LOG_DIR/metal_build.log" \
   || { echo "COMPILE_FAILED"; exit 2; }
 BUILD_DIR="$WORKTREE_DIR/build"
+cmake --build "$BUILD_DIR" --target unit_tests_llk 2>&1 \
+  | tee -a "$LOG_DIR/metal_build.log" \
+  || { echo "COMPILE_FAILED"; exit 2; }
 BIN="$BUILD_DIR/test/tt_metal/unit_tests_llk"
 VERIFY_STRATEGY=worktree
 ```
+
+Build only the `unit_tests_llk` target — a plain `--build-metal-tests` builds the
+whole metal test suite (~1750 targets). `CCACHE_BASEDIR` is not a storage path; it
+strips the per-run worktree prefix so a rebuild can match a previous run's cache.
 
 Report the strategy and build wall-time in the self-log.
 
@@ -296,7 +305,9 @@ else
   HOME_TREE="$WORKTREE_DIR"
   BIN="$WORKTREE_DIR/build/test/tt_metal/unit_tests_llk"
 fi
-FRESH_CACHE="$(mktemp -d "$LOG_DIR/ttcache_${arch}.XXXXXX")"
+TTCACHE_ROOT="${TTCACHE_ROOT:-/localdev/$USER/ttcache}"
+mkdir -p "$TTCACHE_ROOT"
+FRESH_CACHE="$(mktemp -d "$TTCACHE_ROOT/ttcache_${arch}.XXXXXX")"
 env_args=( TT_METAL_HOME="$HOME_TREE" TT_METAL_CACHE="$FRESH_CACHE" )
 qsr_executed=0
 # Opt-in: verify with device-side LLK asserts + Watcher so a firing assert prints a readable
