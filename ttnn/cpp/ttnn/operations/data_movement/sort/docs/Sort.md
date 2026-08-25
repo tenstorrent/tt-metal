@@ -65,7 +65,14 @@ Both `ROW_MAJOR` and `COL_MAJOR` shard orientations are accepted.
   layer transposes the chosen dim to the innermost position before invoking
   the kernel and reverses the transpose on output.
 - Logical shapes need not be tile-aligned; the composite layer pads with
-  ±∞ sentinels and slices back to the original size after sorting.
+  ±∞ sentinels and slices back to the original size after sorting. `uint16`
+  inputs have no ±inf: their pad sentinels are 65 535 (ascending) / 0
+  (descending), which are valid `uint16` values — full-range `uint16` inputs
+  containing the sentinel value may see incorrect indices for tied values at
+  the padded boundary.
+- Zero-size tensors (any dimension of size 0) early-exit with empty
+  values/indices of the input shape, matching `torch.sort`. Scalar and
+  dim-size-1 inputs early-exit with the input and zero indices.
 - The minimum effective sort dim is 2 tiles (64 elements). Smaller dims are
   padded up internally.
 
