@@ -61,7 +61,7 @@ void kernel_main() {
     // last W-tile. Only the LAST block holds that tile, so the partial scaler
     // is passed on the last block and ::none() on every earlier one.
     constexpr auto partial_scaler =
-        HAS_PARTIAL_W ? ckl::ReducePartialScaler::last_tile_at(1) : ckl::ReducePartialScaler::none();
+        HAS_PARTIAL_W ? ckl::ReducePartialScaler::with_partial() : ckl::ReducePartialScaler::none();
 
     // ---------- Pass 1: streaming mean ----------
     // Scaler = 1/N (with partial-scaler-zeroed padded positions) converts SUM
