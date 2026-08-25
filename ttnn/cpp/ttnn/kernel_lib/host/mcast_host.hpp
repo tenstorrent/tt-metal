@@ -104,7 +104,7 @@ private:
     uint32_t sender_index_for_line_(uint32_t line) const;
     tt::tt_metal::CoreCoord line_coord_(const tt::tt_metal::CoreCoord& core, uint32_t i) const;
     std::vector<uint32_t> noc_ordered_bbox_(const std::vector<std::pair<uint32_t, uint32_t>>& vs) const;
-    std::vector<uint32_t> sender_rect_(const tt::tt_metal::CoreCoord& core) const;
+    std::vector<uint32_t> line_rect_(const tt::tt_metal::CoreCoord& core) const;
     std::vector<uint32_t> rotating_rt_(const tt::tt_metal::CoreCoord& core) const;
 
     tt::tt_metal::IDevice* device_;
