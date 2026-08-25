@@ -158,7 +158,8 @@ class DecodeRuntimeConfig:
     mesh_device: Any
     output_reader: OutputReader
     lane_capacity: int
-    page_table_layout: PageTableLayout
+    page_table_layout: PageTableLayout  # Current geometry; may be replaced once before execution.
+    page_table_layout_ceiling: PageTableLayout  # Construction-time upper bound retained across replacement.
     cluster_shape: tuple[int, int]
     num_devices: int
     vocab_size: int
@@ -166,8 +167,6 @@ class DecodeRuntimeConfig:
     force_greedy_top_k: bool
     allow_force_argmax: bool
     position_feedback_capable: bool
-    max_page_table_capacity_width: int
-    max_decode_page_table_width: int
 
     def __post_init__(self) -> None:
         _validate_resolved_decode_config(self)
@@ -241,8 +240,7 @@ class DecodeRuntimeConfig:
             force_greedy_top_k=force_greedy_top_k,
             allow_force_argmax=allow_force_argmax,
             position_feedback_capable=callable(getattr(model, "increment_positions", None)),
-            max_page_table_capacity_width=page_table_layout.raw_capacity_width,
-            max_decode_page_table_width=page_table_layout.decode_width,
+            page_table_layout_ceiling=page_table_layout,
         )
 
     def with_page_table_layout(self, layout: PageTableLayout) -> "DecodeRuntimeConfig":
@@ -251,9 +249,9 @@ class DecodeRuntimeConfig:
         _validate_page_table_layout(layout)
         if layout.block_size != self.page_table_layout.block_size:
             raise ValueError("replacement page-table layout cannot change block_size")
-        if layout.raw_capacity_width > self.max_page_table_capacity_width:
+        if layout.raw_capacity_width > self.page_table_layout_ceiling.raw_capacity_width:
             raise ValueError("replacement page-table capacity exceeds the construction-time ceiling")
-        if layout.decode_width > self.max_decode_page_table_width:
+        if layout.decode_width > self.page_table_layout_ceiling.decode_width:
             raise ValueError("replacement decode width exceeds the construction-time ceiling")
         return dataclasses.replace(self, page_table_layout=layout)
 
@@ -863,18 +861,14 @@ def _validate_resolved_decode_config(config: DecodeRuntimeConfig) -> None:
         raise ValueError("allow_force_argmax must match the resolved model capability")
     if config.position_feedback_capable != callable(getattr(config.model, "increment_positions", None)):
         raise ValueError("position_feedback_capable must match the resolved model capability")
-    if (
-        not isinstance(config.max_page_table_capacity_width, int)
-        or isinstance(config.max_page_table_capacity_width, bool)
-        or config.max_page_table_capacity_width < config.page_table_layout.raw_capacity_width
-    ):
-        raise ValueError("max_page_table_capacity_width must cover page_table_layout")
-    if (
-        not isinstance(config.max_decode_page_table_width, int)
-        or isinstance(config.max_decode_page_table_width, bool)
-        or config.max_decode_page_table_width < config.page_table_layout.decode_width
-    ):
-        raise ValueError("max_decode_page_table_width must cover page_table_layout")
+    if not isinstance(config.page_table_layout_ceiling, PageTableLayout):
+        raise TypeError("page_table_layout_ceiling must be a PageTableLayout")
+    if config.page_table_layout.block_size != config.page_table_layout_ceiling.block_size:
+        raise ValueError("page_table_layout_ceiling cannot change block_size")
+    if config.page_table_layout.raw_capacity_width > config.page_table_layout_ceiling.raw_capacity_width:
+        raise ValueError("page_table_layout_ceiling must cover page_table_layout capacity")
+    if config.page_table_layout.decode_width > config.page_table_layout_ceiling.decode_width:
+        raise ValueError("page_table_layout_ceiling must cover decode page-table geometry")
 
 
 def _copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):

@@ -124,13 +124,30 @@ jobs:
       tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
       summary-scope: ${{ inputs.platform }}
 
+  runtime-sanity-tests:
+    needs: [build-artifact]
+    if: ${{ inputs.tag-version != '' }}
+    permissions:
+      contents: read
+      packages: read
+    secrets: inherit
+    uses: ./.github/workflows/runtime-sanity-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: wh_n150,bh_p150
+
   # Run-level aggregate of per-job AI summaries from release-demo-tests-impl.
   # expected-jobs is the union of single-host and exabox multihost legs so a
   # missing ai_job_summary artifact is reconciled as INFRA_FAILURE.
   ai-run-summary:
     name: "AI Run Summary"
     needs: [release-demo-tests]
-    if: always() && needs.release-demo-tests.result != 'skipped'
+    # Reports on a run that failed — the case the summary exists for — but not
+    # on one that was cancelled: an aborted run has no outcome to summarize, and
+    # asking for one spends an LLM call to say it stopped early.
+    if: ${{ !cancelled() && needs.release-demo-tests.result != 'skipped' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

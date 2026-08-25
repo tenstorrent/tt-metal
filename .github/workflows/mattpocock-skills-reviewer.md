@@ -2,7 +2,7 @@
 description: Reviews pull requests using Matt Pocock's engineering skills to provide targeted, high-quality improvement suggestions based on the type of changes
 emoji: 🔍
 engine: copilot
-model: claude-sonnet-4.6
+model: claude-sonnet-5
 features:
   gh-aw-detection: true
 cache:
@@ -80,12 +80,6 @@ if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft =
     types:
     - opened
     - ready_for_review
-  slash_command:
-    events:
-    - pull_request_comment
-    - pull_request_review_comment
-    name: matt
-    strategy: centralized
 permissions:
   contents: read
   copilot-requests: write

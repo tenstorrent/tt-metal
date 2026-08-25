@@ -413,9 +413,12 @@ def test_metal2_dataflow_buffers_reach_resource_usage_per_core():
         )
 
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
-        # implementation="native" is load-bearing: the default picks the codegen path, which uses
-        # circular buffers and reports a non-zero peak whether or not DFBs are recorded.
-        ttnn.repeat(input_tensor, [1, 1, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG, implementation="native")
+        # The forced-native entry is load-bearing: ttnn.repeat routes this case to the codegen
+        # path, which uses circular buffers and reports a non-zero peak whether or not DFBs are
+        # recorded.
+        ttnn._ttnn.operations.data_movement.repeat_force_native(
+            input_tensor, [1, 1, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         captured_graph = ttnn.graph.end_graph_capture()
 
         # Each DFB is (2 * READ_ALIGNMENT) + page_size = 128 + 256 bytes, and neither is borrowed,

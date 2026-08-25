@@ -48,19 +48,24 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, uint16_t, uint1
     uint32_t tile_width = 32) {
     const auto config_opt = find_topk_core_config(
         width, min_dim, max_dim, k, core_range, l1_size, value_tile_size, index_tile_size, tile_width);
-    if (config_opt.has_value()) {
-        const auto& config = config_opt.value();
-        return {
-            config.num_cores + 1,
-            config.split_size,
-            config.rem,
-            config.final_input_size,
-            config.selected_x,
-            config.selected_y};
-    }
-    const auto max_cores =
-        (core_range.end_coord.y - core_range.start_coord.y - 1) * (core_range.end_coord.x - core_range.start_coord.x);
-    return {max_cores + 1, width, 0, width * k, 0, 0};
+    // select_program_factory only picks the multi-core factory after verify_multi_core_cost
+    // succeeded with the same arguments, so a valid config must exist here. The old fallback
+    // fabricated a config with selected_x/selected_y = 0 (and an unsigned-underflow-prone core
+    // count), which only failed later with a confusing "Failed to select local cores range".
+    TT_FATAL(
+        config_opt.has_value(),
+        "TopK multi-core factory selected but no valid core configuration exists for width={} k={} grid={}",
+        width,
+        k,
+        core_range.str());
+    const auto& config = config_opt.value();
+    return {
+        config.num_cores + 1,
+        config.split_size,
+        config.rem,
+        config.final_input_size,
+        config.selected_x,
+        config.selected_y};
 }
 
 tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory::create_descriptor(
