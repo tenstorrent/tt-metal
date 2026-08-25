@@ -147,9 +147,10 @@ TEST_F(McastHostFixture, PerRow8x8) {
     //         (num_active = span-1 = 7; flags = 1; rotating_span = 0 for fixed mode) ---
     EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 0, 1, 7, 1, 0}));
 
-    // --- RT: sender at col 0 of row Y -> rect over cols [1, 7] of that row ---
+    // --- RT: sender at col 0 of row Y -> full receiver line, cols [0, 7] of that row (the device
+    //         pipe excludes the in-line source) ---
     for (uint32_t Y : {0u, 3u, 7u}) {
-        EXPECT_EQ(mc.runtime_args(CoreCoord(0, Y)), rect(virt(1, Y), virt(7, Y))) << "sender row " << Y;
+        EXPECT_EQ(mc.runtime_args(CoreCoord(0, Y)), rect(virt(0, Y), virt(7, Y))) << "sender row " << Y;
     }
     // --- RT: receiver at col X (!=0) of row Y -> [sender_x, sender_y, 0, 0] with sender at col 0 ---
     for (uint32_t X : {1u, 4u, 7u}) {
@@ -191,9 +192,9 @@ TEST_F(McastHostFixture, PerColumn8x8) {
 
     EXPECT_EQ(mc.compile_time_args(), (std::vector<uint32_t>{1, 2, 3, 7, 1, 0}));
 
-    // sender at row 0 of column X -> rect over rows [1, 7] of that column.
+    // sender at row 0 of column X -> full receiver line, rows [0, 7] of that column.
     for (uint32_t X : {0u, 4u, 7u}) {
-        EXPECT_EQ(mc.runtime_args(CoreCoord(X, 0)), rect(virt(X, 1), virt(X, 7))) << "sender col " << X;
+        EXPECT_EQ(mc.runtime_args(CoreCoord(X, 0)), rect(virt(X, 0), virt(X, 7))) << "sender col " << X;
     }
     // receiver at row Y (!=0) of column X -> [sender_x, sender_y, 0, 0] with sender at row 0.
     for (uint32_t Y : {1u, 4u, 7u}) {
@@ -284,7 +285,7 @@ TEST_F(McastHostFixture, OffsetPerRowDiagonalNoc1) {
     EXPECT_TRUE(mc.is_sender(CoreCoord(5, 5)));
     EXPECT_EQ(
         mc.runtime_args(CoreCoord(5, 5)),
-        expected_bbox(dev, {CoreCoord(2, 5), CoreCoord(3, 5), CoreCoord(4, 5)}, NOC::NOC_1));
+        expected_bbox(dev, {CoreCoord(2, 5), CoreCoord(3, 5), CoreCoord(4, 5), CoreCoord(5, 5)}, NOC::NOC_1));
     const auto sender = dev->worker_core_from_logical_core(CoreCoord(4, 4));
     EXPECT_EQ(
         mc.runtime_args(CoreCoord(2, 4)),
@@ -332,7 +333,7 @@ TEST_F(McastHostFixture, OffsetPerColumnDiagonalNoc1) {
     EXPECT_TRUE(mc.is_sender(CoreCoord(5, 5)));
     EXPECT_EQ(
         mc.runtime_args(CoreCoord(5, 5)),
-        expected_bbox(dev, {CoreCoord(5, 2), CoreCoord(5, 3), CoreCoord(5, 4)}, NOC::NOC_1));
+        expected_bbox(dev, {CoreCoord(5, 2), CoreCoord(5, 3), CoreCoord(5, 4), CoreCoord(5, 5)}, NOC::NOC_1));
     const auto sender = dev->worker_core_from_logical_core(CoreCoord(4, 4));
     EXPECT_EQ(
         mc.runtime_args(CoreCoord(4, 2)),
