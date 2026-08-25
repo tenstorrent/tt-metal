@@ -207,7 +207,10 @@ TEST_F(MeshDeviceFixture, Semaphore_SemDerivedOutsideRegion_StillChecked) {
     Program program = CreateProgram();
     uint32_t sem_id = CreateSemaphore(program, logical_core, /*initial_value=*/0);
     // Allocate a buffer so the live-tensor range set is armed (non-null).
-    auto buf = Buffer::create(device, 1024, 1024, BufferType::L1);
+    auto buf = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = 1024},
+        {.page_size = 1024, .buffer_type = BufferType::L1},
+        this->devices_.at(0).get());
 
     std::string kernel_src = R"(
         #include "api/dataflow/dataflow_api.h"

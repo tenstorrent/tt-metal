@@ -9,18 +9,10 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_allclose, assert_numeric_metrics, assert_with_ulp
 from models.common.utility_functions import torch_random
 
 TEST_PADDING_VALUE = -42
-
-
-def _skip_fp32_nc_reduce(dtype, dim):
-    # The accurate SFPU fp32 path covers H/W reductions only; batch/channel (dim 0/1) reductions use
-    # the NC path with a bf16-rounded 1/N scaler (~1e-3 error), so fp32 there is not ULP-exact.
-    axes = [dim] if isinstance(dim, int) else list(dim)
-    if dtype == ttnn.float32 and any(a in (0, 1) for a in axes):
-        pytest.skip("fp32 batch/channel-dim mean uses the bf16-scaler NC path; accurate SFPU covers H/W only")
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -76,7 +68,6 @@ def test_mean(device, batch_size, h, w, dim, keepdim, dtype):
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
 def test_mean_scaling(device, shape, dim, keepdim, dtype):
     """Ones input → uniform mean; check the exact result via ULP (both dtypes)."""
-    _skip_fp32_nc_reduce(dtype, dim)
     torch.manual_seed(0)
     torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
     torch_input_tensor = torch.ones(shape, dtype=torch_dtype)
@@ -96,7 +87,6 @@ def test_mean_scaling(device, shape, dim, keepdim, dtype):
 @pytest.mark.parametrize("scalar", [2.0])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
 def test_mean_scaling_factor(device, shape, dim, scalar, dtype):
-    _skip_fp32_nc_reduce(dtype, dim)
     torch.manual_seed(0)
     torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
     torch_input_tensor = torch.ones(shape, dtype=torch_dtype)
@@ -176,3 +166,27 @@ def test_mean_shard(device, mem_config, keepdim, dtype):
     else:
         assert output_mem_config.buffer_type == ttnn.BufferType.L1
         assert output_mem_config.is_sharded()
+
+
+@pytest.mark.parametrize("input_shape", [(32, 32), (16, 2, 32, 3), (16, 2, 32, 24), (1, 1, 64, 64)])
+@pytest.mark.parametrize("fast_and_approximate_mode", [False, True], ids=["accurate", "fast"])
+def test_mean_fp32_fast_and_approximate_mode_no_dim(device, input_shape, fast_and_approximate_mode):
+    """FLOAT32 mean (dim=None) with both values of fast_and_approximate_mode.
+    - False (default): accurate SFPU path.
+    - True: faster FPU/TF32 path.
+    """
+    torch.manual_seed(1)
+
+    torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
+    torch_output_tensor = torch.mean(torch_input_tensor.to(torch.float64)).to(torch.float32)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
+
+    output_tensor = ttnn.mean(input_tensor, dim=None, fast_and_approximate_mode=fast_and_approximate_mode)
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor)).reshape(torch_output_tensor.shape)
+
+    if fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR:
+        assert_allclose(torch_output_tensor, output_tensor, rtol=1e-2, atol=1e-2)
+    else:
+        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)
