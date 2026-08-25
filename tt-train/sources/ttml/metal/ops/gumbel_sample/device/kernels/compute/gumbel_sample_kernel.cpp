@@ -112,8 +112,10 @@ void kernel_main() {
                     // ---- pass 2: score = logits * (1/T) + (-log(-log(U))), one SFPI sweep ----
                     // The scaling is applied to the LOGITS, never to the noise: score = logits/T + g.
                     // Scaling the noise instead would invert the temperature's meaning entirely.
-                    // The init reprograms what rand_tile left behind (counters, SFPU config);
-                    // the fused pass itself relies on no replay slots or const LREGs.
+                    // The init reprograms what rand_tile left behind: counters, SFPU config,
+                    // and the programmable const LREGs holding the log constants (Wormhole's
+                    // rand_tile overwrites two of those slots on every call). The pass uses no
+                    // replay slots, so rand's replayed row is untouched.
                     gumbel_score_tile_init();
                     // The offset template arg is unsigned, so a reversed pair would wrap into a
                     // silent out-of-bounds DST read rather than a negative offset.

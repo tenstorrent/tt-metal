@@ -1202,10 +1202,10 @@ namespace {
 // ttml::metal::sfpu::gumbel_noise_neg_log in gumbel_sfpu.h -- keep them in sync with that header. The
 // header itself is TRISC-only, so the invariants the kernel relies on are pinned here by
 // reconstruction.
-constexpr float kApproxNegLogLn2 = -0.693359375F;
+constexpr float kApproxNegLogLn2 = -0x1.62e43p-1F;
 constexpr float kApproxLogB = 0.240234375F;
-constexpr float kApproxLogC = -1.4140625F;
-constexpr float kApproxLogD = 0x1.2c801p+0F;
+constexpr float kApproxLogC = -0x1.69f218p+0F;
+constexpr float kApproxLogD = 0x1.2c7228p+0F;
 
 // The NEGATED mantissa polynomial q(m) = m*(m*B + C) + D = -p(m) on the octave [1, 2), in double.
 // The kernel returns -ln directly (negation folded into the constants), so the mirror does too.
@@ -1285,7 +1285,7 @@ TEST(GumbelSfpuHostTest, TestGumbelApproxLogInvariants) {
     // point of bounding U below 1.0); the generator's ATTAINABLE top of range sits one fp32 step
     // lower still, because the factory shrinks rand's closed-interval scale by one ULP when
     // from + scale would round past the bound (compute_rand_scale_bits), and there the ceiling is
-    // near 13.75 -- the approximate-log analogue of the exact log's ~16.6.
+    // near 13.81 -- the approximate-log analogue of the exact log's ~16.6.
     const float u_raw_max = std::nextafterf(1.0F, 0.0F);  // kGumbelUniformUpperBound
     const float raw_inner = approx_neg_log<float>(u_raw_max);
     ASSERT_GT(raw_inner, 0.0F) << "-log(U) must stay strictly positive below 1.0";
@@ -1301,5 +1301,5 @@ TEST(GumbelSfpuHostTest, TestGumbelApproxLogInvariants) {
     const float u_top = lower + scale;
     const float top_inner = approx_neg_log<float>(u_top);
     ASSERT_GT(top_inner, 0.0F);
-    EXPECT_LE(approx_neg_log<float>(top_inner), 13.8F) << "noise ceiling left the documented ~13.75 cap";
+    EXPECT_LE(approx_neg_log<float>(top_inner), 13.85F) << "noise ceiling left the documented ~13.81 cap";
 }

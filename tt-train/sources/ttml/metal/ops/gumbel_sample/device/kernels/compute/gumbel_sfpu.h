@@ -31,10 +31,16 @@
  *
  * Both logs feed only the Gumbel noise magnitude, so they run through a
  * cheap approximation (see gumbel_noise_neg_log) rather than tt-llk's precise
- * minimax body; define GUMBEL_SAMPLE_PRECISE_LOG to use it instead. Either
- * way the pass uses immediate constants only -- no programmable const LREGs
- * and no replay slots -- so it composes with rand_tile on both architectures
- * (Wormhole's rand programs LREG12/LREG13; nothing here reads them).
+ * minimax body; define GUMBEL_SAMPLE_PRECISE_LOG to use it instead.
+ *
+ * Register discipline: the pass reads its log constants from the three
+ * programmable const registers (vConstFloatPrgm0..2), programmed by
+ * gumbel_score_tile_init(). Wormhole's rand_tile REPROGRAMS two of those
+ * slots (LREG12/13) on every call -- its PRNG state lives elsewhere -- so
+ * the init must run AFTER rand_tile within each tile, which is exactly the
+ * order the kernel uses: rand_tile(); gumbel_score_tile_init();
+ * gumbel_score_tile(). No replay slots are used, so rand's replayed row
+ * (Blackhole) is untouched.
  */
 
 namespace ttml::metal::sfpu {
@@ -52,18 +58,26 @@ namespace ttml::metal::sfpu {
 sfpi_inline sfpi::vFloat gumbel_noise_neg_log(const sfpi::vFloat v) {
     return -ckernel::sfpu::_calculate_log_body_no_init_(v);
 }
+
+// The precise body manages its own constants; nothing to program.
+inline void gumbel_score_constants_init() {
+}
 #else
 /**
  * Approximate -ln(v) for the noise chain: exponent split plus one quadratic
- * over the mantissa octave -- 2 MADs and 4 constants (3 of them single-load
- * fp16a) versus the precise body's 3 MADs, 4 two-load fp32 constants, and
- * predicated zero guard. The NEGATION is folded into the constants: both
- * call sites want -log (the inner produces -log U, the outer's result IS
- * the Gumbel value), so returning -ln directly deletes two per-element
- * register sign flips. Sign flips are exact, so kNegLn2, kB, and kC stay
- * exactly on the fp16a grid -- an fp16a-exact literal loads with a single
- * SFPLOADI where a full fp32 constant takes two -- keep them on that grid
- * when re-fitting.
+ * over the mantissa octave -- 2 MADs, three FULL-FP32 constants read for
+ * free from the programmable const registers (programmed once per tile by
+ * gumbel_score_constants_init), and one fp16a immediate, versus the precise
+ * body's 3 MADs, 4 two-load fp32 constants, and predicated zero guard. The
+ * NEGATION is folded into the constants: both call sites want -log (the
+ * inner produces -log U, the outer's result IS the Gumbel value), so
+ * returning -ln directly deletes two per-element register sign flips.
+ * kGumbelPolyB is the one value still constrained to the fp16a grid: sfpi
+ * exposes only three programmable float slots, so it stays an inline
+ * immediate, and an fp16a-exact literal loads with a single SFPLOADI where
+ * a full fp32 immediate takes two. Keep B on that grid when re-fitting; the
+ * other three are free fp32 (C and D must stay EXACT derivations from ln2
+ * and B, or the endpoint ties below break).
  *
  * The noise needs distributional fidelity, not ULP accuracy. Invariants
  * (pinned host-side by TestGumbelApproxLogInvariants), stated for the
@@ -73,24 +87,38 @@ sfpi_inline sfpi::vFloat gumbel_noise_neg_log(const sfpi::vFloat v) {
  *    e*kNegLn2 + q(m) is continuous and decreasing across octave
  *    boundaries (up to 1-ulp fp32 jitter). A monotone transform of U
  *    cannot reorder samples, so argmax semantics survive the approximation.
- *  - Error: |q + ln| <= 5.4e-3 on [1,2), plus |e|*2.1e-4 from the fp16a
- *    ln(2) -- orders below the sampling test's binomial resolution.
+ *  - Error: |q + ln| <= 5.3e-3 on [1,2), plus |e|*1.9e-9 from fp32 ln(2)
+ *    (the old fp16a ln2 cost |e|*2.1e-4 -- at U ~ 2^-32 that term alone
+ *    exceeded the polynomial bound) -- orders below the sampling test's
+ *    binomial resolution.
  *  - No zero guard: the caller's rand bounds give U in [2^-32, 1-2^-24],
  *    and the uniform +2^-20 shift on q keeps -log(U) >= ~1e-6 under fp32
  *    rounding, so the outer call's argument never reaches zero or flips
- *    sign. Cost: noise tops out near 13.75 instead of 16.64, compressing
+ *    sign. Cost: noise tops out near 13.81 instead of 16.64, compressing
  *    only the ~1e-6 upper quantile of the Gumbel tail.
  */
+constexpr float kGumbelNegLn2 = -0x1.62e43p-1F;  // -ln(2), full fp32 -- lives in a Prgm reg
+constexpr float kGumbelPolyB = 0.240234375F;     // fp16a-exact minimax under the ties (inline immediate)
+constexpr float kGumbelPolyC = -0x1.69f218p+0F;  // kGumbelNegLn2 - 3*kGumbelPolyB, fp32-exact
+constexpr float kGumbelPolyD = 0x1.2c7228p+0F;   // 2*kGumbelPolyB - kGumbelNegLn2 + 2^-20, fp32-exact
+
+// Program the log constants into the SFPU's programmable const registers, once per tile from
+// gumbel_score_tile_init(). Turning the per-use SFPLOADI immediates (2 call sites x 4 faces = 8
+// materializations per constant per tile) into one programming each is what buys full-fp32 budget
+// for these constants; sfpi exposes only THREE float slots, so kGumbelPolyB -- the cheapest to
+// materialize, a single-load fp16a immediate -- stays inline in gumbel_noise_neg_log.
+inline void gumbel_score_constants_init() {
+    sfpi::vConstFloatPrgm0 = kGumbelNegLn2;
+    sfpi::vConstFloatPrgm1 = kGumbelPolyC;
+    sfpi::vConstFloatPrgm2 = kGumbelPolyD;
+}
+
 sfpi_inline sfpi::vFloat gumbel_noise_neg_log(const sfpi::vFloat v) {
-    constexpr float kNegLn2 = -0.693359375F;  // -ln(2) to fp16a precision
-    constexpr float kB = 0.240234375F;        // fp16a-exact minimax under the endpoint ties
-    constexpr float kC = -1.4140625F;         // kNegLn2 - 3*kB, fp16a-exact
-    constexpr float kD = 0x1.2c801p+0F;       // 2*kB - kNegLn2 + 2^-20, fp32-exact
     const sfpi::vFloat m = sfpi::setexp(v, 127);
-    const sfpi::vFloat poly = m * (m * kB + kC) + kD;
+    const sfpi::vFloat poly = m * (m * kGumbelPolyB + sfpi::vConstFloatPrgm1) + sfpi::vConstFloatPrgm2;
     const auto exp = sfpi::convert<sfpi::vSMag>(sfpi::exexp(v));
     const sfpi::vFloat expf = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::Nearest);
-    return expf * kNegLn2 + poly;
+    return expf * sfpi::vConstFloatPrgm0 + poly;
 }
 #endif
 
@@ -143,7 +171,13 @@ inline void _calculate_gumbel_score_(const std::uint32_t inv_temperature_bits) {
 /**
  * @brief Initializes the fused Gumbel scoring SFPU operation.
  */
-ALWI void gumbel_score_tile_init() { MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused>())); }
+ALWI void gumbel_score_tile_init() {
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused>()));
+    // AFTER the llk init (so nothing it resets clobbers them), and after rand_tile in the kernel's
+    // per-tile order (Wormhole's rand reprograms LREG12/13 -- two of the three Prgm slots -- on
+    // every call).
+    MATH((ttml::metal::sfpu::gumbel_score_constants_init()));
+}
 
 /**
  * @brief Overwrites the uniform tile at `idst` with the fused Gumbel score.

@@ -92,7 +92,7 @@ constexpr auto kWriterPositionsCbIndex = tt::CBIndex::c_6;
 // argmax onto that token with certainty. It is a ~2^-32-per-element event, but it is a real one,
 // so here the top of the range is the largest float32 strictly below 1.0 and g stays FINITE --
 // that finiteness is the point of the bound. The ceiling itself is ~16.6 with an exact log; the
-// approximate log in gumbel_sfpu.h caps it lower, near 13.75.
+// approximate log in gumbel_sfpu.h caps it lower, near 13.81.
 //
 // gumbel_sfpu.h's approximate log drops its zero guard on the strength of exactly these bounds --
 // change them only together with that header.
