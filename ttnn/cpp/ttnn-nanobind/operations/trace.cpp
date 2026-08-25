@@ -15,6 +15,8 @@
 #include <nanobind/stl/unordered_set.h>
 #include <nanobind/stl/vector.h>
 
+#include <tt-metalium/experimental/allocation_context.hpp>
+
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/trace.hpp"
 
@@ -33,6 +35,12 @@ void py_module_types(nb::module_& mod) {
 }
 
 void py_module(nb::module_& mod) {
+    // Read the process-wide tracker configuration from Metal's cached RunTimeOptions snapshot. Python must not parse
+    // these environment variables independently because the two layers must always agree.
+    mod.def("trace_allocation_tracking_enabled", []() { return tt::tt_metal::trace_allocation_tracking_enabled(); });
+    mod.def(
+        "trace_allocation_diagnostics_enabled", []() { return tt::tt_metal::trace_allocation_diagnostics_enabled(); });
+
     mod.def(
         "begin_trace_capture",
         [](MeshDevice* device, std::optional<ttnn::QueueId> cq_id) {
