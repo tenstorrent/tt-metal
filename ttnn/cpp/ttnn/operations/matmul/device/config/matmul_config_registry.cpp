@@ -180,6 +180,9 @@ static Resolution resolve_impl(
     if (mode == Mode::Off) {
         return {.reason = ResolutionReason::Disabled};
     }
+    if (mode == Mode::On && eligibility.trace_capture_active) {
+        return {.reason = ResolutionReason::TraceCaptureUnsupported};
+    }
     if (request.schema_version != 1) {
         return {.reason = ResolutionReason::IncompleteRequest};
     }
@@ -246,7 +249,9 @@ DispatchResult resolve_for_dispatch(
     const ttnn::prim::MatmulParams& legacy_parameters,
     const ResolverFunction resolver) {
     auto resolution = Resolution{.reason = ResolutionReason::Disabled};
-    if (mode != Mode::Off) {
+    if (mode == Mode::On && eligibility.trace_capture_active) {
+        resolution = {.reason = ResolutionReason::TraceCaptureUnsupported};
+    } else if (mode != Mode::Off) {
         resolution = request.has_value() && resolver != nullptr
                          ? resolver(mode, request.value(), eligibility)
                          : Resolution{.reason = ResolutionReason::IncompleteRequest};

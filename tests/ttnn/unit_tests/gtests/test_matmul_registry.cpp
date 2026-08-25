@@ -257,6 +257,59 @@ TEST(MatmulConfigRegistry, DispatchDoesNotResolveAnIncompleteRequest) {
     EXPECT_FALSE(result.materialized_parameters.has_value());
 }
 
+TEST(MatmulConfigRegistry, OnTraceCaptureRejectsBeforeResolver) {
+    const auto request = exact_request();
+    const ttnn::prim::MatmulParams legacy_parameters;
+    const auto eligibility = Eligibility{.call = request.call, .trace_capture_active = true};
+    resolver_invocations = 0;
+
+    const auto off =
+        resolve_for_dispatch(Mode::Off, request, eligibility, legacy_parameters, &counting_certified_resolver);
+    EXPECT_EQ(resolver_invocations, 0);
+    EXPECT_EQ(off.resolution.reason, ResolutionReason::Disabled);
+    EXPECT_EQ(off.action, ExecutionAction::Fallback);
+
+    const auto result =
+        resolve_for_dispatch(Mode::On, request, eligibility, legacy_parameters, &counting_certified_resolver);
+
+    EXPECT_EQ(resolver_invocations, 0);
+    EXPECT_EQ(result.resolution.reason, ResolutionReason::TraceCaptureUnsupported);
+    EXPECT_EQ(result.action, ExecutionAction::Fallback);
+    EXPECT_FALSE(result.materialized_parameters.has_value());
+    EXPECT_EQ(resolve(Mode::On, request, eligibility).reason, ResolutionReason::TraceCaptureUnsupported);
+}
+
+TEST(MatmulConfigRegistry, ShadowTraceCaptureObservesWithoutMutation) {
+    const auto request = exact_request();
+    const auto eligibility = Eligibility{.call = request.call, .trace_capture_active = true};
+    ttnn::prim::MatmulParams legacy_parameters;
+    legacy_parameters.output_dtype = DataType::FLOAT32;
+    const auto legacy_hash = ttsl::hash::hash_objects_with_default_seed(legacy_parameters);
+    resolver_invocations = 0;
+
+    const auto result =
+        resolve_for_dispatch(Mode::Shadow, request, eligibility, legacy_parameters, &counting_certified_resolver);
+
+    EXPECT_EQ(resolver_invocations, 1);
+    EXPECT_EQ(result.resolution.reason, ResolutionReason::CertifiedMatch);
+    EXPECT_EQ(result.action, ExecutionAction::ObserveOnly);
+    EXPECT_FALSE(result.materialized_parameters.has_value());
+    EXPECT_EQ(ttsl::hash::hash_objects_with_default_seed(legacy_parameters), legacy_hash);
+}
+
+TEST(MatmulConfigRegistry, TraceCaptureRejectionHasBoundedTelemetry) {
+    reset_stats_for_testing();
+    const auto rejection = Resolution{.reason = ResolutionReason::TraceCaptureUnsupported};
+    record_resolution(Mode::On, OperationDomain::DenseMatmul, rejection, ExecutionAction::Fallback);
+
+    const auto snapshot = stats_snapshot();
+    const auto& dense = snapshot.domains[static_cast<std::size_t>(OperationDomain::DenseMatmul)];
+    EXPECT_EQ(dense.resolution_attempts, 1);
+    EXPECT_EQ(dense.fallbacks, 1);
+    EXPECT_EQ(dense.reasons[static_cast<std::size_t>(ResolutionReason::TraceCaptureUnsupported)], 1);
+    EXPECT_EQ(dense.certified_hits, 0);
+}
+
 TEST(MatmulConfigRegistry, ResolvesDefaultOutputContractFromInputA) {
     const auto result = resolve_matmul_io_contract(default_io_request());
 

@@ -8,6 +8,8 @@
 #include <numeric>
 #include <variant>
 
+#include <tt-metalium/experimental/inspector.hpp>
+
 #include "device/config/matmul_program_config_types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
@@ -233,7 +235,17 @@ static ttnn::Tensor bound_matmul(
     const auto registry_mode = registry::current_mode();
     std::optional<ttnn::prim::MatmulParams> registry_parameters;
     if (registry_mode != registry::Mode::Off) {
-        auto eligibility = registry::Eligibility{.call = call_semantics};
+        bool trace_capture_active = false;
+        try {
+            if (auto* device = input_tensor_a.device(); device != nullptr) {
+                trace_capture_active = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(device).has_value();
+            }
+        } catch (...) {
+            // If trace state cannot be queried, On must remain on the legacy path.
+            trace_capture_active = registry_mode == registry::Mode::On;
+        }
+
+        auto eligibility = registry::Eligibility{.call = call_semantics, .trace_capture_active = trace_capture_active};
         std::optional<registry::MatmulRegistryRequest> registry_request;
         try {
             const auto io_contract = registry::resolve_matmul_io_contract(registry::IoContractRequest{
@@ -255,6 +267,7 @@ static ttnn::Tensor bound_matmul(
             eligibility = registry::Eligibility{
                 .call = call_semantics,
                 .io_contract_status = io_contract.status,
+                .trace_capture_active = trace_capture_active,
                 .has_program_config = parameters.program_config.has_value(),
                 .has_compute_kernel_config = parameters.compute_kernel_config.has_value(),
                 .has_user_core_grid = parameters.user_core_coord.has_value(),

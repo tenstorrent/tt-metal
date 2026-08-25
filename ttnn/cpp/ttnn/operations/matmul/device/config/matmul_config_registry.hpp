@@ -50,6 +50,7 @@ enum class ResolutionReason {
     IneligibleOperationDomain,
     MalformedOperationSemantics,
     InconsistentIoContract,
+    TraceCaptureUnsupported,
     ExplicitOverride,
     UnsupportedSemantics,
     IncompleteRequest,
@@ -103,6 +104,7 @@ ResolvedMatmulIoContract resolve_matmul_io_contract(const IoContractRequest& req
 struct Eligibility {
     CallSemantics call;
     IoContractStatus io_contract_status = IoContractStatus::Resolved;
+    bool trace_capture_active = false;
     bool has_program_config = false;
     bool has_compute_kernel_config = false;
     bool has_user_core_grid = false;
