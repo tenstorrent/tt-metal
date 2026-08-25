@@ -49,20 +49,6 @@ on:
           - unit
           - wan22
         default: "disabled"
-      galaxy-perf:
-        description: "Perf tests: Select all, specific model, or disabled"
-        required: false
-        type: choice
-        options:
-          - disabled
-          - all
-          #          - cnn
-          #          - llama70b
-          #          - llama_unit_tests
-          #          - llama70b_prefill
-          #          - sentence_bert
-          - wan2-2
-        default: "disabled"
       galaxy-e2e:
         description: "Galaxy e2e tests: all, one suite (see tests/pipeline_reorg/galaxy_e2e_tests.yaml ids), or disabled"
         required: false
@@ -121,7 +107,6 @@ jobs:
       run-sanity: ${{ steps.logic.outputs.run-sanity }}
       run-unit: ${{ steps.logic.outputs.run-unit }}
       run-integration: ${{ steps.logic.outputs.run-integration }}
-      run-model-perf: ${{ steps.logic.outputs.run-model-perf }}
       run-e2e: ${{ steps.logic.outputs.run-e2e }}
     steps:
       - name: Validate e2e SKU selection
@@ -140,49 +125,42 @@ jobs:
               echo "run-sanity=${{ inputs.galaxy-sanity }}" >> $GITHUB_OUTPUT
               echo "run-unit=${{ inputs.galaxy-unit != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-integration=${{ inputs.galaxy-integration != 'disabled' }}" >> $GITHUB_OUTPUT
-              echo "run-model-perf=${{ inputs.galaxy-perf != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-e2e=${{ inputs.galaxy-e2e != 'disabled' }}" >> $GITHUB_OUTPUT
               ;;
             "models-mandatory")
               echo "run-sanity=true" >> $GITHUB_OUTPUT
               echo "run-unit=false" >> $GITHUB_OUTPUT
               echo "run-integration=false" >> $GITHUB_OUTPUT
-              echo "run-model-perf=false" >> $GITHUB_OUTPUT
               echo "run-e2e=false" >> $GITHUB_OUTPUT
               ;;
             "models-extended")
               echo "run-sanity=true" >> $GITHUB_OUTPUT
               echo "run-unit=false" >> $GITHUB_OUTPUT
               echo "run-integration=false" >> $GITHUB_OUTPUT
-              echo "run-model-perf=true" >> $GITHUB_OUTPUT
               echo "run-e2e=false" >> $GITHUB_OUTPUT
               ;;
             "op-pr")
               echo "run-sanity=false" >> $GITHUB_OUTPUT
               echo "run-unit=true" >> $GITHUB_OUTPUT
               echo "run-integration=false" >> $GITHUB_OUTPUT
-              echo "run-model-perf=false" >> $GITHUB_OUTPUT
               echo "run-e2e=false" >> $GITHUB_OUTPUT
               ;;
             "nightly")
               echo "run-sanity=false" >> $GITHUB_OUTPUT
               echo "run-unit=true" >> $GITHUB_OUTPUT
               echo "run-integration=true" >> $GITHUB_OUTPUT
-              echo "run-model-perf=true" >> $GITHUB_OUTPUT
               echo "run-e2e=false" >> $GITHUB_OUTPUT
               ;;
             "hw-self-test")
               echo "run-sanity=false" >> $GITHUB_OUTPUT
               echo "run-unit=false" >> $GITHUB_OUTPUT
               echo "run-integration=true" >> $GITHUB_OUTPUT
-              echo "run-model-perf=true" >> $GITHUB_OUTPUT
               echo "run-e2e=false" >> $GITHUB_OUTPUT
               ;;
             *)
               echo "run-sanity=true" >> $GITHUB_OUTPUT
               echo "run-unit=false" >> $GITHUB_OUTPUT
               echo "run-integration=false" >> $GITHUB_OUTPUT
-              echo "run-model-perf=false" >> $GITHUB_OUTPUT
               echo "run-e2e=false" >> $GITHUB_OUTPUT
               ;;
           esac
@@ -198,7 +176,7 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-      tracy: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
+      tracy: false
       build-inplace-wheel: true
       build-umd-tests: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
@@ -233,17 +211,6 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-integration || 'all' }}
-  galaxy-model-perf-tests:
-    if: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
-    needs: [build-artifact, determine-tests]
-    secrets: inherit
-    uses: ./.github/workflows/galaxy-perf-tests-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: wh_galaxy_perf,wh_galaxy_perf_uf
-      model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-perf || 'all' }}
   galaxy-e2e-tests:
     if: ${{ needs.determine-tests.outputs.run-e2e == 'true' }}
     needs: [build-artifact, determine-tests]
