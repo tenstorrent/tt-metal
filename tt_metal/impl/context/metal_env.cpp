@@ -170,6 +170,12 @@ void MetalEnvImpl::initialize_base_objects() {
     const auto platform_arch = get_platform_architecture(*this->rtoptions_);
 
     cluster_ = std::make_unique<Cluster>(*this->rtoptions_);
+    if (this->rtoptions_->get_simulator_enabled() &&
+        (platform_arch != tt::ARCH::BLACKHOLE || cluster_->number_of_user_devices() != 2 ||
+         cluster_->number_of_pci_devices() != 2)) {
+        log_info(tt::LogMetal, "Disabling multi-erisc mode for unsupported simulator topology");
+        this->rtoptions_->set_enable_2_erisc_mode(false);
+    }
     this->verify_fw_capabilities();
 
     if (platform_arch == tt::ARCH::QUASAR && this->rtoptions_->get_fast_dispatch()) {
