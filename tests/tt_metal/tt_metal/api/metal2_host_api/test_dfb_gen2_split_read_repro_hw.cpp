@@ -47,12 +47,6 @@
 namespace tt::tt_metal::experimental {
 namespace {
 
-// Four entries through a two-slot ring: enough that the ring wraps, which is what lets an early
-// release hand the consumer a slot whose previous contents are still there.
-constexpr uint32_t kEntrySize = 1024;
-constexpr uint32_t kNumEntries = 4;
-constexpr uint32_t kRingDepth = 2;
-
 class Gen2DFBSplitReadReproTest : public tt::tt_metal::MeshDeviceFixture {};
 
 // A data-movement kernel config for whichever generation is running. The two config types are
@@ -67,12 +61,18 @@ DataMovementHardwareConfig dm_config(bool gen2, DataMovementProcessor proc) {
 }
 
 TEST_F(Gen2DFBSplitReadReproTest, TwoReadsPerAnnouncedSlotCorruptsTheStream) {
+    // Four entries through a two-slot ring: enough that the ring wraps, which is what lets an early
+    // release hand the consumer a slot whose previous contents are still there.
+    constexpr uint32_t entry_size = 1024;
+    constexpr uint32_t num_entries = 4;
+    constexpr uint32_t ring_depth = 2;
+
     auto mesh_device = devices_.at(0);
     IDevice* device = mesh_device->get_devices()[0];
     const bool gen2 = device->arch() == tt::ARCH::QUASAR;
 
     const NodeCoord node{0, 0};
-    const uint32_t total_bytes = kNumEntries * kEntrySize;
+    const uint32_t total_bytes = num_entries * entry_size;
 
     InterleavedBufferConfig dram_config{
         .device = device, .size = total_bytes, .page_size = total_bytes, .buffer_type = BufferType::DRAM};
@@ -100,8 +100,8 @@ TEST_F(Gen2DFBSplitReadReproTest, TwoReadsPerAnnouncedSlotCorruptsTheStream) {
 
     DataflowBufferSpec ring{
         .unique_id = DFBSpecName{"ring"},
-        .entry_size = kEntrySize,
-        .num_entries = kRingDepth,
+        .entry_size = entry_size,
+        .num_entries = ring_depth,
     };
 
     producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"ring"}, "ring"));
@@ -123,14 +123,14 @@ TEST_F(Gen2DFBSplitReadReproTest, TwoReadsPerAnnouncedSlotCorruptsTheStream) {
             .kernel = KernelSpecName{"producer"},
             .advanced_options =
                 AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {static_cast<uint32_t>(in_buffer->address()), kNumEntries}}},
+                    .runtime_varargs = {{node, {static_cast<uint32_t>(in_buffer->address()), num_entries}}},
                 },
         },
         ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"consumer"},
             .advanced_options =
                 AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {static_cast<uint32_t>(out_buffer->address()), kNumEntries}}},
+                    .runtime_varargs = {{node, {static_cast<uint32_t>(out_buffer->address()), num_entries}}},
                 },
         },
     };
@@ -155,11 +155,11 @@ TEST_F(Gen2DFBSplitReadReproTest, TwoReadsPerAnnouncedSlotCorruptsTheStream) {
 
     ASSERT_EQ(output.size(), input.size());
 
-    const uint32_t words_per_entry = kEntrySize / sizeof(uint32_t);
-    for (uint32_t entry = 0; entry < kNumEntries; entry++) {
+    const uint32_t words_per_entry = entry_size / sizeof(uint32_t);
+    for (uint32_t entry = 0; entry < num_entries; entry++) {
         const uint32_t expected = input[entry * words_per_entry];
         const uint32_t actual = output[entry * words_per_entry];
-        EXPECT_EQ(actual, expected) << "entry " << entry << " of " << kNumEntries << " came back wrong: expected "
+        EXPECT_EQ(actual, expected) << "entry " << entry << " of " << num_entries << " came back wrong: expected "
                                     << expected << ", got " << actual
                                     << ". The consumer's wait_front returned before the producer's push_back, so it "
                                     << "copied out a slot the producer had not filled.";
