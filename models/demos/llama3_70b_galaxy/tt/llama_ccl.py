@@ -887,6 +887,7 @@ class TT_CCL:
                     else persistent_buffer.memory_config()
                 )
                 input_tensor_mesh = ttnn.to_memory_config(input_tensor_mesh, target_mem_cfg)
+                memory_config = target_mem_cfg
             output_tensor_mesh = ttnn.experimental.all_reduce_async(
                 input_tensor_mesh,
                 persistent_buffer,
