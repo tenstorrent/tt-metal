@@ -42,7 +42,7 @@ pytestmark = [
 
 
 @dataclass(frozen=True)
-class _ProductionCase:
+class _PerformanceCase:
     case_id: str
     batch_heads: int
     num_chunks: int
@@ -51,15 +51,24 @@ class _ProductionCase:
     expected_duration_ns: int
 
 
-_PRODUCTION_PERF_MARGIN = 0.05
-_PRODUCTION_CASE = _ProductionCase(
+_PERF_REGRESSION_MARGIN = 0.05
+_REGRESSION_CASE = _PerformanceCase(
     "bh2-n4-k32-v64",
     batch_heads=2,
     num_chunks=4,
     key_dim=32,
     value_dim=64,
-    expected_duration_ns=15_921,
+    expected_duration_ns=16_269,
 )
+_PRODUCTION_CASE = _PerformanceCase(
+    "pr7-leaf-bh96-n20-k128-v128",
+    batch_heads=96,
+    num_chunks=20,
+    key_dim=128,
+    value_dim=128,
+    expected_duration_ns=363_886,
+)
+_PRODUCTION_BF16 = frozenset({"kd", "q_decay", "final_decay"})
 
 
 @pytest.mark.parametrize(
@@ -106,6 +115,24 @@ def test_recurrent_chunk_scan_contract_and_trace(
     )
 
 
+def _regression_inputs(
+    device: ttnn.Device,
+    *,
+    protocol_seed: int,
+    state_seed: int,
+) -> tuple[tuple[torch.Tensor, ...], torch.Tensor, tuple[ttnn.Tensor, ...], ttnn.Tensor]:
+    case = _REGRESSION_CASE
+    host_inputs = host_protocol(
+        case.batch_heads,
+        case.num_chunks,
+        case.key_dim,
+        case.value_dim,
+        seed=protocol_seed,
+    )
+    host_state = initial_state(case.batch_heads, case.key_dim, case.value_dim, seed=state_seed)
+    return host_inputs, host_state, device_protocol(host_inputs, device), to_device(host_state, device)
+
+
 def _production_inputs(
     device: ttnn.Device,
     *,
@@ -118,15 +145,26 @@ def _production_inputs(
         case.num_chunks,
         case.key_dim,
         case.value_dim,
+        bf16_names=_PRODUCTION_BF16,
         seed=protocol_seed,
     )
     host_state = initial_state(case.batch_heads, case.key_dim, case.value_dim, seed=state_seed)
     return host_inputs, host_state, device_protocol(host_inputs, device), to_device(host_state, device)
 
 
+def _production_compute_config(device: ttnn.Device) -> ttnn.DeviceComputeKernelConfig:
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+
 def test_recurrent_chunk_scan_is_device_deterministic(device: ttnn.Device) -> None:
-    case = _PRODUCTION_CASE
-    host_inputs, host_state, inputs, state = _production_inputs(device, protocol_seed=1441, state_seed=1442)
+    case = _REGRESSION_CASE
+    host_inputs, host_state, inputs, state = _regression_inputs(device, protocol_seed=1441, state_seed=1442)
     expected = recurrent_oracle(host_inputs, host_state)
     reference, outputs, mismatch_marker = collect_accuracy_and_determinism_results(
         device, lambda: run_recurrent(inputs, state)
@@ -151,9 +189,9 @@ def test_recurrent_chunk_scan_is_device_deterministic(device: ttnn.Device) -> No
 def test_recurrent_chunk_scan_cache_hit_rebinds_fresh_tensors(
     device: ttnn.Device, isolated_program_cache: None
 ) -> None:
-    case = _PRODUCTION_CASE
-    host_a, state_a_host, inputs_a, state_a = _production_inputs(device, protocol_seed=1911, state_seed=1913)
-    host_b, state_b_host, inputs_b, state_b = _production_inputs(device, protocol_seed=1912, state_seed=1914)
+    case = _REGRESSION_CASE
+    host_a, state_a_host, inputs_a, state_a = _regression_inputs(device, protocol_seed=1911, state_seed=1913)
+    host_b, state_b_host, inputs_b, state_b = _regression_inputs(device, protocol_seed=1912, state_seed=1914)
     outputs_a = run_recurrent(inputs_a, state_a)
     ttnn.synchronize_device(device)
     entries = device.num_program_cache_entries()
@@ -181,8 +219,8 @@ def test_recurrent_chunk_scan_cache_hit_rebinds_fresh_tensors(
 def test_recurrent_chunk_scan_default_compute_config_matches_explicit_defaults(
     device: ttnn.Device, isolated_program_cache: None
 ) -> None:
-    case = _PRODUCTION_CASE
-    _, _, inputs, state = _production_inputs(device, protocol_seed=817, state_seed=817)
+    case = _REGRESSION_CASE
+    _, _, inputs, state = _regression_inputs(device, protocol_seed=817, state_seed=817)
     implicit = run_recurrent(inputs, state)
     entries = device.num_program_cache_entries()
     explicit_config = ttnn.init_device_compute_kernel_config(
@@ -203,8 +241,8 @@ def test_recurrent_chunk_scan_default_compute_config_matches_explicit_defaults(
 def test_recurrent_chunk_scan_approximate_math_uses_distinct_accurate_program(
     device: ttnn.Device, isolated_program_cache: None
 ) -> None:
-    case = _PRODUCTION_CASE
-    host_inputs, host_state, inputs, state = _production_inputs(device, protocol_seed=818, state_seed=818)
+    case = _REGRESSION_CASE
+    host_inputs, host_state, inputs, state = _regression_inputs(device, protocol_seed=818, state_seed=818)
     exact = run_recurrent(inputs, state)
     entries = device.num_program_cache_entries()
     approximate_config = ttnn.init_device_compute_kernel_config(
@@ -227,8 +265,8 @@ def test_recurrent_chunk_scan_approximate_math_uses_distinct_accurate_program(
 
 
 def test_recurrent_chunk_scan_rejects_unsupported_compute_config(device: ttnn.Device, expect_error: Callable) -> None:
-    case = _PRODUCTION_CASE
-    _, _, inputs, state = _production_inputs(device, protocol_seed=819, state_seed=819)
+    case = _REGRESSION_CASE
+    _, _, inputs, state = _regression_inputs(device, protocol_seed=819, state_seed=819)
     unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         packer_l1_acc=True,
@@ -240,11 +278,11 @@ def test_recurrent_chunk_scan_rejects_unsupported_compute_config(device: ttnn.De
 @pytest.mark.requires_host_iommu
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-def test_recurrent_chunk_scan_production_performance(device: ttnn.Device) -> None:
-    case = _PRODUCTION_CASE
+def test_recurrent_chunk_scan_regression_performance(device: ttnn.Device) -> None:
+    case = _REGRESSION_CASE
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for recurrent chunk-scan performance checks")
-    _, _, inputs, state = _production_inputs(device, protocol_seed=117, state_seed=117)
+    _, _, inputs, state = _regression_inputs(device, protocol_seed=117, state_seed=117)
 
     def run() -> list[ttnn.Tensor]:
         return run_recurrent(inputs, state)
@@ -258,14 +296,51 @@ def test_recurrent_chunk_scan_production_performance(device: ttnn.Device) -> Non
         case.value_dim,
     )
     logger.info(
-        f"recurrent chunk scan {case.case_id}: duration={duration_ns:.0f} ns, "
+        f"recurrent chunk scan regression {case.case_id}: duration={duration_ns:.0f} ns, "
         f"profiler_runtime_id={perf_record['runtime_id']}"
     )
-    lower = case.expected_duration_ns * (1 - _PRODUCTION_PERF_MARGIN)
-    upper = case.expected_duration_ns * (1 + _PRODUCTION_PERF_MARGIN)
-    assert lower <= duration_ns <= upper, (
-        f"{case.case_id} duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
-        f"(reference {case.expected_duration_ns} ns, margin +/- {_PRODUCTION_PERF_MARGIN * 100:.0f}%)"
+    upper = case.expected_duration_ns * (1 + _PERF_REGRESSION_MARGIN)
+    assert duration_ns <= upper, (
+        f"{case.case_id} duration {duration_ns:.0f} ns exceeds {upper:.0f} ns "
+        f"(reference {case.expected_duration_ns} ns, upper margin {_PERF_REGRESSION_MARGIN * 100:.0f}%)"
+    )
+
+
+@pytest.mark.requires_host_iommu
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_recurrent_chunk_scan_production_performance(device: ttnn.Device) -> None:
+    case = _PRODUCTION_CASE
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail("Real-time profiler must be active for recurrent chunk-scan performance checks")
+    _, _, inputs, state = _production_inputs(device, protocol_seed=117, state_seed=117)
+    compute_config = _production_compute_config(device)
+
+    def run() -> list[ttnn.Tensor]:
+        return run_recurrent(
+            inputs,
+            state,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=compute_config,
+        )
+
+    outputs, perf_record = profile_realtime_program(device, run)
+    duration_ns = perf_record["duration_ns"]
+    assert tuple(outputs[0].shape) == (
+        case.batch_heads,
+        case.num_chunks,
+        CHUNK_SIZE,
+        case.value_dim,
+    )
+    assert outputs[0].memory_config() == ttnn.DRAM_MEMORY_CONFIG
+    logger.info(
+        f"recurrent chunk scan production {case.case_id}: duration={duration_ns:.0f} ns, "
+        f"profiler_runtime_id={perf_record['runtime_id']}"
+    )
+    upper = case.expected_duration_ns * (1 + _PERF_REGRESSION_MARGIN)
+    assert duration_ns <= upper, (
+        f"{case.case_id} duration {duration_ns:.0f} ns exceeds {upper:.0f} ns "
+        f"(reference {case.expected_duration_ns} ns, upper margin {_PERF_REGRESSION_MARGIN * 100:.0f}%)"
     )
 
 

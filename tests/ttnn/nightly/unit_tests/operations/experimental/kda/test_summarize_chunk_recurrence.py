@@ -41,7 +41,7 @@ pytestmark = [
 
 
 @dataclass(frozen=True)
-class _ProductionCase:
+class _PerformanceCase:
     case_id: str
     batch_heads: int
     num_chunks: int
@@ -49,14 +49,22 @@ class _ProductionCase:
     expected_duration_ns: int
 
 
-_PRODUCTION_PERF_MARGIN = 0.05
-_PRODUCTION_CASE = _ProductionCase(
+_PERF_REGRESSION_MARGIN = 0.05
+_REGRESSION_CASE = _PerformanceCase(
     "bh8-n4-d32",
     batch_heads=8,
     num_chunks=4,
     dim=32,
-    expected_duration_ns=20_476,
+    expected_duration_ns=20_336,
 )
+_PRODUCTION_CASE = _PerformanceCase(
+    "pr7-leaf-bh96-n20-d128",
+    batch_heads=96,
+    num_chunks=20,
+    dim=128,
+    expected_duration_ns=335_148,
+)
+_PRODUCTION_BF16 = frozenset({"kd", "q_decay", "final_decay"})
 
 
 @pytest.mark.parametrize(
@@ -90,18 +98,45 @@ def test_summarize_chunk_recurrence_contract_trace_and_semantics(
     assert_summary_reconstructs_state(host_inputs, ttnn.to_torch(first[0]), ttnn.to_torch(first[1]))
 
 
+def _regression_protocol(
+    device: ttnn.Device,
+    *,
+    seed: int,
+) -> tuple[tuple[torch.Tensor, ...], tuple[ttnn.Tensor, ...]]:
+    case = _REGRESSION_CASE
+    host_inputs = host_protocol(case.batch_heads, case.num_chunks, case.dim, case.dim, seed=seed)
+    return host_inputs, device_protocol(host_inputs, device)
+
+
 def _production_protocol(
     device: ttnn.Device,
     *,
     seed: int,
 ) -> tuple[tuple[torch.Tensor, ...], tuple[ttnn.Tensor, ...]]:
     case = _PRODUCTION_CASE
-    host_inputs = host_protocol(case.batch_heads, case.num_chunks, case.dim, case.dim, seed=seed)
+    host_inputs = host_protocol(
+        case.batch_heads,
+        case.num_chunks,
+        case.dim,
+        case.dim,
+        bf16_names=_PRODUCTION_BF16,
+        seed=seed,
+    )
     return host_inputs, device_protocol(host_inputs, device)
 
 
+def _production_compute_config(device: ttnn.Device) -> ttnn.DeviceComputeKernelConfig:
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+
 def test_summarize_chunk_recurrence_is_device_deterministic(device: ttnn.Device) -> None:
-    host_inputs, inputs = _production_protocol(device, seed=1441)
+    host_inputs, inputs = _regression_protocol(device, seed=1441)
     reference, outputs, mismatch_marker = collect_accuracy_and_determinism_results(device, lambda: run_summary(inputs))
     assert_equal(
         torch.zeros_like(mismatch_marker),
@@ -118,8 +153,8 @@ def test_summarize_chunk_recurrence_is_device_deterministic(device: ttnn.Device)
 def test_summarize_chunk_recurrence_cache_hit_rebinds_fresh_tensors(
     device: ttnn.Device, isolated_program_cache: None
 ) -> None:
-    host_a, inputs_a = _production_protocol(device, seed=1911)
-    host_b, inputs_b = _production_protocol(device, seed=1912)
+    host_a, inputs_a = _regression_protocol(device, seed=1911)
+    host_b, inputs_b = _regression_protocol(device, seed=1912)
     outputs_a = run_summary(inputs_a)
     ttnn.synchronize_device(device)
     entries = device.num_program_cache_entries()
@@ -146,7 +181,7 @@ def test_summarize_chunk_recurrence_cache_hit_rebinds_fresh_tensors(
 def test_summarize_chunk_recurrence_default_compute_config_matches_explicit_defaults(
     device: ttnn.Device, isolated_program_cache: None
 ) -> None:
-    _, inputs = _production_protocol(device, seed=817)
+    _, inputs = _regression_protocol(device, seed=817)
     implicit = run_summary(inputs)
     entries = device.num_program_cache_entries()
     explicit_config = ttnn.init_device_compute_kernel_config(
@@ -167,7 +202,7 @@ def test_summarize_chunk_recurrence_default_compute_config_matches_explicit_defa
 def test_summarize_chunk_recurrence_approximate_math_uses_distinct_accurate_program(
     device: ttnn.Device, isolated_program_cache: None
 ) -> None:
-    host_inputs, inputs = _production_protocol(device, seed=818)
+    host_inputs, inputs = _regression_protocol(device, seed=818)
     exact = run_summary(inputs)
     entries = device.num_program_cache_entries()
     approximate_config = ttnn.init_device_compute_kernel_config(
@@ -192,7 +227,7 @@ def test_summarize_chunk_recurrence_approximate_math_uses_distinct_accurate_prog
 def test_summarize_chunk_recurrence_rejects_unsupported_compute_config(
     device: ttnn.Device, expect_error: Callable
 ) -> None:
-    _, inputs = _production_protocol(device, seed=819)
+    _, inputs = _regression_protocol(device, seed=819)
     unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         packer_l1_acc=True,
@@ -204,11 +239,11 @@ def test_summarize_chunk_recurrence_rejects_unsupported_compute_config(
 @pytest.mark.requires_host_iommu
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-def test_summarize_chunk_recurrence_production_performance(device: ttnn.Device) -> None:
-    case = _PRODUCTION_CASE
+def test_summarize_chunk_recurrence_regression_performance(device: ttnn.Device) -> None:
+    case = _REGRESSION_CASE
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for recurrence-summary performance checks")
-    _, inputs = _production_protocol(device, seed=117)
+    _, inputs = _regression_protocol(device, seed=117)
 
     def run() -> list[ttnn.Tensor]:
         return run_summary(inputs)
@@ -217,14 +252,42 @@ def test_summarize_chunk_recurrence_production_performance(device: ttnn.Device) 
     duration_ns = perf_record["duration_ns"]
     assert tuple(outputs[0].shape) == (case.batch_heads, case.dim, case.dim)
     logger.info(
-        f"recurrence summary {case.case_id}: duration={duration_ns:.0f} ns, "
+        f"recurrence summary regression {case.case_id}: duration={duration_ns:.0f} ns, "
         f"profiler_runtime_id={perf_record['runtime_id']}"
     )
-    lower = case.expected_duration_ns * (1 - _PRODUCTION_PERF_MARGIN)
-    upper = case.expected_duration_ns * (1 + _PRODUCTION_PERF_MARGIN)
-    assert lower <= duration_ns <= upper, (
-        f"{case.case_id} duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
-        f"(reference {case.expected_duration_ns} ns, margin +/- {_PRODUCTION_PERF_MARGIN * 100:.0f}%)"
+    upper = case.expected_duration_ns * (1 + _PERF_REGRESSION_MARGIN)
+    assert duration_ns <= upper, (
+        f"{case.case_id} duration {duration_ns:.0f} ns exceeds {upper:.0f} ns "
+        f"(reference {case.expected_duration_ns} ns, upper margin {_PERF_REGRESSION_MARGIN * 100:.0f}%)"
+    )
+
+
+@pytest.mark.requires_host_iommu
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_summarize_chunk_recurrence_production_performance(device: ttnn.Device) -> None:
+    case = _PRODUCTION_CASE
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail("Real-time profiler must be active for recurrence-summary performance checks")
+    _, inputs = _production_protocol(device, seed=117)
+    output_memory = group_summary_height_sharded(device, case.batch_heads, case.dim)
+    compute_config = _production_compute_config(device)
+
+    def run() -> list[ttnn.Tensor]:
+        return run_summary(inputs, memory_config=output_memory, compute_kernel_config=compute_config)
+
+    outputs, perf_record = profile_realtime_program(device, run)
+    duration_ns = perf_record["duration_ns"]
+    assert tuple(outputs[0].shape) == (case.batch_heads, case.dim, case.dim)
+    assert outputs[0].memory_config() == output_memory
+    logger.info(
+        f"recurrence summary production {case.case_id}: duration={duration_ns:.0f} ns, "
+        f"profiler_runtime_id={perf_record['runtime_id']}"
+    )
+    upper = case.expected_duration_ns * (1 + _PERF_REGRESSION_MARGIN)
+    assert duration_ns <= upper, (
+        f"{case.case_id} duration {duration_ns:.0f} ns exceeds {upper:.0f} ns "
+        f"(reference {case.expected_duration_ns} ns, upper margin {_PERF_REGRESSION_MARGIN * 100:.0f}%)"
     )
 
 
