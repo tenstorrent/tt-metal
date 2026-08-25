@@ -6513,3 +6513,115 @@ max 13.9 us -- matching the drainer's own out[] busy-sweep counters independentl
 **Hangs:** 0 in ~65 measured 150k/2k captures on the gather-read kernel and its two reverted variants. (Two device wedges during development were a
 run killed mid-flight from outside, and the CV-offset bug above -- both understood, neither a drain-path
 hang.)
+
+## §N+72 — Adaptive raw sweeps, the scan unroll, and what Mo's sub-10 filler knee actually is (bh-lb-120, 2026-08-25/26)
+
+Four device-side changes landed here, then the claimed target was measured instead of chased.
+
+**1. HIGH-PRODUCTION MODE: raw span sweeps under peak-lane hysteresis.** When the slice runs hot the CV
+pass is a wasted serialized round-trip -- the tails it fetches sit inside the spans about to be read.
+HIGH mode reads each core's whole span in ONE round-trip, ships it as a RAW frame (the format the
+decoder already walks circularly and the self frames already use), advances the mirror from the
+control vector that arrives INSIDE the span, and drops the trigger deferral: every core is consumed
+every sweep. Two details make raw frames exact: the staged CV's HEADS are patched to the mirror before
+the ship (the worker's own head words can lag a write-back in flight on the other NoC, and a stale head
+reads as tail - head > ring = a decoder anomaly), and the raw scan order is FIXED -- applying the packed
+scan's per-sweep rotation gave every core a near-double service interval once per rotation period
+(delay 65: 13/6 stalls -> 12.9k/9.1k) because under full service, scan order IS service order.
+
+The signal had to be the PEAK lane, not mean fill: a serviced slice self-regulates its mean
+(consumption pins it near rate x sweep / capacity; it read 50-60% at delay 20 with 199,772 stalls on
+the books, overlapping the healthy range). The per-sweep peak unconsumed lane is the distance to the
+actual failure. Enter at 3/4 ring; exit below 1/8; 512-sweep dwell. The exit was measured DOWN from the
+derivable 1/4: packed's TAIL, not its typical peak, still stalled producers at delays 70-75, so raw
+letting go there cycled the mode through the regime it exists to remove (248/174-203 stalls with exit
+at 1/4 against 0/0 for raw held on).
+
+The credit veto must gate ENTRY only. Raw wire is capacity-proportional, and unconditional raw once
+measured 1.6M stalls with 2x wire drowning the decode-paced ack -- so no entry while the FIFO backlog
+exceeds 1/4. But the first cut ALSO exited on backlog, and that inverted the win: three fillers cycled
+enter->veto-exit 14-25 times per run and every exit handed a slice packed could not carry back to
+packed -- 41,867 stalls at delay 60 against packed's own 2.2k, all in the oscillating fillers' slices
+while the fillers that stayed in raw ran clean. The FIFO's own credit wait throttles raw gracefully
+(worst credit-wait 0.1 -> 23-33 us, the throttle visible); the only forced exit left is the WEDGE
+escape (peak pinned at capacity + FIFO backlogged), for the host-bound corner where pacing holds the
+peak at the clamp and the low-fill exit can never fire.
+
+**2. SCAN UNROLL (the mainline of Mo's own comment).** The gather rewrite of §N+71 had regressed the
+per-core scan to a loop over indexed arrays -- exactly what the deleted process_batch's comment warned
+spills on this core. Unrolled into scalars with no runs[] array at all three scan sites, and the
+decide loop now times itself: **58 ns/core** at 2k iters, 67 ns/core at the 150k pipeline knee
+(out[61..63], host-reported), against the ~356 ns/core Mo measured for the spilling form. Busy sweep at
+the pipeline knee 6.6 -> 6.0 us, worst 13.5 -> 12.5 us, read share 34 -> 28%.
+
+**3. POSTED head write-backs** (Mo's 48c60923371 applied): the worker-ACK round trips left the barrier
+predicates and the congested worker route; a bounded posted-SENT drain covers the exit tail.
+
+**4. The drain kernel opted OUT of its own producer instrumentation** (PERF_DEBUG_DRAIN_KERNEL in
+kernel_profiler.hpp's gate): no drainer serves a DRAM core, so the producer ring was write-only dead
+weight -- and at ~1.2 KB it had twice pushed the kernel past the 11,264 B DRISC code region during this
+work (the region gate is why issue_core's lane walk stays a loop: unrolled, its 5x-inlined NoC-issue
+body alone overflowed the region by 324 B). .text now 10,104 B with all features on.
+
+**MEASURED KNEES (150k iters, 11x10, single device; all quoted runs count-exact at 957,000,550 records
+(+2/stall), anomalies/bad frames/resyncs/unknown-core 0).**
+
+- PIPELINE (2 decode threads, 64 MiB FIFO): **106**, 5/5 clean reps on the final kernel (plus 112
+  clean 2/2) -- unchanged from §N+71: the entry gate keeps raw frames off a host-bound pipeline, so
+  the adaptive mode costs the pipeline nothing.
+- FILLER (3 GiB FIFO/socket via TT_METAL_PERF_DEBUG_FIFO_MB, 6 decode threads so the host drain never
+  gates raw wire; credit-wait is then pacing, not starvation): the STRICT-zero knee stays at §N+71's
+  **75** (7 reps: 0/61/0/0/0 and 0/12 -- five zeros, tens in the other two; 70 = 1/0; 65 = 40/29;
+  60 = 160/18). What the adaptive mode buys is the shape UNDER the knee: against packed-only's cliff
+  (65 = 23-61, 60 = 2.2-2.7k, 50 = 256k, 40 = 1.5M) it holds tens-to-thousands deep into overload --
+  60 = 0-160, 50 = ~5k (RAW_ONLY 4.9k/6.0k), 40 = 278k -- an 8-100x flattening of the overload band,
+  i.e. the capture degrades instead of collapsing. The exit-at-1/4 first cut also produced a WORSE
+  band AT 70-75 than packed alone (203/174 and 248/13: the mode kept handing a hot slice back to
+  packed); the 1/8 exit is what removed it (0/12 and 1/0).
+- BURST (10k iters -- the runway protocol; the 3 GiB FIFOs hold the whole capture, so this is pure
+  device capability + PCIe): hysteretic and RAW_ONLY within noise of each other; delay 30 = 69-84k,
+  20 = ~160k, 15 = ~210-218k, 10 = ~316-329k. The floor is the WIRE: offered = 8800/zone_ns GB/s =
+  28.5 GB/s at delay 30 and 37.4 at delay 20, against the ~37 GB/s measured PCIe write ceiling (§N+53)
+  -- and unlike a DMA-to-DRAM filler, a direct-push filler carries that write inside its sweep.
+
+**TT_METAL_PERF_DEBUG_RAW_ONLY=1** (diagnostic, in-tree): locks HIGH mode on -- no CV pass ever, no
+hysteresis. It answered the "is the hysteresis just too slow?" question: no. RAW_ONLY equals the
+hysteretic mode at every delay that matters (and both hit the same wire floor), so the CV round-trip
+was not the filler-knee wall and the reaction time was not either. One structural note: HIGH mode and
+DRISC self-zones together exceed the code region by ~1.1 KB even after the producer-gate reclaim, so a
+zones build compiles the raw machinery out (kRawCapable) and behaves as §N+71 -- which is also the
+configuration its zone shapes were validated against (20,968 DRISC-SWEEP zones decoded through
+STALL_CSV on the final kernel, gates clean).
+
+**MO'S SUB-10, MEASURED INSTEAD OF QUOTED (origin/mo/drisc_drain_v6 built and run on THIS box, same
+harness, same grid, TT_METAL_PERF_DEBUG_FILLERS=6 -- his 6-filler + 1-mover shape):**
+
+| config | 75 | 50 | 30 | 22 | 20 | 15 | 10 |
+|---|---|---|---|---|---|---|---|
+| (a) his default, 150k | 4.83M/4.83M | 4.83M/4.82M | 4.82M/4.82M | - | 4.82M/4.81M | - | 4.87M/4.87M |
+| (b) RING=448+NO_DECODE, 150k | 2.63M/2.64M | 3.96M/3.96M | 4.08M/4.08M | - | 4.06M/4.06M | - | 4.45M/4.45M |
+| (c) RING=448+NO_DECODE, 10k | - | - | 3/2 | 335/281 | - | 1079/1161 | 187.7k/189.6k |
+
+Sub-10 does NOT reproduce in any configuration. His burst onset on our box is ~delay 22-30 -- matching
+his own commit log ("d22: 154 -> 2, d20: 22.5k -> 4.0k", 48c60923371) -- and it is a RUNWAY number: at
+(c)'s clean point his rings sit at 39-44% high-water with the mover's tail thousands of frames behind.
+Sustained, the runway exhausts: at (b) 150k his rings run 100% full with ~25k ring-room waits per
+filler and the filler's worst sweep is 155-157 us of which 145-147 us is RING-ROOM credit-wait. His own
+§N+65 audit says it plainly: "every era knee was a BURST number" and "the sustained wall is the MOVER's
+per-frame rate".
+
+**The profile side-by-side (same box, same night)** -- his clean burst point (c, delay 30) against our
+pipeline knee: worst sweep 10.9-11.5 us (read 1.5-1.8, proc 4.8-4.9 = ~170 ns/core scan, write 0.8-0.9
+-- a local-bank GDDR-DMA enqueue) vs ours 12.5-12.6 us (read 6.9-7.0, proc 3.5 at 58-67 ns/core scan,
+write 1.1 -- a PCIe write). The sweep machineries are the same class and our per-core scan is now the
+faster one; the structural difference is WHERE egress sits. His filler hands frames to the DRAM tile's
+own DMA engine and a separate mover pays the host cost later (which is why his sustained numbers
+collapse); ours carries PCIe write issue + credit pacing inside the sweep (which is why our burst floor
+is the PCIe ceiling, ~delay 25-30, and our sustained numbers are the ones that win). Direct push at
+sub-30 delays would need the egress out of the sweep again -- which is the DRAM-ring design this branch
+deleted, with §N+71's measured sustained cost.
+
+**What did NOT move the filler knee:** 7 fillers at the old per-core cost (owner-measured: 75 at both 6
+and 7); the CV-pass removal alone (RAW_ONLY == hysteretic); entry aimed at the peak core (the peak is
+measured before that sweep's own ship, so the tripping lane is already serviced at entry); the pace-gap
+suspicion (its share is lifetime-dominated; under load a shipping sweep zeroes the gap every time).

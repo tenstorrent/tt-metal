@@ -45,7 +45,11 @@
 // kernels contain DeviceZoneScoped* sites, and no drainer serves dispatch cores. Without the
 // !DISPATCH_KERNEL clause a dispatch core fills its blocking ring and the NEXT device open's drainer
 // bring-up wedges at its write barrier (heartbeat stuck, phase=11).
-#if defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL)
+// PERF_DEBUG_DRAIN_KERNEL opts the streaming profiler's own drain kernel out for the same reason (no
+// drainer serves a DRAM core, so its producer ring is write-only dead weight) plus a harder one: the
+// producer machinery is ~1 KB of a code region the drain kernel has already overflowed twice. Its
+// self-profiling rides its staging slots (SpscZoneScope in profiler_common.h), not this producer.
+#if defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && !defined(PERF_DEBUG_DRAIN_KERNEL)
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_ERISC)
 // Kernel-link stack floor (kernel_<risc>.ld), for the stack canary below. Declared at GLOBAL scope --

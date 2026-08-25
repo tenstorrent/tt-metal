@@ -356,6 +356,16 @@ uint32_t ship_min_pct() {
     return v;
 }
 
+// TT_METAL_PERF_DEBUG_RAW_ONLY=1: a DIAGNOSTIC that locks every filler in HIGH-production mode -- no CV
+// pass ever, every core read whole and shipped RAW every sweep, hysteresis compiled out. It isolates
+// "is the CV round-trip the filler-knee wall" from "does the hysteresis react fast enough", and it is
+// only meaningful against a FIFO sized for the ~2x raw wire (see FIFO_MB below); in the 64 MiB pipeline
+// configuration it reproduces the decode-ack overload the hysteresis exists to prevent.
+bool raw_only() {
+    static const bool v = perf_debug::env_flag("TT_METAL_PERF_DEBUG_RAW_ONLY");
+    return v;
+}
+
 // TT_METAL_PERF_DEBUG_FIFO_MB: host FIFO per D2H socket, in MiB. See the header comment on the default.
 // Capped at 3.5 GiB: the socket's byte size and the device's wrap-safe credit arithmetic
 // (reserve_pages_bounded's bytes_sent - bytes_acked) are 32-bit, so a FIFO at or past 4 GiB overflows
@@ -1512,9 +1522,10 @@ bool PerfDebugProfiler::boot_device(
                 0u,  // retired: GAP_MAX (its ceiling)
                 0u,  // retired: READ_SPLIT
                 // Arg 20: write VC. With the egress NoC alternating on d&1, d&2 splits each NoC's three
-                // pushers across the two unicast request VCs. Args 21..31 retired.
+                // pushers across the two unicast request VCs. Arg 21: RAW_ONLY diagnostic. Args 22..31
+                // retired.
                 (d & 2u) ? 0u : 1u,
-                0u,
+                raw_only() ? 1u : 0u,
                 0u,
                 0u,
                 0u,
@@ -1553,7 +1564,8 @@ bool PerfDebugProfiler::boot_device(
                 DramConfig{
                     .noc = (drain_noc_override() < 0 ? (d & 1u) != 0 : drain_noc_override() == 1) ? NOC::NOC_1
                                                                                                   : NOC::NOC_0,
-                    .compile_args = cargs});
+                    .compile_args = cargs,
+                    .defines = {{"PERF_DEBUG_DRAIN_KERNEL", "1"}}});
             std::vector<uint32_t> rt = {my_cores, static_cast<uint32_t>(prof_l1)};
             rt.insert(rt.end(), coords.begin() + lo, coords.begin() + hi);
             SetRuntimeArgs(*ctx.drain_program[d], drain_id, ctx.drisc_logical[d], rt);
@@ -2033,6 +2045,33 @@ void PerfDebugProfiler::stop() {
                     "[perf-debug profiler] DRISC ship threshold: {} core visits deferred, {} ships forced by age",
                     res[170],
                     res[171]);
+            }
+            // HIGH-mode telemetry: how often the raw-sweep mode ran and the distribution of the signal that
+            // drives it (per-sweep PEAK unconsumed lane, in eighths of the ring, busy sweeps only).
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] DRISC read mode: raw sweeps {} ({} raw frames; enters {}, fill-exits {}, "
+                "veto-exits {}) | busy-sweep peak-lane/8ths [{} {} {} {} {} {} {} {}]",
+                res[51],
+                res[52],
+                res[48],
+                res[49] - res[50],
+                res[50],
+                res[53],
+                res[54],
+                res[55],
+                res[56],
+                res[57],
+                res[58],
+                res[59],
+                res[60]);
+            if (res[63] != 0) {
+                const uint64_t scan_cyc = (static_cast<uint64_t>(res[62]) << 32) | res[61];
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] DRISC control scan: {:.0f} ns/core over {} core-visits",
+                    static_cast<double>(scan_cyc) / kCycPerUs * 1000.0 / static_cast<double>(res[63]),
+                    res[63]);
             }
             // proc sub-split. `proc` is the biggest busy-sweep phase, and it is two unrelated things:
             // a LOCAL scan of the staged control vectors, and a per-live-core 20 B NoC head write-back
