@@ -42,9 +42,9 @@ case "${MODEL}" in
     ;;
   glm52)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm52_prefill_runner_kv}"
-    # LINE/LINE variant: GLM-5.2's MoE all_to_all deadlocks in warmup under the torus fabric modes on
-    # multi-galaxy pipeline prefill, so the descriptor declares no wrap and the fabric mode stays 2d.
-    MGD="${MGD_DIR}/pipeline_prefill_4galaxy_connected_fabric2d_mesh_graph_descriptor.textproto"
+    # GLM-5.2's MoE all_to_all deadlocks in warmup under the torus fabric modes on multi-galaxy pipeline
+    # prefill, so this leg stays on the plain [LINE,LINE] descriptor with fabric mode 2d.
+    MGD="${MGD_DIR}/pipeline_prefill_4galaxy_connected_mesh_graph_descriptor.textproto"
     MANIFEST="${MANIFEST_DIR}/glm52.json"
     # Sparse DSA: TWO device caches (MLA KVPE over all 78 layers + the lightning-indexer KEY cache over the
     # 21 `full` layers), both PCC'd. The trace must be the indexer-K dump -- the adapter's default golden
