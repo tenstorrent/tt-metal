@@ -105,8 +105,9 @@ public:
             ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0, "TensorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
     }
 
-    // Null bindings have no CTA/CRTA payload — constructing a TensorAccessor from one is a compile error.
-    TensorAccessor(tensor_accessor::NullTensorBindingToken) = delete;
+    // Cannot construct a TensorAccessor from a NullTensorBindingToken, consider binding the token to an actual resource
+    // on host. See: ProgramSpec on host.
+    explicit TensorAccessor(tensor_accessor::NullTensorBindingToken) = delete;
 
     constexpr const auto& dspec() const {
         if constexpr (DSpec::is_static) {
@@ -424,6 +425,8 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
             ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0, "TensorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
     }
 
+    // Cannot construct a TensorAccessor from a NullTensorBindingToken, consider binding the token to an actual resource
+    // on host. See: ProgramSpec on host.
     TensorAccessor(tensor_accessor::NullTensorBindingToken) = delete;
 
     template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>

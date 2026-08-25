@@ -86,6 +86,7 @@ template <bool IsWrite, typename ReleaseFunc>
 // NullDFBBindingToken does not.
 //
 struct DFBBindingToken {
+    // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
     explicit constexpr DFBBindingToken(uint16_t id) noexcept : id_(id) {}
 
     static constexpr bool is_null = false;
@@ -102,6 +103,9 @@ private:
     uint16_t id_;
 };
 
+// Emitted when this ProgramSpec did not declare the named DFB.
+// Used as stand-in type to describe null-bindings.
+// Cannot be used to construct a DataflowBuffer.
 struct NullDFBBindingToken {
     static constexpr bool is_null = true;
 };
@@ -119,8 +123,9 @@ public:
     //   DataflowBuffer dfb(my_dfb_name);
     DataflowBuffer(DFBBindingToken token) : DataflowBuffer(token.id()) {}
 
-    // Null bindings have no device slot — constructing a DataflowBuffer from one is a compile error.
-    DataflowBuffer(NullDFBBindingToken) = delete;
+    // Cannot construct a DataflowBuffer from a NullDFBBindingToken, consider binding the token to an actual resource on
+    // host. See: ProgramSpec on host.
+    explicit DataflowBuffer(NullDFBBindingToken) = delete;
 
     // Low-level constructor: prefer DFBBindingToken overload above for new kernel code.
     DataflowBuffer(uint16_t logical_dfb_id);
