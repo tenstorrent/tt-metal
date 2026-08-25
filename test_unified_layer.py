@@ -180,7 +180,9 @@ def apply_rope(device, x, cos, sin, m, seq_t, dim_t, chunk):
         (ROPE_CB["rot"], chunk),
         (ROPE_CB["out"], chunk, ACT),
     ]
-    rt = [t.buffer_address() for t in (x, cos, sin, m, out)]
+    # The last two are the chunk range rope.cpp partitions across cores. One core here, so
+    # it owns all of them. Omitting them compiles and feeds the loop a garbage bound.
+    rt = [t.buffer_address() for t in (x, cos, sin, m, out)] + [0, total // chunk]
     return launch(device, ROPE_KERNEL, cbs, [chunk, total // chunk], rt, (x, cos, sin, m, out))
 
 

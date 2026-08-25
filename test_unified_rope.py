@@ -35,7 +35,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, single_core, unified_program
+from unified_harness import core_block, make_cb, split_evenly, unified_program
 
 KERNEL = "unified_kernels/rope.cpp"
 TILE = 32
@@ -69,7 +69,7 @@ def cos_sin(seq, dim, theta=10000.0):
     return c, s
 
 
-def run(device, seq_t, dim_t, chunk, seed=0):
+def run(device, seq_t, dim_t, chunk, seed=0, cores=1):
     torch.manual_seed(seed)
     S, D = seq_t * TILE, dim_t * TILE
     total_tiles = seq_t * dim_t
@@ -90,11 +90,19 @@ def run(device, seq_t, dim_t, chunk, seed=0):
     tx, tc, ts, tm = to_dev(x), to_dev(cos_t), to_dev(sin_t), to_dev(m)
     tout = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, S, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram)
 
-    core_ranges, cores = single_core()
-    ct_args = [chunk, total_tiles // chunk]
+    # Chunks are the unit of work and the rotation is per-tile, so they share nothing:
+    # splitting them needs no reduction and no ordering. Every core still reads the one
+    # rotation tile, which is 2KB and read once per core.
+    nchunks = total_tiles // chunk
+    ncores = min(cores, nchunks)
+    core_ranges, core_list = core_block(ncores)
+    shares = split_evenly(nchunks, ncores)
+
+    ct_args = [chunk, nchunks]
     for t in (tx, tc, ts, tm, tout):
         ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    rt_args = [t.buffer_address() for t in (tx, tc, ts, tm, tout)]
+    addrs = [t.buffer_address() for t in (tx, tc, ts, tm, tout)]
+    rt_args = {c: addrs + [begin, count] for c, (begin, count) in zip(core_list, shares)}
 
     cbs = [
         make_cb(CB["x"], core_ranges, num_pages=chunk),
@@ -108,7 +116,7 @@ def run(device, seq_t, dim_t, chunk, seed=0):
     program = unified_program(
         kernel_source=KERNEL,
         core_ranges=core_ranges,
-        cores=cores,
+        cores=core_list,
         cbs=cbs,
         compile_time_args=ct_args,
         runtime_args=rt_args,
@@ -151,6 +159,19 @@ def main(argv=None):
             )
             if not ok:
                 failed.append((seq_t, dim_t, chunk))
+
+        # Partition invariance, checked EXACTLY: chunks share nothing, so splitting them is
+        # a decomposition and not an approximation, and anything other than a bit-identical
+        # result means a core read or wrote outside its range. 12 chunks over 5 cores is the
+        # uneven split, which is where an off-by-one in the range arithmetic lives.
+        one = run(device, 4, 3, 1)[0]
+        for n in (2, 5, 12):
+            many = run(device, 4, 3, 1, cores=n)[0]
+            diff = (many - one).abs().max().item()
+            ok = diff == 0.0
+            logger.info(f"12 chunks over {n:2d} cores vs 1: max|diff| = {diff:.6f}   {'ok' if ok else 'FAIL'}")
+            if not ok:
+                failed.append(f"cores-{n}")
     finally:
         ttnn.close_device(device)
 
