@@ -733,6 +733,11 @@ DispatchResult resolve_for_dispatch(
         }
     }
 
+    if (mode == Mode::On && resolution.reason == ResolutionReason::CertifiedMatch && resolution.recipe != nullptr &&
+        !has_consistent_untilize_out(*resolution.recipe)) {
+        circuit_break_domain(eligibility.call.domain);
+        resolution.reason = ResolutionReason::MaterializationRejected;
+    }
     auto action = execution_action(mode, resolution);
     std::optional<ttnn::prim::MatmulParams> materialized_parameters;
     try {

@@ -1211,7 +1211,7 @@ TEST(MatmulConfigRegistry, CompactLookupAndMaterializationKeepAllPublicDomainsDi
 
     auto addmm_request = exact_request(OperationDomain::Addmm);
     const std::array addmm_entries{compact_entry(OperationDomain::Addmm)};
-    addmm_request.call = addmm_call_semantics(2.0F, 0.0F);
+    addmm_request.call = addmm_call_semantics(1.0F, -0.0F);
     EXPECT_EQ(
         resolve_with_compact_table_for_testing(
             Mode::On,
