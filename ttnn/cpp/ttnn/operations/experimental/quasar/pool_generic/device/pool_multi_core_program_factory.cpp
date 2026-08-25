@@ -696,10 +696,17 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // window. The old code set face_r_dim = pow2(min(window,16)), which is 16 for windows >= 9 (the resnet
     // stem 3x3 and global-avg 7x7, so they were unaffected) but < 16 for windows <= 8 (e.g. a 2x2 window
     // -> face_r_dim=4 -> total_row_dim=8), tripping BOTH that LLK assert AND validate_buffer_desc's "y_dim
-    // must be 16 when z_dim is 4". The input CB page is already padded to a full tile (round_up(in_cb_sz,
-    // TILE_HW) in pool_utils.cpp) with the pool identity in the pad rows [window_size, 32) (-inf max via
-    // force_max_clear / 0 avg via clear_value_cb, AVG scalar = 1/true_window), so reducing all 32 rows is a
-    // no-op past the true window. (The WH/BH num_faces=2 small-window path is NOT used on Quasar: it
+    // must be 16 when z_dim is 4". Correctness with a full-tile SrcA comes from padding, applied PER
+    // REDUCTION CHUNK. The input CB page is padded to a full 32-row tile (round_up(in_cb_sz, TILE_HW) in
+    // pool_utils.cpp), and the reduce runs over one 32-row tile per chunk, accumulating across
+    // interm_reduction_chunks = ceil(window_size / max_sticks_for_reduction) chunks. Within a chunk the
+    // window elements fill the rows and any UNPOPULATED rows hold the pool identity (-inf max via
+    // force_max_clear / 0 avg via clear_value_cb, AVG scalar = 1/true_window), so reducing them is a no-op.
+    // For a window that fits one tile (<= max_sticks_for_reduction) that is a single chunk padded
+    // [window_size, 32); for a larger window processed in multiple chunks (e.g. 7x7 = 49) the full chunks
+    // are wholly populated and only the LAST partial chunk is padded, at [window_size %
+    // max_sticks_for_reduction, 32). Either way face_r_dim stays 16 -- the chunking splits the window, not
+    // the tile geometry. (The WH/BH num_faces=2 small-window path is NOT used on Quasar: it
     // violates the 32x32 requirement and over-produces SrcA vs the 2-GMPOOL reduce -> double-buffer
     // overflow -> deadlock.)
     const uint32_t num_faces_in_input_tile_for_cb = 4u;
