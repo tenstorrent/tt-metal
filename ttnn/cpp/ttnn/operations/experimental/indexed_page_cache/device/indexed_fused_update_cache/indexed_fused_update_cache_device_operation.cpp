@@ -131,6 +131,11 @@ void IndexedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
             args.cache_tensor1.device() == args.input_tensor2.device() &&
             args.cache_tensor1.device() == args.physical_update_idxs_tensor.device(),
         "all indexed_fused_update_cache tensors must be on the same device");
+    const auto arch = args.cache_tensor1.device()->arch();
+    TT_FATAL(
+        arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE,
+        "indexed_fused_update_cache supports only Wormhole and Blackhole, got {}",
+        arch);
     validate_mesh_topologies(args);
 
     validate_cache_input_pair(args.cache_tensor1, args.input_tensor1, "cache_tensor1", "input_tensor1");

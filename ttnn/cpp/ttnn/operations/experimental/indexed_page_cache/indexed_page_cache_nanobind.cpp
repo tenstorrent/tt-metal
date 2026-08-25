@@ -18,7 +18,7 @@ void bind_experimental_indexed_page_cache_operations(nb::module_& mod) {
             Writes packed rows from two input tensors into two cache tensors in parallel.
 
             ``physical_update_idxs_tensor`` is a row-major INT32 tensor with shape
-            ``[1, num_rows]``. Entry ``i`` gives the physical cache row for input
+            ``[1, num_indices]``. Entry ``i`` gives the physical cache row for input
             row ``i``; negative and out-of-range entries are skipped. Physical rows
             flatten cache dimensions 0 and 2: ``page = index // cache.shape[2]`` and
             ``row_in_page = index % cache.shape[2]``. This operation does not perform
@@ -26,9 +26,11 @@ void bind_experimental_indexed_page_cache_operations(nb::module_& mod) {
 
             Both caches and inputs must be interleaved BF16 TILE tensors. Cache shape
             is ``[num_pages, num_heads, rows_per_page, head_dim]`` and packed input
-            shape is ``[1, num_heads, num_rows, head_dim]``. The operation updates
-            the cache tensors in place and serializes all rows owned by a head/width
-            worker, so multiple rows may safely target the same physical page.
+            shape is ``[1, num_heads, packed_rows, head_dim]``, where
+            ``1 <= packed_rows <= 256`` and
+            ``packed_rows <= num_indices <= 256``. The operation updates the cache
+            tensors in place and serializes all rows owned by a head/width worker, so
+            multiple rows may safely target the same physical page.
 
             Replicated tensors are supported on single- or multi-device meshes. The
             four cache/input tensors may also use one identical tensor-parallel mesh
