@@ -1,8 +1,8 @@
-# Pin-29 stale union fire-witness review
+# Pin-29 stale union fire-witness review and quarantine
 
-Status: **BLOCKED (proof-backed 9/12)**.  This is a review record, not a
-promotion.  It does not change `ON_FLAGS`, `KNOBS`, `KNOB_MODES`, or either
-fire-witness table.
+Status: **QUARANTINE APPLIED; ACTIVE WITNESS GATE 9/9 GREEN**.  This is a
+reviewed removal, not a compiler-pass promotion.  The three options remain
+available and default-off in the compiler.
 
 Date: `2026-08-25`
 
@@ -97,15 +97,14 @@ Those changes only remove previously admitted cases.  Combined with the
 complete pre-hardening production fire inventory and its exact-pin replay,
 there is no structurally honest replacement row in the current registry.
 
-## Required resolution and evidence consequences
+## Applied resolution and evidence consequences
 
-Do not land pin 29 with the present 12-row reviewed table.  The defensible
-resolution is to re-review all three flags out of `ON_FLAGS` (29 -> 26), move
-their existing rows verbatim to `_QUARANTINED_FIRE_WITNESSES`, and remove the
-three drop-one knob entries/modes until a real production-shaped legal-domain
-fire exists.  The negative OFF spellings may remain.  This recommendation is
-deliberately not applied by this record: it changes the reviewed experiment
-and requires owner acceptance.
+The proof-backed resolution removes exactly these three positive flags from
+`ON_FLAGS` (29 -> 26), moves their existing rows verbatim to
+`_QUARANTINED_FIRE_WITNESSES`, and removes their three drop-one knob
+entries/modes until a real production-shaped legal-domain fire exists.  The
+negative OFF spellings remain, so the all-off experiment continues to assert
+the options off.  No witness selector, dump pass, or regex was changed.
 
 Removing the flags is expected to be byte-neutral because the final full-ON
 compiler refuses every previously firing production case, but that expectation
@@ -116,8 +115,9 @@ is not provenance.  It has these mechanical implications:
 2. rerun the complete 854-row classifier with the 26-flag ON set and rerun the
    strict 263-row guard census against that same baseline; expected counts or
    byte identity must be measured, not copied;
-3. revise CURRENT/PIN HISTORY prose and the manifest flag identity, and make
-   R9/R10 green with the reviewed-to-quarantined witness moves;
+3. CURRENT/PIN HISTORY prose and both baseline anchor comments now identify
+   the ON-26 quarantine; R9/R10 are green with the reviewed-to-quarantined
+   witness moves;
 4. any silicon campaign already launched with 29 flags remains evidence for
    that exact experiment, not the proposed 26-flag experiment.  A final
    promotion needs correctness/CRAQ and full silicon keyed to the accepted
@@ -127,6 +127,25 @@ is not provenance.  It has these mechanical implications:
    remaining changed bytes or wins on those selectors come from other passes
    and must be reported that way.
 
-Until that re-review is performed, exact-pin witness preflight correctly
-remains RED at 9/12.  Fabricating three replacement rows would hide the safety
-hardening and violate the witness gate's purpose.
+Post-quarantine installed-pin validation was:
+
+```sh
+python3 witness_preflight.py \
+  --work /tmp/pin29-witness-on26.aEoB4N \
+  --tt-metal-home /home/ttuser/sfpi-uplift/tt-metal
+```
+
+It resolved cc1plus
+`45ba7169920924fd6ebeb6eeb3766156b413dbf895e091b53603bed1e35e7d79`
+and returned `ALL GREEN`: 9 active rows present from seven production compile
+groups.  `conf_lint.sh` returned GREEN with all three quarantined rows
+structurally valid, absent from ON, and absent from the reviewed table.  The
+config and witness selftests additionally bind the shipping state to exactly
+26 positive ON flags, nine active rows, and one quarantined row for each named
+flag, while the generic R10 mutation cases prove that reinserting a
+quarantined flag into ON or dual-listing it is rejected.
+
+This closes the witness-table blocker without hiding the safety hardening.
+The final 26-flag classifier, completion-guard census, correctness/CRAQ, and
+silicon gates described above remain pending and must not inherit the
+superseded 29-flag experiment's results by prose alone.

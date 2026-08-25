@@ -349,66 +349,14 @@ ON_FLAGS = (
     # sfpi-gcc counted-row-formation-*).  MERGE-ORDER: this line lands
     # only with the pin cycle whose toolchain accepts the flag.
     "-mtt-tensix-optimize-counted-row-formation "
-    # QUARANTINE LIFTED AT PIN 14 (wave-9 verdict 4adac11aac1 / HANDOFF
-    # item 13 quarantined crosscall-hoist, crossloop-hoist and init-hoist
-    # until the shared TU-census rooting hole was fixed).  ALL THREE LIFT
-    # CONDITIONS ARE MET in the pin-14 union (sfpi-gcc staging/pin14
-    # 3ca94518817):
-    #   (a) the census roots externally-visible/entry symbols or FAILS
-    #       CLOSED — lane CG census-rooting fix 8dee5e84029 (anchor-model
-    #       rooting _start>main>publics; fail-closed unrooted/expanded/
-    #       entry-root paths; foreign-contract read guard; honest
-    #       zero-trip argument);
-    #   (b) the init-hoist ICE/segfault on non-trivially-rooted censuses
-    #       is fixed (same lane CG commit);
-    #   (c) the zero-trip prose matches behavior — verified against lane
-    #       CJ's production-shaped census twins for the crossloop and
-    #       init-hoist MOP families (e0754714a5b) with a clean lane-CJ
-    #       audit verdict, and the wave-10 review verified every wrong-
-    #       code item closed on cold builds (zero violations).
-    # The witness rows moved back from _QUARANTINED_FIRE_WITNESSES to
-    # _REVIEWED_FIRE_WITNESSES in the same commit (conf R9/R10), and this
-    # ON set is INERT until the pin-14 ceremony finalizes the toolchain
-    # pin: the conf carries RED-on-placeholder pin prose, and both sweep
-    # wrappers refuse at conf-lint before anything runs.
-    # Lane BQ (pin 12): cross-call prefix hoist -- the noinline
-    # callee's call-invariant pinned-LREG coefficient prefix moves to
-    # every proven caller's tile-loop preheader (BI's increment (a)).
-    # Fire witness: sigmoid-tree (both perf and correctness TUs),
-    # dump-proven "hoisted 6 contract materializations" + disasm: the
-    # 12 coefficient SFPLOADI leave the callee for the caller's
-    # preheader; with replay-exec-record the per-tile dead prefix is
-    # 17 -> 4 pushes.  Pre-registered prediction (laneBQ evidence
-    # PREDICTION.md): sigmoid-tree sem_on 27.7-27.8 = parity vs hand.
-    "-mtt-tensix-optimize-crosscall-hoist "
-    # Lane CD (pin 13): cross-loop hoist -- loop-invariant SFPU
-    # immediate materializations (and the programmable-constant
-    # programming points) lift across ENCLOSING loops whose bodies
-    # deliver only audited-inert words (raw .ttinsn constants,
-    # instruction-FIFO stores incl. PHI-joined compositions, MOPs with
-    # a proven TU template census); every unaudited class refuses by
-    # name (crossloop-*).  Fire witness: the exp perf node's
-    # MATH_ISOLATE math.elf -- "crossloop-hoist: hoisted across loop"
-    # x12 (4 loads x 3 loop levels) + "placement lifted from entry bb"
-    # (prgm-const L14 programming once per kernel); per-tile Tensix
-    # word count 68 -> 58 = hand parity; exp corr CRAQ 5630 -> 5589
-    # sim-cycles bit-exact PASS on the pinned BH sim.
-    "-mtt-tensix-optimize-crossloop-hoist "
-    # Lane CA (pin 13): D2 cross-call invariant-init hoist — the noinline
-    # per-tile callee's idempotent formation init prefix (descriptor
-    # program + owned SETC16 + all-lanes enable, 17 issue slots on the
-    # minmax shape) programs once in the caller's tile-block loop
-    # preheader (stage 2 under the owned-row value-equality proof).
-    # Fire witness (dump-proven, laneCA-evidence-20260819): the minmax
-    # perf/corr TUs — dump line: Macro-planner init-hoist: stage=2 init
-    # contract hoisted to caller loop preheader; the callee is pure payload.
-    # Lane CA also completes the drain-schedule flag with loop-backedge
-    # elision + exit compensation (where in-body 3-NOP tail x 4 trips ->
-    # one exit block; witness dump line: loop-backedge drain elided, on
-    # the where TUs).  Measured (lane CA, 3 fresh procs, BH p150): minmax
-    # TILE_LOOP/tile 18.727 -> 16.72 = -5.1% vs hand 17.628 (WIN);
-    # where TTNN_WHERE_BODY 167.5 -> 154.5 = -2.9% vs hand 159.17 (WIN).
-    "-mtt-tensix-optimize-init-hoist "
+    # PIN-29 PROOF-BACKED RE-QUARANTINE: crosscall-hoist,
+    # crossloop-hoist, and init-hoist remain valid default-off compiler
+    # options, but their positive tokens are absent from this reviewed ON
+    # set.  Final entry/MOP hardening refuses every member of their complete
+    # pre-hardening production fire inventory, so no honest R9 witness
+    # exists.  Their exact historical rows are preserved under conf R10 in
+    # _QUARANTINED_FIRE_WITNESSES; proof and evidence consequences:
+    # review_records/REVIEW_RECORD-45ba71699209-stale-witnesses.md.
     # PROMOTED 2026-08-23/24 (owner order "promote the knobs", pin-26 union
     # 6781b2063277 plus lane GJ): the four knobs with completed silicon A/B
     # books.
@@ -493,19 +441,8 @@ KNOBS = {
     "const-remat": "-mtt-tensix-optimize-const-remat",
     "const-residency": "-mtt-tensix-optimize-const-residency",
     "counted-row-formation": "-mtt-tensix-optimize-counted-row-formation",
-    # crosscall-hoist / crossloop-hoist RESTORED at the pin-14 quarantine
-    # lift (lane CG census fix 8dee5e84029; see the ON_FLAGS LIFTED
-    # block above for the full citation chain).
-    "crosscall-hoist": "-mtt-tensix-optimize-crosscall-hoist",
-    "crossloop-hoist": "-mtt-tensix-optimize-crossloop-hoist",
-    # init-hoist (lane CA, pin 13/14): first knob row added at the pin-14
-    # lift (laneDO — the flag previously had NO knob row at all, so the
-    # weekly never attributed it).  drop-one mode is MANDATORY, not a
-    # choice: laneCJ's census-timing fact is that solo init-hoist ALWAYS
-    # refuses — the stage-2 init-contract proof needs the macro-planner
-    # formation pipeline that the OFF base disables, so a solo leg is a
-    # permanent A/A.
-    "init-hoist": "-mtt-tensix-optimize-init-hoist",
+    # Pin-29 quarantined crosscall/crossloop/init flags carry no knob row:
+    # a weekly attribution leg must not exercise a quarantined option.
     # ---- pin-14 NEW default-off flags: knob legs ONLY.  Deliberately
     # NOT in the reviewed ON set — the weekly measures each on its
     # target rows (attribution on every changed row; silicon legs on the
@@ -735,8 +672,8 @@ def validate_requested_rows_active(values, active):
 #     the solo OFF base disables;
 #   planner-residency  — the -mtt-tensix-macro-planner-residency flag is
 #     not even in its pass's gate solo (needs the planner pipeline);
-#   init-hoist         — laneCJ census-timing fact: solo ALWAYS refuses
-#     (stage-2 proof needs the planner formation the OFF base disables).
+#   drain-schedule     — its reviewed fires require the planner formation
+#     pipeline that the solo OFF base disables.
 # The four seeded on-plus knobs are the pin-14 DEFAULT-OFF booking flags:
 # their wins only materialize on the reviewed-ON baseline (booking2:
 # replay-loop-unroll solo = byte-identical legs on castfp32tofp16a, all six
@@ -747,24 +684,8 @@ def validate_requested_rows_active(values, active):
 KNOB_MODES = {
     "replay-exec-record": "drop-one",
     "planner-residency": "drop-one",
-    "init-hoist": "drop-one",
-    # Lane GI (owner ratification 2026-08-24 item 3, EM solo-mode booking
-    # shape): laneEM's PASS-OP-MATRIX findings 2-3 prove these three ON-set
-    # knobs are SOLO-BLIND — dump-witnessed ON-25 fires with ZERO
-    # byte-attributed rows, because each pass only runs inside a pipeline
-    # the all-off solo base disables (the exact laneDO dependent/service
-    # class the drop-one mode exists for):
-    #   crossloop-hoist  9 fires (addcmul, exp, exp2, expm1cw, hardmish,
-    #                    hardtanh, i0, lerp, sdpa), 9 preempted, 0 byte;
-    #   crosscall-hoist  1 fire (sigmoidappx-tree), 0 byte;
-    #   drain-schedule   5 fires (minmax-max/min, mulint32-fresh, typecast,
-    #                    where), 0 byte.
-    # The OTHER majority-preempted knobs (invariant-loadi 12/35 preempted,
-    # capture-rotation, interlock-schedule, ...) keep solo: they have
-    # non-zero solo byte-changers, so their solo legs are NOT structurally
-    # A/A — EM finding 4 is a preemption fact, not a mode defect.
-    "crossloop-hoist": "drop-one",
-    "crosscall-hoist": "drop-one",
+    # drain-schedule is an ON-set dependent/service pass whose solo base is
+    # structurally blind; retain its reviewed drop-one attribution.
     "drain-schedule": "drop-one",
     # The completion guard is default-off and depends on replay-hoist,
     # already present in reviewed-ON.  A solo OFF-vs-OFF+guard leg would be
