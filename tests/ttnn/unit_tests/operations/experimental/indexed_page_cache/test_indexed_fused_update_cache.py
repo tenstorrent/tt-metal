@@ -231,15 +231,22 @@ def test_indexed_fused_update_cache_trace_replay(device):
 def test_indexed_fused_update_cache_multi_tile_rows_and_worker_stride(device):
     torch.manual_seed(29)
     # 8 heads * 16 width tiles = 128 workers. This is larger than the 12x10
-    # P150 compute grid and verifies that a core can own more than one worker.
-    cache_shape = (2, 8, 64, 512)
-    source_rows = 40
+    # P150 compute grid and verifies that a core can own more than one worker;
+    # the three physical pages also cover num_cores being much larger than pages.
+    # Three source tiles force the two-slot scratch pipeline to wrap and wait
+    # before reusing slot zero.
+    cache_shape = (3, 8, 64, 512)
+    source_rows = 96
     input_shape = (1, cache_shape[1], source_rows, cache_shape[3])
     cache1 = torch.zeros(cache_shape, dtype=torch.bfloat16)
     cache2 = torch.zeros(cache_shape, dtype=torch.bfloat16)
     input1 = torch.randn(input_shape, dtype=torch.bfloat16)
     input2 = torch.randn(input_shape, dtype=torch.bfloat16)
     positions = list(range(60, 60 + source_rows))
+    # Reuse one destination at both source-tile boundaries. Writes tagged with
+    # different transaction IDs must still preserve last-source-row-wins order.
+    positions[32] = positions[31]
+    positions[64] = positions[31]
 
     output1_tt, output2_tt = ttnn.experimental.indexed_fused_update_cache(
         _device_tensor(cache1, device),

@@ -50,15 +50,47 @@ void kernel_main() {
     CoreLocalMem<volatile int32_t> physical_positions(positions_dfb.get_read_ptr());
 
     auto copy_rows = [&](const auto& source, const auto& cache, uint32_t head, uint32_t width_tile) {
-        for (uint32_t source_height_tile = 0; source_height_tile < source_height_tiles; ++source_height_tile) {
+        constexpr uint32_t scratch_buffer_depth = 2;
+        bool writes_in_flight[scratch_buffer_depth] = {false, false};
+
+        auto wait_for_slot_writes = [&](uint32_t slot) {
+            if (writes_in_flight[slot]) {
+                noc.async_write_barrier<NocOptions::TXN_ID>({.trid = slot + 1});
+                writes_in_flight[slot] = false;
+            }
+        };
+
+        auto issue_source_read = [&](uint32_t source_height_tile, uint32_t slot) {
+            // A slot can be overwritten only after the cache writes sourced from it have completed.
+            wait_for_slot_writes(slot);
             const uint32_t source_tile = (head * source_height_tiles + source_height_tile) * width_tiles + width_tile;
-
             scratch_dfb.reserve_back(1);
-            noc.async_read(
-                source, scratch_dfb, scratch_dfb.get_entry_size(), {.page_id = source_tile}, {.offset_bytes = 0});
-            noc.async_read_barrier();
-            scratch_dfb.push_back(1);
+            noc.async_read<NocOptions::TXN_ID>(
+                source,
+                scratch_dfb,
+                scratch_dfb.get_entry_size(),
+                {.page_id = source_tile},
+                {.offset_bytes = 0},
+                {.trid = slot + 1});
+        };
 
+        if constexpr (source_height_tiles == 0) {
+            return;
+        }
+
+        issue_source_read(/*source_height_tile=*/0, /*slot=*/0);
+        noc.async_read_barrier<NocOptions::TXN_ID>({.trid = 1});
+        scratch_dfb.push_back(1);
+
+        for (uint32_t source_height_tile = 0; source_height_tile < source_height_tiles; ++source_height_tile) {
+            const uint32_t current_slot = source_height_tile % scratch_buffer_depth;
+            const bool has_next_tile = source_height_tile + 1 < source_height_tiles;
+            const uint32_t next_slot = (current_slot + 1) % scratch_buffer_depth;
+            if (has_next_tile) {
+                issue_source_read(source_height_tile + 1, next_slot);
+            }
+
+            bool wrote_current_slot = false;
             for (uint32_t tile_row = 0; tile_row < tile_height; ++tile_row) {
                 const uint32_t source_row = source_height_tile * tile_height + tile_row;
                 if (source_row >= source_rows) {
@@ -86,17 +118,34 @@ void kernel_main() {
                     const uint32_t source_offset =
                         (source_face_y * 2 + face_x) * face_bytes + source_line * face_line_bytes;
                     const uint32_t dest_offset = (dest_face_y * 2 + face_x) * face_bytes + dest_line * face_line_bytes;
-                    noc.async_write(
+                    noc.async_write<NocOptions::TXN_ID>(
                         scratch_dfb,
                         cache,
                         face_line_bytes,
                         {.offset_bytes = source_offset},
-                        {.page_id = cache_tile, .offset_bytes = dest_offset});
+                        {.page_id = cache_tile, .offset_bytes = dest_offset},
+                        {.trid = current_slot + 1});
+                    wrote_current_slot = true;
                 }
             }
-            noc.async_write_barrier();
+            // Transaction IDs split completion accounting only. These unicast writes share the
+            // same NoC and default write VC, so program order (and last-source-row-wins) is retained.
+            writes_in_flight[current_slot] = wrote_current_slot;
+
+            if (has_next_tile) {
+                noc.async_read_barrier<NocOptions::TXN_ID>({.trid = next_slot + 1});
+                scratch_dfb.push_back(1);
+            }
             scratch_dfb.pop_front(1);
         }
+
+        for (uint32_t slot = 0; slot < scratch_buffer_depth; ++slot) {
+            wait_for_slot_writes(slot);
+        }
+
+        // Transaction IDs are sticky command-buffer state; do not leak them to the next invocation.
+        noc_async_read_set_trid(0, noc.get_noc_id());
+        noc_async_write_set_trid(0, noc.get_noc_id());
     };
 
     for (uint32_t worker = worker_start; worker < worker_count; worker += worker_stride) {

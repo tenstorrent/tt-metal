@@ -32,6 +32,8 @@ ttnn::device_operation::ProgramArtifacts IndexedFusedUpdateCacheProgramFactory::
     const uint32_t source_height_tiles = input1.padded_shape()[2] / tt::constants::TILE_HEIGHT;
     const uint32_t worker_count = num_heads * width_tiles;
 
+    // Work is partitioned over disjoint (head, width_tile) workers, not cache pages. Every worker
+    // walks the positions but writes only its own tile column, so num_cores may exceed the page count.
     const auto grid = cache1.device()->compute_with_storage_grid_size();
     const uint32_t num_cores = std::min(worker_count, static_cast<uint32_t>(grid.x * grid.y));
     const auto all_cores = num_cores_to_corerangeset(num_cores, grid, /*row_wise=*/true);
@@ -41,6 +43,7 @@ ttnn::device_operation::ProgramArtifacts IndexedFusedUpdateCacheProgramFactory::
     const auto positions_data_format = datatype_to_dataformat_converter(positions.dtype());
     const uint32_t tile_bytes = cache1.tensor_spec().tile().get_tile_size(cache_data_format);
     const uint32_t positions_page_bytes = positions.buffer()->aligned_page_size();
+    constexpr uint32_t scratch_buffer_depth = 2;
 
     const DFBSpecName SCRATCH{"scratch"};
     const DFBSpecName POSITIONS_DFB{"positions"};
@@ -101,7 +104,7 @@ ttnn::device_operation::ProgramArtifacts IndexedFusedUpdateCacheProgramFactory::
             {DataflowBufferSpec{
                  .unique_id = SCRATCH,
                  .entry_size = tile_bytes,
-                 .num_entries = 1,
+                 .num_entries = scratch_buffer_depth,
                  .data_format_metadata = cache_data_format,
              },
              DataflowBufferSpec{
