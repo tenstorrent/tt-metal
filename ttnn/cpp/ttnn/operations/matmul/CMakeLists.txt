@@ -166,9 +166,11 @@ target_include_directories(
     PRIVATE
         ${FixmeOpIncDirs}
         # The attestation provider consumes internal MetalContext/Cluster state.
-        # Their private headers use paths rooted at tt_metal and its hardware
-        # include tree internally.
+        # Their private headers use paths rooted at tt_metal, common, the
+        # in-tree API directory, and the hardware include tree internally.
         ${PROJECT_SOURCE_DIR}/tt_metal
+        ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
+        ${PROJECT_SOURCE_DIR}/tt_metal/common
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         ${MATMUL_REGISTRY_BUILD_ATTESTATION_DIR}
         ${MATMUL_REGISTRY_GENERATED_DIR}
