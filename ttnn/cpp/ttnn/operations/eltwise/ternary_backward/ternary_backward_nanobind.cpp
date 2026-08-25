@@ -228,3 +228,5 @@ void py_module(nb::module_& mod) {
 }
 
 }  // namespace ttnn::operations::ternary_backward
+
+// trigger test: no-op comment, see PR description
