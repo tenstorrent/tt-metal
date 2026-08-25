@@ -308,7 +308,10 @@ def _preprocess_gelu_golden_inputs(function_args, function_kwargs):
     golden_args, golden_kwargs = ttnn.decorators.default_preprocess_golden_function_inputs(
         function_args, function_kwargs
     )
-    golden_kwargs["_ttnn_skip_comparison"] = True
+    variant = function_kwargs.get("variant")
+    fast_and_approximate_mode = function_kwargs.get("fast_and_approximate_mode", False)
+    if variant == ttnn.GeluVariant.FastLut or fast_and_approximate_mode:
+        golden_kwargs["_ttnn_skip_comparison"] = True
     return golden_args, golden_kwargs
 
 

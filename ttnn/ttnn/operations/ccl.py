@@ -30,7 +30,8 @@ def _preprocess_collective_golden_inputs(function_args, function_kwargs):
         function_args[0] = input_tensors
     else:
         function_kwargs["input_tensor"] = input_tensors
-    function_kwargs["_golden_mesh_shape"] = mesh_shape
+    function_kwargs["_ttnn_golden_mesh_shape"] = mesh_shape
+    function_kwargs["_ttnn_global_golden_mesh_shards"] = True
     return tuple(function_args), function_kwargs
 
 
@@ -48,14 +49,14 @@ def _golden_function_all_broadcast(
     input_tensors,
     *args,
     cluster_axis=None,
-    _golden_mesh_shape=None,
+    _ttnn_golden_mesh_shape=None,
     **kwargs,
 ):
-    if _golden_mesh_shape is None:
+    if _ttnn_golden_mesh_shape is None:
         return None
 
     # Each result broadcasts one rank's payload across the first cluster group.
-    return _get_first_collective_group(input_tensors, _golden_mesh_shape, cluster_axis)
+    return _get_first_collective_group(input_tensors, _ttnn_golden_mesh_shape, cluster_axis)
 
 
 ttnn.attach_golden_function(
@@ -70,14 +71,14 @@ def _golden_function_all_gather(
     dim,
     *args,
     cluster_axis=None,
-    _golden_mesh_shape=None,
+    _ttnn_golden_mesh_shape=None,
     **kwargs,
 ):
     import torch
 
-    if _golden_mesh_shape is None:
+    if _ttnn_golden_mesh_shape is None:
         return None
-    input_group = _get_first_collective_group(input_tensors, _golden_mesh_shape, cluster_axis)
+    input_group = _get_first_collective_group(input_tensors, _ttnn_golden_mesh_shape, cluster_axis)
     # The first rank receives every rank's shard concatenated along the requested dimension.
     return torch.cat(input_group, dim=dim)
 
@@ -93,14 +94,14 @@ def _golden_function_all_reduce(
     input_tensors,
     *args,
     cluster_axis=None,
-    _golden_mesh_shape=None,
+    _ttnn_golden_mesh_shape=None,
     **kwargs,
 ):
     import torch
 
-    if _golden_mesh_shape is None:
+    if _ttnn_golden_mesh_shape is None:
         return None
-    input_group = _get_first_collective_group(input_tensors, _golden_mesh_shape, cluster_axis)
+    input_group = _get_first_collective_group(input_tensors, _ttnn_golden_mesh_shape, cluster_axis)
     # Stable all-reduce always performs a sum and replicates it to the group.
     return torch.stack(input_group).sum(dim=0)
 
@@ -117,14 +118,14 @@ def _golden_function_reduce_scatter(
     dim,
     *args,
     cluster_axis=None,
-    _golden_mesh_shape=None,
+    _ttnn_golden_mesh_shape=None,
     **kwargs,
 ):
     import torch
 
-    if _golden_mesh_shape is None:
+    if _ttnn_golden_mesh_shape is None:
         return None
-    input_group = _get_first_collective_group(input_tensors, _golden_mesh_shape, cluster_axis)
+    input_group = _get_first_collective_group(input_tensors, _ttnn_golden_mesh_shape, cluster_axis)
     reduced = torch.stack(input_group).sum(dim=0)
     # The first rank receives the first equal chunk of the reduced tensor.
     return torch.chunk(reduced, len(input_group), dim=dim)[0]
@@ -142,14 +143,14 @@ def _golden_function_mesh_partition(
     dim,
     cluster_axis=None,
     *args,
-    _golden_mesh_shape=None,
+    _ttnn_golden_mesh_shape=None,
     **kwargs,
 ):
     import torch
 
-    if _golden_mesh_shape is None:
+    if _ttnn_golden_mesh_shape is None:
         return None
-    input_group = _get_first_collective_group(input_tensors, _golden_mesh_shape, cluster_axis)
+    input_group = _get_first_collective_group(input_tensors, _ttnn_golden_mesh_shape, cluster_axis)
     # The first rank keeps the first equal partition of its local input.
     return torch.chunk(input_group[0], len(input_group), dim=dim)[0]
 
@@ -173,14 +174,14 @@ def _golden_function_point_to_point(
     sender_coord,
     receiver_coord,
     *args,
-    _golden_mesh_shape=None,
+    _ttnn_golden_mesh_shape=None,
     **kwargs,
 ):
-    if _golden_mesh_shape is None:
+    if _ttnn_golden_mesh_shape is None:
         return None
 
-    sender_index = _mesh_coordinate_to_index(sender_coord, _golden_mesh_shape)
-    receiver_index = _mesh_coordinate_to_index(receiver_coord, _golden_mesh_shape)
+    sender_index = _mesh_coordinate_to_index(sender_coord, _ttnn_golden_mesh_shape)
+    receiver_index = _mesh_coordinate_to_index(receiver_coord, _ttnn_golden_mesh_shape)
     # Comparison observes rank zero, replacing it only when rank zero is the receiver.
     return input_tensors[sender_index] if receiver_index == 0 else input_tensors[0]
 
@@ -214,8 +215,11 @@ def _golden_function_all_to_all_dispatch(
         device=input_tokens.device,
     )
     output_tokens[dispatch_mask] = input_tokens.unsqueeze(0).expand(num_devices, -1, -1, -1)[dispatch_mask]
+    ttnn.decorators.set_golden_comparison_config(
+        output_tokens, method="allclose", scope="all", rtol=0.0, atol=0.0, mask=dispatch_mask
+    )
 
-    # Metadata is all-gathered while unspecified placeholder token rows are normalized to zero.
+    # Metadata is all-gathered; placeholder token rows are excluded from comparison.
     output_metadata = expert_indices_tensor[:, 0].unsqueeze(0).expand(num_devices, -1, -1, -1).clone()
     return output_tokens, output_metadata
 
@@ -244,25 +248,36 @@ def _golden_function_all_to_all_combine(
         dtype=input_tensor.dtype,
         device=input_tensor.device,
     )
+    populated_slots = torch.zeros((selected_experts, batch, sequence), dtype=torch.bool, device=input_tensor.device)
 
     # Reconstruct each sparse expert contribution in its original top-k slot.
     for batch_index in range(batch):
         for sequence_index in range(sequence):
-            used_devices = set()
-            for topk_index in range(selected_experts):
-                expert_index = int(expert_metadata[batch_index, sequence_index, topk_index])
-                device_index = int(torch.nonzero(expert_mapping[expert_index], as_tuple=False)[0])
-                if local_reduce:
-                    if device_index in used_devices:
-                        continue
-                    used_devices.add(device_index)
-                    contribution_index = device_index
-                else:
-                    contribution_index = expert_index
-                output[topk_index, batch_index, sequence_index] = input_tensor[
-                    contribution_index, batch_index, sequence_index
-                ]
+            if local_reduce:
+                selected = expert_metadata[batch_index, sequence_index]
+                for device_index in range(expert_mapping.shape[-1]):
+                    local_experts = torch.nonzero(expert_mapping[:, device_index], as_tuple=False).flatten()
+                    for expert_index in local_experts:
+                        matching_topk = torch.nonzero(selected == expert_index, as_tuple=False).flatten()
+                        if matching_topk.numel() == 0:
+                            continue
+                        topk_index = int(matching_topk[0])
+                        output[topk_index, batch_index, sequence_index] = input_tensor[
+                            device_index, batch_index, sequence_index
+                        ]
+                        populated_slots[topk_index, batch_index, sequence_index] = True
+                        break
+            else:
+                for topk_index in range(selected_experts):
+                    expert_index = int(expert_metadata[batch_index, sequence_index, topk_index])
+                    output[topk_index, batch_index, sequence_index] = input_tensor[
+                        expert_index, batch_index, sequence_index
+                    ]
+                    populated_slots[topk_index, batch_index, sequence_index] = True
 
+    ttnn.decorators.set_golden_comparison_config(
+        output, method="allclose", scope="all", rtol=0.0, atol=0.0, mask=populated_slots
+    )
     return output
 
 
@@ -285,7 +300,8 @@ def _preprocess_reduce_to_root_golden_inputs(function_args, function_kwargs):
         else:
             function_kwargs[input_name] = input_tensors
 
-    function_kwargs["_golden_mesh_shape"] = mesh_shape
+    function_kwargs["_ttnn_golden_mesh_shape"] = mesh_shape
+    function_kwargs["_ttnn_global_golden_mesh_shards"] = True
     return tuple(function_args), function_kwargs
 
 
@@ -296,12 +312,12 @@ def _golden_function_reduce_to_root(
     root_coord,
     *args,
     scale_fp32=1.0,
-    _golden_mesh_shape=None,
+    _ttnn_golden_mesh_shape=None,
     **kwargs,
 ):
     import torch
 
-    if _golden_mesh_shape is None:
+    if _ttnn_golden_mesh_shape is None:
         return None
     if len(input_tensors_l) != 4 or len(input_tensors_s) != 4 or len(input_tensors_m) != 4:
         raise ValueError("reduce_to_root golden requires the operation's fixed four-device topology")
@@ -344,7 +360,7 @@ def _golden_function_reduce_to_root(
     output_l = tensor_l.reshape(input_tensors_l[0].shape)
     output_s = tensor_s.reshape(input_tensors_s[0].shape)
     output_m = tensor_m.reshape(input_tensors_m[0].shape)
-    root_index = _mesh_coordinate_to_index(root_coord, _golden_mesh_shape)
+    root_index = _mesh_coordinate_to_index(root_coord, _ttnn_golden_mesh_shape)
     for output in (output_l, output_s, output_m):
         output._ttnn_mesh_index = root_index
     return output_l, output_s, output_m
