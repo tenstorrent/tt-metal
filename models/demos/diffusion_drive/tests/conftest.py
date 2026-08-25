@@ -99,7 +99,24 @@ def _checkpoint_path() -> str | None:
 
 @pytest.fixture(scope="session")
 def checkpoint_path() -> str | None:
+    """The real trained checkpoint, or None. Single source of truth for every test.
+
+    Resolution order: ``$DD_CHECKPOINT_PATH``, then the repo ``data/`` dir that
+    ``scripts/prepare_assets.py`` writes, then the staged ``$DD_DATA_ROOT`` eval layout.
+    """
     return _checkpoint_path()
+
+
+@pytest.fixture
+def missing_asset():
+    """Skip on a missing asset locally; fail under DD_REQUIRE_ASSETS=1."""
+
+    def _missing_asset(reason: str):
+        if _assets_required():
+            pytest.fail(f"{reason} (DD_REQUIRE_ASSETS=1 — CI must stage this asset)", pytrace=False)
+        pytest.skip(reason)
+
+    return _missing_asset
 
 
 @pytest.fixture(scope="session", autouse=True)

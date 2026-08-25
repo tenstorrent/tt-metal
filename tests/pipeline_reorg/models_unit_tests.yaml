@@ -1861,3 +1861,25 @@
       tier: 2
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
+
+- name: DiffusionDrive unit tests
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface
+    # Stage the checkpoint + plan anchors (pinned revision, sha256-verified). Cached
+    # in HF_HOME after the first run. DD_REQUIRE_ASSETS turns "asset missing" into a
+    # failure instead of a skip, so the real-checkpoint gate below cannot self-skip.
+    python models/demos/diffusion_drive/scripts/prepare_assets.py
+    export DD_REQUIRE_ASSETS=1
+    pytest --timeout 1800 \
+      models/demos/diffusion_drive/tests/pcc/ \
+      models/demos/diffusion_drive/tests/sanity/
+  model: diffusiondrive
+  model_family: DiffusionDrive
+  skus:
+    # 2.5 min measured end-to-end on BH p150a (prepare_assets + all 47 pcc/sanity
+    # tests); the rest is headroom for the one-off 730 MB asset download.
+    wh_n300:
+      timeout: 10
+      tier: 3
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
