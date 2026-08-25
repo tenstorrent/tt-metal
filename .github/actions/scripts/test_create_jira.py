@@ -12,7 +12,7 @@ import pytest
 SCRIPTS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from file_rtl_sim_jira import format_test, match_entry, parse_failed  # noqa: E402
+from create_jira import format_test, match_entry, parse_failed  # noqa: E402
 
 MAP_PATH = SCRIPTS_DIR / "ai_ip_tests.json"
 

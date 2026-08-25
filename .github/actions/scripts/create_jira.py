@@ -20,8 +20,9 @@ Environment:
 import json
 import os
 import re
+import sys
 
-from create_jira_issue import _env, _truthy, file_issue
+from jira_client import _env, _truthy, file_issue
 
 # The sim reporter renders every row with --gtest_filter= regardless of runner,
 # so the group's extension, not the separator, decides the runner.
@@ -95,6 +96,7 @@ def main():
     print(f"parsed {len(failed)} failed test(s) from the check detail")
 
     filed = 0
+    failed_to_file = 0
     for config, group, filt, runner in failed:
         test = format_test(config, group, filt, runner)
         entry = match_entry(config, group, filt, runner, mapping)
@@ -115,20 +117,26 @@ def main():
             # Matched one component of a back2back batch; the batch is what ran.
             desc.append(f"Matched on:  {entry['filter']} (ran back-to-back with the other filters above)")
         desc += [f"Commit:      {sha}", f"Sim results: {url}", f"Release run: {run_url}"]
-        result = file_issue(
-            base=base,
-            email=email,
-            token=token,
-            project=project,
-            summary=f"RTL sim test failed during release: {test}",
-            issue_type=issue_type,
-            description="\n".join(desc) + "\n",
-            labels=labels,
-            # Stable per-test label: this test owns one issue; reruns comment.
-            dedup_label="rtl-sim:" + _slug(f"{config}-{group}-{filt}"),
-            assignee=entry.get("assignee"),
-            dry_run=dry,
-        )
+        try:
+            result = file_issue(
+                base=base,
+                email=email,
+                token=token,
+                project=project,
+                summary=f"RTL sim test failed during release: {test}",
+                issue_type=issue_type,
+                description="\n".join(desc) + "\n",
+                labels=labels,
+                # Stable per-test label: this test owns one issue; reruns comment.
+                dedup_label="rtl-sim:" + _slug(f"{config}-{group}-{filt}"),
+                assignee=entry.get("assignee"),
+                dry_run=dry,
+            )
+        except (SystemExit, Exception) as e:  # jira_client exits on API error
+            # One unusable assignee or a transient 5xx must not drop the rest.
+            print(f"::warning::could not file {test}: {e}")
+            failed_to_file += 1
+            continue
         print(result)
         filed += 1
 
@@ -157,6 +165,9 @@ def main():
         filed += 1
 
     print(f"filed/updated {filed} issue(s)")
+    if failed_to_file:
+        # Exit non-zero so a silent "zero tickets, green workflow" is impossible.
+        sys.exit(f"error: {failed_to_file} issue(s) could not be filed")
 
 
 if __name__ == "__main__":
