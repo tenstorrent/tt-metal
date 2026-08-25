@@ -62,17 +62,32 @@ There are two important metrics for understanding LLK test execution frequency:
 
 ### Key Findings
 
-#### Direct Trigger Metric
+#### Direct Trigger Metric (VERIFIED ✅)
 - Only **17 out of 165 commits (10.3%)** directly modified LLK-specific code
 - The remaining **148 commits (89.7%)** modified code in ops, models, ttnn, or other areas
-- These non-LLK commits would NOT trigger the LLK gate if run independently
+- **Source:** Git file pattern matching
 
-#### Cascade Effect Metric
-- Due to merge queue cascading, **165 out of 165 commits (100%)** end up running the LLK test suite
-- **Average**: Each LLK commit causes **9.7** subsequent commits to inherit and run its LLK changes
-- **Multiplier**: The cascade effect magnifies the trigger count by **9.7x**
+#### Cascade Effect Metric (THEORETICAL ⚠️)
+- **Model prediction:** 165 out of 165 commits (100%) should run the LLK test suite
+- **Actual data:** July 31 sample shows 66.7% success, 33.3% skipped conclusions
+- **Status:** Theoretical model ≠ observed behavior
 
-**Important caveat:** This 100% assumes the first commit in the period is an LLK commit. If non-LLK commits appear *before* the first LLK commit, those commits would not run the LLK suite. In July 2026, the first analyzed commit (position 0) is an LLK commit, which is why cascade coverage reaches 100%.
+**Important caveats:**
+
+1. **Theoretical model:** The cascade calculation assumes:
+   - The cascade behavior works as described (commits inherit LLK changes while queued)
+   - The first commit in the period is an LLK commit
+   - The merge queue doesn't optimize away cascaded runs
+
+2. **Actual data limitations:** GitHub Actions API shows workflow *conclusions* (skipped/success) but not which specific *jobs* executed
+   - "Skipped" workflow might mean all jobs skipped, or only some jobs
+   - Cannot determine if LLK suite specifically ran on skipped workflows
+   - Would need job-level execution logs to verify
+
+3. **Verified from July 31 sample:**
+   - 10 runs: success (66.7%)
+   - 5 runs: skipped (33.3%)
+   - Suggests not all commits triggered full gate execution
 
 ### What This Means
 
