@@ -689,6 +689,28 @@ KNOBS = {
     # lcm-fresh keeps its FZ downstream-fallback refusal byte-identically
     # (measured honest no-fire), gcd-fresh inert.
     "record-hoist-peel": "-mtt-tensix-optimize-record-hoist-peel",
+    # GV (pressure-park): post-CC residency admission + LREG tier — the
+    # FX PASS-GAP "invariant-loadi rename/pressure admission" class.
+    # The const-residency CC-canonical peel class stops its candidate
+    # scan at the body's first CC writer, so fresh-body coefficient
+    # materializations inside the lowered v_if region reload every row
+    # (softplus 6 x 2-issue, acosh 23, gelu 19, softsign, sqrt,
+    # atan2 — dump-attributed at ON-28, laneGV evidence).  The knob
+    # admits post-CC candidates whose every consumer is in the audited
+    # lane-predicated set (the const-remat audit; the parked all-lanes
+    # constant-register read refines exactly the lanes the original
+    # fresh predicated load left indeterminate — the invariant pass's
+    # ratified superset-write argument), and on prgm-exhausted hoists
+    # remaining admitted candidates to the same proven programming
+    # point as plain LREG live ranges while the function-wide SSA
+    # pressure model stays within the 8-LREG file.  Fire targets:
+    # softplus-fresh (3 parks + 1 LREG hoist, 34 -> 28 words/row),
+    # gelu-fresh (3 parks), trigonometry-fresh (1 park; L13/L14
+    # TU-claimed + LREG file full = honest ceiling), softsign-fresh
+    # (1 park).  sqrt-fresh / threshold-fresh = measured honest
+    # no-fire controls (named lreg-file-exhausted / no admissible
+    # candidate).
+    "pressure-park": "-mtt-tensix-optimize-pressure-park",
 }
 
 
@@ -797,6 +819,11 @@ KNOB_MODES = {
     # reviewed-ON pipeline (record-hoist is in the ON set); the booking
     # A/B is (ON + flag) vs plain ON.
     "record-hoist-peel": "on-plus",
+    # GV pressure-park: default-off on-plus knob — the residency classes
+    # it widens run in the ON set (const-residency), so attribution is
+    # ON vs ON+flag.  Promotion requires an R9 witness and the ON-vs-ON
+    # attribution ceremony.
+    "pressure-park": "on-plus",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
