@@ -368,16 +368,7 @@ void kernel_main() {
                 const uint32_t curr_scratch_cb_id = scratch_cb_id_0;
                 DataflowBuffer curr_scratch_cb = scratch_cb_0;
 #endif
-                // Model A (wide-reduction fix): the scratch CB holds ONE contiguous full-width (in_ntiles_c)
-                // output stick, so reserve it ONCE per stick (on the first c-block) -- NOT per c-block.
-                // Reserving/pushing a full stick per c-block advanced wr_entry_idx mid-stick, overran the
-                // 2-slot ring, and grew the packer's L1 base (base_l1 = wr_entry_idx * ...) past the buffer-
-                // descriptor limit -> Risc IB interrupt (0x19), with the fault address creeping run-to-run as
-                // base_l1 grew. Each c-block packs its channel slice into this shared stick below; the whole
-                // stick is pushed once on the last c-block so the DM reader consumes exactly one stick per pop.
-                if (first_c_block) {
-                    curr_scratch_cb.reserve_back(scratch_npages);
-                }
+                curr_scratch_cb.reserve_back(scratch_npages);
                 // QSR fix (split-reader second stream): the top-of-kernel pack_untilize_dest_init targets
                 // scratch_cb_0 only, so odd (reader1) sticks packing into scratch_cb_1 used a packer
                 // descriptor still bound to scratch_cb_0 -> the pack landed nowhere and reader1 read an
@@ -395,41 +386,15 @@ void kernel_main() {
                 //   c1 -> block_c_index 4/2 = 2      -> tiles 4..5
                 // Init width must equal pack width per c-block (pack_untilize.h contract), so init per c-block.
                 if (last_c_block) {
-                    pack_untilize_dest_init<partial_iter_output_tiles, in_ntiles_c>(curr_scratch_cb_id);
-                    pack_untilize_dest<partial_iter_output_tiles, in_ntiles_c>(
-                        curr_scratch_cb_id, 1, (c_i * max_tiles_per_iter) / partial_iter_output_tiles);
+                    pack_untilize_dest_init<partial_iter_output_tiles>(curr_scratch_cb_id);
+                    pack_untilize_dest<partial_iter_output_tiles>(curr_scratch_cb_id, 1, 0);
                 } else {
-                    pack_untilize_dest_init<max_tiles_per_iter, in_ntiles_c>(curr_scratch_cb_id);
-                    pack_untilize_dest<max_tiles_per_iter, in_ntiles_c>(curr_scratch_cb_id, 1, c_i);
+                    pack_untilize_dest_init<max_tiles_per_iter>(curr_scratch_cb_id);
+                    pack_untilize_dest<max_tiles_per_iter>(curr_scratch_cb_id, 1, 0);
                 }
                 tile_regs_release();
-                if (last_c_block) {
-                    // Push the whole stick once, after every c-block has packed its slice, so the DM reader
-                    // consumes exactly one full stick per wait_front/pop_front(scratch_npages) -- the previous
-                    // per-c-block push overran the ring (see the reserve note above).
-                    //
-                    // [DEBUG scratch scaffold] Producer-side pack-write commit barrier. push_back() below posts
-                    // the SPSC credit the DM reader spins on (reader_pool_2d.cpp wait_front), after which it reads
-                    // this stick's row DIRECTLY from TL1. On HW the credit instruction itself waits for the packer
-                    // write to drain (TT_PUSH_TILES packer_wr_done_wait_mask=0x1 in llk_push_tiles), but the Quasar
-                    // emulator does NOT honor that embedded sub-field, so the counter can post before
-                    // pack_untilize_dest's TL1 write lands -> the reader reads a stale/empty scratch slot (a
-                    // fraction of sticks dropped->0 or dup->neighbor: PCC 0.897; watcher latency hides it, since
-                    // the scratch CB is single-buffered so the credit is the only producer->consumer serializer).
-                    // Drain the packer engine before posting the credit. Mirrors the "wait for pack to finish"
-                    // STALLWAIT idiom in llk_pack_common.h:307. No-op-equivalent on HW (redundant with the wr_done
-                    // wait); remove once the sim models PUSH_TILES.packer_wr_done_wait_mask.
-                    // Quasar-only: this barrier fixes the emulator's failure to honor PUSH_TILES'
-                    // packer_wr_done_wait_mask (see comment above). WH/BH HW honor it, so the stall is a no-op
-                    // there -- and TTI_STALLWAIT has a DIFFERENT arity per arch (Quasar takes 4 args, WH takes 2),
-                    // so it must be arch-gated to compile at all. NB: TTI_STALLWAIT expands to a bare __asm__
-                    // statement, so it must NOT be wrapped in the expression-form PACK((...)) parens -- PACK(...)
-                    // is variadic, so the comma-separated p_stall args pass straight through as one asm statement.
-#ifdef ARCH_QUASAR
-                    PACK(TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK));
-#endif
-                    curr_scratch_cb.push_back(scratch_npages);  // hand off to the DM reader, which writes the output
-                }
+
+                curr_scratch_cb.push_back(scratch_npages);  // hand off to the DM reader, which writes the output
 #else
                 // Production RM path: narrow pack straight into out_cb (already reserved above). Pair the
                 // pack-untilize init with a matching width per c-block (same contract as the scratch path).
