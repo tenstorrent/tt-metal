@@ -82,6 +82,17 @@ constexpr RowOutputSpec row_output(
     DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
     PackRelu relu = PackRelu::Disabled) noexcept;
 
+// Sum of squares over each ROW OF TILES: `square` with DestAccumulation::PerRow, i.e. the
+// squares of the row's Wt tiles are accumulated ELEMENT-WISE in DEST and one full tile is
+// packed out per tile-row (Ht outputs for an (Ht, Wt) grid).
+//
+// There is NO within-tile collapse. Every one of the output tile's 32x32 positions holds a
+// partial sum; nothing is reduced into column 0. `RowOutputSpec` / `row_output(...)` /
+// `DestAccumulation::PerRow` all mean "one output per row OF TILES" -- not "the values are
+// already reduced per row", which is the reading the naming invites.
+//
+// So a caller that needs a per-matrix-row scalar (an rms/variance denominator, say) must still
+// reduce within the tile afterwards -- e.g. ReduceWithinTile::Collapse, not ::Skip.
 template <InputSpec Input, RowOutputSpec RowOutput>
 ALWI void sum_of_squares(TypedIterationShape<IterationShapeKind::Grid> shape);
 
