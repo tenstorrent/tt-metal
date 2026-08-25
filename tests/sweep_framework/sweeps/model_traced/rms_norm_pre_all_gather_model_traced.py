@@ -4,6 +4,7 @@
 
 import re
 
+import ast
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -41,6 +42,65 @@ parameters = {
 
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
+
+
+def invalidate_vector(test_vector) -> tuple:
+    """Reject traced configs this framework cannot run as recorded.
+
+    fp32 dest accumulation doubles this op's static dataflow buffers, and with no traced
+    program_config the default path keeps a whole row of the input on ONE core. Measured on
+    blackhole, width 4096 asks for 1690624 B against a 1572864 B L1 budget and throws before the op
+    runs:
+
+        dataflow_buffer.cpp: statically allocated dataflow buffers on core range [0-0 - 0-0]
+        grow to 1690624 B which is beyond max L1 size of 1572864 B
+
+    The models this was traced from reach this op with the input already width-sharded across a core
+    grid plus a matching LayerNormShardedMultiCoreProgramConfig (see tt_transformers/tt/ccl.py:440-443),
+    which is what makes fp32 accumulation affordable. That sharding and program_config are absent from
+    the trace, so the vector as recorded is not the computation the model performed, and it cannot be
+    made to run faithfully: dropping fp32_dest_acc_en does fit L1 but accumulates 4096 squares in
+    bfloat16 and lands at PCC ~0.72, i.e. it would trade an exception for a wrong answer.
+
+    Reported as invalid rather than failed. In CI this was 9 vectors -- every width-4096 config -- in
+    every scheduled model-traced run.
+
+    The 1690624 B measurement gives ~413 B of buffer per element of width, so the budget runs out
+    just under width 3810; the bound below is expressed from that rather than hardcoding 4096, and it
+    leaves the traced width-1024 and width-640 configs (31 vectors, all passing) untouched.
+    """
+    ckc = test_vector.get("compute_kernel_config")
+    if not isinstance(ckc, dict) or not ckc.get("fp32_dest_acc_en"):
+        return False, None
+    if test_vector.get("program_config"):
+        return False, None
+    mem = test_vector.get("input_a_memory_config")
+    layout = ((mem or {}).get("data") or {}).get("memory_layout") if isinstance(mem, dict) else None
+    if layout is not None and "INTERLEAVED" not in str(layout):
+        return False, None
+
+    shape = test_vector.get("input_a_shape")
+    if isinstance(shape, str):
+        try:
+            shape = ast.literal_eval(shape)
+        except (ValueError, SyntaxError):
+            return False, None
+    if not isinstance(shape, (list, tuple)) or not shape:
+        return False, None
+    width = shape[-1]
+    if not isinstance(width, int):
+        return False, None
+
+    _BYTES_PER_WIDTH_ELEM = 1690624 / 4096  # measured: width 4096 asked for 1690624 B
+    _L1_BUDGET = 1572864
+    if width * _BYTES_PER_WIDTH_ELEM <= _L1_BUDGET:
+        return False, None
+    return True, (
+        f"traced config cannot run as recorded: fp32_dest_acc_en with no program_config needs "
+        f"~{int(width * _BYTES_PER_WIDTH_ELEM)} B of static dataflow buffers on one core against a "
+        f"{_L1_BUDGET} B L1 budget (width {width}). The model reaches this op width-sharded across a "
+        f"core grid with a matching program_config, neither of which the trace records."
+    )
 
 
 def mesh_device_fixture():
