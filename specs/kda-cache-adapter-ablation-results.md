@@ -12,9 +12,9 @@ All three required real Kimi-K3 `B=1,T=5120` layouts passed CPU-oracle accuracy,
 exact real-state round trip, exact patterned ordering round trip, and physical
 segment checks on eight Blackhole devices.
 
-For the one-way prefill-to-decode handoff, steady export costs 0.035-0.115 ms per
+For the one-way prefill-to-decode handoff, steady export costs 35-115 µs per
 KDA layer, or 0.364-1.136% of the measured layer wall time. Import costs
-0.045-0.155 ms, or 0.462-1.532%. Convolution resharing dominates and grows with
+45-155 µs, or 0.462-1.532%. Convolution resharing dominates and grows with
 the SP replication factor. Use the adapters at the disaggregation boundary;
 do not change the contract. A fully direct layout is not available in PR7 because
 the recurrent scan and convolution consumer explicitly require interleaved input,
@@ -22,17 +22,17 @@ and the recurrent producer requires interleaved output.
 
 ## Steady trace-wall ablation
 
-Each cell is median milliseconds from 20 synchronized samples of 100 trace
-replays. Parentheses give p95. `combined %` is combined median divided by the
-same layout's real KDA-layer median.
+Adapter cells are median microseconds from 20 synchronized samples of 100 trace
+replays. Parentheses give p95. The layer column remains in milliseconds.
+`combined %` is combined median divided by the same layout's real KDA-layer median.
 
-| Layout | Layer ms | Export S | Export conv | Export combined | Export % | Import S | Import conv | Import combined | Import % |
+| Layout | Layer (ms) | Export S (µs) | Export conv (µs) | Export combined (µs) | Export % | Import S (µs) | Import conv (µs) | Import combined (µs) | Import % |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| SP1xTP8 | 9.7171 | 0.01253 (0.01261) | 0.02737 (0.02740) | 0.03540 (0.03627) | 0.364% | 0.01164 (0.01165) | 0.03624 (0.03627) | 0.04492 (0.04519) | 0.462% |
-| SP2xTP4 | 9.6486 | 0.01634 (0.01639) | 0.04895 (0.04898) | 0.06172 (0.06200) | 0.640% | 0.01623 (0.01628) | 0.06975 (0.06987) | 0.08258 (0.08264) | 0.856% |
-| SP4xTP2 | 10.1103 | 0.02365 (0.03000) | 0.09433 (0.09439) | 0.11482 (0.11510) | 1.136% | 0.02379 (0.02395) | 0.13395 (0.13405) | 0.15489 (0.15502) | 1.532% |
+| SP1xTP8 | 9.7171 | 12.53 (12.61) | 27.37 (27.40) | 35.40 (36.27) | 0.364% | 11.64 (11.65) | 36.24 (36.27) | 44.92 (45.19) | 0.462% |
+| SP2xTP4 | 9.6486 | 16.34 (16.39) | 48.95 (48.98) | 61.72 (62.00) | 0.640% | 16.23 (16.28) | 69.75 (69.87) | 82.58 (82.64) | 0.856% |
+| SP4xTP2 | 10.1103 | 23.65 (30.00) | 94.33 (94.39) | 114.82 (115.10) | 1.136% | 23.79 (23.95) | 133.95 (134.05) | 154.89 (155.02) | 1.532% |
 
-A bidirectional export-plus-import transition is 0.0803, 0.1443, and 0.2697 ms
+A bidirectional export-plus-import transition is 80.3, 144.3, and 269.7 µs
 per layer respectively: 0.827%, 1.496%, and 2.668% of one layer. If all 69 KDA
 layers are converted serially, the measured medians imply one-way export totals
 of 2.44, 4.26, and 7.92 ms; import totals are 3.10, 5.70, and 10.69 ms.
