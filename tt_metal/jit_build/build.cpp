@@ -144,7 +144,7 @@ void JitBuildEnv::init(
 
     // Use local sfpi for development
     // Use system sfpi for production to avoid packaging it
-    // Ordered by precedence.
+    // Ordered by precedence
     const std::array<std::string, 2> sfpi_roots = {
         this->root_ + "runtime/sfpi", parse_env<std::string>("SFPI_ROOT", "/opt/tenstorrent/sfpi")};
 
