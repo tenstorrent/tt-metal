@@ -82,11 +82,40 @@ std::vector<tt::tt_metal::CoreCoord> populate_all_logical_dispatch_cores(
     return get_consistent_logical_cores(env, num_hw_cqs, dispatch_core_config);
 }
 
-tt::tt_metal::CommandQueueDispatchLayout generate_cq_dispatch_layout(tt::ARCH arch, uint8_t num_hw_cqs) {
+tt::tt_metal::CommandQueueDispatchLayout generate_cq_dispatch_layout(
+    tt::ARCH arch, uint8_t num_hw_cqs, const std::vector<tt::tt_metal::CoreCoord>& dispatch_core_pool) {
     if (arch != tt::ARCH::QUASAR) {
         return {.fd_kernels_on_same_core = false, .num_cqs_per_core = 1};
     }
-    return {.fd_kernels_on_same_core = true, .num_cqs_per_core = num_hw_cqs};
+
+    constexpr uint32_t num_fd_kernels_per_cq = 2;
+    // Pool is [cq0 prefetch, cq0 dispatch, cq1 prefetch, cq1 dispatch, ...]; a wrong length
+    // would make the pair indexing below miss a CQ or read past the end.
+    TT_ASSERT(dispatch_core_pool.size() == num_fd_kernels_per_cq * num_hw_cqs);
+
+    std::vector<tt::tt_metal::CoreCoord> cq_dispatch_cores;
+    cq_dispatch_cores.reserve(num_hw_cqs);
+    for (uint8_t cq = 0; cq < num_hw_cqs; cq++) {
+        const tt::tt_metal::CoreCoord& prefetch_core = dispatch_core_pool[num_fd_kernels_per_cq * cq];
+        const tt::tt_metal::CoreCoord& dispatch_core = dispatch_core_pool[num_fd_kernels_per_cq * cq + 1];
+        TT_FATAL(
+            prefetch_core == dispatch_core,
+            "Expected prefetch and dispatch cores to be the same, got prefetch core {} and dispatch core {}",
+            prefetch_core,
+            dispatch_core);
+        cq_dispatch_cores.push_back(dispatch_core);
+    }
+
+    const bool all_cqs_on_one_core =
+        std::all_of(cq_dispatch_cores.begin(), cq_dispatch_cores.end(), [&cq_dispatch_cores](const auto& core) {
+            return core == cq_dispatch_cores.front();
+        });
+    if (all_cqs_on_one_core) {
+        return {.fd_kernels_on_same_core = true, .num_cqs_per_core = num_hw_cqs};
+    }
+
+    // The only placement remaining is one CQ per dispatch core.
+    return {.fd_kernels_on_same_core = true, .num_cqs_per_core = 1};
 }
 
 }  // namespace
@@ -126,12 +155,12 @@ void DispatchQueryManager::reset(DispatchCoreConfig& dispatch_core_config, uint8
     }
 
     go_signal_noc_ = (dispatch_s_enabled_ and arch != tt::ARCH::QUASAR) ? NOC::NOC_1 : NOC::NOC_0;
-    cq_dispatch_layout_ = generate_cq_dispatch_layout(arch, num_hw_cqs);
-    // Reset the dispatch cores reported by the manager. Will be re-populated when the associated query is made
-    dispatch_cores_ = {};
-    // Populate dispatch
+    // Populate dispatch cores first: the layout is derived from the cores this pool hands out per CQ.
     logical_dispatch_cores_on_user_chips_ =
         populate_all_logical_dispatch_cores(env_, num_hw_cqs_, dispatch_core_config_);
+    cq_dispatch_layout_ = generate_cq_dispatch_layout(arch, num_hw_cqs, logical_dispatch_cores_on_user_chips_);
+    // Reset the dispatch cores reported by the manager. Will be re-populated when the associated query is made
+    dispatch_cores_ = {};
 }
 
 const std::vector<tt::tt_metal::CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores(uint32_t device_id) const {
