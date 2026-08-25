@@ -24,6 +24,15 @@
 
 #include <umd/device/types/arch.hpp>
 
+#ifndef __has_feature
+#define __has_feature(x) 0
+#endif
+#if __has_feature(leak_sanitizer) || __has_feature(address_sanitizer) || defined(__SANITIZE_ADDRESS__) || \
+    defined(__SANITIZE_LEAK__)
+#define TT_MATMUL_REGISTRY_TEST_LSAN_ACTIVE 1
+#include <sanitizer/lsan_interface.h>
+#endif
+
 #include "device/mock_device_util.hpp"
 
 #include "ttnn/graph/graph_query_op_constraints.hpp"
@@ -46,12 +55,29 @@
 
 namespace tt::tt_metal {
 
+namespace {
+
+#ifdef TT_MATMUL_REGISTRY_TEST_LSAN_ACTIVE
+class ScopedLeakTrackingDisable {
+public:
+    ScopedLeakTrackingDisable() { __lsan_disable(); }
+    ~ScopedLeakTrackingDisable() { __lsan_enable(); }
+};
+#endif
+
+}  // namespace
+
 class QueryOpConstraintsMockDevice : public ::testing::Test {
 protected:
     std::unique_ptr<MetalEnv> mock_env_;
     std::shared_ptr<distributed::MeshDevice> mock_device_;
 
     void SetUp() override {
+#ifdef TT_MATMUL_REGISTRY_TEST_LSAN_ACTIVE
+        // OpenMPI/PMIx intentionally retain process-global discovery state.
+        // Suppress only mock-environment startup; registry calls remain checked.
+        const ScopedLeakTrackingDisable suppress_process_global_leaks;
+#endif
         mock_env_ = std::make_unique<MetalEnv>(
             MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)));
         auto mesh_shape = mock_env_->get_system_mesh().shape();
