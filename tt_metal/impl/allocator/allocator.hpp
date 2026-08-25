@@ -91,9 +91,6 @@ public:
     void shrink_allocator_size(const BufferType& buffer_type, DeviceAddr shrink_size, bool bottom_up = true);
     void reset_allocator_size(const BufferType& buffer_type);
 
-    static void push_corruptible_allocation_scope(const std::vector<AllocatorImpl*>& allocators);
-    static void pop_corruptible_allocation_scope();
-
     // See <tt-metalium/experimental/allocation_context.hpp> for the thread-local context stack API.
 
     // High water mark tracking for DRAM allocations during trace capture
@@ -138,6 +135,7 @@ protected:
 
 private:
     friend class distributed::MeshDeviceImpl;
+    friend std::unordered_set<size_t> get_all_unsafe_tracked_ids();
 
     void register_active_trace(SubDeviceManagerId manager_id, const distributed::MeshTraceId& trace_id);
     void unregister_active_trace(SubDeviceManagerId manager_id, const distributed::MeshTraceId& trace_id);
@@ -145,10 +143,6 @@ private:
     std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(
         SubDeviceManagerId manager_id, const distributed::MeshTraceId& trace_id);
     void remove_unsafe_tracked_id(size_t buffer_unique_id);
-    static std::vector<size_t> drain_pending_traceback_ids();
-    static std::unordered_set<size_t> get_all_unsafe_tracked_ids();
-    static void register_traceback_allocator(AllocatorImpl* allocator);
-    static void unregister_traceback_allocator(AllocatorImpl* allocator);
     void verify_safe_allocation() const;
     void record_allocation_if_unsafe(Buffer* buffer);
     void record_deallocation(size_t buffer_unique_id);
@@ -194,5 +188,13 @@ private:
         unsafe_tracked_ids_by_manager_and_trace_;
     std::unordered_map<size_t, std::string> unsafe_allocation_contexts_;
 };
+
+// Process-wide and thread-local implementation state used by the trace allocation diagnostics layer.
+void push_corruptible_allocation_scope(const std::vector<AllocatorImpl*>& allocators);
+void pop_corruptible_allocation_scope();
+std::vector<size_t> drain_pending_traceback_ids();
+std::unordered_set<size_t> get_all_unsafe_tracked_ids();
+void register_traceback_allocator(AllocatorImpl* allocator);
+void unregister_traceback_allocator(AllocatorImpl* allocator);
 
 }  // namespace tt::tt_metal

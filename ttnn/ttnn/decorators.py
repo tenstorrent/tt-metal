@@ -18,7 +18,7 @@ from loguru import logger
 
 import ttnn
 import ttnn.operation_tracer
-from ttnn.trace_allocation_config import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_TRACKING
+from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_TRACKING
 
 
 def compare_tensors_using_pcc(
@@ -533,7 +533,7 @@ if TRACE_ALLOC_DIAGNOSTICS:
     def _drain_traceback_ids(source="op_end", op_name=None):
         """Drain allocation IDs and capture their Python call stacks."""
         from ttnn._ttnn.operations.trace import drain_pending_traceback_ids
-        from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
+        from ttnn.tools.trace_allocation_tracker import TraceAllocationTracker
 
         pending = drain_pending_traceback_ids()
         if pending:
@@ -551,11 +551,11 @@ if TRACE_ALLOC_DIAGNOSTICS:
                 marker += ".\n"
                 stack = marker + stack
             for buf_id in pending:
-                UnsafeAllocationTracker._tracebacks[buf_id] = stack
+                TraceAllocationTracker._tracebacks[buf_id] = stack
 
         # C++ deallocation accounting is authoritative. Reconcile after adding
         # pending tracebacks so IDs retired before or during this drain are pruned.
-        UnsafeAllocationTracker.reconcile_tracebacks()
+        TraceAllocationTracker.reconcile_tracebacks()
 
 
 # Keyword argument names through which an operation writes into a caller-supplied tensor in

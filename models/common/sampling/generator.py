@@ -31,9 +31,9 @@ def _mark_trace_buffers_corruptible(bucket, value):
         for item in value:
             _mark_trace_buffers_corruptible(bucket, item)
         return
-    mark_corruptible = getattr(ttnn, "mark_corruptible", None)
-    if mark_corruptible is not None:
-        mark_corruptible(value)
+    acknowledge_corruptible = getattr(ttnn, "acknowledge_corruptible", None)
+    if acknowledge_corruptible is not None:
+        acknowledge_corruptible(value)
 
 
 def _hash_request_seed_to_device_seed(seed: int, counter: int, salt: int = 0) -> int:

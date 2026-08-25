@@ -49,7 +49,7 @@
 #include <experimental/fabric/fabric_types.hpp>
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/realtime_profiler_manager.hpp"
-#include "distributed/trace_allocation_tracker.hpp"
+#include <tt-metalium/experimental/trace_allocation_tracker.hpp>
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
@@ -330,16 +330,10 @@ void MeshDeviceImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
         allocator->remove_unsafe_tracked_id(buffer_unique_id);
     }
 }
-std::vector<size_t> MeshDeviceImpl::drain_pending_traceback_ids() {
-    return AllocatorImpl::drain_pending_traceback_ids();
-}
-std::unordered_set<size_t> MeshDeviceImpl::get_all_unsafe_tracked_ids() {
-    return AllocatorImpl::get_all_unsafe_tracked_ids();
-}
 void MeshDeviceImpl::push_corruptible_allocation_scope() {
-    AllocatorImpl::push_corruptible_allocation_scope(this->trace_allocators());
+    tt::tt_metal::push_corruptible_allocation_scope(this->trace_allocators());
 }
-void MeshDeviceImpl::pop_corruptible_allocation_scope() { AllocatorImpl::pop_corruptible_allocation_scope(); }
+void MeshDeviceImpl::pop_corruptible_allocation_scope() { tt::tt_metal::pop_corruptible_allocation_scope(); }
 
 namespace trace_allocation_tracker {
 
@@ -355,8 +349,8 @@ std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(const MeshDevice*
 void remove_unsafe_tracked_id(MeshDevice* device, size_t buffer_unique_id) {
     device->impl().remove_unsafe_tracked_id(buffer_unique_id);
 }
-std::vector<size_t> drain_pending_traceback_ids() { return MeshDeviceImpl::drain_pending_traceback_ids(); }
-std::unordered_set<size_t> get_all_unsafe_tracked_ids() { return MeshDeviceImpl::get_all_unsafe_tracked_ids(); }
+std::vector<size_t> drain_pending_traceback_ids() { return tt::tt_metal::drain_pending_traceback_ids(); }
+std::unordered_set<size_t> get_all_unsafe_tracked_ids() { return tt::tt_metal::get_all_unsafe_tracked_ids(); }
 void push_corruptible_allocation_scope(MeshDevice* device) { device->impl().push_corruptible_allocation_scope(); }
 void pop_corruptible_allocation_scope(MeshDevice* device) { device->impl().pop_corruptible_allocation_scope(); }
 

@@ -16,11 +16,14 @@
 #include <nanobind/stl/vector.h>
 
 #include <tt-metalium/experimental/allocation_context.hpp>
+#include <tt-metalium/experimental/trace_allocation_tracker.hpp>
 
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/trace.hpp"
 
 namespace ttnn::operations::trace {
+
+namespace tracker = tt::tt_metal::distributed::trace_allocation_tracker;
 
 void py_module_types(nb::module_& mod) {
     nb::class_<ttnn::MeshTraceId>(mod, "MeshTraceId")
@@ -137,35 +140,33 @@ void py_module(nb::module_& mod) {
     // Unsafe allocation tracking
     mod.def(
         "get_unsafe_tracked_ids",
-        [](MeshDevice* device, MeshTraceId trace_id) {
-            return ttnn::operations::trace::get_unsafe_tracked_ids(device, trace_id);
-        },
+        [](MeshDevice* device, MeshTraceId trace_id) { return tracker::get_unsafe_tracked_ids(device, trace_id); },
         nb::arg("mesh_device"),
         nb::arg("trace_id"));
     mod.def(
         "remove_unsafe_tracked_id",
         [](MeshDevice* device, size_t buffer_unique_id) {
-            ttnn::operations::trace::remove_unsafe_tracked_id(device, buffer_unique_id);
+            tracker::remove_unsafe_tracked_id(device, buffer_unique_id);
         },
         nb::arg("mesh_device"),
         nb::arg("buffer_unique_id"));
-    mod.def("drain_pending_traceback_ids", []() { return ttnn::operations::trace::drain_pending_traceback_ids(); });
-    mod.def("get_all_unsafe_tracked_ids", []() { return ttnn::operations::trace::get_all_unsafe_tracked_ids(); });
+    mod.def("drain_pending_traceback_ids", []() { return tracker::drain_pending_traceback_ids(); });
+    mod.def("get_all_unsafe_tracked_ids", []() { return tracker::get_all_unsafe_tracked_ids(); });
     mod.def(
         "push_corruptible_allocation_scope",
-        [](MeshDevice* device) { ttnn::operations::trace::push_corruptible_allocation_scope(device); },
+        [](MeshDevice* device) { tracker::push_corruptible_allocation_scope(device); },
         nb::arg("mesh_device"));
     mod.def(
         "pop_corruptible_allocation_scope",
-        [](MeshDevice* device) { ttnn::operations::trace::pop_corruptible_allocation_scope(device); },
+        [](MeshDevice* device) { tracker::pop_corruptible_allocation_scope(device); },
         nb::arg("mesh_device"));
 
     // Allocation context stack
     mod.def(
         "push_allocation_context",
-        [](const std::string& ctx) { ttnn::operations::trace::push_allocation_context(ctx); },
+        [](const std::string& ctx) { tt::tt_metal::push_allocation_context(ctx); },
         nb::arg("context"));
-    mod.def("pop_allocation_context", []() { ttnn::operations::trace::pop_allocation_context(); });
+    mod.def("pop_allocation_context", []() { tt::tt_metal::pop_allocation_context(); });
 }
 
 }  // namespace ttnn::operations::trace

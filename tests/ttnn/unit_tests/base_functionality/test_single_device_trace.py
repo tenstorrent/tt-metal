@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 import torch
 import ttnn
-from ttnn.trace_allocation_config import TRACE_ALLOC_DIAGNOSTICS
+from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_DIAGNOSTICS
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import skip_for_slow_dispatch
@@ -268,7 +268,7 @@ def test_trace_allocation_tracking_acknowledgments_and_lifetime(device, expect_e
         marked = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
         marked_id = marked.buffer_unique_id()
         assert marked_id in ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
-        assert ttnn.mark_corruptible(marked) == marked_id
+        assert ttnn.acknowledge_corruptible(marked) == marked_id
         assert marked_id not in ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
 
         with ttnn.corruptible_allocation_scope(device):
@@ -283,7 +283,7 @@ def test_trace_allocation_tracking_acknowledgments_and_lifetime(device, expect_e
         assert temporary_id not in ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
 
         if TRACE_ALLOC_DIAGNOSTICS:
-            from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
+            from ttnn.tools.trace_allocation_tracker import TraceAllocationTracker
 
             # The aggregate diagnostics registry does not perform per-trace
             # stale-ID cleanup: deallocation must update it eagerly as well.
@@ -293,7 +293,7 @@ def test_trace_allocation_tracking_acknowledgments_and_lifetime(device, expect_e
             # reconcile Python tracebacks with the eagerly updated C++ state.
             with ttnn.corruptible_allocation_scope(device):
                 reconciliation_boundary = ttnn.neg(trace_input)
-            assert temporary_id not in UnsafeAllocationTracker._tracebacks
+            assert temporary_id not in TraceAllocationTracker._tracebacks
             reconciliation_boundary.deallocate()
 
         # All three allowed cases remain safe to replay while the acknowledged tensors are still alive.
@@ -323,7 +323,7 @@ def test_trace_allocation_tracking_acknowledgments_and_lifetime(device, expect_e
 
         unsafe_b = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
         if TRACE_ALLOC_DIAGNOSTICS:
-            assert raw_temporary_id not in UnsafeAllocationTracker._tracebacks
+            assert raw_temporary_id not in TraceAllocationTracker._tracebacks
         with expect_error(RuntimeError, "Found 2 device buffer") as error:
             ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
         assert f"Buffer {unsafe_a.buffer_unique_id()}" in str(error.value)

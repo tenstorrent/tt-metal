@@ -16,6 +16,8 @@ namespace tt::tt_metal::distributed {
 
 class MeshDevice;
 
+// Experimental trace allocation safety tracker. Registration and lookup interpret trace IDs under the currently
+// active sub-device manager; see the trace capture API documentation for manager-scoping requirements.
 namespace trace_allocation_tracker {
 
 void register_active_trace(MeshDevice* device, const MeshTraceId& trace_id);

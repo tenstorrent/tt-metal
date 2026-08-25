@@ -160,7 +160,7 @@ from ttnn._ttnn.operations.debug import (
     apply_device_delay,
 )
 
-from ttnn.trace_allocation_config import TRACE_ALLOC_TRACKING
+from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_TRACKING
 
 if TRACE_ALLOC_TRACKING:
     from ttnn._ttnn.operations.trace import (
@@ -186,11 +186,11 @@ else:
 
 
 if TRACE_ALLOC_TRACKING:
-    from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
+    from ttnn.tools.trace_allocation_tracker import TraceAllocationTracker
 
     def execute_trace(mesh_device, trace_id, *, cq_id=None, blocking=True):
         """Execute a captured trace, with automatic allocation-safety verification."""
-        UnsafeAllocationTracker.verify_before_replay(mesh_device, trace_id)
+        TraceAllocationTracker.verify_before_replay(mesh_device, trace_id)
         return _ttnn_execute_trace(mesh_device, trace_id, cq_id=cq_id, blocking=blocking)
 
 else:
@@ -198,14 +198,14 @@ else:
     execute_trace = _ttnn_execute_trace
 
 
-def mark_corruptible(tensor):
+def acknowledge_corruptible(tensor):
     """
-    Mark a specific tensor buffer as intentionally corruptible for trace
-    allocation safety checks.
+    Acknowledge that a tensor buffer may intentionally be corrupted by trace
+    replay, removing it from trace allocation safety checks.
     """
-    from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
+    from ttnn.tools.trace_allocation_tracker import TraceAllocationTracker
 
-    return UnsafeAllocationTracker.mark_corruptible(tensor)
+    return TraceAllocationTracker.acknowledge_corruptible(tensor)
 
 
 from ttnn._ttnn.global_circular_buffer import (

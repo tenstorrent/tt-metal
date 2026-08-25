@@ -31,7 +31,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include "tt_metal/distributed/mesh_device_impl.hpp"
-#include "tt_metal/distributed/trace_allocation_tracker.hpp"
+#include <tt-metalium/experimental/trace_allocation_tracker.hpp>
 
 namespace tt::tt_metal {
 

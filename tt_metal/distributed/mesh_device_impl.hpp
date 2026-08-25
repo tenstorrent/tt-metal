@@ -232,8 +232,6 @@ public:
     std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(
         SubDeviceManagerId manager_id, const MeshTraceId& trace_id) const;
     void remove_unsafe_tracked_id(size_t buffer_unique_id);
-    static std::vector<size_t> drain_pending_traceback_ids();
-    static std::unordered_set<size_t> get_all_unsafe_tracked_ids();
     void push_corruptible_allocation_scope();
     void pop_corruptible_allocation_scope();
 

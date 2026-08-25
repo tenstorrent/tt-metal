@@ -73,11 +73,11 @@ bool allocation_context_contains(std::string_view ctx) {
         });
 }
 
-void AllocatorImpl::push_corruptible_allocation_scope(const std::vector<AllocatorImpl*>& allocators) {
+void push_corruptible_allocation_scope(const std::vector<AllocatorImpl*>& allocators) {
     corruptible_allocation_scope_stack.emplace_back(allocators.begin(), allocators.end());
 }
 
-void AllocatorImpl::pop_corruptible_allocation_scope() {
+void pop_corruptible_allocation_scope() {
     TT_ASSERT(!corruptible_allocation_scope_stack.empty(), "pop_corruptible_allocation_scope called with empty stack");
     corruptible_allocation_scope_stack.pop_back();
 }
@@ -188,7 +188,7 @@ void AllocatorImpl::record_allocation_if_unsafe(Buffer* buffer) {
 
     const auto& allocation_context = current_allocation_context();
     if (this->in_corruptible_allocation_scope() ||
-        (skip_program_cache_ && allocation_context.starts_with("program_cache:"))) {
+        (skip_program_cache_ && allocation_context.starts_with(kProgramCacheAllocationContextPrefix))) {
         return;
     }
 
@@ -253,25 +253,25 @@ void AllocatorImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
     this->record_deallocation(buffer_unique_id);
 }
 
-std::vector<size_t> AllocatorImpl::drain_pending_traceback_ids() {
+std::vector<size_t> drain_pending_traceback_ids() {
     std::vector<size_t> result;
     result.swap(pending_traceback_ids);
     return result;
 }
 
-void AllocatorImpl::register_traceback_allocator(AllocatorImpl* allocator) {
+void register_traceback_allocator(AllocatorImpl* allocator) {
     auto& registry = traceback_allocator_registry();
     std::lock_guard<std::mutex> lock(registry.mutex);
     registry.allocators.insert(allocator);
 }
 
-void AllocatorImpl::unregister_traceback_allocator(AllocatorImpl* allocator) {
+void unregister_traceback_allocator(AllocatorImpl* allocator) {
     auto& registry = traceback_allocator_registry();
     std::lock_guard<std::mutex> lock(registry.mutex);
     registry.allocators.erase(allocator);
 }
 
-std::unordered_set<size_t> AllocatorImpl::get_all_unsafe_tracked_ids() {
+std::unordered_set<size_t> get_all_unsafe_tracked_ids() {
     std::unordered_set<size_t> result;
     auto& registry = traceback_allocator_registry();
     std::lock_guard<std::mutex> registry_lock(registry.mutex);

@@ -16,24 +16,50 @@ Controlled by environment variables:
 
 Set these before importing ttnn; they are read once at process startup.
 
-See also: ttnn.corruptible_allocation_scope, ttnn.execute_trace.
+See also: ttnn.acknowledge_corruptible, ttnn.corruptible_allocation_scope, ttnn.execute_trace.
 """
 
 from __future__ import annotations
 
 import gc
+import os
 import sys
+import warnings
 from typing import ClassVar
 
 from ttnn._ttnn.operations.trace import (
     get_all_unsafe_tracked_ids,
     get_unsafe_tracked_ids,
     remove_unsafe_tracked_id,
+    trace_allocation_diagnostics_enabled,
+    trace_allocation_tracking_enabled,
 )
-from ttnn.trace_allocation_config import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_REFERRER_DEPTH
 
 
-class UnsafeAllocationTracker:
+def _env_nonnegative_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+        if parsed < 0:
+            raise ValueError
+        return parsed
+    except ValueError:
+        warnings.warn(f"{name} must be a non-negative integer; using {default}", stacklevel=2)
+        return default
+
+
+# Metal owns and parses these process-wide settings once. Query its cached RunTimeOptions snapshot rather than
+# reading the environment independently, so TTNN and Metal cannot disagree. Referrer depth is Python-only.
+TRACE_ALLOC_TRACKING = trace_allocation_tracking_enabled()
+TRACE_ALLOC_DIAGNOSTICS = trace_allocation_diagnostics_enabled()
+TRACE_ALLOC_REFERRER_DEPTH = (
+    _env_nonnegative_int("TT_METAL_TRACE_ALLOC_REFERRER_DEPTH", 10) if TRACE_ALLOC_DIAGNOSTICS else 10
+)
+
+
+class TraceAllocationTracker:
     """Per-device tracker for allocations made while traces are active."""
 
     _tracebacks: ClassVar[dict[int, str]] = {}
@@ -50,24 +76,24 @@ class UnsafeAllocationTracker:
         return currently_unsafe
 
     @classmethod
-    def mark_corruptible(cls, tensor) -> int:
+    def acknowledge_corruptible(cls, tensor) -> int:
         """
-        Mark a tensor's backing buffer as intentionally corruptible.
-        This removes the buffer from unsafe-allocation tracking immediately.
+        Acknowledge that a tensor's backing buffer may intentionally be corrupted.
+        This removes the buffer from trace-allocation tracking immediately.
         Returns the tensor's buffer_unique_id.
         """
         import ttnn
 
         if not isinstance(tensor, ttnn.Tensor):
-            raise TypeError(f"mark_corruptible expects a ttnn.Tensor, got {type(tensor).__name__}")
+            raise TypeError(f"acknowledge_corruptible expects a ttnn.Tensor, got {type(tensor).__name__}")
         if not ttnn.is_tensor_storage_on_device(tensor):
-            raise ValueError("mark_corruptible expects a tensor with device storage")
+            raise ValueError("acknowledge_corruptible expects a tensor with device storage")
         if not tensor.is_allocated():
-            raise ValueError("mark_corruptible expected an allocated tensor")
+            raise ValueError("acknowledge_corruptible expected an allocated tensor")
 
         buf_id = tensor.buffer_unique_id()
         if buf_id is None:
-            raise ValueError("mark_corruptible expected a tensor with a valid device buffer_unique_id")
+            raise ValueError("acknowledge_corruptible expected a tensor with a valid device buffer_unique_id")
 
         remove_unsafe_tracked_id(tensor.device(), buf_id)
         cls._tracebacks.pop(buf_id, None)
@@ -229,7 +255,7 @@ class UnsafeAllocationTracker:
                     continue
                 for name, val in local_items:
                     stats["locals"] += 1
-                    _scan_value(val, loc, name, depth=UnsafeAllocationTracker._referrer_depth)
+                    _scan_value(val, loc, name, depth=TraceAllocationTracker._referrer_depth)
                 frame = frame.f_back
 
         lines: list[str] = [
@@ -265,6 +291,6 @@ class UnsafeAllocationTracker:
             lines.append(
                 "Hint: these may be program cache buffers (tracked by default; disable with"
                 " TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=1), or held deeper than the"
-                f" referrer search depth (currently {UnsafeAllocationTracker._referrer_depth} levels)."
+                f" referrer search depth (currently {TraceAllocationTracker._referrer_depth} levels)."
             )
         return "\n".join(lines)
