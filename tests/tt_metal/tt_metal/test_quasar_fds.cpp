@@ -488,10 +488,6 @@ TEST_F(QuasarFdsFixture, DispatchEngineGroupIsolation) {
     }
 }
 
-// The register-semantics tests below take each engine in turn, like the handshake tests above:
-// the FDS register file is one hardware block, but every engine carries its own instance and its
-// own wiring of the paths under test, so each has to answer for itself.
-
 // Several consecutive go/done rounds on the same group in one program, which is the re-signalling
 // path a real launch sequence exercises and the single-round tests never do. Capture is
 // change-triggered, so the protocol's clearing discipline — the engine dropping its go to zero

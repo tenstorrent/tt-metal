@@ -27,7 +27,7 @@ set(UNIT_TESTS_LEGACY_SRC
     test_multiple_programs.cpp
     test_pack_relu.cpp
     test_quasar_compute_kernels.cpp
-    test_quasar_dispatch_engines.cpp
+    test_quasar_fds.cpp
     test_quasar_events.cpp
     test_quasar_mesh_buffers.cpp
     test_quasar_mesh_workloads.cpp
