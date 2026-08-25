@@ -21,8 +21,8 @@ CB_ACCUMULATOR = 2
 CB_OUTPUT = 16
 DEST_LIMIT = 4  # fp32 DEST + half synchronization, fixed by _compute_config().
 
-COMPUTE_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/kernels/reduce.cpp"
-SCALER_KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/kernels/reduce_scaler.cpp"
+COMPUTE_KERNEL = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce.cpp"
+SCALER_KERNEL = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_scaler.cpp"
 
 POLICIES = ("WaitAndPopPerTile", "BulkWaitBulkPop", "WaitUpfrontNoPop", "NoWaitNoPop")
 INDEXED_POLICIES = ("WaitUpfrontNoPop", "NoWaitNoPop")
@@ -360,7 +360,6 @@ def _defines(case: ReduceCase) -> list[tuple[str, str]]:
         ("REDUCE_INPUT_POLICY", f"compute_kernel_lib::ReduceInputPolicy::{case.policy}"),
         ("REDUCE_RECONFIG_MODE", f"compute_kernel_lib::ReduceDataFormatReconfigMode::{case.reconfig_mode}"),
         ("REDUCE_FP32_MODE", f"ReduceFp32Mode::{case.fp32_mode}"),
-        ("REDUCE_NUM_CALLS", str(case.calls)),
         ("REDUCE_FACTOR", str(case.reduce_factor)),
         ("REDUCE_EXPECTED_COL_CHUNK", str(case.col_chunk)),
     ]
@@ -539,6 +538,7 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
             kernel_source=COMPUTE_KERNEL,
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=_single_core(),
+            compile_time_args=[case.calls],
             runtime_args=_runtime_args([case.rows, case.cols, case.batches, case.row_stride]),
             defines=defines,
             config=_compute_config(case),

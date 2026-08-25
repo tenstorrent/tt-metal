@@ -15,8 +15,9 @@ constexpr uint32_t cb_input = 0;
 constexpr uint32_t cb_scaler = 1;
 constexpr uint32_t cb_accumulator = 2;
 constexpr uint32_t cb_output = 16;
+constexpr uint32_t num_calls = get_compile_time_arg_val(0);
 
-static_assert(REDUCE_NUM_CALLS >= 1 && REDUCE_NUM_CALLS <= 4);
+static_assert(num_calls >= 1);
 
 constexpr DataFormat input_format = static_cast<DataFormat>(unpack_src_format[cb_input]);
 constexpr bool uses_sfpu = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, input_format, REDUCE_FP32_MODE>();
@@ -32,17 +33,22 @@ struct PostReduceMultiply {
 };
 #endif
 
+template <bool enable_accumulation>
+ALWI auto make_accumulation(uint32_t iteration) {
+    if constexpr (enable_accumulation) {
+        return compute_kernel_lib::Accumulate::at(cb_accumulator, iteration);
+    } else {
+        return compute_kernel_lib::NoAccumulation{};
+    }
+}
+
 template <uint32_t output_cb>
 ALWI void run_reduce_call(
     compute_kernel_lib::ReduceInputBlockShape shape,
     compute_kernel_lib::ReduceInputMemoryLayout layout,
     uint32_t input_tiles,
     uint32_t iteration) {
-#if REDUCE_NUM_CALLS > 1
-    const auto accumulation = compute_kernel_lib::Accumulate::at(cb_accumulator, iteration);
-#else
-    const auto accumulation = compute_kernel_lib::NoAccumulation{};
-#endif
+    const auto accumulation = make_accumulation<(num_calls > 1)>(iteration);
 
     compute_kernel_lib::reduce<
         REDUCE_OP,
@@ -86,26 +92,21 @@ void kernel_main() {
     const auto layout = row_stride == cols ? compute_kernel_lib::ReduceInputMemoryLayout::contiguous()
                                            : compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(row_stride);
 
-    constexpr uint32_t first_output_cb = REDUCE_NUM_CALLS == 1 ? cb_output : cb_accumulator;
+    constexpr uint32_t first_output_cb = num_calls == 1 ? cb_output : cb_accumulator;
     compute_kernel_hw_startup(cb_input, cb_scaler, first_output_cb);
 
     // One sharded tensor backs a linear sequence of per-call blocks. Make the
     // complete stream visible once; ownership then follows the selected policy.
-    cb_reserve_back(cb_input, input_tiles * REDUCE_NUM_CALLS);
-    cb_push_back(cb_input, input_tiles * REDUCE_NUM_CALLS);
+    cb_reserve_back(cb_input, input_tiles * num_calls);
+    cb_push_back(cb_input, input_tiles * num_calls);
 
-    run_reduce_call<first_output_cb>(shape, layout, input_tiles, 0);
-
-    if constexpr (REDUCE_NUM_CALLS >= 2) {
-        constexpr uint32_t second_output_cb = REDUCE_NUM_CALLS == 2 ? cb_output : cb_accumulator;
-        run_reduce_call<second_output_cb>(shape, layout, input_tiles, 1);
-    }
-    if constexpr (REDUCE_NUM_CALLS >= 3) {
-        constexpr uint32_t third_output_cb = REDUCE_NUM_CALLS == 3 ? cb_output : cb_accumulator;
-        run_reduce_call<third_output_cb>(shape, layout, input_tiles, 2);
-    }
-    if constexpr (REDUCE_NUM_CALLS >= 4) {
-        run_reduce_call<cb_output>(shape, layout, input_tiles, 3);
+    for (uint32_t call = 0; call < num_calls; ++call) {
+        const bool is_last_call = call == num_calls - 1;
+        if (is_last_call) {
+            run_reduce_call<cb_output>(shape, layout, input_tiles, call);
+        } else {
+            run_reduce_call<cb_accumulator>(shape, layout, input_tiles, call);
+        }
     }
 
     // reduce() deliberately keeps the scaler resident for reuse by every call.
