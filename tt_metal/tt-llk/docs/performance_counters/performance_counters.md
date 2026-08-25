@@ -120,10 +120,10 @@ cd $LLK_HOME/tests
 export CHIP_ARCH=blackhole   # or wormhole / quasar
 
 # Phase 1 — build all variants (no HW access)
-pytest --compile-producer --enable-perf-counters -n 8 -x ./python_tests/perf_eltwise_binary_fpu.py
+pytest --compile-producer --enable-perf-counters -n 8 -x ./python_tests/perf_eltwise_binary.py
 
 # Phase 2 — run on HW
-pytest --compile-consumer --enable-perf-counters -x ./python_tests/perf_eltwise_binary_fpu.py
+pytest --compile-consumer --enable-perf-counters -x ./python_tests/perf_eltwise_binary.py
 ```
 
 The `--enable-perf-counters` flag triggers two things:

@@ -121,6 +121,7 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
         """Build the GPT-OSS model + runtime for this rank. The runtime is stateless w.r.t. the KV
         cache (owns_kv_cache=False): the engine allocated it via allocate_kv_cache and passes it into
         each call."""
+        import ttnn
         from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
         from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
@@ -134,6 +135,10 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             tp_axis=params.tp_axis,
             weight_cache_path=params.weight_cache_path,
             owns_kv_cache=False,  # engine owns the cache (from allocate_kv_cache); passed into every call
+            # PREFILL_TOPOLOGY=linear runs pods without torus wraparound (same knob as the harness).
+            topology=(
+                ttnn.Topology.Linear if os.getenv("PREFILL_TOPOLOGY", "ring") == "linear" else ttnn.Topology.Ring
+            ),
             is_first_rank=params.is_first_rank,
             is_last_rank=params.is_last_rank,
             first_layer_idx=params.first_layer_idx,

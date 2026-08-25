@@ -102,11 +102,15 @@ class TtPrefillRuntime:
         self.hf_config = hf_config
         self.config = config
 
-        self.chunk_sizes = resolve_chunk_sizes(
+self.chunk_sizes = resolve_chunk_sizes(
             config.default_chunk_size, config.additional_chunk_sizes, config.max_seq_len
         )
         self.max_chunk_size = self.chunk_sizes[0]
-        assert config.topology == ttnn.Topology.Ring, "GPT-OSS sequence-parallel prefill requires Ring topology"
+        # Ring by default (faster CCLs on torus pods); Linear is supported for pods without wraparound.
+        assert config.topology in (
+            ttnn.Topology.Ring,
+            ttnn.Topology.Linear,
+        ), f"GPT-OSS sequence-parallel prefill supports Ring or Linear topology, got {config.topology}"
 
         self.model_built = False
         self.kv_cache_allocated = False

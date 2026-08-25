@@ -19,12 +19,11 @@
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
 
-# Codegen-path coverage for every op ported to tt-dm-codegen (untilize and repeat today).
-# `-k codegen` selects each op's tests that pin the codegen kernels, so a newly ported op joins
-# this entry by appending its unit-test file rather than by adding another job. How an op pins them
-# is the op's own business: untilize calls the verification-only entries in
-# ttnn._ttnn.operations.data_movement, since its public API takes no implementation argument, while
-# repeat still passes implementation="codegen".
+# Codegen-path coverage for every op that has one (untilize and repeat today).
+# `-k codegen` selects each op's tests that pin the codegen kernels, so a newly covered op joins
+# this entry by appending its unit-test file rather than by adding another job. Both ops pin them
+# through the verification-only entries in ttnn._ttnn.operations.data_movement -- neither public
+# API takes an implementation argument.
 #
 # Those pinned tests are the ones worth gating a merge on: they run the codegen kernels and
 # compare against native on the same input. The generated routing matrices under
