@@ -91,7 +91,14 @@ class T5Encoder(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
 
-        self.token_embeddings = Embedding(config.vocab_size, config.embed_dim, device=self.mesh_device)
+        tp = self.parallel_config.tensor_parallel
+        self.shard_token_embeddings = tp.factor > 1 and config.embed_dim % tp.factor == 0
+        self.token_embeddings = Embedding(
+            config.vocab_size,
+            config.embed_dim,
+            device=self.mesh_device,
+            mesh_axis=tp.mesh_axis if self.shard_token_embeddings else None,
+        )
         self.encoder = T5Stack(config, self.mesh_device, self.ccl_manager, self.parallel_config)
         self.final_layer_norm = T5RMSNorm(  # final layer norm
             embedding_dim=self.config.embed_dim,
@@ -110,6 +117,16 @@ class T5Encoder(Module):
         self, prompt: ttnn.Tensor, *, attention_mask: ttnn.Tensor | None = None, zero_masking: bool = False
     ) -> list[ttnn.Tensor]:
         embeddings = self.token_embeddings(prompt)
+        if self.shard_token_embeddings:
+            embeddings = ttnn.squeeze(
+                self.ccl_manager.all_gather(
+                    ttnn.unsqueeze(embeddings, 0),
+                    dim=3,
+                    mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+                    use_hyperparams=True,
+                ),
+                0,
+            )
         hidden_states = self.encoder(embeddings, attention_mask=attention_mask)
         output = self.final_layer_norm(hidden_states[-1])
         if zero_masking and attention_mask is not None:

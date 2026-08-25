@@ -1101,15 +1101,12 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     const uint32_t total_heads = B * NH;
     std::vector<std::vector<HeadSegmentRef>> head_segments(total_heads);
 
-    // Evenly distribute flat global q chunks across cores
     const uint32_t total_q_chunks = B * NH * num_q_chunks;
-    const uint32_t base_chunks_per_core = (num_sdpa_cores == 0) ? 0 : (total_q_chunks / num_sdpa_cores);
-    const uint32_t extra_chunks = (num_sdpa_cores == 0) ? 0 : (total_q_chunks % num_sdpa_cores);
 
     log_debug(
         tt::LogOp,
         "[ExpRingJointSDPA] grid={}x{}={} cores, B={}, NH={}, num_q_chunks={}({} local+{} joint), "
-        "base_chunks_per_core={} (+{} extras)",
+        "one head per row, one Q chunk per column ({} of {} cores active)",
         sdpa_grid.x,
         sdpa_grid.y,
         num_sdpa_cores,
@@ -1118,61 +1115,32 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         num_q_chunks,
         num_local_q_chunks,
         num_joint_q_chunks,
-        base_chunks_per_core,
-        extra_chunks);
-    uint32_t next_global_chunk = 0;
-
-    auto decode_flat_chunk = [&](uint32_t flat_chunk_index) {
-        const uint32_t head_span = num_q_chunks;
-        const uint32_t head_index = head_span == 0 ? 0 : (flat_chunk_index / head_span);
-        const uint32_t q_chunk = head_span == 0 ? 0 : (flat_chunk_index % head_span);
-        const uint32_t batch = (NH == 0) ? 0 : (head_index / NH);
-        const uint32_t head = (NH == 0) ? 0 : (head_index % NH);
-        return std::tuple<uint32_t, uint32_t, uint32_t>{batch, head, q_chunk};
-    };
+        total_q_chunks,
+        num_sdpa_cores);
 
     for (uint32_t i = 0; i < num_sdpa_cores; ++i) {
         CoreCoord core = {i % sdpa_grid.x, i / sdpa_grid.x};
-        uint32_t chunk_count = base_chunks_per_core + ((i < extra_chunks) ? 1 : 0);
-        if (next_global_chunk >= total_q_chunks) {
-            chunk_count = 0;
-        } else if (chunk_count > total_q_chunks - next_global_chunk) {
-            chunk_count = total_q_chunks - next_global_chunk;
-        }
-
         auto& work = core_work.at(i);
         work.logical_core = core;
         work.physical_core = device->worker_core_from_logical_core(core);
-        work.global_q_start = next_global_chunk;
-        work.global_q_count = chunk_count;
 
-        uint32_t remaining = chunk_count;
-        uint32_t flat_chunk = next_global_chunk;
-        while (remaining > 0) {
-            auto [batch_idx, head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
-            uint32_t chunk_capacity_in_head = num_q_chunks - q_chunk_idx;
-            uint32_t chunk_take = std::min(remaining, chunk_capacity_in_head);
+        const uint32_t head_index = core.y;  // == batch * NH + head
+        const uint32_t q_chunk_idx = core.x;
+        const bool has_work = (head_index < total_heads) && (q_chunk_idx < num_q_chunks);
 
-            work.head_work.push_back(CoreHeadWork{
-                .batch = batch_idx,
-                .head = head_idx,
-                .q_chunk_start = q_chunk_idx,
-                .q_chunk_count = chunk_take,
-            });
-
-            if (!head_segments.empty()) {
-                uint32_t head_id = (batch_idx * NH) + head_idx;
-                if (head_id < head_segments.size()) {
-                    head_segments[head_id].push_back(HeadSegmentRef{
-                        .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
-                }
-            }
-
-            remaining -= chunk_take;
-            flat_chunk += chunk_take;
+        work.global_q_start = head_index * num_q_chunks + q_chunk_idx;
+        work.global_q_count = has_work ? 1 : 0;
+        if (!has_work) {
+            continue;
         }
 
-        next_global_chunk += chunk_count;
+        work.head_work.push_back(CoreHeadWork{
+            .batch = (NH == 0) ? 0 : (head_index / NH),
+            .head = (NH == 0) ? 0 : (head_index % NH),
+            .q_chunk_start = q_chunk_idx,
+            .q_chunk_count = 1,
+        });
+        head_segments[head_index].push_back(HeadSegmentRef{.core_idx = i, .head_work_index = 0});
     }
 
     // Construct chains: for each head that spans >= 2 cores, pick first core
@@ -1498,6 +1466,15 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             injector_physical_by_head[head_key] = core_work[ci].physical_core;
         }
     }
+    if (num_q_chunks == 1) {
+        for (uint32_t ci = 0; ci < num_sdpa_cores; ++ci) {
+            if (core_work[ci].global_q_count == 0) {
+                continue;
+            }
+            const auto& hw = core_work[ci].head_work.front();
+            injector_physical_by_head.emplace(hw.batch * NH + hw.head, core_work[ci].physical_core);
+        }
+    }
 
     // ---- Fabric MUX config (needed for writer kernel CT args below) ----
     // MUX cores are placed at the last x coordinate of the full device grid.
@@ -1817,29 +1794,19 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
                                           // dispatch via
                                           // ExpRingJointSDPAMeshWorkloadFactory::override_runtime_arguments
 
-                // Find the injector core for this MUX writer's (batch, head)
-                const auto& mux_head_work = core_work.at(i).head_work;
+                const uint32_t head_key = core.y;
                 CoreCoord injector_physical = {0, 0};
-                if (mux_head_work.empty()) {
-                    log_warning(
-                        tt::LogOp,
-                        "MUX writer core ({},{}) has no head_work; cannot determine injector",
-                        core.x,
-                        core.y);
-                } else {
-                    uint32_t head_key = mux_head_work[0].batch * NH + mux_head_work[0].head;
+                if (head_key < total_heads) {
                     auto it = injector_physical_by_head.find(head_key);
-                    if (it != injector_physical_by_head.end()) {
-                        injector_physical = it->second;
-                    } else {
-                        log_warning(
-                            tt::LogOp,
-                            "MUX writer core ({},{}) batch={} head={}: no injector found in chain info",
-                            core.x,
-                            core.y,
-                            mux_head_work[0].batch,
-                            mux_head_work[0].head);
-                    }
+                    TT_FATAL(
+                        it != injector_physical_by_head.end(),
+                        "MUX writer core ({},{}): no injector found for head {} (B*NH={}, num_q_chunks={})",
+                        core.x,
+                        core.y,
+                        head_key,
+                        total_heads,
+                        num_q_chunks);
+                    injector_physical = it->second;
                 }
                 writer_args.push_back(static_cast<uint32_t>(injector_physical.x));
                 writer_args.push_back(static_cast<uint32_t>(injector_physical.y));

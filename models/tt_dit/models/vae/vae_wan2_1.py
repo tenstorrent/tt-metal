@@ -1561,7 +1561,7 @@ class WanDecoder(Module):
             )
             output_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
         else:
-            output_BCTHW = None
+            chunk_outputs = []
             # Process frame 0 on its own first, then the remaining frames in groups of
             # t_chunk_size. This mirrors the reference decode loop (which feeds frame 0
             # alone with first_chunk=True before the rest) and the WanEncoder chunking.
@@ -1579,12 +1579,12 @@ class WanDecoder(Module):
                     feat_idx=self._conv_idx,
                     logical_w=logical_w,
                 )
-                out_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
-                if output_BCTHW is None:
-                    output_BCTHW = out_BCTHW
-                else:
-                    output_BCTHW = ttnn.concat([output_BCTHW, out_BCTHW], dim=2)
+                chunk_outputs.append(ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3)))
             self.clear_cache()
+            output_BCTHW = chunk_outputs[0] if len(chunk_outputs) == 1 else ttnn.concat(chunk_outputs, dim=2)
+            if len(chunk_outputs) > 1:
+                for t in chunk_outputs:
+                    ttnn.deallocate(t)
 
         output_tile_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.TILE_LAYOUT)
         output_BCTHW = ttnn.clamp(output_tile_BCTHW, min=-1.0, max=1.0)
