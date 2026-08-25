@@ -2,7 +2,7 @@
 description: Reviews pull requests using Matt Pocock's engineering skills to provide targeted, high-quality improvement suggestions based on the type of changes
 emoji: 🔍
 engine: copilot
-model: claude-sonnet-4.6
+model: claude-sonnet-5
 features:
   gh-aw-detection: true
 cache:

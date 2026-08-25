@@ -2,7 +2,7 @@
 description: Reviews pull requests with Tenstorrent domain-knowledge skills — kernel structural correctness, L1 footprint, race hazards, trace safety, precision policy, CCL topology, and program-cache correctness
 emoji: 🔷
 engine: copilot
-model: claude-sonnet-4.6
+model: claude-sonnet-5
 features:
   gh-aw-detection: true
 cache:
