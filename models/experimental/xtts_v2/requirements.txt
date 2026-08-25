@@ -1,1 +1,6 @@
 num2words>=0.5.13
+hangul_romanize>=0.1.0  # Korean: the vocab has no Hangul, so it must be romanized first
+pypinyin>=0.53.0        # Chinese: likewise, romanized to pinyin
+cutlet>=0.5.0           # Japanese: likewise, romanized to romaji
+unidic-lite>=1.0.8      # the dictionary cutlet reads (~45 MB)
+opencc-python-reimplemented>=0.1.7  # tests only: folds traditional Han to simplified before scoring

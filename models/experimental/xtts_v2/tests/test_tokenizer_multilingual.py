@@ -21,8 +21,8 @@ from models.experimental.xtts_v2.reference.coqui.cleaners import (
 )
 from models.experimental.xtts_v2.frontend import (
     BASIC_LANGUAGES,
+    VOCAB_TAG,
     CLEANED_LANGUAGES,
-    NEEDS_PACKAGE,
     SUPPORTED_LANGUAGES,
     XttsTokenizer,
 )
@@ -41,6 +41,9 @@ def xtts_vocab():
 # if num2words changes again these turn XPASS and ask to be looked at.
 STALE_VECTORS = {
     ("Через 12.5 секунды.", "ru"): "num2words 0.5.14 renders this as 'двенадцать целых пять десятых'",
+    ("12.5 초 안에.", "ko"): "num2words 0.5.14 reads the decimal as Sino-Korean 오, not native 다섯",
+    ("이것은 1 번째 테스트입니다", "ko"): "the ordinal pattern needs no space before 번째, so this expands as a cardinal",
+    ("배터리 잔량이 14%입니다.", "ko"): "the symbol table leaves a space after 퍼센트",
 }
 
 
@@ -233,6 +236,9 @@ GOLDEN_SENTENCES = {
     "ar": "العنصر 3 يكلف 5 دولار.",
     "hu": "A 3. tétel 5,50€-ba kerül.",
     "hi": "तीसरी वस्तु की कीमत 5 डॉलर है।",
+    "ko": "3번째 물건은 5.50달러입니다.",
+    "zh": "第3个物品价格是5.50美元。",
+    "ja": "3番目の品物は5.50ドルです。",
 }
 
 
@@ -626,6 +632,92 @@ GOLDEN_IDS = {
         6261,
         6241,
     ),
+    "ko": (
+        6152,
+        66,
+        2,
+        67,
+        47,
+        8,
+        6126,
+        2,
+        5875,
+        5950,
+        8,
+        5804,
+        2,
+        28,
+        2,
+        386,
+        65,
+        2,
+        5623,
+        84,
+        5802,
+        8,
+        5938,
+        832,
+        322,
+        9,
+    ),
+    "zh": (
+        5023,
+        4592,
+        150,
+        4574,
+        4585,
+        2497,
+        4499,
+        4981,
+        23,
+        1164,
+        4499,
+        4772,
+        4557,
+        2497,
+        4498,
+        1447,
+        4695,
+        2497,
+        4498,
+        25,
+        52,
+        4497,
+        4690,
+        2124,
+        14,
+        4596,
+        7,
+    ),
+    "ja": (
+        5412,
+        4498,
+        2,
+        2264,
+        80,
+        2,
+        95,
+        2,
+        120,
+        41,
+        122,
+        1479,
+        2,
+        465,
+        2,
+        4500,
+        9,
+        4500,
+        5755,
+        2,
+        134,
+        84,
+        59,
+        2,
+        372,
+        34,
+        9,
+    ),
 }
 
 
@@ -638,15 +730,8 @@ def test_every_language_has_a_golden_sentence():
 def test_encode_supported_language(lang, xtts_vocab):
     ids = XttsTokenizer(xtts_vocab).encode(GOLDEN_SENTENCES[lang], lang)
     assert len(ids) > 3, f"{lang}: {len(ids)} tokens is too few to be a real encoding"
-    assert XttsTokenizer(xtts_vocab).decode(ids).startswith(f"[{lang}]"), "language tag missing"
-
-
-@pytest.mark.parametrize("lang", sorted(NEEDS_PACKAGE))
-def test_language_needing_a_package_is_refused_by_name(lang, xtts_vocab, expect_error):
-    """Refuse loudly and name the package: silently mis-cleaning gives plausible-but-wrong audio."""
-    package = NEEDS_PACKAGE[lang].split()[0].rstrip(",")  # "pypinyin," -> "pypinyin"
-    with expect_error(NotImplementedError, package):
-        XttsTokenizer(xtts_vocab).encode("test", lang)
+    tag = VOCAB_TAG.get(lang, lang)
+    assert XttsTokenizer(xtts_vocab).decode(ids).startswith(f"[{tag}]"), "language tag missing"
 
 
 def test_unknown_language_is_refused(xtts_vocab, expect_error):
@@ -672,7 +757,9 @@ def test_token_ids_match_the_golden(lang, xtts_vocab):
 @pytest.mark.parametrize("lang", SUPPORTED_LANGUAGES)
 def test_language_tag_is_one_vocab_token(lang, xtts_vocab):
     """A tag the vocab lacks does not raise — it shatters into <unk> characters, so the model gets
-    no language instruction and speaks with the wrong phonetics."""
+    no language instruction and speaks with the wrong phonetics. Chinese is why VOCAB_TAG exists:
+    the vocab spells it [zh-cn], so the language code alone would not be a token."""
+    tag = VOCAB_TAG.get(lang, lang)
     raw = XttsTokenizer(xtts_vocab).tokenizer
-    assert raw.token_to_id(f"[{lang}]") is not None, f"[{lang}] is not in vocab.json"
-    assert len(raw.encode(f"[{lang}]").ids) == 1, f"[{lang}] does not encode as a single token"
+    assert raw.token_to_id(f"[{tag}]") is not None, f"[{tag}] is not in vocab.json"
+    assert len(raw.encode(f"[{tag}]").ids) == 1, f"[{tag}] does not encode as a single token"

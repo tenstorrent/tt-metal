@@ -22,12 +22,13 @@ DSP building blocks (`sinc_resample`, `melscale_fbanks`, `mel_spectrogram`) reim
 exact torchaudio functions coqui calls (torchaudio is not in tt-metal's env). They are pure
 torch and deterministic.
 
-Language support: the 13 in SUPPORTED_LANGUAGES. Cleaning comes from coqui_cleaners.py, which
-is vendored from coqui rather than transcribed — the model was trained on those tables' output.
-zh/ja/ko each need a transliteration package and are refused by name; cs is blocked by a
-num2words gap (see CLEANED_LANGUAGES). Number expansion needs `num2words` (tiny, pure python).
+Language support: those in SUPPORTED_LANGUAGES. Cleaning comes from reference/coqui/cleaners.py,
+vendored rather than transcribed — the model was trained on those tables' output. zh, ja and ko are
+romanized after cleaning because the vocab has no CJK; cs is absent, blocked by a num2words gap (see
+CLEANED_LANGUAGES). Number expansion needs `num2words`; each romanizer needs its own package.
 """
 
+import functools
 import math
 import os
 
@@ -234,24 +235,63 @@ def speaker_logmel(audio, sr: int):
 
 
 # ---------------------------------------------------------------------------------------
-# Block 0: tokenizer (coqui VoiceBpeTokenizer). Cleaning comes from coqui_cleaners, vendored
+# Block 0: tokenizer (coqui VoiceBpeTokenizer). Cleaning comes from reference/coqui, vendored
 # verbatim: the model was trained on those tables' output, so a rewrite risks token drift.
 # ---------------------------------------------------------------------------------------
 
 # Languages whose cleaning needs nothing beyond num2words.
 # cs is absent: upstream asks num2words for "cz", which does not exist, and num2words has no
 # Czech ordinals — while upstream's cs pattern makes a bare "3." one.
-CLEANED_LANGUAGES = ("ar", "de", "en", "es", "fr", "hu", "it", "nl", "pl", "pt", "ru", "tr")
+CLEANED_LANGUAGES = ("ar", "de", "en", "es", "fr", "hu", "it", "ko", "nl", "pl", "pt", "ru", "tr", "zh")
 # hi has no cleaner tables upstream either — it gets lowercase + whitespace only.
 BASIC_LANGUAGES = ("hi",)
-# Each needs a transliteration package before its text reaches the BPE, so they are refused by
-# name rather than silently mis-tokenized.
-NEEDS_PACKAGE = {
-    "zh": "pypinyin, plus coqui's zh_num2words for number expansion",
-    "ja": "cutlet (which pulls in fugashi and a ~50 MB unidic dictionary)",
-    "ko": "hangul_romanize",
-}
-SUPPORTED_LANGUAGES = CLEANED_LANGUAGES + BASIC_LANGUAGES
+# Japanese runs neither cleaner: upstream romanizes and lowercases it and stops there, so it gets
+# no number expansion and digits reach the model as digits. It is still romanized, like ko and zh.
+UNCLEANED_LANGUAGES = ("ja",)
+SUPPORTED_LANGUAGES = CLEANED_LANGUAGES + BASIC_LANGUAGES + UNCLEANED_LANGUAGES
+
+
+# Each romanizer imports its package on first use, so only the languages actually requested need
+# theirs installed, and each engine is built once rather than per utterance.
+@functools.lru_cache(maxsize=1)
+def _korean_transliter():
+    from hangul_romanize import Transliter
+    from hangul_romanize.rule import academic
+
+    return Transliter(academic)
+
+
+@functools.lru_cache(maxsize=1)
+def _japanese_transliter():
+    import cutlet
+
+    return cutlet.Cutlet()
+
+
+def _romanize_korean(text):
+    """Hangul -> Latin."""
+    return _korean_transliter().translit(text)
+
+
+def _romanize_japanese(text):
+    """Kana and kanji -> romaji, lowercased. Upstream lowercases after romanizing."""
+    return _japanese_transliter().romaji(text).lower()
+
+
+def _romanize_chinese(text):
+    """Hanzi -> pinyin with tone numbers."""
+    import pypinyin
+
+    return "".join(
+        p[0] for p in pypinyin.pinyin(text, style=pypinyin.Style.TONE3, heteronym=False, neutral_tone_with_five=True)
+    )
+
+
+# The vocab holds no CJK — Hangul, Hanzi and Kanji all encode to <unk> — so those scripts are
+# romanized after the cleaner tables and before the BPE.
+ROMANIZERS = {"ja": _romanize_japanese, "ko": _romanize_korean, "zh": _romanize_chinese}
+# Chinese is tagged [zh-cn] in the vocab; a bare [zh] is not a token and would shatter into <unk>.
+VOCAB_TAG = {"zh": "zh-cn"}
 
 
 class XttsTokenizer:
@@ -270,15 +310,17 @@ class XttsTokenizer:
 
     def encode(self, text, lang="en"):
         lang = lang.split("-")[0]  # drop the region: "pt-br" -> "pt"
-        if lang in NEEDS_PACKAGE:
-            raise NotImplementedError(f"language {lang!r} needs {NEEDS_PACKAGE[lang]}")
-        if lang in CLEANED_LANGUAGES:
+        if lang in UNCLEANED_LANGUAGES:
+            text = ROMANIZERS[lang](text.strip())
+        elif lang in CLEANED_LANGUAGES:
             text = multilingual_cleaners(text.strip(), lang)
+            if lang in ROMANIZERS:
+                text = ROMANIZERS[lang](text)
         elif lang in BASIC_LANGUAGES:
             text = basic_cleaners(text.strip())
         else:
             raise NotImplementedError(f"language {lang!r} is not one of {SUPPORTED_LANGUAGES}")
-        text = f"[{lang}]{text}"
+        text = f"[{VOCAB_TAG.get(lang, lang)}]{text}"
         text = text.replace(" ", "[SPACE]")
         return self.tokenizer.encode(text).ids
 

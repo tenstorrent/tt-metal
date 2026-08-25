@@ -33,6 +33,7 @@ from language_corpus.WER_SENTENCES.
 Run:
     pytest -svv models/experimental/xtts_v2/tests/test_wer.py
 """
+import functools
 import math
 import os
 import unicodedata
@@ -41,7 +42,7 @@ import pytest
 import torch
 from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
-from models.experimental.xtts_v2.frontend import SUPPORTED_LANGUAGES, sinc_resample
+from models.experimental.xtts_v2.frontend import ROMANIZERS, SUPPORTED_LANGUAGES, sinc_resample
 from models.experimental.xtts_v2.tests.language_corpus import WER_SENTENCES
 from models.experimental.xtts_v2.tt.ttnn_xtts_model import OUTPUT_SR, Voice, XttsV2
 
@@ -65,6 +66,8 @@ LIMITS = {
     "es": (0.03, 0.30),
     "de": (0.03, 0.30),
     "fr": (0.03, 0.30),
+    "ja": (0.04, 0.30),
+    "ko": (0.04, 0.30),
     "nl": (0.06, 0.30),
     "pl": (0.07, 0.50),
     "ar": (0.08, 0.30),
@@ -72,6 +75,7 @@ LIMITS = {
     "tr": (0.08, 0.50),
     "it": (0.09, 0.50),
     "ru": (0.10, 0.30),
+    "zh": (0.11, 0.30),
     "hu": (0.15, 0.50),
     "hi": (0.20, 0.75),
 }
@@ -146,8 +150,8 @@ def _trailing_silence(wav):
     return (len(frames) - 1 - loud[-1].item()) * n / OUTPUT_SR
 
 
-def _wer(reference, hypothesis):
-    ref, hyp = _words(reference), _words(hypothesis)
+def _edit_ratio(ref, hyp):
+    """Levenshtein distance over two sequences, divided by the reference length."""
     d = [[0] * (len(hyp) + 1) for _ in range(len(ref) + 1)]
     for i in range(len(ref) + 1):
         d[i][0] = i
@@ -157,6 +161,51 @@ def _wer(reference, hypothesis):
         for j in range(1, len(hyp) + 1):
             d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (ref[i - 1] != hyp[j - 1]))
     return d[-1][-1] / max(len(ref), 1)
+
+
+def _wer(reference, hypothesis):
+    return _edit_ratio(_words(reference), _words(hypothesis))
+
+
+def _cer(reference, hypothesis):
+    """Error rate over characters, with spacing discarded.
+
+    For scripts without dependable word boundaries a whitespace metric is unusable: where there are
+    no spaces at all it sees one token per sentence, so any mistake scores 1.0. Korean does space,
+    but variably enough that the reference and the ASR can both be right and still disagree."""
+    return _edit_ratio("".join(_words(reference)), "".join(_words(hypothesis)))
+
+
+# Scored by character, not by word. Their limits are therefore not comparable with the others':
+# the same audio spreads its errors over more units.
+CHAR_SCORED = ("ja", "ko", "zh")
+
+
+@functools.lru_cache(maxsize=1)
+def _simplifier():
+    from opencc import OpenCC
+
+    return OpenCC("t2s")
+
+
+# Both sides pass through the same normaliser before scoring, so how the ASR chose to WRITE a
+# correct utterance is not charged to the model.
+#
+# zh -- Whisper picks simplified or traditional per utterance and the difference lands on nearly
+#       every character. Chinese only: Japanese kanji are a third variant this would corrupt.
+# ja -- the same word may be written in kanji or kana, and homophones pick either. The fold is the
+#       frontend's own romanizer, so it asks exactly what the model was given: the right sounds.
+SCORE_FOLDS = {
+    "zh": lambda t: _simplifier().convert(t),
+    "ja": ROMANIZERS["ja"],
+}
+
+
+def _score(lang, reference, hypothesis):
+    fold = SCORE_FOLDS.get(lang)
+    if fold:
+        reference, hypothesis = fold(reference), fold(hypothesis)
+    return (_cer if lang in CHAR_SCORED else _wer)(reference, hypothesis)
 
 
 class _Asr:
@@ -216,19 +265,20 @@ def run_language(lang, asr, tts, all_voices, verbose=True):
             silence = _trailing_silence(wav)
             if silence > OVER_RUN_SECONDS:
                 over_run.append(f"{name}/{text[:16]}:{silence:.1f}s")
-            scores[(name, text)] = _wer(text, asr(wav, lang))
+            scores[(name, text)] = _score(lang, text, asr(wav, lang))
         if verbose:  # per speaker, so a long run shows progress and a failure names the speaker
             row = [scores[(name, t)] for t in texts]
             print(f"  {lang}  {name:24s} " + " ".join(f"{w:.3f}" for w in row) + f"  mean {sum(row) / len(row):.3f}")
     mean = sum(scores.values()) / len(scores)
     ceiling, collapse = LIMITS[lang]
     run_on_limit = MAX_OVER_RUN_FULL_SWEEP if lang == FULL_SWEEP_LANG else MAX_OVER_RUN
+    metric = "CER" if lang in CHAR_SCORED else "WER"
     degenerate = [f"{n}/{t[:20]}" for (n, t), w in scores.items() if w >= collapse]
     msg = (
-        f"{lang}: {len(voices)} speakers x {len(texts)} sentences, WER {mean:.4f} "
+        f"{lang}: {len(voices)} speakers x {len(texts)} sentences, {metric} {mean:.4f} "
         f"(worst single {max(scores.values()):.3f}, perfect {sum(1 for w in scores.values() if w == 0)}"
         f"/{len(scores)}, degenerate {len(degenerate)}, over-run {len(over_run)}/{run_on_limit}) "
-        f"ceiling {ceiling}, degenerate limit {MAX_DEGENERATE} at WER {collapse}"
+        f"ceiling {ceiling}, degenerate limit {MAX_DEGENERATE} at {metric} {collapse}"
         + (f"; over-ran: {over_run}" if over_run else "")
     )
     passed = mean <= ceiling and len(degenerate) <= MAX_DEGENERATE and len(over_run) <= run_on_limit
@@ -285,6 +335,54 @@ def test_wer_metric():
     )
     for reference, hypothesis, want in cases:
         assert _wer(reference, hypothesis) == want, f"WER({reference!r}, {hypothesis!r})"
+
+
+def test_cer_metric():
+    """The character metric, checked before it is used to judge anything. Spacing is discarded, so
+    a difference only in spacing scores zero while a different character still counts."""
+    cases = (
+        ("的岛屿", "的岛屿", 0.0),
+        ("旧地图上画着", "旧地图上画着", 0.0),
+        ("旧地图上画着", "旧地图上画过", 1 / 6),  # one character of six
+        ("旧地图上画着", "旧地图上画", 1 / 6),  # a dropped character
+        ("こんにちは世界", "こんにちは世海", 1 / 7),
+        # Korean spacing is optional in places, so the same sentence written two legal ways matches
+        ("달려 있었기에", "달려있었기에", 0.0),
+        ("네 개 층을", "네개 층을", 0.0),
+        # ...but a genuinely different word still scores
+        ("선원도 찾지", "선언도 찾지", 1 / 5),  # five characters once spacing is dropped
+        # scripts that DO have word boundaries are not scored this way; _wer keeps them
+        ("the cat sat", "the cat sat", 0.0),
+    )
+    for reference, hypothesis, want in cases:
+        got = _cer(reference, hypothesis)
+        assert abs(got - want) < 1e-9, f"CER({reference!r}, {hypothesis!r}) = {got}, want {want}"
+
+
+def test_metric_choice_matches_the_script():
+    """A space-less script scored by word would see one token per sentence: any error at all would
+    score 1.0, and the collapse gate would call every imperfect run degenerate."""
+    zh = ("旧地图上画着三座岛屿", "旧地图上画着三座岛")
+    assert _wer(*zh) == 1.0, "word scoring is degenerate here, which is why CHAR_SCORED exists"
+    assert _cer(*zh) < 0.2
+    assert all(lang in SUPPORTED_LANGUAGES for lang in CHAR_SCORED)
+
+
+def test_score_folds():
+    """Each fold removes a way the ASR can write a CORRECT utterance differently, and none of them
+    may hide a wrong one."""
+    trad, simp = "在鐵路修到山谷以前很久", "在铁路修到山谷以前很久"
+    assert _score("zh", simp, trad) == 0.0, "the same sentence in the other script is not an error"
+    assert _cer(simp, trad) > 0.0, "...and it is the fold doing that; the raw characters differ"
+    assert _score("zh", "时刻表取决于天气", "時刻標取決於天氣") > 0.0, "a mishearing must survive"
+
+    for a, b in (("まったく", "全く"), ("いっそう", "一層"), ("やかん", "夜間")):
+        assert _score("ja", a, b) == 0.0, f"{a}/{b} is one word written two ways"
+    for a, b in (("資料", "修行"), ("満たし", "煮たし")):
+        assert _score("ja", a, b) > 0.0, f"{a}/{b} is a mishearing and must survive"
+
+    # the Chinese fold must not reach Japanese: its kanji are a third variant
+    assert SCORE_FOLDS["zh"]("見た") != "見た" and SCORE_FOLDS["ja"] is not SCORE_FOLDS["zh"]
 
 
 def test_trailing_silence_metric():

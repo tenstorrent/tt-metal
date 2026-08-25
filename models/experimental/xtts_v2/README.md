@@ -119,12 +119,13 @@ first-ever run when kernels build from scratch.
 
 ## Known limitations
 
-- **13 of 17 languages.** `ar de en es fr hu it nl pl pt ru tr` get coqui's full cleaning
-  (abbreviations, symbols, ordinals, number expansion) and `hi` gets lowercase + whitespace,
-  from the vendored `coqui_cleaners.py`. The other four are refused by name: `zh` needs
-  `pypinyin`, `ja` needs `cutlet` (~50 MB of dictionary), `ko` needs `hangul_romanize`, and
-  `cs` is blocked upstream — coqui asks `num2words` for language `"cz"`, which does not exist,
-  and `num2words` has no Czech ordinals.
+- **16 of 17 languages.** `ar de en es fr hu it ko nl pl pt ru tr zh` get coqui's full cleaning
+  (abbreviations, symbols, ordinals, number expansion), `hi` gets lowercase + whitespace, and `ja`
+  is romanized without number expansion — all from the vendored `reference/coqui/`. `zh`, `ja` and
+  `ko` are romanized before the BPE, since the vocab holds no CJK, and each needs its package:
+  `pypinyin`, `cutlet` (~45 MB of dictionary) and `hangul_romanize`. `cs` is blocked upstream —
+  coqui asks `num2words` for language `"cz"`, which does not exist, and `num2words` has no Czech
+  ordinals even under `"cs"`.
 - **Model hard caps:** text ≤ 402 GPT tokens per utterance; audio ≤ 605 codes ≈ ~28 s of
   speech per utterance. Text needing more than that is cut off **mid-sentence** — the model
   stops wherever it has got to, and the rest is never spoken. Chunk long input by sentence.
