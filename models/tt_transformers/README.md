@@ -6,6 +6,7 @@ The current version is verified to work with the following models:
 | Model                                                                                            | Hardware                    | <org/model>                                      |
 |--------------------------------------------------------------------------------------------------|-----------------------------|-------------------------------------------------|
 | [DeepSeek R1 Distill Llama 70B](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Llama-70B)| LoudBox / QuietBox / Galaxy | ```deepseek-ai/DeepSeek-R1-Distill-Llama-70B``` |
+| [EXAONE 4.5 33B](https://huggingface.co/LGAI-EXAONE/EXAONE-4.5-33B) (text; host-vision hybrid demo) | P150x8 (BH LoudBox)  | ```LGAI-EXAONE/EXAONE-4.5-33B```                |
 | [Llama 3.1 8B](https://huggingface.co/meta-llama/Llama-3.1-8B)                                   | n150 / p100 / p150          | ```meta-llama/Llama-3.1-8B```                   |
 | [Llama 3.1 70B](https://huggingface.co/meta-llama/Llama-3.1-70B)                                 | LoudBox / QuietBox / Galaxy | ```meta-llama/Llama-3.1-70B```                  |
 | [Llama 3.2 1B](https://huggingface.co/meta-llama/Llama-3.2-1B)                                   | n150                        | ```meta-llama/Llama-3.2-1B```                   |
