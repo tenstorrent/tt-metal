@@ -170,21 +170,36 @@ inline void calculate_sfpu_binary_div(const uint dst_index_in0, const uint dst_i
             // If in0*r = +/-inf, then the residual e = in0 - (+/-inf)*in1 = -/+inf and
             // result + e*r = inf + (-inf) = NaN, which would corrupt IEEE overflow behavior.
             v_if(sfpi::exexp(result, sfpi::ExponentMode::Biased) != 255) {
-                // Residual (Markstein) refinement removes the double-rounding of in0 * round(1/in1).
-                // The residual subtraction is exact under Sterbenz's lemma.
-                sfpi::vFloat e = in0 - result * in1;
-                result = result + e * r;
+                // The residual is equally unusable when in1 is non-finite, and that case
+                // reaches here because the quotient is finite rather than in spite of it:
+                // r = 1/inf = 0 and result = in0 * 0 = 0, so result * in1 is 0 * inf, the
+                // residual is NaN and the refinement destroys a correct zero. The guard is
+                // about whether the residual can be formed, not about the quotient's size.
+                v_if(sfpi::exexp(in1, sfpi::ExponentMode::Biased) != 255) {
+                    // Residual (Markstein) refinement removes the double-rounding of in0 * round(1/in1).
+                    // The residual subtraction is exact under Sterbenz's lemma.
+                    sfpi::vFloat e = in0 - result * in1;
+                    result = result + e * r;
+                }
+                v_endif;
             }
             v_endif;
         }
 
         v_if(in1 == 0) {
-            v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
-            v_else {
-                result = std::numeric_limits<float>::infinity();
-                result = sfpi::copysgn(result, in0);
+            if constexpr (BINOP == BinaryOp::DIV_NO_NAN) {
+                // div_no_nan is defined by this arm: a zero divisor yields zero,
+                // for a zero dividend too. Everything above it is the ordinary
+                // quotient, which is why the two share one kernel.
+                result = 0.0f;
+            } else {
+                v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
+                v_else {
+                    result = std::numeric_limits<float>::infinity();
+                    result = sfpi::copysgn(result, in0);
+                }
+                v_endif;
             }
-            v_endif;
         }
         v_endif;
 
