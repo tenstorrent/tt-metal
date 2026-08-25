@@ -93,8 +93,9 @@ void MeshTrace::populate_mesh_buffer(
     };
 
     // Trace storage is safe from every live trace: reserved BufferType::TRACE storage is disjoint from ordinary DRAM,
-    // and dynamic top-down BufferType::DRAM storage is checked against every live trace's high-water mark below. Mark
-    // both forms so the trace allocation tracker does not report them.
+    // and dynamic top-down BufferType::DRAM storage is checked against every live trace's high-water mark below. The
+    // "trace_storage" allocation context is explicitly recognized by the trace allocation tracker, which uses it to
+    // exclude both forms from unsafe-allocation accounting (and from the tracking-disabled warning).
     {
         auto trace_storage_context = tt::tt_metal::make_allocation_context_guard("trace_storage");
         trace_buffer->mesh_buffer =
