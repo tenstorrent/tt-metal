@@ -93,6 +93,10 @@ on:
       - "Custom test dispatch"
       - "Validate installation step from instructions"
       - "LLK perf"
+      - "(Runtime) Sanity Tests"
+      - "(Runtime) Unit Tests"
+      - "(Runtime) Integration Tests"
+      - "(Runtime) Performance Tests"
     types:
       - completed
 
