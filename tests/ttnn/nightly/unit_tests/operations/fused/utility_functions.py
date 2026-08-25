@@ -22,22 +22,7 @@ import ttnn
 # ---------------------------------------------------------------------------
 # Shared test_id x gamma/beta dtype grid for the mix-precision layernorm tests.
 #
-# These tests used to cross a standalone ``gamma_dtype`` axis with ``test_id``, which doubled
-# every grid. The gamma/beta dtype is independent of every other axis in those grids:
-#
-#   * the gamma/beta CB data format is derived solely from the gamma/beta tensor dtype
-#     (sharded_layernorm_factory_helpers.cpp, layernorm_op_multi_core.cpp) -- it is never
-#     combined with the input dtype, the welford mode or the shard orientation;
-#   * it feeds only tile size and CB creation;
-#   * validation checks only that it is FLOAT32 or BFLOAT16 (layernorm_device_operation.cpp),
-#     with no cross-check against the input dtype;
-#   * the tolerances never branch on it.
-#
-# The reader-kernel switch ``use_row_major_kernel`` keys on gamma *layout*, not dtype, so a
-# ``gamma_layout`` axis does interact and must stay crossed where it appears. This is the same
-# de-crossing that #53549 applied to the axis under its ``gb_dtype`` name.
-#
-# The dtype is fused into ``test_id`` rather than pinned to a single value, alternating so both
+# The dtype is fused into ``test_id``, alternating so both
 # formats appear in every {LN, RMSN} x {G, GB} x {residual, no residual} category:
 #
 #   test_id   0     1      2       3      4       5        6    7     8      9     10     11
@@ -45,8 +30,6 @@ import ttnn
 #             |<---------- residual (add_*) ---------->|   |<--------- no residual --------->|
 #   gamma     bf16  bf16   fp32    fp32   fp32    bf16     bf16 fp32  bf16   fp32  bf16   fp32
 #
-# ``test_id % 3 == 0`` (0, 3, 6, 9) passes no gamma/beta to the op at all, so its entry only
-# affects host-side tensor construction.
 # ---------------------------------------------------------------------------
 
 _MIX_PRECISION_TEST_ID_NAMES = (
