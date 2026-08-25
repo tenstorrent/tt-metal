@@ -409,7 +409,11 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
         const uint16_t full = static_cast<uint16_t>((ops / NL) * L);
         const uint16_t rem = ops % NL;
         const uint16_t start = static_cast<uint16_t>(i * L);
-        const uint16_t part = (rem <= start) ? 0u : ((rem - start > L) ? L : (rem - start));
+        uint16_t part = 0u;
+        if (rem > start) {
+            const uint16_t into_run = static_cast<uint16_t>(rem - start);
+            part = (into_run > L) ? L : into_run;
+        }
         return static_cast<uint16_t>((full + part) * block);
     };
     uint16_t expected_slot0 = expected_for_slot(0);

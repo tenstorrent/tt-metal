@@ -808,10 +808,11 @@ size_t serialize_dfb_config_for_core(
                         run_length = bs;
                         stride2_entries = (P - 1u) * bs + 1u;
                     }
+                } else if (!is_dm_hart) {
+                    run_length = 0u;
+                    stride2_entries = side_stride_entries;
                 } else {
-                    // Not BLOCKED: evenly spaced, so every hop is just stride.
-                    run_length =
-                        is_dm_hart ? (dfb_dm_side_credits_split(*dfb, rc.is_producer) ? 0u : 1u) : 0u;
+                    run_length = dfb_dm_side_credits_split(*dfb, rc.is_producer) ? 0u : 1u;
                     stride2_entries = side_stride_entries;
                 }
                 entry.run_length = dfb_narrow_field<uint16_t>(run_length, dfb->id, "run_length");
@@ -1891,9 +1892,12 @@ std::vector<DFBRiscConfig> DataflowBufferImpl::compute_per_core_risc_configs(con
     const uint32_t effective_stride = this->stride_in_entries;
     const bool global_order = dfb_uses_global_order(this->config);
     const uint32_t block_entries = std::max<uint32_t>(this->config.producer_block_size, 1u);
-    const uint32_t base_step = global_order    ? (block_entries * entry_size)
-                               : (effective_stride > 1) ? entry_size
-                                                        : (this->capacity * entry_size);
+    uint32_t base_step = this->capacity * entry_size;
+    if (global_order) {
+        base_step = block_entries * entry_size;
+    } else if (effective_stride > 1) {
+        base_step = entry_size;
+    }
 
     std::vector<DFBRiscConfig> per_core_rc = hw_risc_configs;
     const uint32_t slot_span = global_order
