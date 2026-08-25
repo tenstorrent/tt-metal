@@ -23,13 +23,9 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 // PRIMITIVE symbol under test (NOT the forked _api.h wrapper / compute_kernel_api entry).
 // Resolved from the promoted experimental/ copy (landed on main via #53295); the demo-fork shadow tree this test was
-// originally written against is gone. The promoted header still takes params that the instantiation we drive does not
-// read, which -Werror -Wunused-parameter flags. Scoped push/pop is enough here (unlike the sdpa siblings, the
-// offending params are not on template bodies). Drop it once the promoted header is warning-clean.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
+// originally written against is gone. No -Wunused shim needed on this thread either: the promoted header reads every
+// parameter it takes, so it builds clean under -Werror -Wunused-parameter.
 #include "experimental/llk_unpack_AB_compressed_custom_mm.h"
-#pragma GCC diagnostic pop
 #include "llk_unpack_common.h"
 #include "params.h"
 

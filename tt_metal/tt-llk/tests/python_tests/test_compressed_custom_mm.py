@@ -33,7 +33,12 @@
 import pytest
 import torch
 from conftest import blackhole_only
-from helpers.compressed_utils import FMT_CODE, pack_bfp_tile, unpack_bfp_tile
+from helpers.compressed_utils import (
+    FMT_CODE_BY_DATAFORMAT,
+    encode_tile_meta,
+    pack_bfp_tile,
+    unpack_bfp_tile,
+)
 from helpers.custom_mm_utils import (
     dense_result_rowmajor,
     matmul_grid,
@@ -41,7 +46,7 @@ from helpers.custom_mm_utils import (
 )
 from helpers.device import BootMode
 from helpers.format_config import DataFormat
-from helpers.golden_generators import MatmulGolden, get_golden_generator
+from helpers.golden_generators import TILE_DIM, MatmulGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
 from helpers.param_config import generate_combination, parametrize
 from helpers.stimuli_config import StimuliConfig
@@ -58,33 +63,6 @@ from helpers.utils import matmul_acc_atol, passed_test
 # in0 (SrcB) is bf16; in1 (SrcA) is the BFP-compressed operand. Sweep the three BFP widths the LLK's exponent-section
 # MOP config supports.
 IN1_COMPRESSED_FORMATS = [DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b]
-
-_FMT_CODE = {
-    DataFormat.Bfp8_b: FMT_CODE["bfp8"],
-    DataFormat.Bfp4_b: FMT_CODE["bfp4"],
-    DataFormat.Bfp2_b: FMT_CODE["bfp2"],
-}
-
-TILE_DIM = 32
-
-
-def _encode_meta(fmt_code, ct_dim, kt_dim):
-    # Same packing as test_matmul_custom_compressed.encode_meta: 10 tiles per u32, tile i at
-    # bits [3i+3 : 3i+4] (format) and bit 3i+2 (use_b), with bits [1:0] of each word carrying the
-    # previous tile's format so the unpacker's 5-bit sliding window sees (prev, use_b, curr).
-    total = kt_dim * ct_dim
-    meta = [0] * ((total + 9) // 10)
-    prev_fmt = 0
-    for i in range(total):
-        u, j = divmod(i, 10)
-        if j == 0:
-            meta[u] |= prev_fmt & 0b11
-        use_b = 1 if (i % ct_dim) == 0 else 0
-        meta[u] |= use_b << (3 * j + 2)
-        meta[u] |= fmt_code << (3 * j + 3)
-        prev_fmt = fmt_code
-    return meta
-
 
 # generate_combination tuple layout (len 7, same_src_format=False):
 #   (unpack_A_src, unpack_A_dst, unpack_B_src, unpack_B_dst, pack_src, pack_dst, math)
@@ -130,7 +108,7 @@ def _pack_in1_bfp(in1, kt_dim, ct_dim, code):
 # is the only one of the three matmul advance tests that multiplies the grid by a format axis. So the merge-gate test
 # below keeps all three compression formats but only the grid corners (ct_dim and in0_rows at their extremes, both
 # kt_dim values) == 24 cases, and the full sweep runs nightly. The two are the same body.
-CORNER_GRID = matmul_grid(ct_dims=[1, 16], kt_dims=[2, 4], in0_rows=[1, 8])
+CORNER_GRID = matmul_grid(ct_dims=[1, 16], kt_dims=[2, 4], in0_face_r_dims=[1, 8])
 
 
 @blackhole_only
@@ -165,8 +143,6 @@ def _run_compressed_custom_mm(
     ct_kt_rows,
     boot_mode=BootMode.DEFAULT,
 ):
-    import numpy as np
-
     ct_dim, kt_dim, in0_rows = ct_kt_rows
     rt_dim = 1  # compressed_custom_mm contract: rt_dim is always 1
     output_tile_cnt = rt_dim * ct_dim
@@ -191,7 +167,7 @@ def _run_compressed_custom_mm(
     in0 = src_A.reshape(in0_dimensions).to(torch_format)
     in1 = src_B.reshape(in1_dimensions).to(torch_format)
 
-    code = _FMT_CODE[in1_format]
+    code = FMT_CODE_BY_DATAFORMAT[in1_format]
     packed_b, in1_dequant = _pack_in1_bfp(in1, kt_dim, ct_dim, code)
 
     # Golden multiplies the DEQUANTIZED in1, so BFP rounding is folded in rather than charged against PCC.
@@ -211,7 +187,8 @@ def _run_compressed_custom_mm(
     ).reshape(in0_dimensions[0], in1_dimensions[1])
 
     in0_faces = pack_in0_faces(in0, kt_dim, in0_format)
-    meta_bytes = np.array(_encode_meta(code, ct_dim, kt_dim), dtype=np.uint32).tobytes()
+    # Every tile carries the one BFP format under test, so the assignment is uniform.
+    meta_bytes = encode_tile_meta([code] * (kt_dim * ct_dim), ct_dim)
 
     configuration = TestConfig(
         "sources/compressed_custom_mm_test.cpp",

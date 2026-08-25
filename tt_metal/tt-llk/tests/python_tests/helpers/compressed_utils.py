@@ -36,6 +36,14 @@ FMT_CODE = {"bfp8": 3, "bfp4": 2, "bfp2": 1, "bfp0": 0}
 # tested for "is a zero tile" simply as ``code == 0`` (non-zero as ``code != 0``).
 assert FMT_CODE["bfp0"] == 0, "bfp0 code must be 0 (used as the zero-tile sentinel)"
 
+# The same codes keyed by the harness DataFormat, for tests that sweep a DataFormat axis and
+# need the kernel code for it. bfp0 has no DataFormat: it is the absence of a tile.
+FMT_CODE_BY_DATAFORMAT = {
+    DataFormat.Bfp8_b: FMT_CODE["bfp8"],
+    DataFormat.Bfp4_b: FMT_CODE["bfp4"],
+    DataFormat.Bfp2_b: FMT_CODE["bfp2"],
+}
+
 
 def assign_random(K, N, formats, granularity):
     # Randomly assign formats across the (K//granularity) x (N//granularity) row-major
@@ -285,6 +293,31 @@ class CompressedStimuliConfig(StimuliConfig):
         write_to_device(location, self.buf_a_addr, self.packed_a)
         write_to_device(location, self.buf_b_addr, self.packed_b)
         write_to_device(location, self.buf_c_addr, self.packed_meta)
+
+
+def encode_tile_meta(assignment, ct):
+    """Pack a row-major (kt x ct) grid of per-tile FMT_CODEs into the tile kernels' meta buffer.
+
+    10 tiles per u32: tile j of a word contributes its format at bits [3j+3 : 3j+4] and its
+    use_b flag at bit 3j+2, and bits [1:0] of each word carry the *previous* tile's format so
+    the unpacker's 5-bit sliding window always sees (prev, use_b, curr). use_b is set on the
+    first tile of every kt row, i.e. whenever in0 (SrcB) has to be re-fetched.
+
+    Read by both the unpacker and the math thread of the tile-granular compressed matmuls.
+    """
+    total = len(assignment)
+    meta = [0] * ((total + 9) // 10)
+    prev_fmt = 0
+    for i in range(total):
+        u, j = divmod(i, 10)
+        if j == 0:
+            meta[u] |= prev_fmt & 0b11
+        fmt = assignment[i] & 0b11
+        use_b = 1 if (i % ct) == 0 else 0
+        meta[u] |= use_b << (3 * j + 2)
+        meta[u] |= fmt << (3 * j + 3)
+        prev_fmt = fmt
+    return np.array(meta, dtype=np.uint32).tobytes()
 
 
 def pack_bfp_tile(tile, code, tile_dim, face_dim=FACE_C_DIM):

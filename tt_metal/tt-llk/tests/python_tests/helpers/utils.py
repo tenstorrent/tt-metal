@@ -103,9 +103,10 @@ tolerances = {
 # rounding noise stays below it while any real signal stays above.
 PCC_SIGNAL_FLOOR = 1e-6
 
-# Per-K-tile growth of the atol floor in matmul_acc_atol. Calibrated across formats on
-# Blackhole (worst observed ~0.0034 at kt=16, bfp2/bfp0).
-MATMUL_ACC_ATOL_PER_KT = 0.005
+# Relative accumulation error the LoFi MVMUL adds per K-tile, as a fraction of the mean
+# accumulated magnitude. Calibrated across formats on Blackhole (worst observed ~0.0034 at
+# kt=16, bfp2/bfp0), rounded up for headroom.
+MATMUL_ACC_REL_ERR_PER_KT = 0.005
 
 
 def matmul_acc_atol(
@@ -120,6 +121,15 @@ def matmul_acc_atol(
     outputs at large kt. Scale the floor by ``kt_dim * mean|nonzero golden|``, never below
     the format default, and leave rtol alone; PCC stays the real gate.
 
+    Why not simply ``tolerances[fmt].atol * kt_dim``: that scales the wrong quantity. The
+    error this floor covers is a *relative* accumulation error, so it tracks the magnitude
+    of the accumulated sum, which itself grows with K -- while ``tolerances[fmt].atol`` is a
+    fixed absolute number tuned for single-element ops and says nothing about the golden's
+    scale. For a uniform[0, 1] stimuli matmul at kt=16 the golden entries average ~1e2, so
+    the real error is O(1) while ``0.05 * 16 == 0.8`` still under-covers it; on a golden of
+    small magnitude the same product is far too loose. Two separate axes -- the format's
+    flat floor and the K-scaled one -- hence the ``max`` rather than a product.
+
     The mean excludes zeros so a golden carrying structural zeros -- the bfp0 "zero tile"
     of the compressed matmuls -- cannot deflate it.
     """
@@ -128,7 +138,7 @@ def matmul_acc_atol(
     mean_active = active.mean().item() if active.numel() else 0.0
     return max(
         tolerances[output_data_format].atol,
-        MATMUL_ACC_ATOL_PER_KT * kt_dim * mean_active,
+        MATMUL_ACC_REL_ERR_PER_KT * kt_dim * mean_active,
     )
 
 

@@ -23,15 +23,20 @@ from .tile_constants import FACE_C_DIM
 # Header contract: ct_dim 1..16, kt_dim even (2..256), in0 rows in {1, 2, 4, 8}.
 CT_DIMS = [1, 2, 4, 8, 16]
 KT_DIMS = [2, 4]
-IN0_ROWS = [1, 2, 4, 8]
+# NOT rt_dim: the header contract pins rt_dim at 1, and in0 is a single partial tile. This axis is
+# in0's *face* row count -- the value that goes to the primitives' unpB_face_r_dim / the harness's
+# IN_FACE_DIMS(in0_face_r_dim=...) -- so it is named after that parameter, not after the tile grid.
+IN0_FACE_R_DIMS = [1, 2, 4, 8]
 
 
-def matmul_grid(ct_dims=None, kt_dims=None, in0_rows=None):
-    """The (ct_dim, kt_dim, in0_rows) sweep shared by the custom_mm-style tests."""
+def matmul_grid(ct_dims=None, kt_dims=None, in0_face_r_dims=None):
+    """The (ct_dim, kt_dim, in0_face_r_dim) sweep shared by the custom_mm-style tests."""
     combos = []
     for ct in ct_dims if ct_dims is not None else CT_DIMS:
         for kt in kt_dims if kt_dims is not None else KT_DIMS:
-            for rows in in0_rows if in0_rows is not None else IN0_ROWS:
+            for rows in (
+                in0_face_r_dims if in0_face_r_dims is not None else IN0_FACE_R_DIMS
+            ):
                 combos.append((ct, kt, rows))
     return combos
 
