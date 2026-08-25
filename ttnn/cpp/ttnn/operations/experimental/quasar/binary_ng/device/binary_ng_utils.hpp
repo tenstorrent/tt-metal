@@ -143,4 +143,21 @@ bool is_native_L1_sharding(
 ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::Shape& shape_b);
 
 MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const ttnn::Shape& shape_b);
+
+// Env-driven tuning for ProgramFactoryQuasarNative, read once per process. R/C/W constrain ADMISSION
+// only until the multi-thread host wiring lands -- raising them narrows which shapes route native and
+// cannot make the program use more engines; native_tuning() log_info's that so an A/B log is honest.
+struct NativeTuning {
+    bool implicit_sync = false;       // parsed; NOT yet consumed
+    uint32_t entries_per_thread = 2;  // parsed; NOT yet consumed. Per-thread ring depth once it is
+    uint32_t reader_threads = 1;      // R -- admission gate only, for now
+    uint32_t compute_threads = 1;     // C -- admission gate only, for now; must be 1, 2 or 4
+    uint32_t writer_threads = 1;      // W -- admission gate only, for now
+    bool enabled = false;             // TTNN_QSR_NATIVE; 0 and unset both mean OFF
+};
+
+// Parsed once into a function-local static. Knobs are TTNN_QSR_{NATIVE, IMPLICIT_SYNC,
+// ENTRIES_PER_THREAD, READER_THREADS, COMPUTE_THREADS, WRITER_THREADS}. Topology invariants are
+// asserted only when `enabled`, so a bad knob cannot take down the fallback reference arm.
+const NativeTuning& native_tuning();
 }  // namespace ttnn::operations::experimental::quasar::binary_ng
