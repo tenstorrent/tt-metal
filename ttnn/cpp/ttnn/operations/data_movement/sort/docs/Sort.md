@@ -101,6 +101,22 @@ Both `ROW_MAJOR` and `COL_MAJOR` shard orientations are accepted.
   cost of each compare-exchange; the data-movement-heavy phases of sort are
   unaffected.
 
+#### Unstable index contract (`stable=False`)
+
+- Unstable indices are always a valid per-row permutation: gathering the
+  input by the returned indices reproduces the sorted values, and no index
+  repeats or leaves the logical range. The CrossCore factory runs the
+  index-aware comparator for **both** stabilities (issue #54043: the raw
+  positional tie decision was not consistent between the two cores sharing a
+  spanning tile pair, so ties could duplicate indices) — its unstable output
+  is therefore exactly the torch-stable permutation. The single-core and
+  MultiCore-DRAM factories decide ties within one instruction stream and
+  never had the hazard.
+- One observable side effect on the CrossCore path: `float32` values are
+  canonicalized `-0.0` → `+0.0` on entry (the comparator's 32-bit-DEST tie
+  sweep, previously applied only under `stable=True`). Numerically equal;
+  bit-exact consumers of signed zeros (`copysign`, `1/x`) see `+0.0`.
+
 ## Tensor Transformations
 
 Before and after the core sorting operation, the input tensor undergoes several transformations to ensure compatibility with the Bitonic Sort algorithm and hardware requirements. These transformations are transparent to the user and are automatically reversed after sorting.

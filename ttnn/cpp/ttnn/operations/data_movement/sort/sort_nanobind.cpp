@@ -30,7 +30,7 @@ void bind_sort_operation(nb::module_& mod) {
         Keyword Arguments:
             dim (int, optional): The dimension along which to sort. Defaults to `-1` (last dimension).
             descending (bool, optional): If `True`, sorts in descending order. Defaults to `False`.
-            stable (bool, optional): If `True`, ensures the original order of equal elements is preserved. Defaults to `False`.
+            stable (bool, optional): If `True`, ensures the original order of equal elements is preserved. Defaults to `False`. With `stable=False` the returned indices are still always a valid permutation (no duplicates inside tie groups, no out-of-range indices — issue #54043 is fixed), but which of several equal elements comes first is unspecified. On the multi-core cross-core path, `float32` inputs have `-0.0` canonicalized to `+0.0` in the returned values for both stabilities.
             memory_config (ttnn.MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
             out (tuple of ttnn.Tensor, optional): Preallocated output tensors for the sorted values and indices. Defaults to `None`. The index tensor must be of type uint16 or uint32.
 
