@@ -166,18 +166,7 @@ def _build_layer_norm_shapes():
 _SHAPES = _build_layer_norm_shapes()
 
 # ---------------------------------------------------------------------------
-# Input distribution: fused into the shape axis rather than crossed with it.
-#
-# The distribution only sets the numeric range of the generated input. It selects no kernel, no
-# reduction path and no threshold -- the ULP/atol caps are fixed per dtype, and the near-zero atol
-# scales with the golden's own range, so a wide-range distribution is self-normalizing. Crossing it
-# with the shape axis tripled the case count of these four characterization tests without reaching
-# a new code path.
-#
-# Rotating it across the shapes instead keeps every distribution on a third of the shapes, spanning
-# the W sweep, the H sweep, a square, the non-tile-aligned 37x41 and the 1x512 vector. Note that
-# adding a shape to _build_layer_norm_shapes shifts the assignment of every later shape; that is
-# fine for a characterization sweep, but it does mean the pairing is not stable across edits.
+# Input distribution: rotated across the shapes
 # ---------------------------------------------------------------------------
 _BF16_DISTRIBUTIONS = ("uniform_01", "normal", "wide_uniform")
 _FP32_DISTRIBUTIONS = ("normal", "wide_uniform", "centered_uniform")
