@@ -43,9 +43,6 @@ constexpr uint32_t kReadySpinIterations = 200;
 
 namespace fds_epoch {
 
-// Drop every done a previous epoch left captured in this engine's input registers. The clears
-// stick: a held stale value cannot re-latch, which is why the workers keep alternating their ready
-// tokens rather than holding one.
 inline void clear_dispatch_inputs(uint32_t worker_mask) {
     for (uint32_t mask = worker_mask, neo = 0; mask != 0; mask >>= 1, neo++) {
         if (mask & 1u) {
@@ -54,8 +51,6 @@ inline void clear_dispatch_inputs(uint32_t worker_mask) {
     }
 }
 
-// The same on the worker side: drop every go a previous epoch left captured, and the worker's own
-// outgoing done with it, so only a fresh go can satisfy the wait that follows.
 inline void clear_worker_inputs(uint32_t dispatch_mask) {
     for (uint32_t mask = dispatch_mask, inst = 0; mask != 0; mask >>= 1, inst++) {
         if (mask & 1u) {
@@ -65,8 +60,7 @@ inline void clear_worker_inputs(uint32_t dispatch_mask) {
     overlay::FdsNeo::fds_clear_done();
 }
 
-// True once at least num_ready lanes of worker_mask hold one of the two ready tokens. Status is not
-// gated by the enable masks, so this needs no group configuration to observe.
+// Status is not gated by the enable masks, so this needs no group configuration.
 inline bool workers_ready(uint32_t worker_mask, uint32_t num_ready) {
     const uint32_t ready_lanes = (overlay::FdsDispatch::fds_read_group_status(kReadyTokenA) |
                                   overlay::FdsDispatch::fds_read_group_status(kReadyTokenB)) &
@@ -74,8 +68,6 @@ inline bool workers_ready(uint32_t worker_mask, uint32_t num_ready) {
     return static_cast<uint32_t>(__builtin_popcount(ready_lanes)) >= num_ready;
 }
 
-// Engine side of the opening: shed the previous epoch, then wait until num_ready workers have
-// declared themselves live. False means the wait expired, and the caller must not send its go.
 inline bool wait_for_workers(uint32_t worker_mask, uint32_t num_ready, uint32_t poll_iterations) {
     clear_dispatch_inputs(worker_mask);
     for (uint32_t i = 0; i < poll_iterations; i++) {
@@ -86,9 +78,6 @@ inline bool wait_for_workers(uint32_t worker_mask, uint32_t num_ready, uint32_t 
     return false;
 }
 
-// Hold the next ready token on this worker's done wire. Called once per poll iteration; only the
-// iterations that land on the spin period actually write, so a caller that also inspects the go
-// wire in the same loop stays paced with wait_for_go.
 inline void pulse_ready(uint32_t& ready_token, uint32_t iteration) {
     if (iteration % kReadySpinIterations == 0) {
         overlay::FdsNeo::fds_done(/*ad_enable=*/false, ready_token);
@@ -96,10 +85,7 @@ inline void pulse_ready(uint32_t& ready_token, uint32_t iteration) {
     }
 }
 
-// Worker side of the opening: shed the previous epoch, then hold alternating ready tokens until
-// awaited_value appears on one of the lanes named by dispatch_mask. The lane it arrived on is
-// reported through go_inst, which is how a worker learns which engine is driving it this epoch.
-// False means the wait expired.
+// go_inst reports which engine drove this worker in the current epoch.
 inline bool wait_for_go(uint32_t dispatch_mask, uint32_t awaited_value, uint32_t poll_iterations, uint32_t& go_inst) {
     clear_worker_inputs(dispatch_mask);
 

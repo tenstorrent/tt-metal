@@ -2,10 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Dispatch-engine side of the de-glitch filter test: supply a sub-threshold pulse, a held value,
-// and a held value at the specification's floor threshold, each on the worker's cue. The
-// assertions live in quasar_fds_filter_worker.cpp.
-//
 // The session go both starts the worker and tells it which lane this engine drives. It is dropped
 // again before the worker raises its filter: a threshold raised over a parked lane re-captures the
 // value still on the wire, so the wire must be carrying zero by then for that re-capture to be
@@ -25,7 +21,6 @@ using fds_filter::kTokenPulseChecked;
 using fds_filter::kTokenRearmed;
 
 constexpr uint32_t kNumSlots = 1;
-// A step token never arrived; the value encodes which one below.
 constexpr uint32_t kTimeoutTokenBase = 0x5A5A0020;
 constexpr uint32_t kPulseRepeats = 8;
 

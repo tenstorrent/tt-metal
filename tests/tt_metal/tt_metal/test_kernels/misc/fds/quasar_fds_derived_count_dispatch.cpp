@@ -2,23 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Dispatch-engine side of the derivation-semantics test. Status, count and the interrupt are all
-// recomputed from the input registers every cycle; nothing accumulates. Three consequences are
-// asserted here, against workers that raise their dones and hold them (the standard worker kernel,
-// quasar_fds_worker_signal.cpp):
-//  1. The enable mask filters counting only, never status: with the mask empty, status shows every
-//     done and the count reads zero.
-//  2. The count is live and falls as well as rises: clearing the input registers returns it to
-//     zero while the workers still hold their dones, and it stays there because a clear sticks.
-//  3. Group 0 is nothing but the idle decode: it complements the busy map while the dones are
-//     held, and reads all-ones over the source width once every input register is clear.
-
 #include <cstdint>
 #include "api/compile_time_args.h"
 
 #include "quasar_fds_common.h"
 
-// Extra status slots, mirrored by the host in test_quasar_dispatch_engines.cpp.
+// Mirrored by test_quasar_fds.cpp.
 // The count read back while the enable mask was empty; anything but zero is the failure.
 constexpr uint32_t kSlotCountUnderEmptyEnable = 1;
 // The group status observed after the input registers were cleared under held senders.
@@ -26,19 +15,12 @@ constexpr uint32_t kSlotStatusAfterClear = 2;
 // The group 0 status, recorded when either group 0 check fails.
 constexpr uint32_t kSlotIdleStatus = 3;
 constexpr uint32_t kNumSlots = 4;
-// The dones never all showed in status.
 constexpr uint32_t kTimeoutStatus = 0x5A5A0005;
-// The count was nonzero although the group's enable mask was empty.
 constexpr uint32_t kCountedWithoutEnable = 0x5A5A0006;
-// The count never reached the worker total once the enable mask was set.
 constexpr uint32_t kTimeoutCount = 0x5A5A0007;
-// Status or count never fell to zero after the input registers were cleared.
 constexpr uint32_t kTimeoutClear = 0x5A5A0008;
-// Status or count came back while the input registers stayed cleared under held senders.
 constexpr uint32_t kRelatchedAfterClear = 0x5A5A0009;
-// Group 0's status was not the all-idle map.
 constexpr uint32_t kBadIdleMap = 0x5A5A000A;
-// Group 0's status did not complement the busy map while the dones were held.
 constexpr uint32_t kBadBusyIdleMap = 0x5A5A000B;
 
 void kernel_main() {

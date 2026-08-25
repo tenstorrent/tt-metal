@@ -2,12 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Worker side of the auto dispatch pacing test: record every value the engine's queue releases
-// onto the go wire, in the order captured. The burst counts upwards, so each release is a change
-// the filter passes and each value is unique — which is what lets the host check order and
-// multiplicity rather than merely counting transitions. The dispatch-engine side lives in
-// quasar_fds_auto_pacing_dispatch.cpp.
-//
 // One limit is the hardware's, not the test's: a release of the value already on the wire is no
 // change at all, so nothing downstream could observe it. Unique burst values sidestep that instead
 // of trying to detect it.
@@ -25,7 +19,6 @@ using fds_auto_pacing::kTokenRecorded;
 
 constexpr uint32_t kSlotRecordedCount = 1;
 constexpr uint32_t kSlotFirstValue = 2;
-// Fewer than burst_length values arrived.
 constexpr uint32_t kTimeoutBurst = 0x5A5A0050;
 
 void kernel_main() {
@@ -42,7 +35,6 @@ void kernel_main() {
         return;
     }
 
-    // Clear the lane so the burst starts from a quiet register, then tell the engine to fire.
     overlay::FdsNeo::fds_clear_de_status(go_inst);
     overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenArmed);
 

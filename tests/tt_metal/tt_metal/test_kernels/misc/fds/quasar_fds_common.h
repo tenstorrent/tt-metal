@@ -4,13 +4,7 @@
 
 #pragma once
 
-// Shared status layout, result codes, and bounded waits for the Quasar FDS test kernels.
-//
-// The opening ready/go handshake lives in quasar_fds_epoch.h. Everything here is the rest of the
-// ceremony every kernel repeats: stamp a status block the host can read, wait a bounded number of
-// iterations for a register to show a value, and fail with a named code rather than hang. Pair-
-// specific go values and step tokens that used to be copied into both sides of a test live in the
-// namespaces at the bottom.
+// Shared status layout, bounded waits, and pair-specific tokens for the Quasar FDS test kernels.
 
 #include "risc_attribs.h"
 #include "risc_common.h"
@@ -34,7 +28,6 @@ constexpr uint32_t kTimeoutGo = kTimeout;
 // Worker: a go that was seen never dropped back to zero.
 constexpr uint32_t kTimeoutGoClear = 0x5A5A0005;
 
-// Tests that run a single worker NEO.
 constexpr uint32_t kNumWorkers = 1;
 
 // Opening value for the tests that need one distinct from their payload, so a stale session capture
@@ -79,7 +72,6 @@ inline status_ptr begin_worker(uint32_t l1_address, uint32_t num_slots) {
     return status;
 }
 
-// False if the ready wait expired; the status block already holds kReadyTimeout.
 inline bool workers_are_ready(
     status_ptr status,
     uint32_t l1_address,
@@ -94,7 +86,6 @@ inline bool workers_are_ready(
     return false;
 }
 
-// False if the go never arrived; the status block already holds kTimeoutGo.
 inline bool received_go(
     status_ptr status,
     uint32_t l1_address,
@@ -150,7 +141,6 @@ inline bool wait_de_status(uint32_t inst, uint32_t expected, uint32_t poll_itera
     return false;
 }
 
-// First nonzero value seen on the lane, or zero if the window stayed quiet.
 inline uint32_t lane_nonzero(uint32_t inst, uint32_t iterations) {
     for (uint32_t i = 0; i < iterations; i++) {
         const uint32_t observed = overlay::FdsNeo::fds_read_de_status(inst);

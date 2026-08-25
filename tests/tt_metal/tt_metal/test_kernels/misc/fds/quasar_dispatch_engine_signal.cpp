@@ -2,11 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Dispatch-engine side of the Quasar FDS go/done handshake: wait until every worker holds a ready
-// token on its done wire, send an FDS go signal to the worker NEOs selected by worker_mask, then
-// wait until done_threshold workers have signalled done. The worker side lives in
-// quasar_fds_worker_signal.cpp.
-//
 // The FDS wire index of any given worker core is not established, so the host aims the go at every
 // NEO wire at once rather than at a chosen one.
 //
@@ -21,10 +16,7 @@
 
 #include "quasar_fds_common.h"
 
-// Slots of the status block this kernel writes at l1_address. The host test that reads them back
-// carries the same layout, so a change here has to be made in test_quasar_dispatch_engines.cpp as
-// well. The host clears the block before launch, so the result values separate a kernel that never
-// ran from one that ran and stalled and one that ran to the end.
+// Mirrored by test_quasar_fds.cpp.
 constexpr uint32_t kSlotDoneCount = 1;
 // The lowest-numbered quiet group that was credited a done anyway, so a leak names the group it
 // landed in. Zero means none was, group 0 being the idle value on the wire and so never a group a
@@ -80,7 +72,6 @@ void kernel_main() {
         }
     }
 
-    // Leave the wire idle so the next epoch starts from a cleared output.
     overlay::FdsDispatch::fds_clear_go();
 
     status[kSlotDoneCount] = done_count;

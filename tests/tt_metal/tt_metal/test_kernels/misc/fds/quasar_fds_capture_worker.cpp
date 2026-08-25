@@ -2,15 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Worker side of the capture-semantics test, holding the assertions:
-//  1. A software clear of an input register sticks while the sender holds its value: the register
-//     must stay zero, because capture is change-triggered and the wire has not changed.
-//  2. A rewrite of the identical value is not recaptured: writing the same group id again puts no
-//     change on the wire, so exactly one capture happens per stable-value episode.
-//  3. A real change through zero is recaptured, which also proves the silence above was capture
-//     semantics and not a dead wire.
-// The dispatch-engine side that paces these steps lives in quasar_fds_capture_dispatch.cpp.
-
 #include <cstdint>
 #include "api/compile_time_args.h"
 
@@ -20,11 +11,8 @@ using fds_capture::kTokenChecked;
 using fds_capture::kTokenCleared;
 
 constexpr uint32_t kNumSlots = 2;
-// The cleared input register re-latched the held value.
 constexpr uint32_t kRelatchedAfterClear = 0x5A5A0010;
-// The rewrite of the identical value was captured as a new event.
 constexpr uint32_t kRecapturedWithoutChange = 0x5A5A0011;
-// The real change through zero was never captured.
 constexpr uint32_t kTimeoutRecapture = 0x5A5A0012;
 
 void kernel_main() {

@@ -2,11 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Dispatch-engine side of the capture-semantics test. Capture is change-triggered: a software
-// clear of an input register sticks while the sender still holds its value, and rewriting the same
-// value produces no second capture because the wire never changes. This kernel supplies the held,
-// rewritten and changed go values in turn, paced by tokens the worker raises on its done wire; the
-// checks live in quasar_fds_capture_worker.cpp.
+// Supplies held, rewritten, and changed go values paced by the worker's step tokens.
 
 #include <cstdint>
 #include "api/compile_time_args.h"
@@ -17,9 +13,7 @@ using fds_capture::kTokenChecked;
 using fds_capture::kTokenCleared;
 
 constexpr uint32_t kNumSlots = 1;
-// The worker never reported clearing its input register.
 constexpr uint32_t kTimeoutCleared = 0x5A5A0006;
-// The worker never reported finishing its rewrite-silence window.
 constexpr uint32_t kTimeoutChecked = 0x5A5A0007;
 
 void kernel_main() {

@@ -2,10 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Worker side of the Quasar FDS go/done handshake: signal readiness, wait for an FDS go signal
-// from a dispatch engine, then drive the matching done signal back.
-// The dispatch-engine side lives in quasar_dispatch_engine_signal.cpp.
-//
 // Which dispatch instance drives this NEO is not established, so every inbox register is watched
 // rather than a chosen one.
 //
@@ -27,7 +23,6 @@ void kernel_main() {
 
     fds_kernel::status_ptr status = fds_kernel::begin_worker(l1_address, kNumSlots);
 
-    // This kernel answers whichever engine reached it, so the lane the go arrived on is not needed.
     uint32_t go_inst = 0;
     const bool go_received = fds_epoch::wait_for_go(dispatch_mask, group_id, poll_iterations, go_inst);
 

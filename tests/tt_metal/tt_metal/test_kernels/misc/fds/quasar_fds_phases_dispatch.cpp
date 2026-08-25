@@ -2,12 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Dispatch-engine side of the consecutive-phases test: run several go/done rounds on the same
-// group within one program, exercising the clearing discipline the protocol requires between
-// identical messages. Capture is change-triggered, so a second go of the same group is only
-// observable if the output was cleared to zero in between, and a second done only if the worker
-// cleared its own. The worker side lives in quasar_fds_phases_worker.cpp.
-//
 // Phase boundaries ride on the wires themselves: the go dropping to zero tells the workers the
 // engine has collected every done, and the group count falling back to zero tells the engine every
 // worker has cleared its done and re-armed for the next phase.
@@ -19,10 +13,7 @@
 
 constexpr uint32_t kSlotPhasesDone = 1;
 constexpr uint32_t kNumSlots = 2;
-// The done count never reached the threshold within a phase.
 constexpr uint32_t kTimeoutDones = 0x5A5A0003;
-// The done count never fell back to zero after the go was cleared, so some worker never cleared
-// its done between phases.
 constexpr uint32_t kTimeoutRearm = 0x5A5A0005;
 
 void kernel_main() {

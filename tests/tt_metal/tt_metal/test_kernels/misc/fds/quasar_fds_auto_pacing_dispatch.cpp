@@ -2,13 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Dispatch-engine side of the auto dispatch pacing test: push more go values through the queue
-// than it holds, counting upwards so every release is both a change on the wire and a value that
-// appears exactly once. The worker (quasar_fds_record_worker.cpp) records the values it captures;
-// the host asserts it saw every one exactly once, in order, and that the queue-full flag asserted
-// while the burst outran the cadence. The writes poll the flag rather than landing on a full
-// queue, so the hardware's own block-on-full behaviour is deliberately not relied on here.
-//
 // The burst is written through fds_go with auto dispatch enabled, which polls the queue-full flag
 // before each write; the flag is sampled once more before the last write, where four undelivered
 // values must be sitting in the four-deep queue.
@@ -24,9 +17,7 @@ using fds_auto_pacing::kTokenRecorded;
 
 constexpr uint32_t kSlotSawQueueFull = 1;
 constexpr uint32_t kNumSlots = 2;
-// The worker never reported clearing its lane.
 constexpr uint32_t kTimeoutArmed = 0x5A5A0006;
-// The worker never reported recording the full burst.
 constexpr uint32_t kTimeoutRecorded = 0x5A5A0007;
 
 void kernel_main() {

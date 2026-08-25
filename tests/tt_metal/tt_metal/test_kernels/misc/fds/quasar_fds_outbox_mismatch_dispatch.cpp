@@ -22,11 +22,8 @@ using fds_outbox::kTokenDelivered;
 using fds_outbox::kTokenSilenceChecked;
 
 constexpr uint32_t kNumSlots = 1;
-// The worker never reported clearing its lane.
 constexpr uint32_t kTimeoutArmed = 0x5A5A0006;
-// The worker never reported finishing its silence window.
 constexpr uint32_t kTimeoutSilence = 0x5A5A0007;
-// The worker never reported the matched-outbox delivery.
 constexpr uint32_t kTimeoutDelivered = 0x5A5A0008;
 
 void kernel_main() {

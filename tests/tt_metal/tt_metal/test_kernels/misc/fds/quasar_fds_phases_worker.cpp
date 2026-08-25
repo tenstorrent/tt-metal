@@ -2,10 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Worker side of the consecutive-phases test: answer several go/done rounds on the same group,
-// clearing the done between rounds as the protocol requires for identical messages. The
-// dispatch-engine side lives in quasar_fds_phases_dispatch.cpp.
-//
 // The go dropping to zero is the signal that the engine has collected this round's dones, so the
 // done is cleared only then: clearing earlier would retract it before it was counted.
 

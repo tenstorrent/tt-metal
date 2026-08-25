@@ -2,11 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Dispatch-engine side of the worker auto dispatch test: send a go, wait for the done the worker
-// pushes through its auto dispatch queue, then drop the go — which is the worker's cue that the
-// done was counted and its queue may be switched off. The assertions live in
-// quasar_fds_auto_done_worker.cpp.
-
 #include <cstdint>
 #include "api/compile_time_args.h"
 

@@ -2,12 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Worker side of the concurrent-engines test: every dispatch engine sends a go for the same group
-// at once, and this kernel waits until its group status shows all of them held simultaneously
-// before answering with a single done — which each engine then sees on its own lane. This is the
-// only kernel that exercises the worker-side group decode across its input lanes; the standard
-// worker polls raw registers with a threshold of one. The dispatch-engine side is the standard
-// quasar_dispatch_engine_signal.cpp, one instance per engine in one program.
+// Unlike the standard worker's raw-register wait, this exercises worker-side group decode across
+// all dispatch-engine lanes.
 
 #include <cstdint>
 #include "api/compile_time_args.h"

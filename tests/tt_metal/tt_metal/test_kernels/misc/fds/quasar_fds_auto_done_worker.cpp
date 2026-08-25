@@ -2,21 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Worker side of the worker auto dispatch test, holding the assertions:
-//  1. With auto dispatch enabled, a done write is diverted into the queue rather than the output
-//     register: the register reads back stale, which is the architected way to tell the two modes
-//     apart.
-//  2. The queued value is released onto the wire and reaches the dispatch engine. (That it also
-//     holds after the queue drains is architected but not asserted: the engine's captured input
-//     cannot tell a held wire from a pulse.)
-// The dispatch-engine side lives in quasar_fds_auto_done_dispatch.cpp.
-//
-// The outbox address must be the very address fds_done writes, because the trigger comparison is on
-// the full untruncated address. On the worker map that leaves no room to get it wrong: the map is
-// based at zero, so a register's OFFSET-form and ADDR-form macros hold the same value. The
-// convention hazard the outbox-mismatch test pins is a dispatch-map problem only, where the ADDR
-// form is the OFFSET form plus 0x200.
-
 #include <cstdint>
 #include "api/compile_time_args.h"
 
@@ -24,9 +9,7 @@
 
 constexpr uint32_t kSlotDoneReadback = 1;
 constexpr uint32_t kNumSlots = 2;
-// The go was never dropped, so the done was never acknowledged.
 constexpr uint32_t kTimeoutAck = kTimeoutGoClear;
-// The done write updated the output register: it took the direct path, not the queue.
 constexpr uint32_t kNotDiverted = 0x5A5A0040;
 
 void kernel_main() {

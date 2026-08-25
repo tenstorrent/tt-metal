@@ -2,14 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Worker side of the de-glitch filter test, holding the assertions:
-//  1. A value replaced before the filter threshold elapses is genuinely lost: after the engine's
-//     brief pulses, nothing may be captured for the whole silence window.
-//  2. A value held stable is captured, at the same long threshold that filtered the pulse.
-//  3. The specification's floor threshold of 7 also passes a held value.
-// The dispatch-engine side that supplies pulse and held values lives in
-// quasar_fds_filter_dispatch.cpp.
-//
 // Two threshold hazards shape the sequencing. Raising the threshold over a parked lane re-captures
 // whatever the wire holds, so the long filter is programmed only after the engine has dropped the
 // session go and its zero has demonstrably landed — the re-capture is then a harmless zero.
@@ -31,11 +23,8 @@ using fds_filter::kTokenPulseChecked;
 using fds_filter::kTokenRearmed;
 
 constexpr uint32_t kNumSlots = 2;
-// The sub-threshold pulse was captured.
 constexpr uint32_t kPulseCaptured = 0x5A5A0030;
-// The held value was never captured at the long threshold.
 constexpr uint32_t kTimeoutHeldCapture = 0x5A5A0031;
-// The held value was never captured at the floor threshold.
 constexpr uint32_t kTimeoutFloorCapture = 0x5A5A0032;
 
 void kernel_main() {
@@ -93,7 +82,6 @@ void kernel_main() {
         }
     }
 
-    // Leave de-glitching off for whatever runs on this tile next.
     overlay::FdsNeo::fds_config_filter_length(kNoDeglitchFilter);
 
     status[kSlotObservedValue] = observed;

@@ -2,13 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Worker side of the outbox address-convention test, holding the assertions:
-//  1. While the engine's outbox holds the OFFSET-form address, its ADDR-form go write must deliver
-//     nothing: the lane stays clear for the whole silence window, and in particular the mismatched
-//     payload value is never seen at any point in the run.
-//  2. Once the outbox holds the matching ADDR form, the same write delivers.
-// The dispatch-engine side lives in quasar_fds_outbox_mismatch_dispatch.cpp.
-
 #include <cstdint>
 #include "api/compile_time_args.h"
 
@@ -21,9 +14,7 @@ using fds_outbox::kTokenDelivered;
 using fds_outbox::kTokenSilenceChecked;
 
 constexpr uint32_t kNumSlots = 2;
-// The mismatched write reached the wire.
 constexpr uint32_t kMismatchedDelivered = 0x5A5A0060;
-// The matched write never arrived.
 constexpr uint32_t kTimeoutMatched = 0x5A5A0061;
 
 void kernel_main() {
@@ -40,7 +31,6 @@ void kernel_main() {
         return;
     }
 
-    // Clear the lane, then let the engine fire the mismatched write early in the silence window.
     overlay::FdsNeo::fds_clear_de_status(go_inst);
     overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenArmed);
 

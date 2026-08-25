@@ -42,7 +42,6 @@ constexpr uint32_t kComplete = 0x5A5A0002;
 constexpr uint32_t kSlotDoneCount = 1;
 constexpr uint32_t kSlotCreditedQuietGroup = 2;
 constexpr uint32_t kNumHandshakeDispatchSlots = 3;
-// The standard worker kernel (quasar_fds_worker_signal.cpp) carries only the result word.
 constexpr uint32_t kNumHandshakeWorkerSlots = 1;
 
 // Depth of the two FDS input-bus register arrays: one TENSIX_TO_DISPATCH register per NEO wire on
@@ -68,7 +67,6 @@ constexpr uint32_t all_lanes_mask(uint32_t num_lanes) {
 constexpr uint32_t kWorkerMask = all_lanes_mask(kNumNeoWires);
 constexpr uint32_t kDispatchMask = all_lanes_mask(kNumDispatchInstances);
 
-// First assignable group. Group 0 is reserved because it is the idle value on the wire.
 constexpr uint32_t kGroupId = 1;
 // Each side gives up rather than spinning forever, so a missing signal fails the test with a
 // readable status word instead of hanging it. Kept modest because this runs under a cycle
@@ -85,7 +83,6 @@ std::vector<CoreCoord> all_dispatch_engine_cores(IDevice* dev) {
         MetalContext::instance().get_cluster().get_soc_desc(dev->id()));
 }
 
-// Why these tests cannot run in this configuration, or empty when they can.
 std::string fds_tests_skip_reason(IDevice* dev) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         return "This test can only be run under the simulator or emulator. "
@@ -137,7 +134,6 @@ struct HandshakeResult {
     uint32_t credited_quiet_group() const { return dispatch_status[kSlotCreditedQuietGroup]; }
 };
 
-// Reads one core's status block.
 std::vector<uint32_t> read_status(
     IDevice* dev, const CoreCoord& core, uint32_t addr, uint32_t num_words, CoreType core_type) {
     const CoreCoord virtual_core = dev->virtual_core_from_logical_core(core, core_type);
@@ -145,7 +141,6 @@ std::vector<uint32_t> read_status(
         dev->id(), virtual_core, addr, num_words * sizeof(uint32_t));
 }
 
-// One core's status block, read back after the program completed.
 struct CoreStatus {
     CoreCoord core;
     std::vector<uint32_t> status;
@@ -357,8 +352,6 @@ TEST_F(QuasarFdsFixture, DispatchEngineSingleWorker) {
             run_handshake(device_, dispatch_core, {WorkerSet{.cores = kSingleWorkerCore}}, kGroupId);
         log_handshake(result);
 
-        // A failed epoch is reported and the remaining engines still run, so one run names every
-        // engine that works and every engine that does not.
         if (!result.dispatch_ran()) {
             ADD_FAILURE() << "dispatch engine kernel did not run";
             continue;
@@ -398,8 +391,6 @@ TEST_F(QuasarFdsFixture, DispatchEngineAllWorkers) {
             continue;
         }
 
-        // Reported per worker rather than as a count, so a partly working mapping names the nodes
-        // that worked and the nodes that did not.
         for (const WorkerReport& worker : result.workers) {
             if (!worker.ran()) {
                 ADD_FAILURE() << "worker kernel did not run on core " << worker.core.str();
@@ -436,8 +427,6 @@ TEST_F(QuasarFdsFixture, DispatchEngineGroupIsolation) {
         GTEST_SKIP() << "Test requires at least two worker nodes";
     }
 
-    // As many groups as FDS can assign, and never more than there are worker nodes to fill them,
-    // since a group with no nodes proves nothing.
     const uint32_t num_groups = std::min(num_workers, kNumAssignableGroups);
 
     // Cut the flat list of worker nodes into that many runs, as evenly as the count divides, the
@@ -638,7 +627,6 @@ TEST_F(QuasarFdsFixture, DispatchEngineConcurrentEngines) {
     // Slots of quasar_fds_aggregate_worker.cpp; the dispatch side is the standard handshake kernel.
     constexpr uint32_t kSlotStatusMask = 1;
     constexpr uint32_t kNumWorkerSlots = 2;
-    // The one worker answers every engine, so each engine waits on exactly one done.
     constexpr uint32_t kDonesPerEngine = 1;
 
     const FdsProgramResult result = run_fds_program(
