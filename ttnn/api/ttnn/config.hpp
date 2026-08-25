@@ -41,6 +41,9 @@ struct Config {
         // Snapshotted on the first public matmul dispatch and immutable after
         // that point.  Mutating CONFIG later does not alter registry behavior.
         MatmulRegistryMode matmul_registry_mode = MatmulRegistryMode::Off;
+        // Independently snapshotted on the first AGMM dispatch. The collective
+        // registry has a disjoint key/table and remains disabled by default.
+        MatmulRegistryMode agmm_registry_mode = MatmulRegistryMode::Off;
         // Re-validate Metal 2.0 program args on the cache-hit fast path (Update{Tensor,ProgramRun}Args).
         // The cache-miss build path always validates. Off by default; CI turns it on.
         bool validate_program_args = false;
