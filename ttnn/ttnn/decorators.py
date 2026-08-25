@@ -536,25 +536,26 @@ if TRACE_ALLOC_DIAGNOSTICS:
         from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
 
         pending = drain_pending_traceback_ids()
-        currently_unsafe = UnsafeAllocationTracker.reconcile_tracebacks()
-        pending = [buf_id for buf_id in pending if buf_id in currently_unsafe]
-        if not pending:
-            return
-        import traceback as _tb
+        if pending:
+            import traceback as _tb
 
-        # Drop the tracker wrapper frames so the traceback ends at the model call site.
-        stack = "".join(_tb.format_stack()[:-2])
-        if source == "op_start":
-            marker = (
-                "[trace alloc tracker] pending traceback IDs were flushed at op entry; "
-                "allocation likely happened outside a wrapped op"
-            )
-            if op_name:
-                marker += f" before '{op_name}'"
-            marker += ".\n"
-            stack = marker + stack
-        for buf_id in pending:
-            UnsafeAllocationTracker._tracebacks[buf_id] = stack
+            # Drop the tracker wrapper frames so the traceback ends at the model call site.
+            stack = "".join(_tb.format_stack()[:-2])
+            if source == "op_start":
+                marker = (
+                    "[trace alloc tracker] pending traceback IDs were flushed at op entry; "
+                    "allocation likely happened outside a wrapped op"
+                )
+                if op_name:
+                    marker += f" before '{op_name}'"
+                marker += ".\n"
+                stack = marker + stack
+            for buf_id in pending:
+                UnsafeAllocationTracker._tracebacks[buf_id] = stack
+
+        # C++ deallocation accounting is authoritative. Reconcile after adding
+        # pending tracebacks so IDs retired before or during this drain are pruned.
+        UnsafeAllocationTracker.reconcile_tracebacks()
 
 
 # Keyword argument names through which an operation writes into a caller-supplied tensor in
