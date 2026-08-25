@@ -327,6 +327,28 @@ jobs:
           path: test-reports
           merge-multiple: false
 
+      # AIIPSW-15 (Horizon) is tested in the separate private tt-umd-horizon repo,
+      # which publishes its latest results to results/latest.json on its `stable`
+      # branch. Pull that file (read-only, cross-repo) so the report can account it.
+      # Non-fatal: a missing token/branch/file just leaves AIIPSW-15 inconclusive.
+      - name: Pull tt-umd-horizon test evidence
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.HORIZON_RESULTS_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::notice::HORIZON_RESULTS_TOKEN not configured; skipping Horizon evidence."
+            exit 0
+          fi
+          if gh api "repos/tenstorrent/tt-umd-horizon/contents/results/latest.json?ref=stable" \
+               --jq '.content' 2>/dev/null | base64 -d > horizon-results.json; then
+            echo "Pulled Horizon results:"; cat horizon-results.json
+          else
+            echo "::notice::Horizon results not available (repo/branch/file missing); AIIPSW-15 inconclusive."
+            rm -f horizon-results.json
+          fi
+
       - name: Build report
         continue-on-error: true
         env:
@@ -340,6 +362,7 @@ jobs:
           RTL_SIM_SHA: ${{ needs.check-rtl-sim-status.outputs.sha }}
           RTL_SIM_URL: ${{ needs.check-rtl-sim-status.outputs.url }}
           RTL_SIM_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HORIZON_RESULTS_FILE: horizon-results.json
           RELEASE_VERSION: ${{ inputs.tag-version }}
           TEST_REPORTS_DIR: test-reports
           REPORT_MD_OUT: release-test-evidence.md
