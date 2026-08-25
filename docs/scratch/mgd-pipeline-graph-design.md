@@ -16,17 +16,53 @@ are expected to be filled in as follow-up passes.
 
 ## 0. Problem recap
 
-The Mesh Graph Descriptor carries no pipeline information: nothing says which submesh
-is which pipeline stage, nor how stages connect to one another, nor how the ring closes.
-The topology mapper therefore commits a physical mapping with no visibility into the
-pipeline it is expected to support, and infeasibility is only discovered afterwards by
-the pipeline builder, at which point the only recourse is to re-run mapping blind.
+The pipeline graph is already declared in blaze — `build_single_galaxy_pipeline_graph`
+in `blaze/models/gpt_oss_120b/entry.py`:
+
+```python
+nodes = {
+    "s0": Node(shape=SUBMESH_SHAPE_4X2, name="Embedding", factory=s_embed),
+    "s1": Node(shape=SUBMESH_SHAPE_4X2, name="Windowed",  factory=...),
+    "s2": Node(shape=SUBMESH_SHAPE_4X2, name="Global",    factory=...),
+    "s3": Node(shape=SUBMESH_SHAPE_4X2, name="LMHead",    factory=s_lm_head),
+}
+edges = [
+    Edge("s0", "s1"),
+    Edge("s1", "s2"),
+    Edge("s2", "s3"),
+    Edge("s3", "s0", is_loopback=True),
+]
+```
+
+![Pipeline graph](https://raw.githubusercontent.com/tenstorrent/tt-metal/ridvan/mgd-ticket-52016-diagrams/docs/scratch/ticket-52016-diagrams/1-pipeline-graph.png)
+
+### The Problem
+The MGD this runs on has none of that — four anonymous 4x2 slices, no stage names, no
+adjacency, no ring:
+
+```textproto
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 4 ] }
+  host_topology   { dims: [ 2, 2 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+```
+
+![MGD submesh view](https://raw.githubusercontent.com/tenstorrent/tt-metal/ridvan/mgd-ticket-52016-diagrams/docs/scratch/ticket-52016-diagrams/2-mgd-submesh-view.png)
+
+The mapper commits blind. The builder sees `entry.py` only after, and fails with
+`"no valid submesh assignment found"`. The only recourse is to re-run mapping blind.
 
 ![Current flow](https://raw.githubusercontent.com/tenstorrent/tt-metal/ridvan/mgd-ticket-52016-diagrams/docs/scratch/ticket-52016-diagrams/3-current-flow.png)
 
-The intended end state is a three-phase mapping solve, with a new middle phase that
-validates pipeline/ring feasibility while mapping is still in progress and can still
-be steered:
+---
+
+Intended end state: a three-phase solve. The new middle phase checks pipeline/ring
+feasibility while mapping can still be steered.
 
 ![Proposed flow](https://raw.githubusercontent.com/tenstorrent/tt-metal/ridvan/mgd-ticket-52016-diagrams/docs/scratch/ticket-52016-diagrams/4-proposed-flow.png)
 
@@ -66,9 +102,7 @@ embeddable in the mapping I am about to commit?"* during its solve. It is delibe
 **not** a layout source of truth - `blaze`'s `PipelineGraph` remains that at runtime.
 That scoping is what keeps the format as small as it is.
 
-The format does **not** need to mirror the argument list of `resolve_graph_layout`. A
-conversion step sits between the two, so the descriptor can be written in whatever shape
-is most natural to declare, and the transformation adapts it.
+> **Note:** The format does **not** need to mirror the argument list of `resolve_graph_layout`. The MGD pipeline graph merely checks if this pipeline can be fullfilled during mapping, could be a superset of the one checked in PIpeline graph.
 
 ### 1.2 The pipeline descriptor
 
@@ -89,8 +123,9 @@ pipeline_descriptors {
 }
 ```
 
-This is a mechanical transcription of `build_single_galaxy_pipeline_graph` in
-`blaze/models/gpt_oss_120b/entry.py`, minus the host-side factories:
+#### Dropped from `entry.py`
+
+Same graph, for comparison:
 
 ```python
 nodes = {
@@ -107,9 +142,13 @@ edges = [
 ]
 ```
 
-![Pipeline graph](https://raw.githubusercontent.com/tenstorrent/tt-metal/ridvan/mgd-ticket-52016-diagrams/docs/scratch/ticket-52016-diagrams/1-pipeline-graph.png)
+Two fields are omitted. Both matter to the pipeline builder; neither changes the shape
+being mapped, since they don't affect the topology mapping or graph isomorphism check. They stay out of MGD. See 2.1 for more details.
 
-Note the ring-closing edge `s3 -> s0` is present but carries no special marking. See 2.1.
+- **`factory`** (`s_embed`, `s_lm_head`, ...) — host-side construction. The builder
+  needs it; the mapper never calls it.
+- **`is_loopback`** — a builder conversion mark. The ring is already the `s3 -> s0`
+  edge. See 2.1.
 
 #### A heterogeneous example
 
@@ -176,10 +215,6 @@ obligations on `validate_pipeline_descriptors`.
 
 Every check the declared pipeline graph must pass before a mapping can be committed.
 
-The organizing axis is **when a check can run**, because that decides where it lives and how
-cheap it is. Four tiers, from "needs nothing but the descriptor" to "needs a committed mapping".
-Ordering matters: the Tier C check is NP-complete, so anything Tier A or Tier B can reject on a
-declaration alone is worth rejecting there.
 
 > **Note - the tiers check topology, not the pipeline builder.**
 >
@@ -260,19 +295,6 @@ Multiplicity is expressed by **repetition**, so `edges` needs no `channels` fiel
 antiparallel form is the only way to declare a two-stage ring: conversion marks one direction
 as the return path and the remainder is acyclic.
 
-Repetition does impose that the two blocks have at least `k` distinct ethernet links between
-them, one per repetition. **That is verified during mapping, not at descriptor load** - whether
-the links exist is a property of the placement, not of the descriptor, so it belongs to 2.3
-against a candidate mapping. A descriptor declaring more channels than the fabric can carry
-therefore parses cleanly and is rejected later.
-
-It is not met today, and the gap is on both sides of the boundary. `discover_connections`
-does collect every direct link between two blocks, but only `links[0]` is read when resolving
-an edge, so repetitions currently resolve onto the same physical link. And
-`_layout_from_resolution` builds `edge_map` as
-`{(re.src, re.dst): re for re in result.resolved_edges}`, which collapses a repeated pair to
-whichever entry comes last. Supporting channels means changing both. See 5.1
-
 #### Cycles are allowed - conversion breaks them
 
 ```textproto
@@ -340,12 +362,6 @@ same mesh, host_topology 4 x 2  ->  slice 2x2  !=  stage 4x2   REJECT
   shape. Heterogeneous pipelines are therefore uniform *per mesh instance* and vary *between*
   instances, which is why `shape` lives on the stage rather than on the descriptor.
 
-**Why this one matters.** The two shapes are derived independently today and never compared -
-production Python carves from the stage shape via `create_submeshes`, while the MGD's
-`host_topology` implies its own. They agree in tested configurations by arithmetic
-coincidence. On disagreement there is no load error; it surfaces later as `"no valid submesh
-assignment found"`, which names neither cause.
-
 #### Capacity
 
 - **Total capacity:** stage count equals total slot count exactly. `_collect_submeshes`
@@ -356,9 +372,6 @@ assignment found"`, which names neither cause.
   the slices the MGD declares at that shape, counted per mesh *instance*. Each instance
   contributes `prod(host_topology.dims)` slices, so the same descriptor instantiated twice
   contributes twice as many slots.
-- **Shape-group partition:** a valid assignment of shape groups to mesh instances exists.
-  Each instance admits exactly one slice shape, so this is an exact bipartite matching on
-  counts, not a packing search.
 
 ```
 gpt_oss_120b_single_galaxy
@@ -531,29 +544,6 @@ duplicated constraint that can drift?
 The question: given the descriptor from section 1, the concrete proto change and the full
 set of code that has to learn about a new top-level MGD section.
 
-Seed pointers, following the `pinnings` precedent as the most recent example of adding a
-top-level section:
-
-- `tt_metal/fabric/protobuf/mesh_graph_descriptor.proto` - new field on the top-level
-  `MeshGraphDescriptor` container, which uses field numbers 1-5 today.
-- `tt_metal/fabric/mesh_graph_descriptor.cpp` - defaults in `set_defaults`, a
-  `validate_pipeline_descriptors` wired into `static_validate` (validators run in
-  early-exit groups, so placement in that sequence matters), and a
-  `populate_pipeline_descriptors`.
-- `tt_metal/api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp` - declare the
-  validator, the populator, and an accessor.
-- `tests/tt_metal/tt_fabric/fabric_router/test_mesh_graph_descriptor.cpp` - validation
-  and population tests, one per Tier A rule in 2.1. Existing failure tests assert on the
-  `"Failed to validate MeshGraphDescriptor textproto"` report substring.
-- `tt_metal/fabric/MGD_README.md` - schema documentation.
-
-Two practical notes. The parser sets `AllowUnknownField(true)`, so a new section parses
-harmlessly on older binaries and existing textprotos need no edits until the field is
-actually wired. And the proto is compiled C++-only via `--cpp_out`, with no `*_pb2.py`
-anywhere in the tree, so Python consumes MGD as text - which matters if blaze is to
-generate these descriptors.
-
----
 
 ## 4. Mapping the graph as a stage in topology mapper util
 
@@ -573,75 +563,3 @@ Seed pointers:
   coordinates and H2D/D2H placement? Given 1.1 scopes the descriptor to feasibility, the
   cheaper variant may be the better fit, and it would not need the loopback designation
   or host IO at all.
-
-### 4.1 Prerequisite: decoupling the resolver from the live control plane
-
-The resolver currently reaches for a global singleton on the first step of its work:
-
-```cpp
-// tt_metal/fabric/pipeline_builder.cpp:27
-std::optional<RoutingDirection> pipeline_get_forwarding_direction(FabricNodeId src, FabricNodeId dst) {
-    const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
-    ...
-}
-
-// tt_metal/fabric/pipeline_builder.cpp:40
-std::map<uint32_t, std::vector<uint32_t>> pipeline_get_chip_neighbors(FabricNodeId src, RoutingDirection direction) {
-    const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
-    ...
-}
-```
-
-Those two wrappers are the entire surface through which `resolve_graph_layout` learns
-about physical connectivity. Two problems for running a feasibility round inside the
-mapper: the mapper runs *before* routing tables are established, and even if it did not,
-the live control plane reflects the **committed** mapping while the mapper needs to ask
-about a **candidate** one. So both need to take an injectable connectivity view. This is
-the enabling refactor for section 4 and gates the whole approach.
-
----
-
-## 5. How to solve this in the SAT solver
-
-**Reserved.** *TBD.*
-
-The question: whether ring and stage-adjacency constraints become SAT clauses, or stay a
-separate check layered on top of the existing solve.
-
-Seed pointers:
-
-- The mapper already uses CaDiCaL through `TopologySatSolver`, with incremental blocking
-  clauses driving enumeration on retry, and a DFS fallback. Engine selection is
-  influenced by `TT_TOPOLOGY_SOLVER_ENGINE`.
-- There is precedent for *not* pushing everything into SAT: `assign_non_colliding_hops`
-  is a separate backtracking helper for inter-mesh ring hop assignment. A pipeline
-  feasibility check could follow that pattern instead of being encoded as clauses.
-- Varying stage shapes make candidate blocks overlap, so choosing a disjoint carving is a
-  packing sub-problem. If that is solved here rather than restricted away by 2.2's shape
-  agreement, this section owns both packing and adjacency, arguing for one combined
-  encoding.
-- The rotation-invariance from 2.1 is a small but real win for any encoding: the solver
-  never has to consider which stage is first, only whether the cycle exists.
-- The tension to work through: encoding adjacency as clauses lets the solver avoid
-  infeasible mappings natively instead of discovering them and backtracking, but the
-  constraint is fundamentally a subgraph-isomorphism question - Hamiltonian cycle in the
-  spanning-ring case - which is awkward to encode compactly and may blow up clause count.
-
-### 5.1 Note: two things the descriptor can express and the pipeline cannot yet build
-
-Recorded so a valid descriptor is not blamed for a downstream failure. Both are separate work
-from this ticket, and blaze's `docs/pipeline_builder.md` is out of date on the first.
-
-**Forks.** The C++ resolver is fork-safe: its deconfliction step looks up the entry edge's
-*actual* source precisely because `stage_order[i-1]` is the wrong branch when a topological
-order interleaves forks. The Python wiring has not caught up - `_layout_from_resolution` keys
-`edge_map[(stage_names[i - 1], name)]`, which is that same wrong assumption, and both it and
-`_build_pipeline_config` take `out_edges[0]`, silently using one outgoing edge per stage. So a
-forked descriptor resolves correctly in C++ and then loses branches in Python.
-
-**Channels.** Repetition of an ordered pair is unimplemented on both sides. In C++ every edge
-between a block pair reads `links[0]`, so repetitions share one physical link instead of
-claiming distinct ones. In Python `edge_map` is built as
-`{(re.src, re.dst): re for re in result.resolved_edges}`, so repetitions collapse to whichever
-entry comes last. Making channels real means giving `ResolvedEdge` a per-repetition link
-assignment and keying the Python side by something other than the ordered pair.
