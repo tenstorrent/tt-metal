@@ -472,8 +472,6 @@ class TTSampling(LightweightModule):
                 line_all_gather_kwargs["dtype"] = dtype
             return self._line_all_gather(tensor, **line_all_gather_kwargs)
 
-        # num_links and topology are deprecated/ignored by ttnn.all_gather (removed September-2026);
-        # dropped here to silence the per-call deprecation warning without changing behavior.
         return ttnn.all_gather(
             tensor,
             dim=dim,

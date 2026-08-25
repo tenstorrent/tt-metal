@@ -264,8 +264,6 @@ class LogProbsCalculator:
                 kwargs["buffer_key"] = buffer_key
             return self._line_all_gather(tensor, **kwargs)
 
-        # num_links and topology are deprecated/ignored by ttnn.all_gather (removed September-2026);
-        # dropped here to silence the per-call deprecation warning without changing behavior.
         return ttnn.all_gather(
             tensor,
             dim=dim,
