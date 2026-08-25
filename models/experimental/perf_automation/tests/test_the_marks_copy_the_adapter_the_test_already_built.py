@@ -27,6 +27,12 @@ from agent.stage_marks import find_pipeline_in_scope, inject_stage_marks
 _SHAPE = '''import os
 
 PERF_BATCH = 8
+_PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
+
+
+def _try_traced():
+    _traced_forward()
+    return True
 
 
 def _build_kwargs():
@@ -46,10 +52,14 @@ def test_main_perf(device_params, device):
         %(ids)s = [1, 2, 3]
         measure_adapter(PipelineStageAdapter(%(build)s, %(ids)s, batch=PERF_BATCH), device)
 
-    if not os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
-        _traced_forward()
+    _PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
+    if _PERF_TRACE and not _PROFILING:
+        if not _try_traced():
+            %(eager)s()
     else:
         %(eager)s()
+        if _PERF_TRACE:
+            _try_traced()
 '''
 
 
@@ -161,3 +171,57 @@ def test_a_zero_result_says_why(capsys):
     assert sm.mark_stages_in_scope({"a": 1}, device=object()) == 0
     err = capsys.readouterr().err
     assert "NO per-stage boundaries" in err and "no object in scope exposes" in err
+
+
+# --- the branch the profiler actually reaches ----------------------------------------------------
+
+
+def test_it_skips_a_call_that_is_dead_under_profiling():
+    """THE REGRESSION. The rule was "the last bare call is the profiled branch". In the real
+    generated test the last one is `_try_traced()` inside `if _PERF_TRACE:` -- false under profiling,
+    because the tracy subprocess is given TT_PERF_TRACE=0. Both the bracket and the per-stage pass
+    landed there, so the capture came back with zero signposts AND zero diagnostics: silence from a
+    block that never ran."""
+    from agent.stage_marks import reachable_bare_calls
+
+    got = [n for _, _, n in reachable_bare_calls(_src())]
+    assert got == ["_eager_forward"], got
+
+
+def test_the_marks_follow_that_decision():
+    out, why = inject_stage_marks(_src())
+    assert "per-stage pass in _eager_forward()" in why, why
+    lines = out.splitlines()
+    br = next(i for i, l in enumerate(lines) if 'signpost("start")' in l)
+    assert "_eager_forward()" in lines[br + 1], "the bracket wrapped a call the profiler never makes"
+
+
+def test_the_environment_comes_from_the_run_not_from_a_copy_here():
+    """Two consumers had their own copies of TT_METAL_DEVICE_PROFILER=1 / TT_PERF_TRACE=0. The one
+    that SETS them owns them; this reads that definition."""
+    from agent.probes import PROFILING_ENV
+    from agent.stage_marks import _profiling_env
+
+    assert _profiling_env() == dict(PROFILING_ENV)
+    assert PROFILING_ENV["TT_METAL_DEVICE_PROFILER"] == "1"
+    assert PROFILING_ENV["TT_PERF_TRACE"] == "0"
+
+
+def test_an_undecidable_condition_keeps_both_branches():
+    """A call that MIGHT run beats one that certainly does not."""
+    from agent.stage_marks import reachable_bare_calls
+
+    src = _src().replace('_PERF_TRACE and not _PROFILING', 'some_unknown_flag')
+    got = [n for _, _, n in reachable_bare_calls(src)]
+    # Both arms of the undecidable branch are kept -- and _try_traced STILL is not, because its own
+    # condition (`if _PERF_TRACE:`) remains decidable and false. Undecidable widens the search; it
+    # does not switch it off.
+    assert got == ["_eager_forward", "_eager_forward"], got
+
+
+def test_a_module_level_flag_is_carried_into_the_function():
+    """_PERF_TRACE is assigned at module scope and read inside the test function. Binding top-level
+    statements into a throwaway dict left the condition undecidable and both branches reachable."""
+    from agent.stage_marks import reachable_bare_calls
+
+    assert [n for _, _, n in reachable_bare_calls(_src())] == ["_eager_forward"]

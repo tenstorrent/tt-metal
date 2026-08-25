@@ -151,7 +151,7 @@ def test_injection_lands_on_a_real_generated_test():
     assert ("injected at line" in why) or (why == "already injected"), why
     _ast.parse(out)
     assert '_tt_sm.signpost("start")' in out and '_tt_sm.signpost("stop")' in out
-    assert "mark_stages(" in out
+    assert "mark_stages_in_scope(" in out
 
 
 def test_injection_is_idempotent():
@@ -179,16 +179,36 @@ def test_it_refuses_rather_than_guesses():
     assert "cannot find the body of _gone()" in why2, why2
 
 def test_the_measured_call_stays_inside_the_pair():
-    """The marked pass adds ops to the capture. Without start/stop around the measured region the
-    main report would count them and every per-op number would move for no reason to do with the
-    model."""
+    """The bracket must wrap the call the PROFILER makes, not merely some call.
+
+    Injected here rather than read off disk: a file a previous run already marked cannot show where
+    this version would place the pair, and run 29 left exactly such a file -- its bracket wraps
+    `_try_traced()`, the branch that is dead under profiling, which is the bug this now prevents."""
     from agent.stage_marks import inject_stage_marks
 
-    out, _ = inject_stage_marks(_real_test_src())
-    a = out.index('_tt_sm.signpost("start")')
-    b = out.index('_tt_sm.signpost("stop")')
-    assert "_eager_forward()" in out[a:b]
-    assert out.index("mark_stages(") > b
+    src = (
+        "import os\n"
+        '_PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"\n'
+        "\n\n"
+        "def test_x_perf(device):\n"
+        "    def _eager_forward():\n"
+        "        pipe = build_pipeline(device)\n"
+        "        return pipe\n"
+        "\n"
+        '    _PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"\n'
+        "    if _PERF_TRACE and not _PROFILING:\n"
+        "        _try_traced()\n"
+        "    else:\n"
+        "        _eager_forward()\n"
+        "        if _PERF_TRACE:\n"
+        "            _try_traced()\n"
+    )
+    out, why = inject_stage_marks(src)
+    assert "injected" in why, why
+    a = out.index('signpost("start")')
+    b = out.index('signpost("stop")')
+    assert "_eager_forward()" in out[a:b], out[a:b]
+    assert "_try_traced()" not in out[a:b], "the bracket wrapped a call the profiler never makes"
 
 
 def test_the_generator_injects_before_it_validates():

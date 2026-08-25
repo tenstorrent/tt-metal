@@ -460,6 +460,22 @@ class PreflightError(Exception):
     """The discovered perf test selects zero tests (the S512 trap)."""
 
 
+# THE ENVIRONMENT A TRACY PROFILING RUN EXECUTES UNDER, named once.
+#
+# Two consumers need to agree on it and used to hold their own copies of the literals: this module,
+# which sets them on the subprocess, and stage_marks, which has to work out WHICH branch of the
+# generated test runs under them before it can put the stage marks in a reachable place. It guessed
+# instead -- "the last bare call is the profiled branch" -- and on a regenerated test that call sat
+# inside `if _PERF_TRACE:`, which is false here, so both the bracket and the per-stage pass landed in
+# code the profiler never executes and the capture came back with zero signposts.
+PROFILING_ENV = {
+    "TT_METAL_DEVICE_PROFILER": "1",
+    # EAGER-ONLY under tracy: a trace replay runs as one fused program and emits no per-op device
+    # data, so profiling it floods the buffer with nothing useful.
+    "TT_PERF_TRACE": "0",
+}
+
+
 def build_tracy_command(perf_test: str, case: str | None, out_dir: str | Path) -> list[str]:
     """The raw profile_this command (C++ post-processing default) + -o.
 
@@ -1383,14 +1399,14 @@ def make_run_profiled(
         out_dir = profiles_dir / "tracy_out"
         log_path = profiles_dir / f"run{i}_tracy.log"
         env = dict(os.environ)
-        env["TT_METAL_DEVICE_PROFILER"] = "1"
+        env["TT_METAL_DEVICE_PROFILER"] = PROFILING_ENV["TT_METAL_DEVICE_PROFILER"]
         # EAGER-ONLY under tracy. tracy profiles per-op device time from eager dispatch; a trace replay
         # runs as one fused program that emits NO per-op device data, so profiling it just floods tracy's
         # post-processor with one "device data missing" warning per traced op (~180k for a whole pipeline)
         # -- slow enough that the no-output watchdog false-kills the run. The end-to-end trace_replay
         # verdict is measured SEPARATELY (check_full_pipeline_latency, profiler off), so the tracy run
         # needs only device_ms. Keep the two apart; the redundant per-token this used to scrape is None-safe.
-        env["TT_PERF_TRACE"] = "0"
+        env["TT_PERF_TRACE"] = PROFILING_ENV["TT_PERF_TRACE"]
         env.update(extra_env or {})
         _prof = os.environ.get("PERF_MCP_PROFILE_ENV")
         if _prof:

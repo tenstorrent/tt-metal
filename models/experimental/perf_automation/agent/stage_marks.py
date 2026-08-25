@@ -35,6 +35,8 @@ from __future__ import annotations
 import ast
 import sys
 
+_UNKNOWN = object()
+
 
 def signpost(name: str) -> None:
     """Emit one tracy signpost. Best-effort: a mark that cannot be written costs the split, not the run.
@@ -245,6 +247,158 @@ _MARK_PASS_TEMPLATE = """{i}# --- per-stage marks (injected) -------------------
 
 
 
+def _env_value(node, env: dict):
+    """os.environ.get("NAME"[, default]) evaluated against `env`, or _UNKNOWN."""
+    if not isinstance(node, ast.Call):
+        return _UNKNOWN
+    f = node.func
+    if getattr(f, "attr", None) != "get":
+        return _UNKNOWN
+    owner = getattr(f, "value", None)
+    if getattr(owner, "attr", None) != "environ" and getattr(owner, "id", None) != "environ":
+        return _UNKNOWN
+    if not node.args or not isinstance(node.args[0], ast.Constant):
+        return _UNKNOWN
+    name = node.args[0].value
+    if name in env:
+        return env[name]
+    if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
+        return node.args[1].value
+    return None
+
+
+def _eval(node, env: dict, names: dict):
+    """The value of an expression under the profiling environment, or _UNKNOWN.
+
+    Deliberately small: names, constants, os.environ.get, not/and/or and ==/!=. That is the whole
+    vocabulary a generated test uses to decide whether it is being profiled, and anything richer is
+    answered _UNKNOWN so the caller can say it could not tell instead of guessing wrong."""
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        return names.get(node.id, _UNKNOWN)
+    v = _env_value(node, env)
+    if v is not _UNKNOWN:
+        return v
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        inner = _eval(node.operand, env, names)
+        return _UNKNOWN if inner is _UNKNOWN else (not inner)
+    if isinstance(node, ast.BoolOp):
+        vals = [_eval(v, env, names) for v in node.values]
+        if isinstance(node.op, ast.And):
+            if any(v is not _UNKNOWN and not v for v in vals):
+                return False
+            return _UNKNOWN if any(v is _UNKNOWN for v in vals) else True
+        if any(v is not _UNKNOWN and v for v in vals):
+            return True
+        return _UNKNOWN if any(v is _UNKNOWN for v in vals) else False
+    if isinstance(node, ast.Compare) and len(node.ops) == 1:
+        left, right = _eval(node.left, env, names), _eval(node.comparators[0], env, names)
+        if left is _UNKNOWN or right is _UNKNOWN:
+            return _UNKNOWN
+        if isinstance(node.ops[0], ast.Eq):
+            return left == right
+        if isinstance(node.ops[0], ast.NotEq):
+            return left != right
+    return _UNKNOWN
+
+
+def _bind_names(body, env: dict, names: dict) -> None:
+    """Record simple `x = <expr>` bindings so later conditions can be evaluated."""
+    for st in body:
+        if isinstance(st, ast.Assign) and len(st.targets) == 1 and isinstance(st.targets[0], ast.Name):
+            val = _eval(st.value, env, names)
+            if val is not _UNKNOWN:
+                names[st.targets[0].id] = val
+
+
+def reachable_bare_calls(text: str, env: dict | None = None) -> list:
+    """[(lineno, indent, callee)] for bare `_f()` statements the PROFILING run actually reaches.
+
+    WHY EVALUATE RATHER THAN GUESS. The rule here was "the last bare call is the profiled branch". It
+    held for one generated test and not the next: that one ended with
+
+        else:
+            _eager_forward()          <- what the profiler runs
+            if _PERF_TRACE:
+                _try_traced()         <- last, and dead under profiling
+
+    so the marks went into a branch that never executes and the capture came back with no signposts
+    and no diagnostics -- silence from a block that never ran.
+
+    The run's own environment settles it. probes.PROFILING_ENV is what the tracy subprocess is given,
+    the test decides its branch from exactly those variables, and both facts are the tool's, not the
+    generator's. Conditions that cannot be decided leave BOTH branches in, which is the safe reading:
+    a call that might run is better than a call that certainly does not.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return []
+    env = dict(env or _profiling_env())
+    lines = text.splitlines()
+    out = []
+
+    def walk(body, names):
+        _bind_names(body, env, names)
+        for st in body:
+            if isinstance(st, ast.If):
+                verdict = _eval(st.test, env, names)
+                if verdict is _UNKNOWN:
+                    walk(st.body, dict(names))
+                    walk(st.orelse, dict(names))
+                elif verdict:
+                    walk(st.body, dict(names))
+                else:
+                    walk(st.orelse, dict(names))
+                continue
+            if isinstance(st, (ast.For, ast.While, ast.With, ast.Try)):
+                for sub in ("body", "orelse", "finalbody", "handlers"):
+                    inner = getattr(st, sub, None) or []
+                    for h in inner:
+                        if isinstance(h, ast.ExceptHandler):
+                            walk(h.body, dict(names))
+                        elif isinstance(h, ast.stmt):
+                            walk([h], dict(names))
+                continue
+            if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue  # a definition is not a call
+            if (
+                isinstance(st, ast.Expr)
+                and isinstance(st.value, ast.Call)
+                and isinstance(st.value.func, ast.Name)
+                and not st.value.args
+                and not st.value.keywords
+            ):
+                line = lines[st.lineno - 1]
+                out.append((st.lineno, line[: len(line) - len(line.lstrip())], st.value.func.id))
+
+    # MODULE SCOPE FIRST, and carried in. `_PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"`
+    # sits at module level while the branch that reads it is inside the test function -- binding each
+    # top-level statement into a throwaway dict left the function unable to decide its own condition,
+    # so both branches came back reachable and the marks went to the wrong one anyway.
+    module_names: dict = {}
+    _bind_names(tree.body, env, module_names)
+    # ONLY THE TEST FUNCTION. pytest enters through it, so that is where "the profiled path" starts;
+    # walking every module-level def also collected the bare calls inside helper functions, which are
+    # reached only if something calls them. `test_` is pytest's own contract -- the same one the node
+    # ids in the manifest are built from -- not a guess about this generator.
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+            walk(node.body, dict(module_names))
+    return out
+
+
+def _profiling_env() -> dict:
+    """The env a tracy run executes under -- from probes, which is what sets it."""
+    try:
+        from .probes import PROFILING_ENV
+
+        return dict(PROFILING_ENV)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def inject_stage_marks(text: str) -> tuple:
     """Wrap the profiled eager measurement in marks and append the per-stage pass. (text, why).
 
@@ -258,17 +412,14 @@ def inject_stage_marks(text: str) -> tuple:
     if "_tt_sm" in text:
         return text, "already injected"
     lines = text.splitlines(keepends=True)
-    # The bare call to the eager pass. The LAST one is the profiled branch; an earlier one is the
-    # trace-replay fallback. The NAME comes from the file, never from a list here.
-    at = []
-    for k, line in enumerate(lines):
-        stripped = line.strip()
-        body = line[: len(line) - len(line.lstrip())]
-        if stripped.endswith("()") and stripped[:-2].isidentifier() and stripped[:-2].startswith("_"):
-            at.append((k, body, stripped[:-2]))
-    if not at:
-        return text, "no bare call to an eager pass to wrap"
-    k, ind, fname = at[-1]
+    # THE CALL THE PROFILER ACTUALLY REACHES, decided by evaluating the test's own branches under the
+    # environment the tracy subprocess is given. Position is not a signal: the previous rule took the
+    # LAST bare call and put the marks inside `if _PERF_TRACE:`, which is false under profiling.
+    reach = reachable_bare_calls(text)
+    if not reach:
+        return text, "no bare call to an eager pass on the profiled path"
+    lineno, ind, fname = reach[-1]
+    k = lineno - 1
     # WHERE THE PIPELINE LIVES. The per-stage pass needs the built model, and that is a local of the
     # function being called here -- not of this scope. Copying the test's adapter arguments into this
     # branch is what raised NameError on a regenerated test. So the bracket stays here and the pass is

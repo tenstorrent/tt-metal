@@ -57,6 +57,11 @@ def test_the_profiling_path_keeps_its_cap():
     """Tracy MUST stay capped -- an uncapped capture overflows the marker buffer. The fix must not
     touch it."""
     probes = (_PA / "agent" / "probes.py").read_text()
-    assert 'env["TT_METAL_DEVICE_PROFILER"] = "1"' in probes
-    i = probes.index('env["TT_METAL_DEVICE_PROFILER"] = "1"')
+    # The literals moved into probes.PROFILING_ENV, named once because stage_marks must evaluate the
+    # test's branches under exactly the env this sets. The assertion follows the value, not the spelling.
+    from agent.probes import PROFILING_ENV
+
+    assert PROFILING_ENV["TT_METAL_DEVICE_PROFILER"] == "1"
+    assert 'env["TT_METAL_DEVICE_PROFILER"] = PROFILING_ENV' in probes
+    i = probes.index('env["TT_METAL_DEVICE_PROFILER"] = PROFILING_ENV')
     assert "_depth_vars" not in probes[max(0, i - 2000) : i + 2000], "the tracy path lost its cap"
