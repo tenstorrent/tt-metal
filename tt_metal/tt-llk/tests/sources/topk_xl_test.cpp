@@ -293,7 +293,7 @@ inline void topk_xl_rebuild(std::uint32_t dst_index, bool ascending)
 template <std::uint32_t K>
 inline void topk_xl_merge_both_halves(std::uint32_t dst_index, bool ascending)
 {
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_merge_both_halves_<K, APPROX>, dst_index, VectorMode::RC_custom, dst_index, ascending);
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_merge_both_halves_<K, false>, dst_index, VectorMode::RC_custom, dst_index, ascending);
 }
 
 inline void topk_xl_add_lsb_indices_init()

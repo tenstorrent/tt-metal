@@ -86,6 +86,7 @@ DB_SCHEMA = [
     Column("dest_sync", "string", True, "configuration"),
     Column("dst_index", "int64", True, "configuration"),
     Column("fast_mode", "string", True, "configuration"),
+    Column("fused_sort", "string", True, "configuration"),
     Column("full_ct_dim", "int64", True, "configuration"),
     Column("full_rt_dim", "int64", True, "configuration"),
     Column("in0_c_dim", "int64", True, "configuration"),
