@@ -4,6 +4,8 @@
 
 # Corner cases of topk/argmax/cumsum/cumprod/moe/sampling and multi-dim RM sum.
 
+import contextlib
+
 import pytest
 import torch
 import ttnn
@@ -197,7 +199,7 @@ def _torch_sampling_reference(values, indices, k, p, temp, seed):
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("k", [50, 1, 0])
-def test_topk(device, tensor_shape, dim, dtype, layout, k):
+def test_topk(device, tensor_shape, dim, dtype, layout, k, expect_error):
     """
     Test the compatibility of the torch and ttnn topk output for different tensor shapes.
     topk returns a tuple of (values, indices). We compare values via PCC and validate
@@ -217,19 +219,20 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
         logger.info(f"torch topk raised: {e}")
         torch_errored = True
 
-    ttnn_errored = False
-    try:
+    # torch has already run, so its outcome is the expectation for ttnn: the two must
+    # fail on exactly the same inputs. Bracketing the provoked failure marks it as
+    # expected so CI log triage does not read it as a crash.
+    ctx = (
+        expect_error(
+            (IndexError, TypeError, RuntimeError),
+            # dim=None is rejected by the binding, not by a device assert.
+            "K cannot be larger|index out of range|incompatible function arguments",
+        )
+        if torch_errored
+        else contextlib.nullcontext()
+    )
+    with ctx:
         ttnn_result = ttnn_topk(ttnn_tensor, k, dim=dim)
-    except (IndexError, TypeError, RuntimeError) as e:
-        ttnn_errored = True
-        if not torch_errored:
-            logger.error(f"torch passed, but ttnn raised exception: {e}")
-
-    if torch_errored and ttnn_errored:
-        logger.info(f"Both PyTorch and TTNN errored")
-    assert torch_errored == ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"
-
-    # Skip the rest of the test if an exception was raised in both
     if torch_errored:
         return
 
@@ -306,7 +309,7 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
 @pytest.mark.parametrize("keepdim", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-def test_argmax(device, tensor_shape, dim, keepdim, dtype, layout):
+def test_argmax(device, tensor_shape, dim, keepdim, dtype, layout, expect_error):
     """
     Test the compatibility of the torch and ttnn argmax output for different tensor shapes.
     argmax returns indices (UINT32). We validate semantically by checking that the values at
@@ -339,17 +342,16 @@ def test_argmax(device, tensor_shape, dim, keepdim, dtype, layout):
         logger.info(f"torch argmax raised: {e}")
         torch_errored = True
 
-    ttnn_errored = False
-    try:
+    # torch has already run, so its outcome is the expectation for ttnn: the two must
+    # fail on exactly the same inputs. Bracketing the provoked failure marks it as
+    # expected so CI log triage does not read it as a crash.
+    ctx = (
+        expect_error((IndexError, TypeError, RuntimeError), "Expected reduction dim")
+        if torch_errored
+        else contextlib.nullcontext()
+    )
+    with ctx:
         ttnn_result = ttnn_argmax(ttnn_tensor, dim=dim, keepdim=keepdim)
-    except (IndexError, TypeError, RuntimeError) as e:
-        ttnn_errored = True
-        if not torch_errored:
-            logger.error(f"torch passed, but ttnn raised exception: {e}")
-
-    assert torch_errored == ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"
-
-    # Skip the rest of the test if an exception was raised in both
     if torch_errored:
         return
 
@@ -433,7 +435,7 @@ def test_accumulation(device, tensor_shape, dim, dtype, layout, op):
     Unlike standard reductions, cumsum/cumprod produce same-shape outputs (accumulations).
     Checks that resulting tensors are within a certain tolerance of PyTorch outputs.
     Some operations raise exceptions in torch, we check if the same behavior is observed in ttnn.
-    Note: We do not enforce the same exception type or message.
+    Note: We do not enforce the same exception type or message between PyTorch and ttnn.
     """
     torch.manual_seed(0)
 
@@ -504,12 +506,12 @@ def test_accumulation(device, tensor_shape, dim, dtype, layout, op):
 @pytest.mark.parametrize("tensor_shape", [(), (1, 1, 32, 64), (1, 1, 0, 64), (1, 1, 15, 23), (2, 2, 32, 64)])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-def test_moe(device, tensor_shape, dtype, layout):
+def test_moe(device, tensor_shape, dtype, layout, expect_error):
     """
     Test ttnn.moe against the torch reference (topk + softmax + sum) for scalar and
     4D tensor shapes.
     Some operations raise exceptions in torch, we check if the same behavior is observed in ttnn.
-    Note: We do not enforce the same exception type or message.
+    Note: We do not enforce the same exception type or message between PyTorch and ttnn.
     """
     torch.manual_seed(0)
     rank = len(tensor_shape)
@@ -561,8 +563,15 @@ def test_moe(device, tensor_shape, dtype, layout):
         logger.info(f"torch MOE reference raised: {e}")
         torch_errored = True
 
-    ttnn_errored = False
-    try:
+    # torch has already run, so its outcome is the expectation for ttnn: the two must
+    # fail on exactly the same inputs. Bracketing the provoked failure marks it as
+    # expected so CI log triage does not read it as a crash.
+    ctx = (
+        expect_error((IndexError, TypeError, RuntimeError), "Input shape must be|Input shape inner dim")
+        if torch_errored
+        else contextlib.nullcontext()
+    )
+    with ctx:
         ttnn_input = ttnn.from_torch(torch_input, layout=layout, device=device)
         ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, TEST_PADDING_VALUE)
         ttnn_expert_mask = ttnn.from_torch(expert_mask, layout=layout, device=device)
@@ -570,14 +579,6 @@ def test_moe(device, tensor_shape, dtype, layout):
         ttnn_topE_mask = ttnn.from_torch(topE_mask, layout=layout, device=device)
         ttnn_topE_mask = ttnn.fill_implicit_tile_padding(ttnn_topE_mask, TEST_PADDING_VALUE)
         ttnn_result = ttnn_moe(ttnn_input, ttnn_expert_mask, ttnn_topE_mask, k)
-    except (IndexError, TypeError, RuntimeError) as e:
-        ttnn_errored = True
-        if not torch_errored:
-            logger.error(f"torch passed, but ttnn raised exception: {e}")
-
-    assert torch_errored == ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"
-
-    # Skip the rest of the test if an exception was raised in both
     if torch_errored:
         return
 
@@ -620,7 +621,7 @@ def test_moe(device, tensor_shape, dtype, layout):
 @pytest.mark.parametrize("tensor_shape", [(), (1, 1, 32, 64), (1, 1, 32, 0), (1, 1, 18, 22)])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-def test_sampling(device, tensor_shape, dtype, layout):
+def test_sampling(device, tensor_shape, dtype, layout, expect_error):
     """
     Test ttnn.sampling against a torch reference (softmax -> top-k -> top-p -> multinomial).
     Structure mirrors test_moe: error parity (including scalar and non-4D), shape/validity checks, and prealloc path.
@@ -659,8 +660,19 @@ def test_sampling(device, tensor_shape, dtype, layout):
         logger.info(f"torch sampling reference raised: {e}")
         torch_errored = True
 
-    ttnn_errored = False
-    try:
+    # torch has already run, so its outcome is the expectation for ttnn: the two must
+    # fail on exactly the same inputs. Bracketing the provoked failure marks it as
+    # expected so CI log triage does not read it as a crash.
+    ctx = (
+        expect_error(
+            (ValueError, IndexError, TypeError, RuntimeError),
+            # A rank-0 input trips ShapeBase indexing before the rank check runs.
+            "Input inner dim|index out of range",
+        )
+        if torch_errored
+        else contextlib.nullcontext()
+    )
+    with ctx:
         input_values = ttnn.from_torch(torch_values, layout=layout, device=device)
         input_values = ttnn.fill_implicit_tile_padding(input_values, TEST_PADDING_VALUE)
         input_indices = ttnn.from_torch(
@@ -680,13 +692,6 @@ def test_sampling(device, tensor_shape, dtype, layout):
             temp=temp_tensor,
             seed=SAMPLING_SEED,
         )
-    except (ValueError, IndexError, TypeError, RuntimeError) as e:
-        ttnn_errored = True
-        if not torch_errored:
-            logger.error(f"torch passed, but ttnn sampling raised: {e}")
-
-    assert torch_errored == ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"
-
     if torch_errored:
         return
 
@@ -780,7 +785,7 @@ INVALID_SHAPE_DIMS = [(s, d) for s in _PARITY_SHAPES for d in _PARITY_DIMS if _d
 
 @pytest.mark.parametrize("tensor_shape, dim", INVALID_SHAPE_DIMS)
 @pytest.mark.parametrize("op", ["sum", "var"])
-def test_generic_ops_dim_parity(device, tensor_shape, dim, op):
+def test_generic_ops_dim_parity(device, tensor_shape, dim, op, expect_error):
     torch.manual_seed(0)
     torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
     ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
@@ -792,11 +797,8 @@ def test_generic_ops_dim_parity(device, tensor_shape, dim, op):
         logger.info(f"torch {op} raised: {e}")
         torch_errored = True
 
-    ttnn_errored = False
-    try:
+    # Every parametrization here is an invalid dim, so ttnn must raise; torch is
+    # still probed above to keep the two implementations' behaviour tied together.
+    assert torch_errored, f"torch {op} unexpectedly accepted dim={dim}"
+    with expect_error((IndexError, TypeError, RuntimeError), "Unsupported dim"):
         TTNN_REDUCTION_WRAPPERS[op](ttnn_tensor, dim=dim, keepdim=True)
-    except (IndexError, TypeError, RuntimeError) as e:
-        logger.info(f"ttnn {op} raised: {e}")
-        ttnn_errored = True
-
-    assert torch_errored and ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"

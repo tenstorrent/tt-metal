@@ -384,3 +384,121 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+
+  # =============================================================================
+  # AI run summary
+  # =============================================================================
+  # Aggregates the per-leg ai-job-summary artifacts into one run-level report.
+  # expected-jobs is the union of each impl's matrix, so a leg whose runner died is
+  # reported as an infra failure rather than silently dropped. A new test job must be
+  # added to `needs:` below or its legs are absent from that union with no error.
+  #
+  # No scope: this workflow has no workflow_call trigger and no call site carries a
+  # strategy matrix, so exactly one instance of this job exists per run. A scoped run
+  # stage over unscoped job summaries matches nothing and stubs every leg
+  # INFRA_FAILURE, which is strictly worse than the collision scope guards against.
+  #
+  # check-harbor, build-artifact, generate-arch-matrix and resolve-docker-pull-refs
+  # are in `needs:` because every test job is gated on them: when the build fails the
+  # impls are *skipped*, not failed, and without them the combined result would be
+  # `skipped` — which suppresses infra synthesis entirely and reports a broken run as
+  # if nothing was due.
+  ai-run-summary:
+    name: "AI Run Summary"
+    needs:
+      - check-harbor
+      - build-artifact
+      - generate-arch-matrix
+      - resolve-docker-pull-refs
+      - ttsim-unit-tests
+      - syseng-didt-tests
+      - ops-unit-tests
+      - ops-integration-tests
+      - ttnn-integration-tests
+      - cnn-unit-tests
+      - ttnn-p100-tests
+      - umd-p100-tests
+      - tt-train-unit-tests
+      - tt-train-perf-pretraining-tests
+      - tt-train-perf-finetuning-tests
+      - triage-tests
+      - llk-unit-tests
+    # Reports on a run that failed — the case the summary exists for — but not
+    # on one that was cancelled: an aborted run has no outcome to summarize, and
+    # asking for one spends an LLM call to say it stopped early.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read # download the per-leg ai_job_summary artifacts
+      contents: read # a job-level block zeroes every scope it omits, incl. checkout's
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          filter: blob:none
+          sparse-checkout: .github
+      - name: Aggregate child matrices and results
+        id: aggregate
+        # Reporting must never fail the run: a jq error here would turn a green
+        # nightly red.
+        continue-on-error: true
+        env:
+          # toJSON(needs) is one object keyed by child job name, each with `result`
+          # and `outputs.matrix`; aggregating from it keeps this data-driven as jobs
+          # are added to or removed from the `needs` list.
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          # Expected legs come from the children that ran. A cancelled child keeps a
+          # successful load-test-matrix, so including it would stub its legs as
+          # INFRA_FAILURE when another child failed; skipped children expose a
+          # null/empty matrix, which fromjson would throw on. On workflow_dispatch
+          # most test jobs are legitimately skipped, so this is the common path here.
+          RAN=$(jq -cn --argjson n "$NEEDS" '
+            [$n[] | select(.result != "cancelled" and .result != "skipped")]')
+
+          EXPECTED=$(jq -cn --argjson r "$RAN" '
+            [$r[] | .outputs.matrix | select(. != null and . != "") | fromjson] | add // []')
+          echo "expected-jobs=$EXPECTED" >> "$GITHUB_OUTPUT"
+          echo "Merged $(echo "$EXPECTED" | jq 'length') expected legs"
+
+          # Most-severe-wins over every child, so a cancelled run says so in the
+          # report instead of reading as a clean pass. Upstream also treats
+          # cancelled/skipped as "expect nothing", which is what we want: legs that
+          # never finished were aborted, not infra failures.
+          RESULT=$(jq -rn --argjson n "$NEEDS" '
+            [$n[].result] as $s |
+            if   any($s[]; . == "failure")   then "failure"
+            elif any($s[]; . == "cancelled") then "cancelled"
+            elif any($s[]; . == "success")   then "success"
+            else                                  "skipped"
+            end')
+          echo "run-result=$RESULT" >> "$GITHUB_OUTPUT"
+          echo "Combined run-result: $RESULT"
+      - id: ai-run-summary
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE",
+              "input_dir": "ai_job_summaries",
+              "output_dir": "ai_run_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          expected-jobs: ${{ steps.aggregate.outputs.expected-jobs }}
+          run-result: ${{ steps.aggregate.outputs.run-result }}
+      - name: Show report
+        if: ${{ always() && steps.ai-run-summary.outputs.report-file != '' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
+        run: |
+          if [ -f "$REPORT_FILE" ]; then
+            cat "$REPORT_FILE"
+            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Report file not found: $REPORT_FILE"
+          fi
