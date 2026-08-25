@@ -447,3 +447,72 @@ def test_a_preparer_in_an_enclosing_function_is_visible():
     out, _ = inject_stage_marks(src)
     line = next(l for l in out.splitlines() if "mark_stages_in_scope" in l)
     assert "bind=_prep" in line, line
+
+
+def test_a_preparer_with_extra_arguments_is_still_used():
+    """run 35, exactly: a module-level preparer doing the right thing, skipped for its signature.
+
+        def _patch_trace_inputs(pipe, batch):     <- two arguments
+            ...
+            pipe.encode_trace_inputs = lambda: mel
+
+    The rule was "it takes the pipeline, and only that". One generated test wrote one parameter and
+    worked; the next wrote two -- with a docstring explaining it exists precisely because the
+    _captured tensors are not shipped -- and was skipped. Every stage then fell back to those missing
+    files, all three were dropped, and the run marked nothing.
+
+    The rule contained no name, so every scan for hardcoded identifiers passed it. It was an
+    assumption about SHAPE, which is the thing the generator varies."""
+    from agent.stage_marks import find_input_preparer
+
+    src = (
+        "import os\n"
+        '_PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"\n'
+        "\n\n"
+        "def _patch_trace_inputs(pipe, batch):\n"
+        "    pipe.encode_trace_inputs = lambda: batch.mel\n"
+        "    pipe.decode_trace_inputs = lambda: batch.ids\n"
+        "\n\n"
+        "def test_x_perf(device):\n"
+        "    def _eager_forward():\n"
+        "        pipe = build_pipeline(device)\n"
+        "        return pipe\n"
+        "\n"
+        '    _PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"\n'
+        "    if _PERF_TRACE and not _PROFILING:\n"
+        "        pass\n"
+        "    else:\n"
+        "        _eager_forward()\n"
+    )
+    assert find_input_preparer(src, 0) == "_patch_trace_inputs"
+    out, why = inject_stage_marks(src)
+    ast.parse(out)
+    line = next(l for l in out.splitlines() if "mark_stages_in_scope" in l)
+    assert "bind=_patch_trace_inputs" in line, line
+
+
+def test_a_preparer_with_many_arguments_is_still_used():
+    """Nothing about the count matters -- only that the function does the work and is reachable."""
+    from agent.stage_marks import find_input_preparer
+
+    src = (
+        "import os\n"
+        '_PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"\n'
+        "\n\n"
+        "def prep(pipe, batch, head, layers=None):\n"
+        "    pipe.prefill_trace_inputs = lambda: batch\n"
+        "\n\n"
+        "def test_x_perf(device):\n"
+        "    def _eager_forward():\n"
+        "        pipe = build_pipeline(device)\n"
+        "        return pipe\n"
+        "\n"
+        '    _PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"\n'
+        "    if _PERF_TRACE and not _PROFILING:\n"
+        "        pass\n"
+        "    else:\n"
+        "        _eager_forward()\n"
+    )
+    assert find_input_preparer(src, 0) == "prep"
+    out, _ = inject_stage_marks(src)
+    assert "bind=prep" in next(l for l in out.splitlines() if "mark_stages_in_scope" in l)

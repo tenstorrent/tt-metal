@@ -202,8 +202,13 @@ def find_input_preparer(text: str, at_line: int = 0) -> str:
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        if len(node.args.args) != 1:
-            continue  # it takes the pipeline, and only that
+        # NO RULE ABOUT THE SIGNATURE. This required exactly one parameter, on the reasoning that a
+        # preparer "takes the pipeline and only that". One generated test wrote _bind_stage_inputs(pipe)
+        # and worked; the next wrote _patch_trace_inputs(pipe, batch) -- module level, doing exactly
+        # the right thing, with a docstring explaining it exists because the _captured tensors are not
+        # shipped -- and was skipped for having two. Every stage then fell back to those missing files
+        # and the run marked nothing. A rule about SHAPE, and shape is what the generator varies:
+        # it contains no name, so every scan for hardcoded identifiers passed it.
         if id(_enclosing_scope(tree, node)) not in visible:
             continue
         if _assigns_stage_hook(node):
