@@ -52,6 +52,32 @@ values. A populated table must not be emitted or enabled until that upstream API
 exists, the producer derives the identical canonical preimage independently,
 and compatibility digests are generated into the runtime build.
 
+The concrete missing contracts are:
+
+- `Tensor::tensor_topology()` exposes distribution shape, placements, and
+  coordinates without `get_device_tensors()`, but TT has no versioned canonical
+  digest for it or for the complete `MemoryConfig` variants;
+- `MeshDeviceView` exposes ordered fabric-node IDs, but no stable API exports a
+  canonical digest of the active fabric config, routing planes/tables, live-link
+  selection, and ordered per-device capability/harvest facts (including remote
+  devices);
+- this operation relies on the device-operation adapter's internal default
+  output-topology inference, so the exact pre-launch output topology is not a
+  public AGMM contract; and
+- this directory has a semantic dependency manifest but no generated AGMM
+  semantic/build attestation constants wired into its CMake target.
+
+None of those facts can be replaced by process-local IDs, generic C++ hashes,
+streamed debug strings, or the one-chip matmul registry's differently scoped
+digests.
+
+`build_registry_request` is the device-free fail-closed seam for that future
+provider. It accepts only already-resolved compact facts, rejects trace capture
+and explicit program/kernel overrides, requires every digest to be nonzero, and
+checks mesh, optional-tensor, operation, tile, and workload consistency before
+returning a request. It does not make the production provider available and it
+does not hash partial runtime state.
+
 ## One-shot execution
 
 `Shadow` can record an exact would-hit but never materializes or applies a

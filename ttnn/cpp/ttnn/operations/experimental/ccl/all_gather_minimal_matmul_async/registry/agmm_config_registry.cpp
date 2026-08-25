@@ -72,6 +72,46 @@ bool optional_tensor_contract_is_complete(const compact::OptionalTensorDescripto
     return tensor_contract_is_complete(tensor.tensor) && is_default_tile(tensor.tensor);
 }
 
+bool operation_contract_is_complete(const compact::KeyDescriptor& key) noexcept;
+bool shape_matches_workload(const compact::KeyDescriptor& key) noexcept;
+
+bool device_contract_has_required_facts(const compact::DeviceDescriptor& device) noexcept {
+    return device.architecture != 0 && device.board_capability_class != 0 && device.device_count != 0 &&
+           device.mesh_rows != 0 && device.mesh_cols != 0 && device.compute_grid_x != 0 &&
+           device.compute_grid_y != 0 && !is_zero(device.ordered_mesh_sha256) && !is_zero(device.topology_sha256) &&
+           !is_zero(device.runtime_capability_sha256);
+}
+
+bool request_has_required_facts(const compact::KeyDescriptor& key) noexcept {
+    const auto optional_has_required_facts = [](const compact::OptionalTensorDescriptor& tensor) {
+        return !tensor.present || tensor_contract_is_complete(tensor.tensor);
+    };
+    return key.schema_version == compact::kKeySchemaVersion && key.codegen_recipe_abi == compact::kCodegenRecipeAbi &&
+           device_contract_has_required_facts(key.device) && key.workload.logical_m != 0 &&
+           key.workload.logical_k != 0 && key.workload.logical_n != 0 && key.workload.padded_m != 0 &&
+           key.workload.padded_k != 0 && key.workload.padded_n != 0 && key.workload.batch != 0 &&
+           tensor_contract_is_complete(key.input) && tensor_contract_is_complete(key.weight) &&
+           optional_has_required_facts(key.bias) && optional_has_required_facts(key.ternary_input_a) &&
+           optional_has_required_facts(key.ternary_input_b) && optional_has_required_facts(key.persistent_output) &&
+           optional_has_required_facts(key.persistent_weight) && key.operation.ring_size != 0 &&
+           key.operation.fsdp_ring_size != 0 && key.operation.output_tile_height != 0 &&
+           key.operation.output_tile_width != 0 && !is_zero(key.operation.output_memory_config_sha256) &&
+           !is_zero(key.operation.output_tensor_topology_sha256);
+}
+
+bool request_contract_is_consistent(const compact::KeyDescriptor& key) noexcept {
+    return static_cast<std::uint32_t>(key.device.mesh_rows) * key.device.mesh_cols == key.device.device_count &&
+           is_default_tile(key.input) && is_default_tile(key.weight) &&
+           optional_tensor_contract_is_complete(key.bias) &&
+           optional_tensor_contract_is_complete(key.ternary_input_a) &&
+           optional_tensor_contract_is_complete(key.ternary_input_b) &&
+           optional_tensor_contract_is_complete(key.persistent_output) &&
+           optional_tensor_contract_is_complete(key.persistent_weight) && operation_contract_is_complete(key) &&
+           key.operation.output_layout == 1 && key.operation.output_tile_height == 32 &&
+           key.operation.output_tile_width == 32 && !key.operation.output_tile_transpose_of_faces &&
+           !key.operation.output_tile_transpose_within_face && shape_matches_workload(key);
+}
+
 bool operation_contract_is_complete(const compact::KeyDescriptor& key) noexcept {
     const auto& operation = key.operation;
     if (operation.chunks < 1 || operation.dim != -1 || operation.chunk_size_count > compact::kMaxChunkSizes ||
@@ -257,6 +297,44 @@ std::string_view resolution_reason_name(const ResolutionReason reason) noexcept 
 
 AttestationResult production_attestation(const tt::tt_metal::distributed::MeshDevice&) noexcept {
     return {.status = AttestationStatus::UnsupportedAttestation};
+}
+
+RequestBuildResult build_registry_request(const RegistryRequestFacts& facts) noexcept {
+    switch (preflight(facts.eligibility)) {
+        case ResolutionReason::TraceCaptureUnsupported:
+            return {.status = RequestBuildStatus::TraceCaptureUnsupported};
+        case ResolutionReason::ExplicitProgramConfig:
+            return {.status = RequestBuildStatus::ExplicitProgramConfig};
+        case ResolutionReason::ExplicitComputeKernelConfig:
+            return {.status = RequestBuildStatus::ExplicitComputeKernelConfig};
+        case ResolutionReason::CertifiedMatch: break;
+        default: return {.status = RequestBuildStatus::IncompleteDescriptor};
+    }
+    if (facts.attestation.status == AttestationStatus::UnsupportedAttestation) {
+        return {.status = RequestBuildStatus::UnsupportedAttestation};
+    }
+    if (facts.attestation.status == AttestationStatus::QueryFailed) {
+        return {.status = RequestBuildStatus::AttestationQueryFailed};
+    }
+
+    const auto key = compact::KeyDescriptor{
+        .device = facts.attestation.device,
+        .workload = facts.workload,
+        .operation = facts.operation,
+        .input = facts.input,
+        .weight = facts.weight,
+        .bias = facts.bias,
+        .ternary_input_a = facts.ternary_input_a,
+        .ternary_input_b = facts.ternary_input_b,
+        .persistent_output = facts.persistent_output,
+        .persistent_weight = facts.persistent_weight};
+    if (!request_has_required_facts(key)) {
+        return {.status = RequestBuildStatus::IncompleteDescriptor};
+    }
+    if (!request_contract_is_consistent(key)) {
+        return {.status = RequestBuildStatus::InconsistentDescriptor};
+    }
+    return {.status = RequestBuildStatus::Success, .request = RegistryRequest{.key = key}};
 }
 
 CompatibilityStatus validate_compatibility(

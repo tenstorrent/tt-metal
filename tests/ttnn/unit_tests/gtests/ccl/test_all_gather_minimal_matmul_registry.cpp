@@ -122,6 +122,22 @@ registry::CompatibilityDigests valid_compatibility() {
         .runtime_capability_sha256 = digest(3)};
 }
 
+registry::RegistryRequestFacts valid_request_facts() {
+    const auto key = valid_key();
+    return registry::RegistryRequestFacts{
+        .attestation = registry::AttestationResult{
+            .status = registry::AttestationStatus::Success, .device = key.device},
+        .workload = key.workload,
+        .operation = key.operation,
+        .input = key.input,
+        .weight = key.weight,
+        .bias = key.bias,
+        .ternary_input_a = key.ternary_input_a,
+        .ternary_input_b = key.ternary_input_b,
+        .persistent_output = key.persistent_output,
+        .persistent_weight = key.persistent_weight};
+}
+
 std::atomic<std::uint32_t> resolver_calls{0};
 std::atomic<std::uint32_t> materializer_calls{0};
 compact::EntryDescriptor selected_descriptor = valid_entry();
@@ -253,6 +269,62 @@ TEST_F(AgmmRegistryTest, ExactLookupRequiresFullKeyAndCompatibility) {
         entries,
         valid_compatibility());
     EXPECT_EQ(result.reason, registry::ResolutionReason::UnsupportedAttestation);
+}
+
+TEST_F(AgmmRegistryTest, PureRequestBuilderBindsEveryResolvedDescriptor) {
+    const auto facts = valid_request_facts();
+    const auto built = registry::build_registry_request(facts);
+    ASSERT_EQ(built.status, registry::RequestBuildStatus::Success);
+    ASSERT_TRUE(built.request.has_value());
+    EXPECT_EQ(built.request->key, valid_key());
+}
+
+TEST_F(AgmmRegistryTest, PureRequestBuilderFailsClosedWithoutExactAttestation) {
+    auto facts = valid_request_facts();
+    facts.attestation = {};
+    auto built = registry::build_registry_request(facts);
+    EXPECT_EQ(built.status, registry::RequestBuildStatus::UnsupportedAttestation);
+    EXPECT_FALSE(built.request.has_value());
+
+    facts.attestation.status = registry::AttestationStatus::QueryFailed;
+    built = registry::build_registry_request(facts);
+    EXPECT_EQ(built.status, registry::RequestBuildStatus::AttestationQueryFailed);
+    EXPECT_FALSE(built.request.has_value());
+}
+
+TEST_F(AgmmRegistryTest, PureRequestBuilderRejectsExplicitOverridesBeforeAttestation) {
+    auto facts = valid_request_facts();
+    facts.eligibility.has_explicit_program_config = true;
+    facts.attestation = {};
+    auto built = registry::build_registry_request(facts);
+    EXPECT_EQ(built.status, registry::RequestBuildStatus::ExplicitProgramConfig);
+
+    facts.eligibility = {.has_explicit_compute_kernel_config = true};
+    built = registry::build_registry_request(facts);
+    EXPECT_EQ(built.status, registry::RequestBuildStatus::ExplicitComputeKernelConfig);
+}
+
+TEST_F(AgmmRegistryTest, PureRequestBuilderRejectsMissingAndInconsistentFacts) {
+    auto facts = valid_request_facts();
+    facts.input.tensor_topology_sha256 = {};
+    auto built = registry::build_registry_request(facts);
+    EXPECT_EQ(built.status, registry::RequestBuildStatus::IncompleteDescriptor);
+    EXPECT_FALSE(built.request.has_value());
+
+    facts = valid_request_facts();
+    facts.attestation.device.device_count += 1;
+    built = registry::build_registry_request(facts);
+    EXPECT_EQ(built.status, registry::RequestBuildStatus::InconsistentDescriptor);
+
+    facts = valid_request_facts();
+    facts.workload.logical_k += 32;
+    built = registry::build_registry_request(facts);
+    EXPECT_EQ(built.status, registry::RequestBuildStatus::InconsistentDescriptor);
+
+    facts = valid_request_facts();
+    facts.bias.tensor = tensor_descriptor({1, 1, 1, 128}, {1, 1, 32, 128});
+    built = registry::build_registry_request(facts);
+    EXPECT_EQ(built.status, registry::RequestBuildStatus::InconsistentDescriptor);
 }
 
 TEST_F(AgmmRegistryTest, ShadowObservesAndOnMaterializesAtMostOnce) {

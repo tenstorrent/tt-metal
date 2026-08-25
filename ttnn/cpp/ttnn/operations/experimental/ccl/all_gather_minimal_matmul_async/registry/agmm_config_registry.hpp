@@ -76,6 +76,42 @@ struct RegistryRequest {
     bool operator==(const RegistryRequest&) const = default;
 };
 
+// Request construction stays separate from querying live TT objects. A future
+// production provider must resolve every descriptor and digest before calling
+// this pure, allocation-free seam; this function never invents a missing
+// tensor, mesh, fabric, or runtime fact.
+struct RegistryRequestFacts {
+    Eligibility eligibility{};
+    AttestationResult attestation{};
+    compact::WorkloadDescriptor workload{};
+    compact::OperationDescriptor operation{};
+    compact::TensorDescriptor input{};
+    compact::TensorDescriptor weight{};
+    compact::OptionalTensorDescriptor bias{};
+    compact::OptionalTensorDescriptor ternary_input_a{};
+    compact::OptionalTensorDescriptor ternary_input_b{};
+    compact::OptionalTensorDescriptor persistent_output{};
+    compact::OptionalTensorDescriptor persistent_weight{};
+};
+
+enum class RequestBuildStatus : std::uint8_t {
+    Success,
+    TraceCaptureUnsupported,
+    ExplicitProgramConfig,
+    ExplicitComputeKernelConfig,
+    UnsupportedAttestation,
+    AttestationQueryFailed,
+    IncompleteDescriptor,
+    InconsistentDescriptor,
+};
+
+struct RequestBuildResult {
+    RequestBuildStatus status = RequestBuildStatus::IncompleteDescriptor;
+    std::optional<RegistryRequest> request = std::nullopt;
+};
+
+RequestBuildResult build_registry_request(const RegistryRequestFacts& facts) noexcept;
+
 struct CompatibilityDigests {
     compact::Sha256 semantic_source_sha256{};
     compact::Sha256 build_identity_sha256{};
