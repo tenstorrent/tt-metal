@@ -226,28 +226,12 @@ def test_perf_eltwise_unary_sfpu(
     configuration.run(perf_report)
 
 
-# ---------------------------------------------------------------------------
-# Extra slices that used to live in their own perf_*.py modules.
-# Same C++ dispatch (eltwise_unary_sfpu_perf.cpp); narrower format matrices for
-# paths the main sweep does not cover: Int32 unary, UInt16/UInt32 comparisons,
-# and Float32 Erfinv (the main sweep only drives Erfinv at Float16_b).
-#
-# They must share ALL_PERF_RUN_TYPES with the main sweep: this module writes one
-# CSV, and combine_perf_reports refuses worker files with different column
-# schemas (MATH_ISOLATE-only would omit mean(L1_TO_L1)/TEXT_SIZE(PACK_ISOLATE)/...).
-# ---------------------------------------------------------------------------
-
+# Extra slices for formats the main sweep does not cover. They must use
+# ALL_PERF_RUN_TYPES so this module's single CSV has one column schema.
 _EXTRA_SLICE_DIMS = [[128, 64]]  # tile_cnt: 8
 
-# int32 unary ops share the eltwise_unary_sfpu_perf.cpp dispatch but need an
-# Int32 format, so they run through a dedicated extra-slice test below.
-#
-# Coverage note: AddInt32/SubInt32 (binop_with_unary.h) currently have perf-only
-# coverage here and no functional golden/assert, because the int32-unary
-# functional sweep is blocked by the fast-tilize gap (tt-llk #495). Their integer
-# core is exercised functionally via the binary path (_add_int_/_sub_int_ in
-# test_eltwise_binary_sfpu.py, SfpuElwadd), but the unary calculate_add_int32/
-# calculate_sub_int32 wrappers themselves stay perf-only until #495 is resolved.
+# AddInt32/SubInt32 are perf-only until the int32-unary functional sweep is
+# unblocked (tt-llk #495); integer add/sub is covered via the binary path.
 _INT32_UNARY_OPS = [
     MathOperation.AddInt32,
     MathOperation.SubInt32,
