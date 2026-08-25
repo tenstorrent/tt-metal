@@ -3366,6 +3366,9 @@ about 1890us against ttnn's 1820** -- roughly parity, and a projection rather th
 measurement, because perfect scaling is the optimistic end and these two kernels have never
 been run on more than one core.
 
+**Outcome: 430.5us, not 204, so a whole layer is 2113.5us.** Both kernels were parallelised
+in the two sections below and the optimistic end was off by 2.1x.
+
 **silu*up is now the single largest remaining item in the layer**, at 10.3ms of one core
 against the 13.1ms those three stages cost together. It is one SFPU pass over 4096 tiles, and
 partitioning it is the same shape of work as the row-chunking rmsnorm already has.
@@ -3454,6 +3457,60 @@ picking it back up.
 
 What did work: `grep -rn "binary.cpp" *.py` found all three launchers in one go, and running
 it BEFORE fixing anything is the difference between one edit and two hangs.
+
+### Parallelising RoPE, and the first complete layer number
+
+Same change as `binary.cpp`, for the same reason: the rotation is PER TILE -- the pairing never
+crosses a 32-element boundary, which is the whole reason this op fits the model as a matmul with
+`kt_dim` 1 -- so chunk c depends on nothing outside its own tiles of x, cos and sin and writes
+only its own tiles of the output. A `chunk_begin`/`chunk_count` pair, and every core reads the
+one 2KB rotation tile.
+
+| RoPE on Q, [512,2048] = 1024 tiles in 128 chunks of 8 | | |
+|---|---|---|
+| 1 core | 2295.6 us | 1.0x |
+| 2 | 1151.0 | 2.0x |
+| 4 | 578.7 | 4.0x |
+| 8 | 292.9 | 7.8x |
+| 16 | 155.9 | 14.7x |
+| 32 | 95.5 | 24.0x |
+| **64** | **67.2** | **34.1x** |
+
+Bit-identical to the single-core result at every core count, and the suite checks 12 chunks over
+2, 5 and 12 cores exactly -- 5 into 12 being the uneven split.
+
+**Every stage of the layer is now parallelised, which it never has been before:**
+
+| stage, 64 cores, bfloat8_b | us |
+|---|---|
+| FFN gate + up x2 | 692.8 |
+| flash attention, 32 heads | 336.3 |
+| FFN down | 277.5 |
+| silu(gate) * up | 264.2 |
+| Q + output projections | 187.5 |
+| rmsnorm x2 | 121.7 |
+| RoPE on Q and K | 99.4 |
+| K and V projections x2 | 67.2 |
+| residual x2 | 67.0 |
+| **whole layer** | **2113.5** |
+
+**Against ttnn's TransformerBlock at 1820us: 1.16x.** That is the first number in this document
+that is actually like for like -- same shapes, same grid, same weight format, and every stage
+of the layer counted rather than the convenient ones. For scale, the same layer was 78.3ms on
+one core when the breakdown was first taken, and 4424.0us as recently as two commits ago with
+RoPE still serial.
+
+The four stages that were serial went 13080.8us -> 430.5us together. The projection made
+earlier put them at 204us if they scaled perfectly and was labelled optimistic; the outcome is
+430.5, so **the optimistic end was off by 2.1x** and the reasons are specific and measured:
+silu*up is SFPU-limited past 16 cores, the residual add is at 184GB/s and cannot go faster,
+and RoPE tops out at 34.1x rather than 64x. Recording the projection separately from the
+measurement is what makes that comparison possible at all.
+
+Where the remaining 293us to ttnn sits, by the per-shape ratios already measured: the four
+matmuls are 1.21x to 1.31x of ttnn except gate/up at 0.83x, and attention and the eltwise
+stages have no ttnn counterpart measured on the same footing yet. Nothing here is a mystery
+of the kind the NOC asymmetry was -- it is ordinary per-shape tuning from here.
 
 ## Phase 11 -- Full block orchestration
 

@@ -30,6 +30,13 @@
 //
 // Runtime args (identical on all three kernels):
 //   0..4     x, cos, sin, trans_mat, out base addresses
+//   5        chunk_begin    first chunk this core owns
+//   6        chunk_count    how many it owns
+//
+// Chunks are the unit of partitioning and split with no coordination: the rotation is
+// per-tile, so chunk c depends on nothing outside its own tiles of x, cos and sin and
+// writes only its own tiles of the output. num_chunks stays compile-time because it is what
+// the host divides, not what a core walks. The rotation tile is read by every core.
 
 #include <tt/unified/core>
 
@@ -44,7 +51,7 @@ constexpr uint32_t kCbOut = 16;
 
 void kernel_main() {
     constexpr uint32_t chunk = get_compile_time_arg_val(0);
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(1);
+    [[maybe_unused]] constexpr uint32_t num_chunks = get_compile_time_arg_val(1);
 
     constexpr auto x_args = TensorAccessorArgs<2>();
     constexpr auto cos_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
@@ -57,6 +64,8 @@ void kernel_main() {
     const uint32_t sin_addr = get_arg_val<uint32_t>(2);
     const uint32_t m_addr = get_arg_val<uint32_t>(3);
     const uint32_t out_addr = get_arg_val<uint32_t>(4);
+    const uint32_t chunk_begin = get_arg_val<uint32_t>(5);
+    const uint32_t chunk_count = get_arg_val<uint32_t>(6);
 
     using Blk = u::Shape<chunk, 1>;  // N tiles, shape irrelevant to a per-tile op
     using M = u::Shape<1, 1>;
@@ -80,7 +89,8 @@ void kernel_main() {
     // popped until the kernel ends -- the same rule the reduce scaler and a fused bias obey.
     u::ComputeBlock m = u::noc_load<0>(m_storage, m_acc, 0).wait();
 
-    for (uint32_t c = 0; c < num_chunks; ++c) {
+    for (uint32_t n = 0; n < chunk_count; ++n) {
+        const uint32_t c = chunk_begin + n;
         u::ComputeBlock x = u::noc_load<0>(x_storage, x_acc, c).wait();
         u::ComputeBlock cos = u::noc_load<0>(cos_storage, cos_acc, c).wait();
         u::ComputeBlock sin = u::noc_load<0>(sin_storage, sin_acc, c).wait();
