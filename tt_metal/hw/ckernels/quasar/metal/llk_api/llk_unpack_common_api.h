@@ -15,12 +15,58 @@
 #include "llk_defs.h"
 #include "llk_io.h"
 #include "llk_operands.h"
+#include "llk_sync.h"
 #include "llk_unpack_common.h"
 #include "api/dataflow/dataflow_buffer.h"
 
 /*************************************************************************
  * LLK UNPACK COMMON
  *************************************************************************/
+
+/**
+ * @brief Reset the unpack thread's destination-section tracking at program start.
+ */
+inline void llk_unpack_dest_section_sync_init() {
+    if constexpr (UnpackToDestEn) {
+        ckernel::trisc::_reset_dest_register_offset_();
+        ckernel::trisc::_set_dest_section_base_<ckernel::to_underlying(ckernel::trisc::TriscID::Unpack)>(
+            ckernel::trisc::_get_dest_buffer_base_());
+
+        // PACK_UNPACK carries physical DEST-bank credits across the entire
+        // unpack -> math -> pack pipeline. A bank is reserved here before
+        // unpack writes it and returned only after pack has consumed it.
+        constexpr std::uint32_t N = (DST_SYNC_MODE == ckernel::DstSync::SyncFull) ? 1 : 2;
+        _llk_sync_init_(semaphore::PACK_UNPACK, N, N);
+    }
+}
+
+/**
+ * @brief Reserve one destination section for all unpack-to-DEST writes in the current acquire/commit scope.
+ */
+inline void llk_unpack_wait_for_dest_available() {
+    if constexpr (UnpackToDestEn) {
+        _llk_sync_wait_<p_stall::STALL_UNPACK | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(semaphore::PACK_UNPACK);
+        _llk_sync_get_(semaphore::PACK_UNPACK);
+    }
+}
+
+/**
+ * @brief Publish one completed unpack-to-DEST section and advance the unpack bank once.
+ *
+ * @tparam EN_32BIT_DEST True when DEST uses 32-bit storage.
+ */
+template <bool EN_32BIT_DEST>
+inline void llk_unpack_dest_section_done() {
+    if constexpr (UnpackToDestEn) {
+        _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
+        if constexpr (DST_SYNC_MODE == ckernel::DstSync::SyncHalf) {
+            _llk_sync_advance_dest_section_<
+                ckernel::to_underlying(ckernel::trisc::TriscID::Unpack),
+                EN_32BIT_DEST,
+                p_stall::UNPACK0>();
+        }
+    }
+}
 
 /**
  * @brief Allocate a BFD id from the unpack partition, program its table entry from the operand's
@@ -53,6 +99,7 @@ inline void llk_unpack_program_bfd(const std::uint32_t operand_id) {
  * @param operandB: The input1 operand circular buffer
  */
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
+    llk_unpack_dest_section_sync_init();
     const std::uint32_t unpA_operand_id = get_operand_id(unpA_operand);
     const std::uint32_t unpB_operand_id = get_operand_id(unpB_operand);
 

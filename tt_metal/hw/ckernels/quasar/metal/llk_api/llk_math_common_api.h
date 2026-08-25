@@ -142,9 +142,10 @@ inline void llk_math_wait_for_dest_available() {
 template <bool EN_32BIT_DEST>
 inline void llk_math_dest_section_done() {
     // Always post MATH_PACK, the math thread is in the chain for every op, including the
-    // no-real-work unpack-to-dest forwarder.
+    // no-real-work unpack-to-dest forwarder. Every SyncHalf client advances its private
+    // section base once so an SFPU following unpack-to-DEST stays aligned with unpack and pack.
     _llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
-    if constexpr (DST_SYNC_MODE == DstSync::SyncHalf && !UnpackToDestEn) {
+    if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
         _llk_sync_advance_dest_section_<ckernel::TRISC_ID, EN_32BIT_DEST, p_stall::WAIT_SFPU, p_stall::MATH>();
     }
 }

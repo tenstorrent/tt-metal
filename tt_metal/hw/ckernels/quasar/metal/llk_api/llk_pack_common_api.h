@@ -143,8 +143,11 @@ inline void llk_pack_dest_section_done() {
     if constexpr (UnpackToDestEn) {
         _llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);
         if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
-            _llk_sync_advance_dest_section_<ckernel::TRISC_ID, true /*EN_32BIT_DEST*/, p_stall::PACK0>();
+            _llk_sync_advance_dest_section_<ckernel::TRISC_ID, EN_32BIT_DEST, p_stall::PACK0>();
         }
+        // Return the physical-bank credit only after PACK0 has drained and
+        // this thread has advanced its private section base.
+        _llk_sync_post_(semaphore::PACK_UNPACK);
     } else {
         _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, EN_32BIT_DEST>();
     }
