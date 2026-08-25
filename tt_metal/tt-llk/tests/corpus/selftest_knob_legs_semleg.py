@@ -512,6 +512,142 @@ with tempfile.TemporaryDirectory() as td:
         out,
     )
 
+    def run_knob_device_case(
+        name, failed_perf=(), zero_rc_perf=(), corr_log_passes=True
+    ):
+        """Exercise the real knob_silicon assembly with filesystem evidence.
+
+        Device execution is stubbed, but its rc/log contract and all sample
+        accounting remain real.  failed_perf is a set of (rep, leg) pairs.
+        """
+        sw_case = mk_sweep(td / f"ev-{name}")
+        calls = []
+
+        def fake_classify_case(row, sel, legs=None, tag="classify"):
+            return {
+                "status": "OK",
+                "all": "IDENTICAL" if tag.endswith("-corr") else "CHANGED",
+            }
+
+        def fake_device_job_case(
+            row, sel, label, leg, flags, tag="silicon", expected_texts=None
+        ):
+            calls.append((sel, label, leg))
+            work = sw_case.ev / row["op"] / tag / sel / f"{label}-{leg}"
+            work.mkdir(parents=True, exist_ok=True)
+            failed = label.startswith("r") and (int(label[1:]), leg) in failed_perf
+            log_passes = not failed and (label != "corr" or corr_log_passes)
+            (work / "log.txt").write_text(
+                "1 passed in 0.01s\n" if log_passes else "1 failed in 0.01s\n"
+            )
+            return 0 if not failed or (int(label[1:]), leg) in zero_rc_perf else 1
+
+        sw_case.classify = fake_classify_case
+        sw_case.craq = lambda *args, **kwargs: {
+            "status": "OK",
+            "legs": {"off": "PASS", "knob": "PASS"},
+        }
+        sw_case._classify_texts = lambda *args, **kwargs: {"math.elf": "text"}
+        sw_case._device_job = fake_device_job_case
+        sw_case._perf_value = lambda *args, **kwargs: 100.0
+        sw_case._kernel_value = lambda *args, **kwargs: 90.0
+        row_case = mk_row(
+            name,
+            {
+                "sem-perf": "perf.py::t[mathop:Perf]",
+                "sem-corr": "corr.py::t[mathop:Corr]",
+            },
+        )
+        (sw_case.ev / name).mkdir()
+        sw_case.knob_silicon(
+            row_case,
+            {
+                "selector": "sem-perf",
+                "status": "OK",
+                "firing_knobs": [_completion_knob],
+            },
+        )
+        evidence = json.loads((sw_case.ev / name / "knob-silicon.json").read_text())[
+            _completion_knob
+        ]
+        return sw_case, calls, evidence
+
+    sw_green, calls_green, green = run_knob_device_case("knob-green")
+    check(
+        "knob_silicon device gate: complete 3/3 green evidence keeps the "
+        "successful schema and behavior",
+        green["status"] == "OK"
+        and set(green)
+        == {
+            "selector",
+            "flags",
+            "off_flags",
+            "mode",
+            "classify",
+            "classify_corr",
+            "craq_bh",
+            "corr_off",
+            "cells",
+            "status",
+        }
+        and len([c for c in calls_green if c[1].startswith("r")]) == 6
+        and not sw_green.reds,
+        green,
+    )
+
+    # One failed repetition leaves 2/3 parsable knob samples.  Historically
+    # that partial median silently booked; every one of the six expected jobs
+    # is now adjudicated and the entire knob entry is RED/refused.
+    sw_one, calls_one, one = run_knob_device_case(
+        "knob-one-of-three-failed",
+        failed_perf={(2, "knob")},
+        zero_rc_perf={(2, "knob")},
+    )
+    check(
+        "knob_silicon device gate: one failed rep (2/3 samples) is RED and "
+        "books no cells",
+        one["status"] == "STOP_PERF_FAILED"
+        and one["perf_failures"]
+        == [{"rep": 2, "leg": "knob", "rc": 0, "passed": False}]
+        and "cells" not in one
+        and len([c for c in calls_one if c[1].startswith("r")]) == 6
+        and sw_one.reds,
+        one,
+    )
+
+    # Two failed repetitions leave only 1/3 parsable knob samples.  This is
+    # independently covered so neither partial-sample shape can regress.
+    sw_two, calls_two, two = run_knob_device_case(
+        "knob-two-of-three-failed",
+        failed_perf={(1, "knob"), (3, "knob")},
+    )
+    check(
+        "knob_silicon device gate: two failed reps (1/3 samples) is RED and "
+        "books no cells",
+        two["status"] == "STOP_PERF_FAILED"
+        and {(x["rep"], x["leg"]) for x in two["perf_failures"]}
+        == {(1, "knob"), (3, "knob")}
+        and "cells" not in two
+        and len([c for c in calls_two if c[1].startswith("r")]) == 6
+        and sw_two.reds,
+        two,
+    )
+
+    # rc=0 alone is insufficient for correctness: pytest's passing marker is
+    # part of the evidence contract, and a failed log must withhold all perf.
+    sw_corr, calls_corr, corr = run_knob_device_case(
+        "knob-corr-no-pass", corr_log_passes=False
+    )
+    check(
+        "knob_silicon device gate: correctness rc=0 without a passing log "
+        "is RED and withholds perf",
+        corr["status"] == "STOP_CORRECTNESS_FAILED"
+        and corr["corr_off"] == "FAIL(rc=0,no-pass)"
+        and not [c for c in calls_corr if c[1].startswith("r")]
+        and sw_corr.reds,
+        corr,
+    )
+
 # ---------------- 2. eqz-class sem leg ----------------
 
 FRESH_NODES = {

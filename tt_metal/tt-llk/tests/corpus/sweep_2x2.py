@@ -4602,10 +4602,13 @@ exit $RC
                         row, corr_sel, leg, tag=f"knobs/{knob}-corr"
                     ),
                 )
-                entry[f"corr_{leg}"] = "PASS" if rc == 0 else f"FAIL(rc={rc})"
-                if rc != 0:
+                work = self.ev / row["op"] / tag / corr_sel / f"corr-{leg}"
+                passed = rc == 0 and (self.a.dry_run or self._passed(work / "log.txt"))
+                entry[f"corr_{leg}"] = (
+                    "PASS" if passed else f"FAIL(rc={rc}{'' if rc else ',no-pass'})"
+                )
+                if not passed:
                     corr_fail = True
-                    break
             if corr_fail:
                 entry["status"] = "STOP_CORRECTNESS_FAILED"
                 self.reds.append(
@@ -4615,12 +4618,14 @@ exit $RC
             # 5. perf: 3 fresh processes per leg, alternating OFF/knob.
             samples = {"off": [], "knob": []}
             ksamples = {"off": [], "knob": []}
+            perf_failures = []
             for r in range(1, PERF_RUNS + 1):
                 for leg, flags in legs_spec:
-                    self._device_job(
+                    label = f"r{r}"
+                    rc = self._device_job(
                         row,
                         sel,
-                        f"r{r}",
+                        label,
                         leg,
                         flags,
                         tag=tag,
@@ -4628,12 +4633,37 @@ exit $RC
                             row, sel, leg, tag=f"knobs/{knob}"
                         ),
                     )
-                    val = self._perf_value(row, sel, f"r{r}", leg, tag=tag)
+                    work = self.ev / row["op"] / tag / sel / f"{label}-{leg}"
+                    passed = rc == 0 and (
+                        self.a.dry_run or self._passed(work / "log.txt")
+                    )
+                    if not passed:
+                        perf_failures.append(
+                            {
+                                "rep": r,
+                                "leg": leg,
+                                "rc": rc,
+                                "passed": False,
+                            }
+                        )
+                        continue
+                    val = self._perf_value(row, sel, label, leg, tag=tag)
                     if val is not None:
                         samples[leg].append(val)
-                    kval = self._kernel_value(row, sel, f"r{r}", leg, tag=tag)
+                    kval = self._kernel_value(row, sel, label, leg, tag=tag)
                     if kval is not None:
                         ksamples[leg].append(kval)
+            if perf_failures and not self.a.dry_run:
+                entry["status"] = "STOP_PERF_FAILED"
+                entry["perf_failures"] = perf_failures
+                failed = ",".join(
+                    f"r{x['rep']}-{x['leg']}(rc={x['rc']})" for x in perf_failures
+                )
+                self.reds.append(
+                    f"{row['op']}/{knob}: knob perf device job(s) failed "
+                    f"rc/pass validation: {failed} — nothing booked"
+                )
+                continue
             empty = [
                 leg for leg in ("off", "knob") if not samples[leg] or not ksamples[leg]
             ]
@@ -4645,6 +4675,24 @@ exit $RC
                     f"{row['op']}/{knob}: EMPTY perf samples on executed "
                     f"knob leg(s) {','.join(empty)} (GE-F2 silent-data-loss "
                     "class) — nothing booked"
+                )
+                continue
+            incomplete = {
+                leg: {"diag": len(samples[leg]), "kernel": len(ksamples[leg])}
+                for leg in ("off", "knob")
+                if len(samples[leg]) != PERF_RUNS or len(ksamples[leg]) != PERF_RUNS
+            }
+            if incomplete and not self.a.dry_run:
+                entry["status"] = "INCOMPLETE_SAMPLES_FATAL"
+                entry["sample_counts"] = incomplete
+                counts = ", ".join(
+                    f"{leg}=diag:{n['diag']}/{PERF_RUNS},"
+                    f"kernel:{n['kernel']}/{PERF_RUNS}"
+                    for leg, n in incomplete.items()
+                )
+                self.reds.append(
+                    f"{row['op']}/{knob}: INCOMPLETE knob perf samples "
+                    f"({counts}) — nothing booked"
                 )
                 continue
             cell = {leg: (sum(v) / len(v)) if v else None for leg, v in samples.items()}
