@@ -69,9 +69,6 @@ class WarmupCoordinatorConfig:
     decode_trace_enabled: bool
     eager_plan: WarmupPlan
     sampled_plan: WarmupPlan
-    max_page_table_capacity_width: int
-    max_prefill_page_table_width: int
-    max_decode_page_table_width: int
 
     def __post_init__(self) -> None:
         if not isinstance(self.warmup, WarmupConfig):
