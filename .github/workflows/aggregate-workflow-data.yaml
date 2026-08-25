@@ -89,7 +89,6 @@ jobs:
               ".github/workflows/models-t3-unit-tests.yaml",
 
               ".github/workflows/perf-device-models.yaml",
-              ".github/workflows/single-card-ttnn-models-frequent-tests.yaml",
               ".github/workflows/tt-metal-l2-nightly.yaml",
               ".github/workflows/ttnn-run-sweeps.yaml",
               ".github/workflows/vllm-model-tests.yaml",

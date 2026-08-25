@@ -952,7 +952,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         if (MetalContext::instance().get_cluster().get_target_device_type() != tt::TargetDevice::Emule)
 #endif
         {
-            detail::CompileProgram(device, program);
+            program.impl().compile(device);
         }
         program.impl().finalize_dataflow_buffer_configs();
         if (!program.impl().is_finalized()) {
@@ -1780,6 +1780,11 @@ uint32_t CreateSemaphore(
 }
 
 GlobalSemaphore CreateGlobalSemaphore(
+    distributed::MeshDevice& device, CoreRangeSet cores, uint32_t initial_value, BufferType buffer_type) {
+    return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
+}
+
+GlobalSemaphore CreateGlobalSemaphore(
     IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
     return GlobalSemaphore(device, cores, initial_value, buffer_type);
 }
@@ -1966,6 +1971,14 @@ uint8_t GetCurrentCommandQueueIdForThread() {
 }
 
 namespace experimental {
+
+GlobalCircularBuffer CreateGlobalCircularBuffer(
+    distributed::MeshDevice& device,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
+    uint32_t size,
+    BufferType buffer_type) {
+    return GlobalCircularBuffer(device, sender_receiver_core_mapping, size, buffer_type);
+}
 
 GlobalCircularBuffer CreateGlobalCircularBuffer(
     IDevice* device,

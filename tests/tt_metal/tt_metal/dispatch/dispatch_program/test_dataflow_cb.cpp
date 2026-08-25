@@ -13,6 +13,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 
 using namespace tt;
@@ -51,12 +52,13 @@ TEST_F(MeshDispatchFixture, DataflowCb) {
     const uint32_t num_tiles = tiles_to_transfer_per_cb * total_cbs;
     const uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
-    InterleavedBufferConfig dram_config{
-        .device = dev, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::DeviceLocalBufferConfig dram_config{.page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+    distributed::ReplicatedBufferConfig global_config{.size = dram_buffer_size};
 
-    auto src_dram_buffer = CreateBuffer(dram_config);
+    auto src_dram_buffer = distributed::MeshBuffer::create(global_config, dram_config, mesh_device.get());
     uint32_t dram_buffer_src_addr = src_dram_buffer->address();
-    auto dst_dram_buffer = CreateBuffer(dram_config);
+    auto dst_dram_buffer = distributed::MeshBuffer::create(global_config, dram_config, mesh_device.get());
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
     auto create_cb = [&](uint32_t cb_index) {
@@ -98,7 +100,7 @@ TEST_F(MeshDispatchFixture, DataflowCb) {
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-    detail::WriteToBuffer(src_dram_buffer, src_vec);
+    distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, /*blocking=*/true);
 
     SetRuntimeArgs(program, reader_cb_kernel, core, {dram_buffer_src_addr, 0, tiles_to_transfer_per_cb});
     SetRuntimeArgs(program, writer_cb_kernel, core, {dram_buffer_dst_addr, 0, tiles_to_transfer_per_cb});
@@ -111,7 +113,7 @@ TEST_F(MeshDispatchFixture, DataflowCb) {
     this->RunProgram(mesh_device, workload);
 
     std::vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
 
     // Validation
     EXPECT_EQ(src_vec, result_vec);
@@ -119,7 +121,6 @@ TEST_F(MeshDispatchFixture, DataflowCb) {
 
 TEST_F(MeshDispatchFixture, DataflowDfb) {
     auto mesh_device = devices_[0];
-    IDevice* dev = mesh_device->get_devices()[0];
     Program program = CreateProgram();
 
     CoreCoord core = {0, 0};
@@ -140,12 +141,13 @@ TEST_F(MeshDispatchFixture, DataflowDfb) {
     const uint32_t num_tiles = tiles_to_transfer_per_dfb * total_dfbs;
     const uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
-    InterleavedBufferConfig dram_config{
-        .device = dev, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::DeviceLocalBufferConfig dram_config{.page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+    distributed::ReplicatedBufferConfig global_config{.size = dram_buffer_size};
 
-    auto src_dram_buffer = CreateBuffer(dram_config);
+    auto src_dram_buffer = distributed::MeshBuffer::create(global_config, dram_config, mesh_device.get());
     uint32_t dram_buffer_src_addr = src_dram_buffer->address();
-    auto dst_dram_buffer = CreateBuffer(dram_config);
+    auto dst_dram_buffer = distributed::MeshBuffer::create(global_config, dram_config, mesh_device.get());
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
     tt_metal::experimental::dfb::DataflowBufferConfig dfb_config = {
@@ -194,7 +196,7 @@ TEST_F(MeshDispatchFixture, DataflowDfb) {
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-    detail::WriteToBuffer(src_dram_buffer, src_vec);
+    distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, /*blocking=*/true);
 
     SetRuntimeArgs(program, reader_cb_kernel, core, {dram_buffer_src_addr, 0, tiles_to_transfer_per_dfb});
     SetRuntimeArgs(program, writer_cb_kernel, core, {dram_buffer_dst_addr, 0, tiles_to_transfer_per_dfb});
@@ -207,7 +209,7 @@ TEST_F(MeshDispatchFixture, DataflowDfb) {
     this->RunProgram(mesh_device, workload);
 
     std::vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
 
     // Validation
     EXPECT_EQ(src_vec, result_vec);

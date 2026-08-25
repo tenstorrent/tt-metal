@@ -10,9 +10,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "device_fixture.hpp"
-#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -45,7 +45,7 @@ TEST_F(UnitMeshFixture, Semaphore_Direct_Write_SanityCheck) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     EXPECT_DEATH(
-        slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
         ".*Illegal Semaphore Access: Offset 0x.*is inside the reserved Semaphore region.*");
 }
 
@@ -83,7 +83,7 @@ TEST_F(UnitMeshFixture, Semaphore_OutsideRegion_NoViolation) {
     SetRuntimeArgs(program, kernel, logical_core, {addr});
 
     // Must NOT abort.
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -100,7 +100,6 @@ TEST_F(UnitMeshFixture, Semaphore_OutsideRegion_NoViolation) {
 TEST_F(MeshDeviceFixture, Semaphore_RawGetSemaphoreCast_NoViolation) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
     uint32_t sem_id = CreateSemaphore(program, logical_core, /*initial_value=*/3);
@@ -128,7 +127,7 @@ TEST_F(MeshDeviceFixture, Semaphore_RawGetSemaphoreCast_NoViolation) {
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = {sem_id}});
 
     // Must NOT abort.
-    detail::LaunchProgram(device, program);
+    LaunchProgram(*this->devices_.at(0), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -189,7 +188,7 @@ TEST_F(MeshDeviceFixture, Semaphore_RelayUnicast_NoViolation) {
     SetRuntimeArgs(program, sender_kernel, sender_core, {rx_virtual.x, rx_virtual.y});
 
     // Must NOT abort (and must not hang: the relay's value wakes the waiter).
-    detail::LaunchProgram(device, program);
+    LaunchProgram(*this->devices_.at(0), std::move(program), /*wait_until_cores_done=*/true);
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -208,7 +207,10 @@ TEST_F(MeshDeviceFixture, Semaphore_SemDerivedOutsideRegion_StillChecked) {
     Program program = CreateProgram();
     uint32_t sem_id = CreateSemaphore(program, logical_core, /*initial_value=*/0);
     // Allocate a buffer so the live-tensor range set is armed (non-null).
-    auto buf = Buffer::create(device, 1024, 1024, BufferType::L1);
+    auto buf = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = 1024},
+        {.page_size = 1024, .buffer_type = BufferType::L1},
+        this->devices_.at(0).get());
 
     std::string kernel_src = R"(
         #include "api/dataflow/dataflow_api.h"
@@ -226,7 +228,9 @@ TEST_F(MeshDeviceFixture, Semaphore_SemDerivedOutsideRegion_StillChecked) {
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = {sem_id}});
 
-    EXPECT_DEATH(detail::LaunchProgram(device, program), ".*Out-of-Bounds Write.*");
+    EXPECT_DEATH(
+        LaunchProgram(*this->devices_.at(0), std::move(program), /*wait_until_cores_done=*/true),
+        ".*Out-of-Bounds Write.*");
     ::unsetenv("TT_METAL_EMULE_ASAN");
 }
 
