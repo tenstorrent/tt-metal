@@ -5,26 +5,26 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 // Minimal BRISC reader for the sharded decode RoPE path.
-// The compute kernel (rotary_embedding_hf_sharded.cpp) relies on a scalar CB that
+// The compute kernel (rotary_embedding_hf_sharded.cpp) relies on a scalar DFB that
 // contains -1.0 in bfloat16 for the rotate-half negation.  No NOC transfers are
-// required (all tensor data lives in globally-allocated L1 CBs), so this kernel's
-// only job is to write the scalar value into L1 and signal the CB as ready.
+// required (all tensor data lives in globally-allocated L1 buffers), so this kernel's
+// only job is to write the scalar value into L1 and signal the DFB as ready.
 
 void kernel_main() {
-    constexpr uint32_t scalar_cb_id = get_compile_time_arg_val(0);
     // bfloat16 representation of -1.0f, passed as uint32 from the factory.
-    constexpr uint16_t scalar_value = (uint16_t)get_compile_time_arg_val(1);
+    constexpr uint16_t scalar_value = (uint16_t)get_arg(args::scalar_value);
 
-    CircularBuffer cb_scalar(scalar_cb_id);
+    DataflowBuffer dfb_scalar(dfb::scalar);
 
-    cb_scalar.reserve_back(1);
-    uint32_t l1_write_addr = cb_scalar.get_write_ptr();
+    dfb_scalar.reserve_back(1);
+    uint32_t l1_write_addr = dfb_scalar.get_write_ptr();
     volatile tt_l1_ptr uint16_t* scalar_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
     scalar_buf[0] = scalar_value;
-    cb_scalar.push_back(1);
+    dfb_scalar.push_back(1);
 }

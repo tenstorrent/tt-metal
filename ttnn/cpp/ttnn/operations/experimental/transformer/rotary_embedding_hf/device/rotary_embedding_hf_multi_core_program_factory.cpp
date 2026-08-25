@@ -4,45 +4,59 @@
 
 #include "rotary_embedding_hf_multi_core_program_factory.hpp"
 #include <bit>
+#include <filesystem>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace {
 
-ProgramDescriptor create_single_tile_prefill_descriptor(
-    const RotaryEmbeddingHfParams& operation_attributes, const RotaryEmbeddingHfInputs& tensor_args, Tensor& output) {
-    ProgramDescriptor desc;
+// Legacy always ran with the ComputeConfigDescriptor defaults for math_approx_mode (false)
+// and dst_full_sync_en (false): the factory resolved those knobs but never copied them onto
+// the descriptor. Reproduce those defaults explicitly instead of honoring the caller's
+// resolved values, so behavior is unchanged.
+ComputeHardwareConfig make_prefill_compute_hw_config(tt::ARCH arch, const ttnn::DeviceComputeKernelConfig& config) {
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(arch, config);
+    sfpu_precision_mode(compute_hw) = Precision::Precise;  // legacy default: math_approx_mode = false
+    double_buffer_dest(compute_hw) = true;                 // legacy default: dst_full_sync_en = false (inverted)
+    return compute_hw;
+}
 
+ttnn::device_operation::ProgramArtifacts create_single_tile_prefill_artifacts(
+    const RotaryEmbeddingHfParams& operation_attributes, const RotaryEmbeddingHfInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input_tensor;
     const auto& cos = tensor_args.cos_cache;
     const auto& sin = tensor_args.sin_cache;
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    const auto& input_mt = input.mesh_tensor();
+    const auto& cos_mt = cos.mesh_tensor();
+    const auto& sin_mt = sin.mesh_tensor();
+    const auto& output_mt = output.mesh_tensor();
 
-    tt::DataFormat cos_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(cos.dtype());
-    uint32_t cos_single_tile_size = tt::tile_size(cos_cb_data_format);
+    tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    uint32_t input_single_tile_size = tt::tile_size(input_data_format);
 
-    tt::DataFormat sin_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(sin.dtype());
-    uint32_t sin_single_tile_size = tt::tile_size(sin_cb_data_format);
+    tt::DataFormat cos_data_format = tt::tt_metal::datatype_to_dataformat_converter(cos.dtype());
+    uint32_t cos_single_tile_size = tt::tile_size(cos_data_format);
 
-    tt::DataFormat trans_mat_cb_data_format = input_cb_data_format == tt::DataFormat::Bfp8_b
-                                                  ? tt::DataFormat::Bfp8_b
-                                              : input_cb_data_format == tt::DataFormat::Float32
-                                                  ? tt::DataFormat::Float32
-                                                  : tt::DataFormat::Float16_b;
-    uint32_t trans_mat_single_tile_size = tt::tile_size(trans_mat_cb_data_format);
+    tt::DataFormat sin_data_format = tt::tt_metal::datatype_to_dataformat_converter(sin.dtype());
+    uint32_t sin_single_tile_size = tt::tile_size(sin_data_format);
 
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    tt::DataFormat trans_mat_data_format = input_data_format == tt::DataFormat::Bfp8_b    ? tt::DataFormat::Bfp8_b
+                                           : input_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32
+                                                                                          : tt::DataFormat::Float16_b;
+    uint32_t trans_mat_single_tile_size = tt::tile_size(trans_mat_data_format);
+
+    tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
     constexpr uint32_t Wt = 1;
     uint32_t num_rows = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT;
@@ -90,204 +104,295 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
         num_output_tiles = num_input_tiles;
     }
 
-    constexpr uint8_t input_cb_index = tt::CBIndex::c_0;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_input_tiles * input_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = input_cb_index,
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
-        }}},
-        .buffer = in_sharded ? input.buffer() : nullptr,
-    });
+    // ---- Resource names (function-local: avoids unity-build anon-namespace collisions) ----
+    // DFB accessor names follow the shared Metal 2.0 compute kernel
+    // (../rotary_embedding/device/kernels/compute/rotary_embedding_single_tile_metal2.cpp),
+    // which owns the dfb::/args:: vocabulary on this path.
+    const DFBSpecName IN{"in"};                                // legacy CB c_0 (input; borrowed when in_sharded)
+    const DFBSpecName TRANS_MAT{"trans_mat"};                  // legacy CB c_1 (rotate-half transform matrix)
+    const DFBSpecName COS_DFB{"cos"};                          // legacy CB c_2 (cos)
+    const DFBSpecName SIN_DFB{"sin"};                          // legacy CB c_3 (sin)
+    const DFBSpecName ROTATED_IN_INTERM{"rotated_in_interm"};  // legacy CB c_24
+    const DFBSpecName COS_INTERM{"cos_interm"};                // legacy CB c_25
+    const DFBSpecName SIN_INTERM{"sin_interm"};                // legacy CB c_26
+    const DFBSpecName OUT{"out"};                              // legacy CB c_16 (output; borrowed when out_sharded)
+    const TensorParamName INPUT{"input"};
+    const TensorParamName COS_CACHE{"cos_cache"};
+    const TensorParamName SIN_CACHE{"sin_cache"};
+    const TensorParamName OUTPUT{"output"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE_G1{"compute_g1"};
+    const KernelSpecName COMPUTE_G2{"compute_g2"};
 
-    constexpr uint8_t trans_mat_cb_index = tt::CBIndex::c_1;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = trans_mat_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = trans_mat_cb_index,
-            .data_format = trans_mat_cb_data_format,
-            .page_size = trans_mat_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t cos_cb_index = tt::CBIndex::c_2;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = cos_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = cos_cb_index,
-            .data_format = cos_cb_data_format,
-            .page_size = cos_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t sin_cb_index = tt::CBIndex::c_3;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = sin_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = sin_cb_index,
-            .data_format = sin_cb_data_format,
-            .page_size = sin_single_tile_size,
-        }}},
-    });
-
-    uint32_t num_interm_tiles = 1;
-    constexpr uint8_t rotated_input_interm_cb_index = tt::CBIndex::c_24;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_interm_tiles * input_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = rotated_input_interm_cb_index,
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t cos_interm_cb_index = tt::CBIndex::c_25;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_interm_tiles * input_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = cos_interm_cb_index,
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t sin_interm_cb_index = tt::CBIndex::c_26;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_interm_tiles * input_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = sin_interm_cb_index,
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t output_cb_index = tt::CBIndex::c_16;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_output_tiles * output_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = output_cb_index,
-            .data_format = output_cb_data_format,
-            .page_size = output_single_tile_size,
-        }}},
-        .buffer = out_sharded ? output.buffer() : nullptr,
-    });
-
-    auto* src_buffer = input.buffer();
-    auto* cos_buffer = cos.buffer();
-    auto* sin_buffer = sin.buffer();
-    auto* dst_buffer = output.buffer();
-
-    std::vector<uint32_t> reader_compile_time_args;
+    // ---- DataflowBuffers ----
+    DataflowBufferSpec in_dfb{
+        .unique_id = IN,
+        .entry_size = input_single_tile_size,
+        .num_entries = num_input_tiles,
+        .data_format_metadata = input_data_format,
+    };
     if (in_sharded) {
-        reader_compile_time_args = {
-            (std::uint32_t)input_cb_index,
-            (std::uint32_t)cos_cb_index,
-            (std::uint32_t)sin_cb_index,
-            (std::uint32_t)trans_mat_cb_index,
-            (std::uint32_t)Ht,
-            (std::uint32_t)HtWt,
-        };
-        tt::tt_metal::TensorAccessorArgs(*cos_buffer).append_to(reader_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(*sin_buffer).append_to(reader_compile_time_args);
-    } else {
-        reader_compile_time_args = {
-            (std::uint32_t)input_cb_index,
-            (std::uint32_t)cos_cb_index,
-            (std::uint32_t)sin_cb_index,
-            (std::uint32_t)trans_mat_cb_index,
-            (std::uint32_t)Ht,
-            (std::uint32_t)HtWt,
-        };
-        tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(*cos_buffer).append_to(reader_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(*sin_buffer).append_to(reader_compile_time_args);
+        in_dfb.borrowed_from = INPUT;
     }
-
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-
-    KernelDescriptor::Defines writer_kernel_defines;
+    DataflowBufferSpec out_dfb{
+        .unique_id = OUT,
+        .entry_size = output_single_tile_size,
+        .num_entries = num_output_tiles,
+        .data_format_metadata = output_data_format,
+    };
     if (out_sharded) {
-        writer_kernel_defines.emplace_back("OUT_SHARDED", "1");
+        out_dfb.borrowed_from = OUTPUT;
     }
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        in_sharded ? "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/"
-                     "dataflow/reader_rotary_embedding_hf_single_tile_interleaved_start_id_sharded.cpp"
-                   : "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/"
-                     "dataflow/reader_rotary_embedding_hf_single_tile_interleaved_start_id.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/dataflow/"
-        "writer_rotary_embedding_hf_interleaved.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.defines = std::move(writer_kernel_defines);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    std::vector<uint32_t> compute_kernel_args_group_1 = {
-        (std::uint32_t)input_cb_index,
-        (std::uint32_t)cos_cb_index,
-        (std::uint32_t)sin_cb_index,
-        (std::uint32_t)trans_mat_cb_index,
-        (std::uint32_t)rotated_input_interm_cb_index,
-        (std::uint32_t)cos_interm_cb_index,
-        (std::uint32_t)sin_interm_cb_index,
-        (std::uint32_t)output_cb_index,
-        (std::uint32_t)num_rows_per_core_group_1,
+    Group<DataflowBufferSpec> dataflow_buffers = {
+        std::move(in_dfb),
+        DataflowBufferSpec{
+            .unique_id = TRANS_MAT,
+            .entry_size = trans_mat_single_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = trans_mat_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = COS_DFB,
+            .entry_size = cos_single_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = cos_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = SIN_DFB,
+            .entry_size = sin_single_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = sin_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = ROTATED_IN_INTERM,
+            .entry_size = input_single_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = input_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = COS_INTERM,
+            .entry_size = input_single_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = input_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = SIN_INTERM,
+            .entry_size = input_single_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = input_data_format,
+        },
+        std::move(out_dfb),
     };
 
-    KernelDescriptor compute_desc_g1;
-    compute_desc_g1.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/"
-        "rotary_embedding_single_tile.cpp";
-    compute_desc_g1.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc_g1.core_ranges = core_group_1;
-    compute_desc_g1.compile_time_args = compute_kernel_args_group_1;
-    compute_desc_g1.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-    };
-
-    std::optional<KernelDescriptor> compute_desc_g2;
-    if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_kernel_args_group_2 = compute_kernel_args_group_1;
-        compute_kernel_args_group_2[8] = num_rows_per_core_group_2;
-        KernelDescriptor g2;
-        g2.kernel_source =
-            "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/"
-            "rotary_embedding_single_tile.cpp";
-        g2.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        g2.core_ranges = core_group_2;
-        g2.compile_time_args = std::move(compute_kernel_args_group_2);
-        g2.config = ComputeConfigDescriptor{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
+    // ---- Compute hardware config ----
+    ComputeHardwareConfig compute_hw =
+        make_prefill_compute_hw_config(device->arch(), operation_attributes.compute_kernel_config);
+    if (fp32_dest_acc_en) {
+        // With a 32-bit Dest, Metal 2.0 requires an explicit UnpackMode for every Float32 DFB the
+        // compute kernel consumes. Legacy set no unpack_to_dest_mode (Default == UnpackToSrc), so
+        // the explicit entries carry that same value.
+        auto& modes = unpack_modes(compute_hw);
+        auto add_entry_if_fp32 = [&](const DFBSpecName& name, tt::DataFormat format) {
+            if (format == tt::DataFormat::Float32) {
+                modes.emplace(name, UnpackMode::UnpackToSrc);
+            }
         };
-        compute_desc_g2 = std::move(g2);
+        add_entry_if_fp32(IN, input_data_format);
+        add_entry_if_fp32(COS_DFB, cos_data_format);
+        add_entry_if_fp32(SIN_DFB, sin_data_format);
+        add_entry_if_fp32(TRANS_MAT, trans_mat_data_format);
+        add_entry_if_fp32(ROTATED_IN_INTERM, input_data_format);
+        add_entry_if_fp32(COS_INTERM, input_data_format);
+        add_entry_if_fp32(SIN_INTERM, input_data_format);
     }
 
+    // ---- Kernels ----
+    // Reader source is selected on in_sharded: the sharded variant takes no src accessor
+    // (the input shard is resident; the reader just cursor-advances the borrowed DFB).
+    Group<TensorBinding> reader_tensor_bindings;
+    if (in_sharded) {
+        reader_tensor_bindings = {
+            TensorBinding{.tensor_parameter_name = COS_CACHE, .accessor_name = "cos"},
+            TensorBinding{.tensor_parameter_name = SIN_CACHE, .accessor_name = "sin"},
+        };
+    } else {
+        reader_tensor_bindings = {
+            TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"},
+            TensorBinding{.tensor_parameter_name = COS_CACHE, .accessor_name = "cos"},
+            TensorBinding{.tensor_parameter_name = SIN_CACHE, .accessor_name = "sin"},
+        };
+    }
+    KernelSpec::RuntimeArgSchema reader_arg_schema;
+    if (in_sharded) {
+        reader_arg_schema = {.runtime_arg_names = {"num_rows", "start_row_id", "cos_sin_start_id"}};
+    } else {
+        reader_arg_schema = {.runtime_arg_names = {"num_rows", "start_id", "start_row_id", "cos_sin_start_id"}};
+    }
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = std::filesystem::path(
+            in_sharded ? "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/"
+                         "dataflow/reader_rotary_embedding_hf_single_tile_interleaved_start_id_sharded.cpp"
+                       : "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/"
+                         "dataflow/reader_rotary_embedding_hf_single_tile_interleaved_start_id.cpp"),
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = IN,
+                    .accessor_name = "in",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = COS_DFB,
+                    .accessor_name = "cos",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = SIN_DFB,
+                    .accessor_name = "sin",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = TRANS_MAT,
+                    .accessor_name = "trans_mat",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .tensor_bindings = std::move(reader_tensor_bindings),
+        .compile_time_args =
+            {
+                {"Ht", Ht},
+                {"HtWt", HtWt},
+            },
+        .runtime_arg_schema = std::move(reader_arg_schema),
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
+
+    KernelSpec::CompilerOptions writer_compiler_options;
+    if (out_sharded) {
+        writer_compiler_options.defines.emplace("OUT_SHARDED", "1");
+    }
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source = std::filesystem::path(
+            "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/dataflow/"
+            "writer_rotary_embedding_hf_interleaved.cpp"),
+        .compiler_options = std::move(writer_compiler_options),
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = OUT,
+                    .accessor_name = "out",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
+
+    // The same compute source runs on both work-split groups, differing only in the per-group
+    // num_rows compile-time arg — preserved as two KernelSpecs, never demoted to a runtime arg.
+    // The kernel source is the sibling rotary_embedding op's shared Metal 2.0 fork; this op
+    // supplies no DECODE_MODE define, so only the prefill path of that kernel is compiled.
+    auto make_compute_spec = [&](const KernelSpecName& unique_id, uint32_t num_rows_per_core) {
+        return KernelSpec{
+            .unique_id = unique_id,
+            .source = std::filesystem::path(
+                "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/"
+                "rotary_embedding_single_tile_metal2.cpp"),
+            // Legacy compute default opt_level is O3; Metal 2.0 defaults to O2 — set explicitly to preserve.
+            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+            .dfb_bindings =
+                {
+                    DFBBinding{
+                        .dfb_spec_name = IN,
+                        .accessor_name = "in",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = COS_DFB,
+                        .accessor_name = "cos",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = SIN_DFB,
+                        .accessor_name = "sin",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = TRANS_MAT,
+                        .accessor_name = "trans_mat",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = ROTATED_IN_INTERM,
+                        .accessor_name = "rotated_in_interm",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = ROTATED_IN_INTERM,
+                        .accessor_name = "rotated_in_interm",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = COS_INTERM,
+                        .accessor_name = "cos_interm",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = COS_INTERM,
+                        .accessor_name = "cos_interm",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = SIN_INTERM,
+                        .accessor_name = "sin_interm",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = SIN_INTERM,
+                        .accessor_name = "sin_interm",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = OUT,
+                        .accessor_name = "out",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                },
+            .compile_time_args =
+                {
+                    {"num_rows", num_rows_per_core},
+                },
+            .hw_config = compute_hw,
+        };
+    };
+
+    Group<KernelSpec> kernels;
+    kernels.push_back(std::move(reader));
+    kernels.push_back(std::move(writer));
+    kernels.push_back(make_compute_spec(COMPUTE_G1, num_rows_per_core_group_1));
+
+    Group<WorkUnitSpec> work_units = {
+        WorkUnitSpec{.name = "group_1", .kernels = {READER, WRITER, COMPUTE_G1}, .target_nodes = core_group_1},
+    };
+    if (!core_group_2.ranges().empty()) {
+        kernels.push_back(make_compute_spec(COMPUTE_G2, num_rows_per_core_group_2));
+        work_units.push_back(
+            WorkUnitSpec{.name = "group_2", .kernels = {READER, WRITER, COMPUTE_G2}, .target_nodes = core_group_2});
+    }
+
+    // ---- Per-core runtime args ----
     uint32_t g1_numcores = core_group_1.num_cores();
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
-    reader_desc.runtime_args.reserve(num_cores);
-    writer_desc.runtime_args.reserve(num_cores);
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores.at(i);
@@ -295,56 +400,81 @@ ProgramDescriptor create_single_tile_prefill_descriptor(
         uint32_t cos_sin_start_id = num_tiles_written % HtWt;
 
         if (in_sharded) {
-            reader_desc.emplace_runtime_args(
-                core, {cos_buffer, sin_buffer, num_rows_per_core, num_tiles_written / Wt % Ht, cos_sin_start_id});
-        } else {
-            reader_desc.emplace_runtime_args(
+            AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values,
                 core,
-                {src_buffer,
-                 cos_buffer,
-                 sin_buffer,
-                 num_rows_per_core,
-                 num_tiles_written,
-                 num_tiles_written / Wt % Ht,
-                 cos_sin_start_id});
+                {{"num_rows", num_rows_per_core},
+                 {"start_row_id", num_tiles_written / Wt % Ht},
+                 {"cos_sin_start_id", cos_sin_start_id}});
+        } else {
+            AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values,
+                core,
+                {{"num_rows", num_rows_per_core},
+                 {"start_id", num_tiles_written},
+                 {"start_row_id", num_tiles_written / Wt % Ht},
+                 {"cos_sin_start_id", cos_sin_start_id}});
         }
 
-        writer_desc.emplace_runtime_args(core, {dst_buffer, num_rows_per_core * Wt, num_tiles_written});
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core,
+            {{"num_tiles", num_rows_per_core * Wt}, {"start_id", num_tiles_written}});
         num_tiles_written += num_rows_per_core * Wt;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc_g1));
-    if (compute_desc_g2.has_value()) {
-        desc.kernels.push_back(std::move(*compute_desc_g2));
-    }
+    // ---- Assemble spec + run-args ----
+    ProgramSpec spec{
+        .name = "rotary_embedding_hf_single_tile_prefill",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .tensor_parameters =
+            {
+                TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},
+                TensorParameter{.unique_id = COS_CACHE, .spec = cos.tensor_spec()},
+                TensorParameter{.unique_id = SIN_CACHE, .spec = sin.tensor_spec()},
+                TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()},
+            },
+        .work_units = std::move(work_units),
+    };
 
-    return desc;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    run_args.tensor_args = {
+        {INPUT, input_mt},
+        {COS_CACHE, cos_mt},
+        {SIN_CACHE, sin_mt},
+        {OUTPUT, output_mt},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-ProgramDescriptor create_multi_tile_descriptor(
+ttnn::device_operation::ProgramArtifacts create_multi_tile_artifacts(
     const RotaryEmbeddingHfParams& operation_attributes, const RotaryEmbeddingHfInputs& tensor_args, Tensor& output) {
-    ProgramDescriptor desc;
-
     const auto& input = tensor_args.input_tensor;
     const auto& cos = tensor_args.cos_cache;
     const auto& sin = tensor_args.sin_cache;
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    const auto& input_mt = input.mesh_tensor();
+    const auto& cos_mt = cos.mesh_tensor();
+    const auto& sin_mt = sin.mesh_tensor();
+    const auto& output_mt = output.mesh_tensor();
 
-    tt::DataFormat cos_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(cos.dtype());
-    uint32_t cos_single_tile_size = tt::tile_size(cos_cb_data_format);
+    tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    uint32_t input_single_tile_size = tt::tile_size(input_data_format);
 
-    tt::DataFormat sin_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(sin.dtype());
-    uint32_t sin_single_tile_size = tt::tile_size(sin_cb_data_format);
+    tt::DataFormat cos_data_format = tt::tt_metal::datatype_to_dataformat_converter(cos.dtype());
+    uint32_t cos_single_tile_size = tt::tile_size(cos_data_format);
 
-    tt::DataFormat scalar_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t scalar_single_tile_size = tt::tile_size(scalar_cb_data_format);
+    tt::DataFormat sin_data_format = tt::tt_metal::datatype_to_dataformat_converter(sin.dtype());
+    uint32_t sin_single_tile_size = tt::tile_size(sin_data_format);
 
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    tt::DataFormat scalar_data_format = tt::DataFormat::Float16_b;
+    uint32_t scalar_single_tile_size = tt::tile_size(scalar_data_format);
+
+    tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
     uint32_t num_rows = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT;
     uint32_t Ht = input.padded_shape()[-2] / TILE_HEIGHT;
@@ -394,250 +524,360 @@ ProgramDescriptor create_multi_tile_descriptor(
         num_output_tiles = num_input_tiles;
     }
 
-    constexpr uint8_t input_cb_index = tt::CBIndex::c_0;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_input_tiles * input_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = input_cb_index,
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
-        }}},
-        .buffer = in_sharded ? input.buffer() : nullptr,
-    });
-
-    constexpr uint8_t rotated_input_cb_index = tt::CBIndex::c_1;
     uint32_t num_rotated_input_tiles = 2 * Wt;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_rotated_input_tiles * input_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = rotated_input_cb_index,
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
-        }}},
-    });
-
     uint32_t num_cos_sin_tiles = 2 * Wt;
-    constexpr uint8_t cos_cb_index = tt::CBIndex::c_2;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_cos_sin_tiles * cos_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = cos_cb_index,
-            .data_format = cos_cb_data_format,
-            .page_size = cos_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t sin_cb_index = tt::CBIndex::c_3;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_cos_sin_tiles * sin_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = sin_cb_index,
-            .data_format = sin_cb_data_format,
-            .page_size = sin_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t src_scalar_cb_index = tt::CBIndex::c_4;
     uint32_t num_scalar_tiles = 1;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_scalar_tiles * scalar_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src_scalar_cb_index,
-            .data_format = scalar_cb_data_format,
-            .page_size = scalar_single_tile_size,
-        }}},
-    });
-
     uint32_t num_interm_tiles = 1;
-    constexpr uint8_t rotated_input_interm_cb_index = tt::CBIndex::c_24;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_interm_tiles * input_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = rotated_input_interm_cb_index,
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
-        }}},
-    });
 
-    constexpr uint8_t cos_interm_cb_index = tt::CBIndex::c_25;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_interm_tiles * cos_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = cos_interm_cb_index,
-            .data_format = cos_cb_data_format,
-            .page_size = cos_single_tile_size,
-        }}},
-    });
+    // ---- Resource names (function-local: avoids unity-build anon-namespace collisions) ----
+    const DFBSpecName IN{"in"};                                // legacy CB c_0 (input; borrowed when in_sharded)
+    const DFBSpecName ROTATED_IN{"rotated_in"};                // legacy CB c_1 (rotated-half input read stream)
+    const DFBSpecName COS_DFB{"cos"};                          // legacy CB c_2 (cos)
+    const DFBSpecName SIN_DFB{"sin"};                          // legacy CB c_3 (sin)
+    const DFBSpecName SCALAR{"scalar"};                        // legacy CB c_4 (-1.0 rotate-half scalar)
+    const DFBSpecName ROTATED_IN_INTERM{"rotated_in_interm"};  // legacy CB c_24
+    const DFBSpecName COS_INTERM{"cos_interm"};                // legacy CB c_25
+    const DFBSpecName SIN_INTERM{"sin_interm"};                // legacy CB c_26
+    const DFBSpecName OUT{"out"};                              // legacy CB c_16 (output; borrowed when out_sharded)
+    const TensorParamName INPUT{"input"};
+    const TensorParamName COS_CACHE{"cos_cache"};
+    const TensorParamName SIN_CACHE{"sin_cache"};
+    const TensorParamName OUTPUT{"output"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE_G1{"compute_g1"};
+    const KernelSpecName COMPUTE_G2{"compute_g2"};
 
-    constexpr uint8_t sin_interm_cb_index = tt::CBIndex::c_26;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_interm_tiles * sin_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = sin_interm_cb_index,
-            .data_format = sin_cb_data_format,
-            .page_size = sin_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t output_cb_index = tt::CBIndex::c_16;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_output_tiles * output_single_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = output_cb_index,
-            .data_format = output_cb_data_format,
-            .page_size = output_single_tile_size,
-        }}},
-        .buffer = out_sharded ? output.buffer() : nullptr,
-    });
-
-    const uint16_t bfloat16_scalar = std::bit_cast<uint16_t>(bfloat16(-1.0f));
-
-    auto* src_buffer = input.buffer();
-    auto* cos_buffer = cos.buffer();
-    auto* sin_buffer = sin.buffer();
-    auto* dst_buffer = output.buffer();
-
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)input_cb_index,
-        (std::uint32_t)rotated_input_cb_index,
-        (std::uint32_t)cos_cb_index,
-        (std::uint32_t)sin_cb_index,
-        (std::uint32_t)src_scalar_cb_index,
-        (std::uint32_t)bfloat16_scalar,
-        (std::uint32_t)Ht,
-        (std::uint32_t)Wt,
-        (std::uint32_t)HtWt,
-        (std::uint32_t)half_Wt,
+    // ---- DataflowBuffers ----
+    // When in_sharded, the input DFB borrows the resident input shard; the reader still
+    // NoC-reads the src tiles into it through the accessor (intentional legacy behavior —
+    // a self-aliasing copy of resident tiles into their own storage). Preserved byte-for-byte.
+    DataflowBufferSpec in_dfb{
+        .unique_id = IN,
+        .entry_size = input_single_tile_size,
+        .num_entries = num_input_tiles,
+        .data_format_metadata = input_data_format,
     };
-    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*cos_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*sin_buffer).append_to(reader_compile_time_args);
-
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-
-    KernelDescriptor::Defines writer_kernel_defines;
+    if (in_sharded) {
+        in_dfb.borrowed_from = INPUT;
+    }
+    DataflowBufferSpec out_dfb{
+        .unique_id = OUT,
+        .entry_size = output_single_tile_size,
+        .num_entries = num_output_tiles,
+        .data_format_metadata = output_data_format,
+    };
     if (out_sharded) {
-        writer_kernel_defines.emplace_back("OUT_SHARDED", "1");
+        out_dfb.borrowed_from = OUTPUT;
     }
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/dataflow/"
-        "reader_rotary_embedding_hf_interleaved.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/dataflow/"
-        "writer_rotary_embedding_hf_interleaved.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.defines = std::move(writer_kernel_defines);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    std::vector<uint32_t> compute_kernel_args_group_1 = {
-        (std::uint32_t)input_cb_index,
-        (std::uint32_t)rotated_input_cb_index,
-        (std::uint32_t)cos_cb_index,
-        (std::uint32_t)sin_cb_index,
-        (std::uint32_t)src_scalar_cb_index,
-        (std::uint32_t)rotated_input_interm_cb_index,
-        (std::uint32_t)cos_interm_cb_index,
-        (std::uint32_t)sin_interm_cb_index,
-        (std::uint32_t)output_cb_index,
-        (std::uint32_t)num_rows_per_core_group_1,
-        (std::uint32_t)Wt,
-        (std::uint32_t)half_Wt};
-
-    KernelDescriptor compute_desc_g1;
-    compute_desc_g1.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/compute/"
-        "rotary_embedding_hf.cpp";
-    compute_desc_g1.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc_g1.core_ranges = core_group_1;
-    compute_desc_g1.compile_time_args = compute_kernel_args_group_1;
-    compute_desc_g1.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
+    Group<DataflowBufferSpec> dataflow_buffers = {
+        std::move(in_dfb),
+        DataflowBufferSpec{
+            .unique_id = ROTATED_IN,
+            .entry_size = input_single_tile_size,
+            .num_entries = num_rotated_input_tiles,
+            .data_format_metadata = input_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = COS_DFB,
+            .entry_size = cos_single_tile_size,
+            .num_entries = num_cos_sin_tiles,
+            .data_format_metadata = cos_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = SIN_DFB,
+            .entry_size = sin_single_tile_size,
+            .num_entries = num_cos_sin_tiles,
+            .data_format_metadata = sin_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = SCALAR,
+            .entry_size = scalar_single_tile_size,
+            .num_entries = num_scalar_tiles,
+            .data_format_metadata = scalar_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = ROTATED_IN_INTERM,
+            .entry_size = input_single_tile_size,
+            .num_entries = num_interm_tiles,
+            .data_format_metadata = input_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = COS_INTERM,
+            .entry_size = cos_single_tile_size,
+            .num_entries = num_interm_tiles,
+            .data_format_metadata = cos_data_format,
+        },
+        DataflowBufferSpec{
+            .unique_id = SIN_INTERM,
+            .entry_size = sin_single_tile_size,
+            .num_entries = num_interm_tiles,
+            .data_format_metadata = sin_data_format,
+        },
+        std::move(out_dfb),
     };
 
-    std::optional<KernelDescriptor> compute_desc_g2;
-    if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_kernel_args_group_2 = compute_kernel_args_group_1;
-        compute_kernel_args_group_2[9] = num_rows_per_core_group_2;
-
-        KernelDescriptor g2;
-        g2.kernel_source =
-            "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/compute/"
-            "rotary_embedding_hf.cpp";
-        g2.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        g2.core_ranges = core_group_2;
-        g2.compile_time_args = std::move(compute_kernel_args_group_2);
-        g2.config = ComputeConfigDescriptor{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
+    // ---- Compute hardware config ----
+    ComputeHardwareConfig compute_hw =
+        make_prefill_compute_hw_config(device->arch(), operation_attributes.compute_kernel_config);
+    if (fp32_dest_acc_en) {
+        // With a 32-bit Dest, Metal 2.0 requires an explicit UnpackMode for every Float32 DFB the
+        // compute kernel consumes. Legacy set no unpack_to_dest_mode (Default == UnpackToSrc), so
+        // the explicit entries carry that same value. (The scalar DFB is always Float16_b.)
+        auto& modes = unpack_modes(compute_hw);
+        auto add_entry_if_fp32 = [&](const DFBSpecName& name, tt::DataFormat format) {
+            if (format == tt::DataFormat::Float32) {
+                modes.emplace(name, UnpackMode::UnpackToSrc);
+            }
         };
-        compute_desc_g2 = std::move(g2);
+        add_entry_if_fp32(IN, input_data_format);
+        add_entry_if_fp32(ROTATED_IN, input_data_format);
+        add_entry_if_fp32(COS_DFB, cos_data_format);
+        add_entry_if_fp32(SIN_DFB, sin_data_format);
+        add_entry_if_fp32(ROTATED_IN_INTERM, input_data_format);
+        add_entry_if_fp32(COS_INTERM, cos_data_format);
+        add_entry_if_fp32(SIN_INTERM, sin_data_format);
     }
 
+    // ---- Kernels ----
+    const uint16_t bfloat16_scalar = std::bit_cast<uint16_t>(bfloat16(-1.0f));
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = std::filesystem::path(
+            "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/dataflow/"
+            "reader_rotary_embedding_hf_interleaved.cpp"),
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = IN,
+                    .accessor_name = "in",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = ROTATED_IN,
+                    .accessor_name = "rotated_in",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = COS_DFB,
+                    .accessor_name = "cos",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = SIN_DFB,
+                    .accessor_name = "sin",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = SCALAR,
+                    .accessor_name = "scalar",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"},
+                TensorBinding{.tensor_parameter_name = COS_CACHE, .accessor_name = "cos"},
+                TensorBinding{.tensor_parameter_name = SIN_CACHE, .accessor_name = "sin"},
+            },
+        .compile_time_args =
+            {
+                {"scalar_value", bfloat16_scalar},
+                {"Ht", Ht},
+                {"Wt", Wt},
+                {"HtWt", HtWt},
+                {"half_Wt", half_Wt},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"num_rows", "start_id", "start_row_id", "cos_sin_start_id"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
+
+    KernelSpec::CompilerOptions writer_compiler_options;
+    if (out_sharded) {
+        writer_compiler_options.defines.emplace("OUT_SHARDED", "1");
+    }
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source = std::filesystem::path(
+            "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/dataflow/"
+            "writer_rotary_embedding_hf_interleaved.cpp"),
+        .compiler_options = std::move(writer_compiler_options),
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = OUT,
+                    .accessor_name = "out",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
+
+    // The same compute source runs on both work-split groups, differing only in the per-group
+    // num_rows compile-time arg — preserved as two KernelSpecs, never demoted to a runtime arg.
+    auto make_compute_spec = [&](const KernelSpecName& unique_id, uint32_t num_rows_per_core) {
+        return KernelSpec{
+            .unique_id = unique_id,
+            .source = std::filesystem::path(
+                "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/compute/"
+                "rotary_embedding_hf.cpp"),
+            // Legacy compute default opt_level is O3; Metal 2.0 defaults to O2 — set explicitly to preserve.
+            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+            .dfb_bindings =
+                {
+                    DFBBinding{
+                        .dfb_spec_name = IN,
+                        .accessor_name = "in",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = ROTATED_IN,
+                        .accessor_name = "rotated_in",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = COS_DFB,
+                        .accessor_name = "cos",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = SIN_DFB,
+                        .accessor_name = "sin",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = SCALAR,
+                        .accessor_name = "scalar",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = ROTATED_IN_INTERM,
+                        .accessor_name = "rotated_in_interm",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = ROTATED_IN_INTERM,
+                        .accessor_name = "rotated_in_interm",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = COS_INTERM,
+                        .accessor_name = "cos_interm",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = COS_INTERM,
+                        .accessor_name = "cos_interm",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = SIN_INTERM,
+                        .accessor_name = "sin_interm",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = SIN_INTERM,
+                        .accessor_name = "sin_interm",
+                        .endpoint_type = DFBEndpointType::CONSUMER,
+                    },
+                    DFBBinding{
+                        .dfb_spec_name = OUT,
+                        .accessor_name = "out",
+                        .endpoint_type = DFBEndpointType::PRODUCER,
+                    },
+                },
+            .compile_time_args =
+                {
+                    {"num_rows", num_rows_per_core},
+                    {"Wt", Wt},
+                    {"half_Wt", half_Wt},
+                },
+            .hw_config = compute_hw,
+        };
+    };
+
+    Group<KernelSpec> kernels;
+    kernels.push_back(std::move(reader));
+    kernels.push_back(std::move(writer));
+    kernels.push_back(make_compute_spec(COMPUTE_G1, num_rows_per_core_group_1));
+
+    Group<WorkUnitSpec> work_units = {
+        WorkUnitSpec{.name = "group_1", .kernels = {READER, WRITER, COMPUTE_G1}, .target_nodes = core_group_1},
+    };
+    if (!core_group_2.ranges().empty()) {
+        kernels.push_back(make_compute_spec(COMPUTE_G2, num_rows_per_core_group_2));
+        work_units.push_back(
+            WorkUnitSpec{.name = "group_2", .kernels = {READER, WRITER, COMPUTE_G2}, .target_nodes = core_group_2});
+    }
+
+    // ---- Per-core runtime args ----
     uint32_t g1_numcores = core_group_1.num_cores();
     const auto& cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
-    reader_desc.runtime_args.reserve(num_cores);
-    writer_desc.runtime_args.reserve(num_cores);
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores.at(i);
         uint32_t num_rows_per_core = i < g1_numcores ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
         uint32_t cos_sin_start_id = num_tiles_written % HtWt;
 
-        reader_desc.emplace_runtime_args(
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
             core,
-            {src_buffer,
-             cos_buffer,
-             sin_buffer,
-             num_rows_per_core,
-             num_tiles_written,
-             num_tiles_written / Wt % Ht,
-             cos_sin_start_id});
+            {{"num_rows", num_rows_per_core},
+             {"start_id", num_tiles_written},
+             {"start_row_id", num_tiles_written / Wt % Ht},
+             {"cos_sin_start_id", cos_sin_start_id}});
 
-        writer_desc.emplace_runtime_args(core, {dst_buffer, num_rows_per_core * Wt, num_tiles_written});
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core,
+            {{"num_tiles", num_rows_per_core * Wt}, {"start_id", num_tiles_written}});
         num_tiles_written += num_rows_per_core * Wt;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc_g1));
-    if (compute_desc_g2.has_value()) {
-        desc.kernels.push_back(std::move(*compute_desc_g2));
-    }
+    // ---- Assemble spec + run-args ----
+    ProgramSpec spec{
+        .name = "rotary_embedding_hf_multi_tile_prefill",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = std::move(dataflow_buffers),
+        .tensor_parameters =
+            {
+                TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},
+                TensorParameter{.unique_id = COS_CACHE, .spec = cos.tensor_spec()},
+                TensorParameter{.unique_id = SIN_CACHE, .spec = sin.tensor_spec()},
+                TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()},
+            },
+        .work_units = std::move(work_units),
+    };
 
-    return desc;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    run_args.tensor_args = {
+        {INPUT, input_mt},
+        {COS_CACHE, cos_mt},
+        {SIN_CACHE, sin_mt},
+        {OUTPUT, output_mt},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace
 
-ProgramDescriptor RotaryEmbeddingHfMultiCore::create_descriptor(
+ttnn::device_operation::ProgramArtifacts RotaryEmbeddingHfMultiCore::create_program_artifacts(
     const RotaryEmbeddingHfParams& operation_attributes, const RotaryEmbeddingHfInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input_tensor;
     if (input.padded_shape()[-1] / TILE_WIDTH == 1) {
-        return create_single_tile_prefill_descriptor(operation_attributes, tensor_args, output);
+        return create_single_tile_prefill_artifacts(operation_attributes, tensor_args, output);
     }
-    return create_multi_tile_descriptor(operation_attributes, tensor_args, output);
+    return create_multi_tile_artifacts(operation_attributes, tensor_args, output);
 }
 
 }  // namespace ttnn::experimental::prim

@@ -6,16 +6,16 @@
 
 #include "ttnn/operations/experimental/transformer/rotary_embedding_hf/device/rotary_embedding_hf_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/metal_v2_artifacts.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct RotaryEmbeddingHfMultiCoreSharded {
-    // Contract (1): single ProgramDescriptor.  All four working CBs (input/cos/sin/output)
-    // are sharded — they use CBDescriptor::buffer so the framework patches dynamic
-    // addresses on cache hit, mirroring the legacy UpdateDynamicCircularBufferAddress chain.
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    // Metal 2.0 ProgramSpecFactoryConcept. All four working DFBs (input/cos/sin/output)
+    // are sharded — they are built on borrowed memory (DataflowBufferSpec::borrowed_from
+    // naming the io TensorParameter), so the framework refreshes their backing addresses
+    // from the tensor arguments on every cache hit.
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const RotaryEmbeddingHfParams& operation_attributes,
         const RotaryEmbeddingHfInputs& tensor_args,
         Tensor& output);

@@ -9,107 +9,100 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
 
-    constexpr uint32_t in_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t cos_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t sin_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t trans_mat_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t rotated_in_interm_cb_id = get_compile_time_arg_val(4);
-    constexpr uint32_t cos_interm_cb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t sin_interm_cb_id = get_compile_time_arg_val(6);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(7);
-    constexpr uint32_t heads_per_batch_t = get_compile_time_arg_val(8);
-    constexpr uint32_t batch_per_core = get_compile_time_arg_val(9);
+    constexpr uint32_t heads_per_batch_t = get_arg(args::heads_per_batch_t);
+    constexpr uint32_t batch_per_core = get_arg(args::batch_per_core);
 
-    CircularBuffer in_cb(in_cb_id);
-    CircularBuffer cos_cb(cos_cb_id);
-    CircularBuffer sin_cb(sin_cb_id);
-    CircularBuffer trans_mat_cb(trans_mat_cb_id);
-    CircularBuffer rotated_in_interm_cb(rotated_in_interm_cb_id);
-    CircularBuffer cos_interm_cb(cos_interm_cb_id);
-    CircularBuffer sin_interm_cb(sin_interm_cb_id);
-    CircularBuffer out_cb(out_cb_id);
+    DataflowBuffer dfb_in(dfb::in);
+    DataflowBuffer dfb_cos(dfb::cos);
+    DataflowBuffer dfb_sin(dfb::sin);
+    DataflowBuffer dfb_trans_mat(dfb::trans_mat);
+    DataflowBuffer dfb_rotated_in_interm(dfb::rotated_in_interm);
+    DataflowBuffer dfb_cos_interm(dfb::cos_interm);
+    DataflowBuffer dfb_sin_interm(dfb::sin_interm);
+    DataflowBuffer dfb_out(dfb::out);
 
-    trans_mat_cb.wait_front(onetile);
-    compute_kernel_hw_startup<SrcOrder::Reverse>(in_cb_id, trans_mat_cb_id, rotated_in_interm_cb_id);
-    matmul_init(in_cb_id, trans_mat_cb_id);
-    compute_kernel_hw_startup(rotated_in_interm_cb_id, sin_cb_id, sin_interm_cb_id);
+    dfb_trans_mat.wait_front(onetile);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::in, dfb::trans_mat, dfb::rotated_in_interm);
+    matmul_init(dfb::in, dfb::trans_mat);
+    compute_kernel_hw_startup(dfb::rotated_in_interm, dfb::sin, dfb::sin_interm);
 
     for (uint32_t batch_idx = 0; batch_idx < batch_per_core; ++batch_idx) {
-        sin_cb.reserve_back(onetile);
-        cos_cb.reserve_back(onetile);
-        sin_cb.push_back(onetile);
-        cos_cb.push_back(onetile);
+        dfb_sin.reserve_back(onetile);
+        dfb_cos.reserve_back(onetile);
+        dfb_sin.push_back(onetile);
+        dfb_cos.push_back(onetile);
 
         for (uint32_t ht = 0; ht < heads_per_batch_t; ++ht) {
-            rotated_in_interm_cb.reserve_back(onetile);
-            sin_interm_cb.reserve_back(onetile);
-            cos_interm_cb.reserve_back(onetile);
-            out_cb.reserve_back(onetile);
+            dfb_rotated_in_interm.reserve_back(onetile);
+            dfb_sin_interm.reserve_back(onetile);
+            dfb_cos_interm.reserve_back(onetile);
+            dfb_out.reserve_back(onetile);
 
-            in_cb.reserve_back(onetile);
-            in_cb.push_back(onetile);
-            in_cb.wait_front(onetile);
+            dfb_in.reserve_back(onetile);
+            dfb_in.push_back(onetile);
+            dfb_in.wait_front(onetile);
 
-            reconfig_data_format(in_cb_id, trans_mat_cb_id);
-            pack_reconfig_data_format(rotated_in_interm_cb_id);
-            matmul_init(in_cb_id, trans_mat_cb_id);
+            reconfig_data_format(dfb::in, dfb::trans_mat);
+            pack_reconfig_data_format(dfb::rotated_in_interm);
+            matmul_init(dfb::in, dfb::trans_mat);
             tile_regs_acquire();
-            matmul_tiles(in_cb_id, trans_mat_cb_id, 0, 0, 0);
+            matmul_tiles(dfb::in, dfb::trans_mat, 0, 0, 0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, rotated_in_interm_cb_id);
+            pack_tile(0, dfb::rotated_in_interm);
             tile_regs_release();
-            rotated_in_interm_cb.push_back(onetile);
+            dfb_rotated_in_interm.push_back(onetile);
 
-            rotated_in_interm_cb.wait_front(onetile);
-            sin_cb.wait_front(onetile);
-            reconfig_data_format(rotated_in_interm_cb_id, sin_cb_id);
-            pack_reconfig_data_format(sin_interm_cb_id);
+            dfb_rotated_in_interm.wait_front(onetile);
+            dfb_sin.wait_front(onetile);
+            reconfig_data_format(dfb::rotated_in_interm, dfb::sin);
+            pack_reconfig_data_format(dfb::sin_interm);
             tile_regs_acquire();
-            mul_bcast_rows_init(rotated_in_interm_cb_id, sin_cb_id);
-            mul_tiles_bcast_rows(rotated_in_interm_cb_id, sin_cb_id, 0, 0, 0);
+            mul_bcast_rows_init(dfb::rotated_in_interm, dfb::sin);
+            mul_tiles_bcast_rows(dfb::rotated_in_interm, dfb::sin, 0, 0, 0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, sin_interm_cb_id);
+            pack_tile(0, dfb::sin_interm);
             tile_regs_release();
-            sin_interm_cb.push_back(onetile);
-            rotated_in_interm_cb.pop_front(onetile);
+            dfb_sin_interm.push_back(onetile);
+            dfb_rotated_in_interm.pop_front(onetile);
 
-            cos_cb.wait_front(onetile);
-            reconfig_data_format(in_cb_id, cos_cb_id);
-            pack_reconfig_data_format(cos_interm_cb_id);
+            dfb_cos.wait_front(onetile);
+            reconfig_data_format(dfb::in, dfb::cos);
+            pack_reconfig_data_format(dfb::cos_interm);
             tile_regs_acquire();
-            mul_bcast_rows_init(in_cb_id, cos_cb_id);
-            mul_tiles_bcast_rows(in_cb_id, cos_cb_id, 0, 0, 0);
+            mul_bcast_rows_init(dfb::in, dfb::cos);
+            mul_tiles_bcast_rows(dfb::in, dfb::cos, 0, 0, 0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, cos_interm_cb_id);
+            pack_tile(0, dfb::cos_interm);
             tile_regs_release();
-            cos_interm_cb.push_back(onetile);
-            in_cb.pop_front(onetile);
+            dfb_cos_interm.push_back(onetile);
+            dfb_in.pop_front(onetile);
 
-            cos_interm_cb.wait_front(onetile);
-            sin_interm_cb.wait_front(onetile);
-            reconfig_data_format(cos_interm_cb_id, sin_interm_cb_id);
-            pack_reconfig_data_format(out_cb_id);
-            add_init(cos_interm_cb_id, sin_interm_cb_id);
+            dfb_cos_interm.wait_front(onetile);
+            dfb_sin_interm.wait_front(onetile);
+            reconfig_data_format(dfb::cos_interm, dfb::sin_interm);
+            pack_reconfig_data_format(dfb::out);
+            add_init(dfb::cos_interm, dfb::sin_interm);
             tile_regs_acquire();
-            add_tiles(cos_interm_cb_id, sin_interm_cb_id, 0, 0, 0);
+            add_tiles(dfb::cos_interm, dfb::sin_interm, 0, 0, 0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, out_cb_id);
+            pack_tile(0, dfb::out);
             tile_regs_release();
-            out_cb.push_back(onetile);
-            cos_interm_cb.pop_front(onetile);
-            sin_interm_cb.pop_front(onetile);
+            dfb_out.push_back(onetile);
+            dfb_cos_interm.pop_front(onetile);
+            dfb_sin_interm.pop_front(onetile);
         }
 
-        sin_cb.pop_front(onetile);
-        cos_cb.pop_front(onetile);
+        dfb_sin.pop_front(onetile);
+        dfb_cos.pop_front(onetile);
     }
 }
