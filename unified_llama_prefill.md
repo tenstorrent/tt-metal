@@ -3512,6 +3512,13 @@ matmuls are 1.21x to 1.31x of ttnn except gate/up at 0.83x, and attention and th
 stages have no ttnn counterpart measured on the same footing yet. Nothing here is a mystery
 of the kind the NOC asymmetry was -- it is ordinary per-shape tuning from here.
 
+## API misuse audit
+
+Moved to its own file: `unified_api_hazards.md`. A list of ways the API can be misused
+without the misuse being visible from one thread on one core -- CB page counts, projection
+and core uniformity, and the host contract -- with what is already enforced recorded
+alongside, so it is not re-derived. Two entries are verified live rather than hypothetical.
+
 ## Phase 11 -- Full block orchestration
 
 Host-side and kernel-loop work, not model gaps.
