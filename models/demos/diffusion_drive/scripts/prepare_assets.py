@@ -94,34 +94,43 @@ def _download_hf(repo_id: str, filename: str, dest: Path) -> None:
     try:
         from huggingface_hub import hf_hub_download
     except ImportError:
-        print("  huggingface_hub not installed — falling back to direct URL")
-        _download_url(
-            f"https://huggingface.co/{repo_id}/resolve/{_HF_REVISION}/{filename}",
-            dest,
-        )
-        _verify_checkpoint(dest)
-        return
+        hf_hub_download = None
 
-    print(f"  Downloading {repo_id}/{filename} @ {_HF_REVISION[:12]}")
-    print(f"  -> {dest}")
     tmp = dest.with_suffix(dest.suffix + ".tmp")
-    try:
-        downloaded = hf_hub_download(
-            repo_id,
-            filename,
-            revision=_HF_REVISION,
-            local_dir=str(tmp.parent),
-        )
-        # The returned path is assembled from repo-controlled metadata, so confirm
-        # it really landed inside the asset dir before moving it into place.
-        src = Path(downloaded).resolve()
-        asset_dir = tmp.parent.resolve()
-        if asset_dir not in src.parents:
-            raise RuntimeError(f"download landed outside the asset dir: {src}")
-        src.rename(dest)
-    except Exception as exc:
-        tmp.unlink(missing_ok=True)
-        raise RuntimeError(f"Download failed: {exc}") from exc
+    if hf_hub_download is not None:
+        print(f"  Downloading {repo_id}/{filename} @ {_HF_REVISION[:12]}")
+        print(f"  -> {dest}")
+        try:
+            downloaded = hf_hub_download(
+                repo_id,
+                filename,
+                revision=_HF_REVISION,
+                local_dir=str(tmp.parent),
+            )
+            # The returned path is assembled from repo-controlled metadata, so confirm
+            # it really landed inside the asset dir before moving it into place.
+            src = Path(downloaded).resolve()
+            asset_dir = tmp.parent.resolve()
+            if asset_dir not in src.parents:
+                raise RuntimeError(f"download landed outside the asset dir: {src}")
+            src.rename(dest)
+        except Exception as exc:
+            # Fall through to the plain HTTPS path rather than giving up. The usual
+            # cause in CI is HF_HUB_OFFLINE=1, which the model-test container sets on
+            # SKUs whose weight cache is a read-only NFS mount; hf_hub_download then
+            # refuses to touch the network even though the runner has one. urllib is
+            # unaffected, fetches the same pinned revision, and the SHA-256 check
+            # below is what actually establishes trust either way.
+            tmp.unlink(missing_ok=True)
+            print(f"  huggingface_hub download failed ({exc}) — falling back to direct URL")
+        else:
+            _verify_checkpoint(dest)
+            print(f"  Saved: {dest}")
+            return
+    else:
+        print("  huggingface_hub not installed — falling back to direct URL")
+
+    _download_url(f"https://huggingface.co/{repo_id}/resolve/{_HF_REVISION}/{filename}", dest)
     _verify_checkpoint(dest)
     print(f"  Saved: {dest}")
 
@@ -134,15 +143,30 @@ def _download_url(url: str, dest: Path) -> None:
     print(f"  Downloading {url}")
     tmp = dest.with_suffix(dest.suffix + ".tmp")
     try:
+        # Report only when the percentage actually changes. urlretrieve fires the
+        # callback per block (~89k times for this file), and in a CI log — where \r
+        # does not overwrite — that was half a megabyte of noise. Off a tty, print
+        # every 10% on its own line instead of redrawing.
+        interactive = sys.stdout.isatty()
+        state = {"pct": -1}
 
         def _progress(count, block_size, total_size):
-            if total_size > 0:
-                pct = min(100, int(count * block_size * 100 / total_size))
+            if total_size <= 0:
+                return
+            pct = min(100, int(count * block_size * 100 / total_size))
+            step = 1 if interactive else 10
+            if pct < state["pct"] + step:
+                return
+            state["pct"] = pct
+            if interactive:
                 sys.stdout.write(f"\r  {pct}%")
-                sys.stdout.flush()
+            else:
+                sys.stdout.write(f"  {pct}%\n")
+            sys.stdout.flush()
 
         urllib.request.urlretrieve(url, tmp, _progress)
-        print()
+        if interactive:
+            print()
     except Exception as exc:
         tmp.unlink(missing_ok=True)
         raise RuntimeError(f"Download failed: {exc}") from exc
