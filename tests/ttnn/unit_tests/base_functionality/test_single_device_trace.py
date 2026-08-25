@@ -302,6 +302,7 @@ def test_trace_allocation_tracking_acknowledgments_and_lifetime(device, expect_e
             del raw_temporary
             gc.collect()
             assert raw_temporary_id not in ttnn._ttnn.operations.trace.get_all_unsafe_tracked_ids()
+            assert raw_temporary_id not in ttnn._ttnn.operations.trace.drain_pending_traceback_ids()
 
         unsafe_b = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
         if TRACE_ALLOC_DIAGNOSTICS:
