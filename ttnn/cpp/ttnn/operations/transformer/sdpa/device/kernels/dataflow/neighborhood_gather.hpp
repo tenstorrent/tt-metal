@@ -74,7 +74,7 @@ inline void scatter_row(
     uint32_t tile_bytes) {
     const uint32_t seqtile = j / TH;
     const uint32_t r = j % TH;
-    const uint32_t face_row = (r >= FH) ? 2u : 0u;
+    const uint32_t face_idx = (r >= FH) ? 2u : 0u;
     const uint32_t fr = r & (FH - 1);
     // Within one dtile, the token's 32 D-cols split at the FW boundary into two faces, and each half lands
     // CONTIGUOUSLY in its face row: dest[c] = p[face*256 + fr*16 + (c%16)]. So instead of a per-element
@@ -86,9 +86,9 @@ inline void scatter_row(
         // FW=16 Float16_b elems per face-row = 8 uint32 words; the staging stick and the tile faces are
         // both 4-byte aligned, so copy word-wise (halves the load/store count on the dataflow RISC).
         volatile tt_l1_ptr uint32_t* d_lo =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(p + face_row * FACE_HW + fr * FW);
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(p + face_idx * FACE_HW + fr * FW);
         volatile tt_l1_ptr uint32_t* d_hi =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(p + (face_row + 1) * FACE_HW + fr * FW);
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(p + (face_idx + 1) * FACE_HW + fr * FW);
         volatile tt_l1_ptr uint32_t* s_lo = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s);
         volatile tt_l1_ptr uint32_t* s_hi = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + FW);
         for (uint32_t c = 0; c < FW / 2; ++c) {

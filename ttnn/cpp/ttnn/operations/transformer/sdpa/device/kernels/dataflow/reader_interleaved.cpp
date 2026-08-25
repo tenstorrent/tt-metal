@@ -649,15 +649,15 @@ void kernel_main() {
                 constexpr uint32_t v_D = vDHt * tt::constants::TILE_WIDTH;
                 const uint32_t k_row_bytes = nb_W * k_D * 2;  // bf16 W-row page
                 const uint32_t v_row_bytes = nb_W * v_D * 2;
-                constexpr uint32_t seqtile_toks = Sk_chunk_t * tt::constants::TILE_HEIGHT;
+                constexpr uint32_t k_chunk_size = Sk_chunk_t * tt::constants::TILE_HEIGHT;
 
                 CircularBuffer cb_stage(cb_id_gather_stage);
                 cb_stage.reserve_back(1);
                 const uint32_t stage_addr = cb_stage.get_write_ptr();
 
                 for (uint32_t pc = 0; pc < n_packed_chunks; ++pc) {
-                    const uint32_t j0 = pc * seqtile_toks;
-                    uint32_t j1 = j0 + seqtile_toks;
+                    const uint32_t j0 = pc * k_chunk_size;
+                    uint32_t j1 = j0 + k_chunk_size;
                     if (j1 > n_box) {
                         j1 = n_box;
                     }

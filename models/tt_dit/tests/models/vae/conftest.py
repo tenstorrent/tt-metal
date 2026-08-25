@@ -36,3 +36,48 @@ def pytest_runtest_makereport(item, call):
     ):
         report.outcome = "failed"
         report.longrepr = f"GATE SKIPPED under DIFFVAE_GATES_STRICT → treated as FAIL: {report.longrepr}"
+
+
+@pytest.fixture
+def decode_tree(request):
+    """Render the decode timing tree for the TIMED pass of a decode test.
+
+    A decode test warms up first and measures second, so the last root recorded during the test IS
+    the timed pass -- no marker to set and nothing that can drift out of step with what actually
+    ran. The header says which pass it was, derived from the count rather than asserted, so a test
+    that grows a third decode reports "3 of 3" instead of quietly mislabelling.
+
+    Set DIFFVAE_TREE_ALL=1 to also render the warm-up passes (JIT compile cost lands there).
+    """
+    from models.tt_dit.utils import decode_tree as tree
+
+    first = tree.root_count()
+    yield
+    new = tree.roots()[first:]
+    if not new:
+        return  # timing off, or the test skipped before decoding
+
+    nodeid = request.node.name
+    print("\n" + tree.render(new[-1], title=f"{nodeid} · decode pass {len(new)} of {len(new)} (TIMED)"))
+    if os.environ.get("DIFFVAE_TREE_ALL") == "1":
+        for i, root in enumerate(new[:-1]):
+            print("\n" + tree.render(root, title=f"{nodeid} · decode pass {i + 1} of {len(new)} (warm-up)"))
+    request.config._diffvae_rollups.append((nodeid, tree.category_totals(new[-1]), new[-1].incl_ms))
+
+
+def pytest_configure(config):
+    config._diffvae_rollups = []
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """Repeat each timed decode's category roll-up after the summary line.
+
+    The trees themselves are thousands of loguru lines up the scrollback by the time a run ends;
+    this is the part worth reading side by side when comparing two configurations.
+    """
+    from models.tt_dit.utils import decode_tree as tree
+
+    for nodeid, (totals, spans), total_ms in getattr(config, "_diffvae_rollups", []):
+        terminalreporter.write_line("")
+        terminalreporter.write_line(f"DECODE CATEGORIES · {nodeid}")
+        terminalreporter.write_line(tree.render_categories(totals, spans, total_ms))

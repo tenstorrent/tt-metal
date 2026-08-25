@@ -14,6 +14,24 @@
 #   DIFFVAE_GATES_STRICT  1 (default) -> skip becomes fail;  0 -> allow skips
 #   DIFFVAE_GATES_TOL     max allowed PCC drop vs baseline    (default 0.0002)
 #   RECORD_BASELINE       1 -> record this run as the new baseline instead of comparing
+#
+# LTX_CORE_SRC must point at the directory CONTAINING the ltx_core package, i.e. the trailing
+# packages/ltx-core/src -- the repo root alone gives ModuleNotFoundError, since the stage-5 gate
+# just sys.path.insert()s this value. ltx_core is upstream's own implementation (the parity
+# reference); it is not vendored and not pip-installed, so it needs a sibling LTX-2 checkout.
+# One known checkout on this host, readable only while that home stays world-readable:
+#
+#   export LTX_CORE_SRC=/home/noblewoodall/LTX-2/packages/ltx-core/src
+#
+# DIFFVAE_CAPTURE defaults to ~/ltx25_diffvae/stages/crop10.safetensors. Generate it once (host
+# only, no device) -- capture_stages.py needs ltx_core too, so both gates unlock together:
+#
+#   mkdir -p ~/ltx25_diffvae/stages
+#   PYTHONPATH=$LTX_CORE_SRC:. python capture_stages.py randn:1x128x4x34x60 \
+#       --crop 10 --out ~/ltx25_diffvae/stages/crop10.safetensors
+#
+# The synthetic randn: latent reproduces all 8 committed baseline PCCs to four decimals, so it is
+# a sound regression gate -- but it is still not evidence about output video quality.
 set -uo pipefail
 
 ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"

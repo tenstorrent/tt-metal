@@ -30,7 +30,28 @@ from models.tt_dit.models.vae.diffvae_ltx import DiffVAEDecoder, decoder_config
 from models.tt_dit.models.vae.diffvae_ltx_stage5 import _bands
 from models.tt_dit.utils.check import assert_quality
 
-CAPTURE = Path(os.environ.get("DIFFVAE_CAPTURE", "/home/noblewoodall/ltx25_diffvae/stages/crop10.safetensors"))
+
+def _gate_ccl(mesh_device):
+    """CCLManager for the gates. Defaults are the historical Linear/1-link the committed baseline
+    was recorded with, so an unset environment reproduces it exactly; DIFFVAE_TOPOLOGY /
+    DIFFVAE_NUM_LINKS let a gate run also cover the collective config the runner actually ships
+    (ring + 2 links). An all-gather only moves bytes, so this should not shift any PCC -- which is
+    the point of being able to check.
+    """
+    from models.tt_dit.parallel.manager import CCLManager
+
+    topology = (
+        ttnn.Topology.Ring if os.environ.get("DIFFVAE_TOPOLOGY", "linear").lower() == "ring" else ttnn.Topology.Linear
+    )
+    return CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=topology)
+
+
+CAPTURE = Path(
+    os.environ.get(
+        "DIFFVAE_CAPTURE",
+        os.path.expanduser("~/ltx25_diffvae/stages/crop10.safetensors"),
+    )
+)
 CHECKPOINT = Path(
     os.environ.get(
         "DIFFVAE_CHECKPOINT",
@@ -123,7 +144,6 @@ def test_decode_stage5_wsp_matches_replicated(*, mesh_device, sp_axis):
     end-to-end check that the full-stage-SP forward plumbing (reshard, sharded upload, gather)
     reassembles to the same pixels. Same latent and seed, so both draw the same x0 noise.
     """
-    from models.tt_dit.parallel.manager import CCLManager
 
     if not CHECKPOINT.exists():
         pytest.skip(f"missing {CHECKPOINT}")
@@ -135,7 +155,7 @@ def test_decode_stage5_wsp_matches_replicated(*, mesh_device, sp_axis):
     replicated.load_checkpoint(CHECKPOINT)
     pixels_rep = replicated.decode(latent, seed=0)
 
-    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    ccl_manager = _gate_ccl(mesh_device)
     sharded = DiffVAEDecoder(
         config,
         mesh_device=mesh_device,
@@ -160,7 +180,6 @@ def test_decode_full_wsp_matches_replicated(*, mesh_device, sp_axis):
     decode, on shipped weights. The det stages shard from stage 1 (stage 0 replicated) and hand the
     context to stage 5 W-sharded directly (same sp_axis) -- no gather-to-replicated round trip. Same
     latent and seed, so both draw the same x0 noise. End-to-end check of det-stage SP + the handoff."""
-    from models.tt_dit.parallel.manager import CCLManager
 
     if not CHECKPOINT.exists():
         pytest.skip(f"missing {CHECKPOINT}")
@@ -172,7 +191,7 @@ def test_decode_full_wsp_matches_replicated(*, mesh_device, sp_axis):
     replicated.load_checkpoint(CHECKPOINT)
     pixels_rep = replicated.decode(latent, seed=0)
 
-    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    ccl_manager = _gate_ccl(mesh_device)
     # DIFFVAE_TP_HEADS=1 also enables TP-over-heads on the orthogonal (size-4) axis -- only valid when
     # W shards the size-8 axis (sp_axis=1), since num_heads=4 must divide the TP axis size.
     tp_axis = 0 if (os.environ.get("DIFFVAE_TP_HEADS") == "1" and sp_axis == 1) else None
