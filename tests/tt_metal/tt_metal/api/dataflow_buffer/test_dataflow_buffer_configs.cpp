@@ -2386,11 +2386,12 @@ TEST_F(UnitMeshFixture, TensixDMTest1xDFB4Bx4B_blk4_impl_rejected_2_0) {
 }
 
 // --- REJECTED CONFIG: implicit BLOCKED whose txn window doesn't cover every tile counter ---
-// The ISR credits all of a RISC's tile counters equally when a txn ID retires, but a BLOCKED endpoint
-// moves a whole block per counter. At P=1, C=4, block_size=4 and 16 entries the txn window covers 2 of
-// the 4 counters' blocks while all 4 are credited, so consumers 2 and 3 would read entries nobody
-// wrote. compute_txn_descriptor rejects it; the explicit twin is unaffected.
-TEST_F(UnitMeshFixture, DMTest1xDFB1Bx4B_blk4_impl_rejected_2_0) {
+// The ISR credits all of a RISC's tile counters equally when a txn ID retires, while a BLOCKED
+// endpoint moves a whole block per counter, so a txn window must cover a whole number of blocks on
+// every counter. At P=1, C=4, block_size=4 and 16 entries only one txn id satisfies that: its window
+// is the whole ring, so all four blocks are written before any counter is credited. The txn-id picker
+// falls back to that count, which is why this config runs rather than being rejected.
+TEST_F(UnitMeshFixture, DMTest1xDFB1Bx4B_blk4_impl_2_0) {
     auto& mesh_device = this->device();
     if (mesh_device.arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only";
@@ -2406,7 +2407,7 @@ TEST_F(UnitMeshFixture, DMTest1xDFB1Bx4B_blk4_impl_rejected_2_0) {
         .num_entries = 16,
         .block_size = 4,
     };
-    EXPECT_ANY_THROW(run_single_dfb_program_2_0(mesh_device, params));
+    run_single_dfb_program_2_0(mesh_device, params);
 }
 
 // --- REJECTED CONFIG: BLOCKED->BLOCKED with mismatched block sizes (direct API) ---
@@ -2433,7 +2434,7 @@ TEST_F(UnitMeshFixture, DirectApi_BlockSizeMismatch_rejected) {
             experimental::dfb::CreateDataflowBuffer(program, CoreCoord(0, 0), config);
             program.impl().finalize_dataflow_buffer_configs();
         },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("one global block grid")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must equal consumer_block_size")));
 }
 
 // --- REJECTED CONFIG: BLOCKED->STRIDED where the consumers cannot split a block (direct API) ---

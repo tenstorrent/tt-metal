@@ -110,10 +110,12 @@ namespace {
 // Move the current slot's cursor past the n entries this op just handled.
 template <bool is_write>
 inline void dfb_dm_advance_slot(LocalDFBInterface& intf, uint32_t n) {
-    ASSERT(n == 1 || intf.run_length <= 1);
     ASSERT(intf.block_size <= 1 || n == intf.block_size);
     auto& slot = intf.tc_slots[intf.tc_idx];
-    const bool completing = static_cast<uint16_t>(intf.run_pos + 1u) >= intf.run_length;
+    const uint32_t run_len = (intf.run_length > 1) ? static_cast<uint32_t>(intf.run_length) : 1u;
+    const uint32_t run_pos_after = (intf.run_length > 1) ? (static_cast<uint32_t>(intf.run_pos) + n) : 1u;
+    ASSERT(run_pos_after <= run_len);
+    const bool completing = run_pos_after >= run_len;
     const uint32_t advance = (n - 1u) * intf.stride_size + (completing ? intf.stride2 : intf.stride_size);
     if constexpr (is_write) {
         slot.wr_ptr += advance;
@@ -130,7 +132,7 @@ inline void dfb_dm_advance_slot(LocalDFBInterface& intf, uint32_t n) {
         intf.run_pos = 0;
         intf.tc_idx = (intf.tc_idx + 1) % intf.num_tcs_to_rr;
     } else {
-        intf.run_pos++;
+        intf.run_pos = static_cast<uint16_t>(run_pos_after);
     }
 }
 #endif  // !COMPILE_FOR_TRISC

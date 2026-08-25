@@ -1342,23 +1342,63 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
     return desc;
 }
 
-// Returns the smallest n in (1, NUM_TXN_IDS] satisfying the divisibility constraint that
-// compute_txn_descriptor() enforces:
-//   ALL consumer:  num_entries % (n * num_tcs_per_risc) == 0
-//   all other cases:   num_entries % (n * num_prods_or_cons * num_tcs_per_risc) == 0
-// Falls back to 1 if no n > 1 satisfies the constraint.
-// If even n=1 does not satisfy the constraint the configuration is invalid
-// and compute_txn_descriptor() will catch it with a TT_FATAL.
+// Would compute_txn_descriptor() accept this txn-id count? It mirrors that function's checks, so
+// the picker below can reject a count instead of choosing one the descriptor would then FATAL on.
+static bool dfb_txn_id_count_is_legal(
+    uint16_t num_entries,
+    uint8_t num_txn_ids,
+    uint8_t num_prods_or_cons,
+    uint8_t num_tcs_per_risc,
+    bool consumes_all,
+    uint32_t block_size,
+    bool credits_split,
+    uint32_t run_length) {
+    const uint32_t required_divisor = consumes_all
+                                          ? static_cast<uint32_t>(num_txn_ids) * num_tcs_per_risc
+                                          : static_cast<uint32_t>(num_txn_ids) * num_prods_or_cons * num_tcs_per_risc;
+    if (required_divisor == 0 || num_entries % required_divisor != 0) {
+        return false;
+    }
+    const uint32_t wide_per_txn = num_entries / num_txn_ids;
+    const uint32_t wide_entry_threshold = consumes_all ? (num_prods_or_cons * wide_per_txn) : wide_per_txn;
+    if (block_size == 0 || wide_entry_threshold % block_size != 0) {
+        return false;
+    }
+    if (wide_entry_threshold / block_size > 0xFFu || wide_per_txn > 0xFFu) {
+        return false;
+    }
+    const uint32_t per_txn = consumes_all ? wide_per_txn : (wide_entry_threshold / num_prods_or_cons);
+    if (run_length > 1 && num_tcs_per_risc > 1 && per_txn % (run_length * num_tcs_per_risc) != 0) {
+        return false;
+    }
+    if (block_size > 1 && credits_split) {
+        return per_txn % block_size == 0 && block_size % num_tcs_per_risc == 0;
+    }
+    if (block_size > 1) {
+        return per_txn % (block_size * num_tcs_per_risc) == 0;
+    }
+    return true;
+}
+
+// Returns the smallest n in (1, NUM_TXN_IDS] that compute_txn_descriptor() will accept.
 static uint8_t compute_optimal_txn_id_count(
     uint16_t num_entries,
     uint8_t num_prods_or_cons,
     uint8_t num_tcs_per_risc,
-    bool consumes_all) {
+    bool consumes_all,
+    uint32_t block_size,
+    bool credits_split,
+    uint32_t run_length) {
     for (uint8_t n = 2; n <= ::dfb::NUM_TXN_IDS; n++) {
-        uint32_t divisor = consumes_all
-            ? static_cast<uint32_t>(n) * num_tcs_per_risc
-            : static_cast<uint32_t>(n) * num_prods_or_cons * num_tcs_per_risc;
-        if (num_entries % divisor == 0) {
+        if (dfb_txn_id_count_is_legal(
+                num_entries,
+                n,
+                num_prods_or_cons,
+                num_tcs_per_risc,
+                consumes_all,
+                block_size,
+                credits_split,
+                run_length)) {
             return n;
         }
     }
@@ -2809,11 +2849,18 @@ void ProgramImpl::finalize_single_dfb_config(
     // is per-side (separate IE_1/IE_2 masks driving separate ISR handlers).
     if (dfb->groups.empty()) {
         if (config.enable_producer_implicit_sync && !producer_is_tensix_only) {
-            uint8_t num_prod_txn_ids = compute_optimal_txn_id_count(
-                config.num_entries, config.num_producers, num_producer_tcs,
-                /*consumes_all=*/false);
-            auto producer_txn_ids = txn_id_allocator_.allocate(num_prod_txn_ids);
             const uint32_t producer_block_size = dfb_effective_block_entries(*dfb, /*is_producer=*/true);
+            const bool producer_credits_split = dfb_dm_side_credits_split(*dfb, /*is_producer=*/true);
+            const uint32_t producer_run_length = dfb_dm_side_run_length(*dfb, /*is_producer=*/true);
+            uint8_t num_prod_txn_ids = compute_optimal_txn_id_count(
+                config.num_entries,
+                config.num_producers,
+                num_producer_tcs,
+                /*consumes_all=*/false,
+                producer_block_size,
+                producer_credits_split,
+                producer_run_length);
+            auto producer_txn_ids = txn_id_allocator_.allocate(num_prod_txn_ids);
             dfb->producer_txn_descriptor = compute_txn_descriptor(
                 config.num_entries,
                 config.num_producers,
@@ -2823,8 +2870,8 @@ void ProgramImpl::finalize_single_dfb_config(
                 num_producer_tcs,
                 config.pap,
                 producer_block_size,
-                dfb_dm_side_credits_split(*dfb, /*is_producer=*/true),
-                dfb_dm_side_run_length(*dfb, /*is_producer=*/true));
+                producer_credits_split,
+                producer_run_length);
             log_debug(
                 tt::LogMetal,
                 "DFB {} implicit sync: producer txn_ids=[{}] threshold={} per_txn={} per_tc={}",
@@ -2837,11 +2884,18 @@ void ProgramImpl::finalize_single_dfb_config(
 
         if (config.enable_consumer_implicit_sync && !consumer_is_tensix_only) {
             const bool consumes_all = (config.cap == ::dfb::AccessPattern::ALL);
-            uint8_t num_cons_txn_ids = compute_optimal_txn_id_count(
-                config.num_entries, config.num_consumers, num_consumer_tcs,
-                /*consumes_all=*/consumes_all);
-            auto consumer_txn_ids = txn_id_allocator_.allocate(num_cons_txn_ids);
             const uint32_t consumer_block_size = dfb_effective_block_entries(*dfb, /*is_producer=*/false);
+            const bool consumer_credits_split = dfb_dm_side_credits_split(*dfb, /*is_producer=*/false);
+            const uint32_t consumer_run_length = dfb_dm_side_run_length(*dfb, /*is_producer=*/false);
+            uint8_t num_cons_txn_ids = compute_optimal_txn_id_count(
+                config.num_entries,
+                config.num_consumers,
+                num_consumer_tcs,
+                /*consumes_all=*/consumes_all,
+                consumer_block_size,
+                consumer_credits_split,
+                consumer_run_length);
+            auto consumer_txn_ids = txn_id_allocator_.allocate(num_cons_txn_ids);
             dfb->consumer_txn_descriptor = compute_txn_descriptor(
                 config.num_entries,
                 config.num_producers,
@@ -2851,8 +2905,8 @@ void ProgramImpl::finalize_single_dfb_config(
                 num_consumer_tcs,
                 config.cap,
                 consumer_block_size,
-                dfb_dm_side_credits_split(*dfb, /*is_producer=*/false),
-                dfb_dm_side_run_length(*dfb, /*is_producer=*/false));
+                consumer_credits_split,
+                consumer_run_length);
             log_debug(
                 tt::LogMetal,
                 "DFB {} implicit sync: consumer txn_ids=[{}] threshold={} per_txn={} per_tc={}",
