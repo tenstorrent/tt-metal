@@ -8,11 +8,13 @@
 
 #include <tt-metalium/constants.hpp>
 #include "moreh_nll_loss_step2_device_operation.hpp"
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -96,11 +98,14 @@ void bind_self_loop(Group<DFBBinding>& bindings, const DFBSpecName& dfb, std::st
 // explicitly, so where the 32-bit Dest register makes the five intermediates Float32, each gets an
 // explicit UnpackToSrc -- the same mode as before, now spelled out. All five are bound by the
 // compute kernel in every configuration, so the table needs no further conditions.
+//
+// It is reached through the unpack_modes() accessor rather than std::get<ComputeGen1Config>, which
+// would throw on a Gen2 (Quasar) target.
 ComputeHardwareConfig make_compute_hw_config(
     tt::ARCH arch, const DeviceComputeKernelConfig& compute_kernel_config, bool fp32_dest_acc_en) {
     auto hw_config = ttnn::to_compute_hardware_config(arch, compute_kernel_config);
     if (fp32_dest_acc_en) {
-        std::get<ComputeGen1Config>(hw_config).unpack_modes = {
+        unpack_modes(hw_config) = {
             {DFB_TMP_WEIGHT, UnpackMode::UnpackToSrc},
             {DFB_TMP_INPUT, UnpackMode::UnpackToSrc},
             {DFB_TMP1, UnpackMode::UnpackToSrc},
@@ -648,6 +653,9 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_step2_impl_3d(
     KernelRunArgs reader_run_args{.kernel = READER};
     KernelRunArgs writer_run_args{.kernel = WRITER};
 
+    const uint32_t input_element_size = input.element_size();
+    const uint32_t output_element_size = output.element_size();
+
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
         uint32_t units_per_core;
@@ -668,7 +676,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_step2_impl_3d(
                 {"start_id", tile_offset},
                 {"C", origin_C},
                 {"W", origin_W},
-                {"element_size", input.element_size()},
+                {"element_size", input_element_size},
             });
 
         AddRuntimeArgsForNode(
@@ -678,7 +686,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_step2_impl_3d(
                 {"num_tiles_per_core", units_per_core},
                 {"start_id", tile_offset},
                 {"W", origin_W},
-                {"element_size", output.element_size()},
+                {"element_size", output_element_size},
             });
 
         tile_offset += units_per_core;

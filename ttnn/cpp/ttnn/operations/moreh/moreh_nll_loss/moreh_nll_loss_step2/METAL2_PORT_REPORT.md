@@ -81,7 +81,7 @@ the brief said. Each now returns `ttnn::device_operation::ProgramArtifacts`;
 
 ## Successes
 
-- **[Anti-pattern: Demoting per-group CTA to RTA](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/port_patterns.md#anti-pattern-demoting-per-group-cta-to-rta)
+- **[Anti-pattern: Demoting per-group CTA to RTA](../../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/port_patterns.md#anti-pattern-demoting-per-group-cta-to-rta)
   fired exactly as designed, on the op it was written about.** The legacy factory populates a per-core
   compute runtime-arg vector carrying precisely `units_per_core` — and the compute kernel reads no
   runtime args at all, taking that count from a compile-time arg instead. Collapsing the two compute
@@ -94,7 +94,7 @@ the brief said. Each now returns `ttnn::device_operation::ProgramArtifacts`;
   "this op baits the trap unusually well" warning was accurate, and the catalog entry's worked example
   transferred one-to-one.
 
-- **[Two-toucher DFB → assign 1P+1C](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/port_patterns.md#pattern-two-toucher-dfb--assign-1p1c-dual-instance-work-split)'s
+- **[Two-toucher DFB → assign 1P+1C](../../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/port_patterns.md#pattern-two-toucher-dfb--assign-1p1c-dual-instance-work-split)'s
   "re-derive, don't transcribe" instruction, plus the *Constraint* paragraph distinguishing the
   disjoint-node work split from the same-grid one, is what kept the multi-binding flag out of this
   port.** Four DFBs (`tmp_input`, `output`, `tmp_weight`, `divisor`) are referenced by **three**
@@ -102,11 +102,11 @@ the brief said. Each now returns `ttnn::device_operation::ProgramArtifacts`;
   reads like a multi-binding case. Re-running the census per *node* rather than per spec gives two, and
   `dataflow_buffer_spec.hpp:42-50` states the rule at the field: multiple specs may share one endpoint
   role given non-overlapping node coverage, the same kernel kind, and identical binding-site
-  parameters. Going to the header — as [§Read this first](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#read-this-first)
+  parameters. Going to the header — as [§Read this first](../../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#read-this-first)
   recommends over hunting for a precedent — settled it definitively in less time than finding a
   comparable port would have taken.
 
-- **[Compiler options](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#compiler-options)
+- **[Compiler options](../../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#compiler-options)
   caught a defect that has nothing in the code to look at.** `grep -n opt_level` over the legacy
   factory returns *nothing*, which reads as "no setting, nothing to carry" — and is precisely the
   dominant shape of the miss: an absent `KernelDescriptor::opt_level` still resolves to **`O3`** on a
@@ -117,7 +117,7 @@ the brief said. Each now returns `ttnn::device_operation::ProgramArtifacts`;
   `device/moreh_nll_loss_step2_program_factory.cpp:177`, and deliberately inside the shared
   `make_compute_spec` helper so it cannot be set on one instance and missed on the other.
 
-- **[Hardware configuration](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#hardware-configuration)'s
+- **[Hardware configuration](../../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#hardware-configuration)'s
   `unpack_modes` warning — all three of its "three things change at once" — was needed here.** The
   legacy vector is `vector<UnpackToDestMode>(NUM_CIRCULAR_BUFFERS, Default)`: uniform, and `Default`
   maps to `UnpackToSrc`, which one normally expresses by *omitting* every entry. That reasoning gets you
@@ -155,7 +155,7 @@ the brief said. Each now returns `ttnn::device_operation::ProgramArtifacts`;
    conditionally-bound `Float32` DFB consumed under `enable_32_bit_dest` therefore needs *both* rules
    applied at once, not either one.
 
-2. **The [anti-pattern self-audit](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#anti-pattern-self-audit)
+2. **The [anti-pattern self-audit](../../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#anti-pattern-self-audit)
    has no item for a local left dangling by dropped plumbing, and that was this port's only build
    failure.** Dropping the dead `N` runtime arg from the 4d reader left
    `const auto origin_N = input_shape_without_padding[0];` with no remaining reader, which `-Werror`
@@ -171,11 +171,11 @@ the brief said. Each now returns `ttnn::device_operation::ProgramArtifacts`;
 
 3. **The `METAL2_*.md` artifacts are the one thing whose own relative links the recipe never discusses,
    and they are easy to get wrong in the direction that looks right.** [Generated docs in the op
-   directory](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#generated-docs-in-the-op-directory)
+   directory](../../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#generated-docs-in-the-op-directory)
    is emphatic that *code* must not cite these files or the recipe, and the self-audit greps `.cpp` /
    `.hpp` / `.h` for `.md` — correctly. But the plan and report are themselves asked to "cite the doc
    section by name and link," and a link from an op-directory `.md` into `docs/…/metal_2.0/` is a deep
-   relative path (`../../../../../../docs/…`) that no check validates and that is trivially
+   relative path (`../../../../../../../docs/…`) that no check validates and that is trivially
    miscounted — while *looking* exactly like the sanctioned citation the Successes section asks for.
    Since these artifacts are deleted before merge, a broken link costs only a reviewer's click, so this
    is minor. **Suggested addition:** one line saying whether the four artifacts should link into the
@@ -188,8 +188,8 @@ the brief said. Each now returns `ttnn::device_operation::ProgramArtifacts`;
    for a factory whose three internal paths are near-copies, and the recipe does not say which wins.**
    This factory's three rank builders are ~85% identical, and the port had to decide how much to share:
    the three legacy `impl_*` functions duplicate their CB creation, kernel wiring and compute config
-   wholesale. [Scope discipline](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#host-side-stay-in-the-lane)
-   says don't refactor adjacent code; [Unity-build hygiene](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/port_patterns.md#pattern-unity-build-hygiene-for-anonymous-namespace-symbols)
+   wholesale. [Scope discipline](../../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#host-side-stay-in-the-lane)
+   says don't refactor adjacent code; [Unity-build hygiene](../../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/port_patterns.md#pattern-unity-build-hygiene-for-anonymous-namespace-symbols)
    says hoist truly-identical declarations into shared scope; and *Compiler options* effectively
    *requires* sharing the compute-spec construction, since "specs built through a shared helper are no
    exception — the level is per `KernelSpec`" is much easier to guarantee with one helper than with six
@@ -202,7 +202,7 @@ the brief said. Each now returns `ttnn::device_operation::ProgramArtifacts`;
    identical spec-construction helpers is in scope (it is forced by the per-`KernelSpec` fields), while
    merging the legacy code paths themselves is not.
 
-5. **The [self-audit](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#anti-pattern-self-audit)'s
+5. **The [self-audit](../../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#anti-pattern-self-audit)'s
    forced-scaffolding check is guaranteed to fail while the port is being verified, which briefly reads
    as a real finding.** `git diff --name-only "$BASE" | grep -E '^tt_metal/'` necessarily lists
    `program_spec.cpp` and `program_run_args.cpp` for as long as the legality-check forcing is in place —
@@ -212,7 +212,7 @@ the brief said. Each now returns `ttnn::device_operation::ProgramArtifacts`;
    **Suggested addition:** a clause on that item — *"run this last, after the verification run and after
    reverting the forcing; it is expected to fail until then."*
 
-6. **A small proving-the-markers gap.** [Ensure the legality checks are enabled](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#ensure-the-metal-20-host-side-legality-checks-are-enabled)
+6. **A small proving-the-markers gap.** [Ensure the legality checks are enabled](../../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/port/metal2_port.md#ensure-the-metal-20-host-side-legality-checks-are-enabled)
    says to add the *same* marker string in each file and then confirm "**two markers present**." With
    one identical string, a grep cannot tell two fresh translation units from one fresh and one stale —
    which is the exact failure the step exists to rule out. Suffixing each marker with its filename
