@@ -1158,5 +1158,6 @@ TEST_F(TestScopedGraphCapture, ReportMetadataContainsCaptureTimeGitIdentity) {
     EXPECT_TRUE(looks_like_hex(metadata.at(ttnn::graph::kReportGitShaShort).get<std::string>()));
     EXPECT_FALSE(metadata.at(ttnn::graph::kReportGitVersion).get<std::string>().empty());
     EXPECT_FALSE(metadata.at(ttnn::graph::kReportBuildType).get<std::string>().empty());
+    EXPECT_NE(metadata.at(ttnn::graph::kReportBuildType).get<std::string>(), "Unknown");
     EXPECT_TRUE(metadata.at(ttnn::graph::kReportGitDirty).is_boolean());
 }

@@ -111,7 +111,9 @@ function(ParseGitDescribe)
     )
     string(APPEND VERSION_DEB "~ubuntu${UBUNTU_RELEASE}")
 
-    message(STATUS "Version: ${VERSION_FULL}")
+    if(NOT VERSION_PARSE_QUIET)
+        message(STATUS "Version: ${VERSION_FULL}")
+    endif()
 
     # Output variables
     set(VERSION_FULL "${VERSION_FULL}" PARENT_SCOPE)
@@ -126,19 +128,44 @@ function(GenerateVersionHeader)
     if(NOT VERSION_SHA)
         set(VERSION_SHA "${VERSION_HASH}")
     endif()
-    if(CMAKE_BUILD_TYPE)
-        set(VERSION_BUILD_TYPE "${CMAKE_BUILD_TYPE}")
-    else()
-        set(VERSION_BUILD_TYPE "Unknown")
-    endif()
     if(VERSION_DIRTY)
         set(VERSION_DIRTY_CPP "true")
     else()
         set(VERSION_DIRTY_CPP "false")
     endif()
-    configure_file(
-        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/tt_metal_version.hpp.in"
-        "${PROJECT_BINARY_DIR}/generated/tt_metal/impl/version.hpp"
-        @ONLY
+    if(NOT VERSION_TEMPLATE)
+        set(VERSION_TEMPLATE "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/tt_metal_version.hpp.in")
+    endif()
+    if(NOT VERSION_OUTPUT)
+        set(VERSION_OUTPUT "${PROJECT_BINARY_DIR}/generated/tt_metal/impl/version.hpp")
+    endif()
+    if(NOT EXISTS "${VERSION_TEMPLATE}")
+        message(FATAL_ERROR "Missing version header template: ${VERSION_TEMPLATE}")
+    endif()
+    get_filename_component(_version_outdir "${VERSION_OUTPUT}" DIRECTORY)
+    file(MAKE_DIRECTORY "${_version_outdir}")
+    set(_version_tmp "${VERSION_OUTPUT}.tmp")
+    configure_file("${VERSION_TEMPLATE}" "${_version_tmp}" @ONLY)
+    execute_process(
+        COMMAND
+            "${CMAKE_COMMAND}" -E copy_if_different "${_version_tmp}" "${VERSION_OUTPUT}"
+    )
+    file(REMOVE "${_version_tmp}")
+endfunction()
+
+function(AddVersionHeaderTarget)
+    set(_template "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/tt_metal_version.hpp.in")
+    set(_script "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/generate_tt_metal_version.cmake")
+    set(_output "${PROJECT_BINARY_DIR}/generated/tt_metal/impl/version.hpp")
+    add_custom_target(
+        tt_metal_version_header
+        COMMAND
+            "${CMAKE_COMMAND}" "-DVERSION_TEMPLATE=${_template}" "-DVERSION_OUTPUT=${_output}"
+            "-DVERSION_PARSE_QUIET=TRUE" -P "${_script}"
+        BYPRODUCTS
+            "${_output}"
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+        VERBATIM
+        COMMENT "Refreshing tt-metal version header"
     )
 endfunction()

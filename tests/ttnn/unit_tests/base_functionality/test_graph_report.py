@@ -2523,6 +2523,7 @@ class TestGraphReportImport:
         assert report_json["metadata"].get("git_sha_short")
         assert report_json["metadata"].get("version")
         assert report_json["metadata"].get("build_type")
+        assert report_json["metadata"]["build_type"] != "Unknown"
 
         db_path = graph_report.import_report(report_path, db_dir)
 
