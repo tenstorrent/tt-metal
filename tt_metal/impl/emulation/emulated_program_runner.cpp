@@ -925,7 +925,7 @@ static void emit_metal2_namespaces(
         f << "namespace tensor {\n";
         for (const auto& ta : s.ta_accessors) {
             if (ta.is_null) {
-                f << "using " << ta.name << "_t = NullTensorBindingToken;\n";
+                f << "using " << ta.name << "_t = ::tensor_accessor::NullTensorBindingToken;\n";
             } else {
                 f << "using " << ta.name << "_t = ::tensor_accessor::TensorBindingToken<" << ta.cta_offset << "u, "
                   << ta.addr_crta_offset << "u>;\n";

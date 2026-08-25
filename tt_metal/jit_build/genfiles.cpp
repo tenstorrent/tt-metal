@@ -273,7 +273,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "namespace tensor {\n";
             for (const auto& entry : ta_entries) {
                 if (entry.is_null) {
-                    content << "using " << entry.name << "_t = NullTensorBindingToken;\n";
+                    content << "using " << entry.name << "_t = ::tensor_accessor::NullTensorBindingToken;\n";
                     content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
                 } else {
                     content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<"

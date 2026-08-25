@@ -68,7 +68,7 @@ public:
     }
 
     // Null bindings have no address CRTA — constructing a LocalTensorAccessor from one is a compile error.
-    explicit LocalTensorAccessor(NullTensorBindingToken) = delete;
+    explicit LocalTensorAccessor(tensor_accessor::NullTensorBindingToken) = delete;
 
     // Legacy constructor: from a raw node-local L1 base address (a byte address).
     // (Typically a legacy Buffer's address passed into the kernel as a CRTA.)
