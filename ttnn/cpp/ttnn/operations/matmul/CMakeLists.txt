@@ -24,10 +24,8 @@ add_custom_command(
         ${MATMUL_REGISTRY_GENERATED_HEADER}
         ${MATMUL_REGISTRY_GENERATED_SOURCE}
     COMMAND
-        ${Python3_EXECUTABLE} ${MATMUL_REGISTRY_EMITTER}
-        --lock ${MATMUL_REGISTRY_LOCK}
-        --header ${MATMUL_REGISTRY_GENERATED_HEADER}
-        --source ${MATMUL_REGISTRY_GENERATED_SOURCE}
+        ${Python3_EXECUTABLE} ${MATMUL_REGISTRY_EMITTER} --lock ${MATMUL_REGISTRY_LOCK} --header
+        ${MATMUL_REGISTRY_GENERATED_HEADER} --source ${MATMUL_REGISTRY_GENERATED_SOURCE}
     DEPENDS
         ${MATMUL_REGISTRY_LOCK}
         ${MATMUL_REGISTRY_EMITTER}
@@ -86,7 +84,12 @@ target_sources(
         ${MATMUL_REGISTRY_GENERATED_SOURCE}
 )
 
-target_include_directories(ttnn_op_matmul PRIVATE ${FixmeOpIncDirs} ${MATMUL_REGISTRY_GENERATED_DIR})
+target_include_directories(
+    ttnn_op_matmul
+    PRIVATE
+        ${FixmeOpIncDirs}
+        ${MATMUL_REGISTRY_GENERATED_DIR}
+)
 target_link_libraries(ttnn_op_matmul PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(

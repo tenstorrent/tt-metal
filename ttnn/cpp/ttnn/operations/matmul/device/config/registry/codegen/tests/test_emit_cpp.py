@@ -6,8 +6,6 @@ from __future__ import annotations
 
 import copy
 import importlib.util
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -53,18 +51,15 @@ def test_canonical_fixture_validates_and_emits_deterministically(tmp_path: Path)
         output_dir = tmp_path / str(run)
         header = output_dir / "matmul_registry_data.hpp"
         source = output_dir / "matmul_registry_data.cpp"
-        subprocess.run(
+        emitter.main(
             [
-                sys.executable,
-                str(EMITTER_PATH),
                 "--lock",
                 str(FIXTURE_PATH),
                 "--header",
                 str(header),
                 "--source",
                 str(source),
-            ],
-            check=True,
+            ]
         )
         outputs.append((header.read_bytes(), source.read_bytes()))
     assert outputs[0] == outputs[1] == (first_header, first_source)

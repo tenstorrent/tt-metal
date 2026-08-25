@@ -598,12 +598,12 @@ def _write_if_changed(path: Path, data: bytes) -> None:
     os.replace(temporary, path)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--lock", type=Path, required=True)
     parser.add_argument("--header", type=Path, required=True)
     parser.add_argument("--source", type=Path, required=True)
-    arguments = parser.parse_args()
+    arguments = parser.parse_args(argv)
     header, source = emit(load_lock(arguments.lock))
     _write_if_changed(arguments.header, header)
     _write_if_changed(arguments.source, source)
