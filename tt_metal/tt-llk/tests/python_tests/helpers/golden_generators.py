@@ -5186,9 +5186,11 @@ class SdpaSfpuGolden:
         x = input_2d.to(torch.float32).clone()
         out = x.clone()
 
-        if op == SdpaOp.RecipLegacy:
-            transformed = torch.reciprocal(x.abs())
-        elif op == SdpaOp.RecipIter:
+        if op in (SdpaOp.RecipLegacy, SdpaOp.RecipIter):
+            # Both are 1/x. RecipLegacy used to be 1/|x| -- _reciprocal_compat_ returns a
+            # magnitude and calculate_recip_first_column's legacy branch never restored the
+            # sign -- but that branch now runs sfpu_reciprocal_iter, which ends in
+            # copysgn(y, in). See FIX_PLAN_52930_reciprocal_compat_pole.md.
             transformed = torch.reciprocal(x)
         elif op in (SdpaOp.ExpAccurate, SdpaOp.ExpPoly):
             # Both fold the scale, so the reference is exp(scale * x).

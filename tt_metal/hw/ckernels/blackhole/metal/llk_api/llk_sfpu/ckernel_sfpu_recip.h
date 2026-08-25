@@ -371,11 +371,12 @@ sfpi_inline void sfpu_reciprocal_init() {
     }
 }
 
+// legacy_compat is accepted but no longer selects _calculate_reciprocal_compat_: that kernel's
+// exponent-difference arithmetic has no pole guard, so recip(0) returned 1.7e38 instead of inf.
+// See FIX_PLAN_52930_reciprocal_compat_pole.md.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8, bool legacy_compat = false>
 inline void calculate_reciprocal() {
-    if constexpr (legacy_compat) {
-        _calculate_reciprocal_compat_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
-    } else if constexpr (APPROXIMATION_MODE) {
+    if constexpr (APPROXIMATION_MODE) {
         _calculate_reciprocal_fast_7b_(ITERATIONS);
     } else if constexpr (is_fp32_dest_acc_en) {
         _calculate_reciprocal_fast_24b_5c_(ITERATIONS);
@@ -394,15 +395,13 @@ void recip_init() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
-    if constexpr (!legacy_compat) {
-        sfpu_reciprocal_init<false>();  // set vConstFloatPrgm0 for sfpu_reciprocal_iter
-        if constexpr (APPROXIMATION_MODE) {
-            _init_reciprocal_fast_7b_();
-        } else if constexpr (is_fp32_dest_acc_en) {
-            _init_reciprocal_fast_24b_5c_();
-        } else {
-            _init_reciprocal_fast_8b_3c_();
-        }
+    sfpu_reciprocal_init<false>();  // set vConstFloatPrgm0 for sfpu_reciprocal_iter
+    if constexpr (APPROXIMATION_MODE) {
+        _init_reciprocal_fast_7b_();
+    } else if constexpr (is_fp32_dest_acc_en) {
+        _init_reciprocal_fast_24b_5c_();
+    } else {
+        _init_reciprocal_fast_8b_3c_();
     }
 }
 

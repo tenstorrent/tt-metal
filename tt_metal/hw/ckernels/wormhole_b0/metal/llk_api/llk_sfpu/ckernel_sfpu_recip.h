@@ -110,13 +110,12 @@ sfpi_inline void sfpu_reciprocal_init() {
     sfpi::vConstFloatPrgm2 = 2.121212482452392578125f;
 }
 
+// legacy_compat is accepted but no longer selects _calculate_reciprocal_compat_: that kernel's
+// exponent-difference arithmetic has no pole guard, so recip(0) returned 1.7e38 instead of inf.
+// See FIX_PLAN_52930_reciprocal_compat_pole.md.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8, bool legacy_compat = false>
 inline void calculate_reciprocal() {
-    if constexpr (legacy_compat) {
-        _calculate_reciprocal_compat_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
-    } else {
-        _calculate_reciprocal_internal_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
-    }
+    _calculate_reciprocal_internal_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool legacy_compat = false>
@@ -128,9 +127,7 @@ void recip_init() {
     sfpu::_init_sfpu_config_reg();
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     math::reset_counters(p_setrwc::SET_ABD_F);
-    if constexpr (!legacy_compat) {
-        sfpu_reciprocal_init<APPROXIMATION_MODE>();
-    }
+    sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 
 }  // namespace sfpu
