@@ -1388,7 +1388,15 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
                 {"number_of_tiles_per_core", number_of_tiles_per_core},
                 {"number_of_cores_used", all_core_utilization_count},
                 {"ascending", static_cast<uint32_t>(!attributes.descending)},
-                {"stable", static_cast<uint32_t>(attributes.stable)},
+                // #54043: this factory ALWAYS runs the index-aware comparator network. The two
+                // peers of a spanning tile pair merge with swapped operand order and keep
+                // opposite halves; a positional (raw SFPSWAP) tie decision can therefore differ
+                // between them, duplicating indices inside tie groups. The comparator's
+                // (value, index) total order is operand-order independent, and a stable ordering
+                // is a valid unstable ordering. Cost is noise here: the factory is
+                // data-movement-bound (~0.3% at W=8192). Pinned host-side so stable=True and
+                // stable=False produce one identical JIT binary.
+                {"stable", 1u},
             },
         .hw_config = ComputeHardwareConfig{compute_hw_config},
     });

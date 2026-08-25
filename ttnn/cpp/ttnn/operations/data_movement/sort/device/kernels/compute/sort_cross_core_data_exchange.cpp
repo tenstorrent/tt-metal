@@ -31,6 +31,10 @@ void kernel_main() {
     // Comparator-stable network (issue #33492): on exact value ties the index tiles are
     // compare-exchanged so equal values keep their original (ascending-index) order, matching
     // torch.sort(stable=True) in both directions.
+    // The factory pins this arg to 1 for BOTH stabilities (#54043): the raw-SFPSWAP tie
+    // decision is not consistent between the two peers of a spanning tile pair, so the
+    // unstable network could duplicate indices inside tie groups. This kernel therefore
+    // always compiles the comparator arms; a stable ordering is a valid unstable ordering.
     constexpr bool stable = get_arg(args::stable) == 1;
 
     DataflowBuffer input_tensor_dfb(dfb::input_tensor);
