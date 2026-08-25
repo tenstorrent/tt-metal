@@ -359,3 +359,91 @@ def test_one_stage_that_cannot_prepare_does_not_cost_the_others():
     window = src[i : i + 2600]
     assert "except Exception" in window and "continue" in window, "a failing stage is still fatal"
     assert "the others are unaffected" in window
+
+
+# --- and the preparer must be REACHABLE from where the marks run ---------------------------------
+
+
+_NESTED_PREPARER = '''import os
+
+_PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
+
+
+def test_main_perf(device_params, device):
+    def _eager_forward():
+        pipe = build_pipeline(device)
+        return pipe.run()
+
+    def _traced_forward():
+        def _build_for_perf(dev):
+            p = build_pipeline(dev)
+            p.encode_trace_inputs = lambda: 1
+            return p
+
+        measure_adapter(PipelineStageAdapter(_build_for_perf, _ids), device)
+
+    _PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
+    if _PERF_TRACE and not _PROFILING:
+        _traced_forward()
+    else:
+        _eager_forward()
+'''
+
+
+def test_a_preparer_nested_in_another_function_is_not_used():
+    """THE REGRESSION, reported by the run itself:
+    STAGE_MARKS_SKIPPED=NameError("name '_build_for_perf' is not defined").
+
+    The preparer is found by what it DOES, which is right, and the first version stopped there -- it
+    matched a function that genuinely assigns the stage-input hooks but was a LOCAL of the traced
+    path, invisible from the eager function where the marks run. Same scope mistake as copying the
+    adapter's arguments across branches, in a new place."""
+    from agent.stage_marks import find_input_preparer
+
+    assert find_input_preparer(_NESTED_PREPARER, 0) == ""
+    out, why = inject_stage_marks(_NESTED_PREPARER)
+    assert "injected" in why, why
+    ast.parse(out)
+    line = next(l for l in out.splitlines() if "mark_stages_in_scope" in l)
+    assert "bind=" not in line, "an out-of-scope preparer was referenced: %s" % line.strip()
+
+
+def test_a_module_level_preparer_is_still_used():
+    """Reachable from anywhere in the file, so it is exactly what the marks should use."""
+    from agent.stage_marks import find_input_preparer
+
+    src = _with_preparer(prep="_prep_anything")
+    assert find_input_preparer(src, 0) == "_prep_anything"
+    out, _ = inject_stage_marks(src)
+    line = next(l for l in out.splitlines() if "mark_stages_in_scope" in l)
+    assert "bind=_prep_anything" in line, line
+
+
+def test_a_preparer_in_an_enclosing_function_is_visible():
+    """Defined in the test function itself, so the pass -- which lands in a function nested inside
+    it -- can see it. Rejecting this would throw away a usable preparer."""
+    from agent.stage_marks import find_input_preparer, _function_body_end
+
+    src = (
+        "import os\n"
+        '_PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"\n'
+        "\n\n"
+        "def test_x_perf(device):\n"
+        "    def _prep(pipe):\n"
+        "        pipe.decode_trace_inputs = lambda: 1\n"
+        "\n"
+        "    def _eager_forward():\n"
+        "        pipe = build_pipeline(device)\n"
+        "        return pipe\n"
+        "\n"
+        '    _PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"\n'
+        "    if _PERF_TRACE and not _PROFILING:\n"
+        "        pass\n"
+        "    else:\n"
+        "        _eager_forward()\n"
+    )
+    end, _ = _function_body_end(src, "_eager_forward")
+    assert find_input_preparer(src, end) == "_prep"
+    out, _ = inject_stage_marks(src)
+    line = next(l for l in out.splitlines() if "mark_stages_in_scope" in l)
+    assert "bind=_prep" in line, line

@@ -181,7 +181,7 @@ def find_pipeline_in_scope(scope: dict):
 _STAGE_INPUT_HOOK = "_trace_inputs"
 
 
-def find_input_preparer(text: str) -> str:
+def find_input_preparer(text: str, at_line: int = 0) -> str:
     """The name of the test's own stage-input preparer, or "".
 
     STRUCTURAL, like everything else here. A pipeline's <stage>_trace_inputs() reads the captured
@@ -198,20 +198,72 @@ def find_input_preparer(text: str) -> str:
         tree = ast.parse(text)
     except SyntaxError:
         return ""
-    best = ""
+    visible = _scopes_visible_at(tree, at_line)
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if len(node.args.args) != 1:
             continue  # it takes the pipeline, and only that
-        for sub in ast.walk(node):
-            if isinstance(sub, ast.Assign) and any(
-                isinstance(t, ast.Attribute) and t.attr.endswith(_STAGE_INPUT_HOOK) for t in sub.targets
-            ):
-                if not best:
-                    best = node.name
-                break
+        if id(_enclosing_scope(tree, node)) not in visible:
+            continue
+        if _assigns_stage_hook(node):
+            return node.name
+    return ""
+
+
+def _assigns_stage_hook(fn) -> bool:
+    """Does THIS function assign a <stage>_trace_inputs, in its own body?
+
+    Not ast.walk: that descends into nested definitions, so the enclosing test function inherited the
+    assignments of a helper defined inside it and was itself offered as the preparer -- which would
+    have called the test recursively. A function is the preparer only if it does the work."""
+    stack = list(fn.body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue  # a nested definition is its own candidate, not this one's work
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Attribute) and t.attr.endswith(_STAGE_INPUT_HOOK) for t in node.targets
+        ):
+            return True
+        stack.extend(
+            c for c in ast.iter_child_nodes(node) if isinstance(c, ast.stmt) or isinstance(c, ast.excepthandler)
+        )
+    return False
+
+
+def _enclosing_scope(tree, node):
+    """The function that `node` is defined in, or the module."""
+    best = tree
+    for cand in ast.walk(tree):
+        if not isinstance(cand, (ast.FunctionDef, ast.AsyncFunctionDef)) or cand is node:
+            continue
+        if cand.lineno < node.lineno <= (cand.end_lineno or cand.lineno):
+            if best is tree or cand.lineno > best.lineno:
+                best = cand
     return best
+
+
+def _scopes_visible_at(tree, line: int) -> set:
+    """The scopes a name at `line` can resolve in: the module and every function enclosing it.
+
+    WHY A NAME IS NOT ENOUGH. The preparer is found by what it does, which is right, and the first
+    version stopped there -- it matched a function that genuinely assigns the stage-input hooks but
+    was a LOCAL of the traced path, invisible from the eager function where the marks run. That is
+    the same scope mistake as copying the adapter's arguments across branches, in a new place:
+    NameError("name '_build_for_perf' is not defined"), reported by the run itself this time.
+
+    Line 0 means "module scope only", which is the safe reading for a caller that has no site yet.
+    """
+    out = {id(tree)}
+    if not line:
+        return out
+    for cand in ast.walk(tree):
+        if isinstance(cand, (ast.FunctionDef, ast.AsyncFunctionDef)) and cand.lineno < line <= (
+            cand.end_lineno or cand.lineno
+        ):
+            out.add(id(cand))
+    return out
 
 
 def mark_stages_in_scope(scope: dict, device, bind=None) -> int:
@@ -493,7 +545,7 @@ def inject_stage_marks(text: str) -> tuple:
     if end2 is None:
         return text, "lost the body of %s() after bracketing" % fname
     o = out.splitlines(keepends=True)
-    _prep = find_input_preparer(text)
+    _prep = find_input_preparer(out, end2)
     o.insert(end2, _MARK_PASS_TEMPLATE.format(i=find2, bind=(", bind=%s" % _prep) if _prep else ""))
     return "".join(o), "injected at line %d, per-stage pass in %s()" % (k + 1, fname)
 
