@@ -26,13 +26,11 @@ void kernel_main() {
     const uint32_t dram_bank_id = get_arg_val<uint32_t>(3);
     const uint32_t vc = get_arg_val<uint32_t>(4);
     const uint32_t dram_reader_index = get_arg_val<uint32_t>(5);
-    const uint32_t dram_endpoint_x = get_arg_val<uint32_t>(6);
-    const uint32_t dram_endpoint_y = get_arg_val<uint32_t>(7);
-    const uint32_t num_shard_to_write_back = get_arg_val<uint32_t>(8);
-    const uint32_t reshard_tensor_start_offset = get_arg_val<uint32_t>(9);
-    tt_l1_ptr uint32_t* per_core_N_reshard_bytes = (tt_l1_ptr uint32_t*)(get_arg_addr(10));
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(11));
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(12));
+    const uint32_t num_shard_to_write_back = get_arg_val<uint32_t>(6);
+    const uint32_t reshard_tensor_start_offset = get_arg_val<uint32_t>(7);
+    tt_l1_ptr uint32_t* per_core_N_reshard_bytes = (tt_l1_ptr uint32_t*)(get_arg_addr(8));
+    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
+    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(10));
 
     // COMPILE TIME ARGS
     constexpr uint32_t in1_page_size = get_compile_time_arg_val(0);
@@ -70,7 +68,6 @@ void kernel_main() {
     constexpr uint32_t k_rows_per_block = in1_block_num_tiles / tiles_per_k_row;
     constexpr uint32_t in1_tile_size_bytes = in1_block_size_bytes / in1_block_num_tiles;
     const uint32_t shard_column_offset_tiles = dram_reader_index * tiles_per_k_row;
-    const bool use_alternate_endpoint = dram_reader_index > 0;
 #endif
 
     Noc noc;
@@ -133,26 +130,13 @@ void kernel_main() {
                 (block * k_rows_per_block + row) * bank_row_stride_tiles + shard_column_offset_tiles;
             const uint32_t read_size = tiles_per_k_row * in1_tile_size_bytes;
             const uint32_t read_address = in1_tensor_addr + source_tile * in1_tile_size_bytes;
-            if (use_alternate_endpoint) {
-                UnicastEndpoint alternate_dram_endpoint;
-                noc.async_read<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
-                    alternate_dram_endpoint,
-                    CoreLocalMem<uint32_t>(l1_write_addr_in1),
-                    read_size,
-                    {.noc_x = dram_endpoint_x,
-                     .noc_y = dram_endpoint_y,
-                     .addr = read_address + bank_to_dram_offset[dram_bank_id]},
-                    {},
-                    NocOptVals{.vc = vc, .trid = curr_block_trid});
-            } else {
-                noc.async_read<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
-                    dram_bank,
-                    CoreLocalMem<uint32_t>(l1_write_addr_in1),
-                    read_size,
-                    {.bank_id = dram_bank_id, .addr = read_address},
-                    {},
-                    NocOptVals{.vc = vc, .trid = curr_block_trid});
-            }
+            noc.async_read<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
+                dram_bank,
+                CoreLocalMem<uint32_t>(l1_write_addr_in1),
+                read_size,
+                {.bank_id = dram_bank_id, .addr = read_address},
+                {},
+                NocOptVals{.vc = vc, .trid = curr_block_trid});
             l1_write_addr_in1 += read_size;
         }
 #else
@@ -203,38 +187,20 @@ void kernel_main() {
     constexpr uint32_t in3_tile_size_bytes = (in3_num_pages * in3_page_size) / reader_width_tiles;
     l1_read_addr_in3 = dram_reader_index * reader_width_tiles * in3_tile_size_bytes;
 #endif
-
     noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
         dram_bank, in3_page_size, {.bank_id = dram_bank_id, .addr = in3_tensor_addr}, NocOptVals{.vc = vc});
 
     for (uint32_t h = 0; h < in3_num_pages; ++h) {
-#ifdef SPLIT_DRAM_BANK
-        if (use_alternate_endpoint) {
-            UnicastEndpoint alternate_dram_endpoint;
-            noc.async_read<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
-                alternate_dram_endpoint,
-                CoreLocalMem<uint32_t>(l1_write_addr_in3),
-                in3_page_size,
-                {.noc_x = dram_endpoint_x,
-                 .noc_y = dram_endpoint_y,
-                 .addr = in3_tensor_addr + l1_read_addr_in3 + bank_to_dram_offset[dram_bank_id]},
-                {},
-                NocOptVals{.vc = vc, .trid = 0});
-        } else
-#endif
-        {
-            noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
-                dram_bank,
-                CoreLocalMem<uint32_t>(l1_write_addr_in3),
-                in3_page_size,
-                {.bank_id = dram_bank_id, .addr = in3_tensor_addr + l1_read_addr_in3},
-                {},
-                NocOptVals{.vc = vc});
-        }
+        noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+            dram_bank,
+            CoreLocalMem<uint32_t>(l1_write_addr_in3),
+            in3_page_size,
+            {.bank_id = dram_bank_id, .addr = in3_tensor_addr + l1_read_addr_in3},
+            {},
+            NocOptVals{.vc = vc});
         l1_read_addr_in3 += in3_page_size;
         l1_write_addr_in3 += in3_page_size;
     }
-
     // Barrier! make sure the reads are done
     noc.async_read_barrier();
     dfb_in3.push_back(in1_block_w);

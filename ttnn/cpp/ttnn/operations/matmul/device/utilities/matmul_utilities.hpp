@@ -353,7 +353,6 @@ struct DramBankReaderAssignment {
     tt::tt_metal::CoreCoord worker_core;
     uint32_t bank_id;
     uint32_t worker_index;
-    tt::tt_metal::CoreCoord dram_endpoint_noc0;
 };
 
 // This type of access pattern cannot be copied.
@@ -377,6 +376,9 @@ void get_optimal_dram_bank_to_reader_assignment(
     tt::tt_metal::NOC noc);
 
 std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
-    tt::tt_metal::IDevice* device, tt::tt_metal::NOC noc, uint32_t workers_per_bank);
+    tt::tt_metal::IDevice* device,
+    tt::tt_metal::NOC noc,
+    uint32_t workers_per_bank,
+    const CoreRangeSet& secondary_reader_excluded_cores);
 
 }  // namespace ttnn::prim::dram_sharded_helpers

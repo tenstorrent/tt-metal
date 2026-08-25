@@ -260,9 +260,10 @@ def run_test_matmul_in1_dram_sharded(
     "N,fidelity,has_bias,activation,grid_size,in1_dtype",
     [
         (1024, ttnn.MathFidelity.HiFi2, True, None, (8, 2), ttnn.bfloat8_b),
+        (1024, ttnn.MathFidelity.HiFi2, False, None, (8, 2), ttnn.bfloat8_b),
         (1280, ttnn.MathFidelity.LoFi, False, "relu", (8, 1), ttnn.bfloat4_b),
     ],
-    ids=["bfp8_hifi2_bias", "bfp4_lofi_padded_relu"],
+    ids=["bfp8_hifi2_bias", "bfp8_hifi2_no_bias", "bfp4_lofi_padded_relu"],
 )
 def test_matmul_in1_dram_sharded_worker_counts(
     device,

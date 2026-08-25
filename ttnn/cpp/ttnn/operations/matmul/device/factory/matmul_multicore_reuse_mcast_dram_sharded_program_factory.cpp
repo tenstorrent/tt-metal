@@ -122,7 +122,8 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         workers_per_bank == 1 || in1_noc == tt::tt_metal::NOC::NOC_0,
         "Multiple workers per DRAM bank currently require a NOC0 data-movement kernel");
 
-    auto reader_assignments = get_dram_bank_reader_assignments(device, in1_noc, workers_per_bank);
+    auto reader_assignments =
+        get_dram_bank_reader_assignments(device, in1_noc, workers_per_bank, input_all_storage_cores);
     uint32_t num_dram_banks = reader_assignments.size() / workers_per_bank;
 
     // Remove cores assigned to padding-only DRAM banks from the workers category
@@ -417,6 +418,21 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     //                      Build Kernel Descriptors
     ////////////////////////////////////////////////////////////////////////////
 
+    std::set<CoreRange> secondary_reader_ranges;
+    std::set<CoreRange> primary_and_idle_ranges;
+    if (workers_per_bank > 1) {
+        for (const auto& assignment : reader_assignments) {
+            if (assignment.worker_index == 1) {
+                secondary_reader_ranges.insert(CoreRange(assignment.worker_core));
+            }
+        }
+        for (const auto& core : all_cores_in_rect_grid_vec) {
+            if (!secondary_reader_ranges.contains(CoreRange(core))) {
+                primary_and_idle_ranges.insert(CoreRange(core));
+            }
+        }
+    }
+
     // in0 sender kernel (reader - RISCV_1)
     KernelDescriptor in0_sender_kernel_desc;
     in0_sender_kernel_desc.kernel_source =
@@ -431,6 +447,15 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     };
     in0_sender_kernel_desc.config =
         DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
+
+    KernelDescriptor in0_sender_other_noc_kernel_desc;
+    if (workers_per_bank > 1) {
+        in0_sender_kernel_desc.core_ranges = CoreRangeSet(primary_and_idle_ranges);
+        in0_sender_other_noc_kernel_desc = in0_sender_kernel_desc;
+        in0_sender_other_noc_kernel_desc.core_ranges = CoreRangeSet(secondary_reader_ranges);
+        in0_sender_other_noc_kernel_desc.config =
+            DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in1_noc};
+    }
 
     // in1 sender/writer kernel (writer - RISCV_0)
     KernelDescriptor in1_sender_writer_kernel_desc;
@@ -449,6 +474,16 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     };
     in1_sender_writer_kernel_desc.config =
         DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
+
+    KernelDescriptor in1_sender_writer_other_noc_kernel_desc;
+    const bool has_secondary_reader_kernels = workers_per_bank > 1;
+    if (has_secondary_reader_kernels) {
+        in1_sender_writer_kernel_desc.core_ranges = CoreRangeSet(primary_and_idle_ranges);
+        in1_sender_writer_other_noc_kernel_desc = in1_sender_writer_kernel_desc;
+        in1_sender_writer_other_noc_kernel_desc.core_ranges = CoreRangeSet(secondary_reader_ranges);
+        in1_sender_writer_other_noc_kernel_desc.config =
+            DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in0_noc};
+    }
 
     // Compute kernel
     uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
@@ -695,7 +730,9 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         mm_in0_sender_args.insert(
             mm_in0_sender_args.end(), in0_mcast_sender_noc_y.begin(), in0_mcast_sender_noc_y.end());
 
-        in0_sender_kernel_desc.runtime_args.emplace_back(core, std::move(mm_in0_sender_args));
+        auto& in0_kernel_desc = secondary_reader_ranges.contains(CoreRange(core)) ? in0_sender_other_noc_kernel_desc
+                                                                                  : in0_sender_kernel_desc;
+        in0_kernel_desc.runtime_args.emplace_back(core, std::move(mm_in0_sender_args));
         sender_id++;
     }
 
@@ -713,7 +750,9 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         mm_in0_receiver_args.insert(
             mm_in0_receiver_args.end(), in0_mcast_sender_noc_y.begin(), in0_mcast_sender_noc_y.end());
 
-        in0_sender_kernel_desc.runtime_args.emplace_back(core, std::move(mm_in0_receiver_args));
+        auto& in0_kernel_desc = secondary_reader_ranges.contains(CoreRange(core)) ? in0_sender_other_noc_kernel_desc
+                                                                                  : in0_sender_kernel_desc;
+        in0_kernel_desc.runtime_args.emplace_back(core, std::move(mm_in0_receiver_args));
     }
 
     // in0 sender runtime args (idle cores in rect grid)
@@ -725,7 +764,9 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
             uint32_t worker_core_type = 0;
             mm_in0_idle_args.push_back((std::uint32_t)worker_core_type);
 
-            in0_sender_kernel_desc.runtime_args.emplace_back(core, std::move(mm_in0_idle_args));
+            auto& in0_kernel_desc = secondary_reader_ranges.contains(CoreRange(core)) ? in0_sender_other_noc_kernel_desc
+                                                                                      : in0_sender_kernel_desc;
+            in0_kernel_desc.runtime_args.emplace_back(core, std::move(mm_in0_idle_args));
         }
     }
 
@@ -801,14 +842,6 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         mm_in1_sender_writer_args.push_back((std::uint32_t)bank_id);
         mm_in1_sender_writer_args.push_back((std::uint32_t)vc);
         mm_in1_sender_writer_args.push_back(reader_assignment.worker_index);
-        uint32_t alternate_endpoint_x = 0;
-        uint32_t alternate_endpoint_y = 0;
-        if (reader_assignment.worker_index > 0) {
-            alternate_endpoint_x = reader_assignment.dram_endpoint_noc0.x;
-            alternate_endpoint_y = reader_assignment.dram_endpoint_noc0.y;
-        }
-        mm_in1_sender_writer_args.push_back(alternate_endpoint_x);
-        mm_in1_sender_writer_args.push_back(alternate_endpoint_y);
 
         if (per_core_N_in1_sender < per_core_N_storage) {
             TT_FATAL(curr_storage_core_idx < num_cores_written_back, "Worker {} has no storage area assigned", core);
@@ -895,7 +928,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
                 }
             }
 
-            mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + 8, num_cores_write_back);
+            mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + 6, num_cores_write_back);
         }
 
         // Build variant args: positions [1] and [2] are buffer addresses
@@ -905,10 +938,12 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         if (bias.has_value()) {
             in1_writer_args[2] = *bias;
         }
-        in1_sender_writer_kernel_desc.emplace_runtime_args(core, in1_writer_args);
+        auto& in1_kernel_desc = reader_assignment.worker_index == 0 ? in1_sender_writer_kernel_desc
+                                                                    : in1_sender_writer_other_noc_kernel_desc;
+        in1_kernel_desc.emplace_runtime_args(core, in1_writer_args);
         TT_FATAL(
-            mm_in1_sender_writer_args.size() >= 13,
-            "Kernel requires at least 13 runtime args, got {}",
+            mm_in1_sender_writer_args.size() >= 11,
+            "Kernel requires at least 11 runtime args, got {}",
             mm_in1_sender_writer_args.size());
     }
 
@@ -922,7 +957,13 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     //                      Push Kernel Descriptors
     ////////////////////////////////////////////////////////////////////////////
     desc.kernels.push_back(std::move(in0_sender_kernel_desc));
+    if (has_secondary_reader_kernels) {
+        desc.kernels.push_back(std::move(in0_sender_other_noc_kernel_desc));
+    }
     desc.kernels.push_back(std::move(in1_sender_writer_kernel_desc));
+    if (has_secondary_reader_kernels) {
+        desc.kernels.push_back(std::move(in1_sender_writer_other_noc_kernel_desc));
+    }
     desc.kernels.push_back(std::move(compute_kernel_desc));
 
     return desc;

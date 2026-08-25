@@ -397,7 +397,10 @@ void get_optimal_dram_bank_to_reader_assignment(
 }
 
 std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
-    tt::tt_metal::IDevice* device, tt::tt_metal::NOC noc, uint32_t workers_per_bank) {
+    tt::tt_metal::IDevice* device,
+    tt::tt_metal::NOC noc,
+    uint32_t workers_per_bank,
+    const CoreRangeSet& secondary_reader_excluded_cores) {
     TT_FATAL(
         workers_per_bank == 1 || workers_per_bank == 2, "workers_per_bank must be 1 or 2, got {}", workers_per_bank);
 
@@ -407,7 +410,7 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
 
     if (workers_per_bank == 1) {
         for (uint32_t bank = 0; bank < primary_workers.size(); ++bank) {
-            assignments.push_back({primary_workers[bank], bank, 0, {}});
+            assignments.push_back({primary_workers[bank], bank, 0});
         }
         return assignments;
     }
@@ -416,51 +419,45 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
         noc == tt::tt_metal::NOC::NOC_0,
         "Multiple readers per DRAM bank currently require a NOC0 data-movement kernel");
 
+    const auto secondary_noc = noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
+    const auto secondary_preferred_workers = device->get_optimal_dram_bank_to_logical_worker_assignment(secondary_noc);
+    TT_FATAL(
+        secondary_preferred_workers.size() == primary_workers.size(),
+        "NOC0 and NOC1 expose different DRAM-bank counts: {} versus {}",
+        primary_workers.size(),
+        secondary_preferred_workers.size());
+
     const auto worker_grid = device->compute_with_storage_grid_size();
-    const uint32_t noc_rows = device->grid_size().y;
     std::set<tt::tt_metal::CoreCoord> used(primary_workers.begin(), primary_workers.end());
 
     for (uint32_t bank = 0; bank < primary_workers.size(); ++bank) {
         const auto primary = primary_workers[bank];
-        assignments.push_back({primary, bank, 0, {}});
-
-        const auto bank_endpoints =
-            tt::tt_metal::experimental::Device::get_additional_dram_bank_noc0_read_endpoints(device, bank);
-        TT_FATAL(
-            bank_endpoints.size() >= workers_per_bank - 1,
-            "DRAM bank {} exposes {} additional read endpoints, fewer than required {}",
-            bank,
-            bank_endpoints.size(),
-            workers_per_bank - 1);
+        assignments.push_back({primary, bank, 0});
 
         bool found = false;
         uint32_t best_cost = std::numeric_limits<uint32_t>::max();
         tt::tt_metal::CoreCoord best_worker{};
-        tt::tt_metal::CoreCoord best_endpoint{};
-        for (uint32_t x = primary.x; x < worker_grid.x; ++x) {
+        for (uint32_t x = 0; x < worker_grid.x; ++x) {
             for (uint32_t y = 0; y < worker_grid.y; ++y) {
                 const tt::tt_metal::CoreCoord candidate{x, y};
-                if (used.contains(candidate)) {
+                if (used.contains(candidate) || secondary_reader_excluded_cores.contains(candidate)) {
                     continue;
                 }
-                const auto worker_noc0 = device->virtual_core_from_logical_core(candidate, tt::CoreType::WORKER);
-                for (const auto& endpoint : bank_endpoints) {
-                    // NOC0 traverses south in Y. Prioritize workers on an endpoint's row, then
-                    // keep each secondary close to its bank's primary reader column.
-                    const uint32_t south_hops = (worker_noc0.y + noc_rows - endpoint.placement_coordinate.y) % noc_rows;
-                    const uint32_t cost = south_hops * 64 + (x - primary.x);
-                    if (cost < best_cost) {
-                        found = true;
-                        best_cost = cost;
-                        best_worker = candidate;
-                        best_endpoint = endpoint.address_coordinate;
-                    }
+                // Place the second reader near this bank's preferred endpoint on the other NOC.
+                // Each reader still uses AllocatorBank, so NOC0 and NOC1 independently use their
+                // firmware-approved endpoint rather than targeting two endpoints from one NOC.
+                const uint32_t cost = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                    device, candidate, secondary_preferred_workers[bank], secondary_noc);
+                if (cost < best_cost) {
+                    found = true;
+                    best_cost = cost;
+                    best_worker = candidate;
                 }
             }
         }
         TT_FATAL(found, "No free second DRAM reader core for bank {}", bank);
         used.insert(best_worker);
-        assignments.push_back({best_worker, bank, 1, best_endpoint});
+        assignments.push_back({best_worker, bank, 1});
     }
     return assignments;
 }
