@@ -14,6 +14,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import torch
+from vllm.logger import init_logger
 from vllm.model_executor.layers.mamba.mamba_utils import (
     MambaStateCopyFuncCalculator,
     MambaStateDtypeCalculator,
@@ -27,10 +28,18 @@ from models.autoports.qwen_qwen3_6_35b_a3b.tt.functional_decoder import (
     QwenLinearAttentionState,
 )
 from models.autoports.qwen_qwen3_6_35b_a3b.tt.generator import QwenReadinessGenerator
-from models.autoports.qwen_qwen3_6_35b_a3b.tt.model import QwenFullModelCache, _copy_bf16_to_existing, _shape, _slice
+from models.autoports.qwen_qwen3_6_35b_a3b.tt.model import (
+    QwenFullModelCache,
+    _copy_bf16_to_existing,
+    _shape,
+    _slice,
+    hf_weights_cached,
+)
 from models.autoports.qwen_qwen3_6_35b_a3b.tt.multichip_decoder import MultichipDecoder
 from models.common.sampling import format_sampling_params
 from models.common.utility_functions import nearest_32
+
+logger = init_logger(__name__)
 
 
 def _model_dir() -> Path:
@@ -138,11 +147,22 @@ class Qwen3_5MoeForConditionalGeneration(QwenReadinessGenerator):
             )
         model_id = getattr(hf_config, "_name_or_path", None) or MODEL_ID
         serving_batch = nearest_32(int(max_batch_size))
+        # Hermetic when possible, but a machine whose HF cache has never seen
+        # this model (first serve on a CI runner) must be allowed to download:
+        # with a hard local_files_only=True the engine dies at weight load
+        # (run 32790175259). The tokenizer/config fetches inherit the same flag.
+        local_files_only = hf_weights_cached(model_id)
+        if not local_files_only:
+            logger.warning(
+                "Qwen3.6 checkpoint %s is not in the local HF cache; "
+                "enabling online download (~68 GB on first serve).",
+                model_id,
+            )
         return cls(
             model_dir=_model_dir(),
             mesh_device=mesh_device,
             model_id=model_id,
-            local_files_only=True,
+            local_files_only=local_files_only,
             max_batch_size=serving_batch,
             max_seq_len=resolved_max_seq_len,
             host_sampling_compat=True,

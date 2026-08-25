@@ -67,6 +67,23 @@ class QwenFullModelCache:
     block_size: int
 
 
+def hf_weights_cached(model_id: str = MODEL_ID) -> bool:
+    """True when the sharded-checkpoint index is already in the local HF cache.
+
+    Probes the same file ``_SafetensorCheckpoint`` opens first, without any
+    network traffic. Serving uses it to decide whether ``local_files_only=True``
+    can hold: a fresh machine (e.g. a CI runner whose mounted HF cache has never
+    seen this model) must be allowed to download, or the engine dies at load
+    with LocalEntryNotFoundError. A partially downloaded snapshot can still fail
+    on a later shard read; this only decides whether going online is permitted.
+    """
+    try:
+        hf_hub_download(model_id, "model.safetensors.index.json", local_files_only=True)
+        return True
+    except Exception:
+        return False
+
+
 class _SafetensorCheckpoint:
     """Small streaming loader for the local HF sharded checkpoint."""
 
