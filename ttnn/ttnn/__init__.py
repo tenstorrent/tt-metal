@@ -186,12 +186,11 @@ else:
 
 
 if TRACE_ALLOC_TRACKING:
+    from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
 
     def execute_trace(mesh_device, trace_id, *, cq_id=None, blocking=True):
         """Execute a captured trace, with automatic allocation-safety verification."""
-        from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
-
-        UnsafeAllocationTracker(mesh_device).verify_before_replay(trace_id)
+        UnsafeAllocationTracker.verify_before_replay(mesh_device, trace_id)
         return _ttnn_execute_trace(mesh_device, trace_id, cq_id=cq_id, blocking=blocking)
 
 else:

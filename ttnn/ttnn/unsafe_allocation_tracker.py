@@ -25,6 +25,11 @@ import gc
 import sys
 from typing import ClassVar
 
+from ttnn._ttnn.operations.trace import (
+    get_all_unsafe_tracked_ids,
+    get_unsafe_tracked_ids,
+    remove_unsafe_tracked_id,
+)
 from ttnn.trace_allocation_config import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_REFERRER_DEPTH
 
 
@@ -36,14 +41,9 @@ class UnsafeAllocationTracker:
     _diagnostics_enabled: ClassVar[bool] = TRACE_ALLOC_DIAGNOSTICS
     _referrer_depth: ClassVar[int] = TRACE_ALLOC_REFERRER_DEPTH
 
-    def __init__(self, mesh_device):
-        self.mesh_device = mesh_device
-
     @classmethod
     def reconcile_tracebacks(cls) -> set[int]:
         """Drop tracebacks for buffers no longer marked unsafe by any allocator."""
-        from ttnn._ttnn.operations.trace import get_all_unsafe_tracked_ids
-
         currently_unsafe = set(get_all_unsafe_tracked_ids())
         for buffer_unique_id in cls._tracebacks.keys() - currently_unsafe:
             cls._tracebacks.pop(buffer_unique_id)
@@ -57,7 +57,6 @@ class UnsafeAllocationTracker:
         Returns the tensor's buffer_unique_id.
         """
         import ttnn
-        from ttnn._ttnn.operations.trace import remove_unsafe_tracked_id
 
         if not isinstance(tensor, ttnn.Tensor):
             raise TypeError(f"mark_corruptible expects a ttnn.Tensor, got {type(tensor).__name__}")
@@ -74,22 +73,29 @@ class UnsafeAllocationTracker:
         cls._tracebacks.pop(buf_id, None)
         return buf_id
 
-    def verify_before_replay(self, trace_id) -> None:
+    @classmethod
+    def verify_before_replay(cls, mesh_device, trace_id) -> None:
         """
-        Call before execute_trace. Triggers GC, then checks for buffers that
-        are unsafe for this trace and still alive. Raises RuntimeError with
-        details if any are found.
+        Call before execute_trace. Checks for unsafe buffers and only triggers
+        GC when the first check finds candidates, then checks again. Raises
+        RuntimeError with details if any remain.
 
         Reports allocation context (op name + compile args) and Python-side referrers.
         """
-        from ttnn._ttnn.operations.trace import get_unsafe_tracked_ids
-
-        gc.collect()
-
         # get_unsafe_tracked_ids returns dict[int, str] mapping buffer_id -> allocation context
-        live_unsafe_map = get_unsafe_tracked_ids(self.mesh_device, trace_id)
-        if self._diagnostics_enabled:
-            self.reconcile_tracebacks()
+        live_unsafe_map = get_unsafe_tracked_ids(mesh_device, trace_id)
+        if not live_unsafe_map:
+            if cls._diagnostics_enabled:
+                cls.reconcile_tracebacks()
+            return
+
+        # Unreachable tensors can be retained in Python reference cycles. Pay
+        # for a full collection only on the exceptional path where C++ first
+        # reports a live unsafe allocation, then re-query authoritative state.
+        gc.collect()
+        live_unsafe_map = get_unsafe_tracked_ids(mesh_device, trace_id)
+        if cls._diagnostics_enabled:
+            cls.reconcile_tracebacks()
         if not live_unsafe_map:
             return
 
@@ -105,15 +111,15 @@ class UnsafeAllocationTracker:
             ctx_str = f" [op: {ctx}]" if ctx else ""
             parts.append(f"Buffer {buf_id}{ctx_str}\n")
 
-            if self._diagnostics_enabled:
-                tb = self._tracebacks.get(buf_id)
+            if cls._diagnostics_enabled:
+                tb = cls._tracebacks.get(buf_id)
                 if tb:
                     parts.append(f"  allocated at:\n{tb}")
 
-        if self._diagnostics_enabled:
+        if cls._diagnostics_enabled:
             parts.append("\n--- Python referrer analysis ---\n")
             try:
-                parts.append(self._find_python_referrers(live_unsafe))
+                parts.append(cls._find_python_referrers(live_unsafe))
             except Exception as e:
                 parts.append(f"(referrer analysis failed: {type(e).__name__}: {e})")
 
