@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <numeric>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
@@ -36,6 +37,10 @@ constexpr const char* KERNEL_READER =
     "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/redistribute_pages_row_major_reader.cpp";
 constexpr const char* KERNEL_WRITER =
     "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/redistribute_pages_row_major_writer.cpp";
+constexpr const char* KERNEL_PARALLEL_READER =
+    "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/redistribute_pages_row_major_parallel_reader.cpp";
+constexpr const char* KERNEL_PARALLEL_WRITER =
+    "ttnn/cpp/ttnn/operations/data_movement/copy/device/kernels/redistribute_pages_row_major_parallel_writer.cpp";
 
 }  // namespace
 
@@ -73,12 +78,155 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultRowMajor::c
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
     const std::uint32_t total_logical_rows = input.logical_volume() / input.logical_shape()[-1];
+
+    // Wide, short tensors otherwise assign work by logical row and leave most cores idle. If both endpoint page
+    // boundaries share an aligned unit, distribute those units independently across the compute grid.
+    constexpr std::uint32_t MAX_SUBBLOCK_SIZE_BYTES = 65536 * 4;
+    const std::uint32_t common_page_elements = std::gcd(elements_per_input_page, elements_per_output_page);
+    const std::uint32_t common_page_bytes = common_page_elements * bytes_per_element;
+    const std::uint32_t required_alignment = std::max(input.buffer()->alignment(), output.buffer()->alignment());
+    const bool can_parallelize_pages = common_page_elements < elements_per_tensor_row &&
+                                       common_page_bytes <= MAX_SUBBLOCK_SIZE_BYTES &&
+                                       common_page_bytes % required_alignment == 0;
+
+    if (can_parallelize_pages) {
+        const std::uint32_t units_per_row = tt::div_up(elements_per_tensor_row, common_page_elements);
+        const std::uint32_t total_units = total_logical_rows * units_per_row;
+        auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_units);
+        std::vector<CoreCoord> ordered_cores = corerange_to_cores(all_cores, num_cores, true);
+        const std::uint32_t aligned_unit_bytes = tt::align(common_page_bytes, required_alignment);
+
+        const m2::DFBSpecName UNIT{"unit"};
+        const m2::TensorParamName INPUT{"input"};
+        const m2::TensorParamName OUTPUT{"output"};
+        const m2::KernelSpecName READER{"reader"};
+        const m2::KernelSpecName WRITER{"writer"};
+
+        m2::DataflowBufferSpec unit_dfb{
+            .unique_id = UNIT,
+            .entry_size = aligned_unit_bytes,
+            .num_entries = 2,
+            .data_format_metadata = tt::tt_metal::datatype_to_dataformat_converter(input.dtype()),
+        };
+
+        const auto arch = device->arch();
+        m2::KernelSpec reader{
+            .unique_id = READER,
+            .source = KERNEL_PARALLEL_READER,
+            .dfb_bindings =
+                {
+                    m2::DFBBinding{
+                        .dfb_spec_name = UNIT,
+                        .accessor_name = "unit",
+                        .endpoint_type = m2::DFBEndpointType::PRODUCER,
+                    },
+                },
+            .tensor_bindings =
+                {
+                    m2::TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"},
+                },
+            .compile_time_args =
+                {
+                    {"units_per_row", units_per_row},
+                    {"input_pages_per_row", num_input_pages_in_row},
+                    {"input_page_elements", elements_per_input_page},
+                    {"row_elements", elements_per_tensor_row},
+                    {"unit_elements", common_page_elements},
+                    {"element_bytes", bytes_per_element},
+                },
+            .runtime_arg_schema =
+                {
+                    .runtime_arg_names = {"start_unit", "num_units"},
+                },
+            .hw_config = ttnn::create_reader_datamovement_config(arch),
+        };
+
+        m2::KernelSpec writer{
+            .unique_id = WRITER,
+            .source = KERNEL_PARALLEL_WRITER,
+            .dfb_bindings =
+                {
+                    m2::DFBBinding{
+                        .dfb_spec_name = UNIT,
+                        .accessor_name = "unit",
+                        .endpoint_type = m2::DFBEndpointType::CONSUMER,
+                    },
+                },
+            .tensor_bindings =
+                {
+                    m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"},
+                },
+            .compile_time_args =
+                {
+                    {"units_per_row", units_per_row},
+                    {"output_pages_per_row", num_output_pages_in_row},
+                    {"output_page_elements", elements_per_output_page},
+                    {"row_elements", elements_per_tensor_row},
+                    {"unit_elements", common_page_elements},
+                    {"element_bytes", bytes_per_element},
+                },
+            .runtime_arg_schema =
+                {
+                    .runtime_arg_names = {"start_unit", "num_units"},
+                },
+            .hw_config = ttnn::create_writer_datamovement_config(arch),
+        };
+
+        m2::KernelRunArgs reader_run_args{.kernel = READER};
+        m2::KernelRunArgs writer_run_args{.kernel = WRITER};
+        std::uint32_t start_unit = 0;
+        for (const auto& core : ordered_cores) {
+            std::uint32_t units_to_process = units_per_core_group_1;
+            if (core_group_2.contains(core)) {
+                units_to_process = units_per_core_group_2;
+            }
+            m2::AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values,
+                core,
+                {{"start_unit", start_unit}, {"num_units", units_to_process}});
+            m2::AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values,
+                core,
+                {{"start_unit", start_unit}, {"num_units", units_to_process}});
+            start_unit += units_to_process;
+        }
+
+        m2::ProgramSpec spec{
+            .name = "copy_default_row_major_parallel",
+            .kernels = {std::move(reader), std::move(writer)},
+            .dataflow_buffers = {std::move(unit_dfb)},
+            .tensor_parameters =
+                {
+                    m2::TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},
+                    m2::TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()},
+                },
+            .work_units =
+                {
+                    m2::WorkUnitSpec{
+                        .name = "main",
+                        .kernels = {READER, WRITER},
+                        .target_nodes = all_cores,
+                    },
+                },
+        };
+
+        m2::ProgramRunArgs run_params;
+        run_params.kernel_run_args.push_back(std::move(reader_run_args));
+        run_params.kernel_run_args.push_back(std::move(writer_run_args));
+        run_params.tensor_args.emplace(INPUT, m2::TensorArgument{input.mesh_tensor()});
+        run_params.tensor_args.emplace(OUTPUT, m2::TensorArgument{output.mesh_tensor()});
+
+        return ttnn::device_operation::ProgramArtifacts{
+            .spec = std::move(spec),
+            .run_params = std::move(run_params),
+        };
+    }
+
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_logical_rows);
     std::vector<CoreCoord> ordered_cores = corerange_to_cores(all_cores, num_cores, true);
 
-    constexpr std::uint32_t MAX_SUBBLOCK_SIZE_BYTES =
-        65536 * 4;  // Chosen empirically to prevent large row OOM DFB error
     std::uint32_t input_page_size = input.buffer()->page_size();
     std::uint32_t aligned_output_page_size =
         output.buffer()->aligned_page_size();  // Since we are double buffering, the output page_size must be aligned so
