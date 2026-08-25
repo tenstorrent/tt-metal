@@ -4,319 +4,302 @@
 
 | Field | Value |
 |-------|-------|
-| Classification | CCL (multi-device, fabric) + compute (TRISC reduction) |
-| Goal | Sum every device's shard element-wise across the N devices of a 1-D MeshDevice line, then scatter: device `i` keeps only slice `i` (of N equal slices along `dim`) of the sum. Per-device-DISTINCT output, unlike all_reduce. |
-| Math | `output_i[...] = (Σ_{c=0}^{N-1} shard_c[...])[slice i along dim]`, `output.shape[dim] = input.shape[dim] / N` |
-| Algorithm | **GATHER-THEN-REDUCE-LOCAL-SLICE** — two ordered `ttnn.generic_op` dispatches on the same command queue. Phase A: line store-and-forward gather of full shards into an op-internal `gather_buffer` (proven all_reduce Phase-A structure). Phase B: local N-way tile sum over ONLY the tile positions of device `i`'s slice, written to the `[dim]/N` output. |
-| Mode | Derivative — structural clone of the in-tree Python `all_reduce` generic_op, plus slice addressing from the shared schedule header |
-| References | `ttnn/ttnn/operations/all_reduce/` (host + kernels, the proven two-phase model); `ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/` (silicon-verified ring/line reference — read-only correctness reference); `ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/compute/reduction.cpp` (the 2-statement `sum_blocks` compute model) |
+| Classification | CCL (compute-CCL: collective movement + tile reduction + per-device-distinct scatter) |
+| Goal | Element-wise SUM of all N devices' same-shape shards on a MeshDevice line; device `i` keeps only slice `i` (of N equal slices along `dim`) of that sum. |
+| Math | `output_i[...] = (Σ_{j=0..N-1} shard_j)[..., i*(W/N) : (i+1)*(W/N)]` for `dim=3` (Phase-0) |
+| Dispatch | **ONE `ttnn.generic_op` per invocation** — a single program per mesh coordinate in one `ttnn.MeshProgramDescriptor`. Compute overlaps fabric arrival via per-block semaphore signaling (Dataflow Strategy T4/T7). A sequential gather-then-reduce two-dispatch split is explicitly forbidden by the acceptance criteria. |
+| Mode | Derivative architecture: the hardware-adopted single-dispatch `reduce_scatter_average` design (commit `8a55e385b9`) minus its 1/N mean epilogue. **No wrapping** — all five kernels are newly authored under `ttnn/ttnn/operations/reduce_scatter/kernels/`; no import/call/dispatch to any existing CCL op. |
+| References (read-only) | `ttnn/ttnn/operations/reduce_scatter_average/` (adopted sibling: kernels, host factory, validate ordering), `ttnn/ttnn/operations/all_reduce/` + `all_gather/` + `point_to_point/` (host-assembly idioms, acceptance-test shape), `experimental/ccl/reduce_scatter_minimal_async` (silicon-verified line algorithm, contrast case), `ttnn/cpp/ttnn/kernel_lib/ccl_helpers_dataflow.hpp`, `ttnn/cpp/ttnn/kernel_lib/accumulate_helpers_compute.hpp`, `ttnn/cpp/ttnn/operations/ccl/shared_with_host/ccl_helpers_schedule.hpp` |
 
-**Generation mandate**: the op is generated from scratch as a self-contained Python op on
-`ttnn.generic_op` + `ttnn.MeshProgramDescriptor` with newly authored kernels under
-`ttnn/ttnn/operations/reduce_scatter/kernels/`. It must NOT import/call/wrap any existing
-reduce_scatter / all_reduce / all_gather op.
+### Files to produce (implementer)
 
-### Why gather-then-reduce (algorithm decision)
-
-| Consideration | Decision |
-|---|---|
-| Correctness risk | Ring reduce-scatter needs the full `RingRsSchedule` step machine agreed across 3 kernels. Gather-then-reduce reduces the cross-kernel agreement to a per-core `(start_tile, num_tiles)` contract + a fixed N-tiles-per-position CB protocol — far smaller drift surface. Both algorithms are blessed; this is the one we can make correct first. |
-| Helper coverage | Still composes all three helper families: fabric egress (`FabricStreamSender`, Phase A writer), compute accumulation (`sum_blocks`, Phase B compute), schedule header (`SliceRowWalker` + `slice_tile_offset` + `is_supported_scatter_dim`, Phase B reader — the ONE definition of slice addressing). |
-| Cost | Phase A moves full shards (all_gather traffic) instead of only needed slices. Perf refinement candidate (slice-only relay, or true ring RS); recorded in Key Risks §R12. |
+| File | Role |
+|------|------|
+| `ttnn/ttnn/operations/reduce_scatter/__init__.py` | re-export `reduce_scatter`, `SUPPORTED`, `EXCLUSIONS`, `INPUT_TAGGERS` (package-level — the golden harness imports from the package) |
+| `ttnn/ttnn/operations/reduce_scatter/reduce_scatter.py` | signature, registry contract, `validate()`, semaphore cache, allocation, the single `ttnn.generic_op` call |
+| `ttnn/ttnn/operations/reduce_scatter/reduce_scatter_program_descriptor.py` | `MeshProgramDescriptor` factory (one `ProgramDescriptor` per mesh coordinate) |
+| `kernels/reduce_scatter_relay_reader.cpp` | relay cores (0,0)+(0,1), NCRISC — one source, direction CT-selected |
+| `kernels/reduce_scatter_relay_writer.cpp` | relay cores, BRISC — fabric egress |
+| `kernels/reduce_scatter_reduce_reader.cpp` | reduce core (0,2), NCRISC — own slice + two-way arrival poll |
+| `kernels/reduce_scatter_reduce_compute.cpp` | reduce core, TRISC — arrival-ordered incremental sum |
+| `kernels/reduce_scatter_reduce_writer.cpp` | reduce core, BRISC — dense output write |
 
 ## Parameters
 
 | Name | Type | Required | Valid Range | Default | Notes |
 |------|------|----------|-------------|---------|-------|
-| `input_tensor` | `ttnn.Tensor` | yes | on a `ttnn.MeshDevice` `(1, N)` line, N ≥ 2; one same-shape shard per device | — | positional |
-| `dim` | `int` | no | Phase-0: canonical `3` (negative alias `-1` accepted); TARGET adds `2` | `3` | **Canonicalize to POSITIVE before the SUPPORTED membership test**: `dim if dim >= 0 else dim + 4` (rank pinned to 4). The golden feature_spec pins the positive convention (`eval/golden_tests/reduce_scatter/feature_spec.py:41-52`). |
-| `topology` | `ttnn.Topology` | no | Phase-0: `Linear` | `Linear` | Import as `from ttnn._ttnn.operations.ccl import Topology as _Topology` (the top-level alias binds too late at eager-import time — `all_reduce.py:35-37`). |
-| `output_tensor` | `ttnn.Tensor \| None` | no | spec must equal the derived output spec | `None` | Written into and returned when supplied. |
+| `input_tensor` | `ttnn.Tensor` | yes | TILE, interleaved, bf16/fp32, on a (1, N) MeshDevice line, N ≥ 2 | — | one SAME-shape shard per device |
+| `dim` | `int` | no | Phase-0: 3 (canonical). Negative aliases accepted (`-4 ≤ dim ≤ 3`, else ValueError) | `3` | **Canonicalize to POSITIVE (`dim % 4`, rank pinned to 4) BEFORE the SUPPORTED membership test** — the feature spec's TARGET uses the positive convention (`eval/golden_tests/reduce_scatter/feature_spec.py:38-47`) and the golden driver pre-canonicalizes (`helpers.py:54`), so `-1` must alias to `3` |
+| `topology` | `ttnn.Topology` | no | Phase-0: `Linear` | `Linear` | import as `from ttnn._ttnn.operations.ccl import Topology as _Topology` at module scope (the top-level `ttnn.Topology` alias binds only after `ttnn.operations` auto-imports — `all_reduce.py:37`) |
+| `output_tensor` | `ttnn.Tensor \| None` | no | slice shape, same dtype/layout/buffer_type as input | `None` | write into the supplied tensor and return the SAME handle |
+
+Signature must be positionally callable exactly as `reduce_scatter(input_tensor, dim=3, topology=_Topology.Linear, output_tensor=None)` — the golden driver calls `reduce_scatter(ttnn_input, dim=scatter_dim, topology=topology)` (`eval/golden_tests/reduce_scatter/helpers.py:90`). Do NOT make `dim` keyword-only.
 
 ## Tensors
 
-### Input (per-device shard; every device holds the SAME shape, distinct values)
+### Input (per-device shard)
 
 | Property | Requirement |
 |----------|-------------|
-| Shape | rank 4 `(B, C, H, W)`; `H % 32 == 0`, `W % 32 == 0` (no padded sub-tile dims); `shape[dim] % (N * 32) == 0` (slice divisible AND tile-aligned — reject loudly with ValueError, never pad) |
+| Shape | `(B, C, H, W)`, rank 4, `H % 32 == 0`, `W % 32 == 0` |
+| Scatter constraint | `shape[dim] % N == 0` AND `(shape[dim] / N) % 32 == 0` — otherwise **ValueError** (loud, no silent padding) |
 | Dtype | `bfloat16` (primary), `float32` |
-| Layout | `TILE_LAYOUT` only (the reduction is a tile compute) |
-| Memory | interleaved, DRAM or L1 (`is_sharded()` → ValueError) |
-| Page size | `buffer_page_size() % 16 == 0` (fabric payload is rounded up to l1_alignment; TILE pages always satisfy this — keep the explicit guard, mirroring `all_reduce.py:124-131`) |
+| Layout | TILE |
+| Memory | interleaved, DRAM or L1 (`ValueError` if `input_tensor.is_sharded()`) |
+| Mesh | `(1, N)` line, `N = prod(mesh_device.shape) ≥ 2` |
 
-### Output (per-device, DISTINCT)
-
-| Property | Value |
-|----------|-------|
-| Shape | input shard shape with `shape[dim] //= N` |
-| Dtype | = input dtype |
-| Layout | `TILE_LAYOUT` |
-| Memory | = input memory config |
-| Allocation | `ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), dtype, layout, mesh_device, input.memory_config())` when not supplied. Every output page is written — no seeding. |
-
-### Op-internal gather_buffer (allocated per call, never returned)
+### Output (per-device DISTINCT)
 
 | Property | Value |
 |----------|-------|
-| Shape | `[B * N, C, H, W]` — N shard-blocks stacked on dim 0, so block `c` occupies the contiguous page range `[c*P, (c+1)*P)` where `P = input.buffer_num_pages()` |
-| Dtype/Layout/Memory | = input |
-| Why mesh-allocated | Uniform buffer address across devices lets the Phase-A fabric `write_page` target the NEIGHBOUR's gather_buffer through the LOCAL accessor base address routed one hop (`all_reduce.py:186-197`). |
+| Shape | shard shape with `shape[dim] //= N` (dim=3: `(B, C, H, W/N)`) |
+| Dtype / Layout / Memory | same as input |
+| Allocation when `output_tensor is None` | `ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), dtype, layout, mesh_device, input.memory_config())`; every output page is written, no seeding needed |
+
+### Op-internal gather buffer (fabric landing target)
+
+| Property | Value |
+|----------|-------|
+| Shape | `(B*N, C, H, W)` — block `c` (source device `c`) occupies tile pages `[c*P, (c+1)*P)` |
+| Dtype / Layout / Memory | same as input; mesh-allocated interleaved ⇒ **uniform buffer address across devices**, which is what lets a fabric `write_page` target the neighbour's block through the LOCAL `TensorAccessor` routed one hop |
+| Lifetime | allocated fresh per call via `ttnn.allocate_tensor_on_device`, passed in `io_tensors` so dispatch resolves and keeps it alive; own block (`c == my_chip_id`) is **never written** (the reduce reader takes the own contribution directly from the input tensor — no serialized self-copy) |
+
+### Derived quantities (host computes once; symbols used throughout)
+
+| Symbol | Formula | Meaning | Golden range |
+|--------|---------|---------|--------------|
+| `N` | `prod(mesh_device.shape)` | devices on the line | 4 (hw `bh_quietbox_1x4_hw`), 8 (sim) |
+| `P` | `input.buffer_num_pages()` | tiles per shard | 64–128 |
+| `Wt` | `W / 32` | shard tile-columns | 8–16 |
+| `slice_Wt` | `Wt / N` | output tile-columns | 1–4 |
+| `Rt` | `B * C * (H / 32)` | total tile-rows (batches are contiguous row-blocks in tiled page order, so the shard is walked as an `Rt × Wt` tile grid — no per-batch logic for dim=3) | 8–16 |
+| `S` | `P / N = Rt * slice_Wt` | output tiles per device | 8–32 |
+| `g` | largest of `{4, 2, 1}` dividing `S` | CB/DEST granule; `g ≤ DEST_AUTO_LIMIT = 4` under `fp32_dest_acc_en` + SyncHalf (`dest_helpers.hpp:90-103`); **`g` divides `S`** so no tail chunk ever exists |
+| `page_size` | `input.buffer_page_size()` | tile bytes (bf16 2048 / fp32 4096) | |
+| `aligned_page_size` | `ttnn.round_up(page_size, ttnn.get_l1_alignment())` | relay CB page (= page_size for tile pages, both already aligned) | |
 
 ## Dataflow Strategy
 
-Two ordered `ttnn.generic_op` dispatches share the device command queue, so Phase A completes on
-device `i` before Phase B reads its gather_buffer — **no cross-device barrier between phases**.
+### Algorithm
+
+Line store-and-forward **gather of whole shards** (the hardware-validated relay traffic pattern shared by the adopted `reduce_scatter_average` and `all_reduce` Phase A) fused in the SAME program with an **arrival-ordered incremental reduce** on a dedicated third core. Every device receives all N−1 remote shards into its local `gather_buffer`; the reduce core consumes only slice `i` of each contribution, one contribution at a time — own shard first, then each arrival the moment its semaphore lands — so the accumulate of contribution *k* overlaps the fabric flight of contribution *k+1*. The per-device-distinct scatter falls out of WHICH slice the reduce core walks (`slice_tile_offset(dim, my_chip_id, …)`), not out of any output-side selection.
+
+Why this decomposition (algorithm decision): the relay half is byte-for-byte the traffic pattern already proven on this hardware by three adopted collectives; the reduce half needs cross-kernel agreement only on a fixed per-contribution CB protocol (`g`-granule streaming of S tiles, N times) — the smallest drift surface that still satisfies the single-dispatch + overlap mandate. The bandwidth-optimal partial-sum line reduce-scatter (compute in the relay path; the `LineSliceCursor`/`LineChannelWalk`/`SyncCadence`/`line_rs_*` step machine of `reduce_scatter_minimal_async`) is deferred as Refinement 4 — it is a different algorithm with a 3-kernel step-flag agreement surface, an FWD-leads/BWD-accumulates output race on middle devices, and an on-device handoff semaphore, none of which the acceptance criteria require.
+
+### Per-device data path
 
 ```
-Phase A (fabric gather — 2 worker cores per device):
-  DRAM input shard ──reader(NCRISC)──> cb_relay_pages ──writer(BRISC)──> fabric 1 hop ──> neighbour's gather_buffer (DRAM)
-  neighbour-landed blocks ──reader reads back out of local gather_buffer──> cb_relay_pages ──writer──> next hop (store-and-forward)
-  own shard ──forward reader self-copy (local NoC via cb_self_copy scratch)──> own gather_buffer block i
-
-Phase B (local slice reduce — full compute grid, no fabric):
-  gather_buffer ──reader(NCRISC): per owned output position, N tiles (one per block) at the SLICE
-  tile id from SliceRowWalker──> cb_gathered_slices ──compute(TRISC): sum_blocks(N→1)──>
-  cb_summed_slice ──writer(BRISC): dense output page──> DRAM output (shape[dim]/N)
+                    device i  (one program, one generic_op dispatch)
+ core (0,0)  relay FWD:  input ──reader──▶ cb_relay_pages ──writer──▶ fabric 1 hop right
+                          gather_buffer (fwd arrivals) ──reader──▶ cb_relay_pages ──writer──▶ (relay onward)
+ core (0,1)  relay BWD:  mirror of (0,0), 1 hop left
+ core (0,2)  reduce:     input slice i  ──reader──▶ cb_contributions ─┐
+                          gather_buffer slice i of each arrived shard ─┤ (arrival order, g-granules)
+                                                                       ▼
+                          compute: seed-copy ▶ (N-1)× incremental add ▶ move ▶ cb_output_tiles
+                                                                       ▼
+                          writer: output tensor (dense tiles 0..S-1)
 ```
 
-### Phase A — Tensix-to-Tensix / device-to-device contract (identical to all_reduce Phase A)
+### Tensix-to-Tensix / device-to-device contract
 
-| Item | Contract |
-|---|---|
-| Worker cores | `forward_core = (0, 0)` (flow rightward, fabric conn → chip i+1), `backward_core = (0, 1)` (flow leftward, → chip i−1). Each runs a reader (NCRISC) + writer (BRISC). No compute kernel in Phase A. |
-| Direction convention | `direction` CT arg: 0 = forward, 1 = backward (Python CCL convention; note the C++ ring writer uses the OPPOSITE — do not copy its `is_forward` handling). The fabric-connection rt-arg block's leading `has_forward` flag doubles as the send direction the kernel peeks. |
-| Block flow (device i, direction d) | Forward writer sends block `i` (seed), then relays blocks `i−1 … 0` to chip i+1. Backward writer sends block `i`, then relays `i+1 … N−1` to chip i−1. Reader pushes the SAME block order into `cb_relay_pages`, so a single FIFO drain matches. |
-| Self-copy | Forward reader only, every device: own input shard → own gather_buffer block `i` via `cb_self_copy` scratch (local NoC read + write per page). |
-| Landing address | Every fabric write lands DIRECTLY in the downstream device's gather_buffer at the block's canonical range: `gb_page(c, p) = c*P + p`, addressed via the local `TensorAccessor` + `write_page` (uniform mesh address). |
-| Sync | ONE op-internal GlobalSemaphore (counting). After each full block lands, the sending writer's `arm_inc(1)` channel incs the semaphore ON THE RECEIVER's same-role core (`(0,0)` for forward flow, `(0,1)` for backward). Receiver's reader does `noc_semaphore_wait_min(sem_ptr, k)` before reading block k back out for relay; a line-end reader (no targets) waits for all `num_relay_blocks` then stops. |
-| Ordering guarantee | The counting inc is issued on the SAME fabric connection after the block's pages — in-order on the connection, so the inc lands after the data. |
-| Cache re-arm | Reader executes `noc_semaphore_set(sem_ptr, 0)` after its LAST wait (both directions, including line ends). See Key Risks §R1. |
-| Line ends | A direction with `my_num_targets == 0` opens NO fabric connection, and its writer gets an EMPTY rt-arg list (the `else: []` branch) — a different rt-arg COUNT is a distinct program hash, which is correct (different device role). |
-
-### Phase B — per-device local pipeline (per work core)
-
-| Stage | Contract |
-|---|---|
-| Reader | For each owned output position `t ∈ [start, start+n)`: compute the slice tile id `id = walker.next()` ONCE, then read the N gathered tiles `gather_buffer[c*P + id]` for `c = 0..N−1` in block order into one `cb_gathered_slices` reservation of N pages; one `noc_async_read_barrier`; push N. |
-| Compute | `binary_op_init_common(cb_gathered_slices, cb_gathered_slices, cb_summed_slice)` once, then per position: `compute_kernel_lib::sum_blocks(cb_gathered_slices, cb_summed_slice, N, /*block_num_tiles=*/1, /*pop_input=*/true)`. The helper owns wait(N)/pop(N)/reserve(1)/push(1), the tile_regs lifecycle, DEST chunking, and the odd-N seed path. |
-| Writer | Per position: wait 1 on `cb_summed_slice`, `noc_async_write` to output page `start + t` (dense — the output slice is dense by construction), barrier, pop 1. |
-| Shared schedule | The Phase-B collective schedule degenerates to the per-core `(start_tile, num_tiles)` pair, computed ONCE on host by `ttnn.split_work_to_cores` and passed to all three kernels. All CB counts derive from the same `n`; there is nothing else to drift. |
-
-### Slice addressing — ONE definition, from the shared schedule header
-
-The Phase-B reader includes `ttnn/operations/ccl/shared_with_host/ccl_helpers_schedule.hpp`
-(kernel include path verbatim from `ring_reduce_scatter_minimal_async_reader.cpp:9`) and walks the
-slice with `ttnn::ccl::schedule::SliceRowWalker` — the same type the silicon-verified C++
-reduce_scatter kernels use for slice tile ids. The host passes three per-device quantities that
-generalize the walker across scatter dims (all in tiles; `Ht = H/32`, `Wt = W/32`):
-
-| Quantity | dim = 3 (Phase-0) | dim = 2 (refinement) | dim = 1 (refinement) | Meaning |
-|---|---|---|---|---|
-| `slice_base` | `i * (Wt / N)` | `i * (Ht / N) * Wt` | `i * (C / N) * Ht * Wt` | first tile id of device i's slice = `slice_tile_offset(dim, i, slice_C, slice_Ht, slice_Wt)` (schedule hpp:466-478) |
-| `slice_run_len` | `Wt / N` | `(Ht / N) * Wt` | `(C / N) * Ht * Wt` | contiguous tile run inside the slice (walker ctor param 1, "slice_Wt") |
-| `slice_stride` | `Wt` | `Ht * Wt` | `C * Ht * Wt` | tile-id jump between consecutive runs (walker ctor param 2, "tensor_Wt") |
-
-Per-core seeding for a core owning `[start, start+n)` (walker API: ctor schedule hpp:498,
-`set_base` :502, `reset_offsets(pages_read_in_row, row_offset)` :510, `next()` :516):
-
-```cpp
-sched::SliceRowWalker walker(slice_run_len, slice_stride);
-walker.set_base(slice_base);
-walker.reset_offsets(start % slice_run_len, (start / slice_run_len) * slice_stride);
-// per position: const uint32_t id = walker.next();   // ONCE per position — see Key Risks §R5
-```
-
-`static_assert(ttnn::ccl::schedule::is_supported_scatter_dim(dim))` (schedule hpp:460) in the
-Phase-B reader turns the host predicate into a compile-time gate. Batches need NO special
-handling for dim 3: the walker's run/stride wrap walks all `B*C*Ht` tile rows seamlessly
-(there is no per-batch cursor in this algorithm — the ring header's per-batch-restart trap does
-not exist here).
-
-Dim-3 correctness argument (implementer sanity check): flattened input tile id
-`= ((b*C + c)*Ht + h)*Wt + w`; device i keeps `w ∈ [i*sWt, (i+1)*sWt)` with `sWt = Wt/N`; dense
-output id `= ((b*C + c)*Ht + h)*sWt + (w − i*sWt)`. Walker at position `t`:
-`id = i*sWt + (t / sWt)*Wt + (t % sWt)` — exactly the inverse map. Output page = `start + t`.
-
-## Kernel Sources & Phase Selection
-
-| File | RISC | Phases | Notes |
-|---|---|---|---|
-| `kernels/reduce_scatter_reader.cpp` | NCRISC (`ReaderConfigDescriptor`) | A + B, selected by leading `phase` CT arg (`if constexpr`) | Phase A = gather reader (self-copy / seed / relay read-back / counting waits / sem re-arm). Phase B = slice reader (SliceRowWalker + N reads per position). |
-| `kernels/reduce_scatter_writer.cpp` | BRISC (`WriterConfigDescriptor`) | A + B, phase CT arg | Phase A = fabric egress via `FabricStreamSender`. Phase B = dense output page writes. |
-| `kernels/reduce_scatter_compute.cpp` | TRISC (`ComputeConfigDescriptor`) | B only | `binary_op_init_common` + `sum_blocks` loop. |
-
-Shared-source rule (from `all_reduce_program_descriptor.py:22-30`): both phases of a shared source
-use a UNIFORM compile-time-arg superset — a fixed count of scalar CT args after `phase`
-(zero-padded where a phase needs fewer), then a fixed number of `TensorAccessorArgs` (reader: 2 —
-input+gather_buffer for A, gather_buffer+output for B with the 2nd `[[maybe_unused]]`; writer: 1 —
-gather_buffer for A, output for B). `get_compile_time_arg_val` static-asserts on the index even in
-the discarded `if constexpr` branch, so the superset is load-bearing. Phase B's reader needs 7
-scalars (`cb_gathered_slices, num_devices, pages_per_shard, dim, slice_base, slice_run_len,
-slice_stride`), which matches Phase A's 7 (`cb_relay_pages, cb_self_copy, direction, my_chip_id,
-ring_size, num_targets_fwd, num_targets_bwd`) — keep the superset at **7 scalars** on both kernels.
-
-Compute config (Phase B): `math_fidelity=HiFi4, fp32_dest_acc_en=True, math_approx_mode=False,
-dst_full_sync_en=False` — fp32 DEST accumulation covers both the bf16 sum-of-N rounding budget and
-the float32 dtype (mirrors `all_reduce_program_descriptor.py:436-443`).
+| # | Contract | Detail |
+|---|----------|--------|
+| T1 | Fwd channel carries left→right traffic | device `i` fwd-sends `num_fwd_sends = 1 + i` blocks iff `i < N-1` (else 0): own shard first (k=0, from the input tensor), then relays of its `i` fwd arrivals (k=1..i, from the local `gather_buffer`). Fwd arrivals on device `i` = `fwd_arrivals = i` blocks, in chain order **nearest-first**: shards of `i-1, i-2, …, 0`. |
+| T2 | Bwd channel carries right→left traffic | mirror: `num_bwd_sends = 1 + (N-1-i)` iff `i > 0` (else 0); `bwd_arrivals = N-1-i`, order `i+1, i+2, …, N-1`. Total arrivals per device = `N-1`; reduce core consumes `own + N-1 = N` contributions. |
+| T3 | Block indices on the wire | fwd send k: `c = (i + N - k) % N` (k=0 → own `i`; k ≥ 1 → `i-k`); bwd send k: `c = (i + k) % N`. Ring-modular form equals plain linear indices for Linear and is Ring-ready (Refinement 1). Fabric `write_page` targets the NEXT device's `gather_buffer` pages `[c*P, (c+1)*P)` through the local accessor (uniform mesh address). |
+| T4 | Arrival signaling — the overlap mechanism | after the last page of each block, the sending writer issues **two** fabric atomic incs on its armed inc channel, both 1 hop to the receiving device: `sem_dir` at the receiving relay core ((0,0) for fwd / (0,1) for bwd) AND `sem_dir` at the receiving reduce core (0,2). Incs are in-order behind the pages on the same connection, so `sem ≥ k` ⇒ blocks 1..k fully landed in `gather_buffer`. |
+| T5 | Semaphores | TWO op-internal `GlobalSemaphore`s, `sem_fwd` and `sem_bwd` (one L1 address each, a private counter word per core). Consumers: relay reader (0,0) waits `sem_fwd`; relay reader (0,1) waits `sem_bwd`; reduce reader (0,2) polls BOTH. Each consumer re-arms its OWN core's counter to 0 after its last wait (cache-reuse footgun, `ccl_helpers_dataflow.hpp:116-121`). Waits/resets are op-owned — there is no receiver helper. |
+| T6 | Relay forwarding | fwd relay reader waits `sem_fwd ≥ k` for relay k (k=1..fwd_arrivals), reads arrival k−1's `P` pages from the LOCAL `gather_buffer` back into `cb_relay_pages`; the writer forwards them one more hop. A line-end device (`num_sends == 0` in that direction) relays nothing but still waits `sem_dir ≥ arrivals_dir` before re-arming (a reset racing an in-flight inc corrupts the counter). |
+| T7 | Overlap timeline | reduce compute runs pass 0 (own contribution) immediately; pass k runs as soon as the k-th arrival's double-inc lands, while arrival k+1 is still being relayed/flown. The only serialized tail after the last arrival's pass is the S-tile move phase C4 (a block-0 copy) plus the writer drain. |
+| T8 | Deadlock freedom | relay chains are per-direction DAGs (no cycles); the reduce pipeline consumes only sems + local NoC reads + its own core's CBs; each device's egress (seed own shard) depends on nothing remote. No CB spans cores. |
 
 ## Work Distribution
 
-| Field | Phase A | Phase B |
-|-------|---------|---------|
-| Work unit | one shard block (P pages) per direction | one output tile position (N input tiles → 1 output tile) |
-| Grid | 2 fixed cores: `(0,0)` forward, `(0,1)` backward | `ttnn.split_work_to_cores(compute_with_storage_grid_size(), S)` where `S = P / N` output pages |
-| Per-core work | forward: seed + `num_targets_bwd` relays (+ self-copy); backward: seed + `num_targets_fwd` relays | group-1 cores get `ceil`, group-2 `floor`; core k owns `[start_k, start_k + n_k)` with `start` accumulated in `ttnn.corerange_to_cores(all_cores, num_cores, row_wise=True)` order |
-| Remainder | n/a (block counts exact) | handled by the two-group split; cores beyond `num_cores` get no kernel |
-| Descriptor granularity | one `ProgramDescriptor` per `MeshCoordinate(0, i)` (append via `mpd[MeshCoordinateRange(coord, coord)] = program`) for BOTH phases — per-device CT args (`my_chip_id`, `slice_base`) make each device's program distinct | same |
+| Field | Value |
+|-------|-------|
+| Work unit | whole op per device; within a device, fixed roles on 3 cores |
+| Grid | logical cores `(0,0)` fwd relay, `(0,1)` bwd relay, `(0,2)` reduce — `ttnn.CoreRangeSet` of the three singleton ranges. Uniform across devices so the peer NoC coordinates are mesh-wide identical; physical coords via `mesh_device.worker_core_from_logical_core(...)` |
+| Per-core work | (0,0)/(0,1): `num_sends_dir * P` pages relayed, `arrivals_dir` waits; (0,2): reader `N*S` tile reads, compute `N*S` add/copy-equivalents + `S` moved tiles, writer `S` tile writes |
+| Remainder | none — `g` divides `S` by construction; every CB interaction is a whole `g`-granule (or a whole page for relay) |
+| Multi-core reduce | deliberately NOT Phase-0: splitting `S` across reduce cores multiplies the per-block inc fan-out. Golden shapes have S ≤ 32 — one core is right-sized. Refinement 3. |
 
 ## Circular Buffers
 
-| Semantic Name | Index | Page Size | Num Pages | Format | Producer | Consumer | Lifetime / Rationale |
-|---------------|-------|-----------|-----------|--------|----------|----------|----------|
-| `cb_relay_pages` | 16 | `aligned_page_size = round_up(page_size, l1_alignment)` | 2 (double buffer) | input dtype | Phase-A reader (seed + relay read-backs) | Phase-A writer (fabric `write_page`) | Phase A only, on both worker cores. Streaming one page at a time; writer does `noc_async_writes_flushed()` before `cb_pop_front` so the slot isn't reused before the fabric read completes. |
-| `cb_self_copy` | 24 | `aligned_page_size` | 2 | input dtype | Phase-A forward reader (reserve-only SCRATCH) | — (never pushed/popped) | Phase A only. One `cb_reserve_back(cb_self_copy, 1)` then the write-ptr is reused per page for the local self-copy bounce. Intentionally never pushed — document, don't "fix". |
-| `cb_gathered_slices` | 0 | `tile_size = output.buffer_page_size()` | `2 * N` (double-buffered block of N slice tiles) | input dtype | Phase-B reader (pushes N per position, block order c=0..N−1) | Phase-B compute (`sum_blocks` waits N, pops N) | Phase B only, on all work cores. Sized so the reader can stage position t+1 while compute reduces t. |
-| `cb_summed_slice` | 16 | `tile_size` | 2 (double buffer) | output dtype | Phase-B compute (pushes 1 per position) | Phase-B writer (waits/pops 1) | Phase B only. |
+All CBs are core-local (no CB spans cores). **Capacity rule**: every CB's capacity is a multiple of its interaction quantum, so a multi-page reserve/wait never straddles the ring wrap (linear `l1 += page_size` writes after a multi-page reserve require contiguity).
 
-CB sync ledger (push == wait/pop for every CB, per core, per launch):
+| Semantic Name | Index | Cores | Page Size | Num Pages | Format | Producer | Consumer | Lifetime / quantum |
+|---------------|-------|-------|-----------|-----------|--------|----------|----------|--------------------|
+| `cb_relay_pages` | 16 | (0,0), (0,1) | `aligned_page_size` | 2 | input dtype | relay reader | relay writer | streaming, quantum 1 page (double-buffered) |
+| `cb_contributions` | 0 | (0,2) | `page_size` | `2*g` | input dtype | reduce reader | reduce compute | streaming, quantum `g` (double-buffered granules); carries all N contributions in arrival order, own first |
+| `cb_accumulator` | 24 | (0,2) | `page_size` | `S` | input dtype | reduce compute **only** | reduce compute (passes C3) + move phase C4 | resident running sum; quantum `g`; capacity exactly `S` (`g` divides `S` ⇒ wrap-safe). **Single-producer invariant — see R2** |
+| `cb_output_tiles` | 17 | (0,2) | `page_size` | `2*g` | input dtype | reduce compute (C4) | reduce writer | streaming, quantum `g` |
 
-| CB | Producer total | Consumer total |
+There is **no scaler CB** — the sum is the output; nothing multiplies it. All four CBs carry the input dtype, so the boot `binary_op_init_common` covers every phase with zero mid-kernel data-format reconfig.
+
+L1 budget (worst golden case, fp32 `(1,1,256,512)` on N=4: S=32, g=4, page 4096): `cb_contributions` 32 KB + `cb_accumulator` 128 KB + `cb_output_tiles` 32 KB ≈ 192 KB on (0,2); 8 KB on each relay core. Growth cliff: `cb_accumulator = S` pages ⇒ Phase-0 rejects (ValueError) shards with `S > 256`; Refinement 5 lifts it.
+
+### Semaphores
+
+| Name | Kind | Created | Inc'd by | Waited/reset by |
+|------|------|---------|----------|-----------------|
+| `sem_fwd` | GlobalSemaphore, initial 0, all worker cores | once per `mesh_device`, cached (`_SEMAPHORE_CACHE[id(mesh_device)] = (sem_fwd, sem_bwd)`), ONE `ttnn.synchronize_device` inside the miss branch only, covering both creations | left neighbour's fwd relay writer: 2 fabric incs/block → this device's cores (0,0) and (0,2) | (0,0) relay reader; (0,2) reduce reader — each resets its OWN core's counter to 0 after its final wait |
+| `sem_bwd` | same | same miss branch | right neighbour's bwd relay writer: 2 fabric incs/block → cores (0,1) and (0,2) | (0,1) relay reader; (0,2) reduce reader |
+
+Both parked on `mesh_program_descriptor.semaphores = [sem_fwd, sem_bwd]` (guard with `hasattr` for older bindings) — kept alive across the program cache, excluded from the cache hash (`program_descriptors.cpp:1077-1087`). Addresses via `ttnn.get_global_semaphore_address(...)` baked into runtime args. **No per-call post-dispatch barrier.**
+
+## Host Assembly (program factory)
+
+| Duty | Mechanism |
+|------|-----------|
+| Mesh PD | `ttnn.MeshProgramDescriptor()`; one `ttnn.ProgramDescriptor(...)` per `ttnn.MeshCoordinateRange(coord_i, coord_i)` — programs are per-device distinct (CT args: `my_chip_id`, send/arrival counts) |
+| Dispatch | **exactly one** `ttnn.generic_op([input_tensor, gather_buffer, output_tensor], mesh_pd)` — output preallocated and LAST in `io_tensors` (`generic_op_nanobind.cpp:32-33`); `gather_buffer` fresh per call in `io_tensors` so dispatch resolves/keeps it alive |
+| Routes | `ttnn._ttnn.fabric.ccl_dm_route(mesh_device, coord_i, coord_neighbour, topology)` per direction; `assert route.num_hops == 1` (store-and-forward invariant). The route owns the fwd/bwd sign reversal — never hand-derive `is_forward` |
+| Fabric conn args | `ttnn._ttnn.fabric.build_ccl_fabric_rt_args(src_fabric_node_id, neighbor_fabric_node_id, 0, program, worker_core, is_forward)` (`ttnn/cpp/ttnn-nanobind/fabric.cpp:277-297`) — emits the `[has_forward][fwd conn][has_backward][bwd conn]` block, placed **FIRST** in each relay writer's rt args so the kernel consumes it at `conn_arg_idx = 0` and resumes op args at the advanced cursor. It MUTATES the program (appends SemaphoreDescriptors), so append via the live `program.kernels[k].runtime_args[x][y]` view after `ProgramDescriptor` construction. Neighbour ids via `mesh_device.get_fabric_node_id(MeshCoordinate(0, j))` |
+| Packet framing | 1 tile page = 1 fabric packet (`arm_unicast_write(page_size)`); `ccl_packet_dims` NOT used — same documented rejection as all four adopted collectives; tile pages (2048/4096 B) fit a single packet, hardware-validated at both dtypes |
+| Idle direction | empty rt-arg list `[]` + CT `num_sends = 0`; kernel no-ops the egress under `if constexpr` but still runs the T6 wait+reset when `arrivals_dir > 0` |
+| Compute config | `ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False, dst_full_sync_en=False)` — fixes `DEST_AUTO_LIMIT = 4` |
+| TensorAccessors | `list(ttnn.TensorAccessorArgs(t).get_compile_time_args())` appended LAST after all scalar CT args, for: input + gather (relay reader), gather (relay writer), input + gather (reduce reader), output (reduce writer) |
+| Kernel descriptors | 4 relay (fwd reader, fwd writer, bwd reader, bwd writer — CT args differ per direction) + 3 reduce = **7 per program**, five distinct `.cpp` sources (no phase-selector CT superset — the separate-source layout is the cleaner adopted idiom) |
+
+Information each kernel needs (exact CT/RT index layout is the implementer's choice — derive from the CB table and helper signatures):
+
+| Kernel | Core(s) | Needs |
 |---|---|---|
-| `cb_relay_pages` | `(1 + num_relay_blocks) * P` pages when `my_num_targets > 0`, else 0 | identical expression in the writer (same `if constexpr` guard) |
-| `cb_self_copy` | 0 pushes (scratch) | 0 waits |
-| `cb_gathered_slices` | `n * N` | `n` sum_blocks calls × wait/pop N |
-| `cb_summed_slice` | `n` | `n` |
+| `reduce_scatter_relay_reader.cpp` | (0,0)+(0,1) | CT: `cb_relay_pages`, direction, `my_chip_id`, `N`, `num_sends`, `arrivals_dir`, `P` + input/gather accessor args; RT: input addr, gather addr, page size, own-direction sem addr |
+| `reduce_scatter_relay_writer.cpp` | (0,0)+(0,1) | CT: `cb_relay_pages`, direction, `my_chip_id`, `N`, `num_sends`, `P`, L1 alignment + gather accessor args; RT: fabric conn block FIRST, then gather addr, page size, sem addr, NoC xy of the neighbour's relay core AND reduce core |
+| `reduce_scatter_reduce_reader.cpp` | (0,2) | CT: `cb_contributions`, `my_chip_id`, `N`, `fwd_arrivals`, `bwd_arrivals`, `S`, `g`, `Wt`, `slice_Wt`, `P`, `dim` + input/gather accessor args; RT: input addr, gather addr, page size, `sem_fwd` addr, `sem_bwd` addr |
+| `reduce_scatter_reduce_compute.cpp` | (0,2) | CT: `cb_contributions`, `cb_accumulator`, `cb_output_tiles`, `N`, `S`, `g` |
+| `reduce_scatter_reduce_writer.cpp` | (0,2) | CT: `cb_output_tiles`, `S`, `g` + output accessor args; RT: output addr, page size |
 
 ## API Mapping
 
-Every mechanism — helper or raw — with verified file:line. Paths relative to repo root; the two
-kernel-lib headers are `ttnn/cpp/ttnn/kernel_lib/ccl_helpers_dataflow.hpp` (= `dataflow.hpp` below)
-and `ttnn/cpp/ttnn/kernel_lib/accumulate_helpers_compute.hpp` (= `accum.hpp`); the schedule header
-is `ttnn/cpp/ttnn/operations/ccl/shared_with_host/ccl_helpers_schedule.hpp` (= `sched.hpp`,
-kernel include spelling `ttnn/operations/ccl/shared_with_host/ccl_helpers_schedule.hpp`).
+Every mechanism with verified file:line. Type `helper` or `raw_api`.
 
-| Phase | Type | Function | File:Line | Args / Template Params | Input CB | Output CB | Requirements |
-|-------|------|----------|-----------|------------------------|----------|-----------|--------------|
-| A writer | helper | `FabricStreamSender<>` ctor | dataflow.hpp:492 | `(size_t& conn_arg_idx, bool is_forward, uint32_t alignment)`; `ConnT = DirectConn` (default) | — | — | rt-arg block from `ttnn.setup_fabric_connection` FIRST at `conn_arg_idx`; leading `has_forward` flag peeked as the direction. Sender must OUTLIVE the stream (banner :81-84). |
-| A writer | helper | `open(unicast_route(num_hops))` | dataflow.hpp:503 (open), :302-307 (`unicast_route`) | route bound ONCE at open | — | — | `num_hops` rt-arg from `ccl_dm_route(...).num_hops` (always 1 here — neighbour hop). |
-| A writer | helper | `arm_unicast_write(page_size)` → `write_page(l1, c*P + p, gather_buffer)` | dataflow.hpp:423 (arm), :326-327 (write_page) | invariant per-page payload | `cb_relay_pages` (read ptr) | remote gather_buffer | `noc_async_writes_flushed()` before `cb_pop_front` (CB slot reuse guard). |
-| A writer | helper | `arm_inc(1)` → `inc(neighbor_sem_noc_addr)` | dataflow.hpp:435 (arm), :368 (inc) | counting value invariant = 1 | — | remote semaphore | One inc per landed block, in-order after the block's pages on the same connection. |
-| A writer | helper | `stream.close()` | dataflow.hpp:461 | — | — | — | Drains write + atomic barriers, idempotent; destructor closes if forgotten. |
-| A reader | raw_api | `noc_async_read` / `noc_async_write` / `noc_async_read_barrier` / `noc_async_write_barrier` | dataflow_api.h | self-copy, seed staging, relay read-back | input / gather_buffer via `TensorAccessor` | `cb_self_copy`, `cb_relay_pages` | **Op-owned by the helper's documented split** — see "Helpers considered" below. |
-| A reader | raw_api | `noc_semaphore_wait_min(sem_ptr, k)` + `noc_semaphore_set(sem_ptr, 0)` | dataflow_api.h | counting wait per relay block; re-arm after last wait | — | — | Re-arm is MANDATORY (dataflow.hpp:118-120 warning). |
-| B reader | helper | `ttnn::ccl::schedule::SliceRowWalker` | sched.hpp:491 (class), :498 (ctor), :502 (`set_base`), :510 (`reset_offsets`), :516 (`next`) | `(slice_run_len, slice_stride)`; base = `slice_base` | — | — | ONE `next()` per output position, id reused for all N block reads. `shared_with_host` → legal in dataflow kernels (plain C++17). |
-| B reader | helper | `slice_tile_offset` / `is_supported_scatter_dim` | sched.hpp:466-478 / :460 | `slice_base` formula lives on host; kernel `static_assert`s the dim | — | — | Host is the single evaluation site of the offset; kernel re-checks dim validity at compile time. |
-| B reader | raw_api | `noc_async_read(gather_buffer.get_noc_addr(c*P + id), l1, page_size)` | dataflow_api.h | N reads per position, block-major | gather_buffer | `cb_gathered_slices` | One barrier + one `cb_push_back(cb_gathered_slices, N)` per position. |
-| B compute | raw_api | `binary_op_init_common(cb_gathered_slices, cb_gathered_slices, cb_summed_slice)` | tt_metal compute API (`api/compute/eltwise_binary.h`) | hardware startup, once | — | — | Explicitly NOT owned by the helper (accum.hpp:70-77: `compute_kernel_hw_startup` and `binary_op_init_common` are NOT interchangeable; the C++ `sum_blocks` model kernel uses `binary_op_init_common` — `all_reduce_async/.../reduction.cpp:27`). |
-| B compute | helper | `compute_kernel_lib::sum_blocks(cb_gathered_slices, cb_summed_slice, N, 1, /*pop_input=*/true)` | accum.hpp:221-222 (decl), accumulate_helpers_compute.inl:106-157 (impl) | `num_blocks = N` (runtime, mesh-derived), `block_num_tiles = 1`, `pop_input = true` | `cb_gathered_slices` (N tiles, block-major) | `cb_summed_slice` (1 tile) | Owns wait(N·1)/pop/reserve/push, tile_regs lifecycle, DEST chunking vs `DEST_AUTO_LIMIT` (inl:121-123), odd-N copy_tile seed. `pop_input=true` because this is a real producer/consumer CB (accum.hpp:200-205 — the llama_reduce_scatter mode, NOT all_reduce's resident-shell mode). Called in a loop, `n` times per core; each call re-inits, and no `BlockAccumulate` coexists, so the `@post` acc_to_dest note (accum.hpp:212-213) is moot. |
-| B writer | raw_api | `noc_async_write(l1, output.get_noc_addr(start + t), page_size)` + barrier | dataflow_api.h | dense output pages | `cb_summed_slice` | output tensor | wait 1 / pop 1 per position. |
-| host | helper | `ttnn._ttnn.fabric.ccl_dm_route(mesh_device, coord_i, coord_neighbour, topology)` | binding `ttnn/cpp/ttnn-nanobind/fabric.cpp:262-269`; impl `ttnn/cpp/ttnn/operations/ccl/common/host/ccl_helpers_dataflow_host.hpp:151` | per direction, per device | — | — | Owns the fabric fwd/bwd sign reversal + ring short-way. `route.num_hops` → writer rt-arg; `route.is_forward` → `has_forward` flag. |
-| host | helper | `ttnn.setup_fabric_connection(src_fabric_id, dst_fabric_id, link_idx=0, program, core)` | binding fabric.cpp:142-167 | appended AFTER `ProgramDescriptor` construction (it mutates it — appends SemaphoreDescriptors) via the `_append_fabric_rt_args` idiom (`all_reduce_program_descriptor.py:78-92`) | — | — | Block layout `[has_forward][fwd args…][has_backward][bwd args…]`, placed at the END of the writer's rt args; kernel consumes with a cursor. |
-| host | helper | `ttnn.create_global_semaphore` / `ttnn.get_global_semaphore_address` / `ttnn.synchronize_device` | `all_reduce.py:85-95` (idiom) | created on the full worker grid, initial 0 | — | — | Module-level cache keyed `id(mesh_device)`; `synchronize_device` ONCE inside the miss branch only. |
-| host | helper | `ttnn.split_work_to_cores` / `ttnn.corerange_to_cores` | `all_reduce_program_descriptor.py:338-384` (idiom) | Phase-B split over `S` output pages | — | — | Same `(start, n)` pair feeds reader/compute/writer rt args. |
+| Phase | Type | Function | File:Line | Params / Notes | Input CB | Output CB | Requirements |
+|-------|------|----------|-----------|----------------|----------|-----------|--------------|
+| Relay egress open | helper | `dataflow_kernel_lib::ccl::FabricStreamSender<>` ctor / `open(unicast_route(num_hops))` | `ttnn/cpp/ttnn/kernel_lib/ccl_helpers_dataflow.hpp:481,492,503`; `unicast_route` `:302` | `ConnT = DirectConn`; ctor `(conn_arg_idx, is_forward, alignment)`; the fabric block sits at rt-arg index 0 | — | — | sender declared before (outlives) the stream (`:81-84`); route bound ONCE at open |
+| Relay page send | helper | `FabricStream::arm_unicast_write(page_size)` → `channel.write_page(src_l1, page_idx, gather_accessor)` | `:423` (arm), `:327` (write_page) | invariant per-page payload, armed once, issued `num_sends*P` times | `cb_relay_pages` | remote `gather_buffer` | `noc_async_writes_flushed()` between `write_page` and `cb_pop_front` — CB-slot-reuse guard (R7) |
+| Arrival signal ×2 | helper | `FabricStream::arm_inc(1)` → `counter.inc(noc_addr)` twice per block | `:435` (arm), `:368` (inc) | one armed channel, two issues per block: neighbour relay-core sem, neighbour reduce-core sem; addrs via `safe_get_noc_addr(x, y, sem_addr, 0)` | — | remote sems | in-order behind pages on the same connection (R8) |
+| Egress close | helper | `FabricStream::close()` | `:461` | — | — | — | drains write + atomic barriers; idempotent |
+| Arrival wait (relay) | raw_api (op-owned by design) | `noc_semaphore_wait_min(sem_ptr, k)`; re-arm `noc_semaphore_set(sem_ptr, 0)` | helper banner `ccl_helpers_dataflow.hpp:108-121` assigns the WAIT + reset to the op | — | — | — | reset AFTER the final wait, on every role incl. pure receivers (R1) |
+| Arrival poll (reduce) | raw_api (op-owned by design) | two-way poll: `invalidate_l1_cache()` + volatile reads of the `sem_fwd`/`sem_bwd` L1 words; consume whichever direction has an unconsumed arrival (`*sem_dir > consumed_dir`) | no helper exists — receive-side sync is explicitly outside `ccl_helpers_dataflow.hpp` (banner `:108-121`); adopted-kernel precedent `reduce_scatter_average_reduce_reader.cpp:151-170` | — | — | — | monotone counters, loop bound `fwd_arrivals + bwd_arrivals`; reset BOTH after (R1) |
+| Slice tile walk | helper | `ttnn::ccl::schedule::SliceRowWalker(slice_Wt, Wt)` + `set_base` / `reset_offsets(0,0)` / `next()`; base from `slice_tile_offset(dim, my_chip_id, C, slice_Ht, slice_Wt)`; `static_assert(sched::is_supported_scatter_dim(dim))` | `ccl_helpers_schedule.hpp:491-540` (walker), `:466-478` (offset), `:460-461` (dim gate) | own contribution: base `my_chip_id*slice_Wt` over the input accessor; arrival from `src`: base `src*P + my_chip_id*slice_Wt` over the gather accessor; IDENTICAL walk per contribution ⇒ positional alignment across passes (R11), and the walk order equals the output's row-major tile order ⇒ the dense writer needs no walker | — | — | `next()` returns AND advances — call once per tile |
+| DRAM reads/writes | raw_api (no covering helper) | `TensorAccessor` + `noc_async_read`/`noc_async_write` + per-granule barriers | `tech_reports/tensor_accessor/tensor_accessor.md`; CT args from `ttnn.TensorAccessorArgs` | interleaved page addressing | — | `cb_contributions` / output tensor | per-granule (not per-tile) `noc_async_read_barrier` / `noc_async_write_barrier` |
+| Compute boot | raw_api (mandated pre-condition) | `binary_op_init_common(cb_contributions, cb_accumulator, cb_output_tiles)` | pre-condition of the accumulate helpers: `accumulate_helpers_compute.hpp:116-117`, `:211`; ownership note `:70-77` (NOT interchangeable with per-op inits, deliberately not folded into `arm()`) | once at kernel start | — | — | before any helper usage |
+| Seed copy (contribution 0 = own) | helper | `compute_kernel_lib::sum_blocks(cb_contributions, cb_accumulator, /*num_blocks=*/1, /*block_num_tiles=*/g, /*pop_input=*/true)` × `S/g` | decl `accumulate_helpers_compute.hpp:221-222`; `num_blocks == 1` degenerates to a copy of block 0 (`:217`) | `pop_input=true` is load-bearing (R4) | `cb_contributions` (g) | `cb_accumulator` (g) | leaves `add_tiles_init` in acc_to_dest mode (post `:212-213`) ⇒ `rearm()` before the runs (R3) |
+| Incremental accumulate (arrivals 1..N−1) | helper | `compute_kernel_lib::BlockAccumulate::arm(cb_contributions, cb_accumulator, cb_accumulator, g)`; `rearm()`; `run(g)` × `(N-1) * S/g` | arm `accumulate_helpers_compute.hpp:125`, run `:132`, rearm `:175` | **in-place `cb_b == cb_out`**: sound because `run()` pops a and b BEFORE reserving out (`:147-151`, the verified ordering) — with capacity exactly `S`, pop-then-reserve always finds `g` free pages | `cb_contributions` (g) + `cb_accumulator` front (g) | `cb_accumulator` back (g) | `g ≤ DEST_AUTO_LIMIT` asserted at arm (`:122-123`); ONE armed instance only (R10) |
+| Final move to writer | helper | `compute_kernel_lib::sum_blocks(cb_accumulator, cb_output_tiles, /*num_blocks=*/1, /*block_num_tiles=*/g, /*pop_input=*/true)` × `S/g` | `accumulate_helpers_compute.hpp:221-222`, degenerate copy `:217` | block-0 copy of the finished sum into the writer-facing CB; kernel ends after this phase, so its acc_to_dest post-condition is moot | `cb_accumulator` (g) | `cb_output_tiles` (g) | same-format CBs ⇒ no reconfig needed |
 
-### Helpers considered and rejected (mandatory justifications)
+### Raw-API justifications (helpers considered and rejected)
 
-| Candidate | Where it would apply | Rejection (concrete, cited) |
-|---|---|---|
-| `compute_kernel_lib::BlockAccumulate` (accum.hpp:111, `arm(cb_a, cb_b, cb_out, granularity)` :125) | Phase B sum | `arm` takes exactly TWO input CBs and each `run` adds `a + b` from two streams (inl:46-70). Here the N operands land block-major in ONE CB and N is runtime (mesh-derived, 2..8): the N-blocks-resident-in-one-CB shape is exactly what the free function `sum_blocks` exists for (accum.hpp:194-205 "out = the sum of num_blocks equal-shaped tile blocks RESIDENT in one CB — the all_reduce pattern"). `sum_blocks` IS the helper used; this is a helper-vs-helper selection, not a raw fallback. |
-| `compute_kernel_lib::reduce()` (`reduce_helpers_compute.hpp:263-301`) | Phase B sum | `reduce()` performs WITHIN-TILE pooling — REDUCE_ROW/COL/SCALAR collapse the 32×32 tile dims and require a scaler CB (`reduce_helpers_compute.hpp:266-268, 274-276`). This op needs an element-wise N-way sum that PRESERVES tile shape; the tile dims must not be collapsed. Wrong operation class. |
-| `FabricStreamSender::signal()` (dataflow.hpp:527) | Phase A per-block sync | `signal()` is TERMINAL — one inc then close ("do not also call open() on this sender afterwards", hpp:526). The Phase-A writer issues MANY packets + MANY incs across the relay loop, which is the documented staged `open → arm → issue → close` case (banner :86-91). The staged path IS used. |
-| `FabricDuplexSender` (dataflow.hpp:799-824) | Phase A egress | Duplex fans every issue out to ALL connected directions (banner :44-61). Phase A's two directions send DIFFERENT block sequences from DIFFERENT cores (fwd: `i, i−1…0`; bwd: `i, i+1…N−1`), so a shared-issue duplex stream cannot express it; two unidirectional senders on two cores (the proven all_reduce shape) are correct. |
-| `ttnn._ttnn.fabric.ccl_packet_dims` (fabric.cpp:264-265) | Phase A packet framing | Deliberately unused: the primary path uses 1:1 page↔packet framing with `aligned_page_size` as the on-wire payload, same as all_gather/all_reduce (`all_reduce/op_design.md:206`). Available for multi-page coalescing as a perf refinement. |
-| `RingRsSchedule` / `ring_rs_step_flags` / `RingSliceCursor` / `LineChannelWalk` / `SyncCadence` (sched.hpp:223-383, :588-607, :627-753) | whole-op schedule | These model the N-1-step ring/line transfer walks with per-step reduce/forward flags (banner :58-76). The gather-then-reduce algorithm HAS no multi-step transfer schedule — the prompt's blessed simplest form. The schedule header is still the single source of slice addressing (`SliceRowWalker`, `slice_tile_offset`, `is_supported_scatter_dim`). A future ring implementation is the documented refinement (§R12). |
-| `SequentialTileWalker` (sched.hpp:543, `next()` = `base_ + offset_++` :556) | Phase B writer output ids | The output slice is dense by construction; the walker's `next()` is literally `start + t`. Plain dense indexing in the writer is the same arithmetic with no cross-kernel agreement at stake (the shared contract is the per-core `n`, enforced by CB counts). Either is acceptable; the design specifies plain `start + t` to match the proven all_reduce Phase-B writer. |
-| A `FabricStreamReceiver` | Phase A ingress | Does not exist by design — "The receive INGRESS is likewise a local NoC read the op owns; there is no FabricStreamReceiver" (dataflow.hpp:112-120). The relay read-back `noc_async_read` and the `noc_semaphore_wait_min` are the documented op-owned halves. |
+**Final move (C4) — why not a second armed `BlockAccumulate` targeting `cb_output_tiles` for the LAST pass (which would delete C4 entirely):** `accumulate_helpers_compute.hpp:188-191` — "unpack/math config is SINGULAR hardware state, so **two differently-armed accumulators cannot coexist** — hence tracking the mode here rather than handing out two armed objects." The helper's own contract forbids the two-instance shape; the degenerate-copy `sum_blocks` C4 is the helper-native alternative (and mirrors the adopted sibling's C4 phase position exactly, with copy instead of scale). Cost: S extra tile copies (S ≤ 32 golden) after the last arrival — same tail class the adopted design shipped with.
 
-## Compute Phases (Phase B compute kernel, per work core)
+**Eltwise convenience/chain helpers (`eltwise_convenience.hpp` `copy`, `eltwise_chain.hpp` `CopyTile`+`PackTile`) for C4:** **ABSENT from this clone.** `ttnn/cpp/ttnn/kernel_lib/` contains exactly: `accumulate_helpers_compute`, `ccl_helpers_dataflow`, `dest_helpers`, `dfb_helpers_compute`, `dfb_helpers_dataflow`, `l1_helpers`, `reduce_helpers_common/compute/dataflow`, `tilize_helpers`, `untilize_helpers` (`.hpp`+`.inl` each; verified by `ls`). A kernel `#include` of the eltwise headers cannot compile here.
+
+**`reduce_helpers_compute.hpp` `reduce()` for the sum:** reduces WITHIN a tensor along a dim, collapsing the 32×32 within-tile dims via `reduce_tile` — the wrong shape for `out[i] = Σ_j shard_j[i]`, which must preserve every element. The accumulate header's banner draws exactly this contrast (`accumulate_helpers_compute.hpp:12-20`: "That header reduces WITHIN a tensor along a dimension… This one adds whole tile-blocks TOGETHER across separate CBs"). Consequently `prepare_reduce_scaler` is also N/A — no `reduce_tile` anywhere in this op.
+
+**Position-major `sum_blocks(cb, cb_out, N, …)` for the whole reduction (instead of C1–C3):** `sum_blocks` waits the WHOLE input (`num_blocks * block_num_tiles`) up front (`accumulate_helpers_compute.hpp:199-201`) — it cannot start until all N contributions are present, reintroducing zero overlap inside the single dispatch (R13). Arrival-major C1–C3 is the design point.
+
+**`FabricDuplexSender` for the relay writers:** the duplex form serves ONE core owning BOTH directions; this design gives each direction its own core and single-direction connection (the adopted pattern in all four in-tree collectives). Two `FabricStreamSender<>` instances on two cores are strictly simpler and proven.
+
+**`LineSliceCursor` / `LineChannelWalk` / `SyncCadence` / `line_rs_*` predicates (`ccl_helpers_schedule.hpp:588-607, 627-645, 651-658, 690+`):** these are the step machine of the partial-sum line algorithm (per-step slice cursors, chunks-per-sync cadence, FWD/BWD output-accumulate mode split). This design has no per-step slice sequence (every relay block is a whole shard), and its signal quantum is a whole block (one double-inc per block), so a chunks-per-sync cadence has nothing to pace. Adopting them without the partial-sum algorithm would be dead machinery; with it, a different op (Refinement 4). The schedule helpers this algorithm DOES need — `slice_tile_offset`, `SliceRowWalker`, `is_supported_scatter_dim` — are used.
+
+**Two-way semaphore poll — helper considered:** `noc_semaphore_wait_min` blocks on ONE counter and would serialize the two directions (losing overlap whenever the other direction lands first). Receive-side sync is explicitly scoped OUT of `ccl_helpers_dataflow.hpp` (banner `:108-121`); no two-counter primitive exists.
+
+## Compute Phases (reduce_compute kernel, core (0,2))
 
 | # | Operation | Helper? | Input CB (tiles, state) | Output CB (tiles) | CB State After |
 |---|-----------|---------|--------------------------|-------------------|----------------|
-| 0 | `binary_op_init_common(cb_gathered_slices, cb_gathered_slices, cb_summed_slice)` | raw (hardware startup, kernel-owned per accum.hpp:70-77) | — | — | — |
-| 1..n | `sum_blocks(cb_gathered_slices, cb_summed_slice, N, 1, true)` — one call per owned output position | helper | `cb_gathered_slices`: N tiles (block-major, pushed by reader), fully consumed | `cb_summed_slice`: 1 tile | `cb_gathered_slices` empty (popped before the output push); `cb_summed_slice` drained by the writer |
+| C0 | `binary_op_init_common(cb_contributions, cb_accumulator, cb_output_tiles)`; `acc = BlockAccumulate::arm(cb_contributions, cb_accumulator, cb_accumulator, g)` | pre-condition + helper factory | — | — | hw configured; ONE accumulator armed |
+| C1 | Seed: copy contribution 0 (own slice) — `S/g × sum_blocks(cb_contributions, cb_accumulator, 1, g, /*pop_input=*/true)` | helper | `cb_contributions` (g per call, popped) | `cb_accumulator` (g per call) | `cb_accumulator` holds S tiles = own contribution; `cb_contributions` empty |
+| C2 | `acc.rearm()` — restore after `sum_blocks`'s acc_to_dest post-condition | helper | — | — | plain add mode + data formats restored |
+| C3 | Incremental accumulate: `for k in 1..N-1: for chunk in S/g: acc.run(g)` | helper | `cb_contributions` (g, popped) + `cb_accumulator` front (g, popped) | `cb_accumulator` back (g) | after pass k, `cb_accumulator` holds the S-tile running sum of contributions 0..k; FIFO order = walker order preserved every pass |
+| C4 | Final move: `S/g × sum_blocks(cb_accumulator, cb_output_tiles, 1, g, /*pop_input=*/true)` — degenerate block-0 copy of the finished sum | helper | `cb_accumulator` (g, popped) | `cb_output_tiles` (g) | `cb_accumulator` empty; sum streamed to the writer; kernel ends (acc_to_dest post-condition moot) |
 
-## Broadcast Verification
+Compute is order-agnostic: it counts N contributions of S tiles in g-granules; the READER decides arrival order. No step flags, no schedule agreement beyond the fixed CB protocol. C4 exists because the writer cannot consume `cb_accumulator` directly — during C1–C3 the CB transiently holds partial sums indistinguishable from the final one, and the single-armed-instance rule (R10) forbids retargeting the last `run()` at `cb_output_tiles`.
 
-The only binary op is `add_tiles` inside `sum_blocks` — full-tile element-wise, no broadcast form.
+Broadcast verification: N/A — every binary op in this design is a full-tile × full-tile `add_tiles` (BroadcastDim::None); there is no broadcast operand.
 
-| Phase | Op | CB_A Valid Region | CB_B Valid Region | Broadcast Dim |
-|-------|-----|-------------------|-------------------|---------------|
-| B compute | `add_tiles` (via `sum_blocks`) | `cb_gathered_slices` full tiles | `cb_gathered_slices` full tiles (other block offset) | None |
+## CB Sync Audit (push count == wait/pop count, per CB, per device)
 
-## Registry / Entry-Point Contract (module layout)
+| CB | Pushed | Waited/Popped | Balanced |
+|----|--------|----------------|----------|
+| `cb_relay_pages` (per relay core) | reader: `num_sends_dir * P` pages | writer: `num_sends_dir * P` (wait 1 / pop 1) | ✓ (0 = 0 on idle direction) |
+| `cb_contributions` | reader: `N * S` tiles in g-granules (own + fwd_arrivals + bwd_arrivals = N contributions) | compute: C1 pops `S` + C3 pops `(N-1)*S` | ✓ |
+| `cb_accumulator` | compute only: C1 `S` + C3 `(N-1)*S` = `N*S` | compute: C3 pops `(N-1)*S` + C4 pops `S` = `N*S` | ✓ |
+| `cb_output_tiles` | compute: `S` (C4) | writer: `S` (g-granules) | ✓ |
 
-```
-ttnn/ttnn/operations/reduce_scatter/
-  __init__.py                            # re-export: reduce_scatter, SUPPORTED, EXCLUSIONS, INPUT_TAGGERS
-  reduce_scatter.py                      # entry point, validate(), registry, semaphore cache
-  reduce_scatter_program_descriptor.py   # Phase A + Phase B MeshProgramDescriptor builders
-  kernels/
-    reduce_scatter_reader.cpp
-    reduce_scatter_writer.cpp
-    reduce_scatter_compute.cpp
-  op_design.md                           # this file
-```
+Semaphore audit (per device i): `sem_fwd` inc'd `fwd_arrivals` times at (0,0) and `fwd_arrivals` times at (0,2); (0,0) waits values `1..fwd_arrivals` (one per relayed block, or a single `≥ fwd_arrivals` wait at a line end) then resets; (0,2) consumes `fwd_arrivals` arrivals then resets. Mirror for `sem_bwd`. Waits observed == incs issued before every reset — a reset can never race an in-flight inc.
 
-| Item | Decision |
-|---|---|
-| `SUPPORTED` | `{"dtype": [ttnn.bfloat16, ttnn.float32], "layout": [ttnn.TILE_LAYOUT], "topology": [_Topology.Linear], "dim": [3]}`. **`"dim"` MUST be a key even though Phase-0 has one value** — the golden harness derives xfail marks by iterating SUPPORTED (feature_spec.py:44-52); a missing axis surfaces unimplemented `dim=2` as a hard failure instead of the expected `UnsupportedAxisValue`. |
-| `EXCLUSIONS` | `[]` |
-| `INPUT_TAGGERS` | `{}` (golden INPUTS are chosen valid for every TARGET dim; no shape-derived axis needed) |
-| Refusal types | `from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue` with the ImportError fallback subclassing `NotImplementedError` (`all_reduce.py:39-47` verbatim pattern) |
-| `validate()` order | 1) structural → `ValueError`: MeshDevice, `(1, N)` line view, N ≥ 2, rank 4, not sharded, `H % 32`/`W % 32`, canonical-dim divisibility `shape[dim] % (N*32) == 0`, 16-byte page guard, output_tensor spec (shape with `[dim]//N`, dtype, layout, buffer_type). 2) axis gate → `UnsupportedAxisValue` per axis (`dtype, layout, topology, dim`), then `ExcludedCell` scan. Returns `(num_devices, canonical_dim)`. |
-| dim canonicalization | `dim if dim >= 0 else dim + 4` BEFORE the divisibility check and the membership test (positive convention pinned by feature_spec; `-1 ≡ 3`, `-2 ≡ 2`). |
-| Semaphore | Module-level `_SEMAPHORE_CACHE` keyed `id(mesh_device)`; miss branch: create on full worker grid (initial 0) + ONE `ttnn.synchronize_device(mesh_device)`; park on the Phase-A descriptor via `gather_mpd.semaphores = [sem]` (guard with `hasattr` for older bindings). Excluded from the program-cache hash; copied into the cached workload's `shared_variables` on miss. NO per-call post-dispatch barrier. |
-| Dispatches | `ttnn.generic_op([input_tensor, gather_buffer], gather_mpd)` then `ttnn.generic_op([gather_buffer, output_tensor], reduce_mpd)` — the LAST tensor in `io_tensors` is the output. Queue order IS the phase barrier. |
+## Validation & Registry Contract (Phase-0)
 
-## Feature spec (pipeline mode)
+| Item | Value |
+|------|-------|
+| Exports | `SUPPORTED`, `EXCLUSIONS`, `INPUT_TAGGERS`, `reduce_scatter` from both `reduce_scatter.py` and the package `__init__.py` (the golden harness imports from the package) |
+| Exceptions | `from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue` inside `try/except ImportError` with local `NotImplementedError`-subclass fallbacks |
+| Phase-0 `SUPPORTED` | `{"dtype": [ttnn.bfloat16, ttnn.float32], "layout": [ttnn.TILE_LAYOUT], "topology": [_Topology.Linear], "dim": [3]}` — **`"dim"` MUST be a SUPPORTED key even single-valued** (`feature_spec.py:42-47`: the harness derives xfail marks only from declared axes; an undeclared axis surfaces as a hard failure instead of the expected `UnsupportedAxisValue`) |
+| `INPUT_TAGGERS` / `EXCLUSIONS` | `{}` / `[]` (golden INPUTS are all tile-aligned by construction) |
+| `validate()` ordering | **universal structural (ValueError)** — MeshDevice, `(1, N)` line with N ≥ 2, rank 4, `H/W % 32`, not sharded, `-4 ≤ dim ≤ 3` → **axis gate** — canonicalize `dim = dim % 4`, then per-axis `UnsupportedAxisValue`, then `ExcludedCell` → **axis-value-DEPENDENT structural (ValueError)** — `shape[dim] % N == 0`, `(shape[dim]/N) % 32 == 0`, `S ≤ 256` L1 budget, `output_tensor` spec match (shape/dtype/layout/`memory_config().buffer_type`). This ordering (not all_reduce's older all-structural-first) is the verifier-blessed one: an out-of-SUPPORTED `dim` yields the typed refusal, never a shape ValueError computed under the wrong axis |
+| `validate()` returns | `(num_devices, canonical_dim)`; `validate()` is called first in the public function, before any allocation |
+| `output_tensor` path | spec-check in validate; write into it; return the SAME handle (acceptance asserts `buffer_address()` equality) |
+| TARGET − SUPPORTED refinement candidates | `topology=Ring`, `dim=2` — to be filed in `op_requirements.md` |
 
-`eval/golden_tests/reduce_scatter/feature_spec.py` **already exists and is authoritative** — do not
-edit it. TARGET: `dtype [bf16, fp32] × layout [TILE] × topology [Linear, Ring] × dim [3, 2]`;
-INPUTS: `(1,1,256,256), (1,1,256,512), (2,1,256,256)` (widths/heights multiples of 256 = lcm(tile,
-8 devices) so every TARGET dim stays tile-aligned on both the (1,8) sim mesh and the (1,4) hardware
-box); `INVALID = []`.
+## Refinement candidates (not Phase-0)
 
-**Structural impossibilities**: none beyond the existing empty INVALID — every Phase-0 axis
-combination (float dtypes × TILE × topology × dim) is constructible; `Ring` topology and `dim=2`
-are kernel/host refinements (EXCLUSIONS-class, already outside SUPPORTED), not universe changes.
-
-## Program Cache & Semaphore Lifecycle
-
-| Item | Behaviour |
-|---|---|
-| Hash inputs | Per kernel: source path, CT args, core ranges, config, rt-arg COUNTS (not values); per CB: total_size, ranges, formats (`generic_op_device_operation.cpp:48-108`). Same shape/dtype/topology/dim → both dispatches hit. |
-| gather_buffer per call | Allocated fresh each call → new addresses on a cache hit. Safe: rt-arg VALUES are re-pushed by `override_runtime_arguments`; sizes/CT args unchanged. |
-| Semaphore survival | GlobalSemaphore created once (module cache) + parked on the descriptor (excluded from hash, held in `shared_variables`). The acceptance test's cache-hit case fails/hangs if it is re-created per call or if the kernel re-arm (§R1) is missing. |
-| Distinct hash per device role | Line-end writers have rt-arg count 0 vs interior 7+conn-block — intentional distinct entries. |
+| # | Refinement | Sketch |
+|---|-----------|--------|
+| 1 | `topology=Ring` | block indices are already ring-modular (T3); adopt Ring send/arrival depths (fwd `N/2`, bwd `(N-1)//2`) and `ccl_dm_route`'s short-way selection; reduce reader's per-direction source sequences stay `(i ∓ (1+a)) % N` |
+| 2 | `dim=2` | per-(batch,channel) dense runs: `walk_slice_Wt = Wt`, base from `slice_tile_offset(2, …)` (`ccl_helpers_schedule.hpp:466-478`), per-channel `bump_base(slice_Ht*N*Wt)` — the adopted sibling's reduce reader (`reduce_scatter_average_reduce_reader.cpp:77-86,115-145`) is the worked example |
+| 3 | Multi-core reduce | split `S` across reduce cores; needs per-core arrival inc fan-out or a local mcast of the arrival signal |
+| 4 | Bandwidth: true partial-sum line RS | the `LineSliceCursor`/`LineChannelWalk`/`SyncCadence`/`line_rs_*` machine (silicon-verified in `reduce_scatter_minimal_async`); drops the N× gather traffic; extend the host gtest schedule sweeps (`tests/ttnn/unit_tests/gtests/ccl/test_ccl_helpers_schedule.cpp`) before any schedule variant of it |
+| 5 | Large-S support | chunk or spill the accumulator; also a Float32 `cb_accumulator` under bf16 inputs to cut the N−1 per-pass bf16 pack roundings |
+| 6 | Packet coalescing | `ccl_packet_dims` multi-page packets + per-chunk incs |
 
 ## Key Risks and Gotchas
 
-| # | Risk | Mitigation |
-|---|------|------------|
-| R1 | **Cache-reuse semaphore re-arm.** Programs are cached and the GlobalSemaphore reused: first run green, second hangs/corrupts. | Phase-A reader executes `noc_semaphore_set(sem_ptr, 0)` after its LAST wait, in BOTH the relay and the pure-receiver (line-end) paths (dataflow.hpp:118-120; `all_reduce_reader.cpp:115-116`). The acceptance test's program-cache case exists to catch this. |
-| R2 | **Phase ordering is queue-ordered, not barrier-ordered.** | Two `generic_op` dispatches on the same CQ; Phase A completes on device i before Phase B runs there. Do NOT reorder the dispatches; do NOT drop Phase A's read-side counting waits (they are what guarantees the DATA landed before relay/read). |
-| R3 | **Uniform mesh buffer address assumption.** Fabric `write_page` targets the neighbour's gather_buffer through the LOCAL accessor + 1-hop route. | gather_buffer/output MUST be mesh-allocated (`allocate_tensor_on_device` on the mesh) — never per-device allocations. |
-| R4 | **Block-major push order into `cb_gathered_slices`.** `sum_blocks` reads block c at CB index `c * block_num_tiles`; with `block_num_tiles = 1`, tile c must be the c-th page of the reservation. | Reader loops `c = 0..N−1` within one N-page reservation, single barrier, single push of N. |
-| R5 | **One `next()` per output position.** `SliceRowWalker::next()` returns AND advances; calling it per block read (N times per position) silently mis-addresses with no hang. | `const uint32_t id = walker.next();` hoisted above the block loop. |
-| R6 | **Reader-walk ↔ writer-dense agreement.** The reader's `t`-th pushed group must correspond to output page `start + t`. | Both derive from the SAME per-core `(start, n)` rt args; the walker seed formula `reset_offsets(start % run, (start / run) * stride)` is the only nontrivial piece — get it from this doc, not re-derived. |
-| R7 | **`pop_input=true` on `sum_blocks`.** `cb_gathered_slices` is a real producer/consumer CB; the default `false` (all_reduce's resident-shell mode) deadlocks the reader on `cb_reserve_back` after the CB fills. | Explicit `true` (accum.hpp:200-205). |
-| R8 | **CB slot reuse before fabric read.** `write_page` is async; popping the relay page immediately can recycle the L1 slot mid-read. | `noc_async_writes_flushed()` between `write_page` and `cb_pop_front` (`all_reduce_writer.cpp:95`). |
-| R9 | **`cb_self_copy` is reserve-only scratch.** It is never pushed; a well-meaning "fix" adding push/pop desyncs nothing but wastes nothing either — leave as scratch per the proven kernel. | Documented here and in the kernel comment. |
-| R10 | **Line-end writers must read NO rt args.** Their rt-arg list is `[]`; any unconditional `get_arg_val` before the `my_num_targets > 0` guard reads garbage. | The entire Phase-A writer body sits inside `if constexpr (my_num_targets > 0)` (`all_reduce_writer.cpp:57`). |
-| R11 | **fp32_dest_acc_en halves DEST capacity** (DEST_AUTO_LIMIT 8 → 4, `dest_helpers.hpp:89-103`). | Irrelevant at `block_num_tiles = 1` (`sum_blocks` chunks internally, inl:121-123), but binding for any future granularity > 1 refinement. |
-| R12 | **Perf refinements (recorded, not Phase-0):** slice-only gather (each device only needs S·N tiles, not P·N), packet coalescing via `ccl_packet_dims`, granularity > 1 `sum_blocks` blocks, true ring reduce-scatter on `RingRsSchedule` + `BlockAccumulate` (the C++ `ring_reduction.cpp` model), Ring topology, dim ∈ {1, 2} (host-only change: new `slice_base/run/stride` row). | op_requirements.md candidates for the verifier. |
-| R13 | **Mesh/fabric contract in every test.** Verification topology is `bh_quietbox_1x4_hw`: mesh `(1, 4)`, `FABRIC_1D`, real Blackhole silicon via `scripts/run_multidevice_sim_pytest.py --runtime hardware --op reduce_scatter`. A different mesh shape hangs fabric init (`Fabric Router Sync: Timeout`) or fails `system_mesh.cpp: requested_size <= system_size`. The runner exports `MULTIDEV_SIM_MESH_SHAPE` per topology; the acceptance test reads it with default `(1, 4)`. |
-| R14 | **Negative-dim aliases.** `dim=-1` must behave exactly as `dim=3` (positive-convention canonicalization BEFORE the membership test) — a literal `dim in SUPPORTED["dim"]` check rejects legal aliases. |
-| R15 | **Topology import at module import time.** Use `from ttnn._ttnn.operations.ccl import Topology as _Topology`; the `ttnn.Topology` alias binds only after `ttnn.operations` auto-import (`all_reduce.py:35-37`). |
+| # | Risk | Rule |
+|---|------|------|
+| R1 | **Cache-reuse semaphore re-arm** — first run green, second hangs (`ccl_helpers_dataflow.hpp:116-121`) | every consumer resets its OWN core's counter after its final wait: (0,0)→`sem_fwd`, (0,1)→`sem_bwd`, (0,2)→BOTH. Reset on every role, including line-end pure receivers that relay nothing (T6). The acceptance program-cache test exists to catch exactly this |
+| R2 | **`cb_accumulator` single-producer invariant** | ONLY the compute kernel ever reserves/pushes `cb_accumulator`. Each RISC keeps a LOCAL CB write pointer — a reader seeding it directly corrupts the ring. The seed goes through `cb_contributions` + the C1 `sum_blocks` copy |
+| R3 | **`sum_blocks` post-condition** — leaves `add_tiles_init` in acc_to_dest mode (`accumulate_helpers_compute.hpp:212-213`) | `acc.rearm()` between C1 and the first C3 `run()` (also restores unpack/pack data formats, `:169-173`) |
+| R4 | **`pop_input=true` on both `sum_blocks` phases** | the default `false` deadlocks the upstream producer on `cb_reserve_back` once the input CB fills (C1: reader on `cb_contributions`; C4: compute itself on `cb_accumulator` in a later call) |
+| R5 | **Granularity contract** | host guarantees `g ∈ {4,2,1}` divides `S`, so every CB interaction is a full granule and no tail chunk exists; `g ≤ DEST_AUTO_LIMIT = 4` under `fp32_dest_acc_en` (asserted at `arm`, `:122-123`); mirror with kernel `static_assert(S % g == 0)` |
+| R6 | **CB wrap contiguity** — multi-page reserve + linear `l1 += page_size` writes | every CB capacity is a multiple of its quantum (CB table); never mix quanta on one CB |
+| R7 | **`noc_async_writes_flushed()` before `cb_pop_front`** in the relay writer | the fabric write sources the CB slot; popping first lets the reader overwrite in-flight data |
+| R8 | **Inc-after-pages ordering** | both `inc()` issues go on the SAME connection as the block's `write_page`s, after the last page — fabric delivery is in-order per connection, making `sem ≥ k` imply data-complete. Do not move the incs to another stream |
+| R9 | **`static_assert(is_supported_scatter_dim(dim))`** in the reduce reader; `dim` reaches the kernel already canonical (host gate) | |
+| R10 | **ONE armed `BlockAccumulate` per kernel** — unpack/math config is singular hardware state; two differently-armed instances cannot coexist (`accumulate_helpers_compute.hpp:188-191`) | do NOT "optimize" C4 away by arming a second accumulator with `cb_out = cb_output_tiles`; the final move is the degenerate-copy `sum_blocks` |
+| R11 | **Walker discipline** — `SliceRowWalker::next()` returns AND advances | call exactly once per tile; `set_base(...)` + `reset_offsets(0,0)` per contribution; the IDENTICAL walk order for every contribution keeps `add_tiles` positionally aligned across passes, and that order equals the output's row-major tile order (dense writer contract) |
+| R12 | **All reduce-core CBs share the input dtype** | this is what lets one boot `binary_op_init_common(cb_contributions, cb_accumulator, cb_output_tiles)` cover C1/C3/C4 with no mid-kernel reconfig; do not give any of them a different format |
+| R13 | **Overlap is arrival-major by necessity** | a position-major `sum_blocks(cb, out, N, …)` waits full presence (`:199-201`) and reintroduces zero overlap — the failure the single-dispatch mandate exists to prevent. Keep C1–C3 arrival-major |
+| R14 | **`gather_buffer` fresh per call, in `io_tensors`** | dispatch resolves and keeps it alive; uniform mesh address is what makes the neighbour-targeted `write_page` valid — allocate via `ttnn.allocate_tensor_on_device` on the MeshDevice, never per-device |
+| R15 | **Mesh/topology contract** | acceptance runs on a `(1, 4)` Blackhole mesh with `FabricConfig.FABRIC_1D` (`bh_quietbox_1x4_hw` in `scripts/multidevice_sim_topologies.yaml:193-205`); any other mesh shape hangs fabric init (`Fabric Router Sync: Timeout`) or fails `system_mesh.cpp: requested_size <= system_size` — a test/topology mismatch, not an op defect. Drive verification via `scripts/run_multidevice_sim_pytest.py --runtime hardware --op reduce_scatter`; `run_safe_pytest.sh` is the wrong runner for CCL ops |
+| R16 | **bf16 accumulation rounding** | `cb_accumulator` is bf16 under bf16 inputs → N−1 pack roundings; PCC threshold 0.99 (not 0.995), oracle accumulates in fp32 over the quantized shards then casts. Refinement 5 removes the intermediate roundings |
+
+## Structural impossibilities (pipeline-mode note)
+
+`eval/golden_tests/reduce_scatter/feature_spec.py` already exists and is authoritative (not edited here). `INVALID = []` is correct for its TARGET (TILE-only layout, float dtypes, orthogonal `topology`/`dim` axes — every cell constructible); no additional candidates. The golden `helpers.py` was audited: the oracle is the correct fp32-accumulated SUM-then-slice, the driver call matches this signature, and the mesh fixture honours `CCL_HW_MESH_SHAPE` — no harness defects to file.
+
+## Acceptance criteria mapping
+
+| Requirement | Where satisfied |
+|-------------|-----------------|
+| Device i output = slice i of the sum, PCC ~0.99 | `test_reduce_scatter` (bf16 0.99 / fp32 0.999, fp32-accumulated oracle over quantized shards) |
+| Negative-dim alias | `test_reduce_scatter_negative_dim_alias` (`dim=-1` ≡ `dim=3`) |
+| `output_tensor` path returns the supplied handle | `test_reduce_scatter_output_tensor` (`buffer_address()` equality + correctness) |
+| Program-cache hit on 2nd call, semaphores survive | `test_reduce_scatter_program_cache` (2-call loop; catches a missing R1 re-arm as a hang) |
+| ONE `generic_op` dispatch, compute overlaps arrival | single MeshProgramDescriptor dispatch; T4/T7 overlap contract; R13 |
+| Loud shape rejection | `test_reduce_scatter_rejects_non_tile_aligned_slice` (`pytest.raises(ValueError)`) |
+| Typed refusal for unsupported axis values | `test_reduce_scatter_rejects_unsupported_dim` (`pytest.raises(NotImplementedError)` — `UnsupportedAxisValue`) |
 
 ## Hardware Constraints checklist
 
-- [x] CB sync: push == wait/pop for every CB (ledger above)
-- [x] No reduce scaler (no `reduce()` usage — `sum_blocks` needs none)
-- [x] DEST: `sum_blocks` chunks internally against `DEST_AUTO_LIMIT` (= 4 under fp32_dest_acc_en); `block_num_tiles = 1` uses one DST tile
-- [x] No sequential-helper intermediate CBs (single compute helper per position)
-- [x] Page sizes: tile CBs use `buffer_page_size()` of TILE tensors; relay CB uses l1-aligned page size (16-byte guard in validate)
-- [x] All `cb_wait_front` calls on a given CB use one page count (`cb_relay_pages`: 1; `cb_gathered_slices`: N; `cb_summed_slice`: 1)
-- [x] Helpers not wrapped with extra CB ops (`sum_blocks` and the fabric channels own their protocols end-to-end)
-- [x] Hardware startup (`binary_op_init_common`) before the first helper call, kernel-owned
+- [x] CB sync: push count = wait/pop count for every CB (audit table)
+- [x] DEST: `g ≤ 4` under `fp32_dest_acc_en` (SyncHalf) — asserted at `BlockAccumulate::arm`
+- [x] Reduce-scaler pool-type API: N/A — no `reduce_tile` and no scaler anywhere in this op
+- [x] Page sizes tile-aligned; relay CB pages rounded to L1 alignment
+- [x] All `cb_wait_front` calls on a given CB use one page count (`g`; 1 page for relay)
+- [x] Helpers not wrapped with extra CB operations (`sum_blocks`/`BlockAccumulate` own their protocols)
+- [x] Hardware startup (`binary_op_init_common`) before any compute-helper usage
+- [x] Every compute phase uses a helper; every raw-API fallback carries a file:line-cited rejection
