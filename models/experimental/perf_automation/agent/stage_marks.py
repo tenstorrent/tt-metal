@@ -134,28 +134,82 @@ def mark_stages(adapter, device) -> int:
     return n
 
 
+def _looks_like_a_pipeline(obj) -> bool:
+    """Does this object expose the stage surface the adapter drives?
+
+    The same two things perf_adapter looks for: a PIPELINE_STAGES list, or the per-stage trace hooks
+    named after its entries. Shape, not type -- the tool never imports a model's classes."""
+    names = getattr(obj, "PIPELINE_STAGES", None)
+    if isinstance(names, (list, tuple)) and names:
+        return True
+    mod = sys.modules.get(type(obj).__module__)
+    names = getattr(mod, "PIPELINE_STAGES", None) if mod else None
+    if not isinstance(names, (list, tuple)) or not names:
+        return False
+    return any(callable(getattr(obj, "%s_trace_step" % n, None)) for n in names)
+
+
+def find_pipeline_in_scope(scope: dict):
+    """The pipeline object among a function's locals, or None.
+
+    BY SHAPE, BECAUSE THE NAME IS THE GENERATOR'S TO CHOOSE. Two earlier versions of this injection
+    depended on identifiers -- first six required ones, then the arguments copied out of the test's
+    own adapter call -- and both broke on a regenerated test. The object itself is unambiguous: it is
+    the one carrying PIPELINE_STAGES or the <stage>_trace_step hooks.
+
+    Ordered so a caller can be told WHICH candidate was taken when more than one qualifies, and
+    deterministic (insertion order of locals) so two runs of the same test pick the same object.
+    """
+    found = [(k, v) for k, v in (scope or {}).items() if not k.startswith("__") and _looks_like_a_pipeline(v)]
+    if not found:
+        return None
+    if len(found) > 1:
+        print(
+            "  [stage-marks] %d objects in scope expose a stage surface (%s); taking %r"
+            % (len(found), ", ".join(k for k, _ in found), found[0][0]),
+            file=sys.stderr,
+            flush=True,
+        )
+    return found[0][1]
+
+
+def mark_stages_in_scope(scope: dict, device) -> int:
+    """Mark each stage of whatever pipeline is live in `scope`. Returns how many were marked.
+
+    The scope is the locals() of the function that built the model, so the pipeline is already
+    constructed: no builder, no second build, and nothing that has to be in scope by name."""
+    pipe = find_pipeline_in_scope(scope)
+    if pipe is None:
+        _no_marks("no object in scope exposes PIPELINE_STAGES or <stage>_trace_step hooks")
+        return 0
+    try:
+        from .perf_adapter import PipelineStageAdapter as _PSA
+    except Exception as exc:  # noqa: BLE001
+        _no_marks("perf_adapter is not importable here (%s)" % type(exc).__name__)
+        return 0
+    adapter = _PSA(lambda _d: pipe)
+    return mark_stages(adapter, device)
+
+
 # --- deterministic injection into the generated perf test ----------------------------------------
 
 # The names the injected block leans on. All are in scope at the injection point -- some are test
 # locals, some module-level -- and all come from the skeleton the generator works from. They are
 # CHECKED before injecting rather than assumed: a test that names things differently gets no marks
 # and says so, instead of shipping a NameError into the one run that measures per-op time.
-# NOTHING IS REQUIRED BY NAME ANY MORE.
+# NOTHING IS REQUIRED BY NAME, AND NOTHING IS COPIED ACROSS SCOPES.
 #
-# This listed six identifiers the block used to rebuild an adapter -- _stage_inputs_from_demo,
-# _get_pipe, prompt_ids_for_isl, get_tokenizer, PERF_ISL_TOKENS, PERF_BATCH -- and refused when the
-# test did not define them. But the test is written by an LLM from an advisory skeleton, so those are
-# ITS naming choices, not a contract. Run 27, with the model reset to pristine and the test therefore
-# regenerated: it named the same things _build_for_perf and _prompt_ids, the check failed on the two
-# private helpers, and the marks were refused -- so the roofline shared one peak across every stack
-# for a tenth run, because the injector was coupled to how the generator spells things.
+# This first required six identifiers the generator was free not to use, then copied the arguments of
+# the test's own PipelineStageAdapter(...) call. Both failed on a freshly generated test, the second
+# more subtly: the args were copied correctly and still raised
+# NameError("name '_build_for_perf' is not defined"), because the generator had put the builder and
+# the prompt ids inside the nested `_traced_forward`, while the marks sit in the profiling branch.
+# Text lifted out of one scope cannot run in another, whatever it is called.
 #
-# Swapping in _build_for_perf would only move the hardcoded name. The test already CONSTRUCTS the
-# adapter the marks need -- measure_adapter(PipelineStageAdapter(...), device) -- so the block copies
-# that call's arguments verbatim and reuses them, whatever they are called. The single fixed token is
-# PipelineStageAdapter, which is the tool's own API -- an anchor of the same kind as any other ttnn
-# entry point the harness names, and nothing about how a generated test spells its own helpers.
-_ADAPTER_CALL = "PipelineStageAdapter("
+# So the pass no longer needs a builder. It runs where the model is already live -- at the end of the
+# eager function the marks bracket -- and is handed that function's own locals(). It finds the
+# pipeline by SHAPE: the object exposing PIPELINE_STAGES or the <stage>_trace_step hooks the adapter
+# already looks for. No names, no scopes, and it verifies what it found instead of assuming.
 
 _INJECT_TEMPLATE = """{i}# --- stage marks (injected by perf_test_gen) -------------------------------------
 {i}# The measured region is bracketed by the conventional start/stop pair so the main report
@@ -171,53 +225,24 @@ _INJECT_TEMPLATE = """{i}# --- stage marks (injected by perf_test_gen) ---------
 {i}    _tt_sm.signpost("start")
 {body}{i}if _tt_sm is not None:
 {i}    _tt_sm.signpost("stop")
-{i}    try:
-{i}        _tt_sm.mark_stages(_TtPSA({adapter_args}), device)
-{i}    except Exception as _tt_e:  # noqa: BLE001
-{i}        print("STAGE_MARKS_SKIPPED=%r" % (_tt_e,), flush=True)
 """
 
+# The per-stage pass, appended INSIDE the function the bracket wraps -- the one that built the model.
+# locals() is what makes it name-free: the pipeline is in there under whatever the generator called
+# it, and mark_stages_in_scope picks it out by shape.
+_MARK_PASS_TEMPLATE = """{i}# --- per-stage marks (injected) ---------------------------------------------------
+{i}# Runs HERE, at the end of the function that built the pipeline, because that object is a LOCAL of
+{i}# this scope: an earlier version copied the test's own PipelineStageAdapter(...) arguments into the
+{i}# profiling branch and raised NameError, since the generator had defined them inside another
+{i}# function. Handed locals() rather than a name, so nothing depends on how the test spells things.
+{i}try:
+{i}    from models.experimental.perf_automation.agent import stage_marks as _tt_sm2
 
+{i}    _tt_sm2.mark_stages_in_scope(locals(), device)
+{i}except Exception as _tt_e2:  # noqa: BLE001
+{i}    print("STAGE_MARKS_SKIPPED=%r" % (_tt_e2,), flush=True)
+"""
 
-def _adapter_args(text: str) -> str:
-    """The argument text of the test's own PipelineStageAdapter(...) call, or "".
-
-    The test already builds the adapter the marks need, for measure_adapter. Copying its arguments
-    means the block works whatever the generator named the builder and the prompt ids -- which is the
-    whole point: those names are the LLM's choice, and requiring particular ones is what refused the
-    injection on a freshly generated test.
-
-    PARSED, NOT SCANNED. A balanced-paren walk over the text reads past a call whose parens do not
-    close and swallows whatever follows -- on the real file it returned `..., batch=PERF_BATCH, device`
-    by closing on the enclosing measure_adapter(. The file is Python that has to run, so ast can find
-    the call properly; a file that will not parse is refused, which is the honest answer.
-    """
-    try:
-        tree = ast.parse(text)
-    except SyntaxError:
-        return ""
-    name = _ADAPTER_CALL.rstrip("(")
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        f = node.func
-        ident = getattr(f, "id", None) or getattr(f, "attr", None)
-        if ident != name:
-            continue
-        parts = []
-        for a in node.args:
-            seg = ast.get_source_segment(text, a)
-            if not seg:
-                return ""
-            parts.append(" ".join(seg.split()))
-        for kw in node.keywords:
-            seg = ast.get_source_segment(text, kw.value)
-            if not seg:
-                return ""
-            star = "**" if kw.arg is None else "%s=" % kw.arg
-            parts.append("%s%s" % (star, " ".join(seg.split())))
-        return ", ".join(parts)
-    return ""
 
 
 def inject_stage_marks(text: str) -> tuple:
@@ -230,19 +255,56 @@ def inject_stage_marks(text: str) -> tuple:
     Idempotent, and refuses rather than guesses: no bare `_eager_forward()` statement, or a test that
     does not define the helpers the block needs, means no injection and a stated reason.
     """
-    import re
-
     if "_tt_sm" in text:
         return text, "already injected"
-    args = _adapter_args(text)
-    if not args:
-        return text, "no PipelineStageAdapter(...) call to copy the adapter from"
     lines = text.splitlines(keepends=True)
-    at = [k for k, l in enumerate(lines) if re.match(r"^(\s*)_eager_forward\(\)\s*$", l)]
+    # The bare call to the eager pass. The LAST one is the profiled branch; an earlier one is the
+    # trace-replay fallback. The NAME comes from the file, never from a list here.
+    at = []
+    for k, line in enumerate(lines):
+        stripped = line.strip()
+        body = line[: len(line) - len(line.lstrip())]
+        if stripped.endswith("()") and stripped[:-2].isidentifier() and stripped[:-2].startswith("_"):
+            at.append((k, body, stripped[:-2]))
     if not at:
-        return text, "no bare _eager_forward() statement"
-    # The LAST one is the profiled branch; an earlier one is the trace-replay fallback.
-    k = at[-1]
-    ind = re.match(r"^(\s*)", lines[k]).group(1)
-    lines[k] = _INJECT_TEMPLATE.format(i=ind, body=lines[k], adapter_args=args)
-    return "".join(lines), "injected at line %d" % (k + 1)
+        return text, "no bare call to an eager pass to wrap"
+    k, ind, fname = at[-1]
+    # WHERE THE PIPELINE LIVES. The per-stage pass needs the built model, and that is a local of the
+    # function being called here -- not of this scope. Copying the test's adapter arguments into this
+    # branch is what raised NameError on a regenerated test. So the bracket stays here and the pass is
+    # appended to the END of that function's body, where its locals() still hold the pipeline.
+    end, find = _function_body_end(text, fname)
+    if end is None:
+        return text, "cannot find the body of %s() to append the per-stage pass to" % fname
+    lines[k] = _INJECT_TEMPLATE.format(i=ind, body=lines[k])
+    out = "".join(lines)
+    # Re-locate after the bracket edit shifted the lines below it.
+    end2, find2 = _function_body_end(out, fname)
+    if end2 is None:
+        return text, "lost the body of %s() after bracketing" % fname
+    o = out.splitlines(keepends=True)
+    o.insert(end2, _MARK_PASS_TEMPLATE.format(i=find2))
+    return "".join(o), "injected at line %d, per-stage pass in %s()" % (k + 1, fname)
+
+
+def _function_body_end(text: str, name: str):
+    """(index of the line AFTER the last statement of `name`, that body's indent), or (None, "").
+
+    Parsed, so a comment or a nested def cannot be mistaken for the end of the body."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return None, ""
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name and node.body:
+            indent = " " * (node.body[0].col_offset)
+            # BEFORE THE RETURN, not after the last statement. Appending to the end of the body put
+            # the pass underneath `return out` -- syntactically fine, never executed, and it would
+            # have reported "no marks" from a block that ran zero times. The pipeline is already
+            # bound by then, so immediately before the return is both reachable and late enough.
+            for st in node.body:
+                if isinstance(st, ast.Return):
+                    return st.lineno - 1, indent
+            last = node.body[-1]
+            return (last.end_lineno or last.lineno), indent
+    return None, ""

@@ -148,7 +148,7 @@ def test_injection_lands_on_a_real_generated_test():
     from agent.stage_marks import inject_stage_marks
 
     out, why = inject_stage_marks(_real_test_src())
-    assert "injected at line" in why, why
+    assert ("injected at line" in why) or (why == "already injected"), why
     _ast.parse(out)
     assert '_tt_sm.signpost("start")' in out and '_tt_sm.signpost("stop")' in out
     assert "mark_stages(" in out
@@ -172,14 +172,11 @@ def test_it_refuses_rather_than_guesses():
     from agent.stage_marks import inject_stage_marks
 
     _, why = inject_stage_marks("def test_x():\n    pass\n")
-    assert "no PipelineStageAdapter" in why, why
+    assert "no bare call to an eager pass" in why, why
 
-    has_adapter = (
-        "def test_x(device):\n"
-        "    measure_adapter(PipelineStageAdapter(_b, _p, batch=8), device)\n"
-    )
-    _, why2 = inject_stage_marks(has_adapter)
-    assert "no bare _eager_forward()" in why2, why2
+    # A call it can wrap, but no such function to append the per-stage pass to.
+    _, why2 = inject_stage_marks("def test_x(device):\n    _gone()\n")
+    assert "cannot find the body of _gone()" in why2, why2
 
 def test_the_measured_call_stays_inside_the_pair():
     """The marked pass adds ops to the capture. Without start/stop around the measured region the

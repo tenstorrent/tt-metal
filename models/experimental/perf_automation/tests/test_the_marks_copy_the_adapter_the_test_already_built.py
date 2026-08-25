@@ -1,109 +1,163 @@
-"""The injector required six identifiers the generator was free not to use.
+"""The marks run where the pipeline lives, and find it by shape.
 
-The block that emits the per-stage marks needs a PipelineStageAdapter. It used to REBUILD one from
-named helpers -- _stage_inputs_from_demo, _get_pipe, prompt_ids_for_isl, get_tokenizer,
-PERF_ISL_TOKENS, PERF_BATCH -- and refuse when the test did not define them. But the test is written
-by an LLM from a skeleton that is explicitly advisory, so those names are its choice, not a contract.
+Three versions of this injection failed, each on the same mistaken assumption -- that the block can
+name what it needs:
 
-Run 27, the first run with the model reset to pristine and the perf test therefore regenerated: the
-LLM named the same things `_build_for_perf` and `_prompt_ids`, the check failed on the two private
-helpers, and the marks were refused -- so the roofline shared one math-fidelity peak across every
-stack for a tenth consecutive run.
+  1. it required six identifiers (_stage_inputs_from_demo, _get_pipe, prompt_ids_for_isl,
+     get_tokenizer, PERF_ISL_TOKENS, PERF_BATCH) and refused a regenerated test that had called the
+     same things _build_for_perf and _prompt_ids;
+  2. it copied the arguments of the test's own PipelineStageAdapter(...) call, which parsed fine and
+     then raised NameError("name '_build_for_perf' is not defined") on device -- the generator had
+     defined those inside a nested function, and text lifted out of one scope cannot run in another;
+  3. appending the pass to the end of the function body put it under `return out`: syntactically
+     valid, never executed.
 
-Swapping in _build_for_perf would only move the hardcoded name. The test ALREADY constructs the
-adapter, to hand it to measure_adapter, so the block copies that call's arguments verbatim. The one
-fixed token left is PipelineStageAdapter -- the tool's own API, the same kind of anchor as
-ttnn.execute_trace -- and nothing about how a generated test spells its own helpers."""
+What the pass actually needs is the built pipeline, and that is a LOCAL of the function the bracket
+wraps. So it is injected into that function, before its return, and handed locals(). It picks the
+pipeline out by the surface the adapter drives -- PIPELINE_STAGES, or the <stage>_trace_step hooks --
+so nothing depends on how a generated test spells anything."""
 import ast
+import sys
+import types
 
 import pytest
 
-from agent.stage_marks import _adapter_args, inject_stage_marks
+from agent.stage_marks import find_pipeline_in_scope, inject_stage_marks
 
-_SKELETON = '''import os
+_SHAPE = '''import os
 
 PERF_BATCH = 8
 
 
-def %(build)s(dev):
-    return object()
+def _build_kwargs():
+    return {}
 
 
-def test_x_perf(device):
-    %(ids)s = [1, 2, 3]
-    from models.experimental.perf_automation.agent.perf_adapter import PipelineStageAdapter
-    from models.experimental.perf_automation.agent.trace_replay import measure_adapter
+def test_main_perf(device_params, device):
+    def %(eager)s():
+        %(pipe)s = build_pipeline(device, **_build_kwargs())
+        out = %(pipe)s.run()
+        return out
 
-    measure_adapter(PipelineStageAdapter(%(build)s, %(ids)s, batch=PERF_BATCH), device)
-    _eager_forward()
+    def _traced_forward():
+        def %(build)s(dev):
+            return build_pipeline(dev, **_build_kwargs())
+
+        %(ids)s = [1, 2, 3]
+        measure_adapter(PipelineStageAdapter(%(build)s, %(ids)s, batch=PERF_BATCH), device)
+
+    if not os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
+        _traced_forward()
+    else:
+        %(eager)s()
 '''
 
 
-def _src(build="_build_for_perf", ids="_prompt_ids"):
-    body = _SKELETON % {"build": build, "ids": ids}
-    return body.replace("    _eager_forward()\n", "    _eager_forward()\n") + "\ndef _eager_forward():\n    pass\n"
+def _src(eager="_eager_forward", pipe="pipe", build="_build_for_perf", ids="_prompt_ids"):
+    return _SHAPE % {"eager": eager, "pipe": pipe, "build": build, "ids": ids}
 
 
-def test_it_copies_whatever_the_generator_named_things():
-    """The regression: the run-27 test used _build_for_perf / _prompt_ids and was refused."""
-    src = _src()
-    assert _adapter_args(src) == "_build_for_perf, _prompt_ids, batch=PERF_BATCH"
-    out, why = inject_stage_marks(src)
-    assert "injected" in why, why
+def _fn_of(text, line):
+    """Which function encloses this 1-based line."""
+    tree = ast.parse(text)
+    best = None
+    for n in ast.walk(tree):
+        if isinstance(n, ast.FunctionDef) and n.lineno <= line <= (n.end_lineno or n.lineno):
+            if best is None or n.lineno > best.lineno:
+                best = n
+    return best.name if best else None
+
+
+def test_the_pass_lands_inside_the_function_that_built_the_pipeline():
+    """Not in the profiling branch, where the builder is out of scope -- that raised NameError."""
+    out, why = inject_stage_marks(_src())
+    assert "per-stage pass in _eager_forward()" in why, why
     ast.parse(out)
-    assert "_TtPSA(_build_for_perf, _prompt_ids, batch=PERF_BATCH)" in out
+    line = next(i for i, l in enumerate(out.splitlines(), 1) if "mark_stages_in_scope" in l)
+    assert _fn_of(out, line) == "_eager_forward"
 
 
-def test_a_different_naming_works_just_as_well():
-    """Nothing may depend on the spelling -- that is the whole defect."""
-    src = _src(build="make_pipe", ids="ids_for_this_run")
-    out, why = inject_stage_marks(src)
-    assert "injected" in why
+def test_the_pass_is_reachable_and_not_under_the_return():
+    """Appending to the end of the body put it below `return out`: valid, and never executed."""
+    out, _ = inject_stage_marks(_src())
+    lines = out.splitlines()
+    call = next(i for i, l in enumerate(lines) if "mark_stages_in_scope" in l)
+    ret = next(i for i, l in enumerate(lines) if l.strip() == "return out")
+    assert call < ret, "the per-stage pass sits after the return and can never run"
+
+
+def test_it_does_not_care_what_anything_is_named():
+    """The whole defect: every earlier version depended on the generator's spelling."""
+    out, why = inject_stage_marks(_src(eager="_run_it", pipe="model", build="mk", ids="ids"))
+    assert "per-stage pass in _run_it()" in why, why
     ast.parse(out)
-    assert "_TtPSA(make_pipe, ids_for_this_run, batch=PERF_BATCH)" in out
+    line = next(i for i, l in enumerate(out.splitlines(), 1) if "mark_stages_in_scope" in l)
+    assert _fn_of(out, line) == "_run_it"
 
 
-def test_the_old_skeleton_names_still_work():
-    """A test that DOES use the skeleton's names must not regress."""
-    src = _src(build="_get_pipe", ids="_stage_inputs_from_demo")
-    out, why = inject_stage_marks(src)
-    assert "injected" in why
-    ast.parse(out)
+def test_it_is_idempotent():
+    out, _ = inject_stage_marks(_src())
+    again, why = inject_stage_marks(out)
+    assert again == out and why == "already injected"
 
 
-def test_a_multiline_call_is_copied_whole():
-    """The call spans lines and its arguments contain commas and parens: a scan that stops at the
-    first ')' or splits on ',' would truncate it into code that does not parse."""
-    src = _src().replace(
-        "PipelineStageAdapter(_build_for_perf, _prompt_ids, batch=PERF_BATCH)",
-        "PipelineStageAdapter(\n            _build_for_perf,\n            _prompt_ids[0:3],\n            batch=int(PERF_BATCH),\n        )",
-    )
-    assert _adapter_args(src) == "_build_for_perf, _prompt_ids[0:3], batch=int(PERF_BATCH)"
-    out, why = inject_stage_marks(src)
-    assert "injected" in why
-    ast.parse(out)
+def test_the_last_bare_call_is_taken_as_the_profiled_branch():
+    """The pre-existing rule, kept and now asserted: an earlier bare call is the trace-replay
+    fallback, the last is the branch the profiler runs."""
+    out, why = inject_stage_marks(_src())
+    assert "per-stage pass in _eager_forward()" in why
+    lines = out.splitlines()
+    br = next(i for i, l in enumerate(lines) if 'signpost("start")' in l)
+    assert "_eager_forward()" in lines[br + 1], "the bracket wrapped the wrong call"
 
 
-def test_a_test_with_no_adapter_call_is_refused_with_a_reason():
-    src = _src().replace("PipelineStageAdapter(_build_for_perf, _prompt_ids, batch=PERF_BATCH)", "None")
-    out, why = inject_stage_marks(src)
-    assert out == src
-    assert "no PipelineStageAdapter" in why
+def test_a_test_with_nothing_to_wrap_is_refused_with_a_reason():
+    out, why = inject_stage_marks("def test_x():\n    pass\n")
+    assert out == "def test_x():\n    pass\n"
+    assert "no bare call to an eager pass" in why
 
 
-def test_a_file_that_will_not_parse_is_refused_rather_than_half_copied():
-    """A balanced-paren text walk read PAST an unclosed call and returned
-    `_build_for_perf, _prompt_ids, batch=PERF_BATCH, device` by closing on the enclosing
-    measure_adapter( -- code that compiles and measures the wrong thing. Parsing refuses instead."""
-    src = _src().replace("batch=PERF_BATCH)", "batch=PERF_BATCH")
-    assert _adapter_args(src) == ""
-    out, why = inject_stage_marks(src)
-    assert out == src and "no PipelineStageAdapter" in why
+# --- and the runtime half: finding the pipeline among locals ------------------------------------
 
 
-def test_nothing_is_required_by_name_any_more():
-    """The six-name gate is gone; only the tool's own API remains as an anchor."""
-    import agent.stage_marks as sm
+class _WithAttr:
+    PIPELINE_STAGES = ["encode", "decode"]
 
-    assert not hasattr(sm, "_REQUIRED_NAMES"), "the name gate is back"
-    assert sm._ADAPTER_CALL == "PipelineStageAdapter("
+
+def _mod_backed():
+    """A pipeline whose PIPELINE_STAGES lives on its MODULE, with the per-stage hooks on the object --
+    the other shape perf_adapter accepts."""
+    mod = types.ModuleType("fake_pipe_mod")
+    mod.PIPELINE_STAGES = ["decode"]
+    sys.modules["fake_pipe_mod"] = mod
+    cls = type("P", (), {"decode_trace_step": lambda self: None})
+    cls.__module__ = "fake_pipe_mod"
+    return cls()
+
+
+def test_it_finds_the_pipeline_by_its_stage_surface():
+    scope = {"x": 1, "s": "str", "pipe": _WithAttr(), "device": object()}
+    assert isinstance(find_pipeline_in_scope(scope), _WithAttr)
+
+
+def test_it_finds_the_module_backed_shape_too():
+    obj = _mod_backed()
+    assert find_pipeline_in_scope({"whatever": obj}) is obj
+
+
+def test_nothing_in_scope_qualifies_returns_none():
+    assert find_pipeline_in_scope({"a": 1, "b": "two", "c": object()}) is None
+
+
+def test_an_empty_scope_is_not_an_error():
+    assert find_pipeline_in_scope({}) is None
+    assert find_pipeline_in_scope(None) is None
+
+
+def test_a_zero_result_says_why(capsys):
+    """A silent 0 is what let nine earlier failures look identical from the outside."""
+    from agent import stage_marks as sm
+
+    assert sm.mark_stages_in_scope({"a": 1}, device=object()) == 0
+    err = capsys.readouterr().err
+    assert "NO per-stage boundaries" in err and "no object in scope exposes" in err
