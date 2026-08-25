@@ -97,23 +97,15 @@ sfpi_inline sfpi::vFloat _reciprocal_compat_(const sfpi::vFloat in)
     // Set newly denormalized exponent to result exponent field
     sfpi::vFloat out = setexp(result, new_exp);
 
-    // The pole. in == 0 makes setexp(val, 126) discard the magnitude, so the exponent
-    // difference above lands on 126 - exexp(0) = 254 -- an ordinary finite, measured as
-    // 1.7e38 -- where infinity needs 255. The v_if(new_exp < 0) block above guards only the
-    // opposite, underflow end. Issue #52930 finding 4.
+    // Pole guard for in == 0, which the exponent-difference arithmetic above misses: it lands
+    // on 126 - exexp(0) = 254, a finite 1.7e38, where an infinity needs 255. The
+    // v_if(new_exp < 0) block guards only the opposite, underflow end. Issue #52930.
     //
-    // Applied after the setexp rather than alongside the underflow guard: writing an infinity
-    // into `result` first and then running setexp over it would overwrite the exponent field
-    // that makes it an infinity.
-    //
-    // Compared on setsgn(in, 0) rather than a bare in == 0.0F because SFPSETCC's contract
-    // excludes negative zero (VectorUnit.md); measured, the bare compare does not fire for
-    // -0.0 and leaves that pole at 1.7e38. Clearing the sign first costs ~2 percentage points
-    // of the total, and it is what makes -0.0 reach this guard at all. The result there is
-    // then IEEE's: measured 1/-0.0 = -inf on the unpack-to-dest pipelines, where a real -0.0
-    // survives to the LREG and the caller-side v_if(in < 0.0) re-signs the magnitude. On the
-    // pipelines that flush -0.0 to +0.0 before the kernel sees it the answer is +inf, which
-    // is the flush showing through rather than this guard.
+    // Two constraints on the form. It has to run after the setexp, which would otherwise
+    // overwrite the exponent field that makes the value an infinity. And it has to compare
+    // setsgn(in, 0) rather than a bare in == 0.0F, because SFPSETCC is not specified for
+    // negative zero (VectorUnit.md) and leaves -0.0 at 1.7e38; clearing the sign is what
+    // brings -0.0 into the guard, after which the caller-side v_if(in < 0.0) re-signs it.
     v_if (sfpi::setsgn(in, 0) == 0.0F)
     {
         out = std::numeric_limits<float>::infinity();

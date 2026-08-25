@@ -545,17 +545,6 @@ _EDGE_SWEEP_OPS = sorted(
 #
 #   Erfinv at ±1: golden ∓inf/±inf against a saturated result, on the two fp32-dest
 #   combinations only, so tolerance-shaped rather than semantic.
-#
-# CLOSED:
-#
-#   rsqrt_compat at 0 returned 1.7014118e38 instead of inf on all 8 combinations, while
-#   plain Rsqrt over the same probe did not diverge. Root-caused to _reciprocal_compat_,
-#   whose exponent-difference arithmetic (126 - exexp(0) = 254) has no pole guard, and
-#   fixed by adding that guard in place. The kernel is otherwise untouched, so every
-#   non-pole value stays bit-identical -- deliberately, because eight production
-#   normalization kernels select this path by name to match a model baseline. Verified on
-#   Wormhole n300 and Blackhole p100a silicon; see
-#   docs/sfpu_52930_reciprocal_compat_pole.md.
 _EDGE_KNOWN_DIVERGENCES = {
     MathOperation.Sign: (
         (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
@@ -625,8 +614,7 @@ _EDGE_DIVERGENCE_REASON = {
     "unpack-to-dest combinations, the only ones where a real -0.0 reaches the LREG — at "
     "dest_acc=No the kernel is handed +0.0 and agrees, so the probe is not sent there.",
     MathOperation.Rsqrt: "rsqrt(-0) returns NaN; IEEE and the golden give -inf. Same cause "
-    "and same unpack-to-dest scoping as Sqrt. This is about -0, not about the +0 pole that "
-    "RsqrtCompat used to saturate at.",
+    "and same unpack-to-dest scoping as Sqrt.",
 }
 
 
