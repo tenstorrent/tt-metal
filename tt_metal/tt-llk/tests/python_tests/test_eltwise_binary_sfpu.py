@@ -97,7 +97,7 @@ _ELEMENTS_PER_TILE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 
 
 # Per-op (atol, rtol) overrides for the binary suite, mirroring CUSTOM_TOLERANCES in
-# test_sfpu_unary.py. `None` keeps the format default (0.05 / 0.05 for the float formats).
+# test_eltwise_unary_sfpu.py. `None` keeps the format default (0.05 / 0.05 for the float formats).
 #
 # Only two ops belong here: their error is a property of the op's own *composition* rather than
 # of the stimuli, so it grows with the operands however the domain is drawn. Both were previously
@@ -242,7 +242,7 @@ def _positions_and_ramp(size):
 #                                     used here, with the reason recorded per op.
 #
 # The reroute is float-only on purpose: SfpuElwadd/SfpuElwsub and the shift ops also run
-# through test_sfpu_binary_int, where a float domain like uniform(-1, 1) would collapse
+# through test_eltwise_binary_sfpu_int, where a float domain like uniform(-1, 1) would collapse
 # to {-1, 0, 1} and gut the int coverage. Ops with crafted stimuli (mask / isclose /
 # eq-ne / logsigmoid / shift edge cases) pass their own spec and ignore any default.
 # =============================================================================
@@ -317,7 +317,7 @@ _REGISTERED_DEFAULT_STIMULI_OPS: Dict[MathOperation, str] = {
 # applies to them. Declared rather than merely absent, so that routing one of them onto
 # the shared driver later forces a decision instead of silently picking the default.
 _OPS_NOT_USING_SHARED_DRIVER: Dict[MathOperation, str] = {
-    MathOperation.SfpuAddTopRow: "test_sfpu_binary_add_top_row builds its own stimuli, "
+    MathOperation.SfpuAddTopRow: "test_eltwise_binary_sfpu_add_top_row builds its own stimuli, "
     "golden and TestConfig (the top-row semantics need a [64, 32] single-pair layout)",
 }
 
@@ -747,12 +747,12 @@ def sfpu_binary(
         # Eq/Ne and Lt/Gt/Le/Ge are excluded from this *random* sweep: independent draws
         # are never equal (the Eq/Ne golden collapses to a constant) and near-ties that
         # the kernel and the total-order golden round differently read as failures. They
-        # are covered with crafted paired stimuli by test_sfpu_binary_eq_ne and
-        # test_sfpu_binary_float_comparison below.
+        # are covered with crafted paired stimuli by test_eltwise_binary_sfpu_eq_ne and
+        # test_eltwise_binary_sfpu_float_comparison below.
     ],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_sfpu_binary_float(
+def test_eltwise_binary_sfpu_float(
     formats,
     dest_acc,
     mathop,
@@ -798,7 +798,7 @@ def test_sfpu_binary_float(
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_sfpu_binary_div(formats, dest_acc):
+def test_eltwise_binary_sfpu_div(formats, dest_acc):
     # DIV routes through the dedicated production kernel (calculate_sfpu_binary_div);
     # split out from the float sweep since the reciprocal path is precision-sensitive.
     _skip_fp32_no_dest_acc(formats, dest_acc)
@@ -829,7 +829,7 @@ def test_sfpu_binary_div(formats, dest_acc):
     ],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_sfpu_binary_float_extended(formats, dest_acc, mathop):
+def test_eltwise_binary_sfpu_float_extended(formats, dest_acc, mathop):
     # max/min (SFPSWAP) and fmod/remainder (fp32 reciprocal) binary kernels with no
     # dedicated production BinaryOp; driven through the same in-DST harness as add/sub.
     _skip_fp32_no_dest_acc(formats, dest_acc)
@@ -856,7 +856,7 @@ def test_sfpu_binary_float_extended(formats, dest_acc, mathop):
     mathop=[MathOperation.SfpuMask],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_sfpu_binary_mask(formats, dest_acc, mathop):
+def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop):
     # float mask: data at tile0, mask at tile1. Output is data where mask != 0, else 0.
     # Crafted stimuli so the mask carries real zeros.
     _skip_fp32_no_dest_acc(formats, dest_acc)
@@ -885,7 +885,7 @@ def test_sfpu_binary_mask(formats, dest_acc, mathop):
     mathop=[MathOperation.SfpuAtan2],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_sfpu_binary_atan2(formats, dest_acc, mathop):
+def test_eltwise_binary_sfpu_atan2(formats, dest_acc, mathop):
     # atan2(y, x): y = tile0, x = tile1. Signed [-5, 5] gives mixed signs so all quadrants
     # (and the |y|>=|x| / x<0 branches) are exercised; minimax approximation matched under PCC.
     _skip_fp32_no_dest_acc(formats, dest_acc)
@@ -905,7 +905,7 @@ def test_sfpu_binary_atan2(formats, dest_acc, mathop):
     mathop=[MathOperation.SfpuElwEq, MathOperation.SfpuElwNe],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_sfpu_binary_eq_ne(formats, dest_acc, mathop):
+def test_eltwise_binary_sfpu_eq_ne(formats, dest_acc, mathop):
     # Eq/Ne(a, b) with a = tile0, b = tile1. Crafted paired stimuli give a non-constant 0/1
     # golden so the equal branch is exercised (the default random sweep never is).
     _skip_fp32_no_dest_acc(formats, dest_acc)
@@ -927,7 +927,7 @@ def test_sfpu_binary_eq_ne(formats, dest_acc, mathop):
     ],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_sfpu_binary_float_comparison(formats, dest_acc, mathop):
+def test_eltwise_binary_sfpu_float_comparison(formats, dest_acc, mathop):
     # lt/gt/le/ge(a, b) with a = tile0, b = tile1. Crafted so a third of the elements are
     # exactly equal and the rest differ by +/-1.0: the tie is what distinguishes the strict
     # comparisons from the non-strict ones, and the wide gaps keep every other element's
@@ -944,7 +944,7 @@ def test_sfpu_binary_float_comparison(formats, dest_acc, mathop):
     mathop=[MathOperation.SfpuIsclose],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_sfpu_binary_isclose(formats, dest_acc, mathop):
+def test_eltwise_binary_sfpu_isclose(formats, dest_acc, mathop):
     # isclose(a, b) = |a - b| <= atol + rtol*|b|, a = tile0, b = tile1. torch default
     # tolerances (fixed in the C++ dispatch); crafted stimuli give a non-constant 0/1 mix.
     _skip_fp32_no_dest_acc(formats, dest_acc)
@@ -958,7 +958,7 @@ def test_sfpu_binary_isclose(formats, dest_acc, mathop):
     mathop=[MathOperation.SfpuLogsigmoid],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_sfpu_binary_logsigmoid(formats, dest_acc, mathop):
+def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop):
     # logsigmoid(x) with x = tile0. Piecewise poly/passthrough approximation matched under
     # PCC; x swept over [-8, 3.9]. The x > 4 (-exp(-x)) branch needs a device-computed
     # exp(-x) operand the shared harness can't provide, left to a future driver.
@@ -996,7 +996,7 @@ def test_sfpu_binary_logsigmoid(formats, dest_acc, mathop):
     ],
     dest_acc=[DestAccumulation.Yes],
 )
-def test_sfpu_binary_int(
+def test_eltwise_binary_sfpu_int(
     formats,
     dest_acc,
     mathop,
@@ -1032,7 +1032,7 @@ _INT_COMPARISON_OPS = [
     mathop=_INT_COMPARISON_OPS,
     dest_acc=[DestAccumulation.Yes],
 )
-def test_sfpu_binary_int_comparison_ties(formats, dest_acc, mathop):
+def test_eltwise_binary_sfpu_int_comparison_ties(formats, dest_acc, mathop):
     """The exact-equality input, which the random Int32 sweep never produces.
 
     `a == b` is the *only* input on which lt/gt disagree with le/ge, so without it a comparator
@@ -1041,7 +1041,7 @@ def test_sfpu_binary_int_comparison_ties(formats, dest_acc, mathop):
 
     Reuses the float sweep's three-way builder: a third of the elements are exactly equal and the
     rest differ by +/-1, an exact gap on an integer axis. Same shape as
-    test_sfpu_binary_eq_ne_int, which had this for eq/ne already.
+    test_eltwise_binary_sfpu_eq_ne_int, which had this for eq/ne already.
     """
     spec_A, spec_B = _comparison_stimuli_specs()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
@@ -1053,12 +1053,12 @@ def _int_comparison_negative_spec():
     The kernel normalises to LT(a, b) by computing `a - b` and reading the sign, so operands of
     opposite sign are the case the fold exists for, and the random draw never produces one.
     Values stay small (|v| <= 8) so `a - b` cannot overflow -- overflow is what
-    test_sfpu_binary_int_extremes drives deliberately, and mixing the two would leave a failure
+    test_eltwise_binary_sfpu_int_extremes drives deliberately, and mixing the two would leave a failure
     with two candidate causes.
 
     twos_complement=True is required, not incidental: sign-magnitude L1 encoding cannot round-trip
     a negative through Dst -- the same delivery limitation that made the unary RightShift sweep
-    positive-only. test_sfpu_binary_rsub_int32 takes the same route.
+    positive-only. test_eltwise_binary_sfpu_rsub_int32 takes the same route.
     """
 
     def a_face(size, dtype, generator):
@@ -1080,7 +1080,7 @@ def _int_comparison_negative_spec():
     mathop=_INT_COMPARISON_OPS,
     dest_acc=[DestAccumulation.Yes],
 )
-def test_sfpu_binary_int_comparison_across_zero(formats, dest_acc, mathop):
+def test_eltwise_binary_sfpu_int_comparison_across_zero(formats, dest_acc, mathop):
     """Negative and mixed-sign Int32 operands, which the positive-only default never reaches.
 
     The float sweep was fixed to draw from the op's signed domain; the integer default was left at
@@ -1107,7 +1107,7 @@ def test_sfpu_binary_int_comparison_across_zero(formats, dest_acc, mathop):
     ],
     dest_acc=[DestAccumulation.Yes],
 )
-def test_sfpu_binary_bitwise(formats, dest_acc, mathop):
+def test_eltwise_binary_sfpu_bitwise(formats, dest_acc, mathop):
     # int32 bitwise AND/OR/XOR: exact on the full default int range.
     sfpu_binary(formats, dest_acc, mathop)
 
@@ -1151,7 +1151,7 @@ _INT_BINARY_STIMULI = {
     mathop=list(_INT_BINARY_STIMULI),
     dest_acc=[DestAccumulation.Yes],
 )
-def test_sfpu_binary_int_uniform(mathop, dest_acc):
+def test_eltwise_binary_sfpu_int_uniform(mathop, dest_acc):
     int_format = DataFormat.UInt32 if mathop in _UINT32_BINARY_OPS else DataFormat.Int32
     formats = InputOutputFormat(int_format, int_format)
     low, high = _INT_BINARY_STIMULI[mathop]
@@ -1168,7 +1168,7 @@ def test_sfpu_binary_int_uniform(mathop, dest_acc):
     mathop=[MathOperation.SfpuRsubInt32],
     dest_acc=[DestAccumulation.Yes],
 )
-def test_sfpu_binary_rsub_int32(formats, dest_acc, mathop):
+def test_eltwise_binary_sfpu_rsub_int32(formats, dest_acc, mathop):
     sfpu_binary(formats, dest_acc, mathop, twos_complement=True)
 
 
@@ -1177,7 +1177,7 @@ def test_sfpu_binary_rsub_int32(formats, dest_acc, mathop):
     mathop=[MathOperation.SfpuEqInt, MathOperation.SfpuNeInt],
     dest_acc=[DestAccumulation.Yes],
 )
-def test_sfpu_binary_eq_ne_int(formats, dest_acc, mathop):
+def test_eltwise_binary_sfpu_eq_ne_int(formats, dest_acc, mathop):
     # int32 eq/ne via calculate_binary_eq_int (exact 0/1 over the raw INT32 dest bits).
     # Reuse the paired eq/ne stimuli so ~50% of positions compare equal — the equal branch
     # a plain random int sweep would essentially never hit.
@@ -1270,7 +1270,7 @@ def _build_shift_edge_case_src(mathop):
     mathop=_SHIFT_EDGE_OPS,
     dest_acc=[DestAccumulation.Yes],
 )
-def test_sfpu_binary_int_shift_edge_cases(
+def test_eltwise_binary_sfpu_int_shift_edge_cases(
     request,
     formats,
     dest_acc,
@@ -1400,7 +1400,7 @@ def _edge_pairs_for_class(mathop, formats, edge_class, dest_acc, specials=False)
 
 # The ops this suite drives on an integer format. This sweep is float — its format axis is
 # Float16_b/Float32 and the override built above carries float values — so an integer op
-# that gains a singularity belongs in test_sfpu_binary_int_extremes or the shift edge tests
+# that gains a singularity belongs in test_eltwise_binary_sfpu_int_extremes or the shift edge tests
 # rather than here. Assembled from the lists that already drive them, so the two cannot
 # disagree.
 _INT_DRIVEN_BINARY_OPS = frozenset(
@@ -1439,7 +1439,7 @@ _BINARY_EDGE_OPS = sorted(
 assert _BINARY_EDGE_OPS, (
     "no float binary op reaching sfpu_binary() has an entry in "
     "sfpu_domains._OP_SINGULARITIES or in BINARY_SPECIALS_READY_OPS, so "
-    "test_sfpu_binary_edges would collect nothing"
+    "test_eltwise_binary_sfpu_edges would collect nothing"
 )
 
 
@@ -1584,7 +1584,7 @@ _WORMHOLE_ONLY_EDGE_CLASSES = frozenset({_EDGE_CLASS_NEGATIVE_ZERO})
     # else, so all four share one ELF instead of compiling the same kernel four times.
     edge_class=runtime(list(_EDGE_CLASSES)),
 )
-def test_sfpu_binary_edges(request, formats, dest_acc, mathop, edge_class):
+def test_eltwise_binary_sfpu_edges(request, formats, dest_acc, mathop, edge_class):
     """Drive one class of each binary op's registered pole against its counterparts.
 
     One variant per (op, class) rather than per op: see the comment above _EDGE_CLASSES for
@@ -1690,7 +1690,7 @@ def test_sfpu_binary_edges(request, formats, dest_acc, mathop, edge_class):
 #
 # INT32_MIN itself is excluded: sign-magnitude Dst reads 0x80000000 as "negative zero" and
 # cannot round-trip it. That is hardware, not a gap, and it already has a dedicated xfail
-# (test_sfpu_binary_int_shift_int32_min_unsupported). INT32_MIN + 1 stands in for it.
+# (test_eltwise_binary_sfpu_int_shift_int32_min_unsupported). INT32_MIN + 1 stands in for it.
 #
 # The four *ordered* comparisons join the exact eq/ne pair on the same reasoning:
 # calculate_binary_comp_int32 documents no sub-range, so the extremes are inside what the kernel
@@ -1720,13 +1720,13 @@ def _build_int_extremes_src():
     mathop=_INT_EXTREME_OPS,
     dest_acc=[DestAccumulation.Yes],
 )
-def test_sfpu_binary_int_extremes(formats, dest_acc, mathop):
+def test_eltwise_binary_sfpu_int_extremes(formats, dest_acc, mathop):
     # twos_complement=True is required, not decorative. Without it the buffer is packed
     # sign-magnitude, and the bitwise kernels then operate on the wrong bits for negative
     # operands: (INT32_MIN+1) & -1 came back as -1 instead of INT32_MIN+1. The existing
-    # test_sfpu_binary_bitwise never caught this because its default stimuli are
+    # test_eltwise_binary_sfpu_bitwise never caught this because its default stimuli are
     # positive-only, so nothing had established that these kernels need the two's-
-    # complement pack path. test_sfpu_binary_rsub_int32 already sets the same flag.
+    # complement pack path. test_eltwise_binary_sfpu_rsub_int32 already sets the same flag.
     sfpu_binary(
         formats,
         dest_acc,
@@ -1752,7 +1752,7 @@ def test_sfpu_binary_int_extremes(formats, dest_acc, mathop):
     mathop=_SHIFT_EDGE_OPS,
     dest_acc=[DestAccumulation.Yes],
 )
-def test_sfpu_binary_int_shift_int32_min_unsupported(
+def test_eltwise_binary_sfpu_int_shift_int32_min_unsupported(
     formats,
     dest_acc,
     mathop,
@@ -1792,7 +1792,7 @@ def test_sfpu_binary_int_shift_int32_min_unsupported(
     mathop=[MathOperation.SfpuAddTopRow],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_sfpu_binary_add_top_row(formats, dest_acc, mathop):
+def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop):
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
         pytest.skip(
             "32-bit integer formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
@@ -1964,7 +1964,7 @@ def _golden_sfpu_binary_bcast(
     ],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_sfpu_binary_bcast(
+def test_eltwise_binary_sfpu_bcast(
     formats,
     bcast_dim,
     mathop,
