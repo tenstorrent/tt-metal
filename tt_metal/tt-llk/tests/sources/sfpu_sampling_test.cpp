@@ -110,7 +110,7 @@ namespace
 inline void run_sampling_op()
 {
 #if defined(SAMPLING_OP_RECIP_SCALAR)
-    ckernel::sfpu::calculate_sampling_recip_scalar<SAMPLING_LEGACY_COMPAT>();
+    ckernel::sfpu::calculate_sampling_recip_scalar<SAMPLING_LEGACY_COMPAT, is_fp32_dest_acc_en>();
 #elif defined(SAMPLING_OP_CLAMP_MAX_SCALAR)
     ckernel::sfpu::calculate_sampling_clamp_max_scalar(SFPU_UNARY_SCALAR);
 #elif defined(SAMPLING_OP_MUL_UNARY_SCALAR)
