@@ -66,12 +66,7 @@ def test_traced_generate_does_not_fatal_on_first_call():
         except RuntimeError as e:
             msg = str(e)
             if "Cannot load new binaries during trace capture" in msg:
-                pytest.fail(
-                    "First traced generate() tripped the trace-capture "
-                    "fatal. TttGenerationWorker.generate() must pass "
-                    "warmup_prefill=True to Generator.prefill_forward_text "
-                    f"so sampling kernels are cached before capture.\n\n{msg}"
-                )
+                pytest.fail("First traced generate() tripped the trace-capture " "fatal.")
             raise
 
         assert len(completions) == 1, f"expected 1 completion, got {len(completions)}"
