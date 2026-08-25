@@ -242,9 +242,14 @@ registered as `on-plus` knobs: the `off` leg is exactly reviewed ON and the
 `replay-hoist-completion-guard` books
 `-mtt-tensix-replay-hoist-completion-guard` this way; it is deliberately not
 in `ON_FLAGS`.  Before promotion, run knob attribution over the full registry
-(including byte-identical main rows by registering every runnable row in
-`--knob-silicon-rows`), adjudicate every changed TU, then run paired CRAQ and
-correctness-before-performance silicon on its named target and controls.
+with `--knobs replay-hoist-completion-guard`, adjudicate every changed TU,
+then run paired CRAQ and correctness-before-performance silicon on its named
+target and controls.  An explicit `--knobs name[,name...]` list is validated
+for unknown and duplicate names, bypasses the historical changed-main-pair
+cost pregate for every runnable row selected in the run, and writes the
+strict machine-readable `KNOB-CENSUS.json`; a missing, stale, or malformed
+requested verdict makes the run RED.  Omitting `--knobs` preserves the legacy
+all-knob, changed-row weekly policy.
 
 Post-review hardening (PULL_ANALYSIS-20260817 §4, D2–D6):
 

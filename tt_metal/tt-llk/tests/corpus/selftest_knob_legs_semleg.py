@@ -187,6 +187,32 @@ check(
     sweep.ON_FLAGS,
 )
 
+# Explicit knob filters are evidence requests: preserve order, and reject a
+# typo or duplicate rather than silently shrinking/de-duplicating the census.
+check(
+    "knob filter: exact validated selection preserves user order",
+    sweep.validate_requested_names([_completion_knob, "ccmask"], sweep.KNOBS, "--knobs")
+    == (_completion_knob, "ccmask"),
+)
+for _label, _values, _needle in (
+    ("unknown", ["not-a-knob"], "unknown names in --knobs"),
+    ("duplicate", [_completion_knob, _completion_knob], "duplicate names in --knobs"),
+):
+    try:
+        sweep.validate_requested_names(_values, sweep.KNOBS, "--knobs")
+        check(f"knob filter: {_label} name refuses", False)
+    except SystemExit as e:
+        check(f"knob filter: {_label} name refuses", _needle in str(e), e)
+try:
+    sweep.validate_requested_rows_active(["row-a", "row-b"], {"row-a"})
+    check("knob rows: a requested row omitted by the run refuses", False)
+except SystemExit as e:
+    check(
+        "knob rows: a requested row omitted by the run refuses",
+        "omitted from this run: row-b" in str(e),
+        e,
+    )
+
 # lut-select-leaf-ext's parent lut-select token is already IN the ON set:
 # on-plus must DEDUPE it (append only leaf-ext + license), never double it.
 _lleg = dict(sweep.knob_legs("lut-select-leaf-ext"))["knob"].split()
@@ -287,6 +313,93 @@ with tempfile.TemporaryDirectory() as td:
         "attribute_knobs: every KNOBS knob got exactly its knob_legs spec",
         all(seen_legs.get(f"knobs/{k}") == sweep.knob_legs(k) for k in sweep.KNOBS),
         sorted(seen_legs),
+    )
+
+    # An explicit filter is both narrow (only the requested knob runs) and a
+    # strict census (a clean IDENTICAL main pair no longer hides the on-plus
+    # comparison behind the historical cost pregate).
+    sw_filter = mk_sweep(td / "ev-filter")
+    sw_filter.knobs = (_completion_knob,)
+    sw_filter.knob_census_mode = True
+    filter_seen = []
+
+    def fake_classify_filter(row, sel, legs=None, tag="classify"):
+        filter_seen.append((tag, legs))
+        return {"status": "OK", "all": "IDENTICAL"}
+
+    sw_filter.classify = fake_classify_filter
+    row_filter = mk_row("filter-op", {"sem-perf": "perf.py::t[mathop:F]"})
+    (sw_filter.ev / "filter-op").mkdir()
+    filter_att = sw_filter.attribute_knobs(
+        row_filter, {"sem-perf": {"status": "OK", "all": "IDENTICAL"}}
+    )
+    check(
+        "knob filter: exactly the selected completion guard runs on a clean "
+        "main-identical row",
+        filter_seen == [(f"knobs/{_completion_knob}", _completion_legs)]
+        and filter_att.get("status") == "OK",
+        (filter_seen, filter_att),
+    )
+
+    # The coverage assertion counts final keyed evidence, not loop calls.
+    sw_census = mk_sweep(td / "ev-census")
+    sw_census.knobs = (_completion_knob,)
+    sw_census.knob_census_mode = True
+    sw_census.info = {"cc1plus_sha256": "c" * 64, "tt_metal_head": "tree"}
+    sw_census.registry_runnable_ops = ("census-a", "census-b")
+    census_rows = [
+        mk_row("census-a", {"sem-perf": "perf.py::t[mathop:A]"}),
+        mk_row("census-b", {"sem-perf": "perf.py::t[mathop:B]"}),
+    ]
+    for census_row in census_rows:
+        op = census_row["op"]
+        op_root = sw_census.ev / op
+        op_root.mkdir(parents=True)
+        (op_root / "knob-attribution.json").write_text(
+            json.dumps({"op": op, "status": "OK"}) + "\n"
+        )
+        verdict_root = op_root / "knobs" / _completion_knob / "sem-perf"
+        verdict_root.mkdir(parents=True)
+        (verdict_root / "verdict.json").write_text(
+            json.dumps(
+                {
+                    "selector": "sem-perf",
+                    "status": "OK",
+                    "all": "IDENTICAL",
+                    "cc1plus_sha256": "c" * 64,
+                    "tt_metal_head": "tree",
+                }
+            )
+            + "\n"
+        )
+    census = sw_census.emit_knob_census(census_rows)
+    check(
+        "knob census: complete manifest reports exact row/verdict counts",
+        census["complete"]
+        and census["expected_row_count"] == 2
+        and census["expected_verdict_count"] == 2
+        and census["verdict_count"] == 2
+        and census["full_registry_coverage"]
+        and json.loads((sw_census.ev / "KNOB-CENSUS.json").read_text()) == census,
+        census,
+    )
+    (
+        sw_census.ev
+        / "census-b"
+        / "knobs"
+        / _completion_knob
+        / "sem-perf"
+        / "verdict.json"
+    ).unlink()
+    census_incomplete = sw_census.emit_knob_census(census_rows)
+    check(
+        "knob census: missing requested verdict is machine-readable and RED",
+        not census_incomplete["complete"]
+        and census_incomplete["verdict_count"] == 1
+        and census_incomplete["missing_verdicts"]
+        == [{"op": "census-b", "knob": _completion_knob}]
+        and any("explicit knob census incomplete" in red for red in sw_census.reds),
+        census_incomplete,
     )
 
     # FY-F1 INJECTION (lane GF): the knob-only-row blindness.  A row whose

@@ -692,6 +692,42 @@ KNOBS = {
     # no-fire (knob-attribution byte-identical, laneGJ evidence).
     "window-pairing-stride": "-mtt-tensix-optimize-window-pairing-stride",
 }
+
+
+def validate_requested_names(values, known, option):
+    """Validate a comma-list option without losing duplicate intent."""
+    if values is None:
+        return None
+    seen = set()
+    duplicates = []
+    for value in values:
+        if value in seen and value not in duplicates:
+            duplicates.append(value)
+        seen.add(value)
+    if duplicates:
+        sys.exit(f"duplicate names in {option}: {','.join(duplicates)}")
+    unknown = [value for value in values if value not in known]
+    if unknown:
+        sys.exit(f"unknown names in {option}: {','.join(unknown)}")
+    if not values:
+        sys.exit(f"{option} requires at least one name")
+    return tuple(values)
+
+
+def validate_requested_rows_active(values, active):
+    """Refuse requested knob-silicon rows filtered out of this run."""
+    if values is None:
+        return
+    omitted = [op for op in values if op not in active]
+    if omitted:
+        sys.exit(
+            "requested --knob-silicon-rows omitted from this run: "
+            + ",".join(omitted)
+            + " (do not combine a narrower --ops/schedule selection with "
+            "requested knob rows)"
+        )
+
+
 # Per-knob leg MODE (see the KNOBS comment).  Every key must be a KNOBS
 # key; absent = "solo".  The three seeded drop-one knobs are the known
 # dependent/service passes whose solo leg is structurally an A/A:
@@ -1395,9 +1431,23 @@ class Sweep:
     # kernel regressions.  Class attr so object.__new__ selftests see
     # 'clean'.
     device_state = "clean"
+    knob_census_mode = False
 
     def __init__(self, args):
         self.a = args
+        requested_knobs = getattr(args, "knobs", None)
+        if requested_knobs is not None and not args.knob_attribution:
+            sys.exit("--knobs requires --knob-attribution")
+        if requested_knobs is not None and "classify" not in args.phases:
+            sys.exit("--knobs requires the classify phase")
+        self.knobs = validate_requested_names(
+            requested_knobs, KNOBS, "--knobs"
+        ) or tuple(KNOBS)
+        # An explicit knob list is an explicit census request, not the
+        # historical compile-cost heuristic.  It opens every clean runnable
+        # row for exactly the selected knobs and is closed by a strict
+        # machine-readable coverage assertion at the end of run().
+        self.knob_census_mode = requested_knobs is not None
         self.ev = args.evidence_root.resolve()
         self.compiler = (
             args.compiler or TESTS / "sfpi/compiler/bin/riscv-tt-elf-g++"
@@ -1405,9 +1455,18 @@ class Sweep:
         self.objcopy = self.compiler.with_name("riscv-tt-elf-objcopy")
         self.objdump = self.compiler.with_name("riscv-tt-elf-objdump")
         self.python = self._find_python(args.venv)
-        self.rows = [
-            r for r in load_config(args.config) if not args.ops or r["op"] in args.ops
-        ]
+        all_rows = load_config(args.config)
+        self.registry_runnable_ops = tuple(
+            r["op"] for r in all_rows if r["kind"] not in ("skip", "pinpair")
+        )
+        requested_knob_rows = validate_requested_names(
+            getattr(args, "knob_silicon_rows", None),
+            self.registry_runnable_ops,
+            "--knob-silicon-rows",
+        )
+        if requested_knob_rows is not None:
+            args.knob_silicon_rows = list(requested_knob_rows)
+        self.rows = [r for r in all_rows if not args.ops or r["op"] in args.ops]
         if args.ops:
             missing = set(args.ops) - {r["op"] for r in self.rows}
             if missing:
@@ -1440,6 +1499,11 @@ class Sweep:
                     f"{len(self.deferred)} weekly rows: "
                     + ",".join(r["op"] for r in self.deferred)
                 )
+        if args.knob_attribution and requested_knob_rows is not None:
+            active = {
+                r["op"] for r in self.rows if r["kind"] not in ("skip", "pinpair")
+            }
+            validate_requested_rows_active(requested_knob_rows, active)
         self.reds = []
         self.notes = []  # informational report lines (never RED)
         self.reused = []  # cross-run adopted device cells (provenance)
@@ -4384,6 +4448,11 @@ exit $RC
         verdict still gets its knob legs — each knob's own classify verdict
         decides (IDENTICAL knobs record refusals exactly as before).
         Unregistered rows keep the historical cost heuristic verbatim."""
+        if getattr(self, "knob_census_mode", False):
+            return main_cls.get("status") == "OK" and main_cls.get("all") in (
+                "CHANGED",
+                "IDENTICAL",
+            )
         if main_cls.get("all") == "CHANGED":
             return True
         return (
@@ -4401,7 +4470,7 @@ exit $RC
         ):
             return {"op": row["op"], "status": "SKIP_NOT_CHANGED"}
         firing = []
-        for knob in KNOBS:
+        for knob in getattr(self, "knobs", tuple(KNOBS)):
             # Leg shape per knob MODE (knob_legs): solo = OFF vs OFF+flag;
             # drop-one = reviewed-ON-minus-flag vs full reviewed-ON (the
             # only shape that can see a dependent/service pass fire).
@@ -4600,6 +4669,129 @@ exit $RC
         )
 
     # ---------------- scoreboard / manifest ----------------
+    def emit_knob_census(self, rows):
+        """Close an explicit --knobs census with on-disk proof of coverage."""
+        if not getattr(self, "knob_census_mode", False):
+            return None
+        expected_rows = []
+        excluded_rows = []
+        for row in rows:
+            sel = "sem-perf" if row["nodes"]["sem-perf"] else "sem-corr"
+            if row["kind"] in ("skip", "pinpair") or not row["nodes"][sel]:
+                excluded_rows.append(
+                    {
+                        "op": row["op"],
+                        "reason": (
+                            "pinpair"
+                            if row["kind"] == "pinpair"
+                            else "no-semantic-node"
+                        ),
+                    }
+                )
+                continue
+            expected_rows.append((row["op"], sel))
+
+        missing_rows = []
+        missing_verdicts = []
+        invalid_verdicts = []
+        status_counts = {}
+        comparison_counts = {}
+        verdict_count = 0
+        for op, sel in expected_rows:
+            attribution_path = self.ev / op / "knob-attribution.json"
+            if not attribution_path.is_file():
+                missing_rows.append(op)
+            else:
+                try:
+                    attribution = json.loads(attribution_path.read_text())
+                except (OSError, ValueError) as e:
+                    missing_rows.append(op)
+                    invalid_verdicts.append(
+                        {"op": op, "artifact": str(attribution_path), "reason": str(e)}
+                    )
+                else:
+                    if attribution.get("status") != "OK":
+                        missing_rows.append(op)
+                        invalid_verdicts.append(
+                            {
+                                "op": op,
+                                "artifact": str(attribution_path),
+                                "reason": f"attribution status {attribution.get('status')}",
+                            }
+                        )
+            for knob in self.knobs:
+                verdict_path = self.ev / op / "knobs" / knob / sel / "verdict.json"
+                if not verdict_path.is_file():
+                    missing_verdicts.append({"op": op, "knob": knob})
+                    continue
+                try:
+                    verdict = json.loads(verdict_path.read_text())
+                except (OSError, ValueError) as e:
+                    invalid_verdicts.append({"op": op, "knob": knob, "reason": str(e)})
+                    continue
+                if (
+                    verdict.get("cc1plus_sha256") != self.info["cc1plus_sha256"]
+                    or verdict.get("tt_metal_head") != self.info["tt_metal_head"]
+                    or verdict.get("selector") != sel
+                ):
+                    invalid_verdicts.append(
+                        {
+                            "op": op,
+                            "knob": knob,
+                            "reason": "toolchain/tree/selector key mismatch",
+                        }
+                    )
+                    continue
+                verdict_count += 1
+                status = verdict.get("status", "MISSING_STATUS")
+                status_counts[status] = status_counts.get(status, 0) + 1
+                comparison = verdict.get("all", "NO_COMPARISON")
+                comparison_counts[comparison] = comparison_counts.get(comparison, 0) + 1
+
+        expected_ops = [op for op, _sel in expected_rows]
+        registry = set(getattr(self, "registry_runnable_ops", ()))
+        omitted_registry_rows = sorted(registry - set(expected_ops))
+        expected_verdict_count = len(expected_rows) * len(self.knobs)
+        complete = (
+            not missing_rows
+            and not missing_verdicts
+            and not invalid_verdicts
+            and verdict_count == expected_verdict_count
+        )
+        payload = {
+            "schema_version": 1,
+            "complete": complete,
+            "requested_knobs": list(self.knobs),
+            "requested_knob_count": len(self.knobs),
+            "expected_rows": expected_ops,
+            "expected_row_count": len(expected_rows),
+            "registry_runnable_row_count": len(registry),
+            "full_registry_coverage": not omitted_registry_rows,
+            "omitted_registry_rows": omitted_registry_rows,
+            "expected_verdict_count": expected_verdict_count,
+            "verdict_count": verdict_count,
+            "status_counts": status_counts,
+            "comparison_counts": comparison_counts,
+            "missing_rows": sorted(set(missing_rows)),
+            "missing_verdicts": missing_verdicts,
+            "invalid_verdicts": invalid_verdicts,
+            "excluded_rows": excluded_rows,
+            "cc1plus_sha256": self.info["cc1plus_sha256"],
+            "tt_metal_head": self.info["tt_metal_head"],
+        }
+        path = self.ev / "KNOB-CENSUS.json"
+        path.write_text(json.dumps(payload, indent=2) + "\n")
+        if not complete:
+            self.reds.append(
+                "explicit knob census incomplete: "
+                f"{verdict_count}/{expected_verdict_count} keyed verdicts; "
+                f"missing rows={len(set(missing_rows))}, "
+                f"missing verdicts={len(missing_verdicts)}, "
+                f"invalid verdicts={len(invalid_verdicts)} "
+                f"(see {path})"
+            )
+        return payload
+
     def emit_scoreboard(self, results, skips):
         payload = {
             "provenance": self.info,
@@ -5488,7 +5680,7 @@ exit $RC
                 # also get knob legs, so their prewarm must match).
                 if cached is None or not self._knob_pregate_open(row, cached):
                     continue
-                for knob in KNOBS:
+                for knob in getattr(self, "knobs", tuple(KNOBS)):
                     knob_specs.append(
                         (
                             row,
@@ -5759,6 +5951,8 @@ exit $RC
             else:
                 self.verify_toolchain("silicon")
                 results.extend(self._silicon_phase(self._gate_rows(prelim)))
+        if self.knob_census_mode and "classify" in phases:
+            self.emit_knob_census(live)
         self.emit_scoreboard(results, skips)
         rag = "GREEN"
         if "report" in phases:
@@ -5894,6 +6088,16 @@ def main():
         "--knob-attribution",
         action="store_true",
         help="weekly: classify each changed row against each single optimization knob",
+    )
+    ap.add_argument(
+        "--knobs",
+        type=lambda s: s.split(","),
+        default=None,
+        help="comma list of knob names to attribute. Explicit selection is a "
+        "strict census across every runnable row selected for this run: it "
+        "bypasses the main-pair changed-only cost pregate, writes "
+        "KNOB-CENSUS.json, and exits RED if any requested verdict is absent "
+        "or stale. Requires --knob-attribution and the classify phase",
     )
     ap.add_argument(
         "--knob-silicon-rows",
