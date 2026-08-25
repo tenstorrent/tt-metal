@@ -167,8 +167,7 @@ class PrefetcherRingbufferReadTestFixture;
 namespace CommandBuilder {
 
 HostMemDeviceCommand build_dispatch_terminate(MetalContext& metal_ctx, bool include_dispatch_s = true) {
-    bool dispatch_sub_enabled =
-        MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled() && include_dispatch_s;
+    bool dispatch_sub_enabled = metal_ctx.get_dispatch_query_manager().dispatch_s_enabled() && include_dispatch_s;
     DeviceCommandCalculator calc(metal_ctx);
     calc.add_dispatch_wait();
     calc.add_dispatch_terminate();
