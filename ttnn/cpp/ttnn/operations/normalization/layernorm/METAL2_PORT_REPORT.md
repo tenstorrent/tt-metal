@@ -107,7 +107,8 @@ port.
   `op_descriptor.py` still documents it as live behavior, so a caller who passes one is not told it
   is unsupported — it fails with `AttributeError` further down. Because the parameter survives in
   C++, restoring the capability is now a binding question rather than a factory one.
-- **Known downstream consumers** (all outside the porter's writeable surface; none were edited):
+- **Known downstream consumers** (all outside the porter's writeable surface; neither consumer was
+  itself edited, though the test directory's `conftest.py` was — see *Measured impact* below):
   - [models/experimental/ops/descriptors/normalization/_utils.py:109](../../../../../../models/experimental/ops/descriptors/normalization/_utils.py#L109)
     — `factory.create_descriptor(operation_params, tensor_args, out, cr_arg)`, reached through
     `select_program_factory`, so it breaks for interleaved inputs and keeps working for sharded
@@ -117,13 +118,23 @@ port.
   - [tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py:198](../../../../../../tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py#L198)
     — does not call `create_descriptor` itself; it drives the helper above with interleaved tensors
     and an explicit `core_range_set`, and fails through it.
-- **Measured impact.** Running that file post-port gives **60 failed, 29 passed**, and every one of
-  the 60 failures is the same line: `AttributeError: 'LayerNormMultiCoreProgramFactory' object has
-  no attribute 'create_descriptor'`. There is no numerics failure and no second failure mode; the 29
-  that pass are the sharded-input branches, which still reach the sharded factory's surviving
-  `create_descriptor`. The fused-descriptor framework needs a Metal 2.0 path (or an interleaved
-  layernorm branch that stops going through `create_descriptor`) before the interleaved half of it
-  works again.
+- **Measured impact.** Immediately after this pass, that file gave **60 failed, 29 passed** — every
+  failure the same line, `AttributeError: 'LayerNormMultiCoreProgramFactory' object has no attribute
+  'create_descriptor'`, with no numerics failure and no second failure mode. The 29 passes were the
+  sharded-input branches, still reaching the sharded factory's `create_descriptor`. Once the sharded
+  factory was ported too those 29 went the same way, taking the whole
+  `parallel_sequential/` directory to **90 failed, 178 passed** (61 from the interleaved factory, 29
+  from the sharded one).
+- **These tests are now skipped rather than failing**, on the invoker's instruction, by an autouse
+  fixture in
+  [tests/ttnn/unit_tests/operations/fused/parallel_sequential/conftest.py](../../../../../../tests/ttnn/unit_tests/operations/fused/parallel_sequential/conftest.py).
+  It stands a `pytest.skip` in for the absent `create_descriptor` on both factory classes, so a test
+  is skipped only if it actually reaches the call, and the fixture goes inert the moment a factory
+  exposes the method again. The directory now reports **178 passed, 90 skipped**. **This is the one
+  place where green CI stops meaning "works"**: the fused-descriptor framework still has no working
+  layernorm or rms_norm path, and it needs a Metal 2.0 route (or a branch that stops going through
+  `create_descriptor`) before any of it works again. The skip hides that from CI, so the owner
+  should be told directly rather than discovering it from a passing run.
 
 ### `get_pointer_to_cb_data` keeps a CB-vocabulary name after the port
 
@@ -477,10 +488,12 @@ port.
   [models/experimental/ops/descriptors/normalization/_utils.py:109](../../../../../../models/experimental/ops/descriptors/normalization/_utils.py#L109),
   reaches this factory through `select_program_factory` for **sharded** inputs. Part 1 measured that
   file's driver test as 60 failed / 29 passed, where the 29 passes were exactly the sharded-input
-  branches still reaching this `create_descriptor`. With this pass those 29 fail the same way, so the
-  fused-descriptor framework now has **no** working layernorm path and needs a Metal 2.0 route (or a
-  branch that stops going through `create_descriptor`) before any of it works again. That is the same
-  owner and the same ticket as Part 1's entry, with the scope now complete rather than partial.
+  branches still reaching this `create_descriptor`. With this pass those 29 broke the same way, so
+  the fused-descriptor framework now has **no** working layernorm path and needs a Metal 2.0 route
+  (or a branch that stops going through `create_descriptor`) before any of it works again. All 90
+  are since skipped rather than failing, by the conftest fixture described in Part 1's entry; the
+  capability gap is unchanged, only its visibility in CI. That is the same owner and the same ticket
+  as Part 1's entry, with the scope now complete rather than partial.
 
 ### The write-back's arguments and its compile gate did not agree, and Metal 2.0 cannot reproduce the mismatch
 
