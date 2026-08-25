@@ -40,6 +40,15 @@ namespace ckernel::sfpu
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_gelu_appx_licensed_cpp()
 {
+    // The 0.5 of the final "+ 0.5x" is parked in the programmable
+    // constant register — the HAND kernel's own idiom (its init loads
+    // vConstFloatPrgm0 = 0.5).  With it in an LREG the row needs a 9th
+    // live LREG (6 packed table words + x + the half + the LUT result),
+    // so the formed LUT's transactional coefficient hoist refuses on
+    // pressure and the packed words reload per row; as a CReg operand
+    // the MAD reads it directly and the whole loop fits the 8-LREG file
+    // (laneGU measurement: 71223 -> hand-shape loop).
+    sfpi::vConstFloatPrgm0 = 0.5f;
     // NO unroll pragma: measured-negative on this predicated-tree shape
     // (headline-laneGI2-20260824 geluappx-fresh +654.93 unrolled vs
     // headline-laneGI-20260824 +559.07 rolled).
@@ -70,7 +79,7 @@ __attribute__((noinline)) void calculate_gelu_appx_licensed_cpp()
             g = a * 0x1.158p-1f + -0x1p-3f;
         }
         v_endif;
-        sfpi::dst_reg[0] = g + x * 0.5f;
+        sfpi::dst_reg[0] = g + x * sfpi::vConstFloatPrgm0;
         sfpi::dst_reg++;
     }
 }
