@@ -39,18 +39,29 @@ These patterns are defined in [.github/scripts/utils/find-changed-files.sh](.git
 .github/scripts/analyze-llk-gate-triggers.py --since 2026-07-01 --until 2026-08-01 --verbose
 ```
 
-## Example Results
+## Historical Results
 
-From July 2026 analysis:
+Analysis of commits to main by month:
 
-```
-Total commits:     165
-Triggered LLK gate: 17
-Percentage:        10.3%
-```
+| Month | Total Commits | LLK Gate Triggered | Percentage |
+|-------|:-------------:|:------------------:|:----------:|
+| May 2026   | — | — | — |
+| June 2026  | — | — | — |
+| **July 2026**  | **165** | **17** | **10.3%** |
 
-This means only **10.3%** of commits that landed on main in July actually triggered the LLK PR gate.
-The other 89.7% modified code in ops, models, ttnn, or other areas.
+**Notes:**
+- May and June data unavailable (commits not present in current main history)
+- July 2026 covers July 8–14 (commit history range on main)
+- Only **10.3%** of commits that landed on main triggered the LLK PR gate
+- The remaining **89.7%** modified code in ops, models, ttnn, or other areas
+
+### Key Finding
+
+Of the 165 commits in the analyzed period:
+- **17 commits** modified LLK-specific code (wormhole, blackhole, common, SFPI, unit tests, or CI)
+- **148 commits** did not modify LLK code and therefore **did not trigger the LLK PR gate**
+
+This sparse trigger rate (10.3%) means the LLK gate has significant capacity headroom. When an LLK commit does land, we can afford more comprehensive testing on that specific merge without impacting overall CI throughput.
 
 ## Usage for Budget Arguments
 
