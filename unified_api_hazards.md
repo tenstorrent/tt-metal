@@ -163,3 +163,81 @@ Where to start:
   work surveyed and shelved earlier in `unified_llama_prefill.md` (Blaze's
   `blaze_rt_args::get<...>()`, which makes a missing argument a build error).
 - **C13** is a one-line fix and a real hang available today.
+
+---
+
+# Triage: what to do first
+
+Ordered by payoff over cost, with the feasibility of each checked rather than assumed.
+
+## The finding that reorders the list
+
+**`ASSERT_ENABLED` is 0 in a normal build.** It is 1 only under `WATCHER_ENABLED` or
+`LIGHTWEIGHT_KERNEL_ASSERTS`; otherwise `ASSERT` expands to `(void(sizeof(...)))`. So the
+safety net this library already has -- `Block` consume obligations, `RetainedBlock`
+occupancy, moved-from poisoning -- **was dormant in every run of this work**. Written,
+reviewed, paid for, never executing.
+
+`TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1` enables it through `ebreak`, with no watcher
+overhead and no build change. Six suites run that way: 136 checks, zero failures, zero
+spurious asserts. The net is correct and was simply switched off.
+
+This has to come first because **adding runtime checks to a build that compiles them out is
+theatre.** Every runtime item below depends on it.
+
+## Ranked
+
+1. **Run the suites with asserts enabled.** Zero library code, one environment variable,
+   verified non-disruptive. Activates protection already written, and is the precondition
+   for 2 and 4.
+
+2. **`Storage` asserts its circular buffer is large enough (A1, A2).** VERIFIED FEASIBLE: a
+   probe assert in `Storage(cb_id)` comparing `fifo_num_pages` against `S::num_pages`
+   compiles and passes on correct kernels, so `fifo_num_pages` reads correctly on all five
+   projections. About four lines. It replaces a failure mode also confirmed here -- an
+   undersized CB hangs the device with no diagnostic and needs `tt-smi -r`.
+
+3. **C13 as a COMPILE error, which is better than the runtime check first imagined.** The
+   harness can compute whether the core range is exactly rectangular -- bounding-box area
+   equal to core count -- and emit `TT_UNIFIED_CORE_GRID_EXACT` only then; the no-argument
+   `synchronize_cores()` then `static_assert`s on it. Zero runtime cost, catches a live hang,
+   and independent of item 1. Roughly six lines.
+
+4. **D19, circular-buffer format against tensor dtype.** `TensorAccessor::get_aligned_page_size()`
+   exists, so the accessor-form load and store can assert it equals `cb_page_bytes(cb_id)`.
+   About three lines. UNCHECKED CAVEAT: whether alignment padding can make the two
+   legitimately differ for some dtype.
+
+5. **F28, the DST leaf budget.** One `static_assert(kLeaves <= kMaxDstTiles)`. Free,
+   compile-time, and it settles an open question in the list above rather than leaving it
+   marked unverified.
+
+6. **E22, `reduce_mean`'s scaler.** Give `fill_reduce_scaler` the pool and the shape so it
+   computes 1 or 1/N itself, making a mean holding a sum's scaler unrepresentable. A small
+   mechanical API change that removes a silent-numerics class outright.
+
+## Worth knowing before writing negative tests
+
+**The watcher already localises CB deadlocks precisely.** Reproduced here: with an undersized
+CB, `generated/watcher/watcher.log` shows per core `CRBW` on BRISC (CB reserve-back wait) and
+`CWFW` on NCRISC (CB wait-front wait), naming the kernel. It does NOT fail the run -- it polls
+and keeps polling.
+
+So for the deadlock classes the debugging tool already exists, and what is missing is anything
+that turns a hang into a test failure. A negative-test harness that runs a case under the
+watcher with a timeout and greps the log for stall waypoints would cover much of A and B with
+no library change at all. That harness is worth building before the individual tests, because
+it is what they all need.
+
+## Explicitly not fruit
+
+**D17**, named runtime arguments, is the three-hang problem and remains real work.
+
+**The B and C uniformity classes** need a per-thread trace of circular-buffer operations,
+cross-checked at kernel end -- push counts against wait counts, per CB, per projection. That
+trace is the structural answer to most of both categories, and it is a project rather than a
+fruit. Naming it here so it is not repeatedly rediscovered as an easy one.
+
+Suggested first cut: **1 and 3**, neither of which touches library semantics and one of which
+is free at runtime; then **2 and 5**; and let the negative tests for those build the harness
+that later covers the rest.
