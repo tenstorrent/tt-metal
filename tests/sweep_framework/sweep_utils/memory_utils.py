@@ -69,3 +69,22 @@ def capture_peak_memory(test_module, test_vector: dict, device, use_no_dispatch:
         # If memory capture fails, return None but don't fail the test
         logger.warning(f"Failed to capture peak memory: {e}")
         return None
+
+    finally:
+        # A NO_DISPATCH capture still walks the whole ttnn op path, so it can leave entries in the
+        # device program cache for programs that were never actually dispatched. A LATER vector's
+        # real run that hits one of those entries reads back garbage -- the op appears to compute a
+        # wrong answer, and the failure lands on whichever vector happens to run next rather than on
+        # the capture that caused it.
+        #
+        # Reproduced on blackhole with the traced split vectors: running 8 vectors with this capture
+        # after each one failed 2 of them at PCC 0.00012 and 0.00323 (matching CI run 32804882724's
+        # b7972db392d7 at 0.00012689648134461343); the identical sequence with the capture disabled
+        # passed 8 of 8. The failing vector is never the captured one.
+        #
+        # Clearing the cache costs a recompile on the next vector, which is the same cost the runner
+        # already accepts at every module boundary (clear_job_device_program_cache).
+        try:
+            device.clear_program_cache()
+        except Exception as exc:  # noqa: BLE001 - never let cleanup fail the test
+            logger.debug(f"Could not clear program cache after memory capture: {exc}")
