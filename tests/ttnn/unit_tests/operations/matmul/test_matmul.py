@@ -3699,6 +3699,8 @@ def test_matmul_default_width_sharded(
         ((1, 320, 32), (1, 32, 64), (320, 64), False),
         ((1, 128, 32), (1, 32, 128), (128, 128), False),
         ((1, 128, 32), (1, 32, 128), (128, 128), True),
+        ((1, 224, 32), (1, 32, 224), (224, 224), True),
+        ((1, 416, 32), (1, 32, 352), (416, 352), False),
     ],
     ids=[
         "400x400",
@@ -3708,6 +3710,8 @@ def test_matmul_default_width_sharded(
         "320x64_10x2tiles",
         "128x128_4x4tiles",
         "128x128_4x4tiles_fp32",
+        "7x7_pad_1x4_fp32",
+        "13x11_pad_asymmetric",
     ],
 )
 def test_matmul_default_block_sharded_single_core(device, a_shape, b_shape, expected_shard_shape, fp32_dest_acc_en):
@@ -3723,6 +3727,16 @@ def test_matmul_default_block_sharded_single_core(device, a_shape, b_shape, expe
 
     The 10x2/4x4-tile cases also cover shapes where the sharded-output out_subblock must be
     picked from a legal (h, w) pair other than out_subblock_h == 1.
+
+    Further-scope follow-up (PR #53662's "Further Scope" note): for prime-ish per_core_N
+    (13, 7, 11, ...), that legal pick is stuck at (1, 1) - legal but the least efficient choice.
+    400x400/batch5_broadcast_b (per_core_N=13) already exercise the padded-compute-width path
+    (13 -> 14, out_subblock_w 1 -> 7) as a side effect. The two cases below round that out:
+    fp32's narrower max_subblock_w (get_per_core_factor's doubling ladder tops out at 8, not 16,
+    under fp32_dest_acc_en, so Mt/Nt must be < 8 to get capped down to a prime; 7 -> 8, subblock
+    (1, 4)), and an asymmetric M != N case where only N is prime (11 -> 12, subblock (1, 6)).
+    Each must not read or write past the real per_core_N columns in the padded last subblock,
+    and the shard shape reported to the caller must stay unchanged.
     """
     torch.manual_seed(0)
 
