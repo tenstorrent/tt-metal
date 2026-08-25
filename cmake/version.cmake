@@ -29,6 +29,14 @@ function(ParseGitDescribe)
             OUTPUT_STRIP_TRAILING_WHITESPACE
             ERROR_QUIET
         )
+        execute_process(
+            COMMAND
+                ${GIT_EXECUTABLE} rev-parse HEAD
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            OUTPUT_VARIABLE VERSION_SHA
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
     endif()
     if(NOT VERSION_HASH)
         set(VERSION_HASH ${fallbackHash})
@@ -110,4 +118,27 @@ function(ParseGitDescribe)
     set(VERSION_DEB "${VERSION_DEB}" PARENT_SCOPE)
     set(VERSION_NUMERIC "${VERSION_NUMERIC}" PARENT_SCOPE)
     set(VERSION_HASH "${VERSION_HASH}" PARENT_SCOPE)
+    set(VERSION_SHA "${VERSION_SHA}" PARENT_SCOPE)
+    set(VERSION_DIRTY "${VERSION_DIRTY}" PARENT_SCOPE)
+endfunction()
+
+function(GenerateVersionHeader)
+    if(NOT VERSION_SHA)
+        set(VERSION_SHA "${VERSION_HASH}")
+    endif()
+    if(CMAKE_BUILD_TYPE)
+        set(VERSION_BUILD_TYPE "${CMAKE_BUILD_TYPE}")
+    else()
+        set(VERSION_BUILD_TYPE "Unknown")
+    endif()
+    if(VERSION_DIRTY)
+        set(VERSION_DIRTY_CPP "true")
+    else()
+        set(VERSION_DIRTY_CPP "false")
+    endif()
+    configure_file(
+        "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/tt_metal_version.hpp.in"
+        "${PROJECT_BINARY_DIR}/generated/tt_metal/impl/version.hpp"
+        @ONLY
+    )
 endfunction()

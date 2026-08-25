@@ -5,6 +5,7 @@
 #include <boost/move/utility_core.hpp>
 #include <nlohmann/json.hpp>
 #include <nlohmann/json_fwd.hpp>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -30,6 +31,7 @@
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -182,7 +184,8 @@ TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
         try {
-            [[maybe_unused]] auto nested_capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+            [[maybe_unused]] auto nested_capture =
+                ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
             operation(tt::tt_metal::DataType::BFLOAT16);
             throw std::runtime_error("Expected");
         } catch (const std::exception& e) {
@@ -810,7 +813,6 @@ INSTANTIATE_TEST_SUITE_P(
 
 // Test report contains cluster_descriptor when devices are present
 TEST_F(TestScopedGraphCapture, ReportContainsClusterDescriptor) {
-
     auto report_path = std::filesystem::temp_directory_path() / "test_cluster_desc_report.json";
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
@@ -842,7 +844,6 @@ TEST_F(TestScopedGraphCapture, ReportContainsClusterDescriptor) {
 }
 
 TEST_F(TestScopedGraphCapture, ExactBufferTypeAndMaxSizePerBankTest) {
-
     nlohmann::json trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
@@ -877,7 +878,6 @@ TEST_F(TestScopedGraphCapture, ExactBufferTypeAndMaxSizePerBankTest) {
 }
 
 TEST_F(TestScopedGraphCapture, PerOperationBuffersInReportTest) {
-
     auto report_path = std::filesystem::temp_directory_path() / "test_per_op_buffers_report.json";
     {
         ttnn::graph::GraphProcessor::enable_detailed_buffer_tracing();
@@ -920,7 +920,6 @@ TEST_F(TestScopedGraphCapture, PerOperationBuffersInReportTest) {
 }
 
 TEST_F(TestScopedGraphCapture, DeallocateContainsBufferTypeTest) {
-
     nlohmann::json trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NORMAL);
@@ -959,4 +958,205 @@ TEST_F(TestScopedGraphCapture, DeallocateContainsBufferTypeTest) {
         }
     }
     EXPECT_TRUE(found_alloc) << "Expected at least one buffer_allocate node";
+}
+
+namespace {
+
+std::vector<nlohmann::json> function_starts_with_factory(const nlohmann::json& trace) {
+    std::vector<nlohmann::json> nodes;
+    for (const auto& node : trace) {
+        if (node.at(ttnn::graph::kNodeType) == ttnn::graph::kNodeFunctionStart &&
+            node.at(ttnn::graph::kParams).contains(ttnn::graph::kProgramFactoryType)) {
+            nodes.push_back(node);
+        }
+    }
+    return nodes;
+}
+
+bool looks_like_hex(const std::string& value) {
+    if (value.empty()) {
+        return false;
+    }
+    for (unsigned char c : value) {
+        if (!std::isxdigit(c)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
+TEST_F(TestScopedGraphCapture, ProgramFactoryTypeOnDeviceOp) {
+    const auto tensor_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto input_tensor = ttnn::create_device_tensor(tensor_spec, device_);
+
+    nlohmann::json trace;
+    {
+        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+        const auto output_tensor = ttnn::softmax(input_tensor, -1);
+        trace = capture.end_graph_capture();
+    }
+
+    auto factory_nodes = function_starts_with_factory(trace);
+    ASSERT_FALSE(factory_nodes.empty()) << "Expected a device-op function_start with program_factory_type";
+    for (const auto& node : factory_nodes) {
+        const auto& params = node.at(ttnn::graph::kParams);
+        const auto factory_type = params.at(ttnn::graph::kProgramFactoryType).get<std::string>();
+        EXPECT_FALSE(factory_type.empty());
+        EXPECT_NE(factory_type.find("::"), std::string::npos) << factory_type;
+        ASSERT_TRUE(params.contains(ttnn::graph::kProgramFactoryIndex));
+        EXPECT_TRUE(params.at(ttnn::graph::kProgramFactoryIndex).is_number_integer());
+        ASSERT_TRUE(params.contains(ttnn::graph::kProgramCacheHit));
+        EXPECT_TRUE(params.at(ttnn::graph::kProgramCacheHit).is_boolean());
+    }
+}
+
+TEST_F(TestScopedGraphCapture, ProgramFactoryIndexDiffersAcrossPadVariants) {
+    const auto tile_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto rm_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto tile_input = ttnn::create_device_tensor(tile_spec, device_);
+    const auto rm_input = ttnn::create_device_tensor(rm_spec, device_);
+
+    nlohmann::json trace;
+    {
+        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+        [[maybe_unused]] const auto tiled =
+            ttnn::pad(tile_input, ttnn::Array4D{1, 1, 64, 64}, ttnn::Array4D{0, 0, 0, 0}, 0.0f, true);
+        [[maybe_unused]] const auto row_major =
+            ttnn::pad(rm_input, ttnn::Array4D{1, 1, 32, 40}, ttnn::Array4D{0, 0, 0, 0}, 0.0f, true);
+        trace = capture.end_graph_capture();
+    }
+
+    auto factory_nodes = function_starts_with_factory(trace);
+    std::vector<nlohmann::json> pad_nodes;
+    for (const auto& node : factory_nodes) {
+        const auto name = node.at(ttnn::graph::kParams).at(ttnn::graph::kName).get<std::string>();
+        if (name.find("Pad") != std::string::npos) {
+            pad_nodes.push_back(node);
+        }
+    }
+    ASSERT_GE(pad_nodes.size(), 2u);
+    std::string type_a = pad_nodes[0].at(ttnn::graph::kParams).at(ttnn::graph::kProgramFactoryType).get<std::string>();
+    std::string type_b = pad_nodes[1].at(ttnn::graph::kParams).at(ttnn::graph::kProgramFactoryType).get<std::string>();
+    auto index_a = pad_nodes[0].at(ttnn::graph::kParams).at(ttnn::graph::kProgramFactoryIndex).get<int64_t>();
+    auto index_b = pad_nodes[1].at(ttnn::graph::kParams).at(ttnn::graph::kProgramFactoryIndex).get<int64_t>();
+    EXPECT_NE(type_a, type_b) << type_a << " vs " << type_b;
+    EXPECT_NE(index_a, index_b);
+    EXPECT_NE(type_a.find("Pad"), std::string::npos) << type_a;
+    EXPECT_NE(type_b.find("Pad"), std::string::npos) << type_b;
+}
+
+TEST_F(TestScopedGraphCapture, ProgramCacheHitFalseThenTrueInNormalMode) {
+    device_->clear_program_cache();
+    device_->enable_program_cache();
+
+    const auto tensor_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto input_tensor = ttnn::create_device_tensor(tensor_spec, device_);
+
+    nlohmann::json trace;
+    {
+        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NORMAL);
+        const auto first = ttnn::softmax(input_tensor, -1);
+        const auto second = ttnn::softmax(input_tensor, -1);
+        trace = capture.end_graph_capture();
+    }
+
+    auto factory_nodes = function_starts_with_factory(trace);
+    std::vector<nlohmann::json> softmax_nodes;
+    for (const auto& node : factory_nodes) {
+        const auto name = node.at(ttnn::graph::kParams).at(ttnn::graph::kName).get<std::string>();
+        if (name.find("Softmax") != std::string::npos) {
+            softmax_nodes.push_back(node);
+        }
+    }
+    ASSERT_GE(softmax_nodes.size(), 2u);
+    EXPECT_FALSE(softmax_nodes[0].at(ttnn::graph::kParams).at(ttnn::graph::kProgramCacheHit).get<bool>());
+    EXPECT_TRUE(softmax_nodes[1].at(ttnn::graph::kParams).at(ttnn::graph::kProgramCacheHit).get<bool>());
+}
+
+TEST_F(TestScopedGraphCapture, ProgramCacheHitStaysFalseInNoDispatch) {
+    device_->clear_program_cache();
+    device_->enable_program_cache();
+
+    const auto tensor_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const auto input_tensor = ttnn::create_device_tensor(tensor_spec, device_);
+
+    nlohmann::json trace;
+    {
+        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+        const auto first = ttnn::softmax(input_tensor, -1);
+        const auto second = ttnn::softmax(input_tensor, -1);
+        trace = capture.end_graph_capture();
+    }
+
+    auto factory_nodes = function_starts_with_factory(trace);
+    std::vector<nlohmann::json> softmax_nodes;
+    for (const auto& node : factory_nodes) {
+        const auto name = node.at(ttnn::graph::kParams).at(ttnn::graph::kName).get<std::string>();
+        if (name.find("Softmax") != std::string::npos) {
+            softmax_nodes.push_back(node);
+        }
+    }
+    ASSERT_GE(softmax_nodes.size(), 2u);
+    EXPECT_FALSE(softmax_nodes[0].at(ttnn::graph::kParams).at(ttnn::graph::kProgramCacheHit).get<bool>());
+    EXPECT_FALSE(softmax_nodes[1].at(ttnn::graph::kParams).at(ttnn::graph::kProgramCacheHit).get<bool>());
+}
+
+TEST_F(TestScopedGraphCapture, ReportMetadataContainsCaptureTimeGitIdentity) {
+    auto report_path = std::filesystem::temp_directory_path() / "test_git_identity_report.json";
+    {
+        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+        const auto tensor_spec = tt::tt_metal::TensorSpec(
+            ttnn::Shape(ttnn::Array4D{1, 1, 32, 32}),
+            tt::tt_metal::TensorLayout(
+                tt::tt_metal::DataType::BFLOAT16,
+                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                ttnn::L1_MEMORY_CONFIG));
+        const auto input_tensor = ttnn::create_device_tensor(tensor_spec, device_);
+        capture.end_graph_capture_to_file(report_path);
+    }
+
+    std::ifstream file(report_path);
+    ASSERT_TRUE(file.is_open());
+    nlohmann::json report = nlohmann::json::parse(file);
+    std::filesystem::remove(report_path);
+
+    ASSERT_TRUE(report.contains(ttnn::graph::kReportMetadata));
+    const auto& metadata = report.at(ttnn::graph::kReportMetadata);
+    ASSERT_TRUE(metadata.contains(ttnn::graph::kReportGitSha));
+    ASSERT_TRUE(metadata.contains(ttnn::graph::kReportGitShaShort));
+    ASSERT_TRUE(metadata.contains(ttnn::graph::kReportGitVersion));
+    ASSERT_TRUE(metadata.contains(ttnn::graph::kReportBuildType));
+    ASSERT_TRUE(metadata.contains(ttnn::graph::kReportGitDirty));
+    EXPECT_TRUE(looks_like_hex(metadata.at(ttnn::graph::kReportGitSha).get<std::string>()));
+    EXPECT_TRUE(looks_like_hex(metadata.at(ttnn::graph::kReportGitShaShort).get<std::string>()));
+    EXPECT_FALSE(metadata.at(ttnn::graph::kReportGitVersion).get<std::string>().empty());
+    EXPECT_FALSE(metadata.at(ttnn::graph::kReportBuildType).get<std::string>().empty());
+    EXPECT_TRUE(metadata.at(ttnn::graph::kReportGitDirty).is_boolean());
 }

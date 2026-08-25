@@ -153,6 +153,7 @@ target_include_directories(
         api/ttnn
         core
         cpp # FIXME: Depend on the Ops needed (make the circular obvious)
+        ${PROJECT_BINARY_DIR}/generated
 )
 target_include_directories(ttnn_core SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
 target_link_libraries(
