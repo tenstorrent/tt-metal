@@ -27,7 +27,8 @@ struct AtomicDomainStats {
     std::atomic<std::uint64_t> resolution_attempts{0};
     std::atomic<std::uint64_t> certified_hits{0};
     std::atomic<std::uint64_t> shadow_would_hits{0};
-    std::atomic<std::uint64_t> applied_hits{0};
+    std::atomic<std::uint64_t> selected_hits{0};
+    std::atomic<std::uint64_t> completed_hits{0};
     std::atomic<std::uint64_t> fallbacks{0};
     std::atomic<std::uint64_t> circuit_breaker_activations{0};
     std::array<std::atomic<std::uint64_t>, kResolutionReasonCount> reasons{};
@@ -96,13 +97,23 @@ std::optional<compact::TensorDescriptor> compact_tensor(const TensorRequest& ten
         .tile_width = static_cast<std::uint16_t>(tensor.tile_width)};
 }
 
-std::optional<compact::KeyDescriptor> compact_key(const MatmulRegistryRequest& request) noexcept {
+std::optional<compact::Domain> compact_domain(const OperationDomain domain) noexcept {
+    switch (domain) {
+        case OperationDomain::DenseMatmul: return compact::Domain::DenseMatmul;
+        case OperationDomain::Linear: return compact::Domain::DenseLinear;
+        case OperationDomain::Addmm: return compact::Domain::DenseAddmm;
+        case OperationDomain::IneligibleSharedCaller: return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+std::optional<compact::KeyDescriptor> compact_registry_key_impl(const MatmulRegistryRequest& request) noexcept {
     const auto input_a = compact_tensor(request.input_a);
     const auto input_b = compact_tensor(request.input_b);
     const auto output = compact_tensor(request.output);
+    const auto domain = compact_domain(request.call.domain);
     const auto& device = request.device;
-    if (!input_a.has_value() || !input_b.has_value() || !output.has_value() ||
-        request.call.domain != OperationDomain::DenseMatmul ||
+    if (!input_a.has_value() || !input_b.has_value() || !output.has_value() || !domain.has_value() ||
         device.device_count > std::numeric_limits<std::uint16_t>::max() ||
         device.mesh_rows > std::numeric_limits<std::uint16_t>::max() ||
         device.mesh_cols > std::numeric_limits<std::uint16_t>::max() ||
@@ -116,7 +127,7 @@ std::optional<compact::KeyDescriptor> compact_key(const MatmulRegistryRequest& r
         .bcast_batch_present = request.bcast_batch.has_value(),
         .bcast_batch = request.bcast_batch.value_or(false),
         .board_capability_class = device.board_capability_class,
-        .codegen_recipe_abi = 1,
+        .codegen_recipe_abi = compact::kCodegenRecipeAbi,
         .compute_grid_x = static_cast<std::uint16_t>(device.compute_grid_x),
         .compute_grid_y = static_cast<std::uint16_t>(device.compute_grid_y),
         .device_count = static_cast<std::uint16_t>(device.device_count),
@@ -139,7 +150,7 @@ std::optional<compact::KeyDescriptor> compact_key(const MatmulRegistryRequest& r
         .transpose_a = request.transpose_a,
         .transpose_b = request.transpose_b,
         .untilize_out = request.untilize_out,
-        .domain = compact::Domain::DenseMatmul,
+        .domain = *domain,
         .alpha_f32_bits = request.call.alpha_f32_bits.value_or(0),
         .beta_f32_bits = request.call.beta_f32_bits.value_or(0)};
 }
@@ -157,6 +168,10 @@ std::optional<tt::tt_metal::Tile> transpose_matmul_tile(const tt::tt_metal::Tile
 }
 
 }  // namespace
+
+std::optional<compact::KeyDescriptor> compact_registry_key(const MatmulRegistryRequest& request) noexcept {
+    return compact_registry_key_impl(request);
+}
 
 Mode current_mode() noexcept {
     auto value = frozen_mode.load(std::memory_order_acquire);
@@ -388,8 +403,8 @@ bool has_consistent_untilize_out(const Recipe& recipe) noexcept {
 }
 
 MaterializationResult materialize_matmul_registry_recipe(const compact::EntryDescriptor& descriptor) {
-    if (descriptor.key.schema_version != 1 || descriptor.key.codegen_recipe_abi != 1 ||
-        descriptor.replay.schema_version != 2 || descriptor.key.domain != compact::Domain::DenseMatmul) {
+    if (descriptor.key.schema_version != 1 || descriptor.key.codegen_recipe_abi != compact::kCodegenRecipeAbi ||
+        descriptor.replay.schema_version != 2) {
         return {.status = MaterializationStatus::UnsupportedSchema};
     }
     if (descriptor.replay.family != compact::ProgramFamily::MultiCoreReuse) {
@@ -407,9 +422,19 @@ MaterializationResult materialize_matmul_registry_recipe(const compact::EntryDes
 
     const auto& state = descriptor.replay.call_state;
     const auto& key = descriptor.key;
+    const bool scalar_semantics_valid = [&key] {
+        switch (key.domain) {
+            case compact::Domain::DenseMatmul:
+            case compact::Domain::DenseLinear: return key.alpha_f32_bits == 0 && key.beta_f32_bits == 0;
+            case compact::Domain::DenseAddmm:
+                return key.alpha_f32_bits != 0 && key.alpha_f32_bits != 0x80000000U &&
+                       (key.beta_f32_bits == 0 || key.beta_f32_bits == 0x80000000U);
+        }
+        return false;
+    }();
     const bool invalid_key_envelope =
         key.bcast_batch_present || key.bcast_batch || key.has_activation || key.has_bias || key.run_batched ||
-        key.transpose_a || key.transpose_b || key.untilize_out || key.alpha_f32_bits != 0 || key.beta_f32_bits != 0 ||
+        key.transpose_a || key.transpose_b || key.untilize_out || !scalar_semantics_valid ||
         key.output.buffer_type != compact::BufferType::Dram || key.output.layout != compact::Layout::Tile ||
         key.output.memory_layout != compact::MemoryLayout::Interleaved || key.output.tile_height != 32 ||
         key.output.tile_width != 32;
@@ -463,23 +488,13 @@ MaterializationResult materialize_matmul_registry_recipe(const compact::EntryDes
             .untilize_out = state.untilize_out}};
 }
 
-static Resolution resolve_impl(
-    const Mode mode,
-    const MatmulRegistryRequest& request,
-    const Eligibility& eligibility,
-    const MatmulRegistryRequest* synthetic_request,
-    const Recipe* synthetic_recipe,
-    const compact::TableMetadata& metadata,
-    const std::span<const compact::EntryDescriptor> entries,
-    const CompatibilityDigests* actual_compatibility) noexcept {
-    if (mode == Mode::Off) {
-        return {.reason = ResolutionReason::Disabled};
-    }
-    if (mode == Mode::On && eligibility.trace_capture_active) {
-        return {.reason = ResolutionReason::TraceCaptureUnsupported};
+ResolutionReason validate_v1_request_envelope(
+    const MatmulRegistryRequest& request, const Eligibility& eligibility) noexcept {
+    if (eligibility.trace_capture_active) {
+        return ResolutionReason::TraceCaptureUnsupported;
     }
     if (request.schema_version != 1) {
-        return {.reason = ResolutionReason::IncompleteRequest};
+        return ResolutionReason::IncompleteRequest;
     }
     const auto activation_end =
         request.activation_param_f32_bits.begin() +
@@ -494,41 +509,61 @@ static Resolution resolve_impl(
         request.has_activation != request.activation_op.has_value() ||
         request.activation_param_count > request.activation_param_f32_bits.size() ||
         (!request.has_activation && request.activation_param_count != 0) || nonzero_activation_padding) {
-        return {.reason = ResolutionReason::InconsistentRequest};
+        return ResolutionReason::InconsistentRequest;
     }
     if (eligibility.call.domain == OperationDomain::IneligibleSharedCaller) {
-        return {.reason = ResolutionReason::IneligibleOperationDomain};
+        return ResolutionReason::IneligibleOperationDomain;
     }
     const bool is_addmm = eligibility.call.domain == OperationDomain::Addmm;
-    if (is_addmm != (eligibility.call.alpha_f32_bits.has_value() && eligibility.call.beta_f32_bits.has_value())) {
-        return {.reason = ResolutionReason::MalformedOperationSemantics};
+    const bool has_alpha = eligibility.call.alpha_f32_bits.has_value();
+    const bool has_beta = eligibility.call.beta_f32_bits.has_value();
+    if ((is_addmm && (!has_alpha || !has_beta)) || (!is_addmm && (has_alpha || has_beta))) {
+        return ResolutionReason::MalformedOperationSemantics;
+    }
+    if (is_addmm && (*eligibility.call.alpha_f32_bits == 0 || *eligibility.call.alpha_f32_bits == 0x80000000U)) {
+        return ResolutionReason::MalformedOperationSemantics;
     }
     if (eligibility.io_contract_status != IoContractStatus::Resolved) {
-        return {.reason = ResolutionReason::InconsistentIoContract};
+        return ResolutionReason::InconsistentIoContract;
     }
     if (eligibility.has_program_config || eligibility.has_compute_kernel_config || eligibility.has_user_core_grid) {
-        return {.reason = ResolutionReason::ExplicitOverride};
+        return ResolutionReason::ExplicitOverride;
     }
-    const bool unsupported_bias = eligibility.has_bias && eligibility.call.domain != OperationDomain::Linear;
-    const bool unsupported_activation =
-        eligibility.has_activation && eligibility.call.domain != OperationDomain::Linear;
-    const bool unsupported_transpose =
-        (eligibility.transpose_a || eligibility.transpose_b) && eligibility.call.domain != OperationDomain::Linear;
-    if (unsupported_bias || unsupported_activation || eligibility.has_optional_output || eligibility.has_output_tile ||
-        eligibility.has_global_cb || eligibility.has_sub_device || eligibility.has_bcast_batch ||
-        eligibility.untilize_out || eligibility.input_a_sharded || eligibility.input_b_sharded ||
-        eligibility.output_sharded || eligibility.input_b_batched || unsupported_transpose) {
-        return {.reason = ResolutionReason::UnsupportedSemantics};
+    // V1 deliberately admits the complete no-bias/no-activation/no-transpose
+    // subset in every domain. Linear/addmm never alias dense.matmul, and their
+    // richer tensor semantics remain ineligible until a later schema binds
+    // every bias/activation field exactly.
+    if (eligibility.has_bias || eligibility.has_activation || eligibility.transpose_a || eligibility.transpose_b ||
+        eligibility.has_optional_output || eligibility.has_output_tile || eligibility.has_global_cb ||
+        eligibility.has_sub_device || eligibility.has_bcast_batch || eligibility.untilize_out ||
+        eligibility.input_a_sharded || eligibility.input_b_sharded || eligibility.output_sharded ||
+        eligibility.input_b_batched ||
+        (is_addmm && *eligibility.call.beta_f32_bits != 0 && *eligibility.call.beta_f32_bits != 0x80000000U)) {
+        return ResolutionReason::UnsupportedSemantics;
     }
 
-    // V1's first generated table is dense-only. Linear and addmm remain explicit
-    // empty domains until their bias/activation/output semantics have their own
-    // certified entries; they can never fall through into dense recipes.
+    return ResolutionReason::CertifiedMatch;
+}
+
+static Resolution resolve_impl(
+    const Mode mode,
+    const MatmulRegistryRequest& request,
+    const Eligibility& eligibility,
+    const MatmulRegistryRequest* synthetic_request,
+    const Recipe* synthetic_recipe,
+    const compact::TableMetadata& metadata,
+    const std::span<const compact::EntryDescriptor> entries,
+    const CompatibilityDigests* actual_compatibility) noexcept {
+    if (mode == Mode::Off) {
+        return {.reason = ResolutionReason::Disabled};
+    }
+    const auto envelope_reason = validate_v1_request_envelope(request, eligibility);
+    if (envelope_reason != ResolutionReason::CertifiedMatch) {
+        return {.reason = envelope_reason};
+    }
+
     if (is_domain_circuit_broken(request.call.domain)) {
         return {.reason = ResolutionReason::CircuitBroken};
-    }
-    if (request.call.domain != OperationDomain::DenseMatmul) {
-        return {.reason = ResolutionReason::EmptyRegistry};
     }
 
     if (synthetic_request != nullptr && synthetic_recipe != nullptr && *synthetic_request == request) {
@@ -553,7 +588,7 @@ static Resolution resolve_impl(
         return {.reason = ResolutionReason::RuntimeCapabilityMismatch};
     }
 
-    const auto key = compact_key(request);
+    const auto key = compact_registry_key(request);
     if (!key.has_value()) {
         return {.reason = ResolutionReason::IncompleteRequest};
     }
@@ -574,9 +609,10 @@ DispatchResult resolve_for_dispatch(
     const std::optional<MatmulRegistryRequest>& request,
     const Eligibility& eligibility,
     const ttnn::prim::MatmulParams& legacy_parameters,
-    const ResolverFunction resolver) {
+    const ResolverFunction resolver,
+    const MaterializerFunction materializer) {
     auto resolution = Resolution{.reason = ResolutionReason::Disabled};
-    if (mode == Mode::On && eligibility.trace_capture_active) {
+    if (mode != Mode::Off && eligibility.trace_capture_active) {
         resolution = {.reason = ResolutionReason::TraceCaptureUnsupported};
     } else if (mode != Mode::Off) {
         resolution = request.has_value() && resolver != nullptr
@@ -586,22 +622,37 @@ DispatchResult resolve_for_dispatch(
 
     auto action = execution_action(mode, resolution);
     std::optional<ttnn::prim::MatmulParams> materialized_parameters;
-    if (action == ExecutionAction::ApplyRecipe && resolution.descriptor != nullptr) {
-        auto materialized_recipe = materialize_matmul_registry_recipe(*resolution.descriptor);
-        if (materialized_recipe.status != MaterializationStatus::Success || !materialized_recipe.recipe.has_value()) {
-            const bool unsupported = materialized_recipe.status == MaterializationStatus::UnsupportedSchema ||
-                                     materialized_recipe.status == MaterializationStatus::UnsupportedReplay;
-            resolution.reason =
-                unsupported ? ResolutionReason::UnsupportedReplay : ResolutionReason::MaterializationRejected;
-            action = ExecutionAction::Fallback;
-            circuit_break_domain(eligibility.call.domain);
+    try {
+        if (action == ExecutionAction::ApplyRecipe && resolution.descriptor != nullptr) {
+            auto materialized_recipe =
+                materializer != nullptr ? materializer(*resolution.descriptor) : MaterializationResult{};
+            if (materialized_recipe.status != MaterializationStatus::Success ||
+                !materialized_recipe.recipe.has_value()) {
+                const bool unsupported = materialized_recipe.status == MaterializationStatus::UnsupportedSchema ||
+                                         materialized_recipe.status == MaterializationStatus::UnsupportedReplay;
+                resolution.reason =
+                    unsupported ? ResolutionReason::UnsupportedReplay : ResolutionReason::MaterializationRejected;
+                action = ExecutionAction::Fallback;
+                circuit_break_domain(eligibility.call.domain);
+            } else {
+                const auto native_resolution = Resolution{
+                    .reason = ResolutionReason::CertifiedMatch, .recipe = &materialized_recipe.recipe.value()};
+                materialized_parameters =
+                    materialize_parameters_for_execution(mode, native_resolution, legacy_parameters);
+            }
         } else {
-            const auto native_resolution =
-                Resolution{.reason = ResolutionReason::CertifiedMatch, .recipe = &materialized_recipe.recipe.value()};
-            materialized_parameters = materialize_parameters_for_execution(mode, native_resolution, legacy_parameters);
+            materialized_parameters = materialize_parameters_for_execution(mode, resolution, legacy_parameters);
         }
-    } else {
-        materialized_parameters = materialize_parameters_for_execution(mode, resolution, legacy_parameters);
+    } catch (...) {
+        circuit_break_domain(eligibility.call.domain);
+        resolution.reason = ResolutionReason::MaterializationRejected;
+        action = ExecutionAction::Fallback;
+        materialized_parameters.reset();
+    }
+    if (action == ExecutionAction::ApplyRecipe && !materialized_parameters.has_value()) {
+        circuit_break_domain(eligibility.call.domain);
+        resolution.reason = ResolutionReason::MaterializationRejected;
+        action = ExecutionAction::Fallback;
     }
     return DispatchResult{
         .resolution = resolution, .action = action, .materialized_parameters = std::move(materialized_parameters)};
@@ -677,8 +728,14 @@ void record_resolution(
         case ExecutionAction::ObserveOnly:
             domain_stats.shadow_would_hits.fetch_add(1, std::memory_order_relaxed);
             break;
-        case ExecutionAction::ApplyRecipe: domain_stats.applied_hits.fetch_add(1, std::memory_order_relaxed); break;
+        case ExecutionAction::ApplyRecipe: domain_stats.selected_hits.fetch_add(1, std::memory_order_relaxed); break;
         case ExecutionAction::Fallback: domain_stats.fallbacks.fetch_add(1, std::memory_order_relaxed); break;
+    }
+}
+
+void record_completed_hit(const OperationDomain domain) noexcept {
+    if (index(domain) < stats.size()) {
+        stats[index(domain)].completed_hits.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -697,7 +754,8 @@ StatsSnapshot stats_snapshot() noexcept {
         destination.resolution_attempts = source.resolution_attempts.load(std::memory_order_relaxed);
         destination.certified_hits = source.certified_hits.load(std::memory_order_relaxed);
         destination.shadow_would_hits = source.shadow_would_hits.load(std::memory_order_relaxed);
-        destination.applied_hits = source.applied_hits.load(std::memory_order_relaxed);
+        destination.selected_hits = source.selected_hits.load(std::memory_order_relaxed);
+        destination.completed_hits = source.completed_hits.load(std::memory_order_relaxed);
         destination.fallbacks = source.fallbacks.load(std::memory_order_relaxed);
         destination.circuit_breaker_activations = source.circuit_breaker_activations.load(std::memory_order_relaxed);
         destination.circuit_broken = circuit_breakers[domain].load(std::memory_order_acquire);
@@ -713,7 +771,8 @@ void reset_stats_for_testing() noexcept {
         domain.resolution_attempts.store(0, std::memory_order_relaxed);
         domain.certified_hits.store(0, std::memory_order_relaxed);
         domain.shadow_would_hits.store(0, std::memory_order_relaxed);
-        domain.applied_hits.store(0, std::memory_order_relaxed);
+        domain.selected_hits.store(0, std::memory_order_relaxed);
+        domain.completed_hits.store(0, std::memory_order_relaxed);
         domain.fallbacks.store(0, std::memory_order_relaxed);
         domain.circuit_breaker_activations.store(0, std::memory_order_relaxed);
         for (auto& reason : domain.reasons) {

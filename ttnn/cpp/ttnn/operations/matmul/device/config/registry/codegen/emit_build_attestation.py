@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Emit independent build-time compatibility digests for the matmul registry."""
 
 from __future__ import annotations
@@ -57,7 +61,11 @@ def parse_facts(raw_facts: Iterable[str]) -> dict[str, str]:
     facts: dict[str, str] = {}
     for raw_fact in raw_facts:
         name, separator, value = raw_fact.partition("=")
-        if not separator or not name or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789_" for character in name):
+        if (
+            not separator
+            or not name
+            or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789_" for character in name)
+        ):
             raise AttestationError(f"invalid build fact: {raw_fact!r}")
         if name in facts:
             raise AttestationError(f"duplicate build fact: {name}")
@@ -135,7 +143,7 @@ def device_attestation_digests(facts: dict[str, int]) -> tuple[str, str]:
 
 
 def _bytes_cpp(value: str) -> str:
-    return "{{" + ", ".join(f"0x{value[index:index + 2]}" for index in range(0, len(value), 2)) + "}}"
+    return "{{" + ", ".join(f"0x{value[index : index + 2]}" for index in range(0, len(value), 2)) + "}}"
 
 
 def emit(root: Path, manifest: Path, facts: dict[str, str], header: Path, receipt: Path) -> None:

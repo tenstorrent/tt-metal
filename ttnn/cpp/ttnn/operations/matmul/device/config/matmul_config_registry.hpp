@@ -200,6 +200,30 @@ struct MatmulRegistryRequest {
     bool operator==(const MatmulRegistryRequest&) const = default;
 };
 
+// Lossless conversion into the immutable generated-table key. This is also
+// the single source for the read-only measurement-worker key inspector; it
+// performs no registry lookup, selection, initialization, or mutation.
+std::optional<compact::KeyDescriptor> compact_registry_key(const MatmulRegistryRequest& request) noexcept;
+
+struct RegistryRequestInspection {
+    std::optional<MatmulRegistryRequest> request = std::nullopt;
+    Eligibility eligibility{};
+    DeviceAttestationResult device_attestation{};
+};
+
+// Build the exact request used by bound_matmul from live tensor and call-state
+// facts. Tensor/device inspection may throw before legacy validation, so public
+// dispatch keeps this call inside its observation-only catch boundary.
+RegistryRequestInspection inspect_registry_request(
+    const ttnn::Tensor& input_tensor_a,
+    const ttnn::Tensor& input_tensor_b,
+    bool has_bias,
+    CallSemantics call_semantics,
+    const ttnn::prim::MatmulParams& parameters,
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    bool trace_capture_active,
+    DeviceAttestationProvider provider = &production_device_attestation);
+
 struct Recipe {
     MatmulProgramConfig program_config;
     DeviceComputeKernelConfig compute_kernel_config;
@@ -295,7 +319,8 @@ ExecutionAction execution_action(Mode mode, const Resolution& resolution) noexce
 
 // Construct one complete temporary parameter object before dispatch. Shadow
 // and fallback return nullopt without copying or mutating the legacy object.
-// Native recipe copies can allocate, so failures intentionally propagate.
+// Native recipe copies can allocate. The dispatch gate catches construction
+// failures, circuit-breaks the affected domain, and preserves the legacy path.
 std::optional<ttnn::prim::MatmulParams> materialize_parameters_for_execution(
     Mode mode, const Resolution& resolution, const ttnn::prim::MatmulParams& legacy_parameters);
 
@@ -311,9 +336,14 @@ Mode current_mode() noexcept;
 void reset_startup_mode_for_testing() noexcept;
 
 // Device-free admission plus exact lookup in the generated immutable table.
+// CertifiedMatch means only that the request is inside the exact v1 envelope;
+// it performs no lookup, compatibility initialization, or telemetry mutation.
+ResolutionReason validate_v1_request_envelope(
+    const MatmulRegistryRequest& request, const Eligibility& eligibility) noexcept;
 Resolution resolve(Mode mode, const MatmulRegistryRequest& request, const Eligibility& eligibility) noexcept;
 
 using ResolverFunction = Resolution (*)(Mode, const MatmulRegistryRequest&, const Eligibility&) noexcept;
+using MaterializerFunction = MaterializationResult (*)(const compact::EntryDescriptor&);
 
 struct DispatchResult {
     Resolution resolution;
@@ -328,7 +358,8 @@ DispatchResult resolve_for_dispatch(
     const std::optional<MatmulRegistryRequest>& request,
     const Eligibility& eligibility,
     const ttnn::prim::MatmulParams& legacy_parameters,
-    ResolverFunction resolver = &resolve);
+    ResolverFunction resolver = &resolve,
+    MaterializerFunction materializer = &materialize_matmul_registry_recipe);
 
 // Device-free synthetic-hit seam used to prove exact-key, Shadow, and On
 // behavior while the generated production table remains empty.
@@ -357,7 +388,8 @@ struct DomainStatsSnapshot {
     std::uint64_t resolution_attempts = 0;
     std::uint64_t certified_hits = 0;
     std::uint64_t shadow_would_hits = 0;
-    std::uint64_t applied_hits = 0;
+    std::uint64_t selected_hits = 0;
+    std::uint64_t completed_hits = 0;
     std::uint64_t fallbacks = 0;
     std::uint64_t circuit_breaker_activations = 0;
     bool circuit_broken = false;
@@ -377,6 +409,7 @@ struct StatsSnapshot {
 // dimensions and identifiers are deliberately never retained.
 void record_resolution(
     Mode mode, OperationDomain domain, const Resolution& resolution, ExecutionAction action) noexcept;
+void record_completed_hit(OperationDomain domain) noexcept;
 StatsSnapshot stats_snapshot() noexcept;
 
 // Test only: callers must ensure no concurrent recording is in flight.

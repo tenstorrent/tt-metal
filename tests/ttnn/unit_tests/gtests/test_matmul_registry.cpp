@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdlib>
+#include <stdexcept>
 #include <thread>
 #include <variant>
 
@@ -48,7 +49,7 @@ compact::KeyDescriptor compact_key(const std::uint64_t logical_m) {
     compact::KeyDescriptor key{};
     key.architecture = 2;
     key.board_capability_class = 1;
-    key.codegen_recipe_abi = 1;
+    key.codegen_recipe_abi = compact::kCodegenRecipeAbi;
     key.compute_grid_x = 8;
     key.compute_grid_y = 8;
     key.device_count = 1;
@@ -111,9 +112,9 @@ TEST(MatmulConfigRegistry, CompactLookupIsExactNonOwningAndSidebandIndependent) 
 }
 
 MatmulRegistryRequest exact_request(const OperationDomain domain = OperationDomain::DenseMatmul) {
-    return {
+    auto request = MatmulRegistryRequest{
         .schema_version = 1,
-        .call = CallSemantics{.domain = domain},
+        .call = domain == OperationDomain::Addmm ? addmm_call_semantics(1.0F, 0.0F) : CallSemantics{.domain = domain},
         .workload =
             WorkloadRequest{
                 .logical_m = 128,
@@ -174,17 +175,18 @@ MatmulRegistryRequest exact_request(const OperationDomain domain = OperationDoma
         .activation_param_f32_bits = {},
         .activation_param_count = 0,
     };
+    return request;
 }
 
-compact::EntryDescriptor compact_entry() {
-    const auto request = exact_request();
+compact::EntryDescriptor compact_entry(const OperationDomain domain = OperationDomain::DenseMatmul) {
+    const auto request = exact_request(domain);
     auto entry = compact::EntryDescriptor{};
     entry.key = compact::KeyDescriptor{
         .architecture = request.device.architecture,
         .bcast_batch_present = false,
         .bcast_batch = false,
         .board_capability_class = request.device.board_capability_class,
-        .codegen_recipe_abi = 1,
+        .codegen_recipe_abi = compact::kCodegenRecipeAbi,
         .compute_grid_x = static_cast<std::uint16_t>(request.device.compute_grid_x),
         .compute_grid_y = static_cast<std::uint16_t>(request.device.compute_grid_y),
         .device_count = static_cast<std::uint16_t>(request.device.device_count),
@@ -228,7 +230,11 @@ compact::EntryDescriptor compact_entry() {
         .transpose_a = false,
         .transpose_b = false,
         .untilize_out = false,
-        .domain = compact::Domain::DenseMatmul};
+        .domain = domain == OperationDomain::DenseMatmul ? compact::Domain::DenseMatmul
+                  : domain == OperationDomain::Linear    ? compact::Domain::DenseLinear
+                                                         : compact::Domain::DenseAddmm,
+        .alpha_f32_bits = request.call.alpha_f32_bits.value_or(0),
+        .beta_f32_bits = request.call.beta_f32_bits.value_or(0)};
     entry.replay = compact::ReplayDescriptor{
         .schema_version = 2,
         .family = compact::ProgramFamily::MultiCoreReuse,
@@ -263,6 +269,19 @@ compact::EntryDescriptor compact_entry() {
             .global_cb_is_null = true,
             .sub_device_id_is_null = true}};
     return entry;
+}
+
+TEST(MatmulConfigRegistry, RuntimeRequestConvertsToTheExactDisjointCompactKey) {
+    for (const auto domain : {OperationDomain::DenseMatmul, OperationDomain::Linear, OperationDomain::Addmm}) {
+        const auto request = exact_request(domain);
+        const auto key = compact_registry_key(request);
+        ASSERT_TRUE(key.has_value());
+        EXPECT_EQ(key.value(), compact_entry(domain).key);
+    }
+
+    auto unsupported = exact_request();
+    unsupported.output.memory_layout = TensorMemoryLayout::HEIGHT_SHARDED;
+    EXPECT_FALSE(compact_registry_key(unsupported).has_value());
 }
 
 compact::TableMetadata compact_metadata() {
@@ -343,6 +362,10 @@ Resolution counting_certified_resolver(
         return {.reason = ResolutionReason::InconsistentRequest};
     }
     return {.reason = ResolutionReason::CertifiedMatch, .recipe = &recipe};
+}
+
+MaterializationResult throwing_materializer(const compact::EntryDescriptor&) {
+    throw std::runtime_error("injected materialization failure");
 }
 
 TEST(MatmulConfigRegistry, ModeFreezesAtFirstUse) {
@@ -644,6 +667,16 @@ TEST(MatmulConfigRegistry, CompactTableLookupAndNativeMaterializationAreExact) {
             Mode::On, miss, eligibility, compact_metadata(), entries, compatible_digests())
             .reason,
         ResolutionReason::EmptyRegistry);
+
+    auto invalid_linear = compact_entry(OperationDomain::Linear);
+    invalid_linear.key.alpha_f32_bits = 0x3F800000;
+    EXPECT_EQ(materialize_matmul_registry_recipe(invalid_linear).status, MaterializationStatus::InvalidCallState);
+    auto invalid_addmm = compact_entry(OperationDomain::Addmm);
+    invalid_addmm.key.alpha_f32_bits = 0x80000000;
+    EXPECT_EQ(materialize_matmul_registry_recipe(invalid_addmm).status, MaterializationStatus::InvalidCallState);
+    invalid_addmm = compact_entry(OperationDomain::Addmm);
+    invalid_addmm.key.beta_f32_bits = 0x3F800000;
+    EXPECT_EQ(materialize_matmul_registry_recipe(invalid_addmm).status, MaterializationStatus::InvalidCallState);
 }
 
 TEST(MatmulConfigRegistry, CompactMaterializationRejectsEveryTypedBoundary) {
@@ -839,7 +872,7 @@ TEST(MatmulConfigRegistry, OnTraceCaptureRejectsBeforeResolver) {
     EXPECT_EQ(resolve(Mode::On, request, eligibility).reason, ResolutionReason::TraceCaptureUnsupported);
 }
 
-TEST(MatmulConfigRegistry, ShadowTraceCaptureObservesWithoutMutation) {
+TEST(MatmulConfigRegistry, ShadowTraceCaptureMirrorsOnIneligibilityWithoutMutation) {
     const auto request = exact_request();
     const auto eligibility = Eligibility{.call = request.call, .trace_capture_active = true};
     ttnn::prim::MatmulParams legacy_parameters;
@@ -850,11 +883,12 @@ TEST(MatmulConfigRegistry, ShadowTraceCaptureObservesWithoutMutation) {
     const auto result =
         resolve_for_dispatch(Mode::Shadow, request, eligibility, legacy_parameters, &counting_certified_resolver);
 
-    EXPECT_EQ(resolver_invocations, 1);
-    EXPECT_EQ(result.resolution.reason, ResolutionReason::CertifiedMatch);
-    EXPECT_EQ(result.action, ExecutionAction::ObserveOnly);
+    EXPECT_EQ(resolver_invocations, 0);
+    EXPECT_EQ(result.resolution.reason, ResolutionReason::TraceCaptureUnsupported);
+    EXPECT_EQ(result.action, ExecutionAction::Fallback);
     EXPECT_FALSE(result.materialized_parameters.has_value());
     EXPECT_EQ(ttsl::hash::hash_objects_with_default_seed(legacy_parameters), legacy_hash);
+    EXPECT_EQ(resolve(Mode::Shadow, request, eligibility).reason, ResolutionReason::TraceCaptureUnsupported);
 }
 
 TEST(MatmulConfigRegistry, TraceCaptureRejectionHasBoundedTelemetry) {
@@ -1018,6 +1052,49 @@ TEST(MatmulConfigRegistry, CompactDescriptorDispatchMaterializesOnlyInOn) {
     EXPECT_EQ(ttsl::hash::hash_objects_with_default_seed(legacy), legacy_hash);
 }
 
+TEST(MatmulConfigRegistry, CompactLookupAndMaterializationKeepAllPublicDomainsDisjoint) {
+    reset_circuit_breakers_for_testing();
+    for (const auto domain : {OperationDomain::DenseMatmul, OperationDomain::Linear, OperationDomain::Addmm}) {
+        const auto request = exact_request(domain);
+        const auto eligibility = Eligibility{.call = request.call};
+        const std::array entries{compact_entry(domain)};
+        const auto hit = resolve_with_compact_table_for_testing(
+            Mode::On, request, eligibility, compact_metadata(), entries, compatible_digests());
+        ASSERT_EQ(hit.reason, ResolutionReason::CertifiedMatch);
+        ASSERT_NE(hit.descriptor, nullptr);
+        EXPECT_EQ(materialize_matmul_registry_recipe(*hit.descriptor).status, MaterializationStatus::Success);
+
+        const auto other_domain = domain == OperationDomain::DenseMatmul ? OperationDomain::Linear
+                                  : domain == OperationDomain::Linear    ? OperationDomain::Addmm
+                                                                         : OperationDomain::DenseMatmul;
+        const auto other_request = exact_request(other_domain);
+        EXPECT_EQ(
+            resolve_with_compact_table_for_testing(
+                Mode::On,
+                other_request,
+                Eligibility{.call = other_request.call},
+                compact_metadata(),
+                entries,
+                compatible_digests())
+                .reason,
+            ResolutionReason::EmptyRegistry);
+    }
+
+    auto addmm_request = exact_request(OperationDomain::Addmm);
+    const std::array addmm_entries{compact_entry(OperationDomain::Addmm)};
+    addmm_request.call = addmm_call_semantics(2.0F, 0.0F);
+    EXPECT_EQ(
+        resolve_with_compact_table_for_testing(
+            Mode::On,
+            addmm_request,
+            Eligibility{.call = addmm_request.call},
+            compact_metadata(),
+            addmm_entries,
+            compatible_digests())
+            .reason,
+        ResolutionReason::EmptyRegistry);
+}
+
 TEST(MatmulConfigRegistry, TypedMaterializationRejectionFallsBackAndCircuitBreaksOnlyItsDomain) {
     reset_stats_for_testing();
     reset_circuit_breakers_for_testing();
@@ -1049,6 +1126,49 @@ TEST(MatmulConfigRegistry, TypedMaterializationRejectionFallsBackAndCircuitBreak
     const auto& dense = snapshot.domains[static_cast<std::size_t>(OperationDomain::DenseMatmul)];
     EXPECT_EQ(dense.circuit_breaker_activations, 1);
     EXPECT_TRUE(dense.circuit_broken);
+    reset_circuit_breakers_for_testing();
+}
+
+TEST(MatmulConfigRegistry, UnexpectedMaterializationExceptionCircuitBreaksAndFallsBackBeforeDispatch) {
+    reset_circuit_breakers_for_testing();
+    const auto request = exact_request(OperationDomain::Linear);
+    const auto eligibility = Eligibility{.call = request.call};
+    const auto descriptor_resolver =
+        +[](const Mode, const MatmulRegistryRequest&, const Eligibility&) noexcept -> Resolution {
+        static auto descriptor = compact_entry(OperationDomain::Linear);
+        return {.reason = ResolutionReason::CertifiedMatch, .descriptor = &descriptor};
+    };
+
+    const auto result = resolve_for_dispatch(
+        Mode::On, request, eligibility, ttnn::prim::MatmulParams{}, descriptor_resolver, &throwing_materializer);
+    EXPECT_EQ(result.resolution.reason, ResolutionReason::MaterializationRejected);
+    EXPECT_EQ(result.action, ExecutionAction::Fallback);
+    EXPECT_FALSE(result.materialized_parameters.has_value());
+    EXPECT_TRUE(is_domain_circuit_broken(OperationDomain::Linear));
+    EXPECT_FALSE(is_domain_circuit_broken(OperationDomain::DenseMatmul));
+    reset_circuit_breakers_for_testing();
+}
+
+TEST(MatmulConfigRegistry, InconsistentInjectedRecipeCircuitBreaksAndFallsBackBeforeDispatch) {
+    reset_circuit_breakers_for_testing();
+    const auto request = exact_request(OperationDomain::Addmm);
+    const auto eligibility = Eligibility{.call = request.call};
+    const auto inconsistent_resolver =
+        +[](const Mode, const MatmulRegistryRequest&, const Eligibility&) noexcept -> Resolution {
+        static auto recipe = [] {
+            auto value = basic_recipe();
+            value.untilize_out = true;
+            return value;
+        }();
+        return {.reason = ResolutionReason::CertifiedMatch, .recipe = &recipe};
+    };
+
+    const auto result =
+        resolve_for_dispatch(Mode::On, request, eligibility, ttnn::prim::MatmulParams{}, inconsistent_resolver);
+    EXPECT_EQ(result.resolution.reason, ResolutionReason::MaterializationRejected);
+    EXPECT_EQ(result.action, ExecutionAction::Fallback);
+    EXPECT_FALSE(result.materialized_parameters.has_value());
+    EXPECT_TRUE(is_domain_circuit_broken(OperationDomain::Addmm));
     reset_circuit_breakers_for_testing();
 }
 
@@ -1182,6 +1302,8 @@ TEST(MatmulConfigRegistry, TelemetryIsBoundedAndResettable) {
     const Resolution hit{.reason = ResolutionReason::CertifiedMatch, .recipe = &recipe};
     record_resolution(Mode::Off, OperationDomain::DenseMatmul, hit, ExecutionAction::Fallback);
     record_resolution(Mode::Shadow, OperationDomain::DenseMatmul, hit, ExecutionAction::ObserveOnly);
+    record_resolution(Mode::On, OperationDomain::Addmm, hit, ExecutionAction::ApplyRecipe);
+    record_completed_hit(OperationDomain::Addmm);
     record_resolution(
         Mode::On,
         OperationDomain::Linear,
@@ -1197,6 +1319,9 @@ TEST(MatmulConfigRegistry, TelemetryIsBoundedAndResettable) {
     const auto& linear = snapshot.domains[static_cast<std::size_t>(OperationDomain::Linear)];
     EXPECT_EQ(linear.resolution_attempts, 1);
     EXPECT_EQ(linear.fallbacks, 1);
+    const auto& addmm = snapshot.domains[static_cast<std::size_t>(OperationDomain::Addmm)];
+    EXPECT_EQ(addmm.selected_hits, 1);
+    EXPECT_EQ(addmm.completed_hits, 1);
 
     reset_stats_for_testing();
     snapshot = stats_snapshot();
@@ -1248,20 +1373,12 @@ TEST(MatmulConfigRegistry, RecipeCarriesOneConsistentUntilizeValue) {
     EXPECT_FALSE(has_consistent_untilize_out(matching_1d));
 }
 
-TEST(MatmulConfigRegistry, EachPublicOperationHasADistinctEmptyDomain) {
+TEST(MatmulConfigRegistry, EachPublicOperationHasADistinctSafeEmptyDomain) {
     EXPECT_EQ(
         resolve_with(Mode::On, Eligibility{.call = CallSemantics{.domain = OperationDomain::DenseMatmul}}).reason,
         ResolutionReason::EmptyRegistry);
     EXPECT_EQ(
-        resolve_with(
-            Mode::On,
-            Eligibility{
-                .call = CallSemantics{.domain = OperationDomain::Linear},
-                .has_bias = true,
-                .has_activation = true,
-                .transpose_b = true})
-            .reason,
-        ResolutionReason::EmptyRegistry);
+        resolve_with(Mode::On, Eligibility{.call = linear_call_semantics()}).reason, ResolutionReason::EmptyRegistry);
     EXPECT_EQ(
         resolve_with(
             Mode::On,
@@ -1270,6 +1387,12 @@ TEST(MatmulConfigRegistry, EachPublicOperationHasADistinctEmptyDomain) {
                     CallSemantics{.domain = OperationDomain::Addmm, .alpha_f32_bits = 0x3f800000, .beta_f32_bits = 0}})
             .reason,
         ResolutionReason::EmptyRegistry);
+    EXPECT_EQ(
+        resolve_with(
+            Mode::On,
+            Eligibility{.call = linear_call_semantics(), .has_bias = true, .has_activation = true, .transpose_b = true})
+            .reason,
+        ResolutionReason::UnsupportedSemantics);
 }
 
 TEST(MatmulConfigRegistry, SharedCallersAreNeverEligible) {
@@ -1283,12 +1406,24 @@ TEST(MatmulConfigRegistry, AddmmRequiresExactScalarBits) {
         resolve_with(Mode::On, Eligibility{.call = CallSemantics{.domain = OperationDomain::Addmm}}).reason,
         ResolutionReason::MalformedOperationSemantics);
     EXPECT_EQ(
+        resolve_with(Mode::On, Eligibility{.call = addmm_call_semantics(-0.0F, 1.0F)}).reason,
+        ResolutionReason::MalformedOperationSemantics);
+    EXPECT_EQ(
+        resolve_with(Mode::On, Eligibility{.call = addmm_call_semantics(1.0F, 1.0F)}).reason,
+        ResolutionReason::UnsupportedSemantics);
+    EXPECT_EQ(
         resolve_with(
             Mode::On,
             Eligibility{
                 .call =
                     CallSemantics{
                         .domain = OperationDomain::Linear, .alpha_f32_bits = 0x3f800000, .beta_f32_bits = 0x3f800000}})
+            .reason,
+        ResolutionReason::MalformedOperationSemantics);
+    EXPECT_EQ(
+        resolve_with(
+            Mode::On,
+            Eligibility{.call = CallSemantics{.domain = OperationDomain::Linear, .alpha_f32_bits = 0x3f800000}})
             .reason,
         ResolutionReason::MalformedOperationSemantics);
 }
@@ -1347,6 +1482,8 @@ TEST(MatmulConfigRegistry, UnsupportedV1SemanticsFallBack) {
     expect_unsupported(Eligibility{.call = dense_call, .input_b_batched = true});
     expect_unsupported(Eligibility{.call = dense_call, .transpose_a = true});
     expect_unsupported(Eligibility{.call = dense_call, .transpose_b = true});
+    expect_unsupported(Eligibility{.call = linear_call_semantics(), .has_bias = true});
+    expect_unsupported(Eligibility{.call = linear_call_semantics(), .has_activation = true});
 }
 
 }  // namespace

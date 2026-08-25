@@ -148,11 +148,13 @@ def _tensor(value: Any, path: str) -> dict[str, Any]:
     return item
 
 
-def _key(value: Any, path: str) -> dict[str, Any]:
+def _key(value: Any, path: str, domain: str) -> dict[str, Any]:
     fields = {
+        "alpha_f32_bits",
         "architecture",
         "board_capability_class",
         "bcast_batch",
+        "beta_f32_bits",
         "codegen_recipe_abi",
         "compute_grid_x",
         "compute_grid_y",
@@ -195,6 +197,15 @@ def _key(value: Any, path: str) -> dict[str, Any]:
     _hex(item["topology_sha256"], 64, f"{path}.topology_sha256")
     for name in ("transpose_a", "transpose_b", "has_bias", "has_activation", "untilize_out", "run_batched"):
         _boolean(item[name], f"{path}.{name}", False)
+    if domain == "dense.addmm":
+        _uint(item["alpha_f32_bits"], 32, f"{path}.alpha_f32_bits")
+        _uint(item["beta_f32_bits"], 32, f"{path}.beta_f32_bits")
+        if item["alpha_f32_bits"] in {0, 0x80000000}:
+            raise LockValidationError(f"{path}.alpha_f32_bits must encode a nonzero binary32 value")
+        if item["beta_f32_bits"] not in {0, 0x80000000}:
+            raise LockValidationError(f"{path}.beta_f32_bits must encode positive or negative zero in v1")
+    elif item["alpha_f32_bits"] is not None or item["beta_f32_bits"] is not None:
+        raise LockValidationError(f"{path} scalar semantics are exclusive to dense.addmm")
     if item["bcast_batch"] is not None:
         raise LockValidationError(f"{path}.bcast_batch must be null")
     _tensor(item["input_a"], f"{path}.input_a")
@@ -381,15 +392,15 @@ def validate_lock(value: Any) -> dict[str, Any]:
     for index, raw_entry in enumerate(entries):
         path = f"$.entries[{index}]"
         item = _exact_fields(raw_entry, {"certificate", "domain", "entry_id", "key", "recipe"}, path)
-        if item["domain"] != "dense.matmul":
+        if item["domain"] not in {"dense.matmul", "dense.linear", "dense.addmm"}:
             raise LockValidationError(f"{path}.domain is unsupported")
         _hex(item["entry_id"], 64, f"{path}.entry_id")
-        key = _key(item["key"], f"{path}.key")
+        key = _key(item["key"], f"{path}.key", item["domain"])
         recipe = _recipe(item["recipe"], key, f"{path}.recipe")
         _certificate(item["certificate"], f"{path}.certificate")
         if item["entry_id"] != entry_id(item):
             raise LockValidationError(f"{path}.entry_id mismatch")
-        key_bytes = canonical_bytes(key)
+        key_bytes = canonical_bytes({"domain": item["domain"], "key": key})
         if prior_key is not None and key_bytes < prior_key:
             raise LockValidationError("$.entries are not sorted by canonical key")
         if key_bytes in keys:
@@ -471,9 +482,9 @@ def _compact_key_sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
         False,
         False,
         False,  # transpose_a, transpose_b, untilize_out
-        0,
-        0,
-        0,  # DenseMatmul, absent alpha, absent beta
+        {"dense.matmul": 0, "dense.linear": 1, "dense.addmm": 2}[item["domain"]],
+        key["alpha_f32_bits"] or 0,
+        key["beta_f32_bits"] or 0,
     )
 
 
@@ -490,6 +501,7 @@ def _entry_cpp(item: dict[str, Any]) -> str:
         "throttle_2": "Throttle2",
         "throttle_3": "Throttle3",
     }[ckc["throttle_level"]]
+    domain = {"dense.matmul": "DenseMatmul", "dense.linear": "DenseLinear", "dense.addmm": "DenseAddmm"}[item["domain"]]
 
     def boolean(value: bool) -> str:
         return "true" if value else "false"
@@ -508,7 +520,8 @@ def _entry_cpp(item: dict[str, Any]) -> str:
         .run_batched = false, .schema_version = {key["schema_version"]},
         .topology_sha256 = {_bytes_cpp(key["topology_sha256"])},
         .transpose_a = false, .transpose_b = false, .untilize_out = false,
-        .domain = compact::Domain::DenseMatmul,
+        .domain = compact::Domain::{domain},
+        .alpha_f32_bits = {key["alpha_f32_bits"] or 0}, .beta_f32_bits = {key["beta_f32_bits"] or 0},
     }},
     .replay = compact::ReplayDescriptor{{
         .schema_version = {recipe["schema_version"]}, .family = compact::ProgramFamily::MultiCoreReuse,

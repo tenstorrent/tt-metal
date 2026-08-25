@@ -14,6 +14,11 @@
 
 namespace ttnn::operations::matmul::registry::compact {
 
+// Shared by the compact-lock validator, emitted entries, runtime key
+// construction, and compatibility attestation. Changing it requires a new
+// exporter/runtime contract rather than a local literal update.
+inline constexpr std::uint16_t kCodegenRecipeAbi = 1;
+
 enum class Domain : std::uint8_t { DenseMatmul = 0, DenseLinear = 1, DenseAddmm = 2 };
 // Enumerator values are stable selector ABI. emit_cpp.py explicitly reorders
 // canonically reviewed lock entries into this POD's defaulted runtime order.
@@ -67,8 +72,10 @@ struct KeyDescriptor {
     bool transpose_a{};
     bool transpose_b{};
     bool untilize_out{};
-    // This first schema admits dense.matmul only. The discriminator remains in
-    // the native key so later schema versions cannot cross public operations.
+    // The three public-operation domains are disjoint lookup axes. V1 admits
+    // only the exact no-bias/no-activation subset; addmm additionally binds
+    // exact IEEE-754 alpha/beta spellings and admits beta +/-0 only, so the
+    // otherwise unkeyed additive input is provably unused.
     Domain domain{};
     std::uint32_t alpha_f32_bits{};
     std::uint32_t beta_f32_bits{};

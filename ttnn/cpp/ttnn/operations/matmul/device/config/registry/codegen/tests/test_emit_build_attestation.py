@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 from __future__ import annotations
 
 import hashlib
@@ -38,12 +42,14 @@ def test_build_attestation_is_deterministic_and_independent(tmp_path: Path) -> N
     assert header.read_bytes() == second_header.read_bytes()
     assert receipt.read_bytes() == second_receipt.read_bytes()
     checked = json.loads(receipt.read_text(encoding="utf-8"))
-    assert checked["semantic_source_sha256"] == hashlib.sha256(
-        attestation.canonical_json(checked["semantic_preimage"])
-    ).hexdigest()
-    assert checked["build_identity_sha256"] == hashlib.sha256(
-        attestation.canonical_json(checked["build_preimage"])
-    ).hexdigest()
+    assert (
+        checked["semantic_source_sha256"]
+        == hashlib.sha256(attestation.canonical_json(checked["semantic_preimage"])).hexdigest()
+    )
+    assert (
+        checked["build_identity_sha256"]
+        == hashlib.sha256(attestation.canonical_json(checked["build_preimage"])).hexdigest()
+    )
     assert "semantic_source_sha256" not in checked["build_preimage"]
 
 

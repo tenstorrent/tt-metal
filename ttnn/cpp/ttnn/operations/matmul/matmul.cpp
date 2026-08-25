@@ -6,6 +6,7 @@
 
 #include <array>
 #include <bit>
+#include <exception>
 #include <numeric>
 #include <variant>
 
@@ -89,6 +90,32 @@ Tensor handle_zero_volume_matmul(
 }
 
 }  // namespace detail
+
+namespace {
+
+class RegistryExecutionObserver {
+public:
+    RegistryExecutionObserver(const registry::OperationDomain domain, const bool* selected) noexcept :
+        domain_(domain), selected_(selected), uncaught_exceptions_(std::uncaught_exceptions()) {}
+
+    ~RegistryExecutionObserver() noexcept {
+        if (selected_ == nullptr || !*selected_) {
+            return;
+        }
+        if (std::uncaught_exceptions() > uncaught_exceptions_) {
+            registry::circuit_break_domain(domain_);
+        } else {
+            registry::record_completed_hit(domain_);
+        }
+    }
+
+private:
+    registry::OperationDomain domain_;
+    const bool* selected_;
+    int uncaught_exceptions_;
+};
+
+}  // namespace
 
 std::optional<UnaryWithParam> get_fused_activation(const std::optional<const Activation>& activation) {
     if (!activation.has_value()) {
@@ -219,13 +246,155 @@ static bool get_post_process_bias(
     return post_process_bias;
 }
 
+registry::RegistryRequestInspection registry::inspect_registry_request(
+    const ttnn::Tensor& input_tensor_a,
+    const ttnn::Tensor& input_tensor_b,
+    const bool has_bias,
+    const CallSemantics call_semantics,
+    const ttnn::prim::MatmulParams& parameters,
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    const bool trace_capture_active,
+    const DeviceAttestationProvider provider) {
+    const auto io_contract = resolve_matmul_io_contract(IoContractRequest{
+        .input_a_dtype = input_tensor_a.dtype(),
+        .input_a_tile = input_tensor_a.tensor_spec().tile(),
+        .input_b_tile = input_tensor_b.tensor_spec().tile(),
+        .requested_output_memory_config = parameters.output_mem_config,
+        .requested_output_dtype = parameters.output_dtype,
+        .requested_output_tile = parameters.output_tile,
+        .optional_output = optional_output_tensor.has_value()
+                               ? std::make_optional(OptionalOutputContract{
+                                     .memory_config = optional_output_tensor->memory_config(),
+                                     .dtype = optional_output_tensor->dtype(),
+                                     .tile = optional_output_tensor->tensor_spec().tile()})
+                               : std::nullopt,
+        .transpose_a = parameters.transpose_a,
+        .transpose_b = parameters.transpose_b,
+    });
+    RegistryRequestInspection inspection{
+        .eligibility = Eligibility{
+            .call = call_semantics,
+            .io_contract_status = io_contract.status,
+            .trace_capture_active = trace_capture_active,
+            .has_program_config = parameters.program_config.has_value(),
+            .has_compute_kernel_config = parameters.compute_kernel_config.has_value(),
+            .has_user_core_grid = parameters.user_core_coord.has_value(),
+            .has_bias = has_bias,
+            .has_activation = parameters.user_fused_activation.has_value(),
+            .has_optional_output = optional_output_tensor.has_value(),
+            .has_output_tile = parameters.output_tile.has_value(),
+            .has_global_cb = parameters.global_cb.has_value(),
+            .has_sub_device = parameters.sub_device_id.has_value(),
+            .has_bcast_batch = parameters.bcast_batch.has_value(),
+            .untilize_out = parameters.untilize_out,
+            .input_a_sharded = input_tensor_a.is_sharded(),
+            .input_b_sharded = input_tensor_b.is_sharded(),
+            .output_sharded = io_contract.output_memory_config.is_sharded(),
+            .input_b_batched = parameters.user_run_batched,
+            .transpose_a = parameters.transpose_a,
+            .transpose_b = parameters.transpose_b,
+        }};
+
+    const auto* device_a = input_tensor_a.device();
+    const auto* device_b = input_tensor_b.device();
+    if (input_tensor_a.logical_shape().rank() != 2 || input_tensor_b.logical_shape().rank() != 2 ||
+        device_a == nullptr || device_a != device_b || device_a->num_devices() != 1) {
+        return inspection;
+    }
+
+    const auto a_logical = utilities::get_matmul_tensor_logical_shape(input_tensor_a, parameters.transpose_a);
+    const auto b_logical = utilities::get_matmul_tensor_logical_shape(input_tensor_b, parameters.transpose_b);
+    const auto a_padded = utilities::get_matmul_tensor_padded_shape(input_tensor_a, parameters.transpose_a);
+    const auto b_padded = utilities::get_matmul_tensor_padded_shape(input_tensor_b, parameters.transpose_b);
+    if (a_logical[-1] != b_logical[-2] || a_padded[-1] != b_padded[-2]) {
+        return inspection;
+    }
+
+    inspection.device_attestation = query_device_attestation(*device_a, provider);
+    const auto tensor_request = [](const ttnn::Tensor& tensor) {
+        const auto& tile = tensor.tensor_spec().tile();
+        const auto& memory_config = tensor.memory_config();
+        return TensorRequest{
+            .dtype = tensor.dtype(),
+            .layout = tensor.layout(),
+            .memory_layout = memory_config.memory_layout(),
+            .buffer_type = memory_config.buffer_type(),
+            .tile_height = tile.get_height(),
+            .tile_width = tile.get_width(),
+        };
+    };
+    const auto grid = device_a->compute_with_storage_grid_size();
+    std::optional<std::uint32_t> activation_op;
+    std::array<std::uint32_t, MatmulRegistryRequest::kMaxActivationParameters> activation_params{};
+    std::uint8_t activation_param_count = 0;
+    if (parameters.user_fused_activation.has_value()) {
+        activation_op = static_cast<std::uint32_t>(parameters.user_fused_activation->op_type);
+        if (parameters.user_fused_activation->params.size() > activation_params.size()) {
+            return inspection;
+        }
+        for (const auto parameter : parameters.user_fused_activation->params) {
+            activation_params[activation_param_count++] = std::bit_cast<std::uint32_t>(parameter);
+        }
+    }
+
+    inspection.request = MatmulRegistryRequest{
+        .schema_version = 1,
+        .call = call_semantics,
+        .workload =
+            WorkloadRequest{
+                .logical_m = a_logical[-2],
+                .logical_k = a_logical[-1],
+                .logical_n = b_logical[-1],
+                .padded_m = a_padded[-2],
+                .padded_k = a_padded[-1],
+                .padded_n = b_padded[-1],
+            },
+        .input_a = tensor_request(input_tensor_a),
+        .input_b = tensor_request(input_tensor_b),
+        .output =
+            TensorRequest{
+                .dtype = io_contract.output_dtype,
+                .layout = tt::tt_metal::Layout::TILE,
+                .memory_layout = io_contract.output_memory_config.memory_layout(),
+                .buffer_type = io_contract.output_memory_config.buffer_type(),
+                .tile_height = io_contract.output_tile.get_height(),
+                .tile_width = io_contract.output_tile.get_width(),
+            },
+        .device =
+            DeviceRequest{
+                .attestation_status = inspection.device_attestation.status,
+                .architecture = static_cast<std::uint32_t>(device_a->arch()),
+                .board_capability_class = inspection.device_attestation.attestation.board_capability_class,
+                .device_count = static_cast<std::uint32_t>(device_a->num_devices()),
+                .mesh_rows = static_cast<std::uint32_t>(device_a->num_rows()),
+                .mesh_cols = static_cast<std::uint32_t>(device_a->num_cols()),
+                .compute_grid_x = grid.x,
+                .compute_grid_y = grid.y,
+                .topology_sha256 = inspection.device_attestation.attestation.topology_sha256,
+                .runtime_capability_sha256 = inspection.device_attestation.attestation.runtime_capability_sha256,
+            },
+        .transpose_a = parameters.transpose_a,
+        .transpose_b = parameters.transpose_b,
+        .has_bias = has_bias,
+        .has_activation = parameters.user_fused_activation.has_value(),
+        .untilize_out = parameters.untilize_out,
+        .bcast_batch = parameters.bcast_batch,
+        .run_batched = parameters.user_run_batched,
+        .activation_op = activation_op,
+        .activation_param_f32_bits = activation_params,
+        .activation_param_count = activation_param_count,
+    };
+    return inspection;
+}
+
 static ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
     const registry::CallSemantics call_semantics,
     ttnn::prim::MatmulParams& parameters,
-    std::optional<ttnn::Tensor>& optional_output_tensor) {
+    std::optional<ttnn::Tensor>& optional_output_tensor,
+    bool* external_registry_selected = nullptr) {
     if (input_tensor_a.logical_shape().rank() == 0 || input_tensor_b.logical_shape().rank() == 0) [[unlikely]] {
         TT_THROW(
             "ttnn.matmul: Both arguments to matmul need to be at least 1D, but got shapes {} and {}",
@@ -249,143 +418,24 @@ static ttnn::Tensor bound_matmul(
         auto eligibility = registry::Eligibility{.call = call_semantics, .trace_capture_active = trace_capture_active};
         std::optional<registry::MatmulRegistryRequest> registry_request;
         try {
-            const auto io_contract = registry::resolve_matmul_io_contract(registry::IoContractRequest{
-                .input_a_dtype = input_tensor_a.dtype(),
-                .input_a_tile = input_tensor_a.tensor_spec().tile(),
-                .input_b_tile = input_tensor_b.tensor_spec().tile(),
-                .requested_output_memory_config = parameters.output_mem_config,
-                .requested_output_dtype = parameters.output_dtype,
-                .requested_output_tile = parameters.output_tile,
-                .optional_output = optional_output_tensor.has_value()
-                                       ? std::make_optional(registry::OptionalOutputContract{
-                                             .memory_config = optional_output_tensor->memory_config(),
-                                             .dtype = optional_output_tensor->dtype(),
-                                             .tile = optional_output_tensor->tensor_spec().tile()})
-                                       : std::nullopt,
-                .transpose_a = parameters.transpose_a,
-                .transpose_b = parameters.transpose_b,
-            });
-            eligibility = registry::Eligibility{
-                .call = call_semantics,
-                .io_contract_status = io_contract.status,
-                .trace_capture_active = trace_capture_active,
-                .has_program_config = parameters.program_config.has_value(),
-                .has_compute_kernel_config = parameters.compute_kernel_config.has_value(),
-                .has_user_core_grid = parameters.user_core_coord.has_value(),
-                .has_bias = bias.has_value(),
-                .has_activation = parameters.user_fused_activation.has_value(),
-                .has_optional_output = optional_output_tensor.has_value(),
-                .has_output_tile = parameters.output_tile.has_value(),
-                .has_global_cb = parameters.global_cb.has_value(),
-                .has_sub_device = parameters.sub_device_id.has_value(),
-                .has_bcast_batch = parameters.bcast_batch.has_value(),
-                .untilize_out = parameters.untilize_out,
-                .input_a_sharded = input_tensor_a.is_sharded(),
-                .input_b_sharded = input_tensor_b.is_sharded(),
-                .output_sharded = io_contract.output_memory_config.is_sharded(),
-                .input_b_batched = parameters.user_run_batched,
-                .transpose_a = parameters.transpose_a,
-                .transpose_b = parameters.transpose_b,
-            };
-
-            const auto* device_a = input_tensor_a.device();
-            const auto* device_b = input_tensor_b.device();
-            if (input_tensor_a.logical_shape().rank() == 2 && input_tensor_b.logical_shape().rank() == 2 &&
-                device_a != nullptr && device_a == device_b && device_a->num_devices() == 1) {
-                const auto a_logical =
-                    utilities::get_matmul_tensor_logical_shape(input_tensor_a, parameters.transpose_a);
-                const auto b_logical =
-                    utilities::get_matmul_tensor_logical_shape(input_tensor_b, parameters.transpose_b);
-                const auto a_padded = utilities::get_matmul_tensor_padded_shape(input_tensor_a, parameters.transpose_a);
-                const auto b_padded = utilities::get_matmul_tensor_padded_shape(input_tensor_b, parameters.transpose_b);
-                if (a_logical[-1] == b_logical[-2] && a_padded[-1] == b_padded[-2]) {
-                    const auto device_attestation = registry::query_device_attestation(*device_a);
-                    registry::initialize_registry_compatibility_from_attestation(device_attestation);
-                    const auto tensor_request = [](const ttnn::Tensor& tensor) {
-                        const auto& tile = tensor.tensor_spec().tile();
-                        const auto& memory_config = tensor.memory_config();
-                        return registry::TensorRequest{
-                            .dtype = tensor.dtype(),
-                            .layout = tensor.layout(),
-                            .memory_layout = memory_config.memory_layout(),
-                            .buffer_type = memory_config.buffer_type(),
-                            .tile_height = tile.get_height(),
-                            .tile_width = tile.get_width(),
-                        };
-                    };
-                    const auto grid = device_a->compute_with_storage_grid_size();
-                    std::optional<std::uint32_t> activation_op;
-                    std::array<std::uint32_t, registry::MatmulRegistryRequest::kMaxActivationParameters>
-                        activation_params{};
-                    std::uint8_t activation_param_count = 0;
-                    bool activation_params_fit = true;
-                    if (parameters.user_fused_activation.has_value()) {
-                        activation_op = static_cast<std::uint32_t>(parameters.user_fused_activation->op_type);
-                        activation_params_fit =
-                            parameters.user_fused_activation->params.size() <= activation_params.size();
-                        if (activation_params_fit) {
-                            for (const auto parameter : parameters.user_fused_activation->params) {
-                                activation_params[activation_param_count++] = std::bit_cast<std::uint32_t>(parameter);
-                            }
-                        }
-                    }
-                    if (activation_params_fit) {
-                        registry_request = registry::MatmulRegistryRequest{
-                            .schema_version = 1,
-                            .call = call_semantics,
-                            .workload =
-                                registry::WorkloadRequest{
-                                    .logical_m = a_logical[-2],
-                                    .logical_k = a_logical[-1],
-                                    .logical_n = b_logical[-1],
-                                    .padded_m = a_padded[-2],
-                                    .padded_k = a_padded[-1],
-                                    .padded_n = b_padded[-1],
-                                },
-                            .input_a = tensor_request(input_tensor_a),
-                            .input_b = tensor_request(input_tensor_b),
-                            .output =
-                                registry::TensorRequest{
-                                    .dtype = io_contract.output_dtype,
-                                    .layout = tt::tt_metal::Layout::TILE,
-                                    .memory_layout = io_contract.output_memory_config.memory_layout(),
-                                    .buffer_type = io_contract.output_memory_config.buffer_type(),
-                                    .tile_height = io_contract.output_tile.get_height(),
-                                    .tile_width = io_contract.output_tile.get_width(),
-                                },
-                            .device =
-                                registry::DeviceRequest{
-                                    .attestation_status = device_attestation.status,
-                                    .architecture = static_cast<std::uint32_t>(device_a->arch()),
-                                    .board_capability_class = device_attestation.attestation.board_capability_class,
-                                    .device_count = static_cast<std::uint32_t>(device_a->num_devices()),
-                                    .mesh_rows = static_cast<std::uint32_t>(device_a->num_rows()),
-                                    .mesh_cols = static_cast<std::uint32_t>(device_a->num_cols()),
-                                    .compute_grid_x = grid.x,
-                                    .compute_grid_y = grid.y,
-                                    .topology_sha256 = device_attestation.attestation.topology_sha256,
-                                    .runtime_capability_sha256 =
-                                        device_attestation.attestation.runtime_capability_sha256,
-                                },
-                            .transpose_a = parameters.transpose_a,
-                            .transpose_b = parameters.transpose_b,
-                            .has_bias = bias.has_value(),
-                            .has_activation = parameters.user_fused_activation.has_value(),
-                            .untilize_out = parameters.untilize_out,
-                            .bcast_batch = parameters.bcast_batch,
-                            .run_batched = parameters.user_run_batched,
-                            .activation_op = activation_op,
-                            .activation_param_f32_bits = activation_params,
-                            .activation_param_count = activation_param_count,
-                        };
-                    }
-                }
+            auto inspection = registry::inspect_registry_request(
+                input_tensor_a,
+                input_tensor_b,
+                bias.has_value(),
+                call_semantics,
+                parameters,
+                optional_output_tensor,
+                trace_capture_active);
+            eligibility = inspection.eligibility;
+            registry_request = std::move(inspection.request);
+            if (registry_request.has_value()) {
+                registry::initialize_registry_compatibility_from_attestation(inspection.device_attestation);
             }
         } catch (...) {
             // Observation and request construction may inspect tensors before
             // legacy validators do. Preserve legacy exception timing if they
-            // cannot form an exact request. Recipe materialization remains
-            // outside this catch and intentionally propagates failures.
+            // cannot form an exact request. Recipe materialization is handled
+            // separately by the fail-closed dispatch gate.
         }
         auto registry_dispatch =
             registry::resolve_for_dispatch(registry_mode, registry_request, eligibility, parameters);
@@ -393,6 +443,12 @@ static ttnn::Tensor bound_matmul(
         registry::record_resolution(
             registry_mode, call_semantics.domain, registry_dispatch.resolution, registry_dispatch.action);
     }
+    const bool registry_selected = registry_parameters.has_value();
+    if (external_registry_selected != nullptr) {
+        *external_registry_selected = registry_selected;
+    }
+    const RegistryExecutionObserver registry_execution_observer(
+        call_semantics.domain, external_registry_selected == nullptr ? &registry_selected : nullptr);
 
     // On uses one complete temporary object. Shadow and every fallback retain
     // the exact legacy object, including later in-place transpose normalization.
@@ -742,13 +798,16 @@ Tensor addmm(
         output_tile,
         /*global_cb=*/std::nullopt,
         /*sub_device_id=*/std::nullopt};
+    bool registry_selected = false;
+    const RegistryExecutionObserver registry_execution_observer(registry::OperationDomain::Addmm, &registry_selected);
     auto out_tensor = bound_matmul(
         mat1_tensor,
         mat2_tensor,
         std::nullopt,
         registry::addmm_call_semantics(alpha, beta),
         matmul_params,
-        optional_output_tensor);
+        optional_output_tensor,
+        &registry_selected);
 
     if (alpha != 1.0) {
         multiply_(out_tensor, alpha);

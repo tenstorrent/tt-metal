@@ -12,8 +12,8 @@ CODEGEN_DIR = Path(__file__).resolve().parents[1]
 REGISTRY_DIR = CODEGEN_DIR.parent
 EMITTER_PATH = CODEGEN_DIR / "emit_cpp.py"
 FIXTURE_PATH = REGISTRY_DIR / "fixtures" / "valid_multi_core_reuse.lock.json"
-EXPECTED_CONTENT_SHA256 = "138cd5e90783e2fc23b475bfecdeaa3c00541d1321b71f3635aef7ae6bb4f338"
-EXPECTED_ENTRY_ID = "9659081a8164b4e168b6751015cf53adbef2fab822e780c1c15ca00c29a15bd2"
+EXPECTED_CONTENT_SHA256 = "3992cfdb6654bad0eb86db62fb50cc9623e5ba5c27a0c9a6c813b088b00e850d"
+EXPECTED_ENTRY_ID = "cd7887816e01e45f91c79b8377aa63d3b9551153c5d32c0defbd9f6ffeb0fb3d"
 
 SPEC = importlib.util.spec_from_file_location("matmul_registry_emit_cpp", EMITTER_PATH)
 assert SPEC is not None and SPEC.loader is not None
@@ -73,6 +73,64 @@ def test_emitted_table_uses_pod_numeric_order_not_json_number_spelling() -> None
 
     _, source = emitter.emit(lock)
     assert source.index(b".architecture = 2,") < source.index(b".architecture = 10,")
+
+
+def test_each_public_domain_emits_a_disjoint_nonempty_key() -> None:
+    emitted: dict[str, bytes] = {}
+    for domain, alpha, beta, cpp_domain in (
+        ("dense.matmul", None, None, b"compact::Domain::DenseMatmul"),
+        ("dense.linear", None, None, b"compact::Domain::DenseLinear"),
+        ("dense.addmm", 0x3F800000, 0x80000000, b"compact::Domain::DenseAddmm"),
+    ):
+        lock = fixture()
+        entry = lock["entries"][0]
+        entry["domain"] = domain
+        entry["key"]["alpha_f32_bits"] = alpha
+        entry["key"]["beta_f32_bits"] = beta
+        resign(lock, entries=True)
+        checked = emitter.validate_lock(lock)
+        _, source = emitter.emit(checked)
+        assert cpp_domain in source
+        emitted[domain] = source
+
+    assert len(set(emitted.values())) == 3
+
+    combined = fixture()
+    dense = combined["entries"][0]
+    linear = copy.deepcopy(dense)
+    linear["domain"] = "dense.linear"
+    addmm = copy.deepcopy(dense)
+    addmm["domain"] = "dense.addmm"
+    addmm["key"]["alpha_f32_bits"] = 0x3F800000
+    addmm["key"]["beta_f32_bits"] = 0x80000000
+    combined["entries"] = sorted(
+        [dense, linear, addmm], key=lambda item: emitter.canonical_bytes({"domain": item["domain"], "key": item["key"]})
+    )
+    resign(combined, entries=True)
+    checked = emitter.validate_lock(combined)
+    _, source = emitter.emit(checked)
+    assert b"constexpr std::array<compact::EntryDescriptor, 3>" in source
+
+
+def test_scalar_semantics_are_exclusive_to_addmm(expect_error) -> None:
+    lock = fixture()
+    lock["entries"][0]["key"]["alpha_f32_bits"] = 0x3F800000
+    resign(lock, entries=True)
+    with expect_error(emitter.LockValidationError, "exclusive to dense.addmm"):
+        emitter.validate_lock(lock)
+
+    lock = fixture()
+    lock["entries"][0]["domain"] = "dense.addmm"
+    lock["entries"][0]["key"]["alpha_f32_bits"] = 0
+    lock["entries"][0]["key"]["beta_f32_bits"] = 0x3F800000
+    resign(lock, entries=True)
+    with expect_error(emitter.LockValidationError, "nonzero binary32"):
+        emitter.validate_lock(lock)
+
+    lock["entries"][0]["key"]["alpha_f32_bits"] = 0x3F800000
+    resign(lock, entries=True)
+    with expect_error(emitter.LockValidationError, "positive or negative zero"):
+        emitter.validate_lock(lock)
 
 
 def test_content_hash_tamper_is_rejected(expect_error) -> None:
