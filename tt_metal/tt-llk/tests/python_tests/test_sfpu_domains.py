@@ -31,6 +31,7 @@ from helpers.llk_params import (
 from helpers.sfpu_domains import (
     GENERATED_NAN_SIGN_OPS,
     Operand,
+    edge_pair_values,
     edge_values,
     for_op,
     generated_nan_sign_is_asserted,
@@ -1074,6 +1075,45 @@ def test_zero_pole_probes_are_not_loosened(op):
         op, DataFormat.Float32, DataFormat.Float32, dest_acc=DestAccumulation.No
     )
     assert min(abs(v) for v in probes if v != 0.0) == 2 * 2**-23
+
+
+def _is_negative_zero(value: float) -> bool:
+    return value == 0.0 and math.copysign(1.0, value) < 0.0
+
+
+def test_pow_edge_pairs_include_negative_zero_exponent():
+    """The setsgn(pow, 0) guard is only as good as the pairs that would fail without it.
+
+    The hardware sweep's both_zero class keys on a == 0 and b == 0, which +0.0 satisfies
+    on its own, so a sweep that never generated exponent -0.0 would stay green after
+    dropping setsgn. Pin the stimulus here, host-side: Float32 dest_acc=Yes is the
+    pipeline that actually delivers a signed zero, and the cartesian product must
+    include a positive base, a negative base, and a zero base against that exponent.
+    """
+    pairs = edge_pair_values(
+        MathOperation.SfpuElwpow,
+        DataFormat.Float32,
+        DataFormat.Float32,
+        dest_acc=DestAccumulation.Yes,
+    )
+    neg_zero_bases = [a for a, b in pairs if _is_negative_zero(b)]
+    assert neg_zero_bases, (
+        "SfpuElwpow edge pairs must include exponent -0.0 on the pipeline that "
+        "delivers a signed zero; otherwise test_sfpu_binary_edges cannot catch a "
+        "regression that drops setsgn(pow, 0)"
+    )
+    assert any(a > 0.0 for a in neg_zero_bases), neg_zero_bases
+    assert any(a < 0.0 for a in neg_zero_bases), neg_zero_bases
+    assert any(a == 0.0 for a in neg_zero_bases), neg_zero_bases
+
+    # The datacopy path flattens -0.0, so claiming the pair there would be false coverage.
+    flattened = edge_pair_values(
+        MathOperation.SfpuElwpow,
+        DataFormat.Float16_b,
+        DataFormat.Float16_b,
+        dest_acc=DestAccumulation.No,
+    )
+    assert not any(_is_negative_zero(b) for _, b in flattened)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
