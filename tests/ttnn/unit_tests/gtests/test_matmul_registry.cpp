@@ -752,6 +752,14 @@ TEST(MatmulConfigRegistry, CompactMaterializationRejectsEveryTypedBoundary) {
     descriptor = compact_entry();
     descriptor.replay.call_state.output_tile_is_null = false;
     expect_rejection(descriptor, MaterializationStatus::InvalidCallState);
+
+    descriptor = compact_entry();
+    descriptor.key.input_a.layout = compact::Layout::RowMajor;
+    expect_rejection(descriptor, MaterializationStatus::InvalidCallState);
+
+    descriptor = compact_entry();
+    descriptor.key.input_b.layout = compact::Layout::RowMajor;
+    expect_rejection(descriptor, MaterializationStatus::InvalidCallState);
 }
 
 TEST(MatmulConfigRegistry, CompatibilityAndGuardsPrecedeCompactLookup) {

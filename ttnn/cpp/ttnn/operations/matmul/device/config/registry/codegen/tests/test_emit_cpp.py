@@ -227,6 +227,15 @@ def test_nondefault_output_call_state_is_rejected(expect_error) -> None:
         emitter.validate_lock(lock)
 
 
+def test_non_tile_inputs_are_rejected(expect_error) -> None:
+    for input_name in ("input_a", "input_b"):
+        lock = fixture()
+        lock["entries"][0]["key"][input_name]["layout"] = "row_major"
+        resign(lock, entries=True)
+        with expect_error(emitter.LockValidationError, "must use tile layout in v1"):
+            emitter.validate_lock(lock)
+
+
 def test_unsupported_schema_is_rejected(expect_error) -> None:
     lock = fixture()
     lock["lock_schema_version"] += 1

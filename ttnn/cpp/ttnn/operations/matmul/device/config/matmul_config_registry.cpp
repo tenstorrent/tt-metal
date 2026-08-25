@@ -526,6 +526,7 @@ MaterializationResult materialize_matmul_registry_recipe(const compact::EntryDes
     const bool invalid_key_envelope =
         key.bcast_batch_present || key.bcast_batch || key.has_activation || key.has_bias || key.run_batched ||
         key.transpose_a || key.transpose_b || key.untilize_out || !scalar_semantics_valid ||
+        key.input_a.layout != compact::Layout::Tile || key.input_b.layout != compact::Layout::Tile ||
         key.output.buffer_type != compact::BufferType::Dram || key.output.layout != compact::Layout::Tile ||
         key.output.memory_layout != compact::MemoryLayout::Interleaved || key.output.tile_height != 32 ||
         key.output.tile_width != 32;

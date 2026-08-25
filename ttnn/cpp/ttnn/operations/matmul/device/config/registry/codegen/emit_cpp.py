@@ -208,8 +208,10 @@ def _key(value: Any, path: str, domain: str) -> dict[str, Any]:
         raise LockValidationError(f"{path} scalar semantics are exclusive to dense.addmm")
     if item["bcast_batch"] is not None:
         raise LockValidationError(f"{path}.bcast_batch must be null")
-    _tensor(item["input_a"], f"{path}.input_a")
-    _tensor(item["input_b"], f"{path}.input_b")
+    input_a = _tensor(item["input_a"], f"{path}.input_a")
+    input_b = _tensor(item["input_b"], f"{path}.input_b")
+    if input_a["layout"] != "tile" or input_b["layout"] != "tile":
+        raise LockValidationError(f"{path}.input_a and {path}.input_b must use tile layout in v1")
     output = _tensor(item["output"], f"{path}.output")
     if (
         output["layout"] != "tile"
