@@ -160,52 +160,18 @@ from ttnn._ttnn.operations.debug import (
     apply_device_delay,
 )
 
-from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_TRACKING
+from ttnn.tools import trace_allocation_tracker as _trace_allocation_tracker
 
-if TRACE_ALLOC_TRACKING:
-    from ttnn._ttnn.operations.trace import (
-        pop_corruptible_allocation_scope as _pop_corruptible_allocation_scope,
-        push_corruptible_allocation_scope as _push_corruptible_allocation_scope,
-    )
-
-    @contextlib.contextmanager
-    def corruptible_allocation_scope(mesh_device):
-        """Suppress accounting for intentionally corruptible allocations in this scope."""
-        _push_corruptible_allocation_scope(mesh_device)
-        try:
-            yield
-        finally:
-            _pop_corruptible_allocation_scope(mesh_device)
-
-else:
-
-    @contextlib.contextmanager
-    def corruptible_allocation_scope(mesh_device):
-        """No-op when trace allocation tracking is disabled."""
-        yield
-
-
-if TRACE_ALLOC_TRACKING:
-    from ttnn.tools.trace_allocation_tracker import TraceAllocationTracker
+if _trace_allocation_tracker.TRACE_ALLOC_TRACKING:
 
     def execute_trace(mesh_device, trace_id, *, cq_id=None, blocking=True):
         """Execute a captured trace, with automatic allocation-safety verification."""
-        TraceAllocationTracker.verify_before_replay(mesh_device, trace_id)
+        _trace_allocation_tracker.TraceAllocationTracker.verify_before_replay(mesh_device, trace_id)
         return _ttnn_execute_trace(mesh_device, trace_id, cq_id=cq_id, blocking=blocking)
 
 else:
     # Preserve the original nanobind fast path when tracking is disabled.
     execute_trace = _ttnn_execute_trace
-
-
-def acknowledge_corruptible(tensor):
-    """
-    Acknowledge that a tensor buffer may intentionally be corrupted by trace
-    replay, removing it from trace allocation safety checks.
-    """
-    from ttnn.tools.trace_allocation_tracker import TraceAllocationTracker
-
-    return TraceAllocationTracker.acknowledge_corruptible(tensor)
 
 
 from ttnn._ttnn.global_circular_buffer import (

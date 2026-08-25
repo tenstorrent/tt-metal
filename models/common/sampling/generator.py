@@ -12,6 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from ttnn.tools import trace_allocation_tracker
 
 from ._utils import clamp, is_default_value, split_list
 from .tt_penalties import TTPenalties
@@ -31,7 +32,7 @@ def _acknowledge_trace_buffers_corruptible(bucket, value):
         for item in value:
             _acknowledge_trace_buffers_corruptible(bucket, item)
         return
-    ttnn.acknowledge_corruptible(value)
+    trace_allocation_tracker.acknowledge_corruptible(value)
 
 
 def _hash_request_seed_to_device_seed(seed: int, counter: int, salt: int = 0) -> int:

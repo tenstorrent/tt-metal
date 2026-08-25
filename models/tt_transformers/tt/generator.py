@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from ttnn.tools import trace_allocation_tracker
 from models.common.llama_models import (
     CompletionMessage,
     StopReason,
@@ -105,7 +106,7 @@ def _acknowledge_trace_buffers_corruptible(owner, value):
         for item in value:
             _acknowledge_trace_buffers_corruptible(owner, item)
         return
-    ttnn.acknowledge_corruptible(value)
+    trace_allocation_tracker.acknowledge_corruptible(value)
 
 
 def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
