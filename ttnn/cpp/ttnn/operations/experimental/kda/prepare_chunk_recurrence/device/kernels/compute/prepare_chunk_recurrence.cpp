@@ -29,30 +29,49 @@
 inline void WAIT(DataflowBuffer& buffer, uint32_t n) { buffer.wait_front(n); }
 inline void POP(DataflowBuffer& buffer, uint32_t n) { buffer.pop_front(n); }
 
+constexpr uint32_t largest_divisor_at_most(uint32_t value, uint32_t limit) {
+    for (uint32_t divisor = limit; divisor > 1; --divisor) {
+        if (value % divisor == 0) {
+            return divisor;
+        }
+    }
+    return 1;
+}
+
 // out[Mt,Nt] = A[Mt,Kt] @ (tr ? B[Nt,Kt]^T : B[Kt,Nt]). Inputs must be available.
-inline void mm(
-    DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o, uint32_t Mt, uint32_t Kt, uint32_t Nt, bool tr) {
+template <uint32_t Mt, uint32_t Kt, uint32_t Nt, bool Tr>
+inline void mm(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o) {
+    constexpr uint32_t dst_tiles =
+        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
+    constexpr uint32_t subblock_columns = largest_divisor_at_most(Nt, dst_tiles);
+    constexpr uint32_t subblock_rows = largest_divisor_at_most(Mt, dst_tiles / subblock_columns);
+    static_assert(subblock_rows * subblock_columns <= dst_tiles);
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
     const uint32_t o_id = o.get_id();
 
     o.reserve_back(Mt * Nt);
     pack_reconfig_data_format(o_id);  // mixed bf16/fp32 CBs: set packer to this output's format
-    // matmul_tiles(a_id,b_id): in0=a_id->srcB, in1=b_id->srcA. Reconfig unpack src formats to match (the op
-    // init only asserts formats, it does not set them), else fp32/bf16 CBs are read at the wrong
-    // format and produce garbage.
+    // Matmul maps in0=a_id->srcB and in1=b_id->srcA. Reconfigure unpack formats explicitly because init only
+    // asserts formats; otherwise mixed fp32/bf16 CBs are read in the wrong format.
     reconfig_data_format(b_id, a_id);
-    matmul_init(a_id, b_id, tr ? 1 : 0);
-    for (uint32_t mi = 0; mi < Mt; mi++) {
-        for (uint32_t ni = 0; ni < Nt; ni++) {
+    matmul_block_init(a_id, b_id, Tr, subblock_columns, subblock_rows, Kt);
+    for (uint32_t mi = 0; mi < Mt; mi += subblock_rows) {
+        for (uint32_t ni = 0; ni < Nt; ni += subblock_columns) {
             tile_regs_acquire();
             for (uint32_t ki = 0; ki < Kt; ki++) {
-                uint32_t bi = tr ? (ni * Kt + ki) : (ki * Nt + ni);
-                matmul_tiles(a_id, b_id, mi * Kt + ki, bi, 0);
+                // kt_dim describes operand geometry; each K slice is still issued explicitly. B^T is stored
+                // [Nt,Kt], while the non-transposed B is stored [Kt,Nt].
+                const uint32_t b_index = Tr ? ni * Kt + ki : ki * Nt + ni;
+                matmul_block(a_id, b_id, mi * Kt + ki, b_index, 0, Tr, subblock_columns, subblock_rows, Kt);
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, o_id, mi * Nt + ni);
+            for (uint32_t row = 0; row < subblock_rows; row++) {
+                for (uint32_t column = 0; column < subblock_columns; column++) {
+                    pack_tile(row * subblock_columns + column, o_id, (mi + row) * Nt + ni + column);
+                }
+            }
             tile_regs_release();
         }
     }
@@ -220,17 +239,17 @@ inline void invert_doubling(
     power->wait_front(1);
     ew(eye, *power, *sum, 1, 0);
     sum->wait_front(1);
-    mm(*power, *power, *next_power, 1, 1, 1, false);
+    mm<1, 1, 1, false>(*power, *power, *next_power);
     next_power->wait_front(1);
     power->pop_front(1);
     power = next_power;
     next_power = &state;
 
     for (uint32_t step = 0; step < 4; ++step) {
-        mm(*power, *sum, *product, 1, 1, 1, false);
+        mm<1, 1, 1, false>(*power, *sum, *product);
         product->wait_front(1);
         if (step < 3) {
-            mm(*power, *power, *next_power, 1, 1, 1, false);
+            mm<1, 1, 1, false>(*power, *power, *next_power);
             next_power->wait_front(1);
         }
         power->pop_front(1);
@@ -401,12 +420,12 @@ TT_KERNEL void compute(uint32_t work_count) {
         // G = cumsum(g). Anchor the separable pairwise factors at G_last/2 so neither
         // exp(G-anchor) nor exp(anchor-G) spans the full chunk range. Their products are
         // unchanged, while realistic KDA gates no longer overflow exp(-G).
-        mm(tril, g, decay, Ct, Ct, Kt, false);
+        mm<Ct, Ct, Kt, false>(tril, g, decay);
         WAIT(decay, ck);
         expc(decay, decay_exp, ck);  // exp(G), for scan-facing q_decay/kd
         WAIT(decay_exp, ck);
 
-        mm(ones, g, scratch_one, Ct, Ct, Kt, false);  // replicated G_last
+        mm<Ct, Ct, Kt, false>(ones, g, scratch_one);  // replicated G_last
         WAIT(scratch_one, ck);
         POP(g, ck);
         halfc(scratch_one, scratch_two, ck);  // anchor = G_last/2
@@ -465,10 +484,10 @@ TT_KERNEL void compute(uint32_t work_count) {
         // Materialize both anchored pairwise products, then release state_two/state_three before
         // the doubling inverse reuses those CBs as private scratch. Only the masked Aqk is published to
         // writer-facing intra; publishing the raw matrix creates a second consumer race.
-        mm(state_two, scratch_one, lower_mask, Ct, Kt, Ct, true);
+        mm<Ct, Kt, Ct, true>(state_two, scratch_one, lower_mask);
         WAIT(lower_mask, cc);  // raw beta*k_i*k_j*exp(G_i-G_j)
         POP(state_two, ck);
-        mm(state_three, scratch_one, scratch_two, Ct, Kt, Ct, true);
+        mm<Ct, Kt, Ct, true>(state_three, scratch_one, scratch_two);
         WAIT(scratch_two, cc);  // raw q_i*k_j*exp(G_i-G_j)
         POP(state_three, ck);
         ew(scratch_two, tril, intra, cc, 2);
