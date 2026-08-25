@@ -64,9 +64,9 @@ class VisionHybridTransformer(Transformer):
         return (new_embd,) + out[1:]
 
 
-def encode_image_host(hf_model_name, image, prompt_text, enable_thinking):
-    """Processor + vision tower on host CPU. Returns (input_ids, feats)."""
-    from transformers import AutoModelForImageTextToText, AutoProcessor
+def preprocess_image_prompt(hf_model_name, image, prompt_text, enable_thinking):
+    """Processor on host. Returns the chat-templated inputs dict."""
+    from transformers import AutoProcessor
 
     proc = AutoProcessor.from_pretrained(hf_model_name)
     messages = [
@@ -75,7 +75,7 @@ def encode_image_host(hf_model_name, image, prompt_text, enable_thinking):
             "content": [{"type": "image", "image": image}, {"type": "text", "text": prompt_text}],
         }
     ]
-    inputs = proc.apply_chat_template(
+    return proc.apply_chat_template(
         messages,
         add_generation_prompt=True,
         tokenize=True,
@@ -83,6 +83,12 @@ def encode_image_host(hf_model_name, image, prompt_text, enable_thinking):
         return_tensors="pt",
         enable_thinking=enable_thinking,
     )
+
+
+def encode_image_host(hf_model_name, inputs):
+    """Vision tower on host CPU. Returns merged image embeddings [n, out_hidden]."""
+    from transformers import AutoModelForImageTextToText
+
     hf = AutoModelForImageTextToText.from_pretrained(hf_model_name, torch_dtype="auto")
     t0 = time.time()
     with torch.no_grad():
@@ -90,7 +96,21 @@ def encode_image_host(hf_model_name, image, prompt_text, enable_thinking):
     feats = torch.cat(vout.pooler_output, dim=0)
     logger.info(f"host vision encode: {time.time() - t0:.2f}s -> {tuple(feats.shape)}")
     del hf
-    return inputs["input_ids"], feats
+    return feats
+
+
+def encode_image_tt(mesh_device, inputs, debug=False):
+    """Vision tower on device (models/demos/exaone45_vl). Returns [n, out_hidden]."""
+    from models.demos.exaone45_vl.tt.model import DropInVisionTransformer
+    from models.demos.exaone45_vl.tt.model_config import VisionModelArgs
+
+    vargs = VisionModelArgs(mesh_device, max_batch_size=1, max_seq_len=2048)
+    vision_ref = vargs.reference_vision_model()
+    visual = DropInVisionTransformer(vision_ref, vargs, debug=debug)
+    t0 = time.time()
+    feats = visual(inputs["pixel_values"], inputs["image_grid_thw"])
+    logger.info(f"TT vision encode (incl. weight load): {time.time() - t0:.2f}s -> {tuple(feats.shape)}")
+    return feats.to(torch.bfloat16)
 
 
 def main():
@@ -102,6 +122,13 @@ def main():
     parser.add_argument("--max-new-tokens", type=int, default=200)
     parser.add_argument("--max-seq-len", type=int, default=4096)
     parser.add_argument("--enable-thinking", action="store_true")
+    parser.add_argument(
+        "--vision-device",
+        choices=["host", "tt"],
+        default="host",
+        help="where the vision tower runs: host CPU (HF) or on-device (models/demos/exaone45_vl)",
+    )
+    parser.add_argument("--vision-debug", action="store_true", help="log TT-vision PCC vs the HF reference")
     cli = parser.parse_args()
 
     hf_model_name = os.environ["HF_MODEL"]
@@ -118,8 +145,13 @@ def main():
         d.ellipse([40, 60, 200, 220], fill="red", outline="black", width=4)
         d.rectangle([260, 80, 400, 220], fill="blue", outline="black", width=4)
 
-    input_ids, feats = encode_image_host(hf_model_name, image, cli.prompt, cli.enable_thinking)
-    logger.info(f"prompt: {input_ids.shape[-1]} tokens ({feats.shape[0]} image tokens)")
+    inputs = preprocess_image_prompt(hf_model_name, image, cli.prompt, cli.enable_thinking)
+    input_ids = inputs["input_ids"]
+
+    feats = None
+    if cli.vision_device == "host":
+        feats = encode_image_host(hf_model_name, inputs)
+        logger.info(f"prompt: {input_ids.shape[-1]} tokens ({feats.shape[0]} image tokens)")
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh_device = ttnn.open_mesh_device(
@@ -128,6 +160,9 @@ def main():
         dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.device.DispatchCoreType.WORKER, ttnn.DispatchCoreAxis.COL),
     )
     try:
+        if cli.vision_device == "tt":
+            feats = encode_image_tt(mesh_device, inputs, debug=cli.vision_debug)
+            logger.info(f"prompt: {input_ids.shape[-1]} tokens ({feats.shape[0]} image tokens)")
         paged_cfg = PagedAttentionConfig(block_size=32, max_num_blocks=1024)
         args = ModelArgs(
             mesh_device,
