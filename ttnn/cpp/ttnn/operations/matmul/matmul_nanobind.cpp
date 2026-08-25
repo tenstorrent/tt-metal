@@ -603,9 +603,10 @@ void py_module(nb::module_& mod) {
             R"doc(
             Number of Tensix reader/compute workers assigned to each DRAM bank.
 
-            The default of 1 preserves the established cross-architecture path. A value of 2
-            splits each bank's width shard evenly across two workers and two Blackhole DRAM
-            subchannels. The per-bank shard width in tiles must be divisible by this value.
+            The default of 1 preserves the established cross-architecture path. Values of 2 or 3
+            split each bank's width shard evenly across multiple workers on Blackhole. All readers
+            for one bank use NOC0 and the same allocator-selected DRAM endpoint. The per-bank shard
+            width in tiles must equal this value times the reader width.
         )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& config) {
             // Include fused_activation in the repr for full visibility during tracing/debugging.
