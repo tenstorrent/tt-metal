@@ -1,45 +1,44 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""reduce_scatter — MeshProgramDescriptor assembly (two phases).
+"""reduce_scatter — MeshProgramDescriptor assembly (ONE program per device, ONE
+generic_op dispatch per invocation).
 
-Two ordered ``ttnn.generic_op`` dispatches share the device command queue:
+Per device i, one ProgramDescriptor over three fixed logical cores:
 
-  * Phase A (gather): store-and-forward gather of FULL shards into an op-internal
-    ``gather_buffer`` (block c at pages ``[c*P, (c+1)*P)``) — the proven
-    all_reduce Phase-A structure, generalized over the topology (Refinement 1).
-    Per device, two worker cores run a bidirectional role:
-        forward core  (0, 0): flow rightward, fabric connection -> chip (i+1) % N
-        backward core (0, 1): flow leftward,  fabric connection -> chip (i-1) % N
-    The topology selects the per-direction block-flow table (host-derived
-    ``num_sends`` / ``num_arrivals``; the kernels are topology-agnostic):
-        Linear: fwd of device i relays EVERYTHING through (sends 1+i, receives
-                i); bwd mirrored; line ends send 0. Every hop is line-internal.
-        Ring:   each direction carries only its SHORT-WAY half of the ring —
-                fwd sends/receives fwd_depth = N//2 blocks, bwd
-                bwd_depth = (N-1)//2 — so every block lands EXACTLY once per
-                device and the (i=N-1) -> 0 / 0 -> (i=N-1) hops cross the wrap
-                link (1-hop routes from ccl_dm_route(.., Ring)).
-    Each core runs a reader (NCRISC) + writer (BRISC). Fabric egress goes through
-    the CCL helper (writer); the receive ingress / relay read-back / counting wait
-    are op-owned NoC calls (reader). Cross-device sync uses ONE op-internal
-    GlobalSemaphore (parked on this descriptor by the entry point).
+  * (0,0) forward relay:  reader (NCRISC) + fabric writer (BRISC) —
+    store-and-forward gather flowing rightward (fabric connection -> chip i+1).
+  * (0,1) backward relay: mirror, flowing leftward (-> chip i-1).
+  * (0,2) reduce:         reader + compute + writer — arrival-ordered incremental
+    N-way SUM of this device's S-tile slice, streamed to the dense output.
 
-  * Phase B (reduce): local N-way tile sum over ONLY the tile positions of device
-    i's slice. ``S = P / N`` output-tile positions are split across the compute
-    grid; each core walks its owned positions with the shared-schedule
-    SliceRowWalker seed passed as CT args, reads the N gathered tiles per
-    position, sums them on TRISC (compute_kernel_lib::sum_blocks), and writes the
-    reduced tile to the DENSE output page. No fabric, no cross-device sync.
+Block-flow tables (op_design.md T1/T2 + Refinement 1): the kernels are
+topology-agnostic (their block indices are ring-modular, T3); the `topology`
+kwarg alone selects which host-side depth table + neighbour wiring they run
+under, on the SAME FABRIC_1D fabric config.
 
-ONE reader.cpp / writer.cpp source serves BOTH phases, selected by a leading
-``phase`` compile-time arg. To keep the discarded ``if constexpr`` branch's
-compile-time-arg reads in-bounds (get_compile_time_arg_val static-asserts on the
-index, even in a dead branch), both phases use a UNIFORM compile-time-arg
-superset: 7 scalar CT args after ``phase``, then a fixed number of
-TensorAccessorArgs (reader: 2, writer: 1). Unused scalar slots are zero-padded;
-the reduce reader passes a second (unused-by-it) accessor purely to keep the dead
-gather branch's second-accessor offset valid.
+  * Linear: forward carries left->right traffic — device i fwd-sends 1 + i
+    blocks (own shard first, then relays of its i fwd arrivals) iff it has a
+    right neighbour; fwd arrivals = i. Backward is the mirror. Line ends send 0
+    in the dead direction.
+  * Ring: the wrap link (device N-1 <-> device 0, 1-hop route via
+    ccl_dm_route(.., Ring)) closes the ring, so every block travels the SHORT
+    way round and depths are UNIFORM across devices — fwd sends N//2 (own +
+    N//2 - 1 relays), bwd sends (N-1)//2; arrivals mirror. On even N the
+    N/2-distance tie is carried by FORWARD only (pinned convention — exactly
+    one direction may carry a block or the reduce core double-counts).
+
+The overlap mechanism (op_design.md T4/T7): after each block's last fabric page the
+sending relay writer issues TWO counting atomic-incs on the same connection — the
+receiving device's relay core (store-and-forward chain) AND its reduce core (which
+starts the block's accumulate pass while the next block is still in flight).
+
+Seven kernel descriptors per program (4 relay + 3 reduce); programs are per-device
+DISTINCT (my_chip_id, send/arrival counts, slice base). Fabric connection arg
+blocks are appended to the relay writers' runtime args AFTER ProgramDescriptor
+construction because build_ccl_fabric_rt_args mutates the program (appends
+SemaphoreDescriptors); the block is placed FIRST so the kernel consumes it with a
+cursor from 0.
 """
 
 from __future__ import annotations
@@ -49,27 +48,32 @@ from pathlib import Path
 import ttnn
 
 # Topology lives on the C++ module; the top-level ttnn.Topology alias only binds
-# AFTER ttnn.operations is auto-imported (same import note as the entry point).
+# AFTER ttnn.operations is auto-imported, so reference the source module directly
+# (same idiom as reduce_scatter.py).
 from ttnn._ttnn.operations.ccl import Topology as _Topology
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
-# Phase selectors (leading CT arg of the shared reader / writer sources).
-_PHASE_GATHER = 0
-_PHASE_REDUCE = 1
-
-# CB indices (semantic; see op_design.md "Circular Buffers").
-_CB_RELAY_PAGES = 16  # Phase A reader -> writer: seed pages + store-and-forward read-backs
-_CB_SELF_COPY = 24  # Phase A forward reader scratch for the local self-copy (never pushed)
-_CB_GATHERED_SLICES = 0  # Phase B reader -> compute: N slice tiles for one output position
-_CB_SUMMED_SLICE = 16  # Phase B compute -> writer: the summed slice tile
+# CB indices (semantic names; see op_design.md "Circular Buffers"). There is NO
+# scaler CB — the sum is the output; nothing multiplies it (unlike the adopted
+# reduce_scatter_average sibling this design derives from).
+_CB_CONTRIBUTIONS = 0  # reduce reader -> compute: N contributions, g-granule stream
+_CB_RELAY_PAGES = 16  # relay reader -> relay writer: double-buffered page stream
+_CB_OUTPUT_TILES = 17  # compute -> reduce writer: summed slice tiles, g-granules
+_CB_ACCUMULATOR = 24  # compute-only resident running sum (capacity exactly S)
 
 _LINK_IDX = 0  # single-link transfer
-
-# Number of scalar CT args after `phase`, uniform across both phases.
-_NUM_SCALAR_CT = 7
-
 _TILE = 32
+
+# Fixed logical cores (identical logical->physical mapping assumed across devices —
+# adopted-sibling precedent, hardware-validated).
+_FWD_CORE = ttnn.CoreCoord(0, 0)
+_BWD_CORE = ttnn.CoreCoord(0, 1)
+_REDUCE_CORE = ttnn.CoreCoord(0, 2)
+
+# Kernel list indices — needed to reach the live runtime_args views post-construction.
+_K_FWD_WRITER = 1
+_K_BWD_WRITER = 3
 
 
 def _round_up(value: int, mult: int) -> int:
@@ -77,435 +81,240 @@ def _round_up(value: int, mult: int) -> int:
 
 
 def _num_line_devices(mesh_device) -> int:
-    """Number of devices on the 1-D line (mesh view is (1, N))."""
     n = 1
     for d in tuple(mesh_device.shape):
         n *= d
     return n
 
 
-def _slice_quantities(shard_shape, dim: int, num_devices: int, device_idx: int):
-    """The three per-device walker seeds (all in tiles) — op_design.md
-    "Slice addressing": the host is the single evaluation site of the
-    slice_tile_offset formula (mirrors sched.hpp slice_tile_offset).
+def _granule(s: int) -> int:
+    """Largest of {4, 2, 1} dividing S — so no tail chunk ever exists, and
+    g <= DEST_AUTO_LIMIT = 4 under fp32_dest_acc_en + SyncHalf (R5)."""
+    for g in (4, 2, 1):
+        if s % g == 0:
+            return g
+    return 1  # unreachable (1 divides everything)
 
-    Returns (slice_base, slice_run_len, slice_stride) for device ``device_idx``:
-      slice_base:    first tile id of device i's slice within a shard
-      slice_run_len: contiguous tile run inside the slice (walker ctor "slice_Wt")
-      slice_stride:  tile-id jump between consecutive runs (walker ctor "tensor_Wt")
+
+def _block_flow(i: int, num_devices: int, topology):
+    """Per-topology block-flow table + neighbour wiring for device ``i``
+    (op_design.md T1/T2 for Linear; Refinement 1 for Ring).
+
+    Returns (fwd_sends, fwd_arrivals, bwd_sends, bwd_arrivals,
+             fwd_neighbor, bwd_neighbor) — a neighbour is None iff that
+    direction is idle (sends == 0).
+
+    Linear — forward carries left->right traffic: device i fwd-sends 1 + i
+    blocks (own shard first, then relays of its i fwd arrivals) iff it has a
+    right neighbour; fwd arrivals = i. Backward is the mirror. Line ends send 0.
+
+    Ring — the wrap link closes the ring, so every block travels the SHORT way
+    round: depths are uniform across devices, fwd sends N//2 (own + N//2 - 1
+    relays), bwd sends (N-1)//2, arrivals mirror. Fwd arrival a carries chip
+    (i - 1 - a) mod N (a < N//2), bwd arrival b chip (i + 1 + b) mod N
+    (b < (N-1)//2) — disjoint sets whose union with own is all N chips, so on
+    even N the N/2-distance tie is carried by FORWARD only (pinned convention;
+    exactly one direction may carry a block or the reduce core double-counts).
+    No device is a line end: the num_sends == 0 idle path goes unused (kept —
+    Linear still needs it, except bwd on N == 2 where the "ring" degenerates).
     """
-    _, C, H, W = shard_shape
-    Ht = H // _TILE
-    Wt = W // _TILE
-    N = num_devices
-    if dim == 3:
-        return device_idx * (Wt // N), Wt // N, Wt
-    if dim == 2:
-        return device_idx * (Ht // N) * Wt, (Ht // N) * Wt, Ht * Wt
-    if dim == 1:
-        return device_idx * (C // N) * Ht * Wt, (C // N) * Ht * Wt, C * Ht * Wt
-    raise ValueError(f"reduce_scatter: unsupported scatter dim {dim}")
+    if topology == _Topology.Ring:
+        fwd_sends = num_devices // 2  # own + N//2 - 1 relays; ties travel fwd
+        bwd_sends = (num_devices - 1) // 2
+        fwd_arrivals = fwd_sends  # arrivals mirror sends: uniform depths
+        bwd_arrivals = bwd_sends
+        # Verifier-mandated per-device invariants: exactly N-1 blocks out and
+        # N-1 in; the kernel-side static_assert
+        # (fwd_arrivals + bwd_arrivals + 1 == ring_size) then holds by construction.
+        assert fwd_sends + bwd_sends == num_devices - 1
+        assert fwd_arrivals + bwd_arrivals == num_devices - 1
+        fwd_neighbor = (i + 1) % num_devices if fwd_sends > 0 else None
+        bwd_neighbor = (i - 1) % num_devices if bwd_sends > 0 else None
+        return fwd_sends, fwd_arrivals, bwd_sends, bwd_arrivals, fwd_neighbor, bwd_neighbor
+
+    num_targets_fwd = num_devices - 1 - i  # devices reachable rightward
+    num_targets_bwd = i  # devices reachable leftward
+    fwd_sends = 1 + num_targets_bwd if num_targets_fwd > 0 else 0
+    fwd_arrivals = num_targets_bwd
+    bwd_sends = 1 + num_targets_fwd if num_targets_bwd > 0 else 0
+    bwd_arrivals = num_targets_fwd
+    fwd_neighbor = i + 1 if fwd_sends > 0 else None
+    bwd_neighbor = i - 1 if bwd_sends > 0 else None
+    return fwd_sends, fwd_arrivals, bwd_sends, bwd_arrivals, fwd_neighbor, bwd_neighbor
 
 
-# ===========================================================================
-# Phase A — line store-and-forward gather (structural clone of all_reduce)
-# ===========================================================================
-
-
-def _append_fabric_rt_args(rt_args_ref, src_id, neighbor_id, program, core, is_forward):
-    """Mirror ttnn::ccl::dataflow::build_ccl_fabric_rt_args.
-
-    After the call the block beginning at the current rt_args length is:
-        [has_forward][<forward conn args> if fwd][has_backward][<backward conn args> if bwd]
-    The kernel records that start index as conn_arg_idx; its leading has_forward
-    flag also equals the send direction, which the kernel peeks for is_forward.
-    ``setup_fabric_connection`` also mutates ``program`` (appends SemaphoreDescriptors).
-    """
-    rt_args_ref.append(int(is_forward))  # has_forward
-    if is_forward:
-        rt_args_ref.extend(ttnn.setup_fabric_connection(src_id, neighbor_id, _LINK_IDX, program, core))
-    rt_args_ref.append(int(not is_forward))  # has_backward
-    if not is_forward:
-        rt_args_ref.extend(ttnn.setup_fabric_connection(src_id, neighbor_id, _LINK_IDX, program, core))
-
-
-def _build_gather_device_program(
+def _build_device_program(
     mesh_device,
     i,
     num_devices,
+    topology,
     input_tensor,
     gather_buffer,
-    sem_addr,
-    topology,
-    fwd_noc,
-    bwd_noc,
-    page_size,
-    aligned_page_size,
-    pages_per_shard,
-    l1_alignment,
-    data_format,
-    input_ta,
-    gather_buffer_ta,
+    output_tensor,
+    sem_fwd_addr,
+    sem_bwd_addr,
+    quantities,
+    accessors,
+    noc_coords,
 ):
-    """Build the Phase-A ProgramDescriptor for device ``i`` (line or ring role)."""
-    if topology == _Topology.Ring:
-        # Ring short-way split (even every-block-lands-once cover of the N-1
-        # distances): forward carries forward-distances 1..N//2, backward the
-        # rest ((N+1)//2..N-1, i.e. backward-distances 1..(N-1)//2). A direction
-        # of depth D sends D blocks (seed + D-1 relays) and receives D blocks
-        # (relays the first D-1, terminates the last). Every device is interior.
-        fwd_depth = num_devices // 2
-        bwd_depth = (num_devices - 1) // 2
-        fwd_sends, fwd_arrivals = fwd_depth, fwd_depth
-        bwd_sends, bwd_arrivals = bwd_depth, bwd_depth  # 0 at N == 2 (idle bwd)
-        fwd_neighbor = (i + 1) % num_devices  # i == N-1 wraps to 0
-        bwd_neighbor = (i - 1) % num_devices  # i == 0 wraps to N-1
-    else:
-        # Line: every block relays all the way through; line ends send nothing.
-        num_targets_fwd = num_devices - 1 - i  # devices reachable rightward (i+1..N-1)
-        num_targets_bwd = i  # devices reachable leftward (0..i-1)
-        fwd_sends = 1 + num_targets_bwd if num_targets_fwd > 0 else 0
-        fwd_arrivals = num_targets_bwd
-        bwd_sends = 1 + num_targets_fwd if num_targets_bwd > 0 else 0
-        bwd_arrivals = num_targets_fwd
-        fwd_neighbor = i + 1 if num_targets_fwd > 0 else None
-        bwd_neighbor = i - 1 if num_targets_bwd > 0 else None
+    """Build the single-dispatch ProgramDescriptor for device ``i``."""
+    (
+        page_size,
+        aligned_page_size,
+        l1_alignment,
+        P,
+        Wt,
+        slice_Wt,
+        slice_Ht,
+        S,
+        g,
+        dim,
+    ) = quantities
+    input_ta, gather_ta, output_ta = accessors
+    fwd_noc, bwd_noc, reduce_noc = noc_coords
 
-    coord_i = ttnn.MeshCoordinate(0, i)
-    fabric_id_i = mesh_device.get_fabric_node_id(coord_i)
+    fwd_sends, fwd_arrivals, bwd_sends, bwd_arrivals, fwd_neighbor, bwd_neighbor = _block_flow(i, num_devices, topology)
 
-    forward_core = ttnn.CoreCoord(0, 0)
-    backward_core = ttnn.CoreCoord(0, 1)
-    fwd_set = ttnn.CoreRangeSet([ttnn.CoreRange(forward_core, forward_core)])
-    bwd_set = ttnn.CoreRangeSet([ttnn.CoreRange(backward_core, backward_core)])
-    both_set = ttnn.CoreRangeSet([ttnn.CoreRange(forward_core, backward_core)])
+    fwd_set = ttnn.CoreRangeSet([ttnn.CoreRange(_FWD_CORE, _FWD_CORE)])
+    bwd_set = ttnn.CoreRangeSet([ttnn.CoreRange(_BWD_CORE, _BWD_CORE)])
+    relay_set = ttnn.CoreRangeSet([ttnn.CoreRange(_FWD_CORE, _BWD_CORE)])
+    reduce_set = ttnn.CoreRangeSet([ttnn.CoreRange(_REDUCE_CORE, _REDUCE_CORE)])
 
-    # ----- circular buffers (on both worker cores) -----
+    data_format = input_tensor.dtype
+
+    # ----- circular buffers -----
+    # Capacity rule: every CB's capacity is a multiple of its interaction quantum, so
+    # a multi-page reserve/wait never straddles the ring wrap (op_design.md CB table).
+    # All four CBs carry the input dtype (R12), so the compute kernel's boot
+    # binary_op_init_common covers every phase with zero mid-kernel reconfig.
     cb_relay_pages = ttnn.CBDescriptor(
         total_size=2 * aligned_page_size,  # double-buffered streaming page
-        core_ranges=both_set,
+        core_ranges=relay_set,
         format_descriptors=[
             ttnn.CBFormatDescriptor(buffer_index=_CB_RELAY_PAGES, data_format=data_format, page_size=aligned_page_size)
         ],
     )
-    cb_self_copy = ttnn.CBDescriptor(
-        total_size=2 * aligned_page_size,  # forward reader's self-copy scratch (reserve-only)
-        core_ranges=both_set,
+    cb_contributions = ttnn.CBDescriptor(
+        total_size=2 * g * page_size,  # double-buffered g-granules
+        core_ranges=reduce_set,
         format_descriptors=[
-            ttnn.CBFormatDescriptor(buffer_index=_CB_SELF_COPY, data_format=data_format, page_size=aligned_page_size)
+            ttnn.CBFormatDescriptor(buffer_index=_CB_CONTRIBUTIONS, data_format=data_format, page_size=page_size)
+        ],
+    )
+    cb_accumulator = ttnn.CBDescriptor(
+        total_size=S * page_size,  # resident running sum; capacity EXACTLY S (g divides S)
+        core_ranges=reduce_set,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=_CB_ACCUMULATOR, data_format=data_format, page_size=page_size)
+        ],
+    )
+    cb_output_tiles = ttnn.CBDescriptor(
+        total_size=2 * g * page_size,  # double-buffered g-granules
+        core_ranges=reduce_set,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=_CB_OUTPUT_TILES, data_format=data_format, page_size=page_size)
         ],
     )
 
-    # ----- readers (NCRISC) -----
-    # Uniform CT superset: [phase][7 scalars][input accessor][gather_buffer accessor].
-    def reader_ct(direction, num_sends, num_arrivals):
-        return (
-            [
-                _PHASE_GATHER,
-                _CB_RELAY_PAGES,  # scalar 1
-                _CB_SELF_COPY,  # scalar 2
-                direction,  # scalar 3
-                i,  # scalar 4 (my_chip_id)
-                num_devices,  # scalar 5 (ring_size — modular block indices)
-                num_sends,  # scalar 6 (writer's sends this direction; relays = sends-1)
-                num_arrivals,  # scalar 7 (blocks landing here from upstream)
-            ]
-            + input_ta
-            + gather_buffer_ta
-        )
+    # ----- relay kernels (one source per role, direction via CT args) -----
+    def relay_reader_ct(direction, num_sends, num_arrivals):
+        return [_CB_RELAY_PAGES, direction, i, num_devices, num_sends, num_arrivals] + input_ta + gather_ta
 
-    reader_rt_vals = [
+    def relay_writer_ct(direction, num_sends):
+        return [_CB_RELAY_PAGES, direction, i, num_devices, num_sends, l1_alignment] + gather_ta
+
+    relay_reader_rt_vals = [
         input_tensor.buffer_address(),
         gather_buffer.buffer_address(),
-        pages_per_shard,
+        P,
         page_size,
-        sem_addr,
     ]
 
     fwd_reader_rt = ttnn.RuntimeArgs()
-    fwd_reader_rt[forward_core.x][forward_core.y] = list(reader_rt_vals)
+    fwd_reader_rt[_FWD_CORE.x][_FWD_CORE.y] = relay_reader_rt_vals + [sem_fwd_addr]
     bwd_reader_rt = ttnn.RuntimeArgs()
-    bwd_reader_rt[backward_core.x][backward_core.y] = list(reader_rt_vals)
+    bwd_reader_rt[_BWD_CORE.x][_BWD_CORE.y] = relay_reader_rt_vals + [sem_bwd_addr]
+
+    # Relay writers start with EMPTY rt args: the fabric connection block must come
+    # FIRST but can only be built against the constructed program (it mutates it), so
+    # both the block and the op args are appended post-construction. Idle direction:
+    # rt args stay empty and the kernel no-ops under `if constexpr (num_sends > 0)`.
+    fwd_writer_rt = ttnn.RuntimeArgs()
+    fwd_writer_rt[_FWD_CORE.x][_FWD_CORE.y] = []
+    bwd_writer_rt = ttnn.RuntimeArgs()
+    bwd_writer_rt[_BWD_CORE.x][_BWD_CORE.y] = []
 
     fwd_reader = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "reduce_scatter_reader.cpp"),
+        kernel_source=str(KERNEL_DIR / "reduce_scatter_relay_reader.cpp"),
         core_ranges=fwd_set,
-        compile_time_args=reader_ct(0, fwd_sends, fwd_arrivals),
+        compile_time_args=relay_reader_ct(0, fwd_sends, fwd_arrivals),
         runtime_args=fwd_reader_rt,
         config=ttnn.ReaderConfigDescriptor(),
     )
-    bwd_reader = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "reduce_scatter_reader.cpp"),
-        core_ranges=bwd_set,
-        compile_time_args=reader_ct(1, bwd_sends, bwd_arrivals),
-        runtime_args=bwd_reader_rt,
-        config=ttnn.ReaderConfigDescriptor(),
-    )
-
-    # ----- writers (BRISC) -----
-    # Uniform CT superset: [phase][7 scalars][gather_buffer accessor].
-    def writer_ct(direction, num_sends):
-        return [
-            _PHASE_GATHER,
-            _CB_RELAY_PAGES,  # scalar 1
-            direction,  # scalar 2
-            i,  # scalar 3 (my_chip_id)
-            num_devices,  # scalar 4 (ring_size — modular block indices)
-            num_sends,  # scalar 5 (seed + relays; 0 = idle direction)
-            l1_alignment,  # scalar 6
-            0,  # scalar 7 (pad)
-        ] + gather_buffer_ta
-
-    fwd_writer_rt = ttnn.RuntimeArgs()
-    bwd_writer_rt = ttnn.RuntimeArgs()
-    fwd_route = None
-    bwd_route = None
-    if fwd_sends > 0:
-        coord_next = ttnn.MeshCoordinate(0, fwd_neighbor)
-        fwd_route = ttnn._ttnn.fabric.ccl_dm_route(mesh_device, coord_i, coord_next, topology)
-        # Store-and-forward invariant: every hop is to the physical neighbour.
-        # (The ring wrap pair resolves to 1 hop only through ccl_dm_route's Ring
-        # short-way branch — probed green on this box before implementation.)
-        assert fwd_route.num_hops == 1, f"expected 1-hop neighbour route, got {fwd_route.num_hops}"
-        fwd_writer_rt[forward_core.x][forward_core.y] = [
-            gather_buffer.buffer_address(),
-            pages_per_shard,
-            page_size,
-            fwd_route.num_hops,
-            sem_addr,
-            fwd_noc.x,  # neighbour forward core noc x (counting-sem target)
-            fwd_noc.y,
-        ]
-    else:
-        fwd_writer_rt[forward_core.x][forward_core.y] = []  # idle writer reads nothing (§R10)
-
-    if bwd_sends > 0:
-        coord_prev = ttnn.MeshCoordinate(0, bwd_neighbor)
-        bwd_route = ttnn._ttnn.fabric.ccl_dm_route(mesh_device, coord_i, coord_prev, topology)
-        assert bwd_route.num_hops == 1, f"expected 1-hop neighbour route, got {bwd_route.num_hops}"
-        bwd_writer_rt[backward_core.x][backward_core.y] = [
-            gather_buffer.buffer_address(),
-            pages_per_shard,
-            page_size,
-            bwd_route.num_hops,
-            sem_addr,
-            bwd_noc.x,  # neighbour backward core noc x (counting-sem target)
-            bwd_noc.y,
-        ]
-    else:
-        bwd_writer_rt[backward_core.x][backward_core.y] = []
-
     fwd_writer = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "reduce_scatter_writer.cpp"),
+        kernel_source=str(KERNEL_DIR / "reduce_scatter_relay_writer.cpp"),
         core_ranges=fwd_set,
-        compile_time_args=writer_ct(0, fwd_sends),
+        compile_time_args=relay_writer_ct(0, fwd_sends),
         runtime_args=fwd_writer_rt,
         config=ttnn.WriterConfigDescriptor(),
     )
-    bwd_writer = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "reduce_scatter_writer.cpp"),
+    bwd_reader = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "reduce_scatter_relay_reader.cpp"),
         core_ranges=bwd_set,
-        compile_time_args=writer_ct(1, bwd_sends),
+        compile_time_args=relay_reader_ct(1, bwd_sends, bwd_arrivals),
+        runtime_args=bwd_reader_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    bwd_writer = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "reduce_scatter_relay_writer.cpp"),
+        core_ranges=bwd_set,
+        compile_time_args=relay_writer_ct(1, bwd_sends),
         runtime_args=bwd_writer_rt,
         config=ttnn.WriterConfigDescriptor(),
     )
 
-    program = ttnn.ProgramDescriptor(
-        kernels=[fwd_reader, fwd_writer, bwd_reader, bwd_writer],
-        semaphores=[],
-        cbs=[cb_relay_pages, cb_self_copy],
-    )
-
-    # Fabric connection args live on the writers (kernel idx 1 = fwd, idx 3 = bwd);
-    # appended AFTER ProgramDescriptor construction because setup_fabric_connection
-    # mutates the program (appends SemaphoreDescriptors). get_fabric_node_id owns
-    # the mesh-coord -> physical-fabric-node mapping (NOT identity on ring-cabled
-    # boxes), so neighbours are always looked up through it.
-    if fwd_sends > 0:
-        fabric_id_next = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(0, fwd_neighbor))
-        ref = program.kernels[1].runtime_args[forward_core.x][forward_core.y]
-        _append_fabric_rt_args(ref, fabric_id_i, fabric_id_next, program, forward_core, fwd_route.is_forward)
-    if bwd_sends > 0:
-        fabric_id_prev = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(0, bwd_neighbor))
-        ref = program.kernels[3].runtime_args[backward_core.x][backward_core.y]
-        _append_fabric_rt_args(ref, fabric_id_i, fabric_id_prev, program, backward_core, bwd_route.is_forward)
-
-    return program
-
-
-def create_gather_mesh_program_descriptor(
-    input_tensor: ttnn.Tensor,
-    gather_buffer: ttnn.Tensor,
-    topology,
-    sem_addr: int,
-) -> ttnn.MeshProgramDescriptor:
-    mesh_device = input_tensor.device()
-    num_devices = _num_line_devices(mesh_device)
-
-    l1_alignment = ttnn.get_l1_alignment()
-    data_format = input_tensor.dtype
-    page_size = input_tensor.buffer_page_size()
-    pages_per_shard = input_tensor.buffer_num_pages()
-    aligned_page_size = _round_up(page_size, l1_alignment)
-
-    # NoC coords of the two worker cores (uniform across the mesh) — the
-    # counting-sem targets the SAME logical core on the neighbour device.
-    forward_core = ttnn.CoreCoord(0, 0)
-    backward_core = ttnn.CoreCoord(0, 1)
-    fwd_noc = mesh_device.worker_core_from_logical_core(forward_core)
-    bwd_noc = mesh_device.worker_core_from_logical_core(backward_core)
-
-    input_ta = list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    gather_buffer_ta = list(ttnn.TensorAccessorArgs(gather_buffer).get_compile_time_args())
-
-    mesh_pd = ttnn.MeshProgramDescriptor()
-    for i in range(num_devices):
-        coord_i = ttnn.MeshCoordinate(0, i)
-        program = _build_gather_device_program(
-            mesh_device,
-            i,
-            num_devices,
-            input_tensor,
-            gather_buffer,
-            sem_addr,
-            topology,
-            fwd_noc,
-            bwd_noc,
-            page_size,
-            aligned_page_size,
-            pages_per_shard,
-            l1_alignment,
-            data_format,
-            input_ta,
-            gather_buffer_ta,
-        )
-        mesh_pd[ttnn.MeshCoordinateRange(coord_i, coord_i)] = program
-
-    return mesh_pd
-
-
-# ===========================================================================
-# Phase B — local N-way slice-tile sum
-# ===========================================================================
-
-
-def _build_reduce_device_program(
-    gather_buffer,
-    output_tensor,
-    num_devices,
-    dim,
-    slice_base,
-    slice_run_len,
-    slice_stride,
-    grid,
-    tile_size,
-    pages_per_shard,
-    output_pages,
-    gather_buffer_ta,
-    output_ta,
-):
-    """Build the Phase-B ProgramDescriptor for ONE device (slice_base is
-    per-device — device i reduces only ITS slice's tile positions)."""
-    # S = P / N output-tile positions split across the compute grid.
-    (
-        num_cores,
-        all_cores,
-        core_group_1,
-        core_group_2,
-        tiles_per_core_g1,
-        tiles_per_core_g2,
-    ) = ttnn.split_work_to_cores(grid, output_pages)
-
-    # ----- circular buffers (on the work cores) -----
-    cb_gathered_slices = ttnn.CBDescriptor(
-        total_size=2 * num_devices * tile_size,  # double-buffered block of N slice tiles
-        core_ranges=all_cores,
-        format_descriptors=[
-            ttnn.CBFormatDescriptor(
-                buffer_index=_CB_GATHERED_SLICES, data_format=gather_buffer.dtype, page_size=tile_size
-            )
-        ],
-    )
-    cb_summed_slice = ttnn.CBDescriptor(
-        total_size=2 * tile_size,  # double buffer
-        core_ranges=all_cores,
-        format_descriptors=[
-            ttnn.CBFormatDescriptor(buffer_index=_CB_SUMMED_SLICE, data_format=output_tensor.dtype, page_size=tile_size)
-        ],
-    )
-
-    # ----- per-core runtime args (each core owns output positions [start, start+n)) -----
-    reader_rt = ttnn.RuntimeArgs()
-    writer_rt = ttnn.RuntimeArgs()
-    compute_rt = ttnn.RuntimeArgs()
-
-    cores = ttnn.corerange_to_cores(all_cores, num_cores, True)
-    g1_count = core_group_1.num_cores()
-    gb_addr = gather_buffer.buffer_address()
-    out_addr = output_tensor.buffer_address()
-    start = 0
-    for idx, core in enumerate(cores):
-        n = tiles_per_core_g1 if idx < g1_count else tiles_per_core_g2
-        # reader: [gather_buffer_addr, page_size, start_tile, num_tiles]
-        reader_rt[core.x][core.y] = [gb_addr, tile_size, start, n]
-        # writer: [output_addr, page_size, start_tile, num_tiles]
-        writer_rt[core.x][core.y] = [out_addr, tile_size, start, n]
-        # compute: [num_tiles]
-        compute_rt[core.x][core.y] = [n]
-        start += n
-
-    # ----- kernels -----
-    # Uniform CT superset: reader [phase][7 scalars][gb accessor][output accessor].
-    reader_ct = (
+    # ----- reduce kernels (core (0,2)) -----
+    reduce_reader_ct = (
         [
-            _PHASE_REDUCE,
-            _CB_GATHERED_SLICES,  # scalar 1
-            num_devices,  # scalar 2 (N)
-            pages_per_shard,  # scalar 3 (P — input shard pages)
-            dim,  # scalar 4 (canonical scatter dim; kernel static_asserts it)
-            slice_base,  # scalar 5 (first tile id of THIS device's slice)
-            slice_run_len,  # scalar 6 (contiguous tile run inside the slice)
-            slice_stride,  # scalar 7 (tile-id jump between runs)
+            _CB_CONTRIBUTIONS,
+            i,  # my_chip_id
+            num_devices,
+            fwd_arrivals,
+            bwd_arrivals,
+            S,
+            g,
+            Wt,
+            slice_Wt,
+            slice_Ht,
+            P,
+            dim,
         ]
-        + gather_buffer_ta
-        + output_ta
+        + input_ta
+        + gather_ta
     )
-
-    # writer [phase][7 scalars][output accessor].
-    writer_ct = [
-        _PHASE_REDUCE,
-        _CB_SUMMED_SLICE,  # scalar 1
-        0,  # scalar 2 (pad)
-        0,  # scalar 3 (pad)
-        0,  # scalar 4 (pad)
-        0,  # scalar 5 (pad)
-        0,  # scalar 6 (pad)
-        0,  # scalar 7 (pad)
-    ] + output_ta
-
-    compute_ct = [_CB_GATHERED_SLICES, _CB_SUMMED_SLICE, num_devices]
-
-    reader = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "reduce_scatter_reader.cpp"),
-        core_ranges=all_cores,
-        compile_time_args=reader_ct,
-        runtime_args=reader_rt,
+    reduce_reader_rt = ttnn.RuntimeArgs()
+    reduce_reader_rt[_REDUCE_CORE.x][_REDUCE_CORE.y] = [
+        input_tensor.buffer_address(),
+        gather_buffer.buffer_address(),
+        page_size,
+        sem_fwd_addr,
+        sem_bwd_addr,
+    ]
+    reduce_reader = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "reduce_scatter_reduce_reader.cpp"),
+        core_ranges=reduce_set,
+        compile_time_args=reduce_reader_ct,
+        runtime_args=reduce_reader_rt,
         config=ttnn.ReaderConfigDescriptor(),
     )
-    writer = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "reduce_scatter_writer.cpp"),
-        core_ranges=all_cores,
-        compile_time_args=writer_ct,
-        runtime_args=writer_rt,
-        config=ttnn.WriterConfigDescriptor(),
-    )
-    compute = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "reduce_scatter_compute.cpp"),
-        core_ranges=all_cores,
-        compile_time_args=compute_ct,
-        runtime_args=compute_rt,
-        # fp32_dest_acc: accumulate the N-way sum in fp32 DEST (covers both the
-        # bf16 sum-of-N rounding budget and the float32 secondary dtype).
+
+    reduce_compute = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "reduce_scatter_reduce_compute.cpp"),
+        core_ranges=reduce_set,
+        compile_time_args=[_CB_CONTRIBUTIONS, _CB_ACCUMULATOR, _CB_OUTPUT_TILES, num_devices, S, g],
+        runtime_args=[],
+        # fp32 DEST accumulation covers both the bf16 sum-of-N rounding budget and the
+        # float32 secondary dtype, and fixes DEST_AUTO_LIMIT = 4 (g <= 4 by construction).
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             fp32_dest_acc_en=True,
@@ -514,52 +323,137 @@ def _build_reduce_device_program(
         ),
     )
 
-    return ttnn.ProgramDescriptor(
-        kernels=[reader, writer, compute],
-        semaphores=[],
-        cbs=[cb_gathered_slices, cb_summed_slice],
+    reduce_writer_rt = ttnn.RuntimeArgs()
+    reduce_writer_rt[_REDUCE_CORE.x][_REDUCE_CORE.y] = [output_tensor.buffer_address(), page_size]
+    reduce_writer = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "reduce_scatter_reduce_writer.cpp"),
+        core_ranges=reduce_set,
+        compile_time_args=[_CB_OUTPUT_TILES, S, g] + output_ta,
+        runtime_args=reduce_writer_rt,
+        config=ttnn.WriterConfigDescriptor(),
     )
 
+    program = ttnn.ProgramDescriptor(
+        kernels=[fwd_reader, fwd_writer, bwd_reader, bwd_writer, reduce_reader, reduce_compute, reduce_writer],
+        semaphores=[],
+        cbs=[cb_relay_pages, cb_contributions, cb_accumulator, cb_output_tiles],
+    )
 
-def create_reduce_mesh_program_descriptor(
+    # ----- fabric connection blocks (appended AFTER construction — they mutate the
+    # program) + the relay writers' op args, in the layout the kernel consumes:
+    # [conn block][gather_addr, P, page_size, num_hops, sem_addr, relay_xy, reduce_xy].
+    coord_i = ttnn.MeshCoordinate(0, i)
+    fabric_id_i = mesh_device.get_fabric_node_id(coord_i)
+
+    def _wire_direction(kernel_idx, core, neighbor_idx, sem_addr, relay_noc):
+        coord_next = ttnn.MeshCoordinate(0, neighbor_idx)
+        route = ttnn._ttnn.fabric.ccl_dm_route(mesh_device, coord_i, coord_next, topology)
+        # Store-and-forward invariant: every hop is to the physical neighbour. The
+        # route owns the fabric fwd/bwd sign reversal — never hand-derive is_forward.
+        assert route.num_hops == 1, f"expected 1-hop neighbour route, got {route.num_hops}"
+        ref = program.kernels[kernel_idx].runtime_args[core.x][core.y]
+        block = ttnn._ttnn.fabric.build_ccl_fabric_rt_args(
+            fabric_id_i, route.neighbor_id, _LINK_IDX, program, core, route.is_forward
+        )
+        ref.extend(block)
+        ref.extend(
+            [
+                gather_buffer.buffer_address(),
+                P,
+                page_size,
+                route.num_hops,
+                sem_addr,
+                relay_noc.x,  # neighbour's same-direction relay core (counting-sem target 1)
+                relay_noc.y,
+                reduce_noc.x,  # neighbour's reduce core (counting-sem target 2 — overlap)
+                reduce_noc.y,
+            ]
+        )
+
+    if fwd_sends > 0:
+        _wire_direction(_K_FWD_WRITER, _FWD_CORE, fwd_neighbor, sem_fwd_addr, fwd_noc)
+    if bwd_sends > 0:
+        _wire_direction(_K_BWD_WRITER, _BWD_CORE, bwd_neighbor, sem_bwd_addr, bwd_noc)
+
+    return program
+
+
+def create_mesh_program_descriptor(
+    input_tensor: ttnn.Tensor,
     gather_buffer: ttnn.Tensor,
     output_tensor: ttnn.Tensor,
     num_devices: int,
     dim: int,
-    shard_shape,
+    topology,
+    sem_fwd_addr: int,
+    sem_bwd_addr: int,
 ) -> ttnn.MeshProgramDescriptor:
-    """Phase-B builder. ``shard_shape`` is the per-device INPUT shard shape (rank
-    4); ``dim`` is the CANONICAL (positive) scatter dim."""
-    mesh_device = gather_buffer.device()
+    """One ProgramDescriptor per mesh coordinate; ``dim`` is the CANONICAL (positive)
+    scatter dim (3 or 2, gated upstream by SUPPORTED)."""
+    mesh_device = input_tensor.device()
+    assert _num_line_devices(mesh_device) == num_devices
 
-    grid = mesh_device.compute_with_storage_grid_size()
-    tile_size = output_tensor.buffer_page_size()
-    pages_per_shard = gather_buffer.buffer_num_pages() // num_devices  # P (input shard pages)
-    output_pages = output_tensor.buffer_num_pages()  # S = P / N output-tile positions
+    l1_alignment = ttnn.get_l1_alignment()
+    page_size = input_tensor.buffer_page_size()
+    aligned_page_size = _round_up(page_size, l1_alignment)
+    P = input_tensor.buffer_num_pages()  # tiles per shard
 
-    gather_buffer_ta = list(ttnn.TensorAccessorArgs(gather_buffer).get_compile_time_args())
-    output_ta = list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    shape = list(input_tensor.shape)
+    Wt = shape[3] // _TILE
+    Ht = shape[2] // _TILE
+    # Dim-aware slice quantities: the reduce reader uses slice_Wt for the dim=3 walk
+    # and slice_Ht for the dim=2 walk; the OTHER one is kernel-unused (validate()
+    # guarantees only shape[dim] is N*TILE-divisible, so the unused floor-division
+    # may legitimately be 0).
+    slice_Wt = Wt // num_devices  # output tile-columns (dim=3 walk)
+    slice_Ht = Ht // num_devices  # output tile-rows (dim=2 walk)
+    S = P // num_devices  # output tiles per device (dim-independent: P is a product)
+    g = _granule(S)
 
-    # Per-device programs are DISTINCT (slice_base depends on the device index):
-    # device i reduces only the tile positions of ITS slice.
+    quantities = (
+        page_size,
+        aligned_page_size,
+        l1_alignment,
+        P,
+        Wt,
+        slice_Wt,
+        slice_Ht,
+        S,
+        g,
+        dim,
+    )
+
+    accessors = (
+        list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()),
+        list(ttnn.TensorAccessorArgs(gather_buffer).get_compile_time_args()),
+        list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()),
+    )
+
+    # NoC coords of the three worker cores (uniform across the mesh): the counting
+    # incs target the SAME logical cores on the neighbour device.
+    noc_coords = (
+        mesh_device.worker_core_from_logical_core(_FWD_CORE),
+        mesh_device.worker_core_from_logical_core(_BWD_CORE),
+        mesh_device.worker_core_from_logical_core(_REDUCE_CORE),
+    )
+
     mesh_pd = ttnn.MeshProgramDescriptor()
     for i in range(num_devices):
-        slice_base, slice_run_len, slice_stride = _slice_quantities(shard_shape, dim, num_devices, i)
-        coord_i = ttnn.MeshCoordinate(0, i)
-        program = _build_reduce_device_program(
+        program = _build_device_program(
+            mesh_device,
+            i,
+            num_devices,
+            topology,
+            input_tensor,
             gather_buffer,
             output_tensor,
-            num_devices,
-            dim,
-            slice_base,
-            slice_run_len,
-            slice_stride,
-            grid,
-            tile_size,
-            pages_per_shard,
-            output_pages,
-            gather_buffer_ta,
-            output_ta,
+            sem_fwd_addr,
+            sem_bwd_addr,
+            quantities,
+            accessors,
+            noc_coords,
         )
+        coord_i = ttnn.MeshCoordinate(0, i)
         mesh_pd[ttnn.MeshCoordinateRange(coord_i, coord_i)] = program
+
     return mesh_pd
