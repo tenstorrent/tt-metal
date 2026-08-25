@@ -89,6 +89,9 @@ ttsl::hash::hash_t Matmul_RS::compute_program_hash(
     // input_tiles_per_core_width from the input's real tile, and the matmul helper reads in0/in1
     // tiles off its operands to size every block and circular buffer. Keying on each page config
     // keeps tensors that differ only in tile geometry on separate programs.
+    // The fused matmul half also compiles from MatmulParams (program_config, compute kernel
+    // config, fused activation, output dtype/tile, untilize_out, transpose, global_cb); none of
+    // those can be refreshed on a cache hit, so the whole struct must be keyed.
     return tt::tt_metal::operation::hash_operation<Matmul_RS>(
         operation_attributes.rs_op.dim,
         operation_attributes.rs_op.cluster_axis,
@@ -96,6 +99,7 @@ ttsl::hash::hash_t Matmul_RS::compute_program_hash(
         operation_attributes.rs_op.num_links,
         operation_attributes.rs_op.topology,
         operation_attributes.rs_op.use_noc1_only,
+        operation_attributes.matmul,
         tensor_args.rs.input_tensor.dtype(),
         tensor_args.rs.input_tensor.memory_config(),
         tensor_args.rs.input_tensor.device()->id(),

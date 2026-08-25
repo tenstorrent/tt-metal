@@ -114,6 +114,9 @@ ttsl::hash::hash_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_program_has
     auto intermediate_memory_config = intermediate.memory_config();
     auto intermediate_page_config = intermediate.tensor_spec().page_config();
 
+    // The fused matmul half compiles from MatmulParams (program_config, compute kernel config,
+    // fused activation, output dtype/tile, untilize_out, transpose, global_cb); none of those can
+    // be refreshed on a cache hit, so the whole struct must be keyed.
     return tt::tt_metal::operation::hash_operation<LlamaAllGatherMatmulAsyncDeviceOperation>(
         args.dim,
         args.num_links,
@@ -121,6 +124,7 @@ ttsl::hash::hash_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_program_has
         args.output_memory_config,
         args.topology,
         args.cluster_axis,
+        args.matmul_struct,
         input0_shape,
         input0_memory_layout,
         input0_dtype,
