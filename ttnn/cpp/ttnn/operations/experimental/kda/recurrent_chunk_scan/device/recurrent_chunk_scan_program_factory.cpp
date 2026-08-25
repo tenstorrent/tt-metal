@@ -17,22 +17,19 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
-using namespace tt::tt_metal;
-using namespace tt::constants;
-
 namespace ttnn::experimental::prim {
-namespace m2 = tt::tt_metal::experimental;
 namespace {
 
 struct ScanWorkDistribution {
-    std::vector<CoreCoord> cores;
+    std::vector<tt::tt_metal::CoreCoord> cores;
     std::vector<uint32_t> head;
     std::vector<uint32_t> value_block;
     uint32_t value_tiles_per_core = 1;
-    CoreRangeSet core_set;
+    tt::tt_metal::CoreRangeSet core_set;
 };
 
-ScanWorkDistribution distribute_scan(CoreCoord grid, uint32_t batch_heads, uint32_t value_tiles, bool summary) {
+ScanWorkDistribution distribute_scan(
+    tt::tt_metal::CoreCoord grid, uint32_t batch_heads, uint32_t value_tiles, bool summary) {
     const uint32_t num_cores = grid.x * grid.y;
     TT_FATAL(batch_heads <= num_cores, "KDA recurrent scan heads {} exceed compute cores {}", batch_heads, num_cores);
     uint32_t value_blocks = 1;
@@ -46,15 +43,15 @@ ScanWorkDistribution distribute_scan(CoreCoord grid, uint32_t batch_heads, uint3
     }
     ScanWorkDistribution result;
     result.value_tiles_per_core = value_tiles / value_blocks;
-    std::set<CoreRange> ranges;
+    std::set<tt::tt_metal::CoreRange> ranges;
     for (uint32_t index = 0; index < batch_heads * value_blocks; ++index) {
-        const CoreCoord core{index % grid.x, index / grid.x};
+        const tt::tt_metal::CoreCoord core{index % grid.x, index / grid.x};
         result.cores.push_back(core);
         result.head.push_back(index / value_blocks);
         result.value_block.push_back(index % value_blocks);
-        ranges.insert(CoreRange{core, core});
+        ranges.insert(tt::tt_metal::CoreRange{core, core});
     }
-    result.core_set = CoreRangeSet{ranges};
+    result.core_set = tt::tt_metal::CoreRangeSet{ranges};
     return result;
 }
 
@@ -75,8 +72,8 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
     const uint32_t BH = attrs.batch_heads;
     const uint32_t NC = attrs.num_chunks;
     constexpr uint32_t Ct = 1;
-    const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
-    const uint32_t Vt_full = attrs.value_dim / TILE_WIDTH;
+    const uint32_t Kt = attrs.key_dim / tt::constants::TILE_WIDTH;
+    const uint32_t Vt_full = attrs.value_dim / tt::constants::TILE_WIDTH;
     const bool summary = attrs.mode == RecurrentChunkScanMode::SUMMARY;
     const auto distribution = distribute_scan(device.compute_with_storage_grid_size(), BH, Vt_full, summary);
     const auto& cores = distribution.core_set;
@@ -88,96 +85,99 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
     const uint32_t kc = Kt * Ct;
     const uint32_t scratch_entries = std::max({cc, ck, cv, kv, kc});
 
-    const m2::KernelSpecName READER{"reader"};
-    const m2::KernelSpecName WRITER{"writer"};
-    const m2::KernelSpecName COMPUTE{"compute"};
-    const m2::DFBSpecName STATE{"state"};
-    const m2::DFBSpecName T_INV{"t_inv"};
-    const m2::DFBSpecName V_BETA{"v_beta"};
-    const m2::DFBSpecName KD{"kd"};
-    const m2::DFBSpecName Q_DECAY{"q_decay"};
-    const m2::DFBSpecName INTRA{"intra"};
-    const m2::DFBSpecName STATE_RING{"state_ring"};
-    const m2::DFBSpecName VALUE_NEW{"value_new"};
-    const m2::DFBSpecName FINAL_DECAY{"final_decay"};
-    const m2::DFBSpecName OUTPUT{"output"};
-    const m2::DFBSpecName OUTPUT_INTERMEDIATE{"output_intermediate"};
-    const m2::DFBSpecName K_DECAY_TRANSPOSED{"k_decay_transposed"};
-    const m2::DFBSpecName STATE_UPDATE{"state_update"};
-    const m2::DFBSpecName STATE_TEMPORARY{"state_temporary"};
-    const m2::DFBSpecName FINAL_STATE{"final_state"};
-    const m2::DFBSpecName SCRATCH{"scratch"};
-    const m2::DFBSpecName SUMMARY_RAW{"summary_raw"};
-    const m2::DFBSpecName SUMMARY_SEED{"summary_seed"};
-    const m2::DFBSpecName SUMMARY_RING{"summary_ring"};
+    const tt::tt_metal::experimental::KernelSpecName reader_kernel_name{"reader"};
+    const tt::tt_metal::experimental::KernelSpecName writer_kernel_name{"writer"};
+    const tt::tt_metal::experimental::KernelSpecName compute_kernel_name{"compute"};
+    const tt::tt_metal::experimental::DFBSpecName state_dfb_name{"state"};
+    const tt::tt_metal::experimental::DFBSpecName t_inv_dfb_name{"t_inv"};
+    const tt::tt_metal::experimental::DFBSpecName v_beta_dfb_name{"v_beta"};
+    const tt::tt_metal::experimental::DFBSpecName kd_dfb_name{"kd"};
+    const tt::tt_metal::experimental::DFBSpecName q_decay_dfb_name{"q_decay"};
+    const tt::tt_metal::experimental::DFBSpecName intra_dfb_name{"intra"};
+    const tt::tt_metal::experimental::DFBSpecName state_ring_dfb_name{"state_ring"};
+    const tt::tt_metal::experimental::DFBSpecName value_new_dfb_name{"value_new"};
+    const tt::tt_metal::experimental::DFBSpecName final_decay_dfb_name{"final_decay"};
+    const tt::tt_metal::experimental::DFBSpecName output_dfb_name{"output"};
+    const tt::tt_metal::experimental::DFBSpecName output_intermediate_dfb_name{"output_intermediate"};
+    const tt::tt_metal::experimental::DFBSpecName k_decay_transposed_dfb_name{"k_decay_transposed"};
+    const tt::tt_metal::experimental::DFBSpecName state_update_dfb_name{"state_update"};
+    const tt::tt_metal::experimental::DFBSpecName state_temporary_dfb_name{"state_temporary"};
+    const tt::tt_metal::experimental::DFBSpecName final_state_dfb_name{"final_state"};
+    const tt::tt_metal::experimental::DFBSpecName scratch_dfb_name{"scratch"};
+    const tt::tt_metal::experimental::DFBSpecName summary_raw_dfb_name{"summary_raw"};
+    const tt::tt_metal::experimental::DFBSpecName summary_seed_dfb_name{"summary_seed"};
+    const tt::tt_metal::experimental::DFBSpecName summary_ring_dfb_name{"summary_ring"};
 
-    const m2::TensorParamName V_BETA_TENSOR{"v_beta"};
-    const m2::TensorParamName KD_TENSOR{"kd"};
-    const m2::TensorParamName Q_DECAY_TENSOR{"q_decay"};
-    const m2::TensorParamName INTRA_TENSOR{"intra"};
-    const m2::TensorParamName K_DECAY_TRANSPOSED_TENSOR{"k_decay_transposed"};
-    const m2::TensorParamName FINAL_DECAY_TENSOR{"final_decay"};
-    const m2::TensorParamName T_INV_TENSOR{"t_inv"};
-    const m2::TensorParamName INITIAL_STATE_TENSOR{"initial_state"};
-    const m2::TensorParamName OUTPUT_TENSOR{"output"};
-    const m2::TensorParamName FINAL_STATE_TENSOR{"final_state"};
+    const tt::tt_metal::experimental::TensorParamName v_beta_tensor_name{"v_beta"};
+    const tt::tt_metal::experimental::TensorParamName kd_tensor_name{"kd"};
+    const tt::tt_metal::experimental::TensorParamName q_decay_tensor_name{"q_decay"};
+    const tt::tt_metal::experimental::TensorParamName intra_tensor_name{"intra"};
+    const tt::tt_metal::experimental::TensorParamName k_decay_transposed_tensor_name{"k_decay_transposed"};
+    const tt::tt_metal::experimental::TensorParamName final_decay_tensor_name{"final_decay"};
+    const tt::tt_metal::experimental::TensorParamName t_inv_tensor_name{"t_inv"};
+    const tt::tt_metal::experimental::TensorParamName initial_state_tensor_name{"initial_state"};
+    const tt::tt_metal::experimental::TensorParamName output_tensor_name{"output"};
+    const tt::tt_metal::experimental::TensorParamName final_state_tensor_name{"final_state"};
 
     const auto fp32 = tt::DataFormat::Float32;
     const auto output_format = summary ? fp32 : tt::DataFormat::Float16_b;
-    const auto input_format = [](const Tensor& tensor) { return datatype_to_dataformat_converter(tensor.dtype()); };
-    const auto make_dfb = [](const m2::DFBSpecName& name, uint32_t entries, tt::DataFormat format) {
-        return m2::DataflowBufferSpec{
-            .unique_id = name,
-            .entry_size = tt::tile_size(format),
-            .num_entries = entries,
-            .data_format_metadata = format};
+    const auto input_format = [](const Tensor& tensor) {
+        return tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
     };
-    m2::Group<m2::DataflowBufferSpec> dfb_specs = {
-        make_dfb(STATE, kv, fp32),
-        make_dfb(T_INV, 2 * cc, input_format(in.t_inv)),
-        make_dfb(V_BETA, 2 * cv, input_format(in.v_beta)),
-        make_dfb(KD, 2 * ck, input_format(in.kd)),
-        make_dfb(Q_DECAY, summary ? 1 : 2 * ck, summary ? fp32 : input_format(in.q_decay)),
-        make_dfb(INTRA, summary ? 1 : 2 * cc, summary ? fp32 : input_format(in.intra)),
-        make_dfb(STATE_RING, 2 * kv, fp32),
-        make_dfb(VALUE_NEW, cv, fp32),
-        make_dfb(FINAL_DECAY, 2 * Kt, input_format(in.final_decay)),
-        make_dfb(OUTPUT, summary ? kv : 2 * cv, output_format),
-        make_dfb(OUTPUT_INTERMEDIATE, summary ? 1 : cv, fp32),
-        make_dfb(K_DECAY_TRANSPOSED, 2 * kc, input_format(in.k_dec_t)),
-        make_dfb(STATE_UPDATE, kv, fp32),
-        make_dfb(STATE_TEMPORARY, kv, fp32),
-        make_dfb(FINAL_STATE, kv, fp32),
-        make_dfb(SCRATCH, scratch_entries, fp32),
-        make_dfb(SUMMARY_RAW, kv, fp32),
-        make_dfb(SUMMARY_SEED, kv, fp32),
-        make_dfb(SUMMARY_RING, 2 * kv, fp32),
+    const auto make_dfb =
+        [](const tt::tt_metal::experimental::DFBSpecName& name, uint32_t entries, tt::DataFormat format) {
+            return tt::tt_metal::experimental::DataflowBufferSpec{
+                .unique_id = name,
+                .entry_size = tt::tile_size(format),
+                .num_entries = entries,
+                .data_format_metadata = format};
+        };
+    tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
+        make_dfb(state_dfb_name, kv, fp32),
+        make_dfb(t_inv_dfb_name, 2 * cc, input_format(in.t_inv)),
+        make_dfb(v_beta_dfb_name, 2 * cv, input_format(in.v_beta)),
+        make_dfb(kd_dfb_name, 2 * ck, input_format(in.kd)),
+        make_dfb(q_decay_dfb_name, summary ? 1 : 2 * ck, summary ? fp32 : input_format(in.q_decay)),
+        make_dfb(intra_dfb_name, summary ? 1 : 2 * cc, summary ? fp32 : input_format(in.intra)),
+        make_dfb(state_ring_dfb_name, 2 * kv, fp32),
+        make_dfb(value_new_dfb_name, cv, fp32),
+        make_dfb(final_decay_dfb_name, 2 * Kt, input_format(in.final_decay)),
+        make_dfb(output_dfb_name, summary ? kv : 2 * cv, output_format),
+        make_dfb(output_intermediate_dfb_name, summary ? 1 : cv, fp32),
+        make_dfb(k_decay_transposed_dfb_name, 2 * kc, input_format(in.k_dec_t)),
+        make_dfb(state_update_dfb_name, kv, fp32),
+        make_dfb(state_temporary_dfb_name, kv, fp32),
+        make_dfb(final_state_dfb_name, kv, fp32),
+        make_dfb(scratch_dfb_name, scratch_entries, fp32),
+        make_dfb(summary_raw_dfb_name, kv, fp32),
+        make_dfb(summary_seed_dfb_name, kv, fp32),
+        make_dfb(summary_ring_dfb_name, 2 * kv, fp32),
     };
 
-    m2::KernelSpec reader{
-        .unique_id = READER,
+    tt::tt_metal::experimental::KernelSpec reader{
+        .unique_id = reader_kernel_name,
         .source =
             "ttnn/cpp/ttnn/operations/experimental/kda/recurrent_chunk_scan/device/kernels/dataflow/"
             "reader_recurrent_chunk_scan.cpp",
         .dfb_bindings =
             {
-                m2::ProducerOf(STATE, "state"),
-                m2::ProducerOf(T_INV, "t_inv"),
-                m2::ProducerOf(V_BETA, "v_beta"),
-                m2::ProducerOf(KD, "kd"),
-                m2::ProducerOf(Q_DECAY, "q_decay"),
-                m2::ProducerOf(INTRA, "intra"),
-                m2::ProducerOf(SUMMARY_SEED, "summary_seed"),
-                m2::ProducerOf(K_DECAY_TRANSPOSED, "k_decay_transposed"),
-                m2::ProducerOf(FINAL_DECAY, "final_decay"),
+                tt::tt_metal::experimental::ProducerOf(state_dfb_name, "state"),
+                tt::tt_metal::experimental::ProducerOf(t_inv_dfb_name, "t_inv"),
+                tt::tt_metal::experimental::ProducerOf(v_beta_dfb_name, "v_beta"),
+                tt::tt_metal::experimental::ProducerOf(kd_dfb_name, "kd"),
+                tt::tt_metal::experimental::ProducerOf(q_decay_dfb_name, "q_decay"),
+                tt::tt_metal::experimental::ProducerOf(intra_dfb_name, "intra"),
+                tt::tt_metal::experimental::ProducerOf(summary_seed_dfb_name, "summary_seed"),
+                tt::tt_metal::experimental::ProducerOf(k_decay_transposed_dfb_name, "k_decay_transposed"),
+                tt::tt_metal::experimental::ProducerOf(final_decay_dfb_name, "final_decay"),
             },
         .tensor_bindings =
             {
-                m2::TensorBinding{V_BETA_TENSOR, "v_beta"},
-                m2::TensorBinding{KD_TENSOR, "kd"},
-                m2::TensorBinding{K_DECAY_TRANSPOSED_TENSOR, "k_decay_transposed"},
-                m2::TensorBinding{FINAL_DECAY_TENSOR, "final_decay"},
-                m2::TensorBinding{T_INV_TENSOR, "t_inv"},
+                tt::tt_metal::experimental::TensorBinding{v_beta_tensor_name, "v_beta"},
+                tt::tt_metal::experimental::TensorBinding{kd_tensor_name, "kd"},
+                tt::tt_metal::experimental::TensorBinding{k_decay_transposed_tensor_name, "k_decay_transposed"},
+                tt::tt_metal::experimental::TensorBinding{final_decay_tensor_name, "final_decay"},
+                tt::tt_metal::experimental::TensorBinding{t_inv_tensor_name, "t_inv"},
             },
         .compile_time_args =
             {{"Ct", Ct},
@@ -189,24 +189,29 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
     if (!summary) {
-        reader.tensor_bindings.push_back(m2::TensorBinding{Q_DECAY_TENSOR, "q_decay"});
-        reader.tensor_bindings.push_back(m2::TensorBinding{INTRA_TENSOR, "intra"});
-        reader.tensor_bindings.push_back(m2::TensorBinding{INITIAL_STATE_TENSOR, "initial_state"});
+        reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{q_decay_tensor_name, "q_decay"});
+        reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{intra_tensor_name, "intra"});
+        reader.tensor_bindings.push_back(
+            tt::tt_metal::experimental::TensorBinding{initial_state_tensor_name, "initial_state"});
     } else {
         // The discarded recurrence branch is still parsed; aliases provide its binding names without extra parameters.
-        reader.tensor_bindings.push_back(m2::TensorBinding{V_BETA_TENSOR, "q_decay"});
-        reader.tensor_bindings.push_back(m2::TensorBinding{T_INV_TENSOR, "intra"});
-        reader.tensor_bindings.push_back(m2::TensorBinding{V_BETA_TENSOR, "initial_state"});
+        reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{v_beta_tensor_name, "q_decay"});
+        reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{t_inv_tensor_name, "intra"});
+        reader.tensor_bindings.push_back(
+            tt::tt_metal::experimental::TensorBinding{v_beta_tensor_name, "initial_state"});
     }
 
-    m2::KernelSpec writer{
-        .unique_id = WRITER,
+    tt::tt_metal::experimental::KernelSpec writer{
+        .unique_id = writer_kernel_name,
         .source =
             "ttnn/cpp/ttnn/operations/experimental/kda/recurrent_chunk_scan/device/kernels/dataflow/"
             "writer_recurrent_chunk_scan.cpp",
-        .dfb_bindings = {m2::ConsumerOf(OUTPUT, "output"), m2::ConsumerOf(FINAL_STATE, "final_state")},
+        .dfb_bindings =
+            {tt::tt_metal::experimental::ConsumerOf(output_dfb_name, "output"),
+             tt::tt_metal::experimental::ConsumerOf(final_state_dfb_name, "final_state")},
         .tensor_bindings =
-            {m2::TensorBinding{OUTPUT_TENSOR, "output"}, m2::TensorBinding{FINAL_STATE_TENSOR, "final_state"}},
+            {tt::tt_metal::experimental::TensorBinding{output_tensor_name, "output"},
+             tt::tt_metal::experimental::TensorBinding{final_state_tensor_name, "final_state"}},
         .compile_time_args =
             {{"Ct", Ct},
              {"Kt", Kt},
@@ -218,121 +223,135 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
     };
 
     auto compute_hw = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
-    auto& unpack_modes = m2::unpack_modes(compute_hw);
+    auto& unpack_modes = tt::tt_metal::experimental::unpack_modes(compute_hw);
     for (const auto& name :
-         {STATE,
-          T_INV,
-          V_BETA,
-          KD,
-          Q_DECAY,
-          INTRA,
-          STATE_RING,
-          VALUE_NEW,
-          FINAL_DECAY,
-          OUTPUT,
-          OUTPUT_INTERMEDIATE,
-          K_DECAY_TRANSPOSED,
-          STATE_UPDATE,
-          STATE_TEMPORARY,
-          FINAL_STATE,
-          SCRATCH,
-          SUMMARY_RAW,
-          SUMMARY_SEED,
-          SUMMARY_RING}) {
-        unpack_modes[name] = UnpackMode::UnpackToSrc;
+         {state_dfb_name,
+          t_inv_dfb_name,
+          v_beta_dfb_name,
+          kd_dfb_name,
+          q_decay_dfb_name,
+          intra_dfb_name,
+          state_ring_dfb_name,
+          value_new_dfb_name,
+          final_decay_dfb_name,
+          output_dfb_name,
+          output_intermediate_dfb_name,
+          k_decay_transposed_dfb_name,
+          state_update_dfb_name,
+          state_temporary_dfb_name,
+          final_state_dfb_name,
+          scratch_dfb_name,
+          summary_raw_dfb_name,
+          summary_seed_dfb_name,
+          summary_ring_dfb_name}) {
+        unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
     }
-    m2::KernelSpec compute{
-        .unique_id = COMPUTE,
+    tt::tt_metal::experimental::KernelSpec compute{
+        .unique_id = compute_kernel_name,
         .source =
             "ttnn/cpp/ttnn/operations/experimental/kda/recurrent_chunk_scan/device/kernels/compute/"
             "recurrent_chunk_scan.cpp",
         .dfb_bindings =
             {
-                m2::ConsumerOf(STATE, "state"),
-                m2::ConsumerOf(T_INV, "t_inv"),
-                m2::ConsumerOf(V_BETA, "v_beta"),
-                m2::ConsumerOf(KD, "kd"),
-                m2::ConsumerOf(Q_DECAY, "q_decay"),
-                m2::ConsumerOf(INTRA, "intra"),
-                m2::ProducerOf(STATE_RING, "state_ring"),
-                m2::ConsumerOf(STATE_RING, "state_ring"),
-                m2::ProducerOf(VALUE_NEW, "value_new"),
-                m2::ConsumerOf(VALUE_NEW, "value_new"),
-                m2::ConsumerOf(FINAL_DECAY, "final_decay"),
-                m2::ProducerOf(OUTPUT, "output"),
-                m2::ProducerOf(OUTPUT_INTERMEDIATE, "output_intermediate"),
-                m2::ConsumerOf(OUTPUT_INTERMEDIATE, "output_intermediate"),
-                m2::ConsumerOf(K_DECAY_TRANSPOSED, "k_decay_transposed"),
-                m2::ProducerOf(STATE_UPDATE, "state_update"),
-                m2::ConsumerOf(STATE_UPDATE, "state_update"),
-                m2::ProducerOf(STATE_TEMPORARY, "state_temporary"),
-                m2::ConsumerOf(STATE_TEMPORARY, "state_temporary"),
-                m2::ProducerOf(FINAL_STATE, "final_state"),
-                m2::ProducerOf(SCRATCH, "scratch"),
-                m2::ConsumerOf(SCRATCH, "scratch"),
-                m2::ProducerOf(SUMMARY_RAW, "summary_raw"),
-                m2::ConsumerOf(SUMMARY_RAW, "summary_raw"),
-                m2::ConsumerOf(SUMMARY_SEED, "summary_seed"),
-                m2::ProducerOf(SUMMARY_RING, "summary_ring"),
-                m2::ConsumerOf(SUMMARY_RING, "summary_ring"),
+                tt::tt_metal::experimental::ConsumerOf(state_dfb_name, "state"),
+                tt::tt_metal::experimental::ConsumerOf(t_inv_dfb_name, "t_inv"),
+                tt::tt_metal::experimental::ConsumerOf(v_beta_dfb_name, "v_beta"),
+                tt::tt_metal::experimental::ConsumerOf(kd_dfb_name, "kd"),
+                tt::tt_metal::experimental::ConsumerOf(q_decay_dfb_name, "q_decay"),
+                tt::tt_metal::experimental::ConsumerOf(intra_dfb_name, "intra"),
+                tt::tt_metal::experimental::ProducerOf(state_ring_dfb_name, "state_ring"),
+                tt::tt_metal::experimental::ConsumerOf(state_ring_dfb_name, "state_ring"),
+                tt::tt_metal::experimental::ProducerOf(value_new_dfb_name, "value_new"),
+                tt::tt_metal::experimental::ConsumerOf(value_new_dfb_name, "value_new"),
+                tt::tt_metal::experimental::ConsumerOf(final_decay_dfb_name, "final_decay"),
+                tt::tt_metal::experimental::ProducerOf(output_dfb_name, "output"),
+                tt::tt_metal::experimental::ProducerOf(output_intermediate_dfb_name, "output_intermediate"),
+                tt::tt_metal::experimental::ConsumerOf(output_intermediate_dfb_name, "output_intermediate"),
+                tt::tt_metal::experimental::ConsumerOf(k_decay_transposed_dfb_name, "k_decay_transposed"),
+                tt::tt_metal::experimental::ProducerOf(state_update_dfb_name, "state_update"),
+                tt::tt_metal::experimental::ConsumerOf(state_update_dfb_name, "state_update"),
+                tt::tt_metal::experimental::ProducerOf(state_temporary_dfb_name, "state_temporary"),
+                tt::tt_metal::experimental::ConsumerOf(state_temporary_dfb_name, "state_temporary"),
+                tt::tt_metal::experimental::ProducerOf(final_state_dfb_name, "final_state"),
+                tt::tt_metal::experimental::ProducerOf(scratch_dfb_name, "scratch"),
+                tt::tt_metal::experimental::ConsumerOf(scratch_dfb_name, "scratch"),
+                tt::tt_metal::experimental::ProducerOf(summary_raw_dfb_name, "summary_raw"),
+                tt::tt_metal::experimental::ConsumerOf(summary_raw_dfb_name, "summary_raw"),
+                tt::tt_metal::experimental::ConsumerOf(summary_seed_dfb_name, "summary_seed"),
+                tt::tt_metal::experimental::ProducerOf(summary_ring_dfb_name, "summary_ring"),
+                tt::tt_metal::experimental::ConsumerOf(summary_ring_dfb_name, "summary_ring"),
             },
         .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"summary_pair", static_cast<uint32_t>(summary)}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_chunks"}},
         .hw_config = std::move(compute_hw),
     };
 
-    m2::KernelRunArgs reader_run{.kernel = READER};
-    m2::KernelRunArgs writer_run{.kernel = WRITER};
-    m2::KernelRunArgs compute_run{.kernel = COMPUTE};
+    tt::tt_metal::experimental::KernelRunArgs reader_run_args{.kernel = reader_kernel_name};
+    tt::tt_metal::experimental::KernelRunArgs writer_run_args{.kernel = writer_kernel_name};
+    tt::tt_metal::experimental::KernelRunArgs compute_run_args{.kernel = compute_kernel_name};
     for (uint32_t index = 0; index < distribution.cores.size(); ++index) {
         const auto& core = distribution.cores[index];
         const uint32_t head = distribution.head[index];
         const uint32_t value_block = distribution.value_block[index];
-        m2::AddRuntimeArgsForNode(
-            reader_run.runtime_arg_values, core, {{"head", head}, {"value_block", value_block}, {"num_chunks", NC}});
-        m2::AddRuntimeArgsForNode(
-            writer_run.runtime_arg_values, core, {{"head", head}, {"value_block", value_block}, {"num_chunks", NC}});
-        m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"num_chunks", NC}});
+        tt::tt_metal::experimental::AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {{"head", head}, {"value_block", value_block}, {"num_chunks", NC}});
+        tt::tt_metal::experimental::AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core,
+            {{"head", head}, {"value_block", value_block}, {"num_chunks", NC}});
+        tt::tt_metal::experimental::AddRuntimeArgsForNode(
+            compute_run_args.runtime_arg_values, core, {{"num_chunks", NC}});
     }
 
-    m2::Group<m2::TensorParameter> tensor_parameters = {
-        m2::TensorParameter{.unique_id = V_BETA_TENSOR, .spec = v_beta_tensor.tensor_spec()},
-        m2::TensorParameter{.unique_id = KD_TENSOR, .spec = kd_tensor.tensor_spec()},
-        m2::TensorParameter{.unique_id = K_DECAY_TRANSPOSED_TENSOR, .spec = k_dec_t_tensor.tensor_spec()},
-        m2::TensorParameter{.unique_id = FINAL_DECAY_TENSOR, .spec = final_decay_tensor.tensor_spec()},
-        m2::TensorParameter{.unique_id = T_INV_TENSOR, .spec = t_inv_tensor.tensor_spec()},
-        m2::TensorParameter{.unique_id = OUTPUT_TENSOR, .spec = outputs[0].mesh_tensor().tensor_spec()},
-        m2::TensorParameter{.unique_id = FINAL_STATE_TENSOR, .spec = outputs[1].mesh_tensor().tensor_spec()},
+    tt::tt_metal::experimental::Group<tt::tt_metal::experimental::TensorParameter> tensor_parameters = {
+        tt::tt_metal::experimental::TensorParameter{
+            .unique_id = v_beta_tensor_name, .spec = v_beta_tensor.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{.unique_id = kd_tensor_name, .spec = kd_tensor.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{
+            .unique_id = k_decay_transposed_tensor_name, .spec = k_dec_t_tensor.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{
+            .unique_id = final_decay_tensor_name, .spec = final_decay_tensor.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{.unique_id = t_inv_tensor_name, .spec = t_inv_tensor.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{
+            .unique_id = output_tensor_name, .spec = outputs[0].mesh_tensor().tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{
+            .unique_id = final_state_tensor_name, .spec = outputs[1].mesh_tensor().tensor_spec()},
     };
     if (!summary) {
-        tensor_parameters.push_back(
-            m2::TensorParameter{.unique_id = Q_DECAY_TENSOR, .spec = q_decay_tensor.tensor_spec()});
-        tensor_parameters.push_back(m2::TensorParameter{.unique_id = INTRA_TENSOR, .spec = intra_tensor.tensor_spec()});
-        tensor_parameters.push_back(m2::TensorParameter{
-            .unique_id = INITIAL_STATE_TENSOR, .spec = in.initial_state->mesh_tensor().tensor_spec()});
+        tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
+            .unique_id = q_decay_tensor_name, .spec = q_decay_tensor.tensor_spec()});
+        tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
+            .unique_id = intra_tensor_name, .spec = intra_tensor.tensor_spec()});
+        tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
+            .unique_id = initial_state_tensor_name, .spec = in.initial_state->mesh_tensor().tensor_spec()});
     }
-    m2::ProgramSpec spec{
+    tt::tt_metal::experimental::ProgramSpec spec{
         .name = summary ? "summarize_chunk_recurrence" : "recurrent_chunk_scan",
         .kernels = {std::move(reader), std::move(writer), std::move(compute)},
-        .dataflow_buffers = std::move(dfb_specs),
+        .dataflow_buffers = std::move(dfbs),
         .tensor_parameters = std::move(tensor_parameters),
-        .work_units = {m2::WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = cores}},
+        .work_units = {tt::tt_metal::experimental::WorkUnitSpec{
+            .name = "main",
+            .kernels = {reader_kernel_name, writer_kernel_name, compute_kernel_name},
+            .target_nodes = cores}},
     };
-    m2::ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run), std::move(compute_run)};
+    tt::tt_metal::experimental::ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args), std::move(compute_run_args)};
     run_args.tensor_args = {
-        {V_BETA_TENSOR, v_beta_tensor},
-        {KD_TENSOR, kd_tensor},
-        {K_DECAY_TRANSPOSED_TENSOR, k_dec_t_tensor},
-        {FINAL_DECAY_TENSOR, final_decay_tensor},
-        {T_INV_TENSOR, t_inv_tensor},
-        {OUTPUT_TENSOR, outputs[0].mesh_tensor()},
-        {FINAL_STATE_TENSOR, outputs[1].mesh_tensor()},
+        {v_beta_tensor_name, v_beta_tensor},
+        {kd_tensor_name, kd_tensor},
+        {k_decay_transposed_tensor_name, k_dec_t_tensor},
+        {final_decay_tensor_name, final_decay_tensor},
+        {t_inv_tensor_name, t_inv_tensor},
+        {output_tensor_name, outputs[0].mesh_tensor()},
+        {final_state_tensor_name, outputs[1].mesh_tensor()},
     };
     if (!summary) {
-        run_args.tensor_args.emplace(Q_DECAY_TENSOR, q_decay_tensor);
-        run_args.tensor_args.emplace(INTRA_TENSOR, intra_tensor);
-        run_args.tensor_args.emplace(INITIAL_STATE_TENSOR, in.initial_state->mesh_tensor());
+        run_args.tensor_args.emplace(q_decay_tensor_name, q_decay_tensor);
+        run_args.tensor_args.emplace(intra_tensor_name, intra_tensor);
+        run_args.tensor_args.emplace(initial_state_tensor_name, in.initial_state->mesh_tensor());
     }
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
