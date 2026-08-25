@@ -1381,6 +1381,20 @@ targets:
               top5: 97
             owner_id: U053W15B6JF # Djordje Ivanovic
             team: models
+  qwen3.6-35b-a3b:
+    aliases: ["Qwen3.6-35B-A3B", "Qwen/Qwen3.6-35B-A3B"]
+    skus:
+      # TODO: flip to active with CI-measured perf once a passing bh_quietbox_2 run lands
+      # (blocked on staging the 35B-A3B weights on the runner's /mnt/MLPerf HF cache).
+      bh_quietbox_2:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08FBKRKTB8 # Kohei Yamaguchi
+            team: models
   qwen3.6-27b:
     aliases: ["Qwen3.6-27B", "Qwen/Qwen3.6-27B"]
     skus:

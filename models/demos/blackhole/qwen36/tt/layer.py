@@ -177,6 +177,10 @@ class Qwen36DecoderLayer:
         valid_len=None,
         gdn_collect=False,
     ):
+        # Validate up front: attention/norm treat non-"prefill" as decode while the MoE experts
+        # treat non-"decode" as prefill, so an unsupported mode would split the two down opposite
+        # paths. Fail fast instead.
+        assert mode in ("decode", "prefill"), f"mode must be 'decode' or 'prefill', got {mode!r}"
         _norm_mode = Mode.PREFILL if mode == "prefill" else Mode.DECODE
         if self.num_devices > 1:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
