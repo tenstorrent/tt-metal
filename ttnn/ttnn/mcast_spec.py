@@ -32,14 +32,6 @@ import ttnn
 class McastFamily:
     """One mcast family, addressed by name instead of by CT/RT offset.
 
-    ONE FAMILY == ONE PREFIX == ONE KERNEL-SIDE DECODER. The kernel decodes a family with
-    ``MCAST_ARGS(prefix)``, which pastes the prefix at PREPROCESSOR time, so the number of
-    INDEPENDENT mcast groups a kernel can address is fixed in kernel source, not by the host:
-    ``Mcast2D`` expresses exactly ONE group (over an arbitrary rectangle), and ``Mcast1D``
-    expresses one group PER GRID LINE (each forced to be a full line). Addressing N independent
-    rectangles requires N prefixes baked into the kernel -- a design calling for one ``Mcast2D``
-    per group over rectangles tiling the grid is not expressible with a single family.
-
     Topology is chosen by which sender argument you pass, because a 1D family and a 2D mcast do not
     name their sender the same way: 1D has a sender *index* per line (plus a placement rule that
     walks it across lines), 2D has one sender *core*. So ``sender=`` selects
