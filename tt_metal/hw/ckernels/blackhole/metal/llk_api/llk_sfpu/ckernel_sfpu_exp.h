@@ -62,8 +62,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
     sfpi::vFloat z = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(xlog2));
 
     sfpi::vInt exponential_part =
-        sfpi::exexp(z, sfpi::ExponentMode::Biased);    // Extract exponent ( = 2**(integer part of val/ln2))
-    sfpi::vMag fractional_part = sfpi::exman(z);       // Extract mantissa ( = leftover part, in [0; 1])
+        sfpi::exexp(z, sfpi::ExponentMode::Biased);  // Extract exponent ( = 2**(integer part of val/ln2))
+    sfpi::vMag fractional_part = sfpi::exman(z);     // Extract mantissa ( = leftover part, in [0; 1])
 
     sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
 
@@ -176,7 +176,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     //   LREG3 = xlog2 (preserved through int-part work) → mask
     TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, 0x42fe);
 
-    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, 0x33a8);
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, 0x3f28);
     TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, 0x5ada);
 
     TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATA, 0x3c02);
@@ -186,14 +186,18 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // TTI_ instructions emitted between the TTI_REPLAY/record call and the
     // replay loop, or the replay buffer will misalign.
     //
-    //   Base body:                                                15
-    //     SFPLOAD, SFPMAD, SFPLOADI(255), SFPSWAP,
-    //     SFPEXEXP, SFPEXMAN8, SFPSHFT, SFPEXMAN9, SFPCAST,
+    //   Base body:                                                11
+    //     SFPLOAD, SFPMAD,
+    //     SFP_STOCH_RND(floor), SFPCAST, SFPMAD frac,
     //     SFPMAD poly1, SFPGT mask, SFPMAD poly2,
     //     SFPAND, SFPSETEXP, SFPSTORE.
+    //   The upper clamp that used to sit here (SFPLOADI 255.0 + SFPSWAP) is gone:
+    //   SFP_STOCH_RND's FP32->UINT8 saturates at 255, which is the same bound and is
+    //   also the exponent field for +inf. See test_exp_overflow_saturation.py --
+    //   the ordinary Exp sweep is range-bounded and never drives that path.
     //   + SCALE_EN ? 1 : 0                  (SFPMULI scale)
     //   + is_fp32_dest_acc_en ? 0 : 1       (SFP_STOCH_RND fp32→bf16)
-    constexpr int BODY_LEN = 15 + (SCALE_EN ? 1 : 0) + (is_fp32_dest_acc_en ? 0 : 1);
+    constexpr int BODY_LEN = 11 + (SCALE_EN ? 1 : 0) + (is_fp32_dest_acc_en ? 0 : 1);
 
     // Record the loop body into replay buffer slot 0 the first time
     // through. Subsequent iterations replay the recorded sequence, which
@@ -222,30 +226,44 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // xlog2 = val * (1/ln2) + 127.0f, into LREG3 (preserved past int-part work).
     TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG5, p_sfpu::LREG3, 0);
 
-    // LREG1 = 255.0f. Slots into the SFPMAD's 2-cycle latency window.
-    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
-
-    // Upper clamp. SFPSWAP (mode VEC_MIN_MAX = "max into lreg_dest"):
-    //   LREG1 = max(255, xlog2), LREG3 = min(255, xlog2).
-    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-
-    // _float_to_int32_for_exp_21f_: shift mantissa left by exp-bias bits.
-    // Reads xlog2 from LREG3, leaves int_part in LREG0 (LREG0 freed of val).
-    TTI_SFPEXEXP(0, p_sfpu::LREG3, p_sfpu::LREG1, 0);  // LREG1 = exexp(xlog2)
-    TTI_SFPEXMAN(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);  // LREG0 = exman8(xlog2)
-    TTI_SFPSHFT(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);   // LREG0 <<= LREG1   (int_part)
-
-    // Extract fractional part (sfpi::exman9 with PAD9). LREG0 still holds
-    // the integer-part-as-float-encoding which feeds SETEXP later.
-    TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPEXMAN_MOD1_PAD9);
-
-    // frac = convert<vFloat>(fractional_part, RoundMode::Nearest)
+    // Split xlog2 into its integer and fractional parts.
+    //
+    // The scalar kernel (_float_to_int32_for_exp_21f_) reaches these by building the
+    // 31-bit integer xlog2*2^23 with SFPEXEXP/SFPEXMAN/SFPSHFT and then immediately taking
+    // it apart again with SFPEXMAN/SFPCAST -- 5 instructions to produce two values that a
+    // truncating float->int conversion yields in 3. Same decomposition, same polynomial,
+    // same result; only the encoding of the fractional part differs, and the coefficients
+    // below absorb that (see the c1/c2 loads above: identical mantissas, rescaled by 2^23
+    // and 2^46, so the polynomial is the same function of the same quantity).
+    //
+    // Round-toward-zero on a non-negative argument is floor, and the UINT8 target saturates
+    // at 255 -- which is both the old explicit clamp bound and the exponent field for +inf.
+    // That is why there is no SFPLOADI/SFPSWAP pair here any more.
+    //
+    // The bottom is not symmetric: xlog2 can be negative, and this convert does NOT saturate
+    // a negative input to zero on Blackhole (measured -- it produces garbage). That stays
+    // harmless because the SFPGT/SFPAND mask below zeroes exactly those lanes before the
+    // integer is used, which is the same guard the previous sequence relied on.
     constexpr unsigned SFPCAST_MOD1_SM32_TO_FP32_RNE = 0;
-    TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, SFPCAST_MOD1_SM32_TO_FP32_RNE);
+    TTI_SFP_STOCH_RND(
+        sfpi::SFPSTOCHRND_RND_ZERO,
+        0,
+        0,
+        p_sfpu::LREG3,
+        p_sfpu::LREG0,
+        sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT8);  // LREG0 = min(floor(xlog2), 255)   (int_part)
+
+    TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG1, SFPCAST_MOD1_SM32_TO_FP32_RNE);  // LREG1 = (float)int_part
+
+    // frac = xlog2 - int_part, in [0, 1). LCONST_neg1 turns the SFPMAD into a subtract.
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LCONST_neg1, p_sfpu::LREG3, p_sfpu::LREG1, 0);
 
     // Polynomial refinement of 2^x_f on [0, 1] in Horner form:
     //   frac = c0 + frac * (c1 + frac * c2)
-    //        = 1.0017248 + frac * (7.84e-08 + frac * 4.79e-15)
+    //        = 1.0017248 + frac * (0.657636285 + frac * 0.337189436)
+    // Same polynomial as the scalar kernel, with c1 and c2 scaled by 2^23 and 2^46 because
+    // frac here is a float in [0, 1) rather than the raw 23-bit mantissa. The mantissa bits
+    // of the constants are unchanged (0x..5ada, 0x..a418); only their exponents moved.
     TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG6, p_sfpu::LREG2, 0);
 
     // Negative-input handling: instead of clamping xlog2 with a max(0, ·)
@@ -253,6 +271,8 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // (SFPAND) below.
     // This avoids SFPLOADI + SFPSWAP and introduced instructions
     // can be interleaved with SFPMAD to hide their latency.
+    // It sits here, after the frac subtract, because it overwrites LREG3 -- which still
+    // held xlog2 until that subtract consumed it.
     constexpr unsigned SFPGT_MOD1_SET_VD = 8;
     TTI_SFPGT(0, p_sfpu::LCONST_0, p_sfpu::LREG3, SFPGT_MOD1_SET_VD);
 
@@ -266,8 +286,11 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     TTI_SFPAND(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG0, SFPAND_MOD1_USE_VB);
 
     // y = setexp(frac, masked_int_part) — recombine 2^x_i * 2^x_f.
-    constexpr unsigned SFPSETEXP_MOD1_ARG_EXPONENT = 2;
-    TTI_SFPSETEXP(0, p_sfpu::LREG1, p_sfpu::LREG0, SFPSETEXP_MOD1_ARG_EXPONENT);
+    // Mode 0 takes the exponent from the low bits of LREG0, which is where the truncating
+    // convert leaves it. (The old sequence needed mode 2, ARG_EXPONENT, because its
+    // int_part was carried in the exponent field of a float encoding.)
+    constexpr unsigned SFPSETEXP_MOD1_ARG_LOW_BITS = 0;
+    TTI_SFPSETEXP(0, p_sfpu::LREG1, p_sfpu::LREG0, SFPSETEXP_MOD1_ARG_LOW_BITS);
 
     if constexpr (!is_fp32_dest_acc_en) {
         // Round float32 -> bfloat16 using round-to-nearest before
@@ -397,9 +420,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     return y;
 }
 
-sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) {
-    return _sfpu_exp_fp32_accurate_<true>(x);
-}
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_<true>(x); }
 
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_exp_accurate_(sfpi::vFloat val);
@@ -487,7 +508,7 @@ template <
     bool SCALE_EN = false,
     int ITERATIONS = 8,
     bool CLAMP_NEGATIVE = true>
-void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
+void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     if constexpr (!APPROXIMATION_MODE) {
         if constexpr (!is_fp32_dest_acc_en) {
             // bfloat16-accurate path: hand-tuned TTI exp_21f kernel.
@@ -722,7 +743,7 @@ constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(
 
 template <
     bool APPROXIMATION_MODE,
-    uint32_t scale = 0x3F800000,
+    std::uint32_t scale = 0x3F800000,
     bool CLAMP_NEGATIVE = true,
     bool is_fp32_dest_acc_en = false>
 void exp_init() {
@@ -1064,8 +1085,11 @@ void exp_init() {
             TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xaa3b);
             TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
 
-            // LREG13 = c2 = 4.791750143340323e-15f (0x27aca418)
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x27ac);
+            // LREG13 = c2 = 0.337189436f (0x3eaca418).
+            // Same coefficient as the scalar kernel's 4.791750143340323e-15f, rescaled by
+            // 2^46 because the TTI body's fractional part is a float in [0, 1) rather than
+            // the raw 23-bit mantissa. Identical mantissa bits, exponent shifted.
+            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x3eac);
             TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
             TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
         } else {
