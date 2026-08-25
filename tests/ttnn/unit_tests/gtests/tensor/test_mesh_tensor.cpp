@@ -651,7 +651,9 @@ TEST_F(MeshTensorTest2x4, CopyToDeviceFiltered_WritesOnlyFilteredCores) {
 
 TEST_F(MeshTensorTest2x4, CopyToDeviceFiltered_EmptyFilter_NoChange) {
     const ttnn::Shape shape{1, 1, 64, 32};
-    CoreRangeSet shard_grid(CoreRange(CoreCoord(0, 0), CoreCoord(0, 1)));
+    // DRAM grids are 1D and only grow in X (bank_id == logical x-coordinate), so the grid is a
+    // single row: (0,0)-(1,0), not (0,0)-(0,1).
+    CoreRangeSet shard_grid(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));
     ShardSpec shard_spec(shard_grid, {32, 32});
     MemoryConfig mem_cfg(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::DRAM, shard_spec);
     tt::tt_metal::TensorSpec spec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, mem_cfg));

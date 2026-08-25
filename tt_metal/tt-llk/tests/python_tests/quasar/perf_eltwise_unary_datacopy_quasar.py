@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.llk_params import PERF_RUN_TYPES_QUASAR
+from helpers.llk_params import PERF_LOOP_FACTOR_QUASAR, PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize
 from quasar.test_eltwise_unary_datacopy_quasar import (
     PERF_DATACOPY_COMBINATIONS,
@@ -23,7 +23,7 @@ from quasar.test_eltwise_unary_datacopy_quasar import (
         is_perf=True,
     ),
     run_types=PERF_RUN_TYPES_QUASAR,
-    loop_factor=[32],
+    loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
 )
 def test_perf_eltwise_unary_datacopy_quasar(

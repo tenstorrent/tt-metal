@@ -48,6 +48,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     validate_combine_output,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 
 def run_combine(
@@ -350,12 +351,11 @@ class _Test_Mesh:
 SINGLE_GLX_AND_PROXY_MESHES = _Test_Mesh(
     (8, 4),
     {
-        # Ideally all would run torus XY, but some HW configurations like LB/QB cannot support
-        # rings in all configurations. Pick fabric option as representative as possible.
+        # Preserve the existing SP=8 LoudBox proxy with its wrapped Fabric2D equivalent.
         (8, 4): ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-        (8, 1): ttnn.FabricConfig.FABRIC_1D_RING,  # unexpectedly FABRIC_2D variants hang
+        (8, 1): ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+        (4, 1): ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
         (4, 2): ttnn.FabricConfig.FABRIC_2D,
-        (4, 1): ttnn.FabricConfig.FABRIC_1D_RING,  # unexpectedly FABRIC_2D variants hang
         (2, 2): ttnn.FabricConfig.FABRIC_2D,
     },
 )
@@ -401,33 +401,18 @@ def _model_scaledown_for_combine(model, ref_mesh, target_mesh, pcc_only):
 
 
 def _topo_marker(mesh, fabric_cfg):
-    if mesh[1] == 1 and fabric_cfg == ttnn.FabricConfig.FABRIC_1D:
-        return "linear"
-    if mesh[1] == 1 and fabric_cfg == ttnn.FabricConfig.FABRIC_1D_RING:
+    if fabric_cfg == ttnn.FabricConfig.FABRIC_2D_TORUS_Y:
         return "ring"
     return f"mesh-{mesh[0]}x{mesh[1]}"
 
 
 def _mesh_id(mesh, fabric_cfg):
-    if mesh[1] == 1 and fabric_cfg == ttnn.FabricConfig.FABRIC_1D:
-        return f"linear-{mesh[0]}"
-    if mesh[1] == 1 and fabric_cfg == ttnn.FabricConfig.FABRIC_1D_RING:
-        return f"ring-{mesh[0]}"
-    return f"mesh-{mesh[0]}x{mesh[1]}"
-
-
-def _fabric_cfg_to_fabric_topo_for_cmb_op(fabric_cfg):
-    # This mapping is specific to an op because fabric topology is the CCL algorithm's data-flow shape (Linear / Ring / Mesh / Torus)
-    # ttnn.FabricConfig is the device-level fabric wiring (FABRIC_1D / FABRIC_1D_RING / FABRIC_2D / FABRIC_2D_TORUS_Y) —
-    # set via the `mesh_device` fixture's device_params.
-    # ttnn.Topology on the other hand is what data-movement pattern the algorithm will use in op kernel runtime.
-    # It depends on the fabric config because config might prevent some topology (e.g. FABRIC_1D does not support Ring topology), but topology
-    # doesn't have to use all of the supported movements. For example it is perfectly valid to ask for Topology.Linear (and not Topology.Mesh)
-    # on FABRIC_2D. Thus it is natural for every CCL op to derive which topology to use from the given fabric config.
-    if fabric_cfg in (ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_2D, ttnn.FabricConfig.FABRIC_2D_TORUS_X):
-        return ttnn.Topology.Linear
-    else:
-        return ttnn.Topology.Ring
+    profile = {
+        ttnn.FabricConfig.FABRIC_2D: "fabric2d",
+        ttnn.FabricConfig.FABRIC_2D_TORUS_Y: "torus-y",
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY: "torus-xy",
+    }[fabric_cfg]
+    return f"{profile}-{mesh[0]}x{mesh[1]}"
 
 
 def _cross_product_conflated_cmb_test_dimensions():
@@ -435,7 +420,6 @@ def _cross_product_conflated_cmb_test_dimensions():
     for model_name, model_config_class, is_extended_model, test_meshes in COMBINE_MODELS:
         for target_mesh, fabric_cfg in test_meshes.target_meshes.items():
             device_params = fabric_to_device_params(fabric_cfg)
-            fabric_topo = _fabric_cfg_to_fabric_topo_for_cmb_op(fabric_cfg)
             topo_marker = _topo_marker(target_mesh, fabric_cfg)
             mesh_requirements_marker = pytest.mark.requires_mesh_topology(mesh_shape=target_mesh, topology=topo_marker)
             marks = (
@@ -460,7 +444,6 @@ def _cross_product_conflated_cmb_test_dimensions():
                     pytest.param(
                         shape,
                         device_params,
-                        fabric_topo,
                         seq_len_per_chip,
                         model_config.EMB_SIZE,
                         num_experts,
@@ -500,7 +483,7 @@ def _cross_product_conflated_cmb_test_dimensions():
 #    test-code cross product calculation, or are skipped in the body of the test, depending on where it was less cumbersome to implement it.
 #
 @pytest.mark.parametrize(
-    "mesh_device, device_params, topology, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    "mesh_device, device_params, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     _cross_product_conflated_cmb_test_dimensions(),
     indirect=["mesh_device", "device_params"],
 )
@@ -514,13 +497,13 @@ def _cross_product_conflated_cmb_test_dimensions():
 @pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
 def test_ttnn_combine(
     mesh_device,
+    device_params,
     seq_len_per_chip,
     emb_dim,
     num_routed_experts,
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
     num_links,
-    topology,
     use_predictable_data,
     run_pcc_check,
     dispatched_buffer_layout,
@@ -528,6 +511,7 @@ def test_ttnn_combine(
     is_ci_env,
     is_ci_v2_env,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])[0]
     run_combine(
         mesh_device,
         seq_len_per_chip,

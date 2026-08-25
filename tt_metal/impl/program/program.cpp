@@ -52,6 +52,7 @@
 #include "impl/device/device_impl.hpp"
 #include "impl/memory_tracking/memory_stats_shm.hpp"
 #include "tt-metalium/mesh_device.hpp"
+#include "tt-metalium/mesh_workload.hpp"
 #include <unistd.h>
 #include "jit_build/build.hpp"
 #include <tt_stl/enum.hpp>
@@ -265,10 +266,11 @@ KernelCompileDescriptor build_kernel_descriptor(
                     target.target_name + "__" + std::filesystem::path(target.objs[i]).filename().string() + ".ii";
                 const std::string ii_path = client_out_dir + "/" + ii_name;
                 // Preprocess with the EXACT compile flags via the shared argv builder + exec_command
-                // (posix_spawn, NO shell). A shell command string would mangle map-valued defines
-                // like -DKERNEL_COMPILE_TIME_ARG_MAP={"cb_in0",1},... (braces/quotes/commas/spaces)
-                // and drop named compile-time args. cwd = client_out_dir so -I. / -I.. resolve to
-                // the target + generated-files dirs, identical to the real compile env. -MMD (in
+                // (posix_spawn, NO shell). A shell command string would mangle defines carrying
+                // shell metacharacters, like -DFULL_KERNEL_NAME="<name>" (quotes/parens/commas).
+                // cwd = client_out_dir so -I. / -I.. resolve to the target + generated-files dirs,
+                // identical to the real compile env — which is also what lets the named-CT-arg-map
+                // header's bare -include resolve here. -MMD (in
                 // cflags) leaves a .d next to each .ii; the reuse-cache sidecar is built from those
                 // only after a successful compile (see JitBuildState::write_reuse_cache).
                 const auto args = tt::jit_build::utils::build_gpp_argv(
@@ -452,6 +454,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .unpack_to_dest_mode = compute_descriptor.unpack_to_dest_mode,
                         .bfp8_pack_precise = compute_descriptor.bfp8_pack_precise,
                         .math_approx_mode = compute_descriptor.math_approx_mode,
+                        .enable_trisc2_rvv = compute_descriptor.enable_trisc2_rvv,
                         .compile_args = std::move(compile_args),
                         .defines = std::move(defines),
                         .named_compile_args = std::move(named_compile_args),
@@ -1221,6 +1224,9 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
         this->invalidate_circular_buffer_allocation();
     } else {
         circular_buffer->assign_global_address();
+        // invalidate_circular_buffer_allocation() would have done this; adding a buffer still means
+        // the program has to be laid out again.
+        this->compile_and_allocate_needed_ = true;
     }
 
     // Mark which buffer indices are being used on each core the circular buffer is used on
@@ -1538,6 +1544,8 @@ std::vector<CoreRange> detail::ProgramImpl::circular_buffers_unique_coreranges()
 }
 
 void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
+    // Set unconditionally, before the early return below, so compile_and_allocate re-runs.
+    this->compile_and_allocate_needed_ = true;
     if (this->local_circular_buffer_allocation_needed_) {
         return;
     }
@@ -2660,6 +2668,18 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 }
 
 void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_dispatch) {
+    // The compile and allocation steps below are individually guarded and would early-return:
+    // nothing has changed since this program was compiled and laid out for this device. Skip them
+    // outright, since this is called on every enqueue and the guards alone cost microseconds per
+    // program. The validation steps still have to run: they read live device state - L1 allocations
+    // made since the last enqueue, and service-core claims - so a buffer that has come to overlap
+    // this program's regions is only caught by re-checking them here.
+    if (not this->compile_and_allocate_needed_ and this->compile_and_allocate_device_ == device) {
+        this->validate_circular_buffer_core_ranges(device);
+        this->validate_circular_buffer_region(device);
+        this->validate_dataflow_buffer_region(device);
+        return;
+    }
     this->compile(device, force_slow_dispatch);
     this->allocate_circular_buffers(device);
     this->validate_circular_buffer_core_ranges(device);
@@ -2674,6 +2694,9 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
     // Metal 2.0 scratchpads stack on the DFB allocations and their locations are passed as implicit CRTAs.
     this->allocate_scratchpads(device);
     this->validate_dataflow_buffer_region(device);
+
+    this->compile_and_allocate_needed_ = false;
+    this->compile_and_allocate_device_ = device;
 }
 
 void detail::ProgramImpl::set_runtime_id(ProgramId id) { this->runtime_id = id; }
@@ -3033,6 +3056,12 @@ void detail::ProgramCompileGroup::clear() {
 bool detail::ProgramCompileGroup::contains(tt::tt_metal::IDevice* device) {
     std::lock_guard lock(mutex_);
     return program_device_map_.contains(device);
+}
+
+void LaunchProgram(distributed::MeshDevice& mesh_device, Program&& program, bool wait_until_cores_done) {
+    distributed::MeshWorkload workload;
+    workload.add_program(distributed::MeshCoordinateRange(mesh_device.shape()), std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, wait_until_cores_done);
 }
 
 }  // namespace tt::tt_metal

@@ -12,7 +12,8 @@ sizes:
       wh_n300:
         trace_region_size: 38000000
       wh_llmbox_perf:
-        trace_region_size: 50000000
+        # TTTv2 batch-32 with on-device sampling captures 53764096 bytes.
+        trace_region_size: 60000000
       wh_galaxy_perf:
         trace_region_size: 50000000
       bh_p150:

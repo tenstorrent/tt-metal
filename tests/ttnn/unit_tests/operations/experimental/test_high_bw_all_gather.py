@@ -104,6 +104,7 @@ _NUM_LINKS = 2
 # CI performance targets are global sequence lengths. Both divide exactly by
 # the four-rank QuietBox ring and eight-rank Blackhole Galaxy line.
 _CI_PERF_GLOBAL_ROWS = (55_000, 512 * 1024)
+_CI_INDEXED_CACHE_CAPACITY_GLOBAL_ROWS = 1_000_000
 _CI_PERF_TEST_CASES = [
     ("bf16_row_major", ttnn.bfloat16, 576, ttnn.ROW_MAJOR_LAYOUT, 1152),
     ("fp8_row_major", ttnn.fp8_e4m3, 656, ttnn.ROW_MAJOR_LAYOUT, 704),
@@ -494,12 +495,25 @@ def _run_high_bw_all_gather_perf(
     cluster_axis,
     rows_per_device=_PERF_ROWS_PER_DEVICE,
     profile_samples=7,
+    capacity_rows_per_device=None,
+    input_batch_index=None,
+    gathered_dim_size=None,
 ):
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.skip("high_bw_all_gather bandwidth test requires the realtime device profiler")
 
     axis_size = mesh_device.shape[cluster_axis]
-    global_shape = (1, 1, rows_per_device * axis_size, width)
+    capacity_rows_per_device = capacity_rows_per_device or rows_per_device
+    assert rows_per_device <= capacity_rows_per_device
+    if input_batch_index is not None:
+        assert input_batch_index >= 0
+        cache_slots = input_batch_index + 1
+    else:
+        cache_slots = 1
+    if gathered_dim_size is not None:
+        assert gathered_dim_size == rows_per_device * axis_size
+
+    global_shape = (cache_slots, 1, capacity_rows_per_device * axis_size, width)
     torch.manual_seed(0)
     host_input = torch.rand(global_shape, dtype=torch.bfloat16)
     device_input = _make_tensor(
@@ -516,6 +530,7 @@ def _run_high_bw_all_gather_perf(
     # produces 640 * ring_size output rows).
     local_padded_shape = ttnn.get_device_tensors(device_input)[0].padded_shape
     output_shape = list(local_padded_shape)
+    output_shape[0] = 1
     output_shape[2] *= axis_size
     persistent_output = _make_tensor(
         mesh_device,
@@ -528,16 +543,25 @@ def _run_high_bw_all_gather_perf(
     assert page_size == expected_page_size
     assert ttnn.get_tt_fabric_max_payload_size_bytes() == 14 * 1024
 
-    def run():
+    def run(batch_index=input_batch_index):
+        runtime_controls = {}
+        if batch_index is not None:
+            runtime_controls["input_batch_index"] = batch_index
+        if gathered_dim_size is not None:
+            runtime_controls["gathered_dim_size"] = gathered_dim_size
         return ttnn.experimental.high_bw_all_gather(
             device_input,
             dim=2,
             output_tensor=persistent_output,
             cluster_axis=cluster_axis,
             num_links=_NUM_LINKS,
+            **runtime_controls,
         )
 
-    run()
+    # Prime the indexed program with slot zero, then measure the nonzero slot.
+    # input_batch_index is excluded from the cache key, so this also proves its
+    # source-page base is patched on a cache hit without adding a launch.
+    run(0 if input_batch_index is not None else None)
     ttnn.synchronize_device(mesh_device)
     run()
     ttnn.synchronize_device(mesh_device)
@@ -552,7 +576,8 @@ def _run_high_bw_all_gather_perf(
     bandwidth_gbps = pages_per_device * page_size * (axis_size - 1) / median_ns
     print(
         f"HIGH_BW_ALL_GATHER fabric={ttnn.get_fabric_config()} dtype={dtype} "
-        f"layout={layout} num_links={_NUM_LINKS} rows_per_device={rows_per_device} page_size={page_size}B "
+        f"layout={layout} num_links={_NUM_LINKS} rows_per_device={rows_per_device} "
+        f"capacity_rows_per_device={capacity_rows_per_device} cache_slots={cache_slots} page_size={page_size}B "
         f"median={median_ns / 1e6:.3f}ms effective_receive_bw={bandwidth_gbps:.3f}GB/s "
         f"samples_ms={[round(duration / 1e6, 3) for duration in durations_ns]}"
     )
@@ -630,6 +655,13 @@ def _run_high_bw_all_gather_ci_perf(mesh_device, cluster_axis, min_bandwidth_gbp
         )
         for case_name, dtype, width, layout, expected_page_size in _CI_PERF_TEST_CASES:
             print(f"HIGH_BW_ALL_GATHER_CI_PERF global_rows={global_rows} case={case_name}")
+            # Replace the large BF16 measurement with the serving-shaped indexed-cache path. Its
+            # 512K active payload keeps the existing ring floor meaningful while the 1M allocation
+            # selects the persistent-cache worker topology.
+            indexed_cache_case = global_rows == 512 * 1024 and case_name == "bf16_row_major"
+            capacity_rows_per_device = (
+                _CI_INDEXED_CACHE_CAPACITY_GLOBAL_ROWS // axis_size if indexed_cache_case else None
+            )
             _run_high_bw_all_gather_perf(
                 mesh_device,
                 dtype,
@@ -639,6 +671,9 @@ def _run_high_bw_all_gather_ci_perf(mesh_device, cluster_axis, min_bandwidth_gbp
                 required_bandwidth_gbps,
                 cluster_axis,
                 rows_per_device=rows_per_device,
+                capacity_rows_per_device=capacity_rows_per_device,
+                input_batch_index=1 if indexed_cache_case else None,
+                gathered_dim_size=global_rows if indexed_cache_case else None,
             )
             # Use a compact reference run after the full-size measurement. This
             # validates the same dtype/layout/route without doubling CI memory

@@ -50,7 +50,6 @@ def _argmax_row_major_wide_reduce_last_dim():
     return [
         _case([64, 128], RM, -1, True, torch.float32),
         _case([64, 128], RM, -1, False, torch.int32),
-        _case([64, 128], RM, -1, True, torch.float32),
         _case([32, 64, 128], RM, -1, True, torch.float32),
         _case([32, 64, 128], RM, -1, True, torch.bfloat16),
         _case([32, 64, 128], TL, -1, False, torch.bfloat16),
