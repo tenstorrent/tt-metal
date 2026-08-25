@@ -183,7 +183,7 @@ struct Matmul {
                             DST_SYNC_MODE,
                             DST_ACCUM_MODE,
                             calculate_silu,
-                            (false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
+                            (false /*APPROXIMATION_MODE*/, false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
                             0 /*dst_index*/,
                             VectorMode::R));
                     }
