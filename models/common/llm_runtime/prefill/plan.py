@@ -11,6 +11,8 @@ from typing import Literal, Sequence
 
 import torch
 
+from models.common.llm_runtime.prefill.config import BatchedPrefillPolicy
+
 _SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
 _MAX_BATCHED_PREFILL_TOKENS = 128 * 1024
 _PAGE_TABLE_WIDTH_ALIGNMENT = 8
@@ -112,6 +114,9 @@ def _plan_prefill_requests(
     supports_batched_prefill: bool | None = None,
     disable_batched_prefill: bool = False,
     max_prefill_batch_size: int = 8,
+    batched_prefill_policy: BatchedPrefillPolicy | None = None,
+    sampling_requested: bool = False,
+    batched_output_available: bool = True,
     max_actual_page_table_width: int | None = None,
     canonical_page_table_width: int | None = None,
 ) -> tuple[PrefillRequest, ...]:
@@ -167,6 +172,15 @@ def _plan_prefill_requests(
         if uncached_length > 0:
             buckets.setdefault(padded_lengths[source_row], []).append(source_row)
     legacy_implicit_batching = supports_batched_prefill is None
+    if batched_prefill_policy is None:
+        batched_prefill_policy = BatchedPrefillPolicy.default(
+            maximum_physical_batch=max_prefill_batch_size,
+            maximum_sequence_length=max_prefill_chunk_size,
+        )
+    elif not isinstance(batched_prefill_policy, BatchedPrefillPolicy):
+        raise TypeError("batched_prefill_policy must be a BatchedPrefillPolicy")
+    if batched_prefill_policy.maximum_sequence_length > max_prefill_chunk_size:
+        raise ValueError("batched_prefill_policy maximum_sequence_length cannot exceed max_prefill_chunk_size")
     for sequence_length, source_rows in buckets.items():
         if legacy_implicit_batching:
             padded_batch = _legacy_batched_prefill_size(
@@ -190,8 +204,9 @@ def _plan_prefill_requests(
                 supports_batched_prefill=supports_batched_prefill,
                 disable_batched_prefill=disable_batched_prefill,
                 max_batch_size=max_batch_size,
-                max_prefill_batch_size=max_prefill_batch_size,
-                max_prefill_chunk_size=max_prefill_chunk_size,
+                policy=batched_prefill_policy,
+                sampling_requested=sampling_requested,
+                batched_output_available=batched_output_available,
             )
         if padded_batch is None:
             sequential_rows.extend(source_rows)
@@ -424,21 +439,27 @@ def _batched_prefill_size(
     supports_batched_prefill,
     disable_batched_prefill,
     max_batch_size,
-    max_prefill_batch_size,
-    max_prefill_chunk_size,
+    policy,
+    sampling_requested,
+    batched_output_available,
 ):
-    if batch_size <= 1 or not supports_batched_prefill or disable_batched_prefill:
+    if (
+        batch_size < policy.minimum_active_rows
+        or not supports_batched_prefill
+        or disable_batched_prefill
+        or (sampling_requested and policy.sampling_requires_batched_output and not batched_output_available)
+    ):
         return None
-    if any(value != 0 for value in cached_tokens):
+    if not policy.allow_cached_prefix and any(value != 0 for value in cached_tokens):
         return None
-    if sequence_length > max_prefill_chunk_size:
+    if sequence_length > policy.maximum_sequence_length:
         return None
-    padded_batch = _next_supported_prefill_batch_size(batch_size)
+    padded_batch = next((candidate for candidate in policy.physical_batch_sizes if candidate >= batch_size), None)
     if (
         padded_batch is None
-        or padded_batch > max_prefill_batch_size
+        or padded_batch > policy.maximum_physical_batch
         or padded_batch > max_batch_size
-        or padded_batch * sequence_length >= _MAX_BATCHED_PREFILL_TOKENS
+        or padded_batch * sequence_length >= policy.maximum_total_tokens
     ):
         return None
     return padded_batch

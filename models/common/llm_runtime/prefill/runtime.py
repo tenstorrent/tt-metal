@@ -192,11 +192,12 @@ class PrefillRuntime:
             # whether https://github.com/tenstorrent/tt-metal/issues/47238
             # (batch-invariant kernel fix) has landed.
             disable_batched_prefill=(
-                self.config.disable_batched_prefill
-                or bool(os.environ.get("DISABLE_BATCHED_PREFILL"))
-                or (sampling_params is not None and not self.config.batched_prefill_batched_extract)
+                self.config.disable_batched_prefill or bool(os.environ.get("DISABLE_BATCHED_PREFILL"))
             ),
             max_prefill_batch_size=self.config.max_prefill_batch_size,
+            batched_prefill_policy=self.config.batched_prefill_policy,
+            sampling_requested=sampling_params is not None,
+            batched_output_available=self.config.batched_prefill_batched_extract,
             max_actual_page_table_width=layout.raw_capacity_width,
             canonical_page_table_width=layout.prefill_width,
         )
