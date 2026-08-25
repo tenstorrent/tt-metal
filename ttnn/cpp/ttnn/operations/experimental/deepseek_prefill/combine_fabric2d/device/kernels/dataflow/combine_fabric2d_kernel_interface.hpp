@@ -20,7 +20,6 @@
 
 #include <tt-metalium/buffer.hpp>
 
-#include "../../combine_fabric2d_assignments.hpp"
 #include "../../combine_fabric2d_placement.hpp"
 #include "../../combine_fabric2d_types.hpp"
 
@@ -44,7 +43,7 @@ uint32_t num_dispatch_groups(const CombineFabric2dParams& args, const CombineFab
     return num_routed_experts(tensor_args) / (args.experts_per_chip * ring_extent(args));
 }
 
-uint32_t my_row(const CombineFabric2dParams& args, const ttnn::MeshCoordinate& coord) {
+uint32_t my_dg_index(const CombineFabric2dParams& args, const ttnn::MeshCoordinate& coord) {
     return coord[static_cast<int32_t>(args.axis)];
 }
 
@@ -74,7 +73,7 @@ struct DramBuffers {
 struct KernelPlan {
     StreamId stream = 0;
     uint32_t my_expert_base = 0;
-    uint32_t pages_per_quarter = 0;
+    uint32_t pages_per_stream = 0;
     uint32_t ring_filled_addr = 0;
     uint32_t ring_freed_addr = 0;
     uint32_t fwd_arrived_addr = 0;
@@ -100,10 +99,44 @@ constexpr uint32_t BATCH = NUM_L1_SLOTS / 2;
 constexpr uint32_t META_PREFETCH = 64;
 constexpr uint32_t META_PAD_STRIDE = 64;
 
-// Words per assignment in the reader's assignment block: [dst_chip_id, dst_row, split_idx, split_count].
+// Words per assignment in the reader's assignment block: [dst_chip_id, dst_dg_index, split_idx, split_count].
 constexpr uint32_t ASSIGNMENT_WORDS = 4;
-// Words per chunk descriptor: [origin_row, dst_row, split_idx, split_count].
+// Words per chunk descriptor.
 constexpr uint32_t CHUNK_WORDS = 4;
+
+// One chunk of a stream's forwarding region: whose tokens it carries, for which chip, and the share of each
+// run those two chips agreed on. Enough to compute the chunk's token count, and so its page range once every
+// chunk before it in the region has been counted too.
+//
+// Packed by position into the reader's compile-time args. to_words below is the only place that order is
+// written down, and from_words mirrors it, so the host that emits a chunk and the kernel that reads it back
+// cannot drift apart.
+struct ChunkDescriptor {
+    uint32_t origin_dg_index = 0;
+    uint32_t dst_dg_index = 0;
+    uint32_t split_idx = 0;
+    uint32_t split_count = 1;
+
+    void to_words(uint32_t* words) const {
+        words[0] = origin_dg_index;
+        words[1] = dst_dg_index;
+        words[2] = split_idx;
+        words[3] = split_count;
+    }
+
+    static ChunkDescriptor from_words(const uint32_t* words) {
+        return ChunkDescriptor{words[0], words[1], words[2], words[3]};
+    }
+
+#ifndef KERNEL_BUILD
+    void append_to(std::vector<uint32_t>& out) const {
+        uint32_t words[CHUNK_WORDS];
+        to_words(words);
+        out.insert(out.end(), words, words + CHUNK_WORDS);
+    }
+#endif
+};
+static_assert(sizeof(ChunkDescriptor) == CHUNK_WORDS * sizeof(uint32_t));
 // Marks a schedule entry as "relay forwarding chunk k" rather than "own assignment k".
 constexpr uint32_t SCHED_FWD = 0x80000000u;
 

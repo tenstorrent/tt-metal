@@ -29,17 +29,18 @@ void validate_coverage(const std::map<StreamId, std::vector<Assignment>>& per_st
                 a.split_idx,
                 a.split_count);
             TT_FATAL(
-                claimed[a.dst_row].insert(a.split_idx).second,
-                "combine_fabric2d: two streams both claim share {} of {} for row {}",
+                claimed[a.dst_dg_index].insert(a.split_idx).second,
+                "combine_fabric2d: two streams both claim share {} of {} for dispatch-group index {}",
                 a.split_idx,
                 a.split_count,
-                a.dst_row);
-            auto& want = split_count[a.dst_row];
+                a.dst_dg_index);
+            auto& want = split_count[a.dst_dg_index];
             TT_FATAL(
                 want == 0 || want == a.split_count,
-                "combine_fabric2d: row {} is split {} ways by one stream and {} ways by another; the shares would "
+                "combine_fabric2d: dispatch-group index {} is split {} ways by one stream and {} ways by another; the "
+                "shares would "
                 "not tile the run",
-                a.dst_row,
+                a.dst_dg_index,
                 want,
                 a.split_count);
             want = a.split_count;
@@ -50,14 +51,15 @@ void validate_coverage(const std::map<StreamId, std::vector<Assignment>>& per_st
         "combine_fabric2d: streams cover {} of the {} remote chips on the ring",
         claimed.size(),
         ring_extent - 1);
-    for (const auto& [row, shares] : claimed) {
+    for (const auto& [dg_index, shares] : claimed) {
         TT_FATAL(
-            shares.size() == split_count.at(row),
-            "combine_fabric2d: row {} has {} of its {} shares claimed, so part of every run to that chip would "
+            shares.size() == split_count.at(dg_index),
+            "combine_fabric2d: dispatch-group index {} has {} of its {} shares claimed, so part of every run to that "
+            "chip would "
             "never be sent",
-            row,
+            dg_index,
             shares.size(),
-            split_count.at(row));
+            split_count.at(dg_index));
     }
 }
 
@@ -80,10 +82,10 @@ std::vector<std::pair<int32_t, int32_t>> emitted_offsets(uint32_t m) {
     return emitted;
 }
 
-std::vector<ChunkDescriptor> chunks_at_offsets(
+std::vector<cmbf2d::ChunkDescriptor> chunks_at_offsets(
     const std::vector<std::pair<int32_t, int32_t>>& offsets,
     StreamId stream,
-    uint32_t my_row,
+    uint32_t my_dg_index,
     uint32_t extent,
     uint32_t num_links,
     int32_t hop_shift) {
@@ -92,17 +94,17 @@ std::vector<ChunkDescriptor> chunks_at_offsets(
     const uint32_t m = extent / 2;
     const int32_t travel = is_cw ? 1 : -1;
 
-    std::vector<ChunkDescriptor> chunks;
+    std::vector<cmbf2d::ChunkDescriptor> chunks;
     chunks.reserve(offsets.size());
     for (const auto& [origin_off, dst_off] : offsets) {
         const int32_t origin = origin_off + hop_shift;
         const int32_t dst = dst_off + hop_shift;
         const uint32_t distance = static_cast<uint32_t>(dst - origin);
-        chunks.push_back(ChunkDescriptor{
-            .origin_row = static_cast<uint32_t>(
-                (static_cast<int32_t>(my_row) + travel * origin + static_cast<int32_t>(extent)) % extent),
-            .dst_row = static_cast<uint32_t>(
-                (static_cast<int32_t>(my_row) + travel * dst + static_cast<int32_t>(extent)) % extent),
+        chunks.push_back(cmbf2d::ChunkDescriptor{
+            .origin_dg_index = static_cast<uint32_t>(
+                (static_cast<int32_t>(my_dg_index) + travel * origin + static_cast<int32_t>(extent)) % extent),
+            .dst_dg_index = static_cast<uint32_t>(
+                (static_cast<int32_t>(my_dg_index) + travel * dst + static_cast<int32_t>(extent)) % extent),
             .split_idx = distance == m ? stream : link,
             .split_count = distance == m ? stream_count(num_links) : num_links});
     }
@@ -111,22 +113,26 @@ std::vector<ChunkDescriptor> chunks_at_offsets(
 
 }  // namespace
 
-std::vector<ChunkDescriptor> incoming_chunks(
-    StreamId stream, uint32_t my_row, uint32_t ring_extent, uint32_t num_links) {
-    return chunks_at_offsets(emitted_offsets(ring_extent / 2), stream, my_row, ring_extent, num_links, -1);
+std::vector<cmbf2d::ChunkDescriptor> incoming_chunks(
+    StreamId stream, uint32_t my_dg_index, uint32_t ring_extent, uint32_t num_links) {
+    return chunks_at_offsets(emitted_offsets(ring_extent / 2), stream, my_dg_index, ring_extent, num_links, -1);
 }
 
-std::vector<ChunkDescriptor> outgoing_chunks(
-    StreamId stream, uint32_t my_row, uint32_t ring_extent, uint32_t num_links) {
-    return chunks_at_offsets(emitted_offsets(ring_extent / 2), stream, my_row, ring_extent, num_links, 0);
+std::vector<cmbf2d::ChunkDescriptor> outgoing_chunks(
+    StreamId stream, uint32_t my_dg_index, uint32_t ring_extent, uint32_t num_links) {
+    return chunks_at_offsets(emitted_offsets(ring_extent / 2), stream, my_dg_index, ring_extent, num_links, 0);
 }
 
 std::map<StreamId, std::vector<Assignment>> generate_assignments(
-    const std::vector<uint32_t>& ring_chip_ids, uint32_t my_row, uint32_t num_links) {
+    const std::vector<uint32_t>& ring_chip_ids, uint32_t my_dg_index, uint32_t num_links) {
     const uint32_t extent = static_cast<uint32_t>(ring_chip_ids.size());
     const uint32_t m = extent / 2;
     TT_FATAL(extent >= 3 && extent % 2 == 0, "combine_fabric2d: ring extent {} must be even and at least 3", extent);
-    TT_FATAL(my_row < extent, "combine_fabric2d: row {} is outside a {}-chip ring", my_row, extent);
+    TT_FATAL(
+        my_dg_index < extent,
+        "combine_fabric2d: dispatch-group index {} is outside a {}-chip ring",
+        my_dg_index,
+        extent);
 
     std::map<StreamId, std::vector<Assignment>> per_stream;
     for (uint32_t link = 0; link < num_links; link++) {
@@ -135,10 +141,10 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
             auto& list = per_stream[stream];
 
             auto own = [&](uint32_t distance, uint32_t split_idx, uint32_t split_count) {
-                const uint32_t row = (my_row + (is_cw ? distance : extent - distance)) % extent;
+                const uint32_t dg_index = (my_dg_index + (is_cw ? distance : extent - distance)) % extent;
                 list.push_back(Assignment{
-                    .dst_chip_id = ring_chip_ids[row],
-                    .dst_row = row,
+                    .dst_chip_id = ring_chip_ids[dg_index],
+                    .dst_dg_index = dg_index,
                     .split_idx = split_idx,
                     .split_count = split_count});
             };

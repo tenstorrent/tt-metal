@@ -63,7 +63,7 @@ uint32_t wait_for_filled(uint32_t sent) {
     }
 }
 
-// Tell the downstream reader how far its quarter is filled. A chunk's last page always forces a bump: that
+// Tell the downstream reader how far its region is filled. A chunk's last page always forces a bump: that
 // reader consumes a whole chunk before moving on, so leaving the tail uncounted would strand it.
 template <typename FabricSender>
 void bump_downstream(FabricSender& fabric, uint32_t count) {
