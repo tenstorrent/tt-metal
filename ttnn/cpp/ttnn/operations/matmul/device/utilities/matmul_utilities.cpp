@@ -420,14 +420,6 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
         noc == tt::tt_metal::NOC::NOC_0,
         "Multiple readers per DRAM bank currently require a NOC0 data-movement kernel");
 
-    const auto secondary_noc = noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
-    const auto secondary_preferred_workers = device->get_optimal_dram_bank_to_logical_worker_assignment(secondary_noc);
-    TT_FATAL(
-        secondary_preferred_workers.size() == primary_workers.size(),
-        "NOC0 and NOC1 expose different DRAM-bank counts: {} versus {}",
-        primary_workers.size(),
-        secondary_preferred_workers.size());
-
     const auto worker_grid = device->compute_with_storage_grid_size();
     std::set<tt::tt_metal::CoreCoord> used(primary_workers.begin(), primary_workers.end());
 
@@ -444,11 +436,11 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
                 if (used.contains(candidate) || secondary_reader_excluded_cores.contains(candidate)) {
                     continue;
                 }
-                // Place the second reader near this bank's preferred endpoint on the other NOC.
-                // Each reader still uses AllocatorBank, so NOC0 and NOC1 independently use their
-                // firmware-approved endpoint rather than targeting two endpoints from one NOC.
+                // Both readers use AllocatorBank on the same NOC and therefore target the same
+                // firmware-approved endpoint. Place the second reader near the bank's primary
+                // reader to minimize NOC hops without routing one NOC to multiple endpoints.
                 const uint32_t cost = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
-                    device, candidate, secondary_preferred_workers[bank], secondary_noc);
+                    device, candidate, primary_workers[bank], noc);
                 if (cost < best_cost) {
                     found = true;
                     best_cost = cost;
