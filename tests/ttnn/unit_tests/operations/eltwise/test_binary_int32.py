@@ -869,6 +869,15 @@ def test_div_edge_cases(rounding_mode, device):
         (2147483647, 1073741823),
         (1073741823, -2147483647),
         (1073741824, -2147483647),
+        # INT32_MIN divisor: its magnitude word 0x80000000 reads as negative in
+        # the final r >= b comparison, injecting a spurious quotient increment.
+        (1, -2147483648),
+        (6, -2147483648),
+        (65536, -2147483648),
+        (1000000, -2147483648),
+        (2097153, -2147483648),
+        (2147483647, -2147483648),
+        (-2147483647, -2147483648),
     ]
 
     numerators, denominators = zip(*pairs)

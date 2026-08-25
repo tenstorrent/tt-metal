@@ -137,7 +137,12 @@ sfpi_inline void calculate_div_int32_body(
         q -= 1;
         r += b;
     }
-    v_elseif(r >= b) {
+    // When the divisor is INT32_MIN, its magnitude word is 0x80000000, which
+    // this signed comparison reads as negative -- making it unconditionally
+    // true and injecting a spurious quotient increment (e.g. div(1,
+    // INT32_MIN) returned -1 instead of 0). The true magnitude 2**31 can
+    // never be reached by r here, so exclude that word entirely.
+    v_elseif(r >= b && b != (-2147483647 - 1)) {
         q += 1;
         r -= b;
     }
