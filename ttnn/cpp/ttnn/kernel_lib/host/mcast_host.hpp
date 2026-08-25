@@ -52,15 +52,6 @@ struct McastConfig {
 // Configures independent row or column multicasts over a rectangular receiver grid.
 // Fixed mode selects one sender per line. Rotating mode uses every core in sender_grid, or
 // receiver_grid when sender_grid is omitted.
-//
-// SENDER EXCLUSION AT A LINE ENDPOINT: with a fixed sender at sender_index == 0 or
-// sender_index == span-1 (index 0 is the default, and the natural choice for a group root),
-// sender_rect_ builds a receiver rect that EXCLUDES the sender. SenderPipe::send() only lands
-// the sender its own copy via the loopback leg, which is gated on in_rect_ -- so with an
-// endpoint sender that leg is unreachable and the sender never receives what it broadcasts.
-// A sender that also needs the value must write its own copy to local L1 before send().
-// Loopback engages only when the sender is interior to the line, or outside the receiver grid.
-// The failure is silent and PCC-shaped: every receiver correct, the sender reading stale L1.
 class Mcast1D {
 public:
     Mcast1D(
