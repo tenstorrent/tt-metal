@@ -262,23 +262,7 @@ DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
 namespace {
 // Key material for a sharded operand: the radix its TensorAccessor decomposes page ids with, baked at
 // build time and never refreshed. Nullopt for interleaved operands, which keeps their shape-blind cache
-// reuse. Squeezed, so shapes that share an accessor still share a cache entry. Read off the Buffer, not
-// the spec: set_page_size/set_shard_spec reset buffer_distribution_spec_ while the spec keeps it.
-std::optional<tt::tt_metal::Shape> sharded_tensor_shape_in_pages(const Tensor& tensor) {
-    // to_hash() runs before validate_on_program_cache_miss, so buffer() may throw: device_storage()
-    // TT_FATALs on host storage, get_mesh_buffer() on a deallocated tensor. This guard, not a null check.
-    if (!tensor.memory_config().is_sharded() || !tensor.is_allocated() ||
-        tensor.storage_type() != StorageType::DEVICE) {
-        return std::nullopt;
-    }
-    const auto& distribution_spec = tensor.buffer()->buffer_distribution_spec();
-    if (!distribution_spec.has_value()) {
-        return std::nullopt;
-    }
-    return distribution_spec->tensor_shape_in_pages();
-}
-
-// Same, for an op-created output that has no Tensor yet when the key is built.
+// reuse. Squeezed, so shapes that share an accessor still share a cache entry.
 std::optional<tt::tt_metal::Shape> sharded_tensor_shape_in_pages(const tt::tt_metal::TensorSpec& spec) {
     if (!spec.memory_config().is_sharded()) {
         return std::nullopt;
@@ -291,6 +275,24 @@ std::optional<tt::tt_metal::Shape> sharded_tensor_shape_in_pages(const tt::tt_me
         return std::nullopt;
     }
     return distribution_spec->tensor_shape_in_pages();
+}
+
+// Prefers the Buffer, which is the faithful record of what the accessor was built from: set_page_size
+// and set_shard_spec reset buffer_distribution_spec_ while the spec keeps it. Falls back to the spec
+// when the Buffer is unreadable -- to_hash() runs before validate_on_program_cache_miss, and buffer()
+// throws on host storage or a deallocated tensor -- so a sharded operand never contributes an empty
+// shape to the key, which would be indistinguishable from an interleaved one and would collide.
+std::optional<tt::tt_metal::Shape> sharded_tensor_shape_in_pages(const Tensor& tensor) {
+    if (!tensor.memory_config().is_sharded()) {
+        return std::nullopt;
+    }
+    if (tensor.is_allocated() && tensor.storage_type() == StorageType::DEVICE) {
+        const auto& distribution_spec = tensor.buffer()->buffer_distribution_spec();
+        if (distribution_spec.has_value()) {
+            return distribution_spec->tensor_shape_in_pages();
+        }
+    }
+    return sharded_tensor_shape_in_pages(tensor.tensor_spec());
 }
 }  // namespace
 
