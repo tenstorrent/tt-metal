@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Direct device tests for the compute-side reduce and scaler helpers."""
+"""Direct device tests for reduce dispatch and compute-owned scaler lifecycle."""
 
 from dataclasses import dataclass
 import struct
@@ -45,8 +45,9 @@ class ReduceCase:
     fp32_mode: str = "Fast"
     reconfig_mode: str = "INPUT_AND_OUTPUT"
     valid_elements: int = TILE
+    later_valid_elements: int = 0
     post_multiplier: float | None = None
-    custom_scaler: float | None = None
+    algorithm: str = "Auto"
 
     @property
     def row_stride(self) -> int:
@@ -69,16 +70,6 @@ class ReduceCase:
     @property
     def col_chunk(self) -> int:
         return DEST_LIMIT - 1 if self.uses_sfpu else DEST_LIMIT
-
-    @property
-    def reduce_factor(self) -> int:
-        if self.pool != "AVG":
-            return 1
-        if self.dim == "REDUCE_ROW":
-            return self.cols * self.valid_elements
-        if self.dim == "REDUCE_COL":
-            return self.rows * self.valid_elements
-        return self.rows * self.cols * TILE * TILE
 
 
 def _shape_for_dim(dim: str) -> tuple[int, int, int]:
@@ -259,25 +250,92 @@ def _boundary_cases() -> list[ReduceCase]:
                 )
             )
 
-    for dtype in ("bf16", "fp32"):
-        for dim in DIMS:
-            rows, cols, _ = _shape_for_dim(dim)
-            cases.append(
-                ReduceCase(
-                    name=f"custom-scaler-{dtype}-{dim}",
-                    family="custom-scaler",
-                    dim=dim,
-                    rows=rows,
-                    cols=cols,
-                    input_dtype=dtype,
-                    output_dtype="fp32",
-                    custom_scaler=0.5,
-                )
+        rows, cols = (1, 2) if dim == "REDUCE_ROW" else (2, 1)
+        cases.append(
+            ReduceCase(
+                name=f"scaler-ragged-avg-{dim}",
+                family="scaler-boundaries",
+                dim=dim,
+                rows=rows,
+                cols=cols,
+                pool="AVG",
+                output_dtype="fp32",
+                valid_elements=17,
             )
+        )
+
     return cases
 
 
-ALL_CASES = tuple(_input_space_cases() + _regression_cases() + _numerical_space_cases() + _boundary_cases())
+def _managed_scaler_lifecycle_cases() -> list[ReduceCase]:
+    return [
+        # A full scaler becomes a [full, partial] pair in the same DFB. The old tile must be popped
+        # before the pair can be reserved in the two-tile DFB.
+        ReduceCase(
+            name="managed-scaler-row-full-to-partial",
+            family="managed-scaler-lifecycle",
+            dim="REDUCE_ROW",
+            rows=1,
+            cols=2,
+            calls=2,
+            valid_elements=32,
+            later_valid_elements=17,
+            output_dtype="fp32",
+        ),
+        # The inverse transition verifies that reduce() remembers and removes both resident tiles.
+        ReduceCase(
+            name="managed-scaler-col-partial-to-full",
+            family="managed-scaler-lifecycle",
+            dim="REDUCE_COL",
+            rows=2,
+            cols=1,
+            calls=2,
+            valid_elements=17,
+            later_valid_elements=32,
+            output_dtype="fp32",
+        ),
+        # Reusing the same pair must not try to reserve a duplicate pair in the full DFB.
+        ReduceCase(
+            name="managed-scaler-row-reuse-partial",
+            family="managed-scaler-lifecycle",
+            dim="REDUCE_ROW",
+            rows=1,
+            cols=2,
+            calls=2,
+            valid_elements=17,
+            output_dtype="fp32",
+        ),
+    ]
+
+
+def _accumulate_via_add_cases() -> list[ReduceCase]:
+    cases = []
+    for dim in DIMS:
+        rows, cols, batches = _shape_for_dim(dim)
+        cases.append(
+            ReduceCase(
+                name=f"accumulate-via-add-{dim}",
+                family="algorithm-dispatch",
+                dim=dim,
+                rows=rows,
+                cols=cols,
+                batches=batches,
+                policy="WaitUpfrontNoPop",
+                output_dtype="fp32",
+                algorithm="AccumulateViaAdd",
+            )
+        )
+    return cases
+
+
+ALL_CASES = tuple(
+    _input_space_cases()
+    + _regression_cases()
+    + _numerical_space_cases()
+    + _boundary_cases()
+    + _managed_scaler_lifecycle_cases()
+    + _accumulate_via_add_cases()
+)
 
 
 def _assert_complete_case_matrix() -> None:
@@ -359,13 +417,11 @@ def _defines(case: ReduceCase) -> list[tuple[str, str]]:
         ("REDUCE_INPUT_POLICY", f"compute_kernel_lib::ReduceInputPolicy::{case.policy}"),
         ("REDUCE_RECONFIG_MODE", f"compute_kernel_lib::ReduceDataFormatReconfigMode::{case.reconfig_mode}"),
         ("REDUCE_FP32_MODE", f"ReduceFp32Mode::{case.fp32_mode}"),
-        ("REDUCE_FACTOR", str(case.reduce_factor)),
+        ("REDUCE_ALGORITHM", f"compute_kernel_lib::ReduceAlgorithm::{case.algorithm}"),
         ("REDUCE_EXPECTED_COL_CHUNK", str(case.col_chunk)),
     ]
     if case.post_multiplier is not None:
         defines.append(("REDUCE_POST_MULTIPLIER_BITS", hex(_float_bits(case.post_multiplier))))
-    if case.custom_scaler is not None:
-        defines.append(("REDUCE_CUSTOM_SCALER_BITS", hex(_float_bits(case.custom_scaler))))
     return defines
 
 
@@ -432,15 +488,15 @@ def _physical_input(case: ReduceCase, logical: torch.Tensor) -> torch.Tensor:
     )
 
 
-def _reduce_logical_chunk(case: ReduceCase, chunk: torch.Tensor) -> torch.Tensor:
+def _reduce_logical_chunk(case: ReduceCase, chunk: torch.Tensor, valid_elements: int) -> torch.Tensor:
     chunk = chunk.to(torch.float64) if case.input_dtype != "int32" else chunk.to(torch.int64)
     if case.dim == "REDUCE_ROW":
-        values = chunk.reshape(case.batches, case.rows * TILE, case.cols, TILE)[..., : case.valid_elements]
-        values = values.flatten(-2)
+        logical_width = (case.cols - 1) * TILE + valid_elements
+        values = chunk[..., :logical_width]
         reduce_axis = -1
     elif case.dim == "REDUCE_COL":
-        values = chunk.reshape(case.batches, case.rows, TILE, case.cols * TILE)[:, :, : case.valid_elements, :]
-        values = values.transpose(1, 2).flatten(1, 2)
+        logical_height = (case.rows - 1) * TILE + valid_elements
+        values = chunk[:, :logical_height, :]
         reduce_axis = 1
     else:
         values = chunk
@@ -455,14 +511,20 @@ def _reduce_logical_chunk(case: ReduceCase, chunk: torch.Tensor) -> torch.Tensor
     else:
         reduced = values.amin(dim=reduce_axis)
 
-    if case.custom_scaler is not None:
-        scaler_applications = 2 if case.dim == "REDUCE_SCALAR" else 1
-        reduced = reduced * (case.custom_scaler**scaler_applications)
     return reduced
 
 
 def _golden(case: ReduceCase, chunks: list[torch.Tensor]) -> torch.Tensor:
-    partials = torch.stack([_reduce_logical_chunk(case, chunk) for chunk in chunks])
+    partials = torch.stack(
+        [
+            _reduce_logical_chunk(
+                case,
+                chunk,
+                case.valid_elements if call == 0 or case.later_valid_elements == 0 else case.later_valid_elements,
+            )
+            for call, chunk in enumerate(chunks)
+        ]
+    )
     if case.pool in ("SUM", "AVG"):
         golden = partials.sum(dim=0)
     elif case.pool == "MAX":
@@ -516,7 +578,7 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
     cbs = [
         ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT, device_input),
         ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output),
-        _scratch_cb(CB_SCALER, _scaler_dtype(case), 1),
+        _scratch_cb(CB_SCALER, _scaler_dtype(case), 2),
     ]
     if case.calls > 1:
         # Exact output cardinality is intentional: it covers the wraparound case
@@ -530,7 +592,16 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=_single_core(),
             compile_time_args=[case.calls],
-            runtime_args=_runtime_args([case.rows, case.cols, case.batches, case.row_stride, case.valid_elements]),
+            runtime_args=_runtime_args(
+                [
+                    case.rows,
+                    case.cols,
+                    case.batches,
+                    case.row_stride,
+                    case.valid_elements,
+                    case.later_valid_elements,
+                ]
+            ),
             defines=defines,
             config=_compute_config(case),
         ),
@@ -552,7 +623,9 @@ def test_reduce_helpers_complete_input_space(device, case: ReduceCase):
 
     actual, expected = _run_case(device, case)
     if case.input_dtype == "int32":
-        torch.testing.assert_close(actual.to(torch.int64), expected, rtol=0, atol=0, msg=case.name)
+        torch.testing.assert_close(
+            actual.to(torch.int64), expected, rtol=0, atol=0, msg=lambda msg: f"{case.name}\n{msg}"
+        )
     else:
         rtol = 0.05 if case.calls > 1 or case.input_dtype == "bf16" else 0.02
         torch.testing.assert_close(
@@ -560,5 +633,5 @@ def test_reduce_helpers_complete_input_space(device, case: ReduceCase):
             expected.to(torch.float64),
             rtol=rtol,
             atol=0.1,
-            msg=case.name,
+            msg=lambda msg: f"{case.name}\n{msg}",
         )

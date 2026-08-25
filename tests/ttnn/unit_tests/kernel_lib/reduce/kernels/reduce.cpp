@@ -47,8 +47,14 @@ ALWI void run_reduce_call(
     compute_kernel_lib::ReduceInputBlockShape shape,
     compute_kernel_lib::ReduceInputMemoryLayout layout,
     uint32_t input_tiles,
-    uint32_t iteration) {
+    uint32_t iteration,
+    uint32_t valid_elements) {
     const auto accumulation = make_accumulation<(num_calls > 1)>(iteration);
+#ifdef REDUCE_POST_MULTIPLIER_BITS
+    const PostReduceMultiply post_reduce_op{};
+#else
+    const compute_kernel_lib::NoOp post_reduce_op{};
+#endif
 
     compute_kernel_lib::reduce<
         REDUCE_OP,
@@ -58,16 +64,13 @@ ALWI void run_reduce_call(
         output_cb,
         REDUCE_INPUT_POLICY,
         REDUCE_RECONFIG_MODE,
-        REDUCE_FP32_MODE>(
+        REDUCE_FP32_MODE,
+        REDUCE_ALGORITHM>(
         shape,
         layout,
         accumulation,
-#ifdef REDUCE_POST_MULTIPLIER_BITS
-        PostReduceMultiply {}
-#else
-        compute_kernel_lib::NoOp{}
-#endif
-    );
+        post_reduce_op,
+        compute_kernel_lib::ReducePartialScaler::from_valid_elements(valid_elements));
 
     constexpr bool helper_pops_input =
         REDUCE_INPUT_POLICY == compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile ||
@@ -87,6 +90,7 @@ void kernel_main() {
     const uint32_t batches = get_arg_val<uint32_t>(2);
     const uint32_t row_stride = get_arg_val<uint32_t>(3);
     const uint32_t valid_elements = get_arg_val<uint32_t>(4);
+    const uint32_t later_valid_elements = get_arg_val<uint32_t>(5);
 
     const uint32_t input_tiles = rows * row_stride * batches;
     const auto shape = compute_kernel_lib::ReduceInputBlockShape::of(rows, cols, batches);
@@ -101,23 +105,14 @@ void kernel_main() {
     cb_reserve_back(cb_input, input_tiles * num_calls);
     cb_push_back(cb_input, input_tiles * num_calls);
 
-#ifdef REDUCE_CUSTOM_SCALER_BITS
-    constexpr float scaler = __builtin_bit_cast(float, static_cast<uint32_t>(REDUCE_CUSTOM_SCALER_BITS));
-    compute_kernel_lib::prepare_reduce_scaler<cb_scaler, REDUCE_OP, REDUCE_DIM>(scaler, valid_elements);
-#else
-    compute_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler, REDUCE_OP, REDUCE_DIM, REDUCE_FACTOR>(
-        valid_elements);
-#endif
-
     for (uint32_t call = 0; call < num_calls; ++call) {
         const bool is_last_call = call == num_calls - 1;
+        const uint32_t call_valid_elements =
+            call == 0 || later_valid_elements == 0 ? valid_elements : later_valid_elements;
         if (is_last_call) {
-            run_reduce_call<cb_output>(shape, layout, input_tiles, call);
+            run_reduce_call<cb_output>(shape, layout, input_tiles, call, call_valid_elements);
         } else {
-            run_reduce_call<cb_accumulator>(shape, layout, input_tiles, call);
+            run_reduce_call<cb_accumulator>(shape, layout, input_tiles, call, call_valid_elements);
         }
     }
-
-    // reduce() deliberately keeps the scaler resident for reuse by every call.
-    cb_pop_front(cb_scaler, 1);
 }
