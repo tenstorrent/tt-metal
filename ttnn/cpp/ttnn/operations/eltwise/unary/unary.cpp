@@ -24,6 +24,9 @@ Tensor unary_impl(
         op_chain.back().type() == unary::UnaryOpType::BITCAST) {
         output_dtype = static_cast<DataType>(*op_chain.back().get_param_if<float>(1));
     }
+    if (optional_output_tensor.has_value()) {
+        output_dtype = optional_output_tensor->dtype();
+    }
     bool preserve_fp32_precision = (input_dtype == DataType::FLOAT32);
     bool fp32_dest_acc_en = preserve_fp32_precision || output_dtype == DataType::UINT32 ||
                             output_dtype == DataType::INT32 || output_dtype == DataType::FLOAT32 ||
