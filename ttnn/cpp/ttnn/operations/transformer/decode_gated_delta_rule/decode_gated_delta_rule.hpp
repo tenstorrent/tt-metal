@@ -30,7 +30,10 @@ namespace ttnn::transformer {
  *   initial_state [B, H, K, V]   TILE, same dtype (absent => zeros)
  *
  * Returns:
- *   o          [B, 1, H, V] TILE
+ *   o          [B, 1, H, V] ROW_MAJOR — each head owns its [V] stick as a
+ *               whole DRAM page, so the writer only issues full-page writes
+ *               (sub-page writes do not land on this stack). Feed through
+ *               ttnn.to_layout(o, TILE_LAYOUT) when the next op needs TILE.
  *   new_state  [B, H, K, V] TILE
  *
  * inplace_state=True (requires initial_state): the writer stores new_state

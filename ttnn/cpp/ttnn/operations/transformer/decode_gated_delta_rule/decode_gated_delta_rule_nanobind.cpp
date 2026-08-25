@@ -33,7 +33,10 @@ void bind_decode_gated_delta_rule(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional).
 
         Returns:
-            tuple[ttnn.Tensor, ttnn.Tensor]: o [B,1,H,V] TILE, new_state [B,H,K,V] TILE.
+            tuple[ttnn.Tensor, ttnn.Tensor]: o [B,1,H,V] ROW_MAJOR (pass through
+                ttnn.to_layout for TILE; each head's [V] stick is one whole DRAM
+                page so the writer only issues full-page writes), new_state
+                [B,H,K,V] TILE.
         )doc";
 
     ttnn::bind_function<"decode_gated_delta_rule", "ttnn.transformer.">(

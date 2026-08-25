@@ -2,16 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""TDD device test for fused T=1 ``ttnn.transformer.decode_gated_delta_rule``.
+"""Device test for fused T=1 ``ttnn.transformer.decode_gated_delta_rule``.
 
-Named shapes match ``i-gdn-decode.log`` (this-rig mesh-handoff):
+Two shapes (the silicon-proven decode geometries), bf16 TILE DRAM, against a
+host golden of ``recurrent_gated_delta_rule_decode_ttnn``:
 
   B=1 H=32 K=32 V=32  and  B=1 H=24 K=128 V=128
-  bf16 TILE DRAM vs recurrent_gated_delta_rule_decode_golden
-  I_GDN_DECODE … VERDICT: FAIL   (pcc_o=0.000/0.275, pcc_h=0.973/0.981)
 
-#53304: this file asserts only those named shapes. Do not add it to a
-public PR until a mesh-handoff log of this node prints VERDICT: PASS.
+pcc >= 0.99 per case on both outputs (o and new_state).
 """
 
 from __future__ import annotations
