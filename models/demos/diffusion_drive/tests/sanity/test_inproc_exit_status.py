@@ -17,6 +17,7 @@ These tests drive the real hooks from
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import textwrap
@@ -48,14 +49,14 @@ _CHILD = textwrap.dedent(
             setattr(mod, k, v)
         sys.modules[name] = mod
 
-    spec = importlib.util.spec_from_file_location("dd_inproc_agent", "__AGENT_PATH__")
+    spec = importlib.util.spec_from_file_location("dd_inproc_agent", os.environ["DD_AGENT_PATH"])
     agent = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(agent)
 
     agent._install_exit_status_hooks()
     atexit.register(lambda: os._exit(agent._EXIT_STATUS))
 
-    mode = sys.argv[1]
+    mode = os.environ["DD_TEST_MODE"]
     if mode == "clean":
         pass
     elif mode == "uncaught":
@@ -67,10 +68,17 @@ _CHILD = textwrap.dedent(
 
 
 def _run(mode: str) -> int:
+    """Run the child and return its process exit status.
+
+    The argument vector is entirely static -- interpreter, ``-c``, and a module
+    constant. The two varying values travel in the environment rather than being
+    spliced into the source, so nothing dynamic reaches the command itself.
+    """
     return subprocess.run(
-        [sys.executable, "-c", _CHILD.replace("__AGENT_PATH__", str(_AGENT)), mode],
+        [sys.executable, "-c", _CHILD],
         capture_output=True,
         text=True,
+        env={**os.environ, "DD_AGENT_PATH": str(_AGENT), "DD_TEST_MODE": mode},
     ).returncode
 
 
