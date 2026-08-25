@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Direct device tests for the reduce compute and dataflow helpers."""
+"""Direct device tests for the compute-side reduce and scaler helpers."""
 
 from dataclasses import dataclass
 import struct
@@ -18,11 +18,11 @@ TILE = 32
 CB_INPUT = 0
 CB_SCALER = 1
 CB_ACCUMULATOR = 2
+CB_ZERO_SOURCE = 3
 CB_OUTPUT = 16
 DEST_LIMIT = 4  # fp32 DEST + half synchronization, fixed by _compute_config().
 
 COMPUTE_KERNEL = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce.cpp"
-SCALER_KERNEL = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_scaler.cpp"
 
 POLICIES = ("WaitAndPopPerTile", "BulkWaitBulkPop", "WaitUpfrontNoPop", "NoWaitNoPop")
 INDEXED_POLICIES = ("WaitUpfrontNoPop", "NoWaitNoPop")
@@ -505,6 +505,15 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
         memory_config=_sharded_memory_config(tuple(physical_input.shape)),
     )
 
+    zero_source = torch.full((TILE, TILE), 0.75, dtype=torch.float32)
+    device_zero_source = ttnn.from_torch(
+        zero_source,
+        dtype=_scaler_dtype(case),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_sharded_memory_config(tuple(zero_source.shape)),
+    )
+
     output_shape = _output_shape(case)
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape(output_shape),
@@ -517,6 +526,7 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
     cbs = [
         ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT, device_input),
         ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output),
+        ttnn.cb_descriptor_from_sharded_tensor(CB_ZERO_SOURCE, device_zero_source),
         _scratch_cb(CB_SCALER, _scaler_dtype(case), 1),
     ]
     if case.calls > 1:
@@ -527,26 +537,18 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
     defines = _defines(case)
     kernels = [
         ttnn.KernelDescriptor(
-            kernel_source=SCALER_KERNEL,
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=_single_core(),
-            runtime_args=_runtime_args([case.valid_elements]),
-            defines=defines,
-            config=ttnn.ReaderConfigDescriptor(),
-        ),
-        ttnn.KernelDescriptor(
             kernel_source=COMPUTE_KERNEL,
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=_single_core(),
             compile_time_args=[case.calls],
-            runtime_args=_runtime_args([case.rows, case.cols, case.batches, case.row_stride]),
+            runtime_args=_runtime_args([case.rows, case.cols, case.batches, case.row_stride, case.valid_elements]),
             defines=defines,
             config=_compute_config(case),
         ),
     ]
 
     result = ttnn.generic_op(
-        [device_input, output],
+        [device_input, device_zero_source, output],
         ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs),
     )
     actual = _meaningful_output(case, ttnn.to_torch(result))

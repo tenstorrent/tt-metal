@@ -7,14 +7,17 @@
 #include <type_traits>
 #include <cstdint>
 
+#include <tt-metalium/constants.hpp>
+
 #include "api/compute/reduce.h"
 #include "ttnn/cpp/ttnn/kernel_lib/common_types.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
+
 /**
  * @file reduce_helpers_compute.hpp
- * @brief Single unified reduce function with automatic dispatch
+ * @brief Compute-side reduce scaler generation and unified reduction with automatic dispatch
  *
- * Provides ONE function that handles all reduce operations:
+ * Provides scaler construction helpers and one function that handles all reduce operations:
  * - Row reduction (REDUCE_ROW): Reduces W dimension, outputs Ht tiles per batch
  * - Column reduction (REDUCE_COL): Reduces H dimension, outputs Wt tiles per batch
  * - Scalar reduction (REDUCE_SCALAR): Reduces both H and W, outputs 1 tile per batch
@@ -34,12 +37,17 @@
  * a loop) — re-running mid-kernel can race the compute pipeline and produce
  * undefined behavior.
  *
- * IMPORTANT: The scaler CB must contain the scaling factor tile BEFORE calling reduce().
+ * IMPORTANT: The scaler CB must contain the scaling factor tile BEFORE calling reduce(). It can
+ * be generated on the compute kernel with calculate_and_prepare_reduce_scaler().
  *
  * Basic Usage:
  *   #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
  *
  *   compute_kernel_hw_startup(dfb_in, dfb_scaler, dfb_out);
+ *
+ *   // Use the first input tile as a finite source for compute-side zero generation.
+ *   compute_kernel_lib::calculate_and_prepare_reduce_scaler<
+ *       dfb_in, dfb_scaler, SUM, REDUCE_ROW>();
  *
  *   // Reduce each row (W dimension) - output has Ht tiles per batch
  *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, dfb_in, dfb_scaler, dfb_out>(
@@ -60,6 +68,10 @@
  */
 
 namespace compute_kernel_lib {
+
+// Default reduce factor for SUM and MAX pool types (scaler is always 1.0).
+// Named constant for SUM and MAX where reduce_factor is unused.
+constexpr uint32_t SUM_AND_MAX_REDUCE_FACTOR = 1;
 
 // =============================================================================
 // Reconfig Mode - control data format reconfiguration before reduce
@@ -483,6 +495,60 @@ template <typename T>
 inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
 
 // NoOp is defined in common_types.hpp (shared with binary_op_helpers).
+
+// =============================================================================
+// Reduce Scaler Helpers
+// =============================================================================
+
+/**
+ * @brief Generate a reduce scaler tile on the compute kernel from a caller-provided value
+ *
+ * The helper waits for (but does not pop) the first tile in zero_source_dfb_id, subtracts that
+ * tile from itself with the FPU, and packs the resulting zero tile into scaler_dfb_id. The pack
+ * thread then writes the scaler into row 0 of each participating face before publishing the tile.
+ *
+ * The source tile must use an FPU-compatible format and be finite: NaN or infinity does not
+ * produce zero when subtracted from itself. Its tile shape must match the scaler DFB's tile
+ * shape. The helper reconfigures the unpacker, math engine, and packer; a following operation
+ * must initialize/reconfigure its own state as usual. scaler_dfb_id must be configured as an
+ * intermediate that the compute pack thread can produce and the compute unpack thread can consume.
+ *
+ * Data format and tile shape are deduced from scaler_dfb_id. Float16_b and Float32 scaler DFBs
+ * are supported; half tiles are supported on Wormhole and Blackhole, while Quasar's binary FPU
+ * unpack path currently requires full 32x32 tiles.
+ *
+ * @tparam zero_source_dfb_id DFB containing a finite tile used to create the packed zero tile
+ * @tparam scaler_dfb_id DFB that receives the scaler tile
+ * @tparam pool_type Type of pooling operation (SUM, AVG, MAX)
+ * @tparam reduce_dim Reduction dimension (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
+ * @param scaler_f Float scaler value to write
+ * @param valid_reduce_dim_elements_in_tile Number of valid elements along the reduced dimension
+ *        (1-32, default 32). Invalid positions in a partial tile remain zero.
+ */
+template <uint32_t zero_source_dfb_id, uint32_t scaler_dfb_id, PoolType pool_type, ReduceDim reduce_dim>
+ALWI void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
+
+/**
+ * @brief Generate the standard reduce scaler tile on the compute kernel
+ *
+ * Computes 1/N for AVG and 1.0 for SUM/MAX, then delegates to prepare_reduce_scaler(). For
+ * REDUCE_SCALAR AVG, uses 1/sqrt(N) because the LLK applies the scaler twice.
+ *
+ * @tparam zero_source_dfb_id DFB containing a finite tile used to create the packed zero tile
+ * @tparam scaler_dfb_id DFB that receives the scaler tile
+ * @tparam pool_type Type of pooling operation (SUM, AVG, MAX)
+ * @tparam reduce_dim Reduction dimension (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
+ * @tparam reduce_factor Number of elements being reduced. Required for AVG; ignored for SUM/MAX.
+ * @param valid_reduce_dim_elements_in_tile Number of valid elements along the reduced dimension
+ *        (1-32, default 32). Invalid positions in a partial tile remain zero.
+ */
+template <
+    uint32_t zero_source_dfb_id,
+    uint32_t scaler_dfb_id,
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t reduce_factor = SUM_AND_MAX_REDUCE_FACTOR>
+ALWI void calculate_and_prepare_reduce_scaler(uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
 
 // =============================================================================
 // Main Reduce Function

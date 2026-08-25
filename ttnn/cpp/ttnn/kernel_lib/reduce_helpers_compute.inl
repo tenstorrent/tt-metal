@@ -5,8 +5,9 @@
 // Implementation file for reduce_helpers_compute.hpp
 // Do not include directly - include reduce_helpers_compute.hpp instead
 
+#include <cmath>
+
 #include "api/compute/add_int_sfpu.h"
-#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
@@ -18,6 +19,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
 #include "api/debug/assert.h"
+#include "api/debug/dprint.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dfb_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
@@ -26,6 +28,127 @@
 namespace compute_kernel_lib {
 
 namespace detail {
+
+// =============================================================================
+// Reduce scaler tile construction
+// =============================================================================
+
+// Row and face sizes in uint32 words, matching the dataflow scaler helper.
+constexpr uint32_t ROW_SIZE_U32 = 8;
+constexpr uint32_t ROW_SIZE_U32_FP32 = 16;
+constexpr uint32_t FACE_SIZE_U32 = 128;
+constexpr uint32_t FACE_SIZE_U32_FP32 = 256;
+
+template <DataFormat data_format>
+ALWI uint32_t float_to_scaler_bits(float value) {
+    static_assert(
+        data_format == DataFormat::Float16_b || data_format == DataFormat::Float32,
+        "float_to_scaler_bits only supports Float16_b and Float32 formats");
+
+    const uint32_t bits = __builtin_bit_cast(uint32_t, value);
+    if constexpr (data_format == DataFormat::Float32) {
+        return bits;
+    } else {
+        const uint16_t bf16 = static_cast<uint16_t>(bits >> 16);
+        return (static_cast<uint32_t>(bf16) << 16) | bf16;
+    }
+}
+
+template <DataFormat data_format>
+ALWI void fill_face_row0_cols(
+    volatile tt_l1_ptr uint32_t* face_ptr, uint32_t scaler, uint32_t cols_in_face) {
+    if constexpr (data_format == DataFormat::Float32) {
+        for (uint32_t col = 0; col < cols_in_face; ++col) {
+            face_ptr[col] = scaler;
+        }
+    } else {
+        const uint32_t full_pairs = cols_in_face / 2;
+        for (uint32_t col = 0; col < full_pairs; ++col) {
+            face_ptr[col] = scaler;
+        }
+        if (cols_in_face & 1) {
+            // Lower 16 bits hold the first column in the pair on little-endian RISC-V.
+            face_ptr[full_pairs] = scaler & 0x0000FFFFu;
+        }
+    }
+}
+
+template <DataFormat data_format, uint32_t num_faces>
+ALWI void fill_each_face_row0(volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler) {
+    static_assert(
+        data_format == DataFormat::Float16_b || data_format == DataFormat::Float32,
+        "fill_each_face_row0 only supports Float16_b and Float32 formats");
+
+    constexpr uint32_t face_size_u32 =
+        data_format == DataFormat::Float32 ? FACE_SIZE_U32_FP32 : FACE_SIZE_U32;
+    constexpr uint32_t row_size_u32 = data_format == DataFormat::Float32 ? ROW_SIZE_U32_FP32 : ROW_SIZE_U32;
+
+    for (uint32_t face = 0; face < num_faces; ++face) {
+        const uint32_t face_offset = face * face_size_u32;
+        for (uint32_t column = 0; column < row_size_u32; ++column) {
+            ptr[face_offset + column] = scaler;
+        }
+    }
+}
+
+template <DataFormat data_format, ReduceDim reduce_dim, uint32_t face_rows, uint32_t faces_per_row>
+ALWI void fill_each_face_row0_partial(
+    volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler, uint32_t valid_reduce_dim_elements_in_tile) {
+    static_assert(
+        data_format == DataFormat::Float16_b || data_format == DataFormat::Float32,
+        "fill_each_face_row0_partial only supports Float16_b and Float32 formats");
+    static_assert(
+        reduce_dim == ReduceDim::REDUCE_ROW || reduce_dim == ReduceDim::REDUCE_COL,
+        "partial reduce scalers are only supported for REDUCE_ROW and REDUCE_COL");
+
+    constexpr uint32_t face_size_u32 =
+        data_format == DataFormat::Float32 ? FACE_SIZE_U32_FP32 : FACE_SIZE_U32;
+
+    for (uint32_t face_row = 0; face_row < face_rows; ++face_row) {
+        for (uint32_t face_col = 0; face_col < faces_per_row; ++face_col) {
+            const uint32_t face_idx = face_row * faces_per_row + face_col;
+            uint32_t cols_in_face = 0;
+            if constexpr (reduce_dim == ReduceDim::REDUCE_ROW) {
+                const uint32_t face_col_start = face_col * tt::constants::FACE_WIDTH;
+                if (valid_reduce_dim_elements_in_tile > face_col_start) {
+                    const uint32_t remaining = valid_reduce_dim_elements_in_tile - face_col_start;
+                    cols_in_face = remaining < tt::constants::FACE_WIDTH ? remaining : tt::constants::FACE_WIDTH;
+                }
+            } else {
+                const uint32_t face_row_start = face_row * tt::constants::FACE_HEIGHT;
+                if (valid_reduce_dim_elements_in_tile > face_row_start) {
+                    const uint32_t remaining = valid_reduce_dim_elements_in_tile - face_row_start;
+                    cols_in_face = remaining < tt::constants::FACE_HEIGHT ? remaining : tt::constants::FACE_HEIGHT;
+                }
+            }
+
+            if (cols_in_face > 0) {
+                fill_face_row0_cols<data_format>(ptr + face_idx * face_size_u32, scaler, cols_in_face);
+            }
+        }
+    }
+}
+
+template <DataFormat data_format, ReduceDim reduce_dim, uint32_t face_rows, uint32_t faces_per_row>
+ALWI void fill_reduce_scaler(
+    volatile tt_l1_ptr uint32_t* ptr,
+    uint32_t scaler,
+    uint32_t valid_reduce_dim_elements_in_tile,
+    uint32_t full_dim) {
+    if (scaler == 0) {
+        return;
+    }
+
+    constexpr uint32_t num_faces = face_rows * faces_per_row;
+    if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
+        fill_each_face_row0<data_format, num_faces>(ptr, scaler);
+    } else if (valid_reduce_dim_elements_in_tile == full_dim) {
+        fill_each_face_row0<data_format, num_faces>(ptr, scaler);
+    } else {
+        fill_each_face_row0_partial<data_format, reduce_dim, face_rows, faces_per_row>(
+            ptr, scaler, valid_reduce_dim_elements_in_tile);
+    }
+}
 
 // SFPU MAX fold
 template <DataFormat format>
@@ -616,6 +739,152 @@ ALWI void reduce_accumulate_via_add(
 }  // namespace detail
 
 // =============================================================================
+// Reduce Scaler Helpers
+// =============================================================================
+
+template <uint32_t zero_source_dfb_id, uint32_t scaler_dfb_id, PoolType pool_type, ReduceDim reduce_dim>
+ALWI void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_dim_elements_in_tile) {
+    static_assert(zero_source_dfb_id != scaler_dfb_id, "zero source and scaler DFBs must be different");
+
+    constexpr DataFormat data_format = static_cast<DataFormat>(dfb_l1_format<scaler_dfb_id>());
+    constexpr DataFormat zero_source_format = static_cast<DataFormat>(dfb_l1_format<zero_source_dfb_id>());
+    constexpr uint32_t tile_r_dim = get_tile_r_dim<scaler_dfb_id>();
+    constexpr uint32_t tile_c_dim = get_tile_c_dim<scaler_dfb_id>();
+    static_assert(tile_r_dim % tt::constants::FACE_HEIGHT == 0, "tile height must be a multiple of FACE_HEIGHT");
+    static_assert(tile_c_dim % tt::constants::FACE_WIDTH == 0, "tile width must be a multiple of FACE_WIDTH");
+    static_assert(
+        get_tile_r_dim<zero_source_dfb_id>() == tile_r_dim && get_tile_c_dim<zero_source_dfb_id>() == tile_c_dim,
+        "zero source and scaler DFBs must have the same tile shape");
+    static_assert(
+        reduce_dim != ReduceDim::REDUCE_SCALAR ||
+            (tile_r_dim == tt::constants::TILE_HEIGHT && tile_c_dim == tt::constants::TILE_WIDTH),
+        "REDUCE_SCALAR only supports full 32x32 tiles");
+    static_assert(
+        data_format == DataFormat::Float16_b || data_format == DataFormat::Float32,
+        "prepare_reduce_scaler only supports Float16_b and Float32 scaler DFBs");
+    static_assert(
+        zero_source_format != DataFormat::Int32,
+        "prepare_reduce_scaler requires an FPU-compatible zero source DFB; Int32 is not supported");
+#ifdef ARCH_QUASAR
+    static_assert(
+        tile_r_dim == tt::constants::TILE_HEIGHT && tile_c_dim == tt::constants::TILE_WIDTH,
+        "prepare_reduce_scaler requires full 32x32 tiles on Quasar's binary FPU unpack path");
+#endif
+
+    ASSERT(valid_reduce_dim_elements_in_tile > 0);
+    constexpr uint32_t full_dim = reduce_dim == ReduceDim::REDUCE_COL ? tile_r_dim : tile_c_dim;
+    constexpr uint32_t face_rows = tile_r_dim / tt::constants::FACE_HEIGHT;
+    constexpr uint32_t faces_per_row = tile_c_dim / tt::constants::FACE_WIDTH;
+    constexpr uint32_t onetile = 1;
+
+    DataflowBuffer zero_source_dfb(zero_source_dfb_id);
+    DataflowBuffer scaler_dfb(scaler_dfb_id);
+    zero_source_dfb.wait_front(onetile);
+    scaler_dfb.reserve_back(onetile);
+
+    // The source is used for both operands so x - x creates a zero tile in DST. Reconfigure both
+    // source paths because compute_kernel_hw_startup commonly configures SrcB for the scaler DFB.
+    reconfig_data_format(zero_source_dfb_id, zero_source_dfb_id);
+    sub_init(zero_source_dfb_id, zero_source_dfb_id);
+    pack_reconfig_data_format(scaler_dfb_id);
+    pack_init(scaler_dfb_id);
+
+    tile_regs_acquire();
+    sub_tiles(zero_source_dfb_id, zero_source_dfb_id, 0, 0, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, scaler_dfb_id);
+    tile_regs_release();
+
+    PACK({
+        const uint32_t write_addr = scaler_dfb.get_write_ptr() << cb_addr_shift;
+        volatile tt_l1_ptr uint32_t* write_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+        detail::fill_reduce_scaler<data_format, reduce_dim, face_rows, faces_per_row>(
+            write_ptr,
+            detail::float_to_scaler_bits<data_format>(scaler_f),
+            valid_reduce_dim_elements_in_tile,
+            full_dim);
+#if defined(DEBUG_PRINT_ENABLED)
+        DPRINT("Reduce scaler tile (CB {}):\n", scaler_dfb_id);
+        for (uint16_t row = 0; row < tile_r_dim; ++row) {
+            if constexpr (data_format == DataFormat::Float32 && tile_c_dim > tt::constants::FACE_WIDTH) {
+                DPRINT(
+                    "row {} [0:16]: {}\n",
+                    row,
+                    TileSlice<64>(
+                        scaler_dfb_id,
+                        0,
+                        SliceRange{
+                            .h0 = static_cast<uint8_t>(row),
+                            .h1 = static_cast<uint8_t>(row + 1),
+                            .hs = 1,
+                            .w0 = 0,
+                            .w1 = tt::constants::FACE_WIDTH,
+                            .ws = 1},
+                        true,
+                        true));
+                DPRINT(
+                    "row {} [16:32]: {}\n",
+                    row,
+                    TileSlice<64>(
+                        scaler_dfb_id,
+                        0,
+                        SliceRange{
+                            .h0 = static_cast<uint8_t>(row),
+                            .h1 = static_cast<uint8_t>(row + 1),
+                            .hs = 1,
+                            .w0 = tt::constants::FACE_WIDTH,
+                            .w1 = static_cast<uint8_t>(tile_c_dim),
+                            .ws = 1},
+                        true,
+                        true));
+            } else {
+                DPRINT(
+                    "row {}: {}\n",
+                    row,
+                    TileSlice<64>(
+                        scaler_dfb_id,
+                        0,
+                        SliceRange{
+                            .h0 = static_cast<uint8_t>(row),
+                            .h1 = static_cast<uint8_t>(row + 1),
+                            .hs = 1,
+                            .w0 = 0,
+                            .w1 = static_cast<uint8_t>(tile_c_dim),
+                            .ws = 1},
+                        true,
+                        true));
+            }
+        }
+#endif
+    })
+    scaler_dfb.push_back(onetile);
+}
+
+template <
+    uint32_t zero_source_dfb_id,
+    uint32_t scaler_dfb_id,
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t reduce_factor>
+ALWI void calculate_and_prepare_reduce_scaler(uint32_t valid_reduce_dim_elements_in_tile) {
+    float scaler_f;
+    if constexpr (pool_type == PoolType::AVG) {
+        static_assert(reduce_factor > 0, "reduce_factor must be greater than 0");
+        if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
+            scaler_f = 1.0f / sqrtf(static_cast<float>(reduce_factor));
+        } else {
+            scaler_f = 1.0f / static_cast<float>(reduce_factor);
+        }
+    } else {
+        scaler_f = 1.0f;
+    }
+
+    prepare_reduce_scaler<zero_source_dfb_id, scaler_dfb_id, pool_type, reduce_dim>(
+        scaler_f, valid_reduce_dim_elements_in_tile);
+}
+
+// =============================================================================
 // ReduceDataFormatReconfigMode Helper Functions
 // =============================================================================
 
@@ -954,6 +1223,12 @@ ALWI void reduce(
     }
     if constexpr (reconfig_output(reconfig_mode)) {
         pack_reconfig_data_format(output_dfb_id);
+#ifdef ARCH_QUASAR
+        // pack_reconfig_data_format only updates Quasar's format gasket. A preceding compute-side
+        // scaler build retargets the packer ring to scaler_dfb_id, so explicitly point it back to
+        // the reduction output before reduce_init configures the edge mask.
+        pack_init(output_dfb_id);
+#endif
     }
     // Initialization
     if constexpr (is_sfpu) {

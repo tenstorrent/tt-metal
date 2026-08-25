@@ -14,6 +14,7 @@ namespace {
 constexpr uint32_t cb_input = 0;
 constexpr uint32_t cb_scaler = 1;
 constexpr uint32_t cb_accumulator = 2;
+constexpr uint32_t cb_zero_source = 3;
 constexpr uint32_t cb_output = 16;
 constexpr uint32_t num_calls = get_compile_time_arg_val(0);
 
@@ -86,6 +87,7 @@ void kernel_main() {
     const uint32_t cols = get_arg_val<uint32_t>(1);
     const uint32_t batches = get_arg_val<uint32_t>(2);
     const uint32_t row_stride = get_arg_val<uint32_t>(3);
+    const uint32_t valid_elements = get_arg_val<uint32_t>(4);
 
     const uint32_t input_tiles = rows * row_stride * batches;
     const auto shape = compute_kernel_lib::ReduceInputBlockShape::of(rows, cols, batches);
@@ -99,6 +101,28 @@ void kernel_main() {
     // complete stream visible once; ownership then follows the selected policy.
     cb_reserve_back(cb_input, input_tiles * num_calls);
     cb_push_back(cb_input, input_tiles * num_calls);
+
+    // The FPU-compatible source is separate from the reduction input so Int32 reductions can
+    // exercise the same compute-side scaler path. The helper waits without consuming the tile.
+    cb_reserve_back(cb_zero_source, 1);
+    cb_push_back(cb_zero_source, 1);
+#ifdef REDUCE_CUSTOM_SCALER_BITS
+    constexpr float scaler = __builtin_bit_cast(float, static_cast<uint32_t>(REDUCE_CUSTOM_SCALER_BITS));
+    compute_kernel_lib::prepare_reduce_scaler<cb_zero_source, cb_scaler, REDUCE_OP, REDUCE_DIM>(scaler, valid_elements);
+#else
+    compute_kernel_lib::
+        calculate_and_prepare_reduce_scaler<cb_zero_source, cb_scaler, REDUCE_OP, REDUCE_DIM, REDUCE_FACTOR>(
+            valid_elements);
+#endif
+    cb_pop_front(cb_zero_source, 1);
+
+    // Scaler construction uses both unpack sources and retargets the packer. Restore the state
+    // established by compute_kernel_hw_startup() so REDUCE_RECONFIG_MODE retains its test meaning.
+    reconfig_data_format(cb_input, cb_scaler);
+    pack_reconfig_data_format(first_output_cb);
+#ifdef ARCH_QUASAR
+    pack_init(first_output_cb);
+#endif
 
     for (uint32_t call = 0; call < num_calls; ++call) {
         const bool is_last_call = call == num_calls - 1;
