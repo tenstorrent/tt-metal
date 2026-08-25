@@ -347,7 +347,7 @@ def test_exact_shape_miss_falls_back(device):
     _assert_dispatch_delta(before, after, exact_hit=False, reason="empty_registry")
 
 
-def test_public_validation_error_is_not_retried(device):
+def test_public_validation_error_is_not_retried(device, expect_error):
     lock = _lock()
     domain = "dense.matmul"
     entry = _compatible_entries(lock, device, domain)[0]
@@ -358,7 +358,7 @@ def test_public_validation_error_is_not_retried(device):
     tensor_a = _make_tensor(host_a, key["input_a"], device)
     tensor_b = _make_tensor(host_b, key["input_b"], device)
     before = _domain_stats(_plain(REGISTRY.matmul_registry_stats()), domain)
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "."):
         ttnn.matmul(
             tensor_a,
             tensor_b,
