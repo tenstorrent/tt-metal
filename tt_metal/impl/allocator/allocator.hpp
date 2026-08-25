@@ -146,6 +146,8 @@ private:
     static void unregister_traceback_allocator(AllocatorImpl* allocator);
     void verify_safe_allocation() const;
     void record_allocation_if_unsafe(Buffer* buffer);
+    void record_deallocation(size_t buffer_unique_id);
+    void record_all_deallocations();
     void retire_buffer_if_unreferenced(size_t buffer_unique_id);
     void clear_trace_allocation_state();
     bool in_corruptible_allocation_scope() const;

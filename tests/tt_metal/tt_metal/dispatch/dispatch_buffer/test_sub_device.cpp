@@ -13,6 +13,7 @@
 #include <exception>
 #include <memory>
 #include <optional>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -220,9 +221,22 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerCoversSubDeviceAllocat
         !trace_allocation_skip_program_cache_enabled());
 
     tracked->deallocate();
+    // Aggregate accounting is not allowed to rely on a per-trace query to
+    // discover and lazily retire the deallocated buffer.
+    if (trace_allocation_diagnostics_enabled()) {
+        EXPECT_FALSE(distributed::trace_allocation_tracker::get_all_unsafe_tracked_ids().contains(tracked_id));
+    }
     EXPECT_FALSE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
                      .contains(tracked_id));
-    EXPECT_FALSE(distributed::trace_allocation_tracker::get_all_unsafe_tracked_ids().contains(tracked_id));
+
+    auto cross_thread = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
+    const auto cross_thread_id = cross_thread->get_backing_buffer()->unique_id();
+    std::thread deallocator([cross_thread]() { cross_thread->deallocate(); });
+    deallocator.join();
+    if (trace_allocation_diagnostics_enabled()) {
+        EXPECT_FALSE(distributed::trace_allocation_tracker::get_all_unsafe_tracked_ids().contains(cross_thread_id));
+    }
+
     program_cache_allocation->deallocate();
     EXPECT_FALSE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
                      .contains(program_cache_allocation_id));

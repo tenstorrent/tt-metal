@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <mutex>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -187,6 +188,24 @@ void AllocatorImpl::record_allocation_if_unsafe(Buffer* buffer) {
     }
 }
 
+void AllocatorImpl::record_deallocation(size_t buffer_unique_id) {
+    for (auto& manager_traces : unsafe_tracked_ids_by_manager_and_trace_) {
+        for (auto& trace_buffers : manager_traces.second) {
+            trace_buffers.second.erase(buffer_unique_id);
+        }
+    }
+    unsafe_allocation_contexts_.erase(buffer_unique_id);
+}
+
+void AllocatorImpl::record_all_deallocations() {
+    for (auto& manager_traces : unsafe_tracked_ids_by_manager_and_trace_) {
+        for (auto& trace_buffers : manager_traces.second) {
+            trace_buffers.second.clear();
+        }
+    }
+    unsafe_allocation_contexts_.clear();
+}
+
 std::unordered_map<size_t, std::string> AllocatorImpl::get_unsafe_tracked_ids(
     SubDeviceManagerId manager_id, const distributed::MeshTraceId& trace_id) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -200,44 +219,17 @@ std::unordered_map<size_t, std::string> AllocatorImpl::get_unsafe_tracked_ids(
         return result;
     }
 
-    std::unordered_set<size_t> allocated_buffer_ids;
-    allocated_buffer_ids.reserve(allocated_buffers_.size());
-    for (const auto* buffer : allocated_buffers_) {
-        allocated_buffer_ids.insert(buffer->unique_id());
-    }
-
-    std::vector<size_t> retired_ids;
     for (size_t buffer_unique_id : trace_it->second) {
-        if (!allocated_buffer_ids.contains(buffer_unique_id)) {
-            retired_ids.push_back(buffer_unique_id);
-            continue;
-        }
         auto context_it = unsafe_allocation_contexts_.find(buffer_unique_id);
         result.emplace(
             buffer_unique_id, context_it == unsafe_allocation_contexts_.end() ? std::string{} : context_it->second);
-    }
-
-    // Keep deallocation identical to the ordinary hot path. Retire stale
-    // accounting lazily when a trace is checked instead.
-    for (size_t buffer_unique_id : retired_ids) {
-        for (auto& manager_traces : unsafe_tracked_ids_by_manager_and_trace_) {
-            for (auto& trace_buffers : manager_traces.second) {
-                trace_buffers.second.erase(buffer_unique_id);
-            }
-        }
-        unsafe_allocation_contexts_.erase(buffer_unique_id);
     }
     return result;
 }
 
 void AllocatorImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
     std::lock_guard<std::mutex> lock(mutex_);
-    for (auto& manager_traces : unsafe_tracked_ids_by_manager_and_trace_) {
-        for (auto& trace_buffers : manager_traces.second) {
-            trace_buffers.second.erase(buffer_unique_id);
-        }
-    }
-    unsafe_allocation_contexts_.erase(buffer_unique_id);
+    this->record_deallocation(buffer_unique_id);
 }
 
 std::vector<size_t> AllocatorImpl::drain_pending_traceback_ids() {

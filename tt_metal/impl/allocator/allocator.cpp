@@ -31,9 +31,9 @@ AllocatorImpl::AllocatorImpl(const AllocatorConfig& alloc_config) :
     config_(std::make_unique<AllocatorConfig>(alloc_config)),
     view_(std::make_unique<Allocator>(this)),
     tracking_enabled_(trace_allocation_tracking_enabled()),
-    traceback_capture_enabled_(trace_allocation_diagnostics_enabled()),
+    traceback_capture_enabled_(tracking_enabled_ && trace_allocation_diagnostics_enabled()),
     skip_program_cache_(trace_allocation_skip_program_cache_enabled()) {
-    if (tracking_enabled_) {
+    if (traceback_capture_enabled_) {
         register_traceback_allocator(this);
     }
 }
@@ -238,6 +238,9 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
             l1_manager_->deallocate_buffer(addr, AllocatorID{bank_id + 1});
         }
         allocated_buffers_.erase(buffer);
+        if (tracking_enabled_ && !unsafe_allocation_contexts_.empty()) [[unlikely]] {
+            this->record_deallocation(buffer->unique_id());
+        }
         return;
     }
 
@@ -251,6 +254,9 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.erase(buffer);
+    if (tracking_enabled_ && !unsafe_allocation_contexts_.empty()) [[unlikely]] {
+        this->record_deallocation(buffer->unique_id());
+    }
 }
 
 void AllocatorImpl::deallocate_buffers() {
@@ -259,6 +265,9 @@ void AllocatorImpl::deallocate_buffers() {
     l1_manager_->deallocate_all();
     l1_small_manager_->deallocate_all();
     trace_buffer_manager_->deallocate_all();
+    if (tracking_enabled_ && !unsafe_allocation_contexts_.empty()) [[unlikely]] {
+        this->record_all_deallocations();
+    }
 }
 
 void AllocatorImpl::set_hybrid_device_allocators(const std::vector<AllocatorImpl*>& device_allocators) {
@@ -511,6 +520,9 @@ void AllocatorImpl::clear() {
     l1_manager_->clear();
     l1_small_manager_->clear();
     trace_buffer_manager_->clear();
+    if (tracking_enabled_ && !unsafe_allocation_contexts_.empty()) [[unlikely]] {
+        this->record_all_deallocations();
+    }
 }
 
 void AllocatorConfig::reset() {
@@ -522,7 +534,7 @@ void AllocatorConfig::reset() {
 }
 
 AllocatorImpl::~AllocatorImpl() {
-    if (tracking_enabled_) {
+    if (traceback_capture_enabled_) {
         unregister_traceback_allocator(this);
     }
     this->clear_trace_allocation_state();
@@ -585,6 +597,9 @@ void AllocatorImpl::override_state(const AllocatorState& state) {
     l1_manager_->deallocate_all();
     l1_small_manager_->deallocate_all();
     trace_buffer_manager_->deallocate_all();
+    if (tracking_enabled_ && !unsafe_allocation_contexts_.empty()) [[unlikely]] {
+        this->record_all_deallocations();
+    }
     allocated_buffers_.clear();
 
     // Apply state for each buffer type
