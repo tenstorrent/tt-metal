@@ -16,7 +16,7 @@ def cleanup_ttnn_value(value):
         return
 
     if isinstance(value, dict):
-        for nested_value in value.values():
+        for nested_value in list(value.values()):
             cleanup_ttnn_value(nested_value)
         return
 
@@ -47,7 +47,7 @@ def cleanup_object_graph(obj, seen=None):
         return
 
     if isinstance(obj, dict):
-        for value in obj.values():
+        for value in list(obj.values()):
             cleanup_object_graph(value, seen)
         return
 
