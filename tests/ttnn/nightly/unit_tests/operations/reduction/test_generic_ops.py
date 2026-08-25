@@ -5,6 +5,8 @@
 # Corner cases of the generic reductions (sum/mean/max/min/prod/std/var).
 # Split from test_reduction_ops.py: corner-case tests, not exhaustive sweeps.
 
+import contextlib
+
 import pytest
 import torch
 import ttnn
@@ -61,13 +63,13 @@ OP_CORRECTION = [
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("op, correction", OP_CORRECTION)
-def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correction, op):
+def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correction, op, expect_error):
     """
     Test the compatibility of the torch and ttnn output for the given operation and different
     tensor shapes, keepdim, and dim values.
     Checks that resulting tensors are within a certain tolerance of PyTorch outputs.
     Some operations raise exceptions in torch, we check if the same behavior is observed in ttnn.
-    Note: We do not enforce the same exception type or message.
+    Note: We do not enforce the same exception type or message between PyTorch and ttnn.
     """
     torch.manual_seed(0)
     torch_tensor = torch.randn(tensor_shape, dtype=dtype)
@@ -107,23 +109,25 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
         logger.info(f"torch {op} raised: {e}")
         torch_errored = True
 
-    ttnn_errored = False
-    try:
+    # torch has already run, so its outcome is the expectation for ttnn: the two must
+    # fail on exactly the same inputs. Bracketing the provoked failure marks it as
+    # expected so CI log triage does not read it as a crash.
+    ctx = (
+        expect_error(
+            (IndexError, TypeError, RuntimeError),
+            # prod takes a scalar dim, so a tuple is rejected by the binding rather
+            # than by the device-side zero-size check the other ops hit.
+            "Expected reduction dim|incompatible function arguments",
+        )
+        if torch_errored
+        else contextlib.nullcontext()
+    )
+    with ctx:
         # ttnn.prod doesn't support the correction argument.
-        if op in ("var", "std"):
-            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, correction=correction)
-        elif op != "prod":
-            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, correction=correction)
-        else:
+        if op == "prod":
             ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
-    except (IndexError, TypeError, RuntimeError) as e:
-        ttnn_errored = True
-        if not torch_errored:
-            logger.error(f"torch passed and produced result: {torch_result}, but ttnn raised exception: {e}")
-
-    assert torch_errored == ttnn_errored, f"torch_errored: {torch_errored}, ttnn_errored: {ttnn_errored}"
-
-    # Skip the rest of the test if an exception was raised in both
+        else:
+            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, correction=correction)
     if torch_errored:
         return
 

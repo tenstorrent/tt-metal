@@ -22,13 +22,12 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
         -1.0,
     ],
 )
-def test_negative_exponent(input_shapes, exponent, device):
+def test_negative_exponent(input_shapes, exponent, device, expect_error):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -20, 20, device, seed=1)
 
-    with pytest.raises(RuntimeError) as _e:  # allow-pytest.raises: pre-existing, predates this hook
-        tt_output_tensor_on_device = ttnn.pow_bw(grad_tensor, input_tensor, exponent)
-    assert "exponent >= 0.0" in str(_e.value)
+    with expect_error(RuntimeError, "negative exponents are not supported"):
+        ttnn.pow_bw(grad_tensor, input_tensor, exponent)
 
 
 @pytest.mark.parametrize(

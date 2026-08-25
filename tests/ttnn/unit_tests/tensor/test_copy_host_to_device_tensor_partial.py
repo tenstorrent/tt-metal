@@ -123,7 +123,7 @@ def test_copy_host_to_device_tensor_partial_complementary_filters_dram_sharded(d
     assert torch.equal(got, exp)
 
 
-def test_copy_host_to_device_tensor_partial_interleaved_raises(device):
+def test_copy_host_to_device_tensor_partial_interleaved_raises(device, expect_error):
     shape = (1, 1, 32, 32)
     mem_config = ttnn.DRAM_MEMORY_CONFIG
     tt_a = ttnn.from_torch(
@@ -141,5 +141,5 @@ def test_copy_host_to_device_tensor_partial_interleaved_raises(device):
     dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device, mem_config)
     ttnn.copy_host_to_device_tensor(tt_a, dev)
     flt = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "logical_core_filter is only supported for sharded buffer layouts"):
         ttnn.copy_host_to_device_tensor_partial(tt_b, dev, flt)

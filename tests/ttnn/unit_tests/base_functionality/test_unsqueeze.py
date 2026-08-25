@@ -42,8 +42,8 @@ def test_unsqueeze(device, input_shape, dim, layout):
         ((1, 1, 253), -5, ttnn.ROW_MAJOR_LAYOUT),
     ],
 )
-def test_invalid_cases(device, input_shape, dim, layout):
+def test_invalid_cases(device, input_shape, dim, layout, expect_error):
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "Dimension out of range"):
         ttnn.unsqueeze(input_tensor, dim)

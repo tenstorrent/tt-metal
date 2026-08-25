@@ -288,7 +288,7 @@ def test_interleaved_to_sharded_nd_with_equivalent_2d(
         ],
     ],
 )
-def test_interleaved_to_sharded_rejects_pure_nd(device, tensor_shape, nd_shard_shape, shard_grid):
+def test_interleaved_to_sharded_rejects_pure_nd(device, tensor_shape, nd_shard_shape, shard_grid, expect_error):
     nd_shard_spec = ttnn.NdShardSpec(nd_shard_shape, shard_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
 
@@ -296,5 +296,5 @@ def test_interleaved_to_sharded_rejects_pure_nd(device, tensor_shape, nd_shard_s
     ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "interleaved_to_sharded does not support ND sharding"):
         ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config)

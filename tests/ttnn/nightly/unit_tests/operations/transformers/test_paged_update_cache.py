@@ -1244,7 +1244,7 @@ def test_paged_fill_cache_batched_program_cache(device):
 
 
 @pytest.mark.parametrize("bad_tensor_size", [1, 3, 5, 7])
-def test_paged_fill_cache_batched_rejects_mismatched_batch_idx_tensor(device, bad_tensor_size):
+def test_paged_fill_cache_batched_rejects_mismatched_batch_idx_tensor(device, bad_tensor_size, expect_error):
     """batch_idx_tensor must have exactly input_batch elements; anything else FATALs.
 
     Covers the silent-wrong-result hole where input_batch > 1 paired with a
@@ -1272,11 +1272,11 @@ def test_paged_fill_cache_batched_rejects_mismatched_batch_idx_tensor(device, ba
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.uint32,
     )
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "Batch idx tensor must have input_tensor batch dim"):
         ttnn.experimental.paged_fill_cache(cache_tt, input_tt, page_table_tt, batch_idx_tensor=bad, batch_idx=0)
 
 
-def test_paged_fill_cache_rejects_multi_batch_input_without_tensor(device):
+def test_paged_fill_cache_rejects_multi_batch_input_without_tensor(device, expect_error):
     """input_batch > 1 with no batch_idx_tensor was previously a silent wrong-result; now FATAL."""
     initial_cache_torch, input_torch, page_table_torch = _build_batched_inputs(
         num_input_batch=4,
@@ -1293,7 +1293,7 @@ def test_paged_fill_cache_rejects_multi_batch_input_without_tensor(device):
     input_tt = ttnn.from_torch(input_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     page_table_tt = ttnn.from_torch(page_table_torch, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "input_batch must be 1"):
         ttnn.experimental.paged_fill_cache(cache_tt, input_tt, page_table_tt, batch_idx=0)
 
 
@@ -1346,7 +1346,7 @@ def test_paged_fill_cache_batched_mesh_coords(device):
     assert passing, message
 
 
-def test_paged_fill_cache_batched_rejects_non_row_major_batch_idx_tensor(device):
+def test_paged_fill_cache_batched_rejects_non_row_major_batch_idx_tensor(device, expect_error):
     """The writer kernel reads batch_idx_tensor as a single contiguous noc page;
     require ROW_MAJOR layout so that read covers the whole 1D buffer."""
     initial_cache_torch, input_torch, page_table_torch = _build_batched_inputs(
@@ -1378,5 +1378,5 @@ def test_paged_fill_cache_batched_rejects_non_row_major_batch_idx_tensor(device)
     except (RuntimeError, ValueError):
         pytest.skip("Cannot construct a TILE_LAYOUT uint32 tensor on this build; layout assertion still in place.")
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "Batch idx tensor must have input_tensor batch dim"):
         ttnn.experimental.paged_fill_cache(cache_tt, input_tt, page_table_tt, batch_idx_tensor=bad, batch_idx=0)
