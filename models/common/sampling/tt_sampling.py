@@ -674,8 +674,6 @@ class TTSampling(LightweightModule):
             )
             ttnn.copy_host_to_device_tensor(self._greedy_col_new, self._greedy_col)
 
-
-
         self.log_probs_calculator.set_log_probs_mode(
             enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots
         )
@@ -781,7 +779,6 @@ class TTSampling(LightweightModule):
         adjusted = ttnn.add(gathered_values, boost, sub_core_grids=scg)
         ttnn.deallocate(boost)
         return adjusted
-
 
     def forward(
         self,

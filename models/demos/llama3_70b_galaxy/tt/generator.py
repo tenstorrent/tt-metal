@@ -74,7 +74,6 @@ def get_prefill_warmup_sequence_lengths(max_seq_len: int) -> list[int]:
     return [128] + [2**i for i in range(10, max_seq_len.bit_length()) if 2**i <= max_seq_len]
 
 
-
 def _mark_trace_io_corruptible(tensors):
     """Acknowledge deliberately long-lived trace I/O to the trace-allocation tracker.
 
@@ -1411,8 +1410,10 @@ class Generator(WarmupForwardMixin):
         _rp = int(os.environ.get("TT_RESET_PROBE", "0"))
         if _rp and getattr(self, "_reset_probe_left", _rp) > 0:
             self._reset_probe_left = getattr(self, "_reset_probe_left", _rp) - 1
-            logger.warning(f"[reset-probe] reset_inputs={reset_inputs} reasons={reset_reasons} "
-                           f"page_table_changed={page_table_changed} on_device_sampling={on_device_sampling}")
+            logger.warning(
+                f"[reset-probe] reset_inputs={reset_inputs} reasons={reset_reasons} "
+                f"page_table_changed={page_table_changed} on_device_sampling={on_device_sampling}"
+            )
         kv_cache = kv_cache[0]
         active_seed_slots = None
         if start_pos is not None:
@@ -1614,6 +1615,7 @@ class Generator(WarmupForwardMixin):
                 unsafe = ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(self.mesh_device, trace_id)
                 logger.warning(f"[alloc-probe] decode trace {trace_id}: {len(unsafe)} unsafe allocation(s)")
                 from collections import Counter as _C
+
                 for ctx, cnt in _C(unsafe.values()).most_common(12):
                     logger.warning(f"[alloc-probe]   x{cnt:<4} {str(ctx)[:150]}")
             except Exception as _e:
