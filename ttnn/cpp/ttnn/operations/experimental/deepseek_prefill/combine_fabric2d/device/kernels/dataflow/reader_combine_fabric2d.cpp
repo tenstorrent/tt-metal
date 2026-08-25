@@ -395,61 +395,60 @@ struct Reader {
         return k;
     }
 
-    // Walk the schedule once per local expert. The schedule itself is the same every time — which chip pairs
-    // this stream serves and in what order does not depend on the expert — so the expert is simply the outer
-    // loop. Forwarding chunks always appear in increasing order within it, so `consumed` stays a valid
-    // watermark into our region however the own assignments are interleaved around them.
-    void run_schedule() {
-        for (uint32_t local_expert = 0; local_expert < ct.experts_per_chip; local_expert++) {
-            for (uint32_t si = 0; si < ct.schedule_len; si++) {
-                const uint32_t entry = kernel_compile_time_args[ct.schedule_base + si];
-                if (entry & cmbf2d::SCHED_FWD) {
-                    do_forward_chunk(entry & ~cmbf2d::SCHED_FWD, local_expert);
-                } else {
-                    do_own_assignment(entry, local_expert);
-                }
+    // Walk the schedule for one local expert. The schedule is the same for every expert — which chip pairs
+    // this stream serves and in what order does not depend on the expert — so the expert is only the
+    // caller's loop variable. Forwarding chunks always appear in increasing order, so `consumed` stays a
+    // valid watermark into our region however the own assignments are interleaved around them.
+    //
+    // Publishing at the end leaves nothing claimed but unannounced, which is what lets the local phase
+    // treat the next slot as private.
+    void run_schedule(uint32_t local_expert) {
+        for (uint32_t si = 0; si < ct.schedule_len; si++) {
+            const uint32_t entry = kernel_compile_time_args[ct.schedule_base + si];
+            if (entry & cmbf2d::SCHED_FWD) {
+                do_forward_chunk(entry & ~cmbf2d::SCHED_FWD, local_expert);
+            } else {
+                do_own_assignment(entry, local_expert);
             }
         }
         flush_publish();
     }
 
-    // Same-chip tokens. An expert here also holds tokens that started here, and those need no cable at all —
-    // they are a DRAM-to-DRAM copy on this chip. So they are not a sender's work and never appear in its
-    // packet count; they go straight out over our own NoC.
+    // Same-chip tokens for one local expert. An expert here also holds tokens that started here, and those
+    // need no cable at all — they are a DRAM-to-DRAM copy on this chip. So they are not a sender's work and
+    // never appear in its packet count; they go straight out over our own NoC.
     //
-    // Done LAST and split `local_split_count` ways (one slice per core) for the same reason: it is pure local
-    // bandwidth, so doing it while the fabric is still busy would compete with the token reads feeding it,
-    // and leaving it to one core would make it a serial tail. Whether last is actually the best place for it,
-    // and whether it belongs on separate cores entirely, is a stage-3 question.
-    void run_local_phase() {
+    // Split `local_split_count` ways, one slice per core, so it is not a serial tail on one of them. It runs
+    // inside the expert loop rather than once at the end, so an expert is wholly done — fabric and local
+    // alike — before the next one starts; that costs some overlap with the fabric work still draining, and
+    // whether these copies belong on separate cores entirely is a stage-3 question.
+    void run_local_phase(uint32_t local_expert) {
         // One slot serves as the staging buffer for the whole phase, and is deliberately NEVER published:
         // the sender must not see these tokens, or it would send them over the fabric as well. Slot
         // `published % num_l1_slots` is the next one the sender has yet to be told about, so it is ours to
         // scribble in; claim_slot() is still what proves at least one slot is free before we take it, and
         // `published` does not move during this phase so it stays free. The CMD_END slot below reclaims it.
         const uint32_t slot_addr = slot_addr_of(claim_slot());
-        for (uint32_t le = 0; le < ct.experts_per_chip; le++) {
-            const uint32_t e = ct.my_expert_base + le;
-            const uint32_t begin = ctl.run_begin(ct.my_dg_index, e);
-            const uint32_t n = ctl.run_end(ct.my_dg_index, e) - begin;
-            const uint32_t lo = slice_begin(begin, n, ct.my_stream, ct.local_split_count);
-            const uint32_t hi = slice_begin(begin, n, ct.my_stream + 1, ct.local_split_count);
-            for (uint32_t base = lo; base < hi; base += ct.meta_prefetch_cap) {
-                const uint32_t end = (hi - base) > ct.meta_prefetch_cap ? base + ct.meta_prefetch_cap : hi;
-                prefetch_metadata(base, end);
-                for (uint32_t p = base; p < end; p++) {
-                    volatile tt_l1_ptr uint32_t* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                        meta_pads_addr + (p - base) * cmbf2d::META_PAD_STRIDE);
-                    const uint32_t out_page = meta[1] * ct.num_experts_per_tok + meta[2];
-                    const uint64_t out_addr = dram.out.get_noc_addr(out_page);
-                    noc_async_read(dram.in.get_noc_addr(p), slot_addr, ct.token_size_bytes);
-                    noc_async_read_barrier();
-                    noc_async_write(slot_addr, out_addr, ct.token_size_bytes);
-                    // Serialised on purpose: the slot IS the buffer, so it cannot be refilled until the write
-                    // has read it out. Overlapping these needs several buffers in flight, tracked separately
-                    // from the sender's ring accounting.
-                    noc_async_write_barrier();
-                }
+        const uint32_t e = ct.my_expert_base + local_expert;
+        const uint32_t begin = ctl.run_begin(ct.my_dg_index, e);
+        const uint32_t n = ctl.run_end(ct.my_dg_index, e) - begin;
+        const uint32_t lo = slice_begin(begin, n, ct.my_stream, ct.local_split_count);
+        const uint32_t hi = slice_begin(begin, n, ct.my_stream + 1, ct.local_split_count);
+        for (uint32_t base = lo; base < hi; base += ct.meta_prefetch_cap) {
+            const uint32_t end = (hi - base) > ct.meta_prefetch_cap ? base + ct.meta_prefetch_cap : hi;
+            prefetch_metadata(base, end);
+            for (uint32_t p = base; p < end; p++) {
+                volatile tt_l1_ptr uint32_t* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    meta_pads_addr + (p - base) * cmbf2d::META_PAD_STRIDE);
+                const uint32_t out_page = meta[1] * ct.num_experts_per_tok + meta[2];
+                const uint64_t out_addr = dram.out.get_noc_addr(out_page);
+                noc_async_read(dram.in.get_noc_addr(p), slot_addr, ct.token_size_bytes);
+                noc_async_read_barrier();
+                noc_async_write(slot_addr, out_addr, ct.token_size_bytes);
+                // Serialised on purpose: the slot IS the buffer, so it cannot be refilled until the write
+                // has read it out. Overlapping these needs several buffers in flight, tracked separately
+                // from the sender's ring accounting.
+                noc_async_write_barrier();
             }
         }
         claimed--;  // hand the staging slot back; nothing was ever announced for it
@@ -468,8 +467,12 @@ void kernel_main() {
     const Dram dram = open_dram();
     Reader reader{dram, read_control_tables(dram)};
 
-    reader.run_schedule();
-    reader.run_local_phase();
+    // One pass per local expert, fabric then local, so every token of expert e is placed before expert
+    // e + 1 is touched.
+    for (uint32_t local_expert = 0; local_expert < ct.experts_per_chip; local_expert++) {
+        reader.run_schedule(local_expert);
+        reader.run_local_phase(local_expert);
+    }
     reader.end_stream();
 
     // Back to zero for the next launch, which starts its own count at zero. The upstream sender cannot bump
