@@ -141,6 +141,7 @@ set(HW_JIT_API_HEADERS
     inc/api/dataflow/endpoints.h
     inc/api/dataflow/circular_buffer.h
     inc/api/dataflow/dataflow_buffer.h
+    inc/api/dataflow/fabric_dataflow_buffer.h
     inc/experimental/kernel_args.h
     inc/experimental/blaze_named_args.h
     inc/api/dataflow/noc_semaphore.h
@@ -202,6 +203,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-1xx/dataflow_buffer.inl
     inc/internal/tt-1xx/noc_zero_l1.inl
     inc/internal/tt-2xx/dataflow_buffer.inl
+    inc/internal/tt-2xx/fabric_dataflow_buffer.inl
     inc/internal/tt-2xx/noc_zero_l1.inl
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h

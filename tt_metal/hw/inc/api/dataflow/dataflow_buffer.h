@@ -294,6 +294,15 @@ public:
     uint32_t get_write_ptr() const { return get_write_ptr_impl(); }
     uint32_t get_read_ptr() const { return get_read_ptr_impl(); }
 
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+    // Pull-Fabric consumer primitives. Issuing a pull advances the FIFO read
+    // pointer without returning a producer credit; source-DMA completion
+    // returns that credit later, in FIFO order.
+    uint8_t get_num_tcs_to_rr() const;
+    void advance_read_ptr();
+    void acknowledge_front();
+#endif
+
 #ifndef ARCH_QUASAR
     // WH/BH only — mutate FIFO cursor state (rewind / jump / hold-wr style surgery).
     // Not for peeks: use get_*_ptr. Not declared on Quasar (redesign Classes 2–5).
@@ -316,6 +325,10 @@ private:
     uint32_t get_read_ptr_impl()  const;
 #ifndef COMPILE_FOR_TRISC
     void write_barrier_impl(const Noc &noc) const;
+#ifdef ARCH_QUASAR
+    void advance_read_ptr_impl();
+    void acknowledge_front_impl();
+#endif
 #endif
 
 #ifdef ARCH_QUASAR
@@ -359,6 +372,12 @@ private:
     uint16_t ctxn_id_loop_cnt_ = 0;
     uint8_t ctxn_id_index_ = 0;
     uint16_t ctiles_written_ = 0;  // not the same as tile counter: HW has no way to track pending acks
+
+#ifndef COMPILE_FOR_TRISC
+    // Pull-Fabric credits complete in the same TC round-robin order in which
+    // advance_read_ptr() issued pages.
+    uint8_t fabric_ack_tc_idx_ = 0;
+#endif
 #endif
 };
 

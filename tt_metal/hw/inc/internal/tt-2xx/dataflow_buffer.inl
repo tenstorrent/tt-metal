@@ -28,7 +28,11 @@
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) : logical_dfb_id_(logical_dfb_id) {}
 #else
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
-    : logical_dfb_id_(logical_dfb_id), local_dfb_interface_(get_local_dfb_interface(logical_dfb_id)) {}
+    : logical_dfb_id_(logical_dfb_id), local_dfb_interface_(get_local_dfb_interface(logical_dfb_id))
+#if !defined(COMPILE_FOR_TRISC)
+    , fabric_ack_tc_idx_(local_dfb_interface_.tc_idx)
+#endif
+{}
 #endif
 
 inline uint32_t DataflowBuffer::get_entry_size() const {
@@ -314,6 +318,56 @@ inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
 }
 
 #ifndef COMPILE_FOR_TRISC
+inline uint8_t DataflowBuffer::get_num_tcs_to_rr() const {
+    return local_dfb_interface_.num_tcs_to_rr;
+}
+
+inline void DataflowBuffer::advance_read_ptr() {
+    advance_read_ptr_impl();
+}
+
+inline void DataflowBuffer::acknowledge_front() {
+    acknowledge_front_impl();
+}
+
+inline void DataflowBuffer::advance_read_ptr_impl() {
+    ASSERT(!local_dfb_interface_.broadcast_tc);
+    ASSERT(local_dfb_interface_.num_tcs_to_rr > 0);
+
+    auto& tc_slot =
+        local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
+    tc_slot.rd_ptr += local_dfb_interface_.stride_size;
+    if (tc_slot.rd_ptr >= tc_slot.limit) {
+        tc_slot.rd_ptr = tc_slot.base_addr;
+    }
+
+    local_dfb_interface_.tc_idx++;
+    if (local_dfb_interface_.tc_idx ==
+        local_dfb_interface_.num_tcs_to_rr) {
+        local_dfb_interface_.tc_idx = 0;
+    }
+}
+
+inline void DataflowBuffer::acknowledge_front_impl() {
+    ASSERT(!local_dfb_interface_.broadcast_tc);
+    ASSERT(local_dfb_interface_.num_tcs_to_rr > 0);
+    ASSERT(fabric_ack_tc_idx_ < local_dfb_interface_.num_tcs_to_rr);
+
+    const auto packed_tc =
+        local_dfb_interface_.tc_slots[fabric_ack_tc_idx_]
+            .packed_tile_counter;
+    const uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
+    const uint8_t tc_id = dfb::get_counter_id(packed_tc);
+
+    ASSERT(overlay::llk_intf_get_occupancy(tensix_id, tc_id) > 0);
+    overlay::llk_intf_inc_acked(tensix_id, tc_id, 1);
+
+    fabric_ack_tc_idx_++;
+    if (fabric_ack_tc_idx_ == local_dfb_interface_.num_tcs_to_rr) {
+        fabric_ack_tc_idx_ = 0;
+    }
+}
+
 template <bool is_producer>
 inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, uint8_t txn_id_index) {
     // Determine the txn_id for the last batch. If transactions_issued lands exactly on

@@ -180,10 +180,23 @@
 #error "Packet header pool base and size must be 16-byte aligned"
 #endif
 
+// Pull-Fabric transaction counters. One uint32 per in-flight transaction, which
+// the DE decrements over NoC as each source read completes. Indexed by RISC id
+// so two sender DMs on a core do not share a bank.
+#define MEM_FABRIC_MAX_TRANSACTION_IDS 16
+#define MEM_FABRIC_TXN_COUNTERS_STRIDE (MEM_FABRIC_MAX_TRANSACTION_IDS * 4)
+#define MEM_FABRIC_TXN_COUNTERS_REGION (MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE)
+#define MEM_FABRIC_TXN_COUNTERS_SIZE (MEM_FABRIC_TXN_COUNTERS_STRIDE * MaxDMProcessorsPerCoreType)
+#define MEM_FABRIC_TXN_COUNTERS_BASE(risc_id) \
+    (MEM_FABRIC_TXN_COUNTERS_REGION + (risc_id) * MEM_FABRIC_TXN_COUNTERS_STRIDE)
+#if (MEM_FABRIC_TXN_COUNTERS_REGION % 16 != 0) || (MEM_FABRIC_TXN_COUNTERS_SIZE % 16 != 0)
+#error "Fabric transaction counter region base and size must be 16-byte aligned"
+#endif
+
 // Read-only reserved memory boundary for watcher checks
 #define MEM_MAP_READ_ONLY_END (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO)
 // Read-write reserved memory boundary for watcher checks
-#define MEM_MAP_END (MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE)
+#define MEM_MAP_END (MEM_FABRIC_TXN_COUNTERS_REGION + MEM_FABRIC_TXN_COUNTERS_SIZE)
 
 // Kernel config region size after MEM_MAP_END (see create_tensix_mem_map()).
 #define MEM_KERNEL_CONFIG_SIZE (100 * 1024)

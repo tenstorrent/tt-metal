@@ -37,6 +37,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/dispatch_context.hpp
     api/tt-metalium/experimental/fabric/control_plane.hpp
     api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
+    api/tt-metalium/experimental/fabric/fabric_dataflow_buffer.hpp
     api/tt-metalium/experimental/fabric/fabric.hpp
     api/tt-metalium/experimental/fabric/fabric_edm_types.hpp
     api/tt-metalium/experimental/fabric/fabric_switch_manager.hpp
@@ -175,6 +176,7 @@ set(JITAPI_FILES
     api/tt-metalium/constants.hpp
     api/tt-metalium/experimental/fabric/fabric_edm_types.hpp
     api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
+    api/tt-metalium/experimental/fabric/fabric_dataflow_buffer.hpp
     core_descriptors/blackhole_140_arch.yaml
     core_descriptors/blackhole_140_arch_eth_dispatch.yaml
     core_descriptors/blackhole_140_arch_fabric_mux.yaml
