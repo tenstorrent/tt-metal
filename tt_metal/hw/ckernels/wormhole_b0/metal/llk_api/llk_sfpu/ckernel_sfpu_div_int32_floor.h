@@ -137,7 +137,7 @@ sfpi_inline void calculate_div_int32_body(
         q -= 1;
         r += b;
     }
-    v_elseif(r >= b) {
+    v_elseif(sfpi::as<sfpi::vUInt>(r) >= sfpi::as<sfpi::vUInt>(b)) {
         q += 1;
         r -= b;
     }
