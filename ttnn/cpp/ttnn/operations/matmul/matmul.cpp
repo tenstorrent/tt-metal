@@ -272,28 +272,22 @@ registry::RegistryRequestInspection registry::inspect_registry_request(
         .transpose_b = parameters.transpose_b,
     });
     RegistryRequestInspection inspection{
-        .eligibility = Eligibility{
-            .call = call_semantics,
-            .io_contract_status = io_contract.status,
-            .trace_capture_active = trace_capture_active,
-            .has_program_config = parameters.program_config.has_value(),
-            .has_compute_kernel_config = parameters.compute_kernel_config.has_value(),
-            .has_user_core_grid = parameters.user_core_coord.has_value(),
-            .has_bias = has_bias,
-            .has_activation = parameters.user_fused_activation.has_value(),
-            .has_optional_output = optional_output_tensor.has_value(),
-            .has_output_tile = parameters.output_tile.has_value(),
-            .has_global_cb = parameters.global_cb.has_value(),
-            .has_sub_device = parameters.sub_device_id.has_value(),
-            .has_bcast_batch = parameters.bcast_batch.has_value(),
-            .untilize_out = parameters.untilize_out,
-            .input_a_sharded = input_tensor_a.is_sharded(),
-            .input_b_sharded = input_tensor_b.is_sharded(),
-            .output_sharded = io_contract.output_memory_config.is_sharded(),
-            .input_b_batched = parameters.user_run_batched,
-            .transpose_a = parameters.transpose_a,
-            .transpose_b = parameters.transpose_b,
-        }};
+        .eligibility = v1_eligibility_from_call_state(
+            call_semantics,
+            io_contract.status,
+            trace_capture_active,
+            has_bias,
+            parameters,
+            optional_output_tensor.has_value(),
+            input_tensor_a.is_sharded(),
+            input_tensor_b.is_sharded(),
+            io_contract.output_memory_config.is_sharded())};
+    // Reject caller-known exclusions before shape, device, firmware, and
+    // cluster attestation. Shadow must remain an inexpensive observation of
+    // the ordinary path for calls that cannot possibly match the v1 table.
+    if (preflight_v1_eligibility(inspection.eligibility) != ResolutionReason::CertifiedMatch) {
+        return inspection;
+    }
 
     const auto* device_a = input_tensor_a.device();
     const auto* device_b = input_tensor_b.device();
@@ -405,15 +399,19 @@ static ttnn::Tensor bound_matmul(
     const auto registry_mode = registry::current_mode();
     std::optional<ttnn::prim::MatmulParams> registry_parameters;
     if (registry_mode != registry::Mode::Off) {
-        bool trace_capture_active = false;
+        std::optional<bool> observed_trace_capture_active;
         try {
             if (auto* device = input_tensor_a.device(); device != nullptr) {
-                trace_capture_active = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(device).has_value();
+                observed_trace_capture_active =
+                    tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(device).has_value();
+            } else {
+                observed_trace_capture_active = false;
             }
         } catch (...) {
-            // If trace state cannot be queried, On must remain on the legacy path.
-            trace_capture_active = registry_mode == registry::Mode::On;
+            // An unknown trace state is ineligible in both Shadow and On.
         }
+        const bool trace_capture_active =
+            registry::fail_closed_trace_capture_active(registry_mode, observed_trace_capture_active);
 
         auto eligibility = registry::Eligibility{.call = call_semantics, .trace_capture_active = trace_capture_active};
         std::optional<registry::MatmulRegistryRequest> registry_request;

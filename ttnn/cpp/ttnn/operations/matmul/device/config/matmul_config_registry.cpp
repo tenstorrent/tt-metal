@@ -155,6 +155,31 @@ std::optional<compact::KeyDescriptor> compact_registry_key_impl(const MatmulRegi
         .beta_f32_bits = request.call.beta_f32_bits.value_or(0)};
 }
 
+bool has_valid_multi_core_reuse_work_split(
+    const compact::KeyDescriptor& key, const compact::MultiCoreReuseDescriptor& program) noexcept {
+    const auto& input_a = key.input_a;
+    const auto& input_b = key.input_b;
+    const auto& output = key.output;
+    if (key.logical_m == 0 || key.logical_k == 0 || key.logical_n == 0 || key.padded_m < key.logical_m ||
+        key.padded_k < key.logical_k || key.padded_n < key.logical_n || input_a.tile_height == 0 ||
+        input_a.tile_width == 0 || input_b.tile_height == 0 || input_b.tile_width == 0 || output.tile_height == 0 ||
+        output.tile_width == 0 || input_a.tile_height != output.tile_height ||
+        input_b.tile_width != output.tile_width || key.padded_m % input_a.tile_height != 0 ||
+        key.padded_k % input_a.tile_width != 0 || key.padded_k % input_b.tile_height != 0 ||
+        key.padded_n % input_b.tile_width != 0) {
+        return false;
+    }
+
+    const auto m_tiles = key.padded_m / input_a.tile_height;
+    const auto input_a_k_tiles = key.padded_k / input_a.tile_width;
+    const auto input_b_k_tiles = key.padded_k / input_b.tile_height;
+    const auto n_tiles = key.padded_n / input_b.tile_width;
+    return input_a_k_tiles == input_b_k_tiles && input_a_k_tiles % program.in0_block_w == 0 &&
+           m_tiles % program.per_core_m == 0 && n_tiles % program.per_core_n == 0 &&
+           program.per_core_m % program.out_subblock_h == 0 && program.per_core_n % program.out_subblock_w == 0 &&
+           program.out_subblock_h <= 8 / program.out_subblock_w;
+}
+
 std::optional<tt::tt_metal::Tile> transpose_matmul_tile(const tt::tt_metal::Tile& tile, const bool transpose) {
     if (!transpose) {
         return tile;
@@ -168,6 +193,37 @@ std::optional<tt::tt_metal::Tile> transpose_matmul_tile(const tt::tt_metal::Tile
 }
 
 }  // namespace
+
+std::string_view resolution_reason_name(const ResolutionReason reason) noexcept {
+    switch (reason) {
+        case ResolutionReason::Disabled: return "disabled";
+        case ResolutionReason::IneligibleOperationDomain: return "ineligible_operation_domain";
+        case ResolutionReason::MalformedOperationSemantics: return "malformed_operation_semantics";
+        case ResolutionReason::InconsistentIoContract: return "inconsistent_io_contract";
+        case ResolutionReason::TraceCaptureUnsupported: return "trace_capture_unsupported";
+        case ResolutionReason::ExplicitOverride: return "explicit_override";
+        case ResolutionReason::UnsupportedSemantics: return "unsupported_semantics";
+        case ResolutionReason::IncompleteRequest: return "incomplete_request";
+        case ResolutionReason::InconsistentRequest: return "inconsistent_request";
+        case ResolutionReason::DeviceAttestationUnavailable: return "device_attestation_unavailable";
+        case ResolutionReason::CompatibilityUninitialized: return "compatibility_uninitialized";
+        case ResolutionReason::CompatibilitySchemaMismatch: return "compatibility_schema_mismatch";
+        case ResolutionReason::SemanticSourceMismatch: return "semantic_source_mismatch";
+        case ResolutionReason::BuildIdentityMismatch: return "build_identity_mismatch";
+        case ResolutionReason::RuntimeCapabilityMismatch: return "runtime_capability_mismatch";
+        case ResolutionReason::CircuitBroken: return "circuit_broken";
+        case ResolutionReason::UnsupportedReplay: return "unsupported_replay";
+        case ResolutionReason::MaterializationRejected: return "materialization_rejected";
+        case ResolutionReason::EmptyRegistry: return "empty_registry";
+        case ResolutionReason::CertifiedMatch: return "certified_match";
+        case ResolutionReason::Count: return "count";
+    }
+    return "unknown";
+}
+
+bool fail_closed_trace_capture_active(const Mode mode, const std::optional<bool> observed_active) noexcept {
+    return mode != Mode::Off && observed_active.value_or(true);
+}
 
 std::optional<compact::KeyDescriptor> compact_registry_key(const MatmulRegistryRequest& request) noexcept {
     return compact_registry_key_impl(request);
@@ -295,6 +351,39 @@ CallSemantics addmm_call_semantics(const float alpha, const float beta) noexcept
         .beta_f32_bits = std::bit_cast<std::uint32_t>(beta)};
 }
 
+Eligibility v1_eligibility_from_call_state(
+    const CallSemantics call,
+    const IoContractStatus io_contract_status,
+    const bool trace_capture_active,
+    const bool has_bias,
+    const ttnn::prim::MatmulParams& parameters,
+    const bool has_optional_output,
+    const bool input_a_sharded,
+    const bool input_b_sharded,
+    const bool output_sharded) noexcept {
+    return Eligibility{
+        .call = call,
+        .io_contract_status = io_contract_status,
+        .trace_capture_active = trace_capture_active,
+        .has_program_config = parameters.program_config.has_value(),
+        .has_compute_kernel_config = parameters.compute_kernel_config.has_value(),
+        .has_user_core_grid = parameters.user_core_coord.has_value(),
+        .has_bias = has_bias,
+        .has_activation = parameters.user_fused_activation.has_value(),
+        .has_optional_output = has_optional_output,
+        .has_output_tile = parameters.output_tile.has_value(),
+        .has_global_cb = parameters.global_cb.has_value(),
+        .has_sub_device = parameters.sub_device_id.has_value(),
+        .has_bcast_batch = parameters.bcast_batch.has_value(),
+        .untilize_out = parameters.untilize_out,
+        .input_a_sharded = input_a_sharded,
+        .input_b_sharded = input_b_sharded,
+        .output_sharded = output_sharded,
+        .input_b_batched = parameters.user_run_batched,
+        .transpose_a = parameters.transpose_a,
+        .transpose_b = parameters.transpose_b};
+}
+
 ResolvedMatmulIoContract resolve_matmul_io_contract(const IoContractRequest& request) {
     auto output_memory_config = request.requested_output_memory_config;
     auto output_dtype = request.requested_output_dtype.value_or(request.input_a_dtype);
@@ -416,7 +505,8 @@ MaterializationResult materialize_matmul_registry_recipe(const compact::EntryDes
         program.out_subblock_h == 0 || program.out_subblock_w == 0 || program.per_core_m == 0 ||
         program.per_core_n == 0 || program.allowed_worker_cores_present ||
         program.compute_grid_x > descriptor.key.compute_grid_x ||
-        program.compute_grid_y > descriptor.key.compute_grid_y || program.out_subblock_h > 8 / program.out_subblock_w) {
+        program.compute_grid_y > descriptor.key.compute_grid_y || program.out_subblock_h > 8 / program.out_subblock_w ||
+        !has_valid_multi_core_reuse_work_split(descriptor.key, program)) {
         return {.status = MaterializationStatus::InvalidProgramConfig};
     }
 
@@ -488,28 +578,9 @@ MaterializationResult materialize_matmul_registry_recipe(const compact::EntryDes
             .untilize_out = state.untilize_out}};
 }
 
-ResolutionReason validate_v1_request_envelope(
-    const MatmulRegistryRequest& request, const Eligibility& eligibility) noexcept {
+ResolutionReason preflight_v1_eligibility(const Eligibility& eligibility) noexcept {
     if (eligibility.trace_capture_active) {
         return ResolutionReason::TraceCaptureUnsupported;
-    }
-    if (request.schema_version != 1) {
-        return ResolutionReason::IncompleteRequest;
-    }
-    const auto activation_end =
-        request.activation_param_f32_bits.begin() +
-        std::min<std::size_t>(request.activation_param_count, request.activation_param_f32_bits.size());
-    const bool nonzero_activation_padding = std::any_of(
-        activation_end, request.activation_param_f32_bits.end(), [](const auto value) { return value != 0; });
-    if (request.call != eligibility.call || request.transpose_a != eligibility.transpose_a ||
-        request.transpose_b != eligibility.transpose_b || request.has_bias != eligibility.has_bias ||
-        request.has_activation != eligibility.has_activation || request.untilize_out != eligibility.untilize_out ||
-        request.bcast_batch.has_value() != eligibility.has_bcast_batch ||
-        request.run_batched != eligibility.input_b_batched ||
-        request.has_activation != request.activation_op.has_value() ||
-        request.activation_param_count > request.activation_param_f32_bits.size() ||
-        (!request.has_activation && request.activation_param_count != 0) || nonzero_activation_padding) {
-        return ResolutionReason::InconsistentRequest;
     }
     if (eligibility.call.domain == OperationDomain::IneligibleSharedCaller) {
         return ResolutionReason::IneligibleOperationDomain;
@@ -540,6 +611,34 @@ ResolutionReason validate_v1_request_envelope(
         eligibility.input_b_batched ||
         (is_addmm && *eligibility.call.beta_f32_bits != 0 && *eligibility.call.beta_f32_bits != 0x80000000U)) {
         return ResolutionReason::UnsupportedSemantics;
+    }
+
+    return ResolutionReason::CertifiedMatch;
+}
+
+ResolutionReason validate_v1_request_envelope(
+    const MatmulRegistryRequest& request, const Eligibility& eligibility) noexcept {
+    const auto preflight_reason = preflight_v1_eligibility(eligibility);
+    if (preflight_reason != ResolutionReason::CertifiedMatch) {
+        return preflight_reason;
+    }
+    if (request.schema_version != 1) {
+        return ResolutionReason::IncompleteRequest;
+    }
+    const auto activation_end =
+        request.activation_param_f32_bits.begin() +
+        std::min<std::size_t>(request.activation_param_count, request.activation_param_f32_bits.size());
+    const bool nonzero_activation_padding = std::any_of(
+        activation_end, request.activation_param_f32_bits.end(), [](const auto value) { return value != 0; });
+    if (request.call != eligibility.call || request.transpose_a != eligibility.transpose_a ||
+        request.transpose_b != eligibility.transpose_b || request.has_bias != eligibility.has_bias ||
+        request.has_activation != eligibility.has_activation || request.untilize_out != eligibility.untilize_out ||
+        request.bcast_batch.has_value() != eligibility.has_bcast_batch ||
+        request.run_batched != eligibility.input_b_batched ||
+        request.has_activation != request.activation_op.has_value() ||
+        request.activation_param_count > request.activation_param_f32_bits.size() ||
+        (!request.has_activation && request.activation_param_count != 0) || nonzero_activation_padding) {
+        return ResolutionReason::InconsistentRequest;
     }
 
     return ResolutionReason::CertifiedMatch;
@@ -612,12 +711,15 @@ DispatchResult resolve_for_dispatch(
     const ResolverFunction resolver,
     const MaterializerFunction materializer) {
     auto resolution = Resolution{.reason = ResolutionReason::Disabled};
-    if (mode != Mode::Off && eligibility.trace_capture_active) {
-        resolution = {.reason = ResolutionReason::TraceCaptureUnsupported};
-    } else if (mode != Mode::Off) {
-        resolution = request.has_value() && resolver != nullptr
-                         ? resolver(mode, request.value(), eligibility)
-                         : Resolution{.reason = ResolutionReason::IncompleteRequest};
+    if (mode != Mode::Off) {
+        const auto preflight_reason = preflight_v1_eligibility(eligibility);
+        if (preflight_reason != ResolutionReason::CertifiedMatch) {
+            resolution = {.reason = preflight_reason};
+        } else {
+            resolution = request.has_value() && resolver != nullptr
+                             ? resolver(mode, request.value(), eligibility)
+                             : Resolution{.reason = ResolutionReason::IncompleteRequest};
+        }
     }
 
     auto action = execution_action(mode, resolution);

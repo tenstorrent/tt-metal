@@ -68,8 +68,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p generated/test_reports
+          export GTEST_OUTPUT=xml:/work/generated/test_reports/matmul_registry_contract.xml
           /usr/bin/tt-nn-validation-basic \
             --gtest_filter='MatmulConfigRegistry.*' \
+            --gtest_color=yes
+          export GTEST_OUTPUT=xml:/work/generated/test_reports/matmul_registry_wrapper_contract.xml
+          /usr/bin/tt-nn-validation-matmul-registry-wrappers \
+            --gtest_filter='QueryOpConstraintsMockDevice.MatmulRegistryOffAndEmptyShadowPreserveConstraintQuery:QueryOpConstraintsMockDevice.PublicMatmulWrappersForwardOneDisjointDomainEach' \
             --gtest_color=yes
 
       - name: Upload test report

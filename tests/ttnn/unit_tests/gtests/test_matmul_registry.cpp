@@ -284,6 +284,31 @@ TEST(MatmulConfigRegistry, RuntimeRequestConvertsToTheExactDisjointCompactKey) {
     EXPECT_FALSE(compact_registry_key(unsupported).has_value());
 }
 
+TEST(MatmulConfigRegistry, SharedDefaultCallStateProjectionAdmitsEveryPublicDomainWithoutAliasing) {
+    const ttnn::prim::MatmulParams default_parameters;
+    const std::array calls{dense_matmul_call_semantics(), linear_call_semantics(), addmm_call_semantics(1.0F, 0.0F)};
+    for (const auto& call : calls) {
+        const auto eligibility = v1_eligibility_from_call_state(
+            call, IoContractStatus::Resolved, false, false, default_parameters, false, false, false, false);
+        EXPECT_EQ(eligibility.call, call);
+        EXPECT_EQ(preflight_v1_eligibility(eligibility), ResolutionReason::CertifiedMatch);
+    }
+
+    auto explicit_parameters = default_parameters;
+    explicit_parameters.program_config = MatmulMultiCoreProgramConfig{};
+    const auto explicit_eligibility = v1_eligibility_from_call_state(
+        dense_matmul_call_semantics(),
+        IoContractStatus::Resolved,
+        false,
+        false,
+        explicit_parameters,
+        false,
+        false,
+        false,
+        false);
+    EXPECT_EQ(preflight_v1_eligibility(explicit_eligibility), ResolutionReason::ExplicitOverride);
+}
+
 compact::TableMetadata compact_metadata() {
     return compact::TableMetadata{
         .lock_schema_version = 1,
@@ -698,6 +723,28 @@ TEST(MatmulConfigRegistry, CompactMaterializationRejectsEveryTypedBoundary) {
     descriptor.replay.program_config.compute_grid_x = 0;
     expect_rejection(descriptor, MaterializationStatus::InvalidProgramConfig);
 
+    for (const auto mutate : {
+             +[](compact::EntryDescriptor& item) { item.key.input_a.tile_height = 16; },
+             +[](compact::EntryDescriptor& item) { item.key.logical_m = 0; },
+             +[](compact::EntryDescriptor& item) { item.key.padded_m = item.key.logical_m - 1; },
+             +[](compact::EntryDescriptor& item) { item.key.padded_m = 129; },
+             +[](compact::EntryDescriptor& item) { item.key.input_b.tile_height = 16; },
+             +[](compact::EntryDescriptor& item) { item.replay.program_config.in0_block_w = 3; },
+             +[](compact::EntryDescriptor& item) { item.replay.program_config.per_core_m = 3; },
+             +[](compact::EntryDescriptor& item) { item.replay.program_config.per_core_n = 3; },
+             +[](compact::EntryDescriptor& item) { item.replay.program_config.out_subblock_h = 3; },
+             +[](compact::EntryDescriptor& item) { item.replay.program_config.out_subblock_w = 3; },
+             +[](compact::EntryDescriptor& item) { item.replay.program_config.compute_grid_x = 9; },
+             +[](compact::EntryDescriptor& item) {
+                 item.replay.program_config.out_subblock_h = 4;
+                 item.replay.program_config.out_subblock_w = 4;
+             },
+         }) {
+        descriptor = compact_entry();
+        mutate(descriptor);
+        expect_rejection(descriptor, MaterializationStatus::InvalidProgramConfig);
+    }
+
     descriptor = compact_entry();
     descriptor.replay.compute_kernel_config.math_fidelity = static_cast<compact::MathFidelity>(0xff);
     expect_rejection(descriptor, MaterializationStatus::InvalidComputeKernelConfig);
@@ -850,6 +897,31 @@ TEST(MatmulConfigRegistry, DispatchDoesNotResolveAnIncompleteRequest) {
     EXPECT_FALSE(result.materialized_parameters.has_value());
 }
 
+TEST(MatmulConfigRegistry, CallerKnownIneligibilitySkipsRequestAndResolverInShadowAndOn) {
+    const ttnn::prim::MatmulParams legacy_parameters;
+    for (const auto mode : {Mode::Shadow, Mode::On}) {
+        for (const auto& [eligibility, expected] : std::array{
+                 std::pair{
+                     Eligibility{.call = dense_matmul_call_semantics(), .has_program_config = true},
+                     ResolutionReason::ExplicitOverride},
+                 std::pair{
+                     Eligibility{.call = dense_matmul_call_semantics(), .has_bias = true},
+                     ResolutionReason::UnsupportedSemantics},
+                 std::pair{
+                     Eligibility{.call = CallSemantics{.domain = OperationDomain::IneligibleSharedCaller}},
+                     ResolutionReason::IneligibleOperationDomain},
+             }) {
+            resolver_invocations = 0;
+            const auto result =
+                resolve_for_dispatch(mode, std::nullopt, eligibility, legacy_parameters, &counting_certified_resolver);
+            EXPECT_EQ(resolver_invocations, 0);
+            EXPECT_EQ(result.resolution.reason, expected);
+            EXPECT_EQ(result.action, ExecutionAction::Fallback);
+            EXPECT_FALSE(result.materialized_parameters.has_value());
+        }
+    }
+}
+
 TEST(MatmulConfigRegistry, OnTraceCaptureRejectsBeforeResolver) {
     const auto request = exact_request();
     const ttnn::prim::MatmulParams legacy_parameters;
@@ -889,6 +961,16 @@ TEST(MatmulConfigRegistry, ShadowTraceCaptureMirrorsOnIneligibilityWithoutMutati
     EXPECT_FALSE(result.materialized_parameters.has_value());
     EXPECT_EQ(ttsl::hash::hash_objects_with_default_seed(legacy_parameters), legacy_hash);
     EXPECT_EQ(resolve(Mode::Shadow, request, eligibility).reason, ResolutionReason::TraceCaptureUnsupported);
+}
+
+TEST(MatmulConfigRegistry, UnknownTraceCaptureStateFailsClosedInShadowAndOn) {
+    EXPECT_FALSE(fail_closed_trace_capture_active(Mode::Off, std::nullopt));
+    EXPECT_FALSE(fail_closed_trace_capture_active(Mode::Shadow, false));
+    EXPECT_FALSE(fail_closed_trace_capture_active(Mode::On, false));
+    EXPECT_TRUE(fail_closed_trace_capture_active(Mode::Shadow, true));
+    EXPECT_TRUE(fail_closed_trace_capture_active(Mode::On, true));
+    EXPECT_TRUE(fail_closed_trace_capture_active(Mode::Shadow, std::nullopt));
+    EXPECT_TRUE(fail_closed_trace_capture_active(Mode::On, std::nullopt));
 }
 
 TEST(MatmulConfigRegistry, TraceCaptureRejectionHasBoundedTelemetry) {
@@ -1326,6 +1408,17 @@ TEST(MatmulConfigRegistry, TelemetryIsBoundedAndResettable) {
     reset_stats_for_testing();
     snapshot = stats_snapshot();
     EXPECT_EQ(snapshot.domains[static_cast<std::size_t>(OperationDomain::DenseMatmul)].resolution_attempts, 0);
+}
+
+TEST(MatmulConfigRegistry, EveryTelemetryReasonHasAStableUniqueName) {
+    std::array<std::string_view, kResolutionReasonCount> names;
+    for (std::size_t index = 0; index < names.size(); ++index) {
+        names[index] = resolution_reason_name(static_cast<ResolutionReason>(index));
+        EXPECT_FALSE(names[index].empty());
+        EXPECT_NE(names[index], "unknown");
+    }
+    std::ranges::sort(names);
+    EXPECT_EQ(std::ranges::adjacent_find(names), names.end());
 }
 
 TEST(MatmulConfigRegistry, TelemetryCountersAreConcurrent) {

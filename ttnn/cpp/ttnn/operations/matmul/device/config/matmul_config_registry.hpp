@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string_view>
 
 #include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
@@ -70,6 +71,12 @@ enum class ResolutionReason {
     CertifiedMatch,
     Count,
 };
+
+std::string_view resolution_reason_name(ResolutionReason reason) noexcept;
+
+// A failed inspector query is indistinguishable from active capture and must
+// reject both Shadow and On. Off remains inert.
+bool fail_closed_trace_capture_active(Mode mode, std::optional<bool> observed_active) noexcept;
 
 inline constexpr std::size_t kOperationDomainCount = 4;
 inline constexpr std::size_t kResolutionReasonCount = static_cast<std::size_t>(ResolutionReason::Count);
@@ -134,6 +141,20 @@ struct Eligibility {
     bool transpose_a = false;
     bool transpose_b = false;
 };
+
+// Shared caller-state projection used by both public wrapper dispatch and the
+// read-only resolved-key inspector. Tests can compare wrapper defaults at this
+// seam without querying a device or mutating registry state.
+Eligibility v1_eligibility_from_call_state(
+    CallSemantics call,
+    IoContractStatus io_contract_status,
+    bool trace_capture_active,
+    bool has_bias,
+    const ttnn::prim::MatmulParams& parameters,
+    bool has_optional_output,
+    bool input_a_sharded,
+    bool input_b_sharded,
+    bool output_sharded) noexcept;
 
 // The generated table accepts this complete, exact request—not Eligibility.
 // Keeping the lookup seam typed prevents a certified recipe from crossing an
@@ -338,6 +359,7 @@ void reset_startup_mode_for_testing() noexcept;
 // Device-free admission plus exact lookup in the generated immutable table.
 // CertifiedMatch means only that the request is inside the exact v1 envelope;
 // it performs no lookup, compatibility initialization, or telemetry mutation.
+ResolutionReason preflight_v1_eligibility(const Eligibility& eligibility) noexcept;
 ResolutionReason validate_v1_request_envelope(
     const MatmulRegistryRequest& request, const Eligibility& eligibility) noexcept;
 Resolution resolve(Mode mode, const MatmulRegistryRequest& request, const Eligibility& eligibility) noexcept;

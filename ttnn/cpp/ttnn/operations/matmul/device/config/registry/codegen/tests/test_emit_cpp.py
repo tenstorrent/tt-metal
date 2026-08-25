@@ -181,6 +181,43 @@ def test_unknown_program_family_is_rejected(expect_error) -> None:
         emitter.validate_lock(lock)
 
 
+def test_malformed_multi_core_reuse_work_splits_are_rejected(expect_error) -> None:
+    cases: list[tuple[str, object]] = [
+        ("key.input_a.tile_height", 16),
+        ("key.padded_m", 129),
+        ("key.input_b.tile_height", 16),
+        ("program_config.in0_block_w", 3),
+        ("program_config.per_core_m", 3),
+        ("program_config.per_core_n", 3),
+        ("program_config.out_subblock_h", 3),
+        ("program_config.out_subblock_w", 3),
+        ("program_config.compute_grid_x", 9),
+    ]
+    for field, value in cases:
+        lock = fixture()
+        entry = lock["entries"][0]
+        if field.startswith("key."):
+            target = entry["key"]
+            components = field.removeprefix("key.").split(".")
+        else:
+            target = entry["recipe"]
+            components = field.split(".")
+        for component in components[:-1]:
+            target = target[component]
+        target[components[-1]] = value
+        resign(lock, entries=True)
+        with expect_error(emitter.LockValidationError):
+            emitter.validate_lock(lock)
+
+    lock = fixture()
+    program = lock["entries"][0]["recipe"]["program_config"]
+    program["out_subblock_h"] = 4
+    program["out_subblock_w"] = 4
+    resign(lock, entries=True)
+    with expect_error(emitter.LockValidationError, "destination-register bound"):
+        emitter.validate_lock(lock)
+
+
 def test_nondefault_output_call_state_is_rejected(expect_error) -> None:
     lock = fixture()
     lock["entries"][0]["key"]["output"]["buffer_type"] = "l1"

@@ -222,6 +222,43 @@ def _key(value: Any, path: str, domain: str) -> dict[str, Any]:
     return item
 
 
+def _validate_multi_core_reuse_work_split(key: dict[str, Any], program: dict[str, Any], path: str) -> None:
+    input_a = key["input_a"]
+    input_b = key["input_b"]
+    output = key["output"]
+    if input_a["tile_height"] != output["tile_height"] or input_b["tile_width"] != output["tile_width"]:
+        raise LockValidationError(f"{path} input/output tile axes are inconsistent")
+
+    dimensions_and_tiles = (
+        (key["padded_m"], input_a["tile_height"], "padded_m/input_a.tile_height"),
+        (key["padded_k"], input_a["tile_width"], "padded_k/input_a.tile_width"),
+        (key["padded_k"], input_b["tile_height"], "padded_k/input_b.tile_height"),
+        (key["padded_n"], input_b["tile_width"], "padded_n/input_b.tile_width"),
+    )
+    for dimension, tile, name in dimensions_and_tiles:
+        if dimension % tile != 0:
+            raise LockValidationError(f"{path} {name} must divide exactly")
+
+    m_tiles = key["padded_m"] // input_a["tile_height"]
+    input_a_k_tiles = key["padded_k"] // input_a["tile_width"]
+    input_b_k_tiles = key["padded_k"] // input_b["tile_height"]
+    n_tiles = key["padded_n"] // input_b["tile_width"]
+    if input_a_k_tiles != input_b_k_tiles:
+        raise LockValidationError(f"{path} input K tile counts are inconsistent")
+    if input_a_k_tiles % program["in0_block_w"] != 0:
+        raise LockValidationError(f"{path}.in0_block_w must divide padded K tiles")
+    if m_tiles % program["per_core_m"] != 0:
+        raise LockValidationError(f"{path}.per_core_m must divide padded M tiles")
+    if n_tiles % program["per_core_n"] != 0:
+        raise LockValidationError(f"{path}.per_core_n must divide padded N tiles")
+    if program["per_core_m"] % program["out_subblock_h"] != 0:
+        raise LockValidationError(f"{path}.out_subblock_h must divide per_core_m")
+    if program["per_core_n"] % program["out_subblock_w"] != 0:
+        raise LockValidationError(f"{path}.out_subblock_w must divide per_core_n")
+    if program["out_subblock_h"] * program["out_subblock_w"] > 8:
+        raise LockValidationError(f"{path} output subblock exceeds the destination-register bound")
+
+
 def _recipe(value: Any, key: dict[str, Any], path: str) -> dict[str, Any]:
     item = _exact_fields(value, {"call_state", "compute_kernel_config", "program_config", "schema_version"}, path)
     if item["schema_version"] != REPLAY_SCHEMA_VERSION:
@@ -250,6 +287,9 @@ def _recipe(value: Any, key: dict[str, Any], path: str) -> dict[str, Any]:
         _uint(program[name], 32, f"{path}.program_config.{name}", positive=True)
     if program["allowed_worker_cores"] is not None:
         raise LockValidationError(f"{path}.program_config.allowed_worker_cores must record exact null")
+    if program["compute_grid_x"] > key["compute_grid_x"] or program["compute_grid_y"] > key["compute_grid_y"]:
+        raise LockValidationError(f"{path}.program_config compute grid exceeds the attested device grid")
+    _validate_multi_core_reuse_work_split(key, program, f"{path}.program_config")
 
     ckc = _exact_fields(
         item["compute_kernel_config"],

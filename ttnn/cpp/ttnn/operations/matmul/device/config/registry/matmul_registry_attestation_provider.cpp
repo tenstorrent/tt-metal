@@ -7,9 +7,9 @@
 #include <tt-metalium/cluster.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
-#include "distributed/mesh_device_impl.hpp"
-#include "impl/context/metal_context.hpp"
-#include "llrt/tt_cluster.hpp"
+#include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/impl/context/metal_context.hpp"
+#include "tt_metal/llrt/tt_cluster.hpp"
 
 namespace ttnn::operations::matmul::registry {
 

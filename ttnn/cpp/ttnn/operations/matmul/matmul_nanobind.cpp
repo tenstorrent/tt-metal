@@ -383,10 +383,16 @@ so its additive input is unused and cannot be an unkeyed semantic dependency.
                 domain["circuit_breaker_activations"] = source.circuit_breaker_activations;
                 domain["circuit_broken"] = source.circuit_broken;
                 nb::list reasons;
-                for (const auto count : source.reasons) {
+                nb::dict reasons_by_name;
+                for (std::size_t reason_index = 0; reason_index < source.reasons.size(); ++reason_index) {
+                    const auto count = source.reasons[reason_index];
                     reasons.append(count);
+                    const auto name =
+                        registry::resolution_reason_name(static_cast<registry::ResolutionReason>(reason_index));
+                    reasons_by_name[nb::str(name.data(), name.size())] = count;
                 }
                 domain["reason_counts"] = std::move(reasons);
+                domain["reason_counts_by_name"] = std::move(reasons_by_name);
                 domains.append(std::move(domain));
             }
             result["domains"] = std::move(domains);
