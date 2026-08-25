@@ -33,7 +33,6 @@ inline __attribute__((always_inline)) void matrix_multiply(
     static_assert(subblock_rows * subblock_columns <= dst_tiles);
 
     output.reserve_back(Mt * Nt);
-    pack_reconfig_data_format(output_id);
     reconfig_data_format(b_id, a_id);
     matmul_block_init(a_id, b_id, Tr, subblock_columns, subblock_rows, Kt);
     for (uint32_t row_start = 0; row_start < Mt; row_start += subblock_rows) {
@@ -60,7 +59,6 @@ inline __attribute__((always_inline)) void matrix_multiply(
 inline __attribute__((always_inline)) void elementwise(
     uint32_t a_id, uint32_t b_id, uint32_t output_id, DataflowBuffer& output, uint32_t count, uint32_t operation) {
     output.reserve_back(count);
-    pack_reconfig_data_format(output_id);
     reconfig_data_format(a_id, b_id);
     if (operation == 0) {
         add_init(a_id, b_id);
@@ -94,7 +92,6 @@ inline __attribute__((always_inline)) void multiply_by_decay(
     uint32_t key_tiles,
     uint32_t value_tiles) {
     output.reserve_back(key_tiles * value_tiles);
-    pack_reconfig_data_format(output_id);
     reconfig_data_format(state_id, decay_id);
     mul_bcast_cols_init(state_id, decay_id);
     for (uint32_t key = 0; key < key_tiles; key++) {
@@ -222,6 +219,7 @@ TT_KERNEL void compute(uint32_t num_chunks) {
         elementwise(dfb::summary_raw, dfb::final_state, dfb::output, output, kv, 1);
         summary_raw.pop_front(kv);
     } else {
+        pack_reconfig_data_format(dfb::scratch);
         for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
             DataflowBuffer& current_state = chunk == 0 ? state : state_ring;
             DataflowBuffer& destination = chunk == num_chunks - 1 ? final_state : state_ring;
@@ -251,11 +249,13 @@ TT_KERNEL void compute(uint32_t num_chunks) {
             matrix_multiply<Ct, Ct, Vt, false>(dfb::intra, dfb::value_new, dfb::scratch, scratch);
             scratch.wait_front(cv);
             intra.pop_front(cc);
+            pack_reconfig_data_format(dfb::output);
             elementwise(dfb::output_intermediate, dfb::scratch, dfb::output, output, cv, 0);
             output_intermediate.pop_front(cv);
             scratch.pop_front(cv);
 
             k_decay_transposed.wait_front(kc);
+            pack_reconfig_data_format(dfb::state_update);
             matrix_multiply<Kt, Ct, Vt, false>(
                 dfb::k_decay_transposed, dfb::value_new, dfb::state_update, state_update);
             state_update.wait_front(kv);
