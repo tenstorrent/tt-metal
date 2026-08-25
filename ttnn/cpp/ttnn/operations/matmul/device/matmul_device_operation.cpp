@@ -630,8 +630,8 @@ void validate_matmul_compute_grid_and_per_core_dims(
                                   ProgramConfigType,
                                   operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
                     TT_FATAL(
-                        program_config.num_workers_per_dram_bank == 1 || program_config.num_workers_per_dram_bank == 2,
-                        "{}: num_workers_per_dram_bank must be 1 or 2, got {}",
+                        program_config.num_workers_per_dram_bank >= 1 && program_config.num_workers_per_dram_bank <= 3,
+                        "{}: num_workers_per_dram_bank must be in [1, 3], got {}",
                         config_name,
                         program_config.num_workers_per_dram_bank);
                     TT_FATAL(

@@ -63,7 +63,7 @@ void kernel_main() {
     // (in1_num_pages * in1_page_size) rather than get_tile_size() (the unpadded tile size).
     constexpr uint32_t in1_block_size_bytes = in1_num_pages * in1_page_size;
 #ifdef SPLIT_DRAM_BANK
-    static_assert(workers_per_bank == 2);
+    static_assert(workers_per_bank > 1);
     constexpr uint32_t tiles_per_k_row = reader_width_tiles;
     constexpr uint32_t k_rows_per_block = in1_block_num_tiles / tiles_per_k_row;
     constexpr uint32_t in1_tile_size_bytes = in1_block_size_bytes / in1_block_num_tiles;

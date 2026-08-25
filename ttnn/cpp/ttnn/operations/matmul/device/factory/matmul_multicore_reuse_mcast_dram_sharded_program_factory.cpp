@@ -112,8 +112,8 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     }
 
     TT_FATAL(
-        workers_per_bank == 1 || workers_per_bank == 2,
-        "DRAM-sharded matmul supports one or two workers per bank, got {}",
+        workers_per_bank >= 1 && workers_per_bank <= 3,
+        "DRAM-sharded matmul supports one to three workers per bank, got {}",
         workers_per_bank);
     TT_FATAL(
         workers_per_bank == 1 || device->arch() == tt::ARCH::BLACKHOLE,
@@ -162,7 +162,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     uint32_t per_core_N_in1_sender = per_core_N_compute;
     TT_FATAL(
         workers_per_bank == 1 || in1_shard_width_tiles == workers_per_bank * per_core_N_in1_sender,
-        "Two-reader DRAM-sharded matmul requires weight shard width {} tiles to equal {} workers times {} reader "
+        "Multi-reader DRAM-sharded matmul requires weight shard width {} tiles to equal {} workers times {} reader "
         "tiles",
         in1_shard_width_tiles,
         workers_per_bank,

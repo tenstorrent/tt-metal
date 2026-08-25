@@ -258,13 +258,16 @@ def run_test_matmul_in1_dram_sharded(
     )
 
 
-@pytest.mark.parametrize("num_workers_per_dram_bank", [1, 2], ids=["one_worker", "two_workers"])
+@pytest.mark.parametrize("num_workers_per_dram_bank", [1, 2, 3], ids=["one_worker", "two_workers", "three_workers"])
 @pytest.mark.parametrize(
     "N,fidelity,has_bias,activation,grid_size,in1_dtype",
     [
         (1024, ttnn.MathFidelity.HiFi2, True, None, (8, 2), ttnn.bfloat8_b),
         (1024, ttnn.MathFidelity.HiFi2, False, None, (8, 2), ttnn.bfloat8_b),
-        (1280, ttnn.MathFidelity.LoFi, False, "relu", (8, 1), ttnn.bfloat4_b),
+        # Use eight output-storage cores and 168 logical output tiles. This is
+        # divisible by every reader count on both p100 (seven banks) and p150
+        # (eight banks), while the eight-core grid also divides K exactly.
+        (5376, ttnn.MathFidelity.LoFi, False, "relu", (8, 1), ttnn.bfloat4_b),
     ],
     ids=["bfp8_hifi2_bias", "bfp8_hifi2_no_bias", "bfp4_lofi_padded_relu"],
 )
@@ -309,7 +312,14 @@ def test_matmul_in1_dram_sharded_worker_counts(
     )
 
 
-def test_matmul_in1_dram_sharded_two_workers_rejects_oversized_storage(device, function_level_defaults, expect_error):
+@pytest.mark.parametrize(
+    "num_workers_per_dram_bank,shard_width_tiles",
+    [(2, 8), (3, 12)],
+    ids=["two_workers", "three_workers"],
+)
+def test_matmul_in1_dram_sharded_multi_workers_rejects_oversized_storage(
+    device, function_level_defaults, expect_error, num_workers_per_dram_bank, shard_width_tiles
+):
     if not is_blackhole():
         pytest.skip("Multiple DRAM-sharded matmul workers per bank are currently Blackhole-only")
 
@@ -331,10 +341,10 @@ def test_matmul_in1_dram_sharded_two_workers_rejects_oversized_storage(device, f
             in1_dtype=ttnn.bfloat8_b,
             out_dtype=ttnn.bfloat16,
             function_level_defaults=function_level_defaults,
-            num_workers_per_dram_bank=2,
+            num_workers_per_dram_bank=num_workers_per_dram_bank,
             # Keep the intentionally oversized shard tile-aligned for each
             # Blackhole variant. p150 has eight banks, while p100 has seven.
-            N_padded_override=device.dram_grid_size().x * 32 * 8,
+            N_padded_override=device.dram_grid_size().x * 32 * shard_width_tiles,
         )
 
 

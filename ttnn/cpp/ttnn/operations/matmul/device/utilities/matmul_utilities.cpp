@@ -403,7 +403,7 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
     uint32_t workers_per_bank,
     const CoreRangeSet& secondary_reader_excluded_cores) {
     TT_FATAL(
-        workers_per_bank == 1 || workers_per_bank == 2, "workers_per_bank must be 1 or 2, got {}", workers_per_bank);
+        workers_per_bank >= 1 && workers_per_bank <= 3, "workers_per_bank must be in [1, 3], got {}", workers_per_bank);
 
     const auto primary_workers = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
     std::vector<DramBankReaderAssignment> assignments;
@@ -427,30 +427,32 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
         const auto primary = primary_workers[bank];
         assignments.push_back({primary, bank, 0});
 
-        bool found = false;
-        uint32_t best_cost = std::numeric_limits<uint32_t>::max();
-        tt::tt_metal::CoreCoord best_worker{};
-        for (uint32_t x = 0; x < worker_grid.x; ++x) {
-            for (uint32_t y = 0; y < worker_grid.y; ++y) {
-                const tt::tt_metal::CoreCoord candidate{x, y};
-                if (used.contains(candidate) || secondary_reader_excluded_cores.contains(candidate)) {
-                    continue;
-                }
-                // Both readers use AllocatorBank on the same NOC and therefore target the same
-                // firmware-approved endpoint. Place the second reader near the bank's primary
-                // reader to minimize NOC hops without routing one NOC to multiple endpoints.
-                const uint32_t cost = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
-                    device, candidate, primary_workers[bank], noc);
-                if (cost < best_cost) {
-                    found = true;
-                    best_cost = cost;
-                    best_worker = candidate;
+        for (uint32_t worker_index = 1; worker_index < workers_per_bank; ++worker_index) {
+            bool found = false;
+            uint32_t best_cost = std::numeric_limits<uint32_t>::max();
+            tt::tt_metal::CoreCoord best_worker{};
+            for (uint32_t x = 0; x < worker_grid.x; ++x) {
+                for (uint32_t y = 0; y < worker_grid.y; ++y) {
+                    const tt::tt_metal::CoreCoord candidate{x, y};
+                    if (used.contains(candidate) || secondary_reader_excluded_cores.contains(candidate)) {
+                        continue;
+                    }
+                    // All readers use AllocatorBank on the same NOC and therefore target the same
+                    // firmware-approved endpoint. Place additional readers near the bank's primary
+                    // reader to minimize NOC hops without routing one NOC to multiple endpoints.
+                    const uint32_t cost = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                        device, candidate, primary_workers[bank], noc);
+                    if (cost < best_cost) {
+                        found = true;
+                        best_cost = cost;
+                        best_worker = candidate;
+                    }
                 }
             }
+            TT_FATAL(found, "No free DRAM reader {} core for bank {}", worker_index, bank);
+            used.insert(best_worker);
+            assignments.push_back({best_worker, bank, worker_index});
         }
-        TT_FATAL(found, "No free second DRAM reader core for bank {}", bank);
-        used.insert(best_worker);
-        assignments.push_back({best_worker, bank, 1});
     }
     return assignments;
 }
