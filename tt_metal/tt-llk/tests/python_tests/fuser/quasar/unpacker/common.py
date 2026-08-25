@@ -81,6 +81,20 @@ def configure_unpack(
     return _emit_configure(compute_node, dest_acc, new_A_dst, new_B_dst)
 
 
+def _upk_to_dest_sem_init(config: "GlobalConfig", operation: "L1Operation") -> str:
+    from fuser.fpu_node import FpuNode
+    from fuser.quasar.unpacker.unpack_a import _uses_upk_to_dest_semaphores
+
+    if not _uses_upk_to_dest_semaphores(config):
+        return ""
+    if not any(
+        isinstance(node, FpuNode) and node.unpack_to_dest.value
+        for node in operation.math.math_nodes
+    ):
+        return ""
+    return "_llk_sync_init_(semaphore::UNPACK_MATH, 1, 0);\n"
+
+
 def dvalid_init(config: "GlobalConfig" = None, operation: "L1Operation" = None) -> str:
     from helpers.llk_params import PerfRunType
 
@@ -88,7 +102,7 @@ def dvalid_init(config: "GlobalConfig" = None, operation: "L1Operation" = None) 
         if config.perf_run_type in (None, PerfRunType.L1_TO_L1):
             return "set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
         return "set_up_zero_dest_dvalid_handshake_for_unpack();\n"
-    return ""
+    return _upk_to_dest_sem_init(config, operation)
 
 
 def sync_with_packer(config: "GlobalConfig", operation: "L1Operation") -> str:
