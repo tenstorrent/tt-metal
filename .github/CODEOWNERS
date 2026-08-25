@@ -135,7 +135,6 @@ tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h @mo-tenstorrent @yusufbashiTT @
 tt_metal/hw/inc/internal/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/internal/tt-1xx/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
 tt_metal/hw/inc/**/tensor/ @tenstorrent/metalium-developers-ttnn-core
-tt_metal/hw/inc/api/tensor/ @tenstorrent/metalium-developers-ttnn-core @abhullar-tt @akerteszTT @riverwuTT
 tt_metal/hw/toolchain/ @jbaumanTT @nathan-TT
 tt_metal/hw/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @jbaumanTT @nathan-TT
 tt_metal/hw/inc/api/compute/compute_kernel_api.h @davorchap @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @ndivnicTT @fvranicTT
