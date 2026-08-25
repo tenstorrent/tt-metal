@@ -8,6 +8,7 @@
 #include <variant>
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "high_bw_all_gather_device_operation_types.hpp"
 #include "high_bw_all_gather_unicast_factory.hpp"
 
@@ -21,6 +22,9 @@ struct HighBwAllGatherDeviceOperation {
     using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
     using program_factory_t = std::variant<HighBwAllGatherUnicastFactory>;
 
+    // The selected batch slot and valid prefix are patched into kernel runtime arguments. Hash only
+    // their presence, so a serving loop reuses one compiled program as either value changes.
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
@@ -42,6 +46,8 @@ Tensor high_bw_all_gather(
     uint32_t cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
-    std::optional<uint32_t> num_links = std::nullopt);
+    std::optional<uint32_t> num_links = std::nullopt,
+    std::optional<uint32_t> input_batch_index = std::nullopt,
+    std::optional<uint32_t> gathered_dim_size = std::nullopt);
 
 }  // namespace ttnn::prim

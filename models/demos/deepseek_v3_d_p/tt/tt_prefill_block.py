@@ -16,6 +16,7 @@ from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import ROUTED_EXPERT_ACTIVATION_BY_NAME
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
@@ -67,8 +68,20 @@ class TtPrefillBlock(LightweightModule):
     """
 
     @staticmethod
-    def check_cache_complete(cache_path: Path, layer_idx: int, is_dense: bool, experts_per_chip: int = 8) -> bool:
-        """Check if block cache is complete (norms + MLA + FFN/MoE)."""
+    def check_cache_complete(
+        cache_path: Path,
+        layer_idx: int,
+        is_dense: bool,
+        experts_per_chip: int = 8,
+        *,
+        model_cfg: type | None = None,
+    ) -> bool:
+        """Check if block cache is complete (norms + MLA + FFN/MoE).
+
+        ``model_cfg`` is optional but MUST be passed for a LatentMoE model (Kimi-K3): without it this
+        cannot know to look for the latent-projection cache files, and would report a cache that is
+        missing them as complete. Left optional so existing callers are unaffected.
+        """
         prefix = f"layer_{layer_idx}"
 
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.attn_norm"):
@@ -82,7 +95,14 @@ class TtPrefillBlock(LightweightModule):
             if not TtFfn.check_cache_complete(cache_path, f"{prefix}.ffn"):
                 return False
         else:
-            if not TtMoe.check_cache_complete(cache_path, layer_idx, experts_per_chip):
+            if not TtMoe.check_cache_complete(
+                cache_path,
+                layer_idx,
+                experts_per_chip,
+                use_latent_moe=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None)
+                not in (None, getattr(model_cfg, "EMB_SIZE", None)),
+                latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
+            ):
                 return False
 
         return True
@@ -188,6 +208,12 @@ class TtPrefillBlock(LightweightModule):
                 shared_expert_weights_dtype=shared_expert_weights_dtype,
                 cache_path=cache_path,
                 layer_idx=layer_idx,
+                # Must match _build_moe's reads: omitting them caches the shared expert at the wrong
+                # intermediate, which regenerates as a plausible-but-wrong cache rather than an error.
+                shared_hidden_dim=getattr(model_cfg, "SHARED_EXPERT_INTERMEDIATE_SIZE", None),
+                routed_emb_dim=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None),
+                latent_weights=state_dict.get("latent_weights"),
+                latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
             )
         else:
             # Use static method (no device copy!)
@@ -228,6 +254,7 @@ class TtPrefillBlock(LightweightModule):
         routing_use_l1_small_for_semaphores: bool = False,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
+        first_layer_idx: Optional[int] = None,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -293,10 +320,12 @@ class TtPrefillBlock(LightweightModule):
             is_balanced=is_balanced,
             weight_cache_path=weight_cache_path,
             is_chunked=is_chunked,
+            active_seq_len=seq_len,
             slot_num=slot_num,
             layer_num=layer_num,
             kv_only=kv_only,
             sparse_kv_cache_format=sparse_kv_cache_format,
+            first_layer_idx=first_layer_idx,
         )
 
         if kv_only:
@@ -321,6 +350,7 @@ class TtPrefillBlock(LightweightModule):
             self.ffn = self._build_moe(
                 mesh_device=mesh_device,
                 model_cfg=model_cfg,
+                config=config,
                 state_dict=state_dict,
                 seq_len=seq_len,
                 sp_axis=sp_axis,
@@ -362,6 +392,7 @@ class TtPrefillBlock(LightweightModule):
     def _build_moe(
         mesh_device,
         model_cfg,
+        config,
         state_dict,
         seq_len,
         sp_axis,
@@ -411,12 +442,24 @@ class TtPrefillBlock(LightweightModule):
             seq_len_per_chip=seq_len_per_chip,
             emb_dim=emb_dim,
             hidden_dim=model_cfg.MOE_INTERMEDIATE_SIZE,
+            # getattr because every other model config lacks these; None makes TtMoe fall back.
+            routed_emb_dim=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None),
+            shared_hidden_dim=getattr(model_cfg, "SHARED_EXPERT_INTERMEDIATE_SIZE", None),
+            latent_weights=state_dict.get("latent_weights"),  # None if cache exists
+            latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
+            # Same source as the block's attn_norm and ffn_norm, so the three cannot disagree.
+            rms_norm_eps=config.rms_norm_eps,
+            max_gate_seq_len_per_chip=getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", None),
             num_links=num_links,
             topology=topology,
             routed_expert_weights=state_dict.get("routed_expert_weights"),  # None if cache exists
             shared_expert_weights=state_dict.get("shared_expert_weights"),  # None if cache exists
             routed_expert_activations_dtype=routed_expert_activations_dtype,
             routed_expert_weights_dtype=routed_expert_weights_dtype,
+            # Kimi-K3 is the only config that names one; everything else defaults to SiLU.
+            routed_expert_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[
+                getattr(model_cfg, "ROUTED_EXPERT_ACTIVATION", "silu")
+            ],
             shared_expert_activations_dtype=shared_expert_activations_dtype,
             shared_expert_weights_dtype=shared_expert_weights_dtype,
             gate_weights=state_dict.get("gate_weights"),  # None if cache exists

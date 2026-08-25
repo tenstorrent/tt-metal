@@ -33,6 +33,7 @@ add_subdirectory(reduction)
 # metalium-developers-sdpa
 add_subdirectory(high_bw_all_gather)
 add_subdirectory(indexer_score)
+add_subdirectory(kda)
 add_subdirectory(topk_large_indices)
 
 # metallium-maintainers-llama-models
@@ -90,6 +91,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::Reduction
         TTNN::Ops::Experimental::HighBwAllGather
         TTNN::Ops::Experimental::IndexerScore
+        TTNN::Ops::Experimental::KDA
         TTNN::Ops::Experimental::TopkLargeIndices
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::IsIn

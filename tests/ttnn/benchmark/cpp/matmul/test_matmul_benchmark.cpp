@@ -314,7 +314,7 @@ void RunMatmulBenchmark(
                             /*output_tensor*/ std::nullopt,
                             attributes)
                             .at(0);
-        tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+        tt::tt_metal::distributed::Synchronize(*dev_ptr, std::nullopt);
         output_tensor.deallocate();
     }
 
@@ -339,7 +339,7 @@ void RunMatmulBenchmark(
         {
             ZoneScopedN("Matmul trace iterations");
             ttnn::operations::trace::execute_trace(dev_ptr, tid, std::nullopt, false);
-            tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+            tt::tt_metal::distributed::Synchronize(*dev_ptr, std::nullopt);
         }
 
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -358,7 +358,7 @@ void RunMatmulBenchmark(
                                     /*output_tensor*/ std::nullopt,
                                     attributes)
                                     .at(0);
-                tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+                tt::tt_metal::distributed::Synchronize(*dev_ptr, std::nullopt);
                 auto end_time = std::chrono::high_resolution_clock::now();
                 total_time += end_time - start_time;
                 output_tensor.deallocate();

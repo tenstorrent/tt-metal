@@ -24,6 +24,7 @@ struct NlpCreateHeadsDeviceOperation {
         uint32_t num_kv_heads;
         uint32_t head_dim;
         bool transpose_k_heads;
+        bool kv_tied;
         MemoryConfig output_mem_config;
     };
 
@@ -42,6 +43,13 @@ struct NlpCreateHeadsDeviceOperation {
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
+
+        static void override_runtime_arguments(
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
     };
 
     struct Sharded {
@@ -49,6 +57,13 @@ struct NlpCreateHeadsDeviceOperation {
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
+
+        static void override_runtime_arguments(
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
     };
 
     using program_factory_t = std::variant<Interleaved, Sharded>;
@@ -69,18 +84,6 @@ struct NlpCreateHeadsDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    // Patch the cached program's per-dispatch state in place on every cache hit: the buffer-address
-    // runtime args of whichever factory built it (the Sharded reader/writer bake raw base AND per-core
-    // `base + head_offset` start addresses, which a Buffer* binding cannot express) plus the Sharded
-    // output CB addresses.  Defined in nlp_create_qkv_heads_program_factory.cpp so it can reuse the
-    // same per-core builders create_descriptor() uses; no descriptor is rebuilt.
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::transformer
@@ -93,6 +96,7 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads(
     std::optional<uint32_t> num_kv_heads,
     uint32_t head_dim,
     bool transpose_k_heads,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors);
+    bool kv_tied = false,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors = std::nullopt);
 }  // namespace ttnn::prim

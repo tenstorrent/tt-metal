@@ -42,6 +42,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
+#include "ttnn/operations/normalization/layernorm/device/kernels/layernorm_scaler_tiles.h"
 #include "layernorm_dataflow_utils.h"
 
 namespace generic = norm::kernel_util::generic;
@@ -105,21 +106,21 @@ void kernel_main() {
     const uint32_t src0_page_bytes = W * elem_size_bytes;
 #else
     // TILE path: input a is already in tile layout.
-    const uint32_t src0_page_bytes = get_tile_size(dfb_id_in0);
+    const uint32_t src0_page_bytes = dfb_in0.get_tile_size();
 #endif
 
     const auto src_a = TensorAccessor(src0_args, src_addr);
 
 #ifdef FUSE_GAMMA
-    const uint32_t gamma_tile_bytes = get_tile_size(dfb_id_gamma);
+    const uint32_t gamma_tile_bytes = dfb_gamma.get_tile_size();
     const auto addrg = TensorAccessor(gamma_args, gamma_addr);
 #endif
 #ifdef FUSE_BETA
-    const uint32_t beta_tile_bytes = get_tile_size(dfb_id_beta);
+    const uint32_t beta_tile_bytes = dfb_beta.get_tile_size();
     const auto addrb = TensorAccessor(beta_args, beta_addr);
 #endif
 #ifdef FUSE_PRE_ADD
-    const uint32_t src1_tile_bytes = get_tile_size(dfb_id_in1);
+    const uint32_t src1_tile_bytes = dfb_in1.get_tile_size();
     const auto src_b = TensorAccessor(src1_args, b_addr);
 #endif
 
@@ -129,6 +130,8 @@ void kernel_main() {
 
     if constexpr (!use_welford) {
         constexpr uint32_t partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
+        // Push count shared with the compute kernel's cb_scaler pop count (issue #48487).
+        constexpr uint32_t num_scaler_tiles = norm::layernorm::reduce_scaler_tile_count(W, tt::constants::TILE_WIDTH);
 
         dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
             dfb_scaler,
@@ -136,7 +139,7 @@ void kernel_main() {
             ckernel::ReduceDim::REDUCE_ROW,
             dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
 
-        if constexpr (partial_last_tile_cols > 0) {
+        if constexpr (num_scaler_tiles == 2) {
             dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                 dfb_scaler,
                 ckernel::PoolType::SUM,

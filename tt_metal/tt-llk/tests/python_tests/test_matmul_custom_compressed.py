@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import numpy as np
 import pytest
 from conftest import blackhole_only
 from helpers.compressed_utils import (
@@ -10,27 +9,12 @@ from helpers.compressed_utils import (
     assign_clustered,
     assign_interleaved,
     assign_random,
+    encode_tile_meta,
     generate_exact_assignment,
     run_compressed,
 )
 from helpers.param_config import parametrize
-from helpers.test_config import TestConfig
 from helpers.tile_constants import DEFAULT_TILE_C_DIM
-
-# This suite's LLKs are still vendored under models/demos/deepseek_v3_b1, so the compile needs that
-# llk_lib on the include path. Only llk_lib: those headers pull in nothing from the vendored llk_api.
-# The face-granular op no longer needs any of this -- it moved to tt-llk's experimental/.
-VENDORED_LLK_LIB = "-I../../../models/demos/deepseek_v3_b1/kernel_includes/tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib"
-
-
-@pytest.fixture(autouse=True)
-def compressed_mm_include_paths():
-    added = VENDORED_LLK_LIB not in TestConfig.INCLUDES
-    if added:
-        TestConfig.INCLUDES.append(VENDORED_LLK_LIB)
-    yield
-    if added:
-        TestConfig.INCLUDES.remove(VENDORED_LLK_LIB)
 
 
 def promote_assignment(assignment, ct):
@@ -46,20 +30,9 @@ def pack_b(tiles):
 
 
 def encode_meta(assignment, ct, kt, aux):
-    total = len(assignment)
-    num_u32 = (total + 9) // 10
-    meta = [0] * num_u32
-    prev_fmt = 0
-    for i in range(total):
-        u, j = divmod(i, 10)
-        if j == 0:
-            meta[u] |= prev_fmt & 0b11
-        fmt = assignment[i] & 0b11
-        use_b = 1 if (i % ct) == 0 else 0
-        meta[u] |= use_b << (3 * j + 2)
-        meta[u] |= fmt << (3 * j + 3)
-        prev_fmt = fmt
-    return np.array(meta, dtype=np.uint32).tobytes()
+    # run_compressed's make_meta hook; the packing itself is shared with the compressed_custom_mm
+    # advance test. kt and aux are unused here -- the tile kernel's meta is a flat per-tile stream.
+    return encode_tile_meta(assignment, ct)
 
 
 COMPRESSION_GRANULARITY = DEFAULT_TILE_C_DIM
