@@ -15,14 +15,18 @@ movement with a compute (TRISC) reduction. The oracle is element-wise SUM:
 
 This file is the immutable spec — the implementer must not modify it.
 
-Verification topology (MUST match the sim's fixed mesh-graph descriptor):
-a Wormhole T3K **line mesh of shape (1, 8)** with
-``fabric_config = ttnn.FabricConfig.FABRIC_1D``, driven by
-``scripts/run_multidevice_sim_pytest.py --op all_reduce``. A different mesh
-shape hangs fabric init ("Fabric Router Sync: Timeout"). The proven first case
-is bfloat16, TILE_LAYOUT, Linear topology.
+Verification topology (MUST match the runner's mesh-graph descriptor):
+``bh_quietbox_1x4_hw`` — a real 4-chip Blackhole **line mesh of shape (1, 4)**
+with ``fabric_config = ttnn.FabricConfig.FABRIC_1D``, driven by
+``scripts/run_multidevice_sim_pytest.py --runtime hardware --op all_reduce``.
+A different mesh shape hangs fabric init ("Fabric Router Sync: Timeout") or
+fails ``system_mesh.cpp: requested_size <= system_size`` — a test/topology
+mismatch, not an op defect. CCL_HW_MESH_SHAPE (e.g. "1,8") overrides the
+default for boxes with a different line length; the op derives N from the mesh
+at runtime. The proven first case is bfloat16, TILE_LAYOUT, Linear topology.
 """
 
+import os
 from math import prod
 
 import pytest
@@ -35,6 +39,13 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.operations.all_reduce import all_reduce
 
 
+def _hw_mesh_shape(default=(1, 4)):
+    """Mesh shape for this suite: the (1, 4) bh_quietbox_1x4_hw contract by
+    default, overridable via CCL_HW_MESH_SHAPE for a different line length."""
+    raw = os.environ.get("CCL_HW_MESH_SHAPE")
+    return tuple(int(x) for x in raw.split(",")) if raw else default
+
+
 # PCC tolerances keyed by dtype. A bf16 sum of N terms accumulates rounding, so
 # the bf16 threshold matches the all_reduce golden suite (0.99) rather than the
 # generic pure-movement 0.995 — the reduction genuinely loses a little precision.
@@ -43,7 +54,7 @@ PCC = {
     ttnn.bfloat16: 0.99,
 }
 
-# Reduction runs on TILE_LAYOUT (it is a tile compute). bf16 is the proven
+# The reduction runs on TILE_LAYOUT (it is a tile compute). bf16 is the proven
 # primary dtype; float32 is the secondary supported dtype.
 DTYPES = [ttnn.bfloat16, ttnn.float32]
 
@@ -57,7 +68,7 @@ SHARD_SHAPES = [
     (2, 1, 32, 64),  # multi-batch
 ]
 
-# Topology <-> fabric_config pairing. The sim is a FABRIC_1D line.
+# Topology <-> fabric_config pairing. The verification box is a FABRIC_1D line.
 LINEAR = ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear)
 
 
@@ -94,7 +105,7 @@ def _make_sharded_input(mesh_device, shard_shape, dtype):
 
 
 @pytest.mark.parametrize("device_params, topology", [LINEAR], indirect=["device_params"])
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [_hw_mesh_shape()], indirect=True)
 @pytest.mark.parametrize("dtype", DTYPES)
 @pytest.mark.parametrize("shard_shape", SHARD_SHAPES)
 def test_all_reduce(mesh_device, topology, dtype, shard_shape):
@@ -123,12 +134,14 @@ def test_all_reduce(mesh_device, topology, dtype, shard_shape):
 
 
 @pytest.mark.parametrize("device_params, topology", [LINEAR], indirect=["device_params"])
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [_hw_mesh_shape()], indirect=True)
 def test_all_reduce_program_cache(mesh_device, topology):
     """Second call (program-cache hit) still reduces correctly.
 
-    The op-internal GlobalSemaphore must survive the cache hit (created once,
-    not re-created per call).
+    The op-internal GlobalSemaphores must survive the cache hit (created once,
+    not re-created per call), and every semaphore consumer must have re-armed
+    its counter to 0 after its final wait — a missing re-arm passes the first
+    call and hangs this one.
     """
     num_devices = prod(tuple(mesh_device.shape))
     if num_devices < 2:
@@ -145,7 +158,7 @@ def test_all_reduce_program_cache(mesh_device, topology):
 
 
 @pytest.mark.parametrize("device_params, topology", [LINEAR], indirect=["device_params"])
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [_hw_mesh_shape()], indirect=True)
 def test_all_reduce_output_tensor(mesh_device, topology):
     """The output_tensor path writes into the supplied tensor and returns it."""
     num_devices = prod(tuple(mesh_device.shape))
