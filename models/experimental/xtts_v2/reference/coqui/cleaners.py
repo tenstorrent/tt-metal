@@ -8,8 +8,6 @@
 # Changes from upstream, all deletions:
 #   * split_sentence / get_spacy_lang dropped -- they are upstream's optional text splitter and
 #     the only users of spacy. Sentence splitting is the caller's job here.
-#   * the zh branch of expand_numbers_multilingual dropped (needs pypinyin + upstream's
-#     zh_num2words); zh/ja/ko are refused by frontend.XttsTokenizer instead.
 #   * chinese/korean/japanese transliterate, VoiceBpeTokenizer and the module's self-tests
 #     dropped -- the tests live in tests/test_tokenizer_multilingual.py.
 # num2words is the only runtime dependency, and it was already required for English.
@@ -17,6 +15,8 @@
 import re
 
 from num2words import num2words
+
+from .zh_num2words import TextNorm as zh_num2words
 
 
 _whitespace_re = re.compile(r"\s+")
@@ -480,6 +480,8 @@ def _expand_number(m, lang="en"):
 
 
 def expand_numbers_multilingual(text, lang="en"):
+    if lang == "zh":
+        return zh_num2words()(text)
     if lang in ["en", "ru"]:
         text = re.sub(_comma_number_re, _remove_commas, text)
     else:
