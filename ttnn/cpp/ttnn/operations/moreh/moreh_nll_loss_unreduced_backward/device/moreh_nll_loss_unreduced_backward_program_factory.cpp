@@ -4,6 +4,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include <tt-metalium/constants.hpp>
 #include "moreh_nll_loss_unreduced_backward_device_operation.hpp"
@@ -56,15 +57,15 @@ void push_dfb(ProgramSpec& spec, const DFBSpecName& unique_id, uint32_t num_tile
 // Helper: the reader both fills and drains its private DFBs — some through the FIFO, some purely as an
 // address source — so it is the buffer's only toucher and takes both endpoint roles. One accessor name
 // for both, so the kernel keeps a single DataflowBuffer object per DFB.
-void bind_self_loop(KernelSpec& kernel, const DFBSpecName& dfb, std::string accessor_name) {
+void bind_self_loop(KernelSpec& kernel, const DFBSpecName& dfb, std::string_view accessor_name) {
     kernel.dfb_bindings.push_back(DFBBinding{
         .dfb_spec_name = dfb,
-        .accessor_name = accessor_name,
+        .accessor_name = std::string{accessor_name},
         .endpoint_type = DFBEndpointType::PRODUCER,
     });
     kernel.dfb_bindings.push_back(DFBBinding{
         .dfb_spec_name = dfb,
-        .accessor_name = std::move(accessor_name),
+        .accessor_name = std::string{accessor_name},
         .endpoint_type = DFBEndpointType::CONSUMER,
     });
 }
@@ -122,7 +123,6 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
 
     // create read/write kernel
     KernelSpec::CompilerOptions::Defines reader_defines;
-    KernelSpec::CompilerOptions::Defines writer_defines;
 
     if (weight_has_value) {
         reader_defines.emplace("WEIGHT", "1");
@@ -177,7 +177,6 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
     KernelSpec writer{
         .unique_id = WRITER,
         .source = writer_kernel_file,
-        .compiler_options = {.defines = std::move(writer_defines)},
         .dfb_bindings =
             {
                 DFBBinding{
@@ -310,7 +309,6 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
 
     // create read/write kernel
     KernelSpec::CompilerOptions::Defines reader_defines;
-    KernelSpec::CompilerOptions::Defines writer_defines;
 
     if (weight_has_value) {
         reader_defines.emplace("WEIGHT", "1");
@@ -364,7 +362,6 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
     KernelSpec writer{
         .unique_id = WRITER,
         .source = writer_kernel_file,
-        .compiler_options = {.defines = std::move(writer_defines)},
         .dfb_bindings =
             {
                 DFBBinding{
@@ -502,7 +499,6 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
 
     // create read/write kernel
     KernelSpec::CompilerOptions::Defines reader_defines;
-    KernelSpec::CompilerOptions::Defines writer_defines;
 
     if (weight_has_value) {
         reader_defines.emplace("WEIGHT", "1");
@@ -556,7 +552,6 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_unreduced_backward_impl_
     KernelSpec writer{
         .unique_id = WRITER,
         .source = writer_kernel_file,
-        .compiler_options = {.defines = std::move(writer_defines)},
         .dfb_bindings =
             {
                 DFBBinding{
