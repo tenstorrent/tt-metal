@@ -7,6 +7,12 @@ Same inputs as ``test_bevformer_encoder_forward``: PCC gate, warmup, then
 signposted iterations so the report covers already-compiled, already-dispatched
 programs.
 
+Camera geometry comes from the dataset's fixed rig, not from random matrices.
+``lidar2img`` decides ``bev_mask`` and therefore the spatial-cross-attention
+rebatch length, which sizes every spatial-path tensor; drawing it from the RNG
+would make the measured workload depend on the seed and on how many tensors were
+allocated before it.
+
 No trace capture. ``TTSpatialCrossAttention.forward`` calls ``ttnn.to_torch`` on
 ``bev_mask`` and on its rebatch indices, and the host result decides shapes for
 the ops that follow; reads and writes both TT_FATAL inside a capture region.
@@ -22,7 +28,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.experimental.bevformer.config.encoder_config import get_preset_config
+from models.experimental.bevformer.config.encoder_config import get_preset_config, img_metas_for_dataset
 from models.experimental.bevformer.reference.encoder import BEVFormerEncoder
 from models.experimental.bevformer.tests.test_utils import check_with_pcc
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_encoder_parameters
@@ -37,17 +43,6 @@ def _head_sha():
         return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
     except (subprocess.CalledProcessError, OSError):
         return "unknown"
-
-
-def _sample_img_metas(batch_size, num_cams, image_shape):
-    height, width = image_shape
-    return [
-        {
-            "img_shape": [(height, width, 3)] * num_cams,
-            "lidar2img": [torch.randn(4, 4).tolist() for _ in range(num_cams)],
-        }
-        for _ in range(batch_size)
-    ]
 
 
 @torch.no_grad()
@@ -91,8 +86,7 @@ def test_bevformer_encoder_profile(
     key_length = sum(h * w for h, w in spatial_shapes.tolist())
     camera_features = torch.randn(num_cams, key_length, batch_size, embed_dims, dtype=torch.float32)
 
-    width, height = dataset_config.input_size
-    img_metas = _sample_img_metas(batch_size, num_cams, (height, width))
+    img_metas = img_metas_for_dataset(dataset_config, batch_size)
 
     encoder_kwargs = config.get_encoder_kwargs()
     encoder_kwargs.update({"num_layers": num_layers, "batch_first": True, "return_intermediate": False})
