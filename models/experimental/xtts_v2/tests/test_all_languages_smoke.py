@@ -64,6 +64,8 @@ def test_language_smoke(lang, tts, voice):
         assert torch.isfinite(wav).all(), f"{lang}: non-finite samples"
         assert wav.abs().max() <= 1.0, f"{lang}: samples outside [-1,1] ({wav.abs().max():.3f})"
         assert codes <= cap, f"{lang}: {codes} codes exceeds max_new_tokens {cap}"
+        # a caller cannot tell a finished sentence from a cut-off one without this
+        assert tts.last_timings["truncated"] == (codes == cap), f"{lang}: truncation misreported"
         assert _voc_bucket(wav.shape[-1] // HOP) in VOC_BUCKETS
         audio_ms = 1000 * wav.shape[-1] / OUTPUT_SR
         assert abs(audio_ms - codes * MS_PER_CODE) < MS_PER_CODE, f"{lang}: {audio_ms:.0f}ms, {codes} codes"

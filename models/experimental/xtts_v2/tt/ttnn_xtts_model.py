@@ -462,10 +462,16 @@ class XttsV2:
         # which is a FAKE prefix of fill_value=1 tokens plus START — so coqui permanently
         # suppresses code 1 (and START) from the first sample onward. Replicate it.
         seen = {1, START_AUDIO_TOKEN}
-        codes, vlat = [], []
+        # STOP and the budget are separate reasons to stop, and a caller needs to tell them apart:
+        # one means the sentence finished, the other that it was cut off mid-word. STOP is checked
+        # first so a model that would have stopped anyway is not reported as truncated.
+        codes, vlat, truncated = [], [], False
         while True:
             nxt = _sample_token(last, seen, gen, mh_w, mh_b)
-            if nxt == STOP_AUDIO_TOKEN or len(codes) >= max_new:
+            if nxt == STOP_AUDIO_TOKEN:
+                break
+            if len(codes) >= max_new:
+                truncated = True
                 break
             codes.append(nxt)
             vlat.append(last)  # `last` predicted nxt -> it is nxt's vocoder frame
@@ -481,6 +487,7 @@ class XttsV2:
                     "decode_s": t_decode,
                     "decode_ms_per_token": 1000.0 * t_decode,  # the lone START step
                     "codes": 0,
+                    "truncated": truncated,
                     "vocoder_s": 0.0,
                     "wav_samples": 0,
                 }
@@ -502,6 +509,7 @@ class XttsV2:
                 "decode_s": t_decode,
                 "decode_ms_per_token": 1000.0 * t_decode / max(len(vlat) + 1, 1),
                 "codes": len(codes),
+                "truncated": truncated,
                 "vocoder_s": t_voc,
                 "wav_samples": wav.shape[-1],
             }

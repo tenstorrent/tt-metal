@@ -19,8 +19,12 @@ from models.experimental.xtts_v2.reference.coqui.cleaners import (
     expand_numbers_multilingual,
     expand_symbols_multilingual,
 )
+from loguru import logger
+
 from models.experimental.xtts_v2.frontend import (
     BASIC_LANGUAGES,
+    CHAR_LIMITS,
+    ROMANIZERS,
     VOCAB_TAG,
     CLEANED_LANGUAGES,
     SUPPORTED_LANGUAGES,
@@ -743,6 +747,30 @@ def test_region_suffix_is_stripped(xtts_vocab):
     """ "pt-br" must clean as pt rather than fall through to the unknown-language error."""
     tk = XttsTokenizer(xtts_vocab)
     assert tk.encode(GOLDEN_SENTENCES["pt"], "pt-br") == tk.encode(GOLDEN_SENTENCES["pt"], "pt")
+
+
+def test_char_limits_cover_every_language():
+    """A language with no limit would be checked against nothing. The romanized ones must stay far
+    below the rest: their text expands before it reaches the BPE, so fewer characters fit."""
+    assert sorted(CHAR_LIMITS) == sorted(SUPPORTED_LANGUAGES)
+    for lang in ROMANIZERS:
+        assert CHAR_LIMITS[lang] < CHAR_LIMITS["en"] / 2, f"{lang} expands; its limit must be lower"
+
+
+def test_long_text_warns_before_it_truncates(xtts_vocab):
+    """Silent truncation loses the end of the sentence; the warning names the language and both
+    numbers so a caller can chunk. It is a warning, not an error, matching coqui."""
+    tk = XttsTokenizer(xtts_vocab)
+    seen = []
+    handle = logger.add(lambda m: seen.append(m), level="WARNING")
+    try:
+        tk.encode("가" * (CHAR_LIMITS["ko"] + 1), "ko")
+        assert seen and "ko" in seen[0] and str(CHAR_LIMITS["ko"]) in seen[0]
+        seen.clear()
+        tk.encode("가" * CHAR_LIMITS["ko"], "ko")
+        assert not seen, "a text exactly at the limit is not past it"
+    finally:
+        logger.remove(handle)
 
 
 def test_cleaned_and_basic_languages_do_not_overlap():

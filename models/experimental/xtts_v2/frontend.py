@@ -34,6 +34,7 @@ import os
 
 import torch
 import torch.nn.functional as F
+from loguru import logger
 
 from models.experimental.xtts_v2.reference.coqui.cleaners import basic_cleaners, multilingual_cleaners
 
@@ -293,6 +294,28 @@ ROMANIZERS = {"ja": _romanize_japanese, "ko": _romanize_korean, "zh": _romanize_
 # Chinese is tagged [zh-cn] in the vocab; a bare [zh] is not a token and would shatter into <unk>.
 VOCAB_TAG = {"zh": "zh-cn"}
 
+# Past these lengths coqui warns that audio may truncate, and the romanized languages sit far below
+# the rest: their text expands on the way to the BPE, so far fewer characters fit the token budget.
+# A warning rather than an error, matching upstream -- MAX_TEXT_TOKENS is the hard limit.
+CHAR_LIMITS = {
+    "ar": 166,
+    "de": 253,
+    "en": 250,
+    "es": 239,
+    "fr": 273,
+    "hi": 150,
+    "hu": 224,
+    "it": 213,
+    "ja": 71,
+    "ko": 95,
+    "nl": 251,
+    "pl": 224,
+    "pt": 203,
+    "ru": 182,
+    "tr": 226,
+    "zh": 82,
+}
+
 
 class XttsTokenizer:
     """coqui VoiceBpeTokenizer on the checkpoint's vocab.json (a HF `tokenizers` file).
@@ -301,8 +324,6 @@ class XttsTokenizer:
     Xtts.inference tokenization (which also does sent.strip().lower() first — .lower() is
     already part of the cleaner)."""
 
-    CHAR_LIMIT_EN = 250  # coqui warns (and audio may truncate) past this
-
     def __init__(self, vocab_file):
         from tokenizers import Tokenizer
 
@@ -310,6 +331,9 @@ class XttsTokenizer:
 
     def encode(self, text, lang="en"):
         lang = lang.split("-")[0]  # drop the region: "pt-br" -> "pt"
+        limit = CHAR_LIMITS.get(lang)
+        if limit and len(text) > limit:
+            logger.warning(f"{lang}: {len(text)} characters is past coqui's {limit}; audio may truncate")
         if lang in UNCLEANED_LANGUAGES:
             text = ROMANIZERS[lang](text.strip())
         elif lang in CLEANED_LANGUAGES:
@@ -362,7 +386,7 @@ def assemble_prompt(token_ids, cond_latents, tables: PromptTables):
     latents. The START_AUDIO embedding is NOT part of the prefix — the decode driver feeds it
     as the first step (see TTNNGPTTracedDecoder)."""
     ids = torch.as_tensor(token_ids, dtype=torch.long).reshape(1, -1)
-    assert ids.shape[1] < MAX_TEXT_TOKENS, f"text too long: {ids.shape[1]} tokens (max {MAX_TEXT_TOKENS})"
+    assert ids.shape[1] <= MAX_TEXT_TOKENS, f"text too long: {ids.shape[1]} tokens (max {MAX_TEXT_TOKENS})"
     ids = F.pad(ids, (0, 1), value=STOP_TEXT_TOKEN)
     ids = F.pad(ids, (1, 0), value=START_TEXT_TOKEN)
     emb = tables.text_emb[ids[0]] + tables.text_pos[: ids.shape[1]]  # [S,1024]
