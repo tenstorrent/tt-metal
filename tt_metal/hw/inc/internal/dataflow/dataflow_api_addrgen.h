@@ -208,7 +208,7 @@ uint64_t get_noc_multicast_addr(
 // clang-format on
 FORCE_INLINE
 uint64_t get_noc_addr(uint32_t noc_x, uint32_t noc_y, uint32_t addr, uint8_t noc = noc_index) {
-    return noc_address_backend::worker(noc_x, noc_y, addr, noc);
+    return noc_address_backend::worker_address(noc_x, noc_y, addr, noc);
 }
 
 /*
@@ -221,7 +221,7 @@ std::uint64_t get_noc_addr_helper(std::uint32_t noc_xy, std::uint32_t addr) {
         Get an encoding which contains tensix core and address you want to
         write to via the noc multicast
     */
-    return noc_address_backend::packed_worker(noc_xy, addr);
+    return noc_address_backend::packed_worker_address(noc_xy, addr);
 }
 
 namespace interleaved_addr_gen {
@@ -231,7 +231,7 @@ namespace interleaved_addr_gen {
 // generators below.
 template <bool DRAM>
 FORCE_INLINE uint64_t get_bank_noc_addr(uint32_t bank_index, uint32_t addr, uint8_t noc = noc_index) {
-    return noc_address_backend::bank<DRAM>(bank_index, addr, noc);
+    return noc_address_backend::bank_address<DRAM>(bank_index, addr, noc);
 }
 
 }  // namespace interleaved_addr_gen
@@ -271,7 +271,7 @@ uint64_t get_system_memory_noc_addr(
     const uint32_t offset = 0,
     uint8_t noc = noc_index) {
     uint32_t addr = base_addr + page_size * id + offset;
-    return noc_address_backend::system_memory(addr, noc);
+    return noc_address_backend::system_memory_address(addr, noc);
 }
 
 FORCE_INLINE
@@ -280,7 +280,7 @@ std::uint64_t get_noc_addr(std::uint32_t addr, uint8_t noc = noc_index) {
         Get an encoding which contains the address in L1 on the current core that you want to
         read from/write to via the noc
     */
-    return noc_address_backend::local(addr, noc);
+    return noc_address_backend::self_address(addr, noc);
 }
 
 template <bool DRAM>
@@ -526,7 +526,7 @@ get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t bank_address_offset, uint8_
     if constexpr (DRAM) {
         bank_address_offset += bank_to_dram_offset[bank_id];
     }
-    return noc_address_backend::packed_worker(packed_xy, bank_address_offset);
+    return noc_address_backend::packed_worker_address(packed_xy, bank_address_offset);
 }
 
 template <bool DRAM, uint32_t page_size>

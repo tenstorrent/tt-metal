@@ -219,7 +219,7 @@ FORCE_INLINE uint64_t calculate_dispatch_addr(volatile go_msg_t* go_message_in) 
     constexpr uint32_t dispatch_message_stride = NOC_STREAM_REG_SPACE_SIZE;
 #endif
     const uint32_t local_addr = DISPATCH_MESSAGE_ADDR + dispatch_message_stride * go_message.dispatch_message_offset;
-    return noc_address_backend::dispatch(go_message.master_x, go_message.master_y, local_addr);
+    return noc_address_backend::dispatch_address(go_message.master_x, go_message.master_y, local_addr);
 }
 
 FORCE_INLINE void notify_dispatch_core_done(uint64_t dispatch_addr, uint8_t noc_index) {

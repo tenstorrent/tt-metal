@@ -302,7 +302,7 @@ private:
         auto bank_x = get_bank_x(packed_xy_coords[page_mapping.bank_id]);
         auto bank_y = get_bank_y(packed_xy_coords[page_mapping.bank_id]);
         auto bank_start = DSpec::is_dram ? tensor_accessor::get_dram_bank_base_offset(bank_x, noc)
-                                         : noc_address_backend::worker(bank_x, bank_y, 0, noc);
+                                         : noc_address_backend::worker_address(bank_x, bank_y, 0, noc);
         return bank_start + bank_base_address + (page_mapping.bank_page_offset * aligned_page_size) + offset;
     }
 

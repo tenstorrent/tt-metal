@@ -60,7 +60,7 @@ namespace noc_address_backend {
 [[maybe_unused]] static bool is_local(uint64_t noc_addr, uint8_t noc) {
     return NOC_UNICAST_ADDR_X(noc_addr) == my_x[noc] && NOC_UNICAST_ADDR_Y(noc_addr) == my_y[noc];
 }
-[[maybe_unused]] static uint64_t worker(uint32_t x, uint32_t y, uint32_t addr, [[maybe_unused]] uint8_t noc) {
+[[maybe_unused]] static uint64_t worker_address(uint32_t x, uint32_t y, uint32_t addr, [[maybe_unused]] uint8_t noc) {
     return NOC_XY_ADDR(DYNAMIC_NOC_X(noc, x), DYNAMIC_NOC_Y(noc, y), addr);
 }
 }  // namespace noc_address_backend
