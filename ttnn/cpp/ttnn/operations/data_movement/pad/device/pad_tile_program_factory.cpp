@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pad_tile_program_factory.hpp"
+#include <bit>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -73,6 +74,8 @@ ProgramDescriptor PadTileCoreProgramFactory::create_descriptor(
         packed_pad_value = pad_value;
     } else if (a.dtype() == DataType::UINT16) {
         packed_pad_value = pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
+    } else if (a.dtype() == DataType::FLOAT32) {
+        packed_pad_value = std::bit_cast<uint32_t>(pad_value);
     } else {
         packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
     }
