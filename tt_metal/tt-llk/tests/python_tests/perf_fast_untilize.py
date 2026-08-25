@@ -23,12 +23,22 @@ from helpers.test_variant_parameters import (
 
 
 def _fast_untilize_rt_ct(dest_acc, dest_sync):
-    tiles = [
-        (dims[0] // FAST_UNTILIZE_TILE_R, dims[1] // FAST_UNTILIZE_TILE_C)
-        for dims in generate_perf_input_dimensions(dest_acc, dest_sync)
-    ]
+    """Dest-fill shapes with ct>=2. Tall dest-fill is (max, 1); remap to (max//2, 2)."""
+    tiles = []
+    seen = set()
+    for dims in generate_perf_input_dimensions(dest_acc, dest_sync):
+        rt_dim = dims[0] // FAST_UNTILIZE_TILE_R
+        ct_dim = dims[1] // FAST_UNTILIZE_TILE_C
+        # Kernel static_assert(FULL_CT_DIM >= 2); ct=1 uses the standard fallback.
+        if ct_dim < 2:
+            rt_dim = max(rt_dim // 2, 1)
+            ct_dim = 2
+        pair = (rt_dim, ct_dim)
+        if pair not in seen:
+            seen.add(pair)
+            tiles.append(pair)
     # Remainder blocking: one non-power-of-two width on Half dest.
-    if dest_sync == DestSync.Half and (1, 3) not in tiles:
+    if dest_sync == DestSync.Half and (1, 3) not in seen:
         tiles.append((1, 3))
     return tiles
 

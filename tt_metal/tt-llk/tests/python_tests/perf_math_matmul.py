@@ -12,16 +12,16 @@ from helpers.llk_params import (
     MathFidelity,
     PerfRunType,
     StochasticRounding,
+    Transpose,
 )
 from helpers.matmul_sweep import (
     MatmulConfig,
     generate_face_layout_config_sweep,
     generate_tile_dims,
-    skip_matmul_combination,
     sweep_tiny_tiles_matmul,
 )
 from helpers.param_config import DEST_SYNC_TILE_LIMITS, input_output_formats
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -50,7 +50,6 @@ MATMUL_FORMATS = input_output_formats(
 )
 DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 DEST_SYNC_MODES = [DestSync.Half, DestSync.Full]
-STOCHASTIC_ROUNDING_MODES = [StochasticRounding.No]
 MATH_FIDELITIES = [
     MathFidelity.LoFi,
     MathFidelity.HiFi2,
@@ -89,91 +88,48 @@ def _fits_tiny_perf_tile_shape(cfg) -> bool:
 def generate_perf_matmul_combinations():
     """Regular matmul: dest-filling RT x CT grids with KT in {1, 4}."""
     combinations = []
-    bfloat16_formats = {DataFormat.Float16_b, DataFormat.Float32}
-
     for fmt in MATMUL_FORMATS:
-        is_fpu_bfloat16 = (
-            fmt.input_format in bfloat16_formats
-            and fmt.output_format in bfloat16_formats
-        )
         for dest_acc in DEST_ACC_MODES:
             if is_dest_acc_needed(fmt) and dest_acc == DestAccumulation.No:
                 continue
             if fmt.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
                 continue
-            if (
-                dest_acc == DestAccumulation.No
-                and fmt.input_format == DataFormat.Float16_b
-                and fmt.output_format == DataFormat.Float16
-            ):
-                continue
 
             for dest_sync in DEST_SYNC_MODES:
                 max_tiles = _dest_capacity(dest_sync, dest_acc)
-                for stochastic_mode in STOCHASTIC_ROUNDING_MODES:
-                    for rt_dim, ct_dim in _dest_fill_rt_ct_pairs(max_tiles):
-                        for kt_dim in PERF_KT_DIMS:
-                            if skip_matmul_combination(
-                                stochastic_mode,
-                                dest_acc,
-                                is_fpu_bfloat16,
-                                kt_dim,
-                            ):
-                                continue
-                            tile_dims = generate_tile_dims(
-                                (
-                                    [rt_dim * TILE_DIM, kt_dim * TILE_DIM],
-                                    [kt_dim * TILE_DIM, ct_dim * TILE_DIM],
+                for rt_dim, ct_dim in _dest_fill_rt_ct_pairs(max_tiles):
+                    for kt_dim in PERF_KT_DIMS:
+                        tile_dims = generate_tile_dims(
+                            (
+                                [rt_dim * TILE_DIM, kt_dim * TILE_DIM],
+                                [kt_dim * TILE_DIM, ct_dim * TILE_DIM],
+                            )
+                        )
+                        for face_layout_config in generate_face_layout_config_sweep(
+                            math_matmul=True
+                        ):
+                            combinations.append(
+                                MatmulConfig(
+                                    tile_dimensions=tile_dims,
+                                    face_layout_config=face_layout_config,
+                                    formats=fmt,
+                                    stochastic_rnd=StochasticRounding.No,
+                                    dst_index=0,
+                                    dest_sync=dest_sync,
+                                    dest_acc=dest_acc,
                                 )
                             )
-                            for face_layout_config in generate_face_layout_config_sweep(
-                                math_matmul=True
-                            ):
-                                combinations.append(
-                                    MatmulConfig(
-                                        tile_dimensions=tile_dims,
-                                        face_layout_config=face_layout_config,
-                                        formats=fmt,
-                                        stochastic_rnd=stochastic_mode,
-                                        dst_index=0,
-                                        dest_sync=dest_sync,
-                                        dest_acc=dest_acc,
-                                    )
-                                )
     return combinations
 
 
 MATMUL_COMBINATIONS = generate_perf_matmul_combinations()
-
-
-def _handoff_combinations():
-    """One dest-full geometry for section handoff (not a cartesian of all dest-fill).
-
-    Isolate run types do not model multi-block dest handshake, so the test uses
-    L1_TO_L1 only when num_blocks > 1.
-    """
-    for cfg in MATMUL_COMBINATIONS:
-        if (
-            cfg.tile_dimensions.kt_dim == 1
-            and cfg.dest_sync == DestSync.Half
-            and cfg.dest_acc == DestAccumulation.No
-            and cfg.formats.input_format == DataFormat.Float16_b
-            and cfg.formats.output_format == DataFormat.Float16_b
-            and cfg.face_layout_config.unpack_transpose_faces == Transpose.No
-            and cfg.tile_dimensions.ct_dim == 1
-            and cfg.tile_dimensions.rt_dim
-            == _dest_capacity(cfg.dest_sync, cfg.dest_acc)
-        ):
-            return [cfg]
-    return []
-
 
 TINY_TILES_MATMUL_COMBINATIONS = [
     cfg
     for cfg in sweep_tiny_tiles_matmul(
         MATMUL_FORMATS,
         DEST_ACC_MODES,
-        STOCHASTIC_ROUNDING_MODES,
+        [StochasticRounding.No],
         DEST_SYNC_MODES,
         math_matmul=True,
     )
@@ -186,70 +142,60 @@ TINY_TILES_MATMUL_COMBINATIONS = [
 ALL_TEST_PARAMS = list(
     chain(
         (
-            (fidelity, cfg, throttle, 1)
+            (fidelity, cfg, throttle)
             for fidelity, cfg, throttle in product(
                 MATH_FIDELITIES, MATMUL_COMBINATIONS, THROTTLE_LEVELS
             )
         ),
         (
-            (fidelity, cfg, 0, 1)
+            (fidelity, cfg, 0)
             for fidelity, cfg in product(
                 MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
             )
-        ),
-        (
-            (fidelity, cfg, 0, DEST_HANDOFF_NUM_BLOCKS)
-            for fidelity, cfg in product((MathFidelity.LoFi,), _handoff_combinations())
         ),
     )
 )
 
 
+def _l1_to_l1_num_blocks(math_fidelity, matmul_config, throttle) -> int:
+    """One dest-full LoFi geometry uses multi-block L1_TO_L1 (section handoff)."""
+    dims = matmul_config.tile_dimensions
+    fmt = matmul_config.formats
+    if (
+        math_fidelity == MathFidelity.LoFi
+        and throttle == 0
+        and matmul_config.dest_sync == DestSync.Half
+        and matmul_config.dest_acc == DestAccumulation.No
+        and fmt.input_format == DataFormat.Float16_b
+        and fmt.output_format == DataFormat.Float16_b
+        and dims.kt_dim == 1
+        and dims.ct_dim == 1
+        and dims.rt_dim
+        == _dest_capacity(matmul_config.dest_sync, matmul_config.dest_acc)
+        and matmul_config.face_layout_config.unpack_transpose_faces == Transpose.No
+    ):
+        return DEST_HANDOFF_NUM_BLOCKS
+    return 1
+
+
 @pytest.mark.perf
-@pytest.mark.parametrize(
-    "math_fidelity,matmul_config,throttle,num_blocks", ALL_TEST_PARAMS
-)
+@pytest.mark.parametrize("math_fidelity,matmul_config,throttle", ALL_TEST_PARAMS)
 def test_perf_math_matmul(
     math_fidelity,
     matmul_config,
     throttle,
-    num_blocks,
     perf_report,
 ):
-    """
-    Performance test for matmul operations.
+    """Dest-fill RT x CT (KT 1/4, throttle 0/5) plus tiny-tile dest-fill ct.
 
-    Regular matmul uses dest-filling RT x CT grids sized to dest capacity, with
-    KT in {1, 4} and throttle 0 or 5. Tiny tiles cover ct=1 and dest-fill ct.
-    A dest-handoff slice repeats dest-fill blocks (NUM_BLOCKS=4, KT=1, throttle=0).
+    NUM_BLOCKS>1 is L1_TO_L1-only on one dest-full LoFi geometry (isolates stay 1).
     """
     formats = matmul_config.formats
-    in0_dimensions = matmul_config.tile_dimensions.in0_dimensions
-    in1_dimensions = matmul_config.tile_dimensions.in1_dimensions
     transpose = matmul_config.face_layout_config.unpack_transpose_faces
     num_faces_in0 = matmul_config.face_layout_config.num_faces_in0
     num_faces_in1 = matmul_config.face_layout_config.num_faces_in1
     num_faces = matmul_config.face_layout_config.num_faces
-
-    if is_dest_acc_needed(formats) and matmul_config.dest_acc == DestAccumulation.No:
-        pytest.skip("Dest accumulation must be enabled for this format")
-
-    if (
-        formats.input_format.is_32_bit()
-        and matmul_config.dest_acc == DestAccumulation.No
-    ):
-        pytest.skip("32-bit inputs require dest accumulation")
-
-    if num_blocks > 1:
-        run_types = [PerfRunType.L1_TO_L1]
-    else:
-        run_types = [
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ]
+    num_blocks = _l1_to_l1_num_blocks(math_fidelity, matmul_config, throttle)
 
     variant_tile_count = (
         matmul_config.tile_dimensions.rt_dim
@@ -260,7 +206,7 @@ def test_perf_math_matmul(
     configuration = PerfConfig(
         "sources/math_matmul_test.cpp",
         formats,
-        run_types,
+        ALL_PERF_RUN_TYPES,
         templates=[
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(matmul_config.dest_sync),
@@ -310,5 +256,21 @@ def test_perf_math_matmul(
         ),
         dest_acc=matmul_config.dest_acc,
     )
+    # Isolates do not model dest-section handshake, so NUM_BLOCKS>1 is L1_TO_L1 only.
+    configuration.run_configs = [
+        (
+            templates,
+            [
+                (
+                    NUM_BLOCKS(num_blocks if run_type == PerfRunType.L1_TO_L1 else 1)
+                    if isinstance(param, NUM_BLOCKS)
+                    else param
+                )
+                for param in runtimes
+            ],
+            run_type,
+        )
+        for templates, runtimes, run_type in configuration.run_configs
+    ]
 
     configuration.run(perf_report)
