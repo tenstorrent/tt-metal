@@ -38,7 +38,7 @@ struct LocalDFBInterfaceHost {
     std::array<uint32_t, ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR> limit = {0};
     std::array<::dfb::PackedTileCounter, ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR> packed_tile_counter = {0};
     uint8_t num_tcs_to_rr = 1;
-    bool broadcast_tc = false;  // one credit op posts the full count to every TC (DM<->DM ALL producer)
+    bool broadcast_tc = false;  // DM-DM ALL producer: post to all TCs instead of round-robin
     uint8_t remapper_pair_index = 0;
     uint32_t consumer_tcs = 0;
     uint8_t remapper_consumer_ids_mask = 0;

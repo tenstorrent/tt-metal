@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Metal 2.0 (declarative API) BLOCKED-producer -> STRIDED-consumer DFB producer.
-// Blocks are contiguous in the ring (global block order), so each block moves in one NoC
-// transaction; its credits are split across the consumers, each of which owns an equal share of
+// Blocks are contiguous in the ring, so each block moves in one NoC transaction;
+// its credits are split across the consumers, each of which owns an equal share of
 // every block. Keeps dfb_blocked_producer's contiguous DRAM read order. entries_per_txn carries
 // the transaction size, so the j-loop below is one iteration per block.
 
@@ -34,7 +34,6 @@ void kernel_main() {
     for (uint32_t b = 0; b < num_blocks; ++b) {
         // This thread's b-th block: block_size contiguous pages, blocks interleaved across producers.
         const uint32_t block_base_page = chunk_offset + (b * num_producers + producer_idx) * block_size;
-        // block_size: a block is ring-contiguous under global block order.
 #ifdef ARCH_QUASAR
         const uint32_t entries_per_txn = dfb.get_entries_per_txn();
 #else

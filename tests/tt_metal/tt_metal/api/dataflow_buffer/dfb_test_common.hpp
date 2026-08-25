@@ -579,9 +579,6 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
         } else if (
             p.producer_type == M2PorCType::TENSIX && p.cap == m2::DFBAccessPattern::BLOCKED &&
             (p.num_consumers > 1 || p.num_producers > p.num_consumers)) {
-            // Tensix→DM BLOCKED is identity for every P/C: the flat prefill IS the global block order
-            // (ring entry s holds input page s), and consumer c drains its blocks b ≡ c (mod C)
-            // ascending, writing block b to out pages [b*bs, (b+1)*bs).
             const uint32_t wpe = p.entry_size / sizeof(uint32_t);
             std::vector<uint32_t> expected = input;
             // On mismatch, map each output tile back to the input page that actually landed there.
@@ -607,8 +604,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             p.producer_type == M2PorCType::TENSIX && p.pap == m2::DFBAccessPattern::BLOCKED &&
             p.cap == m2::DFBAccessPattern::ALL) {
             // Trisc→DM BLOCKED→ALL routes the fan-out through the remapper (broadcast credits need a DM
-            // producer). Identity for every P: the flat prefill is the global block order and the ALL
-            // consumer drains blocks in that order (a run of bs entries per counter, then the next block).
+            // producer).
             const uint32_t wpe = p.entry_size / sizeof(uint32_t);
             std::vector<uint32_t> expected = input;
             if (expected != output) {
@@ -632,18 +628,11 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
         } else if (
             p.producer_type == M2PorCType::DM && p.consumer_type == M2PorCType::DM &&
             p.pap == m2::DFBAccessPattern::BLOCKED && p.cap == m2::DFBAccessPattern::ALL) {
-            // DM→DM BLOCKED→ALL is identity for every P: the producer bursts its DRAM blocks straight
-            // into its ring blocks (b ≡ p mod P, ascending), and the ALL consumer drains blocks in
-            // global order (a run of bs entries per counter, then the next block).
             std::vector<uint32_t> expected = input;
             EXPECT_EQ(expected, output) << "M2 DM→DM BLOCKED→ALL identity mismatch";
         } else if (
             p.producer_type == M2PorCType::DM && p.consumer_type == M2PorCType::DM &&
             p.pap == m2::DFBAccessPattern::BLOCKED && p.cap == m2::DFBAccessPattern::STRIDED) {
-            // DM→DM BLOCKED→STRIDED is identity for every P/C: producer p bursts its DRAM blocks
-            // straight into its ring blocks (b ≡ p mod P, ascending), and consumer c reads the
-            // entries ≡ c mod C ascending, writing its k-th read to out page k*C + c — the k-th
-            // entry in its residue class. The two mappings cancel.
             const uint32_t wpe = p.entry_size / sizeof(uint32_t);
             std::vector<uint32_t> expected = input;
             if (expected != output) {
@@ -834,8 +823,7 @@ inline void run_a1_blocked_pipeline(
     detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), output);
 
     // DRAM_out[k] is the Tensix's k-th consumed tile from DFB_IN, since the back half is a FIFO
-    // pass-through. Under global block order the consume order is the ring order, so BLOCKED and ALL
-    // round-trip as identity.
+    // pass-through.
     const uint32_t wpe = entry_size / sizeof(uint32_t);
     const char* cap_name = "STRIDED";
     if (cap_in == m2::DFBAccessPattern::BLOCKED) {
@@ -845,15 +833,13 @@ inline void run_a1_blocked_pipeline(
     }
     std::vector<uint32_t> expected(input.size(), 0u);
     if (cap_in == m2::DFBAccessPattern::ALL) {
-        // BLOCKED→ALL is identity for every P: producers burst their DRAM blocks straight into
-        // their ring blocks (global block order) and the ALL consumer drains blocks in that order.
+        // BLOCKED→ALL
         expected = input;
     } else if (cap_in == m2::DFBAccessPattern::BLOCKED) {
-        // BLOCKED→BLOCKED is identity for every P: producer p bursts its DRAM blocks straight into
-        // its ring blocks (b ≡ p mod P, ascending), and the consumer drains blocks in global order.
+        // BLOCKED→BLOCKED
         expected = input;
     } else {
-        // BLOCKED→STRIDED: C>=P forces P==1 here, so identity.
+        // BLOCKED→STRIDED
         expected = input;
     }
 

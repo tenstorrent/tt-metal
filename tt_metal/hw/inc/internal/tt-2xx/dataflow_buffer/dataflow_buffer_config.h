@@ -171,8 +171,6 @@ inline uint8_t dfb_hart_participation_count(uint32_t participation_mask) {
 constexpr uint8_t DFB_HART_FLAG_IS_PRODUCER  = (1u << 7);
 // DM1 owns this producer's remapper pair; the producer must wait for it before touching its TCs.
 constexpr uint8_t DFB_HART_FLAG_REMAPPER_WAIT_DM1 = (1u << 6);
-// Set only for a broadcasting producer (DM<->DM ALL). Nothing on the device reads this bit today;
-// the device keys off the scalar-pack broadcast_tc byte.
 constexpr uint8_t DFB_HART_FLAG_BROADCAST_TC = (1u << 5);
 // This Neo's packer programs its own remapper pair (intra-tensix alias). DM1 cannot do it: the
 // Tensix-only TC pool is invisible to DM, and one Neo cannot see another Neo's TCs.
@@ -217,21 +215,16 @@ struct dfb_hart_init_entry_t {
                                              // reclaims this byte for remapper_pair_index.
     uint16_t num_entries;                    // bytes 24-25; ring entry count (main update_size path)
     uint16_t capacity;  // bytes 26-27; producer: TC capacity; consumer: 0
-    uint16_t dm_block_size;                  // bytes 28-29: how many entries this DM hart moves in one NoC
-                                             // transaction. 1 unless this hart is BLOCKED and its entries
-                                             // are adjacent, in which case block_size.
-    uint16_t run_length;                     // bytes 30-31: ops on one tile counter before the cursor takes
-                                             // the stride2 jump and rotates to the next counter.
-                                             // DM harts: 1 = rotate every op; 0 selects the split-credit arm
-                                             // (one transaction spans every counter). TRISC harts: 0 = rotate
-                                             // every call (single-stride walk).
-    uint32_t stride2_precomp;                // bytes 32-35: cursor jump taken by the op that completes a run.
-                                             // DM harts: raw bytes; TRISC harts: entries. Equal to the stride
-                                             // for any side that rotates every op.
+    uint16_t block_size;       // bytes 28-29: how many entries this hart moves in one NoC
+                               // transaction. 1 unless this hart is BLOCKED and its entries
+                               // are adjacent, in which case block_size.
+    uint16_t run_length;       // bytes 30-31: ops on one tile counter before the cursor takes
+                               // the stride2 jump.
+                               // >0 = jumps every run_length; 0 = no jump.
+    uint32_t stride2_precomp;  // bytes 32-35: cursor jump in bytes (DM) or tile units (TRISC)
+                               // after run_length ops.
 } __attribute__((packed));
 static_assert(sizeof(dfb_hart_init_entry_t) == 36, "dfb_hart_init_entry_t must be 36B");
-static_assert(offsetof(dfb_hart_init_entry_t, run_length) == 30, "run_length must occupy former pad bytes 30-31");
-static_assert(offsetof(dfb_hart_init_entry_t, stride2_precomp) == 32, "stride2_precomp must sit at bytes 32-35");
 static_assert(offsetof(dfb_hart_init_entry_t, capacity) == 26, "capacity must occupy former pad bytes 26-27");
 static_assert(offsetof(dfb_hart_init_entry_t, num_entries) == 24, "num_entries must stay at bytes 24-25");
 
@@ -277,7 +270,7 @@ inline uint8_t dfb_read_init_entry_producer_signal_bit(const uint8_t* entry_byte
 }
 
 // Returns total serialized bytes for one dfb_hart_init_entry_t with num_tcs TC slots.
-// num_tcs pairs (8B each) + num_tcs ptc bytes, rounded up to 4B (sizeof(header) is already 4B-aligned).
+// num_tcs pairs (8B each) + num_tcs ptc bytes, rounded up to 4B.
 // = sizeof(header) + ((num_tcs * 9 + 3) & ~3).
 inline constexpr uint32_t dfb_hart_init_entry_byte_size(uint32_t num_tcs) {
     const uint32_t tc_bytes = num_tcs * 9u;

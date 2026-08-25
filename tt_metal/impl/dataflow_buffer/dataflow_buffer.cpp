@@ -436,11 +436,7 @@ void verify_dfb_global_header_participation(
 bool has_dm_risc(uint16_t risc_mask);
 bool has_tensix_risc(uint16_t risc_mask);
 
-// Global block order: block b sits at ring entries [b*bs, (b+1)*bs); producer p owns blocks
-// b % P == p, and the consumers own it by their own pattern (BLOCKED: consumer b % C; STRIDED:
-// consumer c owns the block's entries congruent to c mod C; ALL: every consumer reads every
-// block). Blocks round-robin across producers (p0-p1-p0-p1) instead of each producer owning a
-// contiguous sub-ring.
+// Returns true if the DFB's producer access pattern is BLOCKED.
 static bool dfb_uses_global_order(const DataflowBufferConfig& config) {
     return config.pap == ::dfb::AccessPattern::BLOCKED;
 }
@@ -451,8 +447,6 @@ static uint32_t dfb_side_block_entries(
         return 1u;
     }
     const uint32_t block = std::max<uint32_t>(side_block_size, 1u);
-    // A block is contiguous in the ring under global order and on a stride-1 (BLOCKED->ALL) ring,
-    // so the side moves it in one transaction.
     return (global_order || stride_in_entries == 1) ? block : 1u;
 }
 
@@ -469,9 +463,7 @@ static uint32_t dfb_effective_block_entries(const DataflowBufferImpl& dfb, bool 
 }
 
 // One transaction from a BLOCKED producer on a STRIDED ring spans every one of its tile counters
-// (block entry j belongs to consumer j mod C), so its credits are split across them. Serialized as
-// run_length == 0; the device's split arm advances every slot by its share of the block. Only that
-// pairing splits: a BLOCKED ring keeps each block on one counter, so its sides rotate per op.
+// so its credits are split across them.
 static bool dfb_dm_side_credits_split(const DataflowBufferImpl& dfb, bool is_producer) {
     const DataflowBufferConfig& config = dfb.config;
     return is_producer && config.pap == ::dfb::AccessPattern::BLOCKED &&
@@ -763,21 +755,13 @@ size_t serialize_dfb_config_for_core(
             entry.logical_dfb_id = dfb_narrow_field<uint8_t>(dfb->device_slot, dfb->id, "logical_dfb_id");
             entry.num_tcs        = num_tcs;
             entry._reserved0 = 0;
-            entry.dm_block_size = dfb_narrow_field<uint16_t>(
-                dfb_effective_block_entries(*dfb, rc.is_producer),
-                dfb->id,
-                "block_size");
-            // Cursor walk for this hart: {stride, run_length, stride2}. DM sides rotate each op with
-            // a single stride (run 1, stride2 == stride) except a split side (run 0: one transaction
-            // spans every TC); TRISC sides keep the rotate-per-call single-stride walk (run 0).
-            // Global-order BLOCKED rings override per cell:
-            //   B->B  DM: stride = lcm(P,C) blocks, run 1.  TRISC: runs of bs tiles, jump
-            //         (lcm-1)*bs + 1 entries to the slot's next block.
-            //   B->S  DM producer: stride = P*C entries (advance per block op = P blocks), split when
-            //         C > 1. DM consumer: stride C, runs of bs/C entries, jump (P-1)*bs + C to its
-            //         share of the slot's next block. TRISC consumer: the same walk per tile. TRISC
-            //         producer: legacy per-push rotation (tile j credits consumer j % C); its write
-            //         cursor is not block-aware — Tensix BLOCKED->STRIDED producers post credits only.
+            entry.block_size =
+                dfb_narrow_field<uint16_t>(dfb_effective_block_entries(*dfb, rc.is_producer), dfb->id, "block_size");
+            // Tell the device how to hop from one entry this hart owns to the next.
+            // Evenly spaced entries need one number: hop `stride` every time. Under BLOCKED the
+            // entries come in blocks, so it takes three: hop `stride` `run_length` times to cross
+            // a block, then hop `stride2` to reach this hart's next block. Which numbers depends on
+            // the pattern and on whether this is a DM or a Tensix hart.
             uint32_t side_stride_entries = dfb->stride_in_entries;
             {
                 const uint32_t bs = std::max<uint32_t>(dfb->config.producer_block_size, 1u);
@@ -785,51 +769,47 @@ size_t serialize_dfb_config_for_core(
                 const uint32_t C = dfb->config.num_consumers;
                 const bool is_dm_hart = h < ::dfb::TENSIX_RISC_OFFSET;
                 uint32_t run_length;
-                uint32_t stride2_entries;  // stride2 in entries; converted per hart type below
+                uint32_t stride2_entries;
                 if (global_order && dfb->config.cap == ::dfb::AccessPattern::BLOCKED) {
-                    // B->B: a DM side moves whole blocks with a single stride of lcm(P,C) blocks
-                    // (run 1); a TRISC side walks the block per tile (run of bs) and jumps
-                    // (lcm-1)*bs + 1 entries to its slot's next block.
+                    // DM moves a whole block per op, so one hop already lands on its next block.
+                    // Tensix crosses the block tile by tile, then jumps.
                     run_length = is_dm_hart ? 1u : bs;
                     stride2_entries =
                         is_dm_hart ? side_stride_entries : (dfb->stride_in_entries - 1u) * bs + 1u;
                 } else if (global_order && dfb->config.cap == ::dfb::AccessPattern::STRIDED) {
                     if (rc.is_producer) {
                         if (is_dm_hart) {
-                            // DM producer bursts one block per op, P*C entries of cursor per block
-                            // share; splits its credits across its counters when C > 1.
+                            // Its block feeds every consumer a share, so the credits split and the
+                            // hop skips the other producers' blocks.
                             side_stride_entries = P * C;
                             run_length = dfb_dm_side_credits_split(*dfb, /*is_producer=*/true) ? 0u : 1u;
                         } else {
-                            // TRISC producer: legacy per-push rotation (tile j credits consumer
-                            // j % C); credits-only, cursor unused.
+                            // Tensix only posts credits here; it has no block-aware cursor.
                             run_length = 0u;
                         }
                         stride2_entries = side_stride_entries;
                     } else {
-                        // Consumer (DM or TRISC): walk its share of each block, then jump to its
-                        // share of this slot's next block.
+                        // Cross its share of a block, then jump to its share of the next one.
                         run_length = bs / C;
                         stride2_entries = (P - 1u) * bs + C;
                     }
-                } else if (global_order) {  // cap == ALL
+                } else if (global_order) {
                     if (rc.is_producer) {
                         if (is_dm_hart) {
-                            // DM producer bursts one block per op; its slot cursor hops P blocks.
+                            // A whole block per op again; its next block sits P blocks along.
                             side_stride_entries = P;
                             run_length = 1u;
                         } else {
-                            // TRISC producer (remapper fan-out): credits-only, cursor unused.
-                            run_length = 0u;
+                            run_length = 0u;  // credits only, as above
                         }
                         stride2_entries = side_stride_entries;
                     } else {
-                        // Every consumer reads every entry: walk a block per tile, then jump
-                        // (P-1)*bs + 1 entries to this slot's (= this producer's) next block.
+                        // Reads everything: cross a block, then jump to the next one.
                         run_length = bs;
                         stride2_entries = (P - 1u) * bs + 1u;
                     }
                 } else {
+                    // Not BLOCKED: evenly spaced, so every hop is just stride.
                     run_length =
                         is_dm_hart ? (dfb_dm_side_credits_split(*dfb, rc.is_producer) ? 0u : 1u) : 0u;
                     stride2_entries = side_stride_entries;
@@ -838,7 +818,6 @@ size_t serialize_dfb_config_for_core(
                 if (is_dm_hart) {
                     entry.stride2_precomp = dfb->config.entry_size * stride2_entries;
                 } else {
-                    // The TRISC interface stores the jump as uint16 entries.
                     entry.stride2_precomp = dfb_narrow_field<uint16_t>(stride2_entries, dfb->id, "stride2");
                 }
             }
@@ -850,9 +829,6 @@ size_t serialize_dfb_config_for_core(
             //   DM harts   (h < TENSIX_RISC_OFFSET): stride_size = entry_size_raw * side stride
             //   TRISC harts (h >= TENSIX_RISC_OFFSET): stride_size = (entry_size_raw >> 4) * side stride
             // kTRISCCbAddrShift == 4 matches the cb_addr_shift constant in dataflow_buffer_init.h.
-            // On a global-order BLOCKED ring a TRISC BLOCKED endpoint walks tiles within a block
-            // (+1 entry per tile), while a DM endpoint moves whole blocks — the side stride computed
-            // above carries the divergence.
             constexpr uint32_t kTRISCCbAddrShift = 4u;
             if (h < ::dfb::TENSIX_RISC_OFFSET) {
                 entry.stride_size_precomp = dfb->config.entry_size * side_stride_entries;
@@ -1307,7 +1283,7 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
     if (consumes_all) {
         // wr_sent is a global counter shared across all DMs. Each of the num_consumers DMs writes
         // per_txn entries per txn_id, so the ISR must not fire until all consumers have finished
-        // their batch: the entry-domain threshold is num_consumers × per_txn (scaled by block_size above).
+        // their batch: threshold = num_consumers × per_txn.
         per_txn = static_cast<uint8_t>(wide_per_txn);
     } else {
         // Defensive assertion — guaranteed by the upfront check above.
@@ -1325,10 +1301,6 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
         per_txn,
         num_tcs_per_risc);
     uint8_t per_txn_per_tc = per_txn / num_tcs_per_risc;
-
-    // A side that walks its counters in runs (run_length ops per counter before rotating) needs its
-    // txn window to cover whole runs on every counter, or the ISR credits counters mid-run for
-    // entries this side has not reached.
     if (run_length > 1 && num_tcs_per_risc > 1) {
         TT_FATAL(
             per_txn % (run_length * num_tcs_per_risc) == 0,
@@ -1339,9 +1311,6 @@ static dfb_txn_id_descriptor_t compute_txn_descriptor(
             run_length,
             num_tcs_per_risc);
     }
-
-    // A batching side moves entries block_size at a time, so per_txn has to be a whole number of blocks
-    // across its TCs. Otherwise the trid rotates late and some TCs get credits for unwritten entries.
     if (block_size > 1 && credits_split) {
         TT_FATAL(
             per_txn % block_size == 0 && block_size % num_tcs_per_risc == 0,
@@ -1422,9 +1391,6 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
     switch (config.cap) {
         case ::dfb::AccessPattern::STRIDED:
             if (config.pap == ::dfb::AccessPattern::BLOCKED) {
-                // Global block order: producer p bursts whole blocks at b % P == p; consumer c owns
-                // the entries congruent to c mod C inside every block. Each (producer, consumer)
-                // pair shares one tile counter covering num_entries / (P*C) entries.
                 const uint32_t block = std::max<uint32_t>(config.producer_block_size, 1u);
                 TT_FATAL(
                     block % config.num_consumers == 0,
@@ -1461,7 +1427,6 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
                 dfb.id,
                 config.num_entries,
                 config.num_producers);
-            // Same guard for a BLOCKED producer feeding an ALL consumer.
             if (config.producer_block_size > 0) {
                 TT_FATAL(
                     config.num_entries % (config.producer_block_size * config.num_producers) == 0,
@@ -1477,17 +1442,12 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
             stride_in_entries = 1;
             break;
         case ::dfb::AccessPattern::BLOCKED: {
-            // Global block order: block b sits at entries [b*bs, (b+1)*bs), producer b % P, consumer
-            // b % C. Each (p,c) pair's shared blocks form one residue class mod L = lcm(P,C), so every
-            // slot walks a single stride of L blocks. One block grid serves both sides, so the two
-            // block sizes must match.
             const uint32_t L = std::lcm(config.num_producers, config.num_consumers);
             const uint32_t block = std::max<uint32_t>(config.consumer_block_size, 1u);
             const uint32_t pblock = std::max<uint32_t>(config.producer_block_size, 1u);
             TT_FATAL(
                 pblock == block,
-                "BLOCKED DFB {}: producer_block_size {} must equal consumer_block_size {} — the ring is one "
-                "global block grid, which cannot serve two block sizes.",
+                "BLOCKED DFB {}: producer_block_size {} must equal consumer_block_size {}",
                 dfb.id,
                 pblock,
                 block);
@@ -1529,7 +1489,6 @@ static void validate_ring_extent(const DataflowBufferImpl& dfb) {
     if (!tensix_on_dfb || capacity == 0) {
         return;
     }
-    // A global-order slot's run walk spans the whole ring (its last jump lands at base + num_entries).
     const uint64_t ring_bytes = dfb_uses_global_order(config)
                                     ? static_cast<uint64_t>(config.entry_size) * config.num_entries
                                     : static_cast<uint64_t>(config.entry_size) * (stride_in_entries * (capacity - 1U) + 1U);
@@ -1619,7 +1578,7 @@ uint8_t calculate_num_tile_counters(const DataflowBufferConfig& config, bool is_
         return config.num_producers;
     }
     // BLOCKED -> STRIDED: every consumer takes a share of every producer's blocks, so each
-    // (producer, consumer) pair is active and shares one counter.
+    // (producer, consumer) pair shares one counter.
     if (config.pap == ::dfb::AccessPattern::BLOCKED && config.cap == ::dfb::AccessPattern::STRIDED) {
         return is_producer ? static_cast<uint8_t>(config.num_consumers)
                            : static_cast<uint8_t>(config.num_producers);
@@ -1891,8 +1850,6 @@ std::vector<DFBRiscConfig> DataflowBufferImpl::compute_per_core_risc_configs(con
     const uint32_t entry_size      = this->config.entry_size;
     const uint32_t effective_stride = this->stride_in_entries;
     const bool global_order = dfb_uses_global_order(this->config);
-    // Global block order: a slot starts at the first entry its (producer, consumer) pair shares,
-    // and its walk spans the whole ring (the last jump lands exactly at base + num_entries).
     const uint32_t block_entries = std::max<uint32_t>(this->config.producer_block_size, 1u);
     const uint32_t base_step = global_order    ? (block_entries * entry_size)
                                : (effective_stride > 1) ? entry_size
@@ -1903,8 +1860,6 @@ std::vector<DFBRiscConfig> DataflowBufferImpl::compute_per_core_risc_configs(con
                                    ? (this->config.num_entries * entry_size)
                                    : ((entry_size * effective_stride) * (this->capacity - 1)) + entry_size;
     if (global_order && this->config.cap == ::dfb::AccessPattern::STRIDED) {
-        // BLOCKED -> STRIDED: pair (p, c) shares one tile counter, and both sides' slot for the
-        // pair points at entry p*bs + c — consumer c's first entry inside producer p's first block.
         uint32_t producer_ordinal = 0;
         for (auto& rc : per_core_rc) {
             if (!rc.is_producer) {
@@ -2410,20 +2365,14 @@ void ProgramImpl::finalize_single_dfb_config(
             "Both producer and consumer are Tensix-only RISCs. Set tensix_scope to INTRA (same Neo) or INTER "
             "(different Neos). Un-scoped Tensix-to-Tensix DFBs are not allowed.");
     }
-
-    // A Tensix producer must post EXPLICIT credits (the implicit-sync ISR poster is DM-only.
-    // For a BLOCKED DM consumer those per-block posts never reach the
-    // implicit drain, so the consumer deadlocks. Reject at config time.
     if (producer_is_tensix_only && config.cap == ::dfb::AccessPattern::BLOCKED) {
         TT_FATAL(
             !config.enable_consumer_implicit_sync,
-            "BLOCKED DFB {}: a Tensix (explicit-only) producer cannot feed an IMPLICIT-sync DM consumer -- the "
+            "BLOCKED DFB {}: a Tensix (explicit-only) producer cannot feed an IMPLICIT-sync DM consumer, the "
             "implicit-sync ISR path is DM-only, so the per-block explicit credit posts never reach the implicit "
             "BLOCKED drain and the consumer deadlocks. Use explicit sync on the DM consumer, or a DM producer.",
             dfb->id);
     }
-
-    // The device blob stores each side's block_size in a uint16_t; >= 65536 would truncate silently.
     TT_FATAL(
         config.producer_block_size <= 0xFFFFu && config.consumer_block_size <= 0xFFFFu,
         "DFB {}: block_size must be <= 65535 to fit the device config blob (uint16_t); got producer_block_size={}, "
@@ -2431,9 +2380,6 @@ void ProgramImpl::finalize_single_dfb_config(
         dfb->id,
         config.producer_block_size,
         config.consumer_block_size);
-
-    // A Tensix endpoint waits/pushes whole blocks through TT_WAIT_TILES/TT_WAIT_FREE/TT_PUSH_TILES,
-    // whose num_tiles field is 10 bits — 1024 silently encodes as 0.
     if (config.pap == ::dfb::AccessPattern::BLOCKED &&
         (has_tensix_risc(config.producer_risc_mask) || has_tensix_risc(config.consumer_risc_mask))) {
         TT_FATAL(
@@ -2513,10 +2459,6 @@ void ProgramImpl::finalize_single_dfb_config(
     bool dm_dm_all = (config.cap == dfb::AccessPattern::ALL) &&
                          !producer_is_tensix_only && !consumer_is_tensix_only;
 
-    // A broadcasting producer posts every transaction's credits in FULL to every consumer's
-    // counter, but the implicit-sync ISR splits a txn window's credits equally across the
-    // descriptor's counters — each consumer would receive 1/C of its credits and hang. Reject the
-    // combination for BLOCKED rings up front.
     if (dm_dm_all && config.pap == ::dfb::AccessPattern::BLOCKED) {
         TT_FATAL(
             !config.enable_producer_implicit_sync,
@@ -2535,10 +2477,6 @@ void ProgramImpl::finalize_single_dfb_config(
     uint8_t num_producer_tcs = calculate_num_tile_counters(config, true);
     uint8_t num_consumer_tcs = calculate_num_tile_counters(config, false);
 
-    // The per-risc tile-counter arrays (base_addr/limit/packed_tile_counter, and the device tc_slots[])
-    // are fixed at MAX_NUM_TILE_COUNTERS_TO_RR. num_*_tcs can reach a P:C ratio of up to 8 (or
-    // num_producers for DM-DM ALL) via the direct CreateDataflowBuffer API, which would overflow those
-    // arrays on host and read tc_slots[] out of bounds on device. Bound it explicitly.
     TT_FATAL(
         num_producer_tcs <= ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR &&
             num_consumer_tcs <= ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR,
@@ -2640,8 +2578,7 @@ void ProgramImpl::finalize_single_dfb_config(
         for (uint8_t tc_slot = 0; tc_slot < num_producer_tcs; tc_slot++) {
             TileCounterGroup& group = tc_groups[producer_idx][tc_slot];
 
-            // BLOCKED reuses the STRIDED TC pairing (block b belongs to pair (b mod P, b mod C), which
-            // is exactly the STRIDED pairing of residue classes; no remapper).
+            // BLOCKED reuses the STRIDED TC pairing.
             if (config.cap == dfb::AccessPattern::STRIDED || config.cap == dfb::AccessPattern::BLOCKED) {
                 // Determine which consumer(s) this producer TC slot pairs with
                 // BLOCKED->STRIDED: a producer holds one counter per consumer, so its slot index is
@@ -2749,8 +2686,6 @@ void ProgramImpl::finalize_single_dfb_config(
                 (uint32_t)dfb::get_counter_id(risc_config.config.packed_tile_counter[tc]));
         }
         risc_config.config.num_tcs_to_rr = num_producer_tcs;
-        // A DM<->DM ALL producer posts every transaction's credits to all consumer TCs. (A batched
-        // BLOCKED producer's split credits are derived at serialization — dfb_dm_side_credits_split.)
         risc_config.config.broadcast_tc = dm_dm_all;
 
         if (use_remapper) {
@@ -2812,14 +2747,12 @@ void ProgramImpl::finalize_single_dfb_config(
             num_consumer_tcs);
 
         for (uint8_t tc = 0; tc < num_consumer_tcs; tc++) {
-            // BLOCKED reuses the STRIDED TC pairing (residue classes, no remapper).
+            // BLOCKED reuses the STRIDED TC pairing.
             if (config.cap == dfb::AccessPattern::STRIDED || config.cap == dfb::AccessPattern::BLOCKED) {
                 uint8_t producer_idx;
                 uint8_t producer_tc_slot;
 
                 if (config.pap == ::dfb::AccessPattern::BLOCKED && config.cap == ::dfb::AccessPattern::STRIDED) {
-                    // All-pairs: consumer slot p holds the counter shared with producer p (whose
-                    // slot for the pair is this consumer's index).
                     producer_idx = tc;
                     producer_tc_slot = consumer_idx;
                 } else if (producer_risc_ids.size() > consumer_risc_ids.size()) {

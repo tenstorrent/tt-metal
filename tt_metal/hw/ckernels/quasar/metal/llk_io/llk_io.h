@@ -15,11 +15,11 @@
 // Pack updates wr_entry_idx (cursor byte-offset derived via dfb_slot_cursor_offset_units)
 // Unpack updates rd_entry_idx
 //
-// run_length == 0: single-stride walk — advance num_tiles * stride_size_tiles and rotate to the
-// next tile counter every call.
-// run_length > 0: run walk — a slot owns run_length tiles stride_size_tiles apart; the tile that
-// completes the run takes the `jump` (entries) to this slot's next run and rotates. Calls never
-// span a run boundary: they either stay inside the run or complete it exactly.
+// run_length == 0: every call advances the cursor by num_tiles strides and rotates to the next
+// tile counter.
+// run_length > 0: we stay on one tile counter for run_length tiles. Each tile advances the
+// cursor one stride; the last tile of the run instead jumps `jump` entries ahead, to where this
+// counter's next run starts.
 inline void dfb_advance_slot(LocalDFBInterface& intf, DFBTCSlot& slot, std::uint32_t num_tiles) {
     std::uint32_t entry_idx;
 #if defined(UCK_CHLKC_PACK)

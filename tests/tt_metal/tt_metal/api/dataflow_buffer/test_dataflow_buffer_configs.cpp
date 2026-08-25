@@ -2463,7 +2463,7 @@ TEST_F(UnitMeshFixture, DirectApi_BlockedStrided_ConsumersDontDivideBlock_reject
 
 // --- REJECTED CONFIG: implicit-sync broadcast BLOCKED producer (DM<->DM ALL) ---
 // The ISR credits each counter an equal split of a txn window, but a broadcasting producer must
-// post the full count to every counter — the consumers would starve at 1/C of their credits.
+// post the full count to every counter, the consumers would starve at 1/C of their credits.
 TEST_F(UnitMeshFixture, DirectApi_BlockedAll_ImplicitBroadcastProducer_rejected) {
     if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only";
@@ -2513,10 +2513,5 @@ TEST_F(UnitMeshFixture, B10_Blocked_Rejected_2_0) {
         },
         std::exception);
 }
-
-// B7 — CB+DFB mix rejection.
-// Not applicable to M2: ProgramSpec doesn't expose a circular-buffer API
-// (CircularBufferConfig is a legacy host-API construct). M2 programs are
-// purely DFB-based; the legacy CB-then-DFB rejection path can't be exercised
 
 }  // end namespace tt::tt_metal

@@ -78,8 +78,8 @@ struct dfb_init_entry_hdr_t {
     uint16_t block_size;          // bytes 28-29: how many entries this hart moves in one NoC
                                   // transaction. 1 unless this hart is BLOCKED and its entries are
                                   // adjacent, in which case block_size. Always 1 on TRISC.
-    uint16_t run_length;          // bytes 30-31: ops per tile-counter run (see dfb_hart_init_entry_t)
-    uint32_t stride2_precomp;     // bytes 32-35: run-completion cursor jump (DM: bytes; TRISC: entries)
+    uint16_t run_length;          // bytes 30-31: ops per tile-counter run
+    uint32_t stride2_precomp;     // bytes 32-35: run-completion cursor jump
 };
 static_assert(sizeof(dfb_init_entry_hdr_t) == 36, "dfb_init_entry_hdr_t must match the 36B wire header");
 static_assert(alignof(dfb_init_entry_hdr_t) == 4, "dfb_init_entry_hdr_t alignment should follow uint32_t");
@@ -98,8 +98,8 @@ static_assert(alignof(dfb_init_entry_hdr_t) == 4, "dfb_init_entry_hdr_t alignmen
 //   w5 [7:0]=txn_ids[2]  [15:8]=txn_ids[3]  [23:16]=remapper_pair_index
 //      [31:24]=intra_shadow_tc_id (TRISC) / remapper_pair_index (DM pack)
 //   w6 [15:0]=num_entries  [31:16]=capacity
-//   w7 [15:0]=dm_block_size  [31:16]=run_length
-//   w8 = stride2_precomp (u32): run-completion cursor jump — DM=raw bytes, TRISC=entries
+//   w7 [15:0]=block_size  [31:16]=run_length
+//   w8 = stride2_precomp (u32): run-completion cursor jump
 
 // Shared unpack helper: TRISC blob w3–w6 (legacy SoA byte layout).
 template <typename PtrT>

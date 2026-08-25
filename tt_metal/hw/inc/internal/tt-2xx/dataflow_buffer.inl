@@ -107,15 +107,10 @@ namespace {
 #if !DFB_IS_COMPUTE_MATH
 
 #ifndef COMPILE_FOR_TRISC
-// Advance the current slot's cursor for one op of n entries, rotating at run boundaries.
-// run_length == 1: every op completes a run — advance n * stride_size and rotate (stride2 ==
-// stride_size). run_length > 1: run_length single-entry ops sit stride_size apart; the op that
-// completes the run takes the stride2 jump to this slot's next run. Ops never span a run
-// boundary: multi-entry ops only occur on sides serialized with run_length == 1.
+// Move the current slot's cursor past the n entries this op just handled.
 template <bool is_write>
 inline void dfb_dm_advance_slot(LocalDFBInterface& intf, uint32_t n) {
     ASSERT(n == 1 || intf.run_length <= 1);
-    // A block-bursting side's stride hops whole blocks, so its ops must move exactly one block.
     ASSERT(intf.block_size <= 1 || n == intf.block_size);
     auto& slot = intf.tc_slots[intf.tc_idx];
     const bool completing = static_cast<uint16_t>(intf.run_pos + 1u) >= intf.run_length;
@@ -140,9 +135,6 @@ inline void dfb_dm_advance_slot(LocalDFBInterface& intf, uint32_t n) {
 }
 #endif  // !COMPILE_FOR_TRISC
 
-// First slot base to last slot limit. On a global-order BLOCKED ring every slot's limit is its base
-// plus the full ring, so this overshoots the ring extent by the slot-base spread — callers use it as
-// an upper bound, not an exact extent.
 inline uint32_t dfb_ring_span_address_units(const LocalDFBInterface& intf) {
     const uint8_t last = static_cast<uint8_t>(intf.num_tcs_to_rr - 1);
 #if defined(COMPILE_FOR_TRISC)
@@ -404,9 +396,6 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
 
     uint8_t N = local_dfb_interface_.num_tcs_to_rr;
     dfb::PackedTileCounter ptc0 = local_dfb_interface_.tc_slots[0].packed_tile_counter;
-    // Per-slot expected credits after `transactions_issued` ENTRIES. Rotation happens per OP of
-    // block_size entries, in runs of L ops per slot — so count ops, distribute them in runs, and
-    // scale back to entries. A split side (run 0) credits every slot an equal share of each op.
     const uint16_t L = local_dfb_interface_.run_length > 1 ? local_dfb_interface_.run_length : 1u;
     const uint16_t NL = static_cast<uint16_t>(N * L);
     const uint16_t block = local_dfb_interface_.block_size;
@@ -528,10 +517,6 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
 //     - record the scoped-lock event
 template <bool is_write>
 inline DataflowBuffer::ScopedLockRegion DataflowBuffer::lock_acquire_impl(uint16_t num_entries) {
-    // The lock walk below spaces entries stride_size apart from the cursor. That does not model a
-    // BLOCKED side whose held entries are block-contiguous while its stride hops blocks, a run
-    // walk (mid-run jumps), or a run-of-one side whose every op jumps stride2 != stride (a
-    // BLOCKED->STRIDED consumer with block_size == num_consumers). Locks are unsupported there.
     ASSERT(
         local_dfb_interface_.run_length <= 1 &&
         (local_dfb_interface_.block_size > 1
@@ -613,7 +598,7 @@ inline uint32_t DataflowBuffer::prepare_implicit_read() {
     // This is 1 by default in the non-blocked case.
     // Under SPLIT (run_length == 0) the block spans every TC, so wait for each TC's share on each TC.
     // A broadcasting block producer posts the whole block to every TC, so wait for the full block
-    // on each (block_size == 1 broadcast keeps the single-TC wait: rotation covers the others).
+    // on each.
     if (__builtin_expect(local_dfb_interface_.run_length == 0, 0)) {
         const uint32_t per_tc = local_dfb_interface_.block_size / local_dfb_interface_.num_tcs_to_rr;
         bool ready = false;
@@ -654,9 +639,6 @@ inline void DataflowBuffer::commit_implicit_read() {
     // This is 1 by default in the non-blocked case.
     const uint32_t block = local_dfb_interface_.block_size;
     if (__builtin_expect(local_dfb_interface_.run_length == 0, 0)) {
-        // SPLIT: the transaction spanned every TC at once: advance each slot by its share of the
-        // block and leave tc_idx alone (the ISR posts the credits, equally to every counter in the
-        // descriptor).
         const uint32_t per_tc_step =
             (block / local_dfb_interface_.num_tcs_to_rr) * local_dfb_interface_.stride_size;
         for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
@@ -666,8 +648,6 @@ inline void DataflowBuffer::commit_implicit_read() {
             }
         }
     } else if (__builtin_expect(local_dfb_interface_.broadcast_tc && block > 1, 0)) {
-        // BROADCAST block producer: one write position (slot 0), no rotation — the ISR posts the
-        // block's credits to every counter.
         local_dfb_interface_.tc_slots[0].wr_ptr += local_dfb_interface_.stride_size * block;
         if (local_dfb_interface_.tc_slots[0].wr_ptr >= local_dfb_interface_.tc_slots[0].limit) {
             local_dfb_interface_.tc_slots[0].wr_ptr = local_dfb_interface_.tc_slots[0].base_addr;
