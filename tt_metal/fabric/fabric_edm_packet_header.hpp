@@ -564,6 +564,13 @@ public:
         return static_cast<volatile Derived*>(this);
     }
 
+    // Bit i names fabric node i, not a target queue: the DE translates. Unlike
+    // to_chip_sparse_multicast(), whose bits index hop distance.
+    volatile Derived* to_chip_peer_multicast(uint32_t peer_mask) volatile {
+        static_cast<volatile Derived*>(this)->to_chip_peer_multicast_impl(peer_mask);
+        return static_cast<volatile Derived*>(this);
+    }
+
     volatile Derived* to_noc_unicast_write(
         const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -927,6 +934,13 @@ public:
         TT_THROW("Calling to_chip_sparse_multicast from host is unsupported");
 #endif
     }
+    void to_chip_peer_multicast_impl(uint32_t peer_mask) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        ASSERT(false);  // only the LowLatency 1D header has a free routing dword
+#else
+        TT_THROW("Peer multicast is not defined for this header type");
+#endif
+    }
 };
 
 // Used to get the maximum number of hops that this packet header can support
@@ -1126,6 +1140,10 @@ public:
         auto routing = calculate_chip_sparse_multicast_routing_fields(chip_sparse_multicast_command_header);
         routing.copy_to(&this->routing_fields);
     }
+    void to_chip_peer_multicast_impl(uint32_t peer_mask) volatile {
+        // No hops to encode, so the routing dword carries the destination set.
+        this->routing_fields.value = peer_mask;
+    }
 };
 
 // Validate expected sizes with detailed checks
@@ -1222,6 +1240,13 @@ struct HybridMeshPacketHeaderT : PacketHeaderBase<HybridMeshPacketHeaderT<RouteB
         ASSERT(false);
 #else
         TT_THROW("Calling to_chip_sparse_multicast from host is unsupported");
+#endif
+    }
+    void to_chip_peer_multicast_impl(uint32_t peer_mask) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        ASSERT(false);  // a mesh header has hops to encode; no free routing dword
+#else
+        TT_THROW("Peer multicast is not defined for 2D routing");
 #endif
     }
 
