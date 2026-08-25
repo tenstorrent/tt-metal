@@ -134,7 +134,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         MOE_GATE_SCORES_DST_TILE,
         VectorMode::RC_custom,
         MOE_GATE_EPS_BITS,
-        MOE_GATE_SCALE_BITS);
+        MOE_GATE_SCALE_BITS,
+        MOE_GATE_EXTRA_SCALE_BITS);
 
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }

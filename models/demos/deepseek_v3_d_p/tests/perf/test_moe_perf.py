@@ -39,10 +39,12 @@ def test_deepseek_v3_moe_perf_loudbox():
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
-        expected_ns_8x1=15_393_888,  # Mean of two post-migration Fabric2D TorusY runs on 2026-08-15.
+        # Recalibrated 2026-08-21 on this LoudBox, Fabric2D TorusY, with the routed experts folded
+        # into one program. Single run each, where the previous 8x1 was a mean of two.
+        expected_ns_8x1=14_385_886,
         model_name_8x1="deepseek_v3_moe_lb_8x1_torus_y_dispatch_combine",
         command_2x4=_CMD_2X4,
-        expected_ns_2x4=17_217_341,  # Recalibrated 2026-08-14 on this LoudBox with Fabric2D.
+        expected_ns_2x4=15_945_512,
         model_name_2x4="deepseek_v3_moe_lb_2x4_fabric2d_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,
