@@ -8,9 +8,6 @@ import copy
 import importlib.util
 from pathlib import Path
 
-import pytest
-
-
 CODEGEN_DIR = Path(__file__).resolve().parents[1]
 REGISTRY_DIR = CODEGEN_DIR.parent
 EMITTER_PATH = CODEGEN_DIR / "emit_cpp.py"
@@ -78,81 +75,81 @@ def test_emitted_table_uses_pod_numeric_order_not_json_number_spelling() -> None
     assert source.index(b".architecture = 2,") < source.index(b".architecture = 10,")
 
 
-def test_content_hash_tamper_is_rejected() -> None:
+def test_content_hash_tamper_is_rejected(expect_error) -> None:
     lock = fixture()
     lock["content_sha256"] = "0" * 64
-    with pytest.raises(emitter.LockValidationError, match="content_sha256 mismatch"):
+    with expect_error(emitter.LockValidationError, "content_sha256 mismatch"):
         emitter.validate_lock(lock)
 
 
-def test_entry_id_tamper_is_rejected_even_with_resigned_content() -> None:
+def test_entry_id_tamper_is_rejected_even_with_resigned_content(expect_error) -> None:
     lock = fixture()
     lock["entries"][0]["entry_id"] = "0" * 64
     resign(lock)
-    with pytest.raises(emitter.LockValidationError, match="entry_id mismatch"):
+    with expect_error(emitter.LockValidationError, "entry_id mismatch"):
         emitter.validate_lock(lock)
 
 
-def test_duplicate_json_member_is_rejected(tmp_path: Path) -> None:
+def test_duplicate_json_member_is_rejected(tmp_path: Path, expect_error) -> None:
     path = tmp_path / "duplicate.lock.json"
     path.write_text('{"artifact_kind":"first","artifact_kind":"second"}', encoding="utf-8")
-    with pytest.raises(emitter.LockValidationError, match="duplicate JSON key"):
+    with expect_error(emitter.LockValidationError, "duplicate JSON key"):
         emitter.load_lock(path)
 
 
-def test_duplicate_exact_key_is_rejected() -> None:
+def test_duplicate_exact_key_is_rejected(expect_error) -> None:
     lock = fixture()
     duplicate = copy.deepcopy(lock["entries"][0])
     duplicate["certificate"]["evidence_sha256"] = "6" * 64
     lock["entries"].append(duplicate)
     resign(lock, entries=True)
-    with pytest.raises(emitter.LockValidationError, match="duplicates an exact key"):
+    with expect_error(emitter.LockValidationError, "duplicates an exact key"):
         emitter.validate_lock(lock)
 
 
-def test_unknown_field_is_rejected() -> None:
+def test_unknown_field_is_rejected(expect_error) -> None:
     lock = fixture()
     lock["entries"][0]["key"]["surprise"] = False
     resign(lock)
-    with pytest.raises(emitter.LockValidationError, match="field mismatch"):
+    with expect_error(emitter.LockValidationError, "field mismatch"):
         emitter.validate_lock(lock)
 
 
-def test_unknown_program_family_is_rejected() -> None:
+def test_unknown_program_family_is_rejected(expect_error) -> None:
     lock = fixture()
     lock["entries"][0]["recipe"]["program_config"]["family"] = "invented"
     resign(lock, entries=True)
-    with pytest.raises(emitter.LockValidationError, match="family is unknown"):
+    with expect_error(emitter.LockValidationError, "family is unknown"):
         emitter.validate_lock(lock)
 
 
-def test_nondefault_output_call_state_is_rejected() -> None:
+def test_nondefault_output_call_state_is_rejected(expect_error) -> None:
     lock = fixture()
     lock["entries"][0]["key"]["output"]["buffer_type"] = "l1"
     lock["entries"][0]["recipe"]["call_state"]["output"]["buffer_type"] = "l1"
     resign(lock, entries=True)
-    with pytest.raises(emitter.LockValidationError, match="outside the first dense"):
+    with expect_error(emitter.LockValidationError, "outside the first dense"):
         emitter.validate_lock(lock)
 
 
-def test_unsupported_schema_is_rejected() -> None:
+def test_unsupported_schema_is_rejected(expect_error) -> None:
     lock = fixture()
     lock["lock_schema_version"] += 1
     resign(lock)
-    with pytest.raises(emitter.LockValidationError, match="schema version is unsupported"):
+    with expect_error(emitter.LockValidationError, "schema version is unsupported"):
         emitter.validate_lock(lock)
 
 
-def test_nonempty_lock_rejects_unmeasured_compatibility_sentinel() -> None:
+def test_nonempty_lock_rejects_unmeasured_compatibility_sentinel(expect_error) -> None:
     lock = fixture()
     lock["runtime_capability_sha256"] = "0" * 64
     resign(lock)
-    with pytest.raises(emitter.LockValidationError, match="require measured compatibility"):
+    with expect_error(emitter.LockValidationError, "require measured compatibility"):
         emitter.validate_lock(lock)
 
 
-def test_noncanonical_lock_bytes_are_rejected(tmp_path: Path) -> None:
+def test_noncanonical_lock_bytes_are_rejected(tmp_path: Path, expect_error) -> None:
     path = tmp_path / "noncanonical.lock.json"
     path.write_text(FIXTURE_PATH.read_text(encoding="utf-8").replace(":", ": ", 1), encoding="utf-8")
-    with pytest.raises(emitter.LockValidationError, match="not canonical JSON"):
+    with expect_error(emitter.LockValidationError, "not canonical JSON"):
         emitter.load_lock(path)
