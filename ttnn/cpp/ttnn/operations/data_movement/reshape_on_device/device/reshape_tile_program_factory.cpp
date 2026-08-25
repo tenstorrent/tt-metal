@@ -32,9 +32,11 @@ ProgramDescriptor ReshapeTileProgramFactory::create_descriptor(
 
     Buffer* src0_buffer = input_tensor.buffer();
 
-    uint32_t num_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
-
     auto output_shape = output_tensor.padded_shape();
+
+    // Tile count must come from the output tensor to match what the reader produces; deriving it
+    // from the input deadlocks when the input and output have different tile padding.
+    uint32_t num_tiles = output_tensor.physical_volume() / tt::constants::TILE_HW;
 
     Buffer* dst_buffer = output_tensor.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");

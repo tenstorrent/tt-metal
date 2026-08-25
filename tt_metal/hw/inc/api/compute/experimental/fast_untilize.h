@@ -167,7 +167,7 @@ ALWI void fast_untilize_uninit(uint32_t ocb) {
     if constexpr (DST_SYNC_MODE != FAST_UNTILIZE_INTERNAL_DST_SYNC_MODE) {
         MATH((_llk_math_pack_sync_init_<DST_SYNC_MODE, DST_ACCUM_MODE>()));
     }
-    PACK((llk_init_packer_dest_offset_registers<PackMode::Default>()));
+    PACK((llk_init_packer_dest_offset_registers<PackMode::Default>(ocb)));
     PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
     PACK((llk_pack_init(ocb)));
     PACK((llk_pack_fast_untilize_uninit<FAST_UNTILIZE_MAX_UNIT_DIM, full_ct_dim>(ocb)));

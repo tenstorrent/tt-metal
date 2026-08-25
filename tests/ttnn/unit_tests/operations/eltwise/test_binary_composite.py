@@ -99,6 +99,34 @@ def test_binary_atan2_ttnn(input_shapes, device):
 
 @pytest.mark.parametrize(
     "input_shapes",
+    ((torch.Size([1, 1, 32, 32])),),
+)
+def test_binary_atan2_special_values(input_shapes, device):
+    """Regression test: atan2(±inf, ±0) must return ±π/2 per IEEE 754.
+
+    The kernel's both-zero rescue checked `min == 0`, which also fired when
+    only |x| was zero and |y| was infinite, overwriting the correct π/2
+    result with 0 (or π when x was -0).
+    """
+    y_vals = [float("inf"), float("-inf"), 1.0, -1.0, 0.0, float("inf"), float("-inf"), 2.5]
+    x_vals = [0.0, 0.0, float("inf"), float("-inf"), -0.0, 2.5, -2.5, -0.0]
+
+    torch_input_y = torch.tensor([y_vals] * 32, dtype=torch.float32)
+    torch_input_x = torch.tensor([x_vals] * 32, dtype=torch.float32)
+
+    golden_function = ttnn.get_golden_function(ttnn.atan2)
+    golden_tensor = golden_function(torch_input_y, torch_input_x)
+
+    tt_input_y = ttnn.from_torch(torch_input_y, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_input_x = ttnn.from_torch(torch_input_x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.atan2(tt_input_y, tt_input_x)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    torch.testing.assert_close(output_tensor, golden_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
         (torch.Size([1, 1, 320, 384])),

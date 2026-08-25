@@ -1,36 +1,31 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
-from datetime import datetime
 import json
 import math
-import torch
-import pytest
 import os
-import ttnn
+from datetime import datetime
 
+import pytest
+import torch
+from loguru import logger
+from transformers import AutoTokenizer
+
+import ttnn
+from models.common.utility_functions import comp_pcc
+from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_advanced
 from models.demos.llama3_70b_galaxy.tt.generator import Generator, SamplingParams
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
-from models.tt_transformers.tt.common import (
-    preprocess_inputs_prefill,
-    PagedAttentionConfig,
-)
-from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
-from models.common.utility_functions import (
-    comp_pcc,
-)
-from models.demos.utils.device_sku import get_current_device_sku_name
-from models.demos.utils.llm_demo_utils import verify_perf, verify_accuracy
-from models.demos.utils.model_targets import resolve_perf_targets, resolve_accuracy_targets
-from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 
 # Qwen-specific imports
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.demos.llama3_70b_galaxy.tests.unit_tests.qwen_test_utils import DECODE_FABRIC_CONFIG as _FABRIC_CONFIG
-from transformers import AutoTokenizer
-from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_advanced
-
+from models.demos.utils.device_sku import get_current_device_sku_name
+from models.demos.utils.llm_demo_utils import verify_accuracy, verify_perf
+from models.demos.utils.model_targets import resolve_accuracy_targets, resolve_perf_targets
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
 # Use common functions from demo_common.py
 # load_and_cache_context and load_inputs are now imported from demo_common
@@ -141,6 +136,13 @@ def create_tt_qwen_model(
     # When running running prefill-only profile, run just 1 layer
     tt_model_args.n_layers = num_layers if not prefill_profile else 1
 
+    # NOTE: the warm-ttnn-cache HF-load skip is intentionally DISABLED for qwen3-32b-galaxy.
+    # Qwen attention builds its q_norm/k_norm RMSNorms without a weight_cache_path
+    # (llama_attention.py), so those norms are materialized straight from the state_dict with
+    # cache_file_name=None -- i.e. NOT loaded from a .tensorbin. A dataless placeholder would feed
+    # uninitialized (garbage) q_norm/k_norm weights and corrupt accuracy while still passing.
+    # Load the real weights until those norms are cache-backed or captured in a host sidecar.
+    # (llama3.3-70b-galaxy has no q_norm/k_norm and keeps the skip.) (#45400)
     state_dict = tt_model_args.load_state_dict()
     page_table = None
     paged_attention_config = None

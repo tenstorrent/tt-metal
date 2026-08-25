@@ -132,9 +132,14 @@ jobs:
       contents: read
       pull-requests: write
       security-events: write
+      id-token: write            # OIDC for the Tailscale join below
 
     steps:
       - name: Post running notice
+        # Automatic (pull_request-triggered) runs skip this: an "I'm running" ack
+        # with no findings yet is noise. Manual /bug-check comment runs keep it as
+        # confirmation the command was received.
+        if: github.event_name == 'issue_comment'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
@@ -171,6 +176,17 @@ jobs:
       - name: Install dependencies
         run: pip install -r .github/bug_checker/requirements-bug-checker.txt
 
+      # Join the tailnet ephemerally via OIDC so egress to api.anthropic.com routes
+      # through the on-prem connectors with a stable, allowlistable exit IP. Vars are
+      # set by IT onboarding; scoped to an exact repo:branch pair. Same pattern as
+      # .github/workflows/llk-pr-review.yaml.
+      - name: Tailscale
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4.1.2
+        with:
+          oauth-client-id: ${{ vars.TS_GHA_PUBLIC_INTERNET_CLIENT_ID }}
+          audience: ${{ vars.TS_GHA_PUBLIC_INTERNET_AUDIENCE }}
+          tags: tag:tt-github-actions-public-internet-outbound
+
       - name: Run bug checker
         id: check
         env:
@@ -182,6 +198,7 @@ jobs:
           PR_NUMBER: ${{ needs.parse-comment.outputs.pr-number }}
           SUBCOMMAND: ${{ needs.parse-comment.outputs.subcommand }}
           RULE_ID: ${{ needs.parse-comment.outputs.rule-id }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           cmd=(python .github/bug_checker/run_bug_checker.py)
           cmd+=(--pr "$PR_NUMBER")
@@ -191,6 +208,13 @@ jobs:
           fi
           if [ "$SUBCOMMAND" = "run" ] || [ "$SUBCOMMAND" = "check-rule" ]; then
             cmd+=(--sarif .github/bug-checker-results.sarif)
+          fi
+          # Automatic (pull_request-triggered) runs shouldn't post a comment when
+          # there's nothing to report — that's noise without signal. Manual
+          # /bug-check comment runs keep posting "no issues found" etc. as
+          # confirmation the command ran.
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            cmd+=(--quiet-if-clean)
           fi
           cmd+=(--post-comments --verbose)
           "${cmd[@]}"
@@ -203,3 +227,8 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: .github/bug-checker-results.sarif
+
+      # Remove the ephemeral tailnet node immediately, even on failure.
+      - name: Tailscale cleanup
+        if: always()
+        run: sudo tailscale logout
