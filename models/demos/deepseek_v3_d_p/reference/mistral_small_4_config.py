@@ -27,8 +27,6 @@ is exactly 1.0 for every position below 8192 and steps up at each 8192-token bou
 against an HF reference are only meaningful at or below 8192 until ttMLA implements it.
 """
 
-import types
-
 
 class MistralSmall4Config:
     """Mistral-Small-4-119B model dimensions (text_config)."""
@@ -77,25 +75,31 @@ class MistralSmall4Config:
     ROPE_SCALING_BETA_SLOW = 1.0
     ROPE_SCALING_MSCALE = 1.0
     ROPE_SCALING_MSCALE_ALL_DIM = 1.0
+    # partial_rotary_factor; sizes rope at 0.5 * head_dim = 64
+    ROPE_PARTIAL_ROTARY_FACTOR = 0.5
     LLAMA4_SCALING_BETA = 0.1  # llama_4_scaling_beta; no ttMLA equivalent (see module docstring)
 
     # Misc read by the test fixtures / reference construction
     INITIALIZER_RANGE = 0.02
     ATTENTION_BIAS = False
+    MLP_BIAS = False
     ATTENTION_DROPOUT = 0.0
 
 
 def mistral4_hf_config(max_seq: int = 8192):
     """HF-attribute-style config the unified ttMLA reads (Mistral 4 dims, DeepSeek field names).
 
-    Hand-built rather than read via ``AutoConfig``: the checkpoint's config exposes
+    Values are stated here rather than read via ``AutoConfig``: the checkpoint's config exposes
     ``rope_parameters`` (with ``rope_theta`` nested inside it) where ttMLA and the vendored DeepSeek
     reference want a top-level ``rope_theta`` plus a DeepSeek-shaped ``rope_scaling`` dict, and its
     ``quantization_config`` sits on the outer (multimodal) config, so unwrapping to ``text_config``
     drops it and the fp8 loader would refuse the tensors.
+
+    A real ``Mistral4Config``, not a namespace: ``PreTrainedModel.__init__`` rejects anything else,
+    which would cost every random-weight row. The DeepSeek-named extras survive as attributes.
     """
     C = MistralSmall4Config
-    return types.SimpleNamespace(
+    fields = dict(
         vocab_size=C.VOCAB_SIZE,
         hidden_size=C.EMB_SIZE,
         intermediate_size=C.INTERMEDIATE_SIZE,
@@ -117,6 +121,7 @@ def mistral4_hf_config(max_seq: int = 8192):
         rope_theta=float(C.ROPE_THETA),
         rope_interleave=C.ROPE_INTERLEAVE,
         attention_bias=C.ATTENTION_BIAS,
+        mlp_bias=C.MLP_BIAS,
         attention_dropout=C.ATTENTION_DROPOUT,
         initializer_range=C.INITIALIZER_RANGE,
         hidden_act="silu",
@@ -133,6 +138,11 @@ def mistral4_hf_config(max_seq: int = 8192):
             "beta_slow": C.ROPE_SCALING_BETA_SLOW,
             "mscale": C.ROPE_SCALING_MSCALE,
             "mscale_all_dim": C.ROPE_SCALING_MSCALE_ALL_DIM,
+            # Sizes rope at 0.5 * head_dim = 64. Omitting it spans the full 128, and the reference
+            # then hands apply_rotary_pos_emb a cos twice as wide as the rope half of q.
+            "partial_rotary_factor": C.ROPE_PARTIAL_ROTARY_FACTOR,
+            # Drives get_llama_4_attn_scale, exactly 1.0 below 8192 (see the module KNOWN GAP).
+            "llama_4_scaling_beta": C.LLAMA4_SCALING_BETA,
         },
         # MoE structure read by the MoE path and the pretrained cache-build path.
         first_k_dense_replace=C.NUM_DENSE_LAYERS,
@@ -152,3 +162,10 @@ def mistral4_hf_config(max_seq: int = 8192):
             "weight_block_size": None,
         },
     )
+    from transformers.models.mistral4.configuration_mistral4 import Mistral4Config
+
+    cfg = Mistral4Config(**fields)
+    # Mistral4Config folds rope_theta into rope_parameters -- that rename is the whole reason this
+    # function exists -- so put it back where rope.py reads it. Not a property, so setattr sticks.
+    cfg.rope_theta = fields["rope_theta"]
+    return cfg
