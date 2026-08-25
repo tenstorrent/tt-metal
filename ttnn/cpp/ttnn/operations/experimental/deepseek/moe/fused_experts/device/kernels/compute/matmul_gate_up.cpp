@@ -142,7 +142,13 @@ void kernel_main() {
 
                 // ---- gate + up matmul -> cb_mm (gate tiles 0,1; up tiles 2,3). ----
                 matmul_init(cb_input_id, cb_weights_id);
-                reconfig_data_format(cb_weights_id, cb_input_id);
+                // reconfig_full_operand (not reconfig_data_format): iteration j>0 leaves SrcA
+                // configured for cb_mm (face_r_dim = input_tile_h, tiny for tile_h < 16) after
+                // SwiGLU's srca reload, so we must reprogram face geometry AND format when we
+                // put SrcA back on cb_weights (face_r_dim = 16). reconfig_data_format alone
+                // leaves face geometry unchanged and would silently unpack the 32x32 weight
+                // tile as if it were 1x32.
+                reconfig_full_operand(cb_weights_id, cb_input_id);
                 pack_reconfig_data_format(cb_mm_id);
                 mm_cb.reserve_back(kShardTileCols);
 
@@ -181,7 +187,11 @@ void kernel_main() {
                 // ---- SwiGLU: cb_mm (gate | up) -> cb_out (swiglu_tiles tiles). ----
                 mm_cb.wait_front(kShardTileCols);
                 copy_tile_to_dst_init_short(cb_mm_id);
-                reconfig_data_format_srca(cb_mm_id);
+                // reconfig_full_operand_srca: SrcA moves from cb_weights (face_r_dim=16) to
+                // cb_mm (face_r_dim = input_tile_h). The face geometry differs on a tiny input
+                // tile, so plain reconfig_data_format_srca (format-only) would leave the SrcA
+                // unpacker addressing a 16-row face and read garbage.
+                reconfig_full_operand_srca(cb_mm_id);
                 pack_reconfig_data_format(cb_out_id);
                 out_cb.reserve_back(swiglu_tiles);
 
@@ -247,7 +257,11 @@ void kernel_main() {
 
             // ---- down matmul -> cb_mm staging (reuses the dead Phase-1 gate_up staging buffer). ----
             matmul_init(cb_act_id, cb_down_w_id);
-            reconfig_data_format(cb_down_w_id, cb_act_id);
+            // reconfig_full_operand: SrcA moves from cb_mm (face_r_dim = input_tile_h) back to
+            // cb_down_w (face_r_dim=16). SrcB stays face_r_dim = input_tile_h (cb_input ->
+            // cb_act, same tile shape). SrcA's face geometry changes, so plain
+            // reconfig_data_format would keep the old face_r_dim in the unpacker.
+            reconfig_full_operand(cb_down_w_id, cb_act_id);
             pack_reconfig_data_format(cb_mm_id);
             mm_cb.reserve_back(kOutTilesPerCore);
 
@@ -283,8 +297,10 @@ void kernel_main() {
             const uint32_t mul_dst_id = first ? (last ? cb_down_out_id : cb_acc_id) : cb_wtmp_id;
             CircularBuffer mul_dst_cb(mul_dst_id);
             mm_cb.wait_front(kOutTilesPerCore);
-            mul_tiles_init(cb_mm_id, cb_rscalar_id);
-            reconfig_data_format(cb_mm_id, cb_rscalar_id);
+            mul_init(cb_mm_id, cb_rscalar_id);
+            // reconfig_full_operand: SrcA moves from cb_down_w (face_r_dim=16) to cb_mm
+            // (face_r_dim = input_tile_h). Face geometry changes on tiny inputs.
+            reconfig_full_operand(cb_mm_id, cb_rscalar_id);
             pack_reconfig_data_format(mul_dst_id);
             mul_dst_cb.reserve_back(kOutTilesPerCore);
 
@@ -305,8 +321,12 @@ void kernel_main() {
                 CircularBuffer add_dst_cb(add_dst_id);
                 acc_cb.wait_front(kOutTilesPerCore);
                 wtmp_cb.wait_front(kOutTilesPerCore);
-                add_tiles_init(cb_acc_id, cb_wtmp_id);
-                reconfig_data_format(cb_acc_id, cb_wtmp_id);
+                add_init(cb_acc_id, cb_wtmp_id);
+                // Both cb_acc and cb_wtmp share the input tile shape, so face geometry does
+                // not change here; reconfig_full_operand costs a couple of extra register
+                // writes over reconfig_data_format but keeps the whole tiny-tile pipeline
+                // consistent (defensive against later CB shape changes).
+                reconfig_full_operand(cb_acc_id, cb_wtmp_id);
                 pack_reconfig_data_format(add_dst_id);
                 add_dst_cb.reserve_back(kOutTilesPerCore);
 

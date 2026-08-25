@@ -145,6 +145,22 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     const uint32_t k_tiles = static_cast<uint32_t>(gate_up0.logical_shape()[-2]) / TILE_DIM;
     const uint32_t n_tiles = static_cast<uint32_t>(gate_up0.logical_shape()[-1]) / TILE_DIM;  // 2I / 32
     const uint32_t i_tiles = n_tiles / 2u;  // SwiGLU output tile cols (I / 32)
+
+    // Token-row tile shape. Every CB whose tiles hold "one tile row of B tokens" -- cb_input,
+    // cb_out, cb_mm, cb_act, cb_rscalar, cb_down_out, cb_acc, cb_wtmp -- and the DRAM output
+    // tensor use this tile. Weights (gate_up, down) and routing (indices/scores/bcast) stay at
+    // 32x32: they don't carry per-token rows and their kernel-side layout math is bound to
+    // 16x16 faces. Width must be 32 (kernels index tile columns as 32-wide); height can be any
+    // supported tiny value (1, 2, 4, 8, 16, 32). Bfp8_b at tiny heights is now valid tt-llk
+    // support, so cb_act / cb_out keep the Bfp8_b format their L1 budget was sized for.
+    const auto& input_tile = input_tensor.tensor_spec().tile();
+    const uint32_t input_tile_h = input_tile.get_height();
+    const uint32_t input_tile_hw = input_tile.get_tile_hw();
+    // Tiny-tile face layout: face_r_dim = min(tile_h, 16), num_face_rows = 1 for tile_h <= 16
+    // else 2. Width is always 32 => 2 face columns per row of faces.
+    const uint32_t face_r_dim = std::min<uint32_t>(input_tile_h, 16u);
+    const uint32_t num_face_rows = (input_tile_h + 15u) / 16u;
+    const TileDescriptor input_tile_desc(input_tile);
     const uint32_t weight_tile_bytes = static_cast<uint32_t>(gate_up0_buffer->page_size());
     // Number of SwiGLU cores and each one's share of the I dim (see swiglu_tiles_per_core_for).
     const uint32_t swiglu_tiles_per_core = swiglu_tiles_per_core_for(i_tiles);
@@ -215,8 +231,11 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     // output (cb_out) is packed in the same format so the writer can scatter it byte-for-byte
     // into the leader's cb_act, and the down matmul reads it as its bf8 in0 (paired with the
     // bf4 down weights). The down output stays bf16 to match the DRAM output tensor.
+    // Sized from the input tile: tiny-tile bfp8 is now supported by tt-llk, so a (tile_h, 32)
+    // bfp8 tile packs to input_tile.get_tile_size(Bfp8_b) bytes (num_faces * face_r_dim * 16 +
+    // num_faces * 16 exponent bytes for the block-float format).
     const tt::DataFormat act_df = tt::DataFormat::Bfp8_b;
-    const uint32_t act_tile_bytes = tt::tile_size(act_df);
+    const uint32_t act_tile_bytes = input_tile.get_tile_size(act_df);
 
     // SwiGLU clamp limit, passed to the compute kernel as a bit-cast float (the kernel
     // derives -limit internally).
@@ -243,8 +262,10 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     const uint32_t out_cb_bytes = 2u * swiglu_tiles_per_core * act_tile_bytes;
     // Matmul staging buffer (fp32 for full precision before the SwiGLU SFPU pass): phase 1
     // stages 2*swiglu_tiles_per_core tiles (gate | up) and phase 2 reuses it for the
-    // kOutTilesPerCore down-matmul tiles, so it is sized for whichever is larger.
-    const uint32_t mm_tile_bytes = TILE_DIM * TILE_DIM * 4u;
+    // kOutTilesPerCore down-matmul tiles, so it is sized for whichever is larger. The DEST
+    // tile llk-matmul produces has in0's face_r_dim (== the input tile's), so the fp32 pack
+    // writes input_tile_hw * 4 bytes per tile -- tiny at tiny input heights, full-sized at 32.
+    const uint32_t mm_tile_bytes = input_tile_hw * 4u;
     const uint32_t mm_cb_bytes = std::max(2u * swiglu_tiles_per_core, kOutTilesPerCore) * mm_tile_bytes;
 
     // Gathered activation: ONE BLOCK of experts ([experts_block, B, I] == experts_block * i_tiles
@@ -269,7 +290,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     // block rather than for all experts because at a full 32-token disjoint batch the whole set would
     // be hundreds of KB, and the source weights stay resident in cb_bcast anyway.
     const tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
-    const uint32_t scalar_tile_bytes = tt::tile_size(scalar_df);
+    const uint32_t scalar_tile_bytes = input_tile.get_tile_size(scalar_df);
     const uint32_t rscalar_cb_bytes = experts_block * scalar_tile_bytes;
     // Per-core running accumulator for the weighted down-output sum (kOutTilesPerCore tiles),
     // double-buffered so the compute kernel can ping-pong the partial sum across experts.
@@ -420,6 +441,8 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     });
 
     // Activation tiles (page = one tile) so the matmul can index them tile-by-tile.
+    // The token-row-shaped tile (input_tile) is attached so JIT get_tile_size(cb_input) and
+    // unpack strides match the real tile geometry rather than the default 32x32.
     constexpr uint32_t cb_input = CBIndex::c_2;
     desc.cbs.push_back(CBDescriptor{
         .total_size = input_cb_bytes,
@@ -428,6 +451,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
             .buffer_index = cb_input,
             .data_format = input_df,
             .page_size = input_page_size,
+            .tile = input_tile_desc,
         }}},
     });
 
@@ -454,11 +478,15 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
             .buffer_index = cb_out,
             .data_format = act_df,
             .page_size = act_tile_bytes,
+            .tile = input_tile_desc,
         }}},
     });
 
     // Per-core matmul staging buffer (fp32): the compute kernel packs the gate/up matmul
-    // results here (gate 0,1 | up 2,3), then reloads them for the SwiGLU SFPU pass.
+    // results here (gate 0,1 | up 2,3), then reloads them for the SwiGLU SFPU pass. Its DEST
+    // tile inherits face_r_dim from cb_input (in0), so the pack writes an input-tile-shaped
+    // fp32 tile -- attach the input tile descriptor so unpack strides for the SwiGLU SFPU
+    // reload match.
     constexpr uint32_t cb_mm = CBIndex::c_5;
     desc.cbs.push_back(CBDescriptor{
         .total_size = mm_cb_bytes,
@@ -467,6 +495,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
             .buffer_index = cb_mm,
             .data_format = tt::DataFormat::Float32,
             .page_size = mm_tile_bytes,
+            .tile = input_tile_desc,
         }}},
     });
 
@@ -482,6 +511,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
             .buffer_index = cb_act,
             .data_format = act_df,
             .page_size = act_tile_bytes,
+            .tile = input_tile_desc,
         }}},
     });
 
@@ -507,11 +537,13 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
             .buffer_index = cb_down_out,
             .data_format = out_df,
             .page_size = out_tile_bytes,
+            .tile = input_tile_desc,
         }}},
     });
 
     // Routing-weight tiles (one per expert in a block, bf16) consumed by the down-output multiply.
     // The reader refills row b of each tile with that expert's routing weight for token b per block.
+    // The tile shape matches the input's so mul_tiles(cb_mm, cb_rscalar) has agreeing face_r_dim.
     constexpr uint32_t cb_rscalar = CBIndex::c_7;
     desc.cbs.push_back(CBDescriptor{
         .total_size = rscalar_cb_bytes,
@@ -520,6 +552,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
             .buffer_index = cb_rscalar,
             .data_format = scalar_df,
             .page_size = scalar_tile_bytes,
+            .tile = input_tile_desc,
         }}},
     });
 
@@ -532,6 +565,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
             .buffer_index = cb_acc,
             .data_format = out_df,
             .page_size = out_tile_bytes,
+            .tile = input_tile_desc,
         }}},
     });
 
@@ -544,6 +578,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
             .buffer_index = cb_wtmp,
             .data_format = out_df,
             .page_size = out_tile_bytes,
+            .tile = input_tile_desc,
         }}},
     });
 
@@ -640,6 +675,11 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         scratch_l1_offset,
         bitmap_bytes,
         rank_bytes,
+        // Routing-scalar tile geometry (bf16, width 32, height == input tile height).
+        input_tile_h,
+        face_r_dim,
+        num_face_rows,
+        scalar_tile_bytes,
     };
     TensorAccessorArgs(*routing_buffer).append_to(sender_ct_args);
     TensorAccessorArgs(*score_buffer).append_to(sender_ct_args);
@@ -672,12 +712,37 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
 
     // ---- Input-broadcaster kernel on {1,0} (NoC 1). ----
     std::vector<uint32_t> input_ct_args = {
-        cb_input,           input_page_size, input_num_pages, sem_input_id,     sem_id,
-        num_active,         cb_weights,      k_tiles,         i_tiles,          weight_tile_bytes,
-        cb_bcast,           cb_down_weights, cb_act,          down_slice_tiles, down_tile_bytes,
-        act_tile_bytes,     num_producers,   sem_gather_id,   sem_bcast_id,     num_weights,
-        cb_rscalar,         down_prefetch,   batch,           experts_block,    gate_up_reserve_tiles,
+        cb_input,
+        input_page_size,
+        input_num_pages,
+        sem_input_id,
+        sem_id,
+        num_active,
+        cb_weights,
+        k_tiles,
+        i_tiles,
+        weight_tile_bytes,
+        cb_bcast,
+        cb_down_weights,
+        cb_act,
+        down_slice_tiles,
+        down_tile_bytes,
+        act_tile_bytes,
+        num_producers,
+        sem_gather_id,
+        sem_bcast_id,
+        num_weights,
+        cb_rscalar,
+        down_prefetch,
+        batch,
+        experts_block,
+        gate_up_reserve_tiles,
         down_reserve_tiles,
+        // Routing-scalar tile geometry (bf16, width 32, height == input tile height).
+        input_tile_h,
+        face_r_dim,
+        num_face_rows,
+        scalar_tile_bytes,
     };
     TensorAccessorArgs(*input_buffer).append_to(input_ct_args);
     TensorAccessorArgs(*gate_up0_buffer).append_to(input_ct_args);
@@ -734,6 +799,11 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         experts_block,
         gate_up_reserve_tiles,
         down_reserve_tiles,
+        // Routing-scalar tile geometry (bf16, width 32, height == input tile height).
+        input_tile_h,
+        face_r_dim,
+        num_face_rows,
+        scalar_tile_bytes,
     };
     TensorAccessorArgs(*gate_up0_buffer).append_to(receiver_ct_args);
     TensorAccessorArgs(*down0_buffer).append_to(receiver_ct_args);
