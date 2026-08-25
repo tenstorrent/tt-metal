@@ -336,7 +336,8 @@ models:
     bh_sc1: 20
   e2e_tier1:
     wh_n150: 28
-    wh_galaxy_perf: 155
+    wh_galaxy: 50
+    wh_galaxy_perf: 175
     bh_p150: 27
     bh_quietbox_2: 255
     bh_galaxy: 78
