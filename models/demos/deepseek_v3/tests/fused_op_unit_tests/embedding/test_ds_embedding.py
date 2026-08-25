@@ -523,7 +523,7 @@ def test_ds_embedding_single_device(
     ccl,
     force_recalculate_weight_config,
     set_deterministic_env,
-    state_dict,
+    request,
 ):
     """
     Single device test for the embedding fused op.
@@ -564,6 +564,7 @@ def test_ds_embedding_single_device(
     if use_real_weights:
         from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 
+        state_dict = request.getfixturevalue("state_dict")
         embedding_state_dict = sub_state_dict(state_dict, "model.embed_tokens.")
         torch_weight = embedding_state_dict["weight"][:, :per_device_hidden_size].float()
     else:

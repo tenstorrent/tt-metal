@@ -521,6 +521,9 @@ def test_ds_lm_head(
     ],
     indirect=True,
 )
+@pytest.mark.skip(
+    reason="Single-device lm_head produces only a per-device vocabulary shard; use the multi-device test."
+)
 def test_ds_lm_head_single_device(
     mode,
     seq_len,
@@ -536,7 +539,6 @@ def test_ds_lm_head_single_device(
     mesh_device,
     force_recalculate_weight_config,
     set_deterministic_env,
-    state_dict: dict[str, torch.Tensor],
 ):
     """Single device test for lm_head.
 

@@ -472,6 +472,9 @@ def test_ds_rms_norm(
     ],
     indirect=True,
 )
+@pytest.mark.skip(
+    reason="Single-device RMSNorm duplicates the per-device path already covered by the multi-device test."
+)
 def test_ds_rms_norm_single_device(
     mode,
     seq_len,
@@ -488,7 +491,6 @@ def test_ds_rms_norm_single_device(
     mesh_device,
     force_recalculate_weight_config,
     set_deterministic_env,
-    state_dict: dict[str, torch.Tensor],
 ):
     """Single device test for RMSNorm.
 
