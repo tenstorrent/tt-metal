@@ -15,6 +15,10 @@ from models.demos.llvc.reference.llvc_reference import build_reference_model
 from models.demos.llvc.tt.config import LLVCConfig
 from models.demos.llvc.tt.model import LLVCModel
 
+# Streaming and offline share the chunked graph; allow a small numeric gap.
+STREAM_VS_OFFLINE_PCC = 0.99
+BATCHED_VS_SEQUENTIAL_PCC = 0.99
+
 
 def compute_pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     x = a.flatten().float()
@@ -41,7 +45,7 @@ def _small_config() -> LLVCConfig:
         dec_buf_len=13,
         dec_chunk_size=13,
         out_buf_len=4,
-        nhead=4,
+        nhead=4,  # must match the PyTorch reference (no longer hardcoded to 8)
         convnet=ConvNetConfig(out_channels=tuple([1] * 3), kernel_sizes=tuple([3] * 3), dilations=tuple([1] * 3)),
     )
 
@@ -57,6 +61,7 @@ def _reference_params_from(config: LLVCConfig) -> dict:
         dec_buf_len=config.dec_buf_len,
         dec_chunk_size=config.dec_chunk_size,
         out_buf_len=config.out_buf_len,
+        nhead=config.nhead,
         use_pos_enc=config.use_pos_enc,
         decoder_dropout=0.0,
         convnet_config=dict(
@@ -109,12 +114,35 @@ class TestLLVCEndToEnd:
 
         wav = torch.randn(cfg.dec_chunk_size * cfg.L * 4) * 0.2
         stream_out, metrics = model.stream(wav, chunk_factor=1)
+        offline_out = model(wav)
         assert torch.isfinite(stream_out).all()
-        assert metrics.rtf > 0.0
+        assert stream_out.shape == offline_out.shape, f"{stream_out.shape} vs {offline_out.shape}"
+        pcc = compute_pcc(stream_out, offline_out)
         print(
-            f"streaming e2e_RTF={metrics.rtf:.3f} e2e_latency={metrics.latency_ms:.2f}ms "
-            f"(device_RTF={metrics.device_rtf:.3f})"
+            f"streaming vs offline PCC={pcc:.4f} e2e_RTF={metrics.rtf:.3f} "
+            f"e2e_latency={metrics.latency_ms:.2f}ms (device_RTF={metrics.device_rtf:.3f})"
         )
+        assert pcc > STREAM_VS_OFFLINE_PCC, f"streaming vs non-streaming PCC {pcc:.4f} <= {STREAM_VS_OFFLINE_PCC}"
+
+    def test_batched_streams_match_sequential(self, device, torch_seed):
+        """Public API concurrent streams: batched [B, T] matches per-stream B=1."""
+        cfg = _small_config()
+        cfg.use_trace = False
+        ref = build_reference_model(_reference_params_from(cfg))
+        model = LLVCModel(cfg, ref, device=device)
+
+        n = cfg.dec_chunk_size * cfg.L * 4
+        a = torch.randn(n) * 0.2
+        b = torch.randn(n) * 0.2
+        out_a, _ = model.stream(a, chunk_factor=1)
+        out_b, _ = model.stream(b, chunk_factor=1)
+        batched, _ = model.stream(torch.stack([a, b], dim=0), chunk_factor=1)
+        assert batched.shape[0] == 2
+        pcc_a = compute_pcc(batched[0], out_a)
+        pcc_b = compute_pcc(batched[1], out_b)
+        print(f"batched vs sequential PCC: stream0={pcc_a:.4f} stream1={pcc_b:.4f}")
+        assert pcc_a > BATCHED_VS_SEQUENTIAL_PCC, f"batched[0] PCC {pcc_a:.4f} <= {BATCHED_VS_SEQUENTIAL_PCC}"
+        assert pcc_b > BATCHED_VS_SEQUENTIAL_PCC, f"batched[1] PCC {pcc_b:.4f} <= {BATCHED_VS_SEQUENTIAL_PCC}"
 
 
 if __name__ == "__main__":

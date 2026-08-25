@@ -233,6 +233,7 @@ class MaskNet(nn.Module):
         skip_connection,
         proj,
         decoder_dropout,
+        nhead=8,
     ):
         super().__init__()
         self.skip_connection = skip_connection
@@ -255,7 +256,7 @@ class MaskNet(nn.Module):
             ctx_len=dec_buf_len,
             chunk_size=dec_chunk_size,
             num_layers=num_dec_layers,
-            nhead=8,
+            nhead=nhead,
             use_pos_enc=use_pos_enc,
             ff_dim=2 * dec_dim,
             dropout=decoder_dropout,
@@ -385,6 +386,7 @@ class Net(nn.Module):
         proj=True,
         lookahead=True,
         decoder_dropout=0.0,
+        nhead=8,
         convnet_config=None,
     ):
         super().__init__()
@@ -434,6 +436,7 @@ class Net(nn.Module):
             skip_connection=skip_connection,
             proj=proj,
             decoder_dropout=decoder_dropout,
+            nhead=nhead,
         )
 
         self.out_conv = nn.Sequential(
@@ -513,6 +516,7 @@ DEFAULT_MODEL_PARAMS = dict(
     dec_buf_len=13,
     dec_chunk_size=13,
     out_buf_len=4,
+    nhead=8,
     use_pos_enc=True,
     decoder_dropout=0.1,
     convnet_config=dict(

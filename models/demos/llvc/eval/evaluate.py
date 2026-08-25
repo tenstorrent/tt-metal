@@ -9,9 +9,9 @@ Produces the evidence a voice-conversion bring-up is expected to report:
 1. Decoder throughput (latent frames per second) vs the real-time frame rate.
 2. Token-level accuracy vs the PyTorch reference (per-frame correlation + SI-SDR,
    not just a single global PCC).
-3. WER / content preservation (source vs converted, via Whisper) -- optional.
-4. Speaker similarity (to a target speaker if given, else target-consistency of
-   the converted set + contrast vs the source) -- optional.
+3. WER / content preservation (source vs converted, via Whisper). Bounty target
+   is WER < 3.0% on the agreed eval set.
+4. Speaker similarity vs the target speaker (requires ``--target-ref``).
 5. Objective audio quality of the converted speech (DNSMOS) -- optional.
 
 Two stages
@@ -39,16 +39,16 @@ python models/demos/llvc/eval/evaluate.py --stage convert \
 
 # anywhere (after `pip install openai-whisper jiwer resemblyzer librosa onnxruntime requests`):
 python models/demos/llvc/eval/evaluate.py --stage metrics \
-    --input .../test_wavs --out-dir llvc_eval_out --target-ref .../target_speaker
+    --out-dir llvc_eval_out --target-ref .../speaker_8312 --whisper-model small.en
 """
 
 from __future__ import annotations
 
 import argparse
-import itertools
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
 import torch
@@ -220,7 +220,17 @@ def decoder_throughput(rtf: float, sample_rate: int, hop: int) -> dict:
     }
 
 
-def try_wer(source_paths: list[str], converted_paths: list[str]) -> dict | None:
+WER_TARGET = 0.03  # bounty Stage-1 content-preservation gate
+
+
+def _normalize_transcript(text: str) -> str:
+    """Lowercase, strip punctuation, collapse whitespace — ASR-noise, not content."""
+    text = text.lower().strip()
+    text = re.sub(r"[^\w\s']", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def try_wer(source_paths: list[str], converted_paths: list[str], *, whisper_model: str = "small.en") -> dict | None:
     """Word error rate between source and converted transcripts (content preservation)."""
     try:
         import jiwer
@@ -229,19 +239,29 @@ def try_wer(source_paths: list[str], converted_paths: list[str]) -> dict | None:
         logger.warning("WER skipped: install `openai-whisper` and `jiwer` to enable content-preservation eval.")
         return None
 
-    asr = whisper.load_model("base.en")
+    asr = whisper.load_model(whisper_model)
 
     def transcribe(path: str) -> str:
         # Decode with soundfile and hand Whisper the raw 16 kHz mono waveform;
         # passing a path would make Whisper shell out to ffmpeg (not installed here).
         wav = _load_audio(path, 16000).numpy().astype("float32")
-        return asr.transcribe(wav, fp16=False)["text"].strip().lower()
+        return _normalize_transcript(asr.transcribe(wav, fp16=False, language="en")["text"])
 
-    refs, hyps = [], []
+    refs, hyps, pairs = [], [], []
     for src, conv in zip(source_paths, converted_paths):
-        refs.append(transcribe(src))
-        hyps.append(transcribe(conv))
-    return {"wer": float(jiwer.wer(refs, hyps)), "num_files": len(refs)}
+        ref, hyp = transcribe(src), transcribe(conv)
+        refs.append(ref)
+        hyps.append(hyp)
+        pairs.append({"source": os.path.basename(src), "ref": ref, "hyp": hyp})
+    score = float(jiwer.wer(refs, hyps))
+    return {
+        "wer": score,
+        "num_files": len(refs),
+        "whisper_model": whisper_model,
+        "target": WER_TARGET,
+        "meets_target": score < WER_TARGET,
+        "transcripts": pairs,
+    }
 
 
 def try_speaker_similarity(
@@ -249,15 +269,7 @@ def try_speaker_similarity(
     target_ref_paths: list[str],
     source_paths: list[str],
 ) -> dict | None:
-    """Speaker-identity evidence via a speaker encoder.
-
-    With ``--target-ref`` (target-speaker audio): cosine similarity of each
-    converted clip to the mean target embedding. Without it (LLVC ships no target
-    ground truth): report target-*consistency* — the mean pairwise similarity of
-    the converted set, which should be high because every clip must map to the
-    same target voice — and the converted-vs-source similarity, which should be
-    lower, showing the identity actually changed.
-    """
+    """Speaker-identity evidence vs the target speaker (``--target-ref`` required)."""
     try:
         import numpy as np
         from resemblyzer import VoiceEncoder, preprocess_wav
@@ -274,19 +286,17 @@ def try_speaker_similarity(
     conv = [embed(p) for p in converted_paths]
     result: dict = {}
 
-    if target_ref_paths:
-        target = np.mean([embed(p) for p in target_ref_paths], axis=0)
-        target /= np.linalg.norm(target) + 1e-8
-        sims = [float(np.dot(e, target)) for e in conv]
-        result["to_target_mean"] = float(np.mean(sims))
-        result["to_target_min"] = float(np.min(sims))
-    else:
-        logger.warning(
-            "No --target-ref: reporting target-consistency (pairwise similarity of converted clips) "
-            "instead of similarity to a ground-truth target speaker."
+    if not target_ref_paths:
+        raise ValueError(
+            "--target-ref is required: score converted clips against the target speaker "
+            "(LibriSpeech speaker 8312 / KoeAI training target), not converted↔converted consistency."
         )
-        pairs = [float(np.dot(a, b)) for a, b in itertools.combinations(conv, 2)]
-        result["target_consistency_mean"] = float(np.mean(pairs)) if pairs else 1.0
+    target = np.mean([embed(p) for p in target_ref_paths], axis=0)
+    target /= np.linalg.norm(target) + 1e-8
+    sims = [float(np.dot(e, target)) for e in conv]
+    result["to_target_mean"] = float(np.mean(sims))
+    result["to_target_min"] = float(np.min(sims))
+    result["num_target_ref_files"] = len(target_ref_paths)
 
     src = [embed(p) for p in source_paths]
     cross = [float(np.dot(c, s)) for c, s in zip(conv, src)]
@@ -472,10 +482,15 @@ def metrics_stage(args: argparse.Namespace, report: dict | None) -> dict:
     sources = manifest["sources"]
     converted = manifest["converted"]
 
-    wer = try_wer(sources, converted)
+    if not args.target_ref:
+        raise ValueError(
+            "--target-ref is required for speaker similarity (bounty: cosine vs the target speaker). "
+            "Pass LibriSpeech speaker-8312 wavs, e.g. --target-ref LibriSpeech/train-clean-360/8312"
+        )
+    wer = try_wer(sources, converted, whisper_model=args.whisper_model)
     if wer is not None:
         report["content_preservation_wer"] = wer
-    spk = try_speaker_similarity(converted, args.target_ref or [], sources)
+    spk = try_speaker_similarity(converted, args.target_ref, sources)
     if spk is not None:
         report["speaker_similarity"] = spk
     quality = try_dnsmos(converted, sr)
@@ -516,8 +531,9 @@ def _write_markdown(report: dict, path: str) -> None:
         ]
     if "content_preservation_wer" in report:
         lines.append(
-            f"| Content preservation (WER, source vs converted) |"
-            f" {report['content_preservation_wer']['wer'] * 100:.1f}% |"
+            f"| Content preservation (WER, {report['content_preservation_wer'].get('whisper_model', 'whisper')}) |"
+            f" {report['content_preservation_wer']['wer'] * 100:.2f}%"
+            f" (target < {report['content_preservation_wer'].get('target', 0.03) * 100:.1f}%) |"
         )
     if "speaker_similarity" in report:
         spk = report["speaker_similarity"]
@@ -549,7 +565,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--checkpoint", type=str, default=None, help="KoeAI checkpoint .pth (convert stage)")
     p.add_argument("--input", type=str, default="test_wavs", help="Source audio file or directory")
     p.add_argument("--out-dir", type=str, default="llvc_eval_out", help="Converted wavs + report location")
-    p.add_argument("--target-ref", type=str, nargs="*", help="Target-speaker wav(s)/dir for speaker similarity")
+    p.add_argument(
+        "--target-ref",
+        type=str,
+        nargs="*",
+        help="Target-speaker wav(s)/dir (required for metrics; LibriSpeech speaker 8312)",
+    )
+    p.add_argument(
+        "--whisper-model", type=str, default="small.en", help="Whisper checkpoint for WER (default small.en)"
+    )
     p.add_argument("--chunk-factor", type=int, default=2, help="Streaming chunk multiplier (2 meets RTF<0.3)")
     p.add_argument("--limit", type=int, default=0, help="Only evaluate the first N files (0 = all)")
     p.add_argument("--device-id", type=int, default=0)

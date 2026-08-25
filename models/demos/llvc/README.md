@@ -90,7 +90,10 @@ pytest models/demos/llvc/tests/perf/test_perf.py -v -s
 
 `create_llvc(config, device=..., checkpoint_path=...)` is the entry point;
 `LLVCModel.stream(waveform, chunk_factor=1)` returns `(audio, StreamMetrics)`
-and `LLVCModel(waveform)` does non-streaming conversion.
+and `LLVCModel(waveform)` does non-streaming conversion. Both accept `[T]`,
+`[B, T]`, or `[B, 1, T]`: `B > 1` is concurrent streams (independent ring
+buffers per row). PCC tests assert streaming vs offline equivalence and
+batched vs sequential streams.
 
 `StreamMetrics.rtf` / `.latency_ms` are **end-to-end**: each timed chunk includes
 host→device input upload and device→host output download, which a real streaming
@@ -113,29 +116,53 @@ Follow the [TT-NN model bring-up report](https://github.com/tenstorrent/tt-metal
 
 ## Evaluation (quality + performance metrics)
 
-`eval/evaluate.py` produces the standard voice-conversion evidence in one run:
-decoder throughput, token-level accuracy vs the PyTorch reference, and — when the
-optional models are installed — content preservation (WER), speaker similarity,
-and objective audio quality (DNSMOS).
+Bounty Stage-1 gates that need a device box plus the official KoeAI checkpoint:
+
+| Metric | Target | How to measure |
+|---|---|---|
+| Content preservation (WER) | **< 3.0%** | Whisper `small.en` on source vs converted (normalized text) |
+| Speaker similarity | **> 0.70** cosine | Resemblyzer vs **target speaker 8312** (`--target-ref` required) |
+| Token-level accuracy | **> 95%** voiced frames PCC > 0.9 | convert stage vs the PyTorch reference (same `nhead`) |
+
+The earlier **10.9% WER** used Whisper `base.en` on the 10 smoke `test_wavs`
+clips and is **not** the bounty number. Re-run with the commands below.
+
+**Agreed eval set (KoeAI paper / issue #32187):**
+
+1. Source audio: KoeAI `test_wavs`, or LibriSpeech `test-clean` (paper eval).
+2. Target-speaker reference: LibriSpeech **speaker 8312** (KoeAI `f_8312`).
+   After unzipping `train-clean-360.tar.gz`: `LibriSpeech/train-clean-360/8312`.
+3. Config / weights: `experiments/llvc/config.json` +
+   `llvc_models/models/checkpoints/llvc/G_500000.pth`.
+
+Device stage (tt-metal env):
 
 ```bash
-python models/demos/llvc/eval/evaluate.py \
+python models/demos/llvc/eval/evaluate.py --stage convert \
   --config experiments/llvc/config.json \
   --checkpoint llvc_models/models/checkpoints/llvc/G_500000.pth \
   --input test_wavs \
-  --target-ref target_speaker_samples \
   --out-dir llvc_eval_out --chunk-factor 2
 ```
 
-It writes `eval_report.json` + `eval_report.md` (a table ready to paste into a PR)
-and the converted wavs into `--out-dir`.
+Offline metrics (separate venv; Whisper must not share the ttnn torch):
+
+```bash
+pip install openai-whisper jiwer resemblyzer librosa onnxruntime requests 'torchmetrics[audio]'
+python models/demos/llvc/eval/evaluate.py --stage metrics \
+  --out-dir llvc_eval_out \
+  --target-ref LibriSpeech/train-clean-360/8312 \
+  --whisper-model small.en
+```
+
+Attach `llvc_eval_out/eval_report.md` and `eval_report.json` to the PR.
 
 | Metric | How it's computed | Needs |
 |---|---|---|
 | Decoder throughput (latent frames/s) | `sample_rate / (L · RTF)` vs the `sample_rate / L` real-time rate | always (pure torch) |
 | Token-level accuracy vs reference | per-frame PCC (hop = `L`) of non-streaming TTNN vs the PyTorch reference, plus % of frames > 0.9 | always (pure torch) |
 | Content preservation (WER) | Whisper transcribes source vs converted; `jiwer` WER between them | `openai-whisper`, `jiwer` |
-| Speaker similarity | cosine similarity of converted vs target-speaker embeddings | `resemblyzer`, `--target-ref` |
+| Speaker similarity to target | cosine of converted vs `--target-ref` (speaker 8312) | `resemblyzer`, `--target-ref` |
 | Audio quality (DNSMOS) | non-intrusive MOS of the converted speech | `torchmetrics[audio]`, `onnxruntime`, `librosa` |
 
 The three external-model metrics are imported lazily; if a dependency is missing
@@ -148,6 +175,8 @@ the harness logs a skip line and still reports the pure-torch metrics.
 | Streaming e2e RTF | < 0.3 | re-measure after transfer-inclusive timer | `tests/perf/test_perf.py` |
 | Per-chunk e2e latency | < 100 ms | re-measure after transfer-inclusive timer | `tests/perf/test_perf.py` |
 | Accuracy vs PyTorch | PCC > 0.90 | 0.9997 | `tests/pcc/test_llvc.py` |
+| Content preservation | WER < 3.0% | re-run `--stage metrics --whisper-model small.en` | `eval/evaluate.py` |
+| Speaker similarity to target | cosine > 0.70 | re-run `--stage metrics --target-ref .../8312` | `eval/evaluate.py` |
 
 Previously published full-size figures (device-only timer, real KoeAI weights,
 trace): RTF **0.217** / 33.6 ms at `chunk_factor=2`, RTF 0.404 at `chunk_factor=1`.
@@ -174,6 +203,12 @@ will be slightly higher once H2D/D2H is included).
 - **Trace region**: `LLVC_TRACE_REGION_SIZE` (`tt/config.py`) is sized from the
   full-model `forward_chunk` capture footprint on N300 (~22.8 MiB); demo, eval,
   and tests share that constant.
+- **Concurrent streams (Stage 3, implemented):** `stream()` / `__call__` accept
+  batch `B > 1` (`[B, T]` or `[B, 1, T]`). Each row is an independent stream
+  with its own ring buffers. `tests/pcc/test_llvc.py::test_batched_streams_match_sequential`
+  checks batched output against sequential `B=1`. This is **not** a claim of
+  10+ simultaneous real-time sessions or a pipelined encoder/decoder/vocoder
+  schedule; those stretched Stage-3 throughput numbers are out of scope.
 - **Further opportunities** (not required to hit target; would bring
   `chunk_factor=1` under 0.3 too): fuse the encoder LN + ReLU, keep encoder
   activations sharded in L1 across layers, fold the output transpose-conv, and

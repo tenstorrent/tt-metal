@@ -494,8 +494,21 @@ class LLVCModel:
         self._conv_weight_cache["out_conv"] = self.out_conv_w
         return ops.tanh(wav)  # [B, T_out, 1]
 
+    @staticmethod
+    def _normalize_waveform(waveform: torch.Tensor) -> tuple[torch.Tensor, int]:
+        """Accept ``[T]``, ``[B, T]``, or ``[B, 1, T]`` and return ``([B, T], T)``."""
+        if waveform.dim() == 1:
+            return waveform.unsqueeze(0), int(waveform.shape[0])
+        if waveform.dim() == 2:
+            return waveform, int(waveform.shape[-1])
+        if waveform.dim() == 3:
+            if waveform.shape[1] != 1:
+                raise ValueError("3D waveform must be [B, 1, T]")
+            return waveform.reshape(waveform.shape[0], -1), int(waveform.shape[-1])
+        raise ValueError(f"Expected [T], [B, T], or [B, 1, T]; got shape {tuple(waveform.shape)}")
+
     def __call__(self, waveform: torch.Tensor) -> torch.Tensor:
-        """Offline conversion of ``[B, 1, T]`` (or ``[T]``) torch waveform -> ``[B, 1, T]``.
+        """Offline conversion of ``[B, 1, T]`` / ``[B, T]`` / ``[T]`` -> ``[B, 1, T]``.
 
         Runs the causal graph in decoder-aligned chunks (same path as
         :meth:`stream`) rather than one mega ``forward_chunk`` over the whole
@@ -503,47 +516,42 @@ class LLVCModel:
         lengths diverge from the PyTorch reference at ~0.1 PCC while neighbours
         match at 0.999 — while the chunked path stays in the validated regime
         and is mathematically equivalent for this causal model.
+
+        Batch size ``B > 1`` is concurrent streams: each row has its own ring
+        buffers and is converted independently.
         """
-        if waveform.dim() == 3:
-            if waveform.shape[0] != 1:
-                raise ValueError("LLVCModel offline path supports batch size 1")
-            audio = waveform.reshape(-1)
-        elif waveform.dim() == 2:
-            audio = waveform.reshape(-1)
-        else:
-            audio = waveform
-        out, _ = self.stream(audio, chunk_factor=1)
+        out, _ = self.stream(waveform, chunk_factor=1)
         return out
 
     def stream(self, waveform: torch.Tensor, *, chunk_factor: int = 1) -> tuple[torch.Tensor, StreamMetrics]:
         """Streaming conversion mirroring KoeAI ``infer_stream``.
 
-        Splits ``waveform`` ([T] or [1, T]) into chunks of
+        Splits ``waveform`` (``[T]``, ``[B, T]``, or ``[B, 1, T]``) into chunks of
         ``dec_chunk_size * L * chunk_factor`` samples, prepends a 2*L lookahead
         context from the previous chunk, and threads ``LLVCState`` across chunks.
+        ``B > 1`` is concurrent streams (independent per-row ring buffers).
 
-        Returns ``(converted [1, 1, T], StreamMetrics)``. Primary ``rtf`` /
+        Returns ``(converted [B, 1, T], StreamMetrics)``. Primary ``rtf`` /
         ``latency_ms`` are end-to-end (include per-chunk H2D upload and D2H
         download); ``device_*`` fields isolate device execution only.
         """
         cfg = self.config
         L = cfg.L
-        if waveform.dim() == 2:
-            waveform = waveform.reshape(-1)
+        waveform, original_len = self._normalize_waveform(waveform)
+        batch = int(waveform.shape[0])
         chunk_len = cfg.dec_chunk_size * L * chunk_factor
-        original_len = waveform.shape[0]
         if original_len % chunk_len != 0:
             waveform = torch.nn.functional.pad(waveform, (0, chunk_len - (original_len % chunk_len)))
 
         # scoot down by L (matches reference lookahead alignment)
-        waveform = torch.cat((waveform[L:], torch.zeros(L)))
-        chunks = list(torch.split(waveform, chunk_len))
+        waveform = torch.cat((waveform[:, L:], torch.zeros(batch, L, dtype=waveform.dtype)), dim=1)
+        chunks = list(torch.split(waveform, chunk_len, dim=1))
         prepped = []
         for i, c in enumerate(chunks):
-            front = torch.zeros(L * 2) if i == 0 else chunks[i - 1][-L * 2 :]
-            prepped.append(torch.cat([front, c]))
+            front = torch.zeros(batch, L * 2, dtype=c.dtype) if i == 0 else chunks[i - 1][:, -L * 2 :]
+            prepped.append(torch.cat([front, c], dim=1))
 
-        state = self.init_state(1)
+        state = self.init_state(batch)
         # Trace needs at least one warmup + one capture chunk before it can replay.
         if cfg.use_trace and len(prepped) >= 3:
             outputs, device_times, e2e_times = self._stream_traced(prepped, state)
@@ -570,9 +578,8 @@ class LLVCModel:
         )
 
     def _host_chunk(self, chunk: torch.Tensor) -> ttnn.Tensor:
-        """A single prepped chunk as a host ``[1, T, 1]`` ROW_MAJOR tensor."""
-        x = chunk.reshape(1, 1, -1).transpose(1, 2)  # [1, T, 1]
-        return ttnn.from_torch(x, dtype=self.dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+        """A prepped chunk as a host ``[B, T, 1]`` ROW_MAJOR tensor."""
+        return ttnn.from_torch(chunk.unsqueeze(-1), dtype=self.dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     def _stream_eager(self, prepped: list[torch.Tensor], state: LLVCState):
         """One host-dispatched ``forward_chunk`` per chunk (no trace).
@@ -585,7 +592,7 @@ class LLVCModel:
             ttnn.synchronize_device(self.device)
             e2e_start = time.perf_counter()
             x_btc = _to_device(
-                chunk.reshape(1, 1, -1).transpose(1, 2),
+                chunk.unsqueeze(-1),
                 device=self.device,
                 dtype=self.dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -611,9 +618,9 @@ class LLVCModel:
         recurrence as the eager path. Only the replayed chunks are timed (steady state).
         """
         dev = self.device
-        seq_len = int(prepped[0].shape[0])
+        batch, seq_len = int(prepped[0].shape[0]), int(prepped[0].shape[1])
         in_dev = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, seq_len, 1]), self.dtype, ttnn.ROW_MAJOR_LAYOUT, dev, ttnn.DRAM_MEMORY_CONFIG
+            ttnn.Shape([batch, seq_len, 1]), self.dtype, ttnn.ROW_MAJOR_LAYOUT, dev, ttnn.DRAM_MEMORY_CONFIG
         )
         outputs, device_times, e2e_times = [], [], []
 

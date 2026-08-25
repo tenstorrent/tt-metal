@@ -134,6 +134,7 @@ def llvc_config_from_json(model_params: dict, *, device_id: int = 0, dtype: str 
         dec_buf_len=int(model_params.get("dec_buf_len", 13)),
         dec_chunk_size=int(model_params.get("dec_chunk_size", 13)),
         out_buf_len=int(model_params.get("out_buf_len", 4)),
+        nhead=int(model_params.get("nhead", 8)),
         use_pos_enc=bool(model_params.get("use_pos_enc", True)),
         skip_connection=bool(model_params.get("skip_connection", True)),
         proj=bool(model_params.get("proj", True)),
