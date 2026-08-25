@@ -552,9 +552,10 @@ from ttnn._ttnn.operations.experimental import RoutedExpertActivation
 
 # Expose disaggregation in experimental namespace
 experimental.disaggregation = disaggregation
-experimental.moe_compute_supported_weight_dtypes = (
-    ttnn._ttnn.operations.experimental.ccl_experimental.moe_compute_supported_weight_dtypes
-)
+if hasattr(ttnn._ttnn.operations.experimental.ccl_experimental, "moe_compute_supported_weight_dtypes"):
+    experimental.moe_compute_supported_weight_dtypes = (
+        ttnn._ttnn.operations.experimental.ccl_experimental.moe_compute_supported_weight_dtypes
+    )
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 

@@ -8,6 +8,8 @@
 namespace ttnn::experimental::prim::detail {
 
 struct MoEComputeL1Plan {
+    uint32_t a2a_tiles_per_step;
+    uint32_t a2a_buffer_slots;
     uint32_t a2a_tiles;
     uint32_t weight_tiles_per_block;
     uint32_t weight_pipeline_slots;
@@ -33,19 +35,29 @@ constexpr MoEComputeL1Plan plan_moe_compute_l1(
     constexpr uint32_t fast_a2a_budget_bytes = 512 * 1024;
 
     const uint32_t per_core_tiles = ((intermediate_tiles + ring_cores - 1) / ring_cores + 1) & ~1u;
-    const uint32_t a2a_tiles = per_core_tiles * ring_cores;
+    // The ring consumes the local shard before forwarding it.  The final step
+    // consumes the last remote shard but does not need to send it back to its
+    // origin, so slot zero can be reused after ring_cores - 1 hops.  Keeping a
+    // twelfth slot for that redundant final send wastes one full activation
+    // shard on every matmul core.
+    const uint32_t a2a_buffer_slots = ring_cores - 1;
+    const uint32_t a2a_tiles = per_core_tiles * a2a_buffer_slots;
     const bool compact = a2a_tiles * bf16_tile_bytes > fast_a2a_budget_bytes;
     const uint32_t weight_tiles = compact ? compact_weight_tiles_per_block : fast_weight_tiles_per_block;
     const uint32_t slots = compact ? compact_weight_slots : fast_weight_slots;
     const uint32_t bookkeeping_bytes = 16 + 16 + 32 + (has_bias ? bf16_tile_bytes : 0);
     return {
+        per_core_tiles,
+        a2a_buffer_slots,
         a2a_tiles,
         weight_tiles,
         slots,
         a2a_tiles * bf16_tile_bytes + weight_tiles * slots * weight_tile_bytes + bookkeeping_bytes};
 }
 
-static_assert(plan_moe_compute_l1(14336 / 32, 12, 576, false).a2a_tiles == 456);
+static_assert(plan_moe_compute_l1(14336 / 32, 12, 576, false).a2a_tiles_per_step == 38);
+static_assert(plan_moe_compute_l1(14336 / 32, 12, 576, false).a2a_buffer_slots == 11);
+static_assert(plan_moe_compute_l1(14336 / 32, 12, 576, false).a2a_tiles == 418);
 static_assert(plan_moe_compute_l1(14336 / 32, 12, 576, false).weight_pipeline_slots == 1);
 static_assert(plan_moe_compute_l1(2048 / 32, 12, 576, false).weight_pipeline_slots == 3);
 

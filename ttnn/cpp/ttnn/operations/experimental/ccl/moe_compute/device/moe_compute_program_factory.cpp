@@ -368,8 +368,6 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t weight_tile_bytes = tt::tile_size(weight_data_format);
     const auto l1_plan =
         detail::plan_moe_compute_l1(intermediate_tiles, matmul_num_cores, weight_tile_bytes, args.has_bias);
-    const uint32_t a2a_cb_pages = l1_plan.a2a_tiles / matmul_num_cores;
-
     // c_0 is globally backed by tilize_output_tensor; locally allocated matmul
     // CBs grow upward from DEFAULT_UNRESERVED and must end below that tensor.
     // Check this here so dtype-dependent capacity failures name the required
@@ -804,7 +802,7 @@ MoEComputeMeshWorkloadFactory::create_at(
          l1_plan.weight_tiles_per_block * l1_plan.weight_pipeline_slots},
         {"cb_c2w_rdy", tt::CBIndex::c_4, tt::DataFormat::Float32, false, 1},
         {"cb_w2c_rdy", tt::CBIndex::c_5, tt::DataFormat::Float32, false, 1},
-        {"cb_s2c_in2", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, a2a_cb_pages * matmul_num_cores},
+        {"cb_s2c_in2", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, l1_plan.a2a_tiles},
         {"cb_w2c_md", tt::CBIndex::c_7, tt::DataFormat::UInt32, false, 2},
     };
     if (args.has_bias) {
@@ -1269,6 +1267,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"hidden_tiles", hidden_tiles},
         {"intermediate_tiles", intermediate_tiles},
         {"noc_max_burst_bytes", noc_max_burst_bytes},
+        {"a2a_buffer_slots", l1_plan.a2a_buffer_slots},
         {"weight_tiles_per_block", l1_plan.weight_tiles_per_block},
         {"weight_pipeline_slots", l1_plan.weight_pipeline_slots},
         // Matmul -> combine: dm1 increments this on combine cores when data is written
