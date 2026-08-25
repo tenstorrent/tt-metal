@@ -17,33 +17,44 @@ one DFB entry
     -> one API call
     -> one or more Fabric requests, one per route
     -> one transaction ID
-    -> one worker-L1 counter initialized to M
+    -> one worker-L1 counter set to M
+
+   at issue, as soon as the requests are published:
+    -> one read-pointer advance          (no credit returned)
+
+   later, asynchronously:
     -> one decrement per terminal SWQ completion
-    -> one read-pointer advance
     -> ordinary DFB consumer credit when the FIFO-front counter is zero
 ```
 
-`M` is the number of terminal source-read completions, not necessarily the
-number of destinations or DMA lanes.
+The read pointer runs **ahead** of the credit: the issue cursor moves when the
+request is published, the credit returns only once the DMA has finished reading
+the entry. That is why `pop_front()` splits into `advance_read_ptr()` and
+`acknowledge_front()` (§5.1) — without it every send would serialize behind its
+own completion.
 
-Examples:
+`M` counts **terminal source reads**, not destinations or DMA lanes. Where a
+chain exists it amortises: the router issues one packet per direction and
+downstream chips write from what they received, never re-reading the sender's
+L1. So a 1D multicast of range 7 still contributes one SWQ, and `M` is bounded
+by the direction count:
 
 ```text
 unicast                              M = 1
 1D mcast, fwd + bwd                  M = 2   (two requests, one entry)
 2D mcast from mid-mesh               M = 4   (four requests, one entry)
+all-to-all, P peers                  M = P   (ONE request, one entry)
 ```
 
-`M` counts **source reads**, not destinations. A router issues one packet per
-direction and the chain store-and-forwards it; downstream chips write from what
-they received and never re-read the sender's L1. So a 1D multicast of range 7
-still contributes one SWQ, and `M` is bounded by the direction count.
+The last line is the exception that shapes the API. With nothing forwarding
+there is no chain to amortise, so every peer's DMA pulls the page itself: one
+header, `P` reads. `M` is therefore **not** the request count in general, which
+is why `prepare_transaction()` takes it as an argument (§2.3.1, §5.2).
 
-**One call consumes one entry, whatever the direction count.** A 1D multicast
-needs a request per route (§2.2). They are published inside a single
-`async_write_*_with_state()` call, which
-advances the read pointer once. Issuing the directions as separate calls would
-consume separate entries and separate transactions.
+**One call consumes one entry, whatever the direction count.** The routes are
+published inside a single `async_write_*_with_state()`, which advances the read
+pointer once. Issuing directions as separate calls would consume separate
+entries and separate transactions.
 
 The ordinary `DataflowBuffer` remains the only payload queue:
 
@@ -60,420 +71,281 @@ page metadata, or per-lane acknowledgment state.
 
 ## 2. Request and API
 
-### 2.1 Pull metadata
+### 2.1 The request is just the packet header
+
+A pull request is an ordinary `PACKET_HEADER_TYPE` with the source and
+transaction fields filled in. There is no trailer and no new header type:
+`populate_fabric_pull_source_fields()` (`linear/api.h:123`) writes
 
 ```cpp
-struct FabricPullMetadata {
-    uint32_t src_l1_address;   // worker L1 page the DMA pulls from
-    uint32_t txn_id;           // stamped on the SWQ this request generates
-    uint32_t flags;            // bit 0: WriteLocal (see §2.3)
-    // Outgoing port for this route, as eth_chan_directions (E/W/N/S). Neither
-    // fabric API carries it in the packet header -- production picks the port
-    // by choosing which connection to send on. With no connection to choose,
-    // the DE reads it from here.
-    uint32_t direction;
-};
-
-enum FabricPullFlags : uint32_t {
-    FABRIC_PULL_WRITE_LOCAL = 1u << 0,
-};
-
-template <typename PacketHeader>
-struct alignas(16) FabricPullRequest {
-    PacketHeader packet_header;
-    FabricPullMetadata pull;
-};
-
-// One slot per route, all sharing one txn_id. A route generates exactly one
-// SWQ -- the router issues once per direction, then the chain forwards -- so
-// M is `used`, the number of slots set-state claimed.
-//
-// INVARIANT: set-state claims slots in order from 0, so routes[0] is active
-// whenever the set has any route at all. Values common to the whole set --
-// flags, chip_send_type -- are read from it.
-template <typename PacketHeader, uint32_t MaxRoutes>
-struct FabricPullRequestSet {
-    static constexpr uint32_t max_routes = MaxRoutes;
-    std::array<FabricPullRequest<PacketHeader>, MaxRoutes> routes;
-
-    uint32_t used = 0;   // slots filled so far
-
-    volatile FabricPullRequest<PacketHeader>& first() { return routes[0]; }
-
-    // Drop every route and start over. Set-state calls this first.
-    void reset() { used = 0; }
-
-    // Hand out the next unused slot. Set-state's only way to add a route, so
-    // slots always fill from 0 and the invariant above holds by construction.
-    volatile FabricPullRequest<PacketHeader>& next_slot() {
-        ASSERT(used < MaxRoutes);
-        return routes[used++];
-    }
-};
-
-template <tt::tt_fabric::Topology topology>
-inline constexpr uint32_t fabric_max_routes =
-    tt::tt_fabric::is_2D_topology(topology) ? 4u : 2u;
-
-static_assert(sizeof(FabricPullMetadata) == 16);
+packet_header->command_fields.fabric_pull.transaction_id = ...;
+packet_header->command_fields.fabric_pull.src_l1_address = ...;
 ```
 
-### 2.2 One request per route
+and only `sizeof(PACKET_HEADER_TYPE)` is published. Those two fields are the
+only per-send values. The counter bank's base address is **not** in the packet:
+it is per-worker constant data, so it lives in the EDM's per-worker record
+alongside `worker_xy`, written once by the builder before launch (§6). Putting
+it in every packet would ship the same word on every send.
 
-**Starting point, chosen for simplicity.** The worker issues a separate request
-per route and lets them share one transaction. It costs several DE send-queue
-slots per DFB entry; §8 parks the alternative.
+**Nothing tags it as a pull request.** The worker sender channel is pull-only by
+construction — in this mode a worker publishes headers and never a payload — so
+the router knows what it is from the channel it arrived on. Packets already
+inside the fabric chain carry their payload and reach the router by a different
+path, so they are never confused with these. A header-only send (the barrier
+atomic inc) is separated by `payload_size_bytes == 0`: there is nothing to
+fetch.
 
-The flying packet header is **unchanged** — each request carries an ordinary
-`PACKET_HEADER_TYPE` set up for its own route by the existing helpers. No new
-header type, no change to `LowLatencyRoutingFields` or
-`LowLatencyMeshRoutingFields`, no change to router decode.
+Two things deliberately stay **out** of the packet:
 
-`FabricPullMetadata` is a request-only trailer. The worker writes
-`[packet_header][pull]` into the DE send queue; the DE reads `pull` to find the
-source page and the transaction id, and strips it:
+| | where it lives instead |
+|---|---|
+| outgoing port | the worker publishes to that direction's link — `McastRoute::direction` picks it, the packet never carries it |
+| `include_self` | an explicit local NoC write the worker issues itself; it generates no SWQ, so it is not counted in `M` |
 
-```text
-worker L1 --> DE send queue :  [ packet_header | pull ]     <- pull is control
-DE        --> port / SWQ    :  [ packet_header ] + payload  <- pull removed
-```
+### 2.2 One header per route
 
-Route counts come from what a single header can express:
+A chip multicast cannot fork. `LowLatencyRoutingFields` is a positional per-hop
+command stream with no branch offsets: it terminates where a hop is
+`WRITE_ONLY` (`fabric_erisc_router.cpp:701`) and advances by shifting
+(`fabric_edm_packet_transmission.hpp:378`), so one stream long enough to reach a
+whole line would tell the last chip to forward with no downstream link.
+
+So one route per direction, each with its own header:
 
 | topology | routes | why |
 |----------|-------:|-----|
-| 1D | 2 | `LowLatencyRoutingFields` is one linear stream with no branch offsets — it cannot fork, so one route per direction |
-| 2D | 4 | a range forks E/W within its own spine via `branch_east_offset` / `branch_west_offset`, but cannot reach the opposite spine — so E-line, W-line, N-rect, S-rect |
-
-All slots of one entry carry the same `txn_id`, so every completion across
-every route decrements one counter. The read pointer advances once for the
-whole set, which is what keeps one DFB entry per API call.
-
-### 2.3 Topology and route arguments
-
-The caller selects the logical `tt::tt_fabric::Topology` independently of the
-physical Fabric:
-
-```text
-NeighborExchange / Linear / Ring -> 1D route API
-Mesh / Torus                     -> 2D route API
-```
-
-`ChipSendType` selects chip unicast or multicast. `NocSendType` independently
-selects the command executed at each destination.
-
-A 1D multicast is expressed as a **pair of directional hop counts**, not as a
-single `(start_distance, range)`. The router carries no topology knowledge: it
-executes a positional per-hop command stream, terminating only where a hop's
-field is `WRITE_ONLY` (`fabric_erisc_router.cpp:701`), and advances by shifting
-that stream (`fabric_edm_packet_transmission.hpp:378`). A single stream long
-enough to reach every peer of a line would tell the last chip to forward with
-no downstream link. Splitting into forward and backward gives each direction
-its own terminator, and is also how a ring balances load across both links.
+| 1D | 2 | one linear stream cannot fork — forward and backward each need their own terminator |
+| 2D | 4 | a range forks E/W within its own spine but cannot reach the opposite one — E-line, W-line, N-rect, S-rect |
+| all-to-all | 1 | nothing forwards, so there is no stream to fork — one header carries a peer mask and the DE expands it (§2.3.1) |
 
 ```cpp
-template <
-    tt::tt_fabric::Topology topology,
-    tt::tt_fabric::ChipSendType chip_send_type,
-    bool Is2D = tt::tt_fabric::is_2D_topology(topology)>
-struct FabricRouteArgs;
+template <tt::tt_fabric::Topology topology>
+inline constexpr uint32_t fabric_max_routes =
+    tt::tt_fabric::is_2D_topology(topology) ? 4u : 2u;
+```
+
+The slots are **caller-owned**, in the worker's scratchpad, so the worker owns
+the storage and its lifetime. A slot is a plain `PACKET_HEADER_TYPE` — the pull
+fields already live inside it, so there is nothing else to carry:
+
+```cpp
+template <typename PacketHeader, uint32_t MaxRoutes>
+struct alignas(16) FabricPullRequestSet {
+    PacketHeader routes[MaxRoutes];
+    uint8_t direction[MaxRoutes];      // not in the packet; picks the outgoing link
+    uint8_t used;                      // slots set-state filled; headers to publish
+    uint8_t source_read_completions;   // reads to expect back; see below
+    uint8_t include_self;              // not in the packet; a local NoC write
+};
 
 template <tt::tt_fabric::Topology topology>
-struct FabricRouteArgs<
-    topology,
-    tt::tt_fabric::CHIP_UNICAST,
-    false> {
-    uint16_t dst_dev_id;
+using FabricRequestRef =
+    volatile FabricPullRequestSet<PACKET_HEADER_TYPE, fabric_max_routes<topology>>*;
+```
+
+This and `fabric_max_routes` live in `fabric_edm_types.hpp`, not the pull
+header: the host needs both, to size the scratchpad that backs the set and to
+derive the sender's runtime-arg count, and `fabric_pull.hpp` is `ARCH_QUASAR`
+kernel code it cannot include. A `fabric_pull_request_set_bytes(header_size,
+max_routes)` helper sits beside the struct so the host is not retyping the
+layout.
+
+`source_read_completions` is separate from `used` because they are not always
+the same number. Where the chain store-and-forwards they are: one read per route
+serves every peer behind it. A topology that does not forward — every peer one
+hop, nothing to encode per peer — publishes a single header carrying a peer mask
+and owes one read per peer, so the counter is set to the peer count while `used`
+stays 1. The counter has to match the returns, not the requests.
+
+Every route of one entry carries the same `txn_id`, so every completion across
+every route decrements one counter, and the read pointer advances once for the
+whole set. `M` is the route count, not the peer count, *where a chain exists*:
+the router issues one
+packet per direction and the chain store-and-forwards it, so the sender's L1 is
+read once per direction whatever the hop counts.
+
+**Cost.** Each route burns a DE send-queue slot on a queue that is one shared
+resource per worker — two on a line, up to four mid-mesh. §8 parks the
+alternative.
+
+### 2.3 Route arguments
+
+`ChipSendType` selects chip unicast or multicast; `NocSendType` independently
+selects the command run at each destination. A route's shape follows from how
+the topology *delivers*: a line walks hops, a mesh walks a rectangle, and a star
+walks nothing. So the route type is keyed on the topology, and which of the
+three shapes it resolves to comes from the two predicates rather than from a
+1D/2D flag:
+
+```cpp
+// AllToAll is the star: every device is a direct peer of every other, so no
+// packet is ever forwarded. Distinct from NeighborExchange, which is 1D and
+// reaches only the two adjacent chips.
+enum class Topology { NeighborExchange, Linear, Ring, Mesh, Torus, AllToAll };
+
+constexpr bool is_forwarding_topology(Topology t) { return t != Topology::AllToAll; }
+
+struct LineRoute {
+    FabricRange range;      // one hop count; exactly one slot is ever nonzero
+    uint8_t direction;      // eth_chan_directions; selects the outgoing link
 };
 
-// One route, carrying exactly what its set-state helper takes -- nothing
-// unused in either dimensionality.
-template <bool Is2D>
-struct McastRoute;
-
-// Every route names its outgoing port. The header carries only what its
-// set-state helper takes -- linear/api.h:1304 is (start_distance, range),
-// mesh/api.h:1277 is (dst_dev_id, dst_mesh_id, range) -- and neither includes
-// a port, so it travels in pull.direction instead.
-template <>
-struct McastRoute<false> {
-    // Always starts at distance 1: distance 0 is the sender, not routable.
-    uint8_t hops;
-    uint8_t direction;      // eth_chan_directions
-};
-
-template <>
-struct McastRoute<true> {
-    tt::tt_fabric::mesh::experimental::MeshMcastRange range;
+struct RectRoute {
+    FabricRange range;      // MeshMcastRange {e,w,n,s}
+    // Anchor the extents are measured from -- becomes
+    // packet_header->dst_start_node_id (tt_fabric_api.h:157), i.e. the chip
+    // this route's first hop lands on, not any final destination.
     uint16_t dst_dev_id;
     uint16_t dst_mesh_id;
-    uint8_t direction;      // eth_chan_directions
+    uint8_t direction;
 };
 
-// One multicast shape for both dimensionalities: an array of routes, each a
-// line or a rect, filled by the host.
-template <tt::tt_fabric::Topology topology, bool Is2D>
-struct FabricRouteArgs<topology, tt::tt_fabric::CHIP_MULTICAST, Is2D> {
-    std::array<McastRoute<Is2D>, fabric_max_routes<topology>> routes = {};
-    uint8_t num_routes = 0;   // how many of routes[] the host filled
+struct PeerRoute {
+    uint32_t peer_mask;     // one bit per peer; no range, no direction
+};
 
-    // Chip multicast excludes the sender in every direction. Requests a plain
-    // local NoC write at the same address, generating no SWQ. An all-gather
-    // wants it; a broadcast whose source keeps nothing does not.
+// Forwarding is the property the encoding turns on, so it is the outer test.
+template <Topology topology>
+using McastRoute = std::conditional_t<
+    !is_forwarding_topology(topology),                                  // AllToAll
+    PeerRoute,
+    std::conditional_t<is_2D_topology(topology), RectRoute, LineRoute>>;
+
+template <Topology topology>
+struct FabricMcastRouteArgs {
+    std::array<McastRoute<topology>, fabric_max_routes<topology>> routes = {};
+    uint8_t num_routes = 0;
     bool include_self = false;
 };
-
-template <tt::tt_fabric::Topology topology>
-using FabricUnicastRouteArgs =
-    FabricRouteArgs<
-        topology,
-        tt::tt_fabric::CHIP_UNICAST>;
-
-template <tt::tt_fabric::Topology topology>
-using FabricMcastRouteArgs =
-    FabricRouteArgs<
-        topology,
-        tt::tt_fabric::CHIP_MULTICAST>;
 ```
+
+A zero-hop direction contributes no route, which is how a Linear endpoint needs
+no special case: it fills one route, not two. Both 1D directions start at
+distance 1, so `start_distance` is always 1 and each route carries its own
+terminator.
+
+#### 2.3.1 The peer mask
+
+`LineRoute` and `RectRoute` describe a walk: the routing dword is a positional
+per-hop command stream that the router shifts as the packet advances.
+`PeerRoute` describes no walk at all — every peer is one hop and nothing
+forwards — so that dword is free, and the mask goes straight into it:
+
+```cpp
+// LowLatencyRoutingFieldsT<0> is a bare `uint32_t value`, normally 16 hops at
+// 2 bits each. With no hops to encode it carries the mask instead, so 32 nodes
+// fit without touching the header layout.
+void to_chip_peer_multicast(uint32_t peer_mask) volatile {
+    this->routing_fields.value = peer_mask;
+    this->chip_send_type = CHIP_MULTICAST;
+}
+```
+
+**Bit *i* is fabric node *i*, not target queue *i*.** The mask is written in
+topology terms — which devices to deliver to — because that is what the worker
+knows; it has no business naming the DE's queue indices, and the same mask means
+the same set of devices whichever device sends it. The DE translates:
+
+```text
+mask = packet_header->routing_fields.value      // bit i = fabric node i
+for each set bit i:
+    queue = node_to_target_queue[i]             // per-device translation table
+    post FWWriteDMADescriptor to queue, stamped with the same txn_id
+```
+
+The table is per-device and control-plane populated, the same shape as
+`routing_l1_info_t::intra_mesh_direction_table`, which already maps a device id
+to an outgoing direction (`fabric_common.h:594`). The sender's own bit is never
+set: chip multicast excludes the source, and its local copy is `include_self`.
+
+**This is not `SparseMulticastRoutingCommandHeader`.** That type already exists
+and looks similar, but its bits index **hop distance** along a line — set bits
+are WRITE_AND_FORWARD, unset are FORWARD_ONLY, the last set bit is WRITE_ONLY:
+
+```text
+0 --> 1 --> 2 --> 3 --> 4        hop_mask 0b01001 writes at 1 and 4
+```
+
+That needs a chain. On a star every peer sits at distance 1, so a hop mask
+cannot tell them apart — bit *i* has to mean *peer i*, not *hop i*. Same
+bit-vector, different indexing, and the two cannot share an encoding.
+
+**What the mask costs.** `M` stops equalling the route count. A chain amortises:
+the router issues one packet per direction and downstream chips write from what
+they received, never re-reading the sender's L1. A star has no chain, so every
+peer's DMA pulls the page itself:
+
+```text
+              headers published    source reads owed (M)
+line          2                    2
+rect          up to 4              up to 4
+peers         1                    peers_count(peer_mask)
+```
+
+One header instead of one per peer is a real win on the DE send queue — the shared
+resource §8 item 4 flags — and no win at all on source bandwidth. It is also why
+`FabricPullRequestSet` carries `source_read_completions` separately from `used`.
+
+**Why the mask is not the answer for `LineRoute` and `RectRoute`.** It is tempting to give
+every topology one header and let the DE fan out. But there the DE would have to
+*synthesise* a routing stream per direction, and that is not cheap:
+`fabric_set_mcast_route()` reads `routing_l1_info_t` from `ROUTING_TABLE_BASE`,
+computes spine hops and branch offsets, writes `dst_start_node_id` /
+`mcast_params_64` / `is_mcast_active`, and on a mesh-crossing falls into
+`fabric_set_unicast_route()`'s table walk. Set-state exists to pay that **once
+per route**, after which each send patches two fields and publishes. Moving it
+into the DE converts a once-per-route cost into a per-send-per-direction cost, on
+the shared resource, and discards set-state. `Peers` has nothing to synthesise,
+which is the whole reason the mask works there and only there.
 
 ### 2.4 Public Fabric API
 
-```cpp
-template <tt::tt_fabric::Topology topology>
-using FabricRequestRef =
-    CoreLocalMem<
-        volatile FabricPullRequestSet<
-            PACKET_HEADER_TYPE,
-            fabric_max_routes<topology>>>;
+Nothing is opened. Link parameters come from the connection table device-init
+populates at `MEM_TENSIX_FABRIC_CONNECTIONS_BASE`, looked up by the route's
+`direction` and cached per direction — so there is no connection manager, no
+handshake, no connection runtime args, and no teardown.
 
+```cpp
 class Fabric {
 public:
-    template <tt::tt_fabric::Topology topology>
-    void set_async_write_state(
-        FabricRequestRef request,
-        const FabricUnicastRouteArgs<topology>& route);
+    Fabric() = default;
 
     template <tt::tt_fabric::Topology topology>
     void set_async_write_multicast_state(
-        FabricRequestRef request,
-        const FabricMcastRouteArgs<topology>& route);
+        FabricRequestRef<topology>, const FabricMcastRouteArgs<topology>&);
 
-    void async_write_with_state(
-        FabricRequestRef request,
-        FabricDataflowBuffer& payload,
-        uint64_t remote_noc_addr);
+    template <tt::tt_fabric::Topology topology>
+    void set_atomic_inc_multicast_state(
+        FabricRequestRef<topology>, const FabricMcastRouteArgs<topology>&);
 
+    // size_bytes is required, not defaulted: with_state patches PayloadSize on
+    // every call (UnicastWriteUpdateMask::PayloadSize), so a partially filled
+    // entry costs nothing extra and the caller always knows what it filled.
+    // MaxRoutes is deduced from the request, so the caller never restates it.
+    template <uint32_t MaxRoutes>
     void async_write_multicast_with_state(
-        FabricRequestRef request,
-        FabricDataflowBuffer& payload,
-        uint64_t remote_noc_addr);
+        volatile FabricPullRequestSet<PACKET_HEADER_TYPE, MaxRoutes>* request,
+        FabricDataflowBuffer& payload, uint64_t remote_noc_addr,
+        uint32_t size_bytes);
 
-    template <tt::tt_fabric::Topology topology>
-    void async_write(
-        FabricRequestRef request,
-        FabricDataflowBuffer& payload,
-        const FabricUnicastRouteArgs<topology>& route,
-        uint64_t remote_noc_addr);
-
-    template <tt::tt_fabric::Topology topology>
-    void async_write_multicast(
-        FabricRequestRef request,
-        FabricDataflowBuffer& payload,
-        const FabricMcastRouteArgs<topology>& route,
-        uint64_t remote_noc_addr);
-
-private:
-    tt::tt_fabric::WorkerToFabricEdmSender
-        worker_channel_sender_;
-
-    // Publishes every active directional slot, then advances the DFB read
-    // pointer once. write_local comes from the request's flags.
-    void async_write_impl(
-        FabricRequestRef request,
-        FabricDataflowBuffer& payload,
-        uint64_t remote_noc_addr);
+    template <uint32_t MaxRoutes>
+    // `flush` makes each destination drain its preceding NoC writes before the
+    // increment lands -- exposed, not assumed, because it costs the receiver a
+    // drain and an increment that orders nothing need not pay it.
+    void atomic_inc_multicast_with_state(
+        volatile FabricPullRequestSet<PACKET_HEADER_TYPE, MaxRoutes>* request,
+        uint64_t remote_noc_addr, uint32_t value, bool flush);
 };
 ```
 
-JIT/runtime bindings initialize `worker_channel_sender_` with the local DE
-coordinates, request-ring base/depth, and credit addresses. It is shared by all
-payload DFBs sent through that `Fabric` object.
+`set_state` fills one slot per route with its range and anchor;
+`with_state` prepares one transaction of `M`, patches `DstAddr` and
+`PayloadSize` per header, publishes each to its direction's link, issues the
+`include_self` local write, then advances the read pointer once.
 
-Unicast and multicast use explicit Noc-style names:
-
-```cpp
-constexpr auto logical_topology =
-    tt::tt_fabric::Topology::Linear;
-
-FabricUnicastRouteArgs<logical_topology> unicast_route{
-    .dst_dev_id = dst_dev_id,
-};
-fabric.set_async_write_state(
-    request,
-    unicast_route);
-fabric.async_write_with_state(
-    request,
-    payload,
-    remote_noc_addr);
-
-FabricMcastRouteArgs<logical_topology> multicast_route{
-    .start_distance = start_distance,
-    .range = range,
-};
-fabric.set_async_write_multicast_state(
-    request,
-    multicast_route);
-fabric.async_write_multicast_with_state(
-    request,
-    payload,
-    remote_noc_addr);
-```
-
-For a 2D topology, the corresponding route types contain mesh/device fields
-and `MeshMcastRange`.
-
-Payload-bearing operation variants use the same transaction path. Header-only
-inline-write and atomic methods do not allocate a transaction ID.
-
-Each operation's `*_set_state()` helper selects `NocSendType` and initializes
-stable command fields:
-
-```text
-async_write             -> to_noc_unicast_write()
-fused_write_atomic      -> to_noc_fused_unicast_write_atomic_inc()
-scatter_write           -> to_noc_unicast_scatter_write()
-noc_multicast_write     -> to_noc_multicast()
-inline_write            -> to_noc_unicast_inline_write()
-atomic_inc              -> to_noc_unicast_atomic_inc()
-```
-
-For unicast write, the complete set-state path is:
-
-```cpp
-template <tt::tt_fabric::Topology topology>
-void Fabric::set_async_write_state(
-    FabricRequestRef request,
-    const FabricUnicastRouteArgs<topology>& route) {
-    auto* packet_header = &request->packet_header;
-
-    if constexpr (tt::tt_fabric::is_2D_topology(topology)) {
-        tt::tt_fabric::fabric_set_unicast_route(
-            packet_header,
-            route.dst_dev_id,
-            route.dst_mesh_id);
-    } else {
-        tt::tt_fabric::fabric_set_unicast_route(
-            packet_header,
-            route.dst_dev_id);
-    }
-
-    packet_header->noc_send_type =
-        tt::tt_fabric::NOC_UNICAST_WRITE;
-
-    tt::tt_fabric::common::experimental::
-        populate_unicast_write_fields<
-            UnicastWriteUpdateMask::None>(
-                packet_header,
-                0,
-                nullptr);
-
-    request->reset();
-    auto& slot = request->next_slot();   // unicast is a single route
-    slot.pull.flags = 0;                 // unicast never writes local
-    slot.pull.direction = route.direction;
-}
-```
-
-The multicast overload fills one slot per route, for both dimensionalities:
-
-```cpp
-template <tt::tt_fabric::Topology topology>
-void Fabric::set_async_write_multicast_state(
-    FabricRequestRef<topology> request,
-    const FabricMcastRouteArgs<topology>& route) {
-    const uint32_t flags =
-        route.include_self ? FABRIC_PULL_WRITE_LOCAL : 0u;
-
-    ASSERT(route.num_routes > 0);
-    ASSERT(route.num_routes <= request->max_routes);
-    request->reset();
-
-    for (uint32_t r = 0; r < route.num_routes; ++r) {
-        const auto& entry = route.routes[r];
-        auto& slot = request->next_slot();
-
-        if constexpr (tt::tt_fabric::is_2D_topology(topology)) {
-            // Per-route destination: the single-header overload at
-            // mesh/api.h:1277, not the connection-manager one at :1305.
-            tt::tt_fabric::mesh::experimental::
-                fabric_multicast_noc_unicast_write_set_state<
-                    UnicastWriteUpdateMask::None>(
-                        &slot.packet_header,
-                        entry.dst_dev_id,
-                        entry.dst_mesh_id,
-                        entry.range);
-        } else {
-            tt::tt_fabric::linear::experimental::
-                fabric_multicast_noc_unicast_write_set_state<
-                    UnicastWriteUpdateMask::None>(
-                        &slot.packet_header,
-                        /*start_distance=*/1,
-                        entry.hops);
-        }
-
-        slot.pull.flags = flags;
-        slot.pull.direction = entry.direction;   // which port the DE sends on
-    }
-
-    ASSERT(request->used > 0);
-}
-```
-
-One loop, one iteration shape. The `if constexpr` covers only the helper call,
-and each `McastRoute` specialization holds exactly that helper's arguments —
-1D `(direction, hops)`, 2D `(dst_dev_id, dst_mesh_id, range)` — so neither
-carries a field it does not use.
-
-The host fills exactly `num_routes` entries, so there is no sentinel to test:
-a Linear line endpoint sets `num_routes = 1`, a mid-mesh device sets 4. That
-also keeps the loop uniform, since "unused" would otherwise mean `hops == 0`
-in 1D and an empty range in 2D.
-
-Each 1D route starts at distance 1 and has its own hop count, so each stream
-terminates at its own `WRITE_ONLY` and neither runs past the end of the chain.
-
-`M` is `request->used`: one SWQ per route. The router issues a packet once per
-direction and the chain store-and-forwards it to every chip along the way —
-those downstream writes never re-read the sender's L1, so they do not
-decrement the counter. A 2D multicast is at most 4 regardless of how many chips
-it reaches; a 1D fwd+bwd is 2; unicast is 1.
-
-The source-local copy is never counted either: `include_self` asks for a plain
-local NoC write, which generates no SWQ.
-
-These counts assume Yukon emits one source-pull SWQ per selected multicast
-node. If an operation expands differently, its set-state method stores the
-actual number of terminal SWQ completions instead.
-
-**`M` is a route count, not a destination count.** A multicast reads the source
-page once per direction; every chip beyond the first is written by a forwarded
-copy, not by another pull. So `range` and `M` are unrelated — a 1D multicast of
-range 7 still contributes one SWQ.
-
-Where the fabric expands a multicast at the source rather than forwarding it,
-range costs nothing and a single-direction `range = num_devices - 1` covers
-every peer with one request — see
-[the example](Quasar-Pull-All-Gather-Example.md).
-
-`async_write_with_state()` and `async_write_multicast_with_state()` validate
-the configured chip-send type and then call one private transaction/send
-implementation. This sharing applies because both execute
-`NOC_UNICAST_WRITE`; only their chip route differs. Other `NocSendType`
-operations use operation-specific implementations and update masks.
-
-Other operation-specific setters use their corresponding route builder,
-`NocSendType`, and `populate_*_fields<...>()` helper. The matching
-`*_with_state()` path updates only fields selected by its compile-time mask.
+Teardown is `~FabricDataflowBuffer()` alone — there is no `flush()`,
+`local_writes_barrier()`, or `close()`, because nothing was opened.
 
 ### 2.5 Caller shape
 
@@ -481,7 +353,6 @@ Producer kernel:
 
 ```cpp
 DataflowBuffer payload(dfb::payload);
-
 payload.reserve_back(1);
 fill(payload.get_write_ptr());
 payload.push_back(1);
@@ -490,178 +361,66 @@ payload.push_back(1);
 Sender kernel:
 
 ```cpp
-Scratchpad<volatile FabricPullRequest<PACKET_HEADER_TYPE>> requests(
-    scratch::fabric_requests);
+using RequestSet = FabricPullRequestSet<PACKET_HEADER_TYPE, fabric_max_routes<topology>>;
+Scratchpad<volatile RequestSet> requests(scratch::fabric_requests);
 FabricDataflowBuffer payload(dfb::payload);
 Fabric fabric;
 
-auto request = requests.local_mem() + request_index;
-
-for (uint32_t i = 0; i < num_pages; ++i) {
-    fabric.async_write_with_state(request, payload, remote_noc_addr);
+auto* data_request = requests.local_mem() + 0;
+fabric.set_async_write_multicast_state(data_request, route);
+for (uint32_t i = 0; i < num_entries; ++i) {
+    fabric.async_write_multicast_with_state(data_request, payload, remote_noc_addr, size_bytes);
 }
-
-payload.finish();
+// ~FabricDataflowBuffer() drains the transaction counters at scope exit.
 ```
 
-Both objects bind the same named DFB. Only the sender constructs
-`FabricDataflowBuffer`; its JIT binding supplies the hidden transaction-counter
-bank. The producer receives no transaction binding or Fabric state.
+Both kernels bind the same named DFB. Only the sender constructs
+`FabricDataflowBuffer`; its JIT binding supplies the transaction-counter bank.
+The producer gets no transaction binding and no Fabric state. Teardown is RAII:
+`~FabricDataflowBuffer()` calls `finish()`. Because `finish()` spins (§4.3), the
+buffer's scope decides where that wait lands — give it a narrower scope to drain
+earlier. It is idempotent, so an explicit early call is still allowed.
 
-`finish()` remains explicit, matching ordinary DFB kernel usage. `Fabric` does
-not own or retain the payload adapter.
+### 2.6 What one send does
 
-Fabric internally:
-
-1. Completes at most one FIFO-front transaction credit.
-2. Waits for the next unsent ordinary-DFB page.
-3. Waits only if all transaction IDs are occupied.
-4. Initializes the next transaction counter.
-5. Tags and publishes the request.
-6. Tries one more nonblocking FIFO-front completion.
-
-Header-only operations do not allocate a transaction ID.
-
-### 2.6 Full call chain
-
-```cpp
-template <tt::tt_fabric::Topology topology>
-void Fabric::async_write(
-    FabricRequestRef request,
-    FabricDataflowBuffer& payload,
-    const FabricUnicastRouteArgs<topology>& route,
-    uint64_t remote_noc_addr) {
-    set_async_write_state(request, route);
-    async_write_with_state(request, payload, remote_noc_addr);
-}
-
-template <tt::tt_fabric::Topology topology>
-void Fabric::async_write_multicast(
-    FabricRequestRef request,
-    FabricDataflowBuffer& payload,
-    const FabricMcastRouteArgs<topology>& route,
-    uint64_t remote_noc_addr) {
-    set_async_write_multicast_state(request, route);
-    async_write_multicast_with_state(request, payload, remote_noc_addr);
-}
-
-void Fabric::async_write_with_state(
-    FabricRequestRef request,
-    FabricDataflowBuffer& payload,
-    uint64_t remote_noc_addr) {
-    ASSERT(
-        request->first().packet_header.chip_send_type ==
-        tt::tt_fabric::CHIP_UNICAST);
-    async_write_impl(request, payload, remote_noc_addr);
-}
-
-void Fabric::async_write_multicast_with_state(
-    FabricRequestRef request,
-    FabricDataflowBuffer& payload,
-    uint64_t remote_noc_addr) {
-    ASSERT(
-        request->first().packet_header.chip_send_type ==
-        tt::tt_fabric::CHIP_MULTICAST);
-
-    async_write_impl(request, payload, remote_noc_addr);
-}
-
-void Fabric::async_write_impl(
-    FabricRequestRef request,
-    FabricDataflowBuffer& payload,
-    uint64_t remote_noc_addr) {
-    // Set once by set_async_write_multicast_state() from route.include_self.
-    const bool write_local =
-        (request->first().pull.flags & FABRIC_PULL_WRITE_LOCAL) != 0;
-
-    // One SWQ per route: the router issues once per direction, then the chain
-    // forwards. So M is simply how many slots set-state claimed.
-    const uint32_t num_swqs = request->used;
-    ASSERT(num_swqs > 0);
-
-    payload.wait_for_txn_id();
-    payload.wait_for_next_issue();
-    const uint32_t source_l1_address =
-        payload.dfb_.get_read_ptr();
-
-    const uint32_t txn_id =
-        payload.prepare_transaction(num_swqs);
-
-    auto publish = [&](auto& slot) {
-        slot.pull.src_l1_address = source_l1_address;
-        slot.pull.txn_id = txn_id;   // every route shares one counter
-
-        tt::tt_fabric::common::experimental::populate_unicast_write_fields<
-            UnicastWriteUpdateMask::DstAddr |
-            UnicastWriteUpdateMask::PayloadSize>(
-            &slot.packet_header,
-            payload.get_entry_size(),
-            tt::tt_fabric::NocUnicastCommandHeader{remote_noc_addr});
-
-        asm volatile("" ::: "memory");
-
-        worker_channel_sender_.wait_for_empty_write_slot();
-        worker_channel_sender_.send_payload_flush_non_blocking_from_address(
-            slot_address(slot),
-            sizeof(FabricPullRequest<PACKET_HEADER_TYPE>),
-            noc);
-    };
-
-    for (uint32_t i = 0; i < request->used; ++i) {
-        publish(request->routes[i]);
-    }
-
-    if (write_local) {
-        noc_async_write<
-            NOC_MAX_BURST_SIZE + 1,
-            true,
-            true>(
-                source_l1_address,
-                remote_noc_addr,
-                payload.get_entry_size(),
-                noc,
-                NOC_UNICAST_WRITE_VC + 1);
-        noc_async_posted_writes_flushed(noc);
-    }
-
-    payload.dfb_.advance_read_ptr();
-    payload.commit_transaction();
-}
+```text
+wait_for_txn_id            -- block only if every transaction id is occupied
+wait_for_next_issue        -- block until the producer has published an entry
+get_read_ptr               -- the entry's L1 address
+prepare_transaction(M)     -- M = request->source_read_completions, which is
+                              request->used only where a chain amortises
+include_self               -- one posted local NoC write on VC+1, issued first
+                              so it overlaps the publishes below
+for each route:
+    patch DstAddr + PayloadSize into that route's header
+    publish it to that route's link
+flush                      -- one noc_async_writes_flushed covers the header
+                              publishes and the local write alike
+commit_transaction         -- advances the read pointer ONCE, for the whole
+                              multicast, and counts the transaction outstanding
+try_complete_front_transaction  -- one nonblocking FIFO-front credit
 ```
 
-The DE copies each slot's `pull.txn_id` into every SWQ it generates from that
-slot. All slots share one id, so every completion across every route decrements
-one counter. A later `try_complete_front_txn()` posts one
-DFB consumer credit when the FIFO-front counter is zero.
+Every route shares one `txn_id`, so the DE stamps that id on every SWQ it
+generates and every completion decrements one counter. One entry, one
+transaction, one read-pointer advance — however many routes the multicast took.
+A caller never issues routes separately. Header-only operations (atomic inc)
+allocate no transaction id.
 
-One entry, one transaction, one read-pointer advance — however many requests
-the multicast took. A caller never issues routes separately.
-
-A multicast covers chips at distances `start_distance .. start_distance +
-range - 1` along the route. A packet must traverse at least one hop to reach
-anything, so the nearest addressable chip is distance 1 — hence
-`ASSERT(start_distance > 0)`. **Distance 0 is the source, and no route reaches
-it**: the packet is injected outbound and never returns, and on Yukon the DE
-expands a multicast into per-peer DMA target queues with no queue for self.
-
-So the source-local copy cannot be expressed as `start_distance = 0`. It is a
-separate mechanism — a plain local NoC write, generating no SWQ, which is why
-it never enters `M`. An operation that wants one asks via `route.include_self`.
-`set_async_write_multicast_state()` records it in `request->pull.flags`; the
-send path reads it there. It is **not** implied by multicast — an all-gather
+**Why `include_self` is a separate mechanism.** A packet must traverse at least
+one hop to reach anything, so the nearest addressable chip is distance 1.
+Distance 0 is the source and no route reaches it: the packet is injected
+outbound and never returns, and the DE expands a multicast into per-peer DMA
+target queues with no queue for self. So the source-local copy cannot be a
+`start_distance = 0` route — it is a plain local NoC write, generating no SWQ,
+which is why it never enters `M`. It is not implied by multicast: an all-gather
 wants it, a broadcast whose source keeps nothing does not, and forcing it would
 write into an address the caller never asked about.
 
-When set, the common implementation publishes the remote Fabric request first,
-issues one untagged posted local NoC write on a separate VC, flushes that local
-write, and only then advances the DFB read pointer. `num_swqs` counts remote
-Fabric SWQs only, so the local copy never enters `M`.
-
-The local write reuses `remote_noc_addr` unchanged. That is only correct when
-the destination layout is identical on the source and on every multicast
-target — as it is for a fully replicated output. Replicas with differing shard
-specs would need a separately supplied local address, which this API does not
-carry.
+The local write reuses `remote_noc_addr` unchanged, which is correct only when
+the destination layout is identical on the source and on every target — as it
+is for a fully replicated output. Replicas with differing shard specs would
+need a separately supplied local address, which this API does not carry.
 
 ## 3. Minimal transaction state
 
@@ -672,7 +431,7 @@ template <uint32_t MaxTransactionIds>
 class FabricDataflowBuffer {
 public:
     uint32_t get_entry_size() const { return dfb_.get_entry_size(); }
-    void finish();
+    void finish();          // called by ~FabricDataflowBuffer(); idempotent
 
 private:
     friend class Fabric;
@@ -687,20 +446,34 @@ private:
     bool try_complete_front_txn();
     void wait_for_txn_id();
     void wait_for_next_issue();
-    uint32_t prepare_transaction(uint32_t num_swqs);
+    uint32_t prepare_transaction(uint32_t source_read_completion_count);
     void commit_transaction();
     uint32_t advance_txn_id(uint32_t txn_id) const;
 };
 ```
 
 The counter bank is a **fixed reserved region of worker L1**, sized once in the
-memory map (`MEM_FABRIC_TXN_COUNTERS_BASE` / `_SIZE`), not allocated per
-program. Its capacity is a platform constant, not an operation parameter — an
-operation consumes what is there. The bank pointer, assigned ID range, and
-transaction cursors are local to the sender DM.
+memory map, not allocated per program. It is not the operation's data: it is a
+mailbox the router writes into, so allocating it per program was the odd part.
+Its capacity is a platform constant — an operation consumes what is there — and
+the cursors are local to the sender DM.
+
+**Indexed by RISC id**, so two sender DMs on one Tensix get separate banks
+without any runtime state:
+
+```c
+#define MEM_FABRIC_TXN_COUNTERS_STRIDE  (MEM_FABRIC_MAX_TRANSACTION_IDS * 4)
+#define MEM_FABRIC_TXN_COUNTERS_BASE(risc_id) \
+    (MEM_FABRIC_TXN_COUNTERS_REGION + (risc_id) * MEM_FABRIC_TXN_COUNTERS_STRIDE)
+```
+
+That is why the kernel writes `FabricDataflowBuffer payload(dfb::payload)` and
+nothing else: no scratchpad to declare, no base to bind, and the router needs
+nothing configured per worker beyond the `worker_xy` it already has.
 
 One `Fabric` object can send from multiple `FabricDataflowBuffer` instances.
-Each payload adapter owns a disjoint transaction-ID range and its own cursors.
+Each payload adapter owns a disjoint transaction-ID range within its RISC's
+bank, and its own cursors.
 
 Practical transaction capacity is limited by the reserved L1 counter bank, not
 by the request tag. `MaxTransactionIds` is the slice of that bank assigned to
@@ -721,10 +494,15 @@ backpressure.
 
 ```cpp
 void initialize() {
+    // Do NOT zero the bank. It is reserved L1 that persists across ops, and
+    // finish() already drained every counter to zero on the way out (§4.3), so
+    // these are clean by construction. A nonzero value means a prior op did not
+    // drain -- assert rather than clobber, which would destroy the evidence and
+    // let that op's late decrement underflow ours.
     for (uint32_t txn_id = 0;
          txn_id < MaxTransactionIds;
          ++txn_id) {
-        counters_[txn_id_base_ + txn_id] = 0;
+        ASSERT(counters_[txn_id_base_ + txn_id] == 0);
     }
 
     next_issue_txn_id_ = 0;
@@ -733,8 +511,9 @@ void initialize() {
 }
 ```
 
-Initialization occurs only after the DE and all prior SWQ completion metadata
-are quiescent.
+Only the three local cursors are written. Initialization is valid only once the
+DE and all prior SWQ completion metadata are quiescent — the assert is what
+catches a violation.
 
 ### 3.2 ID advancement
 
@@ -835,140 +614,78 @@ completion happens at the next Fabric call, during a capacity wait, or during
 
 ### 5.1 DFB issue pointer
 
-The base Fabric path uses no DFB NoC transaction IDs. Add this internal state
-and API to `DataflowBuffer`:
+The pull path splits what `pop_front()` does into two halves: the issue cursor
+moves when the request is published, the consumer credit returns only when the
+DMA has finished reading. So `DataflowBuffer` gains two methods and one cursor:
 
 ```cpp
 friend class FabricDataflowBuffer;
 
-uint8_t get_num_tcs_to_rr() const {
-    return local_dfb_interface_.num_tcs_to_rr;
-}
-void advance_read_ptr();
-void acknowledge_front();
+void advance_read_ptr();     // issue cursor only, no credit
+void acknowledge_front();    // one oldest FIFO consumer credit
 
-uint8_t next_ack_tc_idx_ = 0;
+uint8_t fabric_ack_tc_idx_ = 0;   // one FIFO cursor, not a per-TC array
 ```
 
-Initialize `next_ack_tc_idx_` from `local_dfb_interface_.tc_idx` when the
-sender-side DFB view is constructed. This is one FIFO cursor, not a per-TC
-array.
+`advance_read_ptr()` bumps `tc_slots[tc_idx].rd_ptr` by `stride_size`, wrapping
+at `limit`, then round-robins `tc_idx` over `num_tcs_to_rr`.
+`acknowledge_front()` reads `packed_tile_counter` from the TC at
+`fabric_ack_tc_idx_`, calls `overlay::llk_intf_inc_acked(tensix_id, tc_id, 1)`,
+and round-robins that cursor. `fabric_ack_tc_idx_` initializes from
+`local_dfb_interface_.tc_idx` when the sender-side view is constructed.
 
-Quasar DM implementation:
+The caller keeps using `wait_front(required_occupancy)` and `get_read_ptr()`.
+For `Q` outstanding transactions over `R` round-robin TCs, issue-side waiting is
+still `floor(Q / R)` in-flight entries on the next issue TC.
 
-```cpp
-inline void DataflowBuffer::advance_read_ptr() {
-    const uint8_t issue_tc_idx =
-        local_dfb_interface_.tc_idx;
-    auto& tc_slot =
-        local_dfb_interface_.tc_slots[issue_tc_idx];
-
-    tc_slot.rd_ptr +=
-        local_dfb_interface_.stride_size;
-    if (tc_slot.rd_ptr >= tc_slot.limit) {
-        tc_slot.rd_ptr = tc_slot.base_addr;
-    }
-
-    ++local_dfb_interface_.tc_idx;
-    if (local_dfb_interface_.tc_idx ==
-        local_dfb_interface_.num_tcs_to_rr) {
-        local_dfb_interface_.tc_idx = 0;
-    }
-}
-
-inline void DataflowBuffer::acknowledge_front() {
-    const uint8_t num_tcs =
-        local_dfb_interface_.num_tcs_to_rr;
-    ASSERT(num_tcs > 0);
-
-    const uint8_t completion_tc_idx =
-        next_ack_tc_idx_;
-
-    const auto& tc_slot =
-        local_dfb_interface_.tc_slots[
-            completion_tc_idx];
-    const auto packed_tc =
-        tc_slot.packed_tile_counter;
-
-    const uint8_t tensix_id =
-        dfb::get_tensix_id(packed_tc);
-    const uint8_t tc_id =
-        dfb::get_counter_id(packed_tc);
-
-    ASSERT(
-        overlay::llk_intf_get_occupancy(
-            tensix_id,
-            tc_id) > 0);
-
-    overlay::llk_intf_inc_acked(
-        tensix_id,
-        tc_id,
-        1);
-
-    ++next_ack_tc_idx_;
-    if (next_ack_tc_idx_ == num_tcs) {
-        next_ack_tc_idx_ = 0;
-    }
-}
-```
-
-The caller uses existing `wait_front(required_occupancy)` and
-`get_read_ptr()`. `advance_read_ptr()` advances only the issue cursor.
-`acknowledge_front()` returns one oldest FIFO consumer credit.
-
-For `Q` outstanding transactions over `R` round-robin TCs, issue-side waiting
-still uses:
-
-```text
-in-flight entries on the next issue TC = floor(Q / R)
-```
-
-`FabricDataflowBuffer::finish()` drains all Fabric transaction counters and
-calls `acknowledge_front()` for each before `dfb_.finish()`. No DFB
-NoC-TRID shadow state is touched.
+`FabricDataflowBuffer::finish()` drains every transaction counter, calling
+`acknowledge_front()` for each, then `dfb_.finish()`. No DFB NoC-TRID shadow
+state is touched.
 
 ### 5.2 Transaction preparation
 
 ```cpp
-uint32_t prepare_transaction(uint32_t num_swqs) {
-    ASSERT(num_swqs > 0);
+TransactionId prepare_transaction(uint32_t source_read_completion_count) {
+    ASSERT(source_read_completion_count > 0);
+    ASSERT(outstanding_txn_count_ < MaxTransactionIds);
 
-    const uint32_t txn_id =
-        txn_id_base_ + next_issue_txn_id_;
-    invalidate_l1_cache();
-    const uint32_t previous_count =
-        __atomic_fetch_add(
-            &counters_[txn_id],
-            num_swqs,
-            __ATOMIC_RELEASE);
-    ASSERT(previous_count == 0);
+    const TransactionId txn_id = next_issue_txn_id_;
+    // A plain store, not a read-modify-write: this counter is ours until it
+    // drains back to zero, and the assert is what proves the previous
+    // transaction on this id finished.
+    ASSERT(load_counter(txn_id) == 0);
+    counters_[txn_id] = source_read_completion_count;
+    compiler_fence();
 
+    next_issue_txn_id_ = advance_txn_id(next_issue_txn_id_);
     return txn_id;
 }
 ```
 
-`prepare_transaction()` does not advance the ID. A failure before request
-publication resets the selected counter to zero.
+`prepare_transaction()` advances the issue ID; the read pointer does not move
+until `commit_transaction()`.
 
 ### 5.3 Commit after request publication
 
 ```cpp
 void commit_transaction() {
-    next_issue_txn_id_ = advance_txn_id(next_issue_txn_id_);
+    ASSERT(outstanding_txn_count_ < MaxTransactionIds);
+    dfb_.advance_read_ptr();      // the one read-pointer advance per entry
     ++outstanding_txn_count_;
-
-    try_complete_front_txn();
 }
 ```
 
 `commit_transaction()` runs only after request bytes are flushed and the
-worker-channel occupied update is published.
+worker-channel occupied update is published. It does **not** attempt a
+completion: the caller follows it with `try_complete_front_transaction()`, so
+the opportunistic credit is a separate, skippable step.
 
 ## 6. DE and SWQ completion
 
-The DE reads `pull.direction` to choose the outgoing port — the eth channel
-direction, or the DMA target queue on Yukon — and `pull.txn_id` to tag every
-SWQ generated from that request.
+The outgoing port is not in the packet: the worker publishes each route's
+header to that direction's link, so the DE already has it. The DE reads
+`command_fields.fabric_pull.transaction_id` to tag every SWQ it generates from
+that request.
 
 Completion metadata retains:
 
@@ -980,9 +697,11 @@ struct FabricSwqCompletionTag {
 
 If one target queue completes in issue order, a parallel metadata FIFO is
 enough. Otherwise metadata must be indexed by the returned SWQ command or
-descriptor index. The originating worker-channel record stores worker
-coordinates and `txn_counter_base_address`. The builder allocates and
-configures these fixed values before kernel launch.
+descriptor index. The originating worker-channel record supplies the worker
+coordinates **and** the transaction-counter base; the builder configures both
+before kernel launch. Keeping the base there rather than in the packet also
+lets two sender DMs on one Tensix own separate banks, which a single
+memory-map constant could not.
 
 Each terminal source-read completion performs:
 
@@ -991,6 +710,8 @@ void notify_worker_transaction_complete(
     const FabricSwqCompletionTag& tag,
     const EDMChannelWorkerLocationInfo& worker,
     uint8_t noc) {
+    // Base comes from the per-worker record, not the packet: it is the same
+    // for every send from that worker.
     const uint32_t counter_address =
         worker.txn_counter_base_address +
         tag.txn_id * sizeof(uint32_t);
@@ -1076,35 +797,26 @@ ttnn/cpp/ttnn/operations/ccl/all_gather/device/
     kernels/multicast_writer.cpp
 ```
 
-The pull port must preserve all of these behaviors:
+Production splits the work across a reader and a writer kernel sharing a
+depth-3 CB: the reader owns tagged input reads and sends the forward E/S ranges,
+the writer sends the backward W/N ranges and does the source-local posted copy
+on VC+1. One CB page may hold several input pages and several output chunks,
+`FabricWriter` batches contiguous chunks into scatter packets, large chunks
+split across packets, even ring paths alternate prebuilt routes, and the page is
+popped only once every use of its L1 bytes has been issued.
 
-- One reader and one writer kernel per link share a depth-3 CB.
-- The reader owns tagged input reads and the two-page read pipeline.
-- The reader sends forward E/S Fabric ranges.
-- The writer sends backward W/N Fabric ranges.
-- The writer performs the source-local posted NoC copy on VC+1.
-- One CB page may contain several input pages and several output chunks.
-- `FabricWriter` batches contiguous chunks into scatter packets when possible.
-- Large chunks are split into several Fabric packets.
-- Even ring/torus paths alternate prebuilt primary/alternate routes.
-- Init and completion use multicast atomic-inc semaphores.
-- The reader performs the global completion wait.
-- The CB page is popped only after every use of its L1 bytes has been issued.
+The pull API cannot express that loop faithfully:
+`async_write_multicast_with_state()` consumes one complete DFB entry per call,
+while production issues several chunk sends from one CB page and releases it
+only after both kernels are done with it.
 
-The current pull API cannot express this production loop faithfully. Its
-`async_write_multicast_with_state()` contract consumes one complete DFB entry
-per call, while production all-gather issues several chunk/packet sends from
-one CB page and releases that page only after both directional kernels finish
-using it.
+Route derivation carries over unchanged —
+`ttnn::ccl::get_forward_backward_line_mcast_distance()`
+(`ttnn/cpp/ttnn/operations/ccl/ccl_common.cpp:1849`) returns exactly the two hop
+counts that become two routes, and §2.6 publishes both under one transaction id
+with one read-pointer advance, so the pair costs one DFB entry, not two.
 
-Route derivation reuses `ttnn::ccl::get_forward_backward_line_mcast_distance()`
-(`ttnn/cpp/ttnn/operations/ccl/ccl_common.cpp:1849`) unchanged — it returns
-exactly the two hop counts that become two `Route` entries. Two requests per
-entry is
-not a problem for the pull path: §2.6 publishes both under one transaction id
-and advances the read pointer once, so the pair costs one DFB entry, not two.
-
-The pull API still needs these additional production capabilities:
+The pull API still needs these production capabilities:
 
 1. **Dual sender participation**
    Reader forward sends and writer backward sends can both read the same CB
@@ -1125,20 +837,24 @@ The pull API still needs these additional production capabilities:
    gives each route a slot and publishes them under one transaction id with a
    single read-pointer advance, so one DFB entry still backs the whole
    multicast. But it burns a DE send-queue slot per route — two for 1D, up to
-   four for a mid-mesh device — on a queue Yukon doc §5 lists as a single
-   shared resource.
+   four for a mid-mesh device — on a queue that is one shared resource per
+   worker.
 
-   **Parked alternative.** Collapse it to one request by stating the route in
-   the `pull` trailer and fanning out in the DE, which already parses the
-   header to patch descriptors. Two shapes were considered and neither is
-   settled:
+   **Resolved for all-to-all** (§2.3.1): with nothing forwarding there is no
+   routing stream to build, so the routing dword carries a peer mask and one
+   request covers every peer. One send-queue slot instead of `P`.
+
+   **Still open for the forwarding topologies**, and the two shapes considered are still
+   unsettled:
    - *Rectangle half-extents* `{e, w, n, s}` with
      one route per direction. Compact, but only expresses rectangles.
    - *A branch table in the packet header*, which would also need the router to
      read a turn's branch offset from the header body rather than from inside
      the routing dword — more invasive, and it changes the flying header.
 
-   Multi-request first; revisit once the DE's request-parsing cost is measured.
+   Either way the DE would have to synthesise a routing stream per direction,
+   which is what set-state currently pays once per route (§2.3.1). Multi-request
+   first; revisit once the DE's request-parsing cost is measured.
 5. **Route alternation**
    Primary and alternate request states must toggle per completed packet.
 6. **Multicast atomic-inc**
@@ -1174,10 +890,11 @@ The builder/runtime:
   `FabricDataflowBuffer` in the sender.
 3. Disables DFB implicit NoC-TRID sync for the sender-side binding.
 4. Chooses a transaction-ID range for each sender-side DFB.
-5. Sub-allocates disjoint ID ranges from the reserved worker-L1 counter bank
-  (`MEM_FABRIC_TXN_COUNTERS_BASE`); the bank itself is not allocated per program.
-6. Binds the bank pointer, `txn_id_base`, and range capacity to each sender
-  adapter.
+5. Sub-allocates disjoint ID ranges within that RISC's counter bank
+  (`MEM_FABRIC_TXN_COUNTERS_BASE(risc_id)`), which the memory map already
+  separates per RISC. The bank is not allocated per program.
+6. Binds `txn_id_base` and range capacity to each sender adapter. The bank
+  address needs no binding -- it follows from the RISC id.
 7. Configures the DE's fixed worker-channel table with the preallocated worker
   coordinates and counter base.
 8. Configures SWQ completion tags/FIFOs.
@@ -1214,22 +931,29 @@ mode.
 - Make `FabricDataflowBuffer` a sender-only ordinary-DFB adapter.
 - Reserve the worker counter bank in the memory map; sub-allocate disjoint ID
   ranges per sender DFB out of it. Never size it per operation.
-- Keep the flying packet header unchanged. Carry the multicast extent in the
-  request-only `pull` trailer (§2.2) and fan out in the DE, which already
-  parses the header to patch descriptors.
+- Keep the flying packet header unchanged; the pull fields ride in its
+  `command_fields.fabric_pull` extension, so there is no trailer.
 - Add bounded transaction counters, `txn_id_base`, and three local cursors.
-- Add `txn_id` to `FabricPullMetadata`.
+- Add `Topology::AllToAll`, and resolve the route shape from the topology via
+  the forwarding and 2D predicates rather than a 1D/2D flag: Linear and Ring
+  share the line shape, Mesh and Torus the rect shape, AllToAll neither (§2.3).
+- Carry the source-read count in the request set, separate from the route count.
+  They are equal only where a chain amortises; AllToAll publishes one header and
+  owes one read per peer (§2.3.1).
+- Add `to_chip_peer_multicast()`, a per-device node-id-to-target-queue table for
+  the DE, and the expansion of the mask into one SWQ per set bit, all stamped
+  with the same transaction id (§2.3.1).
 - Compute exact SWQ completion count before request publication.
 - Reuse DFB `wait_front()` / `get_read_ptr()` and add `advance_read_ptr()` /
   `acknowledge_front()`.
 - Derive current-TC issue occupancy from global outstanding count.
-- Track FIFO credit rotation with one `next_ack_tc_idx_`.
+- Track FIFO credit rotation with one `fabric_ack_tc_idx_`.
 - Propagate one transaction ID to all generated SWQs.
 - Atomically decrement the correct worker counter.
-- Carry the source-local posted NoC write as an opt-in `route.include_self`
-  recorded in `pull.flags`. Never imply it from multicast: the source chip is
-  excluded by the chip multicast itself, and only some operations want a local
-  copy.
+- Carry the source-local posted NoC write as an opt-in `route.include_self`,
+  recorded in the caller's request set. Never imply it from multicast: the
+  source chip is excluded by the chip multicast itself, and only some
+  operations want a local copy.
 - Complete at most one front transaction credit per send.
 - Wait/complete only at transaction-ID capacity.
 - Drain all remaining transactions in `finish()`.
