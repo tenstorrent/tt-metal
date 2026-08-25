@@ -235,32 +235,36 @@ void kernel_main() {
 
     // We tilize input Q if it is in ROW MAJOR layout
 #ifdef TILIZE_Q
-    compute_kernel_hw_startup(dfb_q_rm, dfb_q_in);
-    // Keep InitAndUninit: the helper picks fast- vs regular-tilize at compile time and its
-    // teardown must match (fast_tilize_uninit vs tilize_uninit). tilize_q with a FULL-tile Q
-    // (use_half_tile==false, e.g. >16 heads) can take the fast-tilize path, so we must not
-    // hand-roll the uninit here.
-    compute_kernel_lib::tilize<
-        q_chunk_tiles,
-        dfb_q_rm,
-        dfb_q_in,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
-    matmul_init(dfb_q_in, dfb_k_in);
-    // #49266: The Q tilize runs on SrcA; on galaxy Q is a half-tile (num_faces=2), and
-    // tilize_uninit correctly restores SrcA to Q's geometry. But the QK matmul reads operands
-    // REVERSED (SrcA <- in1 = dfb_k_in, num_faces=4), and the per-k_chunk reconfig below is
-    // IGNORE (format-only). Reprogram SrcA/SrcB tile geometry ONCE here for the matmul
-    // operands (is_tile_dim_reconfig_en=true) so K is unpacked with the correct num_faces.
-    // One-time, not per-chunk: nothing after this re-establishes Q's geometry on SrcA (K and V
-    // are both full tiles), so the per-chunk reconfig can stay IGNORE. Without this, SrcA stays
-    // at num_faces=2 and the matmul reads K wrong -> Top-1 0%. (Full-tile Q: this is a no-op
-    // re-assert of num_faces=4.)
-    reconfig_full_operand(dfb_k_in, dfb_q_in);
+    {
+        compute_kernel_hw_startup(dfb_q_rm, dfb_q_in);
+        // Keep InitAndUninit: the helper picks fast- vs regular-tilize at compile time and its
+        // teardown must match (fast_tilize_uninit vs tilize_uninit). tilize_q with a FULL-tile Q
+        // (use_half_tile==false, e.g. >16 heads) can take the fast-tilize path, so we must not
+        // hand-roll the uninit here.
+        compute_kernel_lib::tilize<
+            q_chunk_tiles,
+            dfb_q_rm,
+            dfb_q_in,
+            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+        matmul_init(dfb_q_in, dfb_k_in);
+        // #49266: The Q tilize runs on SrcA; on galaxy Q is a half-tile (num_faces=2), and
+        // tilize_uninit correctly restores SrcA to Q's geometry. But the QK matmul reads operands
+        // REVERSED (SrcA <- in1 = dfb_k_in, num_faces=4), and the per-k_chunk reconfig below is
+        // IGNORE (format-only). Reprogram SrcA/SrcB tile geometry ONCE here for the matmul
+        // operands (is_tile_dim_reconfig_en=true) so K is unpacked with the correct num_faces.
+        // One-time, not per-chunk: nothing after this re-establishes Q's geometry on SrcA (K and V
+        // are both full tiles), so the per-chunk reconfig can stay IGNORE. Without this, SrcA stays
+        // at num_faces=2 and the matmul reads K wrong -> Top-1 0%. (Full-tile Q: this is a no-op
+        // re-assert of num_faces=4.)
+        reconfig_full_operand(dfb_k_in, dfb_q_in);
+    }
 #else
-    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb_q_in, dfb_k_in, dfb_qk_im);
-    matmul_init(dfb_q_in, dfb_k_in);
+    {
+        compute_kernel_hw_startup<SrcOrder::Reverse>(dfb_q_in, dfb_k_in, dfb_qk_im);
+        matmul_init(dfb_q_in, dfb_k_in);
+    }
 #endif
     DataflowBuffer(dfb_q_in).wait_front(q_chunk_tiles);
 
@@ -310,6 +314,56 @@ void kernel_main() {
         dfb_cur_sum = dfb_sum_1;
         dfb_prev_sum = dfb_sum_2;
 
+        /******************************************************************************
+         *                           FLASH ATTENTION LOOP                             *
+         ******************************************************************************/
+        /**
+         * Compute Parameters (most are compile time but some are dynamic):
+         * @tparam St - Total sequence length in tiles
+         * @tparam DHt - Head dimension in tiles
+         * @tparam Sq_chunk_t - Query chunk size in tiles
+         * @tparam Sk_chunk_t - Key chunk size in tiles (dynamic)
+         * @tparam qk_in0_block_w - QK matmul block width
+         * @tparam qk_subblock_w - QK matmul subblock width (dynamic)
+         * @tparam qk_subblock_h - QK matmul subblock height (dynamic)
+         * @tparam qk_in0_num_subblocks - QK input0 subblocks (dynamic)
+         * @tparam qk_in1_num_subblocks - QK input1 subblocks (dynamic)
+         * @tparam qk_num_blocks - QK number of blocks
+         * @tparam out_in0_block_w - Output matmul block width (dynamic)
+         * @tparam out_subblock_w - Output matmul subblock width
+         * @tparam out_subblock_h - Output matmul subblock height
+         * @tparam out_in0_num_subblocks - Output input0 subblocks
+         * @tparam out_in1_num_subblocks - Output input1 subblocks
+         * @tparam out_num_blocks - Output number of blocks (dynamic)
+         * @tparam is_causal - Whether to use causal attention (if mask is applied)
+         * @tparam use_attention_mask - Whether to use attention mask for non-causal attention
+         *
+         * Circular Buffer Parameters:
+         * @tparam dfb_q_in - Query input buffer
+         * @tparam dfb_k_in - Key input buffer
+         * @tparam dfb_v_in - Value input buffer
+         * @tparam dfb_mask_in - Mask input buffer
+         * @tparam dfb_scale_in - Scale input buffer
+         * @tparam dfb_identity_scale_in - Identity scale buffer
+         * @tparam dfb_qk_im - QK intermediate buffer
+         * @tparam dfb_out_im - Output intermediate buffer
+         * @tparam dfb_out_accumulate_im - Output accumulate buffer
+         * @tparam dfb_cur_max - Current max buffer
+         * @tparam dfb_prev_max - Previous max buffer
+         * @tparam dfb_cur_sum - Current sum buffer
+         * @tparam dfb_prev_sum - Previous sum buffer
+         * @tparam dfb_exp_max_diff - Exp max diff buffer
+         * @tparam dfb_out_o - Output O buffer
+         * @tparam dfb_out_m - Output M buffer
+         * @tparam dfb_out_l - Output L buffer
+         *
+         * Runtime Parameters:
+         * @param k_chunk_start - Start index of key chunk
+         * @param k_chunk_end - End index of key chunk
+         * @param do_reduce - Whether to perform reduction
+         * @param qk_chunk_tiles - Number of QK chunk tiles (dynamic)
+         * @param out_chunk_tiles - Number of output chunk tiles
+         */
         /* START OF FLASH ATTENTION LOOP */
         uint32_t dfb_out_mm = dfb_out_accumulate_im;
 
@@ -502,6 +556,17 @@ void kernel_main() {
         /******************************************************************************
          *                      TREE REDUCTION LOGIC                                  *
          ******************************************************************************/
+        /**
+         * Tree reduction reduces the online softmax results in O(log n) rounds.
+         *
+         * For each round r (0 to my_active_rounds-1):
+         *   - If children_per_round[r] != UINT32_MAX, receive from that child
+         *   - Combine received data with local accumulator using softmax correction
+         *
+         * After all receives:
+         *   - If is_tree_root: finalize (1/sum normalization) and output
+         *   - Else: output intermediate results for writer to send to parent
+         */
         // Tree reduction: receive from children and combine
         // Buffer state entering tree reduction:
         //   - dfb_out_accumulate_im: local O (output accumulator)
@@ -520,6 +585,13 @@ void kernel_main() {
                     // Move child's L to dfb_prev_sum_2 for correction
                     move_block<true>(dfb_l_in, dfb_prev_sum_2, Sq_chunk_t);
                     // Fused Softmax Correction
+                    // * Fused Correction is a fused operation that performs the following steps:
+                    // * 1. CUR_MAX = max(PREV_MAX, WORKER_MAX)
+                    // * 2. EXP_MAX_DIFF_2 = exp((WORKER_MAX - CUR_MAX)*scale)
+                    // * 3. PREV_SUM_2 *= EXP_MAX_DIFF_2
+                    // * 4. EXP_MAX_DIFF = exp((PREV_MAX - CUR_MAX)*scale)
+                    // * 5. PREV_SUM *= EXP_MAX_DIFF
+                    // * 6. CUR_SUM = PREV_SUM_2 + PREV_SUM
                     correction_block<scale_fp32, vector_mode>(
                         dfb_m_in,        // cb child max
                         dfb_prev_sum_2,  // cb child sum
@@ -556,6 +628,10 @@ void kernel_main() {
         // Finalize output based on tree role
         if (is_tree_root) {
             // Root node: perform final normalization and output
+            // Determine which sum/max buffer to use based on whether we did tree reduction
+            // If we had children with data, results are in dfb_prev_sum/dfb_prev_max after tree reduction
+            // If single core (no children with data), results are in dfb_cur_sum/dfb_cur_max from FA loop
+
             /* SUM = 1.0 / SUM */
             reconfig_data_format(dfb_prev_sum, dfb_prev_sum);
             pack_reconfig_data_format(dfb_prev_sum);
@@ -603,19 +679,19 @@ void kernel_main() {
             DataflowBuffer(dfb_prev_max).pop_front(Sq_chunk_t);
 
             // Untilize output to ROW MAJOR if input Q was also ROW MAJOR
-#ifdef TILIZE_Q
-            // Unified untilize - auto-dispatches based on out_chunk_tiles vs DEST limit
-            compute_kernel_lib::untilize<
-                out_chunk_tiles,
-                dfb_out_accumulate_im,
-                dfb_out_final,
-                compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-                compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
-#else
-            // Move output to buffer for the writer
-            move_block<true>(dfb_out_accumulate_im, dfb_out_final, out_chunk_tiles);
-#endif
+            if constexpr (untilize_output) {
+                // Unified untilize - auto-dispatches based on out_chunk_tiles vs DEST limit
+                compute_kernel_lib::untilize<
+                    out_chunk_tiles,
+                    dfb_out_accumulate_im,
+                    dfb_out_final,
+                    compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                    compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+                    compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+            } else {
+                // Move output to buffer for the writer
+                move_block<true>(dfb_out_accumulate_im, dfb_out_final, out_chunk_tiles);
+            }
 
         } else if (has_parent) {
             // Non-root node with parent: send intermediate results

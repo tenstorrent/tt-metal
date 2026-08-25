@@ -490,6 +490,27 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         use_attention_sink,
         use_half_tile);
 
+    // Print reducer core coordinates
+    log_debug(tt::LogOp, "Reducer cores ({}):", num_reducer_cores);
+    for (uint32_t i = 0; i < num_reducer_cores; ++i) {
+        log_debug(
+            tt::LogOp, "  reducer[{}]: physical=({}, {})", i, reduce_core_physical_xs[i], reduce_core_physical_ys[i]);
+    }
+
+    // Print output core coordinates
+    log_debug(tt::LogOp, "Output cores ({}):", num_output_cores);
+    for (uint32_t i = 0; i < num_output_cores; ++i) {
+        log_debug(
+            tt::LogOp, "  output[{}]: physical=({}, {})", i, output_core_physical_xs[i], output_core_physical_ys[i]);
+    }
+
+    // Print reduction group core coordinates
+    log_debug(tt::LogOp, "Reduction group cores ({}):", num_active_cores);
+    for (uint32_t i = 0; i < num_active_cores; ++i) {
+        log_debug(
+            tt::LogOp, "  group[{}]: physical=({}, {})", i, reduction_group_core_xs[i], reduction_group_core_ys[i]);
+    }
+
     // ========== Kernel Scalars ==========
     const bfloat16 bfloat_identity_scalar(1.0f);
     const bfloat16 bfloat_zero_scalar(0.0f);
