@@ -47,9 +47,9 @@ TT_ZONE_DEFINE_ID(SPSC_DATA_ID_NOCFP, "DRISC-NOC-FOOTPRINT");    // the per-swee
 }  // namespace kernel_profiler
 
 // D2H: write L1 to PCIe host RAM in NOC_MAX_BURST_SIZE chunks. The caller runs
-// noc_write_init_state<write_cmd_buf>(NOC_INDEX, vc) once per push -- the packed gather calls this ~11
-// times per frame, so a per-call init would repeat command-buffer setup that nothing between the calls
-// invalidates.
+// noc_write_init_state<write_cmd_buf>(NOC_INDEX, vc) once per push -- a push makes several calls (one
+// per frame plus the notify), so a per-call init would repeat command-buffer setup that nothing between
+// the calls invalidates.
 inline void write_to_host_chunked(uint32_t pcie_xy_enc, uint32_t src_l1, uint64_t dst_pcie, uint32_t size) {
     while (size) {
         const uint32_t chunk = size > NOC_MAX_BURST_SIZE ? NOC_MAX_BURST_SIZE : size;

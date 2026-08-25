@@ -1,6 +1,8 @@
 # Direct host push: fillers own D2H sockets, movers deleted
 
-Status: PLAN. Nothing here is implemented yet.
+Status: IMPLEMENTED (`wip/direct-push`), then made faster than the ring design it replaced by
+gather-READ packing -- the filler reads each live run straight to its packed wire offset in staging and
+ships a frame as ONE PCIe write. See FINDINGS §N+71 for the measurements.
 
 ## What changes
 

@@ -67,12 +67,13 @@ private:
     // UMD for it in init_sender_tlb), the same path the two y == 0 movers used before direct push.
     static constexpr uint32_t kNFillers = 6;
     static constexpr uint32_t kNSockets = kNFillers;
-    // Host FIFO per socket. This FIFO is the pipeline's ONLY elasticity now that the device-DRAM ring is
-    // gone, so it is sized to carry the burst the ring used to absorb: 64 MiB matches the per-filler ring
-    // the direct push deleted. It is plain mmap + IOMMU host RAM (D2HSocket::init_host_buffer) reached by a
-    // full 64-bit NoC/PCIe address -- no TLB-window budget and no channel cap; those belong to the Wormhole
-    // hugepage fallback, which Blackhole never takes.
-    static constexpr uint32_t kHRingWords = 16777216;
+    // Host FIFO per socket: TT_METAL_PERF_DEBUG_FIFO_MB, default 64 MiB (host_fifo_bytes() in the .cpp).
+    // This FIFO is the pipeline's ONLY elasticity now that the device-DRAM ring is gone; the default
+    // matches the per-filler ring the direct push deleted, and growing it to hold a whole capture makes a
+    // filler structurally immune to host-drain lag (credit-wait 0 by construction). It is plain mmap +
+    // IOMMU host RAM (D2HSocket::init_host_buffer) reached by a full 64-bit NoC/PCIe address -- no
+    // TLB-window budget and no channel cap; those belong to the Wormhole hugepage fallback, which
+    // Blackhole never takes.
     static constexpr uint32_t kPageSize = 64;
     static constexpr uint32_t kNRisc = 5;
 

@@ -356,6 +356,19 @@ uint32_t ship_min_pct() {
     return v;
 }
 
+// TT_METAL_PERF_DEBUG_FIFO_MB: host FIFO per D2H socket, in MiB. See the header comment on the default.
+// Capped at 3.5 GiB: the socket's byte size and the device's wrap-safe credit arithmetic
+// (reserve_pages_bounded's bytes_sent - bytes_acked) are 32-bit, so a FIFO at or past 4 GiB overflows
+// them -- past this cap the knob would have to move to page units and the socket config to 64-bit.
+uint32_t host_fifo_bytes() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_FIFO_MB");
+        uint64_t mb = (s != nullptr && *s != '\0') ? std::strtoull(s, nullptr, 10) : 64ull;
+        mb = std::clamp<uint64_t>(mb, 1, 3584);
+        return static_cast<uint32_t>(mb << 20);
+    }();
+    return v;
+}
 
 bool tracy_push_enabled() {
     static const bool on = [] {
@@ -765,7 +778,7 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
             tt::LogMetal,
             "[perf-debug profiler] active on {} device(s): DRISC drain -> {} MiB D2H socket -> {}",
             devices_.size(),
-            (static_cast<uint64_t>(kHRingWords) * 4) / (1024 * 1024),
+            host_fifo_bytes() / (1024 * 1024),
             tracy_push_enabled() ? "registered consumers + Tracy"
                                  : "registered consumers (Tracy off; opt in with TT_METAL_STREAMING_PROFILER_TRACY=1)");
     }
@@ -1302,7 +1315,7 @@ bool PerfDebugProfiler::boot_device(
                     mesh_device,
                     distributed::MeshCoreCoord{
                         scoord, CoreCoord(drisc_phys.x, drisc_phys.y)},
-                    static_cast<uint32_t>((static_cast<uint64_t>(kHRingWords) * 4 / kPageSize) * kPageSize),
+                    (host_fifo_bytes() / kPageSize) * kPageSize,
                     distributed::D2HSocket::ExternalConfigBuffer{
                         .address = cfg_l1, .sender_uses_physical_noc_addr = true});
                 ctx.sockets[sk]->set_page_size(kPageSize);

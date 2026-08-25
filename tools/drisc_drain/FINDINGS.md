@@ -6424,3 +6424,92 @@ init failure. NOT kimi-specific; NOT single-device (unit-mesh runs never showed 
 loop from here: per-leg (notify-visibility vs ack-landing) timing on a victim, bring-up-order experiments
 (the week's tally skews ~6:1 toward s0, the first-constructed socket), UMD static/dynamic window path per
 victim -- at 2 min/sample.
+
+## §N+71 — Direct push now BEATS the ring design: gather-READ packing, one PCIe write per frame (bh-lb-120, 2026-08-25)
+
+The direct-push regression (commit c5ed6346d98: zero-stall knee 112 -> ~200, "the wall is PCIe-tile
+write arbitration") is closed and inverted. Three filler-side changes; the wire format, the decoder and
+the host pipeline are untouched.
+
+**1. GATHER-READ packing.** The filler no longer bulk-reads the whole 10,496 B span and NIU-gathers 6-11
+per-run writes into the PCIe tile. The CV pass's tails are now authoritative: a frame claims exactly
+[mirror, tail-at-the-CV-read), which is safe at any gather lag because a producer only appends PAST a
+published tail (its marker stores are fenced before the tail publish), so data below the tail is
+immutable. issue_core computes the packed layout from those tails and gather-reads each live run
+STRAIGHT to its packed wire offset in the staging slot -- the same pack-pad rule serves both hops (read
+src==dst and PCIe-write src==dst congruence, both mod 16 B) -- so a staged slot IS its frame's wire
+image and ships as ONE write_to_host_chunked (two across the FIFO wrap). The frame's control words are
+synthesized from the mirror, the tails and coords[] (heads, tails and SPSC_CORE_XY are all the decoder
+reads). Reads fan out across the slice's ~21 worker cores; the write side, where six fillers converge on
+one PCIe tile, drops from 6-11 arbitration events per frame to one.
+
+**2. The write barrier left the sweep.** gen_shipped[] persists across sweeps: a generation's flush is
+waited on at its slots' next refill, so a sweep's final ship drains under the pace gap or the next
+sweep's CV pass instead of on the sweep's critical path.
+
+**3. Self frames ship RAW** (SPSC_SPAN_RAW_FLAG): the decoder walks raw rings circularly, so the marker
+ring never needs packing into wire order; geometry is constant and staged once. The CV staging in the
+self slot's dead rings ships as bytes nobody decodes.
+
+Deleted outright: the span read, emit_run's per-run gather-write walk, and the saturation bypass
+(cv_bypass) -- CV-first is the only path now because it feeds the gather geometry.
+
+**Measured, 150k iters, 11x10 grid, single device.** Every clean run count-exact at 957,000,550 records
+with anomalies / bad frames / resyncs / unknown-core 0 and per-socket order regressions <= 3 (the
+pre-change baseline shipped up to 5); runs WITH stalls stay count-exact at +2/stall (e.g. 958,227,522 =
+957,000,550 + 2 x 613,486). Same-evening tip baseline first: 3,551 / 4,059 stalls at delay 112 (the box
+ran slower than the morning that measured the commit's 39-283).
+
+- PIPELINE KNEE (2 decode threads, 64 MiB FIFO -- the mainline's exact score context): **106**, 7/7
+  clean reps (0 stalls each); delay 112 clean 5/5. Delay 100 is bimodal (613k, then 0) exactly like the
+  mainline's 106 (two clean, then 345k). The mainline's knee is 112, so direct push now leads by one
+  step, and the margin behavior says both designs sit on the SAME wall there: per-thread decode busy
+  1,184-1,196 ms against a 1,320 ms wall (~90% duty) -- identical to the mainline's ~1,185 ms. At 2
+  threads the pipeline is host-decode-bound; the wire being ~3% smaller is the whole lead.
+- FILLER KNEE (TT_METAL_PERF_DEBUG_FIFO_MB=3072: 3 GiB FIFO per socket holds the whole capture -- the
+  largest socket carries 2,087 MB -- so credit structurally never binds; worst credit-wait read 0.1 us
+  on every filler of every run): **75**, 5/5 clean; 70 = 0 / 3; 65 = 28 / 23. The gap 75 -> 106 is the
+  HOST's contribution to the pipeline knee. The 3.5 GiB knob cap is the 32-bit socket byte size and the
+  device's 32-bit credit arithmetic; nothing needed widening because 3 GiB already exceeds the largest
+  socket's whole-capture load by 47%.
+- The same device-side ladder reproduces with the host wall removed by THREADS instead of FIFO (6
+  decode threads, 64 MiB): 75 = 7/7 clean; 70 bimodal (5/7 clean; 11 / 33); 65 = 23-61; 60 = 2.2-2.7k;
+  50 = 256k; 40 = 1.5M -- the sub-75 residue is the filler's own sweep, not host drain.
+
+**Mechanism, from the drainer's own counters at 112:** write phase 1.72-2.98 -> 0.19 us/push; busy sweep
+9.4-14.2 -> 6.5-6.7 us; worst sweep 30-52 -> 13-14 us and now symmetric across all six fillers; the
+drainer's write share 34% -> 1-5% of busy time; credit-wait ~0 throughout.
+
+**What did NOT work.** (a) A per-core trigger dither over [1/4, 1/2) keyed on core identity: it removed
+the six fillers' synchronized ship bursts as designed (worst-sweep write 9.7-11.4 -> ~2 us) yet
+regressed every point (delay 50: 256k -> 900k stalls; delay 40 grew 305-456 us credit waits) -- the
+extra frames' gather reads cost the sweep more than the bursts did, because the saturated sweep is
+READ-side bound, and past ~50 the extra frames also pushed host decode over. Reverted; trigger stays
+1/2. (b) Growing the idle pace gap only on zero LIVE words instead of zero frames: null result -- under
+load some core ships nearly every sweep, so the ramp this guards against never fires.
+
+**A trap for the record:** SPSC_RING_TAIL_0 is 24 (PROFILER_SPSC_MAX_RISC), not kNumRisc -- a "64 B
+covers heads+tails" CV read covers neither, every lane reads live=0 forever, no filler ever ships, and
+the lossless producers wedge the workload. The symptom (all six drainers POLL-phase with heartbeats
+advancing and "no data for 120 s") now has a known cause.
+
+**Host fix while validating: BroadcastRing's heap fallback vs 64 B NT stores.**
+TT_METAL_PERF_DEBUG_RING_RECS=1048576 segfaulted (SI_KERNEL, "address (nil)"): 24 MiB of slots took
+allocate_slots' new[] fallback (16 B alignment), and the receiver's SpscNtCarry streams 64 B vmovntdq
+lines through emit_slot_ptr -- a misaligned NT store #GPs, which Linux reports as SEGV at nil. Rings
+>= 64 MiB never hit it (mmap path, 2 MiB-aligned). allocate_slots now mmaps at EVERY size (page
+alignment >= 64 B); new[] remains only as the mmap-failure fallback. Verified post-fix: 1048576 runs
+clean (its drops now mean "ring smaller than the backlog", which is that size working as designed).
+
+**Consumer-facing validation -- two separate claims.** The DEVICE+DECODE pipeline's losslessness is the
+record-count gate (exact on every run above). The CONSUMER keeping up is the BroadcastRing's size: at
+the default 32 Mi records/stream a full-rate consumer drops (431M on ops-csv at 150k), so the ring was
+raised to 2^28 records/stream (6.4 GB x 6, mmap'd) and the ops-csv consumer then saw THE WHOLE CAPTURE:
+957,000,550 delivered, 0 dropped, 0 consumer-ring drops, and zero pairing violations (no zones left
+open, no unmatched ends, no start/end id mismatches) across all 957M records. Self frames validate
+through TT_METAL_PERF_DEBUG_STALL_CSV: 17,930 DRISC-SWEEP zones decoded from RAW frames, mean 6.2 us /
+max 13.9 us -- matching the drainer's own out[] busy-sweep counters independently.
+
+**Hangs:** 0 in ~65 measured 150k/2k captures on the gather-read kernel and its two reverted variants. (Two device wedges during development were a
+run killed mid-flight from outside, and the CV-offset bug above -- both understood, neither a drain-path
+hang.)

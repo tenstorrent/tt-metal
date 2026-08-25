@@ -509,32 +509,37 @@ private:
         size_t map_bytes = 0;
     };
 
-    // Large slot arrays are walked far beyond TLB reach, so back them with 2 MiB pages. THP is
-    // madvise-opt-in on typical deployments, hence the explicit mmap + MADV_HUGEPAGE (over-mapped by one
-    // huge page to guarantee an aligned start, which the huge-page fault path requires).
+    // mmap-backed at EVERY size, not just the huge-page tier: a page-aligned base is what guarantees the
+    // cache-line alignment that direct emitters stream 64 B non-temporal stores against (via
+    // emit_slot_ptr) -- the new[] fallback's 16 B alignment general-protection-faulted such a store, which
+    // presents as a SIGSEGV at a nil address, on any ring small enough to have skipped the mmap. Large
+    // slot arrays are additionally walked far beyond TLB reach, so they get 2 MiB pages; THP is
+    // madvise-opt-in on typical deployments, hence the explicit MADV_HUGEPAGE (over-mapped by one huge
+    // page to guarantee an aligned start, which the huge-page fault path requires).
     static SlotStorage allocate_slots(size_t n, bool construct_slots) {
         SlotStorage storage;
 #if defined(__linux__)
         static constexpr size_t kHugePageSize = size_t{2} << 20;
         static constexpr size_t kHugePageMinBytes = size_t{64} << 20;
         const size_t bytes = n * sizeof(Slot);
-        if (bytes >= kHugePageMinBytes) {
-            const size_t map_bytes = bytes + kHugePageSize;
-            void* base = ::mmap(nullptr, map_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-            if (base != MAP_FAILED) {
-                storage.map_base = base;
-                storage.map_bytes = map_bytes;
-                const uintptr_t aligned =
-                    (reinterpret_cast<uintptr_t>(base) + kHugePageSize - 1) & ~(kHugePageSize - 1);
+        const bool huge = bytes >= kHugePageMinBytes;
+        const size_t map_bytes = huge ? bytes + kHugePageSize : bytes;
+        void* base = ::mmap(nullptr, map_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (base != MAP_FAILED) {
+            storage.map_base = base;
+            storage.map_bytes = map_bytes;
+            uintptr_t aligned = reinterpret_cast<uintptr_t>(base);
+            if (huge) {
+                aligned = (aligned + kHugePageSize - 1) & ~(kHugePageSize - 1);
                 ::madvise(reinterpret_cast<void*>(aligned), bytes, MADV_HUGEPAGE);
-                storage.slots = reinterpret_cast<Slot*>(aligned);
-                if (construct_slots) {
-                    for (size_t i = 0; i < n; i++) {
-                        new (storage.slots + i) Slot();
-                    }
-                }
-                return storage;
             }
+            storage.slots = reinterpret_cast<Slot*>(aligned);
+            if (construct_slots) {
+                for (size_t i = 0; i < n; i++) {
+                    new (storage.slots + i) Slot();
+                }
+            }
+            return storage;
         }
 #endif
         storage.owned = std::make_unique<Slot[]>(n);

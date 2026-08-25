@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // The streaming profiler's FILLER: sweep a sixth of the worker grid's SPSC rings and push each core's
-// frame straight into this filler's own D2H socket -- an NIU gather of the live runs into the host FIFO,
-// one write per contiguous ring segment. Six fillers cover the grid; there is no intermediate device-DRAM
-// ring and no mover role, so back-pressure is the socket credit wait against the host FIFO.
+// frame straight into this filler's own D2H socket. The live runs are GATHER-READ off the worker into
+// packed wire order in staging, so a frame ships as ONE PCIe write -- the read side fans out across the
+// slice's cores while the write side, where six fillers converge on one PCIe tile, stays at one
+// arbitration event per frame. Six fillers cover the grid; there is no intermediate device-DRAM ring and
+// no mover role, so back-pressure is the socket credit wait against the host FIFO.
 //
 // Placement evidence and wire format: tools/drisc_drain/FINDINGS.md.
 
@@ -32,8 +34,7 @@ void kernel_main() {
     constexpr uint32_t kNumRisc = 5;
     constexpr uint32_t kRingWords = kernel_profiler::PROFILER_L1_VECTOR_SIZE;
     constexpr uint32_t kCtrlWords = kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE;
-    constexpr uint32_t kSpanWords = kCtrlWords + kNumRisc * kRingWords;  // 2,624 words = 10,496 B
-    constexpr uint32_t kSpanBytes = kSpanWords * 4u;
+    constexpr uint32_t kSpanWords = kCtrlWords + kNumRisc * kRingWords;  // 2,624 words: the raw self frame payload
     // LIVE capacity = the rings alone; kSpanWords also counts the 64-word control vector.
     constexpr uint32_t kLiveWords = kNumRisc * kRingWords;
     constexpr uint32_t kPrefix = kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
@@ -73,10 +74,13 @@ void kernel_main() {
     constexpr uint32_t kShipMinPct = get_compile_time_arg_val(39);
     constexpr uint32_t kShipMaxAgeSweeps = 512u;
     constexpr uint32_t kShipMinWords = (kLiveWords * kShipMinPct) / 100u;
-    // CV-FIRST SWEEPS: read each core's ring TAILS (32 B), decide the ship set, bulk-read spans only
-    // for it. The tails read is a HINT -- the span read re-reads the control vector as its leading
-    // bytes and remains the authoritative snapshot. TAILS ONLY: the decision needs each ring's tail;
-    // heads come from the local mirror.
+    // CV-FIRST SWEEPS: read each core's ring TAILS (32 B), decide the ship set, then GATHER-READ only the
+    // ship set's live runs -- each straight to its packed wire offset in staging, so a staged frame is its
+    // own wire image and ships in ONE PCIe write (two across the FIFO wrap). The tails read is
+    // authoritative for the frames it parents: a frame claims exactly [mirror, tail-at-this-read), and a
+    // producer only ever appends PAST a published tail (fenced after its data), so the gather can trail
+    // the tail read by a whole batch without tearing. The frame's control words are synthesized from the
+    // mirror, these tails and coords[] -- heads, tails and SPSC_CORE_XY are all the decoder reads.
     constexpr uint32_t kCvReadBytes = 32;
     constexpr uint32_t kCvReadSrcOff = kernel_profiler::SPSC_RING_TAIL_0 * 4u;
     // Idle backoff ceiling (~20 us): collapse on work, creep when idle.
@@ -85,15 +89,16 @@ void kernel_main() {
     static_assert(
         kSelfZones != 0 || 2u * kGenSlots < kNStage,
         "CV staging needs a slot past the 2-generation pipeline (kNStage must be odd when self-zones are off)");
-    // The tails land in the ring-1 area of the slot past the pipeline. With self-zones ON that slot holds
-    // the self FRAME, and this placement is still safe: only the self frame's ring 0 is ever live, so its
-    // ring 1..4 storage (8 KiB) is written by nobody and never ships -- the pack skips empty rings. That
-    // shared dead space is what lets CV-first and drainer self-profiling coexist.
+    // The control snapshots land in the ring-1 area of the slot past the pipeline. With self-zones ON that
+    // slot holds the self FRAME, and this placement is still safe: only the self frame's ring 0 is ever
+    // live, so its ring 1..4 storage (8 KiB) carries no markers -- the raw self frame ships these bytes,
+    // but the host walks a lane only between its head and tail, so they are never decoded. That shared
+    // dead space is what lets CV-first and drainer self-profiling coexist.
     constexpr uint32_t kCvSlot = kSelfZones != 0 ? kNStage : 2u * kGenSlots;
     constexpr uint32_t kCvBase = kStageBase + kCvSlot * kSlotBytes + (kPrefix + kCtrlWords + kRingWords) * 4u;
     static_assert(
         kCvReadBytes * kMaxCores <= 4u * kRingWords * 4u,
-        "CV tails staging must fit the self slot's dead ring space");
+        "CV staging must fit the self slot's dead ring space");
     // Per-sweep PP_DATA series FORCED OFF: zones + footprint + CV-first measured 396 B over the
     // 11,264 B code region, and the out[] byte totals answer the traffic questions without it.
     constexpr uint32_t kNocFpSeries = 0u;
@@ -112,15 +117,18 @@ void kernel_main() {
     // and would silently measure nothing.
     static_assert(kSyncEvent == 0 || kSelfZones != 0, "the sync event rides the self-zone ring; enable zones");
 
-    static_assert(kSpanBytes <= NOC_MAX_BURST_SIZE, "the fused span read must fit one NoC burst");
+    static_assert(kRingWords * 4u <= NOC_MAX_BURST_SIZE, "a gather read of a whole ring must fit one NoC burst");
     static_assert(kNumRisc <= kernel_profiler::PROFILER_SPSC_MAX_RISC, "control layout too small");
     static_assert(kSlotWords % kPageWords == 0, "a slot must be a whole number of socket pages");
     // The packed gather's congruence argument (profiler_common.h): pads bring each run to its ring phase,
     // and everything else -- the slot base, the payload base, a wrap continuation -- must land congruent
-    // with NO pad, which these divisibilities are the proof of.
+    // with NO pad, which these divisibilities are the proof of. One pad rule serves both hops: the gather
+    // READ into staging needs src == dst (mod NOC_L1_READ_ALIGNMENT_BYTES) and the frame's PCIe write
+    // needs it mod NOC_PCIE_WRITE_ALIGNMENT_BYTES.
     static_assert(
-        kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS * 4u == NOC_PCIE_WRITE_ALIGNMENT_BYTES,
-        "the shared pad rule no longer matches this part's NoC write congruence");
+        kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS * 4u == NOC_PCIE_WRITE_ALIGNMENT_BYTES &&
+            kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS * 4u == NOC_L1_READ_ALIGNMENT_BYTES,
+        "the shared pad rule no longer matches this part's NoC congruence");
     static_assert(
         kRingWords % kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS == 0 &&
             (kPrefix + kCtrlWords) % kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS == 0 &&
@@ -183,9 +191,9 @@ void kernel_main() {
     // PCIe tile, 7=socket_push_pages bookkeeping, 8=the bytes_sent notify (a PCIe write of the
     // producer pointer), 9=write issued, back in the sweep body.
     constexpr uint32_t kPhWrChunk = 6, kPhWrPush = 7, kPhWrNotify = 8, kPhWrDone = 9;
-    // 10 = frame dropped (credit wait gave up); 11/12/13 = the sweep-body write barriers, which are
+    // 10 = frame dropped (credit wait gave up); 11/13 = the sweep-body write barriers, which are
     // OUTSIDE ship_run and so reported a stale phase before they had markers of their own.
-    constexpr uint32_t kPhDropped = 10, kPhBar1 = 11, kPhBar2 = 12, kPhBarTail = 13;
+    constexpr uint32_t kPhDropped = 10, kPhBar1 = 11, kPhBarTail = 13;
     constexpr uint32_t kPhTailBar = 15;  // the post-loop write barrier, which shared phase 11 and hid there
     // 14 = socket_barrier() in the exit tail. Every blocking call needs its own marker or the phase
     // word lies by omission.
@@ -193,13 +201,12 @@ void kernel_main() {
     *hb = 0;
     *phase = kPhaseInit;
 
-    // Every frame's prefix is IDENTICAL and the bulk read lands past it (at slot + 16 words), so it is
-    // written once here. Word 1 -- the packed payload length -- is the exception: emit_run patches it at
-    // push time, the first moment the fill is known.
+    // Every frame's prefix is IDENTICAL, and of the control words only the heads, tails and SPSC_CORE_XY
+    // are staged per frame -- the rest must read zero on the wire -- so both are written once here.
     for (uint32_t sl = 0; sl < kNStage; sl++) {
         volatile tt_l1_ptr uint32_t* pfx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase + sl * kSlotBytes);
         pfx[0] = kernel_profiler::spsc_span_w0();
-        for (uint32_t k = 1; k < kPrefix; k++) {
+        for (uint32_t k = 1; k < kPrefix + kCtrlWords; k++) {
             pfx[k] = 0;
         }
     }
@@ -208,6 +215,11 @@ void kernel_main() {
     static uint8_t seeded[kMaxCores];
     static uint16_t ship_age[kMaxCores];
     static uint8_t ship_list[kMaxCores];  // CV-first: this sweep's ship set, dense core indices
+    // Per-slot frame geometry, written at gather-read issue and consumed a whole batch later by the ship --
+    // stored, not recomputed, so the two phases cannot diverge. slot_payload[kSelfSlot] is the raw self
+    // frame's constant payload.
+    static uint32_t slot_runs[kNStage * kNumRisc];
+    static uint32_t slot_payload[kNStage + 1];
     for (uint32_t i = 0; i < kMaxCores; i++) {
         seeded[i] = 0;
         ship_age[i] = 0;
@@ -226,10 +238,6 @@ void kernel_main() {
     uint32_t gap = kGapCycles;
     uint32_t overflows = 0;
     uint32_t hb_slot = 0;
-    // SATURATION BYPASS: when nearly every core ships every sweep the tails pass decides nothing, so
-    // sweep the old full-span way. Hysteresis on a 1/8-of-cores slack keeps it from flapping.
-    bool cv_bypass = false;
-    uint32_t cv_below = 0;
     uint32_t scan_rot = 0;
 
     uint64_t c_read = 0;     // bulk span reads: issue + barrier
@@ -239,7 +247,7 @@ void kernel_main() {
     uint64_t c_barrier = 0;  // write barrier before staging is reused
     // `write` sub-split: the chunked NoC write moves bytes (and can block on command-buffer
     // availability), push_pages is local bookkeeping, notify_receiver is a PCIe write.
-    uint64_t c_ph_head = 0;  // the per-core head write-back inside proc (see process_batch)
+    uint64_t c_ph_head = 0;  // the per-core head write-back inside proc (see ship_batch)
     uint64_t c_wr_chunk = 0;
     uint64_t c_wr_push = 0;
     uint64_t c_wr_notify = 0;
@@ -255,6 +263,10 @@ void kernel_main() {
     // Set when a bounded write barrier expires: egress is dead, so STOP SHIPPING for good.
     // Never means "continue anyway" -- staging reuse depends on that barrier having flushed.
     bool egress_dead = false;
+    // Which staging generations hold a ship possibly still in flight. Persists ACROSS sweeps: the write
+    // wait happens at the slots' next refill, never at sweep end, so a sweep's final ship drains under
+    // the pace gap or the next sweep's CV pass instead of on the sweep's critical path.
+    bool gen_shipped[2] = {false, false};
     uint32_t credit_timeouts = 0;  // bounded credit wait expired -> frame dropped instead of deadlocking
     uint32_t dropped_frames = 0;
     // ================================ INSTRUMENTATION START (self-zone + NoC-footprint state and marker path) ====
@@ -293,8 +305,12 @@ void kernel_main() {
     if constexpr (kSelfZones != 0) {
         volatile tt_l1_ptr uint32_t* pfx =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase + kSelfSlot * kSlotBytes);
-        pfx[0] = kernel_profiler::spsc_span_w0();
-        for (uint32_t k = 1; k < kPrefix; k++) {
+        // The self frame ships RAW -- whole rings, decoded circularly against its control vector -- so the
+        // marker ring never needs packing into wire order. Its geometry is constant, staged once here.
+        pfx[0] = kernel_profiler::spsc_span_w0() | kernel_profiler::SPSC_SPAN_RAW_FLAG;
+        pfx[1] = kSpanWords;
+        slot_payload[kSelfSlot] = kSpanWords;
+        for (uint32_t k = 2; k < kPrefix; k++) {
             pfx[k] = 0;
         }
         // The whole control vector, not just the words we use: it ships verbatim and the host reads a head
@@ -392,11 +408,11 @@ void kernel_main() {
     // never fires in normal operation -- it exists purely to convert "wait forever" into "lose a frame".
     constexpr uint64_t kCreditWaitCycles = 67500000ull;
 
-    // Ship `count` adjacent staged slots straight into the host FIFO: per frame, one write for the
-    // prefix + control vector and one per contiguous live ring segment, each landing at its packed wire
-    // offset. Pads and the trailing page fill are never written -- the host derives every offset from the
-    // control vector and reads past them (profiler_common.h).
-    auto emit_run = [&](uint32_t start, uint32_t count) {
+    // Ship `count` adjacent staged slots straight into the host FIFO, ONE write per frame (two when it
+    // straddles the FIFO wrap): the gather reads already landed every live run at its packed wire offset,
+    // so a staged slot IS its frame's wire image. Only the trailing page fill is never written -- the host
+    // derives every offset from the control vector and reads past it (profiler_common.h).
+    auto emit_slots = [&](uint32_t start, uint32_t count) {
         if (count == 0) {
             return;
         }
@@ -405,29 +421,12 @@ void kernel_main() {
             dropped_frames += count;
             return;
         }
-        // Per-frame packed payload, exactly as the host re-derives it. Word 1 is patched here, at the
-        // first moment the fill is known; the page-padded frame length prices the credit reserve.
-        uint32_t flen[kGenSlots];
         uint32_t npages = 0;
         for (uint32_t f = 0; f < count; f++) {
-            const uint32_t slot = kStageBase + (start + f) * kSlotBytes;
-            const tt_l1_ptr uint32_t* cv = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
-            volatile tt_l1_ptr uint32_t* pfx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot);
-            uint32_t off = kPrefix + kCtrlWords;
-            for (uint32_t r = 0; r < kNumRisc; r++) {
-                const uint32_t tail = cv[kernel_profiler::SPSC_RING_TAIL_0 + r];
-                const uint32_t run =
-                    kernel_profiler::spsc_span_live(cv[kernel_profiler::SPSC_RING_HEAD_0 + r], tail, kRingWords);
-                if (run != 0) {
-                    off += kernel_profiler::spsc_span_pack_pad(tail - run, off) + run;
-                }
-            }
-            pfx[0] = kernel_profiler::spsc_span_w0();
-            pfx[1] = off - kPrefix;
-            flen[f] = kernel_profiler::spsc_span_frame_words(off - kPrefix);
-            npages += flen[f] / kPageWords;
+            npages += kernel_profiler::spsc_span_frame_words(slot_payload[start + f]) / kPageWords;
         }
-        // The NIU reads the patched length words; Blackhole stores can reach SRAM out of order.
+        // The NIU reads the control and length words the scalar core staged; Blackhole stores can reach
+        // SRAM out of order.
         asm volatile("fence" ::: "memory");
         const uint64_t t0 = get_timestamp();
         *phase = kPhaseReserve;
@@ -456,7 +455,7 @@ void kernel_main() {
         }
         kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_WRITE, SelfMarkPhase> z_write(self_mark_phase);
         *phase = kPhWrChunk;
-        // Not hoisted out of emit_run: the head write-backs between pushes program the same command
+        // Not hoisted out of emit_slots: the head write-backs between pushes program the same command
         // buffer, so the state must be re-established per push.
         noc_write_init_state<write_cmd_buf, CQ_NOC_mkp>(NOC_INDEX, kWriteVc);
         const uint32_t fifo_size = sender.downstream_fifo_curr_size;
@@ -475,30 +474,9 @@ void kernel_main() {
             }
         };
         for (uint32_t f = 0; f < count; f++) {
-            const uint32_t slot = kStageBase + (start + f) * kSlotBytes;
-            const tt_l1_ptr uint32_t* cv = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
-            put(slot, wr, (kPrefix + kCtrlWords) * 4u);
-            uint32_t off = kPrefix + kCtrlWords;
-            for (uint32_t r = 0; r < kNumRisc; r++) {
-                const uint32_t tail = cv[kernel_profiler::SPSC_RING_TAIL_0 + r];
-                const uint32_t run =
-                    kernel_profiler::spsc_span_live(cv[kernel_profiler::SPSC_RING_HEAD_0 + r], tail, kRingWords);
-                if (run == 0) {
-                    continue;
-                }
-                off += kernel_profiler::spsc_span_pack_pad(tail - run, off);
-                // A lane's live window can straddle its own ring wrap; the pad above is what keeps both
-                // halves congruent with their destination, so each half is a plain write from there.
-                const uint32_t hm = (tail - run) & (kRingWords - 1u);
-                const uint32_t ring_l1 = slot + (kPrefix + kCtrlWords + r * kRingWords) * 4u;
-                const uint32_t chunk = run <= kRingWords - hm ? run : kRingWords - hm;
-                put(ring_l1 + hm * 4u, wr + off * 4u, chunk * 4u);
-                if (chunk < run) {
-                    put(ring_l1, wr + (off + chunk) * 4u, (run - chunk) * 4u);
-                }
-                off += run;
-            }
-            wr += flen[f] * 4u;
+            const uint32_t payload = slot_payload[start + f];
+            put(kStageBase + (start + f) * kSlotBytes, wr, (kPrefix + payload) * 4u);
+            wr += kernel_profiler::spsc_span_frame_words(payload) * 4u;
             if (wr >= fifo_size) {
                 wr -= fifo_size;
             }
@@ -550,7 +528,7 @@ void kernel_main() {
             asm volatile("fence" ::: "memory");
             const uint64_t s_rsv = c_reserve, s_wr = c_write, s_ch = c_wr_chunk, s_pu = c_wr_push, s_no = c_wr_notify;
             const uint32_t s_pages = pages, s_pushes = pushes, s_maxr = max_reserve;
-            emit_run(kSelfSlot, 1);
+            emit_slots(kSelfSlot, 1);
             c_reserve = s_rsv;
             c_write = s_wr;
             c_wr_chunk = s_ch;
@@ -564,7 +542,7 @@ void kernel_main() {
                 self_head = self_tail;
                 self_frames++;
             } else {
-                // Egress is dead. emit_run has already accounted the drop; stop instrumenting rather
+                // Egress is dead. emit_slots has already accounted the drop; stop instrumenting rather
                 // than keep writing into a ring nothing will ever read.
                 egress_dead = true;
             }
@@ -741,216 +719,174 @@ void kernel_main() {
             // body. A sweep that arms mid-body gets only its post-arm children.
             kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_SWEEP, SelfMarkNow> z_sweep(self_mark_now);
             {
-                // ---- software pipeline: read generation G on kReadNoc while G^1 ships on NOC_INDEX ----
+                // ---- software pipeline: gather generation G on kReadNoc while G^1 ships on NOC_INDEX ----
                 uint32_t gen = 0;
                 uint32_t pend_base = 0, pend_n = 0, pend_gen = 0;
                 bool have_pend = false;
-                bool gen_shipped[2] = {false, false};
 
-                // ---- CV-FIRST phases 0+1: gather every core's ring tails, decide the ship set ----
-                // Same arithmetic process_batch runs, from a 32 B read instead of a 10,496 B one.
+                // ---- CV-FIRST phases 0+1: read every core's control words, decide the ship set ----
                 uint32_t n_ship = 0;
                 {
-                    if (cv_bypass && cv_below > num_cores / 8u) {
-                        cv_bypass = false;
+                    const uint64_t t_cv0 = get_timestamp();
+                    {
+                        kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_READ, SelfMarkPhase> z_cv(
+                            self_mark_phase);
+                        for (uint32_t i = 0; i < num_cores; i++) {
+                            const uint32_t xy = coords[i];
+                            CoreLocalMem<uint32_t> dst(kCvBase + i * kCvReadBytes);
+                            noc.async_read<NocOptions::DEFAULT, kCvReadBytes>(
+                                src,
+                                dst,
+                                kCvReadBytes,
+                                {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv_src + kCvReadSrcOff},
+                                {});
+                        }
+                        noc.async_read_barrier();
                     }
-                    cv_below = 0;
-                    if (cv_bypass) {
-                        for (uint32_t c = 0; c < num_cores; c++) {
-                            ship_list[c] = static_cast<uint8_t>(c);
-                        }
-                        n_ship = num_cores;
-                    } else {
-                        const uint64_t t_cv0 = get_timestamp();
-                        {
-                            kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_READ, SelfMarkPhase> z_cv(
-                                self_mark_phase);
-                            for (uint32_t i = 0; i < num_cores; i++) {
-                                const uint32_t xy = coords[i];
-                                CoreLocalMem<uint32_t> dst(kCvBase + i * kCvReadBytes);
-                                noc.async_read<NocOptions::DEFAULT, kCvReadBytes>(
-                                    src,
-                                    dst,
-                                    kCvReadBytes,
-                                    {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv_src + kCvReadSrcOff},
-                                    {});
-                            }
-                            noc.async_read_barrier();
-                        }
-                        const uint64_t t_cv1 = get_timestamp();
-                        c_read += t_cv1 - t_cv0;
-                        // Half a lane, not the DRAM-ring era's quarter. The eager trigger bought producer
-                        // headroom with ring space, which was nearly free; on direct push a frame's cost is
-                        // PCIe write ISSUES inside the sweep, and quarter-trigger frames doubled them --
-                        // measured 12k producer stalls at 10k iters/delay 112 against 26 at half.
-                        const uint32_t lane_trigger = kernel_profiler::PROFILER_L1_VECTOR_SIZE / 2u;
-                        // ROTATED start. The scan/ship order is also the service order, and a fixed order
-                        // gives the last cores a whole sweep less headroom every sweep -- the same handful
-                        // of cores took every producer stall while their slice-mates took none. Wrap by
-                        // compare, never %: a runtime modulo is a soft-div on this core (N+64).
-                        if (++scan_rot >= num_cores) {
-                            scan_rot = 0;
-                        }
-                        uint32_t c = scan_rot;
-                        for (uint32_t k = 0; k < num_cores; k++, (++c >= num_cores ? c = 0 : c)) {
-                            if (!seeded[c]) {
-                                ship_list[n_ship++] = static_cast<uint8_t>(c);
-                                continue;
-                            }
-                            const tt_l1_ptr uint32_t* tails =
-                                reinterpret_cast<const tt_l1_ptr uint32_t*>(kCvBase + c * kCvReadBytes);
-                            uint32_t* mine = &head_mirror[c * kNumRisc];
-                            uint32_t live = 0, peak = 0;
+                    const uint64_t t_cv1 = get_timestamp();
+                    c_read += t_cv1 - t_cv0;
+                    // Half a lane. Re-derived for the gather-read frame and it still wins: a per-core
+                    // dithered trigger over [1/4, 1/2) removed the six fillers' synchronized ship bursts
+                    // (worst-sweep write 9.7-11.4 -> 2 us) yet REGRESSED the knee everywhere (delay 50:
+                    // 256k -> 900k stalls) -- the extra frames' gather reads cost the sweep more than the
+                    // burst did, because the read side, not the PCIe write, is the saturated-sweep wall.
+                    const uint32_t lane_trigger = kernel_profiler::PROFILER_L1_VECTOR_SIZE / 2u;
+                    // ROTATED start. The scan/ship order is also the service order, and a fixed order
+                    // gives the last cores a whole sweep less headroom every sweep -- the same handful
+                    // of cores took every producer stall while their slice-mates took none. Wrap by
+                    // compare, never %: a runtime modulo is a soft-div on this core (N+64).
+                    if (++scan_rot >= num_cores) {
+                        scan_rot = 0;
+                    }
+                    uint32_t c = scan_rot;
+                    for (uint32_t k = 0; k < num_cores; k++, (++c >= num_cores ? c = 0 : c)) {
+                        const tt_l1_ptr uint32_t* tails =
+                            reinterpret_cast<const tt_l1_ptr uint32_t*>(kCvBase + c * kCvReadBytes);
+                        uint32_t* mine = &head_mirror[c * kNumRisc];
+                        if (!seeded[c]) {
+                            // Seed from the TAILS: the mirror means "consumed up to here", and everything
+                            // before this filler first saw the core predates the workload -- the filler is
+                            // resident and verified before any producer runs.
                             for (uint32_t r = 0; r < kNumRisc; r++) {
-                                uint32_t d = tails[r] - mine[r];
-                                if (d > kRingWords) {
-                                    d = kRingWords;  // counted as an overflow by the authoritative scan, not here
-                                }
-                                live += d;
-                                if (d > peak) {
-                                    peak = d;
-                                }
+                                mine[r] = tails[r];
                             }
-                            if (peak > max_occ) {
-                                max_occ = peak;
-                            }
-                            if (live == 0) {
-                                continue;
-                            }
-                            // PER-LANE trigger, not span fill: one hot lane at 90% of its own ring is only ~18% of the span,
-                            // and the producer that blocks is always a LANE. Level check only -- no growth term, so the
-                            // producer's batched tail publish cannot fool it.
-                            if (stop_seen_at == 0 && live < kShipMinWords && peak < lane_trigger &&
-                                ship_age[c] < kShipMaxAgeSweeps) {
-                                ship_age[c]++;
-                                ship_deferred++;
-                                continue;
-                            }
-                            if (ship_age[c] >= kShipMaxAgeSweeps) {
-                                ship_aged++;
-                            }
-                            ship_age[c] = 0;
-                            ship_list[n_ship++] = static_cast<uint8_t>(c);
+                            seeded[c] = 1;
                         }
-                        c_proc += get_timestamp() - t_cv1;
-                        if (n_ship + num_cores / 8u >= num_cores) {
-                            cv_bypass = true;
+                        uint32_t live = 0, peak = 0;
+                        for (uint32_t r = 0; r < kNumRisc; r++) {
+                            uint32_t d = tails[r] - mine[r];
+                            if (d > kRingWords) {
+                                d = kRingWords;  // counted as an overflow when the gather issue clamps it
+                            }
+                            live += d;
+                            if (d > peak) {
+                                peak = d;
+                            }
                         }
+                        if (peak > max_occ) {
+                            max_occ = peak;
+                        }
+                        if (live == 0) {
+                            continue;
+                        }
+                        // PER-LANE trigger, not span fill: one hot lane at 90% of its own ring is only ~18% of the span,
+                        // and the producer that blocks is always a LANE. Level check only -- no growth term, so the
+                        // producer's batched tail publish cannot fool it.
+                        if (stop_seen_at == 0 && live < kShipMinWords && peak < lane_trigger &&
+                            ship_age[c] < kShipMaxAgeSweeps) {
+                            ship_age[c]++;
+                            ship_deferred++;
+                            continue;
+                        }
+                        if (ship_age[c] >= kShipMaxAgeSweeps) {
+                            ship_aged++;
+                        }
+                        ship_age[c] = 0;
+                        ship_list[n_ship++] = static_cast<uint8_t>(c);
                     }
+                    c_proc += get_timestamp() - t_cv1;
                 }
-                // With CV-first the pipeline walks the ship set; without it, every core.
-                const uint32_t n_poll = n_ship;
 
-                auto process_batch = [&](uint32_t base_c, uint32_t n, uint32_t g) {
+                // Stage one core's frame: write the prefix and control words locally, then GATHER-READ each
+                // live run straight to its packed wire offset. The pads bring each destination to its ring
+                // phase, so read src == dst (mod 16 B) holds for every piece -- including a wrap split,
+                // whose continuation is congruent because the capacity is a multiple of the alignment.
+                auto issue_core = [&](uint32_t c, uint32_t sl) {
+                    const uint32_t slot = kStageBase + sl * kSlotBytes;
+                    const uint32_t xy = coords[c];
+                    const tt_l1_ptr uint32_t* tails =
+                        reinterpret_cast<const tt_l1_ptr uint32_t*>(kCvBase + c * kCvReadBytes);
+                    const uint32_t* mine = &head_mirror[c * kNumRisc];
+                    volatile tt_l1_ptr uint32_t* cv =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
+                    uint32_t off = kPrefix + kCtrlWords;
+                    for (uint32_t r = 0; r < kNumRisc; r++) {
+                        const uint32_t tail = tails[r];
+                        uint32_t run = tail - mine[r];
+                        if (run > kRingWords) {
+                            overflows++;
+                            run = kRingWords;
+                        }
+                        slot_runs[sl * kNumRisc + r] = run;
+                        cv[kernel_profiler::SPSC_RING_HEAD_0 + r] = tail - run;
+                        cv[kernel_profiler::SPSC_RING_TAIL_0 + r] = tail;
+                        if (run == 0) {
+                            continue;
+                        }
+                        off += kernel_profiler::spsc_span_pack_pad(tail - run, off);
+                        const uint32_t hm = (tail - run) & (kRingWords - 1u);
+                        const uint32_t ring_src = cv_src + (kCtrlWords + r * kRingWords) * 4u;
+                        const uint32_t chunk = run <= kRingWords - hm ? run : kRingWords - hm;
+                        CoreLocalMem<uint32_t> d0(slot + off * 4u);
+                        noc.async_read<NocOptions::DEFAULT, kRingWords * 4u>(
+                            src,
+                            d0,
+                            chunk * 4u,
+                            {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = ring_src + hm * 4u},
+                            {});
+                        if (chunk < run) {
+                            CoreLocalMem<uint32_t> d1(slot + (off + chunk) * 4u);
+                            noc.async_read<NocOptions::DEFAULT, kRingWords * 4u>(
+                                src,
+                                d1,
+                                (run - chunk) * 4u,
+                                {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = ring_src},
+                                {});
+                        }
+                        off += run;
+                    }
+                    cv[kernel_profiler::SPSC_CORE_XY] = xy;
+                    volatile tt_l1_ptr uint32_t* pfx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot);
+                    pfx[1] = off - kPrefix;
+                    slot_payload[sl] = off - kPrefix;
+                };
+
+                auto ship_batch = [&](uint32_t base_c, uint32_t n, uint32_t g) {
                     const uint64_t t_p0 = get_timestamp();
                     // c_self joins the nested term because self_publish RESTORES c_reserve/c_write, so without it a
                     // mid-batch self publish would be charged to `proc`.
                     const uint64_t flush_at = c_reserve + c_write + (kSelfZones != 0 ? c_self : 0);
                     // PROC as an ordinary RAII scope over the whole batch, so its children (the credit wait and the
-                    // write inside emit_run) nest under it.
+                    // write inside emit_slots) nest under it.
                     kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_PROC, SelfMarkPhase> z_proc(
                         self_mark_phase);
-                    // `frames` advances once per LIVE core, so this asks whether the batch found work without a flag
-                    // in the scan loop.
-                    const uint32_t frames_at_p0 = frames;
-                    uint32_t run_start = 0, run_len = 0;
                     for (uint32_t i = 0; i < n; i++) {
                         const uint32_t c = ship_list[base_c + i];
                         const uint32_t sl = g * kGenSlots + i;
-                        const uint32_t slot = kStageBase + sl * kSlotBytes;
-                        // NON-volatile on purpose. This control vector is in STAGING -- a snapshot the bulk read landed and
-                        // the read barrier waited on -- so nothing mutates it while it is scanned, and a volatile pointer
-                        // would force a reload per access in the one loop that must stay in registers.
-                        const tt_l1_ptr uint32_t* cv = reinterpret_cast<const tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
                         uint32_t* mine = &head_mirror[c * kNumRisc];
-                        if (!seeded[c]) {
-                            for (uint32_t r = 0; r < kNumRisc; r++) {
-                                mine[r] = cv[kernel_profiler::SPSC_RING_HEAD_0 + r];
-                            }
-                            seeded[c] = 1;
-                        }
-
-                        // SCAN, UNROLLED INTO REGISTERS: it is L1-access bound, not arithmetic bound, and indexed arrays
-                        // spill on this core.
-                        uint32_t m0 = mine[0], m1 = mine[1], m2 = mine[2], m3 = mine[3], m4 = mine[4];
-                        uint32_t r0 = cv[kernel_profiler::SPSC_RING_TAIL_0 + 0] - m0;
-                        uint32_t r1 = cv[kernel_profiler::SPSC_RING_TAIL_0 + 1] - m1;
-                        uint32_t r2 = cv[kernel_profiler::SPSC_RING_TAIL_0 + 2] - m2;
-                        uint32_t r3 = cv[kernel_profiler::SPSC_RING_TAIL_0 + 3] - m3;
-                        uint32_t r4 = cv[kernel_profiler::SPSC_RING_TAIL_0 + 4] - m4;
-                        if (r0 > kRingWords) {
-                            overflows++;
-                            r0 = kRingWords;
-                        }
-                        if (r1 > kRingWords) {
-                            overflows++;
-                            r1 = kRingWords;
-                        }
-                        if (r2 > kRingWords) {
-                            overflows++;
-                            r2 = kRingWords;
-                        }
-                        if (r3 > kRingWords) {
-                            overflows++;
-                            r3 = kRingWords;
-                        }
-                        if (r4 > kRingWords) {
-                            overflows++;
-                            r4 = kRingWords;
-                        }
-                        uint32_t peak = r0;
-                        if (r1 > peak) {
-                            peak = r1;
-                        }
-                        if (r2 > peak) {
-                            peak = r2;
-                        }
-                        if (r3 > peak) {
-                            peak = r3;
-                        }
-                        if (r4 > peak) {
-                            peak = r4;
-                        }
-                        if (peak > max_occ) {
-                            max_occ = peak;
-                        }
-                        const uint32_t live = r0 + r1 + r2 + r3 + r4;
-                        {
-                            cv_below += live < kShipMinWords ? 1u : 0u;
-                        }
-                        if (live == 0) {
-                            emit_run(run_start, run_len);
-                            run_len = 0;
-                            continue;
-                        }
-                        // Under CV-first the ship decision was made in phase 1; a listed core ships unconditionally.
-                        if (run_len == 0) {
-                            run_start = sl;
-                        }
-                        run_len++;
-
-                        // Head write-back releases the producer, and is safe at once: the payload is already resident in
-                        // staging, so those ring slots are free regardless of when it reaches the host.
-                        m0 += r0;
-                        m1 += r1;
-                        m2 += r2;
-                        m3 += r3;
-                        m4 += r4;
-                        mine[0] = m0;
-                        mine[1] = m1;
-                        mine[2] = m2;
-                        mine[3] = m3;
-                        mine[4] = m4;
-                        // HEAD WRITE-BACK, timed separately: `proc` is the largest busy-sweep phase and it is two unlike
-                        // things -- a local scan of staged control vectors, and one 20 B noc_async_write per live core.
+                        uint32_t live = 0;
+                        // HEAD WRITE-BACK, timed separately: it releases the producer, and is safe at once --
+                        // the payload is resident in staging (this generation's read barrier passed), so those
+                        // ring slots are free regardless of when the frame reaches the host.
                         const uint64_t t_h0 = get_timestamp();
                         const uint32_t sc = kHeadScratch + hb_slot * 32u;
                         volatile tt_l1_ptr uint32_t* scp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sc);
-                        scp[0] = m0;
-                        scp[1] = m1;
-                        scp[2] = m2;
-                        scp[3] = m3;
-                        scp[4] = m4;
+                        for (uint32_t r = 0; r < kNumRisc; r++) {
+                            const uint32_t m = mine[r] + slot_runs[sl * kNumRisc + r];
+                            mine[r] = m;
+                            scp[r] = m;
+                            live += slot_runs[sl * kNumRisc + r];
+                        }
                         noc_async_write(
                             sc,
                             get_noc_addr(
@@ -962,16 +898,17 @@ void kernel_main() {
                         frames++;
                         total_words += live;
                     }
-                    // A LIVE CORE is a filler's definition of work, and this is the first point after the scan where it
-                    // can be acted on without putting anything inside the scan.
+                    // A LISTED CORE is live by construction, so the batch having cores IS the work signal.
                     if constexpr (kSelfZones != 0) {
-                        if (!self_on && frames != frames_at_p0) {
+                        if (!self_on && n != 0) {
                             self_arm();  // opens the window at EVERY detail level
                         }
                     }
-                    emit_run(run_start, run_len);
-                    gen_shipped[g] = true;
-                    // SATURATING: the nested emit_run time is subtracted so it is not double-counted, but an unsigned
+                    emit_slots(g * kGenSlots, n);
+                    if (!egress_dead) {
+                        gen_shipped[g] = true;
+                    }
+                    // SATURATING: the nested emit_slots time is subtracted so it is not double-counted, but an unsigned
                     // wrap here once produced "proc 18727729111430.1%".
                     {
                         const uint64_t t_p1 = get_timestamp();
@@ -983,12 +920,14 @@ void kernel_main() {
                     // what a Tracy parent is.
                 };
 
-                for (uint32_t base_c = 0; base_c < n_poll; base_c += kGenSlots) {
-                    const uint32_t n = (n_poll - base_c) < kGenSlots ? (n_poll - base_c) : kGenSlots;
+                for (uint32_t base_c = 0; base_c < n_ship; base_c += kGenSlots) {
+                    const uint32_t n = (n_ship - base_c) < kGenSlots ? (n_ship - base_c) : kGenSlots;
 
                     // This generation's previous ship must be out of staging before its slots refill. SENT is
                     // enough: the next writer of this staging is this core's own NIU read responses, so the
-                    // usual source-reuse gate applies.
+                    // usual source-reuse gate applies. gen_shipped persists across sweeps, so a sweep's LAST
+                    // ship is never waited on inside its own sweep -- it drains under the pace gap or the next
+                    // sweep's CV pass, and this is the wait that catches it if it has not.
                     if (gen_shipped[gen]) {
                         const uint64_t t_b0 = get_timestamp();
                         *phase = kPhBar1;
@@ -1013,25 +952,19 @@ void kernel_main() {
                         kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_READ, SelfMarkPhase> z_issue(
                             self_mark_phase);
                         for (uint32_t i = 0; i < n; i++) {
-                            const uint32_t xy = coords[ship_list[base_c + i]];
-                            CoreLocalMem<uint32_t> dst(kStageBase + (gen * kGenSlots + i) * kSlotBytes + kPrefix * 4u);
-                            // ONE read per span, NEVER split across NoCs: the shipped control vector is the span's own first
-                            // bytes, and only a single ascending read guarantees every tail is captured BEFORE the data it
-                            // points at. A second NoC's half completes in any order, so a tail could claim a record the
-                            // other half's capture predates.
-                            noc.async_read<NocOptions::DEFAULT, kSpanBytes>(
-                                src, dst, kSpanBytes, {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv_src}, {});
+                            issue_core(ship_list[base_c + i], gen * kGenSlots + i);
                         }
                     }
                     const uint64_t t_issue = get_timestamp();
 
-                    // The overlap: these writes go out on NOC_INDEX while the reads above fly on kReadNoc.
+                    // The overlap: the previous batch's PCIe writes go out on NOC_INDEX while the gather reads
+                    // above fly on kReadNoc.
                     if (have_pend) {
-                        process_batch(pend_base, pend_n, pend_gen);
+                        ship_batch(pend_base, pend_n, pend_gen);
                     }
 
                     // Issue cost plus only the wait REMAINING after the concurrent ship. Timing to the barrier instead
-                    // would swallow process_batch and double-count it against c_proc -- it did, and phases summed 133%.
+                    // would swallow ship_batch and double-count it against c_proc -- it did, and phases summed 133%.
                     const uint64_t t_after_proc = get_timestamp();
                     {
                         kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_READ_WAIT, SelfMarkPhase> z_wait(
@@ -1048,22 +981,8 @@ void kernel_main() {
                     gen ^= 1u;
                 }
                 if (have_pend) {
-                    process_batch(pend_base, pend_n, pend_gen);
+                    ship_batch(pend_base, pend_n, pend_gen);
                     have_pend = false;
-                }
-                {
-                    const uint64_t t_b0 = get_timestamp();
-                    *phase = kPhBar2;
-                    bool flushed;
-                    {
-                        kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_WR_BARRIER, SelfMarkPhase> z_bar(
-                            self_mark_phase);
-                        flushed = write_barrier_bounded<true>(t_b0 + kCreditWaitCycles);
-                    }
-                    if (!flushed) {
-                        egress_dead = true;
-                    }
-                    c_barrier += get_timestamp() - t_b0;
                 }
             }
 
