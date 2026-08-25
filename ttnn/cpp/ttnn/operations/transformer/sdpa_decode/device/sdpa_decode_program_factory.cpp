@@ -608,13 +608,12 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         &q_tile,
         q_locally_available ? std::optional<TensorParamName>(Q) : std::nullopt);
     if (tilize_q) {
-        add_dfb(
-            DFB_Q_RM,
-            q_tile_size,
-            q_tiles,
-            q_df,
-            &q_tile,
-            q_locally_available ? std::optional<TensorParamName>(Q) : std::nullopt);
+        // c_10 (q_rm) is never borrowed — matching legacy add_cb(c_10, ...) which passes no buffer. Only c_0
+        // (the tilize output / borrowed-Q input) borrows Q under q_locally_available, as legacy does. (A
+        // borrow here would alias the tilize source and output when q_locally_available && tilize_q — a
+        // combination MLA never produces, since MLA Q is tiled — but the port must not add a borrow legacy
+        // lacks.)
+        add_dfb(DFB_Q_RM, q_tile_size, q_tiles, q_df, &q_tile);
         bind(reader_dfb, DFB_Q_RM, "q_rm", DFBEndpointType::PRODUCER);
         bind(compute_dfb, DFB_Q_RM, "q_rm", DFBEndpointType::CONSUMER);
         bind(compute_dfb, DFB_Q_IN, "q_in", DFBEndpointType::PRODUCER);
