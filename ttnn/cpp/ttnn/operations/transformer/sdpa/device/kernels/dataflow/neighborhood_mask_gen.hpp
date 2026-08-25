@@ -1,0 +1,262 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+
+#include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_contract.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_window_rule.hpp"
+
+// Additive attention masks for one (query brick, key brick) pair, generated on device.
+//
+// Why a mask exists at all: at stride 1 the 32 queries in a brick have 32 DIFFERENT context
+// windows, so a single tile of scores contains entries that are valid for some rows and not
+// for others. At stride == brick all 32 share one window and every generated tile is
+// uniformly zero -- the mask becomes dead weight, which is exactly what the stride sweep is
+// meant to reclaim.
+//
+// Generated rather than uploaded: a per-brick mask table at 1080p would be tens of megabytes
+// of DRAM traffic per block. The window rule comes from neighborhood_window_rule.hpp, the
+// same header the host planner uses, so device and host cannot disagree about where a window
+// starts.
+//
+// NOTE: this lives under dataflow/ deliberately. The compute kernel consumes mask tiles from
+// a circular buffer and knows nothing about context windows, strides, bricks or volumes.
+
+namespace ttnn::transformer::neighborhood::mask_gen {
+
+// Local site -> global site. A device holding a halo at the LOW edge of the volume sits at a
+// negative origin, so its first columns map below the volume. Those columns are storage the
+// volume does not contain: no query owns them and no window reaches them, so clamping keeps the
+// unsigned arithmetic below in range without moving any real query or key.
+FORCE_INLINE uint32_t to_global_site(uint32_t local_site, int32_t shard_origin) {
+    const int32_t global_site = static_cast<int32_t>(local_site) + shard_origin;
+    return global_site > 0 ? static_cast<uint32_t>(global_site) : 0u;
+}
+
+// bfloat16 bit patterns. The mask is ADDITIVE: 0 leaves a score alone, -inf drives it to zero
+// through the softmax.
+constexpr uint16_t KEEP_SCORE = 0x0000;
+constexpr uint16_t MASK_SCORE = 0xFF80;  // -infinity
+
+// A site's position inside its brick, from its index in the tile row. Bricks are laid out
+// time-major then height then width -- the same order as site_to_bricked_index on the host.
+struct SiteInBrick {
+    uint32_t time;
+    uint32_t height;
+    uint32_t width;
+};
+
+FORCE_INLINE SiteInBrick
+site_in_brick_from_index(uint32_t site_index_in_brick, kernel_contract::AxisExtents brick_sites) {
+    const uint32_t sites_per_time_slice = brick_sites.height * brick_sites.width;
+    const uint32_t time = site_index_in_brick / sites_per_time_slice;
+    const uint32_t remainder = site_index_in_brick % sites_per_time_slice;
+    return SiteInBrick{time, remainder / brick_sites.width, remainder % brick_sites.width};
+}
+
+// True when the key at `key_site` is inside the context window of the query at `query_site`.
+// Both arrive LOCAL to this device's tensor and are lifted to global here, because a window is
+// clamped at the true volume boundary and never at a shard seam.
+inline bool key_is_visible(
+    const SiteInBrick& query_site, const SiteInBrick& key_site, const kernel_contract::NeighborhoodExtents& extents) {
+    // An axis shorter than the window is attended to in full; clamp exactly as the host does.
+    const uint32_t window_time =
+        extents.context_window.time < extents.volume.time ? extents.context_window.time : extents.volume.time;
+    const uint32_t window_height =
+        extents.context_window.height < extents.volume.height ? extents.context_window.height : extents.volume.height;
+    const uint32_t window_width =
+        extents.context_window.width < extents.volume.width ? extents.context_window.width : extents.volume.width;
+
+    // Must mirror the planner exactly, hence the shared rule rather than a local test.
+    const uint32_t snap_time = snap_extent_on_axis(extents.stride.time, extents.brick_sites.time);
+    const uint32_t snap_height = snap_extent_on_axis(extents.stride.height, extents.brick_sites.height);
+    const uint32_t snap_width = snap_extent_on_axis(extents.stride.width, extents.brick_sites.width);
+
+    return key_is_in_window_on_axis(
+               to_global_site(query_site.time, extents.shard_origin.time),
+               to_global_site(key_site.time, extents.shard_origin.time),
+               extents.stride.time,
+               window_time,
+               extents.volume.time,
+               snap_time) &&
+           key_is_in_window_on_axis(
+               to_global_site(query_site.height, extents.shard_origin.height),
+               to_global_site(key_site.height, extents.shard_origin.height),
+               extents.stride.height,
+               window_height,
+               extents.volume.height,
+               snap_height) &&
+           key_is_in_window_on_axis(
+               to_global_site(query_site.width, extents.shard_origin.width),
+               to_global_site(key_site.width, extents.shard_origin.width),
+               extents.stride.width,
+               window_width,
+               extents.volume.width,
+               snap_width);
+}
+
+// How much of a key brick a query brick can see. When the whole brick is one query group
+// (stride == brick) every row of the mask tile is the same, so a brick that lies wholly inside
+// or wholly outside the window needs no per-element work at all -- just a constant fill.
+//
+// This is what makes a brick-aligned window cheap: with window 12 and brick (2,4,4) the window
+// is exactly 6x3x3 bricks starting on a brick boundary, so NOTHING straddles and the interior
+// mask is entirely memsets. An 11-wide window cuts through bricks on every axis, so its
+// boundary bricks still have to be evaluated site by site.
+enum class BrickCoverage : uint8_t { AllVisible, NoneVisible, Mixed };
+
+// Widest a single brick axis can be: the brick holds 32 sites in total.
+constexpr uint32_t SITES_PER_BRICK_AXIS_MAX = 32;
+
+inline BrickCoverage classify_brick(
+    const SiteInBrick& query_brick_origin,
+    const SiteInBrick& key_brick_origin,
+    const kernel_contract::NeighborhoodExtents& extents) {
+    const uint32_t brick[3] = {extents.brick_sites.time, extents.brick_sites.height, extents.brick_sites.width};
+    const uint32_t stride[3] = {extents.stride.time, extents.stride.height, extents.stride.width};
+    const uint32_t volume[3] = {extents.volume.time, extents.volume.height, extents.volume.width};
+    const uint32_t window_config[3] = {
+        extents.context_window.time, extents.context_window.height, extents.context_window.width};
+    const uint32_t query_origin[3] = {query_brick_origin.time, query_brick_origin.height, query_brick_origin.width};
+    const uint32_t key_origin[3] = {key_brick_origin.time, key_brick_origin.height, key_brick_origin.width};
+    const int32_t shard_origin[3] = {
+        extents.shard_origin.time, extents.shard_origin.height, extents.shard_origin.width};
+    const uint32_t resident[3] = {extents.resident.time, extents.resident.height, extents.resident.width};
+
+    bool all_visible = true;
+    for (uint32_t axis = 0; axis < 3; ++axis) {
+        const uint32_t window_axis = window_config[axis] < volume[axis] ? window_config[axis] : volume[axis];
+        const int32_t shard_base = shard_origin[axis];
+
+        // When the brick holds MANY query groups (stride 1), there is no single window -- but
+        // there is a union of them, and a key brick outside that union is invisible to every
+        // row. At 11^3 stride 1 the gather is 7x5x5 bricks while the union spans only 6x4x4, so
+        // ~45% of gathered bricks are uniformly masked and skip per-element work entirely.
+        if (stride[axis] != brick[axis]) {
+            const uint32_t first_group = to_global_site(query_origin[axis], shard_base) / stride[axis];
+            const uint32_t last_group = to_global_site(query_origin[axis] + brick[axis] - 1, shard_base) / stride[axis];
+            const uint32_t union_low = window_origin_on_axis(first_group, stride[axis], window_axis, volume[axis], 0);
+            const uint32_t union_high =
+                window_origin_on_axis(last_group, stride[axis], window_axis, volume[axis], 0) + window_axis;
+            const uint32_t key_first = to_global_site(key_origin[axis], shard_base);
+            const uint32_t key_last = key_first + brick[axis] - 1;
+            if (key_last < union_low || key_first >= union_high) {
+                return BrickCoverage::NoneVisible;
+            }
+            all_visible = false;  // inside the union, but rows differ: still needs evaluation
+            continue;
+        }
+        const uint32_t window = window_config[axis] < volume[axis] ? window_config[axis] : volume[axis];
+        const int32_t shard_start = shard_origin[axis];
+        const uint32_t origin = window_origin_on_axis(
+            to_global_site(query_origin[axis], shard_start) / stride[axis],
+            stride[axis],
+            window,
+            volume[axis],
+            brick[axis]);
+        const uint32_t key_first_global = to_global_site(key_origin[axis], shard_start);
+        const uint32_t key_last_global = key_first_global + brick[axis] - 1;
+
+        if (key_last_global < origin || key_first_global >= origin + window) {
+            return BrickCoverage::NoneVisible;  // disjoint on this axis, so disjoint entirely
+        }
+        // Ghost sites past what is resident are never visible, so a brick holding any is not uniform.
+        const bool inside_window = key_first_global >= origin && key_last_global < origin + window;
+        const bool inside_volume = key_origin[axis] + brick[axis] - 1 < resident[axis];
+        all_visible = all_visible && inside_window && inside_volume;
+    }
+    return all_visible ? BrickCoverage::AllVisible : BrickCoverage::Mixed;
+}
+
+// Fill one 32x32 bfloat16 tile: rows are the query brick's sites, columns the key brick's.
+//
+// A Float16_b tile is four row-major 16x16 faces, so an element at (row, column) is not at
+// row * 32 + column. Getting this wrong yields a mask that is subtly transposed within each
+// quadrant -- correct along the diagonal, wrong everywhere else.
+// Taken BY VALUE and force-inlined: the caller's `extents` is constexpr, so this lets every
+// divide and modulo by a brick extent fold to a shift instead of a runtime division. The
+// divisions are the bulk of this function's cost.
+FORCE_INLINE void fill_mask_tile(
+    uint32_t write_address,
+    SiteInBrick query_brick_origin,
+    SiteInBrick key_brick_origin,
+    kernel_contract::NeighborhoodExtents extents) {
+    constexpr uint32_t FACE_HEIGHT = 16;
+    constexpr uint32_t FACE_WIDTH = 16;
+    constexpr uint32_t TILE_HEIGHT = 32;
+    constexpr uint32_t TILE_WIDTH = 32;
+
+    volatile tt_l1_ptr uint16_t* tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(write_address);
+
+    const uint32_t brick[3] = {extents.brick_sites.time, extents.brick_sites.height, extents.brick_sites.width};
+    const uint32_t stride[3] = {extents.stride.time, extents.stride.height, extents.stride.width};
+    const uint32_t volume[3] = {extents.volume.time, extents.volume.height, extents.volume.width};
+    const int32_t shard[3] = {extents.shard_origin.time, extents.shard_origin.height, extents.shard_origin.width};
+    const uint32_t resident[3] = {extents.resident.time, extents.resident.height, extents.resident.width};
+    const uint32_t window[3] = {
+        extents.context_window.time < volume[0] ? extents.context_window.time : volume[0],
+        extents.context_window.height < volume[1] ? extents.context_window.height : volume[1],
+        extents.context_window.width < volume[2] ? extents.context_window.width : volume[2]};
+    const uint32_t query_base[3] = {query_brick_origin.time, query_brick_origin.height, query_brick_origin.width};
+    const uint32_t key_base[3] = {key_brick_origin.time, key_brick_origin.height, key_brick_origin.width};
+    const uint32_t snap[3] = {
+        snap_extent_on_axis(stride[0], brick[0]),
+        snap_extent_on_axis(stride[1], brick[1]),
+        snap_extent_on_axis(stride[2], brick[2])};
+
+    // Every key column's position, computed ONCE instead of once per (row, column).
+    uint32_t key_site[3][TILE_WIDTH];
+    bool key_is_ghost[TILE_WIDTH];
+    for (uint32_t column = 0; column < TILE_WIDTH; ++column) {
+        const SiteInBrick offset = site_in_brick_from_index(column, extents.brick_sites);
+        const uint32_t local[3] = {key_base[0] + offset.time, key_base[1] + offset.height, key_base[2] + offset.width};
+        key_is_ghost[column] = local[0] >= resident[0] || local[1] >= resident[1] || local[2] >= resident[2];
+        for (uint32_t axis = 0; axis < 3; ++axis) {
+            key_site[axis][column] = to_global_site(local[axis], shard[axis]);
+        }
+    }
+
+    for (uint32_t row = 0; row < TILE_HEIGHT; ++row) {
+        const SiteInBrick query_offset = site_in_brick_from_index(row, extents.brick_sites);
+        const uint32_t query_local[3] = {
+            query_base[0] + query_offset.time, query_base[1] + query_offset.height, query_base[2] + query_offset.width};
+
+        // A ghost query's output is discarded, but its row is still softmaxed and an all -inf
+        // row yields NaN, which propagates through the rescale into real accumulators. Leave
+        // ghost rows OPEN rather than fully masked.
+        const bool query_is_ghost =
+            query_local[0] >= resident[0] || query_local[1] >= resident[1] || query_local[2] >= resident[2];
+
+        // The window depends only on the ROW. Resolving it here rather than inside the column
+        // loop removes three divisions per element -- 32x fewer window resolutions per tile.
+        uint32_t window_low[3];
+        uint32_t window_high[3];
+        for (uint32_t axis = 0; axis < 3; ++axis) {
+            const uint32_t global = to_global_site(query_local[axis], shard[axis]);
+            const uint32_t origin =
+                window_origin_on_axis(global / stride[axis], stride[axis], window[axis], volume[axis], snap[axis]);
+            window_low[axis] = origin;
+            window_high[axis] = origin + window[axis];
+        }
+
+        const uint32_t face_row_base = (row >= FACE_HEIGHT) ? 2u : 0u;
+        const uint32_t row_in_face = row % FACE_HEIGHT;
+
+        for (uint32_t column = 0; column < TILE_WIDTH; ++column) {
+            const bool visible =
+                !key_is_ghost[column] &&
+                (query_is_ghost || (key_site[0][column] >= window_low[0] && key_site[0][column] < window_high[0] &&
+                                    key_site[1][column] >= window_low[1] && key_site[1][column] < window_high[1] &&
+                                    key_site[2][column] >= window_low[2] && key_site[2][column] < window_high[2]));
+
+            const uint32_t face = face_row_base + ((column >= FACE_WIDTH) ? 1u : 0u);
+            tile[face * (FACE_HEIGHT * FACE_WIDTH) + row_in_face * FACE_WIDTH + (column % FACE_WIDTH)] =
+                visible ? KEEP_SCORE : MASK_SCORE;
+        }
+    }
+}
+
+}  // namespace ttnn::transformer::neighborhood::mask_gen

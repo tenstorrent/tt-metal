@@ -1,0 +1,333 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""NA3D executor backed by the ``neighborhood_scaled_dot_product_attention`` device op.
+
+Same contract as the other executors in ``na3d.py``: ``q``/``k``/``v`` are
+``(B, T, H, W, num_heads, head_dim)``, already RMS-normed and RoPE'd with Q pre-scaled, and the
+return is ``(B, T, H, W, num_heads * head_dim)`` in ROW_MAJOR. Selected with ``backend="bricked"``.
+
+The difference is the site ORDER. The op consumes tokens bricked -- 32 consecutive sites are a
+compact 3D box rather than a pencil along width -- so one tile row is one brick of video and a
+query tile's context window is a handful of long reads instead of 121 short ones. See
+``neighborhood_permute``.
+
+This module converts in and out PER CALL, which is the honest but slow arrangement: the permute
+belongs once at stage entry, because everything between attentions is per-token and therefore
+permutation-equivariant. Hoisting it is what turns the reference implementation's ~325 ms/block
+of reshape+permute into ~0.6 ms. Getting the op running end to end came first; the hoist is
+next, and the spans below are there to show what it would buy.
+"""
+
+from __future__ import annotations
+
+import os
+
+import ttnn
+
+from ..utils import decode_tree
+from .neighborhood_permute import SITES_PER_BRICK, brick_count, to_bricked, to_natural
+
+# Plans depend on no weights but do upload an index table, so rebuilding one per block would
+# dominate. Keyed on the geometry, exactly as the op's program cache is.
+_PLAN_CACHE: dict = {}
+
+
+def _deep_prof(device, key: str, *, category: str | None = None):
+    """The same span helper the reference executor uses, so both break down side by side in the
+    decode tree. Inert unless DIFFVAE_BLOCK_PROF is set: each span costs two device syncs."""
+    from ..models.vae.diffvae_ltx_stage5 import deep_prof
+
+    return deep_prof(device, key, category=category)
+
+
+def _window_origin(group_index, stride, window, volume, snap=0):
+    """Host mirror of window_origin_on_axis. Only used to BUILD the interior mask, which the
+    kernel then reads; the kernel keeps its own copy of the rule for boundary bricks."""
+    first = group_index * stride
+    last = min(first + stride - 1, volume - 1)
+    centre = first + (last - first) // 2
+    highest = volume - window
+    origin = 0 if centre < window // 2 else min(centre - window // 2, highest)
+    if snap <= 1:
+        return origin
+    lowest_containing = max(0, last + 1 - window)
+    highest_containing = min(first, highest)
+    down = (origin // snap) * snap
+    if down >= lowest_containing:
+        return down
+    return down + snap if down + snap <= highest_containing else origin
+
+
+def _site_in_brick(index, brick):
+    per_time = brick[1] * brick[2]
+    return (index // per_time, (index % per_time) // brick[2], (index % per_time) % brick[2])
+
+
+def _regime_of(chunk_origin, chunk_extent, window, volume, stride, snap):
+    """0 = every query in the chunk clamps low, 1 = none clamp, 2 = every query clamps high.
+
+    Returns None when the chunk straddles a transition, where the pattern is not shared and the
+    kernel must evaluate. Those are at most one chunk per edge per axis.
+
+    Scanned over the CHUNK because the chunk is the unit that shares a window. Must agree with
+    ``chunk_regime`` in the reader, which picks the uploaded set the same way.
+    """
+    origins = [
+        _window_origin((chunk_origin + offset) // stride, stride, window, volume, snap)
+        for offset in range(chunk_extent)
+    ]
+    highest = volume - window
+    if all(origin == 0 for origin in origins):
+        return 0
+    if all(origin == highest for origin in origins):
+        return 2
+    centred = [
+        _window_origin((chunk_origin + offset) // stride, stride, window, volume, snap) not in (0, highest)
+        for offset in range(chunk_extent)
+    ]
+    return 1 if all(centred) else None
+
+
+def _build_regime_masks(volume, context_window, stride, brick, chunk_bricks, plan):
+    """``[1, 1, 32, 27 * gather_brick_count * 32]`` -- one mask set per (t, h, w) regime.
+
+    A brick's mask depends on its position only through CLAMPING, and every fully-clamped brick
+    on an axis shares the same window origin (0 low, volume-window high) and the same gather
+    origin. So three classes per axis cover all but the transition bricks: 27 patterns instead
+    of one per brick. This is the same collapse the reference gets from grouping query tiles by
+    window geometry -- built here on the host and read by the kernel like K or V.
+    """
+    import torch
+
+    gather_bricks = plan["gather_bricks"]
+    gather_brick_count = plan["gather_brick_count"]
+    window = tuple(min(context_window[a], volume[a]) for a in range(3))
+    # snap_extent_on_axis, in Python: legal wherever a whole brick lies inside one query group,
+    # which is wherever the stride is a whole number of bricks.
+    snap = tuple(brick[a] if stride[a] % brick[a] == 0 else 0 for a in range(3))
+
+    # A representative CHUNK origin for each regime on each axis. The chunk is the unit that
+    # shares a window, so it is the unit whose clamping decides which pattern applies.
+    chunk_sites = tuple(chunk_bricks[axis] * brick[axis] for axis in range(3))
+    representative = []
+    for axis in range(3):
+        found = {}
+        for index in range(0, max(1, volume[axis] - chunk_sites[axis] + 1), chunk_sites[axis]):
+            regime = _regime_of(index, chunk_sites[axis], window[axis], volume[axis], stride[axis], snap[axis])
+            if regime is not None and regime not in found:
+                found[regime] = index
+        representative.append(found)
+
+    tiles = gather_brick_count * SITES_PER_BRICK
+    masks = torch.zeros(1, 1, SITES_PER_BRICK, 27 * tiles)
+
+    for regime_time in range(3):
+        for regime_height in range(3):
+            for regime_width in range(3):
+                regime = (regime_time * 3 + regime_height) * 3 + regime_width
+                axes = (regime_time, regime_height, regime_width)
+                if any(axes[a] not in representative[a] for a in range(3)):
+                    continue  # this combination does not occur; leave it open, never selected
+                base = tuple(representative[a][axes[a]] for a in range(3))
+                gather_origin = tuple(
+                    (_window_origin(base[a] // stride[a], stride[a], window[a], volume[a], snap[a]) // brick[a])
+                    * brick[a]
+                    for a in range(3)
+                )
+                for slot in range(gather_brick_count):
+                    within = slot % (gather_bricks[1] * gather_bricks[2])
+                    key_origin = (
+                        gather_origin[0] + (slot // (gather_bricks[1] * gather_bricks[2])) * brick[0],
+                        gather_origin[1] + (within // gather_bricks[2]) * brick[1],
+                        gather_origin[2] + (within % gather_bricks[2]) * brick[2],
+                    )
+                    for row in range(SITES_PER_BRICK):
+                        offset = _site_in_brick(row, brick)
+                        query = tuple(base[a] + offset[a] for a in range(3))
+                        low, high = [], []
+                        for a in range(3):
+                            origin = _window_origin(query[a] // stride[a], stride[a], window[a], volume[a], snap[a])
+                            low.append(origin)
+                            high.append(origin + window[a])
+                        for column in range(SITES_PER_BRICK):
+                            key_offset = _site_in_brick(column, brick)
+                            key = tuple(key_origin[a] + key_offset[a] for a in range(3))
+                            if not all(low[a] <= key[a] < high[a] for a in range(3)):
+                                masks[0, 0, row, regime * tiles + slot * SITES_PER_BRICK + column] = float("-inf")
+    return masks
+
+
+def _query_chunk_bricks(stride: tuple[int, int, int], brick: tuple[int, int, int]) -> tuple[int, int, int]:
+    """The largest chunk of bricks that still forms a single query group.
+
+    A chunk is the set of queries sharing one gather. Making it bigger is the single largest
+    lever in this op, because keys-gathered-per-query is ``gathered_box / chunk_queries`` and the
+    box does NOT grow with the chunk so long as the chunk stays inside one query group -- at
+    which point every row in the chunk has the same window. An 11^3 window costs 54 keys per
+    query at one brick per chunk, and 4.8 at 5x2x2.
+
+    So there is nothing to tune: one query group is exactly ``stride`` sites, and the chunk is
+    that measured in bricks. A stride that is not a whole number of bricks on some axis simply
+    cannot amortise along it, and gets one brick there.
+    """
+    return tuple(
+        stride_extent // brick_extent if stride_extent % brick_extent == 0 else 1
+        for stride_extent, brick_extent in zip(stride, brick)
+    )
+
+
+def _cached_plan(volume, context_window, stride, brick, device):
+    query_chunk_bricks = _query_chunk_bricks(stride, brick)
+    key = (volume, context_window, stride, brick, query_chunk_bricks, id(device))
+    entry = _PLAN_CACHE.get(key)
+    if entry is not None:
+        return entry
+
+    import torch
+
+    plan = ttnn.transformer.neighborhood_plan(
+        volume, context_window, stride, brick, query_chunk_bricks=query_chunk_bricks
+    )
+    plan["query_chunk_bricks"] = query_chunk_bricks
+    origin_table = torch.tensor(plan["gather_origin_table"], dtype=torch.uint32).reshape(
+        1, 1, plan["chunk_count"], plan["gather_origin_columns"]
+    )
+    plan["gather_origin_tensor"] = ttnn.from_torch(
+        origin_table, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    from loguru import logger
+
+    logger.info(
+        f"[neighborhood] volume={volume} window={context_window} stride={stride} brick={brick} "
+        f"chunk={query_chunk_bricks} bricks ({plan['bricks_per_query_chunk'] * SITES_PER_BRICK} queries) "
+        f"bricks={plan['brick_count']} gather={plan['gather_brick_count']} tiles "
+        f"({plan['gather_brick_count'] * SITES_PER_BRICK / (plan['bricks_per_query_chunk'] * SITES_PER_BRICK):.2f} "
+        f"keys/query, waste "
+        f"{plan['gather_brick_count'] * 32 / (context_window[0] * context_window[1] * context_window[2]):.2f}x)"
+    )
+    # Uploading these is the single largest win in the op. Generating masks on device instead
+    # costs 43.5 ms of a 53.8 ms block at stage-5 size -- 81% of the whole attention -- because
+    # every gathered brick that straddles the window edge is evaluated per site, per chunk, every
+    # block. There are only 27 distinct patterns, they depend on nothing but geometry, and this
+    # builds them once and keeps them resident.
+    plan["interior_mask_tensor"] = ttnn.from_torch(
+        _build_regime_masks(volume, context_window, stride, brick, query_chunk_bricks, plan),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    _PLAN_CACHE[key] = plan
+    return plan
+
+
+def _tiles_per_kv_chunk(gather_brick_count: int) -> int:
+    """Largest chunk that fits DST and divides the gather evenly.
+
+    A chunk's score tiles stay live in the destination registers through the row max and the
+    exp, so a chunk wider than DST silently returns wrong numbers rather than faulting. Eight is
+    the same bound that makes the rest of the SDPA family use ``k_chunk_size = 256``.
+    """
+    DST_CAPACITY_TILES = 8
+    # DIFFVAE_NA_KV_CHUNK_TILES forces a chunk width. 8 tiles = 256 tokens, the k_chunk_size the
+    # rest of the SDPA family uses; it need not divide the gather because the ragged tail is
+    # padded with fully-masked slots. Fewer, wider chunks means fewer flash iterations.
+    forced = os.environ.get("DIFFVAE_NA_KV_CHUNK_TILES")
+    if forced:
+        return max(1, min(int(forced), DST_CAPACITY_TILES, gather_brick_count))
+    for candidate in range(min(gather_brick_count, DST_CAPACITY_TILES), 0, -1):
+        if gather_brick_count % candidate == 0:
+            return candidate
+    return 1
+
+
+def neighborhood_attention_3d_bricked(
+    query: ttnn.Tensor,
+    key: ttnn.Tensor,
+    value: ttnn.Tensor,
+    *,
+    kernel_size: tuple[int, int, int],
+    stride: tuple[int, int, int] | None = None,
+    scale: float | None = None,
+) -> ttnn.Tensor:
+    batch, time_extent, height_extent, width_extent, head_count, head_dim = tuple(query.shape)
+    assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"
+
+    # PHYSICAL (t, h, w), same convention as DIFFVAE_GNA_STRIDE elsewhere. (1,1,1) is the shipped
+    # architecture: every query centred on its own window. Larger shares one window across each
+    # group, which is what removes the per-query mask -- see the module docstring.
+    if stride is None:
+        stride_env = os.environ.get("DIFFVAE_GNA_STRIDE")
+        stride = tuple(int(part) for part in stride_env.split(",")) if stride_env else (1, 1, 1)
+
+    # DIFFVAE_NA_WINDOW overrides the architectural window. Enlarging it to a whole number of
+    # bricks is what lets every gathered brick be classified wholly in or wholly out, so the
+    # interior mask becomes memsets instead of per-site window evaluation. It changes what the
+    # model sees, so it is an experiment knob, not a default.
+    window_env = os.environ.get("DIFFVAE_NA_WINDOW")
+    if window_env:
+        kernel_size = tuple(int(part) for part in window_env.split(","))
+
+    volume = (time_extent, height_extent, width_extent)
+    # An axis shorter than the window is attended to in full, matching the op's own clamping.
+    context_window = tuple(min(window, extent) for window, extent in zip(kernel_size, volume))
+    # DIFFVAE_NA_BRICK overrides the derived brick. A brick 1 deep in time never needs time
+    # padding, and output_frames = 8*latent_T - 7 is ALWAYS odd, so a 2-deep brick pads (and
+    # therefore full-tensor copies q, k and v) on every single block.
+    brick_env = os.environ.get("DIFFVAE_NA_BRICK")
+    brick = (
+        tuple(int(part) for part in brick_env.split(","))
+        if brick_env
+        else tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
+    )
+    if scale is None:
+        scale = head_dim**-0.5
+
+    device = query.device()
+    plan = _cached_plan(volume, context_window, stride, brick, device)
+    bricked_sites = brick_count(volume, brick) * SITES_PER_BRICK
+    channels = head_count * head_dim
+
+    def to_op_layout(tensor: ttnn.Tensor) -> ttnn.Tensor:
+        """(B,T,H,W,heads,head_dim) -> (B, 1, bricked_sites, heads*head_dim) in TILE.
+
+        The op reads site-major, so heads never move: the 3D brick reorder is the only data
+        movement here. Transposing heads against sites to satisfy a heads-major op cost 24.6 ms a
+        block at stage-5 size -- a third of all layout time -- and bought no arithmetic.
+        """
+        rows = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+        volume_form = ttnn.reshape(rows, (batch, time_extent, height_extent, width_extent, channels))
+        bricked = to_bricked(volume_form, volume=volume, brick=brick)
+        # Sites are the TILE ROW axis and heads are columns, so one tile row is one brick.
+        site_major = ttnn.reshape(bricked, (batch, 1, bricked_sites, channels))
+        return ttnn.to_layout(site_major, ttnn.TILE_LAYOUT)
+
+    with _deep_prof(device, "brick-permute (q,k,v)", category=decode_tree.RESHAPE):
+        query_op = to_op_layout(query)
+        key_op = to_op_layout(key)
+        value_op = to_op_layout(value)
+
+    with _deep_prof(device, "neighborhood-sdpa", category=decode_tree.SDPA):
+        attended = ttnn.transformer.neighborhood_scaled_dot_product_attention(
+            query_op,
+            key_op,
+            value_op,
+            plan["gather_origin_tensor"],
+            interior_mask=plan["interior_mask_tensor"],
+            volume=volume,
+            context_window=context_window,
+            stride=stride,
+            brick=brick,
+            query_chunk_bricks=plan["query_chunk_bricks"],
+            head_count=head_count,
+            scale=scale,
+            tiles_per_kv_chunk=_tiles_per_kv_chunk(plan["gather_brick_count"]),
+        )
+
+    with _deep_prof(device, "unbrick-permute", category=decode_tree.RESHAPE):
+        # Site-major on the way out too, so this is a reshape rather than a transpose.
+        rows = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
+        merged = ttnn.reshape(rows, (batch, bricked_sites, channels))
+        natural = to_natural(merged, volume=volume, brick=brick)
+
+    return natural

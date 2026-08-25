@@ -1,0 +1,204 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <array>
+#include <cstdint>
+#include <vector>
+
+// 3D neighborhood attention geometry.
+//
+// Every neighborhood concept in the design lives in this file and nowhere else. It has no
+// ttnn, kernel, or device dependencies on purpose: the geometry is where the bugs are, and
+// this way it is testable on the host against a brute-force oracle with no hardware.
+//
+// The rule that makes neighborhood attention tractable: the context window keeps its SIZE
+// constant and slides inward at a volume boundary, rather than truncating. A query at site 0
+// attends to [0, K), not to a half-empty [0, K/2]. So every context window is fully in
+// bounds, every query group gathers the same number of sites, and there is nothing
+// out-of-range to mask. A truncating window looks plausible and is wrong near every edge.
+//
+// Naming: every count carries its unit -- _sites, _bricks, _tiles, _index, _count. You
+// cannot add a brick count to a site count when the names do not match.
+
+namespace ttnn::transformer::neighborhood {
+
+// One brick is one hardware tile row: 32 sites, in some 3D arrangement.
+constexpr uint32_t SITES_PER_BRICK = 32;
+
+constexpr uint32_t AXIS_COUNT = 3;
+
+enum class Axis : uint32_t { Time = 0, Height = 1, Width = 2 };
+
+// Natural: row-major over (time, height, width), the order tokens arrive in.
+// Bricked: 32 consecutive tokens form one compact 3D box -- see site_to_bricked_index.
+enum class Order : uint8_t { Natural, Bricked };
+
+// Where a context window sits against a volume boundary on one axis. Three states per axis
+// means at most 27 distinct window geometries in a volume of any size. These change the
+// window's ORIGIN, never its validity -- see the clamping rule above.
+enum class Regime : uint8_t { Low, Interior, High };
+
+// A size, in sites. Distinct type from Site so a size cannot be passed where a position
+// belongs.
+struct Extent3 {
+    std::array<uint32_t, AXIS_COUNT> by_axis{0, 0, 0};
+
+    static constexpr Extent3 of(uint32_t time, uint32_t height, uint32_t width) {
+        return Extent3{{time, height, width}};
+    }
+    constexpr uint32_t time() const { return by_axis[0]; }
+    constexpr uint32_t height() const { return by_axis[1]; }
+    constexpr uint32_t width() const { return by_axis[2]; }
+    constexpr uint32_t operator[](Axis axis) const { return by_axis[static_cast<uint32_t>(axis)]; }
+    constexpr uint32_t sites() const { return by_axis[0] * by_axis[1] * by_axis[2]; }
+
+    friend constexpr bool operator==(const Extent3& left, const Extent3& right) {
+        return left.by_axis == right.by_axis;
+    }
+};
+
+// A signed position, in sites. Distinct from Site because a shard's origin can be NEGATIVE: a
+// symmetric halo puts the device at the low edge of the volume at -halo, and those columns are
+// real storage that simply lies outside the volume. Its queries never use them and its windows
+// never reach them, but the local -> global conversion still has to be able to say where it is.
+struct Offset3 {
+    std::array<int32_t, AXIS_COUNT> by_axis{0, 0, 0};
+
+    static constexpr Offset3 at(int32_t time, int32_t height, int32_t width) { return Offset3{{time, height, width}}; }
+    constexpr int32_t time() const { return by_axis[0]; }
+    constexpr int32_t height() const { return by_axis[1]; }
+    constexpr int32_t width() const { return by_axis[2]; }
+    constexpr int32_t operator[](Axis axis) const { return by_axis[static_cast<uint32_t>(axis)]; }
+
+    friend constexpr bool operator==(const Offset3& left, const Offset3& right) {
+        return left.by_axis == right.by_axis;
+    }
+};
+
+// A position, in sites.
+struct Site {
+    std::array<uint32_t, AXIS_COUNT> by_axis{0, 0, 0};
+
+    static constexpr Site at(uint32_t time, uint32_t height, uint32_t width) { return Site{{time, height, width}}; }
+    constexpr uint32_t time() const { return by_axis[0]; }
+    constexpr uint32_t height() const { return by_axis[1]; }
+    constexpr uint32_t width() const { return by_axis[2]; }
+    constexpr uint32_t operator[](Axis axis) const { return by_axis[static_cast<uint32_t>(axis)]; }
+
+    friend constexpr bool operator==(const Site& left, const Site& right) { return left.by_axis == right.by_axis; }
+};
+
+struct NeighborhoodConfig {
+    Extent3 volume;          // the GLOBAL token grid, in sites
+    Extent3 context_window;  // what one query group attends to, in sites
+    Extent3 stride;          // query group extent, in sites
+    Extent3 brick;           // layout unit, in sites; brick.sites() == SITES_PER_BRICK
+
+    // How many bricks one query CHUNK spans, per axis. A chunk is the set of queries that share
+    // a single gather, so this is the knob that decides how far the gather amortises.
+    //
+    // Keys-gathered-per-query is what governs cost, and it is `box / chunk_queries`. With a
+    // one-brick chunk an 11^3 window costs 1728/32 = 54 keys per query; spread over 4x2x2
+    // bricks it is 5376/512 = 10.5. The reference implementation runs blocks of 480 queries for
+    // exactly this reason -- a small chunk re-gathers almost the same keys for every tile row.
+    //
+    // (1,1,1) is one brick per chunk, the original behaviour.
+    Extent3 query_chunk_bricks{{1, 1, 1}};
+
+    // Sharding. `shard_extent` is what this device actually holds -- its owned region PLUS the
+    // halo its queries reach into -- and `shard_origin` is where that sits in the global volume.
+    // Unsharded is shard_extent == volume with a zero origin, which is the default.
+    //
+    // The split matters because window placement must stay GLOBAL: a window is clamped at the
+    // true volume boundary, never at a shard's internal edge. Clamping locally would silently
+    // truncate every query within half a window of a shard seam -- correct-looking output with a
+    // wrong receptive field along every internal boundary.
+    //
+    // `shard_origin` must be brick-aligned, so the local tensor bricks the same way the global
+    // one would.
+    Extent3 shard_extent{{0, 0, 0}};  // zero means "same as volume"
+    Offset3 shard_origin{{0, 0, 0}};
+
+    // The query chunk's extent in SITES.
+    Extent3 query_chunk_sites() const {
+        return Extent3::of(
+            query_chunk_bricks.time() * brick.time(),
+            query_chunk_bricks.height() * brick.height(),
+            query_chunk_bricks.width() * brick.width());
+    }
+    uint32_t bricks_per_query_chunk() const { return query_chunk_bricks.sites(); }
+
+    Extent3 resident_extent() const { return shard_extent.sites() == 0 ? volume : shard_extent; }
+    bool is_sharded() const { return shard_extent.sites() != 0 && !(shard_extent == volume); }
+};
+
+// A placed context window. `extent` equals config.context_window except on an axis shorter
+// than the window, where it is the whole axis.
+struct ContextWindow {
+    Site origin;
+    Extent3 extent;
+};
+
+// Built once per (volume, context_window, stride, brick) and cached: it uploads index
+// tables, so rebuilding it per block would dominate.
+struct NeighborhoodPlan {
+    NeighborhoodConfig config;
+
+    Extent3 volume_bricks;  // the volume measured in bricks (rounded up)
+    uint32_t brick_count = 0;
+
+    // The volume measured in query chunks. One chunk is one unit of work: its bricks share a
+    // gather, a mask and a flash pass.
+    Extent3 volume_chunks;
+    uint32_t chunk_count = 0;
+
+    // What ONE brick must gather: the union of the context windows of every query group it
+    // contains. At stride == brick that is exactly one context window. At stride 1 the 32
+    // queries have 32 distinct windows and the union is wider on every axis.
+    Extent3 gather_extent;
+    uint32_t gather_sites = 0;
+    uint32_t gather_tiles = 0;  // site-exact: ceil(gather_sites / SITES_PER_BRICK)
+
+    // The same region rounded out to whole bricks, which is what a tile-granular read can
+    // actually fetch: one brick is one tile row, so the key axis is measured in bricks.
+    // Larger than gather_tiles -- 175 against 74 for an 11^3 window at stride 1 -- because a
+    // window whose half-extent is not a multiple of the brick straddles bricks on every axis.
+    // That gap is what stride buys back: at stride == brick the two converge.
+    Extent3 gather_bricks;
+    uint32_t gather_brick_count = 0;
+
+    // Indexed by CHUNK index; each is rounded DOWN to a brick boundary so a whole-brick read
+    // starting here covers the region. Constant size, because the clamping rule keeps every
+    // gather the same extent -- which is also why core load balancing is trivial.
+    std::vector<Site> gather_origin_by_chunk;
+};
+
+// Pick the brick shape minimising the gathered union for a given context window. A function
+// rather than a constant: a window flat in time wants a brick flat in time. `11x11x11` and
+// `2x4x4` belong in a model config, never here and never in a kernel.
+Extent3 choose_brick(Extent3 context_window);
+
+// Which boundary regime one site sits in on one axis.
+Regime regime_for_axis(uint32_t site_index, uint32_t volume_extent_sites, uint32_t context_window_extent_sites);
+
+// The context window for the query group starting at `query_group_origin`. Always fully in
+// bounds; always contains its own query group.
+ContextWindow context_window_for(Site query_group_origin, const NeighborhoodConfig& config);
+
+// Natural <-> Bricked. Round-trips for every site in the volume.
+uint32_t site_to_bricked_index(Site site, const NeighborhoodConfig& config);
+Site bricked_index_to_site(uint32_t bricked_index, const NeighborhoodConfig& config);
+
+// The brick a site belongs to, and the first site of a brick.
+uint32_t site_to_brick_index(Site site, const NeighborhoodConfig& config);
+Site brick_index_to_origin(uint32_t brick_index, const NeighborhoodConfig& config);
+
+// Throws std::invalid_argument on a config that cannot be built.
+void validate_config(const NeighborhoodConfig& config);
+
+NeighborhoodPlan build_plan(const NeighborhoodConfig& config);
+
+}  // namespace ttnn::transformer::neighborhood

@@ -17,6 +17,7 @@
 #include "gated_delta_attn/gated_delta_attn_nanobind.hpp"
 #include "chunk_gated_delta_rule/chunk_gated_delta_rule_nanobind.hpp"
 #include "sdpa/sdpa_nanobind.hpp"
+#include "sdpa/neighborhood_sdpa_nanobind.hpp"
 #include "sdpa_config.hpp"
 #include "sdpa_decode/sdpa_decode_nanobind.hpp"
 #include "split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.hpp"
@@ -74,6 +75,7 @@ void py_module(nb::module_& mod) {
     bind_split_query_key_value_and_split_heads(mod);
 
     bind_sdpa(mod);
+    bind_neighborhood_sdpa(mod);
     bind_sdpa_decode(mod);
     bind_gated_delta_attn_seq(mod);
     bind_chunk_gated_delta_rule(mod);

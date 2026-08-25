@@ -1408,6 +1408,11 @@ def neighborhood_attention_3d(
     across ``sp_axis`` (needs ``ccl_manager`` and ``sp_axis``). The gather-only arguments
     (``device_plan``, ``chunk_budget``) do not apply to the op backends.
     """
+    if backend == "bricked":
+        # Our op: tokens in bricked site order, one tile row per 3D brick.
+        from .neighborhood_attention import neighborhood_attention_3d_bricked
+
+        return neighborhood_attention_3d_bricked(q, k, v, kernel_size=kernel_size, scale=scale)
     if backend == "op":
         return neighborhood_attention_3d_op(q, k, v, kernel_size=kernel_size, scale=scale)
     if backend == "fused":
@@ -1418,7 +1423,7 @@ def neighborhood_attention_3d(
             q, k, v, kernel_size=kernel_size, sp_axis=sp_axis, ccl_manager=ccl_manager, scale=scale
         )
     if backend != "gather":
-        raise ValueError(f"unknown NA3D backend {backend!r}; expected 'gather', 'op', or 'op_sp'")
+        raise ValueError(f"unknown NA3D backend {backend!r}; expected 'gather', 'op', 'op_sp', 'fused' or 'bricked'")
 
     batch, t, h, w, heads, head_dim = tuple(q.shape)
     assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"

@@ -1,0 +1,439 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <stdint.h>
+
+#include "api/core_local_mem.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
+#include "neighborhood_mask_gen.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_chunk_layout.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_contract.hpp"
+
+// Feeds one query CHUNK at a time: the Q tiles of every brick in the chunk, then the context
+// window's K and V tiles in chunks, with a matching additive mask.
+//
+// The chunk is the unit that makes this affordable. Its bricks form ONE query group, so they
+// share one window: the gather happens once for the whole chunk instead of once per brick, and
+// the mask is one tile per gather slot that broadcasts down the rows. That is the difference
+// between 54 keys gathered per query and 4.8.
+//
+// Sites arrive BRICKED, so one brick is exactly one tile row and the key axis is measured in
+// bricks -- "tiles_per_kv_chunk" is literally how many key bricks the compute kernel gets per
+// flash step. This is the only kernel that knows what a context window is; the compute kernel
+// downstream sees tiles and a mask.
+
+namespace contract = ttnn::transformer::neighborhood::kernel_contract;
+namespace mask_gen = ttnn::transformer::neighborhood::mask_gen;
+namespace layout = ttnn::transformer::neighborhood::chunk_layout;
+
+namespace {
+
+// tiles_per_kv_chunk is bounded by DST capacity (8), so the per-chunk scratch is fixed size.
+constexpr uint32_t MAX_TILES_PER_KV_CHUNK = 8;
+
+using layout::BrickCoordinate;
+
+// The key brick a gather slot names, and where it starts in sites. Lifted out of the gather loop
+// so the coverage cache can be filled with exactly the same decode the gather uses.
+FORCE_INLINE BrickCoordinate gather_slot_brick(
+    const BrickCoordinate& gather_origin_brick, uint32_t slot, const contract::AxisExtents& gather_bricks) {
+    const uint32_t per_time_slice = gather_bricks.height * gather_bricks.width;
+    const uint32_t within = slot % per_time_slice;
+    return BrickCoordinate{
+        gather_origin_brick.time + slot / per_time_slice,
+        gather_origin_brick.height + within / gather_bricks.width,
+        gather_origin_brick.width + within % gather_bricks.width};
+}
+
+FORCE_INLINE mask_gen::SiteInBrick gather_slot_origin(
+    const BrickCoordinate& gather_origin_brick,
+    uint32_t slot,
+    const contract::AxisExtents& gather_bricks,
+    const contract::NeighborhoodExtents& extents) {
+    const BrickCoordinate brick = gather_slot_brick(gather_origin_brick, slot, gather_bricks);
+    return mask_gen::SiteInBrick{
+        brick.time * extents.brick_sites.time,
+        brick.height * extents.brick_sites.height,
+        brick.width * extents.brick_sites.width};
+}
+
+// A query brick clamped on no axis and wholly resident. For those the mask pattern is the same
+// as every other interior brick's, so the uploaded tensor applies.
+// Which uploaded mask set applies to this query brick, or NO_REGIME when none does.
+//
+// A brick's mask depends on its position only through CLAMPING: every brick whose queries all
+// clamp low shares one window origin (0) and one gather origin, so they share a pattern. Same
+// for all-clamp-high, and for none-clamped (interior). Three classes per axis, 27 in 3D --
+// which is the same collapse the reference gets by grouping query tiles by window geometry.
+// A brick straddling a transition has no shared pattern and must be evaluated; there is at
+// most one such brick per edge per axis.
+constexpr uint32_t NO_REGIME = 0xFFFFFFFFu;
+
+// Which uploaded mask set applies to this query chunk, or NO_REGIME when none does.
+//
+// The scan is over the CHUNK, not one brick: the chunk is the unit that shares a window, so it
+// is the unit whose clamping behaviour decides the pattern. Scanning a brick would give the
+// right answer only when the chunk is one brick.
+FORCE_INLINE uint32_t
+chunk_regime(const mask_gen::SiteInBrick& chunk_origin_site, const contract::NeighborhoodExtents& extents) {
+    const uint32_t group[3] = {extents.query_chunk.time, extents.query_chunk.height, extents.query_chunk.width};
+    const uint32_t brick[3] = {extents.brick_sites.time, extents.brick_sites.height, extents.brick_sites.width};
+    const uint32_t stride[3] = {extents.stride.time, extents.stride.height, extents.stride.width};
+    const uint32_t volume[3] = {extents.volume.time, extents.volume.height, extents.volume.width};
+    const int32_t shard[3] = {extents.shard_origin.time, extents.shard_origin.height, extents.shard_origin.width};
+    const uint32_t resident[3] = {extents.resident.time, extents.resident.height, extents.resident.width};
+    const uint32_t configured[3] = {
+        extents.context_window.time, extents.context_window.height, extents.context_window.width};
+    const uint32_t local[3] = {chunk_origin_site.time, chunk_origin_site.height, chunk_origin_site.width};
+
+    uint32_t regime = 0;
+    for (uint32_t axis = 0; axis < 3; ++axis) {
+        const uint32_t window = configured[axis] < volume[axis] ? configured[axis] : volume[axis];
+        if (window >= volume[axis]) {
+            return NO_REGIME;
+        }
+        // A chunk that overhangs what is resident carries ghosts, which the shared patterns do
+        // not describe.
+        if (local[axis] + group[axis] > resident[axis]) {
+            return NO_REGIME;
+        }
+        const uint32_t snap = ttnn::transformer::neighborhood::snap_extent_on_axis(stride[axis], brick[axis]);
+        const uint32_t highest = volume[axis] - window;
+
+        bool all_low = true;
+        bool all_high = true;
+        bool all_centred = true;
+        for (uint32_t offset = 0; offset < group[axis]; ++offset) {
+            // A brick in a low-edge halo sits below the volume; it has no window and is never
+            // read, so clamping here just keeps the arithmetic in range.
+            const int32_t signed_global = static_cast<int32_t>(local[axis] + offset) + shard[axis];
+            const uint32_t global = signed_global > 0 ? static_cast<uint32_t>(signed_global) : 0u;
+            const uint32_t origin = ttnn::transformer::neighborhood::window_origin_on_axis(
+                global / stride[axis], stride[axis], window, volume[axis], snap);
+            all_low = all_low && origin == 0;
+            all_high = all_high && origin == highest;
+            all_centred = all_centred && origin != 0 && origin != highest;
+        }
+        const uint32_t axis_class = all_low ? 0u : (all_centred ? 1u : (all_high ? 2u : NO_REGIME));
+        if (axis_class == NO_REGIME) {
+            return NO_REGIME;
+        }
+        regime = regime * 3 + axis_class;
+    }
+    return regime;
+}
+
+}  // namespace
+
+void kernel_main() {
+    constexpr uint32_t head_count = get_compile_time_arg_val(contract::reader_arg::head_count);
+    constexpr uint32_t brick_count = get_compile_time_arg_val(contract::reader_arg::brick_count);
+    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(contract::reader_arg::head_dim_tiles);
+    constexpr uint32_t bricks_per_query_chunk = get_compile_time_arg_val(contract::reader_arg::bricks_per_query_chunk);
+    constexpr contract::AxisExtents query_chunk_bricks{
+        get_compile_time_arg_val(contract::reader_arg::query_chunk_bricks_time),
+        get_compile_time_arg_val(contract::reader_arg::query_chunk_bricks_height),
+        get_compile_time_arg_val(contract::reader_arg::query_chunk_bricks_width)};
+    constexpr contract::AxisExtents volume_chunks{
+        get_compile_time_arg_val(contract::reader_arg::volume_chunks_time),
+        get_compile_time_arg_val(contract::reader_arg::volume_chunks_height),
+        get_compile_time_arg_val(contract::reader_arg::volume_chunks_width)};
+    constexpr uint32_t chunk_count = volume_chunks.time * volume_chunks.height * volume_chunks.width;
+    constexpr uint32_t tiles_per_kv_chunk = get_compile_time_arg_val(contract::reader_arg::tiles_per_kv_chunk);
+    constexpr uint32_t kv_chunk_count = get_compile_time_arg_val(contract::reader_arg::kv_chunk_count);
+    constexpr uint32_t gather_brick_count = get_compile_time_arg_val(contract::reader_arg::gather_brick_count);
+
+    constexpr contract::AxisExtents volume_bricks{
+        get_compile_time_arg_val(contract::reader_arg::volume_bricks_time),
+        get_compile_time_arg_val(contract::reader_arg::volume_bricks_height),
+        get_compile_time_arg_val(contract::reader_arg::volume_bricks_width)};
+    constexpr contract::AxisExtents gather_bricks{
+        get_compile_time_arg_val(contract::reader_arg::gather_bricks_time),
+        get_compile_time_arg_val(contract::reader_arg::gather_bricks_height),
+        get_compile_time_arg_val(contract::reader_arg::gather_bricks_width)};
+    // Not constexpr: `shard_origin` is filled in per chunk from the gather origin table, because
+    // it is the one geometric value that differs per device and the mesh runs one program.
+    // Everything else here is a compile-time constant and still folds.
+    contract::NeighborhoodExtents extents{
+        {get_compile_time_arg_val(contract::reader_arg::brick_sites_time),
+         get_compile_time_arg_val(contract::reader_arg::brick_sites_height),
+         get_compile_time_arg_val(contract::reader_arg::brick_sites_width)},
+        {get_compile_time_arg_val(contract::reader_arg::context_window_time),
+         get_compile_time_arg_val(contract::reader_arg::context_window_height),
+         get_compile_time_arg_val(contract::reader_arg::context_window_width)},
+        {get_compile_time_arg_val(contract::reader_arg::stride_time),
+         get_compile_time_arg_val(contract::reader_arg::stride_height),
+         get_compile_time_arg_val(contract::reader_arg::stride_width)},
+        {get_compile_time_arg_val(contract::reader_arg::volume_time),
+         get_compile_time_arg_val(contract::reader_arg::volume_height),
+         get_compile_time_arg_val(contract::reader_arg::volume_width)},
+        {get_compile_time_arg_val(contract::reader_arg::query_chunk_bricks_time) *
+             get_compile_time_arg_val(contract::reader_arg::brick_sites_time),
+         get_compile_time_arg_val(contract::reader_arg::query_chunk_bricks_height) *
+             get_compile_time_arg_val(contract::reader_arg::brick_sites_height),
+         get_compile_time_arg_val(contract::reader_arg::query_chunk_bricks_width) *
+             get_compile_time_arg_val(contract::reader_arg::brick_sites_width)},
+        {0, 0, 0},  // shard_origin: filled from the table below
+        {get_compile_time_arg_val(contract::reader_arg::resident_time),
+         get_compile_time_arg_val(contract::reader_arg::resident_height),
+         get_compile_time_arg_val(contract::reader_arg::resident_width)}};
+
+    constexpr auto query_accessor_args = TensorAccessorArgs<contract::reader_arg::COUNT>();
+    constexpr auto key_accessor_args = TensorAccessorArgs<query_accessor_args.next_compile_time_args_offset()>();
+    constexpr auto value_accessor_args = TensorAccessorArgs<key_accessor_args.next_compile_time_args_offset()>();
+    constexpr uint32_t has_interior_mask = get_compile_time_arg_val(contract::reader_arg::has_interior_mask);
+    constexpr auto origin_accessor_args = TensorAccessorArgs<value_accessor_args.next_compile_time_args_offset()>();
+    constexpr auto interior_mask_args = TensorAccessorArgs<origin_accessor_args.next_compile_time_args_offset()>();
+
+    // Which regime's set is currently sitting in cb_resident_mask, so a run of chunks that share
+    // a regime -- which is nearly all of them, the interior being one regime -- fetches once.
+    uint32_t resident_regime = NO_REGIME;
+    CircularBuffer cb_resident_mask(contract::cb_resident_mask);
+
+    uint32_t argument_index = 0;
+    const uint32_t query_address = get_arg_val<uint32_t>(argument_index++);
+    const uint32_t key_address = get_arg_val<uint32_t>(argument_index++);
+    const uint32_t value_address = get_arg_val<uint32_t>(argument_index++);
+    const uint32_t gather_origin_address = get_arg_val<uint32_t>(argument_index++);
+    const uint32_t interior_mask_address = get_arg_val<uint32_t>(argument_index++);
+    const uint32_t work_item_start = get_arg_val<uint32_t>(argument_index++);
+    const uint32_t work_item_count = get_arg_val<uint32_t>(argument_index++);
+    const uint32_t tile_bytes = get_arg_val<uint32_t>(argument_index++);
+
+    const auto query_reader = TensorAccessor(query_accessor_args, query_address);
+    const auto key_reader = TensorAccessor(key_accessor_args, key_address);
+    const auto value_reader = TensorAccessor(value_accessor_args, value_address);
+    const auto origin_reader = TensorAccessor(origin_accessor_args, gather_origin_address);
+    const auto interior_mask_reader = TensorAccessor(interior_mask_args, interior_mask_address);
+
+    CircularBuffer cb_query(contract::cb_query);
+    CircularBuffer cb_key(contract::cb_key);
+    CircularBuffer cb_value(contract::cb_value);
+    CircularBuffer cb_mask(contract::cb_mask);
+    CircularBuffer cb_gather_origin(contract::cb_gather_origin);
+
+    Noc noc;
+
+    for (uint32_t work_item = work_item_start; work_item < work_item_start + work_item_count; ++work_item) {
+        // A work item is one (batch, head, query brick). Bricks vary fastest so that
+        // neighbouring bricks -- which share most of their context window -- land on the same
+        // core, which is what later lets their K/V stay resident.
+        const uint32_t chunk_index = work_item % chunk_count;
+        const uint32_t head_index = (work_item / chunk_count) % head_count;
+        const uint32_t batch_index = work_item / (chunk_count * head_count);
+
+        const layout::BrickCoordinate chunk_origin =
+            layout::chunk_origin_brick(chunk_index, volume_chunks, query_chunk_bricks);
+
+        // ---- Q: one tile row per brick in the chunk ----
+        cb_query.reserve_back(head_dim_tiles * bricks_per_query_chunk);
+        uint32_t query_write_pointer = cb_query.get_write_ptr();
+        for (uint32_t brick_in_chunk = 0; brick_in_chunk < bricks_per_query_chunk; ++brick_in_chunk) {
+            const layout::BrickCoordinate brick =
+                layout::brick_within_chunk(brick_in_chunk, chunk_origin, query_chunk_bricks);
+            // A chunk on the far edge can hang off the volume. Those rows have no queries to
+            // read; the writer drops them again, and flash rows are independent so whatever
+            // stale L1 they carry cannot reach a real query.
+            if (!layout::brick_is_inside(brick, volume_bricks)) {
+                query_write_pointer += head_dim_tiles * tile_bytes;
+                continue;
+            }
+            const uint32_t first_tile = layout::tile_offset(
+                batch_index,
+                layout::brick_index(brick, volume_bricks),
+                head_index,
+                brick_count,
+                head_count,
+                head_dim_tiles);
+            for (uint32_t head_dim_tile = 0; head_dim_tile < head_dim_tiles; ++head_dim_tile) {
+                noc.async_read(
+                    query_reader,
+                    CoreLocalMem<uint32_t>(query_write_pointer),
+                    tile_bytes,
+                    {.page_id = first_tile + head_dim_tile},
+                    {});
+                query_write_pointer += tile_bytes;
+            }
+        }
+
+        // ---- where this brick's context window starts, from the host-built plan ----
+        cb_gather_origin.reserve_back(1);
+        const uint32_t origin_write_pointer = cb_gather_origin.get_write_ptr();
+        noc.async_read(
+            origin_reader,
+            CoreLocalMem<uint32_t>(origin_write_pointer),
+            contract::GATHER_ORIGIN_ROW_BYTES,
+            {.page_id = chunk_index},
+            {});
+        noc.async_read_barrier();
+        cb_query.push_back(head_dim_tiles * bricks_per_query_chunk);
+
+        const volatile tt_l1_ptr uint32_t* origin_row =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(origin_write_pointer);
+        namespace column = contract::gather_origin_column;
+        // Origins are rounded down to a brick boundary by the planner, so this division is exact.
+        const BrickCoordinate gather_origin_brick{
+            origin_row[column::gather_time] / extents.brick_sites.time,
+            origin_row[column::gather_height] / extents.brick_sites.height,
+            origin_row[column::gather_width] / extents.brick_sites.width};
+
+        // Where this device sits in the global volume. Addressing above is LOCAL; window
+        // placement below is GLOBAL, and this is what converts between them.
+        extents.shard_origin = contract::SignedAxisOffsets{
+            static_cast<int32_t>(origin_row[column::shard_origin_time]),
+            static_cast<int32_t>(origin_row[column::shard_origin_height]),
+            static_cast<int32_t>(origin_row[column::shard_origin_width])};
+
+        const mask_gen::SiteInBrick chunk_origin_site{
+            chunk_origin.time * extents.brick_sites.time,
+            chunk_origin.height * extents.brick_sites.height,
+            chunk_origin.width * extents.brick_sites.width};
+
+        const uint32_t regime = has_interior_mask != 0 ? chunk_regime(chunk_origin_site, extents) : NO_REGIME;
+        const bool use_uploaded_mask = regime != NO_REGIME;
+
+        uint32_t resident_mask_pointer = 0;
+        if (use_uploaded_mask) {
+            resident_mask_pointer = cb_resident_mask.get_write_ptr();
+            if (regime != resident_regime) {
+                for (uint32_t slot = 0; slot < gather_brick_count; ++slot) {
+                    noc.async_read(
+                        interior_mask_reader,
+                        CoreLocalMem<uint32_t>(resident_mask_pointer + slot * tile_bytes),
+                        tile_bytes,
+                        {.page_id = regime * gather_brick_count + slot},
+                        {});
+                }
+                noc.async_read_barrier();
+                resident_regime = regime;
+            }
+        }
+
+        // ---- K, V and the mask, one flash chunk at a time ----
+        for (uint32_t kv_chunk_index = 0; kv_chunk_index < kv_chunk_count; ++kv_chunk_index) {
+            cb_key.reserve_back(tiles_per_kv_chunk * head_dim_tiles);
+            cb_value.reserve_back(tiles_per_kv_chunk * head_dim_tiles);
+            cb_mask.reserve_back(tiles_per_kv_chunk);
+
+            // K and V are laid out DIFFERENTLY in their circular buffers, and it matters.
+            //
+            // matmul_blocks walks in1 as `in1_index += N` over the inner dimension, so in1 is
+            // always a [K, N] grid of tiles -- the `transpose` flag transposes each TILE, not the
+            // grid. For QK^T that means K must be stored head-dim-major, [head_dim_tiles][slots];
+            // for the PV matmul the inner dimension is the slot, so V is [slots][head_dim_tiles],
+            // which is the order the gather naturally produces.
+            //
+            // At head_dim_tiles == 1 the two layouts are the same buffer, which is why a wrong K
+            // layout survived every test until one used a 64-wide head.
+            const uint32_t key_base_pointer = cb_key.get_write_ptr();
+            uint32_t value_write_pointer = cb_value.get_write_ptr();
+            uint32_t mask_write_pointer = cb_mask.get_write_ptr();
+
+            // Three passes, deliberately. Mixing the constant fills with fill_mask_tile in one
+            // loop body puts a large function (nested loops, divisions) next to a memset in the
+            // same instruction cache and measured WORSE than either alone -- 7498 ms against
+            // 2761 ms for generating everywhere. Keeping each loop tight avoids that.
+            mask_gen::BrickCoverage coverage[MAX_TILES_PER_KV_CHUNK];
+            mask_gen::SiteInBrick key_origins[MAX_TILES_PER_KV_CHUNK];
+
+            for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
+                const uint32_t gather_slot = kv_chunk_index * tiles_per_kv_chunk + slot;
+                const bool slot_is_padding = gather_slot >= gather_brick_count;
+                const uint32_t within_time_slice = gather_slot % (gather_bricks.height * gather_bricks.width);
+                const BrickCoordinate key_brick{
+                    gather_origin_brick.time +
+                        (slot_is_padding ? 0u : gather_slot / (gather_bricks.height * gather_bricks.width)),
+                    gather_origin_brick.height + (slot_is_padding ? 0u : within_time_slice / gather_bricks.width),
+                    gather_origin_brick.width + (slot_is_padding ? 0u : within_time_slice % gather_bricks.width)};
+
+                key_origins[slot] = mask_gen::SiteInBrick{
+                    key_brick.time * extents.brick_sites.time,
+                    key_brick.height * extents.brick_sites.height,
+                    key_brick.width * extents.brick_sites.width};
+                coverage[slot] = slot_is_padding
+                                     ? mask_gen::BrickCoverage::NoneVisible
+                                     : mask_gen::classify_brick(chunk_origin_site, key_origins[slot], extents);
+
+                const uint32_t key_first_tile = layout::tile_offset(
+                    batch_index,
+                    layout::brick_index(key_brick, volume_bricks),
+                    head_index,
+                    brick_count,
+                    head_count,
+                    head_dim_tiles);
+                for (uint32_t head_dim_tile = 0; head_dim_tile < head_dim_tiles; ++head_dim_tile) {
+                    const uint32_t key_write_pointer =
+                        key_base_pointer + (head_dim_tile * tiles_per_kv_chunk + slot) * tile_bytes;
+                    noc.async_read(
+                        key_reader,
+                        CoreLocalMem<uint32_t>(key_write_pointer),
+                        tile_bytes,
+                        {.page_id = key_first_tile + head_dim_tile},
+                        {});
+                    noc.async_read(
+                        value_reader,
+                        CoreLocalMem<uint32_t>(value_write_pointer),
+                        tile_bytes,
+                        {.page_id = key_first_tile + head_dim_tile},
+                        {});
+                    value_write_pointer += tile_bytes;
+                }
+            }
+
+            // Uniform bricks: one word repeated, no window arithmetic at all.
+            for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
+                if (coverage[slot] == mask_gen::BrickCoverage::Mixed) {
+                    continue;
+                }
+                const uint32_t fill = coverage[slot] == mask_gen::BrickCoverage::AllVisible ? 0x00000000u : 0xFF80FF80u;
+                volatile tt_l1_ptr uint32_t* destination =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mask_write_pointer + slot * tile_bytes);
+                for (uint32_t word = 0; word < tile_bytes / sizeof(uint32_t); ++word) {
+                    destination[word] = fill;
+                }
+            }
+
+            // Bricks the window boundary cuts through. Interior bricks all share one pattern, so
+            // they read it from DRAM like K or V; only boundary bricks evaluate. The branch is
+            // hoisted OUT of the loop so each body stays tight.
+            if (use_uploaded_mask) {
+                for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
+                    if (coverage[slot] != mask_gen::BrickCoverage::Mixed) {
+                        continue;
+                    }
+                    // Local copy out of the resident set. Both ends are L1, so this cannot be a
+                    // NOC read (it refuses a local source and destination) -- a word loop it is.
+                    const uint32_t gather_slot = kv_chunk_index * tiles_per_kv_chunk + slot;
+                    volatile tt_l1_ptr uint32_t* source = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                        resident_mask_pointer + gather_slot * tile_bytes);
+                    volatile tt_l1_ptr uint32_t* destination =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mask_write_pointer + slot * tile_bytes);
+                    for (uint32_t word = 0; word < tile_bytes / sizeof(uint32_t); ++word) {
+                        destination[word] = source[word];
+                    }
+                }
+            } else {
+                for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
+                    if (coverage[slot] != mask_gen::BrickCoverage::Mixed) {
+                        continue;
+                    }
+                    mask_gen::fill_mask_tile(
+                        mask_write_pointer + slot * tile_bytes, chunk_origin_site, key_origins[slot], extents);
+                }
+            }
+
+            noc.async_read_barrier();
+            cb_key.push_back(tiles_per_kv_chunk * head_dim_tiles);
+            cb_value.push_back(tiles_per_kv_chunk * head_dim_tiles);
+            cb_mask.push_back(tiles_per_kv_chunk);
+        }
+
+        cb_gather_origin.push_back(1);
+        cb_gather_origin.pop_front(1);
+    }
+}

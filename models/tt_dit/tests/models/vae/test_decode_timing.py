@@ -94,11 +94,16 @@ def test_decode_wsp_timing(*, mesh_device, latent_hw, decode_tree):
     # DIFFVAE_STAGES_WSP=1 also W-shards the deterministic stages (stage 0 stays replicated), so the
     # whole decode runs 1/sp instead of only stage 5 -- reclaiming the replicated det-stage time.
     stages_wsp = os.environ.get("DIFFVAE_STAGES_WSP") == "1"
+    # DIFFVAE_STAGE5_BACKEND selects the stage-5 executor so the same harness times ours against
+    # theirs. "bricked" does not W-shard (its op takes the shard origin at compile time, so it is
+    # uniform across the mesh), which means stage 5 runs the FULL volume on every chip rather than
+    # 1/sp of it -- the comparison is honest about speed but not about memory.
+    stage5_b = os.environ.get("DIFFVAE_STAGE5_BACKEND", "op_sp_w_sharded")
     dec = DiffVAEDecoder(
         config,
         mesh_device=mesh_device,
         ccl_manager=ccl,
-        stage5_na3d_backend="op_sp_w_sharded",
+        stage5_na3d_backend=stage5_b,
         stage5_sp_axis=1,
         stage5_tp_axis=tp_axis,
         stages_na3d_backend="op_sp_w_sharded" if stages_wsp else None,
@@ -114,7 +119,9 @@ def test_decode_wsp_timing(*, mesh_device, latent_hw, decode_tree):
     px = dec.decode(latent, seed=0)
     ttnn.synchronize_device(mesh_device)
     dt = time.perf_counter() - t0
-    backend = "fused" if os.environ.get("DIFFVAE_SP_FUSED") == "1" else "op"
+    backend = (
+        stage5_b if stage5_b != "op_sp_w_sharded" else ("fused" if os.environ.get("DIFFVAE_SP_FUSED") == "1" else "op")
+    )
     tp = "+TP4" if tp_axis is not None else ""
     det = "+detSP" if stages_wsp else ""
     print(
