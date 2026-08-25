@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// rotary_embedding_single_tile_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
+// the consumers still on the legacy API. Until the last of them migrates and
+// this file is retired, changes here likely belong in the fork too.
+
 // Compute kernel for ttnn.experimental.rotary_embedding when head_dim == TILE_WIDTH
 // (single tile along the W dimension). Uses an in-L1 transformation matrix to do
 // HF-style rotate_half via matmul_tiles, since the inter-tile half-swap used for

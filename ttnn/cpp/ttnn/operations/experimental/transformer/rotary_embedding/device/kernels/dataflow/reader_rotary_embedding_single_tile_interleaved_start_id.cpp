@@ -10,9 +10,10 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 // HF rotate_half on a single 32-wide vector x produces y where:
 //   y[0..16]  = -x[16..32]
@@ -31,11 +32,11 @@
 // Each mantissa byte: bit 7 = sign, bits 6..0 = 7-bit magnitude. Decoding uses
 // the shared row exponent; with shared_exp = 127, a mantissa byte of 0x40
 // decodes to +1.0 and 0xC0 decodes to -1.0.
-inline void fill_rotate_half_trans_mat_bfp8(uint32_t cb_id) {
+inline void fill_rotate_half_trans_mat_bfp8(uint32_t dfb_id) {
     constexpr uint32_t onetile = 1;
-    CircularBuffer cb(cb_id);
-    cb.reserve_back(onetile);
-    volatile tt_l1_ptr uint8_t* p = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(cb.get_write_ptr());
+    DataflowBuffer dfb(dfb_id);
+    dfb.reserve_back(onetile);
+    volatile tt_l1_ptr uint8_t* p = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(dfb.get_write_ptr());
     // Zero the whole tile (1088 bytes).
     for (uint32_t i = 0; i < 1088; ++i) {
         p[i] = 0;
@@ -50,18 +51,18 @@ inline void fill_rotate_half_trans_mat_bfp8(uint32_t cb_id) {
         p[32 + r] = 127;
         p[576 + r * 16 + r] = 0xC0;
     }
-    cb.push_back(onetile);
+    dfb.push_back(onetile);
 }
 
-inline void fill_rotate_half_trans_mat_bf16(uint32_t cb_id) {
+inline void fill_rotate_half_trans_mat_bf16(uint32_t dfb_id) {
     constexpr uint32_t onetile = 1;
     constexpr uint16_t one_bf16 = 0x3F80;      // bf16 1.0
     constexpr uint16_t neg_one_bf16 = 0xBF80;  // bf16 -1.0
     constexpr uint32_t face_elems = 16 * 16;   // 256
 
-    CircularBuffer cb(cb_id);
-    cb.reserve_back(onetile);
-    volatile tt_l1_ptr uint16_t* tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb.get_write_ptr());
+    DataflowBuffer dfb(dfb_id);
+    dfb.reserve_back(onetile);
+    volatile tt_l1_ptr uint16_t* tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dfb.get_write_ptr());
     // Zero whole tile (4 faces x 256 elems)
     for (uint32_t i = 0; i < 4 * face_elems; ++i) {
         tile[i] = 0;
@@ -74,95 +75,91 @@ inline void fill_rotate_half_trans_mat_bf16(uint32_t cb_id) {
     for (uint32_t r = 0; r < 16; ++r) {
         tile[2 * face_elems + r * 16 + r] = neg_one_bf16;
     }
-    cb.push_back(onetile);
+    dfb.push_back(onetile);
 }
 
 void kernel_main() {
     Noc noc;
 
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t cos_addr = get_arg_val<uint32_t>(1);
-    uint32_t sin_addr = get_arg_val<uint32_t>(2);
-    uint32_t num_rows = get_arg_val<uint32_t>(3);
-    uint32_t start_id = get_arg_val<uint32_t>(4);
-    uint32_t start_row_id = get_arg_val<uint32_t>(5);
-    uint32_t cos_sin_start_id = get_arg_val<uint32_t>(6);
+    uint32_t num_rows = get_arg(args::num_rows);
+    uint32_t start_id = get_arg(args::start_id);
+#ifndef DECODE_MODE
+    // Unread in decode mode: the cos/sin row bookkeeping it seeds only runs in the prefill loop.
+    uint32_t start_row_id = get_arg(args::start_row_id);
+#endif
+    uint32_t cos_sin_start_id = get_arg(args::cos_sin_start_id);
 
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t cos_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t sin_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t trans_mat_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t Ht = get_compile_time_arg_val(4);
-    constexpr uint32_t HtWt = get_compile_time_arg_val(5);
-    constexpr auto src_args = TensorAccessorArgs<6>();
-    constexpr auto cos_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
-    constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t HtWt = get_arg(args::HtWt);
 
     constexpr uint32_t onetile = 1;
-    const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
-    const auto s0 = TensorAccessor(src_args, src_addr, input_tile_bytes);
+    const auto s0 = TensorAccessor(tensor::src);
+    const auto s1 = TensorAccessor(tensor::cos);
+    const auto s2 = TensorAccessor(tensor::sin);
 
-    const uint32_t cos_tile_bytes = get_tile_size(cos_cb_id);
-    const auto s1 = TensorAccessor(cos_args, cos_addr, cos_tile_bytes);
+    DataflowBuffer dfb_input(dfb::input);
+    DataflowBuffer dfb_cos(dfb::cos);
+    DataflowBuffer dfb_sin(dfb::sin);
 
-    const uint32_t sin_tile_bytes = get_tile_size(sin_cb_id);
-    const auto s2 = TensorAccessor(sin_args, sin_addr, sin_tile_bytes);
+    const uint32_t input_tile_bytes = dfb_input.get_tile_size();
+    const uint32_t cos_tile_bytes = dfb_cos.get_tile_size();
+    const uint32_t sin_tile_bytes = dfb_sin.get_tile_size();
 
-    CircularBuffer cb_input(input_cb_id);
-    CircularBuffer cb_cos(cos_cb_id);
-    CircularBuffer cb_sin(sin_cb_id);
-
-    if (get_tile_size(trans_mat_cb_id) == 2048) {
-        fill_rotate_half_trans_mat_bf16(trans_mat_cb_id);
+    // trans_mat is a single tile: 2048 bytes when bf16, 1088 when bfp8_b.
+    constexpr uint32_t trans_mat_tile_bytes = get_tile_size(dfb::trans_mat);
+    if (trans_mat_tile_bytes == 2048) {
+        fill_rotate_half_trans_mat_bf16(dfb::trans_mat);
     } else {
-        fill_rotate_half_trans_mat_bfp8(trans_mat_cb_id);
+        fill_rotate_half_trans_mat_bfp8(dfb::trans_mat);
     }
 
     uint32_t input_curr_id = start_id;
     uint32_t cos_sin_curr_id = cos_sin_start_id;
+#ifndef DECODE_MODE
     uint32_t ht = start_row_id;
+#endif
 
 #ifdef DECODE_MODE
-    cb_sin.reserve_back(onetile);
-    cb_cos.reserve_back(onetile);
+    dfb_sin.reserve_back(onetile);
+    dfb_cos.reserve_back(onetile);
     {
-        uint32_t sin_l1_write_addr = cb_sin.get_write_ptr();
-        uint32_t cos_l1_write_addr = cb_cos.get_write_ptr();
+        uint32_t sin_l1_write_addr = dfb_sin.get_write_ptr();
+        uint32_t cos_l1_write_addr = dfb_cos.get_write_ptr();
         noc.async_read(s2, CoreLocalMem<uint32_t>(sin_l1_write_addr), sin_tile_bytes, {.page_id = cos_sin_curr_id}, {});
         noc.async_read(s1, CoreLocalMem<uint32_t>(cos_l1_write_addr), cos_tile_bytes, {.page_id = cos_sin_curr_id}, {});
         noc.async_read_barrier();
     }
-    cb_sin.push_back(onetile);
-    cb_cos.push_back(onetile);
+    dfb_sin.push_back(onetile);
+    dfb_cos.push_back(onetile);
 #endif
 
     for (uint32_t i = 0; i < num_rows; ++i) {
-        cb_input.reserve_back(onetile);
-        uint32_t input_l1_write_addr = cb_input.get_write_ptr();
+        dfb_input.reserve_back(onetile);
+        uint32_t input_l1_write_addr = dfb_input.get_write_ptr();
         noc.async_read(
             s0, CoreLocalMem<uint32_t>(input_l1_write_addr), input_tile_bytes, {.page_id = input_curr_id}, {});
         noc.async_read_barrier();
-        cb_input.push_back(onetile);
+        dfb_input.push_back(onetile);
         input_curr_id++;
 
 #ifndef DECODE_MODE
-        cb_sin.reserve_back(onetile);
+        dfb_sin.reserve_back(onetile);
         {
-            uint32_t sin_l1_write_addr = cb_sin.get_write_ptr();
+            uint32_t sin_l1_write_addr = dfb_sin.get_write_ptr();
             noc.async_read(
                 s2, CoreLocalMem<uint32_t>(sin_l1_write_addr), sin_tile_bytes, {.page_id = cos_sin_curr_id}, {});
             noc.async_read_barrier();
         }
-        cb_sin.push_back(onetile);
+        dfb_sin.push_back(onetile);
 
-        cb_cos.reserve_back(onetile);
+        dfb_cos.reserve_back(onetile);
         {
-            uint32_t cos_l1_write_addr = cb_cos.get_write_ptr();
+            uint32_t cos_l1_write_addr = dfb_cos.get_write_ptr();
             noc.async_read(
                 s1, CoreLocalMem<uint32_t>(cos_l1_write_addr), cos_tile_bytes, {.page_id = cos_sin_curr_id}, {});
             noc.async_read_barrier();
         }
-        cb_cos.push_back(onetile);
+        dfb_cos.push_back(onetile);
         cos_sin_curr_id++;
 
         ht++;
