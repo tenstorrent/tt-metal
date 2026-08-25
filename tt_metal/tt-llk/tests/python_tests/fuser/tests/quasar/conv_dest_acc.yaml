@@ -1,6 +1,7 @@
-# Convolution + bias + ReLU: the classic conv-bn-relu building block.
-# Matmul computes the convolution, elwadd adds bias with column broadcast,
-# then SFPU Relu applies the activation function.
+# Convolution with dest accumulation enabled and Float32 intermediates.
+# Tests the higher-precision accumulation path for conv-like matmul workloads.
+
+dest_acc: true
 
 operands:
   - name: "activations"
@@ -14,10 +15,10 @@ operands:
     format: "Float16_b"
   - name: "conv_result"
     dims: [128, 128]
-    format: "Float16_b"
+    format: "Float32"
   - name: "output"
     dims: [128, 128]
-    format: "Float16_b"
+    format: "Float32"
 
 operations:
   - math:
@@ -38,7 +39,8 @@ operations:
         src_b: "bias"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
-        broadcast_type: "COL"
+        broadcast_type: "ROW"
+        broadcast_tile: 0
         math_fidelity: "LoFi"
       - type: "UnarySfpu"
         operation: "Relu"

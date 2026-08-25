@@ -1,5 +1,5 @@
-# Convolution + SiLU activation: used in modern architectures like
-# EfficientNet and ConvNeXt where SiLU (Swish) replaces ReLU.
+# Convolution + SiLU activation, as used in architectures such as
+# EfficientNet where SiLU (Swish) replaces ReLU.
 
 operands:
   - name: "activations"
@@ -37,7 +37,8 @@ operations:
         src_b: "bias"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
-        broadcast_type: "COL"
+        broadcast_type: "ROW"
+        broadcast_tile: 0
         math_fidelity: "LoFi"
       - type: "UnarySfpu"
         operation: "Silu"

@@ -37,7 +37,8 @@ operations:
         src_b: "bias"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
-        broadcast_type: "COL"
+        broadcast_type: "ROW"
+        broadcast_tile: 0
         math_fidelity: "LoFi"
     block_size: [64, 64]
     pack:

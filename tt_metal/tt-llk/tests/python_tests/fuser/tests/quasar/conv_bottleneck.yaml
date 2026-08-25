@@ -1,5 +1,8 @@
-# ResNet bottleneck block: 1x1 reduce, 3x3 conv (as matmul), 1x1 expand,
-# residual add, ReLU. Each conv includes bias via fused elwadd+relu.
+# ResNet-style bottleneck block: 1x1 reduce, 1x1 mid conv, 1x1 expand,
+# residual add, ReLU. The reduce and mid convolutions include per-channel
+# bias via fused elwadd+relu (row broadcast reusing one bias vector).
+# The mid stage stands in for the 3x3 conv of a real bottleneck: a lowered
+# 3x3 conv would need im2col (inner dim 9*C), which the fuser does not model.
 
 dest_acc: true
 
@@ -13,10 +16,10 @@ operands:
   - name: "b_reduce"
     dims: [128, 64]
     format: "Float16_b"
-  - name: "w_3x3"
+  - name: "w_mid"
     dims: [64, 64]
     format: "Float16_b"
-  - name: "b_3x3"
+  - name: "b_mid"
     dims: [128, 64]
     format: "Float16_b"
   - name: "w_expand"
@@ -31,10 +34,10 @@ operands:
   - name: "reduce_bias"
     dims: [128, 64]
     format: "Float16_b"
-  - name: "conv3_out"
+  - name: "mid_out"
     dims: [128, 64]
     format: "Float16_b"
-  - name: "conv3_bias"
+  - name: "mid_bias"
     dims: [128, 64]
     format: "Float16_b"
   - name: "expand_out"
@@ -65,7 +68,8 @@ operations:
         src_b: "b_reduce"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
-        broadcast_type: "COL"
+        broadcast_type: "ROW"
+        broadcast_tile: 0
         math_fidelity: "LoFi"
       - type: "UnarySfpu"
         operation: "Relu"
@@ -75,40 +79,41 @@ operations:
       - output: "reduce_bias"
         packer: "Packer"
 
-  # 3x3 conv (lowered to matmul)
+  # 1x1 mid conv (stand-in for the bottleneck's 3x3 conv)
   - math:
       - type: "Fpu"
         src_a: "reduce_bias"
-        src_b: "w_3x3"
+        src_b: "w_mid"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
         math_fidelity: "HiFi2"
     block_size: [64, 64]
     pack:
-      - output: "conv3_out"
+      - output: "mid_out"
         packer: "Packer"
 
-  # Bias + ReLU for 3x3 conv
+  # Bias + ReLU for mid conv
   - math:
       - type: "Fpu"
-        src_a: "conv3_out"
-        src_b: "b_3x3"
+        src_a: "mid_out"
+        src_b: "b_mid"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
-        broadcast_type: "COL"
+        broadcast_type: "ROW"
+        broadcast_tile: 0
         math_fidelity: "LoFi"
       - type: "UnarySfpu"
         operation: "Relu"
         iterations: 32
     block_size: [64, 64]
     pack:
-      - output: "conv3_bias"
+      - output: "mid_bias"
         packer: "Packer"
 
   # 1x1 expand conv
   - math:
       - type: "Fpu"
-        src_a: "conv3_bias"
+        src_a: "mid_bias"
         src_b: "w_expand"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"

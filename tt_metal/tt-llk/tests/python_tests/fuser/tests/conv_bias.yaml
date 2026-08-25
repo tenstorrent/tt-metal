@@ -1,5 +1,6 @@
 # Convolution + bias: matmul followed by element-wise add with broadcast.
-# Models conv2d with bias where bias is broadcast across the spatial dimension.
+# Models conv2d with per-channel bias: row broadcast repeats one bias vector
+# down the spatial rows, and broadcast_tile reuses it across all output tiles.
 
 operands:
   - name: "activations"
@@ -37,7 +38,8 @@ operations:
         src_b: "bias"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
-        broadcast_type: "COL"
+        broadcast_type: "ROW"
+        broadcast_tile: 0
         math_fidelity: "LoFi"
     block_size: [64, 64]
     pack:
