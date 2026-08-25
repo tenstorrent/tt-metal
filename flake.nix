@@ -41,10 +41,10 @@
             name = "llvm20-compat";
             paths = [
               (pkgs.writeShellScriptBin "clang-20" ''
-                exec clang "$@"
+                exec ${llvm.libcxxClang}/bin/clang "$@"
               '')
               (pkgs.writeShellScriptBin "clang++-20" ''
-                exec clang++ "$@"
+                exec ${llvm.libcxxClang}/bin/clang++ "$@"
               '')
               (pkgs.writeShellScriptBin "clang-20-libcxx" ''
                 exec ${llvm.libcxxClang}/bin/clang "$@"
@@ -68,8 +68,6 @@
             xz
             zstd
             zlib
-            libpng
-            bzip2
             openssl
             wget
             curl
@@ -84,7 +82,6 @@
             capstone
             llvm.openmp
             pugixml
-            libxslt
             openmpi
             llvm.clang
             llvm.clang-tools
@@ -128,6 +125,7 @@
                 pkgs.tbb
                 pkgs.capstone
                 pkgs.openmpi
+                llvm.libcxx
                 pkgs.stdenv.cc.cc.lib
               ]
             }''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
