@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -25,6 +26,14 @@ thread_local std::vector<size_t> pending_traceback_ids;
 thread_local std::vector<std::unordered_set<const AllocatorImpl*>> corruptible_allocation_scope_stack;
 thread_local std::vector<std::string> allocation_context_stack;
 const std::string empty_context;
+
+void erase_pending_traceback_id(size_t buffer_unique_id) { std::erase(pending_traceback_ids, buffer_unique_id); }
+
+void erase_pending_traceback_ids(const std::unordered_map<size_t, std::string>& allocations) {
+    std::erase_if(pending_traceback_ids, [&allocations](size_t buffer_unique_id) {
+        return allocations.contains(buffer_unique_id);
+    });
+}
 
 struct TracebackAllocatorRegistry {
     std::mutex mutex;
@@ -82,6 +91,9 @@ bool AllocatorImpl::in_corruptible_allocation_scope() const {
 
 void AllocatorImpl::clear_trace_allocation_state() {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (traceback_capture_enabled_) {
+        erase_pending_traceback_ids(unsafe_allocation_contexts_);
+    }
     unsafe_allocation_contexts_.clear();
     unsafe_tracked_ids_by_manager_and_trace_.clear();
     active_traces_by_manager_.clear();
@@ -162,7 +174,10 @@ void AllocatorImpl::retire_buffer_if_unreferenced(size_t buffer_unique_id) {
         }
     }
 
-    unsafe_allocation_contexts_.erase(buffer_unique_id);
+    const bool was_tracked = unsafe_allocation_contexts_.erase(buffer_unique_id) > 0;
+    if (was_tracked && traceback_capture_enabled_) {
+        erase_pending_traceback_id(buffer_unique_id);
+    }
 }
 
 void AllocatorImpl::record_allocation_if_unsafe(Buffer* buffer) {
@@ -194,7 +209,10 @@ void AllocatorImpl::record_deallocation(size_t buffer_unique_id) {
             trace_buffers.second.erase(buffer_unique_id);
         }
     }
-    unsafe_allocation_contexts_.erase(buffer_unique_id);
+    const bool was_tracked = unsafe_allocation_contexts_.erase(buffer_unique_id) > 0;
+    if (was_tracked && traceback_capture_enabled_) {
+        erase_pending_traceback_id(buffer_unique_id);
+    }
 }
 
 void AllocatorImpl::record_all_deallocations() {
@@ -202,6 +220,9 @@ void AllocatorImpl::record_all_deallocations() {
         for (auto& trace_buffers : manager_traces.second) {
             trace_buffers.second.clear();
         }
+    }
+    if (traceback_capture_enabled_) {
+        erase_pending_traceback_ids(unsafe_allocation_contexts_);
     }
     unsafe_allocation_contexts_.clear();
 }
