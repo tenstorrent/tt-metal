@@ -208,6 +208,12 @@ private:
  * count accumulates all pairs with @c acc_to_dest from DST's zero start (sound per the banner's
  * DST-zero invariant) — bit-identical to the shipped even-count sequence.
  *
+ * @note Distinct from reduce_helpers_compute.hpp's @c Accumulate knob, despite the shared
+ *   copy_tile-seed-then-accumulate DST idiom: that knob reloads a running partial and accumulates
+ *   @c reduce_tile outputs (dimensional reduce, scaler CB, reduced-shape output) across chunk
+ *   iterations, while this sums resident blocks element-wise via @c add_tiles (full-shape output,
+ *   no scaler). Different LLK op and output shape — neither can express the other.
+ *
  * @pre Hardware startup (@c binary_op_init_common) has run — same ownership note as arm().
  * @post @c add_tiles_init is left in acc_to_dest mode; a BlockAccumulate live in the same kernel
  *       must @c rearm() before its next run().
