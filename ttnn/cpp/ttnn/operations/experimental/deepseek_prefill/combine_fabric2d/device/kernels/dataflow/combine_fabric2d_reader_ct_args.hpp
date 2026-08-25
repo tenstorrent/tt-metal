@@ -37,8 +37,8 @@ struct ReaderCtArgs {
     uint32_t dram_in_base_addr;
     uint32_t dram_out_base_addr;
     uint32_t dram_fwd_base_addr;
-    uint32_t fwd_pages_per_quarter;
-    uint32_t my_quarter;
+    uint32_t fwd_pages_per_stream;
+    uint32_t my_stream;
     uint32_t num_incoming_chunks;
     uint32_t fwd_sem_addr;
     uint32_t nbr_chip_id;
@@ -54,7 +54,7 @@ struct ReaderCtArgs {
     uint32_t num_experts_per_tok;
     uint32_t dispatch_group_size;
     uint32_t local_split_count;
-    uint32_t my_row;
+    uint32_t my_dg_index;
     uint32_t control_addr;
     uint32_t meta_prefetch_cap;
 
@@ -78,12 +78,12 @@ struct ReaderCtArgs {
         dram_in_base_addr(static_cast<uint32_t>(dram.in->address())),
         dram_out_base_addr(static_cast<uint32_t>(dram.out->address())),
         dram_fwd_base_addr(static_cast<uint32_t>(dram.fwd->address())),
-        fwd_pages_per_quarter(plan.pages_per_quarter),
-        // Our quarter of the forwarding buffer. (plane, direction) identifies the upstream sender uniquely
-        // from the downstream chip's point of view, so the reader WRITES quarter q of the neighbour's buffer
-        // and READS quarter q of its own — the same q, because every chip runs the same code. Doubles as
+        fwd_pages_per_stream(plan.pages_per_stream),
+        // Our region of the forwarding buffer. (plane, direction) identifies the upstream sender uniquely
+        // from the downstream chip's point of view, so the reader WRITES region q of the neighbour's buffer
+        // and READS region q of its own — the same q, because every chip runs the same code. Doubles as
         // this stream's share of the same-chip run, which it copies after the fabric work.
-        my_quarter(plan.stream),
+        my_stream(plan.stream),
         num_incoming_chunks(0),  // set from the descriptor block below, so the two cannot disagree
         fwd_sem_addr(plan.fwd_arrived_addr),
         nbr_chip_id(static_cast<uint32_t>(self.downstream_node.chip_id)),
@@ -99,7 +99,7 @@ struct ReaderCtArgs {
         num_experts_per_tok(args.num_experts_per_tok),
         dispatch_group_size(op::ring_extent(args)),
         local_split_count(op::stream_count(args.num_links)),
-        my_row(op::my_row(args, coord)),
+        my_dg_index(op::my_dg_index(args, coord)),
         control_addr(l1.control),
         meta_prefetch_cap(META_PREFETCH) {
         // Schedule: the work order, relays tagged. An own entry carries its index into the table that
@@ -113,22 +113,19 @@ struct ReaderCtArgs {
                 continue;
             }
             blocks_.push_back(w.dst_chip_id);
-            blocks_.push_back(w.dst_row);
+            blocks_.push_back(w.dst_dg_index);
             blocks_.push_back(w.split_idx);
             blocks_.push_back(w.split_count);
         }
-        // Chunk descriptors for our own quarter of the forwarding buffer, in arrival order — which is the
+        // Chunk descriptors for our own region of the forwarding buffer, in arrival order — which is the
         // order the upstream sender emits them, because both sides derive it from the same generator. They
         // are what lets the reader compute every chunk's length, and so its page range, with nothing
         // exchanged between the two chips.
         const auto incoming =
-            op::incoming_chunks(plan.stream, op::my_row(args, coord), op::ring_extent(args), args.num_links);
+            op::incoming_chunks(plan.stream, op::my_dg_index(args, coord), op::ring_extent(args), args.num_links);
         num_incoming_chunks = static_cast<uint32_t>(incoming.size());
         for (const auto& c : incoming) {
-            blocks_.push_back(c.origin_row);
-            blocks_.push_back(c.dst_row);
-            blocks_.push_back(c.split_idx);
-            blocks_.push_back(c.split_count);
+            c.append_to(blocks_);
         }
     }
 
@@ -144,8 +141,8 @@ struct ReaderCtArgs {
             dram_in_base_addr,
             dram_out_base_addr,
             dram_fwd_base_addr,
-            fwd_pages_per_quarter,
-            my_quarter,
+            fwd_pages_per_stream,
+            my_stream,
             num_incoming_chunks,
             fwd_sem_addr,
             nbr_chip_id,
@@ -161,7 +158,7 @@ struct ReaderCtArgs {
             num_experts_per_tok,
             dispatch_group_size,
             local_split_count,
-            my_row,
+            my_dg_index,
             control_addr,
             meta_prefetch_cap};
         word_arr.insert(word_arr.end(), blocks_.begin(), blocks_.end());
@@ -179,8 +176,8 @@ struct ReaderCtArgs {
         dram_in_base_addr(get_compile_time_arg_val(7)),
         dram_out_base_addr(get_compile_time_arg_val(8)),
         dram_fwd_base_addr(get_compile_time_arg_val(9)),
-        fwd_pages_per_quarter(get_compile_time_arg_val(10)),
-        my_quarter(get_compile_time_arg_val(11)),
+        fwd_pages_per_stream(get_compile_time_arg_val(10)),
+        my_stream(get_compile_time_arg_val(11)),
         num_incoming_chunks(get_compile_time_arg_val(12)),
         fwd_sem_addr(get_compile_time_arg_val(13)),
         nbr_chip_id(get_compile_time_arg_val(14)),
@@ -196,7 +193,7 @@ struct ReaderCtArgs {
         num_experts_per_tok(get_compile_time_arg_val(24)),
         dispatch_group_size(get_compile_time_arg_val(25)),
         local_split_count(get_compile_time_arg_val(26)),
-        my_row(get_compile_time_arg_val(27)),
+        my_dg_index(get_compile_time_arg_val(27)),
         control_addr(get_compile_time_arg_val(28)),
         meta_prefetch_cap(get_compile_time_arg_val(29)) {}
 
