@@ -274,6 +274,24 @@ that was **raised with the invoker before construction and decided by them**:
 6. **The op-owned-tensor path is exercised only by the single-core RM factory here.** Its sibling
    (`PadRmReaderWriterMultiCoreProgramFactory`) carries the same allocation but is unreachable, so
    the two factories' op-owned handling has one live test subject between them.
+7. **CI caught a borrowed-DFB sizing hole the confirmed set misses: an input smaller than its own
+   shard.** `test_paged_cache_mask.py::test_update_cache[1x2_grid]` (ttnn misc ops group,
+   wh_n300_civ2) drives `from_torch(..., TILE, height-sharded (32, 128))` on a per-device
+   `(1, 16, 1, 128)` tensor; the mesh construction path builds the row-major input on device
+   already carrying the requested tile-aligned shard spec, so `prim::pad` receives 16 sticks under
+   a 32-stick shard spec. Both sharded factories sized the borrowed `in_shard` DFB as one full
+   shard (`shard_height × stick_bytes` = 8192 B), which trips `ValidateProgramSpec`'s spec-time
+   bound `dfb_bytes <= compute_packed_buffer_size_bytes()` (= 4096 B, `program_spec.cpp:1567`).
+   The legacy CB never validated this: `set_globally_allocated_address` is checked per-bank at
+   attach time, and the per-bank allocation is a full shard (8192 ≤ 8192). The confirmed set never
+   produces such a tensor — its sharded inputs always fill their shard specs.
+   **Fixed:** both sharded factories clamp `in_shard.num_entries` to
+   `min(shard_height, total input sticks)`. The count is inert on device — both readers only
+   raw-peek the DFB's base pointer, no FIFO ops — so the clamp affects validation only, and in the
+   normal (tensor ≥ one shard) case it reduces to the previous value. Reproduced and verified on
+   n150 with the exact per-device shapes (direct `ttnn.pad` on a 16-sticks-under-a-32-stick-shard
+   input, and the `from_torch` mesh path end-to-end); the confirmed set re-ran green afterward
+   (923 passed / 69 skipped / 6 xfailed — the 863/63 baseline plus item 5's added test).
 
 ### Shared kernel touches
 

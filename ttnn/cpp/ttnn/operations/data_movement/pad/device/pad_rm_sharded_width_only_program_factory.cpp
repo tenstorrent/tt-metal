@@ -72,10 +72,15 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
     // Input shard DFB — borrows the input buffer's L1 memory; the framework re-points it from the
     // input TensorArgument on every dispatch. The reader only takes its base pointer (a raw peek,
     // no FIFO ops), so the reader is its sole toucher and binds both endpoints (self-loop).
+    // The entry count is clamped to the sticks the tensor actually holds: an input whose shard
+    // spec is taller than the whole tensor would otherwise fail spec validation against the
+    // borrowed tensor's packed size. The count is inert on device — the reader never runs FIFO
+    // ops on this DFB — so the clamp only affects validation.
+    const uint32_t num_input_sticks = static_cast<uint32_t>(input_tensor.logical_shape().volume() / W);
     DataflowBufferSpec in_shard_dfb{
         .unique_id = SH_W_IN_SHARD,
         .entry_size = unpadded_stick_bytes,
-        .num_entries = shard_height_unpadded,
+        .num_entries = std::min(shard_height_unpadded, num_input_sticks),
         .data_format_metadata = input_dfb_data_format,
         .borrowed_from = SH_W_INPUT,
     };

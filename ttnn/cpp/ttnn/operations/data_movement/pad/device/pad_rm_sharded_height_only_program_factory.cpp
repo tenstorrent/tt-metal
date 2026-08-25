@@ -228,7 +228,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
 
     const auto& a_shape = a.logical_shape();
     uint32_t W = a_shape[3], H = a_shape[2], C = a_shape[1], N = a_shape[0];
-    [[maybe_unused]] uint32_t num_unpadded_sticks = H * C * N;
+    uint32_t num_unpadded_sticks = H * C * N;
     uint32_t W_padded = output_padded_shape[3], H_padded = output_padded_shape[2], C_padded = output_padded_shape[1],
              N_padded = output_padded_shape[0];
 
@@ -298,10 +298,16 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
     // Sharded input DFB — borrows the input buffer's L1 memory; the framework re-points it from
     // the input TensorArgument on every dispatch. The reader only takes its base pointer (a raw
     // peek, no FIFO ops), so the reader is its sole toucher and binds both endpoints (self-loop).
+    // The entry count is clamped to the sticks the tensor actually holds: to_layout can hand pad
+    // an input whose shard spec is taller than the whole tensor (from_torch builds the row-major
+    // input with the requested tile-aligned output sharding, so e.g. 16 sticks arrive under a
+    // 32-stick shard spec), and a full-shard DFB would then fail spec validation against the
+    // borrowed tensor's packed size. The count is inert on device — the reader never runs FIFO
+    // ops on this DFB — so the clamp only affects validation.
     DataflowBufferSpec in_shard_dfb{
         .unique_id = SH_H_IN_SHARD,
         .entry_size = stick_size_unpadded,
-        .num_entries = shard_height_unpadded,
+        .num_entries = std::min(shard_height_unpadded, num_unpadded_sticks),
         .data_format_metadata = dfb_data_format,
         .borrowed_from = SH_H_INPUT,
     };
