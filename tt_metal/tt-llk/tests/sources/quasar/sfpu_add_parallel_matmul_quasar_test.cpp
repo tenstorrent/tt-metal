@@ -116,7 +116,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         static_cast<DataFormat>(formats.pack_S_dst),
         IMPLIED_MATH_FORMAT);
 
-    llk_sfpu_srcs_binary(num_tiles, static_cast<DataFormat>(formats.unpack_S_dst), _calculate_add_srcs_);
+    // SFPU load reads what UNP_S wrote; store writes what PACK1 will read.
+    const std::uint32_t load_sfpmem  = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.unpack_S_dst));
+    const std::uint32_t store_sfpmem = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.pack_S_src));
+
+    llk_sfpu_srcs_binary(
+        num_tiles,
+        static_cast<DataFormat>(formats.unpack_S_dst),
+        [load_sfpmem, store_sfpmem](const int in0_base_addr, const int in1_base_addr, const int store_base_addr, const int num_sfpu_iterations)
+        { _calculate_add_srcs_(in0_base_addr, in1_base_addr, store_base_addr, num_sfpu_iterations, load_sfpmem, store_sfpmem); });
 
     wait_unpack_idle();
     wait_sfpu_idle();

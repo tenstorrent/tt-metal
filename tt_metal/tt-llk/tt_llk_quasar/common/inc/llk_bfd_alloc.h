@@ -45,13 +45,17 @@ namespace ckernel::trisc
 
 // Real UNPACR/PACR hardware engines that consume buffer descriptors. One "current id" slot each;
 // compile-time ownership ties each engine to a TRISC role (see bfd_engine_owned_by_trisc).
+//
+// Unp2_Slice0/Unp2_Slice1 are one engine, not two: a binary SrcS op needs both input descriptors
+// live at once, so UNPACR2 gets two current[] slots.
 enum class BfdResource : std::uint8_t
 {
     Unp0 = 0,
     Unp1,
     Pack0,
     Pack1,
-    UnpS,
+    Unp2_Slice0,
+    Unp2_Slice1,
     Count
 };
 
@@ -70,7 +74,8 @@ constexpr bool bfd_engine_owned_by_trisc(const BfdResource engine, const std::ui
         case BfdResource::Pack0:
             return trisc == 2;
         case BfdResource::Pack1:
-        case BfdResource::UnpS:
+        case BfdResource::Unp2_Slice0:
+        case BfdResource::Unp2_Slice1:
             return trisc == 3;
         default:
             return false;
