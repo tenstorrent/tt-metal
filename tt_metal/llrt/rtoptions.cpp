@@ -315,6 +315,11 @@ bool equals_all(const std::string& token) { return to_lower_copy(trim_copy(token
 }  // namespace
 
 RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/kernels/") {
+    // TTNN may need these process-wide options while its Python module is being initialized, before a MetalContext
+    // (and therefore a RunTimeOptions instance) exists. It reads the same lazy snapshot through a native binding.
+    // Touch it here as well to guarantee that it is initialized no later than RunTimeOptions construction.
+    (void)get_trace_allocation_options();
+
 // Default assume package install path
 #ifdef TT_METAL_INSTALL_ROOT
     if (std::filesystem::is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {
@@ -363,9 +368,6 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         this->root_dir = p.string();
     }
 
-    trace_allocation_tracking_enabled_ = false;
-    trace_allocation_diagnostics_enabled_ = false;
-    trace_allocation_skip_program_cache_enabled_ = false;
     InitializeFromEnvVars();
 
     // Mock devices mirror real silicon of the same architecture: leave the 2-erisc default (and any
@@ -381,6 +383,32 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     TT_FATAL(
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),
         "Cannot enable both debug printing and profiling");
+}
+
+const RunTimeOptions::TraceAllocationOptions& RunTimeOptions::get_trace_allocation_options() {
+    // Unlike ordinary RunTimeOptions fields, these options may be queried by TTNN before MetalContext creates a
+    // RunTimeOptions instance. Keep their parsing owned by RunTimeOptions, but cache all related values in one
+    // process-wide snapshot so TTNN and Metal cannot observe different settings.
+    static const TraceAllocationOptions options = [] {
+        const bool tracking_enabled = is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_TRACKING"));
+        return TraceAllocationOptions{
+            .tracking_enabled = tracking_enabled,
+            .diagnostics_enabled = tracking_enabled && is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_TRACEBACKS")),
+            .skip_program_cache =
+                tracking_enabled && is_env_enabled(std::getenv("TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE")),
+        };
+    }();
+    return options;
+}
+
+bool RunTimeOptions::get_trace_allocation_tracking_enabled() { return get_trace_allocation_options().tracking_enabled; }
+
+bool RunTimeOptions::get_trace_allocation_diagnostics_enabled() {
+    return get_trace_allocation_options().diagnostics_enabled;
+}
+
+bool RunTimeOptions::get_trace_allocation_skip_program_cache_enabled() {
+    return get_trace_allocation_options().skip_program_cache;
 }
 
 void RunTimeOptions::set_root_dir(const std::string& root_dir) {
@@ -1735,19 +1763,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_ALLOCATOR_MODE_HYBRID=1
         case EnvVarID::TT_METAL_ALLOCATOR_MODE_HYBRID: this->allocator_mode_hybrid = is_env_enabled(value); break;
 
-        // Trace-allocation tracker settings are process-start options. Keep their
-        // cached values in RunTimeOptions so runtime hot paths never call getenv.
+        // These process-wide settings are parsed together by get_trace_allocation_options(). That snapshot may be
+        // initialized before this instance exists and is explicitly touched at the start of the constructor.
         case EnvVarID::TT_METAL_TRACE_ALLOC_TRACKING:
-            trace_allocation_tracking_enabled_ = std::strcmp(value, "1") == 0;
-            break;
         case EnvVarID::TT_METAL_TRACE_ALLOC_TRACEBACKS:
-            trace_allocation_diagnostics_enabled_ =
-                trace_allocation_tracking_enabled_ && std::strcmp(value, "1") == 0;
-            break;
-        case EnvVarID::TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE:
-            trace_allocation_skip_program_cache_enabled_ =
-                trace_allocation_tracking_enabled_ && std::strcmp(value, "1") == 0;
-            break;
+        case EnvVarID::TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE: break;
 
         // TT_METAL_SHM_TRACKING_DISABLED
         // Disable shared memory tracking for tt-smi.

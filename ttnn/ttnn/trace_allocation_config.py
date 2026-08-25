@@ -7,9 +7,10 @@
 import os
 import warnings
 
-
-def _env_enabled(name: str) -> bool:
-    return os.environ.get(name) == "1"
+from ttnn._ttnn.operations.trace import (
+    trace_allocation_diagnostics_enabled,
+    trace_allocation_tracking_enabled,
+)
 
 
 def _env_nonnegative_int(name: str, default: int) -> int:
@@ -26,9 +27,10 @@ def _env_nonnegative_int(name: str, default: int) -> int:
         return default
 
 
-# These values are intentionally captured once, when ttnn starts importing.
-TRACE_ALLOC_TRACKING = _env_enabled("TT_METAL_TRACE_ALLOC_TRACKING")
-TRACE_ALLOC_DIAGNOSTICS = TRACE_ALLOC_TRACKING and _env_enabled("TT_METAL_TRACE_ALLOC_TRACEBACKS")
+# Metal owns and parses these process-wide settings once. Query its cached RunTimeOptions snapshot rather than
+# reading the environment independently, so TTNN and Metal cannot disagree.
+TRACE_ALLOC_TRACKING = trace_allocation_tracking_enabled()
+TRACE_ALLOC_DIAGNOSTICS = trace_allocation_diagnostics_enabled()
 TRACE_ALLOC_REFERRER_DEPTH = (
     _env_nonnegative_int("TT_METAL_TRACE_ALLOC_REFERRER_DEPTH", 10) if TRACE_ALLOC_DIAGNOSTICS else 10
 )
