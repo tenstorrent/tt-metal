@@ -14,7 +14,6 @@ namespace {
 constexpr uint32_t cb_input = 0;
 constexpr uint32_t cb_scaler = 1;
 constexpr uint32_t cb_accumulator = 2;
-constexpr uint32_t cb_zero_source = 3;
 constexpr uint32_t cb_output = 16;
 constexpr uint32_t num_calls = get_compile_time_arg_val(0);
 
@@ -102,26 +101,12 @@ void kernel_main() {
     cb_reserve_back(cb_input, input_tiles * num_calls);
     cb_push_back(cb_input, input_tiles * num_calls);
 
-    // The FPU-compatible source is separate from the reduction input so Int32 reductions can
-    // exercise the same compute-side scaler path. The helper waits without consuming the tile.
-    cb_reserve_back(cb_zero_source, 1);
-    cb_push_back(cb_zero_source, 1);
 #ifdef REDUCE_CUSTOM_SCALER_BITS
     constexpr float scaler = __builtin_bit_cast(float, static_cast<uint32_t>(REDUCE_CUSTOM_SCALER_BITS));
-    compute_kernel_lib::prepare_reduce_scaler<cb_zero_source, cb_scaler, REDUCE_OP, REDUCE_DIM>(scaler, valid_elements);
+    compute_kernel_lib::prepare_reduce_scaler<cb_scaler, REDUCE_OP, REDUCE_DIM>(scaler, valid_elements);
 #else
-    compute_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_zero_source, cb_scaler, REDUCE_OP, REDUCE_DIM, REDUCE_FACTOR>(
-            valid_elements);
-#endif
-    cb_pop_front(cb_zero_source, 1);
-
-    // Scaler construction uses both unpack sources and retargets the packer. Restore the state
-    // established by compute_kernel_hw_startup() so REDUCE_RECONFIG_MODE retains its test meaning.
-    reconfig_data_format(cb_input, cb_scaler);
-    pack_reconfig_data_format(first_output_cb);
-#ifdef ARCH_QUASAR
-    pack_init(first_output_cb);
+    compute_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler, REDUCE_OP, REDUCE_DIM, REDUCE_FACTOR>(
+        valid_elements);
 #endif
 
     for (uint32_t call = 0; call < num_calls; ++call) {

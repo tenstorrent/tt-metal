@@ -18,7 +18,6 @@ TILE = 32
 CB_INPUT = 0
 CB_SCALER = 1
 CB_ACCUMULATOR = 2
-CB_ZERO_SOURCE = 3
 CB_OUTPUT = 16
 DEST_LIMIT = 4  # fp32 DEST + half synchronization, fixed by _compute_config().
 
@@ -505,15 +504,6 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
         memory_config=_sharded_memory_config(tuple(physical_input.shape)),
     )
 
-    zero_source = torch.full((TILE, TILE), 0.75, dtype=torch.float32)
-    device_zero_source = ttnn.from_torch(
-        zero_source,
-        dtype=_scaler_dtype(case),
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=_sharded_memory_config(tuple(zero_source.shape)),
-    )
-
     output_shape = _output_shape(case)
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape(output_shape),
@@ -526,7 +516,6 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
     cbs = [
         ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT, device_input),
         ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output),
-        ttnn.cb_descriptor_from_sharded_tensor(CB_ZERO_SOURCE, device_zero_source),
         _scratch_cb(CB_SCALER, _scaler_dtype(case), 1),
     ]
     if case.calls > 1:
@@ -548,7 +537,7 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
     ]
 
     result = ttnn.generic_op(
-        [device_input, device_zero_source, output],
+        [device_input, output],
         ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs),
     )
     actual = _meaningful_output(case, ttnn.to_torch(result))

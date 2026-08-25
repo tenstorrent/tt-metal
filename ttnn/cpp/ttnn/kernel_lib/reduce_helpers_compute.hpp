@@ -45,9 +45,8 @@
  *
  *   compute_kernel_hw_startup(dfb_in, dfb_scaler, dfb_out);
  *
- *   // Use the first input tile as a finite source for compute-side zero generation.
  *   compute_kernel_lib::calculate_and_prepare_reduce_scaler<
- *       dfb_in, dfb_scaler, SUM, REDUCE_ROW>();
+ *       dfb_scaler, SUM, REDUCE_ROW>();
  *
  *   // Reduce each row (W dimension) - output has Ht tiles per batch
  *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, dfb_in, dfb_scaler, dfb_out>(
@@ -503,22 +502,17 @@ inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
 /**
  * @brief Generate a reduce scaler tile on the compute kernel from a caller-provided value
  *
- * For a full scaler, the helper uses the SFPU fill operation to write scaler_f across DEST and
- * packs that tile directly into scaler_dfb_id. For a partial scaler, it waits for (but does not
- * pop) the first tile in zero_source_dfb_id, subtracts that tile from itself with the FPU, packs
- * the resulting zero tile, and writes the scaler into the valid positions before publishing it.
+ * The helper reserves a tile in scaler_dfb_id and writes the scaler directly into row 0 of every
+ * participating face. Other rows are left untouched. For a partial scaler, the unused positions
+ * in each face's row 0 are explicitly written as zero before the tile is published.
  *
- * The source tile must use an FPU-compatible format and be finite: NaN or infinity does not
- * produce zero when subtracted from itself. Its tile shape must match the scaler DFB's tile
- * shape. The helper reconfigures the unpacker, math engine, and packer; a following operation
- * must initialize/reconfigure its own state as usual. scaler_dfb_id must be configured as an
- * intermediate that the compute pack thread can produce and the compute unpack thread can consume.
+ * scaler_dfb_id must be configured as an intermediate that the compute pack thread can produce
+ * and the compute unpack thread can consume. Scaler construction does not alter unpack, math, or
+ * pack configuration.
  *
  * Data format and tile shape are deduced from scaler_dfb_id. Float16_b and Float32 scaler DFBs
- * are supported; half tiles are supported on Wormhole and Blackhole, while Quasar's binary FPU
- * unpack path currently requires full 32x32 tiles.
+ * are supported, as are half and full tile shapes.
  *
- * @tparam zero_source_dfb_id DFB containing a finite tile used to create the packed zero tile
  * @tparam scaler_dfb_id DFB that receives the scaler tile
  * @tparam pool_type Type of pooling operation (SUM, AVG, MAX)
  * @tparam reduce_dim Reduction dimension (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
@@ -526,7 +520,7 @@ inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
  * @param valid_reduce_dim_elements_in_tile Number of valid elements along the reduced dimension
  *        (1-32, default 32). Invalid positions in a partial tile remain zero.
  */
-template <uint32_t zero_source_dfb_id, uint32_t scaler_dfb_id, PoolType pool_type, ReduceDim reduce_dim>
+template <uint32_t scaler_dfb_id, PoolType pool_type, ReduceDim reduce_dim>
 ALWI void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
 
 /**
@@ -535,7 +529,6 @@ ALWI void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_dim_elemen
  * Computes 1/N for AVG and 1.0 for SUM/MAX, then delegates to prepare_reduce_scaler(). For
  * REDUCE_SCALAR AVG, uses 1/sqrt(N) because the LLK applies the scaler twice.
  *
- * @tparam zero_source_dfb_id DFB containing a finite tile used to create the packed zero tile
  * @tparam scaler_dfb_id DFB that receives the scaler tile
  * @tparam pool_type Type of pooling operation (SUM, AVG, MAX)
  * @tparam reduce_dim Reduction dimension (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
@@ -544,7 +537,6 @@ ALWI void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_dim_elemen
  *        (1-32, default 32). Invalid positions in a partial tile remain zero.
  */
 template <
-    uint32_t zero_source_dfb_id,
     uint32_t scaler_dfb_id,
     PoolType pool_type,
     ReduceDim reduce_dim,
