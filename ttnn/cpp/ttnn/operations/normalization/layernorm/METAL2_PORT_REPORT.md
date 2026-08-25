@@ -21,10 +21,11 @@ variant is valid with one factory on each concept and the op builds and runs thr
 sharded pass still has to do is recorded under [Open items for downstream](#open-items-for-downstream).
 
 **No-regression result.** The confirmed test set gives **2236 passed, 22 skipped** both before and
-after the port, with an identical pass/skip split per file. Two behavior changes fall outside that
-test set, both characterized precisely below: the sanctioned pybind removal, and a Welford
-configuration with a 32-bit float input and `fp32_dest_acc_en=False` that used to run and now fails
-while the spec is built.
+after the port, with an identical pass/skip split per file. One behavior change falls outside that
+test set: the sanctioned pybind removal. A second one was found by measurement and then fixed inside
+this port: a Welford configuration with a 32-bit float input and `fp32_dest_acc_en=False` failed
+while the spec was built, and now matches the pre-port output in every digit. Both are characterized
+precisely below.
 
 ## Provenance
 
@@ -140,13 +141,15 @@ port.
 
 ### Welford with a 32-bit float input and `fp32_dest_acc_en=False`
 
-*Tagged: op behavior. Needs an owner decision. Measured on hardware, not inferred.*
+*Tagged: op behavior. Fixed in this port for the case the port broke; a pre-existing bug in a
+neighbouring case is reported here and deliberately left alone. Measured on hardware, not inferred.*
 
-**What happens.** With Welford on, a 32-bit float input in tile layout, and a
-`compute_kernel_config` carrying `fp32_dest_acc_en=False`, the ported factory now fails while the
-spec is built. Both branches of Metal 2.0's unpack-mode rule are reachable, one per configuration:
+**What the port broke.** With Welford on, a 32-bit float input in tile layout, and a
+`compute_kernel_config` carrying `fp32_dest_acc_en=False`, the first ported revision failed while
+the spec was built. Both branches of Metal 2.0's unpack-mode rule were reachable, one per
+configuration:
 
-| case | input | `fp32_dest_acc_en` | residual | pre-port | after the port |
+| case | input | `fp32_dest_acc_en` | residual | pre-port | first ported revision |
 |---|---|---|---|---|---|
 | A | float32 | False | no | ran | `TT_FATAL` [program_spec.cpp:1036](../../../../../../tt_metal/impl/metal2_host_api/program_spec.cpp#L1036) `!is_32bit_element_format(fmt)` |
 | B | float32 | False | yes | ran | `TT_FATAL` [program_spec.cpp:1044](../../../../../../tt_metal/impl/metal2_host_api/program_spec.cpp#L1044) `is_gen2` |
@@ -155,38 +158,59 @@ spec is built. Both branches of Metal 2.0's unpack-mode rule are reachable, one 
 
 Measured with a four-case probe against the pre-port revision and against the ported code, on a
 build with **no** forced-validation scaffolding, so this is the shipped configuration. The residual
-is *not* required, contrary to what an earlier revision of this report said: case A has none.
+is *not* required for the failure: case A has none.
 
-**Why it happens.** `welford_fp32_alias` gates the alias on the *input* being 32-bit float but never
-on `fp32_dest_acc_en`, the switch that sets the Dest register's width
-([device/layernorm_op_multi_core.cpp:450-451](device/layernorm_op_multi_core.cpp#L450-L451)). With
-the switch off, the alias is marked to unpack straight into a 16-bit Dest: in case A it carries the
-input's 32-bit format, which cannot fit; in case B it carries the 16-bit intermediate format, where
-the bypass buys nothing. The port copied the marking across unchanged, so the rule is what is new,
-not the setting.
+**Why it happened.** `welford_fp32_alias` gated the alias on the *input* being 32-bit float but
+never on `fp32_dest_acc_en`, the switch that sets the Dest register's width. With the switch off,
+the alias is marked to unpack straight into a 16-bit Dest: in case A it carries the input's 32-bit
+format, which cannot fit; in case B it carries the 16-bit intermediate format, where the bypass buys
+nothing. The port copied the marking across unchanged, so the rule is what is new, not the setting.
 
-**The obvious fix is wrong, and this is the part worth reading.** Adding `&& fp32_dest_acc_en` to
-the alias condition was tried and measured. It stops the failure, but case A then *runs and returns
-garbage*: PCC 0.0056 against the PyTorch reference, maximum absolute error `inf`. Case B recovers
-properly (PCC 0.99997), as do C and D. So dropping the alias is right for the residual shape and
-actively harmful for the non-residual one, and the change was reverted.
+**The fix applied here.** `&& fp32_dest_acc_en` was added to the alias condition
+([device/layernorm_op_multi_core.cpp:451-456](device/layernorm_op_multi_core.cpp#L451-L456)). With
+the switch off there is no alias, and the compute kernel reads the buffer it would have aliased,
+which is the path it already takes whenever the alias is absent
+([device/kernels/compute/layernorm_welford.cpp:104-109](device/kernels/compute/layernorm_welford.cpp#L104-L109)).
+Measured against the PyTorch reference:
 
-What that says about the pre-port behavior: a 32-bit float Welford input cannot reach the compute
-unit intact when Dest is 16 bits wide, by either route. So case A was almost certainly producing
-wrong numbers silently before the port, and the port converts that into a loud failure. **The
-pre-port numerics were not measured** — only that the call did not raise — so this last step is
-inference, and confirming it needs a run against the pre-port revision.
+| case | pre-port | first ported revision | with the guard |
+|---|---|---|---|
+| A (no residual) | PCC 0.0172, max err `inf` | `TT_FATAL` | PCC 0.0056, max err `inf` |
+| B (residual) | PCC 0.999970288388242 | `TT_FATAL` | PCC 0.999970288388242 |
 
-**What the owner needs to decide.** If that inference holds, the honest fix is to reject the
-combination outright, in the op's validation, rather than to make it run. Note that
+Case B is restored to the pre-port result in every digit, which is the whole point: it produced
+correct output before, and it does again.
+
+**Case A is a pre-existing bug and is left exactly as it was.** It returned garbage before the port
+and returns garbage now, because a 32-bit float Welford input cannot reach the compute unit intact
+when Dest is 16 bits wide, by either route. The first ported revision happened to turn that silent
+wrong answer into a loud failure, but a port is not the place to change behavior, so the guard
+restores the pre-port behavior here as well rather than preserving the accidental improvement.
+
+**The pre-port numerics were measured too.** Running the same probe against the pre-port revision
+gives:
+
+| case | pre-port PCC | pre-port max abs error |
+|---|---|---|
+| A | **0.0172** | **`inf`** |
+| B | 0.999970288388242 | 4.354e-02 |
+| C | 0.9999996686705196 | 4.253e-03 |
+| D | 0.9999893967933305 | 2.344e-02 |
+
+Cases B, C and D all match the ported factory to every digit, which is the no-change result the port
+promises. Case A matches pre-port in being wrong.
+
+**What the owner should follow up on.** Case A's combination should be rejected outright in the op's
+validation, since no binding arrangement makes it produce correct numbers, and today it returns
+`inf` without complaint. That belongs in its own change.
 [test_layer_norm_ulp.py:20](../../../../../../tests/ttnn/nightly/unit_tests/operations/fused/test_layer_norm_ulp.py#L20)
 already asserts in a comment that "device enforces this for FP32 inputs" — no such enforcement
 exists, so that comment describes intended behavior that was never implemented. Adding it would make
 the comment true and would close this out.
 
-**The sharded factory already guards this.** Its condition carries `&& fp32_dest_acc_en`
+**The sharded factory already carries the same guard**
 ([device/layernorm_op_multi_core_sharded.cpp:323](device/layernorm_op_multi_core_sharded.cpp#L323)),
-so the two factories disagree today. Whatever is decided should make them consistent.
+so the two factories now agree.
 
 ### `get_pointer_to_cb_data` keeps a CB-vocabulary name after the port
 

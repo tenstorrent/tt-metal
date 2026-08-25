@@ -447,8 +447,13 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     // FPU add (SrcA Tf32), so an fp32-preserving unpack on the welford side would not recover
     // any real information, but would require the SFPU replay buffer recovery
     // (welford_init<WelfordInitMode::PreserveStats>()) after every transpose_tile.
+    //
+    // The alias exists only to carry an UnpackToDest mode, which is legal and useful only when the
+    // Dest register is 32 bits wide. With fp32_dest_acc_en off it would mark a buffer for a bypass
+    // that preserves nothing, which the ProgramSpec validator rejects. The sharded factory gates its
+    // equivalent the same way.
     const bool welford_fp32_alias = use_welford_and_not_rms_norm && in_data_format == tt::DataFormat::Float32 &&
-                                    !(fuse_pre_add && large_tensor_needed);
+                                    fp32_dest_acc_en && !(fuse_pre_add && large_tensor_needed);
 
     // Separate alias on EX and EX2 for the mean / M2 sliding-window accumulators in
     // layernorm_large_tensor_welford.cpp::welford_fuse_pre_add. That function spills LREG4/5 to
