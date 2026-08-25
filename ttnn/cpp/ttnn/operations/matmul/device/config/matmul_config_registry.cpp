@@ -10,6 +10,7 @@
 #include <limits>
 #include <utility>
 
+#include "matmul_registry_build_attestation.hpp"
 #include "matmul_registry_data.hpp"
 #include "ttnn/operation.hpp"
 
@@ -235,6 +236,41 @@ CompatibilityStatus startup_compatibility_status() noexcept {
 
 void reset_startup_compatibility_for_testing() noexcept {
     frozen_compatibility.store(kCompatibilityUninitialized, std::memory_order_release);
+}
+
+CompatibilityDigests compiled_registry_compatibility_digests(
+    const compact::Sha256& runtime_capability_sha256) noexcept {
+    static_assert(generated_build::kAttestationSchemaVersion == 1);
+    return CompatibilityDigests{
+        .semantic_source_sha256 = generated_build::kActualSemanticSourceSha256,
+        .build_identity_sha256 = generated_build::kActualBuildIdentitySha256,
+        .runtime_capability_sha256 = runtime_capability_sha256};
+}
+
+CompatibilityStatus initialize_registry_compatibility_from_attestation(
+    const DeviceAttestationResult& attestation) noexcept {
+    if (attestation.status != DeviceAttestationStatus::Success) {
+        return startup_compatibility_status();
+    }
+    return initialize_registry_compatibility(
+        compiled_registry_compatibility_digests(attestation.attestation.runtime_capability_sha256));
+}
+
+RegistryCompatibilityAttestation registry_compatibility_attestation(
+    const DeviceAttestationResult& attestation) noexcept {
+    const auto actual = compiled_registry_compatibility_digests(attestation.attestation.runtime_capability_sha256);
+    return RegistryCompatibilityAttestation{
+        .device_attestation_status = attestation.status,
+        .board_capability_class = attestation.attestation.board_capability_class,
+        .actual_semantic_source_sha256 = actual.semantic_source_sha256,
+        .actual_build_identity_sha256 = actual.build_identity_sha256,
+        .actual_topology_sha256 = attestation.attestation.topology_sha256,
+        .actual_runtime_capability_sha256 = actual.runtime_capability_sha256};
+}
+
+RegistryCompatibilityAttestation query_registry_compatibility_attestation(
+    const tt::tt_metal::distributed::MeshDevice& device, const DeviceAttestationProvider provider) noexcept {
+    return registry_compatibility_attestation(query_device_attestation(device, provider));
 }
 
 CallSemantics addmm_call_semantics(const float alpha, const float beta) noexcept {
@@ -501,6 +537,9 @@ static Resolution resolve_impl(
 
     if (entries.empty()) {
         return {.reason = ResolutionReason::EmptyRegistry};
+    }
+    if (request.device.attestation_status != DeviceAttestationStatus::Success) {
+        return {.reason = ResolutionReason::DeviceAttestationUnavailable};
     }
     const auto compatibility = actual_compatibility != nullptr
                                    ? validate_registry_compatibility(metadata, entries.size(), *actual_compatibility)

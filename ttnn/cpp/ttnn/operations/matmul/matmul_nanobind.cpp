@@ -6,9 +6,12 @@
 
 #include <cstddef>
 #include <optional>
+#include <string>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/string_view.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
@@ -16,6 +19,7 @@
 #include <fmt/ranges.h>
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_config_registry.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_optimized_program_factory.hpp"
@@ -45,7 +49,46 @@ struct MatmulProgramConfigPlaceholder {};
 
 using ttnn::operations::unary::UnaryWithParam;
 
+namespace {
+
+std::string digest_hex(const registry::compact::Sha256& digest) {
+    constexpr char hex[] = "0123456789abcdef";
+    std::string result(digest.size() * 2, '0');
+    for (std::size_t index = 0; index < digest.size(); ++index) {
+        result[index * 2] = hex[digest[index] >> 4];
+        result[index * 2 + 1] = hex[digest[index] & 0x0f];
+    }
+    return result;
+}
+
+}  // namespace
+
 void py_module(nb::module_& mod) {
+    mod.def(
+        "matmul_registry_compatibility_attestation",
+        [](const ttnn::MeshDevice& device) {
+            const auto attestation = registry::query_registry_compatibility_attestation(device);
+            nb::dict result;
+            result["artifact_kind"] = registry::kCompatibilityAttestationArtifactKind;
+            result["schema_version"] = attestation.schema_version;
+            result["device_attestation_status"] =
+                registry::device_attestation_status_name(attestation.device_attestation_status);
+            result["codegen_recipe_abi"] = attestation.codegen_recipe_abi;
+            result["board_capability_class"] = attestation.board_capability_class;
+            result["actual_semantic_source_sha256"] = digest_hex(attestation.actual_semantic_source_sha256);
+            result["actual_build_identity_sha256"] = digest_hex(attestation.actual_build_identity_sha256);
+            result["actual_topology_sha256"] = digest_hex(attestation.actual_topology_sha256);
+            result["actual_runtime_capability_sha256"] = digest_hex(attestation.actual_runtime_capability_sha256);
+            return result;
+        },
+        nb::arg("device"),
+        R"doc(Return the immutable matmul-registry build and device attestation for measurement receipts.
+
+The result uses schema ``ttnn_matmul_registry_runtime_attestation`` version 1.
+Consumers must reject any result whose ``device_attestation_status`` is not
+``success``; device-derived digest fields are zero on failure.
+)doc");
+
     auto matmul_program_config = nb::class_<MatmulProgramConfigPlaceholder>(mod, "MatmulProgramConfig", R"doc(
         Variant defining matmul program config
     )doc");

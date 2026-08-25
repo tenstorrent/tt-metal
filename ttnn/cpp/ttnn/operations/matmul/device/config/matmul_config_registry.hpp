@@ -16,6 +16,7 @@
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
+#include "ttnn/operations/matmul/device/config/registry/matmul_registry_attestation.hpp"
 #include "ttnn/operations/matmul/device/config/registry/matmul_registry_descriptor.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/config.hpp"
@@ -56,6 +57,7 @@ enum class ResolutionReason {
     UnsupportedSemantics,
     IncompleteRequest,
     InconsistentRequest,
+    DeviceAttestationUnavailable,
     CompatibilityUninitialized,
     CompatibilitySchemaMismatch,
     SemanticSourceMismatch,
@@ -159,6 +161,7 @@ struct WorkloadRequest {
 };
 
 struct DeviceRequest {
+    DeviceAttestationStatus attestation_status = DeviceAttestationStatus::QueryFailed;
     std::uint32_t architecture;
     std::uint32_t board_capability_class;
     std::uint32_t device_count;
@@ -237,6 +240,23 @@ struct CompatibilityDigests {
     compact::Sha256 runtime_capability_sha256{};
 };
 
+inline constexpr std::string_view kCompatibilityAttestationArtifactKind = "ttnn_matmul_registry_runtime_attestation";
+inline constexpr std::uint16_t kCompatibilityAttestationSchemaVersion = 1;
+
+// Stable read-only attestation surface for measurement workers. A worker must
+// reject the report unless device_attestation_status is Success; digest fields
+// that depend on the device are zero on failure.
+struct RegistryCompatibilityAttestation {
+    std::uint16_t schema_version = kCompatibilityAttestationSchemaVersion;
+    DeviceAttestationStatus device_attestation_status = DeviceAttestationStatus::QueryFailed;
+    std::uint16_t codegen_recipe_abi = compact::kCodegenRecipeAbi;
+    std::uint32_t board_capability_class = 0;
+    compact::Sha256 actual_semantic_source_sha256{};
+    compact::Sha256 actual_build_identity_sha256{};
+    compact::Sha256 actual_topology_sha256{};
+    compact::Sha256 actual_runtime_capability_sha256{};
+};
+
 enum class CompatibilityStatus {
     Uninitialized,
     EmptyRegistry,
@@ -254,6 +274,14 @@ CompatibilityStatus validate_registry_compatibility(
 // later calls observe it and cannot replace the attestation.
 CompatibilityStatus initialize_registry_compatibility(const CompatibilityDigests& actual) noexcept;
 CompatibilityStatus startup_compatibility_status() noexcept;
+CompatibilityDigests compiled_registry_compatibility_digests(const compact::Sha256& runtime_capability_sha256) noexcept;
+CompatibilityStatus initialize_registry_compatibility_from_attestation(
+    const DeviceAttestationResult& attestation) noexcept;
+RegistryCompatibilityAttestation registry_compatibility_attestation(
+    const DeviceAttestationResult& attestation) noexcept;
+RegistryCompatibilityAttestation query_registry_compatibility_attestation(
+    const tt::tt_metal::distributed::MeshDevice& device,
+    DeviceAttestationProvider provider = &production_device_attestation) noexcept;
 
 // Test only: no concurrent registry dispatch may be active.
 CompatibilityStatus initialize_registry_compatibility_for_testing(

@@ -152,6 +152,7 @@ MatmulRegistryRequest exact_request(const OperationDomain domain = OperationDoma
             },
         .device =
             DeviceRequest{
+                .attestation_status = DeviceAttestationStatus::Success,
                 .architecture = 2,
                 .board_capability_class = 1,
                 .device_count = 1,
@@ -281,6 +282,41 @@ CompatibilityDigests compatible_digests() {
         .runtime_capability_sha256 = repeated_digest(0x33)};
 }
 
+DeviceAttestationFacts valid_attestation_facts() {
+    return DeviceAttestationFacts{
+        .architecture = AttestationArchitecture::Blackhole,
+        .board_class = AttestationBoardClass::BlackholeGalaxy,
+        .cluster_class = AttestationClusterClass::BlackholeGalaxy,
+        .device_initialized = true,
+        .remote_only = false,
+        .active_sub_device_manager_is_default = true,
+        .device_count = 1,
+        .mesh_rows = 1,
+        .mesh_cols = 1,
+        .system_mesh_id = 0,
+        .compute_grid_x = 13,
+        .compute_grid_y = 10,
+        .physical_grid_x = 17,
+        .physical_grid_y = 12,
+        .logical_grid_x = 13,
+        .logical_grid_y = 10,
+        .dram_grid_x = 8,
+        .dram_grid_y = 1,
+        .tensix_harvesting_mask = 0,
+        .num_hw_cqs = 1,
+        .num_dram_channels = 8,
+        .l1_size_per_core = 1464320,
+        .dram_size_per_channel = 4278190080ULL,
+        .firmware_bundle_present = true,
+        .firmware_bundle_major = 18,
+        .firmware_bundle_minor = 10,
+        .firmware_bundle_patch = 0,
+        .ethernet_firmware_present = true,
+        .ethernet_firmware_major = 6,
+        .ethernet_firmware_minor = 8,
+        .ethernet_firmware_patch = 1};
+}
+
 Resolution resolve_with(const Mode mode, const Eligibility& eligibility) {
     auto request = exact_request(eligibility.call.domain);
     request.call = eligibility.call;
@@ -390,6 +426,105 @@ TEST(MatmulConfigRegistry, CompatibilityValidationIsExactAndFailClosed) {
     actual = compatible_digests();
     actual.runtime_capability_sha256.back() ^= 1;
     EXPECT_EQ(validate_registry_compatibility(metadata, 1, actual), CompatibilityStatus::RuntimeCapabilityMismatch);
+}
+
+TEST(MatmulConfigRegistry, DeviceAttestationMatchesFrozenExporterContract) {
+    const std::array<std::uint8_t, 3> abc{'a', 'b', 'c'};
+    EXPECT_EQ(registry_sha256(abc), (compact::Sha256{{0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40,
+                                                      0xde, 0x5d, 0xae, 0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17,
+                                                      0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad}}));
+
+    const auto result = derive_device_attestation(valid_attestation_facts());
+    ASSERT_EQ(result.status, DeviceAttestationStatus::Success);
+    EXPECT_EQ(result.attestation.board_capability_class, 3);
+    EXPECT_EQ(result.attestation.topology_sha256, (compact::Sha256{{0xfb, 0xe6, 0x47, 0x00, 0xcb, 0x31, 0x63, 0xcc,
+                                                                    0x7d, 0xfd, 0xbb, 0xa6, 0x53, 0xd9, 0x29, 0xee,
+                                                                    0x24, 0x76, 0x8f, 0xd9, 0xa0, 0xfb, 0xc5, 0xfa,
+                                                                    0xbc, 0xb1, 0x6c, 0x17, 0x57, 0xe8, 0x57, 0x9e}}));
+    EXPECT_EQ(
+        result.attestation.runtime_capability_sha256,
+        (compact::Sha256{{0x33, 0x4e, 0x50, 0x71, 0x1e, 0xde, 0x66, 0xbf, 0x5b, 0x97, 0x3b,
+                          0x9d, 0x5a, 0xb0, 0xb0, 0xeb, 0xfa, 0x47, 0x00, 0x5f, 0x6e, 0x8d,
+                          0xb8, 0x85, 0x82, 0xa9, 0x41, 0xbb, 0x43, 0x55, 0x2e, 0xe8}}));
+
+    const auto compiled = compiled_registry_compatibility_digests(result.attestation.runtime_capability_sha256);
+    EXPECT_EQ(compiled.runtime_capability_sha256, result.attestation.runtime_capability_sha256);
+    EXPECT_NE(compiled.semantic_source_sha256, compact::Sha256{});
+    EXPECT_NE(compiled.build_identity_sha256, compact::Sha256{});
+
+    reset_startup_compatibility_for_testing();
+    EXPECT_EQ(
+        initialize_registry_compatibility_from_attestation(
+            DeviceAttestationResult{.status = DeviceAttestationStatus::FirmwareUnavailable}),
+        CompatibilityStatus::Uninitialized);
+    EXPECT_EQ(initialize_registry_compatibility_from_attestation(result), CompatibilityStatus::EmptyRegistry);
+    EXPECT_EQ(startup_compatibility_status(), CompatibilityStatus::EmptyRegistry);
+    reset_startup_compatibility_for_testing();
+}
+
+TEST(MatmulConfigRegistry, CompatibilityAttestationReportIsReadOnlyAndFailClosed) {
+    const auto device = derive_device_attestation(valid_attestation_facts());
+    const auto report = registry_compatibility_attestation(device);
+    EXPECT_EQ(report.schema_version, kCompatibilityAttestationSchemaVersion);
+    EXPECT_EQ(device_attestation_status_name(report.device_attestation_status), "success");
+    EXPECT_EQ(report.codegen_recipe_abi, compact::kCodegenRecipeAbi);
+    EXPECT_EQ(report.board_capability_class, device.attestation.board_capability_class);
+    EXPECT_EQ(report.actual_topology_sha256, device.attestation.topology_sha256);
+    EXPECT_EQ(report.actual_runtime_capability_sha256, device.attestation.runtime_capability_sha256);
+    EXPECT_NE(report.actual_semantic_source_sha256, compact::Sha256{});
+    EXPECT_NE(report.actual_build_identity_sha256, compact::Sha256{});
+
+    const auto rejected = registry_compatibility_attestation(
+        DeviceAttestationResult{.status = DeviceAttestationStatus::UnsupportedArchitecture});
+    EXPECT_EQ(device_attestation_status_name(rejected.device_attestation_status), "unsupported_architecture");
+    EXPECT_EQ(rejected.board_capability_class, 0);
+    EXPECT_EQ(rejected.actual_topology_sha256, compact::Sha256{});
+    EXPECT_EQ(rejected.actual_runtime_capability_sha256, compact::Sha256{});
+    EXPECT_NE(rejected.actual_semantic_source_sha256, compact::Sha256{});
+    EXPECT_NE(rejected.actual_build_identity_sha256, compact::Sha256{});
+}
+
+TEST(MatmulConfigRegistry, DeviceAttestationFailsClosedOnEveryRequiredEnvelope) {
+    const auto expect_status = [](const DeviceAttestationFacts& facts, const DeviceAttestationStatus expected) {
+        EXPECT_EQ(derive_device_attestation(facts).status, expected);
+    };
+    auto facts = valid_attestation_facts();
+    facts.device_initialized = false;
+    expect_status(facts, DeviceAttestationStatus::DeviceUninitialized);
+    facts = valid_attestation_facts();
+    facts.remote_only = true;
+    expect_status(facts, DeviceAttestationStatus::RemoteDevice);
+    facts = valid_attestation_facts();
+    facts.device_count = 2;
+    expect_status(facts, DeviceAttestationStatus::NotOneChip);
+    facts = valid_attestation_facts();
+    facts.active_sub_device_manager_is_default = false;
+    expect_status(facts, DeviceAttestationStatus::ActiveSubDeviceManager);
+    facts = valid_attestation_facts();
+    facts.architecture = static_cast<AttestationArchitecture>(0xff);
+    expect_status(facts, DeviceAttestationStatus::UnsupportedArchitecture);
+    facts = valid_attestation_facts();
+    facts.board_class = static_cast<AttestationBoardClass>(0xffffffffU);
+    expect_status(facts, DeviceAttestationStatus::UnsupportedBoard);
+    facts = valid_attestation_facts();
+    facts.cluster_class = static_cast<AttestationClusterClass>(0xff);
+    expect_status(facts, DeviceAttestationStatus::UnsupportedCluster);
+    facts = valid_attestation_facts();
+    facts.board_class = AttestationBoardClass::BlackholeP150;
+    expect_status(facts, DeviceAttestationStatus::BoardClusterMismatch);
+    facts = valid_attestation_facts();
+    facts.firmware_bundle_present = false;
+    expect_status(facts, DeviceAttestationStatus::FirmwareUnavailable);
+    facts = valid_attestation_facts();
+    facts.compute_grid_x = 12;
+    expect_status(facts, DeviceAttestationStatus::InvalidCapability);
+
+    facts = valid_attestation_facts();
+    const auto original = derive_device_attestation(facts).attestation;
+    facts.firmware_bundle_patch++;
+    const auto changed = derive_device_attestation(facts).attestation;
+    EXPECT_EQ(changed.topology_sha256, original.topology_sha256);
+    EXPECT_NE(changed.runtime_capability_sha256, original.runtime_capability_sha256);
 }
 
 TEST(MatmulConfigRegistry, EmptyRegistryStartupCompatibilityFreezesConcurrently) {
@@ -551,6 +686,16 @@ TEST(MatmulConfigRegistry, CompatibilityAndGuardsPrecedeCompactLookup) {
             Mode::On, request, eligibility, compact_metadata(), entries, incompatible)
             .reason,
         ResolutionReason::BuildIdentityMismatch);
+
+    auto unattested_request = request;
+    unattested_request.device.attestation_status = DeviceAttestationStatus::FirmwareUnavailable;
+    EXPECT_EQ(
+        resolve_with_compact_table_for_testing(
+            Mode::On, unattested_request, eligibility, compact_metadata(), entries, compatible_digests())
+            .reason,
+        ResolutionReason::DeviceAttestationUnavailable);
+
+    EXPECT_EQ(resolve(Mode::On, unattested_request, eligibility).reason, ResolutionReason::EmptyRegistry);
 
     auto wrong_runtime_request = request;
     wrong_runtime_request.device.runtime_capability_sha256.back() ^= 1;

@@ -9,9 +9,64 @@ set(MATMUL_REGISTRY_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/device/config/registr
 set(MATMUL_REGISTRY_GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/matmul_registry)
 set(MATMUL_REGISTRY_LOCK ${MATMUL_REGISTRY_SOURCE_DIR}/matmul_registry.lock.json)
 set(MATMUL_REGISTRY_EMITTER ${MATMUL_REGISTRY_SOURCE_DIR}/codegen/emit_cpp.py)
+set(MATMUL_REGISTRY_BUILD_ATTESTATION_EMITTER ${MATMUL_REGISTRY_SOURCE_DIR}/codegen/emit_build_attestation.py)
+set(MATMUL_REGISTRY_SEMANTIC_MANIFEST ${MATMUL_REGISTRY_SOURCE_DIR}/semantic_dependencies.txt)
 set(MATMUL_REGISTRY_DESCRIPTOR ${MATMUL_REGISTRY_SOURCE_DIR}/matmul_registry_descriptor.hpp)
 set(MATMUL_REGISTRY_GENERATED_HEADER ${MATMUL_REGISTRY_GENERATED_DIR}/matmul_registry_data.hpp)
 set(MATMUL_REGISTRY_GENERATED_SOURCE ${MATMUL_REGISTRY_GENERATED_DIR}/matmul_registry_data.cpp)
+set(MATMUL_REGISTRY_BUILD_ATTESTATION_DIR ${MATMUL_REGISTRY_GENERATED_DIR}/$<CONFIG>)
+set(MATMUL_REGISTRY_BUILD_ATTESTATION_HEADER
+    ${MATMUL_REGISTRY_BUILD_ATTESTATION_DIR}/matmul_registry_build_attestation.hpp
+)
+set(MATMUL_REGISTRY_BUILD_ATTESTATION_RECEIPT
+    ${MATMUL_REGISTRY_BUILD_ATTESTATION_DIR}/matmul_registry_build_attestation.json
+)
+
+file(STRINGS ${MATMUL_REGISTRY_SEMANTIC_MANIFEST} MATMUL_REGISTRY_SEMANTIC_PATHS)
+list(FILTER MATMUL_REGISTRY_SEMANTIC_PATHS EXCLUDE REGEX "^[ \\t]*(#|$)")
+set(MATMUL_REGISTRY_SEMANTIC_DEPENDENCIES)
+foreach(path IN LISTS MATMUL_REGISTRY_SEMANTIC_PATHS)
+    list(APPEND MATMUL_REGISTRY_SEMANTIC_DEPENDENCIES ${PROJECT_SOURCE_DIR}/${path})
+endforeach()
+
+set(MATMUL_REGISTRY_BUILD_FACT_ARGUMENTS)
+foreach(
+    fact
+    IN ITEMS
+       cmake_active_config=$<CONFIG>
+       cmake_build_type=${CMAKE_BUILD_TYPE}
+       cmake_generator=${CMAKE_GENERATOR}
+       cmake_generator_platform=${CMAKE_GENERATOR_PLATFORM}
+       cmake_generator_toolset=${CMAKE_GENERATOR_TOOLSET}
+       cmake_cxx_compiler=${CMAKE_CXX_COMPILER}
+       cmake_cxx_compiler_architecture_id=${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}
+       cmake_cxx_compiler_id=${CMAKE_CXX_COMPILER_ID}
+       cmake_cxx_compiler_version=${CMAKE_CXX_COMPILER_VERSION}
+       cmake_cxx_compiler_frontend_variant=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT}
+       cmake_cxx_compiler_target=${CMAKE_CXX_COMPILER_TARGET}
+       cmake_cxx_standard=${CMAKE_CXX_STANDARD}
+       cmake_cxx_flags=${CMAKE_CXX_FLAGS}
+       cmake_cxx_flags_debug=${CMAKE_CXX_FLAGS_DEBUG}
+       cmake_cxx_flags_minsizerel=${CMAKE_CXX_FLAGS_MINSIZEREL}
+       cmake_cxx_flags_release=${CMAKE_CXX_FLAGS_RELEASE}
+       cmake_cxx_flags_relwithdebinfo=${CMAKE_CXX_FLAGS_RELWITHDEBINFO}
+       cmake_position_independent_code=${CMAKE_POSITION_INDEPENDENT_CODE}
+       cmake_system_name=${CMAKE_SYSTEM_NAME}
+       cmake_system_processor=${CMAKE_SYSTEM_PROCESSOR}
+       build_shared_libs=${BUILD_SHARED_LIBS}
+       enable_code_timers=${ENABLE_CODE_TIMERS}
+       enable_distributed=${ENABLE_DISTRIBUTED}
+       enable_libcxx=${ENABLE_LIBCXX}
+       enable_tracy=${ENABLE_TRACY}
+       tt_enable_light_metal_trace=${TT_ENABLE_LIGHT_METAL_TRACE}
+       tt_enable_lto=${TT_ENABLE_LTO}
+       tt_metal_skip_linking=${TT_METAL_SKIP_LINKING}
+       tt_metal_use_emule=${TT_METAL_USE_EMULE}
+       tt_umd_build_simulation=${TT_UMD_BUILD_SIMULATION}
+       tt_use_system_sfpi=${TT_USE_SYSTEM_SFPI}
+)
+    list(APPEND MATMUL_REGISTRY_BUILD_FACT_ARGUMENTS --fact ${fact})
+endforeach()
 
 file(MAKE_DIRECTORY ${MATMUL_REGISTRY_GENERATED_DIR})
 configure_file(
@@ -32,9 +87,25 @@ add_custom_command(
         ${MATMUL_REGISTRY_DESCRIPTOR}
     VERBATIM
 )
+add_custom_command(
+    OUTPUT
+        ${MATMUL_REGISTRY_BUILD_ATTESTATION_HEADER}
+        ${MATMUL_REGISTRY_BUILD_ATTESTATION_RECEIPT}
+    COMMAND
+        ${Python3_EXECUTABLE} ${MATMUL_REGISTRY_BUILD_ATTESTATION_EMITTER} --root ${PROJECT_SOURCE_DIR} --manifest
+        ${MATMUL_REGISTRY_SEMANTIC_MANIFEST} --header ${MATMUL_REGISTRY_BUILD_ATTESTATION_HEADER} --receipt
+        ${MATMUL_REGISTRY_BUILD_ATTESTATION_RECEIPT} ${MATMUL_REGISTRY_BUILD_FACT_ARGUMENTS}
+    DEPENDS
+        ${MATMUL_REGISTRY_BUILD_ATTESTATION_EMITTER}
+        ${MATMUL_REGISTRY_SEMANTIC_MANIFEST}
+        ${MATMUL_REGISTRY_SEMANTIC_DEPENDENCIES}
+    VERBATIM
+)
 add_custom_target(
     matmul_registry_generated
     DEPENDS
+        ${MATMUL_REGISTRY_BUILD_ATTESTATION_HEADER}
+        ${MATMUL_REGISTRY_BUILD_ATTESTATION_RECEIPT}
         ${MATMUL_REGISTRY_GENERATED_HEADER}
         ${MATMUL_REGISTRY_GENERATED_SOURCE}
 )
@@ -88,6 +159,7 @@ target_include_directories(
     ttnn_op_matmul
     PRIVATE
         ${FixmeOpIncDirs}
+        ${MATMUL_REGISTRY_BUILD_ATTESTATION_DIR}
         ${MATMUL_REGISTRY_GENERATED_DIR}
 )
 target_link_libraries(ttnn_op_matmul PUBLIC TTNN::Core PRIVATE TT::Metalium)

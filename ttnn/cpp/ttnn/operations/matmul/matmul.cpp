@@ -299,6 +299,8 @@ static ttnn::Tensor bound_matmul(
                 const auto a_padded = utilities::get_matmul_tensor_padded_shape(input_tensor_a, parameters.transpose_a);
                 const auto b_padded = utilities::get_matmul_tensor_padded_shape(input_tensor_b, parameters.transpose_b);
                 if (a_logical[-1] == b_logical[-2] && a_padded[-1] == b_padded[-2]) {
+                    const auto device_attestation = registry::query_device_attestation(*device_a);
+                    registry::initialize_registry_compatibility_from_attestation(device_attestation);
                     const auto tensor_request = [](const ttnn::Tensor& tensor) {
                         const auto& tile = tensor.tensor_spec().tile();
                         const auto& memory_config = tensor.memory_config();
@@ -353,17 +355,17 @@ static ttnn::Tensor bound_matmul(
                                 },
                             .device =
                                 registry::DeviceRequest{
+                                    .attestation_status = device_attestation.status,
                                     .architecture = static_cast<std::uint32_t>(device_a->arch()),
-                                    .board_capability_class = 0,
+                                    .board_capability_class = device_attestation.attestation.board_capability_class,
                                     .device_count = static_cast<std::uint32_t>(device_a->num_devices()),
                                     .mesh_rows = static_cast<std::uint32_t>(device_a->num_rows()),
                                     .mesh_cols = static_cast<std::uint32_t>(device_a->num_cols()),
                                     .compute_grid_x = grid.x,
                                     .compute_grid_y = grid.y,
-                                    // Capability/topology attestation is not yet exposed by MeshDevice.
-                                    // Zero digests fail closed for every future nonempty table.
-                                    .topology_sha256 = {},
-                                    .runtime_capability_sha256 = {},
+                                    .topology_sha256 = device_attestation.attestation.topology_sha256,
+                                    .runtime_capability_sha256 =
+                                        device_attestation.attestation.runtime_capability_sha256,
                                 },
                             .transpose_a = parameters.transpose_a,
                             .transpose_b = parameters.transpose_b,
