@@ -37,7 +37,7 @@ DataType resolve_index_dtype(
             return indices_dtype;
         }
     }
-    return required_index_dtype(tensor_args.input, args.dim);
+    return is_uint32_index_required(tensor_args.input, args.dim) ? DataType::UINT32 : DataType::UINT16;
 }
 
 // Maps the resolved index dtype onto the circular-buffer data format used by the sort datapath. 16-bit indices
@@ -282,12 +282,11 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
             output_tensor1_dtype);
         // The preallocated indices tensor sets the index width for the whole op. A 16-bit one
         // on an input that needs 32 bits wraps past 65535 and returns the wrong columns.
-        const DataType required_dtype = required_index_dtype(input_tensor, args.dim);
-        const bool indices_too_narrow = output_tensor1_dtype == DataType::UINT16 && required_dtype != DataType::UINT16;
+        const bool indices_too_narrow =
+            output_tensor1_dtype == DataType::UINT16 && is_uint32_index_required(input_tensor, args.dim);
         TT_FATAL(
             !indices_too_narrow,
-            "Preallocated indices tensor must be {} for this input, got: {}",
-            required_dtype,
+            "Preallocated indices tensor must be 32-bit (UINT32 or INT32) for this input, got: {}",
             output_tensor1_dtype);
         TT_FATAL(
             output_tensor0_dtype == input_tensor_dtype,

@@ -423,7 +423,7 @@ def test_topk_preallocated_indices_width(W, input_dtype, index_dtype, raises, de
     )
 
     if raises:
-        with expect_error(RuntimeError, "Preallocated indices tensor must be"):
+        with expect_error(RuntimeError, "must be 32-bit"):
             ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, output_tensor=(value_tensor, index_tensor))
         return
 
