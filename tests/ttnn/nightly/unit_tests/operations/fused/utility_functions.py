@@ -79,7 +79,6 @@ _MIX_PRECISION_GAMMA_DTYPES = (
     ttnn.float32,  # 11 RMSN_GB
 )
 
-# Parametrize as ``"test_id, gamma_dtype"`` so the node id still names the dtype that ran.
 MIX_PRECISION_TEST_IDS = tuple(enumerate(_MIX_PRECISION_GAMMA_DTYPES))
 MIX_PRECISION_TEST_ID_NAMES = tuple(
     f"{name}-{'gb_fp32' if dtype == ttnn.float32 else 'gb_bf16'}"
