@@ -24,6 +24,10 @@ dispatch to any existing CCL op.
 
 Phase-0 proven case: bfloat16/float32, TILE_LAYOUT, dim=3, Linear topology, on a
 Blackhole ``(1, 4)`` line mesh with ``FABRIC_1D`` (bh_quietbox_1x4_hw).
+Refinement 1 adds Ring topology: the wrap link (device N-1 <-> device 0) closes
+the ring so every block travels the short way round — uniform per-direction
+send/arrival depths, same fabric config, behaviour selected by the ``topology``
+kwarg alone.
 """
 
 from __future__ import annotations
@@ -70,9 +74,10 @@ SUPPORTED = {
     "dtype": [ttnn.bfloat16, ttnn.float32],
     # The reduction is a tile compute — TILE_LAYOUT only.
     "layout": [ttnn.TILE_LAYOUT],
-    # Linear line relay is Phase-0. Ring is a refinement candidate (the kernels'
-    # block indices are already ring-modular, T3).
-    "topology": [_Topology.Linear],
+    # Linear line relay (Phase-0) + Ring (Refinement 1). The kernels' block
+    # indices are ring-modular (T3); the topology kwarg alone selects the
+    # host-side depth table + wrap-link wiring, under the SAME FABRIC_1D config.
+    "topology": [_Topology.Linear, _Topology.Ring],
     # Scatter dim, POSITIVE convention. Negative aliases are canonicalized BEFORE
     # the membership test (-1 ≡ 3). dim=2 is a refinement candidate.
     "dim": [3],
@@ -221,7 +226,8 @@ def reduce_scatter(
         input_tensor: sharded across a MeshDevice line; each device holds one
             SAME-shape shard (distinct values). TILE_LAYOUT, interleaved.
         dim: scatter dimension (Phase-0: 3; negative alias -1 accepted).
-        topology: Linear (line relay; Phase-0).
+        topology: Linear (line relay; Phase-0) or Ring (wrap-link short-way
+            relay; Refinement 1). Both run under FABRIC_1D.
         output_tensor: optional pre-allocated output (shape = shard with
             ``[dim] / N``); written into and the SAME handle returned when supplied.
     """

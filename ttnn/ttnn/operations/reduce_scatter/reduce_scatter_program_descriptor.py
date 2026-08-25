@@ -12,12 +12,21 @@ Per device i, one ProgramDescriptor over three fixed logical cores:
   * (0,2) reduce:         reader + compute + writer — arrival-ordered incremental
     N-way SUM of this device's S-tile slice, streamed to the dense output.
 
-Linear block-flow (op_design.md T1/T2): forward carries left->right traffic —
-device i fwd-sends 1 + i blocks (own shard first, then relays of its i fwd
-arrivals) iff it has a right neighbour; fwd arrivals = i. Backward is the mirror.
-Line ends send 0 in the dead direction. The kernels are topology-agnostic (their
-block indices are ring-modular, T3) — Ring is a refinement candidate that only
-swaps this host-side table and the wrap-link wiring.
+Block-flow tables (op_design.md T1/T2 + Refinement 1): the kernels are
+topology-agnostic (their block indices are ring-modular, T3); the `topology`
+kwarg alone selects which host-side depth table + neighbour wiring they run
+under, on the SAME FABRIC_1D fabric config.
+
+  * Linear: forward carries left->right traffic — device i fwd-sends 1 + i
+    blocks (own shard first, then relays of its i fwd arrivals) iff it has a
+    right neighbour; fwd arrivals = i. Backward is the mirror. Line ends send 0
+    in the dead direction.
+  * Ring: the wrap link (device N-1 <-> device 0, 1-hop route via
+    ccl_dm_route(.., Ring)) closes the ring, so every block travels the SHORT
+    way round and depths are UNIFORM across devices — fwd sends N//2 (own +
+    N//2 - 1 relays), bwd sends (N-1)//2; arrivals mirror. On even N the
+    N/2-distance tie is carried by FORWARD only (pinned convention — exactly
+    one direction may carry a block or the reduce core double-counts).
 
 The overlap mechanism (op_design.md T4/T7): after each block's last fabric page the
 sending relay writer issues TWO counting atomic-incs on the same connection — the
@@ -37,6 +46,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import ttnn
+
+# Topology lives on the C++ module; the top-level ttnn.Topology alias only binds
+# AFTER ttnn.operations is auto-imported, so reference the source module directly
+# (same idiom as reduce_scatter.py).
+from ttnn._ttnn.operations.ccl import Topology as _Topology
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
@@ -82,18 +96,42 @@ def _granule(s: int) -> int:
     return 1  # unreachable (1 divides everything)
 
 
-def _block_flow(i: int, num_devices: int):
-    """Linear block-flow table + neighbour wiring for device ``i`` (op_design.md
-    T1/T2).
+def _block_flow(i: int, num_devices: int, topology):
+    """Per-topology block-flow table + neighbour wiring for device ``i``
+    (op_design.md T1/T2 for Linear; Refinement 1 for Ring).
 
     Returns (fwd_sends, fwd_arrivals, bwd_sends, bwd_arrivals,
              fwd_neighbor, bwd_neighbor) — a neighbour is None iff that
     direction is idle (sends == 0).
 
-    Forward carries left->right traffic: device i fwd-sends 1 + i blocks (own
-    shard first, then relays of its i fwd arrivals) iff it has a right
-    neighbour; fwd arrivals = i. Backward is the mirror. Line ends send 0.
+    Linear — forward carries left->right traffic: device i fwd-sends 1 + i
+    blocks (own shard first, then relays of its i fwd arrivals) iff it has a
+    right neighbour; fwd arrivals = i. Backward is the mirror. Line ends send 0.
+
+    Ring — the wrap link closes the ring, so every block travels the SHORT way
+    round: depths are uniform across devices, fwd sends N//2 (own + N//2 - 1
+    relays), bwd sends (N-1)//2, arrivals mirror. Fwd arrival a carries chip
+    (i - 1 - a) mod N (a < N//2), bwd arrival b chip (i + 1 + b) mod N
+    (b < (N-1)//2) — disjoint sets whose union with own is all N chips, so on
+    even N the N/2-distance tie is carried by FORWARD only (pinned convention;
+    exactly one direction may carry a block or the reduce core double-counts).
+    No device is a line end: the num_sends == 0 idle path goes unused (kept —
+    Linear still needs it, except bwd on N == 2 where the "ring" degenerates).
     """
+    if topology == _Topology.Ring:
+        fwd_sends = num_devices // 2  # own + N//2 - 1 relays; ties travel fwd
+        bwd_sends = (num_devices - 1) // 2
+        fwd_arrivals = fwd_sends  # arrivals mirror sends: uniform depths
+        bwd_arrivals = bwd_sends
+        # Verifier-mandated per-device invariants: exactly N-1 blocks out and
+        # N-1 in; the kernel-side static_assert
+        # (fwd_arrivals + bwd_arrivals + 1 == ring_size) then holds by construction.
+        assert fwd_sends + bwd_sends == num_devices - 1
+        assert fwd_arrivals + bwd_arrivals == num_devices - 1
+        fwd_neighbor = (i + 1) % num_devices if fwd_sends > 0 else None
+        bwd_neighbor = (i - 1) % num_devices if bwd_sends > 0 else None
+        return fwd_sends, fwd_arrivals, bwd_sends, bwd_arrivals, fwd_neighbor, bwd_neighbor
+
     num_targets_fwd = num_devices - 1 - i  # devices reachable rightward
     num_targets_bwd = i  # devices reachable leftward
     fwd_sends = 1 + num_targets_bwd if num_targets_fwd > 0 else 0
@@ -134,7 +172,7 @@ def _build_device_program(
     input_ta, gather_ta, output_ta = accessors
     fwd_noc, bwd_noc, reduce_noc = noc_coords
 
-    fwd_sends, fwd_arrivals, bwd_sends, bwd_arrivals, fwd_neighbor, bwd_neighbor = _block_flow(i, num_devices)
+    fwd_sends, fwd_arrivals, bwd_sends, bwd_arrivals, fwd_neighbor, bwd_neighbor = _block_flow(i, num_devices, topology)
 
     fwd_set = ttnn.CoreRangeSet([ttnn.CoreRange(_FWD_CORE, _FWD_CORE)])
     bwd_set = ttnn.CoreRangeSet([ttnn.CoreRange(_BWD_CORE, _BWD_CORE)])

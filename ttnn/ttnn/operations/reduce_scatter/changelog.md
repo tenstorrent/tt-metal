@@ -31,3 +31,35 @@
   edges). Pre-existing: test_ring_fabric_probe.py (4 — Ring wrap-link fabric precondition,
   re-confirmed green for Refinement 1). All on real silicon (`bh_quietbox_1x4_hw`, mesh (1,4),
   FABRIC_1D) via `scripts/run_multidevice_sim_pytest.py --op reduce_scatter`.
+
+## Refinement 1 — Ring topology
+- **Date**: 2026-08-25
+- **What was done**: Added `ttnn.Topology.Ring` to `SUPPORTED["topology"]`. Host-side only, as
+  op_design.md predicted (the kernels' block indices were already ring-modular, T3 — zero kernel
+  edits): `_block_flow` in the program descriptor grew a Ring branch with uniform short-way depths
+  (fwd sends/arrivals = N//2, own + N//2−1 relays; bwd = (N−1)//2; even-N N/2-distance tie pinned
+  to FORWARD only) plus per-device asserts `fwd+bwd sends == N−1` and `fwd+bwd arrivals == N−1`
+  (the kernel-side `fwd_arrivals + bwd_arrivals + 1 == ring_size` static_assert then holds by
+  construction); neighbours are modular (`(i±1) % N`) so devices N−1/0 wire the wrap link via the
+  existing `_wire_direction` → `ccl_dm_route(.., Ring)` (1-hop wrap route, fixed in `32186aa74e`,
+  precondition confirmed by test_ring_fabric_probe.py). Behaviour selected by the `topology` kwarg
+  alone under the SAME FABRIC_1D config; the `num_sends == 0` idle path kept for Linear (and the
+  degenerate N=2 ring bwd). `_wire_direction`'s `route.num_hops == 1` assert held on the wrap pair.
+- **Accuracy achieved**: identical error budget to the Linear Phase-0 baseline (arithmetic
+  unchanged — only who-relays-what moved): bf16 worst-device PCC=0.9999954, max_abs_err=0.0625
+  (3 ULP), rel_rms=0.0044; fp32 PCC=0.9999999, max_abs_err=0.0076, rel_rms=0.0008 — on shapes
+  [(1,1,64,256), (2,1,64,256)], N=4 Blackhole ring, fp32-accumulated oracle
+  (test_ring_precision_metrics).
+- **Golden test progress**: 12/24 registry cells passing (was 6/24), 12 typed xfails (all
+  `dim=2` — the 6 Ring×dim=2 cells stay refused via the `dim` axis until Refinement 2).
+  `eval.verify_supported` clean: supported_pass=12, xfail_expected=12, xpass_drift=0,
+  supported_fail=0, xfail_wrong_mode=0 (generated/reduce_scatter_verify_r1/verifier_report.json).
+  Translated `test_ring_reduce_scatter_refinement_axis` flipped to PASS with no edit. Full
+  non-regression sweep (unit + golden dirs): 73 passed, 12 xfailed on `bh_quietbox_1x4_hw`.
+- **Issues encountered**: None — first silicon run of the full ring schedule passed (20/20),
+  including the program-cache-hit re-arm across the wrap link.
+- **Tests added**: test_reduce_scatter_ring.py (24 — host-only depth-table invariants for
+  N∈2..9 incl. send→arrival handshake + disjoint tie-broken source coverage, Linear-table
+  non-regression, ring functional grid bf16/fp32 × {S=1, multi-tile, multi-batch, S=9 g=1},
+  3-iteration cache-hit re-arm over the wrap link, output_tensor path, Linear↔Ring switch in one
+  mesh session, ring precision metrics).

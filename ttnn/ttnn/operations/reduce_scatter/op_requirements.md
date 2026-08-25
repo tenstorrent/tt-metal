@@ -53,7 +53,7 @@
   `generated/reduce_scatter_verify/verifier_report.json`). Precision: bf16 worst-PCC 0.999995
   (max err 3 ULP = N−1 accumulator pack roundings), fp32 worst-PCC 0.9999999 (rel-RMS ≈ 6.3e-4).
 
-### [ ] Refinement 1 — Ring topology
+### [x] Refinement 1 — Ring topology
 
 **Goal**: add `ttnn.Topology.Ring` to `SUPPORTED["topology"]`. Ring closes the wrap link
 (device N−1 ↔ device 0) so every block travels the SHORT way round: per direction, send/arrival
