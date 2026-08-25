@@ -145,47 +145,47 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 # Traced and untraced get SEPARATE tables and SEPARATE margins, selected by mode in
 # `kimi_chunked_perf_gate` -- a traced baseline can never gate an untraced run or vice versa. The two
 # are different regimes, not a small delta: traced measures 0.6-0.95 s/chunk (a ramp, since chunk c
-# attends to KV[0:c*CHUNK]) while untraced is a flat ~1.09 s/chunk, host-dispatch bound so the op2op
+# attends to KV[0:c*CHUNK]) while untraced is a flat ~1.04 s/chunk, host-dispatch bound so the op2op
 # gap swamps the depth ramp entirely.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
-    # (55k / code_debug), measured after the Fabric2D TorusXY routing fixes. Each entry is the median
-    # across the per-run medians from run 31944546064/job 95160035844 and run 31951045807/job
-    # 95176102903. With two runs, that is the midpoint of the two observations rather than either
-    # run's one-sided value.
+    # (55k / code_debug). Re-centered 2026-08-24 (issue #54220): the op got 2-6% FASTER and 7/11 chunks
+    # fell out the bottom of the old band -- the baseline was stale, not the margin too tight. Likely
+    # source is #53968 (active-ERISC __global_pointer$ link fix); a branch that is 08-23 main with
+    # #53968 reverted (run 32666670314) still measures the pre-shift level.
+    #
+    # These are the per-chunk medians of run 32722605093/job 97446035784 (main) verbatim -- the current
+    # level, measured on main, is the baseline. Run 32731794058/job 97448128368 independently agrees to
+    # <=0.010 s on every chunk, so it also sits well inside the +/- 3% band around these numbers.
     (61, 11, 10): [
-        0.5660,
-        0.5695,
-        0.6120,
-        0.6615,
-        0.6925,
-        0.7205,
-        0.7455,
-        0.7785,
-        0.8200,
-        0.8585,
-        0.8935,
+        0.547,
+        0.550,
+        0.596,
+        0.624,
+        0.660,
+        0.691,
+        0.705,
+        0.744,
+        0.798,
+        0.835,
+        0.875,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
-    # (55k / code_debug). Per chunk, the MEDIAN OVER 10 CI RUNS of that run's own per-chunk median --
-    # a single run is not a usable baseline here the way it is for the traced twin. The 10 (all green,
-    # 2026-08-15, `main`, bh_sc1_high_power): 31868565025 31868547288 31868532277 31868515545
-    # 31868482938 31868467067 31868452031 31868433473 31867986909 31866023124.
+    # (55k / code_debug), 2026-08-21 on an 8x4 galaxy, with the routed experts folded into one program
+    # on a Fabric2D mesh. One run's per-chunk medians -- unlike the traced twin, a single run is thin
+    # evidence here, so re-cut this from a set of green runs the first time it disagrees.
     #
     # WITHIN a run the untraced spread is huge -- per-chunk stddev reaches 0.33 s (~30%), because every
     # iteration re-dispatches every op from host and pays a fresh, variable op2op gap. The MEDIAN of the
-    # 9 post-warmup iterations is not: across those 10 runs no chunk median lands further than 2.9% from
-    # the values below, and widening the sample to all 32 runs with a table from 2026-08-11 to 08-15
-    # (many branches) only reaches 3.2%. So the gate is on the median, with UNTRACED_PERF_MARGIN rather
-    # than the traced 3%.
+    # 9 post-warmup iterations is not: on the previous baseline no chunk median across 32 recorded runs
+    # landed further than 3.2% from its median-of-runs value. So the gate is on the median, with
+    # UNTRACED_PERF_MARGIN rather than the traced 3%.
     #
-    # If this does go flaky, re-center before widening: these are the median over the 10 runs, and
-    # centering each chunk on the midrange of all 32 instead pulls the worst deviation to 2.7% (the
-    # 3.2% is one-sided). Widening to 10% is the fallback after that -- every observed run fits inside
-    # a 6.2% total spread, so a band that needs more than 10% is a regression, not noise.
-    (61, 11, 10): [1.095, 1.094, 1.091, 1.098, 1.093, 1.089, 1.092, 1.089, 1.094, 1.089, 1.090],
+    # If this goes flaky, re-center on the median over several runs before widening. Widening to 10% is
+    # the fallback after that -- a band that needs more than 10% is a regression, not noise.
+    (61, 11, 10): [1.043, 1.036, 1.037, 1.047, 1.044, 1.034, 1.034, 1.034, 1.046, 1.041, 1.044],
 }
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
 # program, so the device is its only noise source; untraced re-dispatches from host every iteration and

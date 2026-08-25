@@ -28,6 +28,7 @@ def run_bug_check(
     pr_info: PRInfo,
     sarif_path: Optional[Path] = None,
     post_comments: bool = False,
+    suppress_empty_result: bool = False,
 ) -> list[Finding]:
     """Run all matching rules against a PR and produce output.
 
@@ -35,6 +36,10 @@ def run_bug_check(
         pr_info: PR metadata including diff, changed files, and labels.
         sarif_path: If set, write SARIF output to this path.
         post_comments: If True, post findings as PR comments.
+        suppress_empty_result: If True, skip posting a PR comment when there is
+            nothing to report (no findings, no failed rules, no truncated-diff
+            warnings). Used for automatic (non-comment-triggered) runs so a clean
+            PR doesn't get a "no issues found" comment with no actionable signal.
 
     Returns:
         List of all findings.
@@ -46,7 +51,7 @@ def run_bug_check(
     if not matched_rules:
         logger.info("No rules matched this PR.")
         print_findings([])
-        if post_comments:
+        if post_comments and not suppress_empty_result:
             post_pr_comment(
                 pr_number=pr_info.number,
                 body="## Bug Checker\nNo rules matched the files in this PR — nothing to check." + RERUN_FOOTER,
@@ -68,7 +73,9 @@ def run_bug_check(
             write_sarif([], failed_rules, sarif_path)
             logger.info(f"SARIF output written to {sarif_path}")
         if post_comments:
-            _post_findings_as_comments(pr_info, [], failed_rules, [], rule_paths)
+            _post_findings_as_comments(
+                pr_info, [], failed_rules, [], rule_paths, suppress_empty_result=suppress_empty_result
+            )
         raise BugCheckFailed("Bug Checker failed during LLM setup") from e
 
     all_findings: list[Finding] = []
@@ -131,7 +138,14 @@ def run_bug_check(
 
     # Output: PR comments
     if post_comments:
-        _post_findings_as_comments(pr_info, all_findings, failed_rules, truncated_rules, rule_paths)
+        _post_findings_as_comments(
+            pr_info,
+            all_findings,
+            failed_rules,
+            truncated_rules,
+            rule_paths,
+            suppress_empty_result=suppress_empty_result,
+        )
 
     if failed_rules:
         raise BugCheckFailed(
@@ -349,6 +363,7 @@ def _post_findings_as_comments(
     failed_rules: list[str],
     truncated_rules: list[str],
     rule_paths: dict[str, str],
+    suppress_empty_result: bool = False,
 ) -> None:
     """Post findings as PR comments (inline where valid, general otherwise) plus a summary."""
     valid_diff_lines = diff_line_numbers(pr_info.diff)
@@ -382,6 +397,10 @@ def _post_findings_as_comments(
             logger.warning(f"Failed to post comment for {finding.rule_id} at {finding.file}:{finding.line}: {e}")
 
     logger.info(f"Comments: {inline_posted} inline, {general_posted} general, {failed} failed")
+
+    if suppress_empty_result and not findings and not failed_rules and not truncated_rules:
+        logger.info("Nothing to report and suppress_empty_result is set — skipping summary comment.")
+        return
 
     # Post summary comment
     try:

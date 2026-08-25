@@ -293,14 +293,14 @@ struct NoOp {
  * @tparam scaler_dfb_id DataflowBuffer ID containing scaler tile (compile-time CB id)
  * @tparam output_dfb_id Output DataflowBuffer ID for reduced tiles (compile-time CB id)
  *                       The input/output formats are deduced from these CB ids
- *                       (unpack_src_format / pack_dst_format), so Int32 MAX and SUM are routed to
- *                       the SFPU path automatically (Int32 has no FPU support).
- *                       Other formats use FPU/GMPOOL. Only REDUCE_ROW/REDUCE_COL Int32 MAX/SUM on
- *                       SFPU; MIN dispatched via reduce_{h,w}_neg.cpp (SFPU vs FPU branch).
+ *                       (unpack_src_format / pack_dst_format), so Int32 is routed to the SFPU path
+ *                       automatically (Int32 has no FPU support). Other formats use FPU/GMPOOL
+ *                       unless Accurate fp32 is requested. SFPU covers REDUCE_ROW/REDUCE_COL only;
+ *                       fast-mode float/bf16 MIN is dispatched via reduce_{h,w}_neg.cpp.
  * @tparam input_policy Input handling policy (default: WaitAndPopPerTile - streaming mode)
  * @tparam reconfig_mode Data format reconfiguration mode (default: INPUT_AND_OUTPUT)
- * @tparam fp32_mode Float32 precision mode (default: Fast). Accurate routes Float32 SUM and MAX
- *                   through the SFPU at full fp32; see ReduceFp32Mode.
+ * @tparam fp32_mode Float32 precision mode (default: Fast). Accurate routes Float32 through the
+ *                   SFPU at full fp32; see ReduceFp32Mode.
  *
  * @param input_block_shape Tile grid dimensions (rows x cols x batches)
  *              Use ReduceInputBlockShape::of(r, c, b), ::row(c), ::col(r), or ::single()

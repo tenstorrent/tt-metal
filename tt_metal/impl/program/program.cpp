@@ -52,6 +52,7 @@
 #include "impl/device/device_impl.hpp"
 #include "impl/memory_tracking/memory_stats_shm.hpp"
 #include "tt-metalium/mesh_device.hpp"
+#include "tt-metalium/mesh_workload.hpp"
 #include <unistd.h>
 #include "jit_build/build.hpp"
 #include <tt_stl/enum.hpp>
@@ -453,6 +454,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .unpack_to_dest_mode = compute_descriptor.unpack_to_dest_mode,
                         .bfp8_pack_precise = compute_descriptor.bfp8_pack_precise,
                         .math_approx_mode = compute_descriptor.math_approx_mode,
+                        .enable_trisc2_rvv = compute_descriptor.enable_trisc2_rvv,
                         .compile_args = std::move(compile_args),
                         .defines = std::move(defines),
                         .named_compile_args = std::move(named_compile_args),
@@ -3054,6 +3056,12 @@ void detail::ProgramCompileGroup::clear() {
 bool detail::ProgramCompileGroup::contains(tt::tt_metal::IDevice* device) {
     std::lock_guard lock(mutex_);
     return program_device_map_.contains(device);
+}
+
+void LaunchProgram(distributed::MeshDevice& mesh_device, Program&& program, bool wait_until_cores_done) {
+    distributed::MeshWorkload workload;
+    workload.add_program(distributed::MeshCoordinateRange(mesh_device.shape()), std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, wait_until_cores_done);
 }
 
 }  // namespace tt::tt_metal
