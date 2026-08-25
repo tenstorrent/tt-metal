@@ -163,5 +163,19 @@ namespace unified {
 // byte offset needs the answer in code shared by all five threads.
 inline uint32_t cb_page_bytes(uint32_t cb) { return get_local_cb_interface(cb).fifo_page_size << cb_addr_shift; }
 
+// How many pages the HOST configured this circular buffer with.
+//
+// DATA MOVEMENT ONLY, unlike cb_page_bytes above, and the difference is a LINK one rather
+// than anything about the value. `cb_interface` has no definition in a TRISC link -- a
+// live reference from a compute projection fails with "undefined reference to
+// cb_interface" out of the LLK headers. cb_page_bytes gets away with appearing in shared
+// code only because its result is invariably dead on compute and LTO deletes the call
+// before the linker sees it; a use that compute genuinely evaluates would fail the same
+// way. So anything reading this must sit behind a data-movement guard.
+//
+// The value is the same fact on every projection regardless, since the host configures
+// one circular buffer for the core, which is what makes checking it on one thread enough.
+inline uint32_t cb_num_pages(uint32_t cb) { return get_local_cb_interface(cb).fifo_num_pages; }
+
 }  // namespace unified
 }  // namespace tt
