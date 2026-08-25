@@ -125,12 +125,12 @@ class VisionModelArgs(ModelArgs):
         key_prefixes = ("visual.", "model.visual.")
         vision_state_dict = load_hf_state_dict_filtered(self.CKPT_DIR, key_prefixes)
         if not vision_state_dict:
-            logger.warning(
-                "No vision weights found in {} for prefixes {}. Vision model will use default init.",
-                self.CKPT_DIR,
-                key_prefixes,
+            # A randomly initialized tower would produce plausible-looking but
+            # invalid outputs; random init is reserved for dummy_weights.
+            raise RuntimeError(
+                f"No vision weights found in {self.CKPT_DIR} for prefixes {key_prefixes}; "
+                "refusing to serve a randomly initialized vision tower."
             )
-            return vision_model
 
         prefix_stripped_state_dict = {}
         for key, value in vision_state_dict.items():
@@ -151,18 +151,16 @@ class VisionModelArgs(ModelArgs):
             len(model_keys),
         )
         if not filtered_state_dict:
-            logger.warning(
-                "No matching vision weights found after filtering for {}. Check prefixes or checkpoint contents.",
-                key_prefixes,
+            raise RuntimeError(
+                f"No matching vision weights after filtering for {key_prefixes}: "
+                "check prefixes or checkpoint contents."
             )
-            return vision_model
 
         load_result = vision_model.load_state_dict(filtered_state_dict, strict=False)
         if load_result.missing_keys:
-            logger.warning(
-                "Vision model missing {} of {} weights after filtered load.",
-                len(load_result.missing_keys),
-                len(model_keys),
+            raise RuntimeError(
+                f"Vision model is missing {len(load_result.missing_keys)} of "
+                f"{len(model_keys)} weights after filtered load (e.g. {load_result.missing_keys[:3]})."
             )
         if load_result.unexpected_keys:
             logger.warning(

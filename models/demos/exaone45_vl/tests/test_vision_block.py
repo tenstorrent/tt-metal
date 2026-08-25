@@ -34,8 +34,7 @@ def test_vision_block_inference(
 ):
     n_layers = 28  # EXAONE-4.5 vision depth (Qwen2.5-VL had 32)
     dtype = ttnn.bfloat8_b
-    pccs = [0.99] * n_layers
-    pccs[24:] = [0.85] * (n_layers - 24)
+    pccs = [0.99] * n_layers  # all 28 blocks measured >= 0.995 on real weights
     batch_size = 1  # For prefill we only support batch_size = 1
 
     # Example inputs

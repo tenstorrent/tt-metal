@@ -79,6 +79,9 @@ def test_wrapped_vision_model_inference(
     # wrapped model produces. 4.x returned that merged tensor directly.
     if getattr(reference_output, "pooler_output", None) is not None:
         reference_output = reference_output.pooler_output
+    if isinstance(reference_output, (list, tuple)):
+        # Exaone4_5_VisionModel returns per-image merged embeddings as a tuple
+        reference_output = torch.cat(list(reference_output), dim=0)
     tt_output_torch = torch_model(pt_pixel_values, image_grid_thw)
 
     # Compare outputs

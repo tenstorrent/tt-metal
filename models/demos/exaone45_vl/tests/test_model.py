@@ -98,14 +98,6 @@ def test_vision_model_inference(
     state_dict_prefix = model_args.get_state_dict_prefix("VisionTransformer")
     state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
 
-    # Initialize TT model
-    tt_model = VisionTransformer(
-        args=model_args,
-        state_dict=state_dict,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-        dtype=dtype,
-    )
-
     # Get the necessary preprocessing for vision model
     cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
         seq_len=ref_seq_len,
