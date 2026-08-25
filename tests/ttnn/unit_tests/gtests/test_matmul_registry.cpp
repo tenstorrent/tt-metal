@@ -12,6 +12,7 @@
 #include <tt_stl/reflection.hpp>
 
 #include "ttnn/operations/matmul/device/config/matmul_config_registry.hpp"
+#include "ttnn/operations/matmul/device/config/registry/matmul_registry_descriptor.hpp"
 
 namespace ttnn::operations::matmul::registry {
 namespace {
@@ -31,6 +32,30 @@ using tt::tt_metal::MemoryConfig;
 using tt::tt_metal::TensorMemoryLayout;
 using tt::tt_metal::Tile;
 
+static_assert(std::is_trivially_copyable_v<compact::KeyDescriptor>);
+static_assert(std::is_trivially_copyable_v<compact::ReplayDescriptor>);
+static_assert(std::is_trivially_copyable_v<compact::EntryDescriptor>);
+
+compact::KeyDescriptor compact_key(const std::uint64_t logical_m) {
+    compact::KeyDescriptor key{};
+    key.architecture = 2;
+    key.board_capability_class = 1;
+    key.codegen_recipe_abi = 1;
+    key.compute_grid_x = 8;
+    key.compute_grid_y = 8;
+    key.device_count = 1;
+    key.logical_k = 256;
+    key.logical_m = logical_m;
+    key.logical_n = 512;
+    key.mesh_cols = 1;
+    key.mesh_rows = 1;
+    key.padded_k = 256;
+    key.padded_m = logical_m;
+    key.padded_n = 512;
+    key.schema_version = 1;
+    return key;
+}
+
 IoContractRequest default_io_request() {
     return {
         .input_a_dtype = DataType::BFLOAT16,
@@ -46,6 +71,35 @@ Recipe basic_recipe() {
         .compute_kernel_config = DeviceComputeKernelConfig{},
         .untilize_out = false,
     };
+}
+
+TEST(MatmulConfigRegistry, CompactLookupIsExactNonOwningAndSidebandIndependent) {
+    std::array<compact::EntryDescriptor, 3> entries{};
+    entries[0].key = compact_key(64);
+    entries[1].key = compact_key(128);
+    entries[2].key = compact_key(256);
+    entries[0].entry_id[0] = 0xff;
+    entries[1].entry_id[0] = 0x01;
+    entries[2].entry_id[0] = 0x00;
+
+    const auto requested = compact_key(128);
+    const auto index = compact::ExactIndex{entries};
+    EXPECT_EQ(index.size(), entries.size());
+    const auto* hit = index.lookup(requested);
+    ASSERT_EQ(hit, &entries[1]);
+    EXPECT_EQ(hit->entry_id[0], 0x01);
+
+    auto shape_miss = requested;
+    shape_miss.logical_n += 1;
+    EXPECT_EQ(index.lookup(shape_miss), nullptr);
+
+    auto topology_miss = requested;
+    topology_miss.topology_sha256.back() = 1;
+    EXPECT_EQ(index.lookup(topology_miss), nullptr);
+
+    auto domain_miss = requested;
+    domain_miss.domain = compact::Domain::DenseLinear;
+    EXPECT_EQ(index.lookup(domain_miss), nullptr);
 }
 
 MatmulRegistryRequest exact_request(const OperationDomain domain = OperationDomain::DenseMatmul) {

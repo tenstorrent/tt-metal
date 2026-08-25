@@ -30,10 +30,10 @@ std::array<AtomicDomainStats, kOperationDomainCount> stats;
 constexpr std::size_t index(const OperationDomain domain) { return static_cast<std::size_t>(domain); }
 constexpr std::size_t index(const ResolutionReason reason) { return static_cast<std::size_t>(reason); }
 
-const Recipe* lookup_exact(const MatmulRegistryRequest& request) noexcept {
-    // B0/B2 deliberately carry no native or generated production entry. B1
-    // replaces this stub with POD descriptor lookup plus separate fallible
-    // native materialization; an allocating Recipe must never become the table.
+const Recipe* lookup_empty_native_table(const MatmulRegistryRequest& request) noexcept {
+    // The checked production lock deliberately starts empty. B1's generated
+    // table is compact POD; its future fallible native materializer must not
+    // turn this empty native seam into a table of allocating Recipes.
     static_cast<void>(request);
     return nullptr;
 }
@@ -229,7 +229,7 @@ static Resolution resolve_impl(
     if (synthetic_request != nullptr && synthetic_recipe != nullptr && *synthetic_request == request) {
         return {.reason = ResolutionReason::CertifiedMatch, .recipe = synthetic_recipe};
     }
-    if (const auto* recipe = lookup_exact(request); recipe != nullptr) {
+    if (const auto* recipe = lookup_empty_native_table(request); recipe != nullptr) {
         return {.reason = ResolutionReason::CertifiedMatch, .recipe = recipe};
     }
 

@@ -3,6 +3,58 @@ include(sources.cmake)
 add_library(ttnn_op_matmul ${LIB_TYPE})
 add_library(TTNN::Ops::Matmul ALIAS ttnn_op_matmul)
 
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
+set(MATMUL_REGISTRY_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/device/config/registry)
+set(MATMUL_REGISTRY_GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/matmul_registry)
+set(MATMUL_REGISTRY_LOCK ${MATMUL_REGISTRY_SOURCE_DIR}/matmul_registry.lock.json)
+set(MATMUL_REGISTRY_EMITTER ${MATMUL_REGISTRY_SOURCE_DIR}/codegen/emit_cpp.py)
+set(MATMUL_REGISTRY_DESCRIPTOR ${MATMUL_REGISTRY_SOURCE_DIR}/matmul_registry_descriptor.hpp)
+set(MATMUL_REGISTRY_GENERATED_HEADER ${MATMUL_REGISTRY_GENERATED_DIR}/matmul_registry_data.hpp)
+set(MATMUL_REGISTRY_GENERATED_SOURCE ${MATMUL_REGISTRY_GENERATED_DIR}/matmul_registry_data.cpp)
+
+file(MAKE_DIRECTORY ${MATMUL_REGISTRY_GENERATED_DIR})
+configure_file(
+    ${PROJECT_SOURCE_DIR}/cmake/clang-tidy.d/.clang-tidy.disable.yaml
+    ${MATMUL_REGISTRY_GENERATED_DIR}/.clang-tidy
+    COPYONLY
+)
+add_custom_command(
+    OUTPUT
+        ${MATMUL_REGISTRY_GENERATED_HEADER}
+        ${MATMUL_REGISTRY_GENERATED_SOURCE}
+    COMMAND
+        ${Python3_EXECUTABLE} ${MATMUL_REGISTRY_EMITTER}
+        --lock ${MATMUL_REGISTRY_LOCK}
+        --header ${MATMUL_REGISTRY_GENERATED_HEADER}
+        --source ${MATMUL_REGISTRY_GENERATED_SOURCE}
+    DEPENDS
+        ${MATMUL_REGISTRY_LOCK}
+        ${MATMUL_REGISTRY_EMITTER}
+        ${MATMUL_REGISTRY_DESCRIPTOR}
+    VERBATIM
+)
+add_custom_target(
+    matmul_registry_generated
+    DEPENDS
+        ${MATMUL_REGISTRY_GENERATED_HEADER}
+        ${MATMUL_REGISTRY_GENERATED_SOURCE}
+)
+add_dependencies(ttnn_op_matmul matmul_registry_generated)
+if(TARGET all_generated_files)
+    add_dependencies(all_generated_files matmul_registry_generated)
+endif()
+set_source_files_properties(
+    ${MATMUL_REGISTRY_GENERATED_SOURCE}
+    PROPERTIES
+        GENERATED
+            TRUE
+        SKIP_LINTING
+            TRUE
+        SKIP_UNITY_BUILD_INCLUSION
+            ON
+)
+
 tt_reuse_precompile_headers(ttnn_op_matmul TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_matmul)
 set_target_properties(
@@ -31,9 +83,10 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         ${TTNN_OP_MATMUL_SRCS}
+        ${MATMUL_REGISTRY_GENERATED_SOURCE}
 )
 
-target_include_directories(ttnn_op_matmul PRIVATE ${FixmeOpIncDirs})
+target_include_directories(ttnn_op_matmul PRIVATE ${FixmeOpIncDirs} ${MATMUL_REGISTRY_GENERATED_DIR})
 target_link_libraries(ttnn_op_matmul PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
