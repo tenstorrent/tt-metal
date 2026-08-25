@@ -295,10 +295,11 @@ _MARK_PASS_TEMPLATE = """{i}# --- per-stage marks (injected) -------------------
 {i}# this scope: an earlier version copied the test's own PipelineStageAdapter(...) arguments into the
 {i}# profiling branch and raised NameError, since the generator had defined them inside another
 {i}# function. Handed locals() rather than a name, so nothing depends on how the test spells things.
+{i}print("STAGE_MARKS_ENTER", flush=True)
 {i}try:
 {i}    from models.experimental.perf_automation.agent import stage_marks as _tt_sm2
 
-{i}    _tt_sm2.mark_stages_in_scope(locals(), device{bind})
+{i}    print("STAGE_MARKS_RESULT=%d" % _tt_sm2.mark_stages_in_scope(locals(), device{bind}), flush=True)
 {i}except Exception as _tt_e2:  # noqa: BLE001
 {i}    print("STAGE_MARKS_SKIPPED=%r" % (_tt_e2,), flush=True)
 """
