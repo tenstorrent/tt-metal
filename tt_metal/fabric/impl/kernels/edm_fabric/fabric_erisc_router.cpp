@@ -1604,10 +1604,9 @@ void run_coordinated_context_switch_to_base_firmware(
         }
         if (link_up_now) {
             dbell_was_down = false;
-            // [#45872 LOST-vs-RESET PROBE] STOP flag DISABLED -- senders must run to completion into the sync
-            // barrier so the sync packet reaches the slot and the word[23] min-free probe can read it.
-            // *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_AT_DOWN_ADDR) = 1u;           // w10
-            // STOP_FLAG = 1
+            // [OPTION1] STOP flag DISABLED -- senders run to completion into the barrier so the last-packet
+            // reconcile fires in the naturally-drained state (residual = true off-by-one deficit).
+            // *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_RECV_AT_DOWN_ADDR) = 1u;  // w10 STOP_FLAG = 1
             *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_LINK_DOWN_FLAG_ADDR) =
                 exact_free_now;  // w13 EXACT_FREE_AT_UP (backlog)
             *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_DBELL_NEUTRAL_MIN_ADDR) =

@@ -1209,7 +1209,58 @@ struct LineSyncConfig {
 
         // sync wait
         // [SYNC-PROBE] instrumented; identical wait semantics to noc_semaphore_wait_min().
+        // [#45872 V3] The stream-22 reconcile now runs in the driver (global_sync) BEFORE this blocking wait, so it
+        // can cover EVERY sync config (any direction can be the stranded one), not just config[0]. See
+        // reconcile_stream22_once() / poll_barrier() below.
         sync_dbg_wait_min(line_sync_ptr, target, SYNC_DBG_TAG_GLOBAL_ENTER, sync_iter);
+    }
+
+    // [#45872 V3] True once this line's barrier semaphore has reached the round's target.
+    bool poll_barrier(uint8_t sync_iter) {
+        invalidate_l1_cache();
+        return *line_sync_ptr >= line_sync_val * (sync_iter + 1);
+    }
+
+    // [#45872 V3] One reconcile pass on THIS config's stream 22. The barrier can wedge because a retrain dropped
+    // this sync's stream-22 doorbell decrement: the router's free-slots register reads 32/empty and never forwards
+    // the sync sitting in the slot. The SYNC connection that owns the slot is the truth -- get_num_free_write_slots
+    // = num_buffers - packets_in_flight, so it reads 31 when one sync is genuinely stranded on-chip (lost doorbell)
+    // but 32 if the packet was instead lost on the eth forward (a resend problem, not ours). We record both numbers
+    // to this config's router debug words so the host SLOT dump shows the sync core's view -- w17=exact-free,
+    // w18=register, w19=0xCAFE|delta (the marker proves the write landed) -- then inject the deficit only when it is
+    // a small nonzero delta (the sync channel holds a single packet, so |delta|<=4; delta==0 is a no-op). Returns
+    // the injected delta (0 if none).
+    int32_t reconcile_stream22_once(uint32_t scratch) {
+        auto* sc = static_cast<EdmSenderT*>(connection_ptr_);
+        const uint8_t rnoc = get_fabric_worker_noc();
+        const uint32_t upd_addr = sc->edm_buffer_remote_free_slots_update_addr;
+        const uint32_t ef = sc->get_num_free_write_slots();  // sync conn exact free (31 if stranded on-chip)
+        noc_async_read(get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, upd_addr + 0x6Cu, rnoc), scratch, sizeof(uint32_t));
+        noc_async_read_barrier(rnoc);
+        invalidate_l1_cache();
+        const uint32_t actual = (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)) & 0x1FFFFu;
+        const int32_t delta = static_cast<int32_t>(ef) - static_cast<int32_t>(actual);
+        // telemetry -> this config's router debug words (host SLOT dump reads w0..w25 on the eth core)
+        noc_inline_dw_write(
+            get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, ERISC_DBG_SLOT_BASE + 17u * 4u, rnoc), ef, 0xf, rnoc);
+        noc_inline_dw_write(
+            get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, ERISC_DBG_SLOT_BASE + 18u * 4u, rnoc), actual, 0xf, rnoc);
+        noc_inline_dw_write(
+            get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, ERISC_DBG_SLOT_BASE + 19u * 4u, rnoc),
+            0xCAFE0000u | (static_cast<uint32_t>(delta) & 0xFFFFu),
+            0xf,
+            rnoc);
+        int32_t injected = 0;
+        if (delta != 0 && delta >= -4 && delta <= 4) {
+            noc_inline_dw_write<InlineWriteDst::REG>(
+                get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, upd_addr, rnoc),
+                pack_value_for_inc_on_write_stream_reg_write(delta),
+                0xf,
+                rnoc);
+            injected = delta;
+        }
+        noc_async_writes_flushed();
+        return injected;
     }
 
 private:
@@ -1521,6 +1572,40 @@ struct SenderKernelTrafficConfig {
         }
     }
 
+    // [#45872 RECONCILE v2] Correct the router's stream-22 free-slots register to our EXACT counter value.
+    // Called at the two quiescent points where a lost decrement strands a packet: (a) a sender STUCK waiting for
+    // space (buffer full per our counter, router not draining), and (b) after the final data packet has settled.
+    // Reads the router's stream 22 over NoC (read reg 297 == update reg 270 + 0x6C), then injects
+    // delta = exact_free - register_free as an ATOMIC increment on the router's UPDATE reg. No-op when delta==0.
+    // Uses payload_buffer_ as read scratch -- safe: STEP 3 fill_data() refills it before the next send, and the
+    // last-packet caller is done sending. word[17] records the injected delta; the primary signal is completion.
+    FORCE_INLINE void reconcile_stream22(uint32_t exact_free) {
+        auto* sc = static_cast<EdmSenderT*>(connection_ptr_);
+        const uint8_t rnoc = get_fabric_worker_noc();
+        const uint32_t scratch = payload_buffer_->get_physical_address();
+        const uint32_t upd_addr = sc->edm_buffer_remote_free_slots_update_addr;
+        noc_async_read(get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, upd_addr + 0x6Cu, rnoc), scratch, sizeof(uint32_t));
+        noc_async_read_barrier(rnoc);
+        invalidate_l1_cache();
+        const uint32_t actual = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch) & 0x1FFFFu;
+        const int32_t delta = static_cast<int32_t>(exact_free) - static_cast<int32_t>(actual);
+        noc_inline_dw_write(
+            get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F1F8u + 68u, rnoc),
+            static_cast<uint32_t>(delta));  // word[17]
+        noc_async_writes_flushed();
+        // [#45872 OPTION2 GUARD] Only inject SMALL deltas. The true off-by-one deficit is 1; a large delta (e.g.
+        // -32) means we're reading a MASKED BACKLOG (buffer full of legit packets behind the stuck one), not the
+        // real deficit -> skip (word[17] still records the raw delta so we see it was skipped).
+        if (delta != 0 && delta >= -4 && delta <= 4) {
+            noc_inline_dw_write<InlineWriteDst::REG>(
+                get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, upd_addr, rnoc),
+                pack_value_for_inc_on_write_stream_reg_write(delta),
+                0xf,
+                rnoc);
+            noc_async_writes_flushed();
+        }
+    }
+
     // Send exactly one packet per call (round-robin scheduling)
     // Returns: true if packet was sent, false if blocked (no credits)
     template <bool BENCHMARK_MODE, bool STATEFUL_NOC = false>
@@ -1583,6 +1668,7 @@ struct SenderKernelTrafficConfig {
                 fabric_detail::update_credits_and_slots<STATEFUL_NOC>(conn);
             }
         } else {
+            // [TASK2] reconcile DISABLED -- plain blocking wait (baseline behaviour).
             connection_manager_->template wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
             // STEP 3: Send packet
             if (payload_size_bytes > 0 && payload_buffer_) {
@@ -1630,51 +1716,10 @@ struct SenderKernelTrafficConfig {
         }
         num_packets_processed += 1;  // Always increment by 1
 
-        // [#45872 RECONCILE] On the FINAL data packet, once our own pipeline has drained to quiescent (all healthy
-        // in-flight packets completed; only the register-hidden residual remains), correct the router's stream-22
-        // free-slots register to our EXACT counter value. At this quiescent point completion-based occupancy ==
-        // forward-based occupancy, so delta = (exact_free - register_free) is precisely the lost-decrement deficit
-        // (cumulative over ALL retrains this run). Atomic increment on the router's UPDATE reg; no-op if delta==0.
-        if constexpr (!BENCHMARK_MODE) {
-            if (num_packets_processed == metadata.num_packets && payload_buffer_ != nullptr) {
-                auto* sc = static_cast<EdmSenderT*>(connection_ptr_);
-                const uint8_t rnoc = get_fabric_worker_noc();
-                const uint32_t scratch = payload_buffer_->get_physical_address();
-                const uint32_t upd_addr = sc->edm_buffer_remote_free_slots_update_addr;  // stream-22 UPDATE reg (270)
-                const uint64_t upd_noc = get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, upd_addr, rnoc);
-                const uint64_t rd_noc =
-                    get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, upd_addr + 0x6Cu, rnoc);  // read reg 297
-                // SETTLE: spin until our exact free stops changing (healthy in-flight completed; residual stuck).
-                uint32_t prev = 0xFFFFFFFFu, stable_run = 0, ef = 0;
-                for (uint32_t k = 0; k < 10000000u && stable_run < 20000u; ++k) {
-                    ef = sc->get_num_free_write_slots();
-                    if (ef == prev) {
-                        stable_run++;
-                    } else {
-                        stable_run = 0;
-                        prev = ef;
-                    }
-                }
-                // READ the router's actual stream-22 free slots (17-bit free-slots field, like get_ptr_val).
-                noc_async_read(rd_noc, scratch, sizeof(uint32_t));
-                noc_async_read_barrier(rnoc);
-                invalidate_l1_cache();
-                const uint32_t actual = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch) & 0x1FFFFu;
-                const int32_t delta = static_cast<int32_t>(ef) - static_cast<int32_t>(actual);
-                // OBSERVE: word[15]=exact_free, word[16]=register_free, word[17]=delta.
-                noc_inline_dw_write(get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F1F8u + 60u, rnoc), ef);
-                noc_inline_dw_write(get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F1F8u + 64u, rnoc), actual);
-                noc_inline_dw_write(
-                    get_noc_addr(sc->edm_noc_x, sc->edm_noc_y, 0x6F1F8u + 68u, rnoc), static_cast<uint32_t>(delta));
-                noc_async_writes_flushed();
-                // CORRECT: inject the deficit into stream 22 (atomic increment on the router's UPDATE reg).
-                if (delta != 0) {
-                    noc_inline_dw_write<InlineWriteDst::REG>(
-                        upd_noc, pack_value_for_inc_on_write_stream_reg_write(delta), 0xf, rnoc);
-                    noc_async_writes_flushed();
-                }
-            }
-        }
+        // [#45872 V3] Payload-sender reconcile REMOVED. The data path completes on its own (combo run: TX=10M,
+        // no data hang). The stranded packet is the SYNC (shares stream 22 but is sent from a separate core), so
+        // the reconcile now lives in the SYNC path (global_sync_finish), where the SYNC connection's own
+        // write-read counters give the correct deficit (-1) for the stuck sync.
 
         return true;  // Packet sent successfully
     }
@@ -2819,7 +2864,29 @@ struct SyncKernelConfig {
             sync_dbg_push(SYNC_DBG_TAG_GLOBAL_SENT, sync_iter, i);
         }
 
-        // Wait for acks (only need one config to check)
+        // [#45872 V3] Wait for acks. If the barrier wedges (a retrain stranded a sync packet -> its router's
+        // stream-22 doorbell decrement was lost, register reads 32/empty), reconcile EVERY config's stream 22 --
+        // the stranded sync can be on any direction, but only config[0] carries the barrier semaphore. Each pass
+        // records the sync core's view to that config's router (w17/18/19) so the host SLOT dump is not blind to
+        // the tensix side. Bounded so a genuine unrecoverable hang still falls through to the blocking wait below.
+        {
+            uint32_t rounds = 0;
+            while (!line_sync_configs()[0].poll_barrier(sync_iter)) {
+                for (volatile uint32_t s = 0; s < 4000000u; ++s) {
+                }  // backoff: only act on a real stuck spell
+                if (line_sync_configs()[0].poll_barrier(sync_iter)) {
+                    break;
+                }
+                for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+                    line_sync_configs()[i].reconcile_stream22_once(get_result_buffer_address() + 0x200u + i * 0x40u);
+                }
+                if (++rounds >= 200u) {
+                    break;  // safety cap -> hand off to the blocking wait
+                }
+            }
+        }
+
+        // Blocking wait (satisfied quickly once every stranded sync has been revealed)
         line_sync_configs()[0].global_sync_finish(sync_iter, get_result_buffer_address());
 
         // Close all sync connections
