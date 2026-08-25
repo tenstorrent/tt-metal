@@ -78,7 +78,9 @@ ALWI void process_tile(
     // for llk_post, so this is belt-and-suspenders on the LHS side.)
     pack_init(dfb_llk_post_id);
 #endif
-    unary_bcast_init<BroadcastType::COL>(dfb_bcast_id, dfb_llk_post_id);
+    reconfig_data_format(dfb_bcast_id, dfb_bcast_id);
+    pack_reconfig_data_format(dfb_llk_post_id);
+    unary_bcast_init<BroadcastType::COL>(dfb_bcast_id);
 
     tile_regs_acquire();
     unary_bcast<BroadcastType::COL>(dfb_bcast_id, 0, 0);
@@ -178,7 +180,7 @@ void kernel_main() {
     constexpr auto dfb_post_rhs_id = dfb_pre_rhs_id;
 #endif
 
-    binary_op_init_common(dfb_post_lhs_id, dfb_post_rhs_id, dfb_out_id);
+    compute_kernel_hw_startup(dfb_post_lhs_id, dfb_post_rhs_id, dfb_out_id);
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif

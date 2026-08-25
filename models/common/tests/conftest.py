@@ -195,7 +195,11 @@ def ttnn_mesh_device(request):
         # Select the default fabric topology for the logical mesh requested by the test.
         # A submesh still requires opening the full system parent, but its workload topology
         # determines whether that parent must provide Ring or Linear routes.
+        # Select the default fabric topology for the logical mesh requested by the test.
+        # A submesh still requires opening the full system parent, but its workload topology
+        # determines whether that parent must provide Ring or Linear routes.
         if fabric_config is None:
+            fabric_config = _default_fabric_config(req_shape)
             fabric_config = _default_fabric_config(req_shape)
         # set all other input arguments to default values by top-level conftest.py
         ttnn.set_fabric_config(

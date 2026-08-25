@@ -43,6 +43,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/debug/dprint.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -207,7 +208,7 @@ void kernel_main() {
     const uint32_t offsets_bytes = offsets_pages * aligned_offsets_page_size;
     volatile tt_l1_ptr uint32_t* turn_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(turn_semaphore_id));
-    uint64_t next_turn_sem_noc_addr = get_noc_addr(next_noc_x, next_noc_y, get_semaphore(turn_semaphore_id));
+    Semaphore<> next_turn_sem(turn_semaphore_id);
     if constexpr (IS_OWNER) {
         noc_semaphore_set(turn_sem_ptr, 1);
     }
@@ -227,7 +228,7 @@ void kernel_main() {
     // Shrink the batch loop to this device's real (unpadded) tokens when right-padded (pad_side == 0).
     // The writer applies the same reduction so they agree on the end-of-plan handshake. Padded tokens
     // in the trailing batch keep their sentinel expert index, so expert_dispatch_table[sentinel] == -1
-    // drops them — making a coarse ceil(real/32) batch bound safe.
+    // drops them — making a coarse ceil(real/32) batch bound safe
     uint32_t effective_total_batches = total_batches;
 #ifdef HAS_PADDING_CONFIG
     {
@@ -442,7 +443,7 @@ void kernel_main() {
             noc_async_write_barrier();
         }
         if (batch_idx + 1 < effective_total_batches) {
-            noc_semaphore_inc(next_turn_sem_noc_addr, 1);
+            next_turn_sem.up(noc, next_noc_x, next_noc_y, 1);
             DPRINT_DISPATCH(
                 "[R s={} c={}] b={} RELEASE baton -> signaled next (entries={})\n",
                 (uint32_t)sender_core_idx,

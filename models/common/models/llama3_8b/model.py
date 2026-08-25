@@ -50,7 +50,6 @@ from models.common.tensor_utils import TILE_SIZE, get_out_subblock_w, nearest_32
 
 class LazyWeight(CommonLazyWeight):
     """Let equivalent single-device Llama lanes share portable cache files.
-
     The common cache fingerprint includes the concrete mesh-device id. That is
     useful for device-bound layouts, but Llama DP lanes serialize host tensors
     beneath an already product-qualified ``P150`` cache directory. Reusing an
@@ -80,8 +79,6 @@ class LazyWeight(CommonLazyWeight):
 
 # =============================================================================
 # Runtime Config
-# =============================================================================
-
 
 class Llama31DecoderPrecision:
     """Per-decoder tensor dtype and math-fidelity selection."""

@@ -59,10 +59,6 @@ from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.common.tests.demos.run_helpers import (
     eval_decode_trace_mode,
     load_eval_repeat_prompts_batch32,
-    require_canonical_eval_modes_in_ci,
-    run_eval_repeat_batch32,
-    run_perf_benchmark,
-    run_teacher_forcing,
 )
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.demos.utils.model_targets import resolve_accuracy_targets, resolve_metric_tolerance, resolve_perf_targets

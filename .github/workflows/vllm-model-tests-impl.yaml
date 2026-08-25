@@ -15,10 +15,20 @@ on:
       enabled-skus:
         required: true
         type: string
+      vllm-source:
+        description: "Where the TT backend comes from: 'plugin' (upstream vLLM + standalone tenstorrent/vllm-tt-plugin) or 'fork' (tenstorrent/vllm)"
+        required: false
+        default: plugin
+        type: string
       vllm-commit:
-        description: "vLLM branch or sha"
+        description: "tenstorrent/vllm branch or sha (vllm-source=fork only)"
         required: false
         default: dev
+        type: string
+      vllm-tt-plugin-ref:
+        description: "tenstorrent/vllm-tt-plugin branch or sha (vllm-source=plugin only)"
+        required: false
+        default: main
         type: string
       model:
         description: "Model to test (or 'all' for all models)"
@@ -133,8 +143,13 @@ jobs:
       image: ${{ inputs.docker-image }}
       env:
         TT_METAL_HOME: /work
-        vllm_dir: /work/vllm
-        PYTHONPATH: /work:/work/vllm
+        # Every source-layout difference between the two vllm-source modes is
+        # resolved here, so the test steps below stay mode-agnostic. PLUGIN_DIR
+        # holds examples/ and tests/tt; BENCH_SRC_DIR holds the upstream
+        # benchmarks/ tree, which the published vLLM wheel does not ship.
+        PLUGIN_DIR: ${{ inputs.vllm-source == 'fork' && '/work/vllm/plugins/vllm-tt-plugin' || '/work/vllm-tt-plugin' }}
+        BENCH_SRC_DIR: ${{ inputs.vllm-source == 'fork' && '/work/vllm' || '/work/vllm-source' }}
+        PYTHONPATH: ${{ inputs.vllm-source == 'fork' && '/work:/work/vllm' || '/work:/work/vllm-tt-plugin/src' }}
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         HF_HUB_OFFLINE: 1
@@ -182,7 +197,25 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
 
-      - name: ⬇️ Checkout vLLM
+      - name: 🔎 Validate vllm-source
+        run: |
+          case "${{ inputs.vllm-source }}" in
+            plugin|fork) echo "vllm-source=${{ inputs.vllm-source }}" ;;
+            *) echo "❌ vllm-source must be 'plugin' or 'fork', got '${{ inputs.vllm-source }}'"; exit 1 ;;
+          esac
+
+      - name: ⬇️ Checkout vLLM TT plugin
+        if: ${{ inputs.vllm-source != 'fork' }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          repository: tenstorrent/vllm-tt-plugin
+          path: docker-job/vllm-tt-plugin
+          ref: ${{ inputs.vllm-tt-plugin-ref }}
+          fetch-depth: 1
+
+      - name: ⬇️ Checkout vLLM fork
+        if: ${{ inputs.vllm-source == 'fork' }}
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
@@ -200,15 +233,38 @@ jobs:
         with:
           log-file: ${{ env.FILE_INSTALL_LOG }}
           run: |
-            VLLM_TARGET_DEVICE=empty uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
-            if [ -d vllm/plugins/vllm-tt-plugin ]; then
-              uv pip install --no-deps -e vllm/plugins/vllm-tt-plugin
+            if [ "${{ inputs.vllm-source }}" = "fork" ]; then
+              VLLM_TARGET_DEVICE=empty uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
+              if [ -d vllm/plugins/vllm-tt-plugin ]; then
+                uv pip install --no-deps -e vllm/plugins/vllm-tt-plugin
+              fi
+            else
+              # The plugin owns the vLLM version pin and its dependency overrides,
+              # so the install procedure lives there and is sourced verbatim. It
+              # resolves paths relative to the plugin root.
+              pushd vllm-tt-plugin
+              source docs/install-vllm-tt.sh
+              popd
             fi
             # Per-model Python deps when the model directory pins versions that
             # differ from the docker image (Gemma4 needs transformers==5.5.0).
             case "${{ matrix.test-group.model }}" in
               google/gemma-4-*) uv pip install -r models/demos/gemma4/requirements.txt ;;
             esac
+
+      - name: ⬇️ Checkout vLLM benchmark sources
+        # The structured-output benchmark is a script under benchmarks/, which the
+        # published vLLM distribution does not install. Fetch the tree at exactly
+        # the installed version; the fork already carries it in its own checkout.
+        if: ${{ inputs.vllm-source != 'fork' && matrix.test-group.structured-output }}
+        timeout-minutes: 10
+        run: |
+          VLLM_VERSION="$(python3 -c 'from importlib.metadata import version; print(version("vllm").split("+", 1)[0])')"
+          echo "Fetching vLLM benchmark sources for v${VLLM_VERSION}"
+          git init vllm-source
+          git -C vllm-source remote add origin https://github.com/vllm-project/vllm.git
+          git -C vllm-source fetch --depth 1 origin "refs/tags/v${VLLM_VERSION}"
+          git -C vllm-source checkout --detach FETCH_HEAD
 
       - name: 🚀 Run server
         timeout-minutes: 1
@@ -288,7 +344,7 @@ jobs:
 
           echo "vLLM server args: ${VLLM_SERVER_ARGS[@]}"
 
-          python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py "${VLLM_SERVER_ARGS[@]}" > "${FILE_SERVER_LOG}" 2>&1 &
+          python3 "${PLUGIN_DIR}/examples/server_example_tt.py" "${VLLM_SERVER_ARGS[@]}" > "${FILE_SERVER_LOG}" 2>&1 &
 
           # Store server's pid for cleanup
           echo $! > ${FILE_SERVER_PID}
@@ -418,6 +474,8 @@ jobs:
           # decode trace) still returns deterministic, well-formed-but-garbage
           # tokens, so those checks pass while the model emits gibberish. Requiring
           # a verbatim echo of a simple sentence catches that class of bug directly.
+          # Thinking off per-request and a budget that fits it anyway: a <think> preamble
+          # would eat the tokens and fail the grep for reasons unrelated to coherence.
           SENTENCE="The quick brown fox jumps over the lazy dog."
           curl http://localhost:8000/v1/chat/completions \
             -H "Content-Type: application/json" \
@@ -430,7 +488,8 @@ jobs:
                   \"content\": \"Repeat the following sentence exactly, with no extra words, no quotes, and no commentary: $SENTENCE\"
                 }
               ],
-              \"max_tokens\": 32,
+              \"chat_template_kwargs\": {\"enable_thinking\": false},
+              \"max_tokens\": 512,
               \"temperature\": 0.0,
               \"stream\": false,
               \"ignore_eos\": false
@@ -448,7 +507,7 @@ jobs:
 
       - name: 📐 Run structured output benchmark
         if: ${{ matrix.test-group.structured-output }}
-        timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
+        timeout-minutes: ${{ matrix.test-group.structured-output-timeout || matrix.test-group.benchmark-timeout }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
           log-file: ${{ env.FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG }}
@@ -465,7 +524,7 @@ jobs:
               ADDITIONAL_STRUCTURED_OUTPUT_ARGS=()
             fi
 
-            python3 vllm/benchmarks/benchmark_serving_structured_output.py \
+            python3 "${BENCH_SRC_DIR}/benchmarks/benchmark_serving_structured_output.py" \
               --backend vllm \
               --model ${{ matrix.test-group.model }} \
               --num-prompts 32 \
@@ -536,9 +595,9 @@ jobs:
           run: |
             FILTER="${{ matrix.test-group.sampling-test-filter }}"
             if [ -n "$FILTER" ]; then
-              pytest vllm/plugins/vllm-tt-plugin/tests/tt -v -k "$FILTER" --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
+              pytest "${PLUGIN_DIR}/tests/tt" -v -k "$FILTER" --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
             else
-              pytest vllm/plugins/vllm-tt-plugin/tests/tt -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
+              pytest "${PLUGIN_DIR}/tests/tt" -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
             fi
 
       - name: 🧹 Cleanup server process
@@ -615,7 +674,10 @@ jobs:
   ai-run-summary:
     name: "AI Run Summary"
     needs: [load-test-matrix, vllm-tests]
-    if: always()
+    # Reports on a run that failed — the case the summary exists for — but not
+    # on one that was cancelled: an aborted run has no outcome to summarize, and
+    # asking for one spends an LLM call to say it stopped early.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

@@ -6,6 +6,9 @@
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/allocator_mode.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/system_mesh.hpp>
 
@@ -160,6 +163,11 @@ void validate_remote_desc(
         local_desc.config.socket_mem_config.receiver_sub_device ==
             remote_desc.config.socket_mem_config.receiver_sub_device,
         "Mismatch in receiver sub-device during handshake.");
+
+    TT_FATAL(
+        local_desc.config.socket_mem_config.per_core_allocation ==
+            remote_desc.config.socket_mem_config.per_core_allocation,
+        "Mismatch in socket per-core allocation flag during handshake.");
     if (validate_buffer_addresses) {
         TT_FATAL(
             local_desc.config_buffer_address == remote_desc.config_buffer_address,
@@ -261,7 +269,31 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
 
     uint32_t num_data_cores = 0;
     CoreRangeSet shard_grid;
-    if (socket_mem_config.socket_storage_type == BufferType::DRAM) {
+    bool per_core = socket_mem_config.per_core_allocation;
+    if (per_core) {
+        TT_FATAL(
+            socket_mem_config.socket_storage_type == BufferType::L1,
+            "Per-core socket allocation is only supported for L1 storage (got {}).",
+            socket_mem_config.socket_storage_type);
+        std::unordered_set<MeshCoreCoord> receiver_cores;
+        for (const auto& connection : config.socket_connection_config) {
+            receiver_cores.insert(connection.receiver_core);
+        }
+        TT_FATAL(
+            receiver_cores.size() == 1,
+            "Per-core socket allocation (v1) supports exactly one distinct receiver core (device + core) per "
+            "socket, but the connection config resolves to {} distinct (device, core) receivers. A per-core "
+            "socket may not span multiple receiver cores or devices.",
+            receiver_cores.size());
+
+        TT_FATAL(
+            tt::tt_metal::MetalContext::instance().rtoptions().get_allocator_mode_hybrid(),
+            "Per-core socket allocation requires the device to be opened with AllocatorMode::HYBRID "
+            "(set TT_METAL_ALLOCATOR_MODE_HYBRID=1 before opening the device).");
+
+        shard_grid = CoreRangeSet(receiver_cores.begin()->core_coord);
+        num_data_cores = 1;
+    } else if (socket_mem_config.socket_storage_type == BufferType::DRAM) {
         // Allocate DRAM Sharded Buffer
         shard_grid =
             CoreRange(CoreCoord(0, 0), CoreCoord(receiver->dram_grid_size().x - 1, receiver->dram_grid_size().y - 1));
@@ -274,12 +306,16 @@ std::shared_ptr<MeshBuffer> create_socket_data_buffer(
     }
     // Allocate a shard of size fifo_size on each data core. User decides how these data-cores must be used
     const auto total_data_buffer_size = num_data_cores * socket_mem_config.fifo_size;
+    auto sharding_args = BufferShardingArgs(
+        ShardSpecBuffer(shard_grid, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_data_cores, 1}),
+        TensorMemoryLayout::HEIGHT_SHARDED);
+    if (per_core) {
+        experimental::per_core_allocation::set_per_core_allocation(sharding_args, true);
+    }
     DeviceLocalBufferConfig socket_data_buffer_specs = {
         .page_size = socket_mem_config.fifo_size,
         .buffer_type = socket_mem_config.socket_storage_type,
-        .sharding_args = BufferShardingArgs(
-            ShardSpecBuffer(shard_grid, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_data_cores, 1}),
-            TensorMemoryLayout::HEIGHT_SHARDED),
+        .sharding_args = sharding_args,
         .bottom_up = std::nullopt,
         .sub_device_id = socket_mem_config.socket_storage_type == BufferType::DRAM
                              ? std::nullopt
@@ -448,6 +484,20 @@ void write_socket_configs(
     }
 }
 
+DeviceAddr get_receiver_data_buffer_address(const MeshSocket& receiver_socket) {
+    const auto& config = receiver_socket.get_config();
+    const auto& data_buffer = *receiver_socket.get_data_buffer();
+    if (!config.socket_mem_config.per_core_allocation) {
+        return data_buffer.address();
+    }
+    TT_FATAL(
+        !config.socket_connection_config.empty(),
+        "Per-core socket has no connections; cannot resolve receiver data buffer address.");
+    const auto& receiver_core = config.socket_connection_config.front().receiver_core;
+    return experimental::per_core_allocation::get_per_core_address(
+        data_buffer, receiver_core.device_coord, receiver_core.core_coord);
+}
+
 SocketPeerDescriptor generate_local_endpoint_descriptor(
     const MeshSocket& socket_endpoint, std::optional<DistributedContextId> context_id) {
     const auto& config = socket_endpoint.get_config();
@@ -464,7 +514,7 @@ SocketPeerDescriptor generate_local_endpoint_descriptor(
     SocketPeerDescriptor local_endpoint_desc = {
         .config = config,
         .config_buffer_address = socket_endpoint.get_config_buffer()->address(),
-        .data_buffer_address = is_sender ? 0 : socket_endpoint.get_data_buffer()->address(),
+        .data_buffer_address = is_sender ? 0 : get_receiver_data_buffer_address(socket_endpoint),
         .exchange_tag = tag};
     return local_endpoint_desc;
 }

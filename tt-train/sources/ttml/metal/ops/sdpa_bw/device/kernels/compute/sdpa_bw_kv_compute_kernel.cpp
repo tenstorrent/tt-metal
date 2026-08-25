@@ -222,11 +222,12 @@ void kernel_main() {
 #endif
 
     init_sfpu(cb_query, cb_key);
-    binary_op_init_common(cb_grad_output, cb_query, cb_key);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
+    compute_kernel_hw_startup(cb_grad_output, cb_query, cb_key);
 
     cb_wait_front(cb_mat_mul_reduction, onetile);
 
-    // binary_op_init_common above does the one-time HW config; each matmul site below
+    // compute_kernel_hw_startup above does the one-time HW config; each matmul site below
     // re-establishes its state with reconfig_data_format + matmul_init.
     matmul_init(cb_query, cb_key);
 

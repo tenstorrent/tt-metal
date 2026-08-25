@@ -617,10 +617,17 @@ __attribute__((noinline)) void process_write_paged() {
     // Interleaved pages round-robin the banks, so walking them in page order steps the bank index by one and only
     // advances the in-bank offset when it wraps. TensorAccessor::get_noc_addr instead recovers both from the page id
     // every page, at the cost of two magic-multiply divisions by the bank count.
+    //
+    // A page occupies a whole allocator-aligned slot in its bank, so the row stride is the page size rounded up to
+    // that alignment, not the page size itself. The two differ only for a command whose page size is not already
+    // aligned, which no buffer write generates -- EnqueueWriteBuffer sends the aligned page size -- but the command
+    // permits, and test_dispatcher sends.
     constexpr uint32_t num_banks = is_dram ? NUM_DRAM_BANKS : NUM_L1_BANKS;
+    const uint32_t aligned_page_size =
+        align_power_of_2(page_size, interleaved_addr_gen::get_allocator_alignment<is_dram>());
     uint32_t walk_row = interleaved_addr_gen::get_bank_offset_index<is_dram>(page_id);
     uint32_t walk_bank = interleaved_addr_gen::get_bank_index<is_dram>(page_id, walk_row);
-    uint32_t walk_row_addr = base_addr + walk_row * page_size;
+    uint32_t walk_row_addr = base_addr + walk_row * aligned_page_size;
 
     // DPRINT("process_write_paged - pages: {} page_size: {} dispatch_cb_page_size: {}\n", pages, page_size,
     // dispatch_cb_page_size);
@@ -651,7 +658,7 @@ __attribute__((noinline)) void process_write_paged() {
                 page_id++;
                 if (++walk_bank == num_banks) {
                     walk_bank = 0;
-                    walk_row_addr += page_size;
+                    walk_row_addr += aligned_page_size;
                 }
                 data_ptr += page_size;
                 write_length -= page_size;
@@ -682,7 +689,7 @@ __attribute__((noinline)) void process_write_paged() {
             dst_addr_offset = 0;
             if (++walk_bank == num_banks) {
                 walk_bank = 0;
-                walk_row_addr += page_size;
+                walk_row_addr += aligned_page_size;
             }
         }
 

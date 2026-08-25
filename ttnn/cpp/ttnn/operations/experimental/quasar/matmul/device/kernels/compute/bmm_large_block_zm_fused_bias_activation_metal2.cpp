@@ -42,13 +42,6 @@
 #endif
 
 #include "api/compute/eltwise_binary.h"
-#include "api/debug/dprint.h"  // DEBUG: matmul layer3 hang localization (remove after)
-#include "api/debug/ring_buffer.h"  // DEBUG mcast2d compute-stall: ring-buffer markers (remove after)
-// DEBUG: neutralize compute-kernel DPRINT. DPRINT inside the compute (pack/math/unpack) perturbs the
-// kernel epilogue timing and re-triggers the program-completion stall when DPRINT is enabled on-device.
-// Keep DM-kernel DPRINT (reader/writer) for diagnosis; make the CMPM markers here no-ops.
-#undef DPRINT
-#define DPRINT(...) ((void)0)
 #ifdef SFPU_ACTIVATION
 #include "bmm_fused_activation.hpp"
 #endif
@@ -168,7 +161,6 @@ inline void reblock_and_untilize(
 }
 
 void kernel_main() {
-    DPRINT("MMC start\n");  // DEBUG: stem conv1 Program-B hang
 // RUNTIME ARGS
 #ifdef MATMUL_DRAM_SHARDED
     const bool is_worker_core = get_arg(args::is_worker_core) == 1;
@@ -282,10 +274,24 @@ void kernel_main() {
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
+#ifndef ARCH_QUASAR
             bool is_batch_valid = false;
             UNPACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
             MATH(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
             PACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+#else
+            // Quasar: ckernel::ThreadId has no BRISC (WH/BH-only); the is_batch_valid writer is a DM RISC
+            // (DM2-7), read via mailbox_read((uint8_t)<dm_thread>). That DM->TRISC handoff is not yet wired
+            // on Quasar (prior bring-up saw the compute read its own slot -> 0x19 loopback), so rather than
+            // silently marking every batch valid (wrong output for a real sparsity caller), fail loudly at
+            // JIT if anyone enables batch-sparsity on Quasar. Wire the DM-thread read here once the DM/LLK
+            // team confirms the correct DM thread id and that the handoff works.
+            static_assert(
+                !get_batch_from_reader,
+                "get_batch_from_reader (batch sparsity) is unsupported on Quasar: it needs the DM->TRISC "
+                "is_batch_valid mailbox handoff, which is not wired yet. Do not enable it on Quasar.");
+            const bool is_batch_valid = true;  // unreachable when the static_assert holds (flag is false)
+#endif
             if (!is_batch_valid) {
                 continue;
             }
@@ -293,7 +299,6 @@ void kernel_main() {
 
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
-                DPRINT("MMC bhbw {} {}\n", bh, bw);  // DEBUG: stem conv1 Program-B hang
                 bool enable_reload = false;
 
 #ifdef PACK_RELU
@@ -332,17 +337,9 @@ void kernel_main() {
                     }
 
                     // [DEBUG mcast2d compute stall] Which input wait does the unpacker (UPMW) block on?
-                    // Newest ring marker per stuck core: 0xC0FFEE00 -> stuck at in0 wait (in0 data not
-                    // delivered); 0xC0FFEE01 -> passed in0, stuck at in1 wait; 0xC0FFEE02 -> passed BOTH
                     // input waits, so the stall is later (partials reserve/wait, pack, or dest).
-                    UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE00u));
-                    UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)block));
-                    UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)in0_block_num_tiles));
                     in0_cb.wait_front(in0_block_num_tiles);
-                    UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE01u));
-                    UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)in1_block_num_tiles));
                     in1_cb.wait_front(in1_block_num_tiles);
-                    UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE02u));
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -358,7 +355,6 @@ void kernel_main() {
                             const uint32_t effective_subblock_w =
                                 is_last_in1_subblock_padded ? last_subblock_w_valid : out_subblock_w;
 
-                            DPRINT("MMC sb{} preacq\n", in0_subblock);  // DEBUG #48552 subblock stall localize
                             tile_regs_acquire();
                             if (enable_reload) {
                                 reload_from_cb_to_dst(
@@ -400,12 +396,10 @@ void kernel_main() {
                             }
 
 #endif  // SKIP_COMPUTE
-                            DPRINT("MMC sb{} mmdone\n", in0_subblock);  // DEBUG #48552 matmul_block loop done
 
                             if (last_out) {
                                 tile_regs_commit();
                                 mm_out_cb.reserve_back(out_subblock_num_tiles);
-                                DPRINT("MMC sb{} resv_ok\n", in0_subblock);  // DEBUG #48552 out reserve returned
 
 #if defined SFPU_ACTIVATION and not defined FUSE_BIAS
                                 apply_activation_from_pack<
@@ -441,11 +435,7 @@ void kernel_main() {
                             } else {
                                 tile_regs_commit();
                                 // [DEBUG mm_partials TILE_COUNTERS localization] which producer step faults?
-                                // 0xC0FFEE03 = pre-reserve (+block idx next); 04 = reserved; 05 = packed; 06 = pushed.
-                                PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE03u));
-                                PACK(WATCHER_RING_BUFFER_PUSH((uint32_t)block));
                                 mm_partials_cb.reserve_back(out_subblock_num_tiles);
-                                PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE04u));
                                 tile_regs_wait();
 
 #ifdef PACKER_L1_ACC
@@ -462,40 +452,73 @@ void kernel_main() {
 
                                 uint32_t start_dst_index = 0;
                                 pack_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
-                                PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE05u));
 
                                 tile_regs_release();
                                 mm_partials_cb.push_back(out_subblock_num_tiles);
-                                PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE06u));
                             }
 
                             in1_index_subblock_offset += out_subblock_w;
                         }
                         in0_index_subblock_offset += in0_subblock_num_tiles;
                     }
-                    DPRINT("MMC pack blk={}\n", block);  // DEBUG: all subblock matmul+pack done for this block
 
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
                     if (block < num_blocks_inner_dim - 1) {
-                        // Wait/pop in subblock-sized steps so the step size
-                        // matches the bias section's wait_front(out_subblock_num_tiles),
-                        // satisfying the CB API requirement that all wait_front
-                        // increments on a given CB are identical.
+                        // [#48552] TEN-4746: a bare wait_front->pop_front on mm_partials traps the Quasar unpacker
+                        // (POP_TILES races past WAIT_TILES -> TILE_COUNTERS 0x10000). Interpose a REAL unpack TDMA
+                        // (dummy copy_tile of tile 0) between wait and pop -- NOP/DMANOP/TTI_NOP are INSUFFICIENT
+                        // (LLK-team guidance + abhullar/pop-wait-fix 69014037a + our TTI_NOP-fails/DPRINT-works
+                        // bisection). NB the old "wait_front increments must be identical" rationale for the
+                        // stepped loop is FALSE (only num_entries<=capacity is enforced) but the loop is harmless.
+#ifdef ARCH_QUASAR
+                        reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+                        copy_tile_to_dst_init_short(mm_partials_cb_id);
+#endif
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_cb.wait_front(out_subblock_num_tiles);
+#ifdef ARCH_QUASAR
+                            tile_regs_acquire();
+                            copy_tile(mm_partials_cb_id, /*in_tile_index=*/0, /*dst_tile_index=*/0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            tile_regs_release();
+#endif
                             mm_partials_cb.pop_front(out_subblock_num_tiles);
                         }
+#ifdef ARCH_QUASAR
+                        reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
+                        matmul_block_init(
+                            in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+#endif
                     }
                     // never reload when with bias, bias uses interm buffer
                     enable_reload = false;
 #else
                     // Last iteration does spill and reload to output buffer
                     if (block < num_blocks_inner_dim - 2) {
+                        // [#48552] TEN-4746 interpose (see the FUSE_BIAS drain above): REAL unpack TDMA
+                        // (dummy copy_tile of tile 0) between the bare wait_front/pop_front on mm_partials.
+#ifdef ARCH_QUASAR
+                        reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+                        copy_tile_to_dst_init_short(mm_partials_cb_id);
+#endif
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_cb.wait_front(out_subblock_num_tiles);
+#ifdef ARCH_QUASAR
+                            tile_regs_acquire();
+                            copy_tile(mm_partials_cb_id, /*in_tile_index=*/0, /*dst_tile_index=*/0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            tile_regs_release();
+#endif
                             mm_partials_cb.pop_front(out_subblock_num_tiles);
                         }
+#ifdef ARCH_QUASAR
+                        reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
+                        matmul_block_init(
+                            in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+#endif
                     }
                     if (block == num_blocks_inner_dim - 2) {
                         enable_reload = true;
@@ -509,11 +532,9 @@ void kernel_main() {
 
                     in0_cb.pop_front(in0_block_num_tiles);
                     in1_cb.pop_front(in1_block_num_tiles);
-                    DPRINT("MMC blk_done blk={}\n", block);  // DEBUG: in0/in1 popped, inner-dim block complete
                 }
 
 #ifdef FUSE_BIAS
-                DPRINT("MMC bias\n");  // DEBUG: inner-dim block loop done, entering bias+activation epilogue
 #ifdef PACK_RELU
                 // if last block we pack the final result with relu enabled
                 PACK((llk_pack_relu_config(ReluConfig::zero())));
@@ -650,5 +671,4 @@ void kernel_main() {
     // "MMC end") — finish() across UNPACK/MATH/PACK isn't well-defined for a role that doesn't drive that CB's
     // balance, and untilize_mode_out_cb.finish() waits on the output writer. Credit drain-on-exit is kept only
     // on the DM producer/consumer kernels.
-    DPRINT("MMC end\n");  // DEBUG: stem conv1 Program-B hang
 }

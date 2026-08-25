@@ -612,6 +612,10 @@ void call_unary_sfpu_operation_init()
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(recip_init<APPROX_MODE, is_fp32_dest_acc_en>);
     }
+    else if constexpr (OPERATION == SfpuType::reciprocal_compat)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(recip_init<APPROX_MODE, is_fp32_dest_acc_en, true /* legacy_compat */>);
+    }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(rsqrt_init<APPROX_MODE, false /* legacy_compat */>);
@@ -725,7 +729,15 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     // _int_maxmin_scalar / _int_shift_amount). The two sides must move together, so
     // keep them named on both to avoid a silent golden desync.
     constexpr std::uint32_t MAXMIN_SCALAR = 1000u;
-    constexpr std::uint32_t SHIFT_AMOUNT  = 3u;
+    // Shift amount for the unary shift ops. Overridable from params.h via the SFPU_SHIFT_AMOUNT
+    // template parameter so the Python side can sweep it; a test that does not set it keeps the
+    // original fixed 3. The golden reads the same value through UnarySFPUGolden's shift_amount
+    // argument, so the two sides move together.
+#ifdef SFPU_SHIFT_AMOUNT
+    constexpr std::uint32_t SHIFT_AMOUNT = SFPU_SHIFT_AMOUNT;
+#else
+    constexpr std::uint32_t SHIFT_AMOUNT = 3u;
+#endif
     // Integer scalar that unary_eq/unary_ne (Int32) compare against via metal
     // calculate_comp_unary_int. Shared with the golden (golden_generators.py:
     // _unary_comp_int_scalar); the two sides must move together.
@@ -962,6 +974,22 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_reciprocal, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::reciprocal_compat)
+    {
+        // Legacy-compat reciprocal (legacy_compat = true routes calculate_reciprocal to
+        // _calculate_reciprocal_compat_). Distinct from SfpuType::reciprocal, which exercises
+        // the accurate legacy_compat = false path. Both are covered because the Compute API's
+        // recip_tile()/recip_tile_init() default to legacy_compat = true, so the *default*
+        // production path is this one -- and without this op the suite would only ever build
+        // the non-default kernel.
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_reciprocal,
+            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS, true /* legacy_compat */),
+            dst_index,
+            vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {

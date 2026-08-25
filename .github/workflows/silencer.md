@@ -14,9 +14,15 @@ description: |
   maintainer's approval before CI runs anyway). Never merges its own PRs.
 
 on:
-  # Scan on a daily cadence (warnings live in *successful* runs too, so we do not
-  # wait for failures the way ci-doctor does), plus on demand.
-  schedule: daily
+  # Scan twice a day (warnings live in *successful* runs too, so we do not wait
+  # for failures the way ci-doctor does), plus on demand. Two explicit cron
+  # entries ~12h apart instead of a fuzzy shorthand — gh-aw has no "twice-daily"
+  # shorthand, only "daily" (which scatters to a single time to avoid load
+  # spikes; ours landed at 20:34 UTC) or raw cron. The second entry mirrors
+  # that same :34-past-the-hour offset rather than a round time.
+  schedule:
+    - cron: "34 8 * * *"
+    - cron: "34 20 * * *"
   workflow_dispatch:
     inputs:
       run_id:
@@ -70,11 +76,12 @@ safe-outputs:
     # pr-gate.yaml does not run automatically on Silencer's PRs (a maintainer must approve
     # the workflow run for bot-authored PRs), and while the `dispatch-workflow` output below
     # does start a run without that approval, it is a separate `workflow_dispatch` run whose
-    # result lands after the agent turn ends — so draft is the honest state here. Silencer's
-    # *second* run flips it: once it has a dispatched-run outcome to report, it comments that
-    # outcome onto the PR and marks the PR ready for review via
+    # result lands after the agent turn ends — so draft is the honest state here. A *later* run
+    # flips it, at the very start of that run: once it has a dispatched-run outcome to report, it
+    # comments that outcome onto the PR and marks the PR ready for review via
     # `mark-pull-request-as-ready-for-review` below, because a comment on a draft PR goes
-    # unseen (*Scan procedure* step 7).
+    # unseen (*Scan procedure* step 1) — and then carries on scanning for new noise in that same
+    # run, since reporting is cheap bookkeeping and does not consume the run's one target.
     draft: true
     # Without this, gh-aw's create_pull_request handler appends a random 4-byte hex
     # suffix (crypto.randomBytes(4)) to whatever branch name the agent proposes, and
@@ -89,8 +96,8 @@ safe-outputs:
     labels: [automation, silencer]
     # Scope patches to source-like files only: a mistaken or manipulated agent response
     # cannot touch unrelated files outside Silencer's noise-fix scope.
-    allowed-files: ["**/*.cpp", "**/*.cc", "**/*.cxx", "**/*.h", "**/*.hpp", "**/*.py", "**/*.pyi", "**/*.cmake", "**/CMakeLists.txt"]
-    # One target per run (see *Scan procedure* step 4): Silencer fixes a single noise
+    allowed-files: ["**/*.cpp", "**/*.cc", "**/*.cxx", "**/*.h", "**/*.hpp", "**/*.inl", "**/*.py", "**/*.pyi", "**/*.cmake", "**/CMakeLists.txt"]
+    # One target per run (see *Scan procedure* step 5): Silencer fixes a single noise
     # source per turn, so it opens at most one PR. Also gh-aw's default, but stated
     # explicitly here because it is a deliberate scope decision, not an accident.
     max: 1
@@ -107,22 +114,20 @@ safe-outputs:
     # must be able to name ANY workflow Silencer scans, not just pr-gate/merge-gate: a
     # fix sourced from e.g. galaxy-e2e-tests logs is validated by re-running
     # galaxy-e2e-tests on the fix branch, not a generic gate — the gates cover only
-    # categories 1-2/4 (see *Scan procedure* step 1), so restricting this list to just
-    # the two gates would leave categories 3/5/6 fixes unvalidated for every
+    # categories 1/4 (see *Scan procedure* step 2), so restricting this list to just
+    # the two gates would leave categories 2/3/5/6 fixes unvalidated for every
     # non-gate workflow.
     # The per-call `ref` override this relies on landed in github/gh-aw#49408.
     #
     # This is a COMPILE-TIME allowlist and cannot be derived dynamically. It is the
-    # single hardcoded list of workflows Silencer tracks — *Scan procedure* step 1 scans
+    # single hardcoded list of workflows Silencer tracks — *Scan procedure* step 2 scans
     # exactly this same list, so there is only one place to update when a tracked
     # workflow is added or removed. Entries are bare filename stems, no extension
-    # (`pr-gate` resolves `.github/workflows/pr-gate.yaml`). All 42 are confirmed to
+    # (`pr-gate` resolves `.github/workflows/pr-gate.yaml`). All 39 are confirmed to
     # declare a `workflow_dispatch` trigger, which this safe-output requires.
     workflows:
       - sanity-tests
-      - blackhole-sanity-tests
       - blackhole-e2e-tests
-      - blackhole-demo-tests
       - galaxy-profiler-tests
       - galaxy-multi-user-isolation-tests
       - galaxy-deepseek-tests
@@ -134,13 +139,11 @@ safe-outputs:
       - galaxy-e2e-tests
       - galaxy-sanity
       - galaxy-health
-      - t3000-perf-tests
       - t3000-e2e-tests
       - t3000-integration-tests
       - t3000-profiler-tests
       - single-card-profiler-tests
       - pipeline-select-profiler
-      - t3000-demo-tests
       - t3000-unit-tests
 
       - models-t1-e2e-tests
@@ -151,9 +154,6 @@ safe-outputs:
       - models-t3-unit-tests
 
       - perf-device-models
-      - perf-models
-      - single-card-ttnn-models-frequent-tests
-      - single-card-demo-tests
       - tt-metal-l2-nightly
       - vllm-model-tests
       - sanity-tests-debug
@@ -198,8 +198,14 @@ safe-outputs:
   add-comment:
     max: 5
     target: "*"
+    # The phase-A outcome comment (*Scan procedure* step 1) opens with `/codeowners ping` to
+    # trigger `codeowners-group-analysis.yaml`'s Slack routing — but that listener triggers on
+    # `issue_comment`, and GitHub does not let the default token trigger other workflows this
+    # way (a deliberate recursion guard). Posting with the default token would silently never
+    # fire the ping. Same PAT `repo-assist.md` uses for the identical reason.
+    github-token: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
   mark-pull-request-as-ready-for-review:
-    # The other half of phase 2 (*Scan procedure* step 7): having resolved a dispatched run's
+    # The other half of phase A (*Scan procedure* step 1): having resolved a dispatched run's
     # outcome and commented it onto its own PR, Silencer takes that PR out of draft. A comment
     # on a draft PR goes unseen, so this — not the comment — is what actually surfaces the
     # outcome to a human. Deliberately **unconditional**, not gated on the run's conclusion:
@@ -671,89 +677,87 @@ unreachable, and keep the suppression as tight as possible. Never reach for a bl
 
 ## Scan procedure (scheduled mode)
 
-1. **Pick runs to scan — from Silencer's fixed tracked-workflow list.** Scan exactly the
-   workflows listed in this workflow's `safe-outputs.dispatch-workflow.workflows` allowlist
-   above (bare filename stems, e.g. `sanity-tests` resolves to
-   `.github/workflows/sanity-tests.yaml`) — one hardcoded list, used for both scanning and
-   dispatch, so there is nothing else to keep in sync. Do not derive this list from any other
-   file. That list spans the full tracked CI surface — sanity/e2e/demo/unit/integration/
-   perf/profiler/stress suites across **Blackhole, Galaxy, T3000, and single-card**, the
-   `models-t1/t2/t3` suites, `tt-metal-l2-nightly`, `vllm-model-tests`, the `runtime-*`
-   suites, and the `pr-gate` / `merge-gate` gates (which invoke `build-artifact.yaml`, so
-   **host compile / JIT / deprecated-declaration warnings are covered transitively** through
-   the gate logs — you do not need a separate build-only list). For each tracked workflow,
-   enumerate runs with the `github` MCP tool (**not**
-   `gh run list`, which has no credentials here): `actions_list` with
-   `method: "list_workflow_runs"`, `resource_id: "<workflow-file>"`, and
-   `workflow_runs_filter: {status: "completed", branch: "main"}`, then `actions_list` with
-   `method: "list_workflow_jobs"` on each chosen run ID to get the job IDs that `get_job_logs`
-   needs. See *Token discipline* step 1 for the full argument list.
-   - Keep in mind *which categories live where*: compile / JIT / `-Wdeprecated-declarations`
-     warnings (categories 1–2, 4) surface in the **gate/build** logs; runtime warnings and
-     log spam (categories 3, 5, 6 — e.g. the matmul `allowed_worker_cores` spam, the
-     pipe-delimited `| warning |` lines the *Token discipline* grep is tuned for) surface in
-     the **test / model / perf** logs. Scanning the full tracked list reaches all of them.
-   - **Rotate** which tracked workflows you sample each run (record the last-sampled set in
-     memory) so over successive runs you cover the whole surface instead of re-scanning one.
-   - Frequency counts differ in kind: gate/build logs report a warning **per compile**, test
-     logs report it **per tile/core/device iteration** — the latter is where true log spam
-     concentrates, so weight it accordingly when ranking.
-2. **Deduplicate against memory.** Read your memory index of already-scanned run IDs and
-   already-fixed noise patterns. **Skip** runs/patterns you have already handled or that
-   already have an open `[silencer]` PR. Do not re-open a PR for a pattern in flight.
-3. **Fetch + structurally parse + aggregate** exactly as in *Token discipline* above. Run all
-   four shape parsers (logger, colon-diagnostic, bare GHA-annotation, residue) over every job
-   log you sampled, then produce the three summary artifacts — `histogram.tsv`,
-   `residue_top.txt`, and the ledger-ranked `top_noise.txt` — and read **only** those into
-   context. The histogram is not optional even when `top_noise.txt` already looks conclusive:
-   it is how you notice a whole severity or subsystem you would otherwise never have looked at.
-   Scan `residue_top.txt` for a shape none of the three parsers recognized; if a recurring
-   unrecognized shape turns out to be real emitted noise, say so in your PR/issue so a fourth
-   parser can be added rather than leaving it in residue forever.
-4. **Select ONE high-value target** for this run — the highest-frequency pattern that you can
-   fix cleanly and validate. Exactly one per run: a single focused PR reviews faster and is
-   safer than a sweeping one, and anything else you spotted keeps for the next run (that is
-   what the backlog cursor in memory is for).
-5. **Root-cause it.** From the grep hit, open the *specific source file(s)* (not the log),
-   understand why the noise is emitted, and design the minimal correct fix per its category
-   above. Use DeepWiki-style reasoning only for orientation on sibling repos; verify against
-   current code before committing anything.
-6. **Fetch the base before you patch.** In scheduled / dispatch runs the agent checkout is
-   on the default branch (the PR-context checkout at `silencer.lock.yml:611-615` does not
-   run). If you are amending an **existing** `[silencer]` PR branch via
-   `push-to-pull-request-branch`, `git fetch origin <branch>` and check it out first so
-   your patch applies to the branch's current content, not to stale `main`. For a **new**
-   PR, branch from current `origin/main`.
-7. **Open the PR** (see below), **then dispatch CI on its branch in the same turn** (see
-   *Validating changes via CI*). gh-aw performs both in the `safe_outputs` job **after** your
-   agent turn ends — so you do **not** know the new PR number or its CI run ID yet. Record
-   in memory only what you have now: the pattern you targeted, the branch name, the tracked
-   workflow you dispatched, and the run/job IDs whose logs you actually read. The **next** run
-   resolves the PR number and build outcome with the `github` MCP tool — `search_pull_requests` (`query: "repo:${{ github.repository }} is:pr is:open [silencer]"`)
-   then `pull_request_read` with `method: "get_check_runs"` — **not** `gh pr list` / `gh pr checks`,
-   which have no credentials here. **Then report that outcome back onto the PR** with the
-   `add-comment` safe-output (`add_comment` tool) — resolving an outcome and telling nobody is
-   indistinguishable from never resolving it. That is not hypothetical: the run dispatched for
-   tenstorrent/tt-metal#52111 resolved to a real run URL, Silencer posted it nowhere, and a
-   human had to comment the link onto the PR by hand. Emit exactly one comment on the PR you
-   resolved, in the same JSON style as the `dispatch_workflow` example in *Validating changes
-   via CI*:
+Every run has **two phases, and every run does both.** Phase A (step 1) reports on work already
+in flight; phase B (steps 2–8) looks for new noise. They are **independent**, and phase A must
+never end the run. The asymmetry is the whole reason: phase A is a handful of API calls, while
+phase B is where this workflow's entire token budget goes (*Token discipline*) — so letting a
+cheap status check consume a day's scan would starve new-noise discovery for exactly as long as
+a draft PR sits open awaiting a maintainer, which is precisely when noise is piling up unfixed.
+
+**One quiet step at a time** still holds, and it means what it always meant: **one new noise
+target per run** — not by stopping early, so reporting an outcome and then scanning does not
+spend two quiet steps, it spends one, plus bookkeeping on a step already spent.
+
+That bound is **prompt-enforced, not compiler-enforced.** The `max: 1` on
+`create-pull-request`, `push-to-pull-request-branch`, `create-issue` and `update-issue` are four
+**independent** per-handler ceilings — gh-aw counts each safe-output type separately and has no
+cross-handler or global cap — so nothing in the compiled workflow stops one run from emitting one
+of each and producing four targets. **You must hold the line yourself: at most ONE
+target-producing action per run, counted across `create-pull-request` /
+`push-to-pull-request-branch` / `create-issue` / `update-issue` combined.** They are mutually
+exclusive — picking one rules out the other three for the rest of the run. `add-comment`,
+`mark-pull-request-as-ready-for-review` and `dispatch-workflow` are **not** targets: they are the
+bookkeeping and validation that attach to the one target, or to phase A's report.
+
+1. **Phase A — reconcile in-flight validations, then fall through.** Before scanning anything,
+   check *Memory* → *CI validations in flight* for a dispatched validation whose outcome you have
+   not yet reported. A previous run opened that PR and dispatched CI on its branch in its own
+   final step, but gh-aw performs both in the `safe_outputs` job **after** that agent turn ended
+   — so the PR number and the run's outcome are knowable only now. Resolve them with the `github`
+   MCP tool — `search_pull_requests`
+   (`query: "repo:${{ github.repository }} is:pr is:open [silencer]"`) then `pull_request_read`
+   with `method: "get_check_runs"` — **not** `gh pr list` / `gh pr checks`, which have no
+   credentials here. If memory records nothing in flight, phase A is a **no-op**: go straight to
+   step 2.
+
+   **Then report that outcome back onto the PR** with the `add-comment` safe-output (`add_comment`
+   tool) — resolving an outcome and telling nobody is indistinguishable from never resolving it.
+   That is not hypothetical: the run dispatched for tenstorrent/tt-metal#52111 resolved to a real
+   run URL, Silencer posted it nowhere, and a human had to comment the link onto the PR by hand.
+   Emit exactly one comment on the PR you resolved, in the same JSON style as the
+   `dispatch_workflow` example in *Validating changes via CI*, **starting with the literal line
+   `/codeowners ping`** — this is `codeowners-group-analysis.yaml`'s trigger command (matched
+   anchored at the start of the comment), and everything after it is read as author notes, so
+   the rest of the report reads exactly as it would without the command:
    ```json
-   { "type": "add_comment", "item_number": 52111, "body": "**Test status** — dispatched `pr-gate` run <https://github.com/tenstorrent/tt-metal/actions/runs/30612345678>: `completed` / `success`.\n\nA green conclusion alone confirms nothing about this warning: that run's **own logs** must still be re-grepped for `-Wunused-but-set-variable` in the **build/compile step's** logs (categories 1–2/4 — for a runtime or log-spam fix, the **test-execution step's** logs, categories 3/5/6)." }
+   { "type": "add_comment", "item_number": 52111, "body": "/codeowners ping\n\n**Test status** — dispatched `pr-gate` run <https://github.com/tenstorrent/tt-metal/actions/runs/30612345678>: `completed` / `success`.\n\nA green conclusion alone confirms nothing about this warning: that run's **own logs** must still be re-grepped for `-Wunused-but-set-variable` in the **build/compile step's** logs (categories 1/4 — for a JIT / device-kernel, runtime or log-spam fix, the **test-execution step's** logs, categories 2/3/5/6). For a category-2 fix that step's logs must **also carry the affected kernel's JIT-compile line** — no such line means no test in the run exercised the kernel, so the result is **inconclusive**, not verified." }
    ```
    - `item_number` is the PR number you just resolved — PRs are issues to this API, so
      `add-comment`'s `target: "*"` reaches them.
+   - `/codeowners ping` must be the **first line, verbatim** — the listener's match is anchored
+     (`^/(codeowners?|ping)(\s|$)`), so it has to lead the comment, not follow other text.
    - Report whatever state exists, not only a finished one: `queued` / `in_progress` /
      `success` / `failure` / `cancelled` are all worth saying, and "still running" is a real
-     answer.
+     answer. But **only a terminal state finishes the job**: `success` / `failure` /
+     `cancelled` are terminal, `queued` / `in_progress` are not. A nonterminal report is an
+     **interim update**, and the validation stays in flight until a later run catches its
+     terminal state — see the memory bullet below.
    - Always restate **what to grep and where**, naming the step per category exactly as
      *Validating changes via CI* does. The conclusion is never the proof; the pattern's absence
-     from that run's own logs is.
+     from that run's own logs is — and for category 2, only alongside a JIT-compile line proving
+     the run built the kernel at all.
+   - This fires **at most twice** per PR, however many runs the validation spans: once when the
+     PR first comes out of draft (which may be on a nonterminal state), and once with the
+     terminal outcome. The two flags in *CI validations in flight* are what bound it —
+     `nonterminal_reported` stops a second "still running" comment, `reported` stops a second
+     terminal one — so codeowners are pinged once for progress and once for the result, never
+     on a daily loop.
    - If `search_pull_requests` returns no open `[silencer]` PR matching the branch you
      recorded — already merged or closed, or the dispatch never happened — **skip silently**:
-     post nothing, mark nothing, fabricate no run link, and do not treat it as an error.
-   - Note in memory that this validation has been reported (*Memory* → *CI validations in
-     flight*) so the next daily run does not comment the same outcome again.
+     post nothing, mark nothing, fabricate no run link, do not treat it as an error, and go
+     straight to step 2.
+   - **Update memory according to whether the state was terminal** (*Memory* → *CI validations
+     in flight*) — that, not the fact that you commented, is what decides whether the entry is
+     done:
+     - **Terminal** (`success` / `failure` / `cancelled`) — set `reported: true`. The entry is
+       finished; stop tracking it, and no later run comments the same outcome again.
+     - **Nonterminal** (`queued` / `in_progress`) — set `nonterminal_reported: true` and
+       **leave the entry in flight, `reported` still `false`.** Marking it reported here would
+       be a lie: the dispatched run has not concluded, so its pass/fail and the log re-grep
+       that is the only real proof have never been reported *at all* — and retiring the entry
+       now means they never will be. A later run picks the entry back up, resolves it again,
+       and reports the terminal result then, posting no second "still running" comment in the
+       meantime because `nonterminal_reported` is already set.
 
    **Then, in the same turn, mark that PR ready for review** with the
    `mark-pull-request-as-ready-for-review` safe-output (`mark_pull_request_as_ready_for_review`
@@ -778,7 +782,96 @@ unreachable, and keep the suppression as tight as possible. Never reach for a bl
      safe to emit. That early return is also why the run link must live in the `add_comment`
      call and never only in `reason`: in that case no `reason` comment is posted at all.
 
-   Then **stop** — one quiet step at a time.
+   **Then continue to step 2 in the same run — phase A never ends the run.** The one thing it can
+   change is *which* target step 5 lands on: if the outcome you just reported was a **failure**
+   whose right answer is a follow-up commit to that same PR, then that commit **is** this run's
+   one target — root-cause it from that dispatched run's own logs, push it via
+   `push-to-pull-request-branch` (step 8), and dispatch CI against that same branch in the same
+   turn (*Validating changes via CI* permits this **because** you just pushed to it — that is
+   the one exception to "a branch you created this turn"). Do **not** also open a new PR, open
+   an issue, or update one for an unrelated pattern: that follow-up commit has spent this run's
+   single target-producing action. Record the re-dispatch as a **fresh** *CI validations in
+   flight* entry — the old entry's outcome was terminal and is now `reported`.
+2. **Pick runs to scan — from Silencer's fixed tracked-workflow list.** Scan exactly the
+   workflows listed in this workflow's `safe-outputs.dispatch-workflow.workflows` allowlist
+   above (bare filename stems, e.g. `sanity-tests` resolves to
+   `.github/workflows/sanity-tests.yaml`) — one hardcoded list, used for both scanning and
+   dispatch, so there is nothing else to keep in sync. Do not derive this list from any other
+   file. That list spans the full tracked CI surface — sanity/e2e/demo/unit/integration/
+   perf/profiler/stress suites across **Blackhole, Galaxy, T3000, and single-card**, the
+   `models-t1/t2/t3` suites, `tt-metal-l2-nightly`, `vllm-model-tests`, the `runtime-*`
+   suites, and the `pr-gate` / `merge-gate` gates (which invoke `build-artifact.yaml`, so
+   **host compile and deprecated-declaration warnings are covered transitively** through
+   the gate logs — you do not need a separate build-only list). JIT / device-kernel warnings
+   are **not** covered there: `build-artifact.yaml` excludes device-kernel sources from the
+   host build, so they surface only in test-execution logs (below). For each tracked workflow,
+   enumerate runs with the `github` MCP tool (**not**
+   `gh run list`, which has no credentials here): `actions_list` with
+   `method: "list_workflow_runs"`, `resource_id: "<workflow-file>"`, and
+   `workflow_runs_filter: {status: "completed", branch: "main"}`, then `actions_list` with
+   `method: "list_workflow_jobs"` on each chosen run ID to get the job IDs that `get_job_logs`
+   needs. See *Token discipline* step 1 for the full argument list.
+   - Keep in mind *which categories live where*: host compile / `-Wdeprecated-declarations`
+     warnings (categories 1, 4) surface in the **gate/build** logs; JIT / device-kernel
+     warnings (category 2) surface in the **test / model / perf** logs, emitted by the kernel
+     compiler (`riscv32-tt-elf-g++` / `riscv-tt-elf-g++`) when a test actually runs an op that
+     uses the kernel — never in the host build; runtime warnings and
+     log spam (categories 3, 5, 6 — e.g. the matmul `allowed_worker_cores` spam, the
+     pipe-delimited `| warning |` lines the *Token discipline* grep is tuned for) surface in
+     the **test / model / perf** logs too. Scanning the full tracked list reaches all of them.
+   - **Rotate** which tracked workflows you sample each run (record the last-sampled set in
+     memory) so over successive runs you cover the whole surface instead of re-scanning one.
+   - Frequency counts differ in kind: gate/build logs report a warning **per compile**, test
+     logs report it **per tile/core/device iteration** — the latter is where true log spam
+     concentrates, so weight it accordingly when ranking.
+3. **Deduplicate against memory.** Read your memory index of already-scanned run IDs and
+   already-fixed noise patterns. **Skip** runs/patterns you have already handled or that
+   already have an open `[silencer]` PR. Do not re-open a PR for a pattern in flight.
+4. **Fetch + structurally parse + aggregate** exactly as in *Token discipline* above. Run all
+   four shape parsers (logger, colon-diagnostic, bare GHA-annotation, residue) over every job
+   log you sampled, then produce the three summary artifacts — `histogram.tsv`,
+   `residue_top.txt`, and the ledger-ranked `top_noise.txt` — and read **only** those into
+   context. The histogram is not optional even when `top_noise.txt` already looks conclusive:
+   it is how you notice a whole severity or subsystem you would otherwise never have looked at.
+   Scan `residue_top.txt` for a shape none of the three parsers recognized; if a recurring
+   unrecognized shape turns out to be real emitted noise, say so in your PR/issue so a fourth
+   parser can be added rather than leaving it in residue forever.
+5. **Select ONE high-value target** for this run — the highest-frequency pattern that you can
+   fix cleanly and validate. Exactly one per run: a single focused PR reviews faster and is
+   safer than a sweeping one, and anything else you spotted keeps for the next run (that is
+   what the backlog cursor in memory is for). If step 1 already claimed this run's target with
+   a follow-up commit to a failed validation, that is the one — do not pick a second.
+   **"One" is counted across all four target-producing safe-outputs combined** —
+   `create-pull-request`, `push-to-pull-request-branch`, `create-issue`, `update-issue` — and it
+   is a **hard rule you self-enforce, not one the compiler enforces for you.** Each of those
+   carries its own **independent** `max: 1`; gh-aw counts per safe-output type and has no
+   cross-handler or global total, so emitting one of each would satisfy every configured limit
+   while producing four targets. Emit exactly one of the four, or none. Opening a PR for one
+   pattern *and* an issue for another is a violation of this rule even though both handlers
+   would happily accept it.
+6. **Root-cause it.** From the grep hit, open the *specific source file(s)* (not the log),
+   understand why the noise is emitted, and design the minimal correct fix per its category
+   above. Use DeepWiki-style reasoning only for orientation on sibling repos; verify against
+   current code before committing anything.
+7. **Fetch the base before you patch.** In scheduled / dispatch runs the agent checkout is
+   on the default branch (the PR-context checkout at `silencer.lock.yml:611-615` does not
+   run). If you are amending an **existing** `[silencer]` PR branch via
+   `push-to-pull-request-branch`, `git fetch origin <branch>` and check it out first so
+   your patch applies to the branch's current content, not to stale `main`. For a **new**
+   PR, branch from current `origin/main`.
+8. **Open the PR** (see below), **then dispatch CI on its branch in the same turn** (see
+   *Validating changes via CI*). gh-aw performs both in the `safe_outputs` job **after** your
+   agent turn ends — so you do **not** know the new PR number or its CI run ID yet. Record
+   in memory only what you have now: the pattern you targeted, the branch name, the tracked
+   workflow you dispatched, and the run/job IDs whose logs you actually read. That entry
+   (*Memory* → *CI validations in flight*) is exactly what the **next** run's **step 1** picks
+   up: it resolves the PR number and the build outcome, comments both onto the PR, and takes the
+   PR out of draft — and then goes on to scan for new noise, because reporting is bookkeeping,
+   not this run's quiet step. If the dispatched run is still `queued` / `in_progress` by then,
+   that entry stays in flight and the **first later run that finds it terminal** reports the
+   conclusion (step 1's memory bullet) — it is not retired on the interim update.
+
+   Then **stop** — this run has spent its one target.
 
 ## Validating changes via CI
 
@@ -809,7 +902,19 @@ not a rewritten or guessed variant:
   branch named anything else cannot be validated.
 - Dispatch **exactly once** per turn, for the single PR you touched, against that PR's own
   branch (the configured `max: 1`). Never dispatch a workflow you did not scan, and never
-  dispatch against a branch you did not create this turn.
+  dispatch against a branch you did not write to this turn.
+- **The one exception to "a branch you created this turn", and it is narrow.** You **may**
+  dispatch against a branch an **earlier** run created, if and only if you have **just amended
+  that exact branch in this same turn** via `push-to-pull-request-branch` — the "amending an
+  existing `[silencer]` PR branch" path of *Scan procedure* step 7, reached from step 1's
+  failed-validation follow-up or from step 8. All of these must hold: it is a
+  `[silencer]`-owned branch matching `allowed-refs: ["silencer/*"]`, its PR carries the
+  `[silencer] ` title prefix `push-to-pull-request-branch` requires, and the `ref` is the
+  identical branch string of the push you just emitted. What you are validating is **the commit
+  you added moments ago**, not an arbitrary pre-existing branch you have no business touching —
+  which is what the original rule forbids and still forbids. Without this exception a follow-up
+  fix could never be validated at all, while *Guidelines* requires every fix to dispatch CI in
+  the same turn it is pushed.
 
 **What this proves, and what it does not.** A dispatched run's **pass/fail conclusion alone is
 never sufficient proof — for any category.** A green run says the workflow succeeded; it says
@@ -817,15 +922,29 @@ nothing about *your specific warning*. The proof is always the same act: once th
 **re-grep that run's own logs for the specific pattern** and confirm it is absent. What differs
 by category is only **where in that run's logs the evidence lives**:
 
-- **Categories 1–2 and 4** (host compile, JIT / device-kernel, `-Wdeprecated-declarations`) — in
-  the **build/compile step's** logs of whichever workflow you dispatched. Gate-type or not is
-  irrelevant: what matters is that the dispatched workflow exercises the compile path, which the
-  tracked workflows always do (they pull in `build-artifact.yaml` — see *Scan procedure* step 1).
-  So dispatching the **workflow whose logs sourced the fix** and then reading that run's own
-  compile logs is the **complete, direct** proof — a non-gate target like `t3000-demo-tests`,
-  which recompiles the very kernels that emitted the warning, is not weaker evidence than a gate.
+- **Categories 1 and 4** (host compile, `-Wdeprecated-declarations`) — in the **build/compile
+  step's** logs of whichever workflow you dispatched. Gate-type or not is irrelevant: what
+  matters is that the dispatched workflow exercises the host compile path, which the tracked
+  workflows always do (they pull in `build-artifact.yaml` — see *Scan procedure* step 2).
+- **Category 2** (JIT / device-kernel) — in the **test-execution step's** logs of that same run,
+  **not** the `build-artifact` job. Device-kernel sources are excluded from the host CMake build;
+  they are packaged as source and JIT-compiled at runtime by `riscv32-tt-elf-g++` /
+  `riscv-tt-elf-g++` when a `Program` first runs the op on device. The evidence is therefore the
+  **kernel JIT-compile invocation lines** in the test-execution logs. Grepping the
+  `build-artifact / Build Release` logs proves **nothing** here: that job never invokes the kernel
+  compiler for these files, so the pattern reads as absent whether or not the fix is correct — a
+  false-negative proof, which is exactly what went wrong on tenstorrent/tt-metal#52111. A non-gate
+  target like `t3000-unit-tests` is **not** weaker evidence than a gate for this category: it
+  recompiles the affected kernels through its **own test-execution steps** triggering JIT, which
+  has nothing to do with `build-artifact.yaml`.
 - **Categories 3, 5 and 6** (runtime warnings, log spam, over-verbose messages) — in the
-  **test-execution step's** logs of that same run.
+  **test-execution step's** logs of that same run, the same place as category 2.
+
+Category 2 carries one further caveat: a kernel is JIT-compiled **only if the dispatched run's
+tests actually exercise it** — i.e. call an op that uses it. If no test in that workflow invokes
+the affected kernel, there is **no JIT-compile line to grep at all**; that is **inconclusive**
+validation, not silent success, and must be reported as such rather than as absence-of-warning.
+So prefer dispatching a tracked workflow whose suites are likely to exercise the modified kernel.
 
 Either way, **you cannot do that grep in this turn.** Exactly as with the PR itself — gh-aw
 performs the dispatch in the `safe_outputs` job *after* your agent turn ends — the run does not
@@ -837,11 +956,14 @@ Therefore:
 - Record in memory what you know now: the branch name, the `workflow_name` you dispatched, and
   the run/job IDs whose logs motivated the fix. The **next** scheduled run resolves the outcome
   (`search_pull_requests`, then `pull_request_read` with `method: "get_check_runs"` — see *Scan
-  procedure* step 7) and can then re-grep the dispatched run's own logs — the build/compile step
-  for categories 1–2/4, the test-execution step for categories 3/5/6 — to confirm the pattern is
-  genuinely absent. It must then **post what it found back onto the PR** with the `add-comment`
-  safe-output; an outcome resolved but never reported is worth nothing (*Scan procedure* step 7
-  has the exact call).
+  procedure* step 1) and, **once that outcome is terminal**, can then re-grep the dispatched
+  run's own logs — the build/compile step for categories 1/4, the test-execution step for
+  categories 2/3/5/6 — to confirm the pattern is genuinely absent, and for category 2 that the
+  kernel's JIT-compile line is present at all (per the caveat above). It must then **post what it
+  found back onto the PR** with the `add-comment` safe-output; an outcome resolved but never
+  reported is worth nothing (*Scan procedure* step 1 has the exact call). A run that is still
+  `queued` / `in_progress` gets an interim comment and **remains in flight** — there are no
+  logs to re-grep yet, so the entry is not retired until a later run reports its conclusion.
 - In the PR's **Test Status** section, state plainly that a dispatch was **requested** for this
   branch — not that a run exists. The request is only handled after your turn, and the
   `safe_outputs` job can still reject or fail it (ref rejected by `allowed-refs`, workflow
@@ -850,8 +972,8 @@ Therefore:
   before relying on it — and say explicitly that the run's **own logs** must then be checked for
   this exact pattern, naming which step's logs to look in.
 - A dispatched run is **not** a substitute for maintainer review. Silencer's next run does take
-  the PR out of draft, but only as the final act of reporting the outcome (*Scan procedure*
-  step 7) and purely for **visibility** — a comment sitting on a draft PR goes unseen.
+  the PR out of draft, but only as the closing act of reporting the outcome (*Scan procedure*
+  step 1) and purely for **visibility** — a comment sitting on a draft PR goes unseen.
   Ready-for-review means "a human should now look at this", never "this has been validated":
   the diff still needs a maintainer's review, and the pattern's absence from the dispatched
   run's own logs is still the only proof the fix worked.
@@ -863,7 +985,7 @@ Therefore:
   `silencer` (the latter so these PRs are easy to filter/find later).
 - Opened as **draft** (see *Validating changes via CI* for why) — Silencer's own next run
   marks it ready for review when it reports the dispatched run's outcome onto the PR
-  (*Scan procedure* step 7), so the comment it leaves there is actually seen.
+  (*Scan procedure* step 1), so the comment it leaves there is actually seen.
 - **One concern per PR.** Do not mix categories or unrelated files.
 - PR body must include:
   - **What noise this removes** — the exact warning/message and its **frequency** in the
@@ -883,15 +1005,17 @@ Therefore:
     makes it proof: **a green conclusion on its own confirms nothing about this warning —
     that run's own logs must be re-grepped for the exact pattern once it completes.** Quote
     the pattern to grep for and name **where** it lives in that run: the **build/compile
-    step's** logs for a compile / JIT / deprecated-declaration fix (categories 1–2/4), the
-    **test-execution step's** logs for a runtime or log-spam fix (categories 3/5/6). A
+    step's** logs for a host-compile or deprecated-declaration fix (categories 1/4), the
+    **test-execution step's** logs for a JIT / device-kernel, runtime or log-spam fix
+    (categories 2/3/5/6) — for category 2, the kernel JIT-compile invocation lines, since the
+    `build-artifact` job never compiles device kernels. A
     maintainer should come away knowing exactly what to look for and where, not just "check
     whether it went green".
     If the workflow was **not** in the `dispatch-workflow` allowlist and no dispatch could
     be requested at all, say so here instead and note that the allowlist needs the entry.
     This section is written once, at PR creation, and **not** edited in place afterwards:
     the resolved run link and state arrive as an `add-comment` comment on the PR instead
-    (*Scan procedure* step 7), which leaves one timestamped record per outcome check rather
+    (*Scan procedure* step 1), which leaves one timestamped record per outcome check rather
     than quietly rewriting what the PR previously claimed. That comment keeps the same
     what-to-grep-and-where explicit.
 - Match tt-metal's existing C++/Python style. **No new
@@ -947,9 +1071,24 @@ Use persistent repo memory to stay efficient and non-repetitive across runs:
     age.
 - **Backlog cursor**: which category/pattern to tackle next, so successive runs chip away at
   the noise instead of re-fighting the same top warning.
-- **CI validations in flight**: PR → build-run-ID, to check outcomes on later runs, plus whether
-  that outcome has already been commented back onto the PR (*Scan procedure* step 7) so a later
-  run does not re-post the same result.
+- **CI validations in flight**: branch/PR → dispatched workflow + build-run-ID, to check outcomes
+  on later runs, plus **two independent "already said this" flags** (*Scan procedure* step 1) so
+  a later run neither re-posts the same result nor retires an entry that has not concluded yet:
+  ```json
+  {"branch":"silencer/unused-var-layernorm","pr":52111,"workflow":"pr-gate","run_id":"30612345678","dispatched":"2026-07-29","last_state":"in_progress","nonterminal_reported":true,"reported":false}
+  ```
+  - `last_state`: the most recent state observed — `queued` / `in_progress` / `success` /
+    `failure` / `cancelled`.
+  - `nonterminal_reported`: an interim "still running" comment has already been posted for this
+    entry. Set it when you report a `queued` / `in_progress` state; it is what stops every
+    later run from re-posting the same non-answer — and re-pinging codeowners — day after day.
+  - `reported`: the **terminal** outcome (`success` / `failure` / `cancelled`) has been
+    commented onto the PR. **Only a terminal state may set this.** It is what retires the
+    entry, so setting it on a nonterminal state means the dispatched run's actual conclusion,
+    and the log re-grep that is the only real proof, are never reported at all.
+  - An entry with `reported: false` **stays in flight** and is picked up again by the next
+    run's step 1, however many runs that takes. Drop it once `reported` is `true` — or if step
+    1 finds no matching open `[silencer]` PR (merged, closed, or the dispatch never happened).
 - A short **quiet-score** note per run (e.g. total distinct warning signatures, total warning
   lines) so you and maintainers can see the logs trending toward silence over time.
 
@@ -960,6 +1099,19 @@ Use persistent repo memory to stay efficient and non-repetitive across runs:
 - **Behavior-preserving only.** Never change what the code *does* to make a warning go away.
 - **Small, focused, reviewable PRs** — one noise source each, opened as draft since CI needs
   a maintainer's approval to run regardless.
+- **Every run does both phases: report first, then scan.** Reconciling an in-flight validation
+  (*Scan procedure* step 1) costs a handful of API calls and must **never** end the run — fall
+  through to the scan every time, whether it reported an outcome or found nothing pending.
+  **One quiet step at a time** bounds *new work* — one noise target per run. It was never a
+  licence to spend a whole day's scan budget re-confirming yesterday's PR, which is what
+  stopping after the report does for as long as a draft PR sits open awaiting a maintainer.
+- **At most ONE target-producing action per run — and you enforce it, not the compiler.**
+  Counted across `create-pull-request` / `push-to-pull-request-branch` / `create-issue` /
+  `update-issue` **combined**: pick one, or none. The `max: 1` on each of those is a
+  **per-handler** ceiling and gh-aw has no cross-handler or global cap, so one of each would
+  satisfy every configured limit and still be four targets (*Scan procedure* step 5).
+  `add-comment`, `mark-pull-request-as-ready-for-review` and `dispatch-workflow` are
+  bookkeeping and validation, and do not count against it.
 - **Grep, don't read.** Keep logs on disk; put only aggregated summaries in context. This is
   a hard cost requirement, not a suggestion.
 - **Logs and CI state come from the `github` MCP tool, never the `gh` CLI.** `bash` has no
@@ -969,12 +1121,17 @@ Use persistent repo memory to stay efficient and non-repetitive across runs:
   repo memory, and stop. Never back-fill a "fix" from old issues or a source grep instead.
 - **Validate via CI, never locally.** Always dispatch the source tracked workflow onto your PR
   branch in the same turn you open/amend it (see *Validating changes via CI*). Never claim a fix
-  is verified without a build run, and never claim a runtime/log-spam pattern (categories 3/5/6)
-  is confirmed gone from a compile-only build run — the proof is its absence from the dispatched
-  run's own logs, which you cannot read until a later run. On that later run, **comment the
-  resolved outcome back onto the PR** with `add-comment` and **mark the PR ready for review**
-  with `mark-pull-request-as-ready-for-review` (*Scan procedure* step 7); an outcome you
-  resolve but never report is no better than one you never checked, and a report nobody can see
+  is verified without a CI run, and never claim a JIT/device-kernel (category 2) or
+  runtime/log-spam (categories 3/5/6) pattern is confirmed gone from a host build log — the
+  `build-artifact` job runs no tests, so no runtime output exists there to prove 3/5/6, and it
+  excludes device-kernel sources, so it never invokes the kernel compiler either. The proof is the
+  pattern's absence from the **test-execution** logs of the dispatched run, which you cannot read
+  until a later run — and for category 2 that absence proves nothing on its own: those logs must
+  also **show the affected kernel's JIT-compile line**, or the validation is **inconclusive**
+  rather than verified (see the caveat in *Validating changes via CI*). On that later run,
+  **comment the resolved outcome back onto the PR** with `add-comment` and **mark the PR ready
+  for review** with `mark-pull-request-as-ready-for-review` (*Scan procedure* step 1); an outcome
+  you resolve but never report is no better than one you never checked, and a report nobody can see
   — a comment on a draft PR — is no better than no report.
 - **Coordinate with `deprecations.json` / `deprecation-reaper.yml`** for deprecated-API work;
   migrate call sites, leave shim deletion to the reaper's schedule.

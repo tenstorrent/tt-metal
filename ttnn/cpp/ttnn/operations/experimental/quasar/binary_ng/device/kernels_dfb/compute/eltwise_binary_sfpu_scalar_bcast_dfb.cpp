@@ -106,7 +106,8 @@ ALWI void process_tile(
     // for llk_post, so this is belt-and-suspenders on the LHS side.)
     pack_init(dfb_llk_post_id);
 #endif
-    unary_bcast_init<BroadcastType::SCALAR>(dfb_bcast_id, dfb_llk_post_id);
+    compute_kernel_hw_startup(dfb_bcast_id, dfb_llk_post_id);
+    unary_bcast_init<BroadcastType::SCALAR>(dfb_bcast_id);
 
     tile_regs_acquire();
     unary_bcast<BroadcastType::SCALAR>(dfb_bcast_id, 0, 0);

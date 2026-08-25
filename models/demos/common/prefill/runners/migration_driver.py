@@ -22,8 +22,10 @@ free — exactly the handoff the C++ PrefillScheduler relies on.
 
 Two topologies, selected by whether the destination endpoint id differs from our own:
   * LOOPBACK (dest == src, the default): src and dst slots live in ONE table, routed to the endpoint's
-    internal B worker. The prefill RUNNER validates the migrated KV on-device (PREFILL_VALIDATE_MIGRATION=1
-    + validate_after_prefill) once it sees the DONE sentinel — the producer never PCCs migrated KV itself.
+    internal B worker. Because both slots are in our own table, THIS module verifies the migrated KV
+    after the copy — see ``--verify-migration`` (dst == src byte compare, and/or dst vs the src's golden)
+    over the same device-less UMD path ``check_pcc`` uses for sources. The runner holds no validation of
+    its own: it publishes the table and the device map, and every read-back happens out here.
   * CROSS-ENDPOINT P->D (dest != src): dst lives in the remote DECODE galaxy's table, an independent
     address space. Requires the pairing/connect handshake below, and the decode side has no way to know
     each slot's prompt length / last token, so we write a JSON handoff sidecar for it.
@@ -50,9 +52,41 @@ the same three-terminal flow as before — terminal C just runs THIS module inst
     python3 -m models.demos.common.prefill.runners.migration_driver \
       --manifest models/demos/common/prefill/runners/producer_manifests/<MANIFEST>.yaml
 
-Env (all also settable from the producer manifest's typed ``migration:`` block — see
-``apply_manifest_env``; an explicitly exported env var always wins). Invoking this module IS the opt-in,
-so ``migration.issue`` is redundant here and a ``false`` is warned about rather than honoured:
+Multi-host (validating EVERY rank's layers, not just rank 0's). Both read-backs here — the source golden
+PCC and the destination check — go over UMD, which reaches only the chips physically attached to the host
+the process runs on. On a pipeline runner spanning N hosts, ONE driver process therefore verifies just its
+own host's layer slice and SKIPS the rest (it says so, but a PASS is then a fraction of the model). Covering
+the model needs one process per host — which this module does NOT arrange for itself. Launching is the
+shell's job, exactly as it is for the runner (``run_pipeline_prefill.sh``); use its sibling::
+
+    # C) multi-host: host order == rank order, rank 0 first and it must be THIS host. The third argument
+    #    is the NIC and must match the runner's.
+    ./models/demos/common/prefill/runners/run_migration_driver.sh \
+      models/demos/common/prefill/runners/producer_manifests/<MANIFEST>.yaml \
+      <H0>:1,<H1>:1 [tcp_iface]
+
+Run standalone (no launcher) it is simply rank 0 of 1: one process, one host's coverage, no MPI, and the
+command at the top of this docstring is exactly right. Under a launcher (``OMPI_COMM_WORLD_SIZE`` > 1) the
+same entry point splits by rank, like ``prefill_producer``:
+  * rank 0 (the launch host): the full run — H2D feed, ack drain, MigrationLayerClient, migrate(), both
+    sidecars — plus its own host's read-backs.
+  * every other rank: a device-less VALIDATOR. No H2D connect, no migration client, no migrate; it only
+    reads its OWN host's KV back (source PCC and/or destination check) and votes.
+Coordination is three collectives over the distributed context (host-side MPI, no mesh device), so all
+ranks must see the same env — the launcher script forwards every exported PREFILL_*/MIGRATION_* var and
+each rank applies the same manifest itself. GO#1 = rank 0 broadcasts the resident-slot map once every
+LayerAck has landed (releases the source PCC); GO#2 = rank 0 broadcasts the resolved (src, dst, real_len)
+triples once wait_complete has returned (releases the destination check); DONE = an allgather of each
+rank's verdict, which both waits for every validator's reads to finish and folds the pass/fail. Any rank
+failing fails the run.
+Storage, and this is the usual way a multi-host run goes wrong: PREFILL_MIGRATION_TABLE_PATH must be on
+SHARED storage (every validator reads rank 0's table), while PREFILL_MIGRATION_DEVICE_MAP_PATH must stay
+HOST-LOCAL (each rank reads its OWN host's chips).
+
+Env. Everything below except the two PREFILL_VERIFY_MIGRATION* vars also has a typed field in the
+producer manifest's ``migration:`` block — see ``apply_manifest_env``; an explicitly exported env var
+always wins. Invoking this module IS the opt-in, so ``migration.issue`` is redundant here and a ``false``
+is warned about rather than honoured:
   PREFILL_MIGRATION_DEST_ENDPOINT_ID  destination endpoint id for migrate() (default 1). Equal to our
                                     OWN id => loopback; a different id => cross-endpoint P->D.
   PREFILL_MIGRATION_SRC_ENDPOINT_ID  our OWN endpoint id, i.e. the prefill side (default 1). Only used
@@ -70,8 +104,19 @@ so ``migration.issue`` is redundant here and a ``false`` is warned about rather 
   PREFILL_MIGRATION_HANDOFF_PATH    path of the JSON handoff for a cross-endpoint decode consumer;
                                     unset (default) => not written at all.
   PREFILL_MIGRATION_TIMEOUT_MS      per-migration wait_complete timeout (default 3600000).
-  MIGRATION_DONE_FILE               path of the DONE sentinel the runner polls (default
-                                    /tmp/migration_done.sentinel).
+  PREFILL_VERIFY_MIGRATION          destination read-back mode, == --verify-migration
+                                    (off|dst-bytes|dst-golden|both; default dst-bytes, loopback only).
+                                    No typed manifest field: set it via the CLI flag, an exported env var,
+                                    or the manifest's raw ``env:`` passthrough.
+  PREFILL_VERIFY_MIGRATION_LAYERS   comma layer list to spot-check instead of the full depth. Same: CLI
+                                    flag / env / raw ``env:`` block, no typed field. Honoured by the
+                                    dst-bytes half only; the golden half always reads the full depth, and
+                                    is refused outright when PREFILL_MIGRATION_LAYERS migrated a subset
+                                    (its reader would PCC dst rows the migrate never wrote).
+  MIGRATION_DONE_FILE               path of the DONE sentinel published for an external consumer to poll
+                                    (default /tmp/migration_done.sentinel).
+  The host list is NOT env or manifest config: it is an argument to run_migration_driver.sh, which is what
+  places one process per host (see the multi-host note above).
   Queues + client come from the runner's migration env, resolved via ``runners.migration``:
   PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE and PREFILL_MIGRATION_CLIENT_DIR.
 """
@@ -224,12 +269,12 @@ class MigrationDriver:
 
         Must run while the runner is alive (before any SHUTDOWN sentinel): the endpoint reads source KV
         from device DRAM. ``stats`` is the producer's RunStats — only ``stats.resident`` (slot_id ->
-        (chunks_pushed, actual_isl)) is read. ``num_slots`` is the KV table's slot count when known, used
+        ``_SlotFill``) is read. ``num_slots`` is the KV table's slot count when known, used
         only to bounds-check loopback destinations. ``slot_traces`` / ``pools_by_trace`` are the producer's
         per-slot prompt maps, needed only to write the cross-endpoint handoff.
 
-        The producer does NOT validate migrated KV — the RUNNER does, on-device, once it sees the DONE
-        sentinel (PREFILL_VALIDATE_MIGRATION=1).
+        Validating the copy is the caller's job, not this method's: ``main()`` feeds the returned triples
+        to ``_verify_migrated_slots`` once wait_complete has landed.
         """
         if self.client is None:
             raise RuntimeError("[migration_driver] run() called before attach()")
@@ -252,14 +297,15 @@ class MigrationDriver:
             Duplicate src is allowed (fan-out: migrate one slot to several dsts).
           * Offset (fallback, no explicit pairs) — every resident src slot -> src + dst_slot_offset.
 
-        ``real_len`` is the SRC slot's resident non-pad token count (min(chunks_pushed*chunk_size,
-        actual_isl)), matching the KV the runner wrote; slots with no data are skipped. If ``num_slots`` is
-        known (from the KV table), dst is bounds-checked so a too-large dst fails here with a clear message
-        instead of a cryptic device-side error at migrate time."""
+        ``real_len`` is the SRC slot's resident non-pad token count as recorded at push time (the last
+        ``actual_end`` the producer sent), matching the KV the runner wrote; slots with no data are
+        skipped. It is read rather than re-derived from chunk counts because a multi-turn slot resumed at
+        a non-zero prefix, so ``chunks_pushed * chunk_size`` describes only its latest turn. If
+        ``num_slots`` is known (from the KV table), dst is bounds-checked so a too-large dst fails here
+        with a clear message instead of a cryptic device-side error at migrate time."""
 
         def real_len_of(src: int) -> int:
-            chunks_pushed, actual_isl = stats.resident[src]
-            return min(chunks_pushed * self.chunk_size, actual_isl)
+            return stats.resident[src].real_len
 
         def check_dst(src: int, dst: int) -> None:
             if dst < 0:
@@ -384,15 +430,15 @@ class MigrationDriver:
         per migrated pair as ``{"slots": [{dst_slot, prompt_len, last_prompt_token}, ...]}``. ``first_token``
         is intentionally omitted -- the decode side derives it from the migrated KV.
 
-        This exists for CROSS-ENDPOINT P->D: unlike loopback (where the prefill-side runner validates the KV
-        on-device and needs no prompt metadata), the destination galaxy has no way to know each slot's prompt
+        This exists for CROSS-ENDPOINT P->D: unlike loopback (where this module verifies the destination
+        itself and needs no prompt metadata), the destination galaxy has no way to know each slot's prompt
         length / last token, so it cannot pick the decode start position without this sidecar. ``real_len``
         (element 2 of each triple) is exactly the resident prompt length that was migrated, and the src slot's
         last prompt token is ``pool[real_len - 1]`` of the trace the producer already loaded.
 
         Gated on ``PREFILL_MIGRATION_HANDOFF_PATH``: unset => write nothing, which is what a loopback run
-        wants since the runner validates on-device and needs no sidecar. Written atomically (tmp +
-        os.replace) so the decode side never reads a partial file."""
+        wants since its destination is verified here rather than consumed by a decode side. Written
+        atomically (tmp + os.replace) so the decode side never reads a partial file."""
         if not self.handoff_path:
             return
         if slot_traces is None or pools_by_trace is None:
@@ -427,16 +473,16 @@ class MigrationDriver:
         logger.success(f"[migration_driver] wrote handoff {handoff_path} ({len(slots)} slot(s)): {slots}")
 
     def _write_done_sentinel(self, triples: list) -> list:
-        """Write the migration DONE sentinel — one ``src dst`` line per migrated pair — that the runner's
-        validate_after_prefill (PREFILL_VALIDATE_MIGRATION=1) polls for. This is the SAME handshake the
-        llm-engine scheduler/driver used (prefill_scheduler_driver wrote this file after migrating). Once it
-        appears, the runner PCC-validates each pair ON-DEVICE: src vs golden + dst vs golden (burst), and/or
-        dst==src (PREFILL_MIGRATE_PAIRWISE=1). Takes the SAME triples list ``_issue`` consumed, so the
-        sentinel matches exactly what was migrated. Returns the (src, dst) pairs written."""
+        """Write the migration DONE sentinel — one ``src dst`` line per migrated pair — for an external
+        consumer to poll. This is the SAME handshake the llm-engine scheduler/driver used
+        (prefill_scheduler_driver wrote this file after migrating). It reports which pairs were COPIED, not
+        that they were verified: the destination read-back happens back in ``main()``, after this. Takes the
+        SAME triples list ``_issue`` consumed, so the sentinel matches exactly what was migrated. Returns
+        the (src, dst) pairs written."""
         if not triples:
             raise ValueError(
                 "migration is enabled but the mapping resolved to zero pairs, so there is no DONE sentinel "
-                "to publish (an empty one would make the runner validate nothing and report success). "
+                "to publish (an empty one would report success while nothing moved). "
                 "Prefill itself succeeded — this is a CONFIG problem: either no slot ended up resident, or "
                 "every PREFILL_MIGRATION_PAIRS src was skipped for holding no data. Check that the producer "
                 "actually prefilled the src slots you asked to migrate, or turn migration off "
@@ -500,8 +546,8 @@ def _dump_src_kv(dump_dir: str, table, stats, slot_traces: dict, layers) -> None
     base_dir = os.path.abspath(os.path.expanduser(dump_dir))
     os.makedirs(base_dir, exist_ok=True)
 
-    for slot_id, (chunks_pushed, actual_isl) in sorted(stats.resident.items()):
-        real_len = min(chunks_pushed * producer.CHUNK_SIZE, actual_isl)
+    for slot_id, res in sorted(stats.resident.items()):
+        real_len = res.real_len
         if real_len <= 0:
             continue
         read_len = ((real_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block  # round to a block
@@ -527,6 +573,391 @@ def _dump_src_kv(dump_dir: str, table, stats, slot_traces: dict, layers) -> None
             f"[migration_driver] slot {slot_id} src KV dumped -> {out} "
             f"(layers {sorted(wanted)}, positions [0,{real_len}))"
         )
+
+
+def _verify_dst_vs_src_bytes(table, device_map: dict, triples: list, layers, *, max_report: int = 10) -> bool:
+    """Golden-free DESTINATION check: assert every migrated dst slot holds byte-identical KV to its src
+    slot, over every config / layer / position the migrate covered. Returns True on full agreement.
+
+    This asks the dst==src question the runner's retired ``validate_migrations_pairwise`` used to ask, but
+    over the device-less UMD path instead of the runner's in-memory cache — so it runs in the driver
+    process, needs no per-model adapter hook, and leaves the runner a pure serving loop.
+
+    Byte equality rather than PCC: migration is a byte copy, so the correct dst is bit-identical. That
+    removes the whole reason the old runner-side version needed a 0.99 threshold and an all-zero
+    short-circuit (a decoded all-zero pad tail or a dense layer's index_k has undefined correlation), and
+    it catches corruption in regions where correlation is undefined. Nothing is decoded here, so the check
+    is also model-agnostic — no per-layout branch, unlike ``prefill_producer._read_slot_kv_and_check_pcc``.
+
+    CROSS-TALK between concurrent pairs (pair A's copy landing in pair B's destination) is detectable here
+    ONLY when the source slots hold DIFFERENT data. With the default single-prompt schedule every slot
+    pushes the same trace, so all sources are byte-identical and a mis-routed copy is indistinguishable
+    from a correct one. Set PREFILL_PRODUCER_SLOT_TRACES="dirA,dirB,..." to give each slot its own prompt
+    if that is a property you want this gate to cover. (The same limitation applies to the golden mode —
+    it is a property of identical sources, not of the comparison.)
+
+    Scope limits, all logged rather than silently absorbed:
+      * ``layers`` (the migrated subset, PREFILL_MIGRATION_LAYERS) restricts which layer rows are read;
+        with a subset only config 0 is checked, because a sparse model's index config can be COMPACTED
+        (its layer axis is the full-indexer rank, not the global layer id) and a global id would index
+        the wrong row.
+      * Only whole chunks inside [0, real_len) are compared. A real_len that is not a multiple of the
+        config's chunk_n_tokens leaves a trailing partial chunk unchecked, since whether the engine
+        copies it whole is its business, not this gate's.
+      * A layer whose chips are not in this host's device map is SKIPPED, not failed (multi-host: each
+        driver process only sees its co-located galaxy). The skip count is reported so a "PASSED" line
+        cannot be mistaken for whole-model coverage.
+    """
+    from models.demos.common.prefill.runners import prefill_producer as producer
+
+    n_configs = table.num_configs()
+    if layers and n_configs > 1:
+        logger.warning(
+            f"[migration_driver] verify: layer subset {sorted(set(layers))} given, so only config 0 is "
+            f"checked ({n_configs} configs in the table). A compacted index config indexes rows by "
+            "full-indexer rank, not global layer id, so a global id would read the wrong row."
+        )
+        n_configs = 1
+
+    failures, checked, skipped, tail_tokens = [], 0, 0, 0
+    for src, dst, real_len in triples:
+        for cfg_id in range(n_configs):
+            tcfg = table.config() if cfg_id == 0 else table.config(cfg_id)
+            stride, cfg_layers = int(tcfg.chunk_n_tokens), int(tcfg.num_layers)
+            n_full = (real_len // stride) * stride  # whole chunks only; see the docstring
+            tail_tokens += real_len - n_full
+            wanted = [l for l in sorted(set(layers)) if l < cfg_layers] if layers else list(range(cfg_layers))
+            logger.info(
+                f"[migration_driver] verify bytes: slot {src} -> {dst} config {cfg_id}: "
+                f"{len(wanted)} layer(s) x {n_full // stride} chunk(s) of {stride} token(s) "
+                f"= {2 * len(wanted) * (n_full // stride)} UMD read(s)"
+            )
+            for layer in wanted:
+                mismatches_in_layer = 0
+                for pos in range(0, n_full, stride):
+                    src_loc = table.lookup(layer, pos, src, cfg_id)
+                    dst_loc = table.lookup(layer, pos, dst, cfg_id)
+                    try:
+                        src_uid = producer._resolve_unique_id(
+                            table.get_device_group(src_loc.device_group_index).fabric_node_ids, device_map
+                        )
+                        dst_uid = producer._resolve_unique_id(
+                            table.get_device_group(dst_loc.device_group_index).fabric_node_ids, device_map
+                        )
+                    except KeyError:
+                        # Not this host's chips — the same skip prefill_producer's own read-back makes.
+                        skipped += 1
+                        continue
+                    read_umd = ttnn.experimental.disaggregation.read_dram_umd
+                    src_raw = read_umd(src_uid, src_loc.noc_addr, src_loc.size_bytes)
+                    dst_raw = read_umd(dst_uid, dst_loc.noc_addr, dst_loc.size_bytes)
+                    checked += 1
+                    if bytes(src_raw) != bytes(dst_raw):
+                        mismatches_in_layer += 1
+                        if len(failures) < max_report:
+                            failures.append((src, dst, cfg_id, layer, pos))
+                        elif len(failures) == max_report:
+                            failures.append(None)  # sentinel: "and more"
+                if mismatches_in_layer:
+                    logger.error(
+                        f"[migration_driver] verify bytes: slot {src} -> {dst} config {cfg_id} layer {layer}: "
+                        f"{mismatches_in_layer} chunk(s) differ"
+                    )
+
+    if tail_tokens:
+        logger.warning(
+            f"[migration_driver] verify bytes: {tail_tokens} trailing token(s) across all pairs fell in a "
+            "partial chunk and were NOT compared (real_len is not chunk-aligned)."
+        )
+    if skipped:
+        logger.warning(
+            f"[migration_driver] verify bytes: {skipped} chunk(s) skipped — their chips are not in this "
+            "host's device map. This run verified only the layers resident on THIS host."
+        )
+    if failures:
+        shown = [f for f in failures if f is not None]
+        more = " (and more)" if any(f is None for f in failures) else ""
+        detail = "; ".join(f"slot{s}->slot{d} cfg{c} layer{l} pos{p}" for s, d, c, l, p in shown)
+        logger.error(f"[migration_driver] verify bytes FAILED: dst != src at {detail}{more}")
+        return False
+    if not checked:
+        logger.error(
+            "[migration_driver] verify bytes: nothing was compared (no chunk resolved to a local chip). "
+            "Treating as a FAILURE — a check that read nothing must not report success."
+        )
+        return False
+    logger.success(
+        f"[migration_driver] verify bytes PASSED: {len(triples)} pair(s), {checked} chunk(s) byte-identical "
+        "dst == src"
+    )
+    return True
+
+
+def _verify_dst_vs_golden(table, device_map: dict, triples: list, slot_traces: dict, threshold: float) -> bool:
+    """Golden-anchored DESTINATION check: PCC each migrated dst slot against the SRC slot's golden trace.
+    Returns True when every pair meets ``threshold``.
+
+    This is the device-less counterpart of the "AFTER" half of the runner's retired
+    ``validate_migration_kv``. It reuses ``prefill_producer._read_slot_kv_and_check_pcc``
+    unchanged — that reader is already parameterised by
+    slot id, so passing ``dst`` reads the destination, and passing ``slot_traces[src]`` compares it to
+    what the source was supposed to contain. A correct migration makes dst PCC to golden exactly as src
+    does, which is the pair of numbers the old ``[kv-migrate-validate] BEFORE/AFTER`` lines reported
+    (``_verify_resident_slots`` in main() is still the BEFORE half).
+
+    Stronger than the byte compare in one way — it proves the copy carries MODEL-CORRECT data rather than
+    merely the same bytes the source held, so it also re-confirms prefill itself at the destination — and
+    weaker in others: it decodes through the per-model layout branch (so a new cache layout needs code),
+    it needs the golden trace on disk, and its PCC is undefined over the all-zero pad tail. Run ``both``
+    when you want the transport and the model correctness reported separately.
+
+    FULL DEPTH, ALWAYS. ``_read_slot_kv_and_check_pcc`` takes a slot and a trace, not a layer list: it
+    walks every layer of the model and reports each of its caches' min. There is no layer subset to pass, which is why
+    the caller (``_verify_migrated_slots``) decides whether this check may run at all rather than passing
+    one down — see the gate there. Unlike ``_verify_dst_vs_src_bytes``, this cannot honour
+    PREFILL_VERIFY_MIGRATION_LAYERS, and it must not run against a partially migrated destination.
+    """
+    from models.demos.common.prefill.runners import prefill_producer as producer
+
+    min_pcc, failures, checked = 1.0, [], 0
+    for src, dst, real_len in triples:
+        trace_dir = slot_traces.get(src)
+        if trace_dir is None:
+            logger.error(f"[migration_driver] verify golden: src slot {src} has no trace; skipping {src}->{dst}")
+            continue
+        logger.info(f"[migration_driver] verify golden: dst slot {dst} (migrated from {src}) over [0,{real_len})")
+        try:
+            slot_mins = producer._read_slot_kv_and_check_pcc(table, device_map, dst, real_len, trace_dir)
+        except Exception as e:
+            logger.error(f"[migration_driver] verify golden: dst slot {dst} read/PCC raised {type(e).__name__}: {e}")
+            failures.append((src, dst, float("nan")))
+            continue
+        checked += 1
+        # The reader reports one min per MODEL cache (a sparse model migrates its index cache too); gate on
+        # the weakest and print the breakdown so a regression names the cache that moved wrong.
+        pcc = min(slot_mins.values())
+        min_pcc = min(min_pcc, pcc)
+        per_cache = "".join(f" {cache}_pcc={value:.6f}" for cache, value in slot_mins.items())
+        print(f"[migration_driver] AFTER dst_slot={dst} (src={src}) min_pcc={pcc:.6f}{per_cache}")
+        if pcc < threshold:
+            failures.append((src, dst, pcc))
+
+    if failures:
+        detail = "; ".join(f"slot{s}->slot{d} pcc={p:.6f}" for s, d, p in failures)
+        logger.error(f"[migration_driver] verify golden FAILED (threshold {threshold}): {detail}")
+        return False
+    if not checked:
+        logger.error("[migration_driver] verify golden: no pair was checked; treating as a FAILURE.")
+        return False
+    logger.success(
+        f"[migration_driver] verify golden PASSED: {checked} migrated dst slot(s) >= {threshold} "
+        f"(min {min_pcc:.6f})"
+    )
+    return True
+
+
+def _verify_migrated_slots(
+    mode: str, *, table, triples, slot_traces, layers, migrated_layers, threshold, cross_endpoint
+) -> bool:
+    """Run the requested destination check(s) after the migrate. Returns True when everything requested
+    passed (and True for ``off``, which asserts nothing).
+
+    Skips entirely when cross-endpoint: the dst slot lives in the DECODE galaxy's table, an independent
+    address space this driver's table cannot address. Looking up ``dst`` in OUR table would silently read
+    our own slot ``dst`` — an unwritten slot, or worse, another pair's source — and report a confident
+    wrong answer. Loopback is the only topology where the destination is locally readable.
+
+    TWO layer lists arrive here, and conflating them is a bug:
+      * ``migrated_layers`` (PREFILL_MIGRATION_LAYERS) — which rows the migrate actually COPIED. A subset
+        means every other row of each dst slot was never written, so it constrains what is even
+        MEANINGFUL to read at the destination.
+      * ``layers`` (``--verify-migration-layers``, defaulting to ``migrated_layers``) — which rows this
+        run should bother reading. A pure cost knob: a subset makes a PASS a sample.
+    ``dst-bytes`` takes ``layers`` and honours both. ``dst-golden`` can honour neither — its reader walks
+    the full depth — so the gate below runs it only when the whole model was migrated, and says so
+    otherwise instead of PCCing rows that hold nothing.
+    """
+    if mode == "off":
+        logger.info("[migration_driver] destination verification is OFF; this run proves TRANSPORT only.")
+        return True
+    if cross_endpoint:
+        logger.warning(
+            f"[migration_driver] --verify-migration={mode} ignored: this is a CROSS-ENDPOINT migration, so "
+            "the destination lives in the remote decode table and cannot be read from here. Verify it on "
+            "the decode side (e.g. against a --dump-src-kv reference)."
+        )
+        return True
+    if table is None:
+        logger.error(f"[migration_driver] --verify-migration={mode} needs the KV chunk table, which never appeared.")
+        return False
+    if not triples:
+        logger.error(f"[migration_driver] --verify-migration={mode} but zero pairs were migrated.")
+        return False
+
+    from models.demos.common.prefill.runners import prefill_producer as producer
+
+    device_map = producer._read_device_map(int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")))
+    if not device_map:
+        logger.error(f"[migration_driver] --verify-migration={mode} needs the device map, which is unavailable.")
+        return False
+
+    ok = True
+    if mode in ("dst-bytes", "both"):
+        ok = _verify_dst_vs_src_bytes(table, device_map, triples, layers) and ok
+    if mode in ("dst-golden", "both"):
+        if migrated_layers:
+            # PARTIAL MIGRATION + golden check: refuse, don't guess. The golden reader walks every layer
+            # of the model, but only `migrated_layers` were copied, so it would PCC the dst slot's
+            # UNWRITTEN rows against golden and fail a perfectly correct migration. Skipping quietly would
+            # be worse than failing: `both` would then report a PASS that never looked at the destination
+            # the way the caller asked. dst-bytes is the mode that does honour a subset.
+            logger.error(
+                f"[migration_driver] --verify-migration={mode} cannot run its GOLDEN half: "
+                f"PREFILL_MIGRATION_LAYERS migrated only layer(s) {sorted(set(migrated_layers))}, so every "
+                "other row of each dst slot was never written — and the golden reader "
+                "(prefill_producer._read_slot_kv_and_check_pcc) has no layer-subset parameter, so it would "
+                "PCC that unwritten memory and fail a correct migration. Use --verify-migration=dst-bytes, "
+                "which does honour the subset, or migrate the full depth (unset PREFILL_MIGRATION_LAYERS) "
+                "to get the golden check."
+            )
+            ok = False
+        else:
+            if layers:
+                # Everything was migrated, so the full-depth golden read is CORRECT here — just not the
+                # cheap sample that was asked for. Say so rather than silently spending the reads.
+                logger.warning(
+                    f"[migration_driver] --verify-migration-layers {sorted(set(layers))} applies to the "
+                    "dst-bytes half only; the golden half reads the FULL depth (its reader takes no layer "
+                    "subset). Expect it to cost a full check_pcc pass per pair."
+                )
+            ok = _verify_dst_vs_golden(table, device_map, triples, slot_traces, threshold) and ok
+    return ok
+
+
+# ---------------------------------------------------------------------------
+# Multi-rank coordination (device-less; GO/DONE over MPI collectives, not files)
+#
+# One driver process per pipeline host under an MPI launcher. Rank 0 is the master (feeds H2D, owns the
+# LayerAck channel and the MigrationLayerClient, issues every migrate() and writes both sidecars); every
+# other rank is a device-less validator that reads only its OWN host's chips. The reason the split exists
+# at all is that read_dram_umd is host-local: rank 0 physically cannot read another galaxy's DRAM, so a
+# single-process driver can only ever verify its own layer slice.
+#
+# The barriers reuse prefill_producer's collectives verbatim (_mr_config / _mr_bcast_resident /
+# _mr_allgather_verdict) and add ONE of their own, _mr_bcast_triples, because the destination check needs
+# something the producer never had: the mapping rank 0 actually migrated. Ordering is fixed and identical
+# on every rank — resident bcast (GO#1), triples bcast (GO#2), verdict allgather (DONE) — since these are
+# built out of allgather_int, and a rank issuing a different NUMBER of allgathers desynchronizes the run.
+# ---------------------------------------------------------------------------
+
+
+def _mr_bcast_triples(rank: int, triples: list) -> list:
+    """Broadcast rank 0's resolved ``(src_slot, dst_slot, real_len)`` triples to every rank, built from
+    allgather_int the same way ``prefill_producer._mr_bcast_resident`` is (element [0] of each allgather is
+    rank 0's contribution; ttnn exposes no native broadcast). Non-master ranks pass ``[]`` and receive the
+    list.
+
+    Doubles as GO#2: a validator blocks in the first allgather until the master arrives, which happens only
+    after every migrate()'s wait_complete has returned — i.e. exactly when the destination slots hold data.
+    Broadcasting the triples rather than re-resolving them per rank means the validators check what was
+    MIGRATED, not what a second evaluation of the env/manifest thinks should have been."""
+    items = list(triples) if rank == 0 else []
+    n = ttnn.distributed_context_allgather_int(len(items) if rank == 0 else 0)[0]
+    out = []
+    for k in range(n):
+        src, dst, real_len = items[k] if rank == 0 else (0, 0, 0)
+        src = ttnn.distributed_context_allgather_int(int(src))[0]
+        dst = ttnn.distributed_context_allgather_int(int(dst))[0]
+        real_len = ttnn.distributed_context_allgather_int(int(real_len))[0]
+        out.append((src, dst, real_len))
+    return out
+
+
+def _run_validator(rank: int, world_size: int, args) -> None:
+    """Non-master path: no H2D feed, no migration client, no migrate() — read-back only.
+
+    Waits for the master's GO#1 (the resident-slot broadcast, which the master only reaches after draining
+    every LayerAck, so all layers are written), PCCs this host's local layers of every source slot, then
+    waits for GO#2 (the migrated triples) and runs the same destination check the master runs, again over
+    this host's layers only. Joins the verdict allgather either way — including on failure — so the master
+    can never hang waiting for a rank that gave up early. Exits non-zero when this rank's checks failed.
+
+    Both read-backs filter by the local device map: a layer whose chips are not this host's resolves to no
+    unique_id and is skipped. With one process per host the union across ranks covers the whole model,
+    which is the entire point of running multi-rank."""
+    from models.demos.common.prefill.runners import prefill_producer as producer
+
+    cfg = producer._config_from_env()
+    producer._require_shared_table_path(world_size)
+    timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
+    # Constructed for its env-derived fields only (layers / cross_endpoint) — a validator never attaches a
+    # client and never migrates. The same env on every rank makes these identical to the master's.
+    driver = MigrationDriver(
+        chunk_size=producer.CHUNK_SIZE,
+        num_layers=producer.NUM_LAYERS,
+        default_dst_slot_offset=cfg.num_users,
+    )
+    verify_layers = _parse_layers(args.verify_migration_layers) or driver.layers
+    logger.info(
+        f"[migration_driver] validator rank={rank}/{world_size}: read-back only (no H2D feed, no migrate); "
+        f"src_pcc={cfg.verify} dst_verify={args.verify_migration}"
+    )
+
+    # GO#1 before the table read: the master broadcasts only after draining every LayerAck, which also
+    # means rank 0 finished publishing this run's table, so a read after GO cannot observe a stale one.
+    resident = producer._mr_bcast_resident(rank, {})
+    logger.info(f"[migration_driver] validator rank={rank}: GO received, {len(resident)} resident slot(s)")
+
+    try:
+        kv_table = producer._read_kv_chunk_table(timeout_s)
+    except Exception as e:
+        logger.error(f"[migration_driver] validator rank={rank}: KV table read raised {type(e).__name__}: {e}")
+        kv_table = None
+
+    stats = producer.RunStats(resident=resident, total_pushes=0, push_ms=[], completed=0, wall_s=0.0)
+    # Env-derived, so this is the same slot -> golden mapping the master pushed against. Resolved only for
+    # the checks that actually need a golden: a dst-bytes-only validator compares device bytes to device
+    # bytes, and requiring the trace to be mounted on every host would fail the rank for nothing.
+    needs_traces = cfg.verify or args.verify_migration in ("dst-golden", "both")
+    slot_traces = producer._resolve_slot_prompts(cfg)[0] if needs_traces else {}
+
+    # Source PCC (was prefill correct on THIS host's layers?), the same gate the master runs on its own.
+    verify_ok = True
+    if cfg.verify:
+        if kv_table is None:
+            logger.error(f"[migration_driver] validator rank={rank}: no KV chunk table available; cannot PCC.")
+            verify_ok = False
+        else:
+            try:
+                verify_ok = producer._verify_resident_slots(kv_table, stats, cfg.pcc_threshold, slot_traces)
+            except Exception as e:
+                logger.error(f"[migration_driver] validator rank={rank}: KV read/PCC failed: {type(e).__name__}: {e}")
+                verify_ok = False
+
+    # GO#2: the migrated mapping. Blocks until the master's last wait_complete has returned.
+    triples = _mr_bcast_triples(rank, [])
+    logger.info(f"[migration_driver] validator rank={rank}: {len(triples)} migrated pair(s) received")
+
+    try:
+        migration_ok = _verify_migrated_slots(
+            args.verify_migration,
+            table=kv_table,
+            triples=triples,
+            slot_traces=slot_traces,
+            layers=verify_layers,
+            migrated_layers=driver.layers,
+            threshold=cfg.pcc_threshold,
+            cross_endpoint=driver.cross_endpoint,
+        )
+    except Exception as e:
+        logger.error(f"[migration_driver] validator rank={rank}: destination verify raised {type(e).__name__}: {e}")
+        migration_ok = False
+
+    ok = verify_ok and migration_ok
+    producer._mr_allgather_verdict(ok)  # DONE barrier + verdict fold (the master reads the result)
+    logger.info(f"[migration_driver] validator rank={rank}: DONE src_pcc_ok={verify_ok} dst_verify_ok={migration_ok}")
+    if not ok:
+        sys.exit(1)
 
 
 def main() -> None:
@@ -566,6 +997,32 @@ def main() -> None:
         help="Directory to save each source slot's KV into as src_slot<N>.pt, for a decode-side consumer "
         "to PCC its received copy against. Honours the migrated layer subset. Off when unset.",
     )
+    parser.add_argument(
+        "--verify-migration",
+        choices=("off", "dst-bytes", "dst-golden", "both"),
+        default=os.environ.get("PREFILL_VERIFY_MIGRATION", "dst-bytes"),
+        help="Read the MIGRATED DESTINATION slots back after the migrate (loopback only). 'dst-bytes' "
+        "(default) asserts dst is byte-identical to src — golden-free, model-agnostic, and valid in the "
+        "pad/all-zero regions where PCC is undefined. 'dst-golden' PCCs each dst against the src's golden "
+        "trace, proving the copy carries model-correct data. 'both' runs each in turn. 'off' reports "
+        "transport only. Cost: dst-bytes reads BOTH slots, so it roughly doubles the UMD reads of a "
+        "check_pcc pass (a full-depth Kimi pair is ~215k reads); use --verify-migration-layers to "
+        "spot-check. Neither mode sees cross-talk unless PREFILL_PRODUCER_SLOT_TRACES gives the source "
+        "slots different prompts. Coverage is HOST-LOCAL either way (UMD reaches only this host's chips): "
+        "single-process it checks rank 0's layer slice alone, while under an MPI launcher each rank checks "
+        "its own host's slice and the verdicts are folded — see the module docstring.",
+    )
+    parser.add_argument(
+        "--verify-migration-layers",
+        default=os.environ.get("PREFILL_VERIFY_MIGRATION_LAYERS"),
+        help="Comma list of layer ids to verify (e.g. '0,30,60'), for a fast spot-check instead of the "
+        "full depth. Defaults to every layer the migrate covered. A subset makes a PASS a sample, not a "
+        "proof — the summary says so. Applies to the DST-BYTES half only: the golden half's reader takes "
+        "no layer subset and always walks the full depth. For the same reason 'dst-golden'/'both' are "
+        "REFUSED (not silently skipped) when PREFILL_MIGRATION_LAYERS migrated only part of the model — "
+        "the unmigrated dst rows hold nothing, so PCCing them would fail a correct migration. Use "
+        "'dst-bytes' for a partial-depth migration.",
+    )
     args = parser.parse_args()
 
     # Manifest order matters: the producer applies `env:` first (so a raw PREFILL_* key wins) plus its own
@@ -577,7 +1034,29 @@ def main() -> None:
         os.environ["PREFILL_MIGRATION_PAIRS"] = args.migrations  # CLI beats manifest + env
     producer._load_env_config()
 
+    # Rank split. Under an MPI launcher every non-zero rank is a read-back-only validator for its OWN
+    # host's layers; standalone this is (0, 1) and nothing below changes. Done AFTER the manifest lands in
+    # the env so every rank derives the same config from the same source.
+    #
+    # The log line matters: _mr_config() calls MPI_Init, which BLOCKS until every rank has joined, and a
+    # network misconfiguration (ranks placed on different NICs -- see run_migration_driver.sh's tcp_iface
+    # argument) makes that block forever. Announcing it turns an otherwise silent hang into a visible
+    # "waiting for N ranks".
+    if int(os.environ.get("OMPI_COMM_WORLD_SIZE", "1")) > 1:
+        logger.info(
+            f"[migration_driver] joining the distributed context "
+            f"({os.environ['OMPI_COMM_WORLD_SIZE']} rank(s) expected); this blocks until all of them arrive"
+        )
+    mr_rank, world_size = producer._mr_config()
+    if mr_rank != 0:
+        _run_validator(mr_rank, world_size, args)
+        return
+
     cfg = producer._config_from_env()
+    # Validators read the table the runner published under this path from their own hosts, so on
+    # multi-rank it has to be shared storage. Checked on every rank (same env => same verdict), so a
+    # rejection exits all of them symmetrically instead of half-opening a barrier.
+    producer._require_shared_table_path(world_size)
     # Invoking THIS module is the opt-in, so migration.issue is redundant here. Warn rather than silently
     # honour a `false` that would turn the whole invocation into a no-op.
     if os.environ.get("PREFILL_PRODUCER_ISSUE_MIGRATION", "1") == "0":
@@ -601,6 +1080,10 @@ def main() -> None:
     payload_bytes = service.payload_size_bytes()
     logger.info(f"[migration_driver] attached; payload={payload_bytes}B")
 
+    # Unconditional, unlike prefill_producer.main() which skips the table read when check_pcc is off: here
+    # the table has a SECOND consumer, --verify-migration's destination read-back, which is on by default
+    # and independent of check_pcc. Gating this on cfg.verify would make the default verify silently
+    # unavailable ("needs the KV chunk table, which never appeared") on any check_pcc: false manifest.
     kv_table = producer._read_kv_chunk_table(timeout_s)
     ack_channel = producer._connect_layer_ack_channel(timeout_s)
 
@@ -632,6 +1115,13 @@ def main() -> None:
     )
     producer._drain_layer_acks(ack_channel, producer.NUM_LAYERS * stats.total_pushes)
 
+    # Multi-rank GO#1: every layer of every chunk is now written across every stage's DRAM, so release the
+    # validators to PCC their own hosts' layers. Broadcast BEFORE this rank's own read-back so the reads
+    # overlap across hosts. The drain above is unconditional here (unlike prefill_producer, which gates it
+    # on check_pcc), so this guarantee holds even with check_pcc off.
+    if world_size > 1:
+        producer._mr_bcast_resident(mr_rank, stats.resident)
+
     # Golden PCC + the src-KV dump run BEFORE migrating, so both land before the DONE sentinel a consumer
     # may be waiting on. Migration only READS the source slots, so the order is equivalent.
     verify_ok = True
@@ -649,14 +1139,76 @@ def main() -> None:
         if kv_table is None:
             logger.error("[migration_driver] --dump-src-kv needs the KV chunk table, which never appeared.")
         else:
+            # Rank 0 only: every rank would write the SAME src_slot<N>.pt with a different layer subset and
+            # clobber the others. The dump therefore carries this host's layers alone on a multi-rank run.
+            if world_size > 1:
+                logger.warning(
+                    f"[migration_driver] --dump-src-kv runs on rank 0 only, so {args.dump_src_kv} will hold "
+                    f"THIS host's layers and None for the rest (world_size={world_size}). Dump from a "
+                    "single-rank runner if the decode side needs every layer."
+                )
             _dump_src_kv(args.dump_src_kv, kv_table, stats, slot_traces, driver.layers)
 
-    driver.run(
-        stats,
-        num_slots=kv_table.config().num_slots if kv_table is not None else None,
-        slot_traces=slot_traces,
-        pools_by_trace=pools_by_trace,
-    )
+    # Migrate. Wrapped so a failure here still reaches GO#2 below with an empty mapping: a validator parked
+    # in that broadcast would otherwise hang forever on a master that died. Every rank then verifies zero
+    # pairs, votes False, and the run exits non-zero together.
+    triples = []
+    migrate_ok = True
+    try:
+        triples = driver.run(
+            stats,
+            num_slots=kv_table.config().num_slots if kv_table is not None else None,
+            slot_traces=slot_traces,
+            pools_by_trace=pools_by_trace,
+        )
+    except Exception as e:
+        logger.exception(f"[migration_driver] migration failed: {type(e).__name__}: {e}")
+        migrate_ok = False
+
+    # Multi-rank GO#2: wait_complete has returned for every pair, so the destination slots hold data.
+    # Release the validators with the mapping that was actually migrated.
+    if world_size > 1:
+        _mr_bcast_triples(mr_rank, triples)
+
+    # Destination read-back. Runs AFTER driver.run() because the dst slot only holds anything once the
+    # migrate's wait_complete has returned, and BEFORE the shutdown sentinel below because the UMD reads
+    # need the mesh alive. Note this lands after run() published the DONE sentinel: harmless for loopback
+    # (nothing polls it) but it does mean the sentinel means "copied", not "verified" — a cross-endpoint
+    # consumer waking on it gets no verdict from here, which is why the cross-endpoint case is skipped.
+    verify_layers = _parse_layers(args.verify_migration_layers) or driver.layers
+    if verify_layers and args.verify_migration != "off":
+        logger.warning(
+            f"[migration_driver] verifying layer subset {sorted(set(verify_layers))} only — a PASS is a "
+            "SAMPLE of the migration, not a proof that every layer copied correctly."
+        )
+    try:
+        migration_ok = _verify_migrated_slots(
+            args.verify_migration,
+            table=kv_table,
+            triples=triples,
+            slot_traces=slot_traces,
+            layers=verify_layers,
+            migrated_layers=driver.layers,
+            threshold=cfg.pcc_threshold,
+            cross_endpoint=driver.cross_endpoint,
+        )
+    except Exception as e:
+        # Same reason as the migrate above: reach the verdict allgather rather than stranding a validator.
+        logger.exception(f"[migration_driver] destination verify raised {type(e).__name__}: {e}")
+        migration_ok = False
+    migration_ok = migration_ok and migrate_ok
+
+    # Multi-rank DONE: the verdict allgather is also the barrier that holds this rank until every validator
+    # has finished reading, so the shutdown sentinel below cannot tear the mesh/DRAM down under one. Fold
+    # every rank's verdict — this rank's own is contributed as element [0] — so a failure anywhere fails
+    # the run, and each rank covers a different slice of the model.
+    local_ok = migration_ok and not (cfg.verify and not verify_ok)
+    all_ranks_ok = local_ok
+    if world_size > 1:
+        verdicts = producer._mr_allgather_verdict(local_ok)
+        for r, v in enumerate(verdicts):
+            logger.info(f"[migration_driver] rank={r}: ok={v}")
+        all_ranks_ok = all(verdicts)
 
     # Optional graceful shutdown: sent LAST, because the UMD read-backs above need the mesh/DRAM alive.
     if os.environ.get("PREFILL_SEND_SHUTDOWN", "0") == "1":
@@ -668,7 +1220,19 @@ def main() -> None:
     else:
         logger.info("[migration_driver] exiting (the runner keeps its sync-op loop running).")
 
+    # Both gates feed the exit code: the source PCC (was prefill correct?) and the destination read-back
+    # (did the copy land correctly?). A silent success on either would make the run green while unverified.
+    # Multi-rank, they are folded across ranks first — each rank only ever saw its own host's layers, so
+    # only the fold covers the model.
     if cfg.verify and not verify_ok:
+        logger.error("[migration_driver] FAILED: source KV PCC did not pass on rank 0.")
+    if not migrate_ok:
+        logger.error("[migration_driver] FAILED: the migrate step itself did not complete (see above).")
+    elif not migration_ok:
+        logger.error("[migration_driver] FAILED: migrated destination verification did not pass on rank 0.")
+    if local_ok and not all_ranks_ok:
+        logger.error("[migration_driver] FAILED: rank 0 passed but another rank's read-back did not.")
+    if not all_ranks_ok:
         sys.exit(1)
 
 

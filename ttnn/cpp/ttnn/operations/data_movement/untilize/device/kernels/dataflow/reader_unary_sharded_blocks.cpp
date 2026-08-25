@@ -7,7 +7,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "experimental/kernel_args.h"
 
 // Block-by-block reader for sharded inputs.
 //
@@ -20,14 +20,14 @@
 //   - Each loop iteration reads one block (`tiles_per_block` pages) from that shard.
 //   - TensorAccessor resolves the correct NOC address based on compile-time buffer properties.
 //
-// The kernel still streams one block at a time into a double-buffered CB, so the CB only needs up to
+// The kernel still streams one block at a time into a double-buffered DFB, so the DFB only needs up to
 // two blocks rather than an entire shard.
 //
 // This kernel is used when use_block_reader=true in UntilizeMultiCoreProgramFactory:
 //   - Uneven sharding: tensor dims don't evenly divide shard dims
 //
 // Data flow (block reader):
-//   Sharded Source (L1/DRAM) CB (double-buffered)          Compute
+//   Sharded Source (L1/DRAM) DFB (double-buffered)         Compute
 //   +------------------+     +----------+----------+
 //   | block 0 (1 row)  | --> | block 0  |          | --> untilize_block()
 //   | block 1          | --> |          | block 1  | --> untilize_block()
@@ -35,25 +35,22 @@
 //   | ...              |     +----------+----------+
 //   +------------------+
 //
-// vs. backed CB (zero-copy, used for even sharding + pack_untilize):
-//   L1 Shard Buffer = CB (aliased)
+// vs. backed DFB (zero-copy, used for even sharding + pack_untilize):
+//   L1 Shard Buffer = DFB (aliased)
 //   +------------------+
 //   | all blocks       | --> compute reads directly
 //   +------------------+
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start_shard_id = get_arg_val<uint32_t>(1);
-    const uint32_t num_blocks = get_arg_val<uint32_t>(2);
+    const auto start_shard_id = get_arg(args::start_shard_id);
+    const auto num_blocks = get_arg(args::num_blocks);
 
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t tiles_per_block = get_compile_time_arg_val(1);
-    constexpr uint32_t tile_size_bytes = get_tile_size(cb_id_in0);
+    constexpr auto tiles_per_block = get_arg(args::tiles_per_block);
+    constexpr uint32_t tile_size_bytes = get_tile_size(dfb::in);
     constexpr uint32_t block_size_bytes = tiles_per_block * tile_size_bytes;
-    constexpr auto src_args = TensorAccessorArgs<2>();
-    const auto accessor_src = TensorAccessor(src_args, src_addr);
+    const auto accessor_src = TensorAccessor(tensor::src);
 
     Noc noc;
-    DataflowBuffer dfb_in(cb_id_in0);
+    DataflowBuffer dfb_in(dfb::in);
     auto shard_pages = accessor_src.shard_pages(start_shard_id);
     auto page_iter = shard_pages.begin();
     for (uint32_t b = 0; b < num_blocks; ++b) {

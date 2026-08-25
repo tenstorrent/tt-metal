@@ -29,8 +29,10 @@ public:
     std::vector<std::vector<tt::tt_metal::CoreCoord>> dram_view_eth_cores;  // per dram view preferred eth endpoints for each noc
     std::vector<size_t> dram_view_address_offsets;            // starting address offset
 
-    // Per bank, ordered endpoint translated coordinates.
-    // Index 0 = preferred worker endpoint (NOC 0), indices 1..N = remaining endpoints on the same bank.
+    // Per bank, ordered endpoint translated coordinates. The index is the y of a logical DRAM
+    // CoreCoord, and the order is by role so that y means the same thing on every device regardless
+    // of DRAM harvesting: index 0 = worker endpoint for NOC 0, index 1 = worker endpoint for NOC 1
+    // (when it is a different subchannel), then the bank's remaining subchannels ascending.
     std::vector<std::vector<tt::tt_metal::CoreCoord>> dram_bank_endpoint_coords;
 
     uint64_t dram_core_size{};
@@ -50,6 +52,9 @@ public:
     // endpoint, which is owned by the syseng firmware (CMFW DRAM telemetry, SYS-1419) and runs no
     // DRISC firmware. Hardware without that restriction returns all DRAM cores -- callers never need
     // to special-case it.
+    // A LOGICAL request returns Metal logical DRAM coords ({dram_view, dram_bank_endpoint_coords
+    // index}, the space get_physical_dram_core_from_logical and CreateKernel(DramConfig) use), not
+    // UMD's {channel, raw subchannel}.
     std::vector<tt::tt_metal::CoreCoord> get_metal_dram_cores(tt::CoordSystem coord_system) const;
     tt::tt_metal::CoreCoord get_logical_core_for_dram_view(int dram_view) const;
     size_t get_address_offset(int dram_view) const;
@@ -63,8 +68,15 @@ public:
     tt::tt_metal::CoreCoord get_physical_tensix_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const;
     tt::tt_metal::CoreCoord get_physical_dram_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const;
     // Map a DRAM view + hardware subchannel to the logical CoreCoord used by CreateKernel(DramConfig).
-    // logical.y indexes dram_bank_endpoint_coords (worker endpoint first), not the raw subchannel id.
+    // logical.y indexes dram_bank_endpoint_coords (ordered by endpoint role), not the raw subchannel id.
     tt::tt_metal::CoreCoord get_logical_dram_core_for_subchannel(int dram_view, int subchannel) const;
+    // Same logical space as get_logical_dram_core_for_subchannel, keyed by a TRANSLATED coord. Inverse
+    // of get_physical_dram_core_from_logical. A DRAM view is a dram_view_size window of one hardware
+    // channel -- what Metal allocates against as a DRAM bank -- so a channel split into several views
+    // (Wormhole: two 1 GB views per channel) has one set of NOC endpoints serving all of them. This
+    // returns the lowest view reaching the coord; it round-trips, but is not the only answer.
+    tt::tt_metal::CoreCoord get_logical_dram_core_from_translated(
+        const tt::tt_metal::CoreCoord& translated_coord) const;
     tt::tt_metal::CoreCoord get_physical_dispatch_engine_core_from_logical(const tt::tt_metal::CoreCoord& logical_coord) const;
     uint32_t get_num_dispatch_engine_cores() const;
 

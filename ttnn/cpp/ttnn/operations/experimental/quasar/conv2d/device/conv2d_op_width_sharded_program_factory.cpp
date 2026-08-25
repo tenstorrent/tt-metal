@@ -26,6 +26,8 @@
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -420,8 +422,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
     }();
 
     auto& cq = a.device()->mesh_command_queue();
-    tt::tt_metal::MeshTensor reader_indices_mesh_tensor = tt::tt_metal::enqueue_write_tensor(
-        cq, host_config_tensor.host_tensor(), *a.device(), reader_indices_mem_config);
+    tt::tt_metal::MeshTensor reader_indices_mesh_tensor =
+        cq.enqueue_write_tensor(host_config_tensor.host_tensor(), reader_indices_mem_config);
     tt::tt_metal::Buffer* conv_reader_indices_buffer = reader_indices_mesh_tensor.mesh_buffer().get_reference_buffer();
     const uint32_t reader_indices_actual_page_size = conv_reader_indices_buffer->page_size();
 

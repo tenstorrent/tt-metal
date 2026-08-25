@@ -46,11 +46,28 @@ void RepeatDeviceOperation::validate_on_program_cache_miss(
             "Can only work with UINT16, BFLOAT16, UINT32, INT32, FLOAT32 data types");
     }
 
-    // Dropped memory_layout equality check; predicate + compute_output_specs handle sharded I/O.
+    if (tensor_args.optional_output_tensor.has_value()) {
+        const auto& out = tensor_args.optional_output_tensor.value();
+        const auto& input_shape = input_tensor_a.logical_shape();
+        auto expected_shape = input_shape;
+        const int32_t effective_repeat_dim =
+            operation_attributes.m_repeat_dim >= 0
+                ? operation_attributes.m_repeat_dim
+                : (operation_attributes.m_is_last_dim ? static_cast<int32_t>(input_shape.rank()) - 1 : 1);
+        expected_shape[effective_repeat_dim] *= operation_attributes.m_num_repeats;
+        TT_FATAL(out.logical_shape() == expected_shape, "Repeat optional output shape mismatch");
+        TT_FATAL(out.dtype() == input_tensor_a.dtype(), "Repeat optional output dtype mismatch");
+        TT_FATAL(out.layout() == input_tensor_a.layout(), "Repeat optional output layout mismatch");
+        TT_FATAL(out.device() == input_tensor_a.device(), "Repeat optional output must be on the same device");
+    }
 }
 
 RepeatDeviceOperation::spec_return_value_t RepeatDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& input_tensors) {
+    if (input_tensors.optional_output_tensor.has_value()) {
+        return input_tensors.optional_output_tensor->tensor_spec();
+    }
+
     const auto& input_tensor_a = input_tensors.input;
     const auto& input_shape = input_tensor_a.logical_shape();
     auto output_shape = input_shape;
@@ -91,6 +108,9 @@ RepeatDeviceOperation::spec_return_value_t RepeatDeviceOperation::compute_output
 
 RepeatDeviceOperation::tensor_return_value_t RepeatDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& input_tensors) {
+    if (input_tensors.optional_output_tensor.has_value()) {
+        return input_tensors.optional_output_tensor.value();
+    }
     return create_device_tensor(
         compute_output_specs(operation_attributes, input_tensors), input_tensors.input.device());
 }
@@ -110,12 +130,13 @@ RepeatDeviceOperation::tensor_return_value_t repeat(
     const Tensor& input,
     uint32_t m_num_repeats,
     bool m_is_last_dim,
-    const tt::tt_metal::MemoryConfig& output_mem_config) {
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    std::optional<Tensor> optional_output_tensor) {
     using OperationType = RepeatDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .m_num_repeats = m_num_repeats, .m_is_last_dim = m_is_last_dim, .m_output_mem_config = output_mem_config},
-        OperationType::tensor_args_t{.input = input});
+        OperationType::tensor_args_t{.input = input, .optional_output_tensor = std::move(optional_output_tensor)});
 }
 
 RepeatDeviceOperation::tensor_return_value_t repeat_tile(
@@ -126,7 +147,8 @@ RepeatDeviceOperation::tensor_return_value_t repeat_tile(
     uint32_t tile_higher_pages,
     uint32_t tile_rep_dim_pages,
     uint32_t tile_lower_pages,
-    uint32_t tile_page_size_bytes) {
+    uint32_t tile_page_size_bytes,
+    std::optional<Tensor> optional_output_tensor) {
     using OperationType = RepeatDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -138,6 +160,6 @@ RepeatDeviceOperation::tensor_return_value_t repeat_tile(
             .m_tile_lower_pages = tile_lower_pages,
             .m_tile_page_size_bytes = tile_page_size_bytes,
             .m_repeat_dim = repeat_dim},
-        OperationType::tensor_args_t{.input = input});
+        OperationType::tensor_args_t{.input = input, .optional_output_tensor = std::move(optional_output_tensor)});
 }
 }  // namespace ttnn::prim

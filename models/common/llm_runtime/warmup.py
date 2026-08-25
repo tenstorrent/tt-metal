@@ -58,7 +58,8 @@ class WarmupCoordinatorConfig:
 
     warmup: WarmupConfig
     model: Any
-    page_table_layout: PageTableLayout
+    page_table_layout: PageTableLayout  # Current geometry used to build coverage plans.
+    page_table_layout_ceiling: PageTableLayout  # Construction-time upper bound retained across replacement.
     prefill_sequence_lengths: tuple[int, ...]
     lane_batch_size: int
     device_sampling_enabled: bool
@@ -94,19 +95,17 @@ class WarmupCoordinatorConfig:
             raise ValueError("force-argmax capability requires device sampling")
         if self.prime_q128_tile_ends is not (self.device_sampling_enabled and self.lane_batch_size >= 32):
             raise ValueError("prime_q128_tile_ends must match resolved sampling and lane capabilities")
-        ceilings = (
-            ("max_page_table_capacity_width", self.max_page_table_capacity_width),
-            ("max_prefill_page_table_width", self.max_prefill_page_table_width),
-            ("max_decode_page_table_width", self.max_decode_page_table_width),
-        )
-        for name, value in ceilings:
-            _require_positive_int(name, value)
-        if self.page_table_layout.raw_capacity_width > self.max_page_table_capacity_width:
-            raise ValueError("max_page_table_capacity_width must cover page_table_layout")
-        if self.page_table_layout.prefill_width > self.max_prefill_page_table_width:
-            raise ValueError("max_prefill_page_table_width must cover page_table_layout")
-        if self.page_table_layout.decode_width > self.max_decode_page_table_width:
-            raise ValueError("max_decode_page_table_width must cover page_table_layout")
+        if not isinstance(self.page_table_layout_ceiling, PageTableLayout):
+            raise TypeError("page_table_layout_ceiling must be a PageTableLayout")
+        if self.page_table_layout.block_size != self.page_table_layout_ceiling.block_size:
+            raise ValueError("page_table_layout_ceiling cannot change block_size")
+        if self.page_table_layout.raw_capacity_width > self.page_table_layout_ceiling.raw_capacity_width:
+            raise ValueError("page_table_layout_ceiling must cover page_table_layout capacity")
+        if (
+            self.page_table_layout.prefill_width > self.page_table_layout_ceiling.prefill_width
+            or self.page_table_layout.decode_width > self.page_table_layout_ceiling.decode_width
+        ):
+            raise ValueError("page_table_layout_ceiling must cover canonical page-table geometry")
         expected_eager = _build_plan(
             warmup=self.warmup,
             layout=self.page_table_layout,
@@ -156,10 +155,8 @@ class WarmupCoordinatorConfig:
             raise ValueError("prefill and decode configs must share device-sampling policy")
         if decode.allow_force_argmax is not prefill.allow_force_argmax:
             raise ValueError("prefill and decode configs must share force-argmax capability")
-        if decode.max_page_table_capacity_width != prefill.max_page_table_capacity_width:
-            raise ValueError("prefill and decode configs must share the original capacity ceiling")
-        if decode.max_decode_page_table_width != prefill.max_decode_page_table_width:
-            raise ValueError("prefill and decode configs must share the original decode-width ceiling")
+        if decode.page_table_layout_ceiling != prefill.page_table_layout_ceiling:
+            raise ValueError("prefill and decode configs must share one page-table layout ceiling")
 
         source_lengths = warmup.prefill_seq_lens
         if source_lengths is None:
@@ -199,9 +196,7 @@ class WarmupCoordinatorConfig:
             decode_trace_enabled=trace.decode_enabled,
             eager_plan=eager_plan,
             sampled_plan=sampled_plan,
-            max_page_table_capacity_width=prefill.max_page_table_capacity_width,
-            max_prefill_page_table_width=prefill.max_prefill_page_table_width,
-            max_decode_page_table_width=decode.max_decode_page_table_width,
+            page_table_layout_ceiling=prefill.page_table_layout_ceiling,
         )
 
     def with_page_table_layout(self, layout: PageTableLayout) -> "WarmupCoordinatorConfig":
@@ -211,11 +206,11 @@ class WarmupCoordinatorConfig:
             raise TypeError("layout must be a PageTableLayout")
         if layout.block_size != self.page_table_layout.block_size:
             raise ValueError("page-table layout replacement cannot change block_size")
-        if layout.raw_capacity_width > self.max_page_table_capacity_width:
+        if layout.raw_capacity_width > self.page_table_layout_ceiling.raw_capacity_width:
             raise ValueError("page-table layout replacement cannot exceed the construction-time capacity ceiling")
         if (
-            layout.prefill_width > self.max_prefill_page_table_width
-            or layout.decode_width > self.max_decode_page_table_width
+            layout.prefill_width > self.page_table_layout_ceiling.prefill_width
+            or layout.decode_width > self.page_table_layout_ceiling.decode_width
         ):
             raise ValueError("page-table layout replacement cannot expand canonical geometry")
         return replace(

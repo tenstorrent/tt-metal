@@ -15,6 +15,8 @@
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -23,6 +25,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "impl/program/program_impl.hpp"
 
 #include <umd/device/types/arch.hpp>
 
@@ -244,6 +247,38 @@ void RunNoOpProgram(distributed::MeshDevice& target, const std::string& label) {
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(target.mesh_command_queue(), workload, true);
     log_info(tt::LogTest, "Successfully enqueued no-op program on {}", label);
+}
+
+// Minimal Gen1 Metal 2.0 ProgramSpec: one no-op DM kernel on node (0, 0).
+experimental::ProgramSpec MakeMinimalNoOpProgramSpec() {
+    using experimental::DataMovementGen1Config;
+    using experimental::KernelSpec;
+    using experimental::KernelSpecName;
+    using experimental::NodeCoord;
+    using experimental::ProgramSpec;
+    using experimental::WorkUnitSpec;
+
+    const KernelSpecName kernel_id{"dm_kernel"};
+    KernelSpec dm_kernel{
+        .unique_id = kernel_id,
+        .source = KernelSpec::SourceCode{"void kernel_main() {}"},
+        .num_threads = 1,
+        .hw_config =
+            DataMovementGen1Config{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::NOC_0,
+            },
+    };
+
+    return ProgramSpec{
+        .name = "context_noop",
+        .kernels = {std::move(dm_kernel)},
+        .work_units = {WorkUnitSpec{
+            .name = "work_unit_0",
+            .kernels = {kernel_id},
+            .target_nodes = NodeCoord{0, 0},
+        }},
+    };
 }
 
 // The real (silicon) device takes DEFAULT_CONTEXT_ID and must keep the device profiler active when
@@ -481,6 +516,29 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
 
     // Assert that the MetalContext instance was cleaned up after MeshDevice close
     ASSERT_FALSE(MetalContext::instance_exists(context_id));
+}
+
+// A Metal 2.0 program built from a mock MeshDevice can be enqueued on that same mesh.
+TEST(MetalContextIntegrationTest, MockMetal2ProgramEnqueueOnOwningMesh) {
+    MetalEnv mock_env{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1))};
+    auto mesh_device = mock_env.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+
+    experimental::ProgramSpec spec = MakeMinimalNoOpProgramSpec();
+    distributed::MeshWorkload workload = experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
+    EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true));
+}
+
+// A Metal 2.0 program built on one MeshDevice must not compile on a MeshDevice from a different
+// MetalEnv.
+TEST(MetalContextIntegrationTest, MockMetal2ProgramCompileOnForeignMeshFails) {
+    MetalEnv env_a{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1))};
+    MetalEnv env_b{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1))};
+
+    auto mesh_a = env_a.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+    auto mesh_b = env_b.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+
+    Program program = experimental::MakeProgramFromSpec(*mesh_a, MakeMinimalNoOpProgramSpec());
+    EXPECT_THROW(program.impl().compile(mesh_b.get()), std::runtime_error);
 }
 
 TEST(MetalContextIntegrationTest, CoexistingSiliconAndMockDevice) {

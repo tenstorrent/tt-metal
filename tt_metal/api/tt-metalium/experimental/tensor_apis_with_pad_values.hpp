@@ -7,8 +7,8 @@
 #include <span>
 #include <vector>
 
-#include <tt-metalium/experimental/tensor/host_tensor.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
 
 namespace tt::tt_metal {
 
@@ -25,7 +25,7 @@ namespace tt::tt_metal {
 // undefined behavior and usage of these functions should be avoided.
 //
 // T is the logical encode / pad element type.
-// Explicit instantiations: float, bfloat16, int32_t, uint32_t, uint16_t, uint8_t.
+// Explicit instantiations: float, bfloat16, int32_t, uint32_t, uint16_t, uint8_t, int8_t.
 
 /**
  * Same as HostTensor::from_span, but the padded values are filled with **pad_value**.

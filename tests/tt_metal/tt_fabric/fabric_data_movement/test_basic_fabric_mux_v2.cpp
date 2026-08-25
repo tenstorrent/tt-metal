@@ -156,7 +156,7 @@ struct ReceiverDeviceContext {
     MuxDeployment receiver_mux_deployment;
 };
 
-ChipId get_physical_device_id(const MeshDevicePtr& device) { return device->get_devices()[0]->id(); }
+ChipId get_physical_device_id(const MeshDevicePtr& device) { return device->get_device_ids()[0]; }
 
 uint32_t align_up(uint32_t value, uint32_t alignment) { return ((value + alignment - 1) / alignment) * alignment; }
 
@@ -670,13 +670,8 @@ uint64_t read_word_count(const std::vector<uint32_t>& worker_status) {
 std::vector<uint32_t> read_worker_status(
     const MeshDevicePtr& device, const tt::tt_metal::CoreCoord& logical_core, uint32_t test_results_address) {
     std::vector<uint32_t> worker_status;
-    tt::tt_metal::detail::ReadFromDeviceL1(
-        device->get_devices()[0],
-        logical_core,
-        test_results_address,
-        kTestResultsSizeBytes,
-        worker_status,
-        CoreType::WORKER);
+    tt::tt_metal::slow_dispatch::ReadFromL1(
+        *device, logical_core, test_results_address, kTestResultsSizeBytes, worker_status, CoreType::WORKER);
     return worker_status;
 }
 
@@ -791,16 +786,15 @@ void run_test_case(BaseFabricFixture& fixture, const TestCaseConfig& test_case) 
         const auto& receiver_device_context = receiver_device_context_entry.second;
         fixture.RunProgramNonblocking(
             receiver_device_context.receiver_mux_deployment.device,
-            *receiver_device_context.receiver_mux_deployment.program);
+            std::move(*receiver_device_context.receiver_mux_deployment.program));
     }
-    fixture.RunProgramNonblocking(sender_mux_deployment->device, *sender_mux_deployment->program);
-
-    fixture.WaitForSingleProgramDone(sender_mux_deployment->device, *sender_mux_deployment->program);
+    tt_metal::LaunchProgram(
+        *sender_mux_deployment->device,
+        std::move(*sender_mux_deployment->program),
+        /*wait_until_cores_done=*/true);
     for (const auto& receiver_device_context_entry : receiver_device_contexts.value()) {
         const auto& receiver_device_context = receiver_device_context_entry.second;
-        fixture.WaitForSingleProgramDone(
-            receiver_device_context.receiver_mux_deployment.device,
-            *receiver_device_context.receiver_mux_deployment.program);
+        fixture.WaitForSingleProgramDone(receiver_device_context.receiver_mux_deployment.device);
     }
 
     const uint64_t expected_bytes =

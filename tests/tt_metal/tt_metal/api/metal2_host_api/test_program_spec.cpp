@@ -17,6 +17,8 @@
 //   7. Aggregate type enforcement (designated initializers must work!)
 // Wormhole (Gen1):
 //   8. Gen1 specific tests
+// Device-free:
+//   9. ComputeHardwareConfig common-field accessors
 //
 //---------------------------------------------------------------------------------
 // These unit tests use shortcut functions to create minimal valid ProgramSpec
@@ -30,8 +32,12 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 #include <filesystem>
+#include <numeric>
 #include <optional>
 #include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -39,13 +45,14 @@
 #include "impl/host_api/temp_quasar_api.hpp"  // for QuasarComputeConfig
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_metal.hpp>  // for CompileProgram (JIT trigger)
+#include <tt-metalium/tt_metal.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>  // tensor_accessor::ArgsConfig / ArgConfig::RuntimePageSize
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
+#include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 
 #include "test_helpers.hpp"
 
@@ -1957,9 +1964,8 @@ TEST_F(ProgramSpecTestQuasar, DataFormatNotSupportedOnTargetArchitectureFails) {
 }
 
 TEST_F(ProgramSpecTestQuasar, TooManyDFBsFailsValidation) {
-    // The hard upper limit on DFBs is hal::get_arch_num_circular_buffers().
-    // Exceeding it should fail validation with a clear error, rather than blowing
-    // up downstream during JIT.
+    // Device slots are per-core: exceeding the per-node slot count on a single node must fail
+    // validation rather than blowing up downstream during JIT / enqueue.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -1968,7 +1974,7 @@ TEST_F(ProgramSpecTestQuasar, TooManyDFBsFailsValidation) {
     auto producer = MakeMinimalGen2DMKernel("producer");
     auto consumer = MakeMinimalGen2ComputeKernel("consumer");
 
-    const uint32_t too_many = tt::tt_metal::hal::get_arch_num_circular_buffers() + 1;
+    const uint32_t too_many = static_cast<uint32_t>(::dfb::NUM_DFBS) + 1;
     for (uint32_t i = 0; i < too_many; ++i) {
         std::string name = "dfb_" + std::to_string(i);
         auto dfb = MakeMinimalDFB(name);
@@ -1981,7 +1987,7 @@ TEST_F(ProgramSpecTestQuasar, TooManyDFBsFailsValidation) {
     spec.kernels = {producer, consumer};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
-    const std::string expected_substr = "too many DataflowBufferSpecs (" + std::to_string(too_many) + ")";
+    const std::string expected_substr = "places " + std::to_string(too_many) + " DataflowBufferSpecs on node (0, 0)";
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(expected_substr)));
@@ -3143,6 +3149,72 @@ TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecSucceeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
+// Device slots are per-core: a ProgramSpec may declare more DFBs than
+// get_arch_num_circular_buffers() when each core hosts at most one. This is the Metal 2.0
+// path that issue #51409 needs — previously ValidateProgramSpec rejected on total count.
+TEST_F(ProgramSpecTestGen1, DisjointNodeDFBsExceedSlotCountSucceeds) {
+    const uint32_t max_slots = tt::tt_metal::hal::get_arch_num_circular_buffers();
+    const uint32_t num_dfbs = max_slots + 1;
+    constexpr uint32_t grid_x = 8;  // WH mock worker grid width
+    ASSERT_GE(grid_x * 9u, num_dfbs) << "mock WH grid too small for this packing check";
+
+    ProgramSpec spec;
+    spec.name = "disjoint_dfb_slot_reuse";
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        const NodeCoord node{i % grid_x, i / grid_x};
+        const std::string pname = "prod_" + std::to_string(i);
+        const std::string cname = "cons_" + std::to_string(i);
+        const std::string dname = "dfb_" + std::to_string(i);
+
+        auto prod = MakeMinimalGen1DMKernel(pname, DataMovementProcessor::RISCV_0);
+        auto cons = MakeMinimalGen1DMKernel(cname, DataMovementProcessor::RISCV_1);
+        auto dfb = MakeMinimalDFB(dname);
+        dfb.data_format_metadata = tt::DataFormat::Float16_b;
+        prod.dfb_bindings.push_back(ProducerOf(DFBSpecName{dname}, "out"));
+        cons.dfb_bindings.push_back(ConsumerOf(DFBSpecName{dname}, "in"));
+
+        spec.kernels.push_back(std::move(prod));
+        spec.kernels.push_back(std::move(cons));
+        spec.dataflow_buffers.push_back(std::move(dfb));
+        spec.work_units.push_back(MakeMinimalWorkUnit("wu_" + std::to_string(i), node, {pname, cname}));
+    }
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    for (uint32_t i = 0; i < num_dfbs; ++i) {
+        const std::string dname = "dfb_" + std::to_string(i);
+        EXPECT_EQ(program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(dname))->device_slot, 0u)
+            << dname << " is alone on its node and should reuse device slot 0";
+    }
+}
+
+TEST_F(ProgramSpecTestGen1, TooManyDFBsOnSameNodeFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "too_many_dfbs_one_node";
+
+    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+
+    const uint32_t too_many = tt::tt_metal::hal::get_arch_num_circular_buffers() + 1;
+    for (uint32_t i = 0; i < too_many; ++i) {
+        const std::string name = "dfb_" + std::to_string(i);
+        auto dfb = MakeMinimalDFB(name);
+        dfb.data_format_metadata = tt::DataFormat::Float16_b;
+        spec.dataflow_buffers.push_back(dfb);
+        producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{name}, "p_" + std::to_string(i)));
+        consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{name}, "c_" + std::to_string(i)));
+    }
+
+    spec.kernels = {producer, consumer};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    const std::string expected_substr = "places " + std::to_string(too_many) + " DataflowBufferSpecs on node (0, 0)";
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(expected_substr)));
+}
+
 TEST_F(ProgramSpecTestGen1, ConsumerUnpackToDestBelow32BitWithoutEnableFailsForPerf) {
     // On Gen1, UnpackToDest on a consumed <=16-bit DFB without enable_32_bit_dest bypasses the
     // SrcA/B path for no precision benefit — rejected as bad-for-perf. (On Gen2 the identical spec
@@ -3868,7 +3940,7 @@ TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecWithTensorParameterSucceeds) 
 // TensorParameter JIT Smoke Tests (Gen1 / WH)
 // ============================================================================
 // Codegen-path smoke test for the Metal 2.0 TensorAccessor binding feature. Ends in
-// CompileProgram, so the auto-generated kernel_bindings_generated.h (with its `tensor::` namespace)
+// program.impl().compile, so the auto-generated kernel_bindings_generated.h (with its `tensor::` namespace)
 // must be syntactically valid and compose correctly with the rest of the kernel build. Doesn't
 // validate runtime behavior — catches regressions in codegen string-formatting, token type alias
 // generation, and include-path resolution.
@@ -3903,8 +3975,7 @@ void kernel_main() {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
 // ----------------------------------------------------------------------------
@@ -3940,8 +4011,7 @@ void kernel_main() {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
 // Compute-kernel counterpart. A scratchpad binding works on a compute kernel: scratchpad.h only
@@ -3968,8 +4038,7 @@ void kernel_main() {
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
 // Compile-only: a range-based for loop over a Scratchpad must compile. Exercises begin()/end() and the
@@ -4002,8 +4071,7 @@ void kernel_main() {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
 // ============================================================================
@@ -4011,7 +4079,7 @@ void kernel_main() {
 // ============================================================================
 //
 // Compiles a TT_KERNEL compute kernel through genfiles + the RISC-V compiler on a MOCK Wormhole
-// device (no silicon, no dispatch) via detail::CompileProgram. This is the only no-hardware
+// device (no silicon, no dispatch) via program.impl().compile. This is the only no-hardware
 // coverage that the generated kernel_main() shim is emitted on the COMPUTE (TRISC) compile path
 // and actually compiles: the on-hardware compute test (TtKernelNamedArgsLoopbackCompute) skips in
 // CI, and the shim unit tests only check the generated string, not its genfiles wiring.
@@ -4063,8 +4131,333 @@ TEST_F(ProgramSpecTestGen1, TtKernelComputeShimCompiles) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("wu", node, {"compute", "consumer"})};
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
+// ============================================================================
+// Compile-time varargs — positional CTA prefix + JIT smoke
+// ============================================================================
+//
+// Host: KernelAdvancedOptions::compile_time_varargs (folded into compile_time_args_ as a prefix).
+// Kernel: get_compile_time_vararg* — thin wrappers over kernel_compile_time_args[0..N).
+// TensorBinding CTA payloads follow that prefix in KERNEL_COMPILE_TIME_ARGS.
+
+TEST_F(ProgramSpecTestGen1, CompileTimeVarargsReadableFromKernel) {
+    NodeCoord node{0, 0};
+    const std::vector<uint32_t> cta_varargs = {0xCAFEBABEu, 0xDEADBEEFu, 0x11112222u};
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    static_assert(get_num_compile_time_varargs() == 3u);
+    static_assert(get_compile_time_vararg<0>() == 0xCAFEBABEu);
+    static_assert(get_compile_time_vararg<1>() == 0xDEADBEEFu);
+    static_assert(get_compile_time_vararg<2>() == 0x11112222u);
+    static_assert(get_compile_time_vararg(0) == 0xCAFEBABEu);
+    static_assert(get_compile_time_vararg(1) == 0xDEADBEEFu);
+    static_assert(get_compile_time_vararg(2) == 0x11112222u);
+}
+)"};
+    dm_kernel.advanced_options.compile_time_varargs = cta_varargs;
+
+    ProgramSpec spec;
+    spec.name = "cta_varargs_readable";
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
+TEST_F(ProgramSpecTestGen1, EmptyCompileTimeVarargsReadableFromKernel) {
+    NodeCoord node{0, 0};
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    static_assert(get_num_compile_time_varargs() == 0u);
+}
+)"};
+    // Default / empty compile_time_varargs — accessors must still be emitted and compile.
+
+    ProgramSpec spec;
+    spec.name = "cta_varargs_empty";
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
+// Template accessor bounds-checks at compile time: size==1 but get_compile_time_vararg<1>()
+// must fail JIT (static_assert in the generated helper).
+TEST_F(ProgramSpecTestGen1, OutOfRangeCompileTimeVarargTemplateFailsToCompile) {
+    NodeCoord node{0, 0};
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    // Should not compile
+    (void)get_compile_time_vararg<1>();
+}
+)"};
+    dm_kernel.advanced_options.compile_time_varargs = {0xCAFEBABEu};
+
+    ProgramSpec spec;
+    spec.name = "cta_varargs_oob_template";
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    // MakeProgramFromSpec compiles; OOB template index must fail that build.
+    EXPECT_ANY_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+// Stress: bake 1024 iota words and constexpr-walk them on the kernel side.
+TEST_F(ProgramSpecTestGen1, CompileTimeVarargsIota1024ReadableFromKernel) {
+    NodeCoord node{0, 0};
+    constexpr uint32_t kNumVarargs = 1024u;
+    std::vector<uint32_t> cta_varargs(kNumVarargs);
+    std::iota(cta_varargs.begin(), cta_varargs.end(), 0u);
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+constexpr bool compile_time_varargs_are_iota() {
+    if (get_num_compile_time_varargs() != 1024u) {
+        return false;
+    }
+    for (uint32_t i = 0; i < get_num_compile_time_varargs(); ++i) {
+        if (get_compile_time_vararg(i) != i) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static_assert(compile_time_varargs_are_iota());
+
+void kernel_main() {}
+)"};
+    dm_kernel.advanced_options.compile_time_varargs = cta_varargs;
+
+    ProgramSpec spec;
+    spec.name = "cta_varargs_iota_1024";
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
+// Same stress as above, on a compute (TRISC) kernel — CTA varargs are available on DM and compute.
+TEST_F(ProgramSpecTestGen1, CompileTimeVarargsIota1024ReadableFromComputeKernel) {
+    NodeCoord node{0, 0};
+    constexpr uint32_t kNumVarargs = 1024u;
+    std::vector<uint32_t> cta_varargs(kNumVarargs);
+    std::iota(cta_varargs.begin(), cta_varargs.end(), 0u);
+
+    auto compute_kernel = MakeMinimalGen1ComputeKernel("compute_kernel");
+    compute_kernel.source = KernelSpec::SourceCode{R"(
+constexpr bool compile_time_varargs_are_iota() {
+    if (get_num_compile_time_varargs() != 1024u) {
+        return false;
+    }
+    for (uint32_t i = 0; i < get_num_compile_time_varargs(); ++i) {
+        if (get_compile_time_vararg(i) != i) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static_assert(compile_time_varargs_are_iota());
+
+void kernel_main() {}
+)"};
+    compute_kernel.advanced_options.compile_time_varargs = cta_varargs;
+
+    ProgramSpec spec;
+    spec.name = "cta_varargs_iota_1024_compute";
+    spec.kernels = {compute_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
+// CTA varargs are a positional prefix ahead of TensorBinding CTA payloads.
+TEST_F(ProgramSpecTestGen1, CompileTimeVarargsPrefixBeforeTensorBindingCTAs) {
+    NodeCoord node{0, 0};
+    constexpr uint32_t kVararg0 = 0xCAFEBABEu;
+    constexpr uint32_t kVararg1 = 0xDEADBEEFu;
+    const std::vector<uint32_t> cta_varargs = {kVararg0, kVararg1};
+    const uint32_t n = static_cast<uint32_t>(cta_varargs.size());
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    static_assert(get_num_compile_time_varargs() == 2u);
+    static_assert(get_compile_time_vararg<0>() == 0xCAFEBABEu);
+    static_assert(get_compile_time_vararg<1>() == 0xDEADBEEFu);
+    // Binding CTA_OFFSET is shifted past the CTA-vararg prefix.
+    static_assert(tensor::input_ta_t::args_t::is_dram);
+    TensorAccessor accessor(tensor::input_ta);
+    auto noc_addr = accessor.get_noc_addr(0);
+    (void)noc_addr;
+}
+)"};
+    dm_kernel.advanced_options.compile_time_varargs = cta_varargs;
+
+    ProgramSpec spec;
+    spec.name = "cta_varargs_with_tensor_binding";
+    spec.kernels = {dm_kernel};
+    spec.tensor_parameters = {MakeMinimalTensorParameter("input_tensor", tt::tt_metal::BufferType::DRAM)};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    const auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
+    const auto& handles = kernel->tensor_binding_handles();
+    ASSERT_EQ(handles.size(), 1u);
+    EXPECT_EQ(handles[0].cta_offset, n) << "TensorBinding CTA payload must start after the CTA-vararg prefix";
+    EXPECT_EQ(kernel->get_compile_time_vararg_count(), n);
+
+    const auto compile_args = kernel->compile_time_args();
+    ASSERT_GE(compile_args.size(), n + 1u) << "positional CTAs should hold varargs then binding args_config";
+    EXPECT_THAT(
+        std::vector<uint32_t>(compile_args.begin(), compile_args.begin() + n),
+        ::testing::ElementsAreArray(cta_varargs));
+    const auto args_config =
+        tensor_accessor::ArgsConfig(static_cast<tensor_accessor::ArgsConfig::Underlying>(compile_args[n]));
+    EXPECT_TRUE(args_config.test(tensor_accessor::ArgConfig::IsDram))
+        << "positional compile_args[N] must be the tensor args_config after the CTA-vararg prefix";
+
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+}
+
+TEST_F(ProgramSpecTestGen1, DifferentCompileTimeVarargsProducesDifferentKernelHash) {
+    auto make_program = [this](std::vector<uint32_t> varargs) {
+        NodeCoord node{0, 0};
+        auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+        dm_kernel.advanced_options.compile_time_varargs = std::move(varargs);
+        ProgramSpec spec;
+        spec.name = "cta_varargs_hash";
+        spec.kernels = {dm_kernel};
+        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+        return MakeProgramFromSpec(*mesh_device_, spec);
+    };
+
+    Program prog_a = make_program({0x11112222u, 0x33334444u});
+    Program prog_b = make_program({0xAAAABBBBu, 0xCCCCDDDDu});
+    EXPECT_NE(
+        prog_a.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
+        prog_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash());
+}
+
+TEST_F(ProgramSpecTestGen1, IdenticalCompileTimeVarargsProducesIdenticalKernelHash) {
+    auto make_program = [this] {
+        NodeCoord node{0, 0};
+        auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+        dm_kernel.advanced_options.compile_time_varargs = {0xCAFEBABEu, 0xDEADBEEFu};
+        ProgramSpec spec;
+        spec.name = "cta_varargs_hash_ident";
+        spec.kernels = {dm_kernel};
+        spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+        return MakeProgramFromSpec(*mesh_device_, spec);
+    };
+
+    Program prog_a = make_program();
+    Program prog_b = make_program();
+    EXPECT_EQ(
+        prog_a.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
+        prog_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash());
+}
+
+// Prefix length is part of the cache key even when positional CTA words are unchanged.
+TEST_F(ProgramSpecTestGen1, DifferentCompileTimeVarargCountProducesDifferentKernelHash) {
+    NodeCoord node{0, 0};
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.advanced_options.compile_time_varargs = {0xCAFEBABEu, 0xDEADBEEFu};
+    ProgramSpec spec;
+    spec.name = "cta_varargs_hash_count";
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program prog_a = MakeProgramFromSpec(*mesh_device_, spec);
+    Program prog_b = MakeProgramFromSpec(*mesh_device_, spec);
+    auto kernel_a = prog_a.impl().get_kernel_by_spec_name("dm_kernel");
+    auto kernel_b = prog_b.impl().get_kernel_by_spec_name("dm_kernel");
+    ASSERT_EQ(kernel_a->get_compile_time_vararg_count(), 2u);
+    ASSERT_EQ(kernel_b->get_compile_time_vararg_count(), 2u);
+    ASSERT_EQ(kernel_a->compute_hash(), kernel_b->compute_hash());
+
+    kernel_b->set_compile_time_vararg_count(1u);
+    EXPECT_NE(kernel_a->compute_hash(), kernel_b->compute_hash());
+}
+
+// ============================================================================
+// Compile-time varargs with kernel asserts enabled
+// ============================================================================
+//
+// get_compile_time_vararg(idx) is constexpr AND bounds-checked, and those two properties collide
+// with how ASSERT is defined. The lightweight-assert flavor expands to inline asm ("ebreak");
+// inline assembly is unconditionally not allowed in a constexpr function in C++17.
+// These tests ensure that this caveat is properly handled. The assertion-on environment is
+// simulated in a lightweight (and hacky) way by defining the assertion-enable macro manually.
+
+TEST_F(ProgramSpecTestGen1, InRangeCompileTimeVarargCompilesWithAssertsEnabled) {
+    NodeCoord node{0, 0};
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.compiler_options.defines = {{"LIGHTWEIGHT_KERNEL_ASSERTS", "1"}, {"FORCE_WATCHER_OFF", "1"}};
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    // Constant-evaluated: proves the accessor is still usable in a constant expression while the
+    // out-of-range path carries a (non-constexpr) assert.
+    static_assert(get_compile_time_vararg(0) == 0xCAFEBABEu);
+    static_assert(get_compile_time_vararg(2) == 0x11112222u);
+    // Runtime-evaluated: the index is not a constant expression, so this is the path that actually
+    // emits the bounds check and the ebreak.
+    volatile uint32_t idx = 1;
+    volatile uint32_t sink = get_compile_time_vararg(idx);
+    (void)sink;
+}
+)"};
+    dm_kernel.advanced_options.compile_time_varargs = {0xCAFEBABEu, 0xDEADBEEFu, 0x11112222u};
+
+    ProgramSpec spec;
+    spec.name = "cta_varargs_in_range_asserts_on";
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
     IDevice* device = mesh_device_->get_devices()[0];
     EXPECT_NO_THROW(detail::CompileProgram(device, program));
+}
+
+// Out-of-range index in a constant expression, asserts on: must still fail the build. Constant
+// evaluation reaches the non-constexpr out-of-range report, which is not a constant expression --
+// so this is a clean build failure rather than a read past kernel_compile_time_args.
+TEST_F(ProgramSpecTestGen1, OutOfRangeCompileTimeVarargFailsToCompileWithAssertsEnabled) {
+    NodeCoord node{0, 0};
+
+    auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+    dm_kernel.compiler_options.defines = {{"LIGHTWEIGHT_KERNEL_ASSERTS", "1"}, {"FORCE_WATCHER_OFF", "1"}};
+    dm_kernel.source = KernelSpec::SourceCode{R"(
+void kernel_main() {
+    // Only 1 vararg is baked, so index 1 is out of range. Should not compile.
+    static_assert(get_compile_time_vararg(1) == 0u);
+}
+)"};
+    dm_kernel.advanced_options.compile_time_varargs = {0xCAFEBABEu};
+
+    ProgramSpec spec;
+    spec.name = "cta_varargs_oob_asserts_on";
+    spec.kernels = {dm_kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    // MakeProgramFromSpec compiles; the OOB constant evaluation must fail that build.
+    EXPECT_ANY_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 // ============================================================================
@@ -4599,5 +4992,181 @@ TEST_F(ProgramSpecTestQuasar, AliasDFBFailsOnInconsistentBorrowedFrom) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("inconsistent borrowed_from")));
 }
 
+//---------------------------------------------------------------------------------
+// 9. ComputeHardwareConfig common-field accessors
+//
+// Device-free; no fixture needed.
+//
+// ComputeHardwareConfig is a std::variant<ComputeGen1Config, ComputeGen2Config>, and the accessors
+// exist to hide that variant for the fields both alternatives share. The failure they can plausibly
+// hide is a copy-paste one: an accessor wired to the wrong member, or one that happens to work for
+// the alternative someone tested and not the other.
+//
+// Two things below are load-bearing against exactly that:
+//   - Every check runs against BOTH alternatives, via helpers templated on the alternative type, so
+//     neither generation can be covered by accident alone.
+//   - The two bool fields are checked at values OPPOSITE each other (and opposite their defaults),
+//     so an accessor pointing at the wrong bool cannot pass. Their differing defaults
+//     (enable_32_bit_dest = false, double_buffer_dest = true) make even the untouched-config read
+//     discriminating.
+//
+// The static_asserts pin the return types, which are a deliberate design decision rather than an
+// accident: the mutable accessors return references so callers can assign through them, the const
+// accessors return the small scalars by value (no reference into a temporary variant, no pointless
+// indirection) and unpack_modes by const reference (it is a container; copying it on every read
+// would be wasteful, and callers expect a view).
+//---------------------------------------------------------------------------------
+
+// Non-default values for every common field. Each differs from the field's default, so an accessor
+// that read a hardcoded default, or that never wrote, fails. The bools are opposite each other.
+constexpr MathFidelity kAccessorFidelity = MathFidelity::LoFi;    // default HiFi4
+constexpr Precision kAccessorPrecision = Precision::Approximate;  // default Precise
+constexpr bool kAccessor32BitDest = true;                         // default false
+constexpr bool kAccessorDoubleBuffer = false;                     // default true
+
+const DFBSpecName kAccessorDfbA{"accessor_dfb_a"};
+const DFBSpecName kAccessorDfbB{"accessor_dfb_b"};
+
+using MutableComputeConfig = ComputeHardwareConfig&;
+using ConstComputeConfig = const ComputeHardwareConfig&;
+
+static_assert(std::is_same_v<decltype(fpu_math_fidelity(std::declval<MutableComputeConfig>())), MathFidelity&>);
+static_assert(std::is_same_v<decltype(fpu_math_fidelity(std::declval<ConstComputeConfig>())), MathFidelity>);
+static_assert(std::is_same_v<decltype(sfpu_precision_mode(std::declval<MutableComputeConfig>())), Precision&>);
+static_assert(std::is_same_v<decltype(sfpu_precision_mode(std::declval<ConstComputeConfig>())), Precision>);
+static_assert(std::is_same_v<decltype(enable_32_bit_dest(std::declval<MutableComputeConfig>())), bool&>);
+static_assert(std::is_same_v<decltype(enable_32_bit_dest(std::declval<ConstComputeConfig>())), bool>);
+static_assert(std::is_same_v<decltype(double_buffer_dest(std::declval<MutableComputeConfig>())), bool&>);
+static_assert(std::is_same_v<decltype(double_buffer_dest(std::declval<ConstComputeConfig>())), bool>);
+static_assert(std::is_same_v<decltype(unpack_modes(std::declval<MutableComputeConfig>())), ComputeUnpackModes&>);
+static_assert(std::is_same_v<decltype(unpack_modes(std::declval<ConstComputeConfig>())), const ComputeUnpackModes&>);
+
+// unpack_modes is the one accessor returning a reference from a const config, so it carries a
+// deleted rvalue overload to stop a caller binding that reference into a temporary. Assert the
+// deletion bites — and assert the lvalue forms still compile, because without those positive
+// controls a mere typo here would satisfy the negative assertion vacuously.
+template <typename Config>
+concept UnpackModesAcceptsLvalue = requires(Config& config) { unpack_modes(config); };
+template <typename Config>
+concept UnpackModesAcceptsRvalue = requires(Config config) { unpack_modes(std::move(config)); };
+
+static_assert(UnpackModesAcceptsLvalue<ComputeHardwareConfig>);
+static_assert(UnpackModesAcceptsLvalue<const ComputeHardwareConfig>);
+static_assert(!UnpackModesAcceptsRvalue<ComputeHardwareConfig>);
+static_assert(!UnpackModesAcceptsRvalue<const ComputeHardwareConfig>);
+
+// Reading an untouched config through the accessors must yield the alternative's own defaults.
+template <typename GenConfig>
+void CheckAccessorDefaultsReadThrough() {
+    const ComputeHardwareConfig config{GenConfig{}};
+    const GenConfig defaults{};
+
+    EXPECT_EQ(fpu_math_fidelity(config), defaults.fpu_math_fidelity);
+    EXPECT_EQ(sfpu_precision_mode(config), defaults.sfpu_precision_mode);
+    EXPECT_EQ(enable_32_bit_dest(config), defaults.enable_32_bit_dest);
+    EXPECT_EQ(double_buffer_dest(config), defaults.double_buffer_dest);
+    EXPECT_TRUE(unpack_modes(config).empty());
+}
+
+// Writing through the mutable accessors must land on the held alternative's actual members, and the
+// const accessors must read back what was written.
+template <typename GenConfig>
+void CheckAccessorWritesLandOnHeldAlternative() {
+    ComputeHardwareConfig config{GenConfig{}};
+
+    fpu_math_fidelity(config) = kAccessorFidelity;
+    sfpu_precision_mode(config) = kAccessorPrecision;
+    enable_32_bit_dest(config) = kAccessor32BitDest;
+    double_buffer_dest(config) = kAccessorDoubleBuffer;
+
+    // Bind the returned reference and use it repeatedly — the usage the header documents.
+    auto& dfb_unpack_modes = unpack_modes(config);
+    dfb_unpack_modes.emplace(kAccessorDfbA, UnpackMode::UnpackToDest);
+    dfb_unpack_modes.emplace(kAccessorDfbB, UnpackMode::UnpackToSrc);
+
+    // Reach past the accessors: the writes must be visible on the held alternative itself. This is
+    // what catches an accessor that targets the wrong member.
+    const GenConfig& held = std::get<GenConfig>(config);
+    EXPECT_EQ(held.fpu_math_fidelity, kAccessorFidelity);
+    EXPECT_EQ(held.sfpu_precision_mode, kAccessorPrecision);
+    EXPECT_EQ(held.enable_32_bit_dest, kAccessor32BitDest);
+    EXPECT_EQ(held.double_buffer_dest, kAccessorDoubleBuffer);
+
+    const ComputeUnpackModes expected_modes{
+        {kAccessorDfbA, UnpackMode::UnpackToDest},
+        {kAccessorDfbB, UnpackMode::UnpackToSrc},
+    };
+    EXPECT_EQ(held.unpack_modes, expected_modes)
+        << "unpack_modes() handed back a copy rather than a view onto the held alternative";
+
+    // And the const accessors report the same values.
+    const ComputeHardwareConfig& const_config = config;
+    EXPECT_EQ(fpu_math_fidelity(const_config), kAccessorFidelity);
+    EXPECT_EQ(sfpu_precision_mode(const_config), kAccessorPrecision);
+    EXPECT_EQ(enable_32_bit_dest(const_config), kAccessor32BitDest);
+    EXPECT_EQ(double_buffer_dest(const_config), kAccessorDoubleBuffer);
+    EXPECT_EQ(unpack_modes(const_config), expected_modes);
+}
+
+// An accessor must never reach into the alternative that is NOT held. Assigning a fresh alternative
+// over the variant has to be reflected immediately. This is the retargeting case that makes
+// std::get<ComputeGen1Config> throw, and the reason these accessors exist.
+template <typename FromConfig, typename ToConfig>
+void CheckAccessorsFollowTheHeldAlternative() {
+    ComputeHardwareConfig config{FromConfig{}};
+    fpu_math_fidelity(config) = kAccessorFidelity;
+    enable_32_bit_dest(config) = kAccessor32BitDest;
+
+    config = ToConfig{};  // switch alternatives; the accessors must now see ToConfig's defaults
+
+    const ToConfig defaults{};
+    EXPECT_EQ(fpu_math_fidelity(config), defaults.fpu_math_fidelity);
+    EXPECT_EQ(enable_32_bit_dest(config), defaults.enable_32_bit_dest);
+
+    // ...and writing still works after the switch.
+    fpu_math_fidelity(config) = kAccessorFidelity;
+    EXPECT_EQ(std::get<ToConfig>(config).fpu_math_fidelity, kAccessorFidelity);
+}
+
+TEST(ComputeHardwareConfigAccessors, Gen1DefaultsReadThrough) { CheckAccessorDefaultsReadThrough<ComputeGen1Config>(); }
+
+TEST(ComputeHardwareConfigAccessors, Gen2DefaultsReadThrough) { CheckAccessorDefaultsReadThrough<ComputeGen2Config>(); }
+
+TEST(ComputeHardwareConfigAccessors, Gen1WritesLandOnHeldAlternative) {
+    CheckAccessorWritesLandOnHeldAlternative<ComputeGen1Config>();
+}
+
+TEST(ComputeHardwareConfigAccessors, Gen2WritesLandOnHeldAlternative) {
+    CheckAccessorWritesLandOnHeldAlternative<ComputeGen2Config>();
+}
+
+TEST(ComputeHardwareConfigAccessors, FollowsSwitchFromGen1ToGen2) {
+    CheckAccessorsFollowTheHeldAlternative<ComputeGen1Config, ComputeGen2Config>();
+}
+
+TEST(ComputeHardwareConfigAccessors, FollowsSwitchFromGen2ToGen1) {
+    CheckAccessorsFollowTheHeldAlternative<ComputeGen2Config, ComputeGen1Config>();
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental
+
+namespace {
+
+// Op code calls these accessors unqualified from its own namespace, which only works if they are
+// found by ADL on ComputeHardwareConfig. The checks above cannot show that: they live inside
+// tt::tt_metal::experimental, where ordinary lookup finds the accessors regardless. This probe sits
+// outside that namespace, so ADL is the only thing that can resolve the names.
+template <typename Config>
+concept ComputeAccessorsFoundByAdl = requires(Config& config) {
+    fpu_math_fidelity(config);
+    sfpu_precision_mode(config);
+    enable_32_bit_dest(config);
+    double_buffer_dest(config);
+    unpack_modes(config);
+};
+
+static_assert(ComputeAccessorsFoundByAdl<tt::tt_metal::experimental::ComputeHardwareConfig>);
+static_assert(ComputeAccessorsFoundByAdl<const tt::tt_metal::experimental::ComputeHardwareConfig>);
+
+}  // namespace

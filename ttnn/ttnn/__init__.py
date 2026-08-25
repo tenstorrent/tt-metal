@@ -130,6 +130,8 @@ from ttnn._ttnn.multi_device import (
     get_size as distributed_context_get_size,
     barrier as distributed_context_barrier,
     allgather_int as distributed_context_allgather_int,
+    send_bytes as distributed_context_send_bytes,
+    recv_bytes as distributed_context_recv_bytes,
     subcontext_id as distributed_context_subcontext_id,
     subcontext_count as distributed_context_subcontext_count,
     subcontext_sizes as distributed_context_subcontext_sizes,
@@ -150,13 +152,62 @@ from ttnn._ttnn.operations.trace import (
     MeshTraceId,
     begin_trace_capture,
     end_trace_capture,
-    execute_trace,
+    execute_trace as _ttnn_execute_trace,
     release_trace,
 )
 
 from ttnn._ttnn.operations.debug import (
     apply_device_delay,
 )
+
+from ttnn.trace_allocation_config import TRACE_ALLOC_TRACKING
+
+if TRACE_ALLOC_TRACKING:
+    from ttnn._ttnn.operations.trace import (
+        pop_corruptible_allocation_scope as _pop_corruptible_allocation_scope,
+        push_corruptible_allocation_scope as _push_corruptible_allocation_scope,
+    )
+
+    @contextlib.contextmanager
+    def corruptible_allocation_scope(mesh_device):
+        """Suppress accounting for intentionally corruptible allocations in this scope."""
+        _push_corruptible_allocation_scope(mesh_device)
+        try:
+            yield
+        finally:
+            _pop_corruptible_allocation_scope(mesh_device)
+
+else:
+
+    @contextlib.contextmanager
+    def corruptible_allocation_scope(mesh_device):
+        """No-op when trace allocation tracking is disabled."""
+        yield
+
+
+if TRACE_ALLOC_TRACKING:
+
+    def execute_trace(device, trace_id, *, cq_id=None, blocking=True):
+        """Execute a captured trace, with automatic allocation-safety verification."""
+        from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
+
+        UnsafeAllocationTracker(device).verify_before_replay(trace_id)
+        return _ttnn_execute_trace(device, trace_id, cq_id=cq_id, blocking=blocking)
+
+else:
+    # Preserve the original nanobind fast path when tracking is disabled.
+    execute_trace = _ttnn_execute_trace
+
+
+def mark_corruptible(tensor):
+    """
+    Mark a specific tensor buffer as intentionally corruptible for trace
+    allocation safety checks.
+    """
+    from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
+
+    return UnsafeAllocationTracker.mark_corruptible(tensor)
+
 
 from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
@@ -176,6 +227,7 @@ from ttnn._ttnn.fabric import (
     get_tt_fabric_max_payload_size_bytes,
     get_physical_mesh_shapes,
     get_eth_forwarding_direction,
+    get_forwarding_link_indices,
     get_all_fabric_mesh_ids,
     get_all_mgd_fabric_types,
     MeshId,
@@ -230,11 +282,16 @@ from ttnn._ttnn.counter_channel import (
     InterProcessCounterChannel,
 )
 
+from ttnn._ttnn.layer_ack_service import (
+    LayerAckService,
+)
+
 from ttnn.types import (
     TILE_SIZE,
     DataType,
     DumpTensorMode,
     uint8,
+    int8,
     uint16,
     int32,
     uint32,
@@ -380,6 +437,7 @@ from ttnn.core import (
     split_work_to_cores,
     grid_to_cores,
     get_current_command_queue_id_for_thread,
+    ttnn_dtype_to_torch_dtype,
 )
 
 tile_size = ttnn._ttnn.tensor.tile_size
@@ -524,7 +582,13 @@ from ttnn.operations.reduction import (
     ReduceType,
 )
 
-from ttnn.operations.ccl import Topology, get_usable_topology, DispatchAlgorithm, WorkerMode
+from ttnn.operations.ccl import (
+    Topology,
+    get_usable_topology,
+    DispatchAlgorithm,
+    WorkerMode,
+    MMSignalAggregatorMode,
+)
 
 from ttnn.operations.conv2d import (
     Conv2dConfig,
@@ -559,11 +623,32 @@ from ttnn._ttnn.operations.experimental import RoutedExpertActivation
 # Expose disaggregation in experimental namespace
 experimental.disaggregation = disaggregation
 
+# RGB -> YUV conversion op
+from ttnn._ttnn.operations.experimental import YUVCoefficients
+from ttnn._ttnn.operations.experimental import YUVColorSpace
+from ttnn._ttnn.operations.experimental import RGBRange
+from ttnn._ttnn.operations.experimental import YUVRange
+from ttnn._ttnn.operations.experimental import YUVFormat
+from ttnn._ttnn.operations.experimental import rgb_to_yuv
+from ttnn._ttnn.operations.experimental import yuv_bt601_coefficients
+from ttnn._ttnn.operations.experimental import yuv_bt709_coefficients
+
+experimental.YUVCoefficients = YUVCoefficients
+experimental.YUVColorSpace = YUVColorSpace
+experimental.RGBRange = RGBRange
+experimental.YUVRange = YUVRange
+experimental.YUVFormat = YUVFormat
+experimental.rgb_to_yuv = rgb_to_yuv
+experimental.yuv_bt601_coefficients = yuv_bt601_coefficients
+experimental.yuv_bt709_coefficients = yuv_bt709_coefficients
+
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig, PagedCacheGeometryOverride, SparseKVFormat
 
 transformer.SparseKVFormat = SparseKVFormat
+
+QkvCausalConv1dSiluProgramConfig = ttnn._ttnn.operations.experimental.kda.QkvCausalConv1dSiluProgramConfig
 
 IndexerScoreProgramConfig = ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig
 

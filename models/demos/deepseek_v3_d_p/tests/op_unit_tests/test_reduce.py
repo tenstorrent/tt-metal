@@ -25,33 +25,58 @@ from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.reduce import TorchReduceModule
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_y_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_sparse_combine_output,
     extract_mesh_config,
     get_tp_mesh_composer,
     initialize_test_inputs,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule, _weights_have_output_channel_dim
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from tests.ttnn.utils_for_testing import comp_pcc
 
 REDUCE_MESH_PARAMS = [
     pytest.param(
         (4, 1),
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
-        id="linear-4",
+        torus_y_device_params(),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
+        id="torus-y-4x1",
     ),
     pytest.param(
         (4, 2),
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        fabric2d_device_params(),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-        id="mesh-4x2",
+        id="fabric2d-mesh-4x2",
     ),
 ]
 
 
+@pytest.mark.parametrize(
+    "weights_shape, combine_output_shape, expected",
+    [
+        # A top-k=1 score lacks the output channel and must be unsqueezed.
+        ((4, 64, 1), (1, 4, 64, 1, 1024), False),
+        # The same score with an explicit output channel omits only a leading
+        # mesh dimension and must not receive a second trailing singleton.
+        ((4, 64, 1, 1), (1, 4, 64, 1, 1024), True),
+        ((1, 4, 64, 1, 1), (1, 4, 64, 1, 1024), True),
+        # A top-k>1 score has no ambiguity: without the output channel it is
+        # not broadcastable to the complete combine output.
+        ((4, 64, 8), (1, 4, 64, 8, 1024), False),
+    ],
+)
+def test_weights_output_channel_shape_detection(weights_shape, combine_output_shape, expected):
+    actual = _weights_have_output_channel_dim(weights_shape, combine_output_shape)
+    assert actual is expected, (
+        f"Expected channel-dimension inference to be {expected} for weights={weights_shape} "
+        f"and combine_output={combine_output_shape}, but got {actual}"
+    )
+
+
 def run_reduce(
     mesh_device,
+    device_params,
     seq_len,
     emb_dim,
     topk,
@@ -63,8 +88,6 @@ def run_reduce(
 
     signpost(f"reduce-{mesh_device.shape}-seq{seq_len}-{'weighted' if use_weights else 'unweighted'}")
 
-    # Set topology and num_links
-    topology = ttnn.Topology.Linear
     num_links = 1
 
     num_devices = mesh_device.get_num_devices()
@@ -182,7 +205,7 @@ def run_reduce(
         topk_dim=2,  # topk is dim 2 in [1, seq, topk, hidden]
         cluster_axis=1,
         num_links=num_links,
-        topology=topology,
+        topology=per_axis_topology(device_params["fabric_config"])[1],
     )
 
     tt_output = tt_reduce(
@@ -206,10 +229,23 @@ def run_reduce(
 # Model-independent sanity shape — small seq/emb that exercises the reduce kernel without
 # tying to any model's dimensions. Kept in a single test so it is not duplicated per model.
 @pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
-@pytest.mark.parametrize("seq_len, emb_dim, topk", [(32, 2048, 8)], ids=["generic"])
+@pytest.mark.parametrize(
+    "seq_len, emb_dim, topk",
+    [(32, 2048, 8)],
+    ids=["generic"],
+)
 @pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
-def test_ttnn_reduce(mesh_device, seq_len, emb_dim, topk, use_weights):
-    run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)
+def test_ttnn_reduce(mesh_device, device_params, seq_len, emb_dim, topk, use_weights):
+    run_reduce(mesh_device, device_params, seq_len, emb_dim, topk, use_weights)
+
+
+@pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params", REDUCE_MESH_PARAMS[:1], indirect=["mesh_device", "device_params"]
+)
+def test_ttnn_reduce_single_expert(mesh_device, device_params, use_weights):
+    """Top-k=1 remains on the original single-axis mesh, migrated to TorusY."""
+    run_reduce(mesh_device, device_params, seq_len=32, emb_dim=1024, topk=1, use_weights=use_weights)
 
 
 # Per-model reduce shapes as (id_prefix, config, extended_model). Each model uses seq_len 640 and
@@ -239,5 +275,5 @@ def reduce_shape_params():
 @pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
 @pytest.mark.parametrize("seq_len, emb_dim, topk", reduce_shape_params())
 @pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
-def test_ttnn_reduce_models(mesh_device, seq_len, emb_dim, topk, use_weights):
-    run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)
+def test_ttnn_reduce_models(mesh_device, device_params, seq_len, emb_dim, topk, use_weights):
+    run_reduce(mesh_device, device_params, seq_len, emb_dim, topk, use_weights)
