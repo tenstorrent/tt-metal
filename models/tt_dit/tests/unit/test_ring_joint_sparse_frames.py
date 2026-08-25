@@ -806,7 +806,7 @@ class TestSparseFramesRing:
         reason="exp_ring_joint_scaled_dot_product_attention requires a Blackhole Galaxy cluster",
     )
     @_MESH_TOPOLOGY_EXP
-    def test_exp_avatar_sr_1080p(
+    def test_exp_sparse_frames(
         self,
         mesh_device,
         num_links,
