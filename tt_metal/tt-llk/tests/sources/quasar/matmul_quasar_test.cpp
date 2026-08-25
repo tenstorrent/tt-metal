@@ -132,11 +132,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // configured as MxFp4_2x_A or MxFp4_2x_B.
         // ENABLE_DIRECT_INDEXING selects the DI variant (MVMULDI with explicit indices) vs
         // the auto-increment-addr_mod MVMUL variant.
-        _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(CT_DIM, RT_DIM);
+        // ENABLE_DEST_DIRECT_ADDRESSING additionally puts the dest tile index in every MVMULDI and
+        // unrolls the whole block into the replay buffer, removing the per-tile MOP restart and the
+        // dest addressing instructions.
+        _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT, ENABLE_DEST_DIRECT_ADDRESSING>(CT_DIM, RT_DIM);
         PROFILER_SYNC();
     }
     {
         ZONE_SCOPED("TILE_LOOP")
+        // Pick the execute half that matches the configured init.
+        const auto matmul_block = [&](const std::uint32_t ct_dim, const std::uint32_t rt_dim)
+        {
+            if constexpr (ENABLE_DEST_DIRECT_ADDRESSING)
+            {
+                _llk_math_matmul_block_dest_di_<(ckernel::MathFidelity)MATH_FIDELITY>(ct_dim, rt_dim);
+            }
+            else
+            {
+                _llk_math_matmul_block_(ct_dim, rt_dim);
+            }
+        };
+
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
@@ -150,7 +166,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t i = 0; i < KT_DIM; i++)
                 {
-                    _llk_math_matmul_block_(CT_DIM, RT_DIM);
+                    matmul_block(CT_DIM, RT_DIM);
                 }
             }
         }
@@ -160,7 +176,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t i = 0; i < KT_DIM; i++)
                 {
-                    _llk_math_matmul_block_(CT_DIM, RT_DIM);
+                    matmul_block(CT_DIM, RT_DIM);
                 }
                 _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
             }
