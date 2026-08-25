@@ -6,7 +6,9 @@ redundant open PRs, functional bugs, missing tests, infra problems.
 
 - **MEASURED** = proven by a report result or a test that fails; **INFERRED** = read
   from the merged source, not re-run on silicon.
-- File:line point at `origin/main` (the merged experimental headers), unless a PR is named.
+- File:line point at `origin/main` **`850e79b2982`** (the merged experimental headers), unless a
+  PR is named. The Blackhole experimental headers the §2 bugs rest on are unchanged since; C1 and
+  C5 were re-confirmed at that tip.
 - These are experimental LLKs — they break the normal programming model on purpose, so
   not every deviation is a bug. The ones below are ordinary programming errors.
 
@@ -131,6 +133,13 @@ PRs by state: **open** — 53130, 53361, 52720, 52646 (draft). **merged** — ev
   identical; **`CUSTOM_MM_UNINIT` conflicts** — 53361 adds a `restore_mop` field + an
   `UNINIT_RESTORE_MOP` define 53130 lacks. De-dup before either merges. (52720 and 52646 both
   edit `test_config.py` in non-overlapping regions — rebase, no conflict.)
+- **All four open PRs now rebase against a big test-infra refactor.** Since these PRs were cut,
+  main gutted `conftest.py` into a new `helpers/llk_pytest_plugin.py` and grew `test_config.py` by
+  +355 lines. Any open PR touching `conftest.py` / `test_config.py` will hit real rebase conflicts
+  against that refactor — re-check the "non-overlapping regions" note above after rebasing.
+- **`matmul_custom_no_mop` now has an owner on main.** #53518 (MOP-less matmul LLK + a Quasar
+  test) merged after these PRs were cut. 53361 tests the same LLK (`llk_math_matmul_custom_no_mop.h`)
+  on Blackhole — additive, not redundant, but coordinate with #53518's owner.
 - **`pytest.skip` used where a non-strict xfail belongs — it hides live wrong answers forever.**
   `sum_reduce_scalar` (1-face) and `sdpa_reduce_row` (Sum pool) are both wrong-answer skips in
   53361; they should be `xfail(strict=False)` so they run and flip to XPASS on fix. The *other*
