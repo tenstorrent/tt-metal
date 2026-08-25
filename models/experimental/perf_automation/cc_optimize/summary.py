@@ -1235,6 +1235,11 @@ def _stage_units(stage, prompt_tokens) -> int:
     return int(_each) * max(1, _request_batch())
 
 
+# What the prompt-consuming row is called when the model declared no stages and therefore gave it no
+# name. A display label only -- nothing is looked up by it.
+_PROMPT_ROW_LABEL = "prefill"
+
+
 def _unit_work_name(unit) -> str:
     """What one unit of this model's work is called, from the unit the run measured.
 
@@ -1563,12 +1568,16 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # row it does not have, on the exact reasoning this file's docstring calls the original bug
         # ("a model with NO decode was still handed a DECODE row"), left in place because it was the
         # fallback rather than the main path.
-        if str(unit or "").strip().lower().startswith("tok"):
-            stages = [("decode", 1)]
-            if _pt:
-                stages.insert(0, ("prefill", _pt * max(1, _request_batch())))
-        else:
-            stages = [(_unit_work_name(unit), 1)]
+        # THE UNIT NAMES THE ROW, in both arms. The token arm hardcoded "decode" while the arm right
+        # beside it already asked _unit_work_name -- which returns exactly "decode" for a token unit,
+        # so this is the same output from the one function that owns the question.
+        stages = [(_unit_work_name(unit), 1)]
+        if _pt and str(unit or "").strip().lower().startswith("tok"):
+            # The prompt-consuming pass. A model that declared no stages has no name for it, so this
+            # label is the tool's own and is not looked up anywhere: _stage_block returns None for it
+            # either way. Kept rather than invented from the unit ("decode-prompt") because the label
+            # is what the report prints and the convention is what a reader expects.
+            stages.insert(0, (_PROMPT_ROW_LABEL, _pt * max(1, _request_batch())))
     for name, toks in stages:
         # EVERY TERM FROM THIS STAGE'S OWN BLOCK. params, layers and hidden were read from the model
         # root for every stage alike, so on a multi-tower model the audio encoder was priced with the

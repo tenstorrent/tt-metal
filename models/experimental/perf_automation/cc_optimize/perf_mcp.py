@@ -2571,6 +2571,11 @@ def read_stage_bytes(state_dir_path=None, model="", task="") -> dict:
         return {}
 
 
+# The key this tool used for the prompt length before `prompt_tokens` existed. An on-disk schema
+# name from an older version of THIS file, read only when the modern field is absent.
+_LEGACY_PROMPT_KEY = "prefill"
+
+
 def read_stage_isl(state_dir_path=None, model="", task="") -> int:
     """The prompt length the run ACTUALLY profiled, or 0.
 
@@ -2585,7 +2590,14 @@ def read_stage_isl(state_dir_path=None, model="", task="") -> int:
         # reachable only through one stage's name, and only for models that have a stage so called.
         # The map keeps its old entry for docs written before this key existed.
         _pt = int(_doc.get("prompt_tokens") or 0)
-        return _pt if _pt > 0 else int((_doc.get("isl") or {}).get("prefill") or 0)
+        if _pt > 0:
+            return _pt
+        # A KEY IN AN OLD FILE FORMAT, not a stage of this model. Before `prompt_tokens` existed,
+        # THIS TOOL wrote the prompt length under the literal "prefill", so reading it back is how a
+        # doc from that version is understood -- the same kind of constant as any other on-disk
+        # schema name, and unlike the writer above it cannot mis-price a model, because a doc that
+        # does not have the key simply yields 0. Every doc written since carries prompt_tokens.
+        return int((_doc.get("isl") or {}).get(_LEGACY_PROMPT_KEY) or 0)
     except Exception:  # noqa: BLE001
         return 0
 
@@ -2782,6 +2794,8 @@ def _run_full_pipeline_ms():
     # {stage: items PER REQUEST}, the legacy marker's unit. Kept apart from stage_isl, which holds
     # the TOTAL a stage states for one call.
     stage_isl_per_request = {}
+    # The legacy PERF_ISL_TOKENS marker: one prompt length for the whole request, not a stage's count.
+    prompt_tokens_seen = 0
     stage_ops = {}
     headline_units = []
     walls = []
@@ -2974,7 +2988,20 @@ def _run_full_pipeline_ms():
                         # serves. Merging the two into one map made the reader multiply a total by
                         # the batch again -- prefill counted 8x its real work, and encode 8x for a
                         # batch it does not have.
-                        stage_isl_per_request.setdefault("prefill", _iv)
+                        # THE REQUEST PROPERTY, kept as one -- the prompt length reaches
+                        # _persist_stage_ms as a scalar now, instead of being dug back out from under
+                        # a stage key.
+                        if not prompt_tokens_seen:
+                            prompt_tokens_seen = _iv
+                        # AND STILL FILED UNDER THE CONVENTIONAL NAME, deliberately. This is the
+                        # fallback item count for a stage that states no <stage>_trace_items() of its
+                        # own, and the legacy marker carries no stage of its own to attribute it to.
+                        # Dropping it does remove a name dependency and it also silently reprices any
+                        # such stage at ONE item instead of the sequence it ran -- a worse failure
+                        # than the one it fixes. The real answer is the pipeline stating its own count,
+                        # which is exactly what <stage>_trace_items() is for; this is what happens
+                        # until it does.
+                        stage_isl_per_request.setdefault(_LEGACY_PROMPT_KEY, _iv)
                 except Exception:  # noqa: BLE001
                     pass
             if "TRACE_PER_TOKEN_MS=" in line:
@@ -3073,7 +3100,7 @@ def _run_full_pipeline_ms():
             stage_isl,
             stage_ops,
             batch,
-            int(stage_isl_per_request.get("prefill") or 0),
+            int(prompt_tokens_seen or 0),
             stage_isl_per_request,
             stage_bytes,
         )

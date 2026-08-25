@@ -144,7 +144,10 @@ def test_the_stage_list_is_no_longer_a_literal():
     code = "\n".join(ln for ln in body.splitlines() if not ln.lstrip().startswith("#"))
     assert "_declared" in code, "the stage list is not built from what the model declared"
     j = code.index("_declared")
-    assert 'stages = [("decode", 1)]' in code[j:], "the literal is no longer the fallback-only path"
+    # The fallback no longer spells the recurring stage: _unit_work_name owns that question and
+    # returns "decode" for a token unit, "step" for a diffusion one, "inference" otherwise.
+    assert "stages = [(_unit_work_name(unit), 1)]" in code[j:], "the fallback stopped asking the unit"
+    assert '[("decode", 1)]' not in code, "the hardcoded stage list is back"
 
 
 def test_every_stage_gets_a_unit_and_a_title():

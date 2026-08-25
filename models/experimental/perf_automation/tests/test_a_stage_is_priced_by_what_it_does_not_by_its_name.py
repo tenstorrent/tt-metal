@@ -146,7 +146,10 @@ def test_the_parser_records_the_count_for_whatever_stage_stated_it():
     code = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
     assert "stage_isl[_nm] = _nv" in code, "the count is still keyed by a hardcoded stage name"
     assert 'stage_isl["prefill"] = _iv' not in code, "the hardcoded writer is back"
-    assert 'stage_isl_per_request.setdefault("prefill"' in code, "the legacy marker no longer feeds prefill"
+    # The literal moved into a named constant -- it is the conventional name for the prompt-consuming
+    # stage, used only as the fallback for one that states no <stage>_trace_items() of its own.
+    assert "stage_isl_per_request.setdefault(_LEGACY_PROMPT_KEY" in code, "the legacy marker no longer feeds it"
+    assert '_LEGACY_PROMPT_KEY = "prefill"' in code, "the convention is no longer stated in one place"
 
 
 def test_a_stated_count_is_a_total_and_is_not_multiplied_by_the_batch(monkeypatch):
