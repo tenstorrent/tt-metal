@@ -55,7 +55,7 @@ sfpi_inline void _calculate_softplus_body_(const float beta, const float beta_re
     sfpi::vFloat result = val;
 
     // `t < threshold` relies on vConstNeg1/LREG11 == -1.0 (re-established per launch by _init_sfpu_config_reg_).
-    v_if (t < threshold)
+    v_if (t <= threshold)
     {
         sfpi::vFloat a = sfpi::abs(t);
         sfpi::vFloat residual;

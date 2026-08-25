@@ -78,6 +78,11 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"negative", {{"SFPU_OP_CHAIN_0", "negative_tile_init(); negative_tile(0);"}}},
     {"softplus",
      {{"SFPU_OP_CHAIN_0", "softplus_tile_init(); softplus_tile(0, /* beta */ 0x3F800000u, /* recip */0x3F800000u, /* threshold */ 0x41A00000u);"}}},
+    // Softplus with threshold=0.5 (beta=1.0) so input=0.5 hits the boundary exactly.
+    // Exercises the <= vs < comparison fix: at t==threshold the kernel must still
+    // evaluate softplus, not fall back to the linear branch.
+    {"softplus_boundary",
+     {{"SFPU_OP_CHAIN_0", "softplus_tile_init(); softplus_tile(0, /* beta */ 0x3F800000u, /* recip */0x3F800000u, /* threshold */ 0x3F000000u);"}}},
     {"clamp", {{"SFPU_OP_CHAIN_0", "clamp_tile_init(); clamp_tile(0, 0xBF800000u, 0x3F800000u);"}}},  // [-1.0f, 1.0f]
     // Comparison-to-zero family (unary): result = 1.0f if predicate(x, 0) else 0.0f.
     {"eqz", {{"SFPU_OP_CHAIN_0", "eqz_tile_init(); eqz_tile(0);"}}},
@@ -188,6 +193,15 @@ float sfpu_function(const std::string& op_name, float input) {
     }
     if (op_name == "softplus") {
         return (input > 20.0f) ? input : std::log1p(std::exp(input));
+    }
+    if (op_name == "softplus_boundary") {
+        // Mirror the kernel's parametrized path: beta=1.0, threshold=0.5.
+        // At input == 0.5 (t == threshold), PyTorch still evaluates softplus
+        // (uses > not >=), so the golden is log1p(exp(0.5)) ≈ 0.974.
+        float beta = 1.0f;
+        float threshold = 0.5f;
+        float t = beta * input;
+        return (t > threshold) ? input : std::log1p(std::exp(t)) / beta;
     }
     if (op_name == "clamp") {
         return std::clamp(input, -1.0f, 1.0f);
@@ -315,6 +329,12 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
     if (op_name == "softplus") {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-5.0f, 30.0f, numel, seed);
     }
+    if (op_name == "softplus_boundary") {
+        // Include exact boundary hit (0.5) alongside random values so the
+        // t == threshold comparison fix is deterministically exercised.
+        auto possible_values = vector<bfloat16>({-2.0f, -0.5f, 0.0f, 0.5f, 1.0f, 2.0f});
+        return generate_packed_random_vector_from_vector<uint32_t, bfloat16>(possible_values, numel, seed);
+    }
     if (op_name == "clamp") {
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-2.0f, 2.0f, numel, seed);
     }
@@ -402,6 +422,11 @@ std::pair<float, float> sfpu_tolerance(const std::string& op_name, bool fp32_des
         return {0.03f, 0.02f};
     }
     if (op_name == "softplus") {
+        return {0.06f, 0.02f};
+    }
+    if (op_name == "softplus_boundary") {
+        // Same tolerance as softplus; the boundary point is within the polynomial
+        // domain so accuracy is unchanged.
         return {0.06f, 0.02f};
     }
     return {0.06f, 0.006f};
@@ -1610,7 +1635,9 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "negative"),
         std::make_tuple(4, "negative"),
         std::make_tuple(1, "softplus"),
+        std::make_tuple(1, "softplus_boundary"),
         std::make_tuple(4, "softplus"),
+        std::make_tuple(4, "softplus_boundary"),
         std::make_tuple(1, "clamp"),
         std::make_tuple(4, "clamp"),
         std::make_tuple(1, "relu"),
@@ -1741,7 +1768,9 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "negative"),
         std::make_tuple(4, "negative"),
         std::make_tuple(1, "softplus"),
+        std::make_tuple(1, "softplus_boundary"),
         std::make_tuple(4, "softplus"),
+        std::make_tuple(4, "softplus_boundary"),
         std::make_tuple(1, "clamp"),
         std::make_tuple(4, "clamp"),
         std::make_tuple(1, "relu"),
