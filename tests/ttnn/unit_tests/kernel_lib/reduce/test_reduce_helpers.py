@@ -4,8 +4,9 @@
 
 """Direct device tests for reduce dispatch and compute-owned scaler lifecycle."""
 
-from dataclasses import dataclass
+import os
 import struct
+from dataclasses import dataclass
 
 import pytest
 import torch
@@ -328,6 +329,137 @@ def _accumulate_via_add_cases() -> list[ReduceCase]:
     return cases
 
 
+def _performance_cases() -> list[ReduceCase]:
+    """Larger single-core shapes for stable device-profile comparisons."""
+    cases = []
+    shapes = {
+        "REDUCE_ROW": ((1, 16), (2, 32), (4, 32), (8, 32)),
+        "REDUCE_COL": ((16, 1), (32, 2), (32, 4), (32, 8)),
+        "REDUCE_SCALAR": ((4, 4), (8, 8), (8, 16), (16, 16)),
+    }
+
+    # The four tiers contain 16, 64, 128, and 256 input tiles. SUM and AVG
+    # exercise the same scaler setup with very different steady-state work.
+    for dim, dim_shapes in shapes.items():
+        for rows, cols in dim_shapes:
+            tiles = rows * cols
+            for pool in ("SUM", "AVG"):
+                cases.append(
+                    ReduceCase(
+                        name=f"perf-bf16-{pool}-{dim}-t{tiles}",
+                        family="performance",
+                        dim=dim,
+                        rows=rows,
+                        cols=cols,
+                        pool=pool,
+                        output_dtype="fp32",
+                    )
+                )
+
+    # A large indexed-policy sample separates scaler work from input ownership.
+    for dim, (rows, cols) in {key: value[-1] for key, value in shapes.items()}.items():
+        cases.append(
+            ReduceCase(
+                name=f"perf-bf16-SUM-{dim}-t256-indexed",
+                family="performance",
+                dim=dim,
+                rows=rows,
+                cols=cols,
+                policy="NoWaitNoPop",
+                output_dtype="fp32",
+            )
+        )
+
+    # FP32 FPU reductions use fewer tiers because each input tile is twice as
+    # large in L1. Accurate FP32 and Int32 select the scaler-free SFPU path.
+    medium_shapes = {key: value[1:3] for key, value in shapes.items()}
+    for dim, dim_shapes in medium_shapes.items():
+        for rows, cols in dim_shapes:
+            tiles = rows * cols
+            for pool in ("SUM", "AVG"):
+                cases.append(
+                    ReduceCase(
+                        name=f"perf-fp32-{pool}-{dim}-t{tiles}-fast",
+                        family="performance",
+                        dim=dim,
+                        rows=rows,
+                        cols=cols,
+                        pool=pool,
+                        input_dtype="fp32",
+                        output_dtype="fp32",
+                    )
+                )
+
+    for dtype, fp32_mode in (("fp32", "Accurate"), ("int32", "Fast")):
+        for dim in ("REDUCE_ROW", "REDUCE_COL"):
+            for rows, cols in medium_shapes[dim]:
+                tiles = rows * cols
+                for pool in ("SUM", "MAX"):
+                    cases.append(
+                        ReduceCase(
+                            name=f"perf-{dtype}-{pool}-{dim}-t{tiles}-{fp32_mode.lower()}",
+                            family="performance",
+                            dim=dim,
+                            rows=rows,
+                            cols=cols,
+                            pool=pool,
+                            input_dtype=dtype,
+                            output_dtype=dtype,
+                            fp32_mode=fp32_mode,
+                        )
+                    )
+
+    # Partial-edge and repeated-call cases make scaler construction/reuse
+    # visible without letting a one-tile workload dominate the measurement.
+    for pool in ("SUM", "AVG"):
+        for dim in ("REDUCE_ROW", "REDUCE_COL"):
+            rows, cols = shapes[dim][2]
+            cases.append(
+                ReduceCase(
+                    name=f"perf-bf16-{pool}-{dim}-t128-partial17",
+                    family="performance",
+                    dim=dim,
+                    rows=rows,
+                    cols=cols,
+                    pool=pool,
+                    output_dtype="fp32",
+                    valid_elements=17,
+                )
+            )
+
+    for dim in DIMS:
+        rows, cols = shapes[dim][1]
+        cases.append(
+            ReduceCase(
+                name=f"perf-bf16-SUM-{dim}-t64-two-calls",
+                family="performance",
+                dim=dim,
+                rows=rows,
+                cols=cols,
+                calls=2,
+                output_dtype="fp32",
+            )
+        )
+
+    for dim in DIMS:
+        for rows, cols in medium_shapes[dim]:
+            tiles = rows * cols
+            cases.append(
+                ReduceCase(
+                    name=f"perf-bf16-SUM-{dim}-t{tiles}-accumulate-via-add",
+                    family="performance",
+                    dim=dim,
+                    rows=rows,
+                    cols=cols,
+                    policy="WaitUpfrontNoPop",
+                    output_dtype="fp32",
+                    algorithm="AccumulateViaAdd",
+                )
+            )
+
+    return cases
+
+
 ALL_CASES = tuple(
     _input_space_cases()
     + _regression_cases()
@@ -335,6 +467,7 @@ ALL_CASES = tuple(
     + _boundary_cases()
     + _managed_scaler_lifecycle_cases()
     + _accumulate_via_add_cases()
+    + _performance_cases()
 )
 
 
@@ -363,6 +496,10 @@ def _assert_complete_case_matrix() -> None:
         ("int32", pool, dim, "Fast") for pool in ("SUM", "MAX", "MIN") for dim in ("REDUCE_ROW", "REDUCE_COL")
     }
     assert actual_numerical == expected_numerical
+
+    performance_cases = [case for case in ALL_CASES if case.family == "performance"]
+    assert len(performance_cases) == 68
+    assert {case.rows * case.cols for case in performance_cases} == {16, 64, 128, 256}
 
 
 _assert_complete_case_matrix()
@@ -422,6 +559,8 @@ def _defines(case: ReduceCase) -> list[tuple[str, str]]:
     ]
     if case.post_multiplier is not None:
         defines.append(("REDUCE_POST_MULTIPLIER_BITS", hex(_float_bits(case.post_multiplier))))
+    if os.environ.get("REDUCE_HELPERS_PROFILE"):
+        defines.append(("REDUCE_HELPERS_PROFILE_ZONE", f'"reduce::{case.name}"'))
     return defines
 
 

@@ -8,6 +8,9 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#ifdef REDUCE_HELPERS_PROFILE_ZONE
+#include "tools/profiler/kernel_profiler.hpp"
+#endif
 
 namespace {
 
@@ -56,21 +59,26 @@ ALWI void run_reduce_call(
     const compute_kernel_lib::NoOp post_reduce_op{};
 #endif
 
-    compute_kernel_lib::reduce<
-        REDUCE_OP,
-        REDUCE_DIM,
-        cb_input,
-        cb_scaler,
-        output_cb,
-        REDUCE_INPUT_POLICY,
-        REDUCE_RECONFIG_MODE,
-        REDUCE_FP32_MODE,
-        REDUCE_ALGORITHM>(
-        shape,
-        layout,
-        accumulation,
-        post_reduce_op,
-        compute_kernel_lib::ReducePartialScaler::from_valid_elements(valid_elements));
+    {
+#ifdef REDUCE_HELPERS_PROFILE_ZONE
+        DeviceZoneScopedN("reduce::call");
+#endif
+        compute_kernel_lib::reduce<
+            REDUCE_OP,
+            REDUCE_DIM,
+            cb_input,
+            cb_scaler,
+            output_cb,
+            REDUCE_INPUT_POLICY,
+            REDUCE_RECONFIG_MODE,
+            REDUCE_FP32_MODE,
+            REDUCE_ALGORITHM>(
+            shape,
+            layout,
+            accumulation,
+            post_reduce_op,
+            compute_kernel_lib::ReducePartialScaler::from_valid_elements(valid_elements));
+    }
 
     constexpr bool helper_pops_input =
         REDUCE_INPUT_POLICY == compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile ||
@@ -99,6 +107,9 @@ void kernel_main() {
 
     constexpr uint32_t first_output_cb = num_calls == 1 ? cb_output : cb_accumulator;
     compute_kernel_hw_startup(cb_input, cb_scaler, first_output_cb);
+#ifdef REDUCE_HELPERS_PROFILE_ZONE
+    DeviceZoneScopedN(REDUCE_HELPERS_PROFILE_ZONE);
+#endif
 
     // One sharded tensor backs a linear sequence of per-call blocks. Make the
     // complete stream visible once; ownership then follows the selected policy.
