@@ -480,6 +480,10 @@ inline void eltwise_binary_run_with_dest_reuse(
     const std::uint32_t face_r_dim)
 {
     constexpr std::uint32_t ZERO_ACC_MODE = p_zeroacc::CLR_16;
+    // DEST rows one face spans -- what ZEROACC's 16-row mode clears in a single instruction.
+    constexpr std::uint32_t DEST_ROWS_PER_FACE = 16;
+    // Rows in one DEST bank (half). See the bank-select note below.
+    constexpr std::uint32_t DEST_ROWS_PER_BANK = 512;
 
 #pragma GCC unroll 0
     for (std::uint32_t n = 0; n < loop_count; n++)
@@ -490,7 +494,40 @@ inline void eltwise_binary_run_with_dest_reuse(
         int clear_fp32                     = is_fp32_dest_acc_en && clear_fp32_dst_acc ? 1 : 0;
         const std::uint32_t tiles_per_bank = clear_fp32 ? MAX_TILES_IN_HALF_DEST >> 1 : MAX_TILES_IN_HALF_DEST;
         const std::uint32_t local_tile     = dst_index & (tiles_per_bank - 1);
-        TT_ZEROACC(ZERO_ACC_MODE, clear_fp32, 0, ADDR_MOD_1, get_dest_index_in_faces(local_tile, face_offset + n));
+        const std::uint32_t face_index     = get_dest_index_in_faces(local_tile, face_offset + n);
+
+        // ZEROACC's 16-row mode takes an absolute 16-row block index within the DEST bank, but Blackhole
+        // derives that instruction's bank-select from (dest row offset + block index) -- a row offset and a
+        // block index added together. Once the sum reaches the bank size the select flips and the clear
+        // lands 512 rows away in the other DEST half: the face meant to be cleared keeps the previous
+        // accumulation step, and 16 unrelated rows of the other half are zeroed instead. ELWMUL accumulates
+        // into DEST, so the stale face surfaces as (previous step + product); ELWADD/ELWSUB overwrite DEST
+        // and issue no ZEROACC at all, which is why only ELWMUL shows it.
+        //   Measured on p150 with a fixed block index of 31: dest row offset 480 -> clears block 31 (right),
+        //   offset 488 or 496 -> clears block 63 (wrong half). At offset 496, indices 0..15 still land
+        //   correctly and 16..31 do not -- matching the (offset + index) >= 512 boundary exactly.
+        // Here the dest pointer is 64*local_tile + 16*face while the index is 4*local_tile + face, so the
+        // sum only reaches 512 on the very last face of the last tile of a 16-bit bank (496 + 31 = 527).
+        // A 32-bit bank tops out at 240 + 15 and never trips it. ZEROACC's one-row mode addresses purely
+        // in rows (dest offset + RWC + index) and has no such mismatch, so use it for that one face.
+        // tt-metal#53693.
+        const std::uint32_t dest_row_offset = (local_tile << 6) + ((face_offset + n) << 4);
+        if (dest_row_offset + face_index >= DEST_ROWS_PER_BANK)
+        {
+            // Only reachable with a 16-bit bank: in 32-bit mode the offset tops out at 240 and the index
+            // at 15. That matters because a 32-bit CLR_16 block is not 16 consecutive DEST rows, so the
+            // row-by-row fallback below would not be equivalent.
+            LLK_ASSERT(clear_fp32 == 0, "dest-reuse ZEROACC bank-crossing fallback assumes a 16-bit DEST bank");
+#pragma GCC unroll DEST_ROWS_PER_FACE
+            for (std::uint32_t row = 0; row < DEST_ROWS_PER_FACE; row++)
+            {
+                TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0 /*use_32_bit_mode*/, 0 /*clear_zero_flags*/, ADDR_MOD_1, row);
+            }
+        }
+        else
+        {
+            TT_ZEROACC(ZERO_ACC_MODE, clear_fp32, 0, ADDR_MOD_1, face_index);
+        }
 
         ckernel_template::run();
 

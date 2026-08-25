@@ -674,7 +674,9 @@ def _compute_dest_reuse_golden(
     math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
     tile_dimensions=[[32, 32], [16, 32], [8, 32]],
     input_dimensions=[[512, 32]],
-    output_dimensions=[[128, 32]],
+    output_dimensions=lambda tile_dimensions: (
+        [[128, 32], [256, 32]] if tile_dimensions == [32, 32] else [[128, 32]]
+    ),
 )
 def test_eltwise_binary_dest_reuse(
     reuse_dest_type,
