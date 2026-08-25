@@ -11,7 +11,7 @@
 #include "experimental/kernel_args.h"
 
 inline void fill_constant_tiles(DataflowBuffer& eye, DataflowBuffer& tril, DataflowBuffer& ones) {
-    constexpr uint32_t one = 0x3F800000;
+    constexpr uint32_t fp32_one_bits = __builtin_bit_cast(uint32_t, 1.0F);
     constexpr uint32_t face_width = 16;
     constexpr uint32_t face_elements = face_width * face_width;
     constexpr uint32_t row_bytes = face_width * sizeof(uint32_t);
@@ -31,7 +31,7 @@ inline void fill_constant_tiles(DataflowBuffer& eye, DataflowBuffer& tril, Dataf
 
     // Seed one aligned row, then use local NoC reads to replicate it across the dense regions.
     for (uint32_t column = 0; column < face_width; ++column) {
-        ones_tile[column] = one;
+        ones_tile[column] = fp32_one_bits;
     }
     UnicastEndpoint self;
     const auto ones_row = noc_traits_t<UnicastEndpoint>::src_args_type{
@@ -50,9 +50,9 @@ inline void fill_constant_tiles(DataflowBuffer& eye, DataflowBuffer& tril, Dataf
 
     for (uint32_t row = 0; row < face_width; ++row) {
         for (uint32_t column = 0; column <= row; ++column) {
-            tril_tile[row * face_width + column] = one;
+            tril_tile[row * face_width + column] = fp32_one_bits;
         }
-        eye_tile[row * face_width + row] = one;
+        eye_tile[row * face_width + row] = fp32_one_bits;
     }
     const auto eye_face = noc_traits_t<UnicastEndpoint>::src_args_type{
         .noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = eye.get_write_ptr()};
