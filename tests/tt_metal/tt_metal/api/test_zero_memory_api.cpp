@@ -72,13 +72,23 @@ constexpr uint32_t kStatusOk = 0xCAFEBABEu;
 // Must match zero_memory_api_raw_l1.cpp.
 constexpr uint32_t kPatternBase = 0xA5A50000u;
 
-// Host-known L1 addresses shared by the raw-L1 helpers below: a status word, a slot the kernel
-// reports its region address into, and the region itself for the CoreLocalMem target (the only one
-// the framework does not allocate). kCoreLocalMemAddr is 16B-aligned but not 32/64B, so the checks
-// run against a minimally aligned destination.
-constexpr uint32_t kFlagAddr = 100 * 1024;
-constexpr uint32_t kReportAddr = 100 * 1024 + 64;
-constexpr uint32_t kCoreLocalMemAddr = 104 * 1024 + 16;
+// Reserves L1 the host reads and writes directly — the kernel status/report words, and the region
+// under test for the CoreLocalMem target — so nothing else in the runtime can claim those bytes.
+std::shared_ptr<distributed::MeshBuffer> AllocateL1Scratch(distributed::MeshDevice& mesh_device, uint32_t size_bytes) {
+    return distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = size_bytes},
+        {.page_size = size_bytes, .buffer_type = BufferType::L1},
+        &mesh_device);
+}
+
+// One status word plus one report word, kept in a single allocation; the report slot sits at
+// kReportOffset bytes from its base.
+constexpr uint32_t kScratchWordsBytes = 64;
+constexpr uint32_t kReportOffset = 32;
+
+// Allocator addresses come back 64B-aligned; nudging by 16 makes the CoreLocalMem region minimally
+// aligned (16B, not 32/64B) so it exercises the WH/BH floor. Allocations are sized +nudge to fit.
+constexpr uint32_t kMinAlignNudge = 16;
 
 const char* StatusName(uint32_t status) {
     switch (status) {
@@ -147,11 +157,24 @@ void RunRawL1ZeroTest(distributed::MeshDevice& mesh_device, const RawL1Cfg& cfg)
         ASSERT_EQ(cfg.window_bytes % cfg.num_chunks, 0u) << "num_chunks must divide window_bytes exactly";
     }
 
+    // Allocate the L1 the host needs to reach: the status/report words, and (CoreLocalMem target
+    // only) the region under test. The framework allocates the region for the other two targets.
+    auto scratch_words = AllocateL1Scratch(mesh_device, kScratchWordsBytes);
+    const uint32_t flag_addr = static_cast<uint32_t>(scratch_words->address());
+    const uint32_t report_addr = flag_addr + kReportOffset;
+
+    std::shared_ptr<distributed::MeshBuffer> core_local_region;
+    uint32_t core_local_addr = 0;
+    if (cfg.target == RawL1Target::CoreLocalMem) {
+        core_local_region = AllocateL1Scratch(mesh_device, cfg.region_bytes + kMinAlignNudge);
+        core_local_addr = static_cast<uint32_t>(core_local_region->address()) + kMinAlignNudge;
+    }
+
     // Sentinel both status slots, so a kernel that crashes before reporting is caught rather than
     // reading back a stale pass from a previous test in the same binary.
     std::vector<uint32_t> sentinel{0xBAADF00Du};
-    slow_dispatch::WriteToL1(mesh_device, node, kFlagAddr, sentinel);
-    slow_dispatch::WriteToL1(mesh_device, node, kReportAddr, sentinel);
+    slow_dispatch::WriteToL1(mesh_device, node, flag_addr, sentinel);
+    slow_dispatch::WriteToL1(mesh_device, node, report_addr, sentinel);
 
     experimental::KernelSpec kernel{
         .unique_id = RAW_L1_KERNEL,
@@ -204,9 +227,9 @@ void RunRawL1ZeroTest(distributed::MeshDevice& mesh_device, const RawL1Cfg& cfg)
             {{"region_bytes", cfg.region_bytes},
              {"offset_bytes", cfg.offset_bytes},
              {"window_bytes", cfg.window_bytes},
-             {"flag_addr", kFlagAddr},
-             {"report_addr", kReportAddr},
-             {"region_addr", kCoreLocalMemAddr}}),
+             {"flag_addr", flag_addr},
+             {"report_addr", report_addr},
+             {"region_addr", core_local_addr}}),
     }};
     if (local_tensor.has_value()) {
         params.tensor_args = {
@@ -218,7 +241,7 @@ void RunRawL1ZeroTest(distributed::MeshDevice& mesh_device, const RawL1Cfg& cfg)
     // NOT the kernel's pattern — the kernel's own stamp check then proves it really wrote there.
     if (cfg.target == RawL1Target::CoreLocalMem) {
         std::vector<uint32_t> junk(cfg.region_bytes / sizeof(uint32_t), 0xEEEEEEEEu);
-        slow_dispatch::WriteToL1(mesh_device, node, kCoreLocalMemAddr, junk);
+        slow_dispatch::WriteToL1(mesh_device, node, core_local_addr, junk);
     }
 
     distributed::MeshWorkload workload;
@@ -228,14 +251,14 @@ void RunRawL1ZeroTest(distributed::MeshDevice& mesh_device, const RawL1Cfg& cfg)
 
     // ----- In-kernel verdict -----
     std::vector<uint32_t> flag_out;
-    slow_dispatch::ReadFromL1(mesh_device, node, kFlagAddr, sizeof(uint32_t), flag_out);
+    slow_dispatch::ReadFromL1(mesh_device, node, flag_addr, sizeof(uint32_t), flag_out);
     ASSERT_EQ(flag_out.size(), 1u);
     EXPECT_EQ(flag_out[0], kStatusOk) << "in-kernel status: " << StatusName(flag_out[0]) << " (0x" << std::hex
                                       << flag_out[0] << ")";
 
     // ----- Independent host verify of the same region -----
     std::vector<uint32_t> reported;
-    slow_dispatch::ReadFromL1(mesh_device, node, kReportAddr, sizeof(uint32_t), reported);
+    slow_dispatch::ReadFromL1(mesh_device, node, report_addr, sizeof(uint32_t), reported);
     ASSERT_EQ(reported.size(), 1u);
     const uint32_t region_addr = reported[0];
     ASSERT_NE(region_addr, 0xBAADF00Du) << "kernel never reported its region address";
@@ -535,8 +558,18 @@ static void RunDramFromRawL1Test(distributed::MeshDevice& mesh_device, RawL1Targ
     constexpr uint32_t total_words = num_pages * (page_size_bytes / sizeof(uint32_t));
     const experimental::NodeCoord node{0, 0};
 
+    auto scratch_words = AllocateL1Scratch(mesh_device, kScratchWordsBytes);
+    const uint32_t flag_addr = static_cast<uint32_t>(scratch_words->address());
+
+    std::shared_ptr<distributed::MeshBuffer> core_local_region;
+    uint32_t core_local_addr = 0;
+    if (target == RawL1Target::CoreLocalMem) {
+        core_local_region = AllocateL1Scratch(mesh_device, region_bytes + kMinAlignNudge);
+        core_local_addr = static_cast<uint32_t>(core_local_region->address()) + kMinAlignNudge;
+    }
+
     std::vector<uint32_t> sentinel{0xBAADF00Du};
-    slow_dispatch::WriteToL1(mesh_device, node, kFlagAddr, sentinel);
+    slow_dispatch::WriteToL1(mesh_device, node, flag_addr, sentinel);
 
     // No host-side seeding needed: the kernel stamps the scratch non-zero and verifies the stamp
     // before zeroing it, so the all-zero check proves overload (1) ran for every target type.
@@ -602,9 +635,9 @@ static void RunDramFromRawL1Test(distributed::MeshDevice& mesh_device, RawL1Targ
             {{"page_start", 0u},
              {"page_end", num_pages},
              {"page_size", page_size_bytes},
-             {"flag_addr", kFlagAddr},
+             {"flag_addr", flag_addr},
              {"region_bytes", region_bytes},
-             {"region_addr", kCoreLocalMemAddr}}),
+             {"region_addr", core_local_addr}}),
     }};
     params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{tensor}}};
     if (local_tensor.has_value()) {
@@ -619,7 +652,7 @@ static void RunDramFromRawL1Test(distributed::MeshDevice& mesh_device, RawL1Targ
     distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
 
     std::vector<uint32_t> flag_out;
-    slow_dispatch::ReadFromL1(mesh_device, node, kFlagAddr, sizeof(uint32_t), flag_out);
+    slow_dispatch::ReadFromL1(mesh_device, node, flag_addr, sizeof(uint32_t), flag_out);
     ASSERT_EQ(flag_out.size(), 1u);
     EXPECT_EQ(flag_out[0], kStatusOk) << "in-kernel status: " << StatusName(flag_out[0]) << " (0x" << std::hex
                                       << flag_out[0] << ")";
