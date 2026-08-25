@@ -198,6 +198,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
 
+                    // Stage the full dest block, then SFPU in in0/in1 pairs — same layout as
+                    // sources/sfpu_binary_test.cpp. Interleaving a datacopy with
+                    // SFPU(dst[i], dst[(i+1)%MAX]) wraps the last dest-fill tile onto dest 0.
                     for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
                     {
                         // When data is not unpacked to dest, math needs to copy data from srcA to dest before starting SFPU operation.
@@ -205,15 +208,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         if constexpr (!unpack_to_dest)
                         {
                             LLK_ASSERT(
-                                (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                                (block_tile < get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                                 "block_tile exceeds max dest tiles");
                             _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
                                 block_tile, formats.math, formats.math);
                         }
+                    }
 
+                    LLK_ASSERT((block_tiles % 2u) == 0u, "binary SFPU dest block must hold in0/in1 pairs");
+                    for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile += 2)
+                    {
                         test_utils::
                             call_binary_sfpu_operation<DST_SYNC_MODE, is_fp32_dest_acc_en, APPROX_MODE, SFPU_BINARY_OPERATION, ITERATIONS, formats.math>(
-                                block_tile, (block_tile + 1) % MAX_TILES_DEST, block_tile);
+                                block_tile, block_tile + 1, block_tile);
                     }
                 }
             }
@@ -236,11 +243,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             "block_tile exceeds max dest tiles");
                         _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC_MODE, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
                             block_tile, formats.math, formats.math);
+                    }
 
-                        // Start SFPU binary operation
+                    LLK_ASSERT((block_tiles % 2u) == 0u, "binary SFPU dest block must hold in0/in1 pairs");
+                    for (std::uint32_t block_tile = 0; block_tile < block_tiles; block_tile += 2)
+                    {
                         test_utils::
                             call_binary_sfpu_operation<DST_SYNC_MODE, is_fp32_dest_acc_en, APPROX_MODE, SFPU_BINARY_OPERATION, ITERATIONS, formats.math>(
-                                block_tile, (block_tile + 1) % MAX_TILES_DEST, block_tile);
+                                block_tile, block_tile + 1, block_tile);
                     }
 
                     _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();

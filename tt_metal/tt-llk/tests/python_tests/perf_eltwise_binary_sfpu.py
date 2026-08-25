@@ -39,6 +39,14 @@ def get_dest_accum_modes(formats):
     return [DestAccumulation.Yes, DestAccumulation.No]
 
 
+def _unpack_to_dest(formats, dest_acc):
+    # Int32/UInt32 have no SrcA/SrcB unpack path (cunpack_common.h); they must
+    # unpack straight into dest. Float32 dest_acc=Yes uses the Tf32 SrcA path.
+    if formats.input_format.is_32_bit() and formats.input_format.is_integer():
+        return True
+    return formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
+
+
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats(
@@ -90,9 +98,7 @@ def test_perf_eltwise_binary_sfpu_float(
     iterations,
     input_dimensions,
 ):
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
-    )
+    unpack_to_dest = _unpack_to_dest(formats, dest_acc)
 
     tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
@@ -173,9 +179,7 @@ def test_perf_eltwise_binary_sfpu_int(
     iterations,
     input_dimensions,
 ):
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
-    )
+    unpack_to_dest = _unpack_to_dest(formats, dest_acc)
 
     tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
@@ -264,9 +268,7 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
     if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.Yes:
         pytest.skip("SfpuAddTopRow does not support Float32 with DestAccumulation.Yes")
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
-    )
+    unpack_to_dest = _unpack_to_dest(formats, dest_acc)
 
     tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
@@ -317,9 +319,7 @@ def _div_math_isolate_config(formats, dest_acc, input_dimensions):
     tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
-    )
+    unpack_to_dest = _unpack_to_dest(formats, dest_acc)
     return PerfConfig(
         "sources/eltwise_binary_sfpu_perf.cpp",
         formats,
