@@ -5,9 +5,10 @@
 """Per-perf-test CSV schema catalog.
 
 One entry per perf test: its reviewed set of CSV columns, a ``version`` bumped
-when those columns change, and an ``aliases`` map (old -> new) for a column
-renamed in that test. The gate in test_perf_csv_header_gate.py re-derives each
-test's columns and fails on any drift from this catalog.
+when those columns change, an ``aliases`` map (old -> new) for a column
+renamed in that test, and a ``test_name_aliases`` map (old -> new) when the
+test itself was renamed. The gate in test_perf_csv_header_gate.py re-derives
+each test's columns and fails on any drift from this catalog.
 """
 
 
@@ -53,6 +54,7 @@ PERF_TEST_SCHEMAS = {
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_eltwise_binary_fpu": "perf_eltwise_binary"},
     },
     "perf_eltwise_binary_sfpu": {
         "version": 3,
@@ -109,6 +111,7 @@ PERF_TEST_SCHEMAS = {
             "unpack_transpose_within_face",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_eltwise_typecast": "perf_eltwise_unary_typecast"},
     },
     "perf_eltwise_unary_sfpu": {
         "version": 3,
@@ -274,6 +277,7 @@ PERF_TEST_SCHEMAS = {
             "unpack_transpose_faces",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_math_transpose": "perf_transpose_dest"},
     },
     "perf_matmul": {
         "version": 3,
@@ -417,6 +421,7 @@ PERF_TEST_SCHEMAS = {
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_sfpu_reduce_row_max": "perf_sfpu_reduce"},
     },
     "perf_sfpu_reduce_sdpa": {
         "version": 3,
