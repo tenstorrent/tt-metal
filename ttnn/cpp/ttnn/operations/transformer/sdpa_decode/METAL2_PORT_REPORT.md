@@ -74,12 +74,19 @@ and a trivial `select_program_factory` returning it. `validate_on_program_cache_
   `tensor::`, which is a real `TensorBindingToken`). This was the single biggest "expected-hard, actually-easy"
   surprise.
 - **Shared donor `read_page_table_for_batch`** (`../sdpa/.../dataflow/dataflow_common.hpp`, prefill-shared)
-  constructs `TensorAccessor(args, addr, page_size)` internally — a 3-arg form that cannot take a binding
-  token, and the donor is out of port scope. The recipe's shared-kernel Caution would have me fork the whole
-  (huge) donor. Instead the ~6-line page-table read was **inlined** into sdpa_decode's own reader using
-  `TensorAccessor(tensor::page_table)`; the donor is untouched (still serves prefill). The recipe could add a
-  note that a tiny donor helper whose only incompatibility is internal accessor construction is cheaper to
-  inline in-op than to fork.
+  builds `TensorAccessor(args, addr, page_size)` internally — a 3-arg form that cannot take a binding token.
+  The recipe's `_metal2` *file*-fork mechanism is for bound kernel **sources** (`KernelSpec::source` `.cpp`s),
+  not a helper in a shared **header**, and forking the whole (large) donor header for one 6-line function is
+  disproportionate. **Resolution (invoker-authorized):** the invoker owns the parallel `sdpa` (prefill) port,
+  so an **additive Metal 2.0 overload** of `read_page_table_for_batch` was added *in place* beside the original
+  — it takes a `DataflowBuffer&` + a caller-built `TensorAccessor` (from the bound `tensor::page_table`)
+  instead of the `(cb_id, TensorAccessorArgs, addr, page_size)` form, dropping the redundant
+  page-size-for-the-accessor argument; sdpa_decode's reader calls it. The original 6-arg overload is untouched
+  (prefill's legacy callers keep binding it); the donor gains a `dataflow_buffer.h` include. Verified prefill
+  still compiles and passes (`test_sdpa_prefill.py` sample, 2 passed) and no overload ambiguity. *Recipe gap:*
+  the shared-kernel Caution covers kernel-source forks but is silent on shared **header helpers** whose only
+  incompatibility is internal accessor construction — an additive overload (when the peer-op owner authorizes
+  it) or an in-op named helper is the right move, not a whole-file fork.
 - **`if constexpr` name-lookup on `tensor::`/`dfb::` in a header shared by the writer TU.** `read_q` lives in
   sdpa_decode's own `dataflow_common.hpp`, which the writer also includes. Two-phase lookup means a
   non-dependent `tensor::q` in `read_q`'s body would be looked up even in the writer TU (which does not bind
@@ -128,10 +135,14 @@ and a trivial `select_program_factory` returning it. `validate_on_program_cache_
   `all_output_noc_x/y`; writer `reduction_group_core_xs/ys`, `all_reducer_noc_x/y`, `all_output_noc_x/y`.
   Data-indexed (by `cur_batch` / `reduce_core_index` / `parent_core_in_group`), so genuinely un-nameable.
 - **Shared-kernel touches (coordination signal).**
-  - `../sdpa/.../dataflow/dataflow_common.hpp` and `.../compute/compute_common.hpp` (prefill-shared donors):
-    reused unchanged via the `dfb::name`→`uint32_t` / raw-pointer bridge (their helpers take `uint32_t cb` and
-    raw ptrs). NOT forked. Remaining consumer: sdpa prefill (unchanged). The page-table 3rd-arg drop was made
-    by inlining, not by editing the donor.
+  - `.../compute/compute_common.hpp` (prefill-shared donor): reused unchanged via the `dfb::name`→`uint32_t`
+    bridge (helpers take `uint32_t cb` and raw ptrs). NOT forked.
+  - `../sdpa/.../dataflow/dataflow_common.hpp` (prefill-shared donor): reused unchanged for `copy_tile` /
+    `virtual_seq_tile_id_to_physical_tile_id` (bridged). **One additive edit (invoker-authorized):** a Metal 2.0
+    overload of `read_page_table_for_batch` (`DataflowBuffer&` + caller-built `TensorAccessor`) added beside the
+    original, plus a `dataflow_buffer.h` include; the original overload is untouched. See Friction → Gaps.
+    Remaining consumer: sdpa prefill — the invoker's parallel port can bind the new overload; the additive
+    change is non-breaking for prefill's legacy callers (verified: `test_sdpa_prefill.py` passes).
   - `ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp`: an existing `_metal2` fork (rung 1
     reuse) — the writer binds it (`generate_bcast_col_scalar(DataflowBuffer&, uint32_t)`). No new fork created.
   - `ttnn/cpp/ttnn/kernel_lib/{tilize_helpers,untilize_helpers,reduce_helpers_dataflow,l1_helpers}.hpp`:

@@ -9,6 +9,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -89,6 +90,29 @@ volatile tt_l1_ptr uint32_t* read_page_table_for_batch(
         {});
     noc.async_read_barrier();
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
+}
+
+// Metal 2.0 overload. Reads one page-table stick into an already-reserved DataflowBuffer entry, from a
+// TensorAccessor the caller builds from its bound tensor::<page_table> parameter. Unlike the legacy overload
+// above it takes no TensorAccessorArgs / address / page-size-for-the-accessor triple — the binding token
+// supplies the layout and aligned page size — so page_table_stick_size here is only the read size. The
+// caller owns the DFB's reserve_back / push_back (matching the legacy contract, where this helper only reads).
+template <typename PageTableReaderType>
+volatile tt_l1_ptr uint32_t* read_page_table_for_batch(
+    Noc noc,
+    DataflowBuffer& page_table_dfb,
+    uint32_t batch_idx,
+    const PageTableReaderType& page_table_reader,
+    uint32_t page_table_stick_size) {
+    uint32_t page_table_wr_ptr = page_table_dfb.get_write_ptr();
+    noc.async_read(
+        page_table_reader,
+        CoreLocalMem<uint32_t>(page_table_wr_ptr),
+        page_table_stick_size,
+        {.page_id = batch_idx},
+        {});
+    noc.async_read_barrier();
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_wr_ptr);
 }
 
 class TensorTileShape {

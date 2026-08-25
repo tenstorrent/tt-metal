@@ -302,21 +302,15 @@ void kernel_main() {
         uint32_t num_pages_to_read = is_page_table_sharded ? B : 1;
         dfb_page_table.reserve_back(num_pages_to_read);
 #ifndef IS_PAGE_TABLE_SHARDED
-        // Read page table from DRAM. (Inlined from the sdpa donor's read_page_table_for_batch so the
-        // accessor is built from the tensor::page_table binding; the donor's explicit page_size 3rd
-        // argument is redundant — the binding token supplies the aligned page size — and is dropped.)
-        {
-            uint32_t page_table_dfb_wr_ptr = dfb_page_table.get_write_ptr();
-            const auto page_table_reader = TensorAccessor(tensor::page_table);
-            noc.async_read(
-                page_table_reader,
-                CoreLocalMem<uint32_t>(page_table_dfb_wr_ptr),
-                page_table_page_size,
-                {.page_id = cur_batch / q_heads_parallel_factor},
-                {});
-            noc.async_read_barrier();
-            page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_dfb_wr_ptr);
-        }
+        // Read page table from DRAM via the sdpa donor's Metal 2.0 overload of read_page_table_for_batch,
+        // building the accessor from the tensor::page_table binding (the legacy 3rd page-size argument is
+        // redundant — the binding token supplies the aligned page size — and is dropped).
+        page_table_ptr = read_page_table_for_batch(
+            noc,
+            dfb_page_table,
+            cur_batch / q_heads_parallel_factor,
+            TensorAccessor(tensor::page_table),
+            page_table_page_size);
         page_table_ptr_u32 = page_table_ptr;
 #else
         // Read page table from dynamically allocated L1 buffer (borrowed sharded buffer)
