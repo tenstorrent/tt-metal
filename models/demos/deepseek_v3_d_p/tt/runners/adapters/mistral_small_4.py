@@ -78,7 +78,12 @@ class MistralSmall4Adapter(MLAPrefillAdapter):
     prefill_trace_layout = "single_file"
 
     # --- CPU reference ---------------------------------------------------------------------------
-    # No reference_* classes are wired: transformers' Mistral4Attention needs the precomputed
-    # `position_embeddings` that run_reference_mla does not pass, and Mistral's plain-softmax router
-    # with stacked experts does not match the state dict run_reference_moe expects. Leaving these
-    # None makes those comparisons skip rather than error; MLA is still checked against MLAReference.
+    # Model class only -- create_hf_model needs it for every random-weight row, and rope is computed
+    # at model level so the standalone-attention problem does not arise. attention / moe stay
+    # unwired: run_reference_mla does not pass position_embeddings, and run_reference_moe expects a
+    # different state dict. Those two comparisons skip rather than error.
+    @property
+    def reference_model_cls(self):
+        from transformers.models.mistral4.modeling_mistral4 import Mistral4Model
+
+        return Mistral4Model
