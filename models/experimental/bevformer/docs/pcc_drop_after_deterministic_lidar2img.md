@@ -25,17 +25,50 @@ tests measure.
 ## Conclusion first
 
 1. The commit is not the defect. It removed a degenerate operating point that was
-   hiding a pre-existing TT/reference gap.
-2. The gap is **not** in point sampling, **not** in bilinear interpolation, and
-   **not** in `MSDeformableAttention`. It is in the **`TTSpatialCrossAttention`
-   wrapper** — the accumulate / count-divide / output-projection tail that runs
-   after the inner deformable attention.
-3. The wrapper injects a diffuse per-query relative error of **~9.5% for
-   `num_levels=1` configs and ~5.0% for `num_levels=4`**, on essentially every
-   attended query. A faithful bfloat16 replay of the same arithmetic accounts for
-   only ~1.3% of it, so most of it is implementation, not storage dtype.
-4. Thresholds should not be re-baselined yet. The wrapper is a fixable candidate
-   and re-baselining would freeze the loss in.
+   hiding a pre-existing TT/reference bug.
+2. **`TTSpatialCrossAttention` applies its own `output_proj` twice and never
+   applies the nested deformable attention's `output_proj` at all.** The inner
+   attention's projection weights are dropped during preprocessing, and the inner
+   attention then picks up the SCA's `output_proj` by name collision.
+3. This is a correctness bug in parameter plumbing, not a precision problem. It is
+   not bfloat16, not math fidelity, not bilinear interpolation, and not the
+   accumulate / divide / project tail — all four of those were measured and are
+   clean to 0.99998 or better.
+4. Thresholds must not be re-baselined. They would encode a wrong matmul as the
+   expected accuracy of the model.
+
+### The defect, precisely
+
+`preprocess_spatial_cross_attention_parameters`
+(`tt/model_preprocessing.py:296-318`) builds a **flat** parameter namespace:
+
+- `parameters["output_proj"]` ← the SCA's own `output_proj` (line 296-299, always
+  taken, the SCA always has one)
+- `parameters["value_proj"]`, `["sampling_offsets"]`, `["attention_weights"]` ←
+  lifted out of the nested deformable attention (line 306-312)
+- the nested deformable attention's own `output_proj` is **skipped**, because
+  line 315 guards it with `and not hasattr(torch_model, "output_proj")`
+
+`TTSpatialCrossAttention.__init__` (`tt/tt_spatial_cross_attention.py:83`) then
+hands that whole flat namespace to the inner attention:
+
+```python
+self.deformable_attention = TTMSDeformableAttention(deform_config, device, params)
+```
+
+`TTMSDeformableAttention.forward` (`tt/tt_ms_deformable_attention.py:328-330`)
+finds `self.params.output_proj` — the SCA's — and applies it. SCA then applies the
+same matrix again at `tt_spatial_cross_attention.py:331`.
+
+| | computes |
+|---|---|
+| reference | `SCA.output_proj( MSDA.output_proj(attn) / count ) + residual` |
+| TT | `SCA.output_proj( SCA.output_proj(attn) / count ) + residual` |
+
+Verified by substitution: replacing the reference inner attention's `output_proj`
+with the SCA's reproduces the module to **0.999646**, versus **0.978711** against
+the correct reference — and 0.999646 matches the standalone
+`TTMSDeformableAttention` accuracy of 0.999650 to 4e-6. Nothing else differs.
 
 ## How the geometry changes the operating point
 
@@ -165,6 +198,9 @@ output is 0.999916; with the TT wrapper it is 0.995474 — a **53x larger error*
 from the wrapper alone. Rounding the hybrid's wrapper arithmetic to bfloat16
 changes it by 1e-6, so bfloat16 *storage* explains none of the difference.
 
+This localised the loss to "somewhere between the inner attention's inputs and the
+SCA output", which L3c and L3d then split.
+
 The wrapper's TT tail, per `tt/tt_spatial_cross_attention.py`:
 
 - `slots_torch[...] += queries_output_torch[...]` — host scatter-add, both
@@ -175,9 +211,46 @@ The wrapper's TT tail, per `tt/tt_spatial_cross_attention.py`:
   `compute_kernel_config` passed, so default math fidelity and accumulation
 - `ttnn.add(slots, inp_residual)`
 
-The division cannot lose 9.5%, and the scatter is one rounding. The output
-projection matmul is the only step with the arithmetic depth to produce it, and
-it is the only step running with default fidelity settings.
+The division cannot lose 9.5% and the scatter is one rounding, so the output
+projection matmul was the standing suspect. **L3c refuted that.**
+
+### L3c — each tail op replayed against float32 host — all clean
+
+Same inputs the module gives each op; `output_proj` additionally swept over math
+fidelity settings.
+
+| op | nuscenes_tiny PCC | nuscenes_base PCC |
+|---|---|---|
+| bfloat16 round-trip | 0.999999 | 0.999999 |
+| `ttnn.div` by count | 0.999999 | 0.999999 |
+| `ttnn.linear` default | 0.999982 | 0.999980 |
+| `ttnn.linear` LoFi | 0.999881 | 0.999902 |
+| `ttnn.linear` HiFi2 | 0.999977 | 0.999962 |
+| `ttnn.linear` HiFi4 | 0.999978 | 0.999962 |
+| `ttnn.linear` HiFi4 + fp32 dest acc | 0.999997 | 0.999980 |
+| `ttnn.add` residual | 0.999993 | 0.999993 |
+
+Row rel-err p50 for the default `linear` is 0.007, against the 0.095 the full SCA
+shows. The tail is not the loss, and raising math fidelity is not the fix — the
+whole default-to-HiFi4 span is 1.5e-5 of PCC.
+
+### L3d — capture the module's own inner-attention call — the bug
+
+| measurement | PCC |
+|---|---|
+| module `query` vs host replay | 0.999999 |
+| module `reference_points` vs host replay | 0.999993 |
+| module `value` vs host replay | 0.999999 |
+| module inner output vs reference inner | **0.978711** |
+| module inner output vs reference inner with SCA `output_proj` substituted | **0.999646** |
+| module final output vs reference | 0.995474 |
+
+The module receives the right inputs and returns the wrong output, and the wrong
+output is exactly what the reference produces when it projects with the SCA's
+matrix instead of its own. See **The defect, precisely** above.
+
+The SCA output PCC of 0.995474 is *higher* than its inner 0.978711 because the
+count division and the residual add dilute it.
 
 ### L4 — `TemporalSelfAttention` — cannot be affected, not run
 
@@ -227,29 +300,90 @@ config — three orders of magnitude below the observed gap.
 | carla_tiny | 0.997327 | 0.994968 | 0.995 | now fails by 3e-5 |
 | nuscenes_base | — (L5: 0.998461) | 0.997940 (L5: 0.998647) | 0.997 | passes either way |
 
-## Recommended next experiment
+## Fix — applied and verified
 
-Instrument `TTSpatialCrossAttention` to PCC each stage of its tail against the
-host reference at the same point: `slots` after the scatter, after
-`ttnn.div`, after `ttnn.linear(output_proj)`, and after the residual add. The
-prediction from L3b is that the loss is concentrated in the output projection.
+Give the inner attention its own parameter namespace. Two changes:
 
-Then the direct fix hypothesis: pass an explicit `compute_kernel_config` to that
-`ttnn.linear` with higher math fidelity and fp32 destination accumulation, and
-re-measure. If the SCA PCC moves from 0.9955 toward the hybrid's 0.9999, the
-encoder gap closes without touching the geometry and the thresholds can go **up**,
-not down.
+1. `preprocess_spatial_cross_attention_parameters` — the deformable attention's
+   parameters, `output_proj` included, are nested under
+   `parameters["deformable_attention"]` instead of being flattened next to the
+   SCA's `output_proj`. The line-315 guard goes away with the collision it was
+   working around. A two-level `_convert_sca_parameters_to_object` keeps the
+   nesting through both the fresh and the cached path.
+2. `TTSpatialCrossAttention.__init__` — passes `params.deformable_attention` to
+   `TTMSDeformableAttention` rather than the whole SCA namespace.
 
-Secondary, independent of the above: make TT `point_sampling_3d_to_2d` agree with
-the reference on `bev_mask`. `max_len` differing between host and device makes the
-spatial-path tensor shapes device-dependent, which also affects what the profile
-harness measures.
+Both the standalone SCA path and the layer/encoder path go through that same
+preprocessing function (`model_preprocessing.py:529-531`), so one fix covers both.
 
-## Do not re-baseline yet
+### After the fix
 
-The two failing thresholds are 1.4e-3 and 3e-5 under the line. Both are inside
-the error the SCA wrapper contributes. Re-baselining now would encode a wrapper
-deficiency as the expected accuracy of the model.
+| measurement | before | after |
+|---|---|---|
+| L3d module inner vs reference inner (tiny/rig) | 0.978711 | **0.999650** |
+| L3d same, with SCA `output_proj` substituted | 0.999646 | 0.978729 |
+| L3 SCA tiny/random | 0.996641 | **0.999983** |
+| L3 SCA tiny/rig | 0.995474 | **0.999909** |
+| L3 SCA base/random | 0.999327 | **0.999988** |
+| L3 SCA base/rig | 0.998743 | **0.999952** |
+| L3 row rel-err p50 (tiny/rig) | 0.09507 | **0.01274** |
+| L5 layer tiny/rig | 0.996338 | **0.999548** |
+| L5 layer base/rig | 0.998647 | **0.999719** |
+| L6 encoder nuscenes_tiny/rig, last layer | 0.994639 | **0.999347** |
+| L6 encoder carla_tiny/rig, last layer | 0.994968 | **0.999500** |
+
+The substitution check inverted exactly as predicted: what used to reproduce the
+module now reproduces nothing, and the correct reference now matches it.
+
+### Standing suite
+
+`tests/pcc/test_encoder.py` — 5 passed, all five parametrizations at 0.9993 or
+better against thresholds of 0.995–0.997:
+
+| config | threshold | PCC |
+|---|---|---|
+| nuscenes_base | 0.997 | 0.999498 |
+| nuscenes_tiny | 0.996 | 0.999298 |
+| carla_base | 0.997 | 0.999631 |
+| carla_tiny | 0.995 | 0.999444 |
+| nuscenes_base_fast | 0.996 | 0.999687 |
+
+`test_spatial_cross_attention.py`, `test_layer.py`,
+`test_ms_deformable_attention.py`, `test_temporal_self_attention.py`,
+`test_point_sampling_3d_2d.py` — 25 passed, 1 failed. The failure is
+`test_spatial_cross_attention.py` at bev 200x200: an out-of-memory on a
+2963668992 B DRAM buffer, which reproduces byte-for-byte with the fix stashed.
+Pre-existing and unrelated.
+
+### Why the standing tests missed it
+
+`tests/pcc/test_spatial_cross_attention.py` passes at 0.997–0.999 either way: it
+uses uniform-random reference points with 95% of `bev_mask` cleared, an operating
+point where the wrong projection costs less than the threshold allows. The
+deterministic rig moved the operating point far enough to expose it.
+
+`preprocess_temporal_self_attention_parameters` was checked for the same
+flatten-and-collide shape and is clean: neither the reference nor the TT temporal
+self-attention owns an `output_proj`, so its nested attention's projection is the
+only one in the namespace and is applied correctly.
+
+## Thresholds
+
+All five encoder parametrizations now sit at 0.9993 or better, 3e-3 above their
+thresholds. Raising them is defensible; nothing forces it.
+
+## Secondary, independent
+
+Make TT `point_sampling_3d_to_2d` agree with the reference on `bev_mask`.
+`max_len` differing between host and device (2472 vs 2484) makes the spatial-path
+tensor shapes device-dependent, which also affects what the profile harness
+measures.
+
+## Do not re-baseline
+
+Recorded because it was the standing recommendation before the cause was known:
+the two failing thresholds were 1.4e-3 and 3e-5 under the line, and the cause was
+a wrong matmul. Re-baselining would have made the bug the specification.
 
 ## Note found in passing
 
@@ -266,7 +400,7 @@ pytest models/experimental/bevformer/tests/pcc/test_geometry_divergence.py -sv -
 pytest models/experimental/bevformer/tests/pcc/test_geometry_divergence.py -sv -k spatial_cross
 pytest models/experimental/bevformer/tests/pcc/test_geometry_divergence.py -sv -k stage_isolation
 pytest models/experimental/bevformer/tests/pcc/test_geometry_divergence.py -sv -k layer_divergence
-pytest models/experimental/bevformer/tests/pcc/test_encoder_layerwise.py -sv
+pytest models/experimental/bevformer/tests/pcc/test_geometry_divergence.py -sv -k "encoder_divergence and nuscenes_tiny"
 ```
 
 Run the levels as separate invocations; several TT modules instantiated in one
