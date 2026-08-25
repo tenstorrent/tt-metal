@@ -20,10 +20,18 @@ void kernel_main() {
     constexpr uint32_t num_batched_heads = get_compile_time_arg_val(6);
     constexpr uint32_t Wt = get_compile_time_arg_val(7);
     constexpr uint32_t granularity = get_compile_time_arg_val(8);
-    constexpr uint32_t u_count = get_compile_time_arg_val(9);
+    constexpr uint32_t B = get_compile_time_arg_val(9);
+
+    const uint32_t batch_start_id = get_arg_val<uint32_t>(0);
+
+    // Input batch is round_up(B, 32); last tile may be short when B % 32 != 0.
+    constexpr uint32_t tiles_per_head = (B + 31) / 32;
+    constexpr uint32_t u_count_full = (B < 32 ? B : 32) / granularity;
+    constexpr uint32_t u_count_last = (B - (tiles_per_head - 1) * 32) / granularity;
 
     compute_kernel_hw_startup(in_cb, untilized_in_cb);
 
+    const uint32_t start_tile = batch_start_id / 32;
     for (uint32_t h = 0; h < num_batched_heads; ++h) {
         // Untilize input (standalone operation)
         compute_kernel_lib::untilize<
@@ -34,6 +42,8 @@ void kernel_main() {
             compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
 
+        const uint32_t tile_in_head = (start_tile + h) % tiles_per_head;
+        const uint32_t u_count = (tile_in_head + 1 == tiles_per_head) ? u_count_last : u_count_full;
         for (uint32_t u = 0; u < u_count; ++u) {
             compute_kernel_lib::untilize<Wt, cache_cb, untilized_cache_cb>(granularity);
 

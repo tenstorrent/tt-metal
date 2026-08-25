@@ -24,9 +24,13 @@ void kernel_main() {
     constexpr uint32_t cache_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t granularity = get_compile_time_arg_val(2);
-    constexpr uint32_t u_count = get_compile_time_arg_val(3);
-    constexpr auto cache_args = TensorAccessorArgs<4>();
+    constexpr auto cache_args = TensorAccessorArgs<3>();
     constexpr auto input_args = TensorAccessorArgs<cache_args.next_compile_time_args_offset()>();
+
+    // Input batch is round_up(B, 32); last tile may be short when B % 32 != 0.
+    const uint32_t tiles_per_head = (B + 31) / 32;
+    const uint32_t u_count_full = (B < 32 ? B : 32) / granularity;
+    const uint32_t u_count_last = (B - (tiles_per_head - 1) * 32) / granularity;
 
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
     const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
@@ -46,6 +50,7 @@ void kernel_main() {
 
     uint32_t cache_id = cache_start_id;
     uint32_t b = batch_start_id;
+    uint32_t start_tile = batch_start_id / 32;
 
     for (uint32_t h = 0; h < num_batched_heads; ++h) {
 #ifndef INPUT_SHARDED
@@ -60,6 +65,8 @@ void kernel_main() {
         noc.async_read_barrier();
         cb_input.push_back(Wt);
 #endif
+        const uint32_t tile_in_head = (start_tile + h) % tiles_per_head;
+        const uint32_t u_count = (tile_in_head + 1 == tiles_per_head) ? u_count_last : u_count_full;
         for (uint32_t u = 0; u < u_count; ++u) {
             cb_cache.reserve_back(Wt * granularity);
             uint32_t cache_l1_write_offset = 0;

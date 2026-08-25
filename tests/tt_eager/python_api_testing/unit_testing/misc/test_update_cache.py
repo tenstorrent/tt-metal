@@ -12,7 +12,7 @@ from models.common.utility_functions import skip_for_blackhole
 
 @pytest.mark.parametrize("head_dim", [64])
 @pytest.mark.parametrize("max_seq_len", [4096])
-@pytest.mark.parametrize("num_users", [8, 16, 32, 64])
+@pytest.mark.parametrize("num_users", [8, 16, 32, 34, 64])
 @pytest.mark.parametrize("num_heads", [1, 2, 8])
 @pytest.mark.parametrize("in_sharded", [True, False])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -120,7 +120,7 @@ class TestUpdateCache:
         cache_dtype,
         device,
     ):
-        if num_users > 32 or (num_users + batch_offset) > 32:
+        if batch_offset != 0 and num_users + batch_offset > 32:
             pytest.skip("Batch offset is only used when num_users < 32 and batch_offset + num_users <= 32")
         if cache_dtype != ttnn.bfloat16:
             pytest.skip(
@@ -416,7 +416,7 @@ class TestUpdateCacheFP32:
         cache_dtype,
         device,
     ):
-        if num_users > 32 or (num_users + batch_offset) > 32:
+        if batch_offset != 0 and num_users + batch_offset > 32:
             pytest.skip("Batch offset is only used when num_users < 32 and batch_offset + num_users <= 32")
         input_shape = [num_users, num_heads, 1, head_dim]
         cache_shape = [num_users, num_heads, max_seq_len, head_dim]
