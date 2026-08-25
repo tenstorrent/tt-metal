@@ -82,13 +82,9 @@ SENTENCES = {
 
 
 # --- WER corpus -----------------------------------------------------------------------------
-# Long sentences, where the model is dependable: short utterances are unusable as a gate, scoring
-# 0.000 on one seed and 0.667 on the next. Same story in every language, so the constraints are the
-# same as English's: no digits (the ASR renumbers them), nothing it respells, ordinary prose, and
-# Arabic stays undiacritized because that is what the recogniser emits.
-#
-# NOT REVIEWED BY NATIVE SPEAKERS. Good enough to ask "did the audio say this text", which is all
-# WER measures; not good enough to judge per-language quality.
+# Long sentences: short utterances swing too widely between seeds to gate on. No digits, since the
+# cleaner expands them and the ASR writes them back as numerals; nothing the ASR respells; ordinary
+# prose. Arabic is undiacritized, matching what the recogniser emits.
 WER_SENTENCES = {
     "en": [
         "The old map showed three islands that no sailor had ever found, and nobody wanted to be "

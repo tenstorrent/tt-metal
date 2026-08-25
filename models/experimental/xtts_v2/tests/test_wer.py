@@ -15,12 +15,10 @@ The model free-runs, so every draw realises the sentence differently and there i
 transcript to diff against. WER is a metric on (audio, source text), so each run is scored against
 the text it was given — invariant to how that particular draw happened to say it.
 
-The voice comes from the checkpoint's own speakers_xtts.pth, one entry per built-in studio speaker,
-rather than from a reference clip. That is not just convenience: conditioning on a synthetic
-waveform puts the speaker encoder outside its training distribution, and the decoder can answer by
-emitting non-speech for a whole utterance, or by running on past the end of the sentence. Built-in
-latents avoid both. It also means this test does no DSP and no Block 1 or 2 work: the voice arrives
-as tensors, so a failure here is prefill, decode or the vocoder.
+The voice comes from the checkpoint's own speakers_xtts.pth rather than a reference clip: a
+synthetic waveform puts the speaker encoder outside its training distribution and the decoder
+answers with non-speech. Latents also mean no DSP and no Block 1 or 2 work here, so a failure is
+prefill, decode or the vocoder.
 
 One case per supported language, each gated on its own, so a failure names the language instead of
 burying it in a pooled average. English sweeps every speaker: that axis is language-independent —
@@ -29,9 +27,8 @@ the other languages take a handful of speakers spread through d-vector space to 
 noise. Sweeping all of them per language would multiply the runtime by nine and measure the same
 axis thirteen times.
 
-The slowest test in the suite. Needs the Whisper weights (cached or downloadable). The corpus lives
-in language_corpus.WER_SENTENCES and has not been reviewed by native speakers — enough to ask "did
-the audio say this text", not enough to judge a language's quality.
+The slowest test in the suite. Needs the Whisper weights (cached or downloadable), and the corpus
+from language_corpus.WER_SENTENCES.
 
 Run:
     pytest -svv models/experimental/xtts_v2/tests/test_wer.py
@@ -60,12 +57,9 @@ SPEAKERS_PER_LANG = 6
 # less well, through no fault of the device.
 #
 # ceiling  -- ~3x the language's baseline, with a floor so one unlucky draw cannot breach a
-#             near-perfect language. English is tighter, being swept over every speaker.
-# collapse -- past this a run did not say the sentence. Tiered rather than fitted per language: the
-#             worst of a few dozen draws is itself too noisy to fit to.
-#
-# hi is a model limitation rather than a device one, so its ceiling gates against getting worse
-# instead of asserting the quality is good. The bringup docs carry the matrix these come from.
+#             near-perfect language. FULL_SWEEP_LANG is tighter, running far more draws.
+# collapse -- past this a run did not say the sentence. Tiered, not fitted per language: the worst
+#             of a few dozen draws is too noisy to fit to.
 LIMITS = {
     "en": (0.02, 0.30),
     "es": (0.03, 0.30),
@@ -90,9 +84,8 @@ MAX_DEGENERATE = 2
 # test_all_languages_smoke compares audio length against code count, which stay consistent precisely
 # because the model generated the extra codes.
 OVER_RUN_SECONDS = 0.5  # a natural tail is a fraction of this; a run-on is several times it
-# One bound for most languages: at this many runs a language that does over-run most often shows
-# none, so a tighter bound per language would be fitting the coin flip. FULL_SWEEP_LANG is the
-# exception on evidence -- ten times the runs, none of them over-running.
+# One bound for most languages: at this few runs per language the counts cannot separate one rate
+# from another. FULL_SWEEP_LANG runs far more, so it carries a tighter bound.
 MAX_OVER_RUN = 6
 MAX_OVER_RUN_FULL_SWEEP = 3
 
@@ -253,8 +246,8 @@ def rig():
 
 
 def test_wer_metric():
-    """The measuring instrument, checked before it is used to judge anything. Standard WER, so an
-    over-long transcript can score above 1.0."""
+    """Standard WER, checked before it is used to judge anything. An over-long transcript can
+    score above 1.0."""
     cases = (
         ("the cat sat down", "the cat sat down", 0.0),
         ("the cat sat down", "the dog sat down", 0.25),  # substitution
@@ -274,7 +267,7 @@ def test_wer_metric():
         ("मुझे यह किताब बहुत पसंद है", "मुझे यह किताब बहुत अच्छी है", 1 / 6),
         ("سوق الشتاء مبكرا اليوم", "سوق الصيف مبكرا اليوم", 0.25),  # Arabic, undiacritized
         # Optional orthography must fold: these are the SAME words spelled two legal ways, and the
-        # ASR picks its own. Scoring them as errors is what made Devanagari look broken.
+        # ASR picks its own.
         ("तेज़ चाय", "तेज चाय", 0.0),  # nukta
         ("आँच पर", "आंच पर", 0.0),  # chandrabindu vs anusvara
         ("ज़ोर से", "जोर से", 0.0),

@@ -2,11 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Multilingual text cleaning (coqui_cleaners.py, vendored) and the language gate in frontend.py.
+"""Multilingual text cleaning (reference/coqui/cleaners.py) and the language gate in frontend.py.
 
-The test VECTORS below are coqui's own, lifted from the self-tests in the file the cleaners came
-from — the point of vendoring rather than transcribing is that upstream's expectations come with
-it. Cases upstream had already commented out as broken are left out.
+The test VECTORS below are coqui's own, lifted from the self-tests in the file the cleaners were
+vendored from. Cases upstream had already commented out as broken are left out.
 
 Czech is absent on purpose: upstream asks num2words for "cz", which does not exist, and there are
 no Czech ordinals in num2words either. See frontend.CLEANED_LANGUAGES.
