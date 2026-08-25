@@ -76,7 +76,7 @@ sfpi_inline sfpi::vFloat _calculate_sqrt_body_(const sfpi::vFloat x) {
         }
     }
     if constexpr (!FAST_APPROX) {
-        v_if(x < 0.0F) {
+        v_if(x < 0.0F && sfpi::as<sfpi::vUInt>(x) != 0x80000000u) {
             y = std::numeric_limits<float>::quiet_NaN();  // returns nan for fp32 and inf for bf16
         }
         v_endif;
