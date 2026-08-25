@@ -69,6 +69,7 @@ def run_test_matmul_in1_dram_sharded(
     out_dtype,
     function_level_defaults,
     num_workers_per_dram_bank=1,
+    N_padded_override=None,
     atol_factor_override=None,
     rtol_factor_override=None,
     pcc_threshold_override=None,
@@ -80,7 +81,9 @@ def run_test_matmul_in1_dram_sharded(
 
     # Multi-reader kernels split each bank's width shard evenly. Pad the storage
     # layout to banks * readers while keeping the tensor's logical N unchanged.
-    N_padded = pad_to_dram_banks(N, num_banks * num_workers_per_dram_bank)
+    N_padded = (
+        pad_to_dram_banks(N, num_banks * num_workers_per_dram_bank) if N_padded_override is None else N_padded_override
+    )
 
     in0_shape = [1, 1, M, K]
     in1_shape = [1, 1, K, N]
@@ -304,6 +307,33 @@ def test_matmul_in1_dram_sharded_worker_counts(
         rtol_factor_override=68.5 if in1_dtype == ttnn.bfloat4_b else None,
         pcc_threshold_override=0.99 if in1_dtype == ttnn.bfloat4_b else None,
     )
+
+
+def test_matmul_in1_dram_sharded_two_workers_rejects_oversized_storage(device, function_level_defaults, expect_error):
+    if not is_blackhole():
+        pytest.skip("Multiple DRAM-sharded matmul workers per bank are currently Blackhole-only")
+
+    with expect_error(RuntimeError, "requires weight shard width"):
+        run_test_matmul_in1_dram_sharded(
+            device=device,
+            in0_sharded=True,
+            out_sharded=True,
+            in1_in_dram=True,
+            M=32,
+            K=2048,
+            N=288,
+            fidelity=ttnn.MathFidelity.HiFi2,
+            packer_l1_acc=True,
+            has_bias=False,
+            activation=None,
+            grid_size=(1, 1),
+            in0_dtype=ttnn.bfloat16,
+            in1_dtype=ttnn.bfloat8_b,
+            out_dtype=ttnn.bfloat16,
+            function_level_defaults=function_level_defaults,
+            num_workers_per_dram_bank=2,
+            N_padded_override=2048,
+        )
 
 
 @pytest.mark.parametrize(

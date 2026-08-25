@@ -11,6 +11,7 @@
 #include "tt-metalium/allocator.hpp"
 #include "tt-metalium/experimental/device.hpp"
 #include "tt-metalium/buffer_types.hpp"
+#include "tt-metalium/kernel_types.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"

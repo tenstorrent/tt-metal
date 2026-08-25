@@ -160,6 +160,13 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
 
     uint32_t per_core_N_compute = div_up(N, num_workers);
     uint32_t per_core_N_in1_sender = per_core_N_compute;
+    TT_FATAL(
+        workers_per_bank == 1 || in1_shard_width_tiles == workers_per_bank * per_core_N_in1_sender,
+        "Two-reader DRAM-sharded matmul requires weight shard width {} tiles to equal {} workers times {} reader "
+        "tiles",
+        in1_shard_width_tiles,
+        workers_per_bank,
+        per_core_N_in1_sender);
 
     auto subblock_hw = operations::matmul::bmm_op_utils::get_matmul_subblock_params(
         per_core_M, per_core_N_compute, false, false, fp32_dest_acc_en);
