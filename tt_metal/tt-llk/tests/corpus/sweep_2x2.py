@@ -616,6 +616,26 @@ KNOBS = {
     # 36788).  roundingops / lcm-fresh / recip = measured honest
     # no-fire (knob-attribution byte-identical, laneGJ evidence).
     "window-pairing-stride": "-mtt-tensix-optimize-window-pairing-stride",
+    # GQ (record-hoist-peel): exec-while-record first-trip peel — rescues
+    # exactly the doomed-hoist mirror refusal
+    # noexec-rerecord-dststore-composition-unaudited (Dst-store re-record
+    # window whose preheader sits inside an outer loop: the recip-fresh
+    # face-loop shape, 4 exec-record re-records per tile).  The loop's
+    # proven first trip (capture flipped to exec-while-record + payload +
+    # sibling launches + typed Dst steps) moves verbatim to the dedicated
+    # preheader, every former in-body record site becomes one playback
+    # launch, and the proven-constant counter re-initializes one step
+    # later.  The still-no-exec hazard shape (ES/FJ silicon hang class)
+    # is never formed: exec-while-record re-record with launches between
+    # re-ingestions is the fleet-witnessed composition, and the
+    # dst-autoincr group guard's refuted class is keyed TTREPLAY load=1
+    # exec=0.  Composes with the launch-loop unroll: recip's per-tile
+    # stream 4 x (record + 16 payload + 3 launches) + loop control ->
+    # 1 exec-record + 15 straight-line launches (rvtt-cost.md
+    # "EXEC-WHILE-RECORD FIRST-TRIP PEEL").  Target row: recip;
+    # lcm-fresh keeps its FZ downstream-fallback refusal byte-identically
+    # (measured honest no-fire), gcd-fresh inert.
+    "record-hoist-peel": "-mtt-tensix-optimize-record-hoist-peel",
 }
 
 
@@ -712,6 +732,11 @@ KNOB_MODES = {
     # GJ window-pairing-stride remains a default-off on-plus knob at pin-28;
     # promotion requires an R9 witness and ON-vs-ON attribution ceremony.
     "window-pairing-stride": "on-plus",
+    # GQ record-hoist-peel: default-off on-plus booking knob — the peel
+    # rescues a record-hoist refusal, so its shape only exists on the
+    # reviewed-ON pipeline (record-hoist is in the ON set); the booking
+    # A/B is (ON + flag) vs plain ON.
+    "record-hoist-peel": "on-plus",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
