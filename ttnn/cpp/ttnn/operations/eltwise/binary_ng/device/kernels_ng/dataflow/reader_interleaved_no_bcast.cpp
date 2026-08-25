@@ -33,6 +33,11 @@ void kernel_main() {
     const uint32_t src_num_tiles_b = get_arg_val<uint32_t>(20);
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
+
+    // REPRO ONLY (#53896): unconditionally-false device-side assert. Trips on every core,
+    // halting ncrisc at the ebreak so tt-triage can be run against the hung device.
+    ASSERT(src_num_tiles == 0xDEADBEEF);
+
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
 
     constexpr auto src_args = TensorAccessorArgs<0, 0>();
