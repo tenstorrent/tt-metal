@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""reduce_scatter — self-contained Python CCL op (generic_op + MeshProgramDescriptor).
+"""reduce_scatter — element-wise sum across a MeshDevice line, scattered.
 
-Registry contract: the golden/eval harness reads SUPPORTED / EXCLUSIONS /
-INPUT_TAGGERS at the PACKAGE level, so they are re-exported here alongside the op.
+The registry contract (SUPPORTED / EXCLUSIONS / INPUT_TAGGERS) is re-exported at
+the package level alongside the op — the golden/eval harness reads it from here.
 """
 
 from .reduce_scatter import EXCLUSIONS, INPUT_TAGGERS, SUPPORTED, reduce_scatter
