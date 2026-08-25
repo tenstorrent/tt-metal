@@ -127,7 +127,7 @@ def _perf_param_per_op(
         extra_env = {"TT_DS_CAPTURED_LAYER": str(captured_layer), "TT_DS_CAPTURED_COL": str(captured_col)}
     else:
         extra_env = {}
-    command = f"pytest {worker_dir}/{worker_file}::{worker_test} -k '{k_filter}'"
+    command = f"pytest {worker_dir}/{worker_file}::{worker_test} -k '{k_filter}' --wrapper-invocation"
     return (
         command,
         expected_per_op,

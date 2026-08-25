@@ -19,10 +19,10 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_m
 
 # `and pad0`/`and pad50` pins the padding parametrize so each command selects
 # exactly one production TorusXY case.
-_CMD_8X4_pad0 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad0'"
-_CMD_8X4_pad50 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad50'"
-_CMD_8X1 = f"pytest {_TEST_PATH} -k 'perf-host-64 and torus-y-8x1 and pad0'"
-_CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and fabric2d-mesh-2x4 and pad0'"
+_CMD_8X4_pad0 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad0' --wrapper-invocation"
+_CMD_8X4_pad50 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad50' --wrapper-invocation"
+_CMD_8X1 = f"pytest {_TEST_PATH} -k 'perf-host-64 and torus-y-8x1 and pad0' --wrapper-invocation"
+_CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and fabric2d-mesh-2x4 and pad0' --wrapper-invocation"
 
 
 def _require_certified_torus_xy():
@@ -34,8 +34,9 @@ def _require_certified_torus_xy():
 def test_deepseek_v3_moe_perf_loudbox():
     """Run the existing 8x1 + 2x4 proxies and retain their 8x4 approximation signal.
 
-    The 8x1 SP proxy is migrated from Fabric1d Linear to Fabric2d TorusY; the 2x4 TP proxy is
-    migrated to unwrapped Fabric2d because its two-wide SP dimension cannot form a useful ring.
+    The 8x1 SP proxy runs Fabric2d TorusY; the 2x4 TP proxy runs unwrapped Fabric2d because its
+    two-wide SP dimension cannot form a useful ring. approximate_8x4_perf takes every non-TP op
+    from the 8x1 slot, so that slot must stay an SP=8 run.
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,

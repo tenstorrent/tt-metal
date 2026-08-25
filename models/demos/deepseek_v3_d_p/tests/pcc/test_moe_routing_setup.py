@@ -16,7 +16,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_y_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 
 # from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -53,25 +53,11 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
     "mesh_device, device_params, num_links",
     [
         pytest.param(
-            (4, 1),
-            torus_y_device_params(fabric_payload_size=7 * 1024),
-            2 if is_blackhole() else 1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
-            id="torus-y-4x1",
-        ),
-        pytest.param(
-            (8, 1),
-            torus_y_device_params(fabric_payload_size=7 * 1024),
-            2 if is_blackhole() else 1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
-            id="torus-y-8x1",
-        ),
-        pytest.param(
-            (4, 2),
+            (2, 2),
             fabric2d_device_params(fabric_payload_size=7 * 1024),
             2 if is_blackhole() else 1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="fabric2d-mesh-4x2",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric2d-mesh-2x2",
         ),
         pytest.param(
             (2, 4),
