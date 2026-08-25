@@ -247,6 +247,14 @@ PERF_TEST_SCHEMAS = {
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
     },
+    "perf_fused": {
+        "version": 1,
+        "columns": [
+            "loop_factor",
+            "marker",
+        ],
+        "aliases": {},
+    },
     "perf_math_matmul": {
         "version": 3,
         "columns": [
@@ -839,6 +847,14 @@ PERF_TEST_SCHEMAS_QSR = {
             "unpacker_engine_sel",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+    },
+    "perf_fused_quasar": {
+        "version": 1,
+        "columns": [
+            "loop_factor",
+            "marker",
+        ],
+        "aliases": {},
     },
     "perf_matmul_quasar": {
         "version": 3,
