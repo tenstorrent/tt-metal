@@ -5302,7 +5302,13 @@ exit $RC
                     continue
                 base_pct = 100.0 * (base_pair[1] - base_pair[0]) / base_pair[0]
                 drift = abs(r[key] - base_pct)
-                if base_pct < 0 <= r[key]:  # win-sign flip (causal or vs-hand)
+                base_band = self._band(base_pct)
+                current_band = self._band(r[key])
+                if base_band == "WIN" and current_band == "LOSS":
+                    # A sign crossing is only a WIN→LOSS regression when it
+                    # also crosses both documented ±0.5% class boundaries.
+                    # Small negative PARITY values must not become false REDs
+                    # merely because the current measurement is nonnegative.
                     tag = "YELLOW" if demote else "RED"
                     verdicts.append(
                         f"{name} WIN→LOSS FLIP {base_pct:+.2f}%→{r[key]:+.2f}%: {tag}"
@@ -5311,11 +5317,11 @@ exit $RC
                         rag = "RED"
                     elif rag == "GREEN":
                         rag = "YELLOW"
-                elif base_pct <= -0.5 and r[key] > -0.5:
+                elif base_band == "WIN" and current_band == "PARITY":
                     # Finding sweep_2x2.py:1259 (fixture C): a real win
-                    # (class band <= -0.5%) eroding into the parity band is a
+                    # (class band < -0.5%) eroding into the parity band is a
                     # regression, not drift — RED by default; a full flip to
-                    # >= 0 is caught above.
+                    # LOSS is caught above.
                     tag = "YELLOW" if (allow_win_to_parity or demote) else "RED"
                     verdicts.append(
                         f"{name} WIN→PARITY {base_pct:+.2f}%→{r[key]:+.2f}%: {tag}"

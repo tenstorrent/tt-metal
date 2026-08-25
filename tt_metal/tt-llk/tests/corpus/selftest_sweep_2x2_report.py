@@ -28,6 +28,8 @@ Round-2 regression cases (each is a verifier reproduction recipe):
      selector set and rejects partial/extra/duplicate/status/key failures;
  14. ops-load validation: a perf selector without its correctness selector
      fails loudly.
+ 15. class transitions use the documented ±0.5% bands: a raw sign crossing
+     inside PARITY stays GREEN, while true WIN→PARITY/WIN→LOSS stay gated.
 
 Run standalone or from the nightly/weekly wrappers; exits nonzero on any
 failure so a broken gate can never bless a sweep.
@@ -54,6 +56,8 @@ fix__refop\tbh\tp150\tdevice_cycles\tTILE_LOOP_MATH_ISOLATE_PER_TILE\trefop:hand
 fix__refop\tbh\tp150\tdevice_cycles\tTILE_LOOP_MATH_ISOLATE_PER_TILE\trefop:hand_on\t50.0\tmeasured\trefusal\tselftest\tfixture
 fix__smallwin\tbh\tp150\tdevice_cycles\tTILE_LOOP_MATH_ISOLATE_PER_TILE\tsmallwin:sem_off\t100.0\tmeasured\twin\tselftest\tfixture
 fix__smallwin\tbh\tp150\tdevice_cycles\tTILE_LOOP_MATH_ISOLATE_PER_TILE\tsmallwin:sem_on\t95.0\tmeasured\twin\tselftest\tfixture
+fix__parityop\tbh\tp150\tdevice_cycles\tTILE_LOOP_MATH_ISOLATE_PER_TILE\tparityop:sem_off\t100.0\tmeasured\tparity\tselftest\tfixture
+fix__parityop\tbh\tp150\tdevice_cycles\tTILE_LOOP_MATH_ISOLATE_PER_TILE\tparityop:sem_on\t99.6\tmeasured\tparity\tselftest\tfixture
 fix__lossop\tbh\tp150\tdevice_cycles\tTILE_LOOP_MATH_ISOLATE_PER_TILE\tlossop:sem_off\t100.0\tmeasured\tloss\tselftest\tfixture
 fix__lossop\tbh\tp150\tdevice_cycles\tTILE_LOOP_MATH_ISOLATE_PER_TILE\tlossop:sem_on\t110.0\tmeasured\tloss\tselftest\tfixture
 fix__shared\tbh\tp150\tdevice_cycles\tTILE_LOOP_MATH_ISOLATE_PER_TILE\ttwinop-fresh:sem_off\t100.0\tmeasured\tloss\tselftest\tGE-F1 fixture: fresh twin, measured
@@ -375,6 +379,41 @@ def main():
         rep,
         "WIN→PARITY",
     )
+
+    # 9c. Raw sign crossings wholly inside the parity band are not class
+    #     transitions: baseline -0.4% -> current 0.0% stays PARITY→PARITY.
+    rag, rep = run_report(
+        tmp,
+        "case9c",
+        [
+            make_result(
+                "parityop",
+                "fix__parityop",
+                {"sem_off": 100.0, "sem_on": 100.0},
+                causal_pct=0.0,
+            ),
+        ],
+    )
+    check("parity sign crossing stays GREEN", "GREEN", rag, rep)
+    if "WIN→" in rep:
+        failures.append("parity sign crossing has no WIN transition")
+        print(rep)
+
+    # 9d. A true baseline WIN crossing both class boundaries remains a
+    #     WIN→LOSS RED, distinct from the WIN→PARITY fixture above.
+    rag, rep = run_report(
+        tmp,
+        "case9d",
+        [
+            make_result(
+                "smallwin",
+                "fix__smallwin",
+                {"sem_off": 100.0, "sem_on": 101.0},
+                causal_pct=1.0,
+            ),
+        ],
+    )
+    check("true win→loss remains RED", "RED", rag, rep, "WIN→LOSS FLIP")
 
     # 10. Verifier fixture D (bounded to isolate the loss-growth axis from
     #     the abs-cycle axis): baseline loss +10% growing to +16% (growth
