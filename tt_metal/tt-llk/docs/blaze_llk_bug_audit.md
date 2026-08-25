@@ -18,7 +18,7 @@ PRs by state: **open** — 53130, 53361, 52720, 52646 (draft). **merged** — ev
 
 | §  | Category            | Count | Of which                                                                 |
 |----|---------------------|-------|--------------------------------------------------------------------------|
-| 1  | Redundant open PRs  | **4** | 3 to drop/fold (52646, the 53130↔53361 sampling dup, 52720's compressed cpp) + 1 orphan golden generator |
+| 1  | Redundancy in open PRs | **1 + 3** | 1 fully redundant PR (52646, droppable) + 3 partial overlaps (53130↔53361 sampling, 52720↔53130 compressed cpp, 53361 orphan golden generator) |
 | 2  | Functional bugs     | **9** | 5 re-confirm the report's defects (C1, C2, C4, C5, C6) + 4 new (`sum_reduce_scalar`, `sdpa_reduce_row` Sum, `softmax_k` fp32, `recip_init`) |
 | 3  | Missing tests       | **6** | incl. 4 orphan LLKs with live ttnn callers; + 3 minor gaps                |
 | 4  | Infra problems      | **8** | 1 merge-collision, 1 test that masks a bug, 2 `skip` that should be `xfail` |
@@ -27,7 +27,11 @@ PRs by state: **open** — 53130, 53361, 52720, 52646 (draft). **merged** — ev
 
 ---
 
-## 1. Redundant open PRs
+## 1. Redundancy in open PRs
+
+One PR is fully redundant (52646); the rest are partial overlaps — a shared test case or
+helper, not a whole duplicated PR.
+
 
 - **53130 and 53361 duplicate the sampling test.** Both add/edit `test_sfpu_sampling.py`
   **and** `sfpu_sampling_test.cpp`, and both add a byte-identical `SAMPLING_PRGM0_HAZARD`
