@@ -41,8 +41,8 @@ _STAGE_TIMING = decode_tree.ENABLED
 class _Handle(NamedTuple):
     """What stage_time_start hands to stage_time_end: the clock, the tree node, and the label.
 
-    The label rides along rather than being passed again at the end, so the [stage-timing] line and
-    the tree row are the same string by construction and cannot drift apart.
+    The label is set at START and rides along to the end, so a span that never closes can still
+    name itself in the tree -- anonymous orphans are useless exactly when a leak needs finding.
     """
 
     t0: float
@@ -69,7 +69,6 @@ def stage_timer(mesh_device, label: str, *, category: str | None = None, root: b
     ttnn.synchronize_device(mesh_device)
     ms = (time.perf_counter() - t0) * 1000
     decode_tree.close_span(span, ms)
-    logger.info(f"[stage-timing] {label:34s} {ms:9.1f} ms")
 
 
 def stage_time_start(mesh_device, label: str, *, category: str | None = None):
@@ -91,7 +90,6 @@ def stage_time_end(mesh_device, handle):
     ttnn.synchronize_device(mesh_device)
     ms = (time.perf_counter() - handle.t0) * 1000
     decode_tree.close_span(handle.span, ms)
-    logger.info(f"[stage-timing] {handle.label:34s} {ms:9.1f} ms")
 
 
 def deep_prof(mesh_device, key: str, *, category: str | None = None):
@@ -1370,10 +1368,6 @@ class DiffVAEStage5(Module):
             x = block(x, context, modulation, grid, bands, band_tables)
             stage_time_end(self.mesh_device, _bt0)
             log_dram(self.mesh_device, f"stage5 block {index}")
-        if _STAGE_TIMING and _BLOCK_PROF:
-            for key, ms in sorted({**_BLOCK_PROF, **SP_W_PROF}.items(), key=lambda kv: -kv[1]):
-                logger.info(f"[block-prof] {key:20s} {ms:9.1f} ms  (all {len(self.diff_blocks)} blocks)")
-
         # The tail runs per band too: its output is a quarter the width of the volume it comes
         # from, so joining after the projection rather than before is the cheap order.
         tail = []

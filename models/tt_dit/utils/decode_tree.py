@@ -55,7 +55,8 @@ class Node:
     @property
     def self_ms(self) -> float:
         """Time here that is not in a child. kv-allgather runs inside attention, so charging both in
-        full counts those ms twice -- which is what the flat [block-prof] table does today."""
+        full would count those ms twice -- which is what the flat [block-prof] table this replaced
+        did, printing a span and the span inside it as peers."""
         return max(self.incl_ms - sum(c.incl_ms for c in self.children), 0.0)
 
     def __repr__(self):  # debugging a live stack is the main use

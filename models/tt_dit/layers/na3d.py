@@ -29,6 +29,7 @@ import time
 from dataclasses import dataclass
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -1010,9 +1011,16 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     _gna = os.environ.get("DIFFVAE_GNA") == "1"
     op_block = None
     if os.environ.get("DIFFVAE_BLOCK") == "1" and os.environ.get("DIFFVAE_SP_FUSED", "0") == "1":
+        logger.info(f"""DIFFVAE_BLOCK={os.environ.get("DIFFVAE_BLOCK")}""")
+        logger.info(f"""DIFFVAE_SP_FUSED={os.environ.get("DIFFVAE_SP_FUSED", "0")}""")
+
         _blk = _pick_block(t_full, h_full, w_local, gna=_gna)
         if _blk is not None:
             op_block = (_blk[2], _blk[1], _blk[0])  # op-order (w_local, H, T) block dims = (bw, bh, bt)
+        logger.info(
+            f"NA3D block config: _blk={_blk}, op_block={op_block}, gna={_gna}, "
+            f"t_full={t_full}, h_full={h_full}, w_local={w_local}"
+        )
 
     # Flatten W-outer so a contiguous sequence is a W-band; heads merged then re-split so the spatial
     # reorder is one 5D permute. ``w_`` is this chip's W extent (K/V and Q are the same shard here).
