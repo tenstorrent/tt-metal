@@ -15,10 +15,12 @@ report below:
 **`PORTED`** — `LayerNormMultiCoreProgramFactory` (the interleaved / non-sharded path) and the ten
 kernel entry points it can select are on `ProgramSpecFactoryConcept`.
 
-`LayerNormShardedProgramFactory` is **not** ported in this pass and stays on
-`ProgramDescriptorFactoryConcept`. The two factories share no kernel source, so the `program_factory_t`
-variant is valid with one factory on each concept and the op builds and runs throughout. What the
-sharded pass still has to do is recorded under [Open items for downstream](#open-items-for-downstream).
+`LayerNormShardedProgramFactory` was **not** ported in this pass and was left on
+`ProgramDescriptorFactoryConcept` at the end of it. The two factories share no kernel source, so the
+`program_factory_t` variant is valid with one factory on each concept and the op built and ran
+throughout. What Part 1 handed to the sharded pass is recorded under
+[Open items for downstream](#open-items-for-downstream); Part 2 below is that pass, and both
+factories are on `ProgramSpecFactoryConcept` in the final tree.
 
 **No-regression result.** The confirmed test set gives **2236 passed, 22 skipped** both before and
 after the port, with an identical pass/skip split per file. One behavior change falls outside that
@@ -49,8 +51,9 @@ port.
 - **`default_core_range` kept.** The recipe's pybind exception is narrow: it removes bindings whose
   symbol vanishes. `default_core_range` still exists (the factory body calls it to pick the
   work-split grid), so its nanobind compiles and stays.
-- **`LayerNormShardedProgramFactory::create_descriptor` and its nanobind are untouched**, because
-  that factory is not ported.
+- **`LayerNormShardedProgramFactory::create_descriptor` and its nanobind were untouched by this
+  part**, since Part 1 covers only the multi-core factory. Part 2 ported that factory and removed
+  both, so neither survives in the final tree.
 - **Custom `compute_program_hash`:** none. The device operation defines no override and no backdoor
   `attribute_values` / `to_hash`; the `compute_program_hash` nanobind at
   [layernorm_nanobind.cpp:252-263](layernorm_nanobind.cpp#L252-L263) forwards to the framework
@@ -320,11 +323,15 @@ whitelist's own mapping for this call is `DataflowBuffer::get_tile_address`).
 
 ## Open items for downstream
 
-### The sharded factory is not ported
+### The sharded factory was handed over, and Part 2 picked it up
 
-`LayerNormShardedProgramFactory` remains on `ProgramDescriptorFactoryConcept`. It was left for a
-later pass because this op is broad rather than deep and one factory is the recipe's atomic unit,
-not because anything blocks it.
+*Closed. Kept as the record of what Part 1 handed across; Part 2 below is the outcome.*
+
+At the end of Part 1, `LayerNormShardedProgramFactory` was still on
+`ProgramDescriptorFactoryConcept`. It was left for a later pass because this op is broad rather than
+deep and one factory is the recipe's atomic unit, not because anything blocked it. Part 2 ported it,
+so both factories are on `ProgramSpecFactoryConcept` today and the op has no `create_descriptor`
+anywhere.
 
 **An earlier revision of this report said audit Question 2 blocked it. That is withdrawn.** The
 audit has since retracted Question 2: a buffer-backed CB does not take a per-core SRAM allocation at
@@ -332,13 +339,13 @@ all, so `c_17`'s address is the output tensor's own address and the storage half
 reserves nothing. The port can bind `c_17` on the worker nodes alone and needs nothing on the
 storage nodes. What the finding became instead is a **binding reclassification**: the sharded
 `output`, reached through `c_17` under POST without `skip_write_back`, is **Case 2** rather than
-clean — the writer takes only that binding's base address and does its own remote NOC writes. The
-next porter binds the output as a `TensorParameter`, pulls the base with `get_bank_base_address`,
-and leaves the write-back arithmetic alone.
+clean — the writer takes only that binding's base address and does its own remote NOC writes, so it
+needed binding as a `TensorParameter` with the write-back arithmetic left alone. Part 2 did that
+([device/layernorm_op_multi_core_sharded.cpp:375](device/layernorm_op_multi_core_sharded.cpp#L375)).
 
-Everything else the sharded factory needs is already scoped by the audit and brief: five
+Everything else the sharded factory needed was already scoped by the audit and brief: five
 `allow_instance_multi_binding` buffers, five runtime-vararg sites with the `get_arg_addr` pointer
-wrinkle, three semaphores, and the borrowed-memory list.
+wrinkle, three semaphores, and the borrowed-memory list. See Part 2 for how each landed.
 
 ### Shared kernel touches
 
