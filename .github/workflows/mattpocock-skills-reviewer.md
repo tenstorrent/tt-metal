@@ -80,12 +80,6 @@ if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft =
     types:
     - opened
     - ready_for_review
-  slash_command:
-    events:
-    - pull_request_comment
-    - pull_request_review_comment
-    name: matt
-    strategy: centralized
 permissions:
   contents: read
   copilot-requests: write

@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import shlex
 import subprocess
 import tempfile
 from collections import namedtuple
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -146,12 +148,19 @@ def print_faces(operand1, tile_shape=None):
 
 
 def run_shell_command(
-    command: str, cwd: str | None = None, stdin_data: str | bytes = None, text=True
+    command: str | Sequence[str],
+    cwd: str | None = None,
+    stdin_data: str | bytes = None,
+    text=True,
 ):
+    """Run a command. A string uses ``shell=True`` (legacy). A sequence is
+    executed with ``shell=False`` so path arguments are not re-split.
+    """
+    use_shell = isinstance(command, str)
     result = subprocess.run(
         command,
         cwd=cwd,
-        shell=True,
+        shell=use_shell,
         text=text,
         input=stdin_data,
         stdout=subprocess.DEVNULL,
@@ -159,7 +168,12 @@ def run_shell_command(
     )
 
     if result.returncode != 0:
-        raise RuntimeError(f"Command:\n{command}\n\nCommand's stderr:\n{result.stderr}")
+        pretty = (
+            command
+            if use_shell
+            else " ".join(shlex.quote(str(part)) for part in command)
+        )
+        raise RuntimeError(f"Command:\n{pretty}\n\nCommand's stderr:\n{result.stderr}")
     return result
 
 
