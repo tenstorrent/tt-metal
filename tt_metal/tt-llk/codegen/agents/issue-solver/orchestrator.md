@@ -154,7 +154,7 @@ execute_step_route_verification
 execute_step_record_changed_files
 ```
 
-`execute_step_route_verification` must complete before either tester is
+`execute_step_route_verification` must complete before any tester is
 advanced or spawned. It seals the checksummed manifest and writes its current
 manifest/attempt IDs to run state. `VERIFY_ROUTE=missing` means normalization
 rejected coverage, a path, or a selector; do not execute a test command.
@@ -164,20 +164,24 @@ successful empty fix.
 
 ## 4. Functional Verification
 
-Use `VERIFY_ROUTE`:
+`VERIFY_ROUTE` is a canonical `+`-separated subset of `llk`, `metal`, and
+`ttnn`. Run every named suite, in that order:
 
-| Route | Action |
+| Route membership | Action |
 |---|---|
-| `llk` | spawn `tester.md` |
-| `metal` | spawn `metal-tester.md` |
-| `both` | run `tester.md`, then `metal-tester.md`; retain both outcomes |
+| contains `llk` | spawn `tester.md` |
+| contains `metal` | spawn `metal-tester.md` |
+| contains `ttnn` | spawn `ttnn-tester.md` |
 | `missing` | send `MISSING_TEST_COVERAGE` to the worker; do not test or review |
 | `none` | run `execute_step_mark_unverifiable`; valid only when `verification_required: no` |
+
+For example, `llk+ttnn` runs the Layer-1 and end-to-end suites, while
+`llk+metal+ttnn` runs all three. Never stop after the first successful suite.
 
 The analyzer and worker must leave every required suite at coverage
 `existing` or `added`. If routing returns `missing`, consume one debug retry:
 
-1. Call `execute_step_coverage_feedback` with the missing LLK/metal coverage
+1. Call `execute_step_coverage_feedback` with the missing LLK/Metal/TTNN coverage
    and selector evidence printed by `execute_step_route_verification`.
 2. Spawn `issue-worker.md` with
    `FAILURE_CLASS=MISSING_TEST_COVERAGE`.
@@ -194,10 +198,12 @@ source codegen/scripts/issue_solver/orchestrator_steps.sh
 execute_step_advance_tester       # pass fix_tests after a retry
 # or
 execute_step_advance_metal_test
+# or
+execute_step_advance_ttnn_test
 ```
 
-After an `llk`, `metal`, or `both` route finishes, combine its required suite
-results and then aggregate the counters:
+After every suite named by a functional route finishes, combine its required
+suite results and then aggregate the counters:
 
 ```bash
 execute_step_combine_verification_results
@@ -210,11 +216,9 @@ at `arch_results.<arch>` while preserving each tester's result under
 the current manifest's structured leaves from
 `${LOG_DIR}/verification-results/<attempt>/`. A missing, duplicate, malformed,
 foreign, zero-count, identity-mismatched, artifact-mismatched, or incomplete
-leaf cannot become `SUCCESS`. For `both`, the combined functional outcome is:
-
-- failing if either suite fails;
-- `SUCCESS` if at least one suite passes and the other is non-failing;
-- otherwise `COMPILED_ONLY` or `UNVERIFIABLE_IN_LLK_SUITE`.
+leaf cannot become `SUCCESS`. The combined functional outcome is `SUCCESS`
+only when every required suite has a terminal, nonzero, fully passing result;
+any failing or malformed required suite fails the architecture.
 
 For `none`, call `execute_step_mark_unverifiable` and skip the combiner.
 `none` means runtime verification is genuinely not applicable; it never means

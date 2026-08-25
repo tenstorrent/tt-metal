@@ -10,7 +10,7 @@ Covers the two helpers a review round cannot be correct without:
     verification route from the solve that produced the PR. Getting that wrong means
     verifying the wrong thing on the wrong hardware.
 * ``execute_step_route_verification`` — the executable route is derived from a
-  checksummed manifest before either tester can start.
+  checksummed manifest before any tester can start.
 * ``execute_step_record_review_dispositions`` — the gate that stops a reply the
   addresser never actually thought about from reaching a reviewer.
 * ``execute_step_combine_verification_results`` — the deterministic backstop
@@ -264,7 +264,7 @@ def test_setup_review_run_requires_the_analysis_artifact(
 
 
 # ── execute_step_route_verification ──────────────────────────────────────────
-def _route_case(tmp_path, worktree, *, missing_test=False):
+def _route_case(tmp_path, worktree, *, missing_test=False, include_ttnn=False):
     log_dir = tmp_path / "route-log"
     log_dir.mkdir()
     state = {
@@ -294,9 +294,29 @@ def _route_case(tmp_path, worktree, *, missing_test=False):
     metal = worktree / "tests" / "tt_metal" / "tt_metal" / "llk"
     metal.mkdir(parents=True)
     (metal / "test_reduce.cpp").write_text("// test\n")
+    ttnn = worktree / "tests" / "ttnn" / "unit_tests" / "operations"
+    ttnn.mkdir(parents=True)
+    (ttnn / "test_reduce.py").write_text("def test_reduce(): pass\n")
     artifacts = llk / "codegen" / "artifacts"
-    (artifacts / "issue_36142_analysis.md").write_text(
+    ttnn_verification = (
         """\
+ttnn_verification:
+  target: ttnn
+  coverage: existing
+  test: tests/ttnn/unit_tests/operations/test_reduce.py::test_reduce
+  dispatch: fast
+"""
+        if include_ttnn
+        else """\
+ttnn_verification:
+  target: none
+  coverage: not_applicable
+  test: none
+  dispatch: none
+"""
+    )
+    (artifacts / "issue_36142_analysis.md").write_text(
+        f"""\
 ## Scope
 arch_scope:
   blackhole: in_scope
@@ -311,7 +331,7 @@ metal_verification:
   test_file: tests/tt_metal/tt_metal/llk/test_reduce.cpp
   gtest_filter: LLKFixture.Reduce
   dispatch: fast
-""",
+{ttnn_verification}""",
         encoding="utf-8",
     )
     selected_test = "test_missing.py" if missing_test else "test_reduce.py::test_reduce"
@@ -329,7 +349,7 @@ def test_route_seals_manifest_before_a_tester_can_start(tmp_path, worktree):
     state = json.loads((log_dir / "state.json").read_text())
     manifest_path = Path(state["REQUIRED_VERIFICATION_MANIFEST"])
     manifest = json.loads(manifest_path.read_text())
-    assert state["VERIFY_ROUTE"] == "both"
+    assert state["VERIFY_ROUTE"] == "llk+metal"
     assert state["REQUIRED_VERIFICATION_MANIFEST_ID"] == manifest["manifest_id"]
     assert state["REQUIRED_VERIFICATION_ATTEMPT_ID"] == "attempt-001"
     assert {item["suite"] for item in manifest["requirements"]} == {"llk", "metal"}
@@ -349,6 +369,22 @@ def test_route_rejects_a_missing_selector_before_execution(tmp_path, worktree):
     assert not (log_dir / "required_verification_manifest.json").exists()
 
 
+def test_route_extracts_and_seals_ttnn_state(tmp_path, worktree):
+    result, log_dir = _route_case(tmp_path, worktree, include_ttnn=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    state = json.loads((log_dir / "state.json").read_text())
+    assert state["VERIFY_ROUTE"] == "llk+metal+ttnn"
+    assert state["TTNN_TARGET"] == "ttnn"
+    assert state["TTNN_COVERAGE"] == "existing"
+    assert state["TTNN_TEST"].endswith("test_reduce.py::test_reduce")
+    manifest = json.loads(Path(state["REQUIRED_VERIFICATION_MANIFEST"]).read_text())
+    assert [item["suite"] for item in manifest["requirements"]] == [
+        "llk",
+        "metal",
+        "ttnn",
+    ]
+
+
 # ── execute_step_combine_verification_results ────────────────────────────────
 def _combine_case(tmp_path, worktree, suite_results, route="llk", audit=False):
     log_dir = tmp_path / "combine-log"
@@ -359,7 +395,7 @@ def _combine_case(tmp_path, worktree, suite_results, route="llk", audit=False):
         "TARGET_ARCHES_JSON": ["blackhole"],
     }
     if audit:
-        suites = ("llk", "metal") if route == "both" else (route,)
+        suites = tuple(route.split("+"))
         requirements = [
             {
                 "requirement_id": f"blackhole:{suite}:1",
@@ -508,7 +544,7 @@ def test_combine_requires_every_suite_to_succeed(tmp_path, worktree):
                 "tests_passed": 0,
             },
         },
-        route="both",
+        route="llk+metal",
     )
     assert result.returncode == 0, result.stdout + result.stderr
     combined = run["arch_results"]["blackhole"]

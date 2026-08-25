@@ -32,7 +32,14 @@ def _run(log_dir, *args):
     )
 
 
-def _required_manifest(tmp_path, analysis, plan, *extra, check=True):
+def _required_manifest(
+    tmp_path,
+    analysis,
+    plan,
+    *extra,
+    check=True,
+    git_changes: dict[str, str] | None = None,
+):
     worktree = tmp_path / "worktree"
     llk_tests = worktree / "tt_metal" / "tt-llk" / "tests" / "python_tests"
     llk_tests.mkdir(parents=True, exist_ok=True)
@@ -41,6 +48,33 @@ def _required_manifest(tmp_path, analysis, plan, *extra, check=True):
     metal = worktree / "tests" / "tt_metal" / "tt_metal" / "llk"
     metal.mkdir(parents=True, exist_ok=True)
     (metal / "test_reduce.cpp").write_text("// test\n")
+    ttnn = worktree / "tests" / "ttnn" / "unit_tests" / "operations"
+    ttnn.mkdir(parents=True, exist_ok=True)
+    (ttnn / "test_reduce.py").write_text("def test_reduce(): pass\n")
+    expected_base = "a" * 40
+    if git_changes is not None:
+        subprocess.run(["git", "init", "-q", str(worktree)], check=True)
+        subprocess.run(
+            ["git", "-C", str(worktree), "config", "user.name", "test"], check=True
+        )
+        subprocess.run(
+            ["git", "-C", str(worktree), "config", "user.email", "test@example.com"],
+            check=True,
+        )
+        subprocess.run(["git", "-C", str(worktree), "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", str(worktree), "commit", "-qm", "base"], check=True
+        )
+        expected_base = subprocess.run(
+            ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        for relative, contents in git_changes.items():
+            changed = worktree / relative
+            changed.parent.mkdir(parents=True, exist_ok=True)
+            changed.write_text(contents)
     analysis_path = tmp_path / "analysis.md"
     plan_path = tmp_path / "plan.md"
     analysis_path.write_text(analysis)
@@ -64,7 +98,7 @@ def _required_manifest(tmp_path, analysis, plan, *extra, check=True):
             "--run-id",
             "run-1",
             "--expected-base-sha",
-            "a" * 40,
+            expected_base,
             "--architectures-json",
             '["blackhole"]',
             "--backend",
@@ -86,6 +120,7 @@ def test_required_verification_seals_independent_suites_and_perf_measurement(
 arch_scope:
   blackhole: in_scope
 ## Verification
+fix_layer: mixed
 verification_required: yes
 verifiable_in_llk_suite: partial
 llk_coverage: existing
@@ -138,6 +173,137 @@ regression_tests:
         ).encode()
     ).hexdigest()
     assert manifest["manifest_id"] == expected
+
+
+def test_required_verification_seals_ttnn_as_an_independent_suite(tmp_path):
+    analysis = """\
+## Scope
+arch_scope:
+  blackhole: in_scope
+## Verification
+fix_layer: ttnn
+verification_required: yes
+verifiable_in_llk_suite: partial
+llk_coverage: existing
+metal_verification:
+  target: none
+  coverage: not_applicable
+  test_file: none
+  gtest_filter: none
+  dispatch: none
+ttnn_verification:
+  target: ttnn
+  coverage: added
+  test: tests/ttnn/unit_tests/operations/test_reduce.py::test_reduce
+  dispatch: fast
+"""
+    plan = """\
+## Test Strategy
+reproduction_tests:
+- arch: blackhole
+  test: tests/python_tests/test_reduce.py::test_reduce
+"""
+    proc, output = _required_manifest(tmp_path, analysis, plan)
+    requirements = json.loads(output.read_text())["requirements"]
+    assert proc.returncode == 0
+    assert [item["suite"] for item in requirements] == ["llk", "ttnn"]
+    assert requirements[1]["requirement_id"] == "blackhole:ttnn:1"
+    assert requirements[1]["selector"] == {
+        "test": "tests/ttnn/unit_tests/operations/test_reduce.py",
+        "test_id": "tests/ttnn/unit_tests/operations/test_reduce.py::test_reduce",
+        "k": None,
+    }
+    assert "route=llk+ttnn" in proc.stdout
+
+
+def test_required_verification_rejects_missing_ttnn_coverage(tmp_path):
+    analysis = """\
+## Scope
+arch_scope:
+  blackhole: in_scope
+## Verification
+fix_layer: ttnn
+verification_required: yes
+verifiable_in_llk_suite: no
+llk_coverage: not_applicable
+ttnn_verification:
+  target: ttnn
+  coverage: add_required
+  test: tests/ttnn/unit_tests/operations/test_reduce.py::test_reduce
+  dispatch: fast
+"""
+    proc, output = _required_manifest(
+        tmp_path, analysis, "## Test Strategy\ncompile_checks:\n- none\n", check=False
+    )
+    assert proc.returncode != 0
+    assert "TTNN verification target/coverage is not executable" in proc.stderr
+    assert not output.exists()
+
+
+def test_required_verification_rejects_ttnn_layer_without_ttnn_suite(tmp_path):
+    analysis = """\
+## Scope
+arch_scope:
+  blackhole: in_scope
+## Verification
+fix_layer: ttnn
+verification_required: yes
+verifiable_in_llk_suite: no
+llk_coverage: not_applicable
+metal_verification:
+  target: unit_tests_llk
+  coverage: existing
+  test_file: tests/tt_metal/tt_metal/llk/test_reduce.cpp
+  gtest_filter: LLKFixture.Reduce
+  dispatch: fast
+ttnn_verification:
+  target: none
+  coverage: not_applicable
+  test: none
+  dispatch: none
+"""
+    proc, output = _required_manifest(
+        tmp_path, analysis, "## Test Strategy\ncompile_checks:\n- none\n", check=False
+    )
+    assert proc.returncode != 0
+    assert "TTNN-layer fix requires executable TTNN verification" in proc.stderr
+    assert not output.exists()
+
+
+def test_required_verification_rejects_mixed_diff_that_omits_ttnn_suite(tmp_path):
+    analysis = """\
+## Scope
+arch_scope:
+  blackhole: in_scope
+## Verification
+fix_layer: mixed
+verification_required: yes
+verifiable_in_llk_suite: no
+llk_coverage: not_applicable
+metal_verification:
+  target: unit_tests_llk
+  coverage: existing
+  test_file: tests/tt_metal/tt_metal/llk/test_reduce.cpp
+  gtest_filter: LLKFixture.Reduce
+  dispatch: fast
+ttnn_verification:
+  target: none
+  coverage: not_applicable
+  test: none
+  dispatch: none
+"""
+    proc, output = _required_manifest(
+        tmp_path,
+        analysis,
+        "## Test Strategy\ncompile_checks:\n- none\n",
+        check=False,
+        git_changes={"ttnn/cpp/ttnn/new_operation.cpp": "// candidate\n"},
+    )
+    assert proc.returncode != 0
+    assert (
+        "TTNN source/test changes require executable TTNN verification" in proc.stderr
+    )
+    assert not output.exists()
 
 
 def test_required_verification_revisions_are_immutable_and_linked(tmp_path):
@@ -890,6 +1056,13 @@ def test_predeclared_xfail_requires_tracked_policy_and_replacement_coverage(tmp_
     (tests / "test_replacement.py").write_text(
         "def test_replacement_coverage(): pass\n", encoding="utf-8"
     )
+    # _required_manifest supplies this shared selector fixture. Keep it in the
+    # base commit so this test's candidate diff contains only the waiver edit.
+    ttnn_test = (
+        worktree / "tests" / "ttnn" / "unit_tests" / "operations" / "test_reduce.py"
+    )
+    ttnn_test.parent.mkdir(parents=True)
+    ttnn_test.write_text("def test_reduce(): pass\n", encoding="utf-8")
     selector = {
         "test": "test_known_skip.py",
         "test_id": "test_known_skip.py::test_known_limitation",

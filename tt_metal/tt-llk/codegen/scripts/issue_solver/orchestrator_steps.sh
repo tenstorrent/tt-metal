@@ -75,7 +75,8 @@ _PIPELINE_STEPS_MULTI='[
   {"id":"arch_lookup","name":"Research","desc":"Look up architecture facts only when needed"},
   {"id":"writer","name":"Fix","desc":"Plan and implement one coordinated multi-arch fix"},
   {"id":"tester","name":"Test","desc":"Run the tt-llk Layer-1 suite for each target arch"},
-  {"id":"metal_test","name":"Metal Test","desc":"Build+run the unit_tests_llk gtest suite for Layer-2/3/4 changes (same backend)"},
+  {"id":"metal_test","name":"Metal Test","desc":"Build+run unit_tests_llk for CKernels, Compute-API, and Metal-runtime coverage"},
+  {"id":"ttnn_test","name":"TTNN Test","desc":"Build the TTNN Python target and run exact end-to-end pytest coverage"},
   {"id":"review","name":"Review","desc":"Senior LLK review of the shared fix diff (loop, no PR)"},
   {"id":"perf","name":"Perf","desc":"Measure cycle counts vs baseline per BH/WH arch (local only)"},
   {"id":"fix_tests","name":"Retry","desc":"Debug and update the shared fix after a test, review, or perf failure"}
@@ -85,7 +86,8 @@ _PIPELINE_STEPS_SINGLE='[
   {"id":"arch_lookup","name":"Research","desc":"Look up architecture facts only when needed"},
   {"id":"writer","name":"Fix","desc":"Plan and implement the smallest fix"},
   {"id":"tester","name":"Test","desc":"Run the tt-llk Layer-1 suite"},
-  {"id":"metal_test","name":"Metal Test","desc":"Build+run the unit_tests_llk gtest for Layer-2/3/4 changes (same backend)"},
+  {"id":"metal_test","name":"Metal Test","desc":"Build+run unit_tests_llk for CKernels, Compute-API, and Metal-runtime coverage"},
+  {"id":"ttnn_test","name":"TTNN Test","desc":"Build the TTNN Python target and run exact end-to-end pytest coverage"},
   {"id":"review","name":"Review","desc":"Senior LLK review of the fix diff (loop, no PR)"},
   {"id":"perf","name":"Perf","desc":"Measure cycle counts vs baseline (BH/WH local only)"},
   {"id":"fix_tests","name":"Retry","desc":"Debug and update the fix after a test, review, or perf failure"}
@@ -95,7 +97,8 @@ _PIPELINE_STEPS_SINGLE='[
 _PIPELINE_STEPS_REVIEW='[
   {"id":"addresser","name":"Address","desc":"Turn the PR review feedback into code changes"},
   {"id":"tester","name":"Test","desc":"Run the tt-llk Layer-1 suite"},
-  {"id":"metal_test","name":"Metal Test","desc":"Build+run the unit_tests_llk gtest for Layer-2/3/4 changes"},
+  {"id":"metal_test","name":"Metal Test","desc":"Build+run unit_tests_llk for CKernels, Compute-API, and Metal-runtime coverage"},
+  {"id":"ttnn_test","name":"TTNN Test","desc":"Build the TTNN Python target and run exact end-to-end pytest coverage"},
   {"id":"review","name":"Review","desc":"Senior LLK review of the updated diff (loop, no PR)"},
   {"id":"perf","name":"Perf","desc":"Measure cycle counts only when a disposition asks for it"},
   {"id":"fix_tests","name":"Retry","desc":"Debug and update the review fix after a test or review failure"}
@@ -810,7 +813,8 @@ execute_step_route_verification() {
     P="codegen/artifacts/issue_${num}_fix_plan.md"
     M="$_L/required_verification_manifest.json"
     local FIX_LAYER VERIFY_REQUIRED VERIFIABLE LLK_COVERAGE
-    local METAL_TARGET METAL_COVERAGE METAL_FILTER METAL_DISPATCH ROUTE out
+    local METAL_TARGET METAL_COVERAGE METAL_FILTER METAL_DISPATCH
+    local TTNN_TARGET TTNN_COVERAGE TTNN_TEST TTNN_DISPATCH ROUTE out
     gval() {
         grep -ioE "$1:[[:space:]]*[A-Za-z_]+" "$A" 2>/dev/null |
             head -1 | sed -E "s/.*:[[:space:]]*//" || true
@@ -832,6 +836,15 @@ execute_step_route_verification() {
             head -1 | sed -E "s/^[[:space:]]*gtest_filter:[[:space:]]*//; s/^['\"]//; s/['\"]$//" || true
     )"
     METAL_DISPATCH="$(mval 'dispatch')"
+    tval() {
+        sed -n '/^ttnn_verification:/,/^## /p' "$A" 2>/dev/null |
+            grep -ioE "^[[:space:]]*$1:[[:space:]]*[^#]+" |
+            head -1 | sed -E "s/^[[:space:]]*$1:[[:space:]]*//; s/[[:space:]]+$//; s/^['\"]//; s/['\"]$//" || true
+    }
+    TTNN_TARGET="$(tval 'target')"
+    TTNN_COVERAGE="$(tval 'coverage')"
+    TTNN_TEST="$(tval 'test')"
+    TTNN_DISPATCH="$(tval 'dispatch')"
 
     ss FIX_LAYER      "$FIX_LAYER"
     ss VERIFIABLE_IN_LLK "$VERIFIABLE"
@@ -840,6 +853,10 @@ execute_step_route_verification() {
     ss METAL_COVERAGE "$METAL_COVERAGE"
     ss METAL_FILTER   "$METAL_FILTER"
     ss METAL_DISPATCH "$METAL_DISPATCH"
+    ss TTNN_TARGET    "$TTNN_TARGET"
+    ss TTNN_COVERAGE  "$TTNN_COVERAGE"
+    ss TTNN_TEST      "$TTNN_TEST"
+    ss TTNN_DISPATCH  "$TTNN_DISPATCH"
 
     local -a manifest_args=(
         required-verification
@@ -884,8 +901,8 @@ execute_step_route_verification() {
 import json, sys
 d = json.load(open(sys.argv[1]))
 suites = {r["suite"] for r in d["requirements"]}
-functional = suites & {"llk", "metal"}
-route = "both" if functional == {"llk", "metal"} else next(iter(functional), "none")
+functional = [suite for suite in ("llk", "metal", "ttnn") if suite in suites]
+route = "+".join(functional) or "none"
 print(route, d["attempt_id"], d["manifest_id"], len(d["requirements"]))
 PY
 )"
@@ -893,7 +910,7 @@ PY
     [ -n "$VERIFY_REQUIRED" ] || {
         if [ "$ROUTE" = none ]; then VERIFY_REQUIRED=no; else VERIFY_REQUIRED=yes; fi
     }
-    if [ -z "$LLK_COVERAGE" ] && { [ "$ROUTE" = llk ] || [ "$ROUTE" = both ]; }; then
+    if [ -z "$LLK_COVERAGE" ] && [[ "+$ROUTE+" == *"+llk+"* ]]; then
         LLK_COVERAGE=existing
         ss LLK_COVERAGE "$LLK_COVERAGE"
     fi
@@ -989,17 +1006,38 @@ execute_step_advance_tester() {
 # ===========================================================================
 execute_step_advance_metal_test() {
     local _L; _L="$(_LOG)"
-    local num mode arches route filt; num="$(sg ISSUE_NUMBER)"; mode="$(sg RUN_MODE)"
+    local num mode arches route filt agent; num="$(sg ISSUE_NUMBER)"; mode="$(sg RUN_MODE)"
     arches="$(sg TARGET_ARCHES_JSON)"; route="$(sg VERIFY_ROUTE)"; filt="$(sg METAL_FILTER)"
+    agent="${1:-writer}"
+    [[ "+$route+" == *"+llk+"* ]] && agent=tester
     local scope="issue #${num}"; [ "$mode" = multi ] && scope="issue #${num} across ${arches}"
     rj advance --new-step "metal_test" \
         --new-message "Building+running unit_tests_llk (${filt}) for ${scope}" \
-        --prev-result "success" --prev-message "${route:-metal} route" --agent "writer"
+        --prev-result "success" --prev-message "${route:-metal} route" --agent "$agent"
+}
+
+# ===========================================================================
+# Step 4c — advance to end-to-end TTNN pytest verification.
+# ===========================================================================
+execute_step_advance_ttnn_test() {
+    local _L; _L="$(_LOG)"
+    local num mode arches route test agent; num="$(sg ISSUE_NUMBER)"; mode="$(sg RUN_MODE)"
+    arches="$(sg TARGET_ARCHES_JSON)"; route="$(sg VERIFY_ROUTE)"; test="$(sg TTNN_TEST)"
+    agent="${1:-writer}"
+    if [[ "+$route+" == *"+metal+"* ]]; then
+        agent=metal_test
+    elif [[ "+$route+" == *"+llk+"* ]]; then
+        agent=tester
+    fi
+    local scope="issue #${num}"; [ "$mode" = multi ] && scope="issue #${num} across ${arches}"
+    rj advance --new-step "ttnn_test" \
+        --new-message "Building TTNN + running ${test} for ${scope}" \
+        --prev-result "success" --prev-message "${route:-ttnn} route" --agent "$agent"
 }
 
 # ===========================================================================
 # Step 4 — combine the required suite results for each architecture. Testers
-# write only arch_results.<arch>.suite_results.<llk|metal>; this function owns
+# write only arch_results.<arch>.suite_results.<llk|metal|ttnn>; this function owns
 # the compatibility verdict/count fields consumed by final status and the
 # dashboard. Missing or unknown required results fail closed as ENV_ERROR.
 # ===========================================================================
@@ -1008,7 +1046,7 @@ execute_step_combine_verification_results() {
     local route arches patch pool manifest
     route="$(sg VERIFY_ROUTE)"
     arches="$(sg TARGET_ARCHES_JSON)"
-    case "$route" in llk|metal|both) ;; *) echo "cannot combine VERIFY_ROUTE=$route" >&2; return 1 ;; esac
+    case "$route" in none|missing|"") echo "cannot combine VERIFY_ROUTE=$route" >&2; return 1 ;; esac
 
     pool="$(python - "$_L/run.json" <<'PY'
 import json, sys
@@ -1040,7 +1078,13 @@ with open(run_path) as f:
     run = json.load(f)
 
 arches = json.loads(arches_json)
-required = {"llk": ("llk",), "metal": ("metal",), "both": ("llk", "metal")}[route]
+required = tuple(route.split("+"))
+if (
+    not required
+    or len(set(required)) != len(required)
+    or any(suite not in {"llk", "metal", "ttnn"} for suite in required)
+):
+    raise ValueError(f"invalid functional verification route: {route}")
 failure_priority = ("ENV_ERROR", "COMPILE_FAILED", "TESTS_FAILED", "SIM_ISA_GAP")
 existing = run.get("arch_results") or {}
 updates = {}
@@ -1226,13 +1270,21 @@ execute_step_bump_perf()   { local _L; _L="$(_LOG)"; ss PERF_RETRIES "$(( $(sg P
 # ===========================================================================
 execute_step_advance_review() {
     local _L; _L="$(_LOG)"
-    local num mode arches rr mrr; num="$(sg ISSUE_NUMBER)"; mode="$(sg RUN_MODE)"
+    local num mode arches rr mrr route agent; num="$(sg ISSUE_NUMBER)"; mode="$(sg RUN_MODE)"
     arches="$(sg TARGET_ARCHES_JSON)"; rr="$(sg REVIEW_RETRIES)"; mrr="$(sg MAX_REVIEW_RETRIES)"
+    route="$(sg VERIFY_ROUTE)"; agent=writer
+    if [[ "+$route+" == *"+ttnn+"* ]]; then
+        agent=ttnn_test
+    elif [[ "+$route+" == *"+metal+"* ]]; then
+        agent=metal_test
+    elif [[ "+$route+" == *"+llk+"* ]]; then
+        agent=tester
+    fi
     local what="fix diff for issue #${num}"
     [ "$mode" = multi ] && what="shared fix diff for issue #${num} across ${arches}"
     rj advance --new-step "review" \
         --new-message "Reviewing ${what} (attempt $((rr+1))/$((mrr+1)))" \
-        --prev-result "success" --prev-message "Functional tests passed" --agent "tester"
+        --prev-result "success" --prev-message "Functional tests passed" --agent "$agent"
 }
 
 # ===========================================================================
@@ -1629,6 +1681,7 @@ for agent, filename in [
     ("writer", "agent_issue_worker.md"),
     ("tester", "agent_tester.md"),
     ("metal_test", "agent_metal_tester.md"),
+    ("ttnn_test", "agent_ttnn_tester.md"),
     ("reviewer", "agent_reviewer.md"),
     ("perf", "agent_perf_tester.md"),
     ("fix_tests", "agent_issue_worker_debug.md"),

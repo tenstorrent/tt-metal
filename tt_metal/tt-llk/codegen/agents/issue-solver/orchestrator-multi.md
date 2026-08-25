@@ -19,8 +19,9 @@ directly.
 
 - One run, one analyzer, one optional architecture lookup, and one shared
   worker own the complete fix.
-- `tester.md` and `metal-tester.md` each run once per stage and report all
-  requested architectures. Do not spawn one tester per architecture.
+- `tester.md`, `metal-tester.md`, and `ttnn-tester.md` each run at most once per
+  stage and report all requested architectures. Do not spawn one tester per
+  architecture.
 - Run performance once per eligible architecture, sequentially.
 - Keep progress and results under the single run's `arch_results`.
 - Preserve analyzer-owned `SKIPPED` results for out-of-scope architectures.
@@ -76,13 +77,14 @@ contract. Test selection remains per architecture inside the tester.
 
 ## Functional Verification
 
-Use the shared `VERIFY_ROUTE`:
+Use the shared canonical `VERIFY_ROUTE` and run every named suite in
+`llk` → `metal` → `ttnn` order:
 
-| Route | Multi-arch action |
+| Route membership | Multi-arch action |
 |---|---|
-| `llk` | spawn `tester.md` once |
-| `metal` | spawn `metal-tester.md` once |
-| `both` | spawn each tester once; retain both verdicts per architecture |
+| contains `llk` | spawn `tester.md` once |
+| contains `metal` | spawn `metal-tester.md` once |
+| contains `ttnn` | spawn `ttnn-tester.md` once |
 | `missing` | send one combined `MISSING_TEST_COVERAGE` retry to the shared worker |
 | `none` | call `execute_step_mark_unverifiable`; valid only when verification is not applicable |
 
@@ -93,11 +95,11 @@ architecture, update the analysis coverage states, and return `FIX_UPDATED`.
 Then bump the debug counter, rerun routing, and record changed files. Do not
 convert missing per-architecture coverage to `SKIPPED` or `none`.
 
-Both testers must skip analyzer-owned out-of-scope architectures. After
+All selected testers must skip analyzer-owned out-of-scope architectures. After
 `execute_step_mark_unverifiable`, reapply their `SKIPPED` results because the
 helper initializes every target as unverifiable.
 
-After an `llk`, `metal`, or `both` route, call:
+After all suites in the functional route finish, call:
 
 ```bash
 execute_step_combine_verification_results
@@ -108,12 +110,12 @@ For production runs, the combiner retains each tester's nested suite result and
 writes the dashboard-compatible verdict and counters to
 `arch_results.<arch>`. Audit runs instead derive every architecture, suite, and
 aggregate count from the current manifest's structured result leaves; an
-agent-authored suite summary is not reducer input. For `both`, it combines the
-suites independently for each architecture:
+agent-authored suite summary is not reducer input. It combines the suites
+independently for each architecture:
 
-- any suite failure makes that architecture fail;
-- at least one `SUCCESS` with no failure makes it successful;
-- only compile-only/unverifiable outcomes make it compiled;
+- every required suite must report a terminal, nonzero `SUCCESS` for the
+  architecture to succeed;
+- any suite failure or malformed/missing result makes that architecture fail;
 - `SKIPPED` remains excluded from the combined status.
 
 For `none`, call `execute_step_mark_unverifiable` and skip the combiner.

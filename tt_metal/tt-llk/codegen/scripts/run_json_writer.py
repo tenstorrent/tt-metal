@@ -758,6 +758,59 @@ _VERIFICATION_ARCHES = {"blackhole", "wormhole", "quasar"}
 _COVERED_STATES = {"existing", "added"}
 
 
+def _candidate_changed_paths(worktree: Path, base: str) -> set[str]:
+    """Return tracked and untracked candidate paths when ``worktree`` is Git.
+
+    Historical/unit fixtures may be plain directories, so absence of a Git
+    worktree means there is no additional path-derived routing signal. A real
+    worktree with an invalid base or unreadable diff fails closed.
+    """
+    probe = subprocess.run(
+        ["git", "-C", str(worktree), "rev-parse", "--is-inside-work-tree"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if probe.returncode != 0 or probe.stdout.strip() != "true":
+        return set()
+    diff = subprocess.run(
+        ["git", "-C", str(worktree), "diff", "--name-only", base, "--"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    untracked = subprocess.run(
+        ["git", "-C", str(worktree), "ls-files", "--others", "--exclude-standard"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if diff.returncode != 0 or untracked.returncode != 0:
+        detail = (
+            diff.stderr or untracked.stderr or "cannot inspect candidate diff"
+        ).strip()
+        raise ValueError(
+            f"cannot derive verification route from candidate paths: {detail}"
+        )
+    return {
+        value
+        for value in (*diff.stdout.splitlines(), *untracked.stdout.splitlines())
+        if value
+    }
+
+
+def _is_ttnn_candidate_path(path: str) -> bool:
+    return (
+        path.startswith("ttnn/")
+        or path.startswith("tests/ttnn/")
+        or path.startswith("tests/sweep_framework/")
+        or (path.startswith("models/") and "/tests/" in path)
+    )
+
+
 def _markdown_section(text: str, heading: str) -> str:
     """Return one exact level-two Markdown section without parsing prose."""
     match = re.search(
@@ -910,6 +963,54 @@ def _is_llk_pytest_selector(raw: str) -> bool:
         or target.startswith("tests/python_tests/")
         or target.startswith("ai_gen/")
     )
+
+
+def _normalize_ttnn_pytest_selector(raw: str, worktree: Path) -> dict[str, str | None]:
+    """Normalize one exact repository-level TTNN pytest selector."""
+    value = _markdown_value(raw)
+    try:
+        tokens = shlex.split(value)
+    except ValueError as exc:
+        raise ValueError(f"invalid TTNN pytest selector {raw!r}: {exc}") from exc
+    if len(tokens) == 3 and tokens[1] == "-k" and tokens[2]:
+        target, k_filter = tokens[0], tokens[2]
+    elif len(tokens) == 1:
+        target, k_filter = tokens[0], None
+    else:
+        raise ValueError(
+            "TTNN pytest selector must be an exact path/id or "
+            f"'path -k expression': {raw!r}"
+        )
+    if "::" in target:
+        test_path, node = target.split("::", 1)
+        if not node:
+            raise ValueError(f"TTNN pytest selector has an empty node id: {raw!r}")
+    else:
+        test_path, node = target, None
+    test_path = test_path.removeprefix("./")
+    relative = Path(test_path)
+    allowed = (
+        test_path.startswith("tests/ttnn/")
+        or test_path.startswith("tests/sweep_framework/")
+        or (test_path.startswith("models/") and "/tests/" in test_path)
+        or (test_path.startswith("ttnn/") and "/test" in test_path)
+    )
+    if (
+        not allowed
+        or relative.is_absolute()
+        or ".." in relative.parts
+        or relative.suffix != ".py"
+    ):
+        raise ValueError(f"pytest selector is outside the TTNN suite: {raw!r}")
+    actual = worktree / relative
+    if not actual.is_file():
+        raise ValueError(f"TTNN pytest selector names a missing file: {actual}")
+    test = relative.as_posix()
+    return {
+        "test": test,
+        "test_id": f"{test}::{node}" if node else None,
+        "k": k_filter,
+    }
 
 
 def _verification_backend(backend: str, arch: str) -> str:
@@ -1191,7 +1292,7 @@ def _load_required_manifest(path: Path) -> dict[str, Any]:
         identities.add(identity)
         if requirement["architecture"] not in _VERIFICATION_ARCHES:
             raise ValueError("required-verification architecture is invalid")
-        if requirement["suite"] not in {"llk", "metal", "perf"}:
+        if requirement["suite"] not in {"llk", "metal", "ttnn", "perf"}:
             raise ValueError("required-verification suite is invalid")
         if requirement["backend"] not in {"silicon", "ttsim", "quasar", "local"}:
             raise ValueError("required-verification backend is invalid")
@@ -1312,6 +1413,7 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
     plan_tests = _markdown_items(strategy, {"reproduction_tests", "regression_tests"})
 
     verify_required = _markdown_scalar(verification, "verification_required")
+    fix_layer = _markdown_scalar(verification, "fix_layer")
     verifiable = _markdown_scalar(verification, "verifiable_in_llk_suite")
     llk_coverage = _markdown_scalar(verification, "llk_coverage")
     metal_match = re.search(
@@ -1324,6 +1426,15 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
     metal_test_file = _markdown_scalar(metal, "test_file")
     metal_filter = _markdown_scalar(metal, "gtest_filter")
     metal_dispatch = _markdown_scalar(metal, "dispatch")
+    ttnn_match = re.search(
+        r"(?ms)^ttnn_verification[ \t]*:[^\n]*\n(.*?)(?=^[^ \t\n]|\Z)",
+        verification,
+    )
+    ttnn = ttnn_match.group(1) if ttnn_match else ""
+    ttnn_target = _markdown_scalar(ttnn, "target")
+    ttnn_coverage = _markdown_scalar(ttnn, "coverage")
+    ttnn_test = _markdown_scalar(ttnn, "test")
+    ttnn_dispatch = _markdown_scalar(ttnn, "dispatch")
 
     applicable_candidates = [
         item
@@ -1351,18 +1462,21 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
         for item in plan_tests
         if item.get("test") and not _is_performance_selector(item["test"])
     ]
+    llk_plan = [
+        item for item in functional_plan if _is_llk_pytest_selector(item["test"])
+    ]
     performance_plan = [
         item
         for item in plan_tests
         if item.get("test") and _is_performance_selector(item["test"])
     ]
-    if not llk_applicable and verify_required != "no" and functional_plan:
+    if not llk_applicable and verify_required != "no" and llk_plan:
         llk_applicable = True
     if llk_applicable and not llk_coverage:
-        plan_states = {item.get("coverage", "") for item in functional_plan}
+        plan_states = {item.get("coverage", "") for item in llk_plan}
         if "add_required" in plan_states:
             llk_coverage = "add_required"
-        elif functional_plan and plan_states <= {"", *_COVERED_STATES}:
+        elif llk_plan and plan_states <= {"", *_COVERED_STATES}:
             llk_coverage = "existing"
     if args.performance_only:
         llk_applicable = False
@@ -1410,7 +1524,7 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
         return requirement
 
     if llk_applicable:
-        source_items = functional_plan or applicable_candidates
+        source_items = llk_plan or applicable_candidates
         for arch in arches:
             selected = [
                 item
@@ -1452,17 +1566,54 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
                 _verification_backend(args.backend, arch),
                 {"test": metal_filter, "test_id": None, "k": None},
             )
-    elif (
+    ttnn_applicable = not args.performance_only and ttnn_target not in {"", "none"}
+    if ttnn_applicable:
+        if ttnn_target != "ttnn" or ttnn_coverage not in _COVERED_STATES:
+            raise ValueError("TTNN verification target/coverage is not executable")
+        if ttnn_dispatch not in {"slow", "fast"}:
+            raise ValueError("TTNN verification dispatch must be slow|fast")
+        selector = _normalize_ttnn_pytest_selector(ttnn_test, worktree)
+        for arch in arches:
+            add_requirement(
+                arch,
+                "ttnn",
+                _verification_backend(args.backend, arch),
+                selector,
+            )
+
+    if (
+        not args.performance_only
+        and verify_required == "yes"
+        and fix_layer == "ttnn"
+        and not ttnn_applicable
+    ):
+        raise ValueError("a TTNN-layer fix requires executable TTNN verification")
+
+    changed_ttnn_paths = sorted(
+        path
+        for path in _candidate_changed_paths(worktree, args.expected_base_sha)
+        if _is_ttnn_candidate_path(path)
+    )
+    if (
+        not args.performance_only
+        and verify_required == "yes"
+        and changed_ttnn_paths
+        and not ttnn_applicable
+    ):
+        raise ValueError(
+            "TTNN source/test changes require executable TTNN verification: "
+            + ", ".join(changed_ttnn_paths[:5])
+        )
+
+    if (
         not args.performance_only
         and verifiable in {"no", "partial"}
         and verify_required == "yes"
+        and not (metal_applicable or ttnn_applicable)
     ):
-        if not llk_applicable:
-            raise ValueError(
-                "required Metal route has no executable verification section"
-            )
-        if verifiable == "partial":
-            raise ValueError("partial verification route is missing its Metal section")
+        raise ValueError(
+            "required integration route has no executable Metal or TTNN section"
+        )
 
     for arch in arches:
         selected = [
@@ -1691,8 +1842,8 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
     _atomic_write(revisions, doc, destination=revision_path)
     _atomic_write(output.parent, doc, destination=output)
     suites = {item["suite"] for item in requirements}
-    functional = suites & {"llk", "metal"}
-    route = "both" if functional == {"llk", "metal"} else next(iter(functional), "none")
+    functional = [suite for suite in ("llk", "metal", "ttnn") if suite in suites]
+    route = "+".join(functional) or "none"
     print(
         f"required-verification: route={route} revision={revision} "
         f"attempt_id={doc['attempt_id']} manifest_id={doc['manifest_id']} "
@@ -2343,7 +2494,7 @@ def _load_verification_reduction(path: Path) -> dict[str, Any]:
         if (
             not isinstance(leaf["architecture"], str)
             or not leaf["architecture"]
-            or leaf["suite"] not in {"llk", "metal", "perf"}
+            or leaf["suite"] not in {"llk", "metal", "ttnn", "perf"}
             or leaf["classification"] not in _REDUCTION_PRIORITY
         ):
             raise ValueError("verification reduction leaf contract is invalid")
@@ -2455,7 +2606,7 @@ def cmd_reduce_verification(args: argparse.Namespace) -> int:
     requirements = [
         requirement
         for requirement in manifest["requirements"]
-        if args.scope == "all" or requirement["suite"] in {"llk", "metal"}
+        if args.scope == "all" or requirement["suite"] in {"llk", "metal", "ttnn"}
     ]
     all_required_by_id = {
         requirement["requirement_id"]: requirement

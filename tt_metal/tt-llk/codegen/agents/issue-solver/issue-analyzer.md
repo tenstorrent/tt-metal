@@ -88,8 +88,8 @@ runs; otherwise use `TARGET_ARCH`.
    documentation or comments, and explain why no runtime assertion applies.
    A missing test or unavailable backend does not make verification optional.
    When it is `no`, also set `verifiable_in_llk_suite: no`,
-   `llk_coverage: not_applicable`, and metal coverage to `target: none` /
-   `coverage: not_applicable`.
+   `llk_coverage: not_applicable`, and both integration sections to
+   `target: none` / `coverage: not_applicable`.
 7. Set `verifiable_in_llk_suite` and `llk_coverage`:
    - `yes`: the affected behavior belongs in the Layer-1 tt-llk suite.
      Set coverage to `existing` when a source under `tests/sources/**` already
@@ -107,8 +107,11 @@ runs; otherwise use `TARGET_ARCH`.
      tests/sources tests/python_tests
    ```
 
-8. For `no` or `partial`, find the `unit_tests_llk` test that drives a compute
-   kernel calling the changed symbol:
+8. Decide Metal coverage independently. Require `unit_tests_llk` when the
+   changed behavior belongs to CKernels/Compute API, Metal runtime, or a Metal
+   LLK test, or when it is the narrowest production entry point that exposes
+   the defect. Find the test that drives a compute kernel calling the changed
+   symbol:
 
    ```bash
    rg -l '<changed_symbol>' tests/tt_metal/tt_metal/test_kernels/compute
@@ -123,20 +126,47 @@ runs; otherwise use `TARGET_ARCH`.
    dispatch mode. Use `slow` for a `*SlowDispatchOnly` fixture and `fast`
    otherwise.
 
-   If no metal test reaches required runtime behavior, keep
+   When Metal coverage is required but no test reaches the behavior, keep
    `target: unit_tests_llk`, set `coverage: add_required`, and identify the
    `tests/tt_metal/tt_metal/llk/test_*.cpp` fixture, optional test kernel, source
-   registration, and tight filter the worker must add. A Layer-4 TTNN pytest
-   that this pipeline cannot execute does not satisfy this requirement; add
-   metal coverage for the production compute path as well.
+   registration, and tight filter the worker must add.
 
-   Use `target: none` only with `verification_required: no`; set coverage to
-   `not_applicable`.
-9. Record likely production and test files, one initial hypothesis with a
+   Use `target: none` and `coverage: not_applicable` when the change does not
+   require a distinct Metal regression. Do not add a redundant Metal leaf only
+   because the LLK suite cannot reach a TTNN-only behavior.
+9. Decide TTNN coverage independently. Require a TTNN leaf when any of these is
+   true:
+   - `fix_layer: ttnn`;
+   - a `mixed` fix changes TTNN host code, an operation, a device kernel, or its
+     Python API;
+   - the issue's reproduction or acceptance contract is a TTNN API;
+   - a new or changed LLK/Compute kernel is being propagated through TTNN and
+     that end-to-end path is the behavior being delivered.
+
+   Locate the narrowest existing TTNN pytest before inventing one:
+
+   ```bash
+   rg -n '<operation>|<kernel>|<api>' tests/ttnn tests/sweep_framework models ttnn
+   python3 -m pytest --collect-only -q '<exact selector>'
+   ```
+
+   Record one exact repository-relative pytest path/node ID or
+   `path -k "expression"`. Allowed roots are `tests/ttnn/`,
+   `tests/sweep_framework/`, model test directories, and TTNN's own test tree.
+   Use `dispatch: slow` only when the test requires slow dispatch. If no test
+   reaches required behavior, set `target: ttnn`, `coverage: add_required`, and
+   name the exact test the worker must add. Use `target: none` and
+   `coverage: not_applicable` only when TTNN is not an affected or required
+   public path.
+
+   A TTNN test compiles the TTNN binding and JIT-compiles device kernels, but it
+   does not automatically replace a required LLK or Metal boundary regression.
+   Select each suite whose independently affected contract needs protection.
+10. Record likely production and test files, one initial hypothesis with a
    falsification condition, and relevant reproduction or regression test
    candidates. Mark each candidate as `existing` or `add_required` and ensure
    at least one candidate per required suite is runnable by that suite.
-10. Request architecture research only for ISA semantics, register layouts,
+11. Request architecture research only for ISA semantics, register layouts,
    scheduling, hardware contracts, or cross-architecture porting. Use
    `questions: []` when no research is needed.
 
@@ -165,7 +195,7 @@ fix_layer: llk_lib|ckernels_api|compute_api|ttnn|tt_metal_runtime|metal_tests|mi
 verification_required: yes|no
 verifiable_in_llk_suite: yes|no|partial
 llk_coverage: existing|add_required|added|not_applicable
-metal_verification:            # required when verifiable_in_llk_suite is no|partial
+metal_verification:
   target: unit_tests_llk|none
   coverage: existing|add_required|added|not_applicable
   test_file: <tests/tt_metal/tt_metal/llk/test_*.cpp>|none
@@ -173,6 +203,12 @@ metal_verification:            # required when verifiable_in_llk_suite is no|par
   kernel: <compute-kernel path>|none
   dispatch: slow|fast|none
   reason: <coverage evidence or why verification is not applicable>
+ttnn_verification:
+  target: ttnn|none
+  coverage: existing|add_required|added|not_applicable
+  test: <exact repository-relative pytest path/node or path -k expression>|none
+  dispatch: slow|fast|none
+  reason: <end-to-end coverage evidence or why TTNN is not applicable>
 
 ## Evidence
 failing_command_or_test: ...
@@ -200,6 +236,7 @@ questions:
 ## Test Candidates
 
 - test: <path, pytest id, filter, or command>
+  suite: llk|metal|ttnn|perf
   arch: blackhole|wormhole|quasar|all
   coverage: existing|add_required|added
   reason: ...

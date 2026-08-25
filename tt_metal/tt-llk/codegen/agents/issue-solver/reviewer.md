@@ -103,7 +103,8 @@ source of truth.
 3. **propagation** — an LLK signature/op/behavior change not reflected in the
    metal 4-layer stack (CKernels LLK API → Compute API → TTNN bypass includes),
    an unflagged breaking change (see `metal-integration.md`), or required
-   LLK/metal coverage that does not execute the changed production behavior.
+   LLK/Metal/TTNN coverage that does not execute the changed production
+   behavior.
 4. **parity** — an in-scope architecture is missing an equivalent required
    change. Respect the analysis `arch_scope`; do not request out-of-scope
    architecture work unless a shared API contract requires it.
@@ -119,7 +120,7 @@ Do not request additional tests merely because broader coverage would be
 useful. Do flag a blocking propagation finding when analysis marks runtime
 verification required but the claimed regression is missing, is not registered,
 duplicates the implementation instead of exercising it, or cannot be run by
-the selected LLK/metal tester. Test execution success does not prove that a
+the selected LLK, Metal, or TTNN tester. Test execution success does not prove that a
 mis-scoped test covers the changed path.
 
 ## Blocking vs Advisory

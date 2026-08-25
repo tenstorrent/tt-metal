@@ -29,7 +29,7 @@ Four flows: kernel generation (arch-specific), single-arch issue solving, multi-
 | Kernel gen | `codegen/agents/quasar/orchestrator.md` | `codegen/agents/quasar/llk-*.md` | Quasar only today. Unaffected by multi-arch issue-solver work. |
 | Issue solver (single-arch) | `codegen/agents/issue-solver/orchestrator.md` | `codegen/agents/issue-solver/*.md` | Used when `len(TARGET_ARCHES) == 1`. Parameterized by `TARGET_ARCH` — see `codegen/references/arch-profiles.md`. |
 | Issue solver (multi-arch) | `codegen/agents/issue-solver/orchestrator-multi.md` | same `codegen/agents/issue-solver/*.md` agents, run once with `TARGET_ARCHES` | Used when `len(TARGET_ARCHES) > 1`. One analyzer, one fixer, one tester, one dashboard run, one worktree, one branch, one optional PR. |
-| Review round | `codegen/agents/issue-solver/review/orchestrator.md` | `review/addresser.md` plus the same `tester.md` / `metal-tester.md` / `reviewer.md` / `perf-tester.md` | Addresses the review comments on an **already-open** PR. No analyze stage — scope, fix layer, and verification route are inherited from the solve that produced the PR. |
+| Review round | `codegen/agents/issue-solver/review/orchestrator.md` | `review/addresser.md` plus the same `tester.md` / `metal-tester.md` / `ttnn-tester.md` / `reviewer.md` / `perf-tester.md` | Addresses the review comments on an **already-open** PR. No analyze stage — scope, fix layer, and verification route are inherited from the solve that produced the PR. |
 
 ## Step 1: Classify the Request
 

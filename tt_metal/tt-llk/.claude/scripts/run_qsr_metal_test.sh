@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Run one unit_tests_llk filter against Quasar Aether VCS/emulation.
+# Run one unit_tests_llk filter or an explicit test command against Quasar
+# Aether VCS/emulation.
 #
 # The caller owns the build and supplies a fresh TT_METAL_CACHE. This wrapper
 # owns only the scarce remote Aether execution: backend selection, the
@@ -12,6 +13,7 @@ TT_METAL_HOME_ARG=""
 CACHE=""
 LOG_DIR=""
 RUN_TIMEOUT="${TIMEOUT:-1200}"
+COMMAND=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -21,6 +23,7 @@ while [[ $# -gt 0 ]]; do
     --cache)         CACHE="$2";             shift 2 ;;
     --log-dir)       LOG_DIR="$2";           shift 2 ;;
     --timeout)       RUN_TIMEOUT="$2";        shift 2 ;;
+    --)              shift; COMMAND=("$@"); break ;;
     -h|--help)
       sed -n 's/^# \{0,1\}//p' "$0" | head -24
       exit 0
@@ -29,11 +32,23 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -n "$BIN" ]] || { echo "ERROR: --bin is required" >&2; exit 4; }
-[[ -n "$FILTER" ]] || { echo "ERROR: --gtest-filter is required" >&2; exit 4; }
 [[ -n "$TT_METAL_HOME_ARG" ]] || { echo "ERROR: --tt-metal-home is required" >&2; exit 4; }
 [[ -n "$CACHE" ]] || { echo "ERROR: --cache is required" >&2; exit 4; }
-[[ -x "$BIN" ]] || { echo "ERROR: test binary is not executable: $BIN" >&2; exit 3; }
+if [[ ${#COMMAND[@]} -gt 0 ]]; then
+  [[ -z "$BIN" && -z "$FILTER" ]] || {
+    echo "ERROR: explicit command cannot be combined with --bin/--gtest-filter" >&2
+    exit 4
+  }
+  command -v "${COMMAND[0]}" >/dev/null 2>&1 || {
+    echo "ERROR: command is not executable: ${COMMAND[0]}" >&2
+    exit 3
+  }
+else
+  [[ -n "$BIN" ]] || { echo "ERROR: --bin is required" >&2; exit 4; }
+  [[ -n "$FILTER" ]] || { echo "ERROR: --gtest-filter is required" >&2; exit 4; }
+  [[ -x "$BIN" ]] || { echo "ERROR: test binary is not executable: $BIN" >&2; exit 3; }
+  COMMAND=("$BIN" "--gtest_filter=$FILTER")
+fi
 
 QSR_SIM_BACKEND="${QSR_SIM_BACKEND:-emu}"
 case "$QSR_SIM_BACKEND" in
@@ -90,7 +105,7 @@ if [[ -n "$run_log" ]]; then
     TT_METAL_SIMULATOR="$SIM_PATH" \
     TT_METAL_SLOW_DISPATCH_MODE=1 \
     SSH_MACHINE_NAME="$EMU_HOST" \
-    timeout "$RUN_TIMEOUT" "$BIN" "--gtest_filter=$FILTER" 2>&1 | tee -a "$run_log"
+    timeout "$RUN_TIMEOUT" "${COMMAND[@]}" 2>&1 | tee -a "$run_log"
   rc=${PIPESTATUS[0]}
 else
   env \
@@ -99,7 +114,7 @@ else
     TT_METAL_SIMULATOR="$SIM_PATH" \
     TT_METAL_SLOW_DISPATCH_MODE=1 \
     SSH_MACHINE_NAME="$EMU_HOST" \
-    timeout "$RUN_TIMEOUT" "$BIN" "--gtest_filter=$FILTER"
+    timeout "$RUN_TIMEOUT" "${COMMAND[@]}"
   rc=$?
 fi
 set -e

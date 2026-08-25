@@ -58,6 +58,7 @@ verification identical to a solve's.
 | `addresser.md` | `codegen/agents/issue-solver/review/addresser.md` |
 | `tester.md` | `codegen/agents/issue-solver/tester.md` |
 | `metal-tester.md` | `codegen/agents/issue-solver/metal-tester.md` |
+| `ttnn-tester.md` | `codegen/agents/issue-solver/ttnn-tester.md` |
 | `reviewer.md` | `codegen/agents/issue-solver/reviewer.md` |
 | `perf-tester.md` | `codegen/agents/issue-solver/perf-tester.md` |
 | the solve orchestrator | `codegen/agents/issue-solver/orchestrator.md` |

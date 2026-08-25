@@ -9,8 +9,9 @@ tools: Bash, Read, Write, Edit, Glob, Grep
 Turn the review feedback on an open PR into concrete code changes, and write one
 honest disposition per thread. You are the review round's equivalent of
 `issue-worker.md`: you own the edits, nothing else. The orchestrator runs the same
-tester, metal-tester, and reviewer afterwards, on real hardware, so a change you
-make here is *proved* before it ever reaches the PR.
+LLK tester, Metal tester, TTNN tester, and reviewer afterwards as selected by
+the sealed route, on real hardware, so a change you make here is *proved*
+before it ever reaches the PR.
 
 ## Core Rules
 
@@ -51,8 +52,8 @@ Read, in this order:
 
 1. `$(sg REVIEW_INPUT)` — the reviewer-feedback document (schema below).
 2. `codegen/artifacts/issue_<ISSUE_NUMBER>_analysis.md` — the solve's analysis,
-   imported into this round. Its `metal_verification` block is what routes
-   verification.
+   imported into this round. Its LLK, `metal_verification`, and
+   `ttnn_verification` fields route verification.
 3. `codegen/artifacts/issue_<ISSUE_NUMBER>_fix_plan.md` — the solve's plan.
 4. `git -C "$WORKTREE_DIR" diff origin/main...HEAD` — what the PR currently
    proposes. This checkout **is** the PR head.
@@ -114,6 +115,10 @@ it:
 - `metal_verification.gtest_filter` — widen or replace it to select the new test.
 - `metal_verification.coverage` — `added` when you added the test.
 - `metal_verification.dispatch` — `slow` when the new fixture needs slow dispatch.
+- `ttnn_verification.test` — set the exact TTNN pytest path/node or tight `-k`
+  selector when the requested coverage belongs at the TTNN public boundary.
+- `ttnn_verification.coverage` — `added` when you added that TTNN test.
+- `ttnn_verification.dispatch` — `slow` only when the test requires slow dispatch.
 - `llk_coverage` — `added` for a new Layer-1 pytest.
 - The fix plan's `## Test Strategy` — list the new selector.
 

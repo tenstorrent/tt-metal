@@ -16,8 +16,9 @@ orchestrator handles changes that are not verifiable in this suite.
 - Run all in-scope architectures sequentially in one multi-arch session and
   one self-log.
 - For `TEST_BACKEND=local`, compile with `.claude/scripts/run_test.sh`. When
-  `HW_TEST_DISPATCH_CMD` is set, submit only silicon execution to the shared
-  queue; otherwise let the wrapper run on the local device.
+  `HW_TEST_DISPATCH_CMD` is set for Blackhole/Wormhole, submit after that early
+  gate; the queue repeats the producer in its isolated warm workspace and its
+  card executor runs those artifacts.
 - For `TEST_BACKEND=ttsim`, run selected pytest tests directly with the
   in-process simulator library. Do not use local, RTL-simulator, or
   compile-only flows.
@@ -148,12 +149,12 @@ For every in-scope architecture, write only the LLK suite result under
 Use `run_json_writer.py metric` with a nested JSON patch. JSON-encode
 `queue_jobs` and `obstacle`; never interpolate raw failure output. Do not write
 the combined `arch_results.<arch>.verdict` or aggregate counts. The
-orchestrator combines the required LLK and metal suite results after the route
-finishes.
+orchestrator combines every required LLK, Metal, and TTNN suite result after
+the route finishes.
 
 For multi-arch runs, use the architecture's one-based position in
 `TARGET_ARCHES_JSON` as `phase_index`. Start its dashboard phase when
-`VERIFY_ROUTE=llk|both`:
+the canonical `VERIFY_ROUTE` contains `llk`:
 
 ```bash
 python codegen/scripts/run_json_writer.py message \
@@ -184,8 +185,9 @@ python codegen/scripts/run_json_writer.py phase-end \
   --test-details "$test_details"
 ```
 
-For `VERIFY_ROUTE=both`, leave the phase open; `metal-tester.md` closes it after
-both suite results exist. Map `SUCCESS` and `COMPILED_ONLY` to
+When the route also contains `metal` or `ttnn`, leave the phase open; the last
+selected tester closes it after all suite results exist. Map `SUCCESS` and
+`COMPILED_ONLY` to
 `phase_result=passed`; map other verdicts to `failed`. Because `phase-end`
 increments `phases_completed` for a pass, do not end an already passed phase
 again. A retry after failure starts a new attempt for that phase and ends it
@@ -205,7 +207,7 @@ For a functional test:
 - for Quasar, run `subcommand=compile` as the local gate and then follow
   **Local Quasar Aether**. Never submit Quasar to the silicon queue;
 - for Blackhole/Wormhole with `HW_TEST_DISPATCH_CMD`, run
-  `subcommand=compile` as the local gate and then follow **Queued Silicon**;
+  `subcommand=compile` as the early gate and then follow **Queued Silicon**;
 - without it, use `subcommand=run` so the wrapper compiles and runs on the
   local device.
 
@@ -288,15 +290,10 @@ Record the selected `QSR_SIM_BACKEND` and no queue job ID.
 
 Use this route only for Blackhole/Wormhole with `TEST_BACKEND=local` and
 `HW_TEST_DISPATCH_CMD`, after the corresponding local compile passes. The queue
-owns card scheduling and silicon execution; do not call the wrapper's `run` or
-`simulate` subcommands. Quasar is never valid on this route.
-
-The current queue accepts a worktree and pytest selector rather than the
-locally produced artifact. Its runner repeats the producer step because
-producer artifacts are node-local, and its worktree patch omits untracked
-files. Check `git status --short`; if an untracked path belongs to the fix,
-return `ENV_ERROR` without dispatching. These are queue transport limitations;
-the issue-solver's local compile remains the gate.
+repeats the producer in an isolated warm workspace, then owns card scheduling
+and silicon execution; do not call the local wrapper's `run` or `simulate`
+subcommands. Quasar is never valid on this route. Dispatch captures tracked,
+modified, deleted, and untracked worktree files in the submitted binary diff.
 
 The queue accepts the same exact pytest node or `-k` selector sealed in the
 manifest. Pass `--k "$K_FILTER"` when present; never silently run a broader
@@ -330,10 +327,20 @@ set -e
 ```
 
 Require one final `HW_TEST_RESULT arch=<arch>` marker and record its `job`
-value. For an audit run, also require `RESULT_JSON_OUT` to contain the exact
-protocol-v2 result copied by dispatch. Validate its schema, run, attempt,
-requirement, architecture, backend, and selector against the sealed manifest;
-then derive the compatibility suite summary from its structured evidence:
+value. Treat `failure_stage=build` as `ENV_ERROR`: because the local compile
+passed, the queue runner failed to reproduce it. No structured execution result
+is expected because the producer correctly did not release its artifacts to a
+card. Any other `ran=false` marker is also `ENV_ERROR`.
+
+Record both compile durations in the self-log: the local wrapper duration and,
+when the returned job has `build_started_at` and `built_at`, the queue producer
+duration.
+
+For an audit run that reached execution, also require `RESULT_JSON_OUT` to
+contain the exact protocol-v2 result copied by dispatch. Validate its schema,
+run, attempt, requirement, architecture, backend, and selector against the
+sealed manifest; then derive the compatibility suite summary from its structured
+evidence:
 
 - `classification=success` -> `SUCCESS`;
 - `candidate_failure|coverage_error` -> `TESTS_FAILED`;
@@ -353,6 +360,7 @@ legacy marker remains authoritative:
 |---|---|
 | `ok=true ran=true passed=true` | `SUCCESS` |
 | `ok=false ran=true` | `TESTS_FAILED` |
+| `failure_stage=build ran=false` | `ENV_ERROR` |
 | missing, malformed, or `ran=false` | `ENV_ERROR` |
 
 Legacy queue markers do not provide exact counts. Record zero counts with an
