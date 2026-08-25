@@ -8,7 +8,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#ifdef REDUCE_HELPERS_PROFILE_ZONE
+#ifdef REDUCE_HELPERS_PROFILE
 #include "tools/profiler/kernel_profiler.hpp"
 #endif
 
@@ -60,7 +60,7 @@ ALWI void run_reduce_call(
 #endif
 
     {
-#ifdef REDUCE_HELPERS_PROFILE_ZONE
+#ifdef REDUCE_HELPERS_PROFILE
         DeviceZoneScopedN("reduce::call");
 #endif
         compute_kernel_lib::reduce<
@@ -107,8 +107,8 @@ void kernel_main() {
 
     constexpr uint32_t first_output_cb = num_calls == 1 ? cb_output : cb_accumulator;
     compute_kernel_hw_startup(cb_input, cb_scaler, first_output_cb);
-#ifdef REDUCE_HELPERS_PROFILE_ZONE
-    DeviceZoneScopedN(REDUCE_HELPERS_PROFILE_ZONE);
+#ifdef REDUCE_HELPERS_PROFILE
+    DeviceZoneScopedN("reduce::body");
 #endif
 
     // One sharded tensor backs a linear sequence of per-call blocks. Make the

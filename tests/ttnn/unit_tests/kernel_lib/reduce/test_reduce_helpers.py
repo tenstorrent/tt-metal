@@ -560,7 +560,7 @@ def _defines(case: ReduceCase) -> list[tuple[str, str]]:
     if case.post_multiplier is not None:
         defines.append(("REDUCE_POST_MULTIPLIER_BITS", hex(_float_bits(case.post_multiplier))))
     if os.environ.get("REDUCE_HELPERS_PROFILE"):
-        defines.append(("REDUCE_HELPERS_PROFILE_ZONE", f'"reduce::{case.name}"'))
+        defines.append(("REDUCE_HELPERS_PROFILE", "1"))
     return defines
 
 
