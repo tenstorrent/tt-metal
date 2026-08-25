@@ -158,7 +158,7 @@ class RunRecord(BaseModel):
     # exclude non-real runs (dry-run / maintenance / manual) from fleet stats.
     discard: Flag = Field(description="1 = exclude this run from fleet statistics.")
     discard_reason: Optional[str] = Field(
-        None, description="Reason when discard=1 (dry_run/maintenance/manual_test/…)."
+        None, description="Reason when discard=1 (dry_run/maintenance/manual_test/reboot_pending/…)."
     )
 
     # history: computed by the Data team across the day-series; empty on a lone run.

@@ -53,6 +53,7 @@
 #include "profiler_types.hpp"
 #include "profiler_state_manager.hpp"
 #include "program.hpp"
+#include "program/program_impl.hpp"
 #include "kernels/kernel.hpp"
 #include "device/device_manager.hpp"
 #include "rtoptions.hpp"
@@ -426,8 +427,8 @@ void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
             tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = ct_args});
 
         try {
-            detail::CompileProgram(device_sender, program_sender);
-            detail::CompileProgram(device_receiver, program_receiver);
+            program_sender.impl().compile(device_sender);
+            program_receiver.impl().compile(device_receiver);
         } catch (std::exception& e) {
             log_error(tt::LogMetal, "Failed compile: {}", e.what());
             throw e;

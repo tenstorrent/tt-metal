@@ -79,7 +79,7 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
     const auto topology = fabric_context.get_fabric_topology();
     TT_FATAL(topology == Topology::Mesh, "Intermesh Routing tests need Dynamic Routing enabled.");
 
-    auto devices = fixture->get_devices();
+    const auto& devices = fixture->get_devices();
 
     // Synchronize seeds across hosts (sender and receiver must use the same seed for randomization)
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
@@ -158,8 +158,7 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     // Run sender program
-    fixture->RunProgramNonblocking(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(sender_device, sender_program);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
 
     // Validate status of sender
     std::vector<uint32_t> sender_status;
@@ -200,7 +199,7 @@ void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
     TT_FATAL(topology == Topology::Mesh, "Intermesh Routing tests need Dynamic Routing enabled.");
-    auto devices = fixture->get_devices();
+    const auto& devices = fixture->get_devices();
 
     // Synchronize seeds across hosts (sender and receiver must use the same seed for randomization)
     uint32_t time_seed = 0;
@@ -248,8 +247,7 @@ void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed
     auto recv_program = create_receiver_program(compile_time_args, receiver_runtime_args, receiver_logical_core);
 
     // Run receiver program
-    fixture->RunProgramNonblocking(receiver_device, *recv_program);
-    fixture->WaitForSingleProgramDone(receiver_device, *recv_program);
+    tt_metal::LaunchProgram(*receiver_device, std::move(*recv_program), /*wait_until_cores_done=*/true);
 
     // Validate status of the receiver
     std::vector<uint32_t> receiver_status;
@@ -306,7 +304,7 @@ void run_mcast_sender_step(
     );
     // Randomly select a mcast sender device
     auto sender_phys_id = control_plane.get_physical_chip_id_from_fabric_node_id(mcast_sender_node);
-    auto sender_device = fixture->get_device(sender_phys_id);
+    const auto& sender_device = fixture->get_device(sender_phys_id);
     const auto& worker_grid_size = sender_device->compute_with_storage_grid_size();
     // Randomly select a mcast sender core
     auto sender_x = std::uniform_int_distribution<uint32_t>(0, worker_grid_size.x - 2)(global_rng);
@@ -366,8 +364,7 @@ void run_mcast_sender_step(
     tt_metal::SetRuntimeArgs(mcast_send_program, mcast_send_kernel, sender_logical_core, sender_runtime_args);
 
     log_debug(tt::LogTest, "Run Sender on: {}", sender_device->id());
-    fixture->RunProgramNonblocking(sender_device, mcast_send_program);
-    fixture->WaitForSingleProgramDone(sender_device, mcast_send_program);
+    tt_metal::LaunchProgram(*sender_device, std::move(mcast_send_program), /*wait_until_cores_done=*/true);
 
     // Validate status of sender
     std::vector<uint32_t> sender_status;
@@ -463,12 +460,12 @@ void run_mcast_recv_step(
     // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     for (auto& [dev, recv_program] : recv_programs) {
         log_debug(tt::LogTest, "Run receiver on: {}", dev->id());
-        fixture->RunProgramNonblocking(dev, *recv_program);
+        fixture->RunProgramNonblocking(dev, std::move(*recv_program));
     }
 
     // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
     for (auto& [dev, recv_program] : recv_programs) {
-        fixture->WaitForSingleProgramDone(dev, *recv_program);
+        fixture->WaitForSingleProgramDone(dev);
     }
     // Validate status of the receiver
     // Request test results from the sender host and ensure that they match

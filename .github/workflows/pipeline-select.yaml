@@ -15,15 +15,7 @@ on:
         required: true
         type: string
         default: "in-service"
-      single-card-demo:
-        description: 'Demo tests. Input ''all'', ''disabled'', or a list of requested models as JSON array, for example: ["bge_m3"]'
-        default: disabled
-        type: string
       single-card-perf-device-models:
-        required: false
-        type: boolean
-        default: false
-      single-card-ttnn-models-frequent:
         required: false
         type: boolean
         default: false
@@ -62,9 +54,7 @@ jobs:
   determine-tests:
     runs-on: ubuntu-slim
     outputs:
-      run-demo: ${{ steps.logic.outputs.run-demo }}
       run-perf-device-models: ${{ steps.logic.outputs.run-perf-device-models }}
-      run-ttnn-models-frequent: ${{ steps.logic.outputs.run-ttnn-models-frequent }}
       run-cpp-unit: ${{ steps.logic.outputs.run-cpp-unit }}
     steps:
       - name: Determine test execution
@@ -72,21 +62,15 @@ jobs:
         run: |
           case "${{ inputs.trigger_type }}" in
             "manual")
-              echo "run-demo=${{ inputs.single-card-demo != 'disabled' }}" >> $GITHUB_OUTPUT
               echo "run-perf-device-models=${{ inputs.single-card-perf-device-models }}" >> $GITHUB_OUTPUT
-              echo "run-ttnn-models-frequent=${{ inputs.single-card-ttnn-models-frequent }}" >> $GITHUB_OUTPUT
               echo "run-cpp-unit=${{ inputs.cpp-unit }}" >> $GITHUB_OUTPUT
               ;;
             "models-mandatory")
-              echo "run-demo=false" >> $GITHUB_OUTPUT
               echo "run-perf-device-models=true" >> $GITHUB_OUTPUT
-              echo "run-ttnn-models-frequent=true" >> $GITHUB_OUTPUT
               echo "run-cpp-unit=true" >> $GITHUB_OUTPUT
               ;;
             "models-extended")
-              echo "run-demo=true" >> $GITHUB_OUTPUT
               echo "run-perf-device-models=true" >> $GITHUB_OUTPUT
-              echo "run-ttnn-models-frequent=true" >> $GITHUB_OUTPUT
               echo "run-cpp-unit=true" >> $GITHUB_OUTPUT
               ;;
           esac
@@ -108,18 +92,6 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       build-inplace-wheel: true
       tracy: ${{ needs.determine-tests.outputs.run-perf-device-models == 'true' }}
-  single-card-demo-tests:
-    if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
-    needs: [build-artifact, determine-tests]
-    secrets: inherit
-    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
-    with:
-      extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      requested-models: ${{ inputs.trigger_type == 'manual' && inputs.single-card-demo || 'all' }}
-      arch: wormhole_b0
   single-card-perf-device-models-tests:
     if: ${{ needs.determine-tests.outputs.run-perf-device-models == 'true' }}
     needs: [build-artifact, determine-tests]
@@ -127,15 +99,6 @@ jobs:
     uses: ./.github/workflows/perf-device-models-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  single-card-ttnn-models-frequent:
-    if: ${{ needs.determine-tests.outputs.run-ttnn-models-frequent == 'true' }}
-    needs: [build-artifact, determine-tests]
-    secrets: inherit
-    uses: ./.github/workflows/single-card-ttnn-models-frequent-tests-impl.yaml
-    with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
