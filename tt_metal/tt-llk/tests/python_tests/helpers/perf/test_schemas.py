@@ -111,7 +111,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
     },
     "perf_eltwise_unary_sfpu": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "approx_mode",
             "clamp_negative",
@@ -124,6 +124,7 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "fused_sort",
             "iterations",
             "loop_factor",
             "marker",
