@@ -321,6 +321,9 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             {"scaler_bits", scaler_bits},
             {"use_welford", 1u},
             {"enable_fp32_sfpu", 0u},
+            // Welford never splits the H axis; {1, Ht} selects the reader's un-split path.
+            {"num_h_slices", 1u},
+            {"slice_Ht", Ht},
         };
         reader_rta_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"};
     } else {

@@ -11,6 +11,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 
 void kernel_main() {
     // Start id in column major order. This should be the start of a column.
@@ -25,6 +26,11 @@ void kernel_main() {
     constexpr auto scaler_bits = get_arg(args::scaler_bits);
     constexpr bool use_welford = get_arg(args::use_welford) != 0;
     constexpr auto fp32_mode = get_arg(args::enable_fp32_sfpu) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
+    // H-axis split geometry: the reduction axis is cut into `num_h_slices` slices of `slice_Ht` tiles
+    // each, and the work units become (nc, slice, wt) triples over a (N, C, num_h_slices, W) result.
+    // {1, Ht} is the un-split reduce.
+    constexpr auto num_h_slices = get_arg(args::num_h_slices);
+    constexpr auto slice_Ht = get_arg(args::slice_Ht);
 
     // Welford must process one column at a time because the SFPU can only maintain
     // a single running mean/M2 state. DEST_AUTO_LIMIT interleaves multiple columns
@@ -51,6 +57,51 @@ void kernel_main() {
     dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);
 
     auto tensor_accessor = TensorAccessor(tensor::src);
+
+    if constexpr (num_h_slices > 1) {
+        //
+        // === H-axis split ===
+        //
+        // Each work unit is a (nc, slice, wt) triple of the (N, C, num_h_slices, W) result, laid out
+        // wt-fastest then slice then nc — the same ordering writer_reduce_rm_scalar.cpp recovers from
+        // its start_output_tile_id. col_start_tile_id carries the global work-unit id
+        // (curr_col_in_batch is unused), so the tile ids come out in closed form rather than from an
+        // incremental walk.
+        //
+        // The (j over the slice's H, k over the W-chunk) nesting matches the un-split path, so the
+        // tile order the compute kernel sees still lines up with its DEST_AUTO_LIMIT chunking.
+        //
+        const uint32_t work_start = col_start_tile_id;
+        for (uint32_t i = 0; i < num_cols; i += row_chunk) {
+            const uint32_t chunk_end = std::min(i + row_chunk, num_cols);
+            for (uint32_t j = 0; j < slice_Ht; ++j) {
+                for (uint32_t k = i; k < chunk_end; ++k) {
+                    const uint32_t id = work_start + k;
+                    const uint32_t wt = id % Wt;
+                    const uint32_t slice = (id / Wt) % num_h_slices;
+                    const uint32_t nc = id / (Wt * num_h_slices);
+                    const uint32_t ht = slice * slice_Ht + j;
+
+                    dfb_in0.reserve_back(onetile);
+                    if (ht < Ht) {
+                        noc.async_read(
+                            tensor_accessor,
+                            dfb_in0,
+                            tile_bytes,
+                            {.page_id = nc * HtWt + ht * Wt + wt},
+                            {.offset_bytes = 0});
+                        noc.async_read_barrier();
+                    } else {
+                        // slice_Ht is rounded up, so the trailing slices can run past the end of the
+                        // reduction axis. Push the SUM identity instead of reading out of bounds.
+                        dataflow_kernel_lib::zero_tile(dfb_in0);
+                    }
+                    dfb_in0.push_back(onetile);
+                }
+            }
+        }
+        return;
+    }
 
     uint32_t w = curr_col_in_batch;
 
