@@ -337,6 +337,13 @@ void validate_matmul_reuse_work_split(
 
 namespace ttnn::prim::dram_sharded_helpers {
 
+void validate_num_workers_per_dram_bank(std::size_t workers_per_bank) {
+    TT_FATAL(
+        workers_per_bank >= 1 && workers_per_bank <= 3,
+        "num_workers_per_dram_bank must be in [1, 3], got {}",
+        workers_per_bank);
+}
+
 tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const ttnn::MeshCoordinate& coord) {
     ttnn::distributed::MeshDevice* device = a.device();
     const ttnn::distributed::MeshDeviceView& view = device->get_view();
@@ -402,8 +409,7 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
     tt::tt_metal::NOC noc,
     uint32_t workers_per_bank,
     const CoreRangeSet& secondary_reader_excluded_cores) {
-    TT_FATAL(
-        workers_per_bank >= 1 && workers_per_bank <= 3, "workers_per_bank must be in [1, 3], got {}", workers_per_bank);
+    validate_num_workers_per_dram_bank(workers_per_bank);
 
     const auto primary_workers = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
     std::vector<DramBankReaderAssignment> assignments;
@@ -442,6 +448,8 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
                     // reader to minimize NOC hops without routing one NOC to multiple endpoints.
                     const uint32_t cost = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
                         device, candidate, primary_workers[bank], noc);
+                    // Equal-cost candidates use the same endpoint and hop count. Keep the first candidate in ascending
+                    // x/y scan order so that the assignment is deterministic without adding a second routing objective.
                     if (cost < best_cost) {
                         found = true;
                         best_cost = cost;

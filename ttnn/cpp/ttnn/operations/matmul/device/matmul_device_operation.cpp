@@ -629,11 +629,7 @@ void validate_matmul_compute_grid_and_per_core_dims(
                 if constexpr (std::is_same_v<
                                   ProgramConfigType,
                                   operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
-                    TT_FATAL(
-                        program_config.num_workers_per_dram_bank >= 1 && program_config.num_workers_per_dram_bank <= 3,
-                        "{}: num_workers_per_dram_bank must be in [1, 3], got {}",
-                        config_name,
-                        program_config.num_workers_per_dram_bank);
+                    dram_sharded_helpers::validate_num_workers_per_dram_bank(program_config.num_workers_per_dram_bank);
                     TT_FATAL(
                         program_config.num_workers_per_dram_bank == 1 ||
                             input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE,

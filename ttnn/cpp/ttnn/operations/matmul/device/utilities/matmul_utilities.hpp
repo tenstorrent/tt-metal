@@ -355,6 +355,8 @@ struct DramBankReaderAssignment {
     uint32_t worker_index;
 };
 
+void validate_num_workers_per_dram_bank(std::size_t workers_per_bank);
+
 // This type of access pattern cannot be copied.
 // Treat it as a one off patch to restore functionality that
 // was adjusted to fix one P0 causing another P0.

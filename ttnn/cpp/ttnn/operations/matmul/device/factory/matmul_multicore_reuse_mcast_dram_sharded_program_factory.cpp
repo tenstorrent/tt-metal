@@ -39,6 +39,7 @@ namespace reuse_dram_sharded_optimized_helpers {
 using dram_sharded_helpers::get_dram_bank_reader_assignments;
 using dram_sharded_helpers::get_max_page_size_and_num_pages;
 using dram_sharded_helpers::move_common_entries;
+using dram_sharded_helpers::validate_num_workers_per_dram_bank;
 
 static ProgramDescriptor create_program_dram_sharded_descriptor(
     tt::tt_metal::IDevice* device,
@@ -111,10 +112,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         std::swap(start_core_noc, end_core_noc);
     }
 
-    TT_FATAL(
-        workers_per_bank >= 1 && workers_per_bank <= 3,
-        "DRAM-sharded matmul supports one to three workers per bank, got {}",
-        workers_per_bank);
+    validate_num_workers_per_dram_bank(workers_per_bank);
     TT_FATAL(
         workers_per_bank == 1 || device->arch() == tt::ARCH::BLACKHOLE,
         "Multiple workers per DRAM bank are currently supported only on Blackhole");
@@ -785,6 +783,8 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     }
 
     // Worker cores: in1 sender/writer runtime args
+    constexpr std::size_t num_shards_to_write_back_arg_index = 6;
+    constexpr std::size_t fixed_writer_arg_count = 11;
     for (uint32_t i = 0; i < all_worker_cores_ordered.size(); ++i) {
         auto core = all_worker_cores_ordered[i];
         const auto& reader_assignment = reader_assignments[i];
@@ -895,14 +895,15 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
                 }
             }
 
-            mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + 6, num_cores_write_back);
+            mm_in1_sender_writer_args.insert(
+                mm_in1_sender_writer_args.begin() + num_shards_to_write_back_arg_index, num_cores_write_back);
         }
 
         // A worker can legitimately have no output storage shard to reshard, for example when the reader count exceeds
         // the output shard count. The kernel still materializes its fixed writer-argument views before the zero-count
         // write-back loop, so provide neutral placeholders for those slots.
-        if (mm_in1_sender_writer_args.size() < 11) {
-            mm_in1_sender_writer_args.resize(11, 0);
+        if (mm_in1_sender_writer_args.size() < fixed_writer_arg_count) {
+            mm_in1_sender_writer_args.resize(fixed_writer_arg_count, 0);
         }
 
         // Build variant args: positions [1] and [2] are buffer addresses
