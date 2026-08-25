@@ -56,6 +56,9 @@ HEARTBEAT_INTERVAL_S = 30.0
 # How long to wait for the producer (generate_rank_bindings) to finish on its own before a whole-cluster
 # recover (which would otherwise disrupt the producer's live MPI job); if it overruns, it is stopped.
 PRODUCER_SETTLE_BEFORE_RECOVER_S = 300.0
+# After the producer exits with nothing consumed yet: how long to re-poll solutions_index.yaml before
+# concluding it truly generated nothing (covers cross-NFS-client attribute-cache lag on the index write).
+PRODUCER_EXIT_INDEX_SETTLE_S = 90.0
 
 
 def _short_id(sid: str) -> str:
@@ -203,6 +206,7 @@ def _build_producer_cmd(
     distinct_host_sets: bool,
     allow_shape_permutations: bool,
     mpi_args: Optional[List[str]],
+    tcp_interface: Optional[str] = None,
 ) -> List[str]:
     """Build the ``generate_rank_bindings --all-solutions`` command (the streaming *producer*).
 
@@ -217,6 +221,23 @@ def _build_producer_cmd(
     mock_rank_to_desc: Optional[Dict[int, Path]] = None
     if mock_cluster_rank_binding is not None:
         mock_rank_to_desc = load_mock_rank_to_descriptors(mock_cluster_rank_binding.resolve())
+
+    # The producer is its own mpirun job (independent of the per-solution tt-runs, which get
+    # --tcp-interface via tt-run's flag synthesis). Without these flags the producer relies on
+    # OMPI_MCA_* environment variables and multi-host runs fail interface selection
+    # ("server accept cannot find guid"). Mirror the flags tt-run generates.
+    if tcp_interface:
+        mpi_args = list(mpi_args or []) + [
+            "--mca",
+            "btl",
+            "self,tcp",
+            "--mca",
+            "btl_tcp_if_include",
+            tcp_interface,
+            "--prtemca",
+            "oob_tcp_if_include",
+            tcp_interface,
+        ]
 
     cmd = build_generate_rank_bindings_mpi_cmd(
         executable=executable,
@@ -1022,6 +1043,21 @@ class SolutionConsumer:
                     last_heartbeat = time.time()
                 time.sleep(POLL_INTERVAL_S)
                 continue
+            # Producer-exit settle: the producer may run on a different NFS client than this consumer,
+            # and a single index read right after its exit can be served from a stale attribute cache
+            # (close-to-open consistency lag, up to ~60s) -- wrongly concluding 0 solutions even though
+            # solutions_index.yaml already lists them. Before concluding an EMPTY sweep, re-poll the
+            # index (bounded) until the write becomes visible.
+            if self.producer is not None and not consumed:
+                settle_deadline = time.time() + PRODUCER_EXIT_INDEX_SETTLE_S
+                settled = False
+                while time.time() < settle_deadline:
+                    if self._available():
+                        settled = True
+                        break
+                    time.sleep(3)
+                if settled:
+                    continue
             break  # producer finished (or none) and nothing new left to consume
         return self.results
 
@@ -1226,6 +1262,7 @@ def main(
             distinct_host_sets=distinct_host_sets,
             allow_shape_permutations=allow_shape_permutations,
             mpi_args=parsed_mpi_args,
+            tcp_interface=tcp_interface,
         )
         if dry_run:
             click.echo(f"{PREFIX} Producer (stream solutions):\n  {' '.join(shlex.quote(c) for c in producer_cmd)}")
