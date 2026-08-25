@@ -7,6 +7,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/ternary_backward/ternary_backward.hpp"
@@ -23,7 +24,9 @@ std::vector<Tensor> addcmul_bw(
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(3);
-    grad_tensor.emplace_back(grad);
+    // d/d(input_a) is grad itself, but it still has to land where the caller asked.
+    // to_memory_config returns the tensor unchanged, with no dispatch, when it already has.
+    grad_tensor.emplace_back(ttnn::to_memory_config(grad, output_mem_config));
     Tensor grad_a = ttnn::multiply(
         ttnn::multiply(grad, tensor2, std::nullopt, output_mem_config), value, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(std::move(grad_a));
@@ -43,7 +46,9 @@ std::vector<Tensor> addcdiv_bw(
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(3);
-    grad_tensor.emplace_back(grad);
+    // d/d(input_a) is grad itself, but it still has to land where the caller asked.
+    // to_memory_config returns the tensor unchanged, with no dispatch, when it already has.
+    grad_tensor.emplace_back(ttnn::to_memory_config(grad, output_mem_config));
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
     Tensor grad_a = ttnn::multiply(
