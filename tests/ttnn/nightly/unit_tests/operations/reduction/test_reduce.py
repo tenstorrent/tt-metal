@@ -205,6 +205,59 @@ def test_rm_reduce_h_axis_split(device, reduce_op, dtype, keepdim, shape):
     )
 
 
+# Tall-H TILE reduces: Ht >= 32 splits the H reduce into ROW_MAJOR FP32 partials collapsed by a
+# second stage. Post-commit covers the shape matrix at keepdim=False; the very tall Wt=1 cases and
+# the keepdim variants live here.
+@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("keepdim", [False, True])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 1, 3136, 144),  # EfficientNetB0 global-pool; Wt=5, split fills the grid
+        (1, 1, 12544, 32),  # very tall, Wt=1 — the split takes this from 1 core to the whole grid
+        (1, 1, 51264, 32),  # the shape from the issue; deepest per-slice accumulation here
+        (1, 1, 3216, 128),  # non-aligned H → trailing slices past the end (identity pad)
+        (1, 1, 3136, 145),  # non-aligned W → last-tile clamp in the RM writer
+    ],
+)
+def test_tile_reduce_h_axis_split(device, reduce_op, dtype, keepdim, shape):
+    """H reduce on tall TILE input — stage 1 keeps the tiled reader/compute and emits ROW_MAJOR FP32
+    partials; stage 2 is the dense RM H collapse."""
+    if dtype == ttnn.bfloat16 and shape[2] >= 12544:
+        pytest.skip("bf16 accumulation-limited at this H; covered by the FP32 variant")
+    torch.manual_seed(0)
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    torch_input = torch.rand(shape, dtype=torch_dtype)
+    torch_op = torch.mean if reduce_op == "mean" else torch.sum
+    torch_ref = torch_op(torch_input.float(), dim=-2, keepdim=keepdim).to(torch_dtype)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_op = ttnn.mean if reduce_op == "mean" else ttnn.sum
+    tt_output = ttnn_op(tt_input, dim=-2, keepdim=keepdim)
+    # A TILE input keeps TILE output: stage 1's ROW_MAJOR partials must not leak out as the op's
+    # natural layout the way they do on the RM path.
+    assert tt_output.layout == ttnn.TILE_LAYOUT
+
+    if dtype == ttnn.float32:
+        # Only mean has an accurate fp32 SFPU reduce; sum goes through the TF32-truncating FPU.
+        rtol = 0.002 if reduce_op == "mean" else 0.004
+        pcc_threshold, atol, frobenius_threshold = 0.999, 1e-3, 0.003
+    else:
+        # See the RM variant above: reducing torch.rand leaves the output near-constant, so bf16
+        # quantization dominates the variance PCC measures. Relative error carries the check.
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.97, 0.01, 0.02, 0.005
+    assert_numeric_metrics(
+        torch_ref,
+        ttnn.to_torch(tt_output),
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+        check_ulp=False,
+    )
+
+
 # Partials are always ROW_MAJOR, so output_layout only selects what the final combine stage emits —
 # orthogonal to dtype, so bfloat16 alone covers it.
 @pytest.mark.parametrize("reduce_op", ["mean", "sum"])
