@@ -203,7 +203,28 @@ template <typename S>
 struct Storage {
     using shape = S;
 
-    explicit Storage(uint32_t cb_id) : cb_id(cb_id) {}
+    explicit Storage(uint32_t cb_id) : cb_id(cb_id) {
+        // The host sizes the circular buffer and the kernel names the Shape, and until
+        // here nothing made the two meet. A buffer smaller than one block cannot ever
+        // satisfy cb_reserve_back, so the kernel does not fail -- it waits forever, with
+        // no assert and no output, and the device needs a reset. Checking it where the
+        // Storage is built turns that into a stop at a source line.
+        //
+        // Greater-or-equal, not equal: a deeper buffer is how a reader runs ahead of
+        // compute, and every prefetch depth in this work is exactly that.
+        //
+        // Assertion-only, and asserts are compiled out unless WATCHER_ENABLED or
+        // LIGHTWEIGHT_KERNEL_ASSERTS is set -- see unified_api_hazards.md, which is why
+        // the test harness turns them on.
+        //
+        // Data movement only: cb_interface does not link on a TRISC, so a live read of it
+        // from a compute projection fails the build. One thread is enough -- the host
+        // configures one circular buffer for the core, so every projection would be
+        // checking the same number.
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+        ASSERT(cb_num_pages(cb_id) >= S::num_pages);
+#endif
+    }
 
     Storage(Storage&&) = delete;
     Storage(const Storage&) = delete;
@@ -637,6 +658,22 @@ inline constexpr uint32_t kCoreGridW = TT_UNIFIED_CORE_GRID_W;
 inline constexpr bool kCoreGridKnown = false;
 inline constexpr uint32_t kCoreGridH = 1;
 inline constexpr uint32_t kCoreGridW = 1;
+#endif
+
+// Whether that grid is the WHOLE story: H x W cores, all of them running this program.
+//
+// It is not always. The grid above is the core range's BOUNDING BOX, and a range set need
+// not fill it -- twelve cores laid out row-major are eight in row 0 and four in row 1,
+// whose bounding box is 2 x 8 = sixteen. A rectangle is the only thing a multicast can
+// address, so anything derived from the bounding box then addresses four cores that were
+// never launched, and a barrier waits on them forever.
+//
+// The harness knows both numbers and defines this only when they agree, which turns that
+// hang into a compile error at the one call that cannot take a region argument.
+#if defined(TT_UNIFIED_CORE_GRID_EXACT)
+inline constexpr bool kCoreGridExact = true;
+#else
+inline constexpr bool kCoreGridExact = false;
 #endif
 
 // Two bfloat16 1.0 values in one 32-bit word -- the scaler a SUM reduction wants.

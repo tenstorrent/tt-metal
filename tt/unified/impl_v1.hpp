@@ -977,6 +977,11 @@ void synchronize_cores() {
         kCoreGridKnown,
         "synchronize_cores() with no region needs the program's core grid: build the program through "
         "unified_program(), which defines TT_UNIFIED_CORE_GRID_H/W -- or pass a region explicitly");
+    static_assert(
+        kCoreGridExact,
+        "synchronize_cores() with no region barriers the core grid's BOUNDING BOX, and this program's "
+        "cores do not fill it -- so the barrier would wait on cores that were never launched, forever. "
+        "Either launch on a rectangular core set, or pass the region this barrier actually means");
     synchronize_cores<thread>(LogicalMcast{LogicalCoord::yx(0, 0), Extent::hw(kCoreGridH, kCoreGridW)});
 }
 

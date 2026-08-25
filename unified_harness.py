@@ -146,11 +146,22 @@ def unified_program(
     grid_h = bbox.end.y - bbox.start.y + 1
     grid_w = bbox.end.x - bbox.start.x + 1
 
-    defines = list(defines or []) + [
-        ("TT_UNIFIED_MCAST_SEM_BASE", str(mcast_sem_base)),
-        ("TT_UNIFIED_CORE_GRID_H", str(grid_h)),
-        ("TT_UNIFIED_CORE_GRID_W", str(grid_w)),
-    ]
+    # Whether the cores FILL that bounding box. core_block(12) is eight cores in row 0 and
+    # four in row 1, whose box is 2x8 -- so a barrier derived from the box would address
+    # four cores that were never launched and wait on them forever. Defining this only when
+    # the two agree is what makes the no-region synchronize_cores() a compile error rather
+    # than a hang; see unified_api_hazards.md.
+    grid_exact = core_ranges.num_cores() == grid_h * grid_w
+
+    defines = (
+        list(defines or [])
+        + [
+            ("TT_UNIFIED_MCAST_SEM_BASE", str(mcast_sem_base)),
+            ("TT_UNIFIED_CORE_GRID_H", str(grid_h)),
+            ("TT_UNIFIED_CORE_GRID_W", str(grid_w)),
+        ]
+        + ([("TT_UNIFIED_CORE_GRID_EXACT", "1")] if grid_exact else [])
+    )
 
     shared = dict(
         kernel_source=kernel_source,
