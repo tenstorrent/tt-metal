@@ -10,9 +10,9 @@
 
 namespace tensor_accessor {
 
-// NullTensorBindingToken: emitted when this ProgramSpec did not declare the named TensorParameter.
-// Naming the symbol always compiles. Constructing a TensorAccessor / LocalTensorAccessor from it
-// does not.
+// Emitted when this ProgramSpec did not declare the named TensorParameter.
+// Used as stand-in type to describe null-bindings.
+// Cannot be used to construct a TensorAccessor / LocalTensorAccessor.
 struct NullTensorBindingToken {
     static constexpr bool is_null = true;
 };

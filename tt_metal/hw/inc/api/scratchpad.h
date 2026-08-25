@@ -25,10 +25,6 @@
 // Here my_scratchpad_name is a constexpr ScratchpadBindingToken, auto-included in
 // kernel_bindings_generated.h.
 //
-// If this ProgramSpec did not declare the named scratchpad, codegen emits a
-// NullScratchpadBindingToken instead. Naming the symbol always compiles. Constructing a
-// Scratchpad from a NullScratchpadBindingToken does not.
-//
 class ScratchpadBindingToken {
 public:
     explicit constexpr ScratchpadBindingToken(uint32_t crta_offset, uint32_t size_in_bytes) noexcept :
@@ -44,6 +40,9 @@ private:
     uint32_t size_in_bytes_;  // static per-node size
 };
 
+// Emitted when this ProgramSpec did not declare the named Scratchpad.
+// Used as stand-in type to describe null-bindings.
+// Cannot be used to construct a Scratchpad.
 struct NullScratchpadBindingToken {
     static constexpr bool is_null = true;
 };
@@ -90,7 +89,8 @@ public:
     [[nodiscard]] explicit Scratchpad(const ScratchpadBindingToken& token) noexcept :
         Scratchpad(pointer{get_common_arg_val<uint32_t>(token.crta_offset_)}, token.size_in_bytes_) {}
 
-    // Null bindings have no allocated region — constructing a Scratchpad from one is a compile error.
+    // Cannot construct a Scratchpad from a NullScratchpadBindingToken, consider binding the token to an actual resource
+    // on host. See: ProgramSpec on host.
     explicit Scratchpad(const NullScratchpadBindingToken&) = delete;
 
     /** @brief Get the element at the given index
