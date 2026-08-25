@@ -247,6 +247,7 @@ PERF_TEST_SCHEMAS = {
             "marker",
         ],
         "aliases": {},
+        "test_name_aliases": {"perf_fused": "perf_fused"},
     },
     "perf_math_matmul": {
         "version": 3,
@@ -800,6 +801,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "marker",
         ],
         "aliases": {},
+        "test_name_aliases": {"perf_fused_quasar": "perf_fused_quasar"},
     },
     "perf_matmul_quasar": {
         "version": 3,
