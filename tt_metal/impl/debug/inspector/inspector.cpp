@@ -376,11 +376,11 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
         const auto peer_ep = is_sender ? distributed::SocketEndpoint::RECEIVER : distributed::SocketEndpoint::SENDER;
         // One entry per local core: a sender core feeding several downstreams collects several peers
         // here, rather than repeating the core once per downstream.
-        std::map<std::tuple<uint32_t, uint32_t, uint32_t>, inspector::MeshSocketEndpointData> endpoint_by_core;
+        std::map<std::tuple<uint32_t, uint32_t, uint32_t>, inspector::MeshSocketLocalCoreData> by_core;
         for (const auto& conn : socket->get_config().socket_connection_config) {
             const auto& local_core = is_sender ? conn.sender_core : conn.receiver_core;
             if (!mesh_device->is_local(local_core.device_coord)) {
-                continue;  // Another rank owns this endpoint and reports it itself.
+                continue;  // Another rank owns this core and reports it itself.
             }
             auto* local_device = mesh_device->get_device(local_core.device_coord);
             if (local_device == nullptr) {
@@ -399,22 +399,22 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
                 static_cast<uint32_t>(local_core.core_coord.x),
                 static_cast<uint32_t>(local_core.core_coord.y));
             // Reassigned per connection, but every connection on a core agrees on these.
-            auto& endpoint = endpoint_by_core[core_key];
-            endpoint.chip_id = local_device->id();
-            endpoint.core_x = local_core.core_coord.x;
-            endpoint.core_y = local_core.core_coord.y;
-            endpoint.fabric_chip_id = local_node.chip_id;
-            auto& peer = endpoint.peers.emplace_back();
+            auto& core_data = by_core[core_key];
+            core_data.chip_id = local_device->id();
+            core_data.core.core_x = local_core.core_coord.x;
+            core_data.core.core_y = local_core.core_coord.y;
+            core_data.core.fabric_chip_id = local_node.chip_id;
+            auto& peer = core_data.peers.emplace_back();
             peer.fabric_chip_id = peer_node.chip_id;
             peer.core_x = peer_core.core_coord.x;
             peer.core_y = peer_core.core_coord.y;
         }
-        if (endpoint_by_core.empty()) {
-            return;  // this rank owns no endpoint of this socket
+        if (by_core.empty()) {
+            return;  // this rank owns no core of this socket
         }
-        socket_data.endpoints.reserve(endpoint_by_core.size());
-        for (auto& [core, endpoint] : endpoint_by_core) {
-            socket_data.endpoints.push_back(std::move(endpoint));
+        socket_data.local_cores.reserve(by_core.size());
+        for (auto& [key, core_data] : by_core) {
+            socket_data.local_cores.push_back(std::move(core_data));
         }
         if (data->mesh_socket_logging_enabled) {
             data->logger.log_mesh_socket_created(config_buffer.get(), socket_data);

@@ -8,18 +8,19 @@ Usage:
     dump_mesh_sockets
 
 Description:
-    Dumps raw MeshSocket flow-control metadata from the L1 config buffers, one row per endpoint.
-    Endpoints come from the Inspector getSockets RPC. MeshSocket only.
+    Dumps raw MeshSocket flow-control metadata from the L1 config buffers, one row per core.
+    Cores come from the Inspector getSockets RPC. MeshSocket only.
 
-    Each socket has two endpoints, a sender and a receiver, each with its own config buffer on its
-    own core, and each gets its own row. Role says which one, and columns that live in the other
-    endpoint's buffer are N/A. To join the two halves of a socket, match a sender row's Downstream
-    Addr against a receiver row's Config Addr; that works the same on one host or across ranks, where
-    a rank only ever sees its own endpoints. A sender with several downstreams gets one row per
-    downstream, numbered in Downstream #. All core coordinates are logical. An endpoint whose config
-    buffer could not be read gets no row.
+    A socket pair has a sender side and a receiver side, each with its own config buffer. A side owns
+    one or more local cores, and each core gets its own row. Role says which side, and columns that
+    live in the other side's buffer are N/A. To join the two halves of a socket, match a sender row's
+    Downstream Addr against a receiver row's Config Addr; that pairs the sockets, not the individual
+    cores, and works the same on one host or across ranks, where a rank only ever sees its own cores.
+    A sender core feeding several downstreams gets one row per downstream, numbered in Downstream #,
+    and the Peer column names the core each row describes. All core coordinates are logical. A core
+    whose config buffer could not be read gets no row.
 
-    Node is this endpoint's own fabric node id, the one chip name that is identical on every rank. A
+    Node is this core's own fabric node id, the one chip name that is identical on every rank. A
     peer on this host shows as its device id, matching the Dev column; a peer on another rank shows as
     a fabric node id, which you match against the Node column of that rank's output.
 
@@ -35,7 +36,7 @@ Description:
     The L1 copies of the counters a kernel owns are only refreshed by update_socket_config at kernel
     exit, so they hold where the previous invocation finished. The current values are read instead from
     the SocketSenderInterface / SocketReceiverInterface local in the kernel's frame, matched on
-    config_addr. That halts the endpoint core. A column reads ? when the frame could not be walked or
+    config_addr. That halts the core. A column reads ? when the frame could not be walked or
     the local was optimized out.
 
 Owner:
@@ -111,10 +112,10 @@ class SenderMd:
 
 
 @dataclass
-class Endpoint:
+class SocketCore:
     role: str
     location: OnChipCoordinate
-    node: str  # this endpoint's own fabric node id
+    node: str  # this core's own fabric node id
     config_addr: int
     md_size: int
     acked_stride: int
@@ -142,37 +143,37 @@ class SocketRow:
     peer: str = triage_field("Peer")
 
 
-def read_md(ep: Endpoint) -> ReceiverMd | SenderMd:
-    if ep.role == "receiver":
-        raw = read_from_device(ep.location, ep.config_addr, num_bytes=struct.calcsize(RECV_FMT))
+def read_md(core: SocketCore) -> ReceiverMd | SenderMd:
+    if core.role == "receiver":
+        raw = read_from_device(core.location, core.config_addr, num_bytes=struct.calcsize(RECV_FMT))
         return ReceiverMd(*struct.unpack(RECV_FMT, raw))
 
     sent, n_down, wr, dstr_config_addr, _dstr_fifo, fifo, is_d2h = struct.unpack(
-        SEND_FMT, read_from_device(ep.location, ep.config_addr, num_bytes=struct.calcsize(SEND_FMT))
+        SEND_FMT, read_from_device(core.location, core.config_addr, num_bytes=struct.calcsize(SEND_FMT))
     )
-    acked_base = ep.config_addr + ep.md_size
+    acked_base = core.config_addr + core.md_size
     acked = [
-        struct.unpack("<I", read_from_device(ep.location, acked_base + i * ep.acked_stride, num_bytes=4))[0]
+        struct.unpack("<I", read_from_device(core.location, acked_base + i * core.acked_stride, num_bytes=4))[0]
         for i in range(max(n_down, 1))
     ]
     return SenderMd(sent, n_down, wr, dstr_config_addr, fifo, is_d2h, acked)
 
 
-def read_interface(ep: Endpoint, callstack_provider: CallstackProvider) -> dict[str, int]:
+def read_interface(core: SocketCore, callstack_provider: CallstackProvider) -> dict[str, int]:
     """The kernel's Socket{Sender,Receiver}Interface local, found by matching its config_addr."""
-    fields = ("bytes_sent", "write_ptr") if ep.role == "sender" else ("bytes_acked", "read_ptr")
+    fields = ("bytes_sent", "write_ptr") if core.role == "sender" else ("bytes_acked", "read_ptr")
     dispatcher_data = callstack_provider.dispatcher_data
-    for risc_name in ep.location.noc_block.risc_names:
+    for risc_name in core.location.noc_block.risc_names:
         try:
-            if dispatcher_data.is_idle_in_default_view(ep.location, risc_name):
+            if dispatcher_data.is_idle_in_default_view(core.location, risc_name):
                 continue
             frames = callstack_provider.get_cached_callstacks(
-                ep.location, risc_name, use_full_callstack=True
+                core.location, risc_name, use_full_callstack=True
             ).kernel_callstack_with_message.callstack
         except TimeoutDeviceRegisterError:
             raise
         except Exception as e:
-            log_warning_risc(risc_name, ep.location, f"socket callstack: {e}")
+            log_warning_risc(risc_name, core.location, f"socket callstack: {e}")
             continue
         for frame in frames:
             for var in frame.locals + frame.arguments:
@@ -191,14 +192,14 @@ def read_interface(ep: Endpoint, callstack_provider: CallstackProvider) -> dict[
                     except TimeoutDeviceRegisterError:
                         raise
                     except Exception as e:
-                        log_warning_risc(risc_name, ep.location, f"socket interface: {e}")
+                        log_warning_risc(risc_name, core.location, f"socket interface: {e}")
                         continue
-                    if values.pop("config_addr") == ep.config_addr:
+                    if values.pop("config_addr") == core.config_addr:
                         return values
     return {}
 
 
-def discover(inspector_data, id_mapping, run_checks) -> list[Endpoint]:
+def discover(inspector_data, id_mapping, run_checks) -> list[SocketCore]:
     sockets = list(inspector_data.getSockets().sockets)
 
     def to_device(metal_id: int):
@@ -209,24 +210,24 @@ def discover(inspector_data, id_mapping, run_checks) -> list[Endpoint]:
     # Fabric node id -> device id, so a peer owned by this host can be labelled like the Dev column.
     fabric_to_device_id: dict[tuple[int, int], int] = {}
     for s in sockets:
-        for e in s.endpoints:
+        for e in s.localCores:
             device = to_device(int(e.chipId))
             if device is not None:
-                fabric_to_device_id[(int(s.localMeshId), int(e.fabricChipId))] = device.id
+                fabric_to_device_id[(int(s.localMeshId), int(e.core.fabricChipId))] = device.id
 
-    endpoints: list[Endpoint] = []
+    cores: list[SocketCore] = []
     for s in sockets:
         role = "sender" if s.isSender else "receiver"
         peer_mesh_id = int(s.peerMeshId)
-        for e in s.endpoints:
+        for e in s.localCores:
             device = to_device(int(e.chipId))
             if device is None:
                 continue
-            endpoints.append(
-                Endpoint(
+            cores.append(
+                SocketCore(
                     role=role,
-                    location=OnChipCoordinate(int(e.coreX), int(e.coreY), "logical", device, "tensix"),
-                    node=node_label(int(s.localMeshId), int(e.fabricChipId)),
+                    location=OnChipCoordinate(int(e.core.coreX), int(e.core.coreY), "logical", device, "tensix"),
+                    node=node_label(int(s.localMeshId), int(e.core.fabricChipId)),
                     config_addr=int(s.configBufferAddress),
                     md_size=int(s.senderMdSizeBytes),
                     acked_stride=int(s.bytesAckedStrideBytes),
@@ -243,80 +244,80 @@ def discover(inspector_data, id_mapping, run_checks) -> list[Endpoint]:
                 )
             )
 
-    return endpoints
+    return cores
 
 
-def sender_row(ep: Endpoint, md: SenderMd, index: int) -> SocketRow:
+def sender_row(core: SocketCore, md: SenderMd, index: int) -> SocketRow:
     return SocketRow(
         role="sender",
-        location=ep.location,
-        node=ep.node,
-        config_addr=ep.config_addr,
+        location=core.location,
+        node=core.node,
+        config_addr=core.config_addr,
         downstream_config_addr=md.downstream_config_addr,
         downstream=index,
-        sent_at_sender=ep.interface.get("bytes_sent", "?"),
+        sent_at_sender=core.interface.get("bytes_sent", "?"),
         acked_at_sender=md.bytes_acked[index],
-        write_ptr=ep.interface.get("write_ptr", "?"),
+        write_ptr=core.interface.get("write_ptr", "?"),
         sent_at_receiver=None,  # receiver's buffer
         acked_at_receiver=None,  # receiver's buffer
         read_ptr=None,  # receiver's buffer
         fifo_size=md.fifo_total_size,
         num_downstreams=md.num_downstreams,
-        peer=ep.peers[index].label(),
+        peer=core.peers[index].label(),
     )
 
 
-def receiver_row(ep: Endpoint, md: ReceiverMd) -> SocketRow:
+def receiver_row(core: SocketCore, md: ReceiverMd) -> SocketRow:
     return SocketRow(
         role="receiver",
-        location=ep.location,
-        node=ep.node,
-        config_addr=ep.config_addr,
+        location=core.location,
+        node=core.node,
+        config_addr=core.config_addr,
         downstream_config_addr=None,  # sender's buffer
         downstream=None,  # sender-side index
         sent_at_sender=None,  # sender's buffer
         acked_at_sender=None,  # sender's buffer
         write_ptr=None,  # sender's buffer
         sent_at_receiver=md.bytes_sent,
-        acked_at_receiver=ep.interface.get("bytes_acked", "?"),
-        read_ptr=ep.interface.get("read_ptr", "?"),
+        acked_at_receiver=core.interface.get("bytes_acked", "?"),
+        read_ptr=core.interface.get("read_ptr", "?"),
         fifo_size=md.fifo_total_size,
         num_downstreams=None,  # sender's buffer
-        peer=", ".join(p.label() for p in ep.peers),
+        peer=", ".join(p.label() for p in core.peers),
     )
 
 
-def endpoint_rows(ep: Endpoint) -> list[SocketRow]:
-    if isinstance(ep.md, SenderMd):
-        return [sender_row(ep, ep.md, i) for i in range(len(ep.peers))]
-    elif isinstance(ep.md, ReceiverMd):
-        return [receiver_row(ep, ep.md)]
+def core_rows(core: SocketCore) -> list[SocketRow]:
+    if isinstance(core.md, SenderMd):
+        return [sender_row(core, core.md, i) for i in range(len(core.peers))]
+    elif isinstance(core.md, ReceiverMd):
+        return [receiver_row(core, core.md)]
     return []
 
 
 def run(args, context: Context):
     run_checks = get_run_checks(args, context)
     callstack_provider = get_callstack_provider(args, context)
-    endpoints = discover(get_inspector_data(args, context), get_metal_device_id_mapping(args, context), run_checks)
-    if not endpoints:
+    cores = discover(get_inspector_data(args, context), get_metal_device_id_mapping(args, context), run_checks)
+    if not cores:
         return None
 
-    by_device: dict[int, list[Endpoint]] = {}
-    for ep in endpoints:
-        by_device.setdefault(ep.location.device.unique_id, []).append(ep)
+    by_device: dict[int, list[SocketCore]] = {}
+    for core in cores:
+        by_device.setdefault(core.location.device.unique_id, []).append(core)
 
     def collect_socket_rows(device: Device) -> list[SocketRow]:
         rows: list[SocketRow] = []
-        for ep in by_device.get(device.unique_id, []):
+        for core in by_device.get(device.unique_id, []):
             try:
-                ep.md = read_md(ep)
+                core.md = read_md(core)
             except TimeoutDeviceRegisterError:
                 raise  # let run_per_device_check mark the device (and its remotes) broken
             except Exception as e:
-                log_warning_location(ep.location, f"{ep.role} socket config buffer 0x{ep.config_addr:x}: {e}")
+                log_warning_location(core.location, f"{core.role} socket config buffer 0x{core.config_addr:x}: {e}")
                 continue
-            ep.interface = read_interface(ep, callstack_provider)
-            rows += endpoint_rows(ep)
+            core.interface = read_interface(core, callstack_provider)
+            rows += core_rows(core)
         return rows
 
     return run_checks.run_per_device_check(collect_socket_rows)

@@ -178,17 +178,18 @@ void Data::rpc_get_sockets(rpc::Inspector::GetSocketsResults::Builder& results) 
         socket.setBytesAckedStrideBytes(socket_data.bytes_acked_stride_bytes);
         socket.setLocalMeshId(socket_data.local_mesh_id);
         socket.setPeerMeshId(socket_data.peer_mesh_id);
-        auto endpoints = socket.initEndpoints(socket_data.endpoints.size());
+        auto local_cores = socket.initLocalCores(socket_data.local_cores.size());
         uint32_t j = 0;
-        for (const auto& e : socket_data.endpoints) {
-            auto endpoint = endpoints[j++];
-            endpoint.setChipId(e.chip_id);
-            endpoint.setCoreX(e.core_x);
-            endpoint.setCoreY(e.core_y);
-            endpoint.setFabricChipId(e.fabric_chip_id);
-            auto peers = endpoint.initPeers(e.peers.size());
+        for (const auto& c : socket_data.local_cores) {
+            auto local_core = local_cores[j++];
+            local_core.setChipId(c.chip_id);
+            auto core = local_core.initCore();
+            core.setCoreX(c.core.core_x);
+            core.setCoreY(c.core.core_y);
+            core.setFabricChipId(c.core.fabric_chip_id);
+            auto peers = local_core.initPeers(c.peers.size());
             uint32_t k = 0;
-            for (const auto& p : e.peers) {
+            for (const auto& p : c.peers) {
                 auto peer = peers[k++];
                 peer.setFabricChipId(p.fabric_chip_id);
                 peer.setCoreX(p.core_x);

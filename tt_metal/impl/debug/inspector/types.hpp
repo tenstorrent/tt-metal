@@ -60,18 +60,16 @@ struct MeshDeviceData {
     bool initialized = false;
 };
 
-struct MeshSocketPeerData {
+struct MeshSocketCore {
     uint32_t fabric_chip_id{};
     uint32_t core_x{};
     uint32_t core_y{};
 };
 
-struct MeshSocketEndpointData {
+struct MeshSocketLocalCoreData {
+    MeshSocketCore core;
     uint32_t chip_id{};
-    uint32_t core_x{};
-    uint32_t core_y{};
-    uint32_t fabric_chip_id{};
-    std::vector<MeshSocketPeerData> peers;
+    std::vector<MeshSocketCore> peers;
 };
 
 struct MeshSocketData {
@@ -83,7 +81,7 @@ struct MeshSocketData {
     uint32_t bytes_acked_stride_bytes{};
     uint32_t local_mesh_id{};
     uint32_t peer_mesh_id{};
-    std::vector<MeshSocketEndpointData> endpoints;
+    std::vector<MeshSocketLocalCoreData> local_cores;
 };
 
 struct MeshWorkloadRuntimeEntry {

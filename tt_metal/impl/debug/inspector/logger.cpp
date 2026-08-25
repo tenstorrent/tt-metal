@@ -176,13 +176,13 @@ void Logger::log_mesh_socket_created(
         mesh_sockets_ostream << "    fifo_size: " << socket_data.fifo_size << "\n";
         mesh_sockets_ostream << "    local_mesh_id: " << socket_data.local_mesh_id << "\n";
         mesh_sockets_ostream << "    peer_mesh_id: " << socket_data.peer_mesh_id << "\n";
-        mesh_sockets_ostream << "    endpoints:\n";
-        for (const auto& endpoint : socket_data.endpoints) {
-            mesh_sockets_ostream << "      - chip_id: " << endpoint.chip_id << "\n";
-            mesh_sockets_ostream << "        fabric_chip_id: " << endpoint.fabric_chip_id << "\n";
-            mesh_sockets_ostream << "        core: [" << endpoint.core_x << ", " << endpoint.core_y << "]\n";
+        mesh_sockets_ostream << "    local_cores:\n";
+        for (const auto& core_data : socket_data.local_cores) {
+            mesh_sockets_ostream << "      - chip_id: " << core_data.chip_id << "\n";
+            mesh_sockets_ostream << "        fabric_chip_id: " << core_data.core.fabric_chip_id << "\n";
+            mesh_sockets_ostream << "        core: [" << core_data.core.core_x << ", " << core_data.core.core_y << "]\n";
             mesh_sockets_ostream << "        peers:\n";
-            for (const auto& peer : endpoint.peers) {
+            for (const auto& peer : core_data.peers) {
                 mesh_sockets_ostream << "          - fabric_chip_id: " << peer.fabric_chip_id << "\n";
                 mesh_sockets_ostream << "            core: [" << peer.core_x << ", " << peer.core_y << "]\n";
             }
