@@ -230,6 +230,18 @@ class DiffVAEStage5Config:
 # ---------------------------------------------------------------------------
 
 
+# Backends that keep this chip's W-shard of the sequence through the whole stage. Everything the
+# W-SP path sets up -- the resharded context, the W-sharded RoPE tables, the local W extent, the
+# per-chip row count -- is identical whichever of these runs; only the attention call differs. So
+# this is a membership test rather than a string compare, and putting a backend on the sharded
+# path is a one-line change here instead of four scattered ones.
+W_SHARDED_BACKENDS = ("op_sp_w_sharded", "bricked_sp_w_sharded")
+
+
+def _is_w_sharded(backend: str) -> bool:
+    return backend in W_SHARDED_BACKENDS
+
+
 def neighborhood_attention_3d(
     q: ttnn.Tensor,
     k: ttnn.Tensor,
@@ -801,7 +813,7 @@ class _NeighborhoodAttention3D(Module):
         """
         cfg = self.config
         assert grid.batch == 1, f"batched stage 5 is not implemented; got batch={grid.batch}"
-        sharded = self.na3d_backend == "op_sp_w_sharded"
+        sharded = _is_w_sharded(self.na3d_backend)
         if sharded:
             sp = int(list(self.mesh_device.shape)[self.sp_axis])
             assert grid.w % sp == 0, f"W={grid.w} must split evenly over sp={sp}"
@@ -875,7 +887,23 @@ class _NeighborhoodAttention3D(Module):
             k = lane_unfused(self.to_k, self.k_norm)
             v = lane_unfused(self.to_v, None)
 
-        if sharded:
+        if sharded and self.na3d_backend == "bricked_sp_w_sharded":
+            # Our op: this chip's W-shard plus the halo its windows reach into, and a per-device
+            # gather table carrying where that shard sits in the global volume. Window placement
+            # stays global, so a query near a shard seam still sees a full window.
+            from ...layers.neighborhood_attention import neighborhood_attention_3d_bricked_w_sharded
+
+            out = neighborhood_attention_3d_bricked_w_sharded(
+                q,
+                k,
+                v,
+                dims=(grid.t, grid.h, grid.w),
+                kernel_size=cfg.kernel_size,
+                sp_axis=self.sp_axis,
+                ccl_manager=self.ccl_manager,
+                scale=1.0,
+            )
+        elif sharded:
             out = neighborhood_attention_3d_op_sp_w_sharded(
                 q,
                 k,
@@ -1012,7 +1040,7 @@ class DiffusionNABlock(Module):
 
         # Rows per frame on THIS chip. Under spatial-W SP the sequence is W-sharded, so a frame holds
         # only H*(W/sp) rows here; the frame-granular band slicing below must use that local count.
-        if self.na3d_backend == "op_sp_w_sharded":
+        if _is_w_sharded(self.na3d_backend):
             sp = int(list(self.mesh_device.shape)[self.sp_axis])
             rows = grid.h * (grid.w // sp)
         else:
@@ -1173,15 +1201,15 @@ class DiffVAEStage5(Module):
         # other op (context, RoPE, MLP, tail) stays replicated across tp_axis. Composes with the
         # W-shard above -- the two use orthogonal mesh axes.
         self.tp_axis = tp_axis
-        self._w_sharded = self.na3d_backend == "op_sp_w_sharded"
+        self._w_sharded = _is_w_sharded(self.na3d_backend)
         # Under column-parallel qkv (DIFFVAE_TP_PROJ) the q/k carry only heads/tp per chip, so the
         # shared RoPE tables (which repeat each row per head) must be built for the local head count.
         _tp_proj = tp_axis is not None and os.environ.get("DIFFVAE_TP_PROJ", "1") == "1"
         _tp = int(list(mesh_device.shape)[tp_axis]) if _tp_proj else 1
         self._rope_num_heads = self.config.num_heads // _tp
         if self._w_sharded:
-            assert sp_axis is not None, "op_sp_w_sharded needs sp_axis"
-            assert ccl_manager is not None, "op_sp_w_sharded needs a ccl_manager"
+            assert sp_axis is not None, f"{self.na3d_backend} needs sp_axis"
+            assert ccl_manager is not None, f"{self.na3d_backend} needs a ccl_manager"
         # The tile-aligned width the 48 patch channels are zero-padded to. The pad has to
         # be explicit on conv_in_x_t's K axis: a garbage-filled activation tail would
         # otherwise multiply against whatever the weight's own tile pad happens to hold.

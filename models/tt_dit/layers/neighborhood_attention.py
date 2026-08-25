@@ -331,3 +331,194 @@ def neighborhood_attention_3d_bricked(
         natural = to_natural(merged, volume=volume, brick=brick)
 
     return natural
+
+
+def halo_sites(context_window_extent: int, brick_extent: int) -> int:
+    """Sites of a neighbour's data a shard needs on each side of one axis.
+
+    The window reaches ``context_window // 2`` past a query, and the exchange moves whole bricks
+    because that is the unit the op addresses.
+    """
+    reach = context_window_extent // 2
+    return -(-reach // brick_extent) * brick_extent  # ceil, in whole bricks
+
+
+_SHARDED_PLAN_CACHE: dict = {}
+
+
+def _cached_sharded_plan(volume, context_window, stride, brick, resident, shard_count, sp_axis, device):
+    """One plan per shard, with the per-device gather tables stacked for a sharded upload.
+
+    Every device runs the SAME program, so the plan's shapes -- chunk count, gathered bricks --
+    must agree across shards, and they do: the resident extent is uniform and every origin is
+    brick-aligned, so only the origins themselves differ. Those ride the table, which is sharded
+    over the mesh so each device reads its own.
+    """
+    query_chunk_bricks = _query_chunk_bricks(stride, brick)
+    key = (volume, context_window, stride, brick, resident, shard_count, sp_axis, id(device))
+    entry = _SHARDED_PLAN_CACHE.get(key)
+    if entry is not None:
+        return entry
+
+    import torch
+
+    from ..utils.tensor import from_torch
+
+    owned_width = resident[2] - 2 * halo_sites(min(context_window[2], volume[2]), brick[2])
+    plans = []
+    for shard_index in range(shard_count):
+        # The device at the low edge sits BELOW the volume by one halo. Those columns are real
+        # storage holding nothing the volume contains; no query owns them, no window reaches them.
+        origin_width = shard_index * owned_width - (resident[2] - owned_width) // 2
+        plans.append(
+            ttnn.transformer.neighborhood_plan(
+                volume,
+                context_window,
+                stride,
+                brick,
+                query_chunk_bricks=query_chunk_bricks,
+                shard_extent=resident,
+                shard_origin=(0, 0, origin_width),
+            )
+        )
+
+    first = plans[0]
+    for shard_index, plan in enumerate(plans[1:], start=1):
+        for field in ("chunk_count", "gather_brick_count", "gather_bricks", "volume_chunks"):
+            assert plan[field] == first[field], (
+                f"shard {shard_index} plans a different {field} than shard 0 "
+                f"({plan[field]} vs {first[field]}); one program cannot serve both"
+            )
+
+    columns = first["gather_origin_columns"]
+    stacked = torch.tensor([plan["gather_origin_table"] for plan in plans], dtype=torch.uint32).reshape(
+        shard_count, 1, first["chunk_count"], columns
+    )
+    first["gather_origin_tensor"] = from_torch(
+        stacked,
+        device=device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_axes=[sp_axis, None, None, None],
+    )
+    first["query_chunk_bricks"] = query_chunk_bricks
+    # Generated on device: the uploaded regime sets are enumerated against a single shard origin,
+    # and here every shard has its own.
+    first["interior_mask_tensor"] = None
+    _SHARDED_PLAN_CACHE[key] = first
+    return first
+
+
+def neighborhood_attention_3d_bricked_w_sharded(
+    query: ttnn.Tensor,
+    key: ttnn.Tensor,
+    value: ttnn.Tensor,
+    *,
+    dims: tuple[int, int, int],
+    kernel_size: tuple[int, int, int],
+    sp_axis: int,
+    ccl_manager,
+    scale: float | None = None,
+) -> ttnn.Tensor:
+    """Spatial-W sharded NA3D. ``q``/``k``/``v`` are this chip's W-shard; ``dims`` is the FULL grid.
+
+    Each chip widens its shard by a halo on both sides, runs the op over the widened region with
+    window placement kept GLOBAL, and keeps only the columns it owns. Clamping therefore happens
+    at the true volume boundary rather than at a shard seam -- the failure mode that would
+    otherwise truncate the receptive field of every query within half a window of an internal
+    edge and still return plausible video.
+
+    The halo is symmetric because a mesh runs one program and every device must therefore hold
+    the same resident extent. That puts the device at the low edge of the volume at a negative
+    origin, which the op's signed shard origin handles.
+    """
+    batch, time_extent, height_extent, width_local, head_count, head_dim = tuple(query.shape)
+    assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"
+
+    shard_count = int(list(query.device().shape)[sp_axis])
+    volume = dims
+    assert (
+        volume[2] == width_local * shard_count
+    ), f"W {volume[2]} does not split into {shard_count} shards of {width_local}"
+
+    context_window = tuple(min(window, extent) for window, extent in zip(kernel_size, volume))
+    brick_env = os.environ.get("DIFFVAE_NA_BRICK")
+    brick = (
+        tuple(int(part) for part in brick_env.split(","))
+        if brick_env
+        else tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
+    )
+    stride_env = os.environ.get("DIFFVAE_GNA_STRIDE")
+    stride = tuple(int(part) for part in stride_env.split(",")) if stride_env else (1, 1, 1)
+    if scale is None:
+        scale = head_dim**-0.5
+
+    halo = halo_sites(context_window[2], brick[2])
+    assert halo <= width_local, (
+        f"a {halo}-site halo exceeds the {width_local}-site shard: the window reaches past the "
+        f"neighbour into its neighbour, which a single-hop exchange cannot serve"
+    )
+    resident = (time_extent, height_extent, width_local + 2 * halo)
+
+    device = query.device()
+    plan = _cached_sharded_plan(volume, context_window, stride, brick, resident, shard_count, sp_axis, device)
+    channels = head_count * head_dim
+    bricked_sites = brick_count(resident, brick) * SITES_PER_BRICK
+    num_links = max(1, ccl_manager.num_links)
+    semaphore = ccl_manager.get_np_ping_pong_semaphore(sp_axis)
+
+    def widened(tensor: ttnn.Tensor) -> ttnn.Tensor:
+        """This chip's shard plus a halo of each neighbour's edge, in op layout."""
+        rows = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+        volume_form = ttnn.reshape(rows, (batch, time_extent, height_extent, width_local, channels))
+        exchanged = ccl_manager.neighbor_pad_persistent_buffer(
+            volume_form,
+            dims=[3],
+            pad_left=[halo],
+            pad_right=[halo],
+            padding_mode="zeros",
+            axes=[sp_axis],
+            neighbor_sems=[semaphore],
+            num_links=[num_links],
+        )
+        bricked = to_bricked(exchanged, volume=resident, brick=brick)
+        site_major = ttnn.reshape(bricked, (batch, 1, bricked_sites, channels))
+        return ttnn.to_layout(site_major, ttnn.TILE_LAYOUT)
+
+    with _deep_prof(device, "halo+brick-permute (q,k,v)", category=decode_tree.RESHAPE):
+        query_op, key_op, value_op = (widened(tensor) for tensor in (query, key, value))
+
+    with _deep_prof(device, "neighborhood-sdpa", category=decode_tree.SDPA):
+        attended = ttnn.transformer.neighborhood_scaled_dot_product_attention(
+            query_op,
+            key_op,
+            value_op,
+            plan["gather_origin_tensor"],
+            interior_mask=plan["interior_mask_tensor"],
+            volume=volume,
+            context_window=context_window,
+            stride=stride,
+            brick=brick,
+            query_chunk_bricks=plan["query_chunk_bricks"],
+            shard_extent=resident,
+            # Representative only: the plan's SHAPES are uniform across shards, and each device
+            # reads its own origin out of the sharded table above.
+            shard_origin=(0, 0, -halo),
+            head_count=head_count,
+            scale=scale,
+            tiles_per_kv_chunk=_tiles_per_kv_chunk(plan["gather_brick_count"]),
+        )
+
+    with _deep_prof(device, "unbrick-permute", category=decode_tree.RESHAPE):
+        rows = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
+        merged = ttnn.reshape(rows, (batch, bricked_sites, channels))
+        natural = to_natural(merged, volume=resident, brick=brick)
+        # Drop the halo: those columns belong to a neighbour, which computed them itself.
+        owned = ttnn.slice(
+            natural,
+            [0, 0, 0, halo, 0],
+            [batch, time_extent, height_extent, halo + width_local, channels],
+        )
+        ttnn.deallocate(natural)
+
+    return owned

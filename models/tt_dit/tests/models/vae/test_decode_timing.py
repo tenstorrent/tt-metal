@@ -227,3 +227,47 @@ def test_decode_1080p_tp_pcc(*, mesh_device):
     logger.info(f"[1080p-pcc] gather-mesh reference:          runtime {t_ref:8.0f} ms")
     logger.info(f"[1080p-pcc] no-TP sharded:  PCC {_pcc(no_tp, ref) * 100:.4f} %   runtime {t_no:8.0f} ms")
     logger.info(f"[1080p-pcc] TP + col-qkv:   PCC {_pcc(tp_full, ref) * 100:.4f} %   runtime {t_tp:8.0f} ms")
+
+
+# Does W-sharding stage 5 change what it computes? Window placement must stay GLOBAL: a query
+# within half a context window of a shard seam still needs a full window, clamped only at the
+# true volume boundary. Getting that wrong truncates the receptive field along every internal
+# edge and still returns plausible video, so this compares pixels rather than trusting it.
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("latent_hw", [(16, 16)], ids=["s16"])
+def test_decode_wsp_shard_equivalence(*, mesh_device, latent_hw):
+    if not CHECKPOINT.exists():
+        pytest.skip(f"missing {CHECKPOINT}")
+    from models.tt_dit.parallel.manager import CCLManager
+
+    config = decoder_config(CHECKPOINT)
+    lh, lw = latent_hw
+    torch.manual_seed(0)
+    t_lat = int(os.environ.get("DIFFVAE_LATENT_T", 8))
+    latent = torch.randn(1, config["in_channels"], t_lat, lh, lw)
+    ccl = CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 2)), topology=_topology())
+
+    pixels = {}
+    for backend in ("bricked", "bricked_sp_w_sharded"):
+        decoder = DiffVAEDecoder(
+            config,
+            mesh_device=mesh_device,
+            ccl_manager=ccl,
+            stages_na3d_backend="gather",
+            stage5_na3d_backend=backend,
+            stage5_sp_axis=1,
+        )
+        decoder.load_checkpoint(CHECKPOINT)
+        pixels[backend] = decoder.decode(latent, seed=0).float()
+        ttnn.synchronize_device(mesh_device)
+
+    replicated, sharded = pixels["bricked"], pixels["bricked_sp_w_sharded"]
+    flat = torch.stack([replicated.flatten(), sharded.flatten()])
+    correlation = torch.corrcoef(flat)[0, 1].item()
+    spread = (replicated.max() - replicated.min()).item()
+    drift = ((replicated - sharded).abs().mean() / spread * 100).item()
+    print(f"\n[shard equivalence] PCC {correlation:.6f}   mean |difference| {drift:.4f}% of range\n")
+    assert correlation > 0.999, f"W-sharded stage 5 disagrees with replicated: PCC {correlation:.6f}"
