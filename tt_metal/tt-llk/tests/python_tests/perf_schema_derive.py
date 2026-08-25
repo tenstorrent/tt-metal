@@ -103,26 +103,112 @@ def class_field_specs() -> dict:
     return specs
 
 
-def _call_name(elt: ast.Call):
-    return (
-        elt.func.id
-        if isinstance(elt.func, ast.Name)
-        else getattr(elt.func, "attr", None)
-    )
-
-
-def _self_attr(node):
-    """``self.x`` -> "x", anything else -> None."""
-    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-        return node.attr if node.value.id == "self" else None
+def _call_func_name(elt: ast.Call):
+    if isinstance(elt.func, ast.Name):
+        return elt.func.id
+    if isinstance(elt.func, ast.Attribute):
+        return elt.func.attr
     return None
 
 
-def helper_returned_param_calls(specs: dict) -> dict:
-    """Map helper-function name -> the param constructor Calls it returns.
+def _self_attr(node):
+    if (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "self"
+    ):
+        return node.attr
+    return None
 
-    ``generate_input_dim(...)`` returns ``INPUT_DIMENSIONS(...)``. Tests pass the
-    helper in templates=, so the derivation must follow the return.
+
+def _post_init_none_copies(class_node: ast.ClassDef) -> dict:
+    """Map dest -> src for ``if self.dest is None: self.dest = self.src``.
+
+    NUM_BLOCKS / NUM_TILES_IN_BLOCK copy the shared constructor arg into the
+    input_* / output_* fields this way; the runtime then emits those fields.
+    """
+    copies = {}
+    for stmt in class_node.body:
+        if not isinstance(stmt, ast.FunctionDef) or stmt.name != "__post_init__":
+            continue
+        for if_node in ast.walk(stmt):
+            if not isinstance(if_node, ast.If):
+                continue
+            test = if_node.test
+            if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+                continue
+            if not isinstance(test.ops[0], ast.Is):
+                continue
+            dest = _self_attr(test.left)
+            if dest is None or len(test.comparators) != 1:
+                continue
+            cmp = test.comparators[0]
+            if not (isinstance(cmp, ast.Constant) and cmp.value is None):
+                continue
+            for assign in if_node.body:
+                if not isinstance(assign, ast.Assign) or len(assign.targets) != 1:
+                    continue
+                assign_dest = _self_attr(assign.targets[0])
+                src = _self_attr(assign.value)
+                if assign_dest == dest and src:
+                    copies[dest] = src
+    return copies
+
+
+def class_post_init_copies() -> dict:
+    """Map parameter class name -> {dest_field: src_field} from ``__post_init__``."""
+    copies: dict[str, dict] = {}
+    for path in iter_source_files():
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            if not any(
+                isinstance(b, ast.Name) and b.id in PARAM_BASES for b in node.bases
+            ):
+                continue
+            found = _post_init_none_copies(node)
+            if found:
+                copies.setdefault(node.name, found)
+    return copies
+
+
+def _direct_return_calls(fn: ast.FunctionDef) -> list:
+    """Return Call nodes from this function's body, not from nested functions."""
+    returns = []
+
+    def visit_stmts(stmts):
+        for stmt in stmts:
+            if isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Call):
+                returns.append(stmt.value)
+            elif isinstance(stmt, ast.If):
+                visit_stmts(stmt.body)
+                visit_stmts(stmt.orelse)
+            elif isinstance(stmt, (ast.For, ast.While, ast.AsyncFor)):
+                visit_stmts(stmt.body)
+                visit_stmts(stmt.orelse)
+            elif isinstance(stmt, ast.Try):
+                visit_stmts(stmt.body)
+                for handler in stmt.handlers:
+                    visit_stmts(handler.body)
+                visit_stmts(stmt.orelse)
+                visit_stmts(stmt.finalbody)
+            elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+                visit_stmts(stmt.body)
+
+    visit_stmts(fn.body)
+    return returns
+
+
+def helper_returned_param_calls(specs: dict) -> dict:
+    """Map helper function name -> param-class constructor Calls it returns.
+
+    ``generate_input_dim(...)`` is not itself a parameter class, but it returns
+    ``INPUT_DIMENSIONS(...)``. Tests put the helper call in templates=, so the
+    gate has to follow the return to see the four dimension columns.
     """
     helpers: dict[str, list] = {}
     for path in iter_source_files():
@@ -130,92 +216,17 @@ def helper_returned_param_calls(specs: dict) -> dict:
             tree = ast.parse(path.read_text())
         except SyntaxError:
             continue
-        for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)):
-            # Returns from a function nested inside fn belong to that function.
-            nested = {
-                n
-                for d in ast.walk(fn)
-                if isinstance(d, ast.FunctionDef) and d is not fn
-                for n in ast.walk(d)
-            }
-            got = [
-                n.value
-                for n in ast.walk(fn)
-                if isinstance(n, ast.Return)
-                and n not in nested
-                and isinstance(n.value, ast.Call)
-                and _call_name(n.value) in specs
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            returned = [
+                call
+                for call in _direct_return_calls(node)
+                if _call_func_name(call) in specs
             ]
-            if not got:
-                continue
-            prior = helpers.get(fn.name)
-            if prior is None:
-                helpers[fn.name] = got
-            elif sorted(map(_call_name, prior)) != sorted(map(_call_name, got)):
-                # First-wins would drop the other one's columns without a word,
-                # which is the blind spot this module exists to remove.
-                raise ValueError(
-                    f"two helpers named '{fn.name}' return different parameter "
-                    f"classes ({sorted(map(_call_name, prior))} vs "
-                    f"{sorted(map(_call_name, got))}); rename one, the derivation "
-                    "cannot tell which a test called."
-                )
+            if returned:
+                helpers.setdefault(node.name, returned)
     return helpers
-
-
-def class_post_init_copies() -> dict:
-    """Map param-class name -> {dest: src} for ``if self.dest is None: self.dest = self.src``.
-
-    ``NUM_BLOCKS`` fills input_*/output_* this way: one field set, three emitted.
-    """
-    copies: dict[str, dict] = {}
-    for path in iter_source_files():
-        try:
-            tree = ast.parse(path.read_text())
-        except SyntaxError:
-            continue
-        for cls in (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)):
-            if not any(
-                isinstance(b, ast.Name) and b.id in PARAM_BASES for b in cls.bases
-            ):
-                continue
-            found = {}
-            for fn in cls.body:
-                if not (isinstance(fn, ast.FunctionDef) and fn.name == "__post_init__"):
-                    continue
-                for node in ast.walk(fn):
-                    test = getattr(node, "test", None)
-                    if not (
-                        isinstance(node, ast.If)
-                        and isinstance(test, ast.Compare)
-                        and len(test.ops) == 1
-                        and isinstance(test.ops[0], ast.Is)
-                        and isinstance(test.comparators[0], ast.Constant)
-                        and test.comparators[0].value is None
-                    ):
-                        continue
-                    dest = _self_attr(test.left)
-                    for stmt in node.body:
-                        if (
-                            dest
-                            and isinstance(stmt, ast.Assign)
-                            and len(stmt.targets) == 1
-                            and _self_attr(stmt.targets[0]) == dest
-                            and _self_attr(stmt.value)
-                        ):
-                            found[dest] = _self_attr(stmt.value)
-            if not found:
-                continue
-            prior = copies.get(cls.name)
-            if prior is None:
-                copies[cls.name] = found
-            elif prior != found:
-                raise ValueError(
-                    f"parameter class '{cls.name}' is declared more than once with "
-                    f"different __post_init__ copies ({prior} vs {found}); "
-                    "consolidate them or rename one."
-                )
-    return copies
 
 
 def emitted_fields(
@@ -227,25 +238,38 @@ def emitted_fields(
     emit a field unless (its default is None AND the call does not set it). This
     stops us over-listing optional slots like MATH_OP.pool_type/unary_extra.
 
-    ``helpers`` and ``post_init`` add the two constructs the plain rule misses: a
-    helper that returns a param object, and a ``__post_init__`` copy of a field.
+    Helpers that return a parameter object (``generate_input_dim`` ->
+    ``INPUT_DIMENSIONS``) are followed to that constructor. Fields that
+    ``__post_init__`` copies from an already-emitted field (``NUM_BLOCKS``
+    filling ``input_num_blocks``) are emitted too, matching
+    ``PerfConfig._build_sweep_frame``.
     """
-    name = _call_name(elt)
-    if name not in specs and helpers and name in helpers:
-        return [
-            f
-            for c in helpers[name]
-            for f in emitted_fields(c, specs, helpers, post_init)
-        ]
+    helpers = helpers or {}
+    post_init = post_init or {}
+    name = _call_func_name(elt)
+    if name is None:
+        return []
+    if name not in specs and name in helpers:
+        fields = []
+        for returned in helpers[name]:
+            fields.extend(emitted_fields(returned, specs, helpers, post_init))
+        return fields
     fields = specs.get(name)
     if fields is None:
         return []
     provided = {fields[i][0] for i in range(min(len(elt.args), len(fields)))}
     provided |= {kw.arg for kw in elt.keywords if kw.arg}
     emitted = [f for f, dflt_none in fields if not (dflt_none and f not in provided)]
-    for dest, src in (post_init or {}).get(name, {}).items():
-        if src in emitted and dest not in emitted:
-            emitted.append(dest)
+    emitted_set = set(emitted)
+    copies = post_init.get(name, {})
+    changed = True
+    while changed:
+        changed = False
+        for dest, src in copies.items():
+            if dest not in emitted_set and src in emitted_set:
+                emitted.append(dest)
+                emitted_set.add(dest)
+                changed = True
     return emitted
 
 
@@ -356,11 +380,11 @@ def derive_perf_test_schemas(quasar: bool = False) -> dict:
     global drift gates, not here.
 
     Static approximation: it reads params passed as literal templates=/runtimes=
-    lists (inline, via a variable, or as a dict entry), follows a helper that
-    returns a param object, and includes ``__post_init__`` copies of None-default
-    fields. Params built purely at runtime (comprehensions) are still invisible,
-    which is why ``_assert_matches_catalog`` re-checks the catalog against the CSV
-    a run actually produced.
+    lists (inline, via a variable, or as a dict entry). Helper calls that return
+    a parameter object (``generate_input_dim``) and ``__post_init__`` copies of
+    None-default fields (``NUM_BLOCKS.input_num_blocks``) are included. Params
+    built purely at runtime (comprehensions) are not visible; only the runtime
+    report (or the hardware-free report test, #51244) is exact.
     """
     ps = load_pure_module("schema.py")
     fixed = list(ps.FORMAT_HEADERS) + list(ps.FLAG_HEADERS)

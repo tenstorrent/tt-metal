@@ -203,6 +203,38 @@ def test_test_name_aliases_reject_rename_without_updating_map():
     assert any("perf_old" in p and "perf_new" in p for p in problems)
 
 
+def test_emitted_fields_include_post_init_copies():
+    specs = class_field_specs()
+    post_init = class_post_init_copies()
+    call = ast.parse("NUM_BLOCKS(4)").body[0].value
+    fields = set(emitted_fields(call, specs, post_init=post_init))
+    assert {"num_blocks", "input_num_blocks", "output_num_blocks"} <= fields
+    tiles = ast.parse("NUM_TILES_IN_BLOCK(8)").body[0].value
+    tile_fields = set(emitted_fields(tiles, specs, post_init=post_init))
+    assert {
+        "num_tiles_in_block",
+        "input_num_tiles_in_block",
+        "output_num_tiles_in_block",
+    } <= tile_fields
+
+
+def test_emitted_fields_follow_helper_return():
+    specs = class_field_specs()
+    helpers = helper_returned_param_calls(specs)
+    call = ast.parse("generate_input_dim((32, 32), (32, 32))").body[0].value
+    fields = set(emitted_fields(call, specs, helpers=helpers))
+    assert {"full_rt_dim", "full_ct_dim", "block_ct_dim", "block_rt_dim"} <= fields
+
+
+def test_emitted_fields_leave_optional_math_op_slots_unset():
+    specs = class_field_specs()
+    call = ast.parse("MATH_OP(MathOperation.Elwadd)").body[0].value
+    fields = set(emitted_fields(call, specs))
+    assert "mathop" in fields
+    assert "unary_extra" not in fields
+    assert "pool_type" not in fields
+
+
 def test_test_name_aliases_reject_missing_and_stale_key():
     catalog = {
         "perf_new": {"version": 1, "columns": ["marker"]},

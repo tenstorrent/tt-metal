@@ -292,8 +292,16 @@ def get_unique_base_names(input_dir: Path):
     return sorted(unique_bases)
 
 
-def _reject_duplicate_keys(frame: pd.DataFrame, label: str) -> pd.DataFrame:
-    """Fail the session if any rows share the same (sweep-params, marker) key."""
+def _collapse_duplicate_keys(frame: pd.DataFrame, label: str) -> pd.DataFrame:
+    """Reject rows sharing the same (sweep-params, marker) key.
+
+    Two distinct sweep variants can resolve to an identical recorded key when the
+    harness normalizes a parameter before recording it (e.g. dest_acc forced from
+    No to Yes for an outlier format combo in TestConfig). A differing same-key
+    pair is usually run-to-run noise, but it is also the signature of a test that
+    failed to record a parameter that actually changes the kernel, so it must not
+    pass silently.
+    """
     if frame.empty or MARKER not in frame.columns:
         return frame
 
@@ -319,18 +327,11 @@ def _reject_duplicate_keys(frame: pd.DataFrame, label: str) -> pd.DataFrame:
             ].nunique()
             differing = int((nunique > 1).any(axis=1).sum())
 
-        examples = [
-            dict(zip(key_cols, key if isinstance(key, tuple) else (key,)))
-            for key in list(dup_groups.index[:3])
-        ]
         raise PerfSchemaError(
-            f"{label}: {int(len(dup_groups))} duplicate (sweep-params, marker) "
-            f"key(s) spanning {int(dup_groups.sum())} rows; {differing} key(s) "
-            "disagreed on a metric value. A key must identify one measurement. "
-            "Either the sweep varies something that is not recorded as a column, "
-            "or two sweep points normalize onto the same recorded value (e.g. "
-            "dest_acc promoted from No to Yes for an outlier format combo). "
-            f"First duplicate key(s): {examples}"
+            f"{label}: found {int(len(dup_groups))} duplicate (sweep-params, marker) "
+            f"key(s) spanning {int(dup_groups.sum())} rows; {differing} key(s) had "
+            "differing metric values (run-to-run noise, or a distinguishing "
+            "parameter not recorded as a column)."
         )
     except PerfSchemaError:
         raise
