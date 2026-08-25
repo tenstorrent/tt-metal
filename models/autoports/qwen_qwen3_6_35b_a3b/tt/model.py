@@ -85,9 +85,17 @@ def hf_weights_cached(model_id: str = MODEL_ID) -> bool:
 
 
 class _SafetensorCheckpoint:
-    """Small streaming loader for the local HF sharded checkpoint."""
+    """Small streaming loader for the HF sharded checkpoint.
+
+    Shards are opened from the local snapshot when present and fetched from the
+    Hub on first access otherwise. Downloading the index alone materializes a
+    snapshot dir containing just that JSON (run 32831701064 died on the first
+    shard read that way), so permission to go online must extend to every shard.
+    """
 
     def __init__(self, model_id: str = MODEL_ID, *, local_files_only: bool = True):
+        self.model_id = model_id
+        self.local_files_only = local_files_only
         index_path = hf_hub_download(model_id, "model.safetensors.index.json", local_files_only=local_files_only)
         self.index_path = Path(index_path)
         with self.index_path.open(encoding="utf-8") as f:
@@ -95,9 +103,15 @@ class _SafetensorCheckpoint:
         self.weight_map: dict[str, str] = data["weight_map"]
         self.snapshot_dir = self.index_path.parent
 
+    def _shard_path(self, shard_name: str) -> Path:
+        path = self.snapshot_dir / shard_name
+        if path.exists():
+            return path
+        return Path(hf_hub_download(self.model_id, shard_name, local_files_only=self.local_files_only))
+
     def load_tensor(self, key: str) -> torch.Tensor:
         shard_name = self.weight_map[key]
-        with safe_open(self.snapshot_dir / shard_name, framework="pt", device="cpu") as shard:
+        with safe_open(self._shard_path(shard_name), framework="pt", device="cpu") as shard:
             return shard.get_tensor(key)
 
     def load_prefix(self, prefix: str, *, strip_prefix: bool = True) -> dict[str, torch.Tensor]:
@@ -107,7 +121,7 @@ class _SafetensorCheckpoint:
         out: dict[str, torch.Tensor] = {}
         for shard_name in sorted({self.weight_map[key] for key in keys}):
             shard_keys = [key for key in keys if self.weight_map[key] == shard_name]
-            with safe_open(self.snapshot_dir / shard_name, framework="pt", device="cpu") as shard:
+            with safe_open(self._shard_path(shard_name), framework="pt", device="cpu") as shard:
                 for key in shard_keys:
                     out[key.removeprefix(prefix) if strip_prefix else key] = shard.get_tensor(key)
         return out
