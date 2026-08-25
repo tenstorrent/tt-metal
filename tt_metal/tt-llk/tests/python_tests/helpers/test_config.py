@@ -838,11 +838,10 @@ class TestConfig:
             )
             golden_generators_module.get_golden_generator = get_golden_proxied
 
-        # Always have a fresh build when compiling. Under xdist, only the
-        # controller may remove the shared artifact tree; workers can already
-        # be compiling variants under it. Never on a collect-only pass either —
-        # setup_mode still runs while pytest is only counting tests, so this
-        # would wipe a build that a following consumer run is about to read.
+        # Start compilation from a clean artifact directory. With xdist, only
+        # the controller can safely remove shared artifacts because workers may
+        # already be writing to them. Skip cleanup during test collection so a
+        # subsequent consumer run can reuse the existing build.
         if (
             TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]
             and worker_id == "master"
