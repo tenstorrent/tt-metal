@@ -177,7 +177,7 @@ std::vector<uint32_t> Mcast1D::runtime_args(const tt::tt_metal::CoreCoord& core)
         return rotating_rt_(core);
     }
     if (is_sender(core)) {
-        return sender_rect_(core);
+        return line_rect_(core);
     }
     const auto sender = sender_of_(core);
     const auto virtual_sender = virt_(sender);
@@ -295,31 +295,7 @@ std::vector<uint32_t> Mcast1D::noc_ordered_bbox_(const std::vector<std::pair<uin
     return detail::noc_ordered_bbox(cfg_.noc, coordinates);
 }
 
-std::vector<uint32_t> Mcast1D::sender_rect_(const tt::tt_metal::CoreCoord& core) const {
-    const auto sender = sender_of_(core);
-    const auto receiver_box = receiver_grid_.bounding_box();
-    if (!receiver_box.contains(sender)) {
-        std::vector<std::pair<uint32_t, uint32_t>> coordinates;
-        coordinates.reserve(receiver_span_);
-        for (uint32_t i = 0; i < receiver_span_; ++i) {
-            coordinates.push_back(virt_(line_coord_(core, i)));
-        }
-        return noc_ordered_bbox_(coordinates);
-    }
-
-    if (receiver_span_ == 1) {
-        return noc_ordered_bbox_({virt_(sender)});
-    }
-
-    const uint32_t sender_index = shape_ == Mcast1DShape::PerRow ? static_cast<uint32_t>(sender.x) - origin_x_
-                                                                 : static_cast<uint32_t>(sender.y) - origin_y_;
-    if (sender_index == 0) {
-        return noc_ordered_bbox_({virt_(line_coord_(core, 1u)), virt_(line_coord_(core, receiver_span_ - 1u))});
-    }
-    if (sender_index == receiver_span_ - 1u) {
-        return noc_ordered_bbox_({virt_(line_coord_(core, 0u)), virt_(line_coord_(core, receiver_span_ - 2u))});
-    }
-
+std::vector<uint32_t> Mcast1D::line_rect_(const tt::tt_metal::CoreCoord& core) const {
     std::vector<std::pair<uint32_t, uint32_t>> coordinates;
     coordinates.reserve(receiver_span_);
     for (uint32_t i = 0; i < receiver_span_; ++i) {
