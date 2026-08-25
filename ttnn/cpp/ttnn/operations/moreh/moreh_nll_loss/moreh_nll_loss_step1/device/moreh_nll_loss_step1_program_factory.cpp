@@ -3,13 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <string>
+#include <string_view>
 
 #include "moreh_nll_loss_step1_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -47,15 +47,15 @@ DataflowBufferSpec make_dfb(
 // Used for the three buffers only the reader touches, which therefore hold both endpoints
 // themselves. (`weight_scratch` invokes no FIFO machinery at all, so its labels are cosmetic;
 // the buffer still needs both endpoints declared to be a legal dataflow buffer.)
-void bind_self_loop(Group<DFBBinding>& bindings, const DFBSpecName& dfb, std::string accessor_name) {
+void bind_self_loop(Group<DFBBinding>& bindings, const DFBSpecName& dfb, std::string_view accessor_name) {
     bindings.push_back(DFBBinding{
         .dfb_spec_name = dfb,
-        .accessor_name = accessor_name,
+        .accessor_name = std::string{accessor_name},
         .endpoint_type = DFBEndpointType::PRODUCER,
     });
     bindings.push_back(DFBBinding{
         .dfb_spec_name = dfb,
-        .accessor_name = std::move(accessor_name),
+        .accessor_name = std::string{accessor_name},
         .endpoint_type = DFBEndpointType::CONSUMER,
     });
 }
@@ -158,11 +158,12 @@ ttnn::device_operation::ProgramArtifacts MorehNllLossStep1DeviceOperation::Facto
     // declare the tensors the kernels operate on
     const auto& target_mesh = target.mesh_tensor();
     const auto& output_mesh = output.mesh_tensor();
+    const MeshTensor* const weight_mesh = weight_has_value ? &weight.value().mesh_tensor() : nullptr;
 
     spec.tensor_parameters.push_back(TensorParameter{.unique_id = TENSOR_TARGET, .spec = target_mesh.tensor_spec()});
     if (weight_has_value) {
         spec.tensor_parameters.push_back(
-            TensorParameter{.unique_id = TENSOR_WEIGHT, .spec = weight.value().mesh_tensor().tensor_spec()});
+            TensorParameter{.unique_id = TENSOR_WEIGHT, .spec = weight_mesh->tensor_spec()});
     }
     spec.tensor_parameters.push_back(TensorParameter{.unique_id = TENSOR_OUTPUT, .spec = output_mesh.tensor_spec()});
 
@@ -293,7 +294,7 @@ ttnn::device_operation::ProgramArtifacts MorehNllLossStep1DeviceOperation::Facto
 
     run_args.tensor_args.emplace(TENSOR_TARGET, target_mesh);
     if (weight_has_value) {
-        run_args.tensor_args.emplace(TENSOR_WEIGHT, weight.value().mesh_tensor());
+        run_args.tensor_args.emplace(TENSOR_WEIGHT, *weight_mesh);
     }
     run_args.tensor_args.emplace(TENSOR_OUTPUT, output_mesh);
 
