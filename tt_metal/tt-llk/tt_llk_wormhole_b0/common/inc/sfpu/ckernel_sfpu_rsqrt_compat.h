@@ -96,6 +96,25 @@ sfpi_inline sfpi::vFloat _reciprocal_compat_(const sfpi::vFloat in)
     return setexp(result, new_exp);
 }
 
+// 1/in, carrying the sign that _reciprocal_compat_ drops.
+//
+// The primitive above forces the sign bit and so returns |1/in|; it is only half of a reciprocal,
+// and every caller that wants 1/in owes it the negate below. Spelled out at each call site that
+// step is easy to leave out, and leaving it out is silent -- the result stays correct for positive
+// inputs and is wrong only in sign for negative ones. Prefer this wrapper; take the bare primitive
+// only where the magnitude is the intent.
+template <int max_iter = 3>
+sfpi_inline sfpi::vFloat _reciprocal_compat_signed_(const sfpi::vFloat in)
+{
+    sfpi::vFloat out = _reciprocal_compat_<max_iter>(in);
+    v_if (in < 0.0)
+    {
+        out = -out;
+    }
+    v_endif;
+    return out;
+}
+
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool fp32_dest_acc_en>
 inline void _calculate_rsqrt_compat_(const int iterations)
 {
@@ -104,12 +123,7 @@ inline void _calculate_rsqrt_compat_(const int iterations)
     {
         sfpi::dst_reg[0] = _sqrt_compat_<APPROXIMATION_MODE, 2>(sfpi::dst_reg[0]);
         sfpi::vFloat in  = sfpi::dst_reg[0];
-        sfpi::vFloat out = _reciprocal_compat_<APPROXIMATION_MODE ? 2 : 3>(in);
-        v_if (in < 0.0)
-        {
-            out = -out;
-        }
-        v_endif;
+        sfpi::vFloat out = _reciprocal_compat_signed_<APPROXIMATION_MODE ? 2 : 3>(in);
         if constexpr (!(fp32_dest_acc_en || APPROXIMATION_MODE))
         {
             out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
@@ -137,12 +151,7 @@ inline void _calculate_reciprocal_compat_(const int iterations)
     for (int d = 0; d < iterations; d++)
     {
         sfpi::vFloat in  = sfpi::dst_reg[0];
-        sfpi::vFloat out = _reciprocal_compat_<APPROXIMATION_MODE ? 2 : 3>(in);
-        v_if (in < 0.0)
-        {
-            out = -out;
-        }
-        v_endif;
+        sfpi::vFloat out = _reciprocal_compat_signed_<APPROXIMATION_MODE ? 2 : 3>(in);
         if constexpr (!(fp32_dest_acc_en || APPROXIMATION_MODE))
         {
             out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
