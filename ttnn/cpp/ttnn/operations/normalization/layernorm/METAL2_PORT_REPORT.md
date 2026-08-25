@@ -1,4 +1,14 @@
-# Metal 2.0 Port Report — `layernorm` (`LayerNormMultiCoreProgramFactory`)
+# Metal 2.0 Port Report — `layernorm`
+
+The op's two program factories were ported in two passes, one factory each, and each pass has its own
+report below:
+
+- [Part 1 — `LayerNormMultiCoreProgramFactory`](#part-1--layernormmulticoreprogramfactory)
+- [Part 2 — `LayerNormShardedProgramFactory`](#part-2--layernormshardedprogramfactory)
+
+---
+
+# Part 1 — `LayerNormMultiCoreProgramFactory`
 
 ## Outcome
 
@@ -235,7 +245,7 @@ wrinkle, three semaphores, and the borrowed-memory list.
 ### Shared kernel touches
 
 - **Reused an existing `_metal2` fork (rung 1):**
-  [ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp](../../../../kernel/dataflow/generate_bcast_scalar_metal2.hpp),
+  [ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp](../../../kernel/dataflow/generate_bcast_scalar_metal2.hpp),
   whose `generate_bcast_col_scalar(DataflowBuffer&, uint32_t)` replaces the legacy
   `generate_bcast_scalar.hpp` version taking a `CircularBuffer`. All four ported readers now bind
   the fork. **No new file was created and no pointer comment was added** to the legacy original —
@@ -349,3 +359,394 @@ Each is an ops-team call.
   input *and* a non-large tensor. `test_layer_norm_ulp.py` is the only file that varies
   `fp32_dest_acc_en`, and it passes no residual, so nothing in the confirmed set covers the
   combination. It is worth a targeted test rather than leaving it to chance.
+
+---
+
+# Part 2 — `LayerNormShardedProgramFactory`
+
+## Outcome
+
+**`PORTED`** — `LayerNormShardedProgramFactory` and the thirteen kernel entry points it can select
+across its three `distributed_norm_stage` values are on `ProgramSpecFactoryConcept`. With Part 1
+already done, **both** of the op's factories are now on the spec concept and the op has no
+`create_descriptor` left anywhere.
+
+**No-regression result.** The confirmed test set gives **2631 passed, 664 skipped, 10 xfailed** after
+the port, against **2667 passed, 628 skipped, 10 xfailed** before it. The whole difference is the 36
+parameterizations of the two tests that drive the removed pybind, which are now skipped with the reason
+stated at the test; every other test's outcome is unchanged. C++ side: the 17 normalization gtests and
+the eager `test_layernorm_op` pass, identical to the baseline.
+
+## Provenance
+
+- **Recipe docs (this port):** `93fb1b95d03 2026-08-24 docs(metal_2.0): a run in flight freezes the kernel sources`
+- **Audit docs (inherited):** `93fb1b95d03 2026-08-24 docs(metal_2.0): a run in flight freezes the kernel sources`
+
+## TTNN ProgramFactory
+
+### Concept realized
+
+`ProgramSpecFactoryConcept`, as the audit chose. The ported-from factory has no
+`override_runtime_arguments`, so the framework owns the cache-hit binding refresh and the factory
+implements a single method, `create_program_artifacts`. Nothing about the concept changed during the
+port.
+
+### Device-op-class edits
+
+- **`core_range_set` kept**, as the invoker decided when asked audit Question 2. The signature is
+  `create_program_artifacts(attributes, tensor_args, tensor_return_value, core_range_set = std::nullopt)`.
+  This differs from Part 1, where the equivalent parameter genuinely chose the work-split grid and was
+  dropped: here it only *validates* that the shard grid's multicast bounding box lies inside the given
+  range, and keeping the parameter keeps that validation in the tree. The cost is stated plainly: with
+  the pybind gone the parameter has no caller at all, so the validation is dead code until something
+  calls the factory with a range again.
+- **Pybind entry point removed:** `create_descriptor` on `LayerNormShardedProgramFactory`
+  (the `create_descriptor` static method that stood on the class registration now at
+  [layernorm_nanobind.cpp:339](layernorm_nanobind.cpp#L339)). See the Handoff points entry below.
+- **The `nb::class_<LayerNormShardedProgramFactory>` registration stays**, now with no methods.
+  `select_program_factory` returns that type to Python, and nanobind needs the type registered to
+  convert the variant; the factory's own output (`ProgramArtifacts` / `ProgramSpec`) is not bound to
+  Python anywhere in the repo, so there is nothing to expose in its place.
+- **Custom `compute_program_hash`:** none, same as Part 1. Nothing to preserve, nothing touched.
+- **`<tt-metalium/program_descriptors.hpp>` dropped** from
+  [device/layernorm_device_operation.hpp](device/layernorm_device_operation.hpp): with both factories
+  converted, the op no longer names a descriptor type.
+
+### Open items
+
+- **Relaxation candidates:** none identified, matching the audit (`TensorParameter relaxation = none`).
+  No kernel in this factory reads `ArgConfig::Runtime*`.
+- **Two `TT_FATAL`s added inside the new spec builders**, both guarding an invariant of the new code
+  rather than tightening an op-level check: `add_dfb` rejects a zero entry size (it divides the buffer's
+  byte size by it), and `add_tensor_parameter_specs`' callers rely on the optional tensors being present
+  under the same conditions the buffers are declared. These are the only two count deltas in the
+  TT_FATAL census (5 → 7 in `sharded_layernorm_factory_helpers.cpp`), and both are additions. Every
+  legacy guard is still in place, including the two the `core_range_set` validation carries.
+- **`eps_u` and the packed `cinv` / `winv` scalars are per-node runtime args whose value is identical
+  on every node** (except `cinv` on a two-stage reduce, which genuinely varies), so the other two are
+  really common runtime args. The port keeps them as RTAs; converting changes dispatch semantics and is
+  a separate cleanup.
+
+## Handoff points
+
+### Removed pybind surface: `LayerNormShardedProgramFactory.create_descriptor`
+
+*Tagged: API surface — removed entry point.*
+
+- **File / function:** `LayerNormShardedProgramFactory.create_descriptor`, whose class registration survives at
+  [layernorm_nanobind.cpp:339](layernorm_nanobind.cpp#L339).
+- **What it was for:** it let Python drive the sharded factory directly and receive a
+  `ProgramDescriptor`, including a fourth `core_range_set` argument used only to validate the shard
+  grid's multicast footprint.
+- **Why it had to go:** the `create_descriptor` symbol no longer exists. It could not be pointed at
+  `create_program_artifacts` either, for the same reason Part 1 recorded: neither `ProgramArtifacts`
+  nor `ProgramSpec` is bound to Python anywhere in the repo.
+- **It had live callers in this op's own tests, which is a revision to the audit.** Audit Question 2
+  asked whether `core_range_set` survives the port, on the understanding that the parameter was
+  reachable only through the pybind and had no C++ caller. It also had two *test* callers:
+  `test_layer_norm_sharded_non_rectangular_grid_rejects_excluded_hole_cores`
+  ([tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py:659](../../../../../../tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py#L659))
+  and its RMSNorm sibling
+  ([tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py:441](../../../../../../tests/ttnn/unit_tests/operations/fused/test_rms_norm_sharded.py#L441)),
+  36 parameterizations between them. Each drives `create_descriptor` twice: once with the bare shard
+  grid, expecting the hole-rejection `RuntimeError`, and once with the bounding box, then walking
+  `descriptor.kernels` and `descriptor.semaphores` to assert that placement covers exactly the
+  multicast bounding box and nothing outside it.
+  **Neither half survives.** The rejection needs a Python entry point that reaches the validation, and
+  the placement assertion needs a Python-visible program spec; there is no `ProgramSpec` or
+  `ProgramArtifacts` binding anywhere in the repo. On the invoker's decision both tests are
+  `pytest.mark.skip`ped with that reason stated in full at the test, so the bodies stay intact and can
+  be revived the moment either surface exists. **This is the port's one coverage loss**, and it is a
+  loss of *validation* coverage rather than numerics: the underlying check is still in the factory, and
+  the placement it asserts is separately exercised by the sibling
+  `test_layer_norm_sharded_width_non_rectangular_grid` tests, which run the op end to end on the same
+  non-rectangular grids and pass.
+- **Known downstream consumers.** The same helper Part 1 identified,
+  [models/experimental/ops/descriptors/normalization/_utils.py:109](../../../../../../models/experimental/ops/descriptors/normalization/_utils.py#L109),
+  reaches this factory through `select_program_factory` for **sharded** inputs. Part 1 measured that
+  file's driver test as 60 failed / 29 passed, where the 29 passes were exactly the sharded-input
+  branches still reaching this `create_descriptor`. With this pass those 29 fail the same way, so the
+  fused-descriptor framework now has **no** working layernorm path and needs a Metal 2.0 route (or a
+  branch that stops going through `create_descriptor`) before any of it works again. That is the same
+  owner and the same ticket as Part 1's entry, with the scope now complete rather than partial.
+
+### The write-back's arguments and its compile gate did not agree, and Metal 2.0 cannot reproduce the mismatch
+
+*Tagged: op behavior — one configuration changes. This is the single place the port does not preserve
+legacy behavior, so it is called out at the top of the list.*
+
+- **What legacy did.** `writer_unary_sharded_ln.cpp` and `writer_unary_sharded_ln_rm_gb.cpp` compile
+  their write-back block under `#ifndef SKIP_WRITE_BACK`, i.e. whenever `skip_write_back` is false.
+  But `build_write_back_args` emits the runtime arguments that block reads — the segment count, the
+  storage-core start offset, and the segment array — only when the stage is `POST_ALL_GATHER`
+  ([device/sharded_layernorm_factory_helpers.cpp:1641-1646](device/sharded_layernorm_factory_helpers.cpp#L1641-L1646)
+  pre-port).
+- **The configuration that falls between them.** A **non-distributed** sharded layernorm whose output
+  shard spec differs from its input's. Nothing validates the two equal
+  ([device/layernorm_device_operation.cpp:163-235](device/layernorm_device_operation.cpp#L163-L235)),
+  and `compute_output_specs` takes the output shard spec straight from `output_mem_config`, so a caller
+  can produce it. In that build the writer reads `get_arg_val<uint32_t>(6)`, `(7)` and
+  `get_arg_addr(8)` past the end of its own six-argument list, then writes through a `c_17` its core
+  has no configuration for.
+- **Why the port cannot reproduce it.** Metal 2.0 has no way to read a runtime argument the host never
+  declared: the name would not exist in the kernel's generated header. The port therefore makes the two
+  conditions agree, compiling the write-back when `POST_ALL_GATHER && !skip_write_back` — exactly when
+  its arguments exist. Every post-all-gather program behaves identically to legacy.
+- **What changes.** The non-distributed-with-differing-output-shard-spec program stops issuing that
+  undefined write-back and simply leaves the output where the compute kernel put it. Legacy's behavior
+  there was reading uninitialized argument memory and writing to an unconfigured buffer index, so this
+  is not a case of trading one defined behavior for another; but it *is* a change, and if that
+  configuration is meant to be supported it needs a real write-back path (and its arguments emitted),
+  which is an op-owner change rather than a port one.
+- **Related, and left alone:** under `POST_ALL_GATHER` **with** `skip_write_back`, legacy emitted the
+  write-back arguments and the kernel did not read them. Those are dead runtime args; the port does not
+  emit them.
+
+### `get_pointer_to_cb_data` keeps a CB-vocabulary name after the port (third call site)
+
+*Tagged: kernel-lib naming, non-blocking. Extends Part 1's entry with the sharded call site.*
+
+The sharded Welford compute kernel reaches the reciprocal LUT through the same in-family helper Part 1
+reported, `norm::kernel_util::compute::memory::get_pointer_to_cb_data<T>(uint32_t, ...)`
+([layernorm_sharded_welford.cpp:331](device/kernels/compute/layernorm_sharded_welford.cpp#L331)).
+`dfb::reciprocals` flows straight into its `uint32_t` parameter, so nothing is blocked and the donor
+needed no change. With this pass all three call sites in the op are converted and the helper's name is
+the only CB-vocabulary residue left anywhere in the directory.
+
+## Successes
+
+- **The self-audit's "never stack a self-loop with the multi-binding flag" check was exactly right,
+  and the forced legality checks proved it in one run.** The brief named five buffers for
+  `allow_instance_multi_binding` and argued the case at length ("The flag is correct here, and it is
+  worth knowing why… Do not spend time hunting a 1P+1C assignment for them"). Built that way, the very
+  first sharded test failed with a precise message: *"DFB 'ex2' is self-looped … but the set of
+  producer KernelSpecs differs from the set of consumer KernelSpecs. When a DFB is self-looped, every
+  same-side binding must come from a self-loop participant."* All five are plain **1P+1C**: the kernel
+  that pushes takes the producer side, the second toucher the consumer side, and the pushing kernel's
+  read-back of its own result needs no endpoint of its own. The recipe's instruction to re-derive the
+  census rather than transcribe the brief is what made this a ten-minute correction instead of a
+  shipped defect.
+- **The dead-CB rule, applied to a per-stage census, found thirteen buffers the brief said did not
+  exist.** The brief states "No dead CBs anywhere in this op"; re-deriving the census per
+  `(buffer, stage)` shows seven under `PRE_ALL_GATHER` (`c_3`, `c_8`, `c_9`, `c_10`, `c_15`, `c_18`,
+  `c_20`) and six under `POST_ALL_GATHER` (`c_8`, `c_9`, `c_10`, `c_11`, `c_13`, `c_20`), plus `c_1`
+  when a residual reaches the post stage. Three of them even have declared-but-unused kernel-side
+  aliases, which is what put the search on the right track. The validator would have rejected each as
+  a bindingless buffer, so the recipe's "build no spec, drop the allocation" is both the rule and the
+  only thing that compiles.
+- **The alias-group legality rules caught a real inconsistency at spec time.** `c_0`'s legacy
+  descriptor is buffer-backed and carries the Welford alias as a second format descriptor, so both
+  indices share borrowed memory. Declared as two DFBs, only the primary borrowed at first; the
+  `alias_with` rule that every member must agree on `borrowed_from` is what surfaced it, and it is
+  documented at the field rather than only in the recipe.
+- **Reading the declaring headers beat hunting for a precedent, repeatedly.**
+  `advanced_options.hpp` settled the vararg schema, the per-node override's deprecation, and the three
+  alias rules; `dataflow_buffer_spec.hpp` settled what `borrowed_from` does and does not validate;
+  `program_run_args.hpp` settled the vararg run-args shape. None of that is in the recipe at that level
+  of detail, and the headers answered each question in one read.
+
+## Friction
+
+### Gaps
+
+- **The endpoint rule the port actually needed is not written down anywhere.** The recipe and catalog
+  frame the choice as self-loop (one toucher) / 1P+1C (two touchers) / flag (census cannot fit 1P+1C),
+  and the brief read "compute pushes, then waits on its own result, and a reader also waits" as the
+  third case. The framework's rule is narrower and decides it outright: *a self-looped DFB may not have
+  any same-side binding from a kernel that is not itself a self-loop participant.* Stated that way, a
+  kernel that reads back what it pushed is simply the producer, and the flag never enters. That
+  sentence belongs in the endpoint-assignment pattern, next to the "≥2 kernels locked to the same FIFO
+  role" line it contradicts in practice.
+- **Endpoint counting is per *node*, and the recipe reads as per DFB.** Three separate binding
+  decisions here turned on it: a buffer bound as producer only on the gathering compute spec has no
+  producer at all on the other nodes where the reader still names it; a consumer bound only on the
+  sender reader leaves the other all-to-all nodes without one; and a buffer nothing reads needs its
+  producing kernel to hold both ends. The validator's own message says "instance", and
+  `advanced_options.hpp` says it plainly ("a DFB on a particular node"), but the recipe's prose does
+  not, so the first pass got all three wrong in the same way.
+- **No guidance for a kernel whose whole body is compiled out on some nodes.** This factory places an
+  idle reader / writer / compute triple on the holes of a non-rectangular shard grid, purely so those
+  nodes carry the buffers the reduction multicasts across (legacy did it with a post-pass that widened
+  every non-buffer-backed CB's core range). The resolution is worth a line in the catalog because it is
+  not obvious: gate the whole kernel body on the preprocessor so it references nothing, and declare the
+  bindings **host-side only** — placement comes from the binding, not from the kernel naming the token.
+  That also avoids inventing runtime-argument values for a kernel that reads none.
+- **A per-node vararg block has no non-deprecated expression.** The write-back segment block's length
+  varies per core, `num_runtime_varargs` is a per-kernel scalar, and
+  `num_runtime_varargs_per_node` carries a `[[deprecated]]` attribute, so using it risks the build's
+  `-Werror`. The port declares the longest block on every node and zero-pads the shorter ones; the
+  kernel reads exactly `num_segments_to_write_back` segments, so the padding is never looked at. Worth
+  saying in the varargs Caution: if the count varies per node, pad rather than reach for the deprecated
+  table.
+- **Copying a vararg block into a local array needs a compile-time bound the legacy kernel did not.**
+  Legacy took `get_arg_addr(8)` and indexed the argument region in place. `get_vararg` returns a value,
+  so the kernel must copy into an array, which needs a size — a new named CTA
+  (`max_write_back_segments`) that carries the same number the host used for the vararg count. The
+  brief's "fill a small local array from `get_vararg`" is right, but the extra compile-time argument
+  that comes with it is not mentioned, and it is not optional.
+- **"Reconcile each placement mismatch" needs the mechanism, not just the instruction.** Four buffers
+  are declared on `sender_cores` while the compute kernel naming them runs on the wider
+  `all_to_all_cores`. The way to express that in Metal 2.0 is to promote the `is_allgather_worker` CTA
+  to a preprocessor define and `#ifdef`-gate the aliases, so only the narrower kernel spec binds them —
+  the same CTA-to-define promotion the conditional-binding pattern describes, applied to placement
+  rather than to existence. Naming that in the brief's placement bullet would have saved a pass.
+
+### Confusion
+
+- **"Declare the conditional-side endpoint unconditionally" and the self-loop rule pull against each
+  other, and the recipe gives no order.** Declaring an omitted endpoint is right when it completes a
+  producer/consumer pair on a node that would otherwise have only one side. It is *illegal* when it
+  turns a 1P+1C into a self-loop plus a third endpoint. Both cases occur in this factory, one node set
+  apart. The distinguishing question is whether the kernel being given the extra endpoint is the only
+  toucher on that node; a sentence to that effect in the conditional-binding pattern would resolve it.
+- **A named compile-time argument carrying a per-spec *value* versus one that must become a define.**
+  The reader's `is_all_to_all_worker` stays a named CTA (its two specs differ only in the value), while
+  the compute kernel's must become a define (its two specs differ in their runtime-argument *schema*,
+  and a named argument has to exist at compile time). Same flag, same op, opposite answers. The rule is
+  "does anything downstream of the flag change what the kernel's generated headers contain", which took
+  a while to formulate.
+
+## Test results
+
+The set the invoker confirmed: the sharded-path pytests, the interleaved-path pytests as a regression
+check on the two kernel headers both factories share, the normalization gtests, and the eager
+`test_layernorm_op`.
+
+| | before | after |
+|---|---|---|
+| pytest | 2667 passed, 628 skipped, 10 xfailed | 2631 passed, **664** skipped, 10 xfailed |
+| `unit_tests_ttnn --gtest_filter='*LayerNorm*:*RmsNorm*:*Distributed*Norm*'` | 17 passed | 17 passed |
+| `tt_eager/ops/test_layernorm_op` | pass | pass |
+
+2631 + 36 = 2667, and the skipped count rises by exactly the same 36: the only tests whose outcome
+changed are the two that drive the removed pybind. Nothing else in the set moved, in either direction.
+
+**The legality checks were live for the whole run.** `METAL2_CHECKS_FORCED program_spec` and
+`METAL2_CHECKS_FORCED program_run_args` appear 2924 times each in the pytest log — equal counts, which
+is what proves both translation units were rebuilt rather than serving a stale object. Distinguishing
+the two marker strings by file (rather than emitting the same text twice, as the recipe's snippet does)
+is what makes that a yes/no check instead of a count; Part 1 asked for this and it paid off here,
+because the run that caught the endpoint defect needed to be trusted immediately.
+
+## Open items for downstream
+
+### Shared kernel touches
+
+- **Reused the existing `_metal2` fork (rung 1):**
+  [ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp](../../../kernel/dataflow/generate_bcast_scalar_metal2.hpp),
+  whose `generate_bcast_col_scalar(DataflowBuffer&, uint32_t)` replaces the legacy
+  `generate_bcast_scalar.hpp` version taking a `CircularBuffer`. Both sharded writers now bind the
+  fork. No new file was created and no pointer comment was added to the legacy original: the fork
+  already existed, so this is rung 1, where the original is not the porter's to annotate.
+  **Sunset update:** Part 1 recorded this op's sharded writers as the remaining unmigrated consumers of
+  the legacy header. They are migrated now, so **this op no longer binds
+  `generate_bcast_scalar.hpp` at all.** Whatever binds it outside this op is the only thing left
+  holding the legacy copy open.
+- **`reshard_writer.hpp` changed signature, in-directory, both consumers converted together.**
+  [device/kernels/dataflow/reshard_writer.hpp](device/kernels/dataflow/reshard_writer.hpp)'s
+  `write_resharded_data` took a `DataflowBuffer&` for the resharded-output buffer and used it only to
+  read an address; it now takes that address as a `uint32_t`, because the output is reached through a
+  `TensorBinding` rather than a borrowed buffer. Its only two consumers are this factory's two
+  write-back writers, both converted in this pass. The identically-named header under
+  `ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/` is **that op's own
+  separate file** (it defines `write_minimal_resharded_data` and resolves from its own directory), so
+  nothing outside this op is affected — worth stating because a `grep -rl reshard_writer.hpp` makes it
+  look shared.
+- **Two in-op kernel headers are shared with the Part 1 factory and were left alone.**
+  [device/kernels/dataflow/layernorm_dataflow_utils.h](device/kernels/dataflow/layernorm_dataflow_utils.h)
+  needed no change: the sharded readers use only `compute_single_stage_noc_addrs` /
+  `compute_two_stage_noc_addrs`, whose `L1Ptr` parameters keep working once each kernel copies its
+  vararg coordinate block into a local array.
+  [device/kernels/layernorm_scaler_tiles.h](device/kernels/layernorm_scaler_tiles.h) is used by both
+  factories and needed only a comment sweep from CB to buffer vocabulary.
+
+### Findings the port carried forward unchanged
+
+These are defects and dead code the port preserved rather than fixed, per the porting invariant. Each
+is an ops-team call.
+
+1. **Dead plumbing dropped** (each read by no kernel this factory binds; dropping is zero functional
+   change, and the values are listed so the owner can confirm):
+   - The writer's `gamma_stick_size` / `beta_stick_size` compile-time arg
+     ([device/sharded_layernorm_factory_helpers.cpp:706-712](device/sharded_layernorm_factory_helpers.cpp#L706-L712)
+     pre-port). Both writer sources skip that slot: the plain writer reads
+     `beta_args.next_compile_time_args_offset() + 2 … + 4` and the row-major one `+ 1 … + 5`, and the
+     slot exists only in the row-major case, where the row-major writer's `+ 1` already starts past it.
+   - The trailing duplicate `use_welford` appended to the writer-receiver list only
+     ([:728](device/sharded_layernorm_factory_helpers.cpp#L728) pre-port) — the audit's misc anomaly 4.
+   - The pre-all-gather writer's runtime-arg slots 2, 3 and 4 (`eps_u`, `gamma_dram_addr`,
+     `beta_dram_addr`) — the audit's misc anomaly 3. The two addresses became the gamma / beta
+     `TensorBinding` in the writers that do read them; under `PRE_ALL_GATHER` the port simply does not
+     declare the names.
+   - The `is_top_row` compute compile-time arg (a literal `0` in every configuration) and
+     `FLOAT32_REDUCTION` (compute compile-time arg 11): both are declared in the compute kernels and
+     read by none of them.
+   - The `block_h_size_bytes` reader compile-time arg: declared in all three reader-sender sources and
+     read by none.
+   - The write-back runtime args under `POST_ALL_GATHER` **with** `skip_write_back`, which the kernel's
+     `SKIP_WRITE_BACK` build never reads.
+   - The `dfb_ex2_global` declaration at
+     [reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp:49](device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp#L49)
+     pre-port — the audit's misc anomaly 5 — along with the equally unused `dfb_ex`, `dfb_in1` and
+     `dfb_reciprocal` declarations in the pre- and post-all-gather compute kernels.
+2. **Thirteen buffers are allocated in configurations where nothing touches them, and the port drops
+   those allocations.** Listed under Successes above. A dropped dead buffer has no behavior, but it does
+   free SRAM and shift the addresses of the live buffers on the affected cores, so it is worth the
+   owner knowing: the pre-all-gather stage gives back seven buffers' worth of SRAM and the
+   post-all-gather stage six. Nothing reads them in either stage; the allocations were unconditional in
+   code that also serves the non-distributed stage, where most of them are live.
+3. **A buffer the writer fills and nobody drains, under `POST_ALL_GATHER`.** The writer generates the
+   per-core reduce scaler (`c_2`) in every non-Welford build, but the post-all-gather compute kernel
+   reduces the gathered statistics with the *global* scaler alone and never reads it. The port keeps the
+   allocation and self-loops it on the writer, which is the sanctioned shape for a single-ended buffer;
+   the generation is a few cycles per program and preserved exactly.
+4. **Placement widens in two spots, in both cases for buffers that take no SRAM.** The idle triple binds
+   the same buffers its active counterparts do, which widens the *borrowed* ones (`in0`, `in1`,
+   `in_pre_add`, `out`, `stats`, `reciprocals`) from the active cores to the whole multicast bounding
+   box; legacy widened only the non-borrowed ones. A borrowed buffer takes the tensor's address rather
+   than a per-core allocation, so the SRAM layout is unchanged and only a configuration entry appears on
+   cores that never read it — the same mechanism, and the same harmlessness, as legacy's own `c_17`
+   entry on the storage cores. Separately, the four `sender_cores`-only buffers land on
+   `all_to_all_cores`, which **equals** `sender_cores` in every non-two-stage pre- or post-all-gather
+   program; under a two-stage reduce it is wider, and `c_21` / `c_19`-as-`cb_var` then gain a real
+   allocation on the non-sender gathering cores. That is a configuration where the legacy kernels were
+   already touching buffer indices their own core had no configuration for, so it is worth an owner
+   look independently of this port.
+5. **The `#define` typo Part 1 reported has a sibling here.** Part 1 recorded
+   `#if defined RMSNORM and not defined FUSED_PRE_ADD` (for `FUSE_PRE_ADD`) in the interleaved compute
+   kernel. The same misspelling sits in the sharded one at
+   [layernorm_sharded.cpp:401](device/kernels/compute/layernorm_sharded.cpp#L401): the host never
+   defines `FUSED_PRE_ADD`, so the guarded `reconfig_data_format` is compiled into every RMSNORM build,
+   including the fused-pre-add one it was written to exclude. Carried forward verbatim, typo included.
+
+### Doc-evolution candidates
+
+- **The `cb` → `dfb` sweep over a whole op directory needs the partial-port rule Part 1 asked for, and
+  one more thing: the host-side *size and format* variable names.** The sweep's headline case is the
+  buffer's own name, and those were clean from the start here. What it actually caught was 130 hits in
+  the sharded factory's host code — `in0_CB_size`, `ex_partial_CB_size`, `cb_data_format`,
+  `stats_cb_size`, `CBSizeParams` — legacy names for the *sizes and formats of* the buffers, which
+  survive a careful rename of the buffers themselves. Reported as *hits / files scanned*: **0 / 42**
+  over the op directory after the sweep, counting the three `get_pointer_to_cb_data` call sites
+  separately as an out-of-directory helper name (Handoff points above) rather than as leftovers this
+  port could fix.
+- **A worked example of the per-node endpoint count would carry more than the rule does.** The three
+  mistakes this port made are all the same shape and all cheap to describe: producer-only on a subset of
+  nodes, consumer-only on a subset, and no consumer at all. A short table of "what the validator says"
+  against "what to change" would be the most useful addition to the endpoint pattern.
+
+### Test coverage notes
+
+- **The idle triple is well covered**, which was the most welcome thing the test run said.
+  `test_layer_norm_sharded_width_non_rectangular_grid` and its RMSNorm sibling drive shard grids that
+  do not fill their bounding box, in both orientations, at an offset origin, with and without Welford,
+  and they pass. That is the one part of this factory whose placement the port had to reconstruct
+  rather than copy (legacy widened the core ranges in a post-pass; the port gets there by binding the
+  buffers on three idle `KernelSpec`s), so having it under test rather than reasoned about is worth
+  a lot.
+- **Nothing in the confirmed set exercises a two-stage reduce**, which is the only configuration where
+  `all_to_all_cores` is wider than `sender_cores` and therefore the only one where the placement
+  widening in finding 4 has any effect.
+- **Nothing exercises the non-distributed-with-differing-output-shard-spec configuration** described in
+  the second Handoff-points entry, which is why the behavior change there is invisible to the test set.
+  If that configuration is meant to work, it needs a test before it needs a fix.

@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
 #include "hostdevcommon/common_values.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -12,25 +13,26 @@
 
 // split REDUCE across cores
 void kernel_main() {
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
-    constexpr uint32_t block_h = get_compile_time_arg_val(3);
-    constexpr uint32_t block_h_size_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t num_tiles_per_worker = get_compile_time_arg_val(6);
-    constexpr uint32_t num_tiles_per_worker_bytes = get_compile_time_arg_val(7);
-    constexpr bool rms_norm = get_compile_time_arg_val(17) == 1;
+    constexpr auto num_blocks = get_arg(args::num_blocks);
+    constexpr auto block_h = get_arg(args::block_h);
+    constexpr auto num_tiles_per_worker_bytes = get_arg(args::num_tiles_per_worker_bytes);
+#ifdef RMSNORM
+    constexpr bool rms_norm = true;
+#else
+    constexpr bool rms_norm = false;
+#endif
 
-    const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(0);
-    const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(1);
-    const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(2);
-    const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(3);
-
-    constexpr uint32_t dfb_stats_reduced = tt::CBIndex::c_21;  // [E[x], E[x^2]] local to sender
-    constexpr uint32_t dfb_ex_global = tt::CBIndex::c_15;      // [E[x], E[X^2]] global to all cores
+    const uint32_t mcast_dest_noc_start_x = get_arg(args::mcast_dest_noc_start_x);
+    const uint32_t mcast_dest_noc_start_y = get_arg(args::mcast_dest_noc_start_y);
+    const uint32_t mcast_dest_noc_end_x = get_arg(args::mcast_dest_noc_end_x);
+    const uint32_t mcast_dest_noc_end_y = get_arg(args::mcast_dest_noc_end_y);
 
     Noc noc;
-    Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
-    DataflowBuffer dfb_stats_reduced_obj(dfb_stats_reduced);
-    DataflowBuffer dfb_ex_global_obj(dfb_ex_global);
+    Semaphore<> reduce_sender_sem(sem::reduce_sender);
+    // [E[x], E[x^2]] local to sender
+    DataflowBuffer dfb_stats_reduced_obj(dfb::stats_reduced);
+    // [E[x], E[X^2]] global to all cores
+    DataflowBuffer dfb_ex_global_obj(dfb::ex_global);
     MulticastEndpoint mcast_ep;
 
     constexpr uint32_t stats_tiles = rms_norm ? 1 : 2;

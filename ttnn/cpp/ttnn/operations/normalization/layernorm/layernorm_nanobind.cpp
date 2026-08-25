@@ -333,41 +333,10 @@ void bind_normalization_layernorm_program_factory(nb::module_& mod) {
                 ttnn.CoreRangeSet: The default core range covering the device's compute grid.
             )doc");
 
-    nb::class_<ttnn::prim::LayerNormShardedProgramFactory>(mod, "LayerNormShardedProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::LayerNormParams& operation_attributes,
-               const ttnn::prim::LayerNormInputs& tensor_args,
-               Tensor& tensor_return_value,
-               const std::optional<CoreRangeSet>& core_range_set) {
-                return ttnn::prim::LayerNormShardedProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value, core_range_set);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"),
-            nb::arg("core_range_set") = std::nullopt,
-            R"doc(
-            Creates a program descriptor for sharded layer norm operation.
-
-            Args:
-                operation_attributes (LayerNormParams): Operation parameters including norm type, epsilon, memory config, etc.
-                    Must have a LayerNormShardedMultiCoreProgramConfig as the program_config.
-                tensor_args (LayerNormInputs): Input tensors including input (sharded), residual, weight, bias, and stats.
-                tensor_return_value (ttnn.Tensor): Output tensor reference (sharded).
-                core_range_set (ttnn.CoreRangeSet, optional): Optional core range set restricting the cores this
-                    descriptor may use. If provided, validates that every core the program touches lies within it.
-                    Because the reduction multicasts over the bounding box of the shard grid, that footprint is the
-                    whole bounding box: for a non-rectangular shard grid the holes inside the box also get kernels,
-                    circular buffers and semaphores, so they must be included too.
-
-            Returns:
-                ttnn.ProgramDescriptor: The program descriptor for the sharded layer norm operation.
-
-            Raises:
-                RuntimeError: If core_range_set is provided and the bounding box of the sharded tensor's shard grid
-                    is not entirely contained within it.
-            )doc");
+    // Registered with no methods of its own: select_program_factory returns this type to Python, so
+    // nanobind needs it registered to convert the variant, but the factory builds a ProgramSpec and
+    // that type family is not exposed to Python.
+    nb::class_<ttnn::prim::LayerNormShardedProgramFactory>(mod, "LayerNormShardedProgramFactory");
 }
 
 void bind_normalization_layernorm(nb::module_& mod) {

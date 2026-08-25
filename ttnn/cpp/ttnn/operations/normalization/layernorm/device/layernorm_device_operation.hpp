@@ -7,7 +7,6 @@
 #include <optional>
 #include <variant>
 
-#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -26,7 +25,10 @@ struct LayerNormMultiCoreProgramFactory {
 };
 
 struct LayerNormShardedProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    // The framework calls this with three arguments. The fourth restricts the cores the program may
+    // touch: sharded layernorm derives its cores from the input's shard spec, so the parameter only
+    // validates that the multicast bounding box of that shard grid lies inside the given range.
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const LayerNormParams& operation_attributes,
         const LayerNormInputs& tensor_args,
         Tensor& tensor_return_value,
