@@ -127,6 +127,7 @@
   sp_config: sc1
 
 - name: "Kimi-K3-2.8T MLA chunked accuracy 55k@5k (vs golden trace)"
+  fabric_profile: torus_xy
   cmd: |
     export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3
 
@@ -402,6 +403,7 @@
   sp_config: sc1
 
 - name: "Kimi-K3-2.8T MoE accuracy 5k"
+  fabric_profile: torus_xy
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
@@ -418,6 +420,7 @@
   sp_config: sc1
 
 - name: "Kimi-K3-2.8T MoE perf 5k"
+  fabric_profile: torus_xy
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
@@ -722,155 +725,11 @@
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    # This launcher runs on the GH runner pod, whose TT_METAL_HOME holds build
-    # artifacts only -- full source reaches the galaxy workers via `mpirun --pernode`
-    # but never this pod. ttrun.py and the MGD resolve against source here, so
-    # overlay it from the pod-local /ci checkout without clobbering the build.
     if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    export PYTHONPATH="${TT_METAL_HOME}"
-    : "${PREFILL_SUMMARIES:?PREFILL_SUMMARIES must be set by the blaze impl (shared /ci scratch for the KV table)}"
-    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
-    mkdir -p "${PIPELINE_DIR}"
-    TTRUN_DIR=/etc/ttop
-    TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    MGD="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_4galaxy_connected_mesh_graph_descriptor.textproto"
-    # The runner goes through tt-run automapper, which discovers rank->mesh placement
-    # from the MGD and takes the plain comma-separated host list. The producer (raw
-    # mpirun) needs a slotted host list in the SAME rank order tt-run's discovery chose
-    # (parsed from the generated rankfile below) so its master co-locates with runner
-    # rank 0 -- the H2D stream service is host-local /dev/shm IPC.
-    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
-    # tt-run Phase 1 (generate_rank_bindings) writes generated/ttrun/ under the
-    # launch cwd; keep it on shared NFS so the runner pod can read rank-0 outputs.
-    TTRUN_CWD="${PIPELINE_DIR}/ttrun-cwd"
-    mkdir -p "${TTRUN_CWD}"
-
-    MR_DIR=$(mktemp -d "${PIPELINE_DIR}/prefill_ci_mr.XXXXXX")
-    export TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"
-    # Each producer rank drops its PCC verdict here before the shutdown sentinel; mpirun drops buffered
-    # stdout when the runner tears down, so this file is the only durable record of the measured PCC.
-    PCC_DIR="${MR_DIR}/kv_pcc_verdict"
-    # Per-rank stdout/stderr files (mpirun --output-filename). These survive the teardown
-    # race that truncates forwarded stdout, so their tails are the authoritative debug log.
-    RANKLOGS="${MR_DIR}/ranklogs"
-
-    # The runner idles owning the 4-galaxy allocation until the producer's shutdown
-    # sentinel; on any early exit (table-publish timeout, producer failure) it must be
-    # reaped or it strands the hardware until the step timeout. Killing ttrun.py tears
-    # down the remote ranks with it.
-    cleanup() {
-      if [ -n "${RUNNER_PID:-}" ] && kill -0 "${RUNNER_PID}" 2>/dev/null; then
-        kill "${RUNNER_PID}" 2>/dev/null || true
-        wait "${RUNNER_PID}" 2>/dev/null || true
-      fi
-      # Dump diagnostics before rm: on every exit path (success, producer failure, table
-      # timeout, step-timeout kill) the live mpirun stdout may be truncated at teardown, so
-      # the durable verdict JSON and per-rank ranklog tails are the authoritative record.
-      echo "==================== KV PCC verdicts (PROD_RC=${PROD_RC:-<unset>}) ===================="
-      for f in "${PCC_DIR}"/rank*.json; do
-        [ -e "$f" ] || { echo "no PCC verdict files under ${PCC_DIR}"; break; }
-        echo "$(basename "$f"): $(cat "$f")"
-      done
-      if [ -d "${RANKLOGS}" ]; then
-        echo "==================== ranklog tails ===================="
-        find "${RANKLOGS}" -type f | sort | while read -r f; do
-          echo "---- ${f#"${RANKLOGS}"/} ----"
-          tail -n 40 "$f" 2>/dev/null || true
-        done
-      fi
-      rm -rf "${MR_DIR}"
-    }
-    trap cleanup EXIT
-
-    # tt-run automapper: --mesh-graph-descriptor + --hosts generate the rank
-    # binding by discovery, so no static binding is committed. tt-run forwards only
-    # the device vars it owns (TT_MESH_*) plus its ENV_PASSTHROUGH_PREFIXES; PREFILL_*
-    # fall outside that set, so -- exactly as the producer launch below does --
-    # export them inside a per-rank bash -lc rather than relying on tt-run to carry
-    # them. Launch from TTRUN_CWD so Phase 1 caches on shared NFS; RUNNER_PID stays
-    # ttrun.py's pid so cleanup()'s kill still tears the remote ranks down.
-    cd "${TTRUN_CWD}"
-    python3 "${TTRUN_PY}" \
-      --skip-executable-check \
-      --force-rediscovery \
-      --tcp-interface ens5f0np0 \
-      --mesh-graph-descriptor "${MGD}" \
-      --hosts "${RESOLVED_HOSTS}" \
-      --mpi-args "--bind-to none --tag-output --allow-run-as-root --wdir ${TT_METAL_HOME} --output-filename ${RANKLOGS}/runner -x PATH -x LD_LIBRARY_PATH" \
-      bash -lc "cd '${TT_METAL_HOME}'; \
-        export PYTHONPATH='${TT_METAL_HOME}'; \
-        export PYTHONUNBUFFERED=1; \
-        export PREFILL_MANIFEST='${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests/kimi27.json'; \
-        export MESH_DEVICE=TG; \
-        export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; \
-        export PREFILL_FABRIC_MODE=2d; \
-        export PREFILL_MAX_SEQ_LEN=56320; \
-        export PREFILL_ENABLE_MIGRATION=1; \
-        export PREFILL_MOCK_MIGRATION=1; \
-        export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
-        export LOGURU_LEVEL=INFO; \
-        exec python3 -m models.demos.common.prefill.runners.prefill_runner" &
-    RUNNER_PID=$!
-    cd "${TT_METAL_HOME}"
-
-    for i in $(seq 1 360); do
-      [ -f "${TABLE_PATH}" ] && break
-      kill -0 "${RUNNER_PID}" 2>/dev/null || { echo "runner exited before publishing the KV table"; wait "${RUNNER_PID}"; exit 1; }
-      sleep 5
-    done
-    [ -f "${TABLE_PATH}" ] || { echo "KV table not published within timeout"; exit 1; }
-
-    # tt-run discovery -- not hostfile order -- decides which host runs runner rank i.
-    # The H2D stream service is host-local IPC (a /dev/shm descriptor written by runner
-    # rank 0), so the producer's master (rank 0) must land on that same host. Derive the
-    # producer host order from the generated rankfile (--force-rediscovery guarantees it
-    # was written fresh this run) so producer rank i co-locates with runner rank i. Using
-    # raw hostfile order races discovery and intermittently strands the master on the
-    # wrong host -- H2DStreamService.connect then times out and TT_THROWs.
-    RANKFILE=$(ls -t "${TTRUN_CWD}"/generated/ttrun/*/rankfile 2>/dev/null | head -1)
-    [ -f "${RANKFILE}" ] || { echo "tt-run rankfile not found under ${TTRUN_CWD}/generated/ttrun/*/rankfile"; exit 1; }
-    # rankfile lines are "rank N=hostname slots=X"; emit "N hostname", sort by rank, join as host:1.
-    HOSTS=$(awk '/^rank[[:space:]]+[0-9]+=/ {n=$2; sub(/=.*/,"",n); h=$2; sub(/^[0-9]+=/,"",h); print n" "h}' "${RANKFILE}" | sort -n | awk '{printf "%s%s:1", (NR>1?",":""), $2}')
-    [ -n "${HOSTS}" ] || { echo "failed to parse producer host order from ${RANKFILE}"; exit 1; }
-    echo "producer host order from tt-run discovery: ${HOSTS}"
-
-    MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
-    set +e
-    "${MPIRUN}" \
-      --host "${HOSTS}" --map-by slot --bind-to none --tag-output --allow-run-as-root \
-      --output-filename "${RANKLOGS}/producer" \
-      --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0 \
-      bash -lc "cd '${TT_METAL_HOME}'; \
-        export PYTHONPATH='${TT_METAL_HOME}'; \
-        export PYTHONUNBUFFERED=1; \
-        export PREFILL_MANIFEST='${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests/kimi27.json'; \
-        export MESH_DEVICE=TG; \
-        export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; \
-        export PREFILL_MAX_SEQ_LEN=56320; \
-        export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
-        export PREFILL_PCC_SUMMARY_DIR='${PCC_DIR}'; \
-        export PREFILL_PRODUCER_CHECK_PCC=1; \
-        export PREFILL_SEND_SHUTDOWN=1; \
-        export PREFILL_STANDALONE_CHUNKED_PCC=0.85; \
-        export PREFILL_H2D_CONNECT_TIMEOUT=120; \
-        export LOGURU_LEVEL=INFO; \
-        exec python3 -m models.demos.common.prefill.runners.prefill_producer"
-    PROD_RC=$?
-    set -e
-
-    # The cleanup() EXIT trap dumps the durable PCC verdicts and ranklog tails on every
-    # exit path, so no inline diagnostics are needed here.
-
-    # On success the producer already sent the shutdown sentinel; wait for the runner
-    # to finish teardown so a hung shutdown surfaces here instead of being orphaned.
-    if [ "${PROD_RC}" -eq 0 ]; then
-      wait "${RUNNER_PID}" || echo "runner exited non-zero after producer success (rc=$?)"
-    fi
-
-    exit ${PROD_RC}
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27
   test_type: prefill_runner_kv_pcc
   test_group: module
   skus:
@@ -878,6 +737,32 @@
       # Measured test step ~6 min; headroom for the up-to-120s producer connect plus
       # model-load/NFS variance on a 4-galaxy run. Must match the shield/demo budget.
       timeout: 15
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  sp_config: sc4
+
+# 4-galaxy (SC4) disaggregated prefill for GLM-5.2: the same launcher script as the Kimi-K2.7 entry above
+# under a different model key, but GLM-5.2 owns TWO device caches (MLA KVPE over all 78 layers + the lightning-indexer KEY cache over
+# its 21 `full` layers), and the pipeline split is layer-aware (18/20/20/20, snapped to `full` starts).
+# Both caches are PCC'd: the producer gates on min(config 0, config 1), so this is the only leg that
+# covers the merged multi-cache KV chunk table and the per-stage index-cache numbering.
+- name: "GLM-5.2-744B disaggregated prefill runner/producer KV accuracy 55k@5k (SC4)"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm52
+  test_type: prefill_runner_kv_pcc
+  test_group: module
+  skus:
+    bh_sc4:
+      # 5.5 min weight load from the warm 8x4 cache, then a full-depth 11-chunk request over 78 layers
+      # plus both-cache UMD readback; headroom for the 120 s producer connect and NFS variance. Counts
+      # against the shield/demo budget together with the Kimi entry.
+      timeout: 20
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
   sp_config: sc4

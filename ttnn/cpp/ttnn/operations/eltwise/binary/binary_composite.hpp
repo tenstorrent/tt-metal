@@ -230,7 +230,8 @@ Tensor rsub(
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {});
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+    const std::optional<bool>& fast_and_approximate_mode = std::nullopt);
 
 Tensor rsub(
     const Tensor& input_tensor_a,
@@ -240,7 +241,8 @@ Tensor rsub(
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {});
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+    const std::optional<bool>& fast_and_approximate_mode = std::nullopt);
 
 Tensor atan2(
     const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
