@@ -13,7 +13,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
-from loguru import logger
 from PIL import Image
 
 from ....pipelines.minimax_h3.packing import align_num_frames, prepare_keyframe_image
@@ -28,8 +27,11 @@ from .common_av import (
     check_spatial_seams,
     check_written_file,
     gate_clip,
+    is_host,
+    log_quality,
     log_spectral_flatness,
     log_timing_table,
+    quality_logs_enabled,
     run_warm_generation,
     to_uint8_frames,
     weights_dir,
@@ -67,7 +69,7 @@ def check_keyframe_anchor(frames, keyframe, *, index, stretch, width, height, pc
 
     pcc = float(np.corrcoef(frame.ravel(), expected.ravel())[0, 1])
     label = "first" if index == 0 else "last"
-    logger.info(f"fl2va {label}-keyframe anchor: decoded frame {index} vs keyframe PCC = {pcc:.4f}")
+    log_quality(f"fl2va {label}-keyframe anchor: decoded frame {index} vs keyframe PCC = {pcc:.4f}")
     assert pcc > pcc_floor, (
         f"decoded frame {index} barely correlates with the {label} keyframe (PCC={pcc:.3f}); "
         "the fl2va conditioning path is likely broken"
@@ -92,7 +94,7 @@ def check_tile_boundary_gradient(frames, *, vertical_boundaries, horizontal_boun
         ratios = {int(b): ratio(profile, int(b)) for b in boundaries if 12 < int(b) < len(profile) - 12}
         results[name] = ratios
         if ratios:
-            logger.info(
+            log_quality(
                 f"{name} tile-boundary gradient ratios (1.0 = no seam): "
                 + ", ".join(f"x={b}:{r:.3f}" if name == "vertical" else f"y={b}:{r:.3f}" for b, r in ratios.items())
             )
@@ -102,7 +104,7 @@ def check_tile_boundary_gradient(frames, *, vertical_boundaries, horizontal_boun
     control = [c for c in candidates if all(abs(int(c) - int(b)) > 16 for b in vertical_boundaries)][:12]
     control_ratios = [ratio(gx, int(c)) for c in control]
     mean_control = float(np.mean(control_ratios))
-    logger.info(f"control non-boundary columns: mean ratio {mean_control:.3f}, max {max(control_ratios):.3f}")
+    log_quality(f"control non-boundary columns: mean ratio {mean_control:.3f}, max {max(control_ratios):.3f}")
     assert mean_control < 1.15, (
         f"control columns average {mean_control:.3f}; this statistic is tracking image structure rather "
         "than tile boundaries, so its boundary numbers mean nothing"
@@ -162,7 +164,7 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
     )
 
     expected_frames = align_num_frames(NUM_FRAMES)
-    logger.info(
+    log_quality(
         f"fl2va[{case}] padded_len={pipeline.last_padded_len} "
         f"video={tuple(output.video.shape)} audio={tuple(output.audio.shape)}"
     )
@@ -185,7 +187,13 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
 
     frames = to_uint8_frames(output)
 
-    check_output_sanity(frames, num_frames=expected_frames, height=HEIGHT, width=WIDTH)
+    check_output_sanity(
+        frames,
+        num_frames=expected_frames,
+        height=HEIGHT,
+        width=WIDTH,
+        log=quality_logs_enabled() and is_host(),
+    )
     check_audio_sanity(output.audio, sampling_rate=output.sampling_rate, expected_seconds=expected_frames / output.fps)
     check_av_sync(frames, output.audio, sampling_rate=output.sampling_rate, fps=output.fps)
     log_spectral_flatness(output.audio, sampling_rate=output.sampling_rate)
@@ -221,7 +229,7 @@ def test_fl2va_end_to_end(mesh_device, reset_seeds):
 
     gate_clip(frames, PROMPT, CLIP_THRESHOLD, f"fl2va[{case}]")
 
-    logger.info(
+    log_quality(
         "REMINDER: read the artifact rubric against these frames -- seams and flicker are what every "
         "whole-tensor metric averages away, and both are parallelism bugs"
     )
@@ -283,7 +291,7 @@ def test_fl2va_follows_the_keyframe(mesh_device, reset_seeds):
     to_t2va = pcc(frames[0], np.asarray(_gated_keyframe()))
     tail = pcc(frames[-1], prepared)
 
-    logger.info(
+    log_quality(
         f"fl2va keyframe-drives-generation: frame 0 vs fractal keyframe {to_keyframe:.4f}, "
         f"frame 0 vs t2va's own frame 0 {to_t2va:.4f}, frame -1 vs fractal keyframe {tail:.4f}"
     )

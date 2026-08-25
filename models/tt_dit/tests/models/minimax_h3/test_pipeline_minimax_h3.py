@@ -8,6 +8,9 @@ Six aspect ratios (21:9 .. 9:16) x three durations (5 / 10 / 15 s), 50 steps. Th
 `resolve_canvas_size` -- short edge 768 from 16:9 through 9:16, ~1 MPix for wider -- and the frame
 count from `align_num_frames`, so neither is tabulated here. Each case writes its own artifact stem,
 so a sweep does not overwrite itself.
+
+The MEASUREMENT table logs on the host rank only, and only for the warm generation. Sanity, seam,
+CLIP, artifact, and reminder logs are silent unless `H3_LOG_QUALITY=1`.
 """
 
 from __future__ import annotations
@@ -32,8 +35,12 @@ from .common_av import (
     check_written_file,
     gate_clip,
     gate_vbench,
+    is_host,
+    log_quality,
+    log_quality_warning,
     log_spectral_flatness,
     log_timing_table,
+    quality_logs_enabled,
     run_warm_generation,
     to_uint8_frames,
     weights_dir,
@@ -89,12 +96,15 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
     NUM_FRAMES = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
     # One artifact per working point, so a sweep does not overwrite itself.
     stem = f"t2va_{aspect_ratio[0]}x{aspect_ratio[1]}_{WIDTH}x{HEIGHT}_{duration_s}s"
-    logger.info(f"working point: {aspect_ratio[0]}:{aspect_ratio[1]} -> {WIDTH}x{HEIGHT}, {NUM_FRAMES} frames, {stem}")
+    if is_host():
+        logger.info(
+            f"working point: {aspect_ratio[0]}:{aspect_ratio[1]} -> {WIDTH}x{HEIGHT}, {NUM_FRAMES} frames, {stem}"
+        )
 
     # A missing dependency must report SKIPPED before the long generation, never silently pass as green.
     pytest.importorskip("open_clip", reason="the CLIP gate needs open_clip, which is not installed")
 
-    if not os.environ.get("TT_DIT_CACHE_DIR"):
+    if is_host() and not os.environ.get("TT_DIT_CACHE_DIR"):
         logger.warning(
             "TT_DIT_CACHE_DIR is unset, so every weight load reads safetensors. Prepares are excluded "
             "from the total either way, but the run will take far longer than the reported compute."
@@ -113,7 +123,7 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
     )
 
     expected_frames = align_num_frames(NUM_FRAMES)
-    logger.info(
+    log_quality(
         f"generated {output.num_frames} frames ({output.video_seconds:.3f} s) and "
         f"{output.audio_seconds:.3f} s of audio at {output.sampling_rate} Hz"
     )
@@ -135,7 +145,13 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
 
     frames = to_uint8_frames(output)
 
-    check_output_sanity(frames, num_frames=expected_frames, height=HEIGHT, width=WIDTH)
+    check_output_sanity(
+        frames,
+        num_frames=expected_frames,
+        height=HEIGHT,
+        width=WIDTH,
+        log=quality_logs_enabled() and is_host(),
+    )
     check_audio_sanity(
         output.audio,
         sampling_rate=output.sampling_rate,
@@ -160,7 +176,7 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
     # is named alongside `Exception` because `Skipped` does not derive from it.
     outcome: BaseException | None = None
     is_distributed = ttnn.using_distributed_env()
-    if not is_distributed or int(ttnn.distributed_context_get_rank()) == 0:
+    if is_host():
         try:
             paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
             check_written_file(paths, expected_frames, height=HEIGHT, width=WIDTH)
@@ -177,14 +193,14 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
             if os.environ.get("RUN_VBENCH", "1") not in ("0", "false", "False"):
                 gate_vbench(paths, prompt, VBENCH_THRESHOLDS, stem)
             else:
-                logger.warning("RUN_VBENCH=0, so the VBench gate did not run; generative quality is UNMEASURED")
+                log_quality_warning("RUN_VBENCH=0, so the VBench gate did not run; generative quality is UNMEASURED")
 
-            logger.info(f"artifacts in {artifacts}: {sorted(p.name for p in artifacts.iterdir())}")
+            log_quality(f"artifacts in {artifacts}: {sorted(p.name for p in artifacts.iterdir())}")
         except (Exception, pytest.skip.Exception) as exc:
             outcome = exc
     if is_distributed:
         ttnn.distributed_context_barrier()
-    logger.info(
+    log_quality(
         "REMINDER: read the artifact rubric against these frames -- the seam and flicker scores above "
         "are statistics, and only looking at the output catches what they average away"
     )

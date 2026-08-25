@@ -13,7 +13,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
-from loguru import logger
 from PIL import Image
 
 from ....pipelines.minimax_h3.packing_ref2va import MiniMaxH3Reference, reference_from_video_file
@@ -26,6 +25,7 @@ from .common_av import (
     check_spatial_seams,
     gate_clip,
     gate_vbench,
+    log_quality,
     log_timing_table,
     run_warm_generation,
     to_uint8_frames,
@@ -135,7 +135,7 @@ def _write(output, stem: str) -> dict:
     for index in (0, 17, NUM_FRAMES // 2, NUM_FRAMES - 1):
         Image.fromarray(frames[index]).save(directory / f"{stem}_frame_{index}.png")
     paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, directory, stem=stem)
-    logger.info(f"{stem}: artifacts in {directory} ({sorted(paths)})")
+    log_quality(f"{stem}: artifacts in {directory} ({sorted(paths)})")
     return paths
 
 
@@ -244,7 +244,7 @@ def test_ref2va_conditioning_is_not_a_no_op(mesh_device, reset_seeds):
     colour = (_colour_distance(a, normal), _colour_distance(b, inverted))
     crossed = (_colour_distance(a, inverted), _colour_distance(b, normal))
 
-    logger.info(
+    log_quality(
         f"ref2va discriminator: run-to-run floor {floor:.6f}, reference-swap signal {signal:.6f} "
         f"(ratio {signal / max(floor, 1e-9):.1f}x) | CLIP to normal A={to_normal[0]:.4f} "
         f"B={to_normal[1]:.4f} | CLIP to inverted A={to_inverted[0]:.4f} B={to_inverted[1]:.4f} | "
@@ -267,7 +267,7 @@ def test_ref2va_conditioning_is_not_a_no_op(mesh_device, reset_seeds):
     )
 
     # Direction is logged, not asserted: no known instrument here can fail on a correct pipeline only.
-    logger.info(
+    log_quality(
         f"ref2va direction (recorded, not asserted): CLIP own-vs-other "
         f"A {to_normal[0]:.4f} vs {to_inverted[0]:.4f}, B {to_inverted[1]:.4f} vs {to_normal[1]:.4f}; "
         f"colour own-vs-other A {colour[0]:.4f} vs {crossed[0]:.4f}, B {colour[1]:.4f} vs {crossed[1]:.4f}"

@@ -250,6 +250,10 @@ class MiniMaxH3Output:
         return self.audio.shape[-1] / self.sampling_rate
 
 
+def _is_host_rank() -> bool:
+    return not ttnn.using_distributed_env() or int(ttnn.distributed_context_get_rank()) == 0
+
+
 class MiniMaxH3Pipeline:
     """`t2va` and `fl2va` on a Blackhole mesh. Build with `create_pipeline`."""
 
@@ -279,6 +283,9 @@ class MiniMaxH3Pipeline:
         topology = preset["topology"] if topology is None else topology
         coresident = preset.get("coresident", True) if coresident is None else coresident
         self.trace_denoise = preset.get("trace_denoise", False)
+        # False during `warmup`: generation logs (stage times, per-step, VAE profile) are the
+        # measured-call report, not the compile pass. Construction logs still go through `_host_log`.
+        self._log_generation = True
         # Denoise generations completed. Tracing engages only after one untraced pass; see `_denoise`.
         # The request a live trace was captured at: shapes plus the AdaLN cache object. A capture is
         # only valid for that exact request, so both are compared before reusing it.
@@ -450,6 +457,16 @@ class MiniMaxH3Pipeline:
 
     # ------------------------------------------------------------------ residency
 
+    def _host_log(self, message: str) -> None:
+        """Construction / prepare logs: host rank only, including during warmup."""
+        if _is_host_rank():
+            logger.info(message)
+
+    def _log(self, message: str) -> None:
+        """Generation logs: host rank, measured call only. Warmup is silent."""
+        if self._log_generation:
+            self._host_log(message)
+
     def _make_resident(self, stage: str) -> None:
         """Release whatever the previous stage held before the next one allocates.
 
@@ -477,15 +494,15 @@ class MiniMaxH3Pipeline:
         # release actions and is not one.
         coresident = self.coresident
         if self._resident == "text" and self._text_encoder is not None and not coresident:
-            logger.info("releasing the text encoder")
+            self._host_log("releasing the text encoder")
             self._text_encoder.deallocate_weights()
             self._text_encoder = None
         elif self._resident == "dit" and self._transformer is not None and not coresident:
-            logger.info("releasing the transformer")
+            self._host_log("releasing the transformer")
             self._transformer.deallocate_weights()
             self._transformer = None
         elif self._resident == "vae" and self._vae is not None and not coresident:
-            logger.info("releasing the video VAE")
+            self._host_log("releasing the video VAE")
             self._vae._encoders.clear()
             self._vae._decoders.clear()
         self._resident = stage
@@ -677,7 +694,7 @@ class MiniMaxH3Pipeline:
 
     def _prepare_vision_tower(self):
         if self._vision_tower is None:
-            logger.info("building the Qwen3-VL vision tower (replicated)")
+            self._host_log("building the Qwen3-VL vision tower (replicated)")
             self._vision_tower, self._vision_config = build_minimax_h3_vision_tower(
                 self.weights_dir / "text_encoder", mesh_device=self.mesh_device
             )
@@ -728,7 +745,7 @@ class MiniMaxH3Pipeline:
             detail = f" ({int((type_ids > 0).sum())} of them vision, references {kinds})"
         elif keyframes:
             detail = f" ({int(type_ids.sum())} of them vision, {len(keyframes)} keyframe(s))"
-        logger.info(f"encoding {seq_len} presentation tokens on device" + detail)
+        self._log(f"encoding {seq_len} presentation tokens on device" + detail)
 
         self._make_resident("text")
         if self._text_encoder is None:
@@ -851,7 +868,7 @@ class MiniMaxH3Pipeline:
         config = {k: v for k, v in self.transformer_config.items() if k not in ("rope_freq_dim", "rope_theta")}
         config["patch_size"] = tuple(config["patch_size"])
 
-        logger.info(
+        self._host_log(
             f"building the {config['num_layers']}-layer transformer from {self.transformer_subfolder}/, "
             f"TP={self.tp_factor}/SP={self.sp_factor}"
         )
@@ -945,10 +962,10 @@ class MiniMaxH3Pipeline:
         # Unanimous even though both branches are host-only: a rank reading a half-written table
         # diverges numerically and silently.
         if self._ranks_agree(path.is_file()):
-            logger.info(f"AdaLN table from cache: {path}")
+            self._host_log(f"AdaLN table from cache: {path}")
             table = torch.load(path, weights_only=False)
         else:
-            logger.info(
+            self._host_log(
                 f"building the AdaLN table on host for {len(step_timesteps)} forwards from "
                 f"{self.transformer_subfolder}/ (reads the checkpoint)"
             )
@@ -960,7 +977,7 @@ class MiniMaxH3Pipeline:
                 hidden_size=self.transformer_config["hidden_size"],
                 freq_dim=self.transformer_config["freq_dim"],
             )
-            logger.info(f"AdaLN table built in {time.time() - t0:.1f}s ({table.nbytes() / 1e9:.3f} GB); caching")
+            self._host_log(f"AdaLN table built in {time.time() - t0:.1f}s ({table.nbytes() / 1e9:.3f} GB); caching")
             is_distributed = ttnn.using_distributed_env()
             try:
                 if not is_distributed or int(ttnn.distributed_context_get_rank()) == 0:
@@ -969,7 +986,8 @@ class MiniMaxH3Pipeline:
                 # Warn rather than raise: the table is already in memory, so a failed write costs a
                 # recompute next run and nothing else. Every rank then misses the cache together,
                 # since `_ranks_agree` reads the same absent file, so the ranks stay consistent.
-                logger.warning(f"could not cache the AdaLN table to {path}: {exc}")
+                if _is_host_rank():
+                    logger.warning(f"could not cache the AdaLN table to {path}: {exc}")
             finally:
                 # In `finally`, so a write error on rank 0 cannot leave its peers blocked here.
                 if is_distributed:
@@ -1082,7 +1100,7 @@ class MiniMaxH3Pipeline:
         self._make_resident("vae")
         want_encoder = encode_shape is not None
         if self._vae is None:
-            logger.info("building the video VAE")
+            self._host_log("building the video VAE")
             # Used only for the wave readback, which keeps the decode off the MPI path; the VAE's
             # forward runs no collectives.
             yuv = self.vae_output_type == "yuv420"
@@ -1110,7 +1128,7 @@ class MiniMaxH3Pipeline:
         if decode_shape is not None and decode_shape not in self._vae._decoders:
             t0 = time.time()
             self._vae._decoder_for(*decode_shape)
-            logger.info(f"per-shape decoder {decode_shape} built in {time.time() - t0:.1f}s")
+            self._host_log(f"per-shape decoder {decode_shape} built in {time.time() - t0:.1f}s")
         if encode_shape is not None:
             # taps=1 for a single frame: the causal front-pad is zeros, so a 3-tap temporal conv
             # collapses to `weight[:, :, -1]` exactly, not approximately. A ref2va
@@ -1120,7 +1138,7 @@ class MiniMaxH3Pipeline:
             if key not in self._vae._encoders:
                 t0 = time.time()
                 self._vae._encoder_for(*key)
-                logger.info(f"per-shape encoder {encode_shape} taps={encode_taps} built in {time.time() - t0:.1f}s")
+                self._host_log(f"per-shape encoder {encode_shape} taps={encode_taps} built in {time.time() - t0:.1f}s")
         return self._vae
 
     def _prepare_audio_encoder(self) -> MiniMaxH3AudioEncoder:
@@ -1133,7 +1151,7 @@ class MiniMaxH3Pipeline:
         """
         if self._audio_encoder is None:
             config = self.audio_config
-            logger.info("building the audio encoder (ref2va reference soundtracks)")
+            self._host_log("building the audio encoder (ref2va reference soundtracks)")
             encoder = MiniMaxH3AudioEncoder(
                 encoder_dim=config["encoder_dim"],
                 encoder_rates=tuple(config["encoder_rates"]),
@@ -1205,7 +1223,7 @@ class MiniMaxH3Pipeline:
     def _prepare_audio_decoder(self) -> MiniMaxH3AudioDecoder:
         if self._audio_decoder is None:
             config = self.audio_config
-            logger.info("building the audio decoder")
+            self._host_log("building the audio decoder")
             audio_levers = {
                 k: v
                 for k, v in (
@@ -1352,7 +1370,7 @@ class MiniMaxH3Pipeline:
         # like a bug until you see the `last`-only case pass.
         keyframes = [prepare_keyframe_image(k, height, width, stretch=(i == 0)) for i, k in enumerate(sources)]
         task = "t2va" if not keyframes else ("fl2va" if image is not None else "fl2va_last_frame")
-        logger.info(
+        self._log(
             f"{task} {width}x{height}, {num_frames} frames ({num_frames / MINIMAX_H3_FPS:.2f} s), "
             f"{num_latent_frames} latent frames, {num_audio_latents} audio latents, "
             f"{num_inference_steps} steps, anchors={keyframe_anchors or '()'}"
@@ -1363,7 +1381,6 @@ class MiniMaxH3Pipeline:
         prompt_embeds, text_token_tags = self.encode_prompt(prompt, keyframes=keyframes)
         t_encode = time.time() - t0
         timings.append(("Encoder", t_encode))
-        logger.info(f"Encoding: {t_encode:.1f}s")
 
         # Both schedules. Built here rather than after the layout because the keyframe step below needs
         # `scale_noise`, which takes its `t` at face value and works before `set_timesteps` -- but they
@@ -1411,7 +1428,6 @@ class MiniMaxH3Pipeline:
             condition_rows = scheduler.scale_noise(condition_rows, MINIMAX_H3_KEYFRAME_NOISE_AUG, condition_noise)
             t_keyframe = time.time() - t0
             timings.append(("Keyframe encode", t_keyframe))
-            logger.info(f"Keyframe encode: {t_keyframe:.1f}s — {tuple(condition_rows.shape)}")
 
         # 4. Layout. One conditioning block of `rows_per_frame` rows per anchor, between text and audio.
         layout = build_packed_sequence(
@@ -1487,7 +1503,7 @@ class MiniMaxH3Pipeline:
         num_audio_latents = audio_latent_num_frames(num_frames)
         num_latent_frames = video_latent_num_frames(num_frames)
         kinds = "+".join(reference.kind + ("(+audio)" if reference.has_audio else "") for reference in prepared)
-        logger.info(
+        self._log(
             f"ref2va {width}x{height}, {num_frames} frames ({num_frames / MINIMAX_H3_FPS:.2f} s), "
             f"{num_latent_frames} latent frames, {num_audio_latents} audio latents, "
             f"{num_inference_steps} steps, references=[{kinds}]"
@@ -1498,7 +1514,6 @@ class MiniMaxH3Pipeline:
         prompt_embeds, text_token_tags = self.encode_prompt(prompt, references=prepared)
         t_encode = time.time() - t0
         timings.append(("Encoder", t_encode))
-        logger.info(f"Encoding: {t_encode:.1f}s")
 
         scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
         audio_scheduler = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
@@ -1536,11 +1551,6 @@ class MiniMaxH3Pipeline:
         )
         t_reference = time.time() - t0
         timings.append(("Reference encode", t_reference))
-        logger.info(
-            f"Reference encode: {t_reference:.1f}s — "
-            f"video {None if condition_rows is None else tuple(condition_rows.shape)}, "
-            f"audio {None if audio_condition_rows is None else tuple(audio_condition_rows.shape)}"
-        )
 
         # 4. All the noise for the request, off one generator, in the reference's draw order:
         # conditioning first (one draw per VISUAL reference, at its own resolved shape), then video,
@@ -1650,7 +1660,6 @@ class MiniMaxH3Pipeline:
         )
         t_denoise = time.time() - t0
         timings.append(("Denoise", t_denoise))
-        logger.info(f"Denoise: {t_denoise:.1f}s — {num_inference_steps - 1} steps")
 
         # Same rule: `_prepare_*` before `t0`, never inside it -- and for the VAE that includes the
         # per-shape decoder, whose weight upload would otherwise be timed.
@@ -1661,18 +1670,14 @@ class MiniMaxH3Pipeline:
         )
         t_vae_decode = time.time() - t0
         timings.append(("VAE decode", t_vae_decode))
-        logger.info(f"VAE decode: {t_vae_decode:.1f}s — {tuple(video.shape)}")
 
         audio_decoder = self._prepare_audio_decoder()
         t0 = time.time()
         audio = self._decode_audio(audio_decoder, audio_rows, num_audio_latents, layout.num_condition_audio_rows)
         t_audio_decode = time.time() - t0
         timings.append(("Audio decode", t_audio_decode))
-        logger.info(f"Audio decode: {t_audio_decode:.1f}s")
 
         self.last_timings = list(timings)
-        total = sum(seconds for _, seconds in timings)
-        logger.info(f"Total (compute): {total:.1f}s | frames={tuple(video.shape)}")
 
         return MiniMaxH3Output(
             video=video,
@@ -1712,24 +1717,21 @@ class MiniMaxH3Pipeline:
         the references*, so a warmup with different references warms nothing even at the same prompt.
         `last_padded_len` is exposed so a caller can assert the warm and measured lengths agree.
         """
-        t0 = time.time()
-        if references is not None:
-            task = "ref2va"
-        else:
-            task = "t2va" if image is None and last_image is None else "fl2va"
-        logger.info(f"warmup ({task}): {num_frames}f, {num_inference_steps} steps, prompt {len(prompt)} chars")
-        self(
-            prompt,
-            image=image,
-            last_image=last_image,
-            references=references,
-            num_frames=num_frames,
-            height=height,
-            width=width,
-            aspect_ratio=aspect_ratio,
-            num_inference_steps=num_inference_steps,
-        )
-        logger.info(f"warmup ({task}) done in {time.time() - t0:.1f}s, padded_len={self.last_padded_len}")
+        self._log_generation = False
+        try:
+            self(
+                prompt,
+                image=image,
+                last_image=last_image,
+                references=references,
+                num_frames=num_frames,
+                height=height,
+                width=width,
+                aspect_ratio=aspect_ratio,
+                num_inference_steps=num_inference_steps,
+            )
+        finally:
+            self._log_generation = True
 
     def release_traces(self) -> None:
         """Release the captured denoise trace, as `WanPipeline.release_traces` does.
@@ -1786,7 +1788,7 @@ class MiniMaxH3Pipeline:
         alignment = self.sp_factor * ttnn.TILE_SIZE
         padded_len = ((layout.sequence_length + alignment - 1) // alignment) * alignment
         self.last_padded_len = padded_len
-        logger.info(
+        self._log(
             f"packed sequence {layout.sequence_length} -> {padded_len} padded, "
             f"{padded_len // self.sp_factor} rows/device, {num_cond} condition rows"
         )
@@ -1916,13 +1918,13 @@ class MiniMaxH3Pipeline:
             else:
                 t_steady += t_step
             if i % 10 == 0 or i == len(timesteps) - 1:
-                logger.info(f"  step {i + 1}/{len(timesteps)} t={float(t):.4f}")
+                self._log(f"  step {i + 1}/{len(timesteps)} t={float(t):.4f}")
 
         # This request is now warm: a later call with the same signature may trace.
         self._trace_signature = signature
         self._trace_adaln_cache = adaln_cache
         steady_steps = max(len(timesteps) - 1, 1)
-        logger.info(
+        self._log(
             f"denoise breakdown: preamble {t_preamble:.1f}s (rope {t_rope:.1f}s) | "
             f"first step {t_first:.1f}s | steady {t_steady:.1f}s over {steady_steps} steps "
             f"({t_steady / steady_steps * 1000:.0f} ms/step)"
@@ -1965,6 +1967,7 @@ class MiniMaxH3Pipeline:
             self.patch_size,
         )
         latents = self._denormalize(latents, self.vae_config.latents_mean, self.vae_config.latents_std)
+        vae.log_profile = self._log_generation
         video = vae.decode(latents, output_type="yuv420" if self.vae_output_type == "yuv420" else "float")
         if self.vae_output_type == "yuv420":
             # De-normalized, clamped and colour-converted on device; nothing left to do on host.
