@@ -271,6 +271,62 @@ inline std::uint32_t _get_dest_buffer_base_()
     return dest_register_offset;
 }
 
+/**
+ * @brief Sets destination register base address depending on tile idx
+ * @param tile_idx: Tile index in the dest reg
+ * 16bit dest reg data format -> tile_idx = 0 - 7
+ * 32bit dest reg data format -> tile_idx = 0 - 3
+ */
+template <DstTileShape TILE_SHAPE>
+inline void _set_dst_write_addr_(const std::uint32_t tile_index)
+{
+    constexpr std::uint32_t tile_shape_idx = get_dest_tile_size_log2(TILE_SHAPE);
+    const std::uint32_t dst_index          = (tile_index << tile_shape_idx) + _get_dest_buffer_base_();
+    _set_dest_section_base_<TRISC_ID>(dst_index);
+}
+
+/**
+ * @brief Computes the tile-shape index (a log2-style shift exponent derived from
+ *        the number of rows per tile) and stores it in GPR TEMP0 for later reuse
+ *        by @ref _set_dst_write_addr_by_gpr_ and the reduce MOP instruction stream.
+ *
+ *        This is the "compute once" half of the pair that splits
+ *        @ref _set_dst_write_addr_by_rows_ so the shift amount is calculated a
+ *        single time (when the tile shape is known) and reused across many
+ *        per-tile dest-base calculations.
+ *
+ * @param num_rows_per_tile Number of data rows per tile.
+ */
+inline void _set_tile_shape_idx_gpr_(const std::uint32_t num_rows_per_tile)
+{
+    const std::uint32_t tile_shape_idx =
+        (num_rows_per_tile == 64)
+            ? 6
+            : ((num_rows_per_tile == 32) ? 5 : ((num_rows_per_tile == 16) ? 4 : ((num_rows_per_tile == 8) ? 3 : ((num_rows_per_tile == 4) ? 2 : 1))));
+    ckernel::regfile[p_gpr_math::TILE_SHAPE_IDX] = tile_shape_idx;
+}
+
+/**
+ * @brief Sets the destination register base address depending on the tile index,
+ *        using the tile-shape index previously stored in GPR TEMP0 by
+ *        @ref _set_tile_shape_idx_gpr_ as the left-shift amount that converts
+ *        tile_index into a dest offset.
+ *
+ *        This is the "use many" half of the pair that splits
+ *        @ref _set_dst_write_addr_by_rows_; call @ref _set_tile_shape_idx_gpr_
+ *        once before invoking this for each tile in the reduce.
+ *
+ * @param tile_index Tile index in the dest reg.
+ *        16-bit dest reg data format -> tile_index = 0 - 7
+ *        32-bit dest reg data format -> tile_index = 0 - 3
+ */
+inline void _set_dst_write_addr_by_rows_(const std::uint32_t tile_index)
+{
+    const std::uint32_t tile_shape_idx = ckernel::regfile[p_gpr_math::TILE_SHAPE_IDX];
+    const std::uint32_t dst_index      = (tile_index << tile_shape_idx) + _get_dest_buffer_base_();
+    _set_dest_section_base_<TRISC_ID>(dst_index);
+}
+
 inline constexpr static std::uint32_t masked_data_format(std::uint32_t data_format)
 {
     return data_format & DATA_FORMAT_CONFIG_MASK;
@@ -417,9 +473,10 @@ struct srcs_dims
 };
 
 // SrcS runs in 32-bit element mode when the UNP_S destination format is 32-bit wide.
+// Tf32 datums are 19-bit and do not fit the 16-bit SrcS columns, so they also occupy 32-bit cells.
 inline constexpr bool _is_srcs_32bit_mode_(const DataFormat unpack_S_dst_format)
 {
-    return unpack_S_dst_format == DataFormat::Float32 || unpack_S_dst_format == DataFormat::Int32;
+    return unpack_S_dst_format == DataFormat::Float32 || unpack_S_dst_format == DataFormat::Tf32 || unpack_S_dst_format == DataFormat::Int32;
 }
 
 /**
