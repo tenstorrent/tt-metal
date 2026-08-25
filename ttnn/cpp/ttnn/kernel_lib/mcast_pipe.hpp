@@ -149,6 +149,10 @@ public:
 
     // ===== DATA channel (a block + a ready signal) =====
     // send() handles receiver readiness when enabled, data multicast, ready signaling, and source L1 protection.
+    // The sender gets its OWN copy only via the loopback leg, which is gated on in_rect_ (i.e. on the sender
+    // belonging to the receiver rectangle). Mcast1D with a fixed sender at index 0 or span-1 builds a
+    // sender-EXCLUDING rect, so in_rect_ is always false there and loopback never runs: such a sender must
+    // place its own copy in local L1 itself before calling send(). See Mcast1D in host/mcast_host.hpp.
     // With SOURCE_GUARD=CallerManaged, the caller provides that protection, so send() may return before the NoC
     // finishes reading source L1.
     template <SourceL1Guard SOURCE_GUARD = SourceL1Guard::Guard>
