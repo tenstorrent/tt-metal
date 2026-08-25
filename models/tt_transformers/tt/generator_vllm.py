@@ -1006,6 +1006,90 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
+class Exaone4_5_ForConditionalGeneration(HybridAttentionForCausalLM):
+    """EXAONE-4.5 (text decoder) for vLLM integration.
+
+    Named after the HF architecture string so the vLLM TT plugin can map it
+    directly. The checkpoint is multimodal, but ModelArgs runs its text
+    decoder only (``force_text_only``): hybrid LLLG sliding/full attention
+    (via :class:`HybridAttentionForCausalLM`), post-norm decoder, NoPE
+    full-attention layers. Vision inputs are not yet wired through vLLM —
+    this serves text-only requests.
+    """
+
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": False,  # Sliding window => no prefix caching
+        "supports_async_decode": True,
+        "supports_sample_on_device": True,
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def initialize_vllm_model(
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
+    ):
+        tt_model, model_args = initialize_vllm_text_transformer(
+            hf_config,
+            tt_data_parallel,
+            mesh_device,
+            max_batch_size,
+            max_seq_len=max_seq_len,
+            n_layers=n_layers,
+            dtype=ttnn.bfloat8_b,
+            optimizations=DecodersPrecision.from_string(optimizations)
+            if optimizations is not None
+            else DecodersPrecision.performance,
+        )
+        return cls(tt_model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].model_cache_path
+
+    def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        # While hybrid KV cache groups are disabled upstream (every layer is
+        # one full-attention group), skip the per-layer page-table routing
+        # and let the legacy single page_table flow through
+        # ``Generator.prefill_forward_text`` — same rationale as
+        # ``GptOssForCausalLM.prefill_forward``.
+        if not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
+            return super().prefill_forward_text(*args, **kwargs)
+        page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
+        per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
+        if per_submesh is not None:
+            for m, pt_for_submesh in zip(self.model, per_submesh):
+                m.update_persistent_per_layer_page_tables(pt_for_submesh)
+        with self._route_per_layer_page_tables(per_submesh):
+            return super().prefill_forward_text(*args, **kwargs)
+
+    def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        # See prefill_forward note above.
+        if not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
+            return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
+        page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
+        per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
+        if per_submesh is not None:
+            for m, pt_for_submesh in zip(self.model, per_submesh):
+                m.update_persistent_per_layer_page_tables(pt_for_submesh)
+        with self._route_per_layer_page_tables(per_submesh):
+            # ``HybridAttentionForCausalLM.decode_forward`` is a placeholder;
+            # route to ``Generator``'s actual decode implementation.
+            return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+
 class GptOssForCausalLM(HybridAttentionForCausalLM):
     """GPT-OSS model for vLLM integration.
 
