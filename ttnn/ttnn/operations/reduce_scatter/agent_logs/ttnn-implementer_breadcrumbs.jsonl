@@ -1,0 +1,1 @@
+{"event":"implementation_complete","note":"All 6 files authored per op_design.md: derivative of adopted reduce_scatter_average minus 1/N epilogue (no cb_scaler; C4 = degenerate-copy sum_blocks). Phase-0 SUPPORTED: dtype bf16/fp32, TILE, Linear, dim=3. CB sync audit balanced.","ts":"2026-08-25T16:27:55+00:00"}
