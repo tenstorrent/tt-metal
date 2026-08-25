@@ -25,7 +25,7 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer dfb_mapping(dfb::mapping);  // scratch: mapping-page FIFO (consumer)
-    DataflowBuffer dfb_input(dfb::input);      // input-tile FIFO (consumer)
+    DataflowBuffer dfb_in_tiles(dfb::in_tiles);  // input-tile FIFO (consumer)
     DataflowBuffer dfb_working(dfb::working);  // L1 scratch page (self-loop producer+consumer)
     // loop over output (reshaped) pages this core is responsible for
     bool first = true;
@@ -42,16 +42,16 @@ void kernel_main() {
             }
 
             if (first) {
-                dfb_input.wait_front(1);
-                input_base_addr = dfb_input.get_read_ptr();
+                dfb_in_tiles.wait_front(1);
+                input_base_addr = dfb_in_tiles.get_read_ptr();
                 previous_input_page_idx = map_ptr[seg_idx].input_page_index;
                 first = false;
 
             } else if (map_ptr[seg_idx].input_page_index != previous_input_page_idx) {
                 noc.async_write_barrier();
-                dfb_input.pop_front(1);
-                dfb_input.wait_front(1);
-                input_base_addr = dfb_input.get_read_ptr();
+                dfb_in_tiles.pop_front(1);
+                dfb_in_tiles.wait_front(1);
+                input_base_addr = dfb_in_tiles.get_read_ptr();
                 previous_input_page_idx = map_ptr[seg_idx].input_page_index;
             }
             // TODO (maybe) pre calculate size and offsets in bytes on host
@@ -73,7 +73,7 @@ void kernel_main() {
     // Gated on `first` so a core that processed no segments does not pop a tile it never waited.
     if (!first) {
         noc.async_write_barrier();
-        dfb_input.pop_front(1);
+        dfb_in_tiles.pop_front(1);
     }
     dfb_working.push_back(1);
 }

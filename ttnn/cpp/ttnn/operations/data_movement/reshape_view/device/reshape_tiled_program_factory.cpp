@@ -342,7 +342,8 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
     const DFBSpecName MAPPING{"mapping"};  // reader-produces / writer-consumes mapping-page FIFO
-    const DFBSpecName INPUT_DFB{"input"};  // reader-produces / writer-consumes input-tile FIFO
+    const DFBSpecName IN_TILES{"in_tiles"};  // reader-produces / writer-consumes input-tile FIFO
+                                             // (distinct from tensor::input, the input tensor)
     const DFBSpecName WORKING{"working"};  // writer-only L1 scratch page (self-loop)
     const TensorParamName INPUT_T{"input"};
     const TensorParamName MAPPING_T{"map"};  // the op-owned page-mapping tensor
@@ -362,7 +363,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
             .data_format_metadata = mapping_dataformat,
         },
         DataflowBufferSpec{
-            .unique_id = INPUT_DFB,
+            .unique_id = IN_TILES,
             .entry_size = input_tile_size_bytes,
             .num_entries = reader_dfb_len,
             .data_format_metadata = input_dfb_data_format,
@@ -383,7 +384,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
                 DFBBinding{
                     .dfb_spec_name = MAPPING, .accessor_name = "mapping", .endpoint_type = DFBEndpointType::PRODUCER},
                 DFBBinding{
-                    .dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::PRODUCER},
+                    .dfb_spec_name = IN_TILES, .accessor_name = "in_tiles", .endpoint_type = DFBEndpointType::PRODUCER},
             },
         .tensor_bindings =
             {
@@ -393,7 +394,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
         .compile_time_args =
             {
                 {"Max_Map_Size_Bytes", mapping_page_size_bytes},
-                {"Tile_Size_Bytes", input_tile_size_bytes},
+                {"Tile_size_bytes", input_tile_size_bytes},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"start_output_page_idx", "end_output_page_idx"}},
         .hw_config = create_reader_datamovement_config(device->arch()),
@@ -407,7 +408,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
                 DFBBinding{
                     .dfb_spec_name = MAPPING, .accessor_name = "mapping", .endpoint_type = DFBEndpointType::CONSUMER},
                 DFBBinding{
-                    .dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::CONSUMER},
+                    .dfb_spec_name = IN_TILES, .accessor_name = "in_tiles", .endpoint_type = DFBEndpointType::CONSUMER},
                 DFBBinding{
                     .dfb_spec_name = WORKING, .accessor_name = "working", .endpoint_type = DFBEndpointType::PRODUCER},
                 DFBBinding{
