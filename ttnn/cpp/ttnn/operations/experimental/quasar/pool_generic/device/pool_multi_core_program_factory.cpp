@@ -688,38 +688,25 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // documents as the expected srcB scaler layout, which validates with the assert enabled. (srcA keeps its
     // full 32x32 4-face geometry below -- that operand genuinely needs it.)
     const auto scalar_face = FaceGeometry{.face_r_dim = 1, .num_faces = 1};
-    const uint32_t window_size_hw = kernel_h * kernel_w;
-    // WORKAROUND (Quasar): the input-CB tile's face_r_dim feeds both the reduce tensor-shape and the
-    // TDMA buffer-descriptor y_dim, and Quasar LLK restricts both to powers of 2 <= 16
-    // (validate_tensor_shape_tile_dependent_ops_ in common/tensor_shape.h, validate_buffer_desc in
-    // tt_llk_quasar/common/inc/ckernel_trisc_common.h). WH/BH accept the raw window size directly
-    // (e.g. 9 for a 3x3 window) since they don't run those validators; Quasar asserts. Round the
-    // packed face_r_dim up to the next power of 2 so the tile shape validates (9 -> 16, giving the
-    // valid 16x16 tile: x=16,y=16,z=1). The input CB page is already padded to a full tile
-    // (round_up(in_cb_sz, TILE_HW) in pool_utils.cpp) so the larger face_r_dim reads no OOB.
-    // NOTE: this is a bring-up workaround. For correct results the padded rows [window_size, pow2)
-    // must hold the pool identity (-inf max / 0 avg) via clear_value_cb; otherwise stale L1 leaks
-    // into the reduce. Remove once Quasar reduce/buffer-descriptor supports non-pow2 face_r_dim.
-    const uint32_t raw_face_r_unpadded = std::min(window_size_hw, 16u);
-    uint32_t raw_face_r_pow2 = 1;
-    while (raw_face_r_pow2 < raw_face_r_unpadded) {
-        raw_face_r_pow2 <<= 1;
-    }
-    const uint32_t raw_face_r = raw_face_r_pow2;
     // QSR: the reduce-col strided tilize (_llk_unpack_reduce_col_tilizeA_strided_) only supports a full
-    // 32x32 (4-face) SrcA tile (LLK_ASSERT total_row_dim()==32 && total_col_dim()==32 at
-    // llk_unpack_reduce_col_tilizeA_strided.h). The WH/BH 2-face small-window optimization feeds it a
-    // 16x32 (num_faces=2) tile, which (a) violates that requirement -> wrong tilized data, and (b) makes
-    // the always-4-face strided unpack over-produce SrcA vs the 2-GMPOOL reduce -> SrcA double-buffer
-    // overflow -> deadlock (unpacker spins UPTW, math stalls on SrcB). Always describe the (already
-    // full-tile-padded, round_up(in_cb_sz, TILE_HW)) in_cb page as 4 faces; the padding rows
-    // [window_size, 32) hold the pool identity (-inf max / 0 avg via force_max_clear + clear_value_cb,
-    // AVG scalar = 1/true_window), so reducing the extra rows is a no-op.
+    // 32x32 (4-face) SrcA tile: LLK_ASSERT(total_row_dim()==32 && total_col_dim()==32, "Four face unpack
+    // reduce col tilizeA strided only supports 32x32 tiles") in llk_unpack_reduce_col_tilizeA_strided.h.
+    // A full 4-face tile REQUIRES face_r_dim == FACE_HEIGHT (16): 2 face-rows x 16 = 32 rows. So describe
+    // SrcA as the full 32x32 4-face tile (face_r_dim=16) for EVERY pool window -- NOT the pow2-rounded
+    // window. The old code set face_r_dim = pow2(min(window,16)), which is 16 for windows >= 9 (the resnet
+    // stem 3x3 and global-avg 7x7, so they were unaffected) but < 16 for windows <= 8 (e.g. a 2x2 window
+    // -> face_r_dim=4 -> total_row_dim=8), tripping BOTH that LLK assert AND validate_buffer_desc's "y_dim
+    // must be 16 when z_dim is 4". The input CB page is already padded to a full tile (round_up(in_cb_sz,
+    // TILE_HW) in pool_utils.cpp) with the pool identity in the pad rows [window_size, 32) (-inf max via
+    // force_max_clear / 0 avg via clear_value_cb, AVG scalar = 1/true_window), so reducing all 32 rows is a
+    // no-op past the true window. (The WH/BH num_faces=2 small-window path is NOT used on Quasar: it
+    // violates the 32x32 requirement and over-produces SrcA vs the 2-GMPOOL reduce -> double-buffer
+    // overflow -> deadlock.)
     const uint32_t num_faces_in_input_tile_for_cb = 4u;
     const std::optional<FaceGeometry> input_face_geometry =
-        return_indices
-            ? std::nullopt
-            : std::optional{FaceGeometry{.face_r_dim = raw_face_r, .num_faces = num_faces_in_input_tile_for_cb}};
+        return_indices ? std::nullopt
+                       : std::optional{FaceGeometry{
+                             .face_r_dim = tt::constants::FACE_HEIGHT, .num_faces = num_faces_in_input_tile_for_cb}};
 
     constexpr uint32_t pack_untilize_face_r_dim = 1;
     const bool last_tile_is_partial = in_c % tt::constants::TILE_WIDTH != 0;
