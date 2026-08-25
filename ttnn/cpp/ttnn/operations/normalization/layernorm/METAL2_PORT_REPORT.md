@@ -21,8 +21,10 @@ variant is valid with one factory on each concept and the op builds and runs thr
 sharded pass still has to do is recorded under [Open items for downstream](#open-items-for-downstream).
 
 **No-regression result.** The confirmed test set gives **2236 passed, 22 skipped** both before and
-after the port, with an identical pass/skip split per file. The only behavior change anywhere is the
-sanctioned pybind removal, characterized precisely below.
+after the port, with an identical pass/skip split per file. Two behavior changes fall outside that
+test set, both characterized precisely below: the sanctioned pybind removal, and a Welford
+configuration with a 32-bit float input and `fp32_dest_acc_en=False` that used to run and now fails
+while the spec is built.
 
 ## Provenance
 
@@ -135,6 +137,56 @@ port.
   layernorm or rms_norm path, and it needs a Metal 2.0 route (or a branch that stops going through
   `create_descriptor`) before any of it works again. The skip hides that from CI, so the owner
   should be told directly rather than discovering it from a passing run.
+
+### Welford with a 32-bit float input and `fp32_dest_acc_en=False`
+
+*Tagged: op behavior. Needs an owner decision. Measured on hardware, not inferred.*
+
+**What happens.** With Welford on, a 32-bit float input in tile layout, and a
+`compute_kernel_config` carrying `fp32_dest_acc_en=False`, the ported factory now fails while the
+spec is built. Both branches of Metal 2.0's unpack-mode rule are reachable, one per configuration:
+
+| case | input | `fp32_dest_acc_en` | residual | pre-port | after the port |
+|---|---|---|---|---|---|
+| A | float32 | False | no | ran | `TT_FATAL` [program_spec.cpp:1036](../../../../../../tt_metal/impl/metal2_host_api/program_spec.cpp#L1036) `!is_32bit_element_format(fmt)` |
+| B | float32 | False | yes | ran | `TT_FATAL` [program_spec.cpp:1044](../../../../../../tt_metal/impl/metal2_host_api/program_spec.cpp#L1044) `is_gen2` |
+| C | float32 | True | no | ran | ran |
+| D | bfloat16 | False | no | ran | ran |
+
+Measured with a four-case probe against the pre-port revision and against the ported code, on a
+build with **no** forced-validation scaffolding, so this is the shipped configuration. The residual
+is *not* required, contrary to what an earlier revision of this report said: case A has none.
+
+**Why it happens.** `welford_fp32_alias` gates the alias on the *input* being 32-bit float but never
+on `fp32_dest_acc_en`, the switch that sets the Dest register's width
+([device/layernorm_op_multi_core.cpp:450-451](device/layernorm_op_multi_core.cpp#L450-L451)). With
+the switch off, the alias is marked to unpack straight into a 16-bit Dest: in case A it carries the
+input's 32-bit format, which cannot fit; in case B it carries the 16-bit intermediate format, where
+the bypass buys nothing. The port copied the marking across unchanged, so the rule is what is new,
+not the setting.
+
+**The obvious fix is wrong, and this is the part worth reading.** Adding `&& fp32_dest_acc_en` to
+the alias condition was tried and measured. It stops the failure, but case A then *runs and returns
+garbage*: PCC 0.0056 against the PyTorch reference, maximum absolute error `inf`. Case B recovers
+properly (PCC 0.99997), as do C and D. So dropping the alias is right for the residual shape and
+actively harmful for the non-residual one, and the change was reverted.
+
+What that says about the pre-port behavior: a 32-bit float Welford input cannot reach the compute
+unit intact when Dest is 16 bits wide, by either route. So case A was almost certainly producing
+wrong numbers silently before the port, and the port converts that into a loud failure. **The
+pre-port numerics were not measured** — only that the call did not raise — so this last step is
+inference, and confirming it needs a run against the pre-port revision.
+
+**What the owner needs to decide.** If that inference holds, the honest fix is to reject the
+combination outright, in the op's validation, rather than to make it run. Note that
+[test_layer_norm_ulp.py:20](../../../../../../tests/ttnn/nightly/unit_tests/operations/fused/test_layer_norm_ulp.py#L20)
+already asserts in a comment that "device enforces this for FP32 inputs" — no such enforcement
+exists, so that comment describes intended behavior that was never implemented. Adding it would make
+the comment true and would close this out.
+
+**The sharded factory already guards this.** Its condition carries `&& fp32_dest_acc_en`
+([device/layernorm_op_multi_core_sharded.cpp:323](device/layernorm_op_multi_core_sharded.cpp#L323)),
+so the two factories disagree today. Whatever is decided should make them consistent.
 
 ### `get_pointer_to_cb_data` keeps a CB-vocabulary name after the port
 
@@ -374,13 +426,10 @@ Each is an ops-team call.
   ordinary case and `test_large_layer_norm_with_weight_bias_and_residual_input[use_welford=True]`
   reaches `welford_state_fp32_alias` (`EX` ↔ `EX_WELFORD`, `EX2` ↔ `EX2_WELFORD`) while the
   float32-input Welford cases reach `welford_fp32_alias` on both its fused and non-fused shapes.
-- The watch item the plan flagged — `UnpackToDest` on a `Float16_b` buffer when
-  `welford_fp32_alias && fuse_pre_add && !fp32_dest_acc_en`, which the Gen1 validator can reject —
-  **did not fire** across the full run with the checks forced on, and it cannot: reaching it needs a
-  residual *and* an explicit `compute_kernel_config` with `fp32_dest_acc_en=False` *and* a float32
-  input *and* a non-large tensor. `test_layer_norm_ulp.py` is the only file that varies
-  `fp32_dest_acc_en`, and it passes no residual, so nothing in the confirmed set covers the
-  combination. It is worth a targeted test rather than leaving it to chance.
+- The plan's `unpack_modes` watch item **fires, and is wider than the plan predicted.** It is written
+  up as a Handoff point above (*Welford with a 32-bit float input and `fp32_dest_acc_en=False`*); an
+  earlier revision of this section claimed it "did not fire" and could not be reached, which was
+  wrong on both counts. It was measured, not reasoned about.
 
 ---
 
