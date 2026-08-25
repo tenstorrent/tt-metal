@@ -790,14 +790,19 @@ def test_eltwise_unary_sfpu_edges(
 # the sweep can record a divergence against a single probe rather than a whole combination,
 # the repaired value is asserted here on its own.
 #
-# ONE COMBINATION, AND IT IS THE ONLY ONE THAT CAN SHOW A REGRESSION:
+# ONE COMBINATION -- THE ONLY ONE specials_safe() ADMITS THAT CAN SHOW A REGRESSION:
 #
-#   Float32 -> Float32 at dest_acc=Yes. The probe has to survive in both directions, and each
-#   direction eliminates the alternatives. Inbound: specials_safe() rejects a 16-bit input into
-#   a 32-bit dest (breaker 2), so +inf only reaches the LREG intact from a 32-bit input.
-#   Outbound: the pre-fix result was NaN, and a bf16 output narrows NaN to inf on the way to L1
-#   -- which is exactly how this defect stayed hidden on six of the eight combinations. Run
-#   anywhere else and the assertion passes whether the kernel is fixed or not.
+#   Float32 -> Float32 at dest_acc=Yes. Outbound is the real constraint: the pre-fix result was
+#   NaN, and a bf16 output narrows NaN to inf on the way to L1, which is exactly how this defect
+#   stayed hidden on six of the eight combinations. Run against a 16-bit output and the assertion
+#   passes whether the kernel is fixed or not.
+#
+#   Inbound, specials_safe() then leaves only the 32-bit input. It is a conservative gate, not a
+#   statement about +inf delivery: it rejects Float16_b -> Float32 at dest_acc=Yes on breaker 2,
+#   but breaker 2 is about the *whole* specials set -- that unpack loses -inf and NaN, not +inf.
+#   So that combination does deliver the probe and would show the regression too; the repaired
+#   pole is visible there in the accuracy record. It is excluded here only because this test
+#   asserts specials_safe() as its non-vacuity guard.
 @pytest.mark.nightly
 def test_sqrt_custom_infinity_regression(request):
     formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
