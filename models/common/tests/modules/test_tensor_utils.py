@@ -19,7 +19,7 @@ from models.common.tensor_utils import (
 )
 
 
-def test_pad_dim_to_size():
+def test_pad_dim_to_size(expect_error):
     """Test the pad_dim_to_size utility function."""
 
     # Test padding on last dimension
@@ -44,7 +44,7 @@ def test_pad_dim_to_size():
     assert padded3.shape == (1, 1, 32, 128)
 
     # Test error when target size is smaller
-    with pytest.raises(ValueError, match="smaller than current size"):
+    with expect_error(ValueError, "smaller than current size"):
         pad_dim_to_size(x, dim=-1, size=50)
 
 
@@ -98,11 +98,11 @@ def test_pad_to_shape_single_dim():
     assert torch.equal(padded[:, :, :, :5], x)
 
 
-def test_pad_to_shape_error_on_smaller_target():
+def test_pad_to_shape_error_on_smaller_target(expect_error):
     """Test pad_to_shape raises error when target is smaller than source."""
 
     x = torch.randn(2, 3, 4, 5)
-    with pytest.raises(ValueError, match="smaller than current size"):
+    with expect_error(ValueError, "smaller than current size"):
         pad_to_shape(x, (2, 3, 4, 3))
 
 
