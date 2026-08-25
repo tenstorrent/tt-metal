@@ -1302,6 +1302,7 @@
 
 - name: TT-DiT Wan2.2-T2V-A14B demo e2e tests (Galaxy)
   cmd: |
+    unset HF_HUB_OFFLINE
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
     pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "4x8sp1tp0nl4_ring_is_fsdp1 and resolution_720p" --timeout 1500
   model: wan-2.2-t2v
