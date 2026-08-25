@@ -907,8 +907,9 @@ class TTSampling(LightweightModule):
             # topk_large_indices composite for these halves once it is absent
             # (topk_would_route_to_large_indices mirrors
             # should_route_to_topk_large_indices in topk.cpp; KEEP IN SYNC).
-            # stable is best-effort/broken anyway (tenstorrent/tt-metal#33492);
-            # _adjust_values_for_tiebreak is what actually guarantees the greedy
+            # Sampling opts out of stable topk for decode perf (_topk_stable is
+            # False; the comparator network costs ~2-3x on the SFPU sort stage);
+            # _adjust_values_for_tiebreak is what guarantees the greedy
             # pick after the gather, regardless of per-device tie order. Calls
             # that would not route keep today's arguments bit-for-bit, and a
             # call the model constrained to a sub-grid is never relaxed.
@@ -957,9 +958,10 @@ class TTSampling(LightweightModule):
                 )
             # Perform local top-k on each device. Drop stable=True ONLY when the
             # relaxed call would take the Blackhole topk_large_indices composite
-            # (mirror of topk.cpp's predicate; KEEP IN SYNC) -- stable is
-            # best-effort/broken anyway (#33492) and _adjust_values_for_tiebreak
-            # guarantees the greedy pick. Sub-grid-constrained calls never relax.
+            # (mirror of topk.cpp's predicate; KEEP IN SYNC) -- sampling opts out
+            # of stable for decode perf anyway (_topk_stable is False) and
+            # _adjust_values_for_tiebreak guarantees the greedy pick.
+            # Sub-grid-constrained calls never relax.
             use_routed_topk = self.sub_core_grid_topk is None and topk_would_route_to_large_indices(
                 x_bf16, self.max_top_k, self.mesh_device
             )
