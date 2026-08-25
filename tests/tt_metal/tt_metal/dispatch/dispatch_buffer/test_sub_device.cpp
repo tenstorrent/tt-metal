@@ -41,6 +41,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     CoreRangeSet sharded_cores_2 = CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})});
 
     auto mesh_device = devices_[0];
+    const auto device_id = mesh_device->get_device_ids()[0];
     auto sub_device_manager_1 = mesh_device->create_sub_device_manager({sub_device_1}, local_l1_size);
     auto sub_device_manager_2 = mesh_device->create_sub_device_manager({sub_device_1, sub_device_2}, local_l1_size);
     DeviceAddr l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
@@ -115,7 +116,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     auto input_1_it = input_1.begin();
     for (const auto& physical_core : physical_cores_1) {
         auto readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            mesh_device->get_devices()[0]->id(), physical_core, buffer_1->address(), page_size_1);
+            device_id, physical_core, buffer_1->address(), page_size_1);
         EXPECT_TRUE(std::equal(input_1_it, input_1_it + page_size_1 / sizeof(uint32_t), readback.begin()));
         input_1_it += page_size_1 / sizeof(uint32_t);
     }
@@ -140,7 +141,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     auto input_2_it = input_2.begin();
     for (const auto& physical_core : physical_cores_2) {
         auto readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            mesh_device->get_devices()[0]->id(), physical_core, buffer_3->address(), page_size_2);
+            device_id, physical_core, buffer_3->address(), page_size_2);
         EXPECT_TRUE(std::equal(input_2_it, input_2_it + page_size_2 / sizeof(uint32_t), readback.begin()));
         input_2_it += page_size_2 / sizeof(uint32_t);
     }

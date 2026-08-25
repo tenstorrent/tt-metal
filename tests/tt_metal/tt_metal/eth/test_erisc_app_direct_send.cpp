@@ -489,7 +489,6 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
     auto* const device_0 = mesh_device_0->get_devices()[0];
-    auto* const device_1 = mesh_device_1->get_devices()[0];
 
     const size_t src_eth_l1_byte_address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -501,7 +500,7 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsDirectSendChip0ToChip1) {
             continue;
         }
         auto [device_id, receiver_core] = device_0->get_connected_ethernet_core(sender_core);
-        if (device_1->id() != device_id) {
+        if (mesh_device_1->get_device_ids()[0] != device_id) {
             continue;
         }
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
@@ -547,7 +546,6 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsDirectSendChip1ToChip0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
-    auto* const device_0 = mesh_device_0->get_devices()[0];
     auto* const device_1 = mesh_device_1->get_devices()[0];
 
     const size_t src_eth_l1_byte_address =
@@ -560,7 +558,7 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsDirectSendChip1ToChip0) {
             continue;
         }
         auto [device_id, receiver_core] = device_1->get_connected_ethernet_core(sender_core);
-        if (device_0->id() != device_id) {
+        if (mesh_device_0->get_device_ids()[0] != device_id) {
             continue;
         }
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
@@ -611,8 +609,7 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
     for (const auto& sender_mesh_device : devices_) {
         auto* const sender_device = sender_mesh_device->get_devices()[0];
         for (const auto& receiver_mesh_device : devices_) {
-            auto* const receiver_device = receiver_mesh_device->get_devices()[0];
-            if (sender_device->id() == receiver_device->id()) {
+            if (sender_device->id() == receiver_mesh_device->get_device_ids()[0]) {
                 continue;
             }
             for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
@@ -621,7 +618,7 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
                     continue;
                 }
                 auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
-                if (receiver_device->id() != device_id) {
+                if (receiver_mesh_device->get_device_ids()[0] != device_id) {
                     continue;
                 }
                 ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
@@ -851,9 +848,8 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
 
         // gotcha: devices_ are mesh devices. Mesh device IDs are not the same as actual device IDs needed in the
         // cluster
-        auto* send_device = send_chip->get_devices()[0];
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
-                send_device->id(), sender_core)) {
+                send_chip->get_device_ids()[0], sender_core)) {
             continue;
         }
 
@@ -962,8 +958,7 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConnect
     for (const auto& sender_mesh_device : devices_) {
         auto* const sender_device = sender_mesh_device->get_devices()[0];
         for (const auto& receiver_mesh_device : devices_) {
-            auto* const receiver_device = receiver_mesh_device->get_devices()[0];
-            if (sender_device->id() >= receiver_device->id()) {
+            if (sender_device->id() >= receiver_mesh_device->get_device_ids()[0]) {
                 continue;
             }
             for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
@@ -972,7 +967,7 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConnect
                     continue;
                 }
                 auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
-                if (receiver_device->id() != device_id) {
+                if (receiver_mesh_device->get_device_ids()[0] != device_id) {
                     continue;
                 }
                 for (uint32_t erisc_idx = 0; erisc_idx < num_eriscs; erisc_idx++) {

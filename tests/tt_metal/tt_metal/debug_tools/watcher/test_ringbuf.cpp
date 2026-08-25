@@ -210,9 +210,8 @@ void RunMultiWriterTest(MeshWatcherFixture* fixture, const std::shared_ptr<distr
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto* device = mesh_device->get_devices()[0];
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    const bool is_quasar = device->arch() == tt::ARCH::QUASAR;
+    const bool is_quasar = mesh_device->arch() == tt::ARCH::QUASAR;
     CoreCoord logical_core{0, 0};
     constexpr const char* kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf_2_0.cpp";
 
