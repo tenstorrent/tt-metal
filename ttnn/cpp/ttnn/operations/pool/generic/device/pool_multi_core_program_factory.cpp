@@ -157,6 +157,8 @@ static Tensor create_scalar_config_tensor(
         default: break;
     }
 
+    scalars_per_core.reserve(num_iterations);
+
     {
         uint32_t nhw_linear = 0;
         uint32_t output_stick_n = 0;
@@ -192,6 +194,8 @@ static Tensor create_scalar_config_tensor(
         max_scalars_cnt,
         num_iterations,
         in_memory_layout);
+
+    config_vector.reserve(scalars_per_core.size() * (config_tensor_in_dram ? 1 : num_shards_c) * entries_per_core);
 
     switch (in_memory_layout) {
         case TensorMemoryLayout::HEIGHT_SHARDED:
@@ -241,6 +245,7 @@ std::vector<uint32_t> generate_core_starting_indices(
         case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: repeat_factor = num_cores_x; break;
         default: TT_FATAL(false, "Unsupported shard scheme");
     };
+    starting_indices.reserve(shard_boundaries.size() * repeat_factor);
     for (const auto& item : shard_boundaries) {
         const auto& [output_shard_start, _] = item.output_range;
         if (output_shard_start >= op_trace_metadata.size()) {

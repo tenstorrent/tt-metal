@@ -262,6 +262,7 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
             int dram_src1_channel_id = 1;
             uint32_t dram_buffer_dst_addr =
                 (core_index * per_core_M * per_core_N * single_tile_size) + dram_unreserved_base;
+            int dram_dst_channel_id = 2;
 
             uint32_t dram_buffer_size_act =
                 single_tile_size * per_core_M * K;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
@@ -288,7 +289,7 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
 
             auto activations_tilized = tilize_swizzled(activation_slice, per_core_M * 32, K * 32);
             auto activations_tile_layout =
-                convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
+                convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(activations_tilized));
             auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
             auto activations_tile_transposed = tt_metal::transpose_tiles(activations, per_core_M, K, in0_block_w);
             pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
@@ -296,16 +297,16 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
 
             auto identity_tilized = tilize_swizzled(weights_slice, K * 32, per_core_N * 32);
             auto weights_tile_layout =
-                convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(identity_tilized));
+                convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity_tilized));
             auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
             pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
                 device, dram_src1_channel_id, dram_buffer_src1_addr, weights);
 
             const std::array mm_reader_args = {
                 (std::uint32_t)dram_buffer_src0_addr,
-                (std::uint32_t)0,
+                (std::uint32_t)dram_src0_channel_id,
                 (std::uint32_t)dram_buffer_src1_addr,
-                (std::uint32_t)0,
+                (std::uint32_t)dram_src1_channel_id,
                 (std::uint32_t)(K / in0_block_w),                            // num_blocks
                 (std::uint32_t)per_core_M * in0_block_w,                     // input 0 block num tiles
                 (std::uint32_t)per_core_N * in0_block_w,                     // input 1 block num tiles
@@ -314,7 +315,7 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
 
             const std::array writer_args = {
                 (std::uint32_t)dram_buffer_dst_addr,
-                (std::uint32_t)0,
+                (std::uint32_t)dram_dst_channel_id,
                 (std::uint32_t)out_subblock_h,               // num tiles per sub block m
                 (std::uint32_t)out_subblock_w,               // num tiles per sub block n
                 (std::uint32_t)per_core_M / out_subblock_h,  // num sub blocks m
@@ -334,7 +335,9 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
 
     log_debug(LogTest, "Running Matmul {} core test", num_cores_c * num_cores_r);
 
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
     log_debug(LogTest, "Matmul test done");
     log_debug(LogTest, "Gathering data back from dram and checking against golden");
     for (int i = 0; i < num_cores_r; i++) {
@@ -354,7 +357,7 @@ bool matmul_multi_core_single_dram(const std::shared_ptr<distributed::MeshDevice
                 result_vec);
             auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
             auto result_flat_layout =
-                convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
+                convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));
             auto result_untilized = untilize_swizzled(result_flat_layout, per_core_M * 32, per_core_N * 32);
             pass &= (per_core_golden == result_untilized);
         }
@@ -527,7 +530,7 @@ bool matmul_multi_core_multi_dram(
     log_debug(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
     auto activations_tilized = tilize_swizzled(tensor.get_values(), M * 32, K * 32);
     auto activations_tile_layout =
-        convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
+        convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(activations_tilized));
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
     distributed::DeviceLocalBufferConfig local_buffer_config = {
         .page_size = 1024 * 2, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
@@ -537,7 +540,7 @@ bool matmul_multi_core_multi_dram(
 
     pass &= move_tiles_to_dram(mesh_device, activations, M, K, activation_buffer);
     auto identity_tilized = tilize_swizzled(identity, K * 32, N * 32);
-    auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(identity_tilized));
+    auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity_tilized));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
     distributed::ReplicatedBufferConfig weight_buffer_config = {.size = weights.size() * sizeof(uint32_t)};
     auto weight_buffer = distributed::MeshBuffer::create(weight_buffer_config, local_buffer_config, mesh_device.get());
@@ -590,7 +593,7 @@ bool matmul_multi_core_multi_dram(
             result_iter += 512;
             auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
             auto result_flat_layout =
-                convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
+                convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));
 
             pass &= (golden_tile == result_flat_layout);
         }

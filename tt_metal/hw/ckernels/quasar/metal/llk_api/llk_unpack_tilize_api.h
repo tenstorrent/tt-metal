@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
+#include "llk_assert.h"
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_tilize.h"
+#include "llk_unpack_reduce_col_tilizeA_strided.h"
 #include "api/dataflow/dataflow_buffer.h"
 
 /*************************************************************************
@@ -17,6 +20,11 @@
  * Configures UNP_A stride registers and programs the MOP for tilizing
  * block_ct_dim tiles from row-major L1 data into face format in SrcA.
  *
+ * The operand gets a BFD id allocated from the unpack partition (Unp0 / UNPACR0) and its table
+ * entry is programmed here; the DFB id is used only to fetch buffer info, never as the BFD id.
+ * One init burns 1 unpack-partition id — the standard wrap contract (re-init before re-execute)
+ * applies.
+ *
  * @param operand       The input dataflow buffer identifier.
  * @param full_ct_dim   Number of tiles in a full row of the input tensor.
  * @param block_ct_dim  Number of tiles per MOP invocation (defaults to 1).
@@ -26,7 +34,21 @@ inline void llk_unpack_tilize_init(
     const std::uint32_t operand_id = get_operand_id(operand);
 
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
-    _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE>(operand_id, full_ct_dim, block_ct_dim, tensor_shape);
+
+    LLK_ASSERT(
+        tensor_shape.total_num_faces() == NUM_FACES ||
+            (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
+        "only 1x32 and 2x32 tiny tiles supported for unpack tilize on Quasar");
+
+    if (tensor_shape.total_num_faces() == NUM_FACES) {
+        llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operand_id);
+        _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE>(
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), full_ct_dim, block_ct_dim, tensor_shape);
+    } else {
+        llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(operand_id);
+        _llk_unpack_tilize_strided_init_small_faces_<p_unpacr::UNP_A, DST_ACCUM_MODE>(
+            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape, full_ct_dim, block_ct_dim);
+    }
 }
 
 /**
@@ -41,9 +63,16 @@ inline void llk_unpack_tilize_init(
  */
 inline void llk_unpack_tilize_block(
     const std::uint32_t operand, const std::uint32_t block_c_tiles, const std::uint32_t input_tile_index = 0) {
+    LLK_TDMA_GUARD_NOTE_TDMA(operand);  // TEN-4746: real unpack (UNPACR) disarms this dfb
     const std::uint32_t operand_id = get_operand_id(operand);
 
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+
+    LLK_ASSERT(
+        tensor_shape.total_num_faces() == NUM_FACES ||
+            (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
+        "only 1x32 and 2x32 tiny tiles supported for unpack tilize on Quasar");
+
     const std::uint32_t faces_per_entry = tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
 
     const LocalDFBInterface& local_dfb = g_dfb_interface[operand_id];
@@ -55,6 +84,183 @@ inline void llk_unpack_tilize_block(
     // structural pattern as BH/WH llk_unpack_tilize_block
     const std::uint32_t l1_base_idx = (rd_entry_idx + input_tile_index) * faces_per_entry;
     for (std::uint32_t t = 0; t < block_c_tiles; t++) {
-        _llk_unpack_tilize_<p_unpacr::UNP_A>(l1_base_idx + t);
+        if (tensor_shape.total_num_faces() == NUM_FACES) {
+            _llk_unpack_tilize_<p_unpacr::UNP_A>(l1_base_idx + t);
+        } else {
+            _llk_unpack_tilize_strided_small_faces_<p_unpacr::UNP_A>(tensor_shape, l1_base_idx + t);
+        }
     }
 }
+
+/**
+ * @brief No-op on Quasar — tilize teardown is not required.
+ */
+inline void llk_unpack_tilize_uninit([[maybe_unused]] const std::uint32_t operand) {}
+
+/*************************************************************************
+ * LLK UNPACK TILIZE SRC A, UNPACK SRC B
+ *************************************************************************/
+
+/**
+ * @brief Initialize the unpacker for the combined tilize-A / unpack-B reduce operation.
+ *
+ * This function is only compatible with the math reduce kernel. It configures both UNP_A (tilize
+ * path) and UNP_B (scalar path) so that each subsequent llk_unpack_tilizeA_B call produces one
+ * tilized srcA tile alongside the reloaded srcB scalar tile required by the reduce math op.
+ *
+ * On Quasar, operand A's buffer descriptor is programmed in Strided mode (y_dim=1, z_dim=1)
+ * required by the UNPACR_STRIDE tilize sequence; operand B gets a normal Continuous descriptor.
+ * Both ids come from the unpack BFD partition — DFB ids never double as BFD ids.
+ *
+ * @tparam neginf_srcA      No effect on Quasar; accepted for API compatibility with WH/BH.
+ * @tparam reload_srcB      Must be true on Quasar (asserted true, srcB is reloaded every iteration for reduce);
+ * accepted for API compatibility with WH/BH.
+ * @tparam zero_srcA        No effect on Quasar (asserted false); accepted for API compatibility with WH/BH.
+ * @tparam zero_srcA_reduce No effect on Quasar; accepted for API compatibility with WH/BH.
+ * @param  operandA         Input A dataflow buffer identifier.
+ * @param  operandB         Input B (scaler) dataflow buffer identifier.
+ * @param  ct_dim           Number of column tiles in the tilize block.
+ */
+template <
+    bool neginf_srcA [[maybe_unused]] = false,
+    std::uint32_t reload_srcB [[maybe_unused]] = false,
+    bool zero_srcA [[maybe_unused]] = false,
+    bool zero_srcA_reduce [[maybe_unused]] = false>
+inline void llk_unpack_tilizeA_B_init(
+    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t ct_dim) {
+    static_assert(!zero_srcA, "zero_srcA = true does not trigger any functionality on Quasar.");
+    static_assert(
+        reload_srcB,
+        "reload_srcB has to be true for tilizeA_B_block on Quasar, due to the compatibility with the math reduce "
+        "kernel.");
+
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    const std::uint32_t operandB_id = get_operand_id(operandB);
+
+    const ckernel::TensorShape tensor_shape_A = get_operand_tensor_shape(operandA_id);
+
+    // UNPACR_STRIDE used in unpack_tilize_operands_reduce requires a Strided buffer descriptor
+    // (y_dim=1, z_dim=1) for operandA; operandB (scalar srcB) uses a Continuous descriptor.
+    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0, ckernel::trisc::L1AccessMode::Strided>(operandA_id);
+    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandB_id);
+
+#if defined(REDUCE_OP)
+    _llk_unpack_reduce_col_tilizeA_strided_init_<REDUCE_OP>(
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
+        ct_dim,
+        tensor_shape_A);
+#endif
+}
+
+/**
+ * @brief Tilize one tile into srcA and unpack scaler tile into srcB for the math reduce column kernel.
+ *
+ * This function is only compatible with the math reduce column kernel. It tilizes a single tile
+ * from operand A's row-major L1 data into SrcA while simultaneously unpacking the scalar tile
+ * from operand B into SrcB. The resulting srcA/srcB pair is consumed by a single reduce column math
+ * iteration.
+ *
+ * @tparam neginf_srcA      No effect on Quasar; accepted for API compatibility with WH/BH.
+ * @tparam reload_srcB      Must be true on Quasar (asserted true, srcB is reloaded every iteration for reduce);
+ * accepted for API compatibility with WH/BH.
+ * @tparam zero_srcA        No effect on Quasar (asserted false); accepted for API compatibility with WH/BH.
+ * @tparam zero_srcA_reduce No effect on Quasar; accepted for API compatibility with WH/BH.
+ * @param  operandA     Input A dataflow buffer identifier.
+ * @param  operandB     Input B (scaler) dataflow buffer identifier.
+ * @param  tile_index_a Column tile index within operand A.
+ * @param  tile_index_b Tile index within operand B.
+ * @param  block_ct_dim Number of column tiles in the tilize block.
+ */
+template <
+    bool neginf_srcA [[maybe_unused]] = false,
+    std::uint32_t reload_srcB [[maybe_unused]] = false,
+    bool zero_srcA [[maybe_unused]] = false,
+    bool zero_srcA_reduce [[maybe_unused]] = false>
+inline void llk_unpack_tilizeA_B(
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t tile_index_a,
+    const std::uint32_t tile_index_b,
+    [[maybe_unused]] const std::uint32_t block_ct_dim) {
+    static_assert(!zero_srcA, "zero_srcA = true does not trigger any functionality on Quasar.");
+    static_assert(
+        reload_srcB,
+        "reload_srcB has to be true for tilizeA_B on Quasar, due to the compatibility with the math reduce kernel.");
+
+    LLK_TDMA_GUARD_NOTE_TDMA(operandA);  // TEN-4746: real unpack (UNPACR) disarms these dfbs
+    LLK_TDMA_GUARD_NOTE_TDMA(operandB);
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    const std::uint32_t operandB_id = get_operand_id(operandB);
+
+    const ckernel::TensorShape tensor_shape_A = get_operand_tensor_shape(operandA_id);
+
+    const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
+    const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
+
+    const std::uint32_t rd_entry_idx_a = local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].rd_entry_idx;
+    // Compute how many l1_index units fit in one DFB entry.
+    // _llk_unpack_reduce_col_tilizeA_strided_ internally scales
+    // l1_index by num_faces_c_dim, so one l1_index unit = num_faces_c_dim face-rows in L1.
+    const std::uint32_t entry_size_16B = local_dfb_interface_a.entry_size;  // DFB entry size in 16B
+    const std::uint32_t face_row_16B =                                      // Buffer Descriptor granularity in 16B
+        SCALE_DATUM_SIZE(unpack_src_format[operandA_id], ckernel::trisc::FACE_C_DIM) >> 4;
+    const std::uint32_t l1_index_per_entry =  // l1_index steps per entry
+        entry_size_16B / (face_row_16B * tensor_shape_A.num_faces_c_dim);
+    const std::uint32_t l1_index_a = rd_entry_idx_a * l1_index_per_entry + tile_index_a;
+
+    const std::uint32_t l1_index_b =
+        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx + tile_index_b;
+
+    WAYPOINT("UPTW");
+
+    _llk_unpack_reduce_col_tilizeA_strided_(tensor_shape_A, l1_index_a, l1_index_b);
+
+    WAYPOINT("UPTD");
+}
+
+/**
+ * @brief Tilize a block of srcA column tiles and unpack srcB for the math reduce column kernel.
+ *
+ * This function is only compatible with the math reduce column kernel. It iterates over block_c_tiles_a
+ * column tiles, calling llk_unpack_tilizeA_B for each one. Each iteration produces a tilized srcA
+ * tile paired with the reloaded srcB scalar tile consumed by a reduce column math step.
+ *
+ * @tparam neginf_srcA      No effect on Quasar; accepted for API compatibility with WH/BH.
+ * @tparam reload_srcB      Must be true on Quasar (asserted true, srcB is reloaded every iteration for reduce);
+ * accepted for API compatibility with WH/BH.
+ * @tparam zero_srcA        No effect on Quasar (asserted false); accepted for API compatibility with WH/BH.
+ * @tparam zero_srcA_reduce No effect on Quasar; accepted for API compatibility with WH/BH.
+ * @param  operandA        Input A dataflow buffer identifier.
+ * @param  operandB        Input B (scaler) dataflow buffer identifier.
+ * @param  block_c_tiles_a Number of column tiles in operand A's block.
+ * @param  tile_idx_b      Tile index within operand B.
+ */
+template <
+    bool neginf_srcA [[maybe_unused]] = false,
+    std::uint32_t reload_srcB [[maybe_unused]] = false,
+    bool zero_srcA [[maybe_unused]] = false,
+    bool zero_srcA_reduce [[maybe_unused]] = false>
+inline void llk_unpack_tilizeA_B_block(
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t block_c_tiles_a,
+    const std::uint32_t tile_idx_b) {
+    static_assert(!zero_srcA, "zero_srcA = true does not trigger any functionality on Quasar.");
+    static_assert(
+        reload_srcB,
+        "reload_srcB has to be true for tilizeA_B_block on Quasar, due to the compatibility with math reduce kernel.");
+
+    for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
+        llk_unpack_tilizeA_B<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
+            operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a);
+    }
+}
+
+/**
+ * Tear down the combined tilize-A / unpack-B configuration so a subsequent operation can reprogram
+ * the unpacker. -> No-op for Quasar.
+ *
+ * @param operand Input circular buffer / operand index.
+ */
+inline void llk_unpack_tilizeA_B_uninit([[maybe_unused]] const std::uint32_t operand) {}

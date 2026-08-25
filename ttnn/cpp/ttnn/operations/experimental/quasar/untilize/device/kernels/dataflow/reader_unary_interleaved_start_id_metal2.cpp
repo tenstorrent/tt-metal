@@ -18,9 +18,6 @@ void kernel_main() {
     const uint32_t num_pages = get_arg(args::num_pages);
     const uint32_t start_id = get_arg(args::start_id);
 
-    // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)
-    const uint32_t page_bytes = get_local_cb_interface(dfb::in).fifo_page_size;
-
     // ublocks size defined in pages (works for both TILE and ROW_MAJOR layouts)
     constexpr uint32_t onepage = 1;
 
@@ -28,6 +25,9 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer cb(dfb::in);
+    // QSR: read page size from the DFB object (get_entry_size), not the stale get_local_cb_interface().fifo_page_size;
+    // must be after DFB construction
+    const uint32_t page_bytes = cb.get_entry_size();
 
 // read a ublock of pages from src to CB, and then push the ublock to unpacker
 #ifdef BACKWARDS

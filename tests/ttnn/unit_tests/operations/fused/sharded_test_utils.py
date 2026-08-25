@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 import ttnn
 
@@ -107,6 +108,30 @@ def create_sharded_mem_config(h, w, num_cores_h, num_cores_w, two_stage):
     else:
         shard_spec = create_single_stage_shard_spec(h, w, num_cores_h, num_cores_w)
     return ttnn.MemoryConfig(memory_layout=mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=shard_spec)
+
+
+def make_sharded_norm_mem_config(num_cores_w, h, shard_w, num_cores_h=1):
+    """Block-sharded SRAM config over a num_cores_w x num_cores_h grid, each core owning an [h, shard_w] shard."""
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, num_cores_h - 1))}),
+        [h, shard_w],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    return ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+
+
+def to_poisoned_sharded(device, torch_tensor, mem_config, pad_value):
+    """Tilize onto device with the given sharded config and poison the implicit tile padding with pad_value.
+
+    Poisoning makes any read of the padded columns observable: a kernel that normalizes over the logical
+    width is unaffected, while one that folds the padded columns into its statistics is grossly wrong.
+    """
+    tt = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config)
+    return ttnn.fill_implicit_tile_padding(tt, pad_value)
 
 
 def ttnn_layer_norm_sharded(
@@ -491,3 +516,289 @@ def rms_norm_test_main(
         weight_bias_layout=weight_layout,
         op_name="rms_norm",
     )
+
+
+# Tolerances for the "normalize over the logical width" correctness check below, derived from the bf16
+# error budget.
+# bf16 unit roundoff (round-to-nearest, 7 stored mantissa bits): u = 2^-8 ~= 0.0039. The input and unit
+# gamma / zero beta are quantized to bf16 and the same quantized values feed both the device op and the
+# torch reference, so input quantization cancels. With fp32 dest accumulation the reduction is exact to
+# fp32; the residual is the 1/sqrt(var+eps) SFPU step (a few bf16 ulps, bounded generously by 8u ~=
+# 0.031, acting as a per-row scale) plus output bf16 quantization (<= u). So a correct result has
+# relative-Frobenius <= ~0.035 and per-element relative error <= ~0.035; the tolerances sit a margin
+# above that. The geometries are chosen so a padded-width normalization gives a >= 13% scale error
+# (w96/c2 -> sqrt(128/96) = 1.155, w224/c3 -> sqrt(288/224) = 1.134), several times the tolerance.
+# Per-dtype numeric budget for the logical-width masking check, given as assert_numeric_metrics kwargs.
+# This test detects a padded-vs-logical normalization: a near-pure scale error of magnitude
+# |sqrt(padded / logical) - 1|, which is at least ~0.13 for the geometries covered here. Every budget
+# below stays well under that (so the scale error is still caught) while leaving room for each format's
+# own quantization noise: fp32 tightest, bfloat8_b loosest. atol is the floor for near-zero normalized
+# outputs, where relative tolerance is meaningless.
+_LOGICAL_WIDTH_NORM_BUDGET = {
+    ttnn.float32: dict(frobenius_threshold=0.02, rtol=0.02, atol=0.02),
+    ttnn.bfloat16: dict(frobenius_threshold=0.06, rtol=0.05, atol=0.05),
+    ttnn.bfloat8_b: dict(frobenius_threshold=0.10, rtol=0.08, atol=0.08),
+}
+_LOGICAL_WIDTH_NORM_PAD_POISON = 1000.0  # poison the implicit tile padding so any leak is caught
+
+
+# Block sharding mandates that every core must get the same-sized tile-aligned shard:
+# shard_w = ceil(w / cores / 32) * 32, so the padded width is cores * shard_w.
+# This means the final core's shard may have padding.
+# Two categories are covered:
+#   - tile-aligned widths whose tiles do not divide evenly across the cores (96 over 2, 224 over 3):
+#     every tile on the final core is either fully valid or fully padding, never partial. E.g. 96 over
+#     2 gives the final core one fully-valid tile and one fully-padding tile.
+#   - non-tile-aligned widths (72 over 2, 200 over 3): the logical columns run out mid-tile, so the
+#     final core holds a partially-valid tile followed by a fully-padding tile. E.g. 72 over 2 gives
+#     the final core one partially-valid tile (8 of its 32 columns valid) and one fully-padding tile.
+# In both, the op must normalize over the logical width, not the padded per-core width.
+UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES = [(96, 2), (224, 3), (72, 2), (200, 3)]
+UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS = ["w96_c2", "w224_c3", "w72_c2_nonaligned", "w200_c3_nonaligned"]
+
+
+def run_sharded_norm_logical_width_multicore(
+    device,
+    is_rmsnorm,
+    w,
+    num_cores_w,
+    num_cores_h=1,
+    dtype=ttnn.bfloat16,
+    eps=1e-5,
+    use_welford=False,
+    weight_layout=ttnn.TILE_LAYOUT,
+):
+    """Verify a width-sharded layer/RMS norm normalizes over the LOGICAL width when the width is split
+    across cores so the final core owns fewer real tiles (and, for a non-tile-aligned width, a partially
+    valid final tile plus pure-padding tiles).
+
+    Covers two related cases with one path: a tile-aligned width whose tiles do not divide evenly across
+    cores (e.g. 96 over 2), and a non-tile-aligned width split across cores (e.g. 200 over 2).
+    The statistics should be reduced over the logical element count only (excluding padding).
+    Dividing by the padded count (num_blocks * block_w) instead causes the output to be too large by
+    a factor of ~sqrt(padded/logical), which is a near-pure scale. The check therefore gates on the
+    relative-Frobenius and allclose metrics (both scale-sensitive) and DISABLES PCC, which is
+    scale-invariant and so blind to this class of error. Tolerances come from the per-dtype budget
+    defined above.
+
+    The width is spread over all num_cores_w * num_cores_h cores. A single-row grid (num_cores_h == 1)
+    uses the single-stage cross-core reduce; a 2D grid (both dimensions > 1) selects the two-stage reduce
+    (first stage combines the shards within a row, second combines the per-row results), with the
+    partially-valid boundary block on the final core in row-major order.
+
+    use_welford applies to LayerNorm only, since RMSNorm does not support Welford.
+
+    weight_layout selects the gamma/beta layout: TILE_LAYOUT or ROW_MAJOR_LAYOUT (which selects the
+    row-major gamma/beta writer kernel).
+    """
+    assert not (use_welford and is_rmsnorm), "RMSNorm does not use the Welford reduction"
+    total_cores = num_cores_w * num_cores_h
+    kt = -(-w // TILE_WIDTH)  # ceil: a non-tile-aligned width rounds up to a whole number of tiles
+    shard_wt = -(-kt // total_cores)  # tiles per core (ceil) -> last core owns fewer real tiles
+    shard_w = shard_wt * TILE_WIDTH
+    assert (total_cores - 1) * shard_wt < kt, "geometry must leave the last core at least one real tile"
+
+    torch.manual_seed(0)
+    x = torch.randn(1, 1, TILE_HEIGHT, w)  # fp32 base; quantized to `dtype` on device below
+
+    core_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, num_cores_h - 1))}
+    )
+    sharded_cfg = ttnn.create_sharded_memory_config(
+        shape=(TILE_HEIGHT, shard_w),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_x = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    tt_x = ttnn.to_memory_config(tt_x, memory_config=sharded_cfg)
+    tt_x = ttnn.fill_implicit_tile_padding(tt_x, _LOGICAL_WIDTH_NORM_PAD_POISON)
+
+    # Reference is computed from exactly the values the op consumes: read the sharded, padding-poisoned
+    # input back and take the logical width. For a lossy format (bfloat8_b) the block-shared exponent
+    # means the padding value can perturb the boundary tile, so deriving the reference from the actual
+    # input keeps the comparison fair; any residual error then reflects a masking failure rather than
+    # input quantization.
+    xf = ttnn.to_torch(ttnn.to_memory_config(tt_x, ttnn.L1_MEMORY_CONFIG)).float()[..., :w]
+    if is_rmsnorm:
+        ref = xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + eps)
+    else:
+        ref = (xf - xf.mean(-1, keepdim=True)) * torch.rsqrt(xf.var(-1, unbiased=False, keepdim=True) + eps)
+
+    # gamma = 1, beta = 0 isolate the normalization (the affine is trivially correct and would only
+    # hide a scale error behind PCC). gamma padded width must equal the input padded width (= w).
+    if weight_layout == ttnn.ROW_MAJOR_LAYOUT:
+        # A row-major gamma/beta presents its last padded dim as a whole tile width, with the tile count
+        # carried in an earlier dim, so it is shaped [kt, TILE_WIDTH]. Its volume aligns with the input's
+        # padded width (kt whole tiles), not the wider physical shard span. The elements past the logical
+        # width w are gamma's tile padding and must be zero, matching how tile-layout gamma is zero-padded:
+        # otherwise the padding columns' normalized (poisoned) values reach the output, and for a lossy
+        # sharded output their magnitude corrupts the boundary tile's shared exponent.
+        gamma_flat = torch.zeros(kt * TILE_WIDTH, dtype=torch.bfloat16)
+        gamma_flat[:w] = 1.0
+        gamma_torch = gamma_flat.reshape(kt, TILE_WIDTH)
+        beta_torch = torch.zeros(kt, TILE_WIDTH, dtype=torch.bfloat16)
+    else:
+        gamma_torch = torch.ones(1, 1, 1, w, dtype=torch.bfloat16)
+        beta_torch = torch.zeros(1, 1, 1, w, dtype=torch.bfloat16)
+    gamma = ttnn.from_torch(gamma_torch, layout=weight_layout, device=device)
+
+    # fp32 dest caps subblock_w at 4; keep it a divisor of the shard width in tiles.
+    subblock_w = next(d for d in range(min(shard_wt, 4), 0, -1) if shard_wt % d == 0)
+    prgm = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[num_cores_w, num_cores_h],
+        subblock_w=subblock_w,
+        block_h=1,
+        block_w=shard_wt,
+        use_welford=use_welford,
+        inplace=False,
+    )
+    # fp32 dest + HiFi4 isolate the normalization from accumulation/fidelity error (see budget above).
+    compute_cfg = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    common = dict(
+        epsilon=eps, weight=gamma, program_config=prgm, compute_kernel_config=compute_cfg, memory_config=sharded_cfg
+    )
+    if use_welford:
+        # Welford normalizes via a reciprocal LUT rather than a divide, so it needs the per-core LUT.
+        common["recip_tensor"] = ttnn.create_layer_norm_reciprocals(
+            device, sharded_cfg.shard_spec.grid, sharded_cfg.shard_spec.shape[1]
+        )
+    if is_rmsnorm:
+        tt_out = ttnn.rms_norm(tt_x, **common)
+    else:
+        beta = ttnn.from_torch(beta_torch, layout=weight_layout, device=device)
+        tt_out = ttnn.layer_norm(tt_x, bias=beta, **common)
+    out = ttnn.to_torch(ttnn.to_memory_config(tt_out, ttnn.L1_MEMORY_CONFIG)).float()[..., :w]
+
+    assert_numeric_metrics(
+        ref,
+        out,
+        **_LOGICAL_WIDTH_NORM_BUDGET[dtype],
+        check_pcc=False,  # PCC is scale-invariant; a padded-width normalization is a (near-)pure scale
+    )
+
+
+# Non-rectangular shard grids, as (full_lines, cores_in_last_line, origin, line_length) for
+# non_rectangular_width_shard_config. A "line" is a row under ROW_MAJOR and a column under COL_MAJOR, so
+# the same case describes the shape that is natural for either orientation (see the helper). Every case
+# leaves holes in the grid's bounding box, which is what the reduction multicasts over. Beyond the
+# trailing-partial-line shape, two properties are varied independently and then together:
+#   - origin: a grid that does not start at (0, 0), so the op must apply a grid offset to the mcast
+#     ranges while the shard grid already carries it.
+#   - line_length: lines shorter than the device grid, so the grid does not take up an entire row/column
+#     and the holes are bounded by the grid's own edge rather than the device's.
+NON_RECTANGULAR_GRID_CASES = [
+    (1, 1, (0, 0), None),
+    (2, 3, (0, 0), None),
+    (4, 1, (0, 0), None),
+    (2, 3, (0, 0), 5),
+    (2, 3, (1, 1), None),
+    (1, 2, (2, 1), 4),
+]
+NON_RECTANGULAR_GRID_IDS = [
+    "1_line_plus_1",
+    "2_lines_plus_3",
+    "4_lines_plus_1",
+    "short_lines",
+    "offset_origin",
+    "offset_and_short",
+]
+
+
+def cores_of(core_range_set):
+    """Expand a CoreRangeSet into a set of (x, y) tuples."""
+    return {
+        (x, y)
+        for r in core_range_set.ranges()
+        for x in range(r.start.x, r.end.x + 1)
+        for y in range(r.start.y, r.end.y + 1)
+    }
+
+
+def non_rectangular_width_shard_config(
+    device,
+    full_lines,
+    cores_in_last_line,
+    h,
+    shard_width,
+    origin=(0, 0),
+    line_length=None,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+):
+    """A width-sharded config whose shard grid has a partially-filled trailing line, so it is not a
+    rectangle and its bounding box contains holes. Skips if the geometry does not fit the device grid.
+
+    The shape follows the orientation, matching how shards are laid out: under ROW_MAJOR the lines are
+    rows and the partial line is a short row along the bottom, and under COL_MAJOR they are columns and
+    the partial line is a short column along the right. So the holes always sit at the end of the
+    traversal order, which is the shape a partially-filled grid actually takes.
+
+    Args:
+        full_lines: Number of completely-filled lines before the partial one.
+        cores_in_last_line: Cores in the trailing partial line; the rest of that line are the holes.
+        origin: (x, y) of the top-left core, so the grid need not start at (0, 0).
+        line_length: Cores per full line. Defaults to filling to the far edge of the device grid; pass a
+            smaller value for a grid that does not span an entire row/column.
+        orientation: Shard orientation, which also selects the shape as described above.
+
+    Returns:
+        (grid, memory_config, w) where w is the resulting full tensor width.
+    """
+    device_grid = device.compute_with_storage_grid_size()
+    row_wise = orientation == ttnn.ShardOrientation.ROW_MAJOR
+    origin_x, origin_y = origin
+
+    # Work in (along, across) coordinates: "along" runs down a line, "across" steps between lines.
+    # For ROW_MAJOR that is (x, y); for COL_MAJOR it is (y, x).
+    origin_along, origin_across = (origin_x, origin_y) if row_wise else (origin_y, origin_x)
+    device_along, device_across = (device_grid.x, device_grid.y) if row_wise else (device_grid.y, device_grid.x)
+    if line_length is None:
+        line_length = device_along - origin_along
+
+    if (
+        origin_along + line_length > device_along
+        or origin_across + full_lines + 1 > device_across
+        or not 0 < cores_in_last_line < line_length
+    ):
+        pytest.skip(
+            f"{full_lines}x{line_length}+{cores_in_last_line} at {origin} ({orientation}) does not fit a "
+            f"{device_grid.x}x{device_grid.y} device grid"
+        )
+
+    def core(along, across):
+        return ttnn.CoreCoord(along, across) if row_wise else ttnn.CoreCoord(across, along)
+
+    ranges = []
+    if full_lines > 0:
+        ranges.append(
+            ttnn.CoreRange(
+                core(origin_along, origin_across),
+                core(origin_along + line_length - 1, origin_across + full_lines - 1),
+            )
+        )
+    ranges.append(
+        ttnn.CoreRange(
+            core(origin_along, origin_across + full_lines),
+            core(origin_along + cores_in_last_line - 1, origin_across + full_lines),
+        )
+    )
+    grid = ttnn.CoreRangeSet(ranges)
+
+    num_cores = full_lines * line_length + cores_in_last_line
+    assert grid.num_cores() == num_cores, f"expected {num_cores} cores, built {grid.num_cores()}"
+    assert cores_of(grid) != cores_of(
+        ttnn.CoreRangeSet([grid.bounding_box()])
+    ), "grid should not fill its own bounding box"
+
+    memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(grid, [h, shard_width], orientation),
+    )
+    return grid, memory_config, num_cores * shard_width

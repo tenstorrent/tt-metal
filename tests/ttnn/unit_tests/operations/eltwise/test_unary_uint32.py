@@ -175,3 +175,101 @@ def test_unary_square_uint32_overflow(device):
     assert torch.all(comparison_torch), f"Mismatch found in uint32 square results"
     # square of 65536 and 70000 should overflow to 0 and 4900000000 - 4294967296 = 605032704, respectively
     # output_tensor = ttnn.Tensor([0, 1, 2147395600, 4294836225, 0, 605032704], shape=Shape([6]), dtype=DataType::UINT32, layout=Layout::TILE)
+
+
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.bitwise_and,
+        ttnn.bitwise_or,
+        ttnn.bitwise_xor,
+    ],
+)
+@pytest.mark.parametrize("scalar", [0, 1, 0xFF, 0x7FFFFFFF])
+def test_bitwise_scalar_uint32(device, ttnn_function, scalar):
+    x_torch = torch.tensor([[0, 1, 4294967295, 4294967293, 2147483648, 4294967294, 1234567890]], dtype=torch.uint32)
+
+    golden_fn = ttnn.get_golden_function(ttnn_function)
+    z_torch = golden_fn(x_torch, scalar)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_out = ttnn_function(x_tt, scalar)
+    tt_out = ttnn.to_torch(z_tt_out, dtype=torch.uint32)
+
+    assert torch.equal(z_torch, tt_out)
+
+
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.bitwise_and,
+        ttnn.bitwise_or,
+        ttnn.bitwise_xor,
+    ],
+)
+@pytest.mark.parametrize("scalar", [0, 1, 0xABCD, 0x7FFFFFFF])
+def test_bitwise_scalar_uint32_full_range(device, ttnn_function, scalar):
+    # torch.linspace is not implemented for uint32, so we use float64 and cast to uint32
+    x_values = torch.linspace(0, 4294967295, 1024, dtype=torch.float64)
+    x_torch = x_values.to(dtype=torch.uint32)
+
+    golden_fn = ttnn.get_golden_function(ttnn_function)
+    z_torch = golden_fn(x_torch, scalar)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_out = ttnn_function(x_tt, scalar)
+    tt_out = ttnn.to_torch(z_tt_out, dtype=torch.uint32)
+
+    assert torch.equal(z_torch, tt_out)
+
+
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.bitwise_left_shift,
+        ttnn.bitwise_right_shift,
+    ],
+)
+@pytest.mark.parametrize("shift", [0, 1, 4, 31, 32])
+def test_bitwise_shift_scalar_uint32(device, ttnn_function, shift):
+    # Torch CPU does not implement shifts for the uint32 dtype, so reinterpret the full-range values as
+    # int32 to compute the golden, then mask to 32 bits to emulate the uint32 output.
+    x_uint32 = torch.tensor(
+        [[1, 2, 255, 4096, 2147483648, 4294967294, 4294967295, 0x80000001, 1234567890, 0]], dtype=torch.int64
+    )
+    x_torch = (x_uint32 & 0xFFFFFFFF).to(torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn_function)
+    z_torch = golden_fn(x_torch, shift)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_out = ttnn_function(x_tt, shift)
+
+    tt_out = ttnn.to_torch(z_tt_out).to(torch.int64) & 0xFFFFFFFF
+    z_torch_uint64 = z_torch.to(torch.int64) & 0xFFFFFFFF
+    assert torch.equal(tt_out, z_torch_uint64)
+
+
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.bitwise_left_shift,
+        ttnn.bitwise_right_shift,
+    ],
+)
+@pytest.mark.parametrize("shift", [0, 1, 4, 31, 32])
+def test_bitwise_shift_scalar_uint32_full_range(device, ttnn_function, shift):
+    # Torch CPU does not implement shifts for the uint32 dtype, so reinterpret the full-range values as
+    # int32 to compute the golden, then mask to 32 bits to emulate the uint32 output.
+    x_values = torch.linspace(0, 4294967295, 1024, dtype=torch.float64)
+    x_torch = (x_values.to(torch.int64) & 0xFFFFFFFF).to(torch.int32)
+
+    golden_fn = ttnn.get_golden_function(ttnn_function)
+    z_torch = golden_fn(x_torch, shift)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_out = ttnn_function(x_tt, shift)
+
+    tt_out = ttnn.to_torch(z_tt_out).to(torch.int64) & 0xFFFFFFFF
+    z_torch_uint64 = z_torch.to(torch.int64) & 0xFFFFFFFF
+    assert torch.equal(tt_out, z_torch_uint64)

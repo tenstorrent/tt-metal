@@ -1,0 +1,16 @@
+{
+  "arch": "wormhole_b0",
+  "description": "op-to-op latency CI golden (Wormhole, wh_n300_civ2). Runs under TT_METAL_PROFILER_ACCUMULATE=1 so the per-program L1->DRAM profiler dump does not land in the op2op gap (reviewer request: otherwise the gap is inflated by profiler writeout). ARMED (tolerance_pct=10): centered on the wh_n300_civ2 CI run after the Device 2.0 data-movement API uplift (Noc/CircularBuffer). The gated (mean) op2op is unchanged by the uplift - official_op2op_us=2.05, pack_to_unpack_op2op_us=4.72 - and falls within the pre-uplift multi-run baselines (official 1.956-2.034, pack_to_unpack 4.376-4.718). tolerance_pct=10 gives ~2.5x margin over the observed run-to-run spread; revisit as more runs land.",
+  "pinned_config": "TT_METAL_PROFILER_ACCUMULATE=1 --use-trace --trace-warmup-replays 2 --num-programs 8 --num-pages-per-core 4 --compute-nops 2000 --use-device-profiler",
+  "min_prog_id": 3,
+  "gated_metrics": ["official_op2op_us", "pack_to_unpack_op2op_us"],
+  "golden": {
+    "official_op2op_us": 2.05,
+    "pack_to_unpack_op2op_us": 4.72,
+    "tolerance_pct": 10.0
+  },
+  "tracked": {
+    "rt_gap_to_next_go_ns": null,
+    "device_kernel_dur_us": null
+  }
+}

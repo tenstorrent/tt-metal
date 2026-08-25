@@ -206,7 +206,7 @@ def _collect_tensor_ids(value) -> list:
     return ids
 
 
-def begin_graph_capture(run_mode=None):
+def begin_graph_capture(run_mode=None, *, _internal=False):
     """Wrapper that clears Python I/O state before starting C++ capture.
 
     Automatically enables Python I/O recording so that
@@ -240,9 +240,15 @@ def begin_graph_capture(run_mode=None):
         import ttnn
 
         _python_io_data = []
-        # Preserve comparison records across per-op capture sessions (comparison mode
-        # without enable_graph_report). Only initialize once per test run.
-        if not _comparison_records_data:
+        # A user-initiated (non-internal) outermost capture starts a fresh comparison
+        # sidecar scope: any records left over from earlier comparison-mode activity
+        # in this process must not leak into this capture's sidecar. The per-op
+        # auto-capture inside the operation wrapper passes _internal=True so that
+        # comparison records still accumulate across per-op sessions (comparison mode
+        # without enable_graph_report, later drained by flush_comparison_records_to_db).
+        if not _internal:
+            _comparison_records_data = _new_comparison_records_data()
+        elif not _comparison_records_data:
             _comparison_records_data = _new_comparison_records_data()
         _python_io_recording_enabled = True
         _configure_python_stack_traces_for_outer_graph_capture(ttnn)
@@ -590,8 +596,12 @@ def pretty_format(captured_graph):
             node_string = format_string.format("Add Tensor: " + str(node["params"]["tensor_id"]))
         elif node["node_type"] == "circular_buffer_allocate":
             node_string = format_string.format("Allocate Circular Buffer")
+        elif node["node_type"] == "dataflow_buffer_allocate":
+            node_string = format_string.format("Allocate Dataflow Buffer")
+        elif node["node_type"] == "scratchpad_allocate":
+            node_string = format_string.format("Allocate Kernel Scratchpad")
         elif node["node_type"] == "circular_buffer_deallocate_all":
-            node_string = format_string.format("Deallocate All Circular Buffers")
+            node_string = format_string.format("Deallocate All Program-Scope L1")
         else:
             raise ValueError(f"Unknown node type: {node['node_type']}")
 

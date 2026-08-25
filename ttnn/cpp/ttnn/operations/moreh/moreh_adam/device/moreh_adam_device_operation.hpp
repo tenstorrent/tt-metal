@@ -4,12 +4,16 @@
 
 #pragma once
 
+#include <optional>
+#include <variant>
 #include <vector>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::operations::moreh::moreh_adam {
 struct MorehAdamOperation {
@@ -36,13 +40,26 @@ struct MorehAdamOperation {
         const std::vector<std::optional<Tensor>> output_tensors;
     };
 
-    using spec_return_value_t = std::vector<std::optional<TensorSpec>>;
+    using spec_return_value_t = std::vector<std::optional<tt::tt_metal::TensorSpec>>;
     using tensor_return_value_t = std::vector<std::optional<Tensor>>;
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output_tensor);
+    struct MorehAdamProgramFactory {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output_tensor);
+
+        // Cache-hit re-apply of all per-dispatch state (per-core args incl. hash-excluded lr/step +
+        // tensor-backed CB/buffer addresses), since the hash excludes lr/step. See the .cpp.
+        static void override_runtime_arguments(
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output_tensor,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+    };
+
+    using program_factory_t = std::variant<MorehAdamProgramFactory>;
 
     static void validate_inputs(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);

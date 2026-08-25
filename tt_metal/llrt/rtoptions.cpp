@@ -58,6 +58,7 @@ enum class EnvVarID {
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
     ARCH_NAME,                                // Architecture name (simulation mode)
     TT_MESH_GRAPH_DESC_PATH,                  // Custom fabric mesh graph descriptor
+    TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH,  // Factory System Descriptor (FSD) path
     TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE,  // Core grid override
 
     // ========================================
@@ -85,6 +86,7 @@ enum class EnvVarID {
     TT_METAL_KERNEL_MAP,                // Enable kernel build mapping
     TT_METAL_DISPATCH_DATA_COLLECTION,  // Enable dispatch debug data collection
     TT_METAL_GTEST_ETH_DISPATCH,        // Use Ethernet cores for dispatch in tests
+    TT_METAL_TENSIX_DISPATCH_CORES,     // Quasar: force interim Tensix dispatch cores from core descriptor YAML
     TT_METAL_SKIP_LOADING_FW,           // Skip firmware loading
     TT_METAL_DISABLE_XIP_DUMP,          // Disable XIP dump
 
@@ -116,7 +118,10 @@ enum class EnvVarID {
     TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
     TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
     TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
-    TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Enable Blackhole DRAM programmable cores
+    TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Override Blackhole DRAM programmable cores
+    TT_METAL_MEASURE_DFB_INIT_TIME,  // Temporary DFB init rdcycle instrumentation (deprecate once device profiler
+                                     // covers this).
+    TT_METAL_TDP_LIMIT_WATTS,        // Firmware throttler TDP limit [W] (Blackhole)
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -133,6 +138,7 @@ enum class EnvVarID {
     TT_METAL_PROFILER_MID_RUN_DUMP,                // Force mid-run profiler dumps
     TT_METAL_PROFILER_CPP_POST_PROCESS,            // Enable C++ post-processing for profiler
     TT_METAL_PROFILER_SUM,                         // Enable sum profiling
+    TT_METAL_PROFILER_ACCUMULATE,                  // Accumulate multiple kernels in L1 before DRAM push
     TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT,       // Maximum number of programs supported by the profiler
     TT_METAL_TRACY_MID_RUN_PUSH,                   // Force Tracy mid-run pushes
     TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES,       // Disable dumping collected device data to files
@@ -181,6 +187,7 @@ enum class EnvVarID {
     TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT,  // Serialize inspector data on dispatch timeout
     TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS,           // Capture tensor specs on op dispatch (default: off)
     TT_METAL_INSPECTOR_LOG_RUNTIME_ENTRIES,            // Log runtime entries to YAML (expensive, off by default)
+    TT_METAL_INSPECTOR_LOG_MESH_BUFFERS,               // Log mesh buffer lifecycle to YAML (expensive, off by default)
 
     // ========================================
     // DEBUG PRINTING (DPRINT)
@@ -188,6 +195,7 @@ enum class EnvVarID {
     TT_METAL_DPRINT_CORES,                          // Worker cores for debug printing
     TT_METAL_DPRINT_ETH_CORES,                      // Ethernet cores for debug printing
     TT_METAL_DPRINT_DRAM_CORES,                     // DRAM cores for debug printing
+    TT_METAL_DPRINT_DISPATCH_CORES,                 // Quasar dispatch-engine cores for debug printing
     TT_METAL_DPRINT_CHIPS,                          // Chip IDs for debug printing
     TT_METAL_DPRINT_NODES,                          // Fabric node IDs for debug printing
     TT_METAL_DPRINT_MESH_COORDS,                    // Global system mesh (row,col) coordinates for debug printing
@@ -243,6 +251,9 @@ enum class EnvVarID {
     // ALLOCATOR CONFIGURATION
     // ========================================
     TT_METAL_ALLOCATOR_MODE_HYBRID,  // Enable hybrid lockstep + per-core L1 allocator mode
+    TT_METAL_TRACE_ALLOC_TRACKING,  // Enable per-trace unsafe allocation accounting
+    TT_METAL_TRACE_ALLOC_TRACEBACKS,  // Capture diagnostics for unsafe trace allocations
+    TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE,  // Exclude program-cache buffers from trace accounting
 
     // ========================================
     // SHM TRACKING
@@ -352,10 +363,18 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         this->root_dir = p.string();
     }
 
+    trace_allocation_tracking_enabled_ = false;
+    trace_allocation_diagnostics_enabled_ = false;
+    trace_allocation_skip_program_cache_enabled_ = false;
     InitializeFromEnvVars();
 
-    if (this->runtime_target_device_ != tt::TargetDevice::Silicon) {
-        log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/mock target device");
+    // Mock devices mirror real silicon of the same architecture: leave the 2-erisc default (and any
+    // TT_METAL_DISABLE_MULTI_AERISC override) intact so that HAL construction and kernel compilation match
+    // what a real device would produce. Architecture gating still happens downstream (only Blackhole's HAL
+    // acts on the flag). The simulator and emule backends cannot model dual-erisc, so force it off for them.
+    if (this->runtime_target_device_ == tt::TargetDevice::Simulator ||
+        this->runtime_target_device_ == tt::TargetDevice::Emule) {
+        log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/emule target device");
         this->enable_2_erisc_mode = false;
     }
 
@@ -494,6 +513,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->custom_fabric_mesh_graph_desc_path = std::string(value);
             break;
 
+        // TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH
+        // Path to a Factory System Descriptor (FSD) textproto describing the as-built/expected topology.
+        // When set, tooling may map against it instead of live-discovering the PSD, and it lets
+        // Fabric 2.0 statically reroute traffic around broken links.
+        // Default: unset (fall back to live PSD discovery)
+        // Usage: export TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH=/path/to/fsd.textproto
+        // See https://github.com/tenstorrent/tt-metal/issues/52859 for the design and rollout.
+        case EnvVarID::TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH:
+            this->factory_system_descriptor_path = std::string(value);
+            break;
+
         // TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE
         // Override core grid configuration (this is meant to be deprecated).
         // Default: Hardware-detected core grid
@@ -600,6 +630,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: Worker cores (default dispatch type)
         // Usage: export TT_METAL_GTEST_ETH_DISPATCH=1
         case EnvVarID::TT_METAL_GTEST_ETH_DISPATCH: this->dispatch_core_type = tt_metal::DispatchCoreType::ETH; break;
+
+        // TT_METAL_TENSIX_DISPATCH_CORES
+        // Quasar: use interim Tensix dispatch cores from core descriptor YAML instead of soc dispatch-engine cores.
+        // Default: false (use soc dispatch-engine cores when present)
+        // Usage: export TT_METAL_TENSIX_DISPATCH_CORES=1
+        case EnvVarID::TT_METAL_TENSIX_DISPATCH_CORES:
+            this->use_quasar_tensix_dispatch_cores = is_env_enabled(value);
+            log_info(
+                tt::LogDevice,
+                "TT_METAL_TENSIX_DISPATCH_CORES=1: using interim Tensix dispatch cores from core descriptor YAML");
+            break;
 
         // TT_METAL_SKIP_LOADING_FW
         // Skip loading firmware during device initialization.
@@ -726,14 +767,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->enable_2_erisc_mode = false;
             break;
 
-        // TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES
-        // Enable DRAM programmable cores in the Blackhole HAL on silicon.
-        // Default: false
-        // Usage: export TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1
-        case EnvVarID::TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES:
-            this->enable_blackhole_dram_programmable_cores = is_env_enabled(value);
-            break;
-
         // TT_METAL_USE_MGD_2_0
         // Enables use of Mesh Graph Descriptor 2.0 format for fabric configuration.
         // Default: false (uses MGD 1.0)
@@ -802,7 +835,10 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Store command queues in device DRAM.
         // Default: false (use hugepages)
         // Usage: export TT_METAL_DRAM_BACKED_CQ=1
-        case EnvVarID::TT_METAL_DRAM_BACKED_CQ: this->dram_backed_cq = is_env_enabled(value); break;
+        case EnvVarID::TT_METAL_DRAM_BACKED_CQ:
+            this->dram_backed_cq_env_var_set = true;
+            this->dram_backed_cq = is_env_enabled(value);
+            break;
 
         // TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES
         // Use synchronous direct buffer writes for simulator tensor preloads instead of FD CQ copies.
@@ -811,6 +847,51 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES:
             this->simulator_direct_tensor_writes = is_env_enabled(value);
             break;
+
+        // TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES
+        // Controls Blackhole DRAM programmable cores in the HAL:
+        //   =1 → force enable, =0 → force disable, unset → auto-detect (firmware + topology)
+        // Usage: export TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=0
+        case EnvVarID::TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES:
+            this->blackhole_dram_programmable_cores_override = is_env_enabled(value);
+            break;
+
+        // TT_METAL_MEASURE_DFB_INIT_TIME
+        // Enables rdcycle-based DFB init timing slots in device firmware (Quasar only).
+        // Deprecate once the device profiler subsumes this instrumentation.
+        // Default: false (rdcycle timing disabled; device uses no-op counters)
+        // Usage: export TT_METAL_MEASURE_DFB_INIT_TIME=1
+        case EnvVarID::TT_METAL_MEASURE_DFB_INIT_TIME:
+            this->measure_dfb_init_time_enabled = is_env_enabled(value);
+            break;
+
+        // TT_METAL_TDP_LIMIT_WATTS
+        // TDP limit [W] to hand the firmware throttler when the cluster opens, or 0 to restore the
+        // board default. It stays in effect until the chip is reset or another writer replaces it,
+        // outliving this process. Needs Blackhole with firmware 19.11.0+; anywhere else the limit
+        // is left alone with a warning. An empty value is treated as unset.
+        // Default: unset (whatever limit is already in effect stays)
+        // Usage: export TT_METAL_TDP_LIMIT_WATTS=300
+        case EnvVarID::TT_METAL_TDP_LIMIT_WATTS: {
+            std::string limit_value = trim_copy(value);
+            if (limit_value.empty()) {
+                this->tdp_limit_watts = std::nullopt;
+                break;
+            }
+            try {
+                size_t parse_pos = 0;
+                unsigned long long parsed_limit = std::stoull(limit_value, &parse_pos, 0);
+                if (parse_pos != limit_value.size() || parsed_limit > std::numeric_limits<uint32_t>::max()) {
+                    TT_THROW("TT_METAL_TDP_LIMIT_WATTS must be a watt count: {}", value);
+                }
+                this->tdp_limit_watts = static_cast<uint32_t>(parsed_limit);
+            } catch (const std::invalid_argument&) {
+                TT_THROW("TT_METAL_TDP_LIMIT_WATTS must be a watt count: {}", value);
+            } catch (const std::out_of_range&) {
+                TT_THROW("TT_METAL_TDP_LIMIT_WATTS value out of range: {}", value);
+            }
+            break;
+        }
 
         // ========================================
         // PROFILING & PERFORMANCE
@@ -958,6 +1039,16 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_PROFILER_SUM: {
             if (this->profiler_enabled && is_env_enabled(value)) {
                 this->profiler_sum = true;
+            }
+            break;
+        }
+
+        // TT_METAL_PROFILER_ACCUMULATE
+        // Accumulate kernel invocations in per-RISC L1 (main zones use the growing index), flush to DRAM when nearly
+        // full, read residual via DRAM_AND_L1. Default: false Usage: export TT_METAL_PROFILER_ACCUMULATE=1
+        case EnvVarID::TT_METAL_PROFILER_ACCUMULATE: {
+            if (this->profiler_enabled && is_env_enabled(value)) {
+                this->profiler_accumulate = true;
             }
             break;
         }
@@ -1361,6 +1452,19 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             }
             break;
 
+        // TT_METAL_INSPECTOR_LOG_MESH_BUFFERS
+        // Enables logging of every MeshBuffer construction and destruction to YAML.
+        // WARNING: This is expensive. Buffers churn orders of magnitude faster than programs, so the log
+        // grows very quickly and each event costs a flushed write.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_INSPECTOR_LOG_MESH_BUFFERS=1
+        case EnvVarID::TT_METAL_INSPECTOR_LOG_MESH_BUFFERS:
+            this->inspector_settings.log_mesh_buffers = false;
+            if (strcmp(value, "1") == 0) {
+                this->inspector_settings.log_mesh_buffers = true;
+            }
+            break;
+
         // ========================================
         // DEBUG PRINTING (DPRINT)
         // ========================================
@@ -1388,6 +1492,15 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: disabled (no debug printing on DRAM cores)
         // Usage: export TT_METAL_DPRINT_DRAM_CORES=all
         case EnvVarID::TT_METAL_DPRINT_DRAM_CORES:
+            // Handled by ParseFeatureEnv() - this is for documentation
+            break;
+
+        // TT_METAL_DPRINT_DISPATCH_CORES
+        // Specifies Quasar dispatch-engine cores (CoreType::DISPATCH, synthetic logical coords (index,0)) for
+        // debug printing. Same syntax as DPRINT_CORES (e.g. 'all', 'dispatch', '(0,0)').
+        // Default: disabled (no debug printing on dispatch-engine cores)
+        // Usage: export TT_METAL_DPRINT_DISPATCH_CORES=all
+        case EnvVarID::TT_METAL_DPRINT_DISPATCH_CORES:
             // Handled by ParseFeatureEnv() - this is for documentation
             break;
 
@@ -1622,6 +1735,20 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_ALLOCATOR_MODE_HYBRID=1
         case EnvVarID::TT_METAL_ALLOCATOR_MODE_HYBRID: this->allocator_mode_hybrid = is_env_enabled(value); break;
 
+        // Trace-allocation tracker settings are process-start options. Keep their
+        // cached values in RunTimeOptions so runtime hot paths never call getenv.
+        case EnvVarID::TT_METAL_TRACE_ALLOC_TRACKING:
+            trace_allocation_tracking_enabled_ = std::strcmp(value, "1") == 0;
+            break;
+        case EnvVarID::TT_METAL_TRACE_ALLOC_TRACEBACKS:
+            trace_allocation_diagnostics_enabled_ =
+                trace_allocation_tracking_enabled_ && std::strcmp(value, "1") == 0;
+            break;
+        case EnvVarID::TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE:
+            trace_allocation_skip_program_cache_enabled_ =
+                trace_allocation_tracking_enabled_ && std::strcmp(value, "1") == 0;
+            break;
+
         // TT_METAL_SHM_TRACKING_DISABLED
         // Disable shared memory tracking for tt-smi.
         // Default: 0 (SHM tracking enabled)
@@ -1837,6 +1964,9 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_meta
     ParseFeatureCoreRange(feature, feature_env_prefix + "_CORES", CoreType::WORKER);
     ParseFeatureCoreRange(feature, feature_env_prefix + "_ETH_CORES", CoreType::ETH);
     ParseFeatureCoreRange(feature, feature_env_prefix + "_DRAM_CORES", CoreType::DRAM);
+    // Quasar dispatch-engine cores (CoreType::DISPATCH) use synthetic logical coords (index, 0). Same
+    // syntax as the worker/eth/dram core lists (e.g. "all", "dispatch", "(0,0)").
+    ParseFeatureCoreRange(feature, feature_env_prefix + "_DISPATCH_CORES", CoreType::DISPATCH);
     bool chips_specified = ParseFeatureChipIds(feature, feature_env_prefix + "_CHIPS");
     bool nodes_specified = ParseFeatureNodeIds(feature, feature_env_prefix + "_NODES");
     bool mesh_coords_specified = ParseFeatureMeshCoords(feature, feature_env_prefix + "_MESH_COORDS");
@@ -1878,7 +2008,7 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_meta
 void RunTimeOptions::ParseFeatureCoreRange(
     RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type) {
     char* str = std::getenv(env_var.c_str());
-    std::vector<CoreCoord> cores;
+    std::vector<tt::tt_metal::CoreCoord> cores;
 
     // Check if "all" is specified, rather than a range of cores.
     feature_targets[feature].all_cores[core_type] = RunTimeDebugClassNoneSpecified;
@@ -1901,7 +2031,7 @@ void RunTimeOptions::ParseFeatureCoreRange(
         } else if (str[0] == '(') {
             if (strchr(str, '-')) {
                 // Assume this is a range
-                CoreCoord start, end;
+                tt::tt_metal::CoreCoord start, end;
                 if (sscanf(str, "(%zu,%zu)", &start.x, &start.y) != 2) {
                     TT_THROW("Invalid {}", env_var);
                 }
@@ -1935,7 +2065,7 @@ void RunTimeOptions::ParseFeatureCoreRange(
     }
 
     // Set the core range
-    feature_targets[feature].cores[core_type] = cores;
+    feature_targets[feature].cores[core_type] = std::move(cores);
 }
 
 bool RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string& env_var) {
@@ -1961,7 +2091,7 @@ bool RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
         }
     }
 
-    feature_targets[feature].chip_ids = chips;
+    feature_targets[feature].chip_ids = std::move(chips);
 
     return specified;
 }

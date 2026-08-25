@@ -4,8 +4,9 @@
 
 #pragma once
 
+#include <cstdint>
 #include "llk_math_eltwise_unary_sfpu_init.h"
-#include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_binop_with_unary.h"
 #include "llk_assert.h"
 
@@ -36,8 +37,11 @@ inline void llk_math_eltwise_unary_sfpu_binop_with_scalar(
     std::uint32_t dst_index, std::uint32_t scalar, VectorMode vector_mode = VectorMode::RC) {
     LLK_ASSERT(vector_mode == VectorMode::RC, "Quasar currently only supports vector mode RC");
     static_assert(binop_mode == sfpu::BinopMode::Mul, "Quasar binop_with_scalar currently supports Mul only");
-    _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::calculate_binop_with_scalar<APPROXIMATE, binop_mode, SFPU_ITERATIONS>,
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binop_with_scalar,
+        (APPROXIMATE, binop_mode, SFPU_ITERATIONS),
         dst_index,
         vector_mode,
         scalar);

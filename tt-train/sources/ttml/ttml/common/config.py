@@ -29,6 +29,11 @@ class DeviceConfig:
         self.device_ids = device_config.get("device_ids", None)
         self.enable_tp = device_config.get("enable_tp", False)
         self.enable_ddp = device_config.get("enable_ddp", False)
+        # MoE expert-parallel axis index in `mesh_shape`. -1 (default)
+        # disables MoE-only EP; 0/1/... selects which mesh axis to partition the
+        # MoE experts across. The axis is registered on the mesh under the name
+        # "moe_ep" and is used by sparse_ep (SparseMoEEP).
+        self.moe_axis = int(device_config.get("moe_axis", -1))
         self.enable_fsdp = device_config.get("enable_fsdp", False)
         # Defaults to True: build as deferred metadata -> fully_shard -> materialize already-sharded,
         # so large models (e.g. 32B) never materialize a full replicated copy on one chip.

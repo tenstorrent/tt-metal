@@ -38,6 +38,7 @@ TEST_F(LinearRegressionFullTest, TestLinearRegressionFull) {
     }
 
     std::vector<float> targets;
+    targets.reserve(batch_size);
     for (size_t i = 0; i < batch_size; ++i) {
         targets.push_back(static_cast<float>(i) * 0.1F);
     }

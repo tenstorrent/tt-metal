@@ -117,7 +117,7 @@ jobs:
   # Compute tool image tags for pre-built dependencies
   # These are the same tags computed in build-docker-artifact.yaml
   check-tool-images:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       ccache-tag: ${{ steps.tags.outputs.ccache-tag }}
       sfpi-tag: ${{ steps.tags.outputs.sfpi-tag }}
@@ -202,7 +202,7 @@ jobs:
           nc -zv ${{ env.BUILDKIT_HOST }} ${{ env.BUILDKIT_PORT }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
         if: ${{ inputs.buildkit }}
         with:
           driver: remote

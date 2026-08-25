@@ -18,7 +18,7 @@ namespace ttnn::experimental::prim {
 struct DeepseekMoEFastReduceNCDeviceOperation {
     using operation_attributes_t = DeepseekMoEFastReduceNCParams;
     using tensor_args_t = DeepseekMoEFastReduceNCInputs;
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = std::vector<ttnn::Tensor>;
     using program_factory_t = std::variant<DeepseekMoEFastReduceNCProgramFactory>;
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);

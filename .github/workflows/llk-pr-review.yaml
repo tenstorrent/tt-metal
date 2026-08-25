@@ -145,7 +145,6 @@ jobs:
           set -euo pipefail
           src=".llk-review-knowledge-src/dashboard/pr_review/knowledge"
           out="${GITHUB_WORKSPACE}/.llk-review-system-prompt.md"
-
           required=(
             pinned-rules.md
             learnings.md
@@ -222,6 +221,15 @@ jobs:
       #    MCP server.
       - name: Record review start time
         run: echo "LLK_REVIEW_STARTED_AT=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
+
+      # Join the tailnet ephemerally via OIDC so Anthropic traffic uses the
+      # allowlisted on-prem egress path configured for this repository.
+      - name: Tailscale
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4.1.2
+        with:
+          oauth-client-id: ${{ vars.TS_GHA_PUBLIC_INTERNET_CLIENT_ID }}
+          audience: ${{ vars.TS_GHA_PUBLIC_INTERNET_AUDIENCE }}
+          tags: tag:tt-github-actions-public-internet-outbound
 
       - name: Run /llk-code-review
         id: llk_code_review
@@ -369,3 +377,8 @@ jobs:
 
           echo "::error::Claude completed without posting any LLK review output"
           exit 1
+
+      # 6. Remove the ephemeral tailnet node immediately, even on failure.
+      - name: Tailscale cleanup
+        if: always()
+        run: sudo tailscale logout

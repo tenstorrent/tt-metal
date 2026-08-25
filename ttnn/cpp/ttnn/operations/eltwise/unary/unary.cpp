@@ -204,9 +204,6 @@ DEFINE_UNARY_OP_WITH_FAST_AND_APPROXIMATE_MODE(mish, MISH)
 
 DEFINE_UNARY_OP_WITH_FLOAT_PARAM(heaviside, HEAVISIDE)
 DEFINE_UNARY_OP_WITH_FLOAT_PARAM(leaky_relu, LEAKY_RELU)
-DEFINE_UNARY_OP_WITH_FLOAT_PARAM(relu_max, RELU_MAX)
-DEFINE_UNARY_OP_WITH_FLOAT_PARAM(relu_min, RELU_MIN)
-DEFINE_UNARY_OP_WITH_FLOAT_PARAM(unary_remainder, REMAINDER)
 DEFINE_UNARY_OP_WITH_FLOAT_PARAM(celu, CELU)
 DEFINE_UNARY_OP_WITH_FLOAT_PARAM(rpow, RPOW)
 DEFINE_UNARY_OP_WITH_FLOAT_PARAM(unary_fmod, FMOD)
@@ -214,6 +211,7 @@ DEFINE_UNARY_OP_WITH_FLOAT_PARAM(prelu_sfpu, PRELU_SFPU)
 DEFINE_UNARY_OP_WITH_FLOAT_PARAM(hardshrink, HARDSHRINK)
 DEFINE_UNARY_OP_WITH_FLOAT_PARAM(elu, ELU)
 DEFINE_UNARY_OP_WITH_FLOAT_PARAM(softshrink, SOFTSHRINK)
+DEFINE_UNARY_OP_WITH_FLOAT_PARAM(softcap, SOFTCAP)
 
 #undef DEFINE_UNARY_OP_WITH_FLOAT_PARAM
 
@@ -262,6 +260,9 @@ DEFINE_UNARY_OP_WITH_TWO_FLOAT_PARAMS(selu, SELU)
     }
 
 DEFINE_UNARY_OP_SCALAR_VARIANT(fill, FILL)
+DEFINE_UNARY_OP_SCALAR_VARIANT(unary_remainder, REMAINDER)
+DEFINE_UNARY_OP_SCALAR_VARIANT(relu_max, RELU_MAX)
+DEFINE_UNARY_OP_SCALAR_VARIANT(relu_min, RELU_MIN)
 DEFINE_UNARY_OP_SCALAR_VARIANT(power, POWER)
 DEFINE_UNARY_OP_SCALAR_VARIANT(gt_unary, UNARY_GT)
 DEFINE_UNARY_OP_SCALAR_VARIANT(lt_unary, UNARY_LT)
@@ -327,17 +328,13 @@ Tensor deg2rad(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    using namespace operations::unary;
     constexpr float DEG_TO_RAD = 0.017453292519943295f;
-    return ttnn::multiply(
+    return operations::unary::detail::unary_impl(
         input_tensor,
-        DEG_TO_RAD,
-        std::optional(input_tensor.dtype()),
+        {EltwiseUnaryWithParam(UnaryOpType::MUL_UNARY_SFPU, DEG_TO_RAD)},
         memory_config,
         optional_output_tensor,
-        {},
-        {},
-        {},
-        std::nullopt,
         sub_core_grids);
 }
 
@@ -346,17 +343,13 @@ Tensor rad2deg(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    using namespace operations::unary;
     constexpr float RAD_TO_DEG = 57.29577951308232f;
-    return ttnn::multiply(
+    return operations::unary::detail::unary_impl(
         input_tensor,
-        RAD_TO_DEG,
-        std::optional(input_tensor.dtype()),
+        {EltwiseUnaryWithParam(UnaryOpType::MUL_UNARY_SFPU, RAD_TO_DEG)},
         memory_config,
         optional_output_tensor,
-        {},
-        {},
-        {},
-        std::nullopt,
         sub_core_grids);
 }
 
@@ -431,6 +424,30 @@ Tensor where_tss(
         value_false);
 
     return operations::unary::detail::unary_impl(input, {param}, memory_config, optional_output_tensor, sub_core_grids);
+}
+
+Tensor mac_tss(
+    const Tensor& input_tensor_a,
+    float value1,
+    float value2,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    using namespace operations::unary;
+    // Both scalars are packed as raw floats and the kernel computes in the FP32 SFPU
+    // registers, so integer inputs cannot be served here. ttnn::mac routes them to the
+    // composite path instead; fail loudly if anything else reaches this.
+    TT_FATAL(
+        input_tensor_a.dtype() != DataType::INT32 && input_tensor_a.dtype() != DataType::UINT32,
+        "ttnn::mac_tss does not support integer input dtypes. Got {}. Use ttnn::mac, which falls back to the "
+        "composite path for integer inputs.",
+        input_tensor_a.dtype());
+    return operations::unary::detail::unary_impl(
+        input_tensor_a,
+        {EltwiseUnaryWithParam{UnaryOpType::MAC_TSS, std::vector<float>{value1, value2}}},
+        memory_config,
+        optional_output_tensor,
+        sub_core_grids);
 }
 
 Tensor bitcast(
@@ -719,7 +736,8 @@ Tensor div_sfpu(
     using namespace operations::unary;
     return operations::unary::detail::unary_impl(
         input_tensor,
-        {EltwiseUnaryWithParam{UnaryOpType::RDIV, param}},
+        // RDIV codegen reads params[1] as the rounding mode; 0 is RoundingMode::None
+        {EltwiseUnaryWithParam{UnaryOpType::RDIV, param, 0.0f}},
         memory_config,
         optional_output_tensor,
         sub_core_grids);

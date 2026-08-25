@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <numeric>
 #include <vector>
 
 #include <tt-metalium/tt_metal.hpp>
@@ -71,9 +72,7 @@ inline bool lookup_devices_or_fail(
 // Generate deterministic TX pattern.
 inline std::vector<uint32_t> make_tx_pattern(size_t n_words) {
     std::vector<uint32_t> tx(n_words);
-    for (size_t i = 0; i < n_words; ++i) {
-        tx[i] = 0xA5A50000u + static_cast<uint32_t>(i);
-    }
+    std::iota(tx.begin(), tx.end(), 0xA5A50000u);
     return tx;
 }
 
@@ -83,12 +82,11 @@ inline void verify_payload_words(const std::vector<uint32_t>& rx, const std::vec
         ADD_FAILURE() << "RX size mismatch: got " << rx.size() << " words, expected " << tx.size();
         return;
     }
-    for (size_t i = 0; i < rx.size(); ++i) {
-        if (rx[i] != tx[i]) {
-            ADD_FAILURE() << "Data mismatch at word " << i << " (got 0x" << std::hex << rx[i] << ", exp 0x" << tx[i]
-                          << std::dec << ")";
-            return;
-        }
+    auto it = std::mismatch(rx.begin(), rx.end(), tx.begin());
+    if (it.first != rx.end()) {
+        const size_t i = static_cast<size_t>(it.first - rx.begin());
+        ADD_FAILURE() << "Data mismatch at word " << i << " (got 0x" << std::hex << *it.first << ", exp 0x"
+                      << *it.second << std::dec << ")";
     }
     // OK -> no failure emitted
 }
@@ -187,14 +185,14 @@ Notes:
     // Create the semaphore on the specific receiver logical core of the *mesh*.
     tt::tt_metal::CoreRangeSet rx_core_set(tt::tt_metal::CoreRange(p.receiver_core, p.receiver_core));
     if (!gsemA) {
-        gsemA = tt::tt_metal::CreateGlobalSemaphore(
-            mesh.get(),
+        gsemA = tt::tt_metal::GlobalSemaphore(
+            *mesh,
             rx_core_set,
             /*initial_value=*/0);
     }
     if (!gsemB) {
-        gsemB = tt::tt_metal::CreateGlobalSemaphore(
-            mesh.get(),
+        gsemB = tt::tt_metal::GlobalSemaphore(
+            *mesh,
             rx_core_set,
             /*initial_value=*/0);
     }
@@ -288,15 +286,15 @@ Notes:
     Dist::EnqueueMeshWorkload(mcq, receiver_workload, /*blocking=*/false);
     Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/true);
     // 2) Capture p.trace_iters enqueues back-to-back
-    auto trace_id = Dist::BeginTraceCapture(mesh.get(), mcq.id());
+    auto trace_id = mesh->begin_mesh_trace(mcq);
     for (uint32_t i = 0; i < p.trace_iters; ++i) {
         Dist::EnqueueMeshWorkload(mcq, receiver_workload, /*blocking=*/false);
         Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/false);
     }
-    mesh->end_mesh_trace(mcq.id(), trace_id);
+    mesh->end_mesh_trace(mcq, trace_id);
     // 3) Replay measured section
     auto t0 = std::chrono::steady_clock::now();
-    mesh->replay_mesh_trace(mcq.id(), trace_id, /*blocking=*/false);
+    mesh->replay_mesh_trace(mcq, trace_id, /*blocking=*/false);
     Dist::Finish(mcq);
     auto t1 = std::chrono::steady_clock::now();
     mesh->release_mesh_trace(trace_id);

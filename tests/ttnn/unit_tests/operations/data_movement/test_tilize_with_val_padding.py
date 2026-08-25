@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import pytest
 import torch
 import ttnn
@@ -11,6 +12,7 @@ from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import (
     tilize_with_val_padding as pytorch_tilize_with_val_padding,
 )
+from models.common.utility_functions import is_blackhole, skip_for_blackhole
 
 torch.manual_seed(0)
 
@@ -70,6 +72,26 @@ params += [
     )
 ]
 
+# pad_value == 0.0 exercises the zero-fill path in the row-major tilize_with_val_padding
+# reader kernel (the scalar fill_l1_range store loop that also handles non-zero pads).
+# Only the multicore reader is covered: the single-core reader path is a broken legacy
+# path (garbage output on device, unsupported oversized reads on the simulator) and is
+# never used in production, where tilize_with_val_padding always runs multicore.
+params += [
+    pytest.param(
+        [[1, 1, 50, 50]],
+        {
+            "dtype": [ttnn.bfloat16],
+            "layout": [ttnn.ROW_MAJOR_LAYOUT],
+            "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)],
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            "output_tensor_shape": [1, 1, 64, 64],
+            "pad_value": 0.0,
+            "use_multicore": True,
+        },
+    )
+]
+
 
 @pytest.mark.parametrize("input_shapes, tilize_with_val_padding_args", params)
 def test_run_tilize_with_val_padding_test(input_shapes, tilize_with_val_padding_args, device, function_level_defaults):
@@ -78,6 +100,7 @@ def test_run_tilize_with_val_padding_test(input_shapes, tilize_with_val_padding_
 
     output_tensor_shape = tilize_with_val_padding_args["output_tensor_shape"]
     pad_value = tilize_with_val_padding_args["pad_value"]
+    use_multicore = tilize_with_val_padding_args.get("use_multicore", True)
 
     tt_input = ttnn.from_torch(
         torch_input,
@@ -87,7 +110,11 @@ def test_run_tilize_with_val_padding_test(input_shapes, tilize_with_val_padding_
         memory_config=tilize_with_val_padding_args["input_mem_config"][0],
     )
     tt_output = ttnn.tilize_with_val_padding(
-        tt_input, output_tensor_shape, pad_value, memory_config=tilize_with_val_padding_args["output_mem_config"]
+        tt_input,
+        output_tensor_shape,
+        pad_value,
+        memory_config=tilize_with_val_padding_args["output_mem_config"],
+        use_multicore=use_multicore,
     )
     torch_output = tt_output.cpu().to_torch_with_padded_shape()
 
@@ -620,7 +647,10 @@ def test_tilize_with_val_padding_scalar(device, dtype, scalar_val, pad_value):
     assert_equal(expected_torch_tensor, output_torch_tensor)
 
 
-@pytest.mark.parametrize("use_multicore", [False, True])
+# Only the multicore reader is covered: the single-core reader is a broken legacy path whose
+# stale TensorAccessorArgs contract fails to JIT-compile on a cold cache, and it is never used
+# in production (tilize_with_val_padding always runs multicore).
+@pytest.mark.parametrize("use_multicore", [True])
 def test_tilize_with_val_padding_fp32_truncation(device, use_multicore):
     """Regression test: FP32 must not be truncated to TF32 during tilize_with_val_padding (issue #39310)."""
     input_shape = [1, 1, 50, 50]
@@ -699,3 +729,184 @@ def test_tilize_with_val_padding_tilize_after_avg_pool2d_sum(device, hw, kernel,
     result_flat = y_torch_after_tile.reshape(-1)[: ref_flat.numel()]
 
     assert_with_pcc(ref_flat, result_flat, pcc=0.999)
+
+
+# Regression test for issue #51215 bug 4: column/row padding stores must handle a row byte size
+# that is not a multiple of 4.  The reader's fill_l1_range<elem_size> helper does element-sized
+# head/tail stores around the 4-byte-aligned interior; a naive 4-byte-only fill would clobber
+# adjacent input bytes and leave the last 1-3 pad bytes unfilled.  Uses the multicore reader
+# (the production path); the single-core reader is a broken legacy path (garbage output, and a
+# stale TensorAccessorArgs contract that fails to JIT-compile) and is not exercised here.
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        # bfloat16: row_bytes = width * 2; odd width → row_bytes % 4 == 2 (unaligned)
+        ([1, 1, 32, 31], [1, 1, 32, 32]),
+        ([1, 1, 32, 33], [1, 1, 32, 64]),
+        ([1, 1, 64, 29], [1, 1, 64, 32]),
+        # Partial height: exercises both column-pad and row-pad paths together
+        ([1, 1, 30, 31], [1, 1, 32, 32]),
+    ],
+    ids=["bf16_w31", "bf16_w33", "bf16_w29", "bf16_w31_h30"],
+)
+def test_tilize_with_val_padding_unaligned_row_width(device, input_shape, output_shape):
+    """tilize_with_val_padding with row bytes not a multiple of 4 (issue #51215 bug 4)."""
+    pad_value = 7.0
+    torch_input = (torch.rand(input_shape) * 200 - 100).to(torch.bfloat16)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+    )
+    tt_output = ttnn.tilize_with_val_padding(tt_input, output_shape, pad_value, use_multicore=True)
+    torch_output = tt_output.cpu().to_torch_with_padded_shape()
+
+    torch_golden = pytorch_tilize_with_val_padding(torch_input, output_shape, pad_value)
+    assert_equal(torch_golden, torch_output)
+
+
+# FP8_E4M3 is a 1-byte-per-element format. A row width of 63 → 63 bytes/row, which is
+# not a multiple of 4. This covers the head/tail element-sized stores in
+# fill_l1_range<1> that handle the unaligned bytes at the start and end of each
+# padding region; an incorrect 4-byte-only fill would corrupt adjacent real data.
+# The output must be wider than a single tile (>32): the Blackhole 8-bit unpack-tilize
+# path corrupts odd rows when the block is a single column tile (ct_dim == 1), so that
+# case is rejected by the op guard (tt-llk narrow 8-bit tilize bug).
+# Uses the multicore reader (production path); the single-core reader is broken legacy.
+# Runs on Blackhole hardware only: it is a Blackhole-specific path, and the simulator does
+# not implement the 8-bit tensix elementwise/unpack ops it exercises
+# (UnimplementedFunctionality: tensix_elw_op src_fmt=10).
+@pytest.mark.skipif(
+    not is_blackhole() or bool(os.environ.get("TT_METAL_SIMULATOR")),
+    reason="FP8_E4M3 tilize runs only on Blackhole hardware (not implemented in the simulator)",
+)
+def test_tilize_with_val_padding_fp8_unaligned_row_width(device):
+    """FP8_E4M3 tilize_with_val_padding where the row byte size (width × 1) is not a
+    multiple of 4: verifies that padding is written exactly and real data is preserved."""
+    input_shape = [1, 1, 32, 63]
+    output_shape = [1, 1, 32, 64]
+    # Use a nonzero FP8-exact pad value so the padding assertion fails loudly if the
+    # fill is reverted — 0.0 can pass silently when the CB happens to be zeroed.
+    pad_value = 2.0
+
+    torch_input = (torch.rand(input_shape) * 2 - 1).to(torch.float32)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.fp8_e4m3,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+    )
+    tt_tiled = ttnn.tilize_with_val_padding(tt_input, output_shape, pad_value, use_multicore=True)
+    tt_untiled = ttnn.untilize(tt_tiled)
+    torch_output = ttnn.to_torch(tt_untiled).float()
+
+    # Real data region: use the exact device-quantised FP8 values as golden (converted to
+    # float32 host-side via to_dtype, since single-device FP8→torch is unsupported). This
+    # avoids the lossy float32→FP8→float32 round-trip that weakens detection of the
+    # misaligned-store bug (which clobbers the last real byte of each row).
+    torch_golden = ttnn.to_torch(ttnn.to_dtype(tt_input.cpu(), ttnn.float32)).float()
+    assert_equal(torch_golden, torch_output[..., :63])
+    # Padding column: FP8 2.0 (0x40) round-trips to exactly 2.0.
+    assert torch.all(
+        torch_output[..., 63:] == pad_value
+    ), f"Expected pad_value={pad_value} in padding column, got unique values: {torch_output[..., 63:].unique()}"
+
+
+def _assert_program_cache_reuse_across_new_allocations(
+    device, tensor_shape, output_padded_shape, in_mem_cfg, out_mem_cfg, use_multicore
+):
+    """Run tilize_with_val_padding four times, allocating a fresh input and output every
+    iteration so each dispatch sees a DIFFERENT buffer address, and assert that the results stay
+    correct while the program cache is only ever populated once.
+
+    A tensor address reaches this op's kernels one of two ways, and both are re-resolved on every
+    cache hit rather than baked into the program: the sharded factory backs borrowed-memory
+    dataflow buffers with the input and output shards (their L1 addresses are reattached per
+    dispatch), and the interleaved factory carries the addresses on typed tensor bindings. A stale
+    address on the second dispatch corrupts results silently, which a single-shot test cannot
+    catch."""
+    torch.manual_seed(0)
+    pad_value = 3.5
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    keep_alive = []  # retain prior tensors so each iteration allocates at a NEW address
+    entries = None
+    for i in range(4):
+        torch_input = (torch.rand(tensor_shape) * 200 - 100).to(torch.bfloat16)
+        tt_input = ttnn.from_torch(
+            torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem_cfg
+        )
+        tt_output = ttnn.tilize_with_val_padding(
+            tt_input,
+            ttnn.Shape(output_padded_shape),
+            pad_value,
+            memory_config=out_mem_cfg,
+            use_multicore=use_multicore,
+        )
+        keep_alive += [tt_input, tt_output]
+
+        readback = tt_output
+        if tt_output.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+            readback = ttnn.sharded_to_interleaved(
+                tt_output, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+            )
+
+        torch_golden = pytorch_tilize_with_val_padding(torch_input, output_padded_shape, pad_value)
+        assert_equal(torch_golden, readback.cpu().to_torch_with_padded_shape())
+
+        if i == 0:
+            entries = device.num_program_cache_entries()
+            assert entries >= 1, "the first invocation should have populated the program cache"
+        else:
+            # Not an exact count: the sharded case also runs from_torch / sharded_to_interleaved,
+            # which cache programs of their own. What matters is that iteration 2+ adds none.
+            assert (
+                device.num_program_cache_entries() == entries
+            ), "tilize_with_val_padding must reuse the cached program on a hit"
+
+
+@skip_for_blackhole("BH LLK Issue with tilize, #14609")
+def test_tilize_with_val_padding_program_cache_addr_change_sharded(device):
+    """Sharded factory: the input and output shards back borrowed-memory dataflow buffers."""
+    tensor_shape = (50, 256)
+    num_cores = 4
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))}),
+        [tensor_shape[0], tensor_shape[1] // num_cores],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    _assert_program_cache_reuse_across_new_allocations(
+        device,
+        tensor_shape=tensor_shape,
+        output_padded_shape=[64, 256],
+        in_mem_cfg=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec),
+        # The op derives the output shard spec itself (height becomes the padded height), so pass
+        # the layout only -- supplying a stale shard shape here would fight that.
+        out_mem_cfg=ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type=ttnn.BufferType.L1
+        ),
+        use_multicore=True,
+    )
+
+
+# Only the multicore reader is covered here, matching the rest of this file: the single-core reader
+# is a broken legacy path (garbage output for pad_value == 0) that production never selects, since
+# tilize_with_val_padding always runs multicore. Its factory is ported, so the tensor-binding refresh
+# it relies on is the same one this test exercises through the multicore path.
+def test_tilize_with_val_padding_program_cache_addr_change_interleaved_multicore(device):
+    """Multicore-default factory: addresses ride typed tensor bindings."""
+    dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    _assert_program_cache_reuse_across_new_allocations(
+        device,
+        tensor_shape=(1, 1, 100, 128),
+        output_padded_shape=[1, 1, 128, 128],
+        in_mem_cfg=dram,
+        out_mem_cfg=dram,
+        use_multicore=True,
+    )

@@ -60,7 +60,8 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA = 17,
     CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST = 18,  // unicast packed large write with uint32_t length
     CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS = 19,
-    CQ_DISPATCH_CMD_MAX_COUNT,  // for checking legal IDs
+    CQ_DISPATCH_CMD_RT_PROFILER_FLUSH = 20,  // dispatch_s: wait on the last program and signal its profiler record
+    CQ_DISPATCH_CMD_MAX_COUNT,               // for checking legal IDs
 };
 
 enum GoSignalMcastSettings : uint8_t {
@@ -411,6 +412,11 @@ struct CQDispatchNotifySubordinateGoSignalCmd {
     uint32_t pad3;
 } __attribute__((packed));
 
+struct CQDispatchRtProfilerFlushCmd {
+    uint32_t wait_count;   // worker completion count to wait on
+    uint32_t wait_stream;  // stream index to wait on
+} __attribute__((packed));
+
 struct CQDispatchSetNumWorkerSemsCmd {
     uint8_t pad1;
     uint16_t pad2;
@@ -448,6 +454,7 @@ struct CQDispatchCmd {
         CQDispatchSetNumWorkerSemsCmd set_num_worker_sems;
         CQDispatchSetGoSignalNocDataCmd set_go_signal_noc_data;
         CQDispatchSetSubDeviceWorkerCountsCmd set_sub_device_worker_counts;
+        CQDispatchRtProfilerFlushCmd rt_profiler_flush;
     } __attribute__((packed));
 };
 

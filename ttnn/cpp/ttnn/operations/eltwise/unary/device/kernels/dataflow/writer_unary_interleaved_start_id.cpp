@@ -2,9 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// writer_unary_interleaved_start_id_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file
+// serves the consumers still on the legacy API. Until the last of them migrates and this file is
+// retired, changes here likely belong in the fork too.
+//
+// TODO(#52228): retire this duplication. The issue records why it exists, the full consumer
+// list, and the sunset plan: https://github.com/tenstorrent/tt-metal/issues/52228
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -19,10 +27,10 @@ void kernel_main() {
     const uint32_t page_bytes = get_local_cb_interface(cb_id_out).fifo_page_size;
 
     Noc noc;
-    CircularBuffer cb(cb_id_out);
+    DataflowBuffer dfb(cb_id_out);
 
 #ifdef OUT_SHARDED
-    cb.wait_front(num_pages);
+    dfb.wait_front(num_pages);
 #else
 
     // single-page ublocks (works for both TILE and ROW_MAJOR layouts)
@@ -37,10 +45,10 @@ void kernel_main() {
     uint32_t end_id = start_id + num_pages;
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
-        cb.wait_front(onepage);
-        noc.async_write(cb, s, page_bytes, {}, {.page_id = i});
+        dfb.wait_front(onepage);
+        noc.async_write(dfb, s, page_bytes, {}, {.page_id = i});
         noc.async_writes_flushed();
-        cb.pop_front(onepage);
+        dfb.pop_front(onepage);
     }
     noc.async_write_barrier();
 #endif

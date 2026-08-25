@@ -17,6 +17,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -159,12 +160,12 @@ void wait_for_request_with_timeout(
 // Wrapper for all_gather operations
 void all_gather_with_timeout(
     const tt::tt_metal::distributed::multihost::DistributedContext& context,
-    tt::stl::Span<std::byte> send_buf,
-    tt::stl::Span<std::byte> recv_buf,
+    ttsl::Span<std::byte> send_buf,
+    ttsl::Span<std::byte> recv_buf,
     const std::string& operation_description,
     std::chrono::duration<float> topology_mapping_timeout) {
     execute_with_timeout(
-        [&context](tt::stl::Span<std::byte> send, tt::stl::Span<std::byte> recv) { context.all_gather(send, recv); },
+        [&context](ttsl::Span<std::byte> send, ttsl::Span<std::byte> recv) { context.all_gather(send, recv); },
         operation_description,
         topology_mapping_timeout,
         &context,
@@ -211,7 +212,7 @@ TopologyMapper::TopologyMapper(
     mesh_graph_(mesh_graph),
     physical_system_descriptor_(physical_system_descriptor),
     local_mesh_binding_(local_mesh_binding),
-    fixed_asic_position_pinnings_({}),
+    pinning_groups_({}),
     topology_mapping_timeout_(topology_mapping_timeout) {
     // Initialize containers; population will occur during build_mapping
     mesh_host_ranks_.clear();
@@ -227,14 +228,14 @@ TopologyMapper::TopologyMapper(
     const MeshGraph& mesh_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const LocalMeshBinding& local_mesh_binding,
-    const std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>>& fixed_asic_position_pinnings,
+    const std::vector<::tt::tt_metal::experimental::tt_fabric::PinningConstraint>& pinning_groups,
     std::chrono::duration<float> topology_mapping_timeout) :
     cluster_(cluster),
     distributed_context_(distributed_context),
     mesh_graph_(mesh_graph),
     physical_system_descriptor_(physical_system_descriptor),
     local_mesh_binding_(local_mesh_binding),
-    fixed_asic_position_pinnings_(fixed_asic_position_pinnings),
+    pinning_groups_(pinning_groups),
     topology_mapping_timeout_(topology_mapping_timeout) {
     mesh_host_ranks_.clear();
     mesh_host_rank_coord_ranges_.clear();
@@ -257,7 +258,7 @@ TopologyMapper::TopologyMapper(
     mesh_graph_(mesh_graph),
     physical_system_descriptor_(physical_system_descriptor),
     local_mesh_binding_(local_mesh_binding),
-    fixed_asic_position_pinnings_({}),
+    pinning_groups_({}),
     topology_mapping_timeout_(topology_mapping_timeout) {
     log_debug(
         tt::LogFabric,
@@ -446,35 +447,59 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
             }
         }
 
-        // Build logical and physical adjacency maps
+        // Build logical adjacency, then physical adjacency from rank bindings. When MGD+PGD are available,
+        // attach each mesh's committed PGD MESH grouping pinning onto mesh_pgd_pinnings_ (fast path: keep
+        // asic_id_to_mesh_rank footprints; get_valid_groupings_for_mgd only supplies preferred pinnings).
         auto adjacency_map_logical_multi_mesh =
             ::tt::tt_metal::experimental::tt_fabric::build_logical_multi_mesh_adjacency_graph(mesh_graph_);
-        auto adjacency_map_physical_multi_mesh =
-            ::tt::tt_metal::experimental::tt_fabric::build_physical_multi_mesh_adjacency_graph(
-                physical_system_descriptor_, asic_id_to_mesh_rank);
+
+        // Build TopologyMappingConfig pinnings before physical-graph enrichment so PGD<->MGD matching sees them.
+        ::tt::tt_metal::experimental::tt_fabric::TopologyMappingConfig config;
+
+        config.pinnings = pinning_groups_;
+
+        // PGD<->MGD matching wants pins already keyed by mesh. Start from the MGD map and merge galaxy
+        // corner pins (pinning_groups_) into the same buckets. CSP still uses the flat config.pinnings list.
+        ::tt::tt_metal::experimental::tt_fabric::PinningsByMesh pinnings_by_mesh;
+        if (mesh_graph_.get_mesh_graph_descriptor_path().has_value()) {
+            const auto& mgd = mesh_graph_.get_mesh_graph_descriptor();
+            pinnings_by_mesh = mgd.get_pinnings();
+            for (const auto& [_, groups] : mgd.get_pinnings()) {
+                config.pinnings.insert(config.pinnings.end(), groups.begin(), groups.end());
+            }
+        }
+        ::tt::tt_metal::experimental::tt_fabric::merge_pinnings_by_mesh(pinnings_by_mesh, pinning_groups_);
+
+        ::tt::tt_metal::experimental::tt_fabric::PhysicalMultiMeshGraph adjacency_map_physical_multi_mesh;
+        // If using an MGD, try and match with PGD to consume preferred pinnings from the PGD for better mapping
+        if (mesh_graph_.get_mesh_graph_descriptor_path().has_value()) {
+            auto pgd = ::tt::tt_fabric::try_find_and_load_physical_grouping_descriptor(
+                /*pgd_path=*/std::nullopt, &physical_system_descriptor_);
+            if (pgd.has_value()) {
+                adjacency_map_physical_multi_mesh =
+                    ::tt::tt_metal::experimental::tt_fabric::build_physical_multi_mesh_adjacency_graph(
+                        physical_system_descriptor_,
+                        asic_id_to_mesh_rank,
+                        *pgd,
+                        mesh_graph_.get_mesh_graph_descriptor(),
+                        pinnings_by_mesh);
+            } else {
+                log_debug(
+                    tt::LogFabric,
+                    "No Physical Grouping Descriptor found; building rank-bound physical graph without PGD "
+                    "preferred pinnings");
+                adjacency_map_physical_multi_mesh =
+                    ::tt::tt_metal::experimental::tt_fabric::build_physical_multi_mesh_adjacency_graph(
+                        physical_system_descriptor_, asic_id_to_mesh_rank);
+            }
+        } else {
+            adjacency_map_physical_multi_mesh =
+                ::tt::tt_metal::experimental::tt_fabric::build_physical_multi_mesh_adjacency_graph(
+                    physical_system_descriptor_, asic_id_to_mesh_rank);
+        }
 
         print_logical_adjacency_map(adjacency_map_logical_multi_mesh);
         print_physical_adjacency_map(adjacency_map_physical_multi_mesh);
-
-        // Build TopologyMappingConfig for multi-mesh solver
-        ::tt::tt_metal::experimental::tt_fabric::TopologyMappingConfig config;
-
-        // Convert pinning constraints from fixed_asic_position_pinnings_ format to config format
-        // fixed_asic_position_pinnings_ is: (FabricNodeId, std::vector<AsicPosition>)
-        // config.pinnings expects: std::vector<(AsicPosition, FabricNodeId)>
-        for (const auto& [fabric_node, positions] : fixed_asic_position_pinnings_) {
-            for (const auto& position : positions) {
-                config.pinnings.emplace_back(position, fabric_node);
-            }
-        }
-
-        // Extract pinnings from MGD and add to config (only if mesh graph descriptor is available)
-        if (mesh_graph_.get_mesh_graph_descriptor_path().has_value()) {
-            const auto& pinnings = mesh_graph_.get_mesh_graph_descriptor().get_pinnings();
-            for (const auto& [pos, fabric_node] : pinnings) {
-                config.pinnings.emplace_back(pos, fabric_node);
-            }
-        }
 
         // Set per-mesh validation modes based on mesh graph policy
         for (const auto& mesh_id : mesh_graph_.get_all_mesh_ids()) {
@@ -695,6 +720,7 @@ void TopologyMapper::broadcast_chip_info_to_hosts(const std::vector<std::size_t>
     std::vector<int> target_ranks;
     if (target_rank == -1) {
         // Broadcast to all peers (excluding self)
+        target_ranks.reserve(world_size - 1);
         for (std::size_t peer = 0; peer < world_size; ++peer) {
             if (peer != my_rank) {
                 target_ranks.push_back(peer);
@@ -731,6 +757,7 @@ void TopologyMapper::broadcast_chip_info_to_hosts(const std::vector<std::size_t>
 
     // Collect entries to broadcast based on host ranks filter
     std::vector<const MappedChipInfo*> entries_to_broadcast;
+    entries_to_broadcast.reserve(chip_topology_mapping_.size());
     std::unordered_set<std::size_t> host_rank_set(host_ranks.begin(), host_ranks.end());
     const auto& host_to_rank_map = physical_system_descriptor_.get_host_to_rank_map();
     for (const auto& info : chip_topology_mapping_) {
@@ -758,7 +785,7 @@ void TopologyMapper::broadcast_chip_info_to_hosts(const std::vector<std::size_t>
         // Send count first (synchronous send to ensure receiver posted recv)
         std::uint32_t count_copy = count;
         distributed_context.ssend(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&count_copy), sizeof(count_copy)),
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&count_copy), sizeof(count_copy)),
             Rank{peer_rank},
             Tag{tag_base});
 
@@ -815,12 +842,12 @@ void TopologyMapper::broadcast_chip_info_to_hosts(const std::vector<std::size_t>
             // Send size first, then data
             std::uint32_t record_size = static_cast<std::uint32_t>(record.size());
             distributed_context.ssend(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&record_size), sizeof(record_size)),
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&record_size), sizeof(record_size)),
                 Rank{peer_rank},
                 Tag{tag_size});
 
             distributed_context.ssend(
-                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(record.data(), record.size())),
+                ttsl::as_writable_bytes(ttsl::Span<uint8_t>(record.data(), record.size())),
                 Rank{peer_rank},
                 Tag{tag_base});
         }
@@ -850,7 +877,7 @@ void TopologyMapper::receive_chip_info_from_host(std::size_t source_rank) {
     std::uint32_t count = 0;
     {
         auto req = distributed_context.irecv(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&count), sizeof(count)),
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&count), sizeof(count)),
             Rank{static_cast<int>(source_rank)},
             Tag{tag_base});
 
@@ -884,7 +911,7 @@ void TopologyMapper::receive_chip_info_from_host(std::size_t source_rank) {
         std::uint32_t record_size = 0;
         {
             auto req = distributed_context.irecv(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&record_size), sizeof(record_size)),
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&record_size), sizeof(record_size)),
                 Rank{static_cast<int>(source_rank)},
                 Tag{tag_size});  // Use tag_size for size messages
 
@@ -906,7 +933,7 @@ void TopologyMapper::receive_chip_info_from_host(std::size_t source_rank) {
         // Allocate buffer of exact size
         std::vector<uint8_t> record(record_size);
         auto req = distributed_context.irecv(
-            tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(record.data(), record.size())),
+            ttsl::as_writable_bytes(ttsl::Span<uint8_t>(record.data(), record.size())),
             Rank{static_cast<int>(source_rank)},
             Tag{tag_base});  // Use tag_base for data messages
 
@@ -947,7 +974,7 @@ void TopologyMapper::receive_chip_info_from_host(std::size_t source_rank) {
             for (std::uint32_t d = 0; d < coord_dims; ++d) {
                 coord_values[d] = read_u32_from(record, idx);
             }
-            mesh_coord = MeshCoordinate(tt::stl::Span<const uint32_t>(coord_values));
+            mesh_coord = MeshCoordinate(ttsl::Span<const uint32_t>(coord_values));
         }
 
         // mesh_host_rank
@@ -1616,6 +1643,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
 
     // Extract ASIC IDs from the descriptors map
     std::vector<tt::tt_metal::AsicID> all_asic_ids;
+    all_asic_ids.reserve(total_number_of_chips);
     for (const auto& [asic_id, _] : physical_system_descriptor.get_asic_descriptors()) {
         all_asic_ids.push_back(asic_id);
     }

@@ -21,13 +21,30 @@ Training hyperparameters and optimization settings.
 | `seed` | int | 5489 | Random seed for reproducibility |
 | `model_save_interval` | int | 500 | Save model every N steps |
 | `batch_size` | int | 4 | Batch size for training |
-| `num_epochs` | int | 1 | Number of training epochs |
-| `max_steps` | int | 1000 | Maximum number of training steps |
+| `num_epochs` | int | 0 | Epoch cap; 0 = uncapped. A run stops at whichever of `num_epochs`/`max_steps` comes first |
+| `max_steps` | int | 5000 | Step cap. At least one of `max_steps`/`num_epochs` must be set |
 | `gradient_accumulation_steps` | int | 1 | Number of steps to accumulate gradients |
 | `model_config` | str | "" | Path to model configuration file |
 | `data_path` | str | "DATA_FOLDER/shakespeare.txt" | Path to training data |
 | `scheduler_type` | str | "identity" | Learning rate scheduler ("identity", "warmup_linear") |
 | `tokenizer_type` | str | "char" | Tokenizer type ("char" or "bpe") |
+
+An epoch is one pass over the corpus's *tokens* — `corpus_tokens / (global_batch * seq_len)` steps.
+
+> **Runner differences.** Most configs run under both `examples/train/train.py` and `examples/nano_gpt`
+> (C++). Only `train.py` treats `max_steps: 0` as uncapped and raises when neither cap is set; the C++
+> runner requires `max_steps` and runs a single step at 0. The token-based epoch above is also `train.py`-only.
+
+### LR Schedule Parameters
+Apply to `scheduler_type: warmup_linear`, and to `train.py` only — the C++ `nano_gpt` runner hardcodes
+the equivalent of the defaults below and ignores overrides.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `warmup_ratio` | float | 0.1 | Warmup length as a fraction of the schedule |
+| `warmup_steps` | int | unset | Absolute warmup length; overrides `warmup_ratio`. Omit to use the ratio; set to 0 for no warmup |
+| `min_lr_ratio` | float | 0.01 | Final LR as a fraction of the peak LR |
+| `lr_schedule_steps` | int | 0 | Steps the LR curve is shaped over; 0 = the run length. Set larger than `max_steps` to run only a prefix of a longer curve |
 
 ### Optimizer
 
@@ -47,7 +64,6 @@ training_config:
   seed: 5489
   batch_size: 8
   gradient_accumulation_steps: 8
-  num_epochs: 1
   max_steps: 5000
   optimizer:
     type: AdamW
@@ -125,6 +141,7 @@ Model type and architecture configuration loaded from separate files.
 | `intermediate_dim` | int | null | Feed-forward intermediate dimension |
 | `theta` | float | null | RoPE theta parameter |
 | `num_groups` | int | 3 | Number of groups for grouped attention |
+| `embedding_placement` | str | "replicated" | Token-embedding TP placement (only under TP): `replicated` (sharding off), `vocab_parallel`, or `feature_parallel`. Overridable on the CLI via `--embedding-placement`. |
 
 ### RoPE Scaling (`rope_scaling`)
 | Parameter | Type | Default | Description |
@@ -250,6 +267,7 @@ The optimizer is configured inline under `training_config.optimizer`.
 | `weight_decay` | float | 1e-2 | Weight decay coefficient |
 | `amsgrad` | bool | false | Use AMSGrad variant |
 | `stochastic_rounding` | bool | false | Enable stochastic rounding (AdamW only) |
+| `weight_decay_skip_1d` | bool | false | Skip weight decay on 1-D params (RMSNorm gains, biases). AdamW only; other types reject it. Under Muon, set it inside the nested `adamw:` section |
 | `kahan_summation` | bool | false | Enable Kahan summation (AdamWComposite only) |
 
 ### SGD Parameters
@@ -305,7 +323,6 @@ training_config:
   model_save_interval: 500
   batch_size: 8
   gradient_accumulation_steps: 8
-  num_epochs: 1
   max_steps: 5000
   optimizer:
     type: AdamW

@@ -15,7 +15,8 @@
 
 #include "indexer_score_common.hpp"  // shared CB indices, compile-time dims, work-unit walk
 
-constexpr uint32_t page_bytes = get_compile_time_arg_val(num_common_ct_args);  // row-major page = T*2 bytes
+constexpr bool fused_ring_enabled = get_compile_time_arg_val(num_common_ct_args) != 0;
+constexpr uint32_t page_bytes = get_compile_time_arg_val(num_common_ct_args + 1);  // row-major page = T*2 bytes
 
 constexpr uint32_t frag_bytes = tt::constants::TILE_WIDTH * sizeof(uint16_t);  // one bf16 tile row
 
@@ -66,7 +67,9 @@ inline void write_pooled_strip(
     uint32_t q_seq_row0,
     uint32_t col_off_blocks,
     uint32_t valid_blocks,
-    uint32_t chunk_start_keys) {
+    uint32_t chunk_start_keys,
+    uint32_t straddle_q_keys,
+    uint32_t straddle_jump_keys) {
     CircularBuffer cb(cb_out_strip);
     cb.wait_front(blocks_per_unit);
     volatile tt_l1_ptr uint16_t* src = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb.get_read_ptr());
@@ -88,10 +91,14 @@ inline void write_pooled_strip(
     }
 
     // Forced-local block (sparse_local_block=1): force each query's own block to +inf so top-k always
-    // keeps it. Query (q_seq_row0 + rr)'s block = (chunk_start_keys + q_seq_row0 + rr) / POOL_BLOCK_KEYS;
-    // stamp only when it lands in this unit's [col_off_blocks, +valid).
+    // keeps it. Query (q_seq_row0 + rr)'s block = q_pos / POOL_BLOCK_KEYS, where q_pos is the diagonal key
+    // position -- causal_diag_tile evaluated in KEYS (all args key units; the straddle jump is applied for
+    // the mid-slab boundary chip, 0 otherwise so the common case is unchanged). Stamp only when it lands in
+    // this unit's [col_off_blocks, +valid).
     for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
-        const uint32_t local_block = (chunk_start_keys + q_seq_row0 + rr) / POOL_BLOCK_KEYS;
+        const uint32_t q_seq = q_seq_row0 + rr;
+        const uint32_t q_pos = iscore::causal_diag_tile(q_seq, chunk_start_keys, straddle_q_keys, straddle_jump_keys);
+        const uint32_t local_block = q_pos / POOL_BLOCK_KEYS;
         if (local_block >= col_off_blocks && local_block < col_off_blocks + valid_blocks) {
             scratch[rr * valid_blocks + (local_block - col_off_blocks)] = POOL_POS_INF_BF16;
         }
@@ -124,8 +131,11 @@ void kernel_main() {
     // [8] per-device chunk-start (tiles); runtime so distinct values reuse one program. Only the block-pool
     // forced-local stamp uses it; always set.
     const uint32_t chunk_start_keys = get_arg_val<uint32_t>(8) * tt::constants::TILE_WIDTH;
+    // [9],[10] mid-slab boundary-chip forced-local block jump (keys); both 0 off the boundary chip.
+    const uint32_t straddle_q_keys = get_arg_val<uint32_t>(9) * tt::constants::TILE_WIDTH;
+    const uint32_t straddle_jump_keys = get_arg_val<uint32_t>(10) * tt::constants::TILE_WIDTH;
 
-    constexpr auto out_args = TensorAccessorArgs<num_common_ct_args + 1>();
+    constexpr auto out_args = TensorAccessorArgs<num_common_ct_args + 2>();
     const auto out_acc = TensorAccessor(out_args, out_addr, page_bytes);
 
     Noc noc;
@@ -139,21 +149,40 @@ void kernel_main() {
 
     for (uint32_t phase = 0; phase < num_groups; ++phase) {
         const uint32_t group = row_group0 + phase * group_stride;
-        for (uint32_t band = 0; band < num_bands; ++band) {
+        for (uint32_t band_i = 0; band_i < num_bands; ++band_i) {
+            uint32_t band = band_i;
+            if constexpr (fused_ring_enabled) {
+                // Reordered band-visit order, IDENTICAL to reader/compute (perm starts at rt slot 11).
+                band = get_arg_val<uint32_t>(11 + band_i);
+            }
             span.set(group, band0 + band);
             const uint32_t k_tile0 = span.k_tile_start();
             const uint32_t valid_w = span.k_tiles();  // == KC for interior bands, < KC for a partial last band
+            // The reader/compute do no K/output work for cells wholly past the runtime prefix.
+            // Their q-mcast bookkeeping is completed independently before this point.
+            if (valid_w == 0) {
+                continue;
+            }
             // block-pool: this band's slice starts at block-column k_tile0/block_tiles, width valid_blocks.
             const uint32_t col_off_blocks = block_pool ? (k_tile0 / block_tiles) : 0;
             const uint32_t valid_blocks = block_pool ? (valid_w / block_tiles) : 0;  // == blocks_per_unit (no partial)
             for (uint32_t g = 0; g < num_out_groups; ++g) {
                 const uint32_t plane_row0 = g * sq_rows;
                 for (uint32_t q_row = 0; q_row < q_tiles_per_unit; ++q_row) {
-                    const uint32_t q_seq_row0 = (span.q_tile_start() + q_row) * tt::constants::TILE_HEIGHT;  // within Sq
+                    const uint32_t q_seq_row0 =
+                        (span.q_tile_start() + q_row) * tt::constants::TILE_HEIGHT;  // within Sq
                     const uint32_t page_row_start = plane_row0 + q_seq_row0;
                     if constexpr (block_pool) {
                         write_pooled_strip(
-                            noc, out_acc, page_row_start, q_seq_row0, col_off_blocks, valid_blocks, chunk_start_keys);
+                            noc,
+                            out_acc,
+                            page_row_start,
+                            q_seq_row0,
+                            col_off_blocks,
+                            valid_blocks,
+                            chunk_start_keys,
+                            straddle_q_keys,
+                            straddle_jump_keys);
                     } else {
                         write_strip(noc, out_acc, page_row_start, k_tile0, valid_w);
                     }

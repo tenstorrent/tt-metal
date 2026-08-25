@@ -11,10 +11,10 @@
 #include <unordered_set>
 #include <utility>
 
-using MyIntId = tt::stl::StrongType<int, struct MyIntIdTag>;
-using MyStringId = tt::stl::StrongType<std::string, struct MyStringIdTag>;
+using MyIntId = ttsl::StrongType<int, struct MyIntIdTag>;
+using MyStringId = ttsl::StrongType<std::string, struct MyStringIdTag>;
 
-namespace tt::stl {
+namespace ttsl {
 namespace {
 
 using ::testing::ElementsAre;
@@ -80,4 +80,4 @@ TEST(StrongTypeTest, MoveOnlyType) {
 }
 
 }  // namespace
-}  // namespace tt::stl
+}  // namespace ttsl

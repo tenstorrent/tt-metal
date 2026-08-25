@@ -135,7 +135,8 @@ void kernel_main() {
     uint32_t bias_ntiles_w = get_compile_time_arg_val(16);
     constexpr uint32_t bias_cb_id = tt::CBIndex::c_2;
     constexpr uint32_t out_for_bias_cb_id = tt::CBIndex::c_28;
-    init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(out_for_bias_cb_id, bias_cb_id, out_cb_id);
+    compute_kernel_hw_startup(out_for_bias_cb_id, bias_cb_id, out_cb_id);
+    bcast_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(out_for_bias_cb_id, bias_cb_id);
 #endif
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, out_cb_id);
@@ -207,7 +208,7 @@ void kernel_main() {
                             // bcast add data from bias_cb_id
                             cb_wait_front(bias_cb_id, bias_ntiles_w);
                             cb_wait_front(out_for_bias_cb_id, out_subblock_num_tiles);
-                            add_bcast_rows_init_short(out_for_bias_cb_id, bias_cb_id);
+                            add_bcast_rows_init(out_for_bias_cb_id, bias_cb_id);
                             // reconfig packer df for out
                             // pack_reconfig_data_format(out_cb_id);
                             tile_regs_acquire();

@@ -35,9 +35,8 @@ void tensor_address_runtime_args_overrider::override_runtime_args(
     size_t tensor_idx, uint32_t new_value, tt::tt_metal::RuntimeArgsData& runtime_args_to_modify) const {
     if (tensor_idx >= tensor_address_runtime_arg_indices.size()) {
         log_trace(tt::LogOp, "Tensor index {} is out of bounds. Skipping override", tensor_idx);
+        return;
     }
-    TT_FATAL(
-        tensor_idx < tensor_address_runtime_arg_indices.size(), "Invalid tensor index when overriding runtime args");
 
     const auto& indices = tensor_address_runtime_arg_indices[tensor_idx];
     TT_FATAL(!indices.empty(), "No runtime arg indices associated with tensor");

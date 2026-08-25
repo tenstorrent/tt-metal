@@ -63,7 +63,7 @@ inline void compute_x_hat_preprocessing(const uint32_t num_tiles) {
             const uint32_t temp_reg = x_hat_reg + 1;
 
             // Subtract mean: (input - mean)
-            sub_tiles_init(cb_input_idx, cb_mean_bcast_idx);
+            sub_init(cb_input_idx, cb_mean_bcast_idx);
             sub_tiles(cb_input_idx, cb_mean_bcast_idx, tile_idx + block_idx, 0, x_hat_reg);
 
             // Load broadcasted rstd
@@ -104,7 +104,7 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
         if constexpr (do_mask_w) {
             if (col + 1 == Wt) {
                 const uint32_t target_register = (col == 0) ? sum_register : working_register;
-                mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+                mul_bcast_rows_init(cb_dL_out_idx, cb_gamma_idx);
                 mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, target_register);
 
                 // Limitation: mask_tile only works when the mask register is immediately next to the data register.
@@ -121,11 +121,11 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
                     add_binary_tile(sum_register, target_register, sum_register);
                 }
             } else {
-                mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+                mul_bcast_rows_init(cb_dL_out_idx, cb_gamma_idx);
                 mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, sum_register);
             }
         } else {
-            mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+            mul_bcast_rows_init(cb_dL_out_idx, cb_gamma_idx);
             mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, sum_register);
         }
     }
@@ -177,7 +177,7 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
 
         // compute dy * gamma for dy_gamma_xnorm
         zero_dst_reg(target_register);
-        mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+        mul_bcast_rows_init(cb_dL_out_idx, cb_gamma_idx);
         mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, target_register);
 
         // Load x_normalized for this tile
@@ -260,7 +260,7 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
             if constexpr (do_mask_w) {
                 if (global_col + 1 == Wt) {
                     const uint32_t target_register = (global_col == 0) ? sum_register : working_register;
-                    mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+                    mul_bcast_rows_init(cb_dL_out_idx, cb_gamma_idx);
                     mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, block_idx, block_idx, target_register);
 
                     // Limitation: mask_tile only works when the mask register is immediately next to the data register.
@@ -277,11 +277,11 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
                         add_binary_tile(sum_register, target_register, sum_register);
                     }
                 } else {
-                    mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+                    mul_bcast_rows_init(cb_dL_out_idx, cb_gamma_idx);
                     mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, block_idx, block_idx, sum_register);
                 }
             } else {
-                mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+                mul_bcast_rows_init(cb_dL_out_idx, cb_gamma_idx);
                 mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, block_idx, block_idx, sum_register);
             }
         }
@@ -351,7 +351,7 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
 
             // Compute dy * gamma
             zero_dst_reg(target_register);
-            mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+            mul_bcast_rows_init(cb_dL_out_idx, cb_gamma_idx);
             mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, block_idx, block_idx, target_register);
 
             // Multiply: (dy * gamma) * x_normalized
@@ -419,7 +419,7 @@ inline void compute_dx(const uint32_t input_tile_idx, const uint32_t dx_register
     // Compute dy * gamma
     zero_dst_reg(dx_register);
     reconfig_data_format(cb_dL_out_idx, cb_gamma_idx);
-    mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
+    mul_bcast_rows_init(cb_dL_out_idx, cb_gamma_idx);
     mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, input_tile_idx, input_tile_idx, dx_register);
 
     // Load pre-scaled sum: (1/N) * sum(dy*gamma)
@@ -433,7 +433,7 @@ inline void compute_dx(const uint32_t input_tile_idx, const uint32_t dx_register
 
     // Multiply by x_normalized: x_normalized * (1/N) * sum(dy*gamma * x_normalized)
     reconfig_data_format(cb_x_hat_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
-    mul_tiles_init(cb_x_hat_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
+    mul_init(cb_x_hat_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
     mul_tiles(cb_x_hat_idx, cb_scaled_dy_gamma_xnorm_sum_idx, input_tile_idx, 0, temp_register);
 
     // Subtract: result - x_normalized * (1/N) * sum(...)
@@ -455,7 +455,7 @@ inline void compute_dgamma_components(
     const uint32_t input_tile_idx, const uint32_t dgamma_register, const uint32_t global_col) {
     // Computes dgamma_components = dy * x_normalized
     // Load x_normalized
-    mul_tiles_init(cb_dL_out_idx, cb_x_hat_idx);
+    mul_init(cb_dL_out_idx, cb_x_hat_idx);
     mul_tiles(cb_dL_out_idx, cb_x_hat_idx, input_tile_idx, input_tile_idx, dgamma_register);
 }
 
@@ -475,7 +475,8 @@ void kernel_main() {
     cb_wait_front(cb_scaler_idx, onetile);
 
     init_sfpu(cb_x_hat_idx, cb_dx_idx);
-    binary_op_init_common(cb_x_hat_idx, cb_gamma_idx, cb_dx_idx);
+    // TODO(#52395): compute_kernel_hw_startup is a call-once API and should be the kernel's first Tensix-engine call, but here it follows another engine op (init_sfpu / a prior startup); see the issue.
+    compute_kernel_hw_startup(cb_x_hat_idx, cb_gamma_idx, cb_dx_idx);
     reconfig_data_format(cb_scaler_idx, cb_scaled_dy_gamma_sum_idx);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
@@ -484,7 +485,9 @@ void kernel_main() {
         tile_regs_acquire();
         cb_wait_front(cb_rstd_idx, onetile);
         reconfig_data_format(cb_rstd_idx, cb_rstd_idx);
-        unary_bcast_init<BroadcastType::COL>(cb_rstd_idx, cb_rstd_idx);
+        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+        compute_kernel_hw_startup(cb_rstd_idx, cb_rstd_idx);
+        unary_bcast_init<BroadcastType::COL>(cb_rstd_idx);
         unary_bcast<BroadcastType::COL>(cb_rstd_idx, /* tile idx */ 0, /* reg tile idx */ 0);
         tile_regs_commit();
         cb_pop_front(cb_rstd_idx, onetile);
@@ -494,7 +497,9 @@ void kernel_main() {
         tile_regs_acquire();
         cb_wait_front(cb_mean_idx, onetile);
         reconfig_data_format(cb_mean_idx, cb_mean_idx);
-        unary_bcast_init<BroadcastType::COL>(cb_mean_idx, cb_mean_idx);
+        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+        compute_kernel_hw_startup(cb_mean_idx, cb_mean_idx);
+        unary_bcast_init<BroadcastType::COL>(cb_mean_idx);
         unary_bcast<BroadcastType::COL>(cb_mean_idx, /* tile idx */ 0, /* reg tile idx */ 0);
         tile_regs_commit();
         cb_pop_front(cb_mean_idx, onetile);

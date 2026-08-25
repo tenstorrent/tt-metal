@@ -15,46 +15,29 @@
 //   magic        — CTA (template parameter, compile-time)
 //   entry_size   — CTA (template parameter, compile-time)
 //   input_offset — RTA (function parameter, per-node)
+//   report_addr  — RTA; host-allocated L1 word for the XOR result
 //   num_tiles    — CRTA (function parameter, broadcast)
 //
-// Verification: writes magic ^ entry_size ^ input_offset ^ num_tiles into the first uint32_t of
-// every out_dfb entry (rest zeroed). The host arranges the values so that XOR equals a known
-// target; a wrong arg binding → wrong sum → wrong DRAM word → test fails. (No tile pipeline —
-// raw L1 writes from PACK, same as the named_args_loopback_compute baseline.)
+// Verification: PACK writes magic ^ entry_size ^ input_offset ^ num_tiles into report_addr. The
+// host arranges the values so that XOR equals a known target; a wrong arg binding → wrong sum →
+// test fails.
 
 #include <cstdint>
 
 #include "api/compute/common.h"
-#include "api/dataflow/dataflow_buffer.h"
-#include "experimental/kernel_args.h"  // provides TT_KERNEL, get_arg, the args:: / dfb:: accessors
+#include "experimental/kernel_args.h"  // provides TT_KERNEL, get_arg, the args:: accessors
 
 template <uint32_t magic, uint32_t entry_size>  // CTAs (compile-time)
 TT_KERNEL void loopback_compute(
     uint32_t input_offset,  // RTA (per-node)
+    uint32_t report_addr,   // RTA (host L1 report word)
     uint32_t num_tiles) {   // CRTA (broadcast)
     const uint32_t sum = magic ^ entry_size ^ input_offset ^ num_tiles;
 
-    DataflowBuffer dfb_out(dfb::out_dfb);
-
-    for (uint32_t t = 0; t < num_tiles; ++t) {
-        dfb_out.reserve_back(1);  // implementation gates this to PACK only
-
-        // PACK is the only TRISC that needs to populate the L1 slot — the others reach
-        // reserve_back / push_back as no-ops via the impl gates. On tt-1xx TRISCs, fifo_wr_ptr is
-        // stored as a 16-byte unit address; shift left 4 to get a byte address for L1 access.
 #ifdef TRISC_PACK
-        {
-            volatile tt_l1_ptr uint32_t* out_ptr = (volatile tt_l1_ptr uint32_t*)(dfb_out.get_write_ptr() << 4);
-            out_ptr[0] = sum;
-            const uint32_t words = entry_size / sizeof(uint32_t);
-            for (uint32_t w = 1; w < words; ++w) {
-                out_ptr[w] = 0;
-            }
-        }
+    volatile tt_l1_ptr uint32_t* out_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
+    out_ptr[0] = sum;
 #endif
-
-        dfb_out.push_back(1);  // implementation gates this to PACK only
-    }
 }
 
 // No kernel_main() here — genfiles generates it from this signature (the compute path now wires

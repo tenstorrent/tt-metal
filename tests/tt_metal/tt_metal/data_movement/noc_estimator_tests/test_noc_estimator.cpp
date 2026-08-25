@@ -633,12 +633,11 @@ static bool run_dram_accessor(
 
     uint32_t num_pages = num_dram_banks;
 
-    InterleavedBufferConfig buf_config{
-        .device = device,
-        .size = (size_t)num_pages * bytes_per_txn,
-        .page_size = (uint32_t)bytes_per_txn,
-        .buffer_type = BufferType::DRAM};
-    auto dram_buffer = CreateBuffer(buf_config);
+    auto& cq = mesh_device->mesh_command_queue();
+    auto dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = (size_t)num_pages * bytes_per_txn},
+        {.page_size = (uint32_t)bytes_per_txn, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
 
     std::set<CoreRange> core_ranges;
     for (const auto& c : cores) {
@@ -671,7 +670,7 @@ static bool run_dram_accessor(
         (uint32_t)cfg.pattern,    // 6
         num_pages,                // 7
     };
-    TensorAccessorArgs(*dram_buffer).append_to(compile_args);
+    TensorAccessorArgs(dram_buffer).append_to(compile_args);
 
     auto kernel = CreateKernel(
         program,
@@ -704,7 +703,7 @@ static bool run_dram_accessor(
     for (uint32_t p = 0; p < num_pages; p++) {
         full_input.insert(full_input.end(), page_data.begin(), page_data.end());
     }
-    detail::WriteToBuffer(dram_buffer, full_input);
+    distributed::EnqueueWriteMeshBuffer(cq, dram_buffer, full_input, /*blocking=*/true);
     MetalContext::instance().get_cluster().dram_barrier(device->id());
 
     execute_program(mesh_device, std::move(program));
@@ -838,7 +837,13 @@ static void sweep_one_to_all(const shared_ptr<distributed::MeshDevice>& mesh_dev
     struct GridConfig {
         CoreCoord size;
     };
-    vector<GridConfig> grids = {{{2, 2}}, {{3, 3}}, {{5, 5}}, {{8, 8}}, {device_grid}};
+    vector<GridConfig> grids = {{{2, 2}}, {{3, 3}}, {{5, 5}}, {{8, 8}}};
+    // Add the full device grid if not already included
+    if (std::none_of(grids.begin(), grids.end(), [&](const GridConfig& g) {
+            return g.size.x == device_grid.x && g.size.y == device_grid.y;
+        })) {
+        grids.push_back({device_grid});
+    }
 
     for (auto& grid : grids) {
         // Skip grid sizes larger than device grid
@@ -924,7 +929,13 @@ static void sweep_all_to_all(const shared_ptr<distributed::MeshDevice>& mesh_dev
     IDevice* device = mesh_device->impl().get_device(0);
     CoreCoord device_grid = device->compute_with_storage_grid_size();
 
-    vector<CoreCoord> grid_sizes = {{2, 2}, {3, 3}, {5, 5}, {8, 8}, device_grid};
+    vector<CoreCoord> grid_sizes = {{2, 2}, {3, 3}, {5, 5}, {8, 8}};
+    // Add the full device grid if not already included
+    if (std::none_of(grid_sizes.begin(), grid_sizes.end(), [&](const CoreCoord& g) {
+            return g.x == device_grid.x && g.y == device_grid.y;
+        })) {
+        grid_sizes.push_back({device_grid});
+    }
 
     for (auto& grid_size : grid_sizes) {
         // Skip grid sizes larger than device grid
@@ -950,7 +961,13 @@ static void sweep_all_from_all(const shared_ptr<distributed::MeshDevice>& mesh_d
     IDevice* device = mesh_device->impl().get_device(0);
     CoreCoord device_grid = device->compute_with_storage_grid_size();
 
-    vector<CoreCoord> grid_sizes = {{2, 2}, {3, 3}, {5, 5}, {8, 8}, device_grid};
+    vector<CoreCoord> grid_sizes = {{2, 2}, {3, 3}, {5, 5}, {8, 8}};
+    // Add the full device grid if not already included
+    if (std::none_of(grid_sizes.begin(), grid_sizes.end(), [&](const CoreCoord& g) {
+            return g.x == device_grid.x && g.y == device_grid.y;
+        })) {
+        grid_sizes.push_back({device_grid});
+    }
 
     for (auto& grid_size : grid_sizes) {
         // Skip grid sizes larger than device grid

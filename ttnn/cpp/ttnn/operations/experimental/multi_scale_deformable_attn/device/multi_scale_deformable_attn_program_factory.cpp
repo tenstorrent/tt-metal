@@ -57,6 +57,10 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     const uint32_t reduction_size = 4 * P;
 
     constexpr uint32_t TILE_MAX_ROWS = 32;
+    constexpr uint32_t TILE_WIDTH = 32;
+    // Number of tiles a D-wide query row spans (trailing tile half-filled
+    // when D % 32 == 16). Kernels derive the same value from their D CT arg.
+    const uint32_t n_d_tiles = (D + TILE_WIDTH - 1) / TILE_WIDTH;
 
     // Build the list of output tiles: each tile holds up to 32 contiguous
     // queries from a single batch index n. Q is not required to divide 32 —
@@ -129,11 +133,11 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     push_cb(value_scratch_cb, TILE_MAX_ROWS, value_stick_aligned, value_fmt);
     push_cb(grid_cb, TILE_MAX_ROWS * P, grid_stick_aligned, grid_fmt);
     push_cb(attn_cb, TILE_MAX_ROWS, attn_stick_aligned, attn_fmt);
-    // Reader -> compute pipes: double-buffered tiles.
-    push_cb(input_tile_cb, 2, tile_nbytes, data_format);
+    // Reader -> compute pipes: double-buffered blocks of n_d_tiles tiles.
+    push_cb(input_tile_cb, 2 * n_d_tiles, tile_nbytes, data_format);
     push_cb(scalar_tile_cb, 2, tile_nbytes, data_format);
-    // Compute -> writer pipe: double-buffered tiles.
-    push_cb(output_tile_cb, 2, tile_nbytes, output_fmt);
+    // Compute -> writer pipe: double-buffered blocks of n_d_tiles tiles.
+    push_cb(output_tile_cb, 2 * n_d_tiles, tile_nbytes, output_fmt);
     // Writer-only scratch: 1 page.
     push_cb(output_scratch_cb, 1, output_stick_aligned, output_fmt);
 
@@ -172,7 +176,7 @@ ProgramDescriptor MSDAOperation::create_descriptor(
         "ttnn/cpp/ttnn/operations/experimental/multi_scale_deformable_attn/device/kernels/compute/msda_compute.cpp";
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
-    compute_desc.compile_time_args = {input_tile_cb, scalar_tile_cb, output_tile_cb, reduction_size};
+    compute_desc.compile_time_args = {input_tile_cb, scalar_tile_cb, output_tile_cb, reduction_size, n_d_tiles};
     compute_desc.config = ComputeConfigDescriptor{};
 
     // Writer kernel descriptor.
@@ -180,6 +184,7 @@ ProgramDescriptor MSDAOperation::create_descriptor(
         output_tile_cb,
         output_scratch_cb,
         output_stick_aligned,
+        D,
     };
     TensorAccessorArgs(*output.buffer()).append_to(writer_ct);
 

@@ -17,6 +17,7 @@
 #include "device/device_impl.hpp"
 #include "common/executor.hpp"
 #include "impl/context/context_descriptor.hpp"
+#include "context/metal_context.hpp"
 
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
@@ -31,6 +32,13 @@ namespace {
 
 using tt::tt_fabric::chan_id_t;
 using tt::tt_fabric::EDMStatus;
+
+// Emule teleports cross-chip traffic at the fabric client-API shim and never runs the ERISC router,
+// so its launch/sync handshake would never complete — skip it (as for Mock). See tt-emule
+// docs/fabric-ccl-emulation.md.
+bool skip_fabric_fw_for_emule() {
+    return MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
+}
 
 static_assert(static_cast<uint32_t>(EDMStatus::STARTED) != 0);
 static_assert(static_cast<uint32_t>(EDMStatus::REMOTE_HANDSHAKE_COMPLETE) != 0);
@@ -279,8 +287,20 @@ void FabricFirmwareInitializer::init(
         return;
     }
 
+    // Emule compiles kernels to x86 and never links an erisc binary.
+    if (skip_fabric_fw_for_emule()) {
+        log_info(tt::LogMetal, "Skipping fabric initialization for emule devices");
+        return;
+    }
+
+    // Mock: compile only, to warm the erisc kernel cache. Everything past the compile is device
+    // I/O that MockChip discards.
     if (descriptor_->is_mock_device()) {
-        log_info(tt::LogMetal, "Skipping fabric initialization for mock devices");
+        const auto fabric_manager = descriptor_->fabric_manager();
+        if (has_flag(fabric_manager, tt_fabric::FabricManagerMode::INIT_FABRIC) ||
+            has_flag(fabric_manager, tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
+            compile_fabric_only();
+        }
         return;
     }
 
@@ -314,9 +334,9 @@ void FabricFirmwareInitializer::init(
 }
 
 void FabricFirmwareInitializer::configure() {
-    // Mock: skip router sync (init() skips fabric; sync would fatal on uninitialized builder state).
-    if (descriptor_->is_mock_device()) {
-        log_info(tt::LogMetal, "Skipping fabric configure (router sync) for mock devices");
+    // Mock/Emule: no router ever runs, so the sync below would spin to its timeout and throw.
+    if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule()) {
+        log_info(tt::LogMetal, "Skipping fabric configure (router sync) for mock/emule devices");
         initialized_.test_and_set();
         return;
     }
@@ -330,8 +350,8 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
     TT_FATAL(
         !init_done.contains(InitializerKey::Dispatch),
         "FabricFirmwareInitializer must be torn down after DispatchKernelInitializer");
-    if (descriptor_->is_mock_device()) {
-        log_info(tt::LogMetal, "Skipping fabric teardown for mock devices");
+    if (descriptor_->is_mock_device() || skip_fabric_fw_for_emule()) {
+        log_info(tt::LogMetal, "Skipping fabric teardown for mock/emule devices");
         init_done.erase(key);
         return;
     }
@@ -433,6 +453,24 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
         }
     }
     log_info(tt::LogMetal, "Fabric initialized on {} devices", configured_count);
+}
+
+void FabricFirmwareInitializer::compile_fabric_only() {
+    // ERISC debug builds run from L1 and may exceed the fabric router's L1 budget.
+    // Skipping only leaves the cache cold.
+    if (!rtoptions_.get_erisc_iram_enabled()) {
+        log_info(tt::LogMetal, "Skipping mock fabric compile: erisc IRAM disabled by debug tooling");
+        return;
+    }
+    log_info(tt::LogMetal, "Compiling fabric on mock devices (no router programming or sync)");
+
+    // Serial on purpose: the shared tensix mux config mutates state from a const getter, which
+    // races when devices compile in parallel.
+    for (auto* dev : devices_) {
+        if (!dev->compile_fabric()) {
+            log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
+        }
+    }
 }
 
 void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms) const {

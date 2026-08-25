@@ -30,6 +30,6 @@ using tensor_args_t = SDPAForwardInputs;
 
 using tensor_return_value_t = std::vector<ttnn::Tensor>;
 
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
 
 }  // namespace ttml::metal::ops::sdpa_fw::device

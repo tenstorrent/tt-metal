@@ -3,10 +3,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Run the LLK pytest suite against the ttsim functional simulator, excluding
-# tests marked `quasar`, `nightly`, or `perf`. Each test runs in a forked
-# subprocess so that ttsim's `_Exit(1)` on UnimplementedFunctionality (and
-# similar) only kills that one test and the suite continues.
+# Run the LLK pytest suite against the ttsim functional simulator. For
+# Wormhole/Blackhole this excludes Quasar-only tests; for Quasar it selects
+# Quasar-only tests. Each test runs in a forked subprocess so that ttsim's
+# `_Exit(1)` on UnimplementedFunctionality (and similar) only kills that one
+# test and the suite continues.
 #
 # Generates:
 #   - JUnit XML at python_tests/ttsim_results/ttsim_<timestamp>.xml
@@ -21,8 +22,10 @@ RESULTS_DIR="${TESTS_DIR}/ttsim_results"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 XML_PATH="${RESULTS_DIR}/ttsim_${TIMESTAMP}.xml"
 HTML_PATH="${RESULTS_DIR}/ttsim_${TIMESTAMP}.html"
+COLLECTED_PATH="${RESULTS_DIR}/ttsim_${TIMESTAMP}.collected.txt"
 LATEST_XML="${RESULTS_DIR}/latest.xml"
 LATEST_HTML="${RESULTS_DIR}/latest.html"
+LATEST_COLLECTED="${RESULTS_DIR}/latest.collected.txt"
 
 WORKERS="${WORKERS:-10}"
 TIMEOUT="${TIMEOUT:-300}"
@@ -43,9 +46,9 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") [OPTIONS] [TEST_PATH...] [-- PYTEST_EXTRA_ARGS...]
 
-Runs the LLK pytest suite on ttsim, excluding tests marked
-'quasar', 'nightly', or 'perf'. Per-test process isolation via
-pytest-forked converts ttsim _Exit(1) crashes into normal pytest
+Runs the LLK pytest suite on ttsim. Wormhole/Blackhole runs exclude
+Quasar-only tests; Quasar runs select Quasar-only tests. Per-test
+process isolation via pytest-forked converts ttsim _Exit(1) crashes into normal pytest
 failures; junit XML + HTML report are produced in:
 
   ${RESULTS_DIR}
@@ -54,10 +57,9 @@ Options:
   -n, --workers N       Number of xdist workers (default: 10; env: WORKERS).
                         Use 0 to disable xdist (serial, --forked only).
   -t, --timeout SEC     Per-test timeout in seconds (default: 300; env: TIMEOUT).
-  -a, --architecture A  ttsim architecture to auto-provision: 'blackhole'
-                        or 'wormhole' (default: blackhole;
-                        env: TTSIM_ARCHITECTURE). Ignored when
-                        TT_METAL_SIMULATOR is already set.
+  -a, --architecture A  ttsim architecture: 'blackhole', 'wormhole', or
+                        'quasar' (default: blackhole; env: TTSIM_ARCHITECTURE).
+                        Controls test selection and collection.
   -h, --help            Show this help message.
 
 Environment:
@@ -70,6 +72,7 @@ Environment:
 Examples:
   $(basename "$0")                              # blackhole, auto-downloads simulator
   $(basename "$0") -a wormhole                  # wormhole variant
+  TT_METAL_SIMULATOR=~/sim/libttsim.so $(basename "$0") -a quasar
   $(basename "$0") -n 16 test_eltwise_unary_datacopy.py
   $(basename "$0") -- -k Float16_b
   WORKERS=8 $(basename "$0")
@@ -91,6 +94,33 @@ while [[ $# -gt 0 ]]; do
         *)            TEST_PATHS+=("$1"); shift ;;
     esac
 done
+
+
+# Normalize architecture aliases once so provisioning, collection, marker
+# selection, and reporting all agree.
+case "$ARCHITECTURE" in
+    blackhole|bh)                 ARCHITECTURE=blackhole ;;
+    wormhole|wormhole_b0|wh)      ARCHITECTURE=wormhole ;;
+    quasar|qsr)                   ARCHITECTURE=quasar ;;
+    *)
+        echo "ERROR: unknown --architecture '$ARCHITECTURE' (expected 'blackhole', 'wormhole', or 'quasar')" >&2
+        exit 1
+        ;;
+esac
+
+# Marker expression shared by the collection pass and the real run so both
+# apply the same architecture, nightly, performance, and accuracy filtering.
+case "$ARCHITECTURE" in
+    quasar) MARKER_EXPR="quasar and not nightly and not perf and not accuracy" ;;
+    *)      MARKER_EXPR="not quasar and not nightly and not perf and not accuracy" ;;
+esac
+
+# Quasar tests live under python_tests/quasar. Restrict the default path so
+# xdist workers do not collect the full WH/BH LLK suite just to marker-deselect
+# it. Explicit test paths from the caller are still honored as-is.
+if [[ "$ARCHITECTURE" == "quasar" && ${#TEST_PATHS[@]} -eq 0 ]]; then
+    TEST_PATHS=(quasar)
+fi
 
 # ──────────────────────────────────────────────────────────────
 # Auto-provision ttsim (libttsim_<arch>.so + soc_descriptor.yaml)
@@ -117,8 +147,14 @@ provision_ttsim() {
             soc_src="${REPO_ROOT}/tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml"
             hash_var=ttsim_wh_so_hash
             ;;
+        quasar)
+            architecture=quasar
+            so_name=libttsim_qsr.so
+            soc_src="${REPO_ROOT}/tt_metal/soc_descriptors/quasar_32_arch.yaml"
+            hash_var=ttsim_qsr_so_hash
+            ;;
         *)
-            echo "ERROR: unknown --architecture '$architecture' (expected 'blackhole' or 'wormhole')" >&2
+            echo "ERROR: unknown --architecture '$architecture' (expected 'blackhole', 'wormhole', or 'quasar')" >&2
             exit 1
             ;;
     esac
@@ -204,7 +240,7 @@ if [[ ! -d "$TESTS_DIR" ]]; then
 fi
 
 # ttsim does not implement SFPLOADMACRO; default to disabling unless caller set it.
-export DISABLE_SFPLOADMACRO="${DISABLE_SFPLOADMACRO:-1}"
+export TT_METAL_DISABLE_SFPLOADMACRO="${TT_METAL_DISABLE_SFPLOADMACRO:-1}"
 
 mkdir -p "$RESULTS_DIR"
 
@@ -227,7 +263,7 @@ PYTEST_BASE_ARGS=(
     --run-simulator
     --timeout="$TIMEOUT"
     --forked
-    -m "not quasar and not nightly and not perf and not accuracy"
+    -m "$MARKER_EXPR"
     --junit-xml="$XML_PATH"
     # ttsim writes via printf (stdout), so caplog and stderr are always
     # empty for these tests. Capture only stdout to keep the XML and the
@@ -248,24 +284,82 @@ PYTEST_BASE_ARGS=(
 if [[ "$WORKERS" -gt 0 ]]; then
     PYTEST_BASE_ARGS+=(
         -n "$WORKERS"
-        --dist=loadfile
+        --dist=worksteal
         --max-worker-restart=10000
     )
+fi
+
+# ──────────────────────────────────────────────────────────────
+# Enumerate the expected test set (stable denominator)
+# ──────────────────────────────────────────────────────────────
+# `--collect-only` lists the tests pytest *would* run for this selection. This
+# set is pure static parametrization (there is no pytest_generate_tests, and
+# pytest_collection_modifyitems no-ops without --test-order-file) and therefore
+# identical across ttsim versions, so it gives us a version-independent
+# denominator. The renderer diffs it against the testcases actually recorded in
+# the JUnit XML; anything collected but never recorded is counted as "crashed"
+# (a hard crash that took down the worker before its result could be written,
+# so --forked never turned it into a normal failure).
+#
+# We avoid --run-simulator here (it would load+init the ttsim .so just to
+# enumerate). Instead:
+#   * CHIP_ARCH=<arch> lets conftest import without probing for a real device
+#     (helpers.device runs get_all_cores() at import → get_chip_architecture(),
+#     which short-circuits on CHIP_ARCH instead of calling check_context()).
+#   * --compile-producer puts conftest in BuildMode.PRODUCE, which is the only
+#     mode that skips *both* check_context() calls in pytest_configure
+#     (override_gprs_used_by_tensix_dump and the device/simulator init block).
+# --collect-only never executes a test, so producer mode compiles nothing. Note
+# that producer mode collapses runtime-only axes, so this is a stable compile
+# denominator, not necessarily the full runtime test count.
+COLLECT_CHIP_ARCH="$ARCHITECTURE"
+COLLECT_CMD=(
+    "pytest"
+    --collect-only
+    -q
+    -p no:sugar
+    -o log_cli=false
+    --compile-producer
+    -m "$MARKER_EXPR"
+)
+if [[ ${#TEST_PATHS[@]} -gt 0 ]]; then
+    COLLECT_CMD+=("${TEST_PATHS[@]}")
+fi
+if [[ ${#PYTEST_ARGS[@]} -gt 0 ]]; then
+    COLLECT_CMD+=("${PYTEST_ARGS[@]}")
+fi
+
+collected_count=0
+collect_exit=0
+(
+    cd "$TESTS_DIR"
+    CHIP_ARCH="$COLLECT_CHIP_ARCH" "${COLLECT_CMD[@]}"
+) 2>/dev/null | grep -E '\.py::' >"$COLLECTED_PATH" || collect_exit=$?
+# `grep` returns 1 when it matches nothing; only treat a missing/empty file as
+# a real failure so the run still proceeds (gap analysis is best-effort).
+if [[ -s "$COLLECTED_PATH" ]]; then
+    collected_count="$(wc -l <"$COLLECTED_PATH" | tr -d ' ')"
+else
+    echo "WARNING: test collection produced no node IDs (exit=$collect_exit);" >&2
+    echo "         crashed-test gap analysis will be skipped." >&2
+    rm -f "$COLLECTED_PATH"
 fi
 
 # ──────────────────────────────────────────────────────────────
 # Banner
 # ──────────────────────────────────────────────────────────────
 echo "============================================================"
-echo " ttsim LLK regression (excludes: quasar, nightly, perf)"
+echo " ttsim LLK regression"
 echo "============================================================"
 echo " Architecture   : ${ARCHITECTURE}"
+echo " Marker expr    : ${MARKER_EXPR}"
 echo " Simulator      : ${TT_METAL_SIMULATOR}"
 echo " SoC descriptor : $(dirname "$TT_METAL_SIMULATOR")/soc_descriptor.yaml"
-echo " SFPLOADMACRO   : disabled=${DISABLE_SFPLOADMACRO}"
+echo " SFPLOADMACRO   : disabled=${TT_METAL_DISABLE_SFPLOADMACRO}"
 echo " Workers (-n)   : ${WORKERS}"
 echo " Per-test fork  : on"
 echo " Timeout        : ${TIMEOUT}s"
+echo " Tests collected: ${collected_count}"
 echo " JUnit XML      : ${XML_PATH}"
 echo " HTML report    : ${HTML_PATH}"
 echo " Test paths     : ${TEST_PATHS[*]:-<all>}"
@@ -305,7 +399,13 @@ if [[ -f "$XML_PATH" ]]; then
     rendered=0
     if [[ -x "$RENDERER" || -f "$RENDERER" ]] \
        && python3 -c "import junitparser" &>/dev/null; then
-        if python3 "$RENDERER" "$XML_PATH" "$HTML_PATH"; then
+        RENDER_CMD=(python3 "$RENDERER" "$XML_PATH" "$HTML_PATH")
+        # Pass the expected-test list so the renderer can flag the
+        # collected-but-unrecorded gap as crashed tests.
+        if [[ -s "$COLLECTED_PATH" ]]; then
+            RENDER_CMD+=(--collected "$COLLECTED_PATH")
+        fi
+        if "${RENDER_CMD[@]}"; then
             rendered=1
         fi
     fi
@@ -317,6 +417,7 @@ if [[ -f "$XML_PATH" ]]; then
     if [[ $rendered -eq 1 ]]; then
         ln -sfn "$(basename "$XML_PATH")"  "$LATEST_XML"
         ln -sfn "$(basename "$HTML_PATH")" "$LATEST_HTML"
+        [[ -s "$COLLECTED_PATH" ]] && ln -sfn "$(basename "$COLLECTED_PATH")" "$LATEST_COLLECTED"
     else
         echo ""
         echo "WARNING: no HTML renderer available; only XML produced." >&2

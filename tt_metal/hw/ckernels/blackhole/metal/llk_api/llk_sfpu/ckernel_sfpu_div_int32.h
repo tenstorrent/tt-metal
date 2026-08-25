@@ -25,7 +25,17 @@ inline void calculate_div_int32(const uint dst_index_in0, const uint dst_index_i
         v_if(in0 == 0 || in0 != in1) {
             sfpi::vFloat float_in0 = sfpi::convert<sfpi::vFloat>(in0, sfpi::RoundMode::Nearest);
             sfpi::vFloat float_in1 = sfpi::convert<sfpi::vFloat>(in1, sfpi::RoundMode::Nearest);
-            result = float_in0 * sfpu_reciprocal_iter<2>(float_in1);
+            sfpi::vFloat recip_in1 = sfpu_reciprocal_iter<2>(float_in1);
+            result = float_in0 * recip_in1;
+            // Residual correction using the remainder (a - q*b) * (1/b). The reciprocal is only
+            // accurate to ~1 ulp, so exact quotients (e.g. 28/14) can land 1 ulp off (2.0000001).
+            // One residual step snaps exact quotients to the correct value
+            // Note: this cannot recover precision already lost when |operand| > 2^24 is rounded during
+            // the int32 -> fp32 conversion.
+            //   in1 == 0: recip is +/-inf and (a - inf*0) would produce a NaN, corrupting the
+            //             intended inf/-inf/NaN result of division by zero.
+            v_if(in1 != 0) { result = result + (float_in0 - result * float_in1) * recip_in1; }
+            v_endif;
         }
         v_endif;
 

@@ -187,10 +187,10 @@ GroupAttnMatmulDeviceOperation::spec_return_value_t GroupAttnMatmulDeviceOperati
             output_mem_config = tt::tt_metal::MemoryConfig(
                 output_mem_config.memory_layout(), output_mem_config.buffer_type(), shard_spec);
         }
-        return TensorSpec(
+        return tt::tt_metal::TensorSpec(
             output_shape, TensorLayout(operation_attributes.output_dtype, PageConfig(Layout::TILE), output_mem_config));
     }
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout(
             operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config));

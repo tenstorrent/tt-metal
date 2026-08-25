@@ -98,23 +98,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
 #ifdef EN_DEST_REUSE
+    // Dest-reuse path: seed with a non-reuse op on the first tile of each
+    // accumulation group, then fold remaining tiles via DEST_TO_SRCA/B.
+    // Seeding is required for ELWMUL (zero is the multiplicative annihilator)
+    // and is used for add/sub too so one path covers all ops.
     const std::uint32_t tiles_in_block          = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t num_tiles_accumulations = params.INPUT_NUM_TILES_IN_BLOCK / tiles_in_block;
     const std::uint32_t num_blocks              = params.INPUT_NUM_BLOCKS;
-#else
-    const std::uint32_t tiles_in_block          = params.NUM_TILES_IN_BLOCK;
-    const std::uint32_t num_tiles_accumulations = 1;
-    const std::uint32_t num_blocks              = params.NUM_BLOCKS;
-    constexpr auto REUSE_DEST_TYPE              = ckernel::EltwiseBinaryReuseDestType::NONE;
-#endif
 
-    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, REUSE_DEST_TYPE>(tensor_shape, ACC_TO_DEST);
-
-    // Perform element-wise operation
     for (std::uint32_t block = 0; block < num_blocks; block++)
     {
         _llk_math_wait_for_dest_available_<dest_sync>();
-        for (std::uint32_t n = 0; n < num_tiles_accumulations; n++)
+
+        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(tensor_shape, ACC_TO_DEST);
+        for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
+        {
+            LLK_ASSERT(
+                (static_cast<std::uint32_t>(tile) < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                "Block tile index exceeds maximum destination tiles");
+            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(
+                tensor_shape, tile /* dst_index */, false /* clear_fp32_dst_acc */);
+        }
+
+        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, REUSE_DEST_TYPE>(tensor_shape, ACC_TO_DEST);
+        for (std::uint32_t n = 1; n < num_tiles_accumulations; n++)
         {
             for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
             {
@@ -127,6 +134,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
+#else
+    const std::uint32_t tiles_in_block = params.NUM_TILES_IN_BLOCK;
+    const std::uint32_t num_blocks     = params.NUM_BLOCKS;
+    constexpr auto REUSE_DEST_TYPE     = ckernel::EltwiseBinaryReuseDestType::NONE;
+
+    _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY, REUSE_DEST_TYPE>(tensor_shape, ACC_TO_DEST);
+
+    for (std::uint32_t block = 0; block < num_blocks; block++)
+    {
+        _llk_math_wait_for_dest_available_<dest_sync>();
+        for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
+        {
+            LLK_ASSERT(
+                (static_cast<std::uint32_t>(tile) < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                "Block tile index exceeds maximum destination tiles");
+            _llk_math_eltwise_binary_<ELTWISE_BINARY_OP, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en, MATH_FIDELITY, REUSE_DEST_TYPE>(
+                tensor_shape, tile /* dst_index */, false /* clear_fp32_dst_acc */);
+        }
+        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    }
+#endif
 }
 
 #endif

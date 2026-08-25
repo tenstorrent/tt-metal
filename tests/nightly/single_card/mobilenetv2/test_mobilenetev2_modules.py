@@ -1,1 +1,0 @@
-../../../../models/demos/vision/classification/mobilenetv2/tests/pcc/test_mobilenetv2.py

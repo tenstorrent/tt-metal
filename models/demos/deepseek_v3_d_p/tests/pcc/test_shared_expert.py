@@ -15,8 +15,11 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_x_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import get_num_links
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -26,35 +29,31 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     [
         (4096, 7 * 1024, 2 * 1024),
         (3200, 7 * 1024, 2 * 1024),
+        # Kimi-K3: one shared-expert MLP at moe_intermediate_size * num_shared_experts = 3072 * 2.
+        # Worth its own case because every prior model has num_shared_experts == 1, so hidden_dim and
+        # the shared intermediate coincided and 6144 was never exercised here.
+        (3200, KimiK3Config.EMB_SIZE, KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE),
     ],
-    ids=["4K", "3.2K"],
+    # Ids label seq_len_per_chip first, so the K3 case keeps the "3.2K" prefix it shares with the
+    # case above and adds what actually differs (the 6144 shared intermediate).
+    ids=["4K", "3.2K", "3.2K-k3-6144"],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            torus_x_device_params(),
             1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="linear"),
-            id="linear-4",
-        ),
-        pytest.param(
-            (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
-            1,
-            ttnn.Topology.Ring,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
-            id="ring-4",
+            id="torus-x-1x4",
         ),
         pytest.param(
             (2, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            fabric2d_device_params(),
             1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="linear"),
-            id="mesh-2x4",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-2x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -66,7 +65,6 @@ def test_shared_expert_pcc(
     emb_dim: int,
     hidden_dim: int,
     num_links: int,
-    topology: ttnn.Topology,
 ):
     """
     Test TtSharedExpert PCC against TorchExpert reference.
@@ -81,6 +79,7 @@ def test_shared_expert_pcc(
 
     activations_dtype = ttnn.bfloat16
     weights_dtype = ttnn.bfloat8_b
+    topology = per_axis_topology(device_params["fabric_config"])[1]
 
     num_devices = mesh_device.get_num_devices()
     mesh_shape = mesh_device.shape

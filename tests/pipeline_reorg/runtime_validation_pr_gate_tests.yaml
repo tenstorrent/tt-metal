@@ -3,7 +3,7 @@
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
 # For max allowed timeout refer to .github/time_budget.yaml (runtime -> pr_gate).
 
-- name: metalium validation smoke
+- name: runtime validation smoke
   cmd: /usr/bin/tt-metalium-validation-smoke
   skus:
     wh_n150_civ2:

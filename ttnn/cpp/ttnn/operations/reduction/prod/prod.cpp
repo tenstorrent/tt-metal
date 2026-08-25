@@ -6,6 +6,7 @@
 #include "device/prod_op_all.hpp"
 
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -38,7 +39,7 @@ inline Tensor compute_prod_nc(const Tensor& temp, int64_t dim, const MemoryConfi
         formatted_input_tensor = ttnn::tilize_with_val_padding(temp, a_pad_shape, PadValue(1.0f), temp.memory_config());
     }
     // Apply prod
-    ttnn::SmallVector<int64_t> dimension = {(dim == 1 || dim == -3) ? 1 : 0};
+    ttsl::SmallVector<int64_t> dimension = {(dim == 1 || dim == -3) ? 1 : 0};
     const auto& input_shape = formatted_input_tensor.logical_shape();
     std::array<uint32_t, 4> required = {
         ((dim == 1 || dim == -3) ? input_shape[0] : 1),
@@ -89,7 +90,7 @@ Tensor prod_impl(
 
     // For a zero volume tensor, return a zero volume tensor with the shape adjusted for keepdim.
     if (input_a_padded.logical_volume() == 0) {
-        ttnn::SmallVector<int> dim_vector = reduction_common::generate_reduce_dim(input_a_padded, dim);
+        ttsl::SmallVector<int> dim_vector = reduction_common::generate_reduce_dim(input_a_padded, dim);
         return reduction_common::zero_volume_reduce<reduction_common::ReduceType::Prod>(
             input_a_padded, dim_vector, keepdim, output_mem_config);
     }
@@ -103,11 +104,19 @@ Tensor prod_impl(
         Tensor result = compute_prod_all(input_a_padded, output_mem_config);
         if (keepdim) {
             // Reshape to have all dimensions (as many as the input rank) set to 1.
-            ttnn::SmallVector<uint32_t> output_shape(old_rank, 1);
+            ttsl::SmallVector<uint32_t> output_shape(old_rank, 1);
             result = ttnn::reshape(result, ttnn::Shape{output_shape});
         }
         return result;
     }
+
+    // bfloat4_b is not supported on the dim path: the reduction dim may be repositioned with
+    // ttnn::permute, which re-quantizes bfloat4_b. Permute has a bf16 fallback for bfloat8_b but
+    // not bfloat4_b, see issue #48813. The full-product path above still supports bfloat4_b.
+    TT_FATAL(
+        input_a_padded.dtype() != tt::tt_metal::DataType::BFLOAT4_B,
+        "ttnn.prod with a dim argument does not support bfloat4_b");
+    const Tensor& dim_input = input_a_padded;
 
     // For higher dimension Tensors, we need to squeeze to 4D to perform the reduction
     if (old_rank > 4) {
@@ -123,13 +132,13 @@ Tensor prod_impl(
         const int third_last_dim_idx = input_a_padded.logical_shape().rank() - 3;
         const bool permute_required = third_last_dim_idx != positive_dim;
 
-        ttnn::SmallVector<int64_t> post_permute_dims(input_a_padded.logical_shape().rank());
+        ttsl::SmallVector<int64_t> post_permute_dims(input_a_padded.logical_shape().rank());
         std::iota(post_permute_dims.begin(), post_permute_dims.end(), 0);
         std::swap(post_permute_dims[third_last_dim_idx], post_permute_dims[positive_dim]);
 
         // Tensor with target reduction dim at third last position
         ttnn::Tensor permuted =
-            permute_required ? ttnn::permute(input_a_padded, post_permute_dims, output_mem_config) : input_a_padded;
+            permute_required ? ttnn::permute(dim_input, post_permute_dims, output_mem_config) : dim_input;
 
         // Now squeeze to 4D and do the 4D prod.
         // Dim0 grows to include the rest of the dimensions, and our "third last" dim moves into dim1, which is our 4D
@@ -156,7 +165,7 @@ Tensor prod_impl(
     }
     // 4D or lower dimension Tensors
     // For lower dimension Tensors, we need to unsqueeze to 4D
-    auto input_tensor_4d = ttnn::unsqueeze_to_4D(input_a_padded);
+    auto input_tensor_4d = ttnn::unsqueeze_to_4D(dim_input);
 
     // Update the dim because we unsqueezed input to 4d
     // If dim is negative, counting from the back is not impacted by the unsqueeze
@@ -165,32 +174,32 @@ Tensor prod_impl(
     Tensor temp = input_tensor_4d;
     // Permute for dim 2,3
     if (dim_4d == 2 || dim_4d == -2) {
-        ttnn::SmallVector<int64_t> permute_dims = {2, 0, 1, 3};
+        ttsl::SmallVector<int64_t> permute_dims = {2, 0, 1, 3};
         temp = ttnn::permute(input_tensor_4d, permute_dims, output_mem_config);
     } else if (dim_4d == 3 || dim_4d == -1) {
-        ttnn::SmallVector<int64_t> permute_dims = {3, 0, 1, 2};
+        ttsl::SmallVector<int64_t> permute_dims = {3, 0, 1, 2};
         temp = ttnn::permute(input_tensor_4d, permute_dims, output_mem_config);
     }
     Tensor result = compute_prod_nc(temp, dim_4d, output_mem_config);
     // Permute and unpad result for dim 2,3. Don't need to process dim 0,1.
-    auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
+    auto step = ttsl::SmallVector<uint32_t>({1, 1, 1, 1});
     if (dim_4d == 0 || dim_4d == 1 || dim_4d == -4 || dim_4d == -3) {
         result = ttnn::squeeze_from_4D(result, old_rank);
     } else if (dim_4d == 2 || dim_4d == -2) {
-        ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
+        ttsl::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
         const auto& input_shape = input_tensor_4d.logical_shape();
-        ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-        ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[3]};
+        ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+        ttsl::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[3]};
         result = ttnn::squeeze_from_4D(ttnn::slice(required, start_index, end_index, step, std::nullopt), old_rank);
     } else {  // dim 3
         // permute
-        ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
+        ttsl::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
         // unpad
         const auto& input_shape = input_tensor_4d.logical_shape();
-        ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-        ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[2]};
+        ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+        ttsl::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[2]};
         Tensor new_unpad_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
         // permute back
         after_permute_dims = {0, 1, 3, 2};
@@ -203,7 +212,7 @@ Tensor prod_impl(
 Tensor prod_nc_impl(
     const Tensor& input,
     const Tensor& output,
-    ttnn::SmallVector<int64_t>& dims,
+    ttsl::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config) {
     auto mem_cfg = memory_config.value_or(input.memory_config());
     const Tensor input_padded = input.layout() == Layout::TILE ? ttnn::fill_implicit_tile_padding(input, 1.0f) : input;
@@ -220,13 +229,19 @@ namespace ttnn {
 
 Tensor prod(
     const Tensor& input, std::optional<int64_t> dim, bool keepdim, const std::optional<MemoryConfig>& memory_config) {
-    return operations::reduction::prod_impl(input, dim, keepdim, memory_config);
+    Tensor result = operations::reduction::prod_impl(input, dim, keepdim, memory_config);
+    // Block-float is computed in FLOAT32; return the result in the input dtype to match it
+    if ((input.dtype() == tt::tt_metal::DataType::BFLOAT8_B || input.dtype() == tt::tt_metal::DataType::BFLOAT4_B) &&
+        result.dtype() != input.dtype()) {
+        result = ttnn::typecast(result, input.dtype());
+    }
+    return result;
 }
 
 Tensor prod(
     const Tensor& input,
     const Tensor& output,
-    SmallVector<int64_t>& dims,
+    ttsl::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config) {
     return operations::reduction::prod_nc_impl(input, output, dims, memory_config);
 }

@@ -13,7 +13,7 @@ namespace ttnn::operations::matmul {
 // TODO: Uplift this to support bcast batch for in1; currently, only allows B=1
 // for in1 iff B=1 for in0 (ie. single core)
 struct MatmulMultiCoreReuseProgramConfig {
-    CoreCoord compute_with_storage_grid_size;
+    tt::tt_metal::CoreCoord compute_with_storage_grid_size;
     std::size_t in0_block_w{};
     std::size_t out_subblock_h{};
     std::size_t out_subblock_w{};
@@ -23,7 +23,7 @@ struct MatmulMultiCoreReuseProgramConfig {
 };
 
 struct MatmulMultiCoreReuseMultiCastProgramConfig {
-    CoreCoord compute_with_storage_grid_size;
+    tt::tt_metal::CoreCoord compute_with_storage_grid_size;
     std::size_t in0_block_w{};
     std::size_t out_subblock_h{};
     std::size_t out_subblock_w{};
@@ -50,7 +50,7 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
 // When `gather_in0 == true`, `compute_with_storage_grid_size` is ignored and the gather path
 // can run on any sub-device worker layout, including non-rectangular ones.
 struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
-    CoreCoord compute_with_storage_grid_size;
+    tt::tt_metal::CoreCoord compute_with_storage_grid_size;
     std::size_t in0_block_w{};
     std::size_t out_subblock_h{};
     std::size_t out_subblock_w{};
@@ -66,6 +66,10 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     std::size_t num_global_cb_receivers{};
     bool untilize_out{};
     std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
+    // Select ring-rotated FIFO delivery for gather_in0 with a DRAM-sender GCB. The feeding prefetcher
+    // request MUST supply a per-receiver rotation. GCB-backed mcast_in0 instead consumes natural FIFO
+    // order and requires this flag to remain false.
+    bool stream_in1 = false;
 };
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
@@ -99,9 +103,9 @@ using MatmulProgramConfig = std::variant<
 // synthesized from compute_with_storage_grid_size (or from the device grid for
 // MatmulMultiCoreProgramConfig).  After this call, factories can read
 // config.allowed_worker_cores.value() unconditionally.
-inline void normalize_program_config(MatmulProgramConfig& config, const CoreCoord& device_grid) {
-    auto make_crs = [](const CoreCoord& grid) {
-        return CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(grid.x - 1, grid.y - 1)));
+inline void normalize_program_config(MatmulProgramConfig& config, const tt::tt_metal::CoreCoord& device_grid) {
+    auto make_crs = [](const tt::tt_metal::CoreCoord& grid) {
+        return CoreRangeSet(CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(grid.x - 1, grid.y - 1)));
     };
     std::visit(
         [&](auto& c) {

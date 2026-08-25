@@ -6,7 +6,7 @@ from typing import List
 
 import pytest
 import torch
-from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
+from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     UnarySFPUGolden,
     get_golden_generator,
@@ -19,7 +19,7 @@ from helpers.llk_params import (
     UnpackerEngine,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import input_output_formats, parametrize, runtime
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -74,7 +74,7 @@ def generate_sfpu_fill_combinations(
         for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
             for input_dimensions in [[32, 32], [64, 64]]:
                 combinations.append(
-                    (fmt, dest_acc, implied_math_format, input_dimensions)
+                    (fmt, dest_acc, implied_math_format, runtime(input_dimensions))
                 )
 
     # Int fill: _calculate_fill_int_ with FILL_INT_FORMAT-selected SFPMEM store mode.
@@ -84,7 +84,9 @@ def generate_sfpu_fill_combinations(
         in_fmt = fmt.input_format
         dest_acc = DestAccumulation.Yes if in_fmt.is_32_bit() else DestAccumulation.No
         for input_dimensions in [[32, 32], [64, 64]]:
-            combinations.append((fmt, dest_acc, ImpliedMathFormat.No, input_dimensions))
+            combinations.append(
+                (fmt, dest_acc, ImpliedMathFormat.No, runtime(input_dimensions))
+            )
 
     return combinations
 
@@ -94,15 +96,7 @@ _FILL_FLOAT_INPUTS = [
     DataFormat.Float16,
     DataFormat.Float32,
 ]
-_FILL_FLOAT_OUTPUTS = _FILL_FLOAT_INPUTS + [
-    DataFormat.MxFp8R,
-    DataFormat.MxFp8P,
-]
-SFPU_FILL_FLOAT_FORMATS = [
-    InputOutputFormat(in_fmt, out_fmt)
-    for in_fmt in _FILL_FLOAT_INPUTS
-    for out_fmt in _FILL_FLOAT_OUTPUTS
-]
+SFPU_FILL_FLOAT_FORMATS = input_output_formats(_FILL_FLOAT_INPUTS)
 
 # Fill int path: _calculate_fill_int_ with p_sfpu::sfpmem::INT32/UINT16/INT8/UINT8.
 # Quasar integer formats and their SFPMEM store modes:

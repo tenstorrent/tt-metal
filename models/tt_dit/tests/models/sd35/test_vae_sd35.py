@@ -2,20 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
 import pytest
 import torch
-from loguru import logger
 
 import ttnn
-from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ....models.vae import vae_sd35
 from ....parallel.config import ParallelFactor, VAEParallelConfig, vae_all_gather
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
-from .test_performance_sd35 import get_expected_metrics
+from ....utils.test import line_params_req_exact_devices
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/autoencoders/vae.py
@@ -310,7 +306,8 @@ def vae_device_config(func):
     func = pytest.mark.parametrize("submesh_shape", [(1, 4)])(func)
     func = pytest.mark.parametrize(
         "device_params",
-        [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 20000000}],
+        [{**line_params_req_exact_devices, "l1_small_size": 32768, "trace_region_size": 20000000}],
+        ids=["line"],
         indirect=True,
     )(func)
     return func
@@ -576,10 +573,6 @@ def test_sd35_vae_unet_mid_block2d(
 
 @vae_device_config
 @pytest.mark.parametrize(
-    "dit_unit_test",
-    [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
-)
-@pytest.mark.parametrize(
     (
         "batch",
         "in_channels",
@@ -606,7 +599,6 @@ def test_sd35_vae_vae_decoder(
     width: int,
     norm_num_groups: int,
     block_out_channels: list[int] | tuple[int, ...],
-    dit_unit_test: bool,
 ):
     skip_invalid_submesh_shape(mesh_device, submesh_shape)
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
@@ -650,15 +642,3 @@ def test_sd35_vae_vae_decoder(
     ttnn.synchronize_device(submesh_device)
     tt_final_out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).permute(0, 3, 1, 2)
     assert_quality(torch_output, tt_final_out_torch, pcc=0.99_000)
-
-    if dit_unit_test:
-        benchmark_profiler = BenchmarkProfiler()
-        with benchmark_profiler("vae_decoding", iteration=0):
-            tt_out = tt_model(tt_input_tensor)
-        ttnn.synchronize_device(submesh_device)
-        vae_decoding_time = benchmark_profiler.get_duration("vae_decoding", 0)
-        logger.info(f"VAE Time taken: {vae_decoding_time}")
-        expected_vae_decoding_time = get_expected_metrics(mesh_device)["vae_decoding_time"]
-        assert (
-            vae_decoding_time <= expected_vae_decoding_time
-        ), f"VAE run time {vae_decoding_time} is greater than expected {expected_vae_decoding_time}"

@@ -25,8 +25,20 @@ struct KernelBarrier {
     uint32_t generation = 0;
 };
 
-// Shared barrier state for DM kernels on a worker.
-extern volatile KernelBarrier g_kernel_barrier;
+// Per-side barrier state for DM kernels on a worker. A DFB's producer and consumer
+// kernels can co-reside on one worker with different thread counts; a single shared
+// barrier deadlocks because wait_threads() keys the release on the ARRIVING hart's own
+// participant count against a shared counter, so mixed counts (e.g. producers=2,
+// consumers=4) never hit a target for some arrival orders. Give the producer-side and
+// consumer-side rendezvous separate barriers so each syncs its own threads.
+//
+// Invariant this relies on: at most one producer-role and one consumer-role multi-thread
+// DM rendezvous group per worker. Two co-resident same-role multi-thread DM kernels with
+// different thread counts would still share a slot (host validation admits at most one
+// same-role DFB instance per node today, so this is not a reachable topology); if that
+// ever becomes supported, key the barrier per kernel-group instead of the fixed 2 slots.
+constexpr uint32_t NUM_KERNEL_BARRIERS = 2;  // [0] = producer side, [1] = consumer side
+extern volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS];
 
 #endif // !COMPILE_FOR_TRISC
 
@@ -68,29 +80,34 @@ inline uint32_t get_my_thread_id() {
 
 inline void thread_sync_init() {
 #if defined(ARCH_QUASAR)
-    g_kernel_barrier.arrived = 0;
-    g_kernel_barrier.generation = 0;
+    for (uint32_t i = 0; i < NUM_KERNEL_BARRIERS; i++) {
+        g_kernel_barrier[i].arrived = 0;
+        g_kernel_barrier[i].generation = 0;
+    }
 #endif
 }
 
-inline void wait_threads(uint32_t participants) {
+// barrier_idx selects an independent barrier so co-resident kernels with different
+// participant counts (e.g. a DFB's producer vs consumer kernel) don't share a counter.
+inline void wait_threads(uint32_t participants, uint32_t barrier_idx = 0) {
     if (participants <= 1) {
         return;
     }
 
 #if defined(ARCH_QUASAR)
-    uint32_t next_generation = __atomic_load_n(&g_kernel_barrier.generation, __ATOMIC_ACQUIRE) + 1;
-    uint32_t arrived = __atomic_add_fetch(&g_kernel_barrier.arrived, 1, __ATOMIC_ACQ_REL);
+    volatile KernelBarrier& barrier = g_kernel_barrier[barrier_idx];
+    uint32_t next_generation = __atomic_load_n(&barrier.generation, __ATOMIC_ACQUIRE) + 1;
+    uint32_t arrived = __atomic_add_fetch(&barrier.arrived, 1, __ATOMIC_ACQ_REL);
     if (arrived == participants) {
-        __atomic_store_n(&g_kernel_barrier.arrived, 0, __ATOMIC_RELAXED);
-        __atomic_store_n(&g_kernel_barrier.generation, next_generation, __ATOMIC_RELEASE);
+        __atomic_store_n(&barrier.arrived, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&barrier.generation, next_generation, __ATOMIC_RELEASE);
     } else {
-        while (__atomic_load_n(&g_kernel_barrier.generation, __ATOMIC_ACQUIRE) != next_generation) {}
+        while (__atomic_load_n(&barrier.generation, __ATOMIC_ACQUIRE) != next_generation) {}
     }
 #endif
 }
 
-inline void sync_threads() {
-    wait_threads(get_num_threads());
+inline void sync_threads(uint32_t barrier_idx = 0) {
+    wait_threads(get_num_threads(), barrier_idx);
 }
 #endif  // !COMPILE_FOR_TRISC

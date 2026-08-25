@@ -12,28 +12,22 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 
+#include "device_fixture.hpp"
 #include "impl/context/metal_context.hpp"
 
-class CompileProgramWithKernelPathEnvVarFixture : public ::testing::Test {
+class CompileProgramWithKernelPathEnvVarFixture : public tt::tt_metal::UnitMeshAnyDispatchFixture {
 protected:
     void SetUp() override {
         if (!this->are_preconditions_satisfied()) {
             GTEST_SKIP();
         }
 
-        const tt::ChipId device_id = 0;
-        this->device_ = tt::tt_metal::CreateDevice(device_id);
+        tt::tt_metal::UnitMeshAnyDispatchFixture::SetUp();
         this->program_ = tt::tt_metal::CreateProgram();
     }
 
-    void TearDown() override {
-        if (!IsSkipped()) {
-            tt::tt_metal::CloseDevice(this->device_);
-        }
-    }
-
     void create_kernel(const std::string& kernel_file) {
-        CoreCoord core(0, 0);
+        tt::tt_metal::CoreCoord core(0, 0);
         tt::tt_metal::CreateKernel(
             this->program_,
             kernel_file,
@@ -60,7 +54,6 @@ protected:
         }
     }
 
-    tt::tt_metal::IDevice* device_{};
     tt::tt_metal::Program program_;
 
 private:

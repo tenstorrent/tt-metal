@@ -152,7 +152,7 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         std::vector<float> weight_vector = weight_tensor.to_vector<float>();
 
         // (N,Ci,H,W) -> (N,H,W,Ci)
-        input_tensor = ttnn::permute(input_tensor, SmallVector<int64_t>{0, 2, 3, 1});
+        input_tensor = ttnn::permute(input_tensor, ttsl::SmallVector<int64_t>{0, 2, 3, 1});
 
         // Run Conv2D
         auto [output_tensor, output_dimensions] = std::get<static_cast<int>(ConvResultType::OUTPUT_DIM)>(ttnn::conv2d(
@@ -193,7 +193,7 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
                  param.output_channels}));
 
         // (N,H',W',Co) -> (N,Co,H',W')
-        output_tensor = ttnn::permute(output_tensor, SmallVector<int64_t>{0, 3, 1, 2});
+        output_tensor = ttnn::permute(output_tensor, ttsl::SmallVector<int64_t>{0, 3, 1, 2});
 
         // Copy output tensor to host for comparison
         std::vector<float> res = output_tensor.to_vector<float>();

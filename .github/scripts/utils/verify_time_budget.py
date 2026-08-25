@@ -1,10 +1,10 @@
+import argparse
 import yaml
 import sys
-import os
 from collections import defaultdict
 
 
-def verify_timeouts(tests_file, time_budget_file, workflow_name, tier=None):
+def verify_timeouts(tests_file, time_budget_file, workflow_name, tier=None, max_per_test_timeout=None):
     """
     Verifies that the SUM of all test timeouts for each (Team, SKU) pair in tests_file
     is within the total time budget defined in time_budget_file for the given workflow.
@@ -13,6 +13,10 @@ def verify_timeouts(tests_file, time_budget_file, workflow_name, tier=None):
     the budget is looked up under the per-tier key "<workflow_name>_tier<tier>" (e.g.
     "unit_tier1"). When `tier` is None the behaviour is unchanged: every SKU entry is
     summed and the budget is looked up under the plain "<workflow_name>" key.
+
+    When `max_per_test_timeout` is provided, every individual SKU timeout in the tests
+    file must be <= that limit (minutes). Used by smoke/basic to enforce a per-entry
+    ceiling for a given pipeline (e.g. merge_gate).
     """
     budget_workflow = workflow_name if tier is None else f"{workflow_name}_tier{tier}"
 
@@ -22,10 +26,13 @@ def verify_timeouts(tests_file, time_budget_file, workflow_name, tier=None):
 
     print(f"Loading tests from: {tests_file}")
     with open(tests_file, "r") as f:
-        tests = yaml.safe_load(f)
+        tests = yaml.safe_load(f) or []
 
     if tier is not None:
         print(f"Filtering tests to tier '{tier}'; budgets looked up under workflow key '{budget_workflow}'.")
+
+    if max_per_test_timeout is not None:
+        print(f"Enforcing max per-test timeout of {max_per_test_timeout} min " f"for pipeline '{workflow_name}'.")
 
     errors_found = False
 
@@ -72,13 +79,21 @@ def verify_timeouts(tests_file, time_budget_file, workflow_name, tier=None):
 
             test_timeout = sku_config["timeout"]
 
+            if max_per_test_timeout is not None and float(test_timeout) > float(max_per_test_timeout):
+                print(
+                    f"  [ERROR] Per-test timeout FAILED! Test '{test_name}', SKU '{sku_name}' "
+                    f"has timeout {test_timeout} min, which exceeds the max per-test timeout of "
+                    f"{max_per_test_timeout} min for pipeline '{workflow_name}'."
+                )
+                errors_found = True
+
             # Use a tuple (team, sku) as the key for summation
             budget_key = (test_team, sku_name)
             budget_totals[budget_key] += test_timeout
             print(f"  Test '{test_name}' (Team: {test_team}, SKU: {sku_name}) adds {test_timeout} min.")
 
     if errors_found:
-        print(f"\nMissing keys in {tests_file}. Please fix the entries above.")
+        print(f"\nValidation errors in {tests_file}. Please fix the entries above.")
         sys.exit(1)
 
     # --- Part 2: Verify Total Time Budget for each (Team, SKU) pair ---
@@ -119,15 +134,25 @@ def verify_timeouts(tests_file, time_budget_file, workflow_name, tier=None):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) not in (4, 5):
-        print(
-            "Usage: python verify_time_budget.py <path_to_tests.yaml> <path_to_time_budget.yaml> "
-            "<workflow_name> [<tier>]"
-        )
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="Verify test yaml timeouts against team time budgets (and optional per-test ceiling)."
+    )
+    parser.add_argument("tests_file", help="Path to pipeline_reorg tests yaml")
+    parser.add_argument("time_budget_file", help="Path to time_budget.yaml")
+    parser.add_argument("workflow_name", help="Budget workflow key (e.g. merge_gate, pr_gate, unit)")
+    parser.add_argument(
+        "tier",
+        nargs="?",
+        default=None,
+        help="Optional tier; budgets looked up under <workflow_name>_tier<tier>",
+    )
+    parser.add_argument(
+        "--max-per-test-timeout",
+        type=float,
+        default=None,
+        help="Optional max allowed timeout (minutes) for any individual test SKU entry",
+    )
+    args = parser.parse_args()
 
-    # Optional tier arg: when given (and non-empty) budgets are checked per tier
-    # under the "<workflow_name>_tier<tier>" key.
-    tier_arg = sys.argv[4].strip() if len(sys.argv) == 5 and sys.argv[4].strip() else None
-
-    verify_timeouts(sys.argv[1], sys.argv[2], sys.argv[3], tier_arg)
+    tier_arg = args.tier.strip() if args.tier and args.tier.strip() else None
+    verify_timeouts(args.tests_file, args.time_budget_file, args.workflow_name, tier_arg, args.max_per_test_timeout)

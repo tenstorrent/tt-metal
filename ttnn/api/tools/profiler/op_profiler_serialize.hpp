@@ -299,9 +299,9 @@ inline auto compute_program_hash(
 // make_tensor_meta — extract TensorMeta from a Tensor (no JSON)
 // ---------------------------------------------------------------------------
 
-static inline TensorMeta make_tensor_meta(const Tensor& tensor) {
+static inline TensorMeta make_tensor_meta(const ttnn::Tensor& tensor) {
     TensorMeta m;
-    if (tensor.storage_type() == StorageType::DEVICE) {
+    if (tensor.storage_type() == ttnn::StorageType::DEVICE) {
         m.is_device = true;
         m.device_id = tensor.device()->id();
         m.buffer_type = std::string(enchantum::to_string(tensor.memory_config().buffer_type()));
@@ -373,11 +373,11 @@ inline std::string op_meta_data_serialized_json(
         }
 
         // Input tensors → TensorMeta (no JSON)
-        ttsl::reflection::visit_object_of_type<Tensor>(
+        ttsl::reflection::visit_object_of_type<ttnn::Tensor>(
             [&data](auto&& tensor) { data.input_tensors.push_back(make_tensor_meta(tensor)); }, tensor_args);
 
         // Output tensors → TensorMeta (no JSON)
-        ttsl::reflection::visit_object_of_type<Tensor>(
+        ttsl::reflection::visit_object_of_type<ttnn::Tensor>(
             [&data](auto&& tensor) { data.output_tensors.push_back(make_tensor_meta(tensor)); }, tensor_return_value);
 
         // Performance model — use if constexpr to avoid depending on OpPerformanceModel type
@@ -414,11 +414,14 @@ inline std::string op_meta_data_serialized_json(
                 /* Important! `TT_DNN_DEVICE_OP` must be used in conjunction with `TracyOpMeshWorkload` to feed */    \
                 /* regression tests well-formed data. */                                                              \
                 /* TODO: (Issue #20233): Move the zone below outside TracyOpMeshWorkload. */                          \
-                if (!(mesh_device)->is_local(coord)) {                                                                \
+                auto devices = (mesh_device)                                                                          \
+                                   ->get_view()                                                                       \
+                                   .get_devices(tt::tt_metal::distributed::MeshCoordinateRange(coord, coord));        \
+                if (devices.empty()) {                                                                                \
                     continue;                                                                                         \
                 }                                                                                                     \
                 ZoneScopedN("TT_DNN_DEVICE_OP");                                                                      \
-                auto device_id = (mesh_device)->get_device(coord)->id();                                              \
+                auto device_id = devices.front()->id();                                                               \
                 auto op_id = tt::tt_metal::detail::EncodePerDeviceProgramID(base_program_id, device_id, false);       \
                 std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                     \
                     operation,                                                                                        \

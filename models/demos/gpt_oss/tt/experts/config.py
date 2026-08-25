@@ -160,13 +160,42 @@ class ProgramConfig:
                 divisors = [d for d in range(2, in0_block_w + 1) if Kt % d == 0]
                 in0_block_w = max(divisors) if divisors else Kt
 
+        # Derive out_block_w so the subblock axis is expressible instead of
+        # hardcoding it to 1. The mcast_in0 compute kernel bakes
+        # in1_num_subblocks = out_block_w // out_subblock_w in as a compile-time
+        # arg; if out_subblock_w does not divide out_block_w that integer
+        # division yields 0, the in1_subblock loop runs zero times, cb_out is
+        # never pushed, and the in1 writer parks forever on cb_out.wait_front()
+        # -- a silent device hang. (The same expression also underflows uint32
+        # in the last-block padded skip count.) The host guard added in
+        # sparse_matmul_device_operation.cpp now TT_FATALs on that illegal combo
+        # instead of hanging; here we keep the model from generating one.
+        #
+        # dst-register file limit: out_subblock_h * out_subblock_w <= 8.
+        # out_subblock_h is 1 for decode (M=1 tile), so cap out_subblock_w at 8.
+        out_subblock_w = min(out_subblock_w, 8)
+        # out_subblock_w must divide per_core_N so that out_block_w (a multiple
+        # of it) can also divide per_core_N. If it does not, snap it DOWN to the
+        # largest divisor of per_core_N that does not exceed the requested value
+        # -- mirroring the in0_block_w snap-to-divisor idiom above (1 always
+        # divides, so a legal value always exists).
+        if per_core_N % out_subblock_w != 0:
+            divisors = [d for d in range(1, out_subblock_w) if per_core_N % d == 0]
+            out_subblock_w = max(divisors)
+        # out_block_w is the smallest legal block that holds one full subblock,
+        # i.e. out_block_w == out_subblock_w. This guarantees both
+        # out_block_w % out_subblock_w == 0 and per_core_N % out_block_w == 0, so
+        # in1_num_subblocks is never 0. With the shipped default out_subblock_w=1
+        # this yields out_block_w=1 -- byte-identical to the previous hardcode.
+        out_block_w = out_subblock_w
+
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
             in0_block_w=in0_block_w,
             out_subblock_h=1,
             out_subblock_w=out_subblock_w,
             out_block_h=1,
-            out_block_w=1,
+            out_block_w=out_block_w,
             per_core_M=max(32, m) // 32,
             per_core_N=per_core_N,
             fuse_batch=False,

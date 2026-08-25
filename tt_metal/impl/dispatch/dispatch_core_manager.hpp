@@ -14,16 +14,17 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
-#include "context/context_types.hpp"
-#include "context/metal_env_impl.hpp"
 #include "llrt/core_descriptor.hpp"
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
+#include <hostdevcommon/common_values.hpp>
 
 namespace tt::tt_metal {
+
+class MetalContext;
 
 // Dispatch core manager APIs track which cores are assigned to which dispatch functionality
 
@@ -67,9 +68,11 @@ public:
     ///         This list contains dispatch cores that have not been assigned to a particular dispatch function
     /// @param num_hw_cqs is used to get the correct collection of dispatch cores for a particular device
     /// @param dispatch_core_config specifies the core type that is designated for dispatch functionality
-    dispatch_core_manager(const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, MetalEnvImpl& env);
+    /// @param ctx owning MetalContext (for sibling accessors such as get_service_core_manager)
+    dispatch_core_manager(
+        const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, MetalEnvImpl& env, MetalContext& ctx);
 
-    static constexpr uint8_t MAX_NUM_HW_CQS = 2;
+    static constexpr uint8_t MAX_NUM_HW_CQS = ::MAX_NUM_HW_CQS;
 
     /// @brief Gets the location of the kernel designated to read from the issue queue region from a particular command
     /// queue
@@ -144,7 +147,7 @@ public:
 
     bool is_fabric_mux_core_allocated(ChipId device_id, uint16_t channel, uint8_t cq_id, int tunnel);
 
-    CoreType get_dispatch_core_type();
+    CoreType get_dispatch_core_type() const;
 
     DispatchCoreConfig get_dispatch_core_config();
 
@@ -214,6 +217,9 @@ private:
     DispatchCoreConfig dispatch_core_config_;
     uint8_t num_hw_cqs{};
     MetalEnvImpl& env_;
+    // Owning context; used for context-level siblings (e.g. service_core_manager). Keep env_
+    // for env-level cluster/HAL access — do not reach env state through ctx_.
+    MetalContext& ctx_;
     static dispatch_core_manager* _inst;
 };
 

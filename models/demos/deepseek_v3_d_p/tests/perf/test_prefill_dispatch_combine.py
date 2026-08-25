@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-End-to-end dispatch+combine perf worker for one Galaxy column replayed on LB 8x1.
+End-to-end dispatch+combine perf worker for one Galaxy column replayed on LB 8x1 TorusY.
 
 Runs TtDispatchModule → production layout transform (squeeze → TILE+bfp8 →
 unsqueeze) → TtCombineModule(init_zeros=True) in a single forward pass on
@@ -13,7 +13,9 @@ one CSV; the perf wrapper asserts each independently.
 Required env vars (set by the parent perf test via extra_env):
     TT_DS_CAPTURED_LAYER          int, MoE layer index
     TT_DS_CAPTURED_COL            int, Galaxy column [0, 4)
-    TT_DS_USE_CAPTURED_INDICES    optional path override (defaults to LONGBOOK_QA_ENG_25600)
+    TT_DS_USE_CAPTURED_INDICES    path to expert_routing_dispatch_combine_perf.safetensors, the
+                                  chunked-prefill capture holding every model's cases
+                                  (required; there is no default capture)
 """
 
 import os
@@ -24,6 +26,9 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
@@ -35,29 +40,61 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+
+# Geometry of the replay: LB 8x1 stands in for one 8-chip Galaxy column.
+GALAXY_NUM_DISPATCH_GROUPS = 4
+DISPATCH_GROUP_SIZE = 8
+CHUNK = 5 * 1024  # tokens per chunk in the chunked-prefill run the captures come from
+DISPATCH_BUFFER_CAPACITY_FACTOR = 8
 
 
+# One entry per model whose chunked-prefill capture we replay; add a model by extending this list.
+_CHUNK_MODELS = [("dsv3", DeepSeekV3Config), ("kimi26", KimiK26Config), ("glm52", GLM52Config)]
+_TORUS_Y_MESH_CONFIGS = [param for param in ALL_MESH_CONFIGS if param.id == "fabric2d-torus-y-8x1-2link"]
+assert len(_TORUS_Y_MESH_CONFIGS) == 1, "LoudBox TorusY proxy config missing from ALL_MESH_CONFIGS"
+
+
+# One chunk (5120 tokens) spread over the 8-chip dispatch group => seq_len_per_chip 640. Expert
+# count / embedding size come off each reference config, so they live in one place;
+# experts_per_chip = experts_per_col / 8 (dsv3 256/4/8 = 8, kimi26 384/4/8 = 12), and
+# model selects the per-model capture file (expert_routing_dispatch_combine_perf_<model>.safetensors).
+# The parametrize id is what test_dispatch_combine_perf selects with `-k "<id> and ..."`; since -k
+# matches substrings, no id may be a prefix of another or it would silently pull in the wrong entry too.
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, "
-    "dispatch_buffer_capacity_factor, experts_per_chip_override",
-    [pytest.param(3200, 7168, 256, 8, 8, 8, id="perf_real_indices")],
+    "dispatch_buffer_capacity_factor, experts_per_chip_override, model",
+    [
+        pytest.param(
+            CHUNK // DISPATCH_GROUP_SIZE,
+            cfg.EMB_SIZE,
+            cfg.NUM_ROUTED_EXPERTS,
+            cfg.NUM_EXPERTS_PER_TOKEN,
+            DISPATCH_BUFFER_CAPACITY_FACTOR,
+            cfg.NUM_ROUTED_EXPERTS // GALAXY_NUM_DISPATCH_GROUPS // DISPATCH_GROUP_SIZE,
+            model,
+            id=f"perf_captured_{model}_chunk",
+        )
+        for model, cfg in _CHUNK_MODELS
+    ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
-    ALL_MESH_CONFIGS,
+    "mesh_device, device_params, num_links",
+    _TORUS_Y_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.timeout(0)
 def test_ttnn_dispatch_combine(
     mesh_device,
+    device_params,
     seq_len_per_chip,
     emb_dim,
     num_routed_experts,
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
     num_links,
-    topology,
     experts_per_chip_override,
+    model,
 ):
     layer_str = os.getenv("TT_DS_CAPTURED_LAYER")
     col_str = os.getenv("TT_DS_CAPTURED_COL")
@@ -69,6 +106,7 @@ def test_ttnn_dispatch_combine(
 
     mesh_config = extract_mesh_config(mesh_device)
     sp_axis = mesh_config.sp_axis
+    topology = per_axis_topology(device_params["fabric_config"])[sp_axis]
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
@@ -98,7 +136,8 @@ def test_ttnn_dispatch_combine(
         f"num_dispatch_groups(mesh)={num_dispatch_groups}"
     )
 
-    # Load captured routing (indices remapped to [0, 64) ∪ {255}, col-0 dispatch table).
+    # Load captured routing (in-col indices shifted to [0, experts_per_col), rest -> sentinel 255,
+    # col-0 dispatch table).
     indices, expert_dispatch_table = load_captured_routing(
         dispatch_group_size=dispatch_group_size,
         seq_len_per_chip=seq_len_per_chip,
@@ -106,10 +145,10 @@ def test_ttnn_dispatch_combine(
         num_experts_per_tok=num_experts_per_tok,
         layer=int(layer_str),
         col=int(col_str),
+        model=model,
         captured_indices_path=os.getenv("TT_DS_USE_CAPTURED_INDICES"),
     )
-
-    # get_gate_outputs produces 4-row outputs (Galaxy-global); slice to [0:1] for LB's single dispatch group.
+    # get_gate_outputs produces Galaxy-global rows; keep the selected proxy column only.
     expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
@@ -179,7 +218,7 @@ def test_ttnn_dispatch_combine(
     combine_module = TtCombineModule(
         mesh_device=mesh_device,
         dispatch_group_size=dispatch_group_size,
-        num_dispatch_groups=1,  # LB has 1 physical dispatch group; we simulate one Galaxy col on it.
+        num_dispatch_groups=1,
         experts_per_chip=experts_per_chip,
         num_experts_per_tok=num_experts_per_tok,
         seq_len_per_chip=seq_len_per_chip,

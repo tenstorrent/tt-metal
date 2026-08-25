@@ -10,8 +10,10 @@
 #include <vector>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -26,9 +28,11 @@ inline std::vector<std::vector<uint32_t>> group_contiguous_values_sharded(std::v
     if (values.empty()) {
         return chunks;
     }
+    chunks.reserve(values.size());
 
     // Initialize the first chunk
     std::vector<uint32_t> current_chunk;
+    current_chunk.reserve(values.size());
     current_chunk.push_back(values[0]);
 
     for (size_t i = 1; i < values.size(); ++i) {
@@ -110,6 +114,7 @@ inline std::vector<std::vector<uint32_t>> get_slice_runtime_varargs_rm_sharded(
 
         // stores all sticks id for a core
         std::vector<uint32_t> stick_ids_per_core;
+        stick_ids_per_core.reserve(num_sticks_per_core_unpadded);
         uint32_t src_stick_id = start_id;
         for (uint32_t s = 0; s < num_sticks_per_core_unpadded; ++s) {
             stick_ids_per_core.push_back(src_stick_id);
@@ -151,6 +156,7 @@ inline std::vector<std::vector<uint32_t>> get_slice_runtime_varargs_rm_sharded(
 
         // reader varargs
         std::vector<uint32_t> reader_varargs;
+        reader_varargs.reserve(1 + (3 * core_stick_map.size()));
         reader_varargs.push_back(core_stick_map.size());  // num_cores
 
         for (const auto& core_stick_pair : core_stick_map) {
@@ -166,12 +172,16 @@ inline std::vector<std::vector<uint32_t>> get_slice_runtime_varargs_rm_sharded(
 
         // coalesce the sticks into chunks
         std::vector<std::vector<std::vector<uint32_t>>> stick_chunks_per_core;
+        stick_chunks_per_core.reserve(core_stick_map.size());
+        size_t num_chunks_total = 0;
         for (auto core_stick_pair : core_stick_map) {
             auto stick_chunks = group_contiguous_values_sharded(core_stick_pair.second);
+            num_chunks_total += stick_chunks.size();
             stick_chunks_per_core.push_back(stick_chunks);
 
             reader_varargs.push_back(stick_chunks.size());  // num_chunks for current core
         }
+        reader_varargs.reserve(reader_varargs.size() + (2 * num_chunks_total));
         for (const auto& stick_chunks : stick_chunks_per_core) {
             for (auto chunk : stick_chunks) {
                 reader_varargs.push_back(chunk[0]);      // start id of a chunk
@@ -195,11 +205,17 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;
 
-    // stick sizes
-    uint32_t W_padded = input.logical_shape()[-1];
     uint32_t W_unpadded = output.logical_shape()[-1];
-    auto stick_size_padded = W_padded * input.element_size();
     auto stick_size_unpadded = W_unpadded * output.element_size();
+
+    // Real per-row L1 stride is aligned_page_size(), not the compact payload (differs when W·E % 16 != 0).
+    const uint32_t src_stride_bytes = input.buffer()->aligned_page_size();
+    const uint32_t dst_stride_bytes = output.buffer()->aligned_page_size();
+    const uint32_t begins_bytes = args.slice_start[-1] * input.element_size();
+    TT_FATAL(
+        begins_bytes % ::hal::get_l1_alignment() == 0,
+        "qsr::SliceRmShardedProgramFactory: width-begin ({} bytes) must be L1-aligned.",
+        begins_bytes);
 
     // input shard spec
     auto shard_spec_padded = input.shard_spec().value();
@@ -271,9 +287,11 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
             {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
              TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .compile_time_args =
-            {{"stick_size_padded", static_cast<uint32_t>(stick_size_padded)},
-             {"stick_size_unpadded", static_cast<uint32_t>(stick_size_unpadded)}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+            {{"stick_size_unpadded", static_cast<uint32_t>(stick_size_unpadded)},
+             {"src_stride_bytes", src_stride_bytes},
+             {"dst_stride_bytes", dst_stride_bytes},
+             {"begins_bytes", begins_bytes}},
+        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
         .advanced_options = {.num_runtime_varargs = max_varargs},
     };
 

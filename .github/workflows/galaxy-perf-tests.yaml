@@ -11,14 +11,10 @@ on:
         options:
           - all
           #          - cnn
-          - sd35
-          - flux1-dev
-          - motif
           #          - sentence_bert
           - wan2-2
-          - mochi
-          - qwenimage
           - deepseek_v3
+
       build-type:
         required: false
         type: choice
@@ -52,6 +48,7 @@ jobs:
 
   build-artifact-profiler:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -64,9 +61,9 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-      toolchain: "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake" # stopgap until issue 20140 is resolved
   galaxy-perf-tests:
     needs: [check-harbor, build-artifact-profiler]
+    if: ${{ !cancelled() && needs.build-artifact-profiler.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/galaxy-perf-tests-impl.yaml
     with:

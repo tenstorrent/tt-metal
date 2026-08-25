@@ -18,7 +18,7 @@ namespace ttnn::prim {
 struct GroupNormDeviceOperation {
     using operation_attributes_t = GroupNormParams;
     using tensor_args_t = GroupNormInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct GroupNormShardedProgramFactory {
@@ -66,6 +66,7 @@ Tensor group_norm(
     std::optional<Tensor> beta,
     std::optional<Tensor> input_mask,
     std::optional<Tensor> negative_mask,
-    std::optional<Tensor> reciprocals);
+    std::optional<Tensor> reciprocals,
+    bool synthesize_negative_mask = false);
 
 }  // namespace ttnn::prim

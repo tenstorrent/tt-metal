@@ -18,6 +18,7 @@
 #include <tt-metalium/mxint.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
@@ -39,7 +40,7 @@ namespace unit_tests::llk::mxint_typecast {
 // unpacker/packer performs the format conversion implicitly. Identical to the
 // MXFP4/MXFP8 typecast drivers — only the format(s) under test differ.
 static vector<uint32_t> run_mxint_typecast(
-    const distributed::MeshDevice& mesh_device,
+    distributed::MeshDevice& mesh_device,
     tt::DataFormat input_fmt,
     tt::DataFormat output_fmt,
     const vector<uint32_t>& src_vec,
@@ -90,9 +91,7 @@ static vector<uint32_t> run_mxint_typecast(
         .num_threads = 1,
         .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec writer_spec{
@@ -101,9 +100,7 @@ static vector<uint32_t> run_mxint_typecast(
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec compute_spec{
@@ -125,8 +122,8 @@ static vector<uint32_t> run_mxint_typecast(
              }},
         .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = fp32_dest_acc_en,
+            experimental::ComputeGen2Config{
+                .enable_32_bit_dest = fp32_dest_acc_en,
             },
     };
 
@@ -156,27 +153,27 @@ static vector<uint32_t> run_mxint_typecast(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src_addr", src_buffer->address()},
-                   {"src_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"dram_page_stride", src_dram_stride}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src_addr", src_buffer->address()},
+                 {"src_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"dram_page_stride", src_dram_stride}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", dst_buffer->address()},
-                   {"dst_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"dram_page_stride", dst_dram_stride}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", dst_buffer->address()},
+                 {"dst_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"dram_page_stride", dst_dram_stride}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program, params);
 
-    detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     vector<uint32_t> result_vec;
     detail::ReadFromBuffer(dst_buffer, result_vec);
@@ -209,7 +206,7 @@ static vector<uint32_t> create_random_vector_of_mxint(
         v = dist(rng) + offset;
     }
 
-    vector<uint32_t> packed = pack_as_mx_tiles(fmt, tt::stl::make_const_span(fp32_vec), /*row_major_input=*/true);
+    vector<uint32_t> packed = pack_as_mx_tiles(fmt, ttsl::make_const_span(fp32_vec), /*row_major_input=*/true);
     TT_FATAL(
         packed.size() * sizeof(uint32_t) == num_tiles * single_tile_size,
         "MxInt packed size {} bytes does not match expected {} bytes",
@@ -237,7 +234,7 @@ constexpr float kOffset = -10.0f;  // U(0, 20) + (-10) = U(-10, 10)
 // power-of-two block scale), so the conversion is lossless. We compare the
 // device output against the host-decoded source — both must be bit-identical.
 static void run_widening_or_identity_test(
-    const distributed::MeshDevice& mesh_device,
+    distributed::MeshDevice& mesh_device,
     tt::DataFormat input_fmt,   // an MxInt format
     tt::DataFormat output_fmt,  // Float16_b or the same MxInt format
     bool fp32_dest_acc_en) {
@@ -262,7 +259,7 @@ static void run_widening_or_identity_test(
 // validates that the hardware quantizer matches the OCP MX golden bit-for-bit
 // (modulo rare rounding ties absorbed by `atol`).
 static void run_narrowing_test(
-    const distributed::MeshDevice& mesh_device,
+    distributed::MeshDevice& mesh_device,
     tt::DataFormat output_fmt,  // an MxInt format
     float atol,
     bool fp32_dest_acc_en) {
@@ -272,7 +269,7 @@ static void run_narrowing_test(
         mesh_device, tt::DataFormat::Float16_b, output_fmt, src_vec, kDefaultNumTiles, fp32_dest_acc_en);
 
     auto src_floats = bf16_to_floats(src_vec);  // storage (tile-major) order
-    auto ref_packed = pack_as_mx_tiles(output_fmt, tt::stl::make_const_span(src_floats), /*row_major_input=*/false);
+    auto ref_packed = pack_as_mx_tiles(output_fmt, ttsl::make_const_span(src_floats), /*row_major_input=*/false);
 
     auto ref_floats = mx_to_floats(output_fmt, ref_packed);
     auto hw_floats = mx_to_floats(output_fmt, result_vec);

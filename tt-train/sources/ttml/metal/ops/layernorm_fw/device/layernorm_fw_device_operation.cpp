@@ -15,10 +15,10 @@ void LayerNormForwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
-            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            tensor.storage_type() == ttnn::StorageType::DEVICE,
             "Tensor's '{}' storage type must be {}. Got storage type: {}",
             name,
-            enchantum::to_string(tt::tt_metal::StorageType::DEVICE),
+            enchantum::to_string(ttnn::StorageType::DEVICE),
             enchantum::to_string(tensor.storage_type()));
 
         TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
@@ -42,7 +42,7 @@ void LayerNormForwardDeviceOperation::validate_on_program_cache_miss(
             enchantum::to_string(tensor.dtype()));
 
         TT_FATAL(
-            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "Tensor '{}' must use Interleaved memory layout. Got memory layout: {}",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
@@ -125,7 +125,7 @@ tensor_return_value_t LayerNormForwardDeviceOperation::create_output_tensors(
     if (tensor_args.preallocated_output.has_value()) {
         output_tensors.push_back(tensor_args.preallocated_output);
     } else {
-        output_tensors.push_back(create_device_tensor(output_specs[0], tensor_args.input.device()));
+        output_tensors.push_back(ttnn::create_device_tensor(output_specs[0], tensor_args.input.device()));
     }
 
     // mean (optional)
@@ -133,14 +133,14 @@ tensor_return_value_t LayerNormForwardDeviceOperation::create_output_tensors(
         if (tensor_args.preallocated_mean.has_value()) {
             output_tensors.push_back(tensor_args.preallocated_mean);
         } else {
-            output_tensors.push_back(create_device_tensor(output_specs[1], tensor_args.input.device()));
+            output_tensors.push_back(ttnn::create_device_tensor(output_specs[1], tensor_args.input.device()));
         }
 
         // rstd (optional)
         if (tensor_args.preallocated_rstd.has_value()) {
             output_tensors.push_back(tensor_args.preallocated_rstd);
         } else {
-            output_tensors.push_back(create_device_tensor(output_specs[2], tensor_args.input.device()));
+            output_tensors.push_back(ttnn::create_device_tensor(output_specs[2], tensor_args.input.device()));
         }
     } else {
         output_tensors.push_back(std::nullopt);

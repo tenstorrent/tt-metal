@@ -16,6 +16,7 @@ target_include_directories(
     unit_tests_lightmetal
     PRIVATE
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        "$<TARGET_PROPERTY:Metalium::Metal::Impl,BINARY_DIR>/flatbuffers"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${CMAKE_CURRENT_SOURCE_DIR}

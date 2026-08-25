@@ -45,45 +45,45 @@ void SingleHostContext::barrier() const { return; }
 
   /* Remaining methods throw for single-host context */
 void SingleHostContext::send(
-    tt::stl::Span<std::byte> buf [[maybe_unused]], Rank dest [[maybe_unused]], Tag tag [[maybe_unused]]) const {
+    ttsl::Span<std::byte> buf [[maybe_unused]], Rank dest [[maybe_unused]], Tag tag [[maybe_unused]]) const {
     TT_THROW("method send is unsupported for single-host distributed contexts.");
 }
 
 void SingleHostContext::ssend(
-    tt::stl::Span<std::byte> buf [[maybe_unused]], Rank dest [[maybe_unused]], Tag tag [[maybe_unused]]) const {
+    ttsl::Span<std::byte> buf [[maybe_unused]], Rank dest [[maybe_unused]], Tag tag [[maybe_unused]]) const {
     TT_THROW("method ssend is unsupported for single-host distributed contexts.");
 }
 
 void SingleHostContext::recv(
-    tt::stl::Span<std::byte> buf [[maybe_unused]], Rank source [[maybe_unused]], Tag tag [[maybe_unused]]) const {
+    ttsl::Span<std::byte> buf [[maybe_unused]], Rank source [[maybe_unused]], Tag tag [[maybe_unused]]) const {
     TT_THROW("method recv is unsupported for single-host distributed contexts.");
 }
 
 RequestPtr SingleHostContext::isend(
-    tt::stl::Span<std::byte> buf [[maybe_unused]], Rank dest [[maybe_unused]], Tag tag [[maybe_unused]]) const {
+    ttsl::Span<std::byte> buf [[maybe_unused]], Rank dest [[maybe_unused]], Tag tag [[maybe_unused]]) const {
     TT_THROW("method isend is unsupported for single-host distributed contexts.");
 }
 
 RequestPtr SingleHostContext::irecv(
-    tt::stl::Span<std::byte> buf [[maybe_unused]], Rank source [[maybe_unused]], Tag tag [[maybe_unused]]) const {
+    ttsl::Span<std::byte> buf [[maybe_unused]], Rank source [[maybe_unused]], Tag tag [[maybe_unused]]) const {
     TT_THROW("method irecv is unsupported for single-host distributed contexts.");
 }
 
-void SingleHostContext::broadcast(tt::stl::Span<std::byte> buf [[maybe_unused]], Rank root [[maybe_unused]]) const {
+void SingleHostContext::broadcast(ttsl::Span<std::byte> buf [[maybe_unused]], Rank root [[maybe_unused]]) const {
     TT_THROW("method broadcast is unsupported for single-host distributed contexts.");
 }
 
 void SingleHostContext::all_reduce(
-    tt::stl::Span<std::byte> send_buf [[maybe_unused]],
-    tt::stl::Span<std::byte> recv_buf [[maybe_unused]],
+    ttsl::Span<std::byte> send_buf [[maybe_unused]],
+    ttsl::Span<std::byte> recv_buf [[maybe_unused]],
     ReduceOp op [[maybe_unused]],
     DType dtype [[maybe_unused]]) const {
     TT_THROW("method all_reduce is unsupported for single-host distributed contexts.");
 }
 
 void SingleHostContext::reduce(
-    tt::stl::Span<std::byte> send_buf [[maybe_unused]],
-    tt::stl::Span<std::byte> recv_buf [[maybe_unused]],
+    ttsl::Span<std::byte> send_buf [[maybe_unused]],
+    ttsl::Span<std::byte> recv_buf [[maybe_unused]],
     ReduceOp op [[maybe_unused]],
     DType dtype [[maybe_unused]],
     Rank root [[maybe_unused]]) const {
@@ -91,20 +91,20 @@ void SingleHostContext::reduce(
 }
 
 void SingleHostContext::gather(
-    tt::stl::Span<std::byte> send_buf [[maybe_unused]],
-    tt::stl::Span<std::byte> recv_buf [[maybe_unused]],
+    ttsl::Span<std::byte> send_buf [[maybe_unused]],
+    ttsl::Span<std::byte> recv_buf [[maybe_unused]],
     Rank root [[maybe_unused]]) const {
     TT_THROW("method gather is unsupported for single-host distributed contexts.");
 }
 
 void SingleHostContext::scatter(
-    tt::stl::Span<std::byte> send_buf [[maybe_unused]],
-    tt::stl::Span<std::byte> recv_buf [[maybe_unused]],
+    ttsl::Span<std::byte> send_buf [[maybe_unused]],
+    ttsl::Span<std::byte> recv_buf [[maybe_unused]],
     Rank root [[maybe_unused]]) const {
     TT_THROW("method scatter is unsupported for single-host distributed contexts.");
 }
 
-void SingleHostContext::all_gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const {
+void SingleHostContext::all_gather(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf) const {
     TT_FATAL(
         recv_buf.size() == send_buf.size(),
         "all_gather: recv buffer {} bytes, expected {} (world × send)",
@@ -115,30 +115,30 @@ void SingleHostContext::all_gather(tt::stl::Span<std::byte> send_buf, tt::stl::S
 }
 
 void SingleHostContext::all_to_all(
-    tt::stl::Span<std::byte> send_buf [[maybe_unused]], tt::stl::Span<std::byte> recv_buf [[maybe_unused]]) const {
+    ttsl::Span<std::byte> send_buf [[maybe_unused]], ttsl::Span<std::byte> recv_buf [[maybe_unused]]) const {
     TT_THROW("method all_to_all is unsupported for single-host distributed contexts.");
 }
 
 void SingleHostContext::reduce_scatter(
-    tt::stl::Span<std::byte> send_buf [[maybe_unused]],
-    tt::stl::Span<std::byte> recv_buf [[maybe_unused]],
+    ttsl::Span<std::byte> send_buf [[maybe_unused]],
+    ttsl::Span<std::byte> recv_buf [[maybe_unused]],
     ReduceOp op [[maybe_unused]],
     DType dtype [[maybe_unused]]) const {
     TT_THROW("method reduce_scatter is unsupported for single-host distributed contexts.");
 }
 
 void SingleHostContext::scan(
-    tt::stl::Span<std::byte> send_buf [[maybe_unused]],
-    tt::stl::Span<std::byte> recv_buf [[maybe_unused]],
+    ttsl::Span<std::byte> send_buf [[maybe_unused]],
+    ttsl::Span<std::byte> recv_buf [[maybe_unused]],
     ReduceOp op [[maybe_unused]],
     DType dtype [[maybe_unused]]) const {
     TT_THROW("method scan is unsupported for single-host distributed contexts.");
 }
 
 void SingleHostContext::translate_ranks_to_other_ctx(
-    tt::stl::Span<int> ranks [[maybe_unused]],
+    ttsl::Span<int> ranks [[maybe_unused]],
     const ContextPtr& other_ctx [[maybe_unused]],
-    tt::stl::Span<int> translated_ranks [[maybe_unused]]) const {
+    ttsl::Span<int> translated_ranks [[maybe_unused]]) const {
     TT_THROW("method translate_ranks_to_other_ctx is unsupported for single-host distributed contexts.");
 }
 
@@ -151,7 +151,7 @@ ContextPtr SingleHostContext::split(Color color [[maybe_unused]], Key key [[mayb
     return get_current_world();
 }
 
-ContextPtr SingleHostContext::create_sub_context(tt::stl::Span<int> ranks [[maybe_unused]]) const {
+ContextPtr SingleHostContext::create_sub_context(ttsl::Span<int> ranks [[maybe_unused]]) const {
     TT_THROW("method create_sub_context is unsupported for single-host distributed contexts.");
 }
 

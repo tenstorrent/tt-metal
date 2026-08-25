@@ -22,7 +22,7 @@ namespace ttnn::prim {
 struct RingDistributedSdpaDeviceOperation {
     using operation_attributes_t = RingDistributedSDPAParams;
     using tensor_args_t = RingDistributedSDPAInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct RingDistributedSdpaProgramFactory {

@@ -60,13 +60,13 @@ class FabricNodeId;
 namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
+class AllocatorImpl;
 class ThreadPool;
 struct TraceDescriptor;
 class DriscL1Arena;
 
 namespace distributed {
 
-class D2HSocket;
 class MeshCommandQueue;
 class MeshDeviceView;
 struct MeshTraceBuffer;
@@ -144,7 +144,7 @@ private:
     std::shared_ptr<MeshDevice> parent_mesh_;
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;
 
-    tt::stl::SmallVector<std::unique_ptr<MeshCommandQueueBase>> mesh_command_queues_;
+    ttsl::SmallVector<std::unique_ptr<MeshCommandQueueBase>> mesh_command_queues_;
 
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
     uint32_t trace_buffers_size_ = 0;
@@ -182,11 +182,6 @@ private:
     // Check if the mesh device or any of its children have a CQ in use, and returns one of the child mesh IDs if found.
     std::optional<int> get_child_mesh_id_with_in_use_cq(uint32_t cq_id) const;
 
-    // NOLINTNEXTLINE(readability-make-member-function-const)
-    void mark_allocations_unsafe();
-    // NOLINTNEXTLINE(readability-make-member-function-const)
-    void mark_allocations_safe();
-
     std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
 
     std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
@@ -194,6 +189,7 @@ private:
     // Validates that the sub_device_manager_tracker_ is initialized before accessing it.
     // Throws if the tracker is null (e.g., on remote-only MeshDevices).
     void validate_sub_device_manager_tracker() const;
+    std::vector<AllocatorImpl*> trace_allocators() const;
 
     // Distributed context used to synchronize operations done by all ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
@@ -224,6 +220,20 @@ public:
         destroy_metal_context_instance_on_close_ = destroy;
     }
 
+    // Trace allocation safety lifecycle.
+    // NOLINTNEXTLINE(readability-make-member-function-const)
+    void register_active_trace(const MeshTraceId& trace_id);
+    // NOLINTNEXTLINE(readability-make-member-function-const)
+    void unregister_active_trace(const MeshTraceId& trace_id);
+
+    // Unsafe allocation tracking
+    std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(const MeshTraceId& trace_id) const;
+    void remove_unsafe_tracked_id(size_t buffer_unique_id);
+    static std::vector<size_t> drain_pending_traceback_ids();
+    static std::vector<size_t> drain_retired_traceback_ids();
+    void push_corruptible_allocation_scope();
+    void pop_corruptible_allocation_scope();
+
     // IDevice interface implementation
     tt::ARCH arch() const override;
     int id() const override;
@@ -245,6 +255,8 @@ public:
     std::vector<CoreCoord> ethernet_cores_from_logical_cores(
         const std::vector<CoreCoord>& logical_cores) const override;
     std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
+    std::unordered_map<uint32_t, CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(
+        NOC noc, const MeshCoordinate& coord);
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
     CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const override;
@@ -255,7 +267,7 @@ public:
     std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
-    uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
+    uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) const;
     CoreCoord compute_with_storage_grid_size() const override;
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
@@ -268,7 +280,7 @@ public:
     uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
-        tt::stl::Span<const SubDeviceId> sub_device_ids) const override;
+        ttsl::Span<const SubDeviceId> sub_device_ids) const override;
     const std::set<CoreCoord>& ethernet_cores() const override;
     const std::set<CoreCoord>& storage_only_cores() const override;
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
@@ -276,7 +288,6 @@ public:
     SystemMemoryManager& sysmem_manager() override;
 
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
-    // If cq_id is not provided, the current command queue is returned from the current thread
     MeshTraceId begin_mesh_trace(uint8_t cq_id);
     void begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
     void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
@@ -292,7 +303,7 @@ public:
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_size,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
     bool initialize_impl(
         MeshDevice* pimpl_wrapper,
@@ -300,11 +311,11 @@ public:
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_size,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false);
     void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
     void trigger_realtime_profiler_sync_check();
-    D2HSocket* get_realtime_profiler_socket() const;
+    RealtimeProfilerManager* get_realtime_profiler() const;
 
     // DRISC L1 arena. Consumed by the DRAM-sender GlobalCircularBuffer ctor for
     // pages_sent allocations. Constructed eagerly in initialize_impl() when the
@@ -316,21 +327,25 @@ public:
     // experimental::StartTensorPrefetcher / StopTensorPrefetcher delegate here.
     TensorPrefetcherManager& tensor_prefetcher(MeshDevice* mesh_device);
 
-    // Returns the logical DRAM core for `bank_id` whose physical NoC coord isn't already
-    // claimed by the SOC descriptor as a worker_endpoint or eth_endpoint — i.e. one
-    // safe for a DRISC kernel to occupy. Throws if no free subchannel exists, or
-    // TT_FATALs if bank_id is out of range. Used by the DRAM-sender GCB factory.
-    CoreCoord pick_unused_dram_logical_core(uint32_t bank_id) const;
+    // Returns the logical DRAM core for `bank_id` on `device` whose physical NoC coord isn't
+    // already claimed by the SOC descriptor as a worker_endpoint or eth_endpoint — i.e. one
+    // safe for a DRISC kernel to occupy. Resolved against `device`'s harvested DRAM topology.
+    // Throws if no free subchannel exists, or TT_FATALs if bank_id is out of range.
+    CoreCoord pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const;
 
     // Returns the ordered list of DRISC logical cores that drive a bank's DRAM-sender
-    // prefetcher: element 0 is the free non-endpoint subchannel
+    // prefetcher on `device`: element 0 is the free non-endpoint subchannel
     // (pick_unused_dram_logical_core), element 1 is the bank's NOC1 worker-endpoint
     // subchannel (idle for NOC0 during matmul). Both run their kernels on NOC0; the
-    // pair lets two DRISC cores share a bank's receiver set. Indices are derived
-    // per-bank from the SOC descriptor (they are not fixed across banks). Used by both
-    // the DRAM-sender GCB factory and the TensorPrefetcherManager so their sender
-    // cores always agree.
-    std::vector<CoreCoord> dram_sender_logical_cores(uint32_t bank_id) const;
+    // pair lets two DRISC cores share a bank's receiver set.
+    //
+    // The result names endpoint roles (see metal_SocDescriptor::dram_bank_endpoint_coords), so a
+    // well-formed descriptor set returns the same coords for every `device` in a mesh; the
+    // `device` argument exists because that is a property of the descriptors rather than one this
+    // function can guarantee, and because the physical subchannel each role resolves to does vary
+    // with the device's DRAM harvest mask. Callers addressing hardware must translate the returned
+    // coords through the device they mean.
+    std::vector<CoreCoord> dram_sender_logical_cores(const IDevice* device, uint32_t bank_id) const;
 
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
@@ -341,22 +356,22 @@ public:
     std::size_t num_program_cache_entries() override;
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
     HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
-    bool has_noc_mcast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const override;
+    bool has_noc_mcast_txns(SubDeviceId sub_device_id) const;
+    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const;
+    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const;
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
     SubDeviceManagerId get_default_sub_device_manager_id() const override;
     SubDeviceManagerId create_sub_device_manager(
         std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     SubDeviceManagerId create_sub_device_manager(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+        ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void clear_loaded_sub_device_manager() override;
     CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
     const std::vector<SubDeviceId>& get_sub_device_ids() const override;
     const std::vector<SubDeviceId>& get_sub_device_stall_group() const override;
-    void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
+    void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
     bool is_mmio_capable() const override;
@@ -453,7 +468,7 @@ public:
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
     static std::shared_ptr<MeshDevice> create_unit_mesh(
         int device_id,
@@ -461,7 +476,7 @@ public:
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
     static std::map<int, std::shared_ptr<MeshDevice>> create_unit_meshes(
         const std::vector<int>& device_ids,
@@ -469,7 +484,7 @@ public:
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
     // Create Mesh Devices which refer to a specific MetalContext instance.
@@ -482,7 +497,7 @@ public:
         size_t trace_region_size,
         size_t num_command_queues,
         const DispatchCoreConfig& dispatch_core_config,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap,
+        ttsl::Span<const std::uint32_t> l1_bank_remap,
         size_t worker_l1_size);
     static std::shared_ptr<MeshDevice> create_unit_mesh(
         ContextId context_id,
@@ -491,7 +506,7 @@ public:
         size_t trace_region_size,
         size_t num_command_queues,
         const DispatchCoreConfig& dispatch_core_config,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap,
+        ttsl::Span<const std::uint32_t> l1_bank_remap,
         size_t worker_l1_size);
     static std::map<int, std::shared_ptr<MeshDevice>> create_unit_meshes(
         ContextId context_id,
@@ -500,7 +515,7 @@ public:
         size_t trace_region_size,
         size_t num_command_queues,
         const DispatchCoreConfig& dispatch_core_config,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap,
+        ttsl::Span<const std::uint32_t> l1_bank_remap,
         size_t worker_l1_size);
 };
 

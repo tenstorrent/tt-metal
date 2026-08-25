@@ -47,6 +47,8 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
 
 5. **TensixDataMovementOneFromOnePacketSizes2_0** (Test ID: 159) - Device 2.0 API version of the packet sizes test. Tests the same packet size variations as test ID 5 but uses the NOC API with structured endpoints and virtual channel support for async read operations.
 
+6. **TensixDataMovementOneFromOneDirectedIdeal2_0** (Test ID: 161) - Device 2.0 API version of the directed ideal test.
+
 ## Device 2.0 API Tests
 This test suite now includes tests using the new device 2.0 NOC API. These tests provide the same functionality as the original tests but use an updated API design:
 

@@ -9,7 +9,7 @@
 #include <tuple>
 
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -92,10 +92,16 @@ void validate_rm_preconditions(
 }
 
 std::vector<uint32_t> build_rm_reader_ct_args(
-    const RmPlan& plan, uint32_t scaler_bits, const tt::tt_metal::MeshTensor& src, tt::tt_metal::ReduceOpDim dim) {
+    const RmPlan& plan,
+    uint32_t scaler_bits,
+    const tt::tt_metal::MeshTensor& src,
+    tt::tt_metal::ReduceOpDim dim,
+    uint32_t num_h_slices,
+    uint32_t slice_Ht) {
     // Slots 0-7 are shared by both paths. The reader's REDUCE_COL (H) branch additionally consumes
-    // H_logical at slot 8; the W path omits it, so the source TensorAccessor args follow at slot 8 (W)
-    // or slot 9 (H). The kernel is templated on REDUCE_DIM so the unused slot is genuinely dropped.
+    // H_logical at slot 8 and the H-axis-split geometry (num_h_slices, slice_Ht) at slots 9-10; the
+    // W path omits all three, so the source TensorAccessor args follow at slot 8 (W) or slot 11 (H).
+    // The kernel is templated on REDUCE_DIM so the unused slots are genuinely dropped.
     // Only supports ReduceOpDim::W or ReduceOpDim::H
     std::vector<uint32_t> args = {
         scaler_bits,
@@ -109,17 +115,24 @@ std::vector<uint32_t> build_rm_reader_ct_args(
     };
     if (dim == tt::tt_metal::ReduceOpDim::H) {
         args.push_back(plan.H_logical);
+        args.push_back(num_h_slices);
+        args.push_back(slice_Ht == 0 ? plan.Ht_rm : slice_Ht);
     }
     tt::tt_metal::TensorAccessorArgs(src).append_to(args);
     return args;
 }
 
 std::vector<uint32_t> build_rm_writer_ct_args(
-    const RmPlan& plan, const tt::tt_metal::MeshTensor& dst, tt::tt_metal::ReduceOpDim dim) {
+    const RmPlan& plan,
+    const tt::tt_metal::MeshTensor& dst,
+    tt::tt_metal::ReduceOpDim dim,
+    bool tile_output,
+    uint32_t num_h_slices) {
     // Slot 0 (datum_bytes) is shared. The writer's REDUCE_COL (H) branch additionally consumes
-    // Wt, W_logical, and wt_tiles_per_chunk at slots 1-3; the W path omits them, so the dst
-    // TensorAccessor args follow at slot 1 (W) or slot 4 (H). The kernel is templated on REDUCE_DIM
-    // so the unused slots are genuinely dropped.
+    // Wt, W_logical and wt_tiles_per_chunk at slots 1-3, plus tile_output / num_h_slices /
+    // out_tile_rows at slots 4-6; the W path omits them all, so the dst TensorAccessor args follow
+    // at slot 1 (W) or slot 7 (H). The kernel is templated on REDUCE_DIM so the unused slots are
+    // genuinely dropped.
     // Only supports ReduceOpDim::W or ReduceOpDim::H
     std::vector<uint32_t> args = {
         plan.dst_datum_size,
@@ -128,12 +141,16 @@ std::vector<uint32_t> build_rm_writer_ct_args(
         args.push_back(plan.Wt);
         args.push_back(plan.W_logical);
         args.push_back(plan.wt_tiles_per_chunk);
+        args.push_back(tile_output ? 1u : 0u);
+        args.push_back(num_h_slices);
+        args.push_back(tt::div_up(num_h_slices, plan.rm_rows_per_tile));
     }
     tt::tt_metal::TensorAccessorArgs(dst).append_to(args);
     return args;
 }
 
-std::vector<uint32_t> build_rm_compute_ct_args(const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits) {
+std::vector<uint32_t> build_rm_compute_ct_args(
+    const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits, bool fp32_sfpu_reduce) {
     return {
         Ht_arg,
         plan.Wt,
@@ -141,11 +158,12 @@ std::vector<uint32_t> build_rm_compute_ct_args(const RmPlan& plan, uint32_t Ht_a
         post_mul_scaler_bits,
         plan.wt_tiles_per_chunk,
         plan.ht_tiles_per_chunk,
+        fp32_sfpu_reduce ? 1u : 0u,  // enable_fp32_sfpu: route Float32 through the SFPU
     };
 }
 
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
-    const tt::tt_metal::Tensor& input_tensor, tt::tt_metal::ReduceOpDim reduce_dim) {
+    const ttnn::Tensor& input_tensor, tt::tt_metal::ReduceOpDim reduce_dim) {
     uint32_t num_tiles = input_tensor.physical_volume() / input_tensor.tensor_spec().tile().get_tile_hw();
     if (reduce_dim == tt::tt_metal::ReduceOpDim::H) {
         return tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_H;
@@ -171,7 +189,7 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
     tt::tt_metal::Layout output_layout) {
     using namespace tt::tt_metal;
 
-    TensorSpec tensor_spec(
+    tt::tt_metal::TensorSpec tensor_spec(
         output_shape,
         TensorLayout(output_dtype, PageConfig(output_layout), MemoryConfig(output_mem_config.buffer_type())));
 
@@ -208,7 +226,7 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
 
         // For width/height/block sharding modes, the output shard shape is fully determined
         // by the output physical shape and the core grid. Just delegate to the
-        // appropriate TensorSpec builder.
+        // appropriate tt::tt_metal::TensorSpec builder.
         if (mem_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             return tensor_spec.width_sharded(grid, orientation);
         }
@@ -239,7 +257,8 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
             nd_shard_spec_copy.shard_shape.rank() > 1) {
             nd_shard_spec_copy.shard_shape[-2] = 1;
         }
-        return tensor_spec.sharded(std::move(nd_shard_spec_copy), TensorSpec::ShardShapeAlignment::REQUIRED);
+        return tensor_spec.sharded(
+            std::move(nd_shard_spec_copy), tt::tt_metal::TensorSpec::ShardShapeAlignment::REQUIRED);
     }
 
     // Guard against unexpected new memory layouts.
@@ -267,7 +286,7 @@ void validate_reduce_sharded_buffer_types(
 }
 
 bool h_reduce_negate_fits_in_l1(
-    const tt::tt_metal::Tensor& input_tensor, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    const ttnn::Tensor& input_tensor, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     using namespace tt::tt_metal;
 
     const auto& shape = input_tensor.padded_shape();

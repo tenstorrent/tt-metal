@@ -39,7 +39,7 @@ TEST(HostBufferTest, BasicBorrowed) {
     int num_decrements = 0;
     std::vector<int> vec = {1, 2, 3};
     HostBuffer buffer(
-        tt::stl::Span<int>(vec.data(), vec.size()),
+        ttsl::Span<int>(vec.data(), vec.size()),
         MemoryPin([&]() { num_increments++; }, [&]() { num_decrements++; }));
 
     EXPECT_EQ(num_increments, 1);

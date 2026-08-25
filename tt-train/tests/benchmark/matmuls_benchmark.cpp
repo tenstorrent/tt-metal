@@ -163,7 +163,7 @@ BenchmarkResult RunSingleMatmulBenchmark(
             /*compute_kernel_config=*/compute_kernel_config,
             /*core_grid=*/grid_config.core_grid,
             /*output_tile=*/std::nullopt);
-        tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+        tt::tt_metal::distributed::Synchronize(*dev_ptr, std::nullopt);
         output_tensor.deallocate();
     }
 
@@ -186,7 +186,7 @@ BenchmarkResult RunSingleMatmulBenchmark(
                 /*compute_kernel_config=*/compute_kernel_config,
                 /*core_grid=*/grid_config.core_grid,
                 /*output_tile=*/std::nullopt);
-            tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+            tt::tt_metal::distributed::Synchronize(*dev_ptr, std::nullopt);
             const auto end_time = std::chrono::high_resolution_clock::now();
             total_time += end_time - start_time;
             output_tensor.deallocate();
@@ -256,6 +256,7 @@ void BM_TTTrainMatmulComparison(benchmark::State& state) {
     device->enable_program_cache();
 
     std::vector<BenchmarkResult> results;
+    results.reserve(core_grid_configs.size());
 
     for ([[maybe_unused]] auto _ : state) {
         results.clear();
@@ -270,14 +271,14 @@ void BM_TTTrainMatmulComparison(benchmark::State& state) {
         const auto data_a = ttml::test_utils::make_uniform_vector<float>(a_shape.volume(), -1.0F, 1.0F, seed);
         ttnn::Tensor input_tensor_a = ttnn::Tensor::from_vector(
             data_a,
-            ttnn::TensorSpec(
+            tt::tt_metal::TensorSpec(
                 a_shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)),
             device.get());
 
         const auto data_b = ttml::test_utils::make_uniform_vector<float>(b_shape.volume(), -1.0F, 1.0F, seed + 1);
         ttnn::Tensor input_tensor_b = ttnn::Tensor::from_vector(
             data_b,
-            ttnn::TensorSpec(
+            tt::tt_metal::TensorSpec(
                 b_shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)),
             device.get());
 

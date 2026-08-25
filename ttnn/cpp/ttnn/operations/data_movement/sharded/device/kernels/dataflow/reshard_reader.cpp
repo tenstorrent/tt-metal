@@ -3,46 +3,59 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include "api/tensor/tensor_accessor.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
+// Named RTAs: num_output_pages, num_ranges, output_page_offset
+// Varargs, positional:
+//   [0, num_x_cores)                          input-grid x coordinates, indexed by start_x_index
+//   [num_x_cores, num_x_cores + num_y_cores)  input-grid y coordinates, indexed by start_y_index
+//   [num_x_cores + num_y_cores, ...)          3 words per range: core_start_stride,
+//                                             stride_data_offset, stride_size_num_strides_skip
+//   (zero-padded by the host to a uniform per-kernel count; only num_ranges ranges are read.)
 void kernel_main() {
-    constexpr uint32_t shard_cb = get_compile_time_arg_val(0);
-    constexpr uint32_t num_x_cores = get_compile_time_arg_val(1);
-    constexpr uint32_t num_y_cores = get_compile_time_arg_val(2);
-    constexpr uint32_t page_size = get_compile_time_arg_val(3);
-    constexpr uint32_t unit_size = get_compile_time_arg_val(4);
+    constexpr uint32_t num_x_cores = get_arg(args::num_x_cores);
+    constexpr uint32_t num_y_cores = get_arg(args::num_y_cores);
+    constexpr uint32_t page_size = get_arg(args::page_size);
+    constexpr uint32_t unit_size = get_arg(args::unit_size);
 
     uint32_t y_offset = num_x_cores;
 
-    uint32_t arg_index = num_x_cores + num_y_cores;
-    const uint32_t input_shard_addr = get_arg_val<uint32_t>(arg_index++);
-    const uint32_t num_output_pages = get_arg_val<uint32_t>(arg_index++);
-    const uint32_t num_ranges = get_arg_val<uint32_t>(arg_index++);
-    const uint32_t output_page_offset = get_arg_val<uint32_t>(arg_index++);
+    const uint32_t num_output_pages = get_arg(args::num_output_pages);
+    const uint32_t num_ranges = get_arg(args::num_ranges);
+    const uint32_t output_page_offset = get_arg(args::output_page_offset);
 
+    // The input tensor is walked with raw unicast NOC reads against the per-range core
+    // coordinates, so only its base address is needed.
+    TensorAccessor input(tensor::input);
     Noc noc;
-    CircularBuffer cb(shard_cb);
-    uint32_t l1_write_addr = cb.get_write_ptr() + output_page_offset * page_size;
+    DataflowBuffer dfb(dfb::output_shard);
+    const uint32_t input_shard_addr = input.get_bank_base_address();
+    uint32_t l1_write_addr = dfb.get_write_ptr() + output_page_offset * page_size;
+
+    // The per-range block begins after the input-grid coordinate table.
+    uint32_t arg_index = num_x_cores + num_y_cores;
 
     uint32_t mask_byte = 0x0ff;     // 8 bits
     uint32_t mask_short = 0x0ffff;  // 16 bits
 
     for (uint32_t range_id = 0; range_id < num_ranges; range_id++) {
-        const uint32_t core_start_stride = get_arg_val<uint32_t>(arg_index++);
+        const uint32_t core_start_stride = get_vararg(arg_index++);
         const uint32_t start_x_index = (core_start_stride >> 24);
         const uint32_t start_y_index = (core_start_stride >> 16) & mask_byte;
         const uint32_t stride_x = (core_start_stride >> 8) & mask_byte;
         const uint32_t stride_y = (core_start_stride)&mask_byte;
-        const uint32_t start_x = get_arg_val<uint32_t>(start_x_index);
-        const uint32_t start_y = get_arg_val<uint32_t>(y_offset + start_y_index);
+        const uint32_t start_x = get_vararg(start_x_index);
+        const uint32_t start_y = get_vararg(y_offset + start_y_index);
 
-        const uint32_t stride_data_offset = get_arg_val<uint32_t>(arg_index++);
-        const uint32_t stride_size_num_strides_skip = get_arg_val<uint32_t>(arg_index++);
+        const uint32_t stride_data_offset = get_vararg(arg_index++);
+        const uint32_t stride_size_num_strides_skip = get_vararg(arg_index++);
         const uint32_t num_strides = ((stride_size_num_strides_skip)&mask_short) >> 8;
         const bool skip = (((stride_size_num_strides_skip)&mask_byte) == 1);
 
@@ -57,8 +70,8 @@ void kernel_main() {
 
         for (uint32_t stride_idx = 0; stride_idx < num_strides; stride_idx++) {
             if (!skip) {
-                uint32_t core_id_x = get_arg_val<uint32_t>(core_id_x_index);
-                uint32_t core_id_y = get_arg_val<uint32_t>(y_offset + core_id_y_index);
+                uint32_t core_id_x = get_vararg(core_id_x_index);
+                uint32_t core_id_y = get_vararg(y_offset + core_id_y_index);
                 CoreLocalMem<uint32_t> dst(l1_write_addr);
                 noc.async_read(
                     UnicastEndpoint{},

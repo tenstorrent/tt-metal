@@ -9,6 +9,7 @@ set(PERF_MICROBENCH_TESTS_SRCS
     ethernet/test_ethernet_bidirectional_bandwidth_no_edm.cpp
     ethernet/test_ethernet_link_ping_latency_no_edm.cpp
     ethernet/test_all_ethernet_links.cpp
+    routing/benchmark_fabric_mux_v2_throughput.cpp
     routing/test_tt_fabric_mux_bandwidth.cpp
     noc/test_noc_unicast_vs_multicast_to_single_core_latency.cpp
     tensix/test_gathering.cpp
@@ -30,6 +31,7 @@ set(PERF_MICROBENCH_TESTS_SRCS
     9_dram_adjacent_read_remote_l1_write/test_dram_read_l1_write.cpp
     10_dram_read_remote_cb_sync/test_dram_read_remote_cb.cpp
     11_remote_cb_sync_matmul_single_core/test_remote_cb_sync_matmul.cpp
+    op_to_op_latency/test_op_to_op_latency.cpp
 )
 
 set(X86_64_ONLY_TESTS

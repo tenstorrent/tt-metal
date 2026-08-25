@@ -350,13 +350,23 @@ void kernel_main() {
     uint32_t max_idx = 0;
     auto max_val = get_default_value<src_cb_addr_data_format>();
 
-    done_sem.set(0);
-
     // -------------------------------------------------------------------------
     // Main loop - run by all cores
     for (uint32_t k = 0; k < outer_dim_units; ++k) {
         if (is_reduce_core) {
-            done_sem.set(0);
+            // done_sem is zero-initialized by the dispatcher before the kernel
+            // launches (and restored to zero at the end of this kernel so trace
+            // replays see the same state), so the k == 0 iteration needs no
+            // reset. Resetting it here
+            // at k == 0 would race the worker cores' done_sem.up() increments:
+            // those increments are ungated at k == 0 (the start_sem handshake
+            // below only orders k > 0), so a reset could clobber an increment that
+            // already landed and stall the done_sem.wait(num_cores) below forever.
+            // For k > 0 the reset clears the previous iteration's count and is
+            // ordered ahead of the increments by the start_sem multicast/wait.
+            if (k > 0) {
+                done_sem.set(0);
+            }
             start_sem.set(k + 1);
 
             if constexpr (num_cores > 1) {
@@ -366,17 +376,21 @@ void kernel_main() {
                 }
 
                 if (num_cores1 > 0) {
-                    start_sem.set_multicast(
-                        noc, start_core_x1, start_core_y1, end_core_x1, end_core_y1, num_cores1);
+                    start_sem.set_multicast(noc, start_core_x1, start_core_y1, end_core_x1, end_core_y1, num_cores1);
                 }
 
                 noc.async_write_barrier();
             }
         }
 
-        // Wait to start
+        // Wait to start.  Use wait_min (>=) rather than exact-match: in the
+        // reduce_all path there is no per-iteration done_sem back-pressure (it is
+        // lifted out of this loop), so the reduce core free-runs and can advance
+        // start_sem past (k+1) before a lagging worker samples it.  An exact-match
+        // wait(k+1) would then never observe k+1 and deadlock; start_sem is
+        // monotonically increasing, so wait_min(k+1) is correct for both paths.
         if (k > 0) {
-            start_sem.wait(k + 1);
+            start_sem.wait_min(k + 1);
         }
 
         find_argmax_for_core<reduce_all, src_cb_addr_data_format>(
@@ -490,4 +504,25 @@ void kernel_main() {
             noc.async_write_barrier();
         }
     }  // if constexpr (reduce_all)
+
+    // Restore both semaphores to their initial (zero) state for the next launch. The k == 0
+    // iteration relies on done_sem starting at 0, but that only holds on a fresh enqueue: trace
+    // replay does not re-run the dispatcher's semaphore initialization, so without this reset the
+    // previous run's final count (num_cores) is still present, the reducer's k == 0 wait passes
+    // immediately, and it collates stale partials (observed as argmax indices from the wrong
+    // core's slice on the first outer row). These resets are race-free: the final done_sem.wait
+    // above guarantees every worker's increment for the last iteration has landed, and workers
+    // never read start_sem again after their final wait.
+    if (is_reduce_core) {
+        done_sem.set(0);
+        start_sem.set(0);
+        if constexpr (num_cores > 1) {
+            start_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
+                noc, start_core_x0, start_core_y0, end_core_x0, end_core_y0, num_cores0);
+            if (num_cores1 > 0) {
+                start_sem.set_multicast(noc, start_core_x1, start_core_y1, end_core_x1, end_core_y1, num_cores1);
+            }
+            noc.async_write_barrier();
+        }
+    }
 }

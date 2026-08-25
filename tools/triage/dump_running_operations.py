@@ -22,8 +22,8 @@ Description:
           - Devices / Cores: enumerated lists (may be truncated with "..." for readability)
 
     Companion scripts:
-      - `dump_op_window` — context table of ops with id near the currently-running set.
-      - `dump_op_mesh` — 2D mesh-grid view of running ops, sourced from Inspector's system mesh.
+      - `dump_op_window` - context table of ops with id near the currently-running set.
+      - `dump_op_mesh` - 2D mesh-grid view of running ops, sourced from Inspector's system mesh.
       All share the same aggregation via `operation_provider` (use `--include-done`
       on the triage CLI to surface DONE cores in every consumer).
 

@@ -40,10 +40,9 @@ import torch.nn.functional as F
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from models.common.utility_functions import is_watcher_enabled
+from models.common.utility_functions import is_watcher_enabled, skip_with_llk_assert
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
 from models.experimental.ops.descriptors.fusion import clear_build_cache
-
 
 # =============================================================================
 # Helpers
@@ -790,6 +789,9 @@ class TestPerfDemos:
             tB,
         )
 
+    # TT_METAL_LLK_ASSERTS run produced incorrect fused output for branch A
+    # (PCC=0.004586, Frobenius=1.0) while the unfused companion passed.
+    @skip_with_llk_assert("Issue #49031: Fused parallel chains fail numeric checks with LLK asserts enabled.")
     @pytest.mark.parametrize(
         "perf_mode", ["none"]
     )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
@@ -1264,7 +1266,7 @@ class TestPerfDemos:
     def _sharded_tree_container(self, ops):
         from models.experimental.ops.descriptors.fusion import Sequential, Parallel
 
-        (ln_stem, sl_top, sl_bot, mm_left, mm_right, sl_tl, sl_bl, sl_tr, sl_br, ln_ll, ln_lr, ln_rl, ln_rr) = ops
+        ln_stem, sl_top, sl_bot, mm_left, mm_right, sl_tl, sl_bl, sl_tr, sl_br, ln_ll, ln_lr, ln_rl, ln_rr = ops
         return Sequential(
             ln_stem,
             Parallel(
@@ -1273,6 +1275,9 @@ class TestPerfDemos:
             ),
         )
 
+    # TT_METAL_LLK_ASSERTS run produced incorrect fused output for the left leaf
+    # (PCC=0.005098, Frobenius=1.414062) while the unfused companion passed.
+    @skip_with_llk_assert("Issue #49031: Fused sharded tree fails numeric checks with LLK asserts enabled.")
     @pytest.mark.parametrize(
         "perf_mode", ["none"]
     )  # "cold_start", "e2e", "device_fw" — disabled for CI, enable if measuring performance
