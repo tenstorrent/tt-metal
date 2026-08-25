@@ -45,10 +45,12 @@ sizes:
     aliases: ["Llama-3.3-70B", "meta-llama/Llama-3.3-70B-Instruct"]
     skus:
       wh_llmbox_perf:
-        # Current-main performance batch-32 requires 99,983,360 bytes for the
-        # full captured trace set. Reserve measured headroom instead of
-        # iterating at the exact allocation boundary.
-        trace_region_size: 120000000
+        # Current-main performance batch-32 exceeded 120 MB after capturing
+        # decode plus Q128 prefill batches 32, 1, 2, 4, 8, and 16; the next
+        # capture raised the cumulative requirement to 124,559,360 bytes.
+        # Use the already-proven full-set 70B reservation rather than iterate
+        # around partial capture boundaries.
+        trace_region_size: 224000000
       wh_galaxy_perf:
         trace_region_size: 80000000
       bh_p150:
