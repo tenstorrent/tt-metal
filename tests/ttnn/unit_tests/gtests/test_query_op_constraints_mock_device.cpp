@@ -24,15 +24,6 @@
 
 #include <umd/device/types/arch.hpp>
 
-#ifndef __has_feature
-#define __has_feature(x) 0
-#endif
-#if __has_feature(leak_sanitizer) || __has_feature(address_sanitizer) || defined(__SANITIZE_ADDRESS__) || \
-    defined(__SANITIZE_LEAK__)
-#define TT_MATMUL_REGISTRY_TEST_LSAN_ACTIVE 1
-#include <sanitizer/lsan_interface.h>
-#endif
-
 #include "device/mock_device_util.hpp"
 
 #include "ttnn/graph/graph_query_op_constraints.hpp"
@@ -55,33 +46,12 @@
 
 namespace tt::tt_metal {
 
-namespace {
-
-#ifdef TT_MATMUL_REGISTRY_TEST_LSAN_ACTIVE
-class ScopedLeakTrackingDisable {
-public:
-    ScopedLeakTrackingDisable() { __lsan_disable(); }
-    ~ScopedLeakTrackingDisable() { __lsan_enable(); }
-};
-#endif
-
-}  // namespace
-
 class QueryOpConstraintsMockDevice : public ::testing::Test {
 protected:
-#ifdef TT_MATMUL_REGISTRY_TEST_LSAN_ACTIVE
-    std::optional<ScopedLeakTrackingDisable> suppress_mock_runtime_process_global_leaks_;
-#endif
     std::unique_ptr<MetalEnv> mock_env_;
     std::shared_ptr<distributed::MeshDevice> mock_device_;
 
     void SetUp() override {
-#ifdef TT_MATMUL_REGISTRY_TEST_LSAN_ACTIVE
-        // OpenMPI/PMIx intentionally retain process-global discovery state.
-        // This mock fixture validates behavior; the separate registry contract
-        // binary retains leak detection for the registry runtime itself.
-        suppress_mock_runtime_process_global_leaks_.emplace();
-#endif
         mock_env_ = std::make_unique<MetalEnv>(
             MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)));
         auto mesh_shape = mock_env_->get_system_mesh().shape();
@@ -97,9 +67,6 @@ protected:
     void TearDown() override {
         mock_device_.reset();
         mock_env_.reset();
-#ifdef TT_MATMUL_REGISTRY_TEST_LSAN_ACTIVE
-        suppress_mock_runtime_process_global_leaks_.reset();
-#endif
     }
 };
 

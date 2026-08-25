@@ -73,7 +73,8 @@ jobs:
             --gtest_filter='MatmulConfigRegistry.*' \
             --gtest_color=yes
           export GTEST_OUTPUT=xml:/work/generated/test_reports/matmul_registry_wrapper_contract.xml
-          /usr/bin/tt-nn-validation-matmul-registry-wrappers \
+          ASAN_OPTIONS="${ASAN_OPTIONS:-color=always}:detect_leaks=0" \
+            /usr/bin/tt-nn-validation-matmul-registry-wrappers \
             --gtest_filter='QueryOpConstraintsMockDevice.MatmulRegistryOffAndEmptyShadowPreserveConstraintQuery:QueryOpConstraintsMockDevice.PublicMatmulWrappersForwardOneDisjointDomainEach' \
             --gtest_color=yes
 
