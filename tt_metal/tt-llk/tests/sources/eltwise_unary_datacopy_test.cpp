@@ -38,7 +38,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A                = params.buffer_A;
 #endif
     const std::uint32_t num_tiles           = NUM_BLOCKS * NUM_TILES_IN_BLOCK;
-    const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(tilize_en, num_tiles, num_faces);
+    const std::uint32_t src_handshake_iters = LOOP_FACTOR * num_tiles * num_faces;
 
     {
         START_PERF_MEASURE("INIT")
@@ -68,13 +68,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            // MATH_ISOLATE must fake the dvalids unpack would post. Blackhole tilize
-            // always posts SrcB (UNP_ZEROSRC) per tile regardless of dest acc;
-            // non-tilize unpack_A posts SrcB only for FP32 dest acc. Leaving unpack
-            // idle here deadlocks math.
-            if constexpr (!unpack_to_dest)
+            if constexpr (!tilize_en && !unpack_to_dest)
             {
-                _perf_unpack_loop_set_valid</* src A */ true, /* src B */ tilize_en || is_fp32_dest_acc_en>(src_handshake_iters);
+                _perf_unpack_loop_set_valid</* src A */ true, /* src B */ is_fp32_dest_acc_en>(src_handshake_iters);
             }
         }
         else
@@ -142,8 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
     const int DST_INDEX                    = params.DST_INDEX;
 #endif
-    const std::uint32_t num_tiles           = NUM_BLOCKS * NUM_TILES_IN_BLOCK;
-    const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(tilize_en, num_tiles, num_faces);
+    const std::uint32_t src_handshake_iters = LOOP_FACTOR * NUM_BLOCKS * NUM_TILES_IN_BLOCK * num_faces;
 
     {
         START_PERF_MEASURE("INIT")

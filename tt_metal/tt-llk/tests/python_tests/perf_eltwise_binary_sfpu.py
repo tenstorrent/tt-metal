@@ -9,10 +9,15 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
+    DestSync,
     MathOperation,
     Transpose,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import (
+    generate_perf_input_dimensions,
+    input_output_formats,
+    parametrize,
+)
 from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
@@ -29,13 +34,18 @@ from helpers.test_variant_parameters import (
 
 
 def get_dest_accum_modes(formats):
+    # Int32 binary SFPU kernels use a 32-bit dest (functional pins dest_acc=Yes).
     if formats.input_format.is_32_bit() and formats.input_format.is_integer():
-        return [DestAccumulation.No]
-    # TestConfig promotes dest_acc=No to Yes for outlier format combos, so asking
-    # for both would record two rows with an identical key (the same kernel twice).
-    return distinct_dest_accumulation_modes(
-        formats, [DestAccumulation.Yes, DestAccumulation.No]
-    )
+        return [DestAccumulation.Yes]
+    return [DestAccumulation.Yes, DestAccumulation.No]
+
+
+def _unpack_to_dest(formats, dest_acc):
+    # Int32/UInt32 have no SrcA/SrcB unpack path (cunpack_common.h); they must
+    # unpack straight into dest. Float32 dest_acc=Yes uses the Tf32 SrcA path.
+    if formats.input_format.is_32_bit() and formats.input_format.is_integer():
+        return True
+    return formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
 
 
 @pytest.mark.perf
@@ -59,6 +69,11 @@ def get_dest_accum_modes(formats):
         MathOperation.SfpuElwdiv,
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuElwpow,
+        MathOperation.SfpuXlogy,
+        MathOperation.SfpuElwGt,
+        MathOperation.SfpuBitwiseAnd,
+        MathOperation.SfpuMask,
+        MathOperation.SfpuAtan2,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
     loop_factor=[
@@ -67,9 +82,9 @@ def get_dest_accum_modes(formats):
     iterations=[
         32,
     ],
-    input_dimensions=[
-        [128, 64],  # tile_cnt: 8
-    ],  # Specifying different input sizes to cover different tile counts
+    input_dimensions=lambda dest_acc: generate_perf_input_dimensions(
+        dest_acc, DestSync.Half
+    ),
 )
 def test_perf_eltwise_binary_sfpu_float(
     perf_report,
@@ -81,9 +96,7 @@ def test_perf_eltwise_binary_sfpu_float(
     iterations,
     input_dimensions,
 ):
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
-    )
+    unpack_to_dest = _unpack_to_dest(formats, dest_acc)
 
     tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
@@ -140,6 +153,8 @@ def test_perf_eltwise_binary_sfpu_float(
         MathOperation.SfpuElwLogicalRightShift,
         MathOperation.SfpuElwadd,
         MathOperation.SfpuElwsub,
+        # Int comparisons share calculate_binary_comp_int32; GT_INT is Quasar-only.
+        MathOperation.SfpuElwGt,
     ],
     dest_acc=lambda formats: get_dest_accum_modes(formats),
     loop_factor=[
@@ -148,9 +163,9 @@ def test_perf_eltwise_binary_sfpu_float(
     iterations=[
         32,
     ],
-    input_dimensions=[
-        [128, 64],  # tile_cnt: 8
-    ],
+    input_dimensions=lambda dest_acc: generate_perf_input_dimensions(
+        dest_acc, DestSync.Half
+    ),
 )
 def test_perf_eltwise_binary_sfpu_int(
     perf_report,
@@ -162,9 +177,7 @@ def test_perf_eltwise_binary_sfpu_int(
     iterations,
     input_dimensions,
 ):
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
-    )
+    unpack_to_dest = _unpack_to_dest(formats, dest_acc)
 
     tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
@@ -253,9 +266,7 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
     if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.Yes:
         pytest.skip("SfpuAddTopRow does not support Float32 with DestAccumulation.Yes")
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
-    )
+    unpack_to_dest = _unpack_to_dest(formats, dest_acc)
 
     tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
@@ -293,3 +304,61 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
     )
 
     configuration.run(perf_report)
+
+
+# Extra slice for the dedicated binary DIV kernel (calculate_sfpu_binary_div).
+# Two states: Float16_b / acc=No (bf16 reciprocal + RNE) and Float32 / acc=Yes
+# (fp32 reciprocal + Markstein residual). Same run_types as the rest of this
+# module so the combined CSV stays one schema.
+_BINARY_SFPU_MATH_ISOLATE_DIMS = [[128, 64]]  # tile_cnt: 8
+
+
+def _div_math_isolate_config(formats, dest_acc, input_dimensions):
+    tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
+        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
+    )
+    unpack_to_dest = _unpack_to_dest(formats, dest_acc)
+    return PerfConfig(
+        "sources/eltwise_binary_sfpu_perf.cpp",
+        formats,
+        run_types=ALL_PERF_RUN_TYPES,
+        templates=[
+            MATH_OP(mathop=MathOperation.SfpuElwdiv),
+            APPROX_MODE(ApproximationMode.No),
+            ITERATIONS(32),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_count),
+            LOOP_FACTOR(16),
+            NUM_FACES(num_faces=faces_to_generate),
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+        ],
+        variant_stimuli=StimuliConfig(
+            None,
+            formats.input_format,
+            None,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_count,
+            tile_count_B=tile_count,
+            tile_count_res=tile_count,
+        ),
+        unpack_to_dest=unpack_to_dest,
+        dest_acc=dest_acc,
+        compile_time_formats=True,
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    input_dimensions=_BINARY_SFPU_MATH_ISOLATE_DIMS,
+)
+def test_perf_eltwise_binary_sfpu_div(perf_report, formats, input_dimensions):
+    dest_acc = (
+        DestAccumulation.Yes
+        if formats.input_format == DataFormat.Float32
+        else DestAccumulation.No
+    )
+    _div_math_isolate_config(formats, dest_acc, input_dimensions).run(perf_report)

@@ -368,30 +368,40 @@ def is_assert_hit(risc_name, core_loc="0,0", device_id=0):
     return is_it
 
 
+def _callstack_location(entry: CallstackEntry) -> str:
+    """Resolve file:line:column from ttexalens CallstackEntry.
+
+    Current ttexalens exposes DWARF location as ``entry.file_info`` (a
+    ``DwarfFileLine`` with ``file``/``line``/``column``). Older builds used
+    ``entry.file`` directly. Frames without DWARF leave those fields unset.
+    """
+    file_info = getattr(entry, "file_info", None)
+    file_name = getattr(file_info, "file", None) if file_info is not None else None
+    line = getattr(file_info, "line", None) if file_info is not None else None
+    column = getattr(file_info, "column", None) if file_info is not None else None
+    if file_name is None:
+        file_name = getattr(entry, "file", None)
+        line = getattr(entry, "line", None)
+        column = getattr(entry, "column", None)
+    if not file_name:
+        return "<unknown>"
+
+    path = Path(file_name)
+    llk_home = os.environ.get("LLK_HOME")
+    if llk_home and not path.is_absolute():
+        path = (Path(llk_home) / "tests" / path).resolve()
+    return f"{path}:{line}:{column}"
+
+
 def _print_callstack(risc_name: str, callstack: list[CallstackEntry]) -> str:
     temp_str = f"\n====== {risc_name.upper()} STACK TRACE =======\n"
 
-    LLK_HOME = Path(os.environ.get("LLK_HOME"))
-    TESTS_DIR = LLK_HOME / "tests"
-
     for idx, entry in enumerate(callstack):
-        # Format PC hex like Rust does
-        pc = f"0x{entry.pc:016x}" if entry.pc is not None else "0x????????????????"
-        # first line: idx, pc, function
-        temp_str += f"{idx:>4}: {pc} - {entry.function_name}\n"
-        # second line: file, line, column. ttexalens >= 0.3.29 moved these onto a nullable
-        # CallstackEntry.file_info (DwarfFileLine); older versions exposed them directly on the
-        # entry. Support both, and tolerate frames with no DWARF line info at all -- an
-        # AttributeError here would mask the LLK assertion we are trying to report.
-        file_info = getattr(entry, "file_info", entry)
-        source_file = (
-            getattr(file_info, "file", None) if file_info is not None else None
-        )
-        if source_file is None:
-            temp_str += f"{' '*25}| at <no line info>\n"
-            continue
-        file_path = (TESTS_DIR / Path(source_file)).resolve()
-        temp_str += f"{' '*25}| at {file_path}:{file_info.line}:{file_info.column}\n"
+        pc_value = getattr(entry, "pc", None)
+        pc = f"0x{pc_value:016x}" if pc_value is not None else "0x????????????????"
+        function_name = getattr(entry, "function_name", None) or "<unknown>"
+        temp_str += f"{idx:>4}: {pc} - {function_name}\n"
+        temp_str += f"{' '*25}| at {_callstack_location(entry)}\n"
 
     return temp_str
 
@@ -402,10 +412,16 @@ def handle_if_assert_hit(elfs: list[str], core_loc="0,0", device_id=0):
     for core in TRISC_CORES:
         risc_name = str(core.name)
         if is_assert_hit(risc_name, core_loc=core_loc, device_id=device_id):
-            temp_stack_traces += _print_callstack(
-                risc_name,
-                callstack(core_loc, elfs, risc_name=risc_name, device_id=device_id),
-            )
+            try:
+                temp_stack_traces += _print_callstack(
+                    risc_name,
+                    callstack(core_loc, elfs, risc_name=risc_name, device_id=device_id),
+                )
+            except Exception as exc:  # dump must not hide the ebreak itself
+                temp_stack_traces += (
+                    f"\n====== {risc_name.upper()} STACK TRACE =======\n"
+                    f"Failed to format callstack: {type(exc).__name__}: {exc}\n"
+                )
             assertion_hits.append(risc_name)
 
     if assertion_hits:

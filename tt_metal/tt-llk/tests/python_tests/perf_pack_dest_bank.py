@@ -66,19 +66,17 @@ def get_valid_num_faces_datacopy(tilize):
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
-            # DataFormat.Float16,
-            # DataFormat.Float32,
-            # DataFormat.Bfp8_b,  # Can be enabled if needed
+            DataFormat.Float16,
         ]
     ),
-    dest_acc=[DestAccumulation.No],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     l1_acc=[L1Accumulation.No, L1Accumulation.Yes],
     num_faces=4,
     tilize=[Tilize.No],
     dest_index=0,
     num_blocks=[1, 2],
     num_tiles_in_block=[4, 8],
-    loop_factor=[8, 128, 512],
+    loop_factor=[128],
 )
 def test_perf_pack_dest_bank(
     perf_report,

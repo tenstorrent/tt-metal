@@ -3,11 +3,12 @@
 
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat
-from helpers.llk_params import (
-    PerfRunType,
-)
+from helpers.golden_generators import TILE_DIM
+from helpers.llk_params import DestSync, PerfRunType
 from helpers.param_config import (
+    generate_perf_input_dimensions,
     input_output_formats,
     parametrize,
 )
@@ -18,6 +19,13 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
+
+
+def _pack_untilize_tile_dims(dest_acc):
+    return [
+        (dims[0] // TILE_DIM, dims[1] // TILE_DIM)
+        for dims in generate_perf_input_dimensions(dest_acc, DestSync.Half)
+    ]
 
 
 @pytest.mark.perf
@@ -32,15 +40,16 @@ from helpers.test_variant_parameters import (
             DataFormat.Fp8_e4m3,
         ]
     ),
-    full_rt_dim=[1, 2, 3, 4, 5, 6, 7, 8],
-    full_ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
+    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    rt_ct=lambda dest_acc: _pack_untilize_tile_dims(dest_acc),
 )
 def test_perf_pack_untilize(
     perf_report,
     formats,
-    full_rt_dim,
-    full_ct_dim,
+    dest_acc,
+    rt_ct,
 ):
+    full_rt_dim, full_ct_dim = rt_ct
     if (
         formats.input_format == DataFormat.Fp8_e4m3
         or formats.output_format == DataFormat.Fp8_e4m3
@@ -74,7 +83,7 @@ def test_perf_pack_untilize(
             break
 
     tile_count = full_rt_dim * full_ct_dim
-    dimensions = [full_rt_dim * 32, full_ct_dim * 32]
+    dimensions = [full_rt_dim * TILE_DIM, full_ct_dim * TILE_DIM]
 
     configuration = PerfConfig(
         "sources/pack_untilize_perf.cpp",
@@ -97,6 +106,7 @@ def test_perf_pack_untilize(
             tile_count_res=tile_count,
         ),
         unpack_to_dest=formats.input_format.is_32_bit(),
+        dest_acc=dest_acc,
     )
 
     configuration.run(perf_report)

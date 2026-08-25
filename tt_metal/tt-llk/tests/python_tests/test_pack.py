@@ -34,6 +34,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    generate_perf_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -70,6 +71,24 @@ PACK_RELU_TYPES = [
     PackerReluType.MinThresholdRelu,
     PackerReluType.MaxThresholdRelu,
 ]
+
+
+def generate_pack_perf_combinations():
+    """Dest-full tall/wide matrices per DestSync, dest index 0, all ReLU types."""
+    combinations = []
+    for fmt in PACK_FORMATS:
+        for dest_acc in get_valid_dest_accumulation_modes(fmt):
+            for dest_sync in (DestSync.Half, DestSync.Full):
+                for dimensions in generate_perf_input_dimensions(dest_acc, dest_sync):
+                    for relu_type in PACK_RELU_TYPES:
+                        combinations.append(
+                            (fmt, dest_acc, dimensions, relu_type, dest_sync)
+                        )
+    return combinations
+
+
+PERF_PACK_COMBINATIONS = generate_pack_perf_combinations()
+
 
 # Shared with perf_pack.py so the two sweeps stay aligned.
 # dest_index stays a lambda: get_valid_dest_indices also takes all_indices, which
