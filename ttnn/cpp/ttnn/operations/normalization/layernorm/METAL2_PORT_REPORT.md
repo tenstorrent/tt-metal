@@ -7,8 +7,8 @@ kernel entry points it can select are on `ProgramSpecFactoryConcept`.
 
 `LayerNormShardedProgramFactory` is **not** ported in this pass and stays on
 `ProgramDescriptorFactoryConcept`. The two factories share no kernel source, so the `program_factory_t`
-variant is valid with one factory on each concept and the op builds and runs throughout. The sharded
-factory's blocker is recorded under [Open items for downstream](#open-items-for-downstream).
+variant is valid with one factory on each concept and the op builds and runs throughout. What the
+sharded pass still has to do is recorded under [Open items for downstream](#open-items-for-downstream).
 
 **No-regression result.** The confirmed test set gives **2236 passed, 22 skipped** both before and
 after the port, with an identical pass/skip split per file. The only behavior change anywhere is the
@@ -51,7 +51,7 @@ port.
 - **One `TT_FATAL` added inside the factory body**, guarding that
   `to_compute_hardware_config` returned the Gen1 alternative before the port reads Gen1-only fields
   off it. It cannot fire on Wormhole or Blackhole; it replaces what would otherwise be a
-  `std::bad_variant_access` on a Gen2 device. This is the one count delta in the TT_FATAL census
+  `std::bad_variant_access` on a Gen2 device. This is the one count delta in the TT_FATAL check
   (11 → 12 in the factory), and it is an addition, not a loss.
 - **`Wt` and `eps` are per-node runtime args whose value is identical on every node**, so they are
   really common runtime args. The port keeps them as RTAs; converting changes dispatch semantics and
@@ -67,20 +67,40 @@ port.
   (pre-port line numbers), `LayerNormMultiCoreProgramFactory.create_descriptor`.
 - **What it was for:** it let Python drive the interleaved factory directly and receive a
   `ProgramDescriptor`, including a fourth `core_range_set` argument that the C++ op never sets.
-- **Why it had to go:** `create_program_artifacts` has a fixed three-parameter signature that cannot
-  carry `core_range_set`, and the `create_descriptor` symbol no longer exists. This is
-  ttnn_factory's exception 2 (which names layernorm's `core_range_set` explicitly): the parameter is
-  dropped and its production default, `default_core_range(device)`, is inlined at the work-split
-  site.
+- **Why it had to go:** the `create_descriptor` symbol no longer exists, so the block naming it stops
+  compiling. It could not be pointed at `create_program_artifacts` either: that returns a
+  `ProgramArtifacts`, and neither `ProgramArtifacts` nor `ProgramSpec` is bound to Python anywhere in
+  the repo (`ProgramDescriptor` is bound in four files, these in none), so exposing the new method
+  would first mean binding the whole Metal 2.0 type family. The removal follows ttnn_factory's
+  exception 2, which names layernorm's `core_range_set` explicitly: the parameter is dropped and its
+  production default, `default_core_range(device)`, is inlined at the work-split site. **Read that
+  exception's stated reason with care** — see the Friction entry on it below; the outcome it
+  prescribes is right, the reason it gives is not.
+- **On the `core_range_set` parameter specifically**, stated precisely because an earlier revision of
+  this report overstated it: nothing *technically* prevented keeping it. `ProgramSpecFactoryConcept`
+  tests only for the presence of `create_program_artifacts`, and the adapter calls it with exactly
+  three arguments, so a defaulted fourth parameter would have compiled and gone unnoticed. It was
+  dropped because deleting the binding left it with no caller at all, not because the signature
+  refused it.
+- **What that costs.** Every C++ call already got the whole compute grid, so nothing changed there.
+  But the one Python consumer did pass a genuinely restricted range on the interleaved path
+  ([_utils.py:104](../../../../../../models/experimental/ops/descriptors/normalization/_utils.py#L104),
+  `cr_arg = None if input_tensor.is_sharded() else core_range_set`), so restricting an interleaved
+  layernorm to a subset of cores no longer reaches the factory. Note that the removal is **not**
+  clean from the caller's side: `layer_norm.py` and `rms_norm.py` still take a `core_range_set`
+  argument and forward it, and `op_descriptor.py` still documents it as live behavior, so a caller
+  who passes one is not told it is unsupported — it fails with `AttributeError` further down. Either
+  restoring the capability or withdrawing the argument is a decision for the helper's owner.
 - **Known downstream consumers** (all outside the porter's writeable surface; none were edited):
-  - [models/experimental/ops/descriptors/normalization/_utils.py:113](../../../../../../models/experimental/ops/descriptors/normalization/_utils.py#L113)
+  - [models/experimental/ops/descriptors/normalization/_utils.py:109](../../../../../../models/experimental/ops/descriptors/normalization/_utils.py#L109)
     — `factory.create_descriptor(operation_params, tensor_args, out, cr_arg)`, reached through
     `select_program_factory`, so it breaks for interleaved inputs and keeps working for sharded
     ones. The same file also calls `default_core_range` at
     [:44](../../../../../../models/experimental/ops/descriptors/normalization/_utils.py#L44), which
     still exists.
-  - [tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py](../../../../../../tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py)
-    — drives that helper with interleaved tensors and an explicit `core_range_set`.
+  - [tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py:198](../../../../../../tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py#L198)
+    — does not call `create_descriptor` itself; it drives the helper above with interleaved tensors
+    and an explicit `core_range_set`, and fails through it.
 - **Measured impact.** Running that file post-port gives **60 failed, 29 passed**, and every one of
   the 60 failures is the same line: `AttributeError: 'LayerNormMultiCoreProgramFactory' object has
   no attribute 'create_descriptor'`. There is no numerics failure and no second failure mode; the 29
@@ -115,8 +135,9 @@ whitelist's own mapping for this call is `DataflowBuffer::get_tile_address`).
   DFB's `unpack_modes` entry must be gated on the same condition as its binding"* — is exactly the
   fix, and the error message named the buffer, so the diagnosis took one read. Without the forced
   checks this would have been a silently-wrong precision setting on the Welford path.
-- **The two-toucher / self-loop distinction held up under re-derivation.** The brief listed the
-  interleaved factory's dispositions, and re-running the census per selected kernel source (rather
+- **The self-loop versus 1P+1C distinction held up under re-derivation.** The brief listed how the
+  interleaved factory's buffers should be bound, and re-counting the touching kernels per selected
+  kernel source (rather
   than per buffer) confirmed all of them and additionally surfaced the three that *move* with the
   configuration: `IN`'s producer shifts from the reader to compute on the row-major path, `OUT`
   becomes a compute self-loop there, and `X_WELFORD` is a 1P+1C when the pre-add is not fused and a
@@ -137,6 +158,16 @@ whitelist's own mapping for this call is `DataflowBuffer::get_tile_address`).
 
 ### Gaps
 
+- **ttnn_factory's exception 2 gives a reason that does not hold, using this op as its example.**
+  [ttnn_factory.md](../../../../../../docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/ai/shared/ttnn_factory.md)
+  says *"The fixed `create_program_artifacts` signature (`attributes`, `tensor_args`,
+  `tensor_return_value`) cannot carry it"*, naming layernorm's `core_range_set` as the case. It can
+  carry it: `ProgramSpecFactoryConcept` tests only for the presence of `create_program_artifacts`,
+  and the adapter calls it with exactly three arguments, so a defaulted fourth parameter compiles and
+  goes unnoticed. The exception's *prescription* is still right, but for a different reason — the
+  parameter's only caller is the pybind hook the same exception tells you to delete, so it is left
+  with no caller rather than with no room. Worth correcting, because a porter who applies the stated
+  reason to a parameter that *does* still have a C++ caller would drop something a caller depends on.
 - **A fully-skipped test session and a stale build look identical when proving
   `METAL2_CHECKS_FORCED`.** The recipe says to rebuild, run one test, and grep the log. The op I
   first picked (`tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py`) skipped all
@@ -172,7 +203,7 @@ whitelist's own mapping for this call is `DataflowBuffer::get_tile_address`).
   it as a reader that always produces versus a compute kernel that only conditionally consumes. The
   shape here is different: `IN_RM` and `OUT_RM` are allocated whenever the input is row-major, but
   only two of the four compute kernels carry the tilize / untilize blocks that touch them, so in the
-  other configurations the buffer has *zero* touchers rather than one. The same sentence resolves
+  other configurations no kernel touches the buffer at all, rather than exactly one. The same sentence resolves
   it, but it took a while to recognise that it applied.
 - **The `Group<T>` / `Table<K,V>` heads-up says these are Metal 2.0 types but the examples use them
   unqualified.** They live in `tt::tt_metal::experimental`, so a factory that aliases the namespace
@@ -181,20 +212,21 @@ whitelist's own mapping for this call is `DataflowBuffer::get_tile_address`).
 
 ## Open items for downstream
 
-### The sharded factory is not ported, and audit Question 2 blocks it
+### The sharded factory is not ported
 
-`LayerNormShardedProgramFactory` remains on `ProgramDescriptorFactoryConcept`. The blocker is the
-audit's **Question 2**, which is a construction decision no porter can route around: `c_17`
-(`cb_out_resharded`, POST without `skip_write_back`) is declared over `all_worker_and_storage_cores`
-— *wider* than any kernel's range — and `write_resharded_data` reads its **local** `get_write_ptr()`
-and uses that value as the destination address on a **remote** storage node
-([device/kernels/dataflow/reshard_writer.hpp:39](device/kernels/dataflow/reshard_writer.hpp#L39)).
-That only works because the buffer sits at the same SRAM address on every node in the union. Metal
-2.0 derives a buffer's node set from its bound kernels, so a buffer with no bound kernel on a node
-cannot be placed there, and dropping it on the storage nodes would corrupt whatever the allocator
-put at that address. Either the framework needs a way to place a borrowed-memory buffer on nodes
-with no binding, or the sharded port has to bind something on the storage nodes. **Get that answer
-before starting the sharded factory.**
+`LayerNormShardedProgramFactory` remains on `ProgramDescriptorFactoryConcept`. It was left for a
+later pass because this op is broad rather than deep and one factory is the recipe's atomic unit,
+not because anything blocks it.
+
+**An earlier revision of this report said audit Question 2 blocked it. That is withdrawn.** The
+audit has since retracted Question 2: a buffer-backed CB does not take a per-core SRAM allocation at
+all, so `c_17`'s address is the output tensor's own address and the storage half of its core range
+reserves nothing. The port can bind `c_17` on the worker nodes alone and needs nothing on the
+storage nodes. What the finding became instead is a **binding reclassification**: the sharded
+`output`, reached through `c_17` under POST without `skip_write_back`, is **Case 2** rather than
+clean — the writer takes only that binding's base address and does its own remote NOC writes. The
+next porter binds the output as a `TensorParameter`, pulls the base with `get_bank_base_address`,
+and leaves the write-back arithmetic alone.
 
 Everything else the sharded factory needs is already scoped by the audit and brief: five
 `allow_instance_multi_binding` buffers, five runtime-vararg sites with the `get_arg_addr` pointer

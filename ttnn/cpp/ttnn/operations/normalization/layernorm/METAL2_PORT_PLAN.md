@@ -8,7 +8,7 @@ Written during the inventory and planning steps; committed alongside the port fo
 path), together with the ten kernel entry points it can select.
 `LayerNormShardedProgramFactory` stays on `ProgramDescriptorFactoryConcept` and is untouched;
 the two factories share no kernel source, so the op builds and runs with one factory on each
-concept. The sharded factory's blocker and its remaining work are recorded in
+concept. What the sharded pass still has to do is recorded in
 `METAL2_PORT_REPORT.md`.
 
 ---
@@ -247,11 +247,15 @@ Function-call escapes out of the op directory (all cleared by the audit):
   writes one method, `create_program_artifacts`.
 - **Custom `compute_program_hash`**: none — default reflection-based hash. Nothing to preserve.
 - **Implementation notes**:
-  - `create_program_artifacts` cannot carry the legacy fourth parameter `core_range_set`. Per
-    ttnn_factory exception 2 the parameter is **dropped** and its production default,
+  - The legacy fourth parameter `core_range_set` is **dropped** and its production default,
     `default_core_range(device)`, is **inlined** at the work-split site
-    ([:193](device/layernorm_op_multi_core.cpp#L193)). `default_core_range` itself survives as a
-    static member (the factory body calls it) and its nanobind stays.
+    ([:193](device/layernorm_op_multi_core.cpp#L193)), per ttnn_factory exception 2. To be precise
+    about why, since this plan's first revision claimed the signature could not carry it: nothing
+    technically prevented keeping it. `ProgramSpecFactoryConcept` tests only for the presence of
+    `create_program_artifacts` and the adapter calls it with exactly three arguments, so a defaulted
+    fourth parameter would have compiled unnoticed. It is dropped because its only caller was the
+    nanobind being deleted below. `default_core_range` itself survives as a static member (the
+    factory body calls it) and its nanobind stays.
   - The multi-core `create_descriptor` nanobind
     ([layernorm_nanobind.cpp:320-346](layernorm_nanobind.cpp#L320-L346)) is **deleted** — it would
     otherwise reference a vanished symbol. This is a user-visible API surface change with real
@@ -287,7 +291,7 @@ Default is 1:1 with legacy. Naming convention: the legacy `cb_*` names lose the 
 
 ### Planned DFB endpoint bindings
 
-Re-derived from the kernel-touch census rather than transcribed from the brief. `P` = PRODUCER,
+Re-derived by counting the kernels that touch each buffer, rather than copied from the brief. `P` = PRODUCER,
 `C` = CONSUMER, `self` = the same kernel bound both ways.
 
 Two host-side predicates drive the rows that move:
@@ -297,7 +301,7 @@ compute_tilizes    = input_is_row_major && !use_welford   // C_STD / C_LT carry 
 reader_fills_in    = !compute_tilizes                     // otherwise compute fills IN via tilize_block
 ```
 
-| DFB | declared when | endpoints | disposition |
+| DFB | declared when | endpoints | resolution |
 |---|---|---|---|
 | `IN` (`c_0`) | always | `compute_tilizes` ? compute **self** : reader P + compute C | 1P+1C, or self-loop on the row-major path |
 | `INB` (`c_1`) | `fuse_pre_add` | reader P + compute C | 1P+1C |
@@ -322,7 +326,7 @@ reader_fills_in    = !compute_tilizes                     // otherwise compute f
 | `EX2_WELFORD` (`c_31`) | `welford_state_fp32_alias` | compute **self** | alias of `EX2` |
 
 **No multi-binding flag is set anywhere in this factory**, and no DFB is both self-looped and
-multi-bound. Every census fits one toucher (self-loop) or two touchers (1P+1C).
+multi-bound. Every buffer has either a single touching kernel (self-loop) or two (1P+1C).
 
 `IN_RM` and `OUT_RM` are the one place the declaration is wider than the kernel's actual use: in the
 two legacy-broken row-major configs (Flags above) the selected kernel never references the token.
