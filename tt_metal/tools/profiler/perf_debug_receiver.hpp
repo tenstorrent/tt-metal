@@ -199,6 +199,7 @@ private:
         // pass setup (peek, stall-id refresh, reserve, stats fold). Separates "the decoder itself slowed
         // down" from "the time went around it" without perf.
         uint64_t frame_ticks = 0, ack_ticks = 0;
+        uint64_t wpos = 0;  // records written to the ring, at or ahead of the writer's committed position
         uint64_t order_regressions = 0, bad_frames = 0;
         uint64_t first_data_tsc = 0, last_commit_tsc = 0;
         uint64_t min_zone_ts = 0, max_zone_ts = 0;

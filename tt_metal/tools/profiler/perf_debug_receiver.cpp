@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 #include <sys/prctl.h>
+#include <pthread.h>
 #include <x86intrin.h>
 
 #include <tracy/Tracy.hpp>
@@ -61,6 +62,13 @@ namespace {
 // Credit-return quantum: pop+ack every 8 decoded frames (about one mover push) instead of once per pass,
 // so the device sees credit at decode pace rather than in whole-pass steps.
 constexpr uint32_t kAckBatchFrames = 8;
+// Commit quantum, in ring records. MUST STAY 1. Batching commits leaves the carry holding a partial 64 B
+// line across passes, but decode_pass re-seeds ntc.line_off on entry, so the carry's line stops starting
+// where it believes it does and its stores land misplaced: consumers read misaligned records -- zone
+// durations rendered in seconds -- while every decode-side counter (records, zones, anomalies, order
+// regressions) stays clean, because none of them read the ring back. Batching is not even faster:
+// 1352-1360 ms at 1 against 1365 ms at 32768.
+constexpr uint32_t kCommitBatchRecs = 1;
 // Per-pass peek window (~680 KB). Every complete frame inside it is consumed -- pages peeked but not
 // consumed are clflushed again by the next peek, so the only re-flush waste is a partial tail frame.
 constexpr uint32_t kMaxPagesPerPass = 64 * profiler::kSpscMaxFramePages;
@@ -75,6 +83,15 @@ constexpr uint32_t kEmptyPollsBeforeSleep = 1000;
 // (1.3 -> 2.7 ms), took producer stalls from 600-1257 to 1178-4732 and filled five DRAM rings instead of
 // two -- the sleep becomes a window in which no credit is returned at all.
 constexpr uint32_t kProbeSleepCapUs = 5;
+
+namespace {
+void set_os_thread_name(const std::string& n) {
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%s", n.c_str());
+    pthread_setname_np(pthread_self(), buf);
+}
+}  // namespace
+
 constexpr uint32_t kConsumerSleepCapUs = 100;
 
 inline uint64_t tsc_now() { return __rdtsc(); }
@@ -210,6 +227,10 @@ void PerfDebugReceiver::start() {
 bool PerfDebugReceiver::decode_pass(Stream& s) {
     const uint32_t avail = s.sock->pages_available();
     if (avail == 0) {
+        if (auto& w0 = s.ring->writer(); s.wpos != w0.position()) {  // input dry: deliver what is pending
+            s.ntc.flush_tail();
+            w0.emit_commit(s.wpos);
+        }
         if (s.producers_done.load(std::memory_order_acquire)) {
             s.retired = true;
         }
@@ -249,7 +270,7 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
     const auto view = s.sock->peek(np);
     const size_t first_words = view.first_bytes / 4;
     auto& w = s.ring->writer();
-    uint64_t pos = w.position();
+    uint64_t pos = s.wpos;  // the written position; the writer's own only tracks the batched commits
     const uint64_t pos0 = pos;
     const uint32_t dev = s.dev;
     const bool sink = !stall_only_;
@@ -290,7 +311,7 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
     if (ntc.ring == nullptr) {
         ntc.ring = reinterpret_cast<uint8_t*>(ring_base);
         ntc.cap_bytes = (ring_mask + 1ull) * sizeof(PerfDebugRawRec);
-        ntc.line_byte = pos * sizeof(PerfDebugRawRec);  // pos is 0 on the first pass, so this is aligned
+        ntc.line_off = pos * sizeof(PerfDebugRawRec) % ntc.cap_bytes;  // pos is 0 on the first pass, so this is aligned
     }
     const auto meta_hi = [dev](uint32_t lane, PerfDebugRawRecType rt) {
         return static_cast<uint64_t>((lane << 16) | (dev << 26) | (static_cast<uint32_t>(rt) << 29)) << 32;
@@ -341,14 +362,33 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         if (!sink) {
             return;
         }
-        const PerfDebugRawRecType rt = type == PP_DATA ? PerfDebugRawRecType::Data : PerfDebugRawRecType::Event;
-        ntc.put3(ts, meta_hi(lane, rt) | id, prog);
-        ntc.put3((static_cast<uint64_t>(id) << 32) | n, meta_hi(lane, PerfDebugRawRecType::Ext), prog);
+        const uint64_t pg = prog;
+        // PP_EVENT is payload-less by wire shape, so its Ext record carried nothing the Event record
+        // does not: one record IS the whole packet, and no Ext/Cont ever follows an Event.
+        if (type != PP_DATA) {
+            ntc.put3(ts, meta_hi(lane, PerfDebugRawRecType::Event) | id, pg);
+            pos += 1;
+            return;
+        }
+        const uint64_t q1 = meta_hi(lane, PerfDebugRawRecType::Data) | id;
+        // Ext carries the payload COUNT in its id field and payload words 1-2 in its ts field: the id
+        // repetition it used to carry is already in the head record, so the common short DATA is two
+        // records, not three -- and the pair goes out as ONE carry put (a put3 is a full carry rotation).
+        const uint64_t q4 = meta_hi(lane, PerfDebugRawRecType::Ext) | n;
+        const uint64_t hi0 = n >= 1 ? payload[0] : 0;
+        const uint64_t lo0 = n >= 2 ? payload[1] : 0;
+        __m512i v[2];
+        v[0] = _mm512_set_epi64(
+            0, 0, static_cast<long long>(pg), static_cast<long long>(q4),
+            static_cast<long long>((hi0 << 32) | lo0), static_cast<long long>(pg), static_cast<long long>(q1),
+            static_cast<long long>(ts));
+        v[1] = v[0];
+        ntc.put(v, 6);
         pos += 2;
-        for (uint32_t k = 0; k < (n + 1) / 2; k++) {
-            const uint64_t hi = payload[2 * k];
-            const uint64_t lo = (2 * k + 1 < n) ? payload[2 * k + 1] : 0;
-            ntc.put3((hi << 32) | lo, meta_hi(lane, PerfDebugRawRecType::Cont), prog);
+        for (uint32_t k = 2; k < n; k += 2) {
+            const uint64_t hi = payload[k];
+            const uint64_t lo = (k + 1 < n) ? payload[k + 1] : 0;
+            ntc.put3((hi << 32) | lo, meta_hi(lane, PerfDebugRawRecType::Cont), pg);
             pos++;
         }
     };
@@ -496,9 +536,12 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         }
     }
     if (pos != pos0) {
-        ntc.flush_tail();  // the sub-line remainder must be visible before the commit advertises it
-        w.emit_commit(pos);
         s.records += pos - pos0;
+        s.wpos = pos;
+    }
+    if (s.wpos != w.position() && (pages_done == 0 || s.wpos - w.position() >= kCommitBatchRecs)) {
+        ntc.flush_tail();  // the sub-line remainder must be visible before the commit advertises it
+        w.emit_commit(s.wpos);
     }
     s.zone_markers += zone_markers;
     s.stall_zones += stall_zones;
@@ -555,6 +598,7 @@ void PerfDebugReceiver::decode_thread(std::vector<Stream*> streams) {
     }
     name.pop_back();
     tracy::SetThreadName(name.c_str());
+    set_os_thread_name(name);
     prctl(PR_SET_TIMERSLACK, 1000);  // default 50 us slack would round every probe sleep up to it
     IdleBackoff backoff(kProbeSleepCapUs);
     uint64_t data_passes = 0;
@@ -665,6 +709,7 @@ void PerfDebugReceiver::remove_consumer(PerfDebugConsumerHandle handle) {
 void PerfDebugReceiver::consumer_thread(Consumer& c) {
     const std::string name = "pd-con:" + c.name;
     tracy::SetThreadName(name.c_str());
+    set_os_thread_name(name);
     t_in_consumer = true;
     std::vector<BroadcastRing<PerfDebugRawRec>::Reader> readers;
     readers.reserve(streams_.size());
@@ -907,6 +952,20 @@ void PerfDebugReceiver::log_report() const {
             s.decode.vec_atomic_recs,
             s.decode.scalar_recs,
             s.decode.vec_block_rejects);
+        {
+            const auto& d = s.decode;
+            std::string bt;
+            for (uint32_t t = 0; t < 16; t++) {
+                if (d.scalar_by_type[t] != 0) {
+                    bt += fmt::format("t{}={} ", t, d.scalar_by_type[t]);
+                }
+            }
+            log_info(
+                tt::LogMetal,
+                "[perf-debug receiver] d{}/s{} atomic blocks: {} calls, {} recs, {:.2f} recs/call (max 16) | scalar by type: {}",
+                s.dev, s.sock_idx, d.vec_atomic_calls, d.vec_atomic_recs,
+                d.vec_atomic_calls ? double(d.vec_atomic_recs) / double(d.vec_atomic_calls) : 0.0, bt);
+        }
     }
     uint64_t consumer_drops = 0;
     for (const auto& c : consumers_report_) {

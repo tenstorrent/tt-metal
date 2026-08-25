@@ -35,10 +35,10 @@ DRISC drainer self-zones) are paired for you on the host. Either way you never s
 ```cpp
 enum class PerfDebugRecType : uint32_t {
     Zone = 1,   // a complete zone: data.zone = {start, duration}
-    Data = 3,   // point marker with payload: data.ts; payload follows via Ext + Cont
-    Event = 4,  // point marker, no payload: data.ts
-    Ext = 5,    // Data/Event continuation header: data.ext = (id << 32) | payload word count
-    Cont = 6,   // one uint64 of Data payload: data.payload
+    Data = 3,   // point marker with payload: data.ts; payload follows via Ext (+ Cont)
+    Event = 4,  // point marker, no payload: data.ts; complete in itself
+    Ext = 5,    // Data continuation: id = payload word count, data.ext = payload words 1-2
+    Cont = 6,   // one uint64 of Data payload (words 3 and up): data.payload
 };
 
 struct PerfDebugRecMeta {

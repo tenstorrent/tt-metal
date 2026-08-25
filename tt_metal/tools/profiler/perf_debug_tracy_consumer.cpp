@@ -85,8 +85,12 @@ void PerfDebugTracyConsumer::operator()(const PerfDebugRawRecordBatch& batch) {
         }
         if (type == PerfDebugRawRecType::Ext) {
             if (pend_.active) {
-                pend_.want = (static_cast<uint32_t>(r.ts) + 1) / 2;
-                if (pend_.want == 0) {
+                const uint32_t n = r.id;
+                pend_.want = (n + 1) / 2;
+                if (n != 0 && pend_.got < kMaxEventValues) {
+                    pend_.vals[pend_.got++] = r.ts;
+                }
+                if (pend_.got >= pend_.want) {
                     flush_event(ctx);
                 }
             }
@@ -107,6 +111,9 @@ void PerfDebugTracyConsumer::operator()(const PerfDebugRawRecordBatch& batch) {
             pend_.ts = r.ts;
             pend_.id = r.id;
             pend_.prog = r.prog;
+            if (type == PerfDebugRawRecType::Event) {
+                flush_event(ctx);  // an Event is payload-less and arrives whole -- no Ext follows it
+            }
             continue;
         }
         const auto& dev = ctx.devices[r.meta.dev];

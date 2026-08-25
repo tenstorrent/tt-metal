@@ -14,9 +14,10 @@
 //    zones the child precedes its parent and data.zone.start is NOT monotonic. start+duration
 //    is complete information; sort on start if your analysis needs open order.
 //  - Cross-lane and cross-socket interleaving is arbitrary; demux by meta.lane / meta.dev.
-//  - A Data/Event head is followed immediately by one Ext record (data.ext = id<<32 | payload
-//    word count) and then Cont records (one payload uint64 each, hi word first), with no
-//    other records interleaved.
+//  - A Data head is followed immediately by one Ext record (id = payload word count, data.ext =
+//    payload words 1-2 as (hi << 32) | lo, zero-filled) and then Cont records for words 3 and up
+//    (one payload uint64 each, hi word first), with no other records interleaved. An Event is
+//    payload-less and arrives as ONE complete record -- nothing follows it.
 //  - ZoneTotal carries an accumulated duration sum (data.sum), not a timestamp.
 //  - Every id is the FULL 27-bit structural zone id (hostdevcommon/profiler_zone_id.h) and
 //    resolves to a name from the emitting binary's own ELF via ZoneNameMirror below --
@@ -42,10 +43,10 @@ namespace tt::tt_metal::perf_debug {
 enum class PerfDebugRecType : uint32_t {
     Zone = 1,       // a complete zone: data.zone = {start, duration}
     ZoneTotal = 2,  // accumulated-duration zone: data.sum
-    Data = 3,       // point marker with payload: data.ts; payload follows via Ext + Cont
-    Event = 4,      // point marker, no payload: data.ts
-    Ext = 5,        // Data/Event continuation header: data.ext = (id << 32) | payload word count
-    Cont = 6,       // one uint64 of Data payload: data.payload
+    Data = 3,       // point marker with payload: data.ts; payload follows via Ext (+ Cont)
+    Event = 4,      // point marker, no payload: data.ts; complete in itself
+    Ext = 5,        // Data continuation: id = payload word count, data.ext = payload words 1-2
+    Cont = 6,       // one uint64 of Data payload (words 3 and up): data.payload
 };
 
 struct PerfDebugRecMeta {
@@ -61,7 +62,7 @@ struct PerfDebugRec {
     union DataField {
         uint64_t ts;       // Data / Event: head timestamp
         uint64_t sum;      // ZoneTotal: accumulated duration
-        uint64_t ext;      // Ext: (id << 32) | payload word count
+        uint64_t ext;      // Ext: payload words 1-2, (hi << 32) | lo, zero-filled
         uint64_t payload;  // Cont: one payload uint64 (hi word first on the wire)
         struct {
             uint64_t start;     // device timestamp of the zone open
