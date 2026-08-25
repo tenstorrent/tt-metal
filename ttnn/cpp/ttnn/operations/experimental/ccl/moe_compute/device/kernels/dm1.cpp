@@ -76,6 +76,8 @@ void kernel_main() {
     const auto ring_core_id = get_arg_val<uint32_t>(argidx++);
     const auto ring_neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
     const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
+    const auto ring_predecessor_physical_x = get_arg_val<uint32_t>(argidx++);
+    const auto ring_predecessor_physical_y = get_arg_val<uint32_t>(argidx++);
 
     Noc noc_obj(noc_index);
     Noc noc1_obj(1);
@@ -140,6 +142,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     constexpr uint32_t num_a2a_steps_per_iter = num_cores;
     constexpr uint32_t num_a2a_buffer_slots = get_named_compile_time_arg_val("a2a_buffer_slots");
+    constexpr uint32_t ring_slot_credit_semaphore_id = get_named_compile_time_arg_val("ring_slot_credit_semaphore_id");
     static_assert(num_a2a_buffer_slots + 1 == num_cores, "moe_compute ring buffer plan must omit one return slot");
 
     constexpr uint32_t tiles_per_step = Cfg::in2_tiles_per_step;
@@ -152,6 +155,9 @@ void kernel_main() {
     // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
     const uint64_t neighbor_semaphore_noc_addr =
         get_noc_addr(ring_neighbor_physical_x, ring_neighbor_physical_y, semaphore_addr);
+    Semaphore<> ring_slot_credit_sem(ring_slot_credit_semaphore_id);
+    const uint64_t predecessor_slot_credit_noc_addr = get_noc_addr(
+        ring_predecessor_physical_x, ring_predecessor_physical_y, get_semaphore(ring_slot_credit_semaphore_id));
 
     // Size of each transfer in bytes
     constexpr uint32_t a2a_xfer_bytes_per_step = tiles_per_step * in2_tile_size;
@@ -176,6 +182,7 @@ void kernel_main() {
         LOCAL_BUFFER_OFFSET[i] = local_base_addr + i * a2a_xfer_bytes_per_step;
     }
     uint32_t semaphore_value = 0;
+    uint32_t slot_credit_wait_value = 0;
 
     //-------------------------------------------------------------------------
     // Init synchronization with tilize cores
@@ -255,67 +262,81 @@ void kernel_main() {
         }
 
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
-            // Device 2.0 migration: legacy primitives retained: state-machine setup
-            // (noc_async_write_one_packet_set_state, noc_inline_dw_write_set_state) has no
-            // Device 2.0 wrappers
+            // Device 2.0 migration: legacy packet-write state-machine setup has no wrapper.
             if constexpr (a2a_full_packets == 0 || a2a_remainder_tiles == 0) {
                 // Set only once here if there is only 1 type of packet: either all full with none partial, or none full
                 // with one partial
-                noc_async_write_one_packet_set_state</*posted=*/true>(
+                noc_async_write_one_packet_set_state</*posted=*/false>(
                     neighbor_base_addr,
                     a2a_full_packets > 0 ? a2a_full_packet_size : a2a_remainder_size,
                     /*noc=*/1,
                     vchannel);
             }
-            // Set state for the semaphore write
-#if !defined(ARCH_BLACKHOLE)
-            // WH: keep original stateful path (BH does NOT support stateful inline-write to L1
-            // per dataflow_api.h:2140,2181 -- handled in the per-iteration block below).
-            noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/false>(
-                neighbor_semaphore_noc_addr,
-                /*val=*/0,
-                /*be=*/0xF,
-                /*cmd_buf=*/write_at_cmd_buf,
-                /*noc=*/1,
-                vchannel);
-#endif
-
             // Wait for compute core to tell us that all mm01 data is ready
             cb_c2w_rdy.wait_front(1);
             cb_c2w_rdy.pop_front(1);
 
             // Take the data in cb_s2c_in2 and send it to the next core in the ring
             // Ring synchronization: all cores participate regardless of whether they had CB work
+            bool writer_ready_reserved = false;
+            uint32_t ring_start_slot = 0;
             for (uint32_t i = 0; i < Cfg::num_a2a_iters; ++i) {
                 for (uint32_t step = 0; step < num_a2a_steps_per_iter; ++step) {
                     if constexpr (a2a_full_packets > 0 && a2a_remainder_tiles > 0) {
                         // Resetting required as both full and partial packets exist
                         // Device 2.0 migration: legacy primitive retained: state-machine setup
                         // (noc_async_write_one_packet_set_state) has no Device 2.0 wrapper
-                        noc_async_write_one_packet_set_state</*posted=*/true>(
+                        noc_async_write_one_packet_set_state</*posted=*/false>(
                             neighbor_base_addr, a2a_full_packet_size, /*noc=*/1, vchannel);
                     }
 
                     // Wait for current data to be ready in cb_s2c_in2
                     ring_sem.wait_min(semaphore_value);
 
-                    // Signal to compute core that data is ready
-                    cb_w2c_rdy.reserve_back(1);
+                    // Reserving the one-page writer->compute CB proves compute
+                    // consumed the preceding shard.  A reservation can be
+                    // carried across an inter-iteration restore below.
+                    if (!writer_ready_reserved) {
+                        cb_w2c_rdy.reserve_back(1);
+                    }
+                    writer_ready_reserved = false;
+
+                    // A reservation proves compute consumed the preceding
+                    // slot. Credit the predecessor before it can reuse that
+                    // destination. Non-posted delivery plus the atomic barrier
+                    // makes the credit visible before this core proceeds.
+                    const bool credit_for_walk_wrap = step == 1;
+                    const bool credit_for_interpass_rotation =
+                        step == 2 && moe_ring::requires_interpass_rotation(i, Cfg::num_a2a_iters);
+                    if (credit_for_walk_wrap || credit_for_interpass_rotation) {
+                        noc_semaphore_inc</*posted=*/false>(
+                            predecessor_slot_credit_noc_addr, /*incr=*/1, /*noc_id=*/1, vchannel);
+                        noc1_obj.async_atomic_barrier();
+                    }
+
+                    // Signal to compute core that the current shard is ready.
                     cb_w2c_rdy.push_back(1);
 
-                    // The final step consumes the last remote shard locally. Sending it
-                    // once more would only return it to its origin, where nobody reads it.
-                    // Skip that redundant transfer and reuse slot zero for the shard that
-                    // arrives after num_cores - 1 hops. c5 backpressure guarantees compute
-                    // consumed slot zero before DM1 permits that overwrite.
+                    // The final step consumes the last remote shard locally. Keep the
+                    // regular walk to num_cores - 1 transfers; when another output-width
+                    // pass follows, the credit-protected block below performs the omitted
+                    // return into the next logical start slot.
                     if (step + 1 < num_a2a_steps_per_iter) {
-                        const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[step % num_a2a_buffer_slots];
-                        const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[(step + 1) % num_a2a_buffer_slots];
+                        // Wait before wrapping into this pass's logical start
+                        // until destination compute has retired its prior read.
+                        const uint32_t next_slot =
+                            moe_ring::physical_slot(ring_start_slot, step + 1, num_a2a_buffer_slots);
+                        if (next_slot == ring_start_slot) {
+                            ring_slot_credit_sem.wait_min(++slot_credit_wait_value);
+                        }
+                        const uint32_t local_src_addr =
+                            LOCAL_BUFFER_OFFSET[moe_ring::physical_slot(ring_start_slot, step, num_a2a_buffer_slots)];
+                        const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[next_slot];
 
                         uint32_t pkt_offset = 0;
                         // Rely on compiler to remove loop if no full packet exists
                         for (uint32_t pkt = 0; pkt < a2a_full_packets; ++pkt) {
-                            noc_async_write_one_packet_with_state</*posted=*/true>(
+                            noc_async_write_one_packet_with_state</*posted=*/false>(
                                 local_src_addr + pkt_offset, neighbor_dst_addr + pkt_offset);
                             pkt_offset += a2a_full_packet_size;
                         }
@@ -323,39 +344,66 @@ void kernel_main() {
                             if constexpr (a2a_full_packets > 0) {
                                 // Reset here if full packets exist, otherwise, it was already set once at the top and
                                 // no reset required
-                                noc_async_write_one_packet_set_state</*posted=*/true>(
+                                noc_async_write_one_packet_set_state</*posted=*/false>(
                                     neighbor_base_addr, a2a_remainder_size, /*noc=*/1, vchannel);
                             }
-                            noc_async_write_one_packet_with_state</*posted=*/true>(
+                            noc_async_write_one_packet_with_state</*posted=*/false>(
                                 local_src_addr + pkt_offset, neighbor_dst_addr + pkt_offset);
                         }
 
-                        // Signal neighbor that data is ready (increment their semaphore value).
-                        // Receiver waits via Semaphore<>::wait_min(semaphore_value); both arches
-                        // advance `semaphore_value` by 1 here, just by different mechanisms.
-#if defined(ARCH_BLACKHOLE)
-                        // BH-safe: noc_inline_dw_write_with_state to L1 hangs on BH
-                        // (dataflow_api.h:2140,2181). Use atomic-increment pattern instead;
-                        // receiver-side wait condition is value-equivalent.
+                        // The non-posted payload must be acknowledged at its
+                        // destination before ready is issued on the independent
+                        // atomic command buffer.
+                        noc1_obj.async_write_barrier();
+
+                        // Signal neighbor that data is ready. Use the same atomic
+                        // increment on every architecture: a persistent inline-write
+                        // state would share write_at_cmd_buf with the slot-credit
+                        // atomics above and could be silently overwritten.
                         // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
                         // (neighbor_semaphore_noc_addr) cannot be wrapped by Semaphore<>::inc
                         noc_semaphore_inc</*posted=*/true>(
                             neighbor_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, vchannel);
                         ++semaphore_value;
-#else
-                        // WH: original stateful path.
-                        // Device 2.0 migration: legacy primitive retained: paired with
-                        // noc_inline_dw_write_set_state above
-                        noc_inline_dw_write_with_state<
-                            /*update_addr_lo=*/false,
-                            /*update_counter=*/true,
-                            /*posted=*/true,
-                            /*update_addr_hi=*/false,
-                            /*update_val=*/true>(++semaphore_value);
-#endif
-                        // Ensure writes have left the core before continuing
-                        noc1_obj.async_writes_flushed<NocOptions::POSTED>();
                     }
+                }
+
+                if (moe_ring::requires_interpass_rotation(i, Cfg::num_a2a_iters)) {
+                    // Complete the omitted return hop into a distinct physical
+                    // slot, then use that slot as the next pass's logical
+                    // origin. Reserving c5 proves the final source was consumed;
+                    // the destination credit was issued after step one.
+                    cb_w2c_rdy.reserve_back(1);
+                    writer_ready_reserved = true;
+                    ring_slot_credit_sem.wait_min(++slot_credit_wait_value);
+
+                    const uint32_t next_start_slot = moe_ring::physical_slot(ring_start_slot, 1, num_a2a_buffer_slots);
+                    const uint32_t local_src_addr = LOCAL_BUFFER_OFFSET[ring_start_slot];
+                    const uint64_t neighbor_dst_addr = LOCAL_BUFFER_OFFSET[next_start_slot];
+                    if constexpr (a2a_full_packets > 0 && a2a_remainder_tiles > 0) {
+                        noc_async_write_one_packet_set_state</*posted=*/false>(
+                            neighbor_base_addr, a2a_full_packet_size, /*noc=*/1, vchannel);
+                    }
+                    uint32_t pkt_offset = 0;
+                    for (uint32_t pkt = 0; pkt < a2a_full_packets; ++pkt) {
+                        noc_async_write_one_packet_with_state</*posted=*/false>(
+                            local_src_addr + pkt_offset, neighbor_dst_addr + pkt_offset);
+                        pkt_offset += a2a_full_packet_size;
+                    }
+                    if constexpr (a2a_remainder_tiles > 0) {
+                        if constexpr (a2a_full_packets > 0) {
+                            noc_async_write_one_packet_set_state</*posted=*/false>(
+                                neighbor_base_addr, a2a_remainder_size, /*noc=*/1, vchannel);
+                        }
+                        noc_async_write_one_packet_with_state</*posted=*/false>(
+                            local_src_addr + pkt_offset, neighbor_dst_addr + pkt_offset);
+                    }
+                    // Establish payload-before-ready ordering across the write
+                    // and atomic command buffers.
+                    noc1_obj.async_write_barrier();
+                    noc_semaphore_inc</*posted=*/true>(neighbor_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, vchannel);
+                    ++semaphore_value;
+                    ring_start_slot = next_start_slot;
                 }
             }
 

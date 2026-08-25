@@ -152,6 +152,8 @@ void kernel_main() {
     [[maybe_unused]] constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_shared_experts = get_named_compile_time_arg_val("num_shared_experts");
     constexpr uint32_t shared_expert_tp_factor = get_named_compile_time_arg_val("shared_expert_tp_factor");
+    constexpr uint32_t num_a2a_buffer_slots = get_named_compile_time_arg_val("a2a_buffer_slots");
+    static_assert(num_a2a_buffer_slots + 1 == num_cores, "moe_compute ring buffer plan must omit one return slot");
 
     constexpr auto activation_type =
         ttnn::experimental::prim::detail::MoEActivationFunction(get_named_compile_time_arg_val("activation_function"));
@@ -449,7 +451,12 @@ void kernel_main() {
                 uint32_t dm1_tiles_remaining = shard_tiles_lut[ring_core_id];
                 cb_w2c_rdy.wait_front(1);
 
-                uint32_t in2_offset = 0, in2_index = 0;
+                // The compact ring wraps the final shard into the current
+                // logical start slot, then rotates that start by one between
+                // W2-width passes. Mirror dm1's physical-slot walk exactly;
+                // a linear offset would read one shard beyond the compact CB.
+                uint32_t in2_offset = moe_ring::pass_start_slot(iter, num_a2a_buffer_slots) * tiles_per_step;
+                uint32_t in2_index = in2_offset;
 
                 tile_regs_acquire();
 
@@ -483,6 +490,9 @@ void kernel_main() {
                             src_core = (src_core == 0) ? num_cores - 1 : src_core - 1;
                             dm1_tiles_remaining = shard_tiles_lut[src_core];
                             in2_offset += tiles_per_step;
+                            if (in2_offset == num_a2a_buffer_slots * tiles_per_step) {
+                                in2_offset = 0;
+                            }
                             in2_index = in2_offset;
                         }
                         dm1_tiles_remaining--;

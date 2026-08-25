@@ -475,6 +475,11 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Each core will have a semaphore that its predecessor will signal
     // reuse the same semaphore location for signaling combine cores that per expert data is available
     const uint32_t ring_semaphore_id = tt::tt_metal::CreateSemaphore(program, matmul_core_range_set, INVALID);
+    // Credit from a destination core to its predecessor. It proves compute
+    // has consumed a physical slot before the predecessor reuses that slot in
+    // the compact (num_cores - 1)-slot activation ring.
+    const uint32_t ring_slot_credit_semaphore_id =
+        tt::tt_metal::CreateSemaphore(program, matmul_core_range_set, INVALID);
 
     //-------------------------------------------------------------------------
     // Tilize and Matmul semaphores
@@ -1268,6 +1273,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"intermediate_tiles", intermediate_tiles},
         {"noc_max_burst_bytes", noc_max_burst_bytes},
         {"a2a_buffer_slots", l1_plan.a2a_buffer_slots},
+        {"ring_slot_credit_semaphore_id", ring_slot_credit_semaphore_id},
         {"weight_tiles_per_block", l1_plan.weight_tiles_per_block},
         {"weight_pipeline_slots", l1_plan.weight_pipeline_slots},
         // Matmul -> combine: dm1 increments this on combine cores when data is written
@@ -1351,11 +1357,13 @@ MoEComputeMeshWorkloadFactory::create_at(
     for (const auto& tensor : matmul_tensors) {
         matmul_runtime_args.push_back(tensor->buffer()->address());
     }
-    // Add placeholders for neighbor physical coords and semaphore
+    // Add placeholders for forward-neighbor and predecessor physical coords.
     matmul_runtime_args.push_back(ring_semaphore_id);  // Semaphore ID
     matmul_runtime_args.push_back(0);                  // Ring core ID placeholder
     matmul_runtime_args.push_back(0);                  // Neighbor physical x
     matmul_runtime_args.push_back(0);                  // Neighbor physical y
+    matmul_runtime_args.push_back(0);                  // Predecessor physical x
+    matmul_runtime_args.push_back(0);                  // Predecessor physical y
 
     // Append shard_to_bank table: shard_to_bank[i] = chip bank id holding shard i.
     //
@@ -1395,7 +1403,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     //
     // The kernel's bank-run loop computes `shard_idx = gp / pages_per_bank_total`. To find
     // the actual chip bank, it needs `bank = shard_to_bank[shard_idx]`. We pass this table
-    // as runtime args (one entry per bank, after the 9 standard args). The same shape
+    // as runtime args (one entry per bank, after the 11 standard args). The same shape
     // applies on WH (num_banks=12) and BH (num_banks=8); only the values differ.
     //
     // Sanity-check the divisibility invariants the bank-run kernel relies on. The Python
@@ -1449,7 +1457,9 @@ MoEComputeMeshWorkloadFactory::create_at(
 
         // Use the optimized ring neighbor mapping
         const auto [ring_pos, next_bank] = bank2ring_pos[dram_bank];
+        const uint32_t previous_bank = ring_pos2bank_id[(ring_pos + matmul_num_cores - 1) % matmul_num_cores];
         const auto& next_physical = mesh_device->worker_core_from_logical_core(matmul_cores[next_bank]);
+        const auto& previous_physical = mesh_device->worker_core_from_logical_core(matmul_cores[previous_bank]);
 
         ring_pos2core[ring_pos] = core;
 
@@ -1460,6 +1470,8 @@ MoEComputeMeshWorkloadFactory::create_at(
         matmul_runtime_args[6] = ring_pos;
         matmul_runtime_args[7] = static_cast<uint32_t>(next_physical.x);
         matmul_runtime_args[8] = static_cast<uint32_t>(next_physical.y);
+        matmul_runtime_args[9] = static_cast<uint32_t>(previous_physical.x);
+        matmul_runtime_args[10] = static_cast<uint32_t>(previous_physical.y);
 
         tt::tt_metal::SetRuntimeArgs(program, matmul_dm0_kernel_handle, core, matmul_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, matmul_dm1_kernel_handle, core, matmul_runtime_args);

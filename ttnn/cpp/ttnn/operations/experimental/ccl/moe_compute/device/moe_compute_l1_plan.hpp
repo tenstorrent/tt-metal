@@ -35,11 +35,11 @@ constexpr MoEComputeL1Plan plan_moe_compute_l1(
     constexpr uint32_t fast_a2a_budget_bytes = 512 * 1024;
 
     const uint32_t per_core_tiles = ((intermediate_tiles + ring_cores - 1) / ring_cores + 1) & ~1u;
-    // The ring consumes the local shard before forwarding it.  The final step
-    // consumes the last remote shard but does not need to send it back to its
-    // origin, so slot zero can be reused after ring_cores - 1 hops.  Keeping a
-    // twelfth slot for that redundant final send wastes one full activation
-    // shard on every matmul core.
+    // The ring consumes the local shard before forwarding it.  A compact ring
+    // reuses slot zero after ring_cores - 1 hops; the device protocol protects
+    // that overwrite with a destination-consumption credit and rotates the
+    // logical origin into a distinct slot between output-width passes. Keeping
+    // a dedicated return slot wastes one full activation shard on every matmul core.
     const uint32_t a2a_buffer_slots = ring_cores - 1;
     const uint32_t a2a_tiles = per_core_tiles * a2a_buffer_slots;
     const bool compact = a2a_tiles * bf16_tile_bytes > fast_a2a_budget_bytes;

@@ -65,7 +65,8 @@ void kernel_main() {
     // Run-time arguments. dm0 and dm1 share one rt-arg layout emitted by the host
     // (matmul_runtime_args in program_factory.cpp), so dm0 has to consume the layout
     // positions it doesn't use. Args used here: vchannel, w0_w1_addr, w2_addr, ring_core_id.
-    // The rest are dm1-only (out_addr, ring_semaphore_id, ring_neighbor_physical_*) or
+    // The rest are dm1-only (out_addr, ring_semaphore_id, ring_neighbor_physical_*,
+    // ring_predecessor_physical_*) or
     // legacy placeholders (dram_bank_id).
     uint32_t argidx = 0;
     [[maybe_unused]] const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
@@ -77,6 +78,8 @@ void kernel_main() {
     const auto ring_core_id = get_arg_val<uint32_t>(argidx++);
     [[maybe_unused]] const auto ring_neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
     [[maybe_unused]] const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto ring_predecessor_physical_x = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto ring_predecessor_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // shard_to_bank translation table: maps shard index -> physical chip DRAM bank id.
     // The host appends `num_banks` entries here. The bank-run loop below reads its

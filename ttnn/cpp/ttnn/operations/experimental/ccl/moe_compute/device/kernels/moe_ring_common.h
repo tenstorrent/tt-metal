@@ -10,6 +10,19 @@
 
 namespace moe_ring {
 
+// A compact ring omits the slot that held the return hop. Between output-width
+// passes, rotate the logical start into the next physical slot. This completes
+// that hop without reading from and writing to the same distributed slot.
+constexpr bool requires_interpass_rotation(uint32_t iteration, uint32_t num_iterations) {
+    return iteration + 1 < num_iterations;
+}
+
+constexpr uint32_t pass_start_slot(uint32_t iteration, uint32_t buffer_slots) { return iteration % buffer_slots; }
+
+constexpr uint32_t physical_slot(uint32_t start_slot, uint32_t step, uint32_t buffer_slots) {
+    return (start_slot + step) % buffer_slots;
+}
+
 namespace detail {
 inline uint32_t div_up(const uint32_t a, const uint32_t b) { return (a + b - 1) / b; }
 
