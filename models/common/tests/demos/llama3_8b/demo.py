@@ -29,13 +29,11 @@ import json
 import math
 import os
 from dataclasses import dataclass
-from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoConfig
 from transformers import AutoConfig
 
 import ttnn
@@ -68,11 +66,6 @@ from models.tt_transformers.tt.generator import create_submeshes
 # Expected metrics
 # =============================================================================
 
-# Expected accuracy metrics from measuring TTTv1 for Llama-3.1-8B (top1, top5 only).
-# Decode-throughput targets are measured TTTv1 parity numbers from the old tt_transformers demo
-# sweep recorded in consolidated_git_status_markdown.md. T3K batch-1 TTFT uses comparable
-# simple_text_demo measurements; batch-32 TTFT uses the corresponding batch-1 guardrail until
-# we have direct batch-32 wall-clock baselines.
 # Expected accuracy metrics from measuring TTTv1 for Llama-3.1-8B (top1, top5 only).
 # Decode-throughput targets are measured TTTv1 parity numbers from the old tt_transformers demo
 # sweep recorded in consolidated_git_status_markdown.md. T3K batch-1 TTFT uses comparable
@@ -222,76 +215,12 @@ DEMO_CASES = {
 def load_reference_data(model_name: str):
     """Load reference tokens and top-5 predictions from .refpt file."""
     ref_path = DEMO_DIR / "reference_outputs" / f"{model_name}.refpt"
-    ref_path = DEMO_DIR / "reference_outputs" / f"{model_name}.refpt"
     if not ref_path.exists():
         pytest.skip(f"Reference file not found: {ref_path}")
 
     ref_data = torch.load(ref_path, map_location="cpu")
     reference_tokens = ref_data["reference_tokens"]
     top5_tokens = ref_data["top5_tokens"]
-    metadata = ref_data.get("metadata", {}) if isinstance(ref_data, dict) else {}
-    prompt_len = ref_data.get("prompt_len") if isinstance(ref_data, dict) else None
-    if prompt_len is None and isinstance(metadata, dict):
-        prompt_len = metadata.get("prompt_len")
-    return reference_tokens, top5_tokens, prompt_len, metadata
-
-
-def _resolve_llama_head_counts(hf_model: str | None = None) -> tuple[int, int]:
-    hf_model = hf_model or os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
-    try:
-        config = AutoConfig.from_pretrained(hf_model, local_files_only=os.getenv("CI") == "true")
-    except OSError:
-        if hf_model.rstrip("/").split("/")[-1] == "Llama-3.1-8B-Instruct":
-            return 32, 8
-        raise
-    text_config = getattr(config, "text_config", config)
-    return int(text_config.num_attention_heads), int(text_config.num_key_value_heads)
-
-
-def _validate_tp_topology(mesh_device, *, num_devices: int | None = None) -> None:
-    num_devices = mesh_device.get_num_devices() if num_devices is None else int(num_devices)
-    n_heads, n_kv_heads = _resolve_llama_head_counts()
-    assert n_heads % num_devices == 0, f"n_heads={n_heads} must be divisible by num_devices={num_devices}"
-    assert n_kv_heads % num_devices == 0, f"n_kv_heads={n_kv_heads} must be divisible by num_devices={num_devices}"
-
-
-def _skip_unsupported_case(case: DemoCase, mesh_device) -> None:
-    device_name = get_device_name(mesh_device)
-    if case.use_prefetcher:
-        pytest.skip("TTTv2 does not support the TTTv1 DRAM prefetcher")
-    expected_repeat_batches = 1 if case.report_perf or case.name != "eval-32" else 3
-    if case.repeat_batches != expected_repeat_batches:
-        pytest.skip(f"{case.name} requires repeat_batches={expected_repeat_batches}; got {case.repeat_batches}")
-    if case.name == "batch-32-ci" and device_name == "N150":
-        pytest.skip("batch-32-ci max_seq_len=2048 capacity is not enabled for N150 until verified")
-    if case.data_parallel > 1:
-        num_devices = mesh_device.get_num_devices()
-        if num_devices % case.data_parallel != 0:
-            pytest.skip(f"{case.name} requires device count divisible by DP={case.data_parallel}; got {num_devices}")
-        per_lane_devices = num_devices // case.data_parallel
-        _validate_tp_topology(mesh_device, num_devices=per_lane_devices)
-
-
-def _sampling_params_for_model(model, *, case_name: str):
-    sampling_mode = os.environ.get("SAMPLING_MODE", "on_device_topk").lower()
-    on_device_params = {
-        "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),
-        "on_device_topk": SamplingParams(temperature=0.0, top_k=32, top_p=0.08),
-    }
-    sampling_params = (
-        on_device_params[sampling_mode]
-        if sampling_mode in on_device_params and getattr(model, "supports_on_device_sampling", False)
-        else None
-    )
-    logger.info(f"[{case_name}] SAMPLING_MODE={sampling_mode} -> sampling_params={sampling_params}")
-    return sampling_mode, sampling_params
-
-
-def _prefill_sampling_params(model, sampling_params):
-    if sampling_params is not None and model.config.num_devices > 1:
-        logger.info("Using host argmax for multi-device prefill; decode sampling remains on-device.")
-        return None
-    return sampling_params
     metadata = ref_data.get("metadata", {}) if isinstance(ref_data, dict) else {}
     prompt_len = ref_data.get("prompt_len") if isinstance(ref_data, dict) else None
     if prompt_len is None and isinstance(metadata, dict):
@@ -400,26 +329,17 @@ def create_llama3_for_causal_lm(
     instruct = "Instruct" in hf_model
 
     n_layers = int(os.environ.get("LLAMA3_8B_TTTV2_NUM_LAYERS", "32"))
-    n_layers = int(os.environ.get("LLAMA3_8B_TTTV2_NUM_LAYERS", "32"))
 
     block_size = 32
     max_num_blocks = max_batch_size * math.ceil(max_seq_len / block_size)
     paged_attention_config = Llama31_8BPagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
-    max_num_blocks = max_batch_size * math.ceil(max_seq_len / block_size)
-    paged_attention_config = Llama31_8BPagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
 
-    return from_pretrained(
-        mesh_device=mesh_device,
-        hf_model=hf_model,
     return from_pretrained(
         mesh_device=mesh_device,
         hf_model=hf_model,
         instruct=instruct,
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
-        n_layers=n_layers,
-        optimizations=optimizations,
-        dtype=ttnn.bfloat8_b,
         n_layers=n_layers,
         optimizations=optimizations,
         dtype=ttnn.bfloat8_b,
@@ -506,12 +426,8 @@ pytestmark = pytest.mark.parametrize(
 )
 @pytest.mark.parametrize("optimizations", ["performance", "accuracy"])
 @pytest.mark.usefixtures("silicon_arch_name")
-@pytest.mark.usefixtures("silicon_arch_name")
 def test_llama3_8b(test_config, ttnn_mesh_device, optimizations):
     """Main test function for TTTv2 Llama 3.1-8B."""
-    mesh_device = ttnn_mesh_device
-    case = DEMO_CASES[test_config]
-    device_name = get_device_name(mesh_device)
     mesh_device = ttnn_mesh_device
     case = DEMO_CASES[test_config]
     device_name = get_device_name(mesh_device)
@@ -792,7 +708,6 @@ def test_llama3_8b_bh_seeded_cross_cardinality(ttnn_mesh_device, optimizations):
         ), "BH production must remain sequential after the experiment disposition"
     finally:
         cleanup_model_case(llm.model if llm is not None else None, mesh_device)
-        cleanup_model_case(llm.model if llm is not None else None, mesh_device)
 
 
 # =============================================================================
@@ -938,44 +853,6 @@ def _measure_teacher_forcing_accuracy(llm, mesh_device, *, optimizations: str, l
     model_config = model.config
     model_name = llm.model_name
     reference_tokens, top5_tokens, prompt_len, metadata = load_reference_data(model_name)
-    top1, top5, prompt_len = _measure_teacher_forcing_accuracy(
-        llm, mesh_device, optimizations=optimizations, log_text=True
-    )
-
-    if os.environ.get("CI") == "true":
-        hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
-        model_target, _ = _benchmark_model_identity(hf_model, llm.model_name)
-        central = resolve_accuracy_targets(
-            model_target,
-            get_device_name(mesh_device),
-            batch_size=1,
-            seq_len=prompt_len,
-        )
-        if not central or "top1" not in central or "top5" not in central:
-            raise ValueError(
-                f"No centralized accuracy target for {model_target} on {get_device_name(mesh_device)} "
-                f"(batch_size=1, seq_len={prompt_len}); add an active entry to models/model_targets.yaml."
-            )
-        expected = {"top1": float(central["top1"]) - 0.5, "top5": float(central["top5"]) - 0.5}
-
-    if "top1" in expected:
-        measured_top1 = math.ceil(top1)
-        assert (
-            measured_top1 >= expected["top1"]
-        ), f"Top-1 accuracy {top1:.1f}% (ceil {measured_top1}) below threshold {expected['top1']:.1f}%"
-    if "top5" in expected:
-        measured_top5 = math.ceil(top5)
-        assert (
-            measured_top5 >= expected["top5"]
-        ), f"Top-5 accuracy {top5:.1f}% (ceil {measured_top5}) below threshold {expected['top5']:.1f}%"
-
-
-def _measure_teacher_forcing_accuracy(llm, mesh_device, *, optimizations: str, log_text=False):
-    """Run teacher forcing and return top-1/top-5 percentages."""
-    model = llm.model
-    model_config = model.config
-    model_name = llm.model_name
-    reference_tokens, top5_tokens, prompt_len, metadata = load_reference_data(model_name)
 
     # Ensure reference_tokens is 1D for slicing
     if reference_tokens.dim() > 1:
@@ -991,18 +868,7 @@ def _measure_teacher_forcing_accuracy(llm, mesh_device, *, optimizations: str, l
         logger.info(f"Reference metadata: {metadata}")
 
     prompt_tokens = reference_tokens[:prompt_len].unsqueeze(0)
-    if prompt_len is None:
-        prompt_len = len(reference_tokens) // 2
-        logger.info(f"Reference missing prompt_len metadata; using legacy half-split={prompt_len}.")
-    else:
-        prompt_len = int(prompt_len)
-        logger.info(f"Using reference prompt_len metadata={prompt_len}.")
-    if metadata:
-        logger.info(f"Reference metadata: {metadata}")
 
-    prompt_tokens = reference_tokens[:prompt_len].unsqueeze(0)
-
-    max_batch_size = model_config.max_batch_size
     max_batch_size = model_config.max_batch_size
     prompt_tokens = prompt_tokens.repeat(max_batch_size, 1)
     executor = _build_demo_executor(
@@ -1016,36 +882,7 @@ def _measure_teacher_forcing_accuracy(llm, mesh_device, *, optimizations: str, l
         max_num_blocks = executor.paged_kv_cache_config.num_blocks
         max_num_blocks_per_user = max_num_blocks // max_batch_size
         page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
-    executor = _build_demo_executor(
-        llm,
-        trace_mode="none",
-        device_sampling_enabled=False,
-        include_decode_top_k=False,
-    )
-    try:
-        kv_cache = executor.allocate_kv_cache()
-        max_num_blocks = executor.paged_kv_cache_config.num_blocks
-        max_num_blocks_per_user = max_num_blocks // max_batch_size
-        page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
 
-        target_top5 = (
-            top5_tokens[prompt_len - 1 :] if top5_tokens.shape[0] < len(reference_tokens) else top5_tokens[prompt_len:]
-        )
-        profiler = BenchmarkProfiler()
-        profiler.start("run")
-        result = run_teacher_forcing(
-            executor,
-            prompt_tokens=prompt_tokens,
-            reference_tokens=reference_tokens,
-            top5_tokens=target_top5,
-            kv_cache=kv_cache,
-            page_table=page_table,
-            max_batch_size=max_batch_size,
-            profiler=profiler,
-        )
-        profiler.end("run")
-    finally:
-        executor.cleanup()
         target_top5 = (
             top5_tokens[prompt_len - 1 :] if top5_tokens.shape[0] < len(reference_tokens) else top5_tokens[prompt_len:]
         )
@@ -1073,44 +910,7 @@ def _measure_teacher_forcing_accuracy(llm, mesh_device, *, optimizations: str, l
         log_teacher_forcing_text(
             prompt_tokens, result.predicted_tokens_per_user, reference_tokens[prompt_len:], llm.tokenizer
         )
-    if log_text:
-        log_teacher_forcing_text(
-            prompt_tokens, result.predicted_tokens_per_user, reference_tokens[prompt_len:], llm.tokenizer
-        )
 
-    if os.environ.get("CI") == "true":
-        hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
-        model_target, model_variant = _benchmark_model_identity(hf_model, llm.model_name)
-        num_target = len(reference_tokens) - prompt_len
-        measurements = {
-            "prefill_t/s": result.prefill_tok_s,
-            "prefill_time_to_token": result.prefill_time_to_token_s,
-            "decode_t/s": result.decode_tok_s,
-            "decode_t/s/u": result.decode_tok_s_u,
-        }
-        benchmark_data = create_benchmark_data(
-            profiler, measurements, {"inference_prefill": 0, "inference_decode": 1}, targets={}
-        )
-        benchmark_data.add_measurement(profiler, 0, "inference_decode", "top1_token_accuracy", top1, target=None)
-        benchmark_data.add_measurement(profiler, 0, "inference_decode", "top5_token_accuracy", top5, target=None)
-        benchmark_data.save_partial_run_json(
-            profiler,
-            run_type="demo_accuracy",
-            ml_model_name=model_target,
-            ml_model_type="llm",
-            device_name=get_device_name(mesh_device),
-            num_layers=len(model_config.block_configs),
-            batch_size=1,
-            config_params={
-                "model_variant": model_variant,
-                "optimization_profile": optimizations,
-                "workload": "token-accuracy",
-            },
-            input_sequence_length=prompt_len,
-            output_sequence_length=num_target,
-        )
-
-    return top1, top5, prompt_len
     if os.environ.get("CI") == "true":
         hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
         model_target, model_variant = _benchmark_model_identity(hf_model, llm.model_name)
@@ -1184,171 +984,12 @@ def _run_batch_once(
                 sampling_params,
                 model_config.num_devices,
             ),
-def _run_batch_once(
-    llm,
-    prompts: list[str],
-    *,
-    case_name: str,
-    num_decode_tokens: int,
-    profiler=None,
-) -> tuple[PerfBenchmarkResult, torch.Tensor, str]:
-    """Run one warmed-up batch and return its result and reporting metadata."""
-    model = llm.model
-    model_config = model.config
-    input_tokens, prompt_lens = preprocess_llama3_8b_chat_prompts(
-        prompts,
-        llm,
-        reserve_decode_tokens=num_decode_tokens,
-    )
-
-    sampling_mode, sampling_params = _sampling_params_for_model(model, case_name=case_name)
-    pipeline_readback = os.environ.get("PIPELINE_READBACK", "1").lower() not in ("0", "false", "no")
-    logger.info(f"[{case_name}] PIPELINE_READBACK={pipeline_readback}")
-
-    executor = None
-    result = None
-    try:
-        executor = _build_demo_executor(
-            llm,
-            trace_mode="all",
-            device_sampling_enabled=sampling_params is not None,
-            include_decode_top_k=_force_decode_top_k(
-                sampling_mode,
-                sampling_params,
-                model_config.num_devices,
-            ),
         )
-        kv_cache = executor.allocate_kv_cache()
-        max_batch_size = model_config.max_batch_size
-        max_num_blocks = executor.paged_kv_cache_config.num_blocks
-        max_num_blocks_per_user = max_num_blocks // max_batch_size
         kv_cache = executor.allocate_kv_cache()
         max_batch_size = model_config.max_batch_size
         max_num_blocks = executor.paged_kv_cache_config.num_blocks
         max_num_blocks_per_user = max_num_blocks // max_batch_size
         page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
-        _warmup_demo_executor(executor, kv_cache=kv_cache, page_table=page_table)
-
-        if profiler is not None:
-            profiler.start("run")
-        try:
-            result = run_perf_benchmark(
-                executor,
-                tokens=input_tokens,
-                kv_cache=kv_cache,
-                page_table=page_table,
-                num_decode_tokens=num_decode_tokens,
-                max_batch_size=max_batch_size,
-                prompt_lens=prompt_lens,
-                sampling_params=sampling_params,
-                prefill_sampling_params=_prefill_sampling_params(model, sampling_params),
-                pipeline_readback=pipeline_readback,
-                profiler=profiler,
-            )
-        finally:
-            if profiler is not None:
-                profiler.end("run")
-        assert_no_special_tokens(result.generated_token_ids, llm.tokenizer, case_name=case_name)
-        return result, prompt_lens, sampling_mode
-    finally:
-        if executor is not None:
-            executor.cleanup()
-
-
-def _report_performance(
-    llm,
-    mesh_device,
-    expected,
-    *,
-    prompts,
-    case_name,
-    profiler,
-    result,
-    prompt_lens,
-    sampling_mode,
-    log_text=True,
-    data_parallel=1,
-) -> None:
-    """Log and persist one run, applying gates only when ``expected`` is non-empty."""
-    model_config = llm.model.config
-    logger.info(
-        f"Performance — TTFT: {result.ttft_ms:.1f}ms, "
-        f"tok/s/u: {result.tok_s_u:.1f}, "
-        f"tok/s: {result.tok_s:.1f}, "
-        f"decode latency: {result.decode_latency_mean_ms:.2f}ms"
-    )
-    if log_text:
-        log_generated_text(prompts, result.generated_token_ids, llm.tokenizer)
-
-    if os.environ.get("CI") == "true":
-        hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.1-8B-Instruct")
-        model_target, model_variant = _benchmark_model_identity(hf_model, llm.model_name)
-        prefill_seq_len = int(prompt_lens.max())
-        measurements = {
-            "prefill_t/s": (
-                (result.batch_size * prefill_seq_len) / result.prefill_time_s if result.prefill_time_s > 0 else 0.0
-            ),
-            "prefill_time_to_token": result.prefill_time_s / result.batch_size,
-            "decode_t/s": result.tok_s,
-            "decode_t/s/u": result.tok_s_u,
-        }
-        benchmark_data = create_benchmark_data(
-            profiler, measurements, {"inference_prefill": 0, "inference_decode": 1}, targets={}
-        )
-        decode_iteration_times = result.decode_iteration_times_s or result.decode_times_s
-        for token_pos, decode_time_s in enumerate(decode_iteration_times, start=1):
-            benchmark_data.add_measurement(
-                profiler,
-                0,
-                "inference_decode",
-                f"time_to_token_{token_pos}",
-                decode_time_s * 1000,
-                step_warm_up_num_iterations=None,
-                target=None,
-            )
-        for token_pos in (1, 128, 1024, 2048, 4096, 8192):
-            if token_pos <= len(decode_iteration_times):
-                benchmark_data.add_measurement(
-                    profiler,
-                    0,
-                    "inference_decode",
-                    f"decode_latency_ms_token_{token_pos}",
-                    decode_iteration_times[token_pos - 1] * 1000,
-                    step_warm_up_num_iterations=None,
-                    target=None,
-                )
-        # Match TTTv1's historical first-128 window: compile iteration 0 is
-        # excluded, leaving steady-state iterations 1 through 127.
-        first_window = decode_iteration_times[:127]
-        if first_window:
-            benchmark_data.add_measurement(
-                profiler,
-                0,
-                "inference_decode",
-                "avg_decode_time_first_128",
-                sum(first_window) * 1000 / len(first_window),
-                step_warm_up_num_iterations=None,
-                target=None,
-            )
-        benchmark_data.save_partial_run_json(
-            profiler,
-            run_type="demo_perf",
-            ml_model_name=model_target,
-            ml_model_type="llm",
-            device_name=get_device_name(mesh_device),
-            num_layers=len(model_config.block_configs),
-            batch_size=result.batch_size,
-            config_params={
-                "model_variant": model_variant,
-                "data_parallel": data_parallel,
-                "tensor_parallel": model_config.num_devices,
-                "sampling_mode": sampling_mode,
-                "optimization_profile": case_name.split("/", 1)[0],
-                "workload": case_name.split("/", 1)[1],
-            },
-            input_sequence_length=prefill_seq_len,
-            output_sequence_length=result.num_decode_tokens,
-        )
         _warmup_demo_executor(executor, kv_cache=kv_cache, page_table=page_table)
 
         if profiler is not None:
@@ -1671,15 +1312,6 @@ def _run_dp_smoke(mesh_device, optimizations: str, case: DemoCase) -> None:
             data_parallel=data_parallel,
         )
     finally:
-        if group is not None:
-            group.cleanup()
-        else:
-            for lane in lanes:
-                lane.cleanup()
-        for llm, submesh in zip(llms, submeshes):
-            cleanup_model_case(llm.model, submesh)
-        if data_parallel > 1:
-            mesh_device.quiesce_devices()
         if group is not None:
             group.cleanup()
         else:
