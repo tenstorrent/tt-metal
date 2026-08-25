@@ -54,7 +54,7 @@ permissions:
 # workflow+ref because `issue_comment` events all carry the same `github.ref` (`main`),
 # which would collapse every PR into a single shared slot.
 concurrency:
-  group: "gh-aw-${{ github.workflow }}-${{ github.event.issue.number || github.event.pull_request.number }}"
+  group: "gh-aw-${{ github.workflow }}-${{ github.event.issue.number }}"
 
 engine: copilot
 model: claude-sonnet-5
@@ -88,7 +88,14 @@ pre-agent-steps:
   - name: Pre-fetch PR metadata and diff
     env:
       GH_TOKEN: ${{ github.token }}
-      PR_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number || fromJSON(github.event.inputs.aw_context || github.event.client_payload.aw_context || '{}').item_number }}
+      # `github.event.issue.number` is the only branch that can ever be taken: this
+      # workflow compiles to a single `issue_comment` trigger, and the generated guard
+      # additionally requires `github.event.issue.pull_request != null`. The
+      # `aw_context` fallback chain that the skills-reviewer workflows carry here is
+      # deliberately omitted — those need it because they also run under
+      # `workflow_dispatch`/`repository_dispatch`, and copying it into a
+      # comment-only workflow would just imply a manual entry point that does not exist.
+      PR_NUMBER: ${{ github.event.issue.number }}
       EXPR_GITHUB_REPOSITORY: ${{ github.repository }}
       PR_DIFF_MAX_LINES: "3000"
     run: |
@@ -99,11 +106,31 @@ pre-agent-steps:
         --json number,title,body,headRefName,headRefOid,baseRefName,isCrossRepository,headRepositoryOwner,additions,deletions,changedFiles \
         > /tmp/gh-aw/agent/pr-meta.json
 
-      # Full changed-file list, unabridged. Pipeline selection is driven far more by
-      # WHICH paths changed than by the contents of the hunks, so this list must never
-      # be truncated even when the diff below is.
-      gh pr view "$PR_NUMBER" --repo "$EXPR_GITHUB_REPOSITORY" \
-        --json files --jq '.files[].path' > /tmp/gh-aw/agent/pr-files.txt
+      # Full changed-file list. Pipeline selection is driven far more by WHICH paths
+      # changed than by the contents of the hunks, so this list must not be truncated
+      # even when the diff below is.
+      #
+      # Deliberately `gh api --paginate` and NOT `gh pr view --json files`: the latter
+      # issues a GraphQL query with `files(first: 100)` and silently returns only the
+      # first 100 entries with no error and no indication it truncated. tt-metal
+      # routinely has PRs well past that (a 174-file PR returns exactly 100), and the
+      # missing paths are invisible to the selector — which is precisely how a change
+      # that needed Galaxy coverage would get none. The REST endpoint paginates
+      # properly. It caps at 3000 files, which no realistic PR reaches; the guard below
+      # catches it if one ever does.
+      gh api --paginate "repos/$EXPR_GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+        --jq '.[].filename' > /tmp/gh-aw/agent/pr-files.txt
+
+      # Cross-check the fetched count against what GitHub reports for the PR, and tell
+      # the agent when they disagree so it can widen its selection rather than reason
+      # confidently from a partial list.
+      FILE_COUNT="$(wc -l < /tmp/gh-aw/agent/pr-files.txt)"
+      REPORTED_FILES="$(jq -r '.changedFiles' /tmp/gh-aw/agent/pr-meta.json)"
+      if [ "$FILE_COUNT" -lt "$REPORTED_FILES" ]; then
+        echo "::warning::Changed-file list is incomplete (${FILE_COUNT} of ${REPORTED_FILES})."
+        printf 'INCOMPLETE: fetched %s of %s changed files\n' "$FILE_COUNT" "$REPORTED_FILES" \
+          > /tmp/gh-aw/agent/pr-files-truncated.txt
+      fi
 
       # Diff body is best-effort context and IS truncated. Generated lock files are
       # excluded: they are megabytes of compiler output that would crowd out real
@@ -260,7 +287,8 @@ them.**
 | Path | Contents |
 |---|---|
 | `/tmp/gh-aw/agent/pr-meta.json` | PR number, title, body, head/base branch, fork flag, line counts |
-| `/tmp/gh-aw/agent/pr-files.txt` | Every changed file path, one per line (complete, never truncated) |
+| `/tmp/gh-aw/agent/pr-files.txt` | Every changed file path, one per line |
+| `/tmp/gh-aw/agent/pr-files-truncated.txt` | **Only exists if the file list is incomplete.** If present, read it |
 | `/tmp/gh-aw/agent/pr-diff.patch` | The diff, truncated to 3000 lines |
 | `/tmp/gh-aw/agent/pr-head-ref.txt` | **The branch every dispatch must target** |
 | `/tmp/gh-aw/agent/pr-is-fork.txt` | `true` if the PR comes from a fork |
@@ -283,6 +311,10 @@ hand against a local copy of the branch if they need one. Then stop.
    silicon are reachable; the diff body only refines *how much*. A change confined to
    `docs/`, `tech_reports/`, `*.md`, or comments needs **nothing** — say so and dispatch
    zero pipelines. That is a correct and common outcome, not a failure.
+
+   If `pr-files-truncated.txt` exists, you are reasoning from a partial list. Lean
+   **wider** than the visible paths justify, and say so in your comment so the developer
+   knows to check whether anything was missed.
 
 2. **Map paths to affected hardware and subsystems** using the table below.
 
@@ -332,16 +364,32 @@ pipeline owns the tests being touched); `docs/**`, `tech_reports/**`, `.md` are 
 
 ## Narrowing inputs
 
-Every pipeline in the allowlist has **only optional** `workflow_dispatch` inputs, so
-dispatching with no inputs is always safe and runs that pipeline's defaults. But the
-defaults are usually *maximal*, and that is where the waste is.
+**Each dispatch tool's own input schema is authoritative.** It is generated at compile
+time from that pipeline's `workflow_dispatch` block and already tells you which fields are
+required, which are `enum`-constrained, and what each one defaults to. It also sets
+`additionalProperties: false`, so an input name that is not in the schema is rejected
+before the dispatch is attempted. Work from the schema in front of you; do not infer input
+names from the pipeline's YAML on disk, because the two can disagree (see the maintenance
+note below) and the schema is what validation enforces.
 
-**Before dispatching a pipeline, read its `on.workflow_dispatch.inputs` block** from
-`.github/workflows/<name>.yaml` and pick the narrowing inputs that fit the change. Read
-the file rather than guessing — these schemas change, and an invalid `choice` value makes
-the dispatch fail outright.
+**Eleven pipelines have required inputs — a no-input dispatch of these will fail
+validation.** You must supply at least:
 
-Recurring shapes:
+| Pipeline | Must supply |
+|---|---|
+| `galaxy-sanity` | `arch` |
+| `models-t1-e2e-tests`, `models-t1-unit-tests` | `model` |
+| `models-t2-e2e-tests`, `models-t2-unit-tests` | `model` |
+| `models-t3-e2e-tests`, `models-t3-unit-tests` | `model` |
+| `t3000-integration-tests`, `t3000-unit-tests` | `model` |
+| `vllm-model-tests` | `model` |
+| `ttnn-run-sweeps` | `arch`, `log-level`, `runner-label`, `sweep_name` |
+
+Each of these still has a sensible default in the schema — passing the default explicitly
+is fine when you have no reason to narrow further. The other 23 pipelines take no required
+inputs and can be dispatched bare.
+
+The defaults are usually *maximal*, and that is where the waste is. Recurring shapes:
 
 - **`all` defaults to `true` on the `runtime-*` pipelines.** Setting `blackhole: true`
   alone does **not** narrow anything — `all` is still true and everything runs. You must
@@ -355,6 +403,15 @@ Recurring shapes:
   (e.g. `wh_n150 (N150)`, `bh_p150 (P150)`).
 - Leave `platform`, `build-type`, and `enable-lto` at their defaults unless the change is
   specifically about a build configuration.
+
+> **Maintenance note (for humans, not the agent).** Because those schemas are baked into
+> `test-command.lock.yml` at compile time, they are a *snapshot*. If an allowlisted
+> pipeline later adds an input, renames one, or adds a value to a `choice` list, `/test`
+> cannot use the new shape until this workflow is recompiled — `additionalProperties:
+> false` and the compiled `enum` lists will reject it. The failure mode is narrow and
+> visible (that one dispatch is refused with a validation error, nothing else breaks), but
+> it does mean **changing a dispatch input on any of the 34 pipelines requires re-running
+> `gh aw compile test-command` and committing the lock file.**
 
 ## The ref rule
 
@@ -373,12 +430,20 @@ comment, or your memory of the diff. Never dispatch `main`, `master`, or a relea
 Post exactly one comment. Keep it short enough to read at a glance:
 
 - **What you dispatched** — a table of pipeline, the platform narrowing you applied, and a
-  one-line reason. Link each dispatched run.
+  one-line reason.
 - **The ref** every dispatch targeted, stated explicitly so it is auditable.
 - **What you deliberately skipped** and why, when a reader might expect it — especially
   anything you dropped to stay under the cap of 8.
 - If you dispatched **nothing**, say so plainly and give the reason (docs-only change,
   fork PR, nothing reachable by the optional pipelines). Do not pad it.
+
+**Do not try to link the individual runs, and do not state a run ID, run URL, or start
+time.** You are writing this comment *before* any dispatch has happened: your comment and
+your dispatches are both queued as outputs of this turn and are only carried out
+afterwards, so no run exists yet and no run ID has been assigned. Anything you write in
+that shape would be invented. Name the pipelines instead, and point the reader at the
+repository's [Actions tab](${{ github.server_url }}/${{ github.repository }}/actions) —
+the runs appear there within a minute or so, filtered by the branch you named above.
 
 Close by noting that these are optional pipelines: they do not gate the PR, and a failure
 here means the change needs another look, not that the PR is blocked from merging.
