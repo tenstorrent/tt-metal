@@ -16,11 +16,12 @@ Controlled by environment variables:
 
 Set these before importing ttnn; they are read once at process startup.
 
-See also: ttnn.acknowledge_corruptible, ttnn.corruptible_allocation_scope, ttnn.execute_trace.
+See also: acknowledge_corruptible, corruptible_allocation_scope, ttnn.execute_trace.
 """
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import os
 import sys
@@ -57,6 +58,29 @@ TRACE_ALLOC_DIAGNOSTICS = trace_allocation_diagnostics_enabled()
 TRACE_ALLOC_REFERRER_DEPTH = (
     _env_nonnegative_int("TT_METAL_TRACE_ALLOC_REFERRER_DEPTH", 10) if TRACE_ALLOC_DIAGNOSTICS else 10
 )
+
+
+if TRACE_ALLOC_TRACKING:
+    from ttnn._ttnn.operations.trace import (
+        pop_corruptible_allocation_scope as _pop_corruptible_allocation_scope,
+        push_corruptible_allocation_scope as _push_corruptible_allocation_scope,
+    )
+
+    @contextlib.contextmanager
+    def corruptible_allocation_scope(mesh_device):
+        """Suppress accounting for intentionally corruptible allocations in this scope."""
+        _push_corruptible_allocation_scope(mesh_device)
+        try:
+            yield
+        finally:
+            _pop_corruptible_allocation_scope(mesh_device)
+
+else:
+
+    @contextlib.contextmanager
+    def corruptible_allocation_scope(mesh_device):
+        """No-op when trace allocation tracking is disabled."""
+        yield
 
 
 class TraceAllocationTracker:
@@ -150,7 +174,7 @@ class TraceAllocationTracker:
                 parts.append(f"(referrer analysis failed: {type(e).__name__}: {e})")
 
         parts.append(
-            "\nUse corruptible_allocation_scope() for acknowledged-corruptible "
+            "\nUse ttnn.tools.trace_allocation_tracker.corruptible_allocation_scope() for acknowledged-corruptible "
             "tensors, or ensure temporary tensors are freed before replay."
         )
         raise RuntimeError("".join(parts))
@@ -294,3 +318,8 @@ class TraceAllocationTracker:
                 f" referrer search depth (currently {TraceAllocationTracker._referrer_depth} levels)."
             )
         return "\n".join(lines)
+
+
+def acknowledge_corruptible(tensor) -> int:
+    """Acknowledge that a device tensor's buffer may intentionally be corrupted by trace replay."""
+    return TraceAllocationTracker.acknowledge_corruptible(tensor)

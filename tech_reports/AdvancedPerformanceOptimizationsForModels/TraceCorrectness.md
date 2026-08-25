@@ -55,7 +55,7 @@ As a consequence, all allocations made after some trace has been captured, and n
 
 You can use the trace allocation tracker tool to check a program for potentially unsafe allocations.
 
-If we capture multiple traces, we may want to persist the input tensors as placeholders where new inputs will be copied, while being aware that the old contents may be corrupted by executing other traces. To exempt such tensors from validation use acknowledge_corruptible(tensor).
+If we capture multiple traces, we may want to persist the input tensors as placeholders where new inputs will be copied, while being aware that the old contents may be corrupted by executing other traces. To exempt such tensors from validation, use `trace_allocation_tracker.acknowledge_corruptible(tensor)`.
 
 Buffer allocations may not be explicit!
 For example `ttnn.reshape`, when first executed with a new shape, may allocate a lookup table to speed up future executions. If this happens after some trace has already been captured, executing that trace may corrupt this table. This will lead to undefined behavior, including data corruption and hangs.
@@ -71,7 +71,7 @@ TT_METAL_TRACE_ALLOC_TRACKING=1 python your_program.py
 
 The environment variables are read once while TT-NN starts up, so they must be set before `import ttnn`. Changing them from Python after importing TT-NN has no effect.
 
-Once a trace has been captured, the checker accounts for subsequent device-buffer allocations for that trace. Immediately before `ttnn.execute_trace`, it runs Python garbage collection and checks whether any buffers unsafe for the requested trace are still alive. If so, `ttnn.execute_trace` raises a `RuntimeError` instead of replaying the trace and potentially corrupting the buffers. Buffers that have already been released are removed from the accounting automatically.
+Once a trace has been captured, the checker accounts for subsequent device-buffer allocations for that trace. Immediately before `ttnn.execute_trace`, it checks whether any buffers unsafe for the requested trace are still alive. If it finds candidates, it runs Python garbage collection and checks again. If unsafe buffers remain, `ttnn.execute_trace` raises a `RuntimeError` instead of replaying the trace and potentially corrupting them. Buffers that have already been released are removed from the accounting automatically.
 
 Accounting is kept separately for each `(sub-device manager, trace ID)` pair. Trace IDs are interpreted under the currently active sub-device manager, so the manager used to capture a trace must also be active when the trace is ended, executed, or released. For example, given `capture(trace_a)`, `allocate(x)`, then `capture(trace_b)` under one manager, `x` is unsafe when executing `trace_a` but safe when executing `trace_b`, because it was already present in the allocator when `trace_b` was captured. An allocation made after both captures is unsafe for both traces.
 
@@ -110,15 +110,19 @@ This option should normally be used only to reduce diagnostic noise while invest
 Some trace inputs and outputs are intentionally reused even though replaying another trace may overwrite them. Acknowledge a specific device tensor after allocating it with:
 
 ```python
-ttnn.acknowledge_corruptible(tensor)
+from ttnn.tools import trace_allocation_tracker
+
+trace_allocation_tracker.acknowledge_corruptible(tensor)
 ```
 
-This immediately removes the tensor's backing buffer from validation. Views share their backing-buffer ID, so marking a view acknowledges the shared buffer as well.
+This immediately removes the tensor's backing buffer from validation. Views share their backing-buffer ID, so acknowledging a view acknowledges the shared buffer as well.
 
 If a narrowly scoped block creates several intentionally corruptible buffers, the whole block can be acknowledged:
 
 ```python
-with ttnn.corruptible_allocation_scope(device):
+from ttnn.tools import trace_allocation_tracker
+
+with trace_allocation_tracker.corruptible_allocation_scope(device):
     trace_input = create_trace_input()
     trace_output = create_trace_output()
 ```
@@ -149,6 +153,9 @@ You can avoid this by passing `trace_region_size=0`. With this set, traces will 
 # Common pattern
 
 ```
+from ttnn.tools import trace_allocation_tracker
+
+
 class FunGen:
     @staticmethod
     def fun(x, cond_a, cond_b):
@@ -183,8 +190,8 @@ class FunGen:
                 # These two may be overwritten by executing other traces,
                 # But we always write them before use
                 # and read from them right after executing their trace
-                ttnn.acknowledge_corruptible(x)
-                ttnn.acknowledge_corruptible(out)
+                trace_allocation_tracker.acknowledge_corruptible(x)
+                trace_allocation_tracker.acknowledge_corruptible(out)
                 self.trace_inputs[trace_key] = x
                 self.trace_ids[trace_key] = trace_id
                 self.trace_outputs[trace_key] = out

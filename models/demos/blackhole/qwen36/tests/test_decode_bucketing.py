@@ -17,6 +17,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from ttnn.tools import trace_allocation_tracker
 from models.common.utility_functions import comp_pcc
 from models.demos.blackhole.qwen36.tests.test_factory import parametrize_mesh_tp
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
@@ -86,7 +87,7 @@ def test_trace_buffer_reuse_is_opt_in(monkeypatch):
     from models.tt_transformers.tt.generator import _acknowledge_trace_buffers_corruptible
 
     marked = []
-    monkeypatch.setattr(ttnn, "acknowledge_corruptible", marked.append)
+    monkeypatch.setattr(trace_allocation_tracker, "acknowledge_corruptible", marked.append)
     _acknowledge_trace_buffers_corruptible(SimpleNamespace(), ["default"])
     _acknowledge_trace_buffers_corruptible(
         SimpleNamespace(_tt_allow_decode_trace_buffer_reuse=True),
@@ -339,7 +340,7 @@ def _acknowledge_trace_buffers_corruptible(value):
         for item in value:
             _acknowledge_trace_buffers_corruptible(item)
         return
-    ttnn.acknowledge_corruptible(value)
+    trace_allocation_tracker.acknowledge_corruptible(value)
 
 
 @torch.no_grad()

@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
+from ttnn.tools import trace_allocation_tracker
 from models.common.sampling import (
     LogProbsCalculator,
     SamplingGenerator,
@@ -70,7 +71,7 @@ def test_sampling_precompile_preserves_logits_and_request_state(monkeypatch, all
 
 def test_sampling_trace_buffer_reuse_is_bucket_only(monkeypatch):
     marked = []
-    monkeypatch.setattr(ttnn, "acknowledge_corruptible", marked.append)
+    monkeypatch.setattr(trace_allocation_tracker, "acknowledge_corruptible", marked.append)
 
     _acknowledge_trace_buffers_corruptible(None, ["default"])
     _acknowledge_trace_buffers_corruptible(1, ["input", None, ("output",)])
