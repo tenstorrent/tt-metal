@@ -503,9 +503,10 @@ inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
 /**
  * @brief Generate a reduce scaler tile on the compute kernel from a caller-provided value
  *
- * The helper waits for (but does not pop) the first tile in zero_source_dfb_id, subtracts that
- * tile from itself with the FPU, and packs the resulting zero tile into scaler_dfb_id. The pack
- * thread then writes the scaler into row 0 of each participating face before publishing the tile.
+ * For a full scaler, the helper uses the SFPU fill operation to write scaler_f across DEST and
+ * packs that tile directly into scaler_dfb_id. For a partial scaler, it waits for (but does not
+ * pop) the first tile in zero_source_dfb_id, subtracts that tile from itself with the FPU, packs
+ * the resulting zero tile, and writes the scaler into the valid positions before publishing it.
  *
  * The source tile must use an FPU-compatible format and be finite: NaN or infinity does not
  * produce zero when subtracted from itself. Its tile shape must match the scaler DFB's tile

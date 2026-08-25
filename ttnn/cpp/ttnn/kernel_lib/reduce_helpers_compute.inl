@@ -15,6 +15,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/typecast.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
@@ -779,31 +780,49 @@ ALWI void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_dim_elemen
 
     DataflowBuffer zero_source_dfb(zero_source_dfb_id);
     DataflowBuffer scaler_dfb(scaler_dfb_id);
-    zero_source_dfb.wait_front(onetile);
     scaler_dfb.reserve_back(onetile);
 
-    // The source is used for both operands so x - x creates a zero tile in DST. Reconfigure both
-    // source paths because compute_kernel_hw_startup commonly configures SrcB for the scaler DFB.
-    reconfig_data_format(zero_source_dfb_id, zero_source_dfb_id);
-    sub_init(zero_source_dfb_id, zero_source_dfb_id);
     pack_reconfig_data_format(scaler_dfb_id);
     pack_init(scaler_dfb_id);
 
-    tile_regs_acquire();
-    sub_tiles(zero_source_dfb_id, zero_source_dfb_id, 0, 0, 0);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, scaler_dfb_id);
-    tile_regs_release();
+    if (valid_reduce_dim_elements_in_tile == full_dim) {
+        // A full scaler needs no mask. Fill every DEST element with the requested value and
+        // let the packer convert it to the scaler DFB's storage format.
+        fill_tile_init();
+        tile_regs_acquire();
+        fill_tile(0, scaler_f);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, scaler_dfb_id);
+        tile_regs_release();
+    } else {
+        zero_source_dfb.wait_front(onetile);
+
+        // A partial scaler still needs zeros outside its valid positions. Use the source for
+        // both operands so x - x creates the packed zero tile before the pack thread writes
+        // only the valid scaler positions.
+        reconfig_data_format(zero_source_dfb_id, zero_source_dfb_id);
+        sub_init(zero_source_dfb_id, zero_source_dfb_id);
+
+        tile_regs_acquire();
+        sub_tiles(zero_source_dfb_id, zero_source_dfb_id, 0, 0, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, scaler_dfb_id);
+        tile_regs_release();
+
+        PACK({
+            const uint32_t write_addr = scaler_dfb.get_write_ptr() << cb_addr_shift;
+            volatile tt_l1_ptr uint32_t* write_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
+            detail::fill_reduce_scaler<data_format, reduce_dim, face_rows, faces_per_row>(
+                write_ptr,
+                detail::float_to_scaler_bits<data_format>(scaler_f),
+                valid_reduce_dim_elements_in_tile,
+                full_dim);
+        })
+    }
 
     PACK({
-        const uint32_t write_addr = scaler_dfb.get_write_ptr() << cb_addr_shift;
-        volatile tt_l1_ptr uint32_t* write_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_addr);
-        detail::fill_reduce_scaler<data_format, reduce_dim, face_rows, faces_per_row>(
-            write_ptr,
-            detail::float_to_scaler_bits<data_format>(scaler_f),
-            valid_reduce_dim_elements_in_tile,
-            full_dim);
 #if defined(DEBUG_PRINT_ENABLED)
         DPRINT("Reduce scaler tile (CB {}):\n", scaler_dfb_id);
         for (uint16_t row = 0; row < tile_r_dim; ++row) {
