@@ -33,6 +33,23 @@ def _has_trace_surface(executor) -> bool:
     return hasattr(executor, "trace_id_prefill") and hasattr(executor, "trace_ids_decode")
 
 
+def test_demo_imports_every_called_shared_run_helper():
+    imported = {
+        alias.name
+        for node in _DEMO_TREE.body
+        if isinstance(node, ast.ImportFrom) and node.module == "models.common.tests.demos.run_helpers"
+        for alias in node.names
+    }
+    assert {
+        "eval_decode_trace_mode",
+        "load_eval_repeat_prompts_batch32",
+        "require_canonical_eval_modes_in_ci",
+        "run_eval_repeat_batch32",
+        "run_perf_benchmark",
+        "run_teacher_forcing",
+    } <= imported
+
+
 def test_demo_case_manifest_is_preserved():
     decorators = [node for node in _function("test_qwen3_32b").decorator_list if isinstance(node, ast.Call)]
     test_config = next(node for node in decorators if ast.literal_eval(node.args[0]) == "test_config")
