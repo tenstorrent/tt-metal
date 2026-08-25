@@ -12,10 +12,9 @@ namespace tt::tt_metal::perf_debug {
 
 PerfDebugTracyConsumer::PerfDebugTracyConsumer(PerfDebugTracyHandler* handler) : handler_(handler) {
     // The SWEEP/PACE alternation is what a drainer row is read by, so those two must contrast; PACE is
-    // deliberate idleness and gets a recessive grey. Mover rows use their own hues because the two roles'
-    // same-named phases have different meanings and scales (a filler's CREDIT-WAIT is DRAM ring room, a
-    // mover's is host FIFO credit). Keys are the zone NAMES the drain kernel declares (TT_ZONE_DEFINE_ID
-    // in drisc_drain_common.hpp) -- names are the only stable handle on a structural zone id.
+    // deliberate idleness and gets a recessive grey. Keys are the zone NAMES the drain kernel declares
+    // (TT_ZONE_DEFINE_ID in drisc_drain_common.hpp) -- names are the only stable handle on a structural
+    // zone id.
     zone_colors_["DRISC-SWEEP"] = 0x2E86C1;
     zone_colors_["DRISC-PACE"] = 0x707B7C;
     zone_colors_["DRISC-READ"] = 0x27AE60;
@@ -24,14 +23,8 @@ PerfDebugTracyConsumer::PerfDebugTracyConsumer(PerfDebugTracyHandler* handler) :
     zone_colors_["DRISC-CREDIT-WAIT"] = 0xC0392B;
     zone_colors_["DRISC-WRITE"] = 0xD35400;
     zone_colors_["DRISC-WR-BARRIER"] = 0xF1C40F;
-    // White, and the same on both roles: the sync marker is a fiducial, not a phase.
+    // White: the sync marker is a fiducial, not a phase.
     zone_colors_["DRISC-SYNC"] = 0xFFFFFF;
-    zone_colors_mover_["DRISC-SYNC"] = 0xFFFFFF;
-    zone_colors_mover_["DRISC-SWEEP"] = 0x16A085;
-    zone_colors_mover_["DRISC-READ"] = 0x52BE80;
-    zone_colors_mover_["DRISC-CREDIT-WAIT"] = 0xE74C3C;
-    zone_colors_mover_["DRISC-WRITE"] = 0xE67E22;
-    zone_colors_mover_["DRISC-WR-BARRIER"] = 0xF7DC6F;
 }
 
 PerfDebugTracyConsumer::~PerfDebugTracyConsumer() { log_unnamed_ids("tracy", names_); }
@@ -127,14 +120,8 @@ void PerfDebugTracyConsumer::operator()(const PerfDebugRawRecordBatch& batch) {
         pkt.risc = li.risc;
         pkt.timer_id = r.id;
         pkt.name = names_.lookup(r.id);
-        {
-            // Colour by zone NAME and by role -- see zone_colors_ in the header.
-            const auto& tbl = li.role == PerfDebugLaneRole::Mover ? zone_colors_mover_ : zone_colors_;
-            if (auto it = tbl.find(pkt.name); it != tbl.end()) {
-                pkt.color = it->second;
-            } else if (auto it2 = zone_colors_.find(pkt.name); it2 != zone_colors_.end()) {
-                pkt.color = it2->second;  // mover table has no override for this zone
-            }
+        if (auto it = zone_colors_.find(pkt.name); it != zone_colors_.end()) {
+            pkt.color = it->second;
         }
         const uint64_t base = dev.clock_synced ? 0 : ts_base_[r.meta.dev];
         if (type == PerfDebugRawRecType::Zone) {

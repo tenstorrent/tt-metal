@@ -59,7 +59,6 @@ private:
     // silently stop matching after any edit to the drain kernel. Filled in the constructor with
     // string literals, so string_view keys never dangle.
     std::unordered_map<std::string_view, uint32_t> zone_colors_;
-    std::unordered_map<std::string_view, uint32_t> zone_colors_mover_;
 };
 
 }  // namespace perf_debug

@@ -761,6 +761,17 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
                     o.prog = open.prog;
                     break;
                 }
+                case PerfDebugRawRecType::Zone: {
+                    // Already a complete zone (the device's atomic-zone path): ts is the END and duration
+                    // is set, so it converts 1:1 with no stack. Without this case it fell into the default
+                    // arm and every public consumer received it as a Data record with the duration dropped.
+                    PerfDebugRec& o = out.emplace_back();
+                    o.data.zone = {r.ts - r.duration, r.duration};
+                    o.id = r.id;
+                    o.meta = {0, r.meta.lane, r.meta.dev, PerfDebugRecType::Zone};
+                    o.prog = r.prog;
+                    break;
+                }
                 case PerfDebugRawRecType::ZoneTotal: {
                     PerfDebugRec& o = out.emplace_back();
                     o.data.sum = r.ts;

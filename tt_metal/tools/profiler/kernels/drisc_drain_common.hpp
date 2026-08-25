@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Shared spine of the DRISC drainer kernels (drisc_profiler_filler.cpp, drisc_profiler_mover.cpp): the
-// D2H write/credit/barrier primitives, the drainer's own zone ids and the NoC-footprint instrument.
-// Role-specific logic lives in the kernels; only code that is byte-for-byte identical across roles
-// belongs here.
+// Support spine of the DRISC drain kernel (drisc_profiler_filler.cpp): the D2H write/credit/barrier
+// primitives, the drainer's own zone ids and the NoC-footprint instrument.
 #pragma once
 
 #include <cstdint>
@@ -37,10 +35,10 @@ CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 // below are unchanged. The names are the strings a human reads in Tracy, so they keep their old text.
 namespace kernel_profiler {
 TT_ZONE_DEFINE_ID(DRISC_ZONE_SWEEP, "DRISC-SWEEP");              // one whole poll sweep (the parent)
-TT_ZONE_DEFINE_ID(DRISC_ZONE_READ, "DRISC-READ");                // filler: span-read ISSUE. mover: the DRAM read
-TT_ZONE_DEFINE_ID(DRISC_ZONE_READ_WAIT, "DRISC-READ-WAIT");      // filler: read-barrier wait left after proc
+TT_ZONE_DEFINE_ID(DRISC_ZONE_READ, "DRISC-READ");                // span-read ISSUE
+TT_ZONE_DEFINE_ID(DRISC_ZONE_READ_WAIT, "DRISC-READ-WAIT");      // read-barrier wait left after proc
 TT_ZONE_DEFINE_ID(DRISC_ZONE_PROC, "DRISC-PROC");                // control-vector scan + head write-back
-TT_ZONE_DEFINE_ID(DRISC_ZONE_CREDIT_WAIT, "DRISC-CREDIT-WAIT");  // filler: DRAM ring room. mover: socket credit
+TT_ZONE_DEFINE_ID(DRISC_ZONE_CREDIT_WAIT, "DRISC-CREDIT-WAIT");  // socket credit against the host FIFO
 TT_ZONE_DEFINE_ID(DRISC_ZONE_WRITE, "DRISC-WRITE");              // the egress write itself
 TT_ZONE_DEFINE_ID(DRISC_ZONE_WR_BARRIER, "DRISC-WR-BARRIER");    // write barrier before staging is reused
 TT_ZONE_DEFINE_ID(DRISC_ZONE_PACE, "DRISC-PACE");                // the inter-sweep pacing gap
@@ -48,12 +46,10 @@ TT_ZONE_DEFINE_ID(DRISC_ZONE_SYNC, "DRISC-SYNC");                // common-trigg
 TT_ZONE_DEFINE_ID(SPSC_DATA_ID_NOCFP, "DRISC-NOC-FOOTPRINT");    // the per-sweep NoC-counter PP_DATA sample
 }  // namespace kernel_profiler
 
-constexpr uint32_t kHsRetireBit = kernel_profiler::SPSC_DRAIN_HEAD_RETIRE_BIT;
-
 // D2H: write L1 to PCIe host RAM in NOC_MAX_BURST_SIZE chunks. The caller runs
-// noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC) once per push -- the packed
-// gather calls this ~11 times per frame, so a per-call init would repeat command-buffer setup that
-// nothing between the calls invalidates.
+// noc_write_init_state<write_cmd_buf>(NOC_INDEX, vc) once per push -- the packed gather calls this ~11
+// times per frame, so a per-call init would repeat command-buffer setup that nothing between the calls
+// invalidates.
 inline void write_to_host_chunked(uint32_t pcie_xy_enc, uint32_t src_l1, uint64_t dst_pcie, uint32_t size) {
     while (size) {
         const uint32_t chunk = size > NOC_MAX_BURST_SIZE ? NOC_MAX_BURST_SIZE : size;
@@ -106,10 +102,9 @@ inline bool reserve_pages_bounded(
 // the caller must treat `false` as "egress is dead": stop shipping entirely and leave the loop, never as
 // "carry on". That is safe precisely because it only ever fires when the consumer has already gone away.
 // `sent_only` (NONPOSTED_WR_REQ_SENT, the usual source-reuse gate) is legal ONLY when the buffer's next
-// writer is this core's own NIU (the FILLER's staging, refilled by its own read responses). It is NOT a
-// fence against another L1 master: the MOVER's staging is overwritten by the GDDR-DMA engine, and a
-// sent-based wait there produced 77k/42k decode order regressions in one run. "Data landed" contracts
-// (head publish for unverified consumers, the stop path) keep the acked flush.
+// writer is this core's own NIU (staging, refilled by its own read responses). It is NOT a fence against
+// another L1 master -- a sent-based wait against a DMA-engine refill produced 77k/42k decode order
+// regressions in one run.
 template <bool sent_only = false>
 inline bool write_barrier_bounded(uint64_t deadline) {
     // Bounded on ITERATIONS as well as cycles: the cycle deadline assumes get_timestamp() advances AND
@@ -167,10 +162,9 @@ struct NocFpState {
 // The 32-bit subtract happens FIRST and is only then widened: the truncated difference of two 32-bit samples
 // is the true delta for any delta < 2^32, whether or not the counter rolled over between them.
 //
-// Both NoCs are read rather than just the one this role uses. A filler reads on kReadNoc and writes on
-// NOC_INDEX; a mover does both on NOC_INDEX -- but that is the thing being verified, not an assumption worth
-// baking in. The zero columns ARE the measurement: a non-zero filler read count on NoC 0 would mean the
-// read/write NoC split is not doing what the code claims.
+// Both NoCs are read rather than just the ones the kernel claims to use. The zero columns ARE the
+// measurement: a non-zero read count on the write NoC would mean the read/write NoC split is not doing
+// what the code claims.
 static void nf_sample_regs(NocFpState* s) {
     // Runtime-indexed so the loads collapse into one loop body. NOC_STATUS_READ_REG resolves to a load
     // from (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_STATUS(id) -- this core's own memory-mapped NIU register
@@ -178,10 +172,10 @@ static void nf_sample_regs(NocFpState* s) {
     // Addresses come from NOC_STATUS() in noc_parameters.h and are never literals: test_cluster_bh.cpp
     // carries a misnamed 0xffb202e0 and copying it would propagate the error into a number nobody can check.
     //
-    // The write slots sum the POSTED and NON-POSTED counters: the DMA mover's PCIe pushes are posted by
-    // design, and a total that counted only one flavor would silently under-report bytes -- which is what
-    // the old posted-must-be-zero entry/exit check existed to guard against, and why summing retires it.
-    // The delta of a SUM of two wrapping 32-bit counters is still exact for any true delta < 2^32.
+    // The write slots sum the POSTED and NON-POSTED counters: a total that counted only one flavor would
+    // silently under-report bytes -- which is what the old posted-must-be-zero entry/exit check existed to
+    // guard against, and why summing retires it. The delta of a SUM of two wrapping 32-bit counters is
+    // still exact for any true delta < 2^32.
     static const uint32_t kIds[kNfN] = {
         NIU_MST_RD_DATA_WORD_RECEIVED,
         NIU_MST_RD_REQ_SENT,

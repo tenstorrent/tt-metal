@@ -79,7 +79,7 @@ static_assert(std::is_trivially_copyable_v<PerfDebugRec>);
 inline constexpr uint32_t kPerfDebugMaxLanes = 1u << 10;
 inline constexpr uint32_t kPerfDebugMaxDevices = 1u << 3;
 
-enum class PerfDebugLaneRole : uint8_t { Worker = 0, Filler = 1, Mover = 2, Full = 3 };
+enum class PerfDebugLaneRole : uint8_t { Worker = 0, Filler = 1 };
 
 struct PerfDebugLaneInfo {
     uint32_t chip_id = 0;

@@ -10,8 +10,8 @@
 // SPSC profiler rings DIRECTLY via the resident drainer firmware and streams device zones to Tracy.
 //
 // This class is the CONTROL PLANE: drainer bring-up (resident kernels, NIU stream-mode flips, D2H socket
-// construction, static TLBs), host<->device clock sync and Tracy anchoring, the ordered quiesce, the
-// device results reporting, and the teardown completeness check. Everything from the socket reads to the
+// construction, static TLBs), host<->device clock sync and Tracy anchoring, the quiesce, the device
+// results reporting, and the teardown completeness check. Everything from the socket reads to the
 // record consumers lives in PerfDebugReceiver; the Tracy sink is one more paired-record consumer.
 // Booted once at MeshDevice bring-up (resident); at teardown the host writes 1 to each drainer's stop word
 // to quiesce it, then 2 to release its NIU (no reset).
@@ -44,15 +44,9 @@ class PerfDebugTracyHandler;
 class Program;
 class IDevice;
 
-// Per-risc byte figure the perf-debug role split needs the HAL to size its per-bank DRAM PROFILER region from,
-// or 0 when the split is off. Called from get_profiler_dram_bank_size_for_hal_allocation() ONLY -- that path
-// feeds the HAL region and nothing else. The role split reuses that region instead of allocating a second DRAM
-// buffer, so the region's size and the ring's size are one knob. See FINDINGS §N+39.
-uint32_t perf_debug_dram_region_bytes_per_risc();
-
 // One PerfDebugProfiler per MeshDevice. Constructing it boots the drainers on every eligible local
-// Blackhole device and starts the receiver; destroying it (or calling stop()) quiesces the drainers in
-// role order, drains and shuts down the receiver, and leaves the resident idle FW alone (no reset).
+// Blackhole device and starts the receiver; destroying it (or calling stop()) quiesces the drainers,
+// drains and shuts down the receiver, and leaves the resident idle FW alone (no reset).
 class PerfDebugProfiler {
 public:
     explicit PerfDebugProfiler(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
@@ -66,43 +60,21 @@ public:
     void stop();
 
 private:
-    // TWO DRISC drainers without the role split, one D2H socket per drainer -- kNSockets is both counts.
-    //
-    // WHY 2 (FINDINGS N+34): a 5x knee improvement over 1; below the knee a single drainer falls into a
-    // feedback loop (producers stall -> rings pin -> sweeps cost more) that two stay out of entirely.
-    // 2 IS THE CEILING, for two independent reasons:
-    //   - exactly two DRAM cores measure safe to host a drainer (row y == 0: `0-0` and `9-0`, N+29)
-    //   - TLB windows: nwin=7 per 12 MiB socket into 16 available, so 2x7=14 fits and 3x7=21 does not
-    //     (see kHRingWords below; raising it needs SOCKET_WIN_BASE moved)
-    static constexpr uint32_t kNSockets = 2;
-    // ---- ROLE SPLIT (the only roster) ----
-    //
-    // kNSockets stays 2 -- nothing downstream of the socket knows this feature exists. There are SIX
-    // DRISCs:
-    //
-    //   index 0..3  FILLER  sweep a QUARTER of the worker grid -> write frames into their own device-DRAM
-    //                       ring. No socket, no PCIe, no host MMIO.
-    //   index 4,5   MOVER   read TWO DRAM rings -> push to socket 0 / socket 1. The only two
-    //                       host-facing-safe cores (y == 0). Mover m drains fillers m and m + kNSockets.
-    //
-    // The knee is the FILLER's scan over its share of the grid (FINDINGS N+28/N+34/N+40), and the DRAM ring
-    // is the elastic buffer the TLB-capped 12 MiB host FIFO cannot be: a DRISC writes DRAM natively over
-    // the NoC with no window at all, so the buffer moves to DRAM and can be hundreds of MB.
-    static constexpr uint32_t kMaxDrisc = 6;
-    // kNFillers must stay a whole multiple of kNSockets: mover m takes fillers m, m + kNSockets, ... and
-    // kNPeerMax bounds the per-mover peer state (device compile args and L1 telemetry words are per-peer).
-    static constexpr uint32_t kNFillers = 4;
-    static constexpr uint32_t kNPeerMax = 2;
-    static_assert(kNFillers % kNSockets == 0, "each mover must drain a whole number of fillers");
-    static_assert(kNFillers / kNSockets <= kNPeerMax, "a mover cannot drain more than kNPeerMax rings");
-    static_assert(kNFillers + kNSockets <= kMaxDrisc, "kMaxDrisc must cover every filler and mover");
-    // 12 MiB / socket, and the CEILING: NOC_2M_WINDOW_COUNT=224 with SOCKET_WIN_BASE=208 leaves 16 TLB
-    // windows and the FW maps nwin=ceil((in_off+bytes+64)/2MiB) consecutive windows per socket, so
-    // kNSockets * nwin <= 16 (12 MiB -> nwin=7 -> 14). Raising further needs SOCKET_WIN_BASE moved too.
-    static constexpr uint32_t kHRingWords = 3145728;
+    // SIX DRISC FILLERS, each sweeping a sixth of the worker grid and pushing frames straight into its own
+    // D2H socket. The knee is the filler's scan over its slice (FINDINGS N+28/N+34/N+40), so fillers are
+    // the thing to multiply, and every DRAM view with a spare NoC port can host one. Host-facing duty from
+    // NoC rows y != 0 rides each filler's own static TLB window (configured at bring-up; the socket asks
+    // UMD for it in init_sender_tlb), the same path the two y == 0 movers used before direct push.
+    static constexpr uint32_t kNFillers = 6;
+    static constexpr uint32_t kNSockets = kNFillers;
+    // Host FIFO per socket. This FIFO is the pipeline's ONLY elasticity now that the device-DRAM ring is
+    // gone, so it is sized to carry the burst the ring used to absorb: 64 MiB matches the per-filler ring
+    // the direct push deleted. It is plain mmap + IOMMU host RAM (D2HSocket::init_host_buffer) reached by a
+    // full 64-bit NoC/PCIe address -- no TLB-window budget and no channel cap; those belong to the Wormhole
+    // hugepage fallback, which Blackhole never takes.
+    static constexpr uint32_t kHRingWords = 16777216;
     static constexpr uint32_t kPageSize = 64;
     static constexpr uint32_t kNRisc = 5;
-    static constexpr uint32_t kNoSocket = 0xFFFFFFFFu;  // DeviceCtx::sock_of for a filler
 
     struct DeviceCtx {
         uint32_t chip_id = 0;
@@ -117,38 +89,18 @@ private:
         // what makes a resident drainer possible at all -- a DRAM-only program touches none of the fast
         // dispatch worker grid or dispatch column, so it can sit there across every user workload. Going
         // through the CQ instead would deadlock the first Finish().
-        std::unique_ptr<Program> drain_program[kMaxDrisc];
+        std::unique_ptr<Program> drain_program[kNFillers];
         IDevice* device = nullptr;
         // Per-DRISC. Each drainer owns a disjoint slice of the worker grid, its own socket and its own L1
         // window -- nothing is shared between them on the device side.
-        CoreCoord drisc_logical[kMaxDrisc];
-        CoreCoord drisc_virtual[kMaxDrisc];
-        uint64_t drisc_l1_noc[kMaxDrisc] = {};  // NoC-addressable base of each DRISC L1 window
-        uint32_t drisc_l1_base[kMaxDrisc] = {};
-        uint32_t stop_addr[kMaxDrisc] = {};  // host writes 1 to quiesce, 2 to release the NIU
-        uint32_t done_addr[kMaxDrisc] = {};  // drainer publishes 0xD09E**** once its last page is out
-        uint32_t results_addr[kMaxDrisc] = {};
-        // ---- role split (the only roster: 4 fillers + 2 movers) ----
-        uint32_t n_drisc = kNSockets;      // 2 normally, kNFillers + kNSockets with the role split on
-        uint32_t role[kMaxDrisc] = {};     // 0 = full job, 1 = filler, 2 = mover
-        uint32_t sock_of[kMaxDrisc] = {};  // socket index this DRISC owns, or kNoSocket
-        uint32_t hs_addr[kMaxDrisc] = {};  // filler's handshake block (head/tail/probes) in its L1
-        // mover -> the filler indices it drains, and how many. n_peer is 0 for a filler / full-job drainer.
-        uint32_t peer_of[kMaxDrisc][kNPeerMax] = {};
-        uint32_t n_peer[kMaxDrisc] = {};
-        uint32_t dram_bank[kMaxDrisc] = {};  // ring bank of the ring DRISC d OWNS (fillers; 0 for movers)
-        // Bank-relative base of the ring DRISC d owns. PER-DRISC rather than one shared value: the kernel
-        // reaches its ring through get_noc_addr_from_bank_id, which adds bank_to_dram_offset[bank] itself, so
-        // the host has to subtract THAT BANK's offset. It measures 0 in every bank on bh-26, but with four
-        // rings a single shared address would silently mis-address any bank whose offset differed.
-        uint32_t dram_addr[kMaxDrisc] = {};
-        // CHANNEL-local base of the same ring, for the DMA mover: the GDDR<->L1 DMA engine takes raw channel
-        // addresses, not allocator banks, so this is the HAL region address plus the ring's slot within the
-        // bank -- no bank-offset adjustment (that dance exists only for get_noc_addr_from_bank_id).
-        uint32_t dram_dma_base[kMaxDrisc] = {};
-        uint32_t dram_frames = 0;  // ring capacity in whole frames (identical for every ring)
-        // No buffer handle: the rings live in the HAL's per-bank DRAM PROFILER region, which is reserved for
-        // the profiler's whole lifetime by construction. Nothing to own, nothing to free.
+        CoreCoord drisc_logical[kNFillers];
+        CoreCoord drisc_virtual[kNFillers];
+        uint64_t drisc_l1_noc[kNFillers] = {};  // NoC-addressable base of each DRISC L1 window
+        uint32_t drisc_l1_base[kNFillers] = {};
+        uint32_t stop_addr[kNFillers] = {};  // host writes 1 to quiesce, 2 to release the NIU
+        uint32_t done_addr[kNFillers] = {};  // drainer publishes 0xD09E**** once its last page is out
+        uint32_t results_addr[kNFillers] = {};
+        uint32_t n_drisc = kNFillers;
         // core_index -> virtual (x,y) [what the SRC lane resolves to], and virtual -> NOC0 (x,y) [Tracy view].
         std::vector<std::pair<uint32_t, uint32_t>> core_virt;
         std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> virt_to_noc0;

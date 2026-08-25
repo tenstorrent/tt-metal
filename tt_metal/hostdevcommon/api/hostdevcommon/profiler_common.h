@@ -198,21 +198,12 @@ enum SpscControlBuffer {
 // self-profiling counters need out[64..87], and the NoC-footprint counters out[88..119].
 //
 // WHY 208 IS FREE, and why it must not be raised further. This block lives inside the drain kernel's
-// `kMiscBytes` budget in perf_debug_profiler.cpp, which is 1024 B holding done(64) + stop(64) + results +
-// handshake(64). 208 words is 832 B, so done + stop + results + handshake = exactly 1024. Nothing else
-// moves: `kMiscBytes` is unchanged, so `fixed` is unchanged, so the number of STAGING SLOTS the same L1 can
-// hold is unchanged -- which matters because nstage is 7 by a margin of well under one slot, and losing one
-// would silently drop a mover's max batch 7 -> 6. This is the CEILING: one more word overlaps the handshake
-// block unless kMiscBytes grows, which costs a staging slot. Check that arithmetic, not just this constant.
+// `kMiscBytes` budget in perf_debug_profiler.cpp, which is 1024 B holding done(64) + stop(64) + results.
+// 208 words is 832 B, so done + stop + results = 960 of 1024. Nothing else moves: `kMiscBytes` is
+// unchanged, so `fixed` is unchanged, so the number of STAGING SLOTS the same L1 can hold is unchanged --
+// which matters because nstage is 7 by a margin of well under one slot. Check that arithmetic, not just
+// this constant, before raising it past the budget.
 static constexpr std::uint32_t SPSC_DRAIN_RESULT_WORDS = 208;
-
-// Bit 31 of a filler's published DRAM-ring head, set as its last act before restoring its NIU to NOC2AXI
-// mode. A head is a frame count, so the bit is free. It has to travel IN BAND, in the word the mover
-// already polls: past that flip an untagged peer-L1 address is routed to GDDR instead
-// (experimental/drisc_mode.h), landing in the device profiler's DRAM region -- which returns well-formed
-// zone records, i.e. a plausible head that is wrong forever, with no out-of-band channel left to say so.
-// Every reader of the head word must mask it off before differencing against a tail.
-static constexpr std::uint32_t SPSC_DRAIN_HEAD_RETIRE_BIT = 0x80000000u;
 
 // ---- DRAINER-AUTHORED zones (DRISC self-profiling) --------------------------------------------------
 //
@@ -297,13 +288,7 @@ constexpr static std::uint32_t PROFILER_L1_BUFFER_SIZE = PROFILER_L1_VECTOR_SIZE
 //
 //   [0]                       w0 = SPSC_SPAN_PACKET_TYPE << PP_TYPE_SHIFT; low 27 bits RESERVED, zero
 //   [1]                       payload_words = PROFILER_L1_CONTROL_VECTOR_SIZE + pack pads + shipped ring words
-//   [3]                       role split: the frame's 1-based monotonic ring index. 0 in the bulk slot
-//                             write; stamped by a trailing 4 B write on the same route, so its visibility
-//                             proves every payload packet landed. The mover verifies it after its
-//                             GDDR-DMA read and consumes only the verified prefix. Host decoder skips it.
-//   [7]                       role split: the stamp value again (the trailing write's L1 source, placed
-//                             for src%16 == dst%16 NoC alignment; the decoder skips it too)
-//   [2], [4..7), [8 .. PREFIX) zero
+//   [2 .. PREFIX)             zero
 //   [PREFIX .. +CONTROL)      the worker's profiler control vector, verbatim
 //   [.. +payload)             for each RISC in ascending order with a live run: spsc_span_pack_pad()
 //                             skipped words, then the run, ring wrap resolved into a flat array
