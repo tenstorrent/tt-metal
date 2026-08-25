@@ -312,7 +312,8 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache, pref
             mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
         )
     conv_config = ttnn.Conv1dConfig(weights_dtype=dtype, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
-    try:
+
+    def try_direct():
         return _depthwise_tap_conv1d(
             x_BTC,
             weight,
@@ -330,48 +331,77 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache, pref
             wkey=wkey,
             prepared=prepared,
         )
-    except RuntimeError as exc:
+
+    def try_chunk(chunk):
         # HEIGHT_SHARDED conv1d needs enough rows to spread over the core grid. Every LTX call
         # site has tens of thousands of frames, but MiniMax-H3's BigVGAN starts at the latent
         # rate (T=207, and T=40 in a short test), where the DRAM slicer cannot find any valid
-        # configuration. Its error text is not a stable API, so any RuntimeError takes a fallback.
-        #
-        # Before giving up, retry on channel slices. The failure is the slicer running out of L1: a
+        # configuration for the direct form. The failure is the slicer running out of L1: a
         # depthwise conv1d lays the K sticks out contiguously, so the activation block is C*K wide
-        # (3584 at C=512, K=7) and does not fit however finely T is sliced. Splitting C fits, and the
-        # filter is depthwise so slices are independent and reassembly is a concat -- ~9 ops against
-        # MAC's 3K-1, on a faster op.
-        for chunk in (128, 64, 32):
-            if C % chunk or chunk >= C:
-                continue
-            try:
-                out = _depthwise_tap_conv1d_chunked(
-                    x_BTC,
-                    taps,
-                    stride,
-                    B=B,
-                    C=C,
-                    T_pad=T_pad,
-                    T_out=T_out,
-                    K=K,
-                    chunk=chunk,
-                    mesh_device=mesh_device,
-                    dtype=dtype,
-                    conv_config=conv_config,
-                    compute_config=cache["cc"],
-                    cache=cache,
-                )
-                logger.warning(
-                    f"depthwise conv1d needs C-chunking at T_pad={T_pad}, C={C}, K={K}, stride={stride}; "
-                    f"using {C // chunk} chunks of {chunk}"
-                )
-                return out
-            except RuntimeError:
-                continue
+        # (3584 at C=512, K=7) and does not fit however finely T is sliced. Splitting C fits, and
+        # the filter is depthwise so slices are independent and reassembly is a concat -- ~9 ops
+        # against MAC's 3K-1, on a faster op.
+        if C % chunk or chunk >= C:
+            raise RuntimeError(f"chunk {chunk} does not divide C={C}")
+        out = _depthwise_tap_conv1d_chunked(
+            x_BTC,
+            taps,
+            stride,
+            B=B,
+            C=C,
+            T_pad=T_pad,
+            T_out=T_out,
+            K=K,
+            chunk=chunk,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            conv_config=conv_config,
+            compute_config=cache["cc"],
+            cache=cache,
+        )
+        logger.warning(
+            f"depthwise conv1d needs C-chunking at T_pad={T_pad}, C={C}, K={K}, stride={stride}; "
+            f"using {C // chunk} chunks of {chunk}"
+        )
+        return out
+
+    def try_mac(exc):
         # No chunking fits either: the shift-multiply-add form, which has no sharding constraint at
         # all -- slower, but this is a correctness path (and MAC is the *more* accurate form).
-        logger.warning(f"depthwise conv1d failed at T_pad={T_pad}, C={C}, K={K}, stride={stride}; MAC fallback ({exc})")
+        # `exc` is None when MAC is a cached winner tried before anything else has failed this call.
+        reason = f" ({exc})" if exc is not None else ""
+        logger.warning(f"depthwise conv1d failed at T_pad={T_pad}, C={C}, K={K}, stride={stride}; MAC fallback{reason}")
         return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out, dtype=dtype)
+
+    # Which of these succeeds depends only on (C, K, stride) -- same weight shape, same hardware,
+    # same op config every call -- so it's deterministic across calls within a process. Once
+    # discovered (in warmup), the winner is cached and tried first on every later call instead of
+    # re-attempting the doomed configs that preceded it. A cache miss/mismatch still falls through
+    # the full chain below, so this can't make a call fail that would otherwise have succeeded --
+    # it only skips already-known dead ends. Its error text is not a stable API, so any
+    # RuntimeError just moves on to the next candidate.
+    candidates = ["direct", 128, 64, 32, "mac"]
+    path_key = ("tap_path", C, stride, K)
+    known = cache.get(path_key)
+    if known in candidates:
+        candidates.insert(0, candidates.pop(candidates.index(known)))
+
+    last_exc = None
+    for candidate in candidates:
+        try:
+            out = (
+                try_direct()
+                if candidate == "direct"
+                else try_mac(last_exc)
+                if candidate == "mac"
+                else try_chunk(candidate)
+            )
+        except RuntimeError as exc:
+            last_exc = exc
+            continue
+        cache[path_key] = candidate
+        return out
+    raise last_exc
 
 
 def _depthwise_tap_conv1d_chunked(
