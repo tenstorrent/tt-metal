@@ -71,9 +71,8 @@ class MistralSmall4Adapter(MLAPrefillAdapter):
     # outer (multimodal) config, so the unwrap to text_config drops it and the loader would refuse
     # the fp8 tensors. mistral4_hf_config also fixes the softmax-scale convention (see that module).
     config_builder_overrides_checkpoint = True
-    # Routed experts are stacked: `mlp.experts.gate_up_proj` is one [128, 4096, 4096] fp8 tensor, not
-    # per-expert gate_proj/up_proj. The pretrained fixture therefore loads attention only.
-    packed_expert_checkpoint = True
+    # packed_expert_checkpoint deliberately unset: the fixture splits the stacked experts now
+    # (extract_routed_experts), and setting it would silently load attention only.
     mla_pcc_threshold = 0.995
     moe_pcc_threshold = 0.971
     prefill_trace_layout = "single_file"

@@ -215,7 +215,8 @@ class PrefillModelAdapter(ABC):
     # True when the checkpoint's config loads but says something the TT stack would misread.
     config_builder_overrides_checkpoint: bool = False
     # Checkpoint stores routed experts stacked (one `mlp.experts.gate_up_proj` of [n_experts, ...])
-    # rather than per-expert. The pretrained fixture cannot split that, so it loads attention only.
+    # rather than per-expert. Unread: the fixture splits both layouts. Setting it would mean
+    # loading attention only.
     packed_expert_checkpoint: bool = False
     # Whether the tokenizer needs trust_remote_code=True (custom tokenizer code shipped in the repo,
     # e.g. Kimi's tiktoken-backed BBPE). DeepSeek-V3 uses a stock fast tokenizer, so it turns this off
