@@ -1021,7 +1021,9 @@ GN_INTERLEAVED_SHAPES = [
     "welford_mode, in_dtype, gb_dtype",
     [
         ("legacy", ttnn.bfloat16, ttnn.bfloat16),
+        ("legacy", ttnn.bfloat16, ttnn.float32),
         ("legacy", ttnn.float32, ttnn.float32),
+        ("legacy", ttnn.float32, ttnn.bfloat16),
         ("welford_normal", ttnn.bfloat16, ttnn.float32),
         ("welford_normal", ttnn.float32, ttnn.bfloat16),
         ("welford_reciprocal", ttnn.bfloat16, ttnn.bfloat16),
