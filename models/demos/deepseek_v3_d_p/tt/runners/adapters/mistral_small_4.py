@@ -83,6 +83,14 @@ class MistralSmall4Adapter(MLAPrefillAdapter):
     # unwired: run_reference_mla does not pass position_embeddings, and run_reference_moe expects a
     # different state dict. Those two comparisons skip rather than error.
     @property
+    def reference_moe_cls(self):
+        """Upstream MoE, used by run_reference_moe. Imported lazily: conftest imports every adapter
+        at collection time and transformers is expensive."""
+        from transformers.models.mistral4.modeling_mistral4 import Mistral4MoE
+
+        return Mistral4MoE
+
+    @property
     def reference_model_cls(self):
         from transformers.models.mistral4.modeling_mistral4 import Mistral4Model
 
