@@ -460,7 +460,17 @@ ProgramDescriptor build_native_equivalent(
     UntilizeTensorArgs args{.input = input};
     auto pf = UntilizeDeviceOperation::select_program_factory(attrs, args);
     return std::visit(
-        [&](auto&& factory) { return std::decay_t<decltype(factory)>::create_descriptor(attrs, args, out); }, pf);
+        [&](auto&& factory) -> ProgramDescriptor {
+            using Factory = std::decay_t<decltype(factory)>;
+            if constexpr (requires { Factory::create_descriptor(attrs, args, out); }) {
+                return Factory::create_descriptor(attrs, args, out);
+            } else {
+                TT_THROW(
+                    "untilize codegen: native fallback selected a program factory without descriptor support; "
+                    "the live-L1 fallback must select a descriptor-backed multicore factory");
+            }
+        },
+        pf);
 }
 
 }  // namespace
