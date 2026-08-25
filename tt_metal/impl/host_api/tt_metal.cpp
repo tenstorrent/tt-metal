@@ -1359,7 +1359,7 @@ bool CloseDevice(IDevice* device) {
     // MeshDevice RAII should be used instead to ensure proper teardown.
     TT_FATAL(
         MetalContext::instance().get_cluster().get_associated_mmio_device(device_id) == device_id,
-        "CloseDevice(device_id={}) may only be used for opening single MMIO capable devices. For multi chip clusters, "
+        "CloseDevice(device_id={}) may only be used for closing single MMIO capable devices. For multi chip clusters, "
         "use MeshDevice RAII or MeshDevice::close().",
         device_id);
 

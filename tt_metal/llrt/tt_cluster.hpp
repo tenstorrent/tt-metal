@@ -304,11 +304,10 @@ public:
 
     // Internal routing for SD and FD enables launching user ethernet kernels and FD tunneling for all devices in the
     // cluster. When using multiple devices in a cluster, this should be the flow:
-    //       MeshDevice::create_unit_mesh(0)
-    //       MeshDevice::create_unit_mesh(1)
+    //       auto unit_meshes = MeshDevice::create_unit_meshes({0, 1});
     //       set_internal_routing_info_for_ethernet_cores(true);
     //       set_internal_routing_info_for_ethernet_cores(false);
-    //       close unit meshes (RAII or MeshDevice::close)
+    //       unit_meshes.clear();  // or let RAII close them / MeshDevice::close
     void set_internal_routing_info_for_ethernet_cores(
         const tt::tt_fabric::ControlPlane& control_plane,
         bool enable_internal_routing,
