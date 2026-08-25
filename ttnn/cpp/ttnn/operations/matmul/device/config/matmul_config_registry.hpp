@@ -8,7 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <vector>
+#include <span>
 
 #include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
@@ -16,6 +16,7 @@
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
+#include "ttnn/operations/matmul/device/config/registry/matmul_registry_descriptor.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/config.hpp"
 
@@ -55,6 +56,14 @@ enum class ResolutionReason {
     UnsupportedSemantics,
     IncompleteRequest,
     InconsistentRequest,
+    CompatibilityUninitialized,
+    CompatibilitySchemaMismatch,
+    SemanticSourceMismatch,
+    BuildIdentityMismatch,
+    RuntimeCapabilityMismatch,
+    CircuitBroken,
+    UnsupportedReplay,
+    MaterializationRejected,
     EmptyRegistry,
     CertifiedMatch,
     Count,
@@ -151,16 +160,20 @@ struct WorkloadRequest {
 
 struct DeviceRequest {
     std::uint32_t architecture;
+    std::uint32_t board_capability_class;
     std::uint32_t device_count;
     std::uint32_t mesh_rows;
     std::uint32_t mesh_cols;
     std::uint32_t compute_grid_x;
     std::uint32_t compute_grid_y;
+    compact::Sha256 topology_sha256{};
+    compact::Sha256 runtime_capability_sha256{};
 
     bool operator==(const DeviceRequest&) const = default;
 };
 
 struct MatmulRegistryRequest {
+    static constexpr std::size_t kMaxActivationParameters = 8;
     std::uint32_t schema_version = 1;
     CallSemantics call;
     WorkloadRequest workload;
@@ -176,8 +189,10 @@ struct MatmulRegistryRequest {
     std::optional<bool> bcast_batch;
     bool run_batched;
     std::optional<std::uint32_t> activation_op;
-    // Exact IEEE-754 binary32 spellings, in parameter order.
-    std::vector<std::uint32_t> activation_param_f32_bits;
+    // Exact IEEE-754 binary32 spellings, in parameter order. Lookup requests
+    // never own heap-backed containers.
+    std::array<std::uint32_t, kMaxActivationParameters> activation_param_f32_bits{};
+    std::uint8_t activation_param_count = 0;
 
     bool operator==(const MatmulRegistryRequest&) const = default;
 };
@@ -192,11 +207,58 @@ struct Recipe {
 
 struct Resolution {
     ResolutionReason reason = ResolutionReason::Disabled;
-    // B0/B2 use a non-owning pointer only for the device-free synthetic seam;
-    // B1 replaces it with an immutable POD descriptor/index and separate
-    // fallible native materialization.
+    // Native pointer is retained only by the device-free synthetic seam.
     const Recipe* recipe = nullptr;
+    // Generated static storage; never enters MatmulParams or its cache key.
+    const compact::EntryDescriptor* descriptor = nullptr;
 };
+
+enum class MaterializationStatus {
+    Success,
+    UnsupportedSchema,
+    UnsupportedReplay,
+    InvalidProgramConfig,
+    InvalidComputeKernelConfig,
+    InvalidCallState,
+};
+
+struct MaterializationResult {
+    MaterializationStatus status = MaterializationStatus::UnsupportedReplay;
+    std::optional<Recipe> recipe = std::nullopt;
+};
+
+// Converts compact immutable data into one complete native recipe. This may
+// allocate in future replay families and therefore intentionally is not noexcept.
+MaterializationResult materialize_matmul_registry_recipe(const compact::EntryDescriptor& descriptor);
+
+struct CompatibilityDigests {
+    compact::Sha256 semantic_source_sha256{};
+    compact::Sha256 build_identity_sha256{};
+    compact::Sha256 runtime_capability_sha256{};
+};
+
+enum class CompatibilityStatus {
+    Uninitialized,
+    EmptyRegistry,
+    Compatible,
+    SchemaMismatch,
+    SemanticSourceMismatch,
+    BuildIdentityMismatch,
+    RuntimeCapabilityMismatch,
+};
+
+CompatibilityStatus validate_registry_compatibility(
+    const compact::TableMetadata& expected, std::size_t entry_count, const CompatibilityDigests& actual) noexcept;
+
+// Explicit process-start initialization. The first caller freezes the result;
+// later calls observe it and cannot replace the attestation.
+CompatibilityStatus initialize_registry_compatibility(const CompatibilityDigests& actual) noexcept;
+CompatibilityStatus startup_compatibility_status() noexcept;
+
+// Test only: no concurrent registry dispatch may be active.
+CompatibilityStatus initialize_registry_compatibility_for_testing(
+    const compact::TableMetadata& expected, std::size_t entry_count, const CompatibilityDigests& actual) noexcept;
+void reset_startup_compatibility_for_testing() noexcept;
 
 enum class ExecutionAction { Fallback, ObserveOnly, ApplyRecipe };
 
@@ -220,8 +282,7 @@ Mode current_mode() noexcept;
 // Test only: callers must ensure no concurrent matmul dispatch is in flight.
 void reset_startup_mode_for_testing() noexcept;
 
-// Device-free admission and empty production-table lookup. B1 replaces the
-// empty stub with exact POD descriptor lookup, not a table of native Recipes.
+// Device-free admission plus exact lookup in the generated immutable table.
 Resolution resolve(Mode mode, const MatmulRegistryRequest& request, const Eligibility& eligibility) noexcept;
 
 using ResolverFunction = Resolution (*)(Mode, const MatmulRegistryRequest&, const Eligibility&) noexcept;
@@ -250,18 +311,37 @@ Resolution resolve_with_synthetic_candidate_for_testing(
     const MatmulRegistryRequest& candidate_request,
     const Recipe& candidate_recipe) noexcept;
 
+Resolution resolve_with_compact_table_for_testing(
+    Mode mode,
+    const MatmulRegistryRequest& request,
+    const Eligibility& eligibility,
+    const compact::TableMetadata& metadata,
+    std::span<const compact::EntryDescriptor> entries,
+    const CompatibilityDigests& actual) noexcept;
+
+bool circuit_break_domain(OperationDomain domain) noexcept;
+bool is_domain_circuit_broken(OperationDomain domain) noexcept;
+
+// Test only: no concurrent registry dispatch may be active.
+void reset_circuit_breakers_for_testing() noexcept;
+
 struct DomainStatsSnapshot {
     std::uint64_t resolution_attempts = 0;
     std::uint64_t certified_hits = 0;
     std::uint64_t shadow_would_hits = 0;
     std::uint64_t applied_hits = 0;
     std::uint64_t fallbacks = 0;
+    std::uint64_t circuit_breaker_activations = 0;
+    bool circuit_broken = false;
     std::array<std::uint64_t, kResolutionReasonCount> reasons{};
 };
 
 struct StatsSnapshot {
     bool mode_is_frozen = false;
     Mode frozen_mode = Mode::Off;
+    CompatibilityStatus compatibility_status = CompatibilityStatus::Uninitialized;
+    compact::TableMetadata table_metadata{};
+    std::size_t entry_count = 0;
     std::array<DomainStatsSnapshot, kOperationDomainCount> domains{};
 };
 

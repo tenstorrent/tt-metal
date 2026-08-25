@@ -4,6 +4,7 @@
 
 #include "matmul.hpp"
 
+#include <array>
 #include <bit>
 #include <numeric>
 #include <variant>
@@ -312,56 +313,70 @@ static ttnn::Tensor bound_matmul(
                     };
                     const auto grid = device_a->compute_with_storage_grid_size();
                     std::optional<std::uint32_t> activation_op;
-                    std::vector<std::uint32_t> activation_params;
+                    std::array<std::uint32_t, registry::MatmulRegistryRequest::kMaxActivationParameters>
+                        activation_params{};
+                    std::uint8_t activation_param_count = 0;
+                    bool activation_params_fit = true;
                     if (parameters.user_fused_activation.has_value()) {
                         activation_op = static_cast<std::uint32_t>(parameters.user_fused_activation->op_type);
-                        activation_params.reserve(parameters.user_fused_activation->params.size());
-                        for (const auto parameter : parameters.user_fused_activation->params) {
-                            activation_params.push_back(std::bit_cast<std::uint32_t>(parameter));
+                        activation_params_fit =
+                            parameters.user_fused_activation->params.size() <= activation_params.size();
+                        if (activation_params_fit) {
+                            for (const auto parameter : parameters.user_fused_activation->params) {
+                                activation_params[activation_param_count++] = std::bit_cast<std::uint32_t>(parameter);
+                            }
                         }
                     }
-                    registry_request = registry::MatmulRegistryRequest{
-                        .schema_version = 1,
-                        .call = call_semantics,
-                        .workload =
-                            registry::WorkloadRequest{
-                                .logical_m = a_logical[-2],
-                                .logical_k = a_logical[-1],
-                                .logical_n = b_logical[-1],
-                                .padded_m = a_padded[-2],
-                                .padded_k = a_padded[-1],
-                                .padded_n = b_padded[-1],
-                            },
-                        .input_a = tensor_request(input_tensor_a),
-                        .input_b = tensor_request(input_tensor_b),
-                        .output =
-                            registry::TensorRequest{
-                                .dtype = io_contract.output_dtype,
-                                .layout = tt::tt_metal::Layout::TILE,
-                                .memory_layout = io_contract.output_memory_config.memory_layout(),
-                                .buffer_type = io_contract.output_memory_config.buffer_type(),
-                                .tile_height = io_contract.output_tile.get_height(),
-                                .tile_width = io_contract.output_tile.get_width(),
-                            },
-                        .device =
-                            registry::DeviceRequest{
-                                .architecture = static_cast<std::uint32_t>(device_a->arch()),
-                                .device_count = static_cast<std::uint32_t>(device_a->num_devices()),
-                                .mesh_rows = static_cast<std::uint32_t>(device_a->num_rows()),
-                                .mesh_cols = static_cast<std::uint32_t>(device_a->num_cols()),
-                                .compute_grid_x = grid.x,
-                                .compute_grid_y = grid.y,
-                            },
-                        .transpose_a = parameters.transpose_a,
-                        .transpose_b = parameters.transpose_b,
-                        .has_bias = bias.has_value(),
-                        .has_activation = parameters.user_fused_activation.has_value(),
-                        .untilize_out = parameters.untilize_out,
-                        .bcast_batch = parameters.bcast_batch,
-                        .run_batched = parameters.user_run_batched,
-                        .activation_op = activation_op,
-                        .activation_param_f32_bits = std::move(activation_params),
-                    };
+                    if (activation_params_fit) {
+                        registry_request = registry::MatmulRegistryRequest{
+                            .schema_version = 1,
+                            .call = call_semantics,
+                            .workload =
+                                registry::WorkloadRequest{
+                                    .logical_m = a_logical[-2],
+                                    .logical_k = a_logical[-1],
+                                    .logical_n = b_logical[-1],
+                                    .padded_m = a_padded[-2],
+                                    .padded_k = a_padded[-1],
+                                    .padded_n = b_padded[-1],
+                                },
+                            .input_a = tensor_request(input_tensor_a),
+                            .input_b = tensor_request(input_tensor_b),
+                            .output =
+                                registry::TensorRequest{
+                                    .dtype = io_contract.output_dtype,
+                                    .layout = tt::tt_metal::Layout::TILE,
+                                    .memory_layout = io_contract.output_memory_config.memory_layout(),
+                                    .buffer_type = io_contract.output_memory_config.buffer_type(),
+                                    .tile_height = io_contract.output_tile.get_height(),
+                                    .tile_width = io_contract.output_tile.get_width(),
+                                },
+                            .device =
+                                registry::DeviceRequest{
+                                    .architecture = static_cast<std::uint32_t>(device_a->arch()),
+                                    .board_capability_class = 0,
+                                    .device_count = static_cast<std::uint32_t>(device_a->num_devices()),
+                                    .mesh_rows = static_cast<std::uint32_t>(device_a->num_rows()),
+                                    .mesh_cols = static_cast<std::uint32_t>(device_a->num_cols()),
+                                    .compute_grid_x = grid.x,
+                                    .compute_grid_y = grid.y,
+                                    // Capability/topology attestation is not yet exposed by MeshDevice.
+                                    // Zero digests fail closed for every future nonempty table.
+                                    .topology_sha256 = {},
+                                    .runtime_capability_sha256 = {},
+                                },
+                            .transpose_a = parameters.transpose_a,
+                            .transpose_b = parameters.transpose_b,
+                            .has_bias = bias.has_value(),
+                            .has_activation = parameters.user_fused_activation.has_value(),
+                            .untilize_out = parameters.untilize_out,
+                            .bcast_batch = parameters.bcast_batch,
+                            .run_batched = parameters.user_run_batched,
+                            .activation_op = activation_op,
+                            .activation_param_f32_bits = activation_params,
+                            .activation_param_count = activation_param_count,
+                        };
+                    }
                 }
             }
         } catch (...) {
