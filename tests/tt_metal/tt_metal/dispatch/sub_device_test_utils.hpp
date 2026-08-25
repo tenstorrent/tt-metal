@@ -6,6 +6,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "sub_device.hpp"
@@ -13,10 +14,10 @@
 namespace tt::tt_metal {
 
 inline std::tuple<Program, CoreCoord, GlobalSemaphore> create_single_sync_program(
-    IDevice* device, const SubDevice& sub_device) {
+    distributed::MeshDevice* device, const SubDevice& sub_device) {
     auto syncer_coord = sub_device.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto syncer_core = CoreRangeSet(CoreRange(syncer_coord, syncer_coord));
-    auto global_sem = CreateGlobalSemaphore(device, sub_device.cores(HalProgrammableCoreType::TENSIX), INVALID);
+    auto global_sem = GlobalSemaphore(*device, sub_device.cores(HalProgrammableCoreType::TENSIX), INVALID);
 
     Program syncer_program = CreateProgram();
     auto syncer_kernel = CreateKernel(
@@ -30,7 +31,7 @@ inline std::tuple<Program, CoreCoord, GlobalSemaphore> create_single_sync_progra
 }
 
 inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_sync_program(
-    IDevice* device, const SubDevice& sub_device_1, const SubDevice& sub_device_2) {
+    distributed::MeshDevice* device, const SubDevice& sub_device_1, const SubDevice& sub_device_2) {
     auto waiter_coord = sub_device_2.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto waiter_core = CoreRangeSet(CoreRange(waiter_coord, waiter_coord));
     auto waiter_core_physical = device->worker_core_from_logical_core(waiter_coord);
@@ -39,7 +40,7 @@ inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_sync_
     auto syncer_core = CoreRangeSet(CoreRange(syncer_coord, syncer_coord));
     auto syncer_core_physical = device->worker_core_from_logical_core(syncer_coord);
     auto all_cores = waiter_core.merge(incrementer_cores).merge(syncer_core);
-    auto global_sem = CreateGlobalSemaphore(device, all_cores, INVALID);
+    auto global_sem = GlobalSemaphore(*device, all_cores, INVALID);
 
     Program waiter_program = CreateProgram();
     auto waiter_kernel = CreateKernel(
@@ -77,7 +78,7 @@ inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_sync_
 }
 
 inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_eth_sync_program(
-    IDevice* device, const SubDevice& sub_device_1, const SubDevice& sub_device_2, DataMovementProcessor dm_processor) {
+    distributed::MeshDevice* device, const SubDevice& sub_device_1, const SubDevice& sub_device_2, DataMovementProcessor dm_processor) {
     auto waiter_coord = sub_device_2.cores(HalProgrammableCoreType::ACTIVE_ETH).ranges().at(0).start_coord;
     auto waiter_core = CoreRangeSet(CoreRange(waiter_coord, waiter_coord));
     auto tensix_waiter_coord = sub_device_2.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
@@ -88,7 +89,7 @@ inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_eth_s
     auto syncer_core = CoreRangeSet(CoreRange(syncer_coord, syncer_coord));
     auto syncer_core_physical = device->worker_core_from_logical_core(syncer_coord);
     auto all_cores = tensix_waiter_core.merge(incrementer_cores).merge(syncer_core);
-    auto global_sem = CreateGlobalSemaphore(device, all_cores, INVALID);
+    auto global_sem = GlobalSemaphore(*device, all_cores, INVALID);
 
     Program waiter_program = CreateProgram();
     auto waiter_kernel = CreateKernel(

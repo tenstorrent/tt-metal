@@ -26,15 +26,16 @@ from __future__ import annotations
 
 from typing import Optional, Tuple, Union
 
+import torch
+
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import build_drafter_rope_hf_config
-from models.demos.deepseek_v3_d_p.tt.mla.rope import get_cos_sin_matrix
+from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 
 WEIGHT_DTYPE = ttnn.bfloat8_b  # fc / k_proj / v_proj projection weights
 NORM_WEIGHT_DTYPE = ttnn.bfloat16  # k_norm RMSNorm weight
-ROPE_DTYPE = ttnn.bfloat16  # rope cos/sin tables
 
 
 class TtDFlashDrafter:
@@ -52,6 +53,7 @@ class TtDFlashDrafter:
         sp_axis: int = 0,
         tp_axis: int = 1,
         max_seq_len: Optional[int] = None,
+        chunk_size: Optional[int] = None,
         num_links: int = 1,
         topology: Union[ttnn.Topology, Tuple[ttnn.Topology, ttnn.Topology]] = ttnn.Topology.Linear,
         owned_target_layer_ids: Optional[tuple] = None,
@@ -81,6 +83,7 @@ class TtDFlashDrafter:
         # Prefill builds drafter KV for the FULL chunk the verifier hands it (e.g. 5120 tokens), so the
         # cache is sized to max_seq_len — NOT capped at 4k.
         self.cache_seq = max_seq_len if max_seq_len is not None else config.context_len
+        self.chunk_size = chunk_size
 
         assert (
             self.cache_seq % self.sp_factor == 0
@@ -98,20 +101,19 @@ class TtDFlashDrafter:
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
-        self.hifi4_fp32_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
 
+        if self.build_kv_tail and config.rope_convention != "interleaved":
+            raise NotImplementedError(
+                f"rope_convention={config.rope_convention!r} is not supported for DFlash: use 'interleaved'"
+            )
         self._load_weights(state_dict)
-        self._rope_cos = self._rope_sin = None
-        self._rope_end = 0
-        # rope feeds the per-draft-layer K path, which only the tail rank runs.
+        self._rope: Optional[dict] = None
         if self.build_kv_tail:
-            self._ensure_rope(self.cache_seq)
+            assert self.chunk_size is not None, "chunk_size is required to build the drafter rope table (KV-tail rank)"
+            hf = build_drafter_rope_hf_config(self.config, max_seq_len=self.cache_seq)
+            self._rope = RotarySetup(hf, self.mesh_device, sp_axis=self.sp_axis).get_rope_tensors_indexed(
+                cache_seq_len_global=self.cache_seq, chunk_size_global=self.chunk_size
+            )
         # K/V caches are owned by the CALLER (see allocate_dflash_kv_cache) and passed into
         # forward() — the drafter does not hold them, mirroring the MLA prefill model's kvpe_cache.
         self._reduced_accum: Optional[ttnn.Tensor] = None  # running TP-partial FC sum (Σ fc_slice_i @ h_i)
@@ -194,44 +196,21 @@ class TtDFlashDrafter:
             topology=self.topology,
         )
 
+        src = torch.argsort(interleaved_to_halfsplit_perm(D))  # [0, 64, 1, 65, ...] for head_dim=128
+
         # Per draft layer: k/v proj column-parallel (KV heads split across TP), per-head k_norm replicated.
         self.k_proj, self.v_proj, self.k_norm = [], [], []
         for i in range(cfg.num_hidden_layers):
-            kw = state_dict[self._K_PROJ.format(i=i)]  # [kv_dim, H]
+            kw = state_dict[self._K_PROJ.format(i=i)]  # [kv_dim, H]; output rows are per-head head_dim blocks
             vw = state_dict[self._V_PROJ.format(i=i)]
-            kn = state_dict[self._K_NORM.format(i=i)]  # [head_dim]
+            kn = state_dict[self._K_NORM.format(i=i)]  # [head_dim], shared across heads, applied before rope
+            # kw'[h*D + j, :] = kw[h*D + src[j], :] for every head h; kn'[j] = kn[src[j]].
+            kw = kw.view(cfg.num_key_value_heads, D, H)[:, src, :].reshape(kv_dim, H).contiguous()
+            kn = kn[src].contiguous()
             self.k_proj.append(_linear_w(kw, mapper_col))
             self.v_proj.append(_linear_w(vw, mapper_col))
             self.k_norm.append(_norm_w(kn))
         assert kv_dim == cfg.num_key_value_heads * D
-
-    def _ensure_rope(self, end: int) -> None:
-        """Build (memoized) drafter deepseek_yarn cos/sin covering positions [0, end). Called ONCE from
-        __init__ with end=cache_seq so it stays OUT of the forward() hot path; memoized, so it does
-        NOT rebuild per call (would only rebuild if a longer range were later requested). yarn inv_freq
-        is position-independent, so growing the table never changes the
-        values at existing positions. HALF-SPLIT (interleave=False) to match Qwen3 rotate_half +
-        ttnn.experimental.rotary_embedding_hf; full head_dim (128) rotated (unlike the MLA 64-dim pe).
-        ``end`` is the GLOBAL sequence length and the table is SP-sharded on seq, so each SP chip gets
-        exactly its absolute-position window [r*end/sp, (r+1)*end/sp) — no on-device offset/slice."""
-        if self._rope_cos is not None and self._rope_end >= end:
-            return
-        hf = build_drafter_rope_hf_config(self.config, max_seq_len=end)
-        cos, sin = get_cos_sin_matrix(hf, interleave=False)  # [1, 1, end, head_dim]
-        cos, sin = cos[..., :end, :], sin[..., :end, :]
-        shard = [None, None]
-        shard[self.sp_axis] = 2  # SP-shard the global table on seq → per-chip absolute-position window
-        mapper = ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard)
-        if self._rope_cos is not None:
-            ttnn.deallocate(self._rope_cos)
-            ttnn.deallocate(self._rope_sin)
-        self._rope_cos = ttnn.from_torch(
-            cos, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ROPE_DTYPE, mesh_mapper=mapper
-        )
-        self._rope_sin = ttnn.from_torch(
-            sin, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ROPE_DTYPE, mesh_mapper=mapper
-        )
-        self._rope_end = end
 
     def reset(self):
         """Clear the FC accumulator + any imported upstream partial — call at the start of each prefill
@@ -336,36 +315,77 @@ class TtDFlashDrafter:
         )
         return heads
 
-    def forward(self, k_cache: ttnn.Tensor, v_cache: ttnn.Tensor, positions_start: int = 0) -> None:
+    def forward(
+        self,
+        k_cache: ttnn.Tensor,
+        v_cache: ttnn.Tensor,
+        kv_actual_global: int = 0,
+        *,
+        slot_idx: int = 0,
+    ) -> None:
         """Finalize into the caller-owned ``k_cache``/``v_cache`` (allocate via
         ``allocate_dflash_kv_cache``): consume the accumulated TP-partial FC output, TP-reduce it,
         hidden_norm, then per draft layer project/norm/rope K and project V, writing each into its cache
         slot. The caches are passed in (not owned by the drafter) so the runner drives their lifecycle +
-        dtype, exactly like the MLA prefill model takes ``kvpe_cache`` in ``forward()``. ``positions_start``
-        offsets rope for the last-4k window (Phase 3); Phase 1 uses 0. Caller must have supplied
-        seq-contiguous taps."""
+        dtype, exactly like the MLA prefill model takes ``kvpe_cache`` in ``forward()``.
+
+        ``kv_actual_global`` is the chunk's absolute KV offset in **GLOBAL** tokens (the same unit and the
+        same argument the MLA path passes to ``update_padded_kv_cache``; cf. ``mla.py``'s chunked-prefill
+        write), so chunk c of a sequence passes ``c * chunk_global`` and a multi-turn resume passes the
+        reused prefix length. It must be tile-aligned — align DOWN to the previous 32 and replay the ≤31
+        dropped tokens rather than rounding up, since sub-tile offsets are rejected outright and the kernel's
+        tile-granular staircase and the host mirror disagree off-tile.
+
+        ``slot_idx`` selects which user's cache slot to fill; the cache is user-major
+        (``slot_idx * num_hidden_layers + layer_idx``), as ``allocate_dflash_kv_cache`` lays it out.
+
+        The taps for this chunk need NOT be seq-contiguous: token ids entering the transformer are already
+        block-cyclic-gathered, so each chip's tap slice is exactly the rows its cache shard will hold, and
+        the interleaved indexed rope op derives each chip's shard offset on-device from the whole-cache table
+        built once in ``__init__``."""
         assert self.build_kv_tail, (
             "forward() on a non-tail drafter (build_kv_tail=False); non-tail ranks forward the partial "
             "via export_partial instead"
         )
         cfg = self.config
         # Sanity-check the un-sharded cache dims (layer/head_dim are not seq/SP-sharded, so .shape is
-        # unambiguous here); the seq (dim 2) capacity is checked per-chip below against cache_seq.
-        assert k_cache.shape[0] == cfg.num_hidden_layers and v_cache.shape[0] == cfg.num_hidden_layers, (
-            f"kv cache layer dim {k_cache.shape[0]}/{v_cache.shape[0]} != num_hidden_layers "
-            f"{cfg.num_hidden_layers} (allocate with allocate_dflash_kv_cache)"
-        )
+        # unambiguous here); the seq (dim 2) capacity is checked in GLOBAL tokens below.
+        # dim0 is num_users * num_hidden_layers (user-major), so derive the slot count from it.
+        for name, cache in (("k", k_cache), ("v", v_cache)):
+            assert cache.shape[0] % cfg.num_hidden_layers == 0, (
+                f"{name}_cache batch dim {cache.shape[0]} is not a multiple of num_hidden_layers "
+                f"{cfg.num_hidden_layers} (allocate with allocate_dflash_kv_cache)"
+            )
+        num_slots = k_cache.shape[0] // cfg.num_hidden_layers
+        assert (
+            v_cache.shape[0] // cfg.num_hidden_layers == num_slots
+        ), f"k/v caches disagree on slot count ({num_slots} vs {v_cache.shape[0] // cfg.num_hidden_layers})"
+        assert 0 <= slot_idx < num_slots, f"slot_idx {slot_idx} out of range [0, {num_slots})"
         assert (
             k_cache.shape[-1] == cfg.head_dim and v_cache.shape[-1] == cfg.head_dim
         ), f"kv cache head_dim {k_cache.shape[-1]}/{v_cache.shape[-1]} != {cfg.head_dim}"
         # Combine this rank's accumulated FC partials across TP and add any upstream partial (import_partial).
         reduced = self._finalize_sharded_partial()  # [1,1,seq,H/tp] (or full H when tp==1)
-        seq = reduced.shape[2]  # PER-CHIP seq (dim2, unchanged by the hidden scatter)
-        per_chip_cap = self.cache_seq // self.sp_factor
-        assert positions_start + seq <= per_chip_cap, (
-            f"positions_start+seq ({positions_start + seq}) exceeds per-chip cache depth ({per_chip_cap}); "
-            f"construct with max_seq_len >= the chunk length (the cache is sized to the full chunk; "
-            f"the 4k window is applied at migration, not here)"
+        seq = reduced.shape[2]  # PER-CHIP seq (dim2, unchanged by the hidden scatter) == chunk_local
+        chunk_global = seq * self.sp_factor
+        # Mirror the MLA chunked-prefill write's guards (cf. mla.py). NOTE the units: kv_actual_global and
+        # cache_seq are GLOBAL token counts while `seq` is per-chip — comparing a global offset against a
+        # per-chip capacity is an sp_factor-sized error that shows up as a spurious capacity failure.
+        assert chunk_global % (ttnn.TILE_SIZE * self.sp_factor) == 0, (
+            f"chunk_global ({chunk_global}) must be a multiple of TILE_SIZE * sp "
+            f"({ttnn.TILE_SIZE * self.sp_factor})"
+        )
+        assert (
+            kv_actual_global % ttnn.TILE_SIZE == 0
+        ), f"kv_actual_global ({kv_actual_global}) must be tile-aligned (a multiple of {ttnn.TILE_SIZE})"
+        assert kv_actual_global + chunk_global <= self.cache_seq, (
+            f"kv_actual_global ({kv_actual_global}) + chunk_global ({chunk_global}) exceeds the global cache "
+            f"depth ({self.cache_seq}); construct with a larger max_seq_len (windowing happens at migration)"
+        )
+        assert self.cache_seq % chunk_global == 0, (
+            f"cache_seq ({self.cache_seq}) must be a whole number of chunk_global ({chunk_global}) blocks; "
+            "update_padded_kv_cache tiles the per-user cache block-cyclically in chunk_global-sized blocks, "
+            "so a depth that is not a multiple would corrupt the layout"
         )
 
         # Distributed hidden_norm on the [1,1,seq,H/tp] shard (stats all-gathered internally → correct
@@ -379,12 +399,9 @@ class TtDFlashDrafter:
             ttnn.deallocate(target_hidden)
             target_hidden = gathered  # [1,1,seq,H] replicated on TP
 
-        # RoPE cos/sin: the __init__-built table is SP-sharded over the GLOBAL seq, so this chip already
-        # holds its absolute-position window [r*cache_seq/sp, …); use it directly — no per-call build/slice.
-        # TODO: chunked prefill at arbitrary offsets (positions_start>0) needs an indexed rope op
-        # that takes the offset on-device (like MLA's rotary_embedding_indexed).
-        assert positions_start == 0, "chunked offset not yet supported"
-        cos, sin = self._rope_cos, self._rope_sin
+        assert (
+            chunk_global == self.chunk_size
+        ), f"chunk_global ({chunk_global}) != chunk_size the rope table was built for ({self.chunk_size})"
 
         for i in range(cfg.num_hidden_layers):
             k = ttnn.linear(
@@ -401,7 +418,6 @@ class TtDFlashDrafter:
             )
             k = self._split_heads(k)  # [1, kvh_local, seq, head_dim]
             v = self._split_heads(v)
-            # per-head RMSNorm over head_dim, then Qwen3 half-split rope. V untouched.
             k = ttnn.rms_norm(
                 k,
                 weight=self.k_norm[i],
@@ -409,15 +425,18 @@ class TtDFlashDrafter:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.default_compute_kernel_config,
             )
-            k = ttnn.experimental.rotary_embedding_hf(
-                k, cos, sin, is_decode_mode=False, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
+            k = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                k,
+                self._rope["cos_matrix"],
+                self._rope["sin_matrix"],
+                self._rope["trans_matrix"],
+                kv_actual_global=kv_actual_global,
+                cluster_axis=self.sp_axis,
             )
-            # Write into cache slot `i` (layer as the fill "user" dim). The cache is bf8 (align w/ the
-            # decode KV cache) while k/v leave the projections in bf16; fill_cache_for_user_ needs the
-            # source dtype to match the cache, so typecast down first — TILE both sides, so no relayout
-            # (mirrors MLA _to_cache_format, mla.py:964). Keyed off *_cache.dtype so a bf16-cache caller
-            # (override) still works. TODO: the migration writer + SP-sharded-seq fill replace this
-            # seq-replicated fill_cache_for_user_.
+            # The cache is bf8 (align w/ the decode KV cache) while k/v leave the projections in bf16;
+            # update_padded_kv_cache FATALs unless cache and input dtypes match exactly, so typecast down
+            # first — TILE both sides, so no relayout (mirrors MLA _to_cache_format). Keyed off *_cache.dtype
+            # so a bf16-cache caller (override) still works.
             if k.dtype != k_cache.dtype:
                 k_cast = ttnn.typecast(k, k_cache.dtype)
                 ttnn.deallocate(k)
@@ -426,8 +445,21 @@ class TtDFlashDrafter:
                 v_cast = ttnn.typecast(v, v_cache.dtype)
                 ttnn.deallocate(v)
                 v = v_cast
-            ttnn.kv_cache.fill_cache_for_user_(k_cache, k, i)
-            ttnn.kv_cache.fill_cache_for_user_(v_cache, v, i)
+            # Write this chunk into slot `slot_idx`, draft layer `i`. update_padded_kv_cache derives each
+            # chip's local write offset on-device from kv_actual_global (the same call the MLA chunked-prefill
+            # path makes) and is mesh-aware, unlike fill_cache_for_user_, whose program factory names out
+            # mesh_dispatch_coordinate and so cannot express the per-chip staircase at all.
+            # ALWAYS keyword args: the two nanobind overloads order the scalars differently.
+            for cache, tensor in ((k_cache, k), (v_cache, v)):
+                ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                    cache,
+                    tensor,
+                    slot_idx=slot_idx,
+                    layer_idx=i,
+                    num_layers=cfg.num_hidden_layers,
+                    kv_actual_global=kv_actual_global,
+                    cluster_axis=self.sp_axis,
+                )
             ttnn.deallocate(k)
             ttnn.deallocate(v)
         ttnn.deallocate(target_hidden)

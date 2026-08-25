@@ -16,6 +16,7 @@ from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import ROUTED_EXPERT_ACTIVATION_BY_NAME
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
@@ -253,6 +254,7 @@ class TtPrefillBlock(LightweightModule):
         routing_use_l1_small_for_semaphores: bool = False,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
+        first_layer_idx: Optional[int] = None,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -323,6 +325,7 @@ class TtPrefillBlock(LightweightModule):
             layer_num=layer_num,
             kv_only=kv_only,
             sparse_kv_cache_format=sparse_kv_cache_format,
+            first_layer_idx=first_layer_idx,
         )
 
         if kv_only:
@@ -453,6 +456,10 @@ class TtPrefillBlock(LightweightModule):
             shared_expert_weights=state_dict.get("shared_expert_weights"),  # None if cache exists
             routed_expert_activations_dtype=routed_expert_activations_dtype,
             routed_expert_weights_dtype=routed_expert_weights_dtype,
+            # Kimi-K3 is the only config that names one; everything else defaults to SiLU.
+            routed_expert_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[
+                getattr(model_cfg, "ROUTED_EXPERT_ACTIVATION", "silu")
+            ],
             shared_expert_activations_dtype=shared_expert_activations_dtype,
             shared_expert_weights_dtype=shared_expert_weights_dtype,
             gate_weights=state_dict.get("gate_weights"),  # None if cache exists

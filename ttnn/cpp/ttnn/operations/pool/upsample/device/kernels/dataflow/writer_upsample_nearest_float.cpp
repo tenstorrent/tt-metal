@@ -6,23 +6,20 @@
 
 #include <api/dataflow/dataflow_api.h>
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
     // Runtime arguments
-    const uint32_t output_buffer_addr = get_arg_val<uint32_t>(0);  // Output tensor DRAM address
-    const uint32_t num_sticks = get_arg_val<uint32_t>(1);          // Number of output sticks for this core
-    const uint32_t start_stick_id = get_arg_val<uint32_t>(2);      // Starting output stick ID
+    const auto num_sticks = get_arg(args::num_sticks);          // Number of output sticks for this core
+    const auto start_stick_id = get_arg(args::start_stick_id);  // Starting output stick ID
 
     // Compile-time arguments
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);             // Output CB ID
-    constexpr uint32_t aligned_stick_nbytes = get_compile_time_arg_val(1);  // Aligned stick size in bytes
+    constexpr auto aligned_stick_nbytes = get_arg(args::aligned_stick_nbytes);  // Aligned stick size in bytes
 
-    // Tensor accessor compile-time args start at index 3
-    constexpr auto dst_args = TensorAccessorArgs<2>();
-    const auto output_tensor_accessor = TensorAccessor(dst_args, output_buffer_addr);
+    const auto output_tensor_accessor = TensorAccessor(tensor::output);
 
-    DataflowBuffer out_dfb(cb_id_out);
+    DataflowBuffer out_dfb(dfb::out);
     Noc noc;
 
     // Process sticks assigned to this core

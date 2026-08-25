@@ -13,7 +13,7 @@ on:
           "sdpa_perf" runs ring-joint SDPA and high-bandwidth all-gather.
           Valid stages: dsa_mla_glm, glm_chunked, glm_chunked_accuracy,
           glm_moe, glm_prefill_block, hca_chunked, hca_perf, high_bw_all_gather_perf,
-          k3_mla, k3_mla_perf, kimi_chunked, kimi_chunked_padded, kimi_dflash,
+          k3_mla, k3_mla_perf, k3_mla_trace, kimi_chunked, kimi_chunked_padded, kimi_dflash,
           kimi_k3_moe, kimi_k3_moe_perf, kimi_mla, kimi_moe, kimi_prefill_block,
           kv_cache_table, minimax_prefill_kv_pcc, minimax_prefill_perf, mla,
           mla_chunked, moe_gate, prefill_block, prefill_block_determinism,
@@ -169,7 +169,10 @@ jobs:
     # into expected-jobs so legs that produced no ai_job_summary artifact are
     # reconciled as infra failures rather than silently dropped.
     needs: [Galaxy-Blaze-models-prefill, Galaxy-Blaze-models-prefill-SDPA-Perf-tests, Galaxy-Blaze-models-prefill-sc4]
-    if: always() && !cancelled()
+    # Reports on a run that failed — the case the summary exists for — but not
+    # on one that was cancelled: an aborted run has no outcome to summarize, and
+    # asking for one spends an LLM call to say it stopped early.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

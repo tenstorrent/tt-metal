@@ -380,8 +380,16 @@ def run(
 
     # The operation returns a tuple of (Q_rotated, K_rotated)
     if isinstance(result, (list, tuple)) and len(result) == 2:
-        output_tensor_q = mesh_tensor_to_torch(result[0], device if is_mesh_device else None)
-        output_tensor_k = mesh_tensor_to_torch(result[1], device if is_mesh_device else None)
+        output_tensor_q = mesh_tensor_to_torch(
+            result[0],
+            device if is_mesh_device else None,
+            scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+        )
+        output_tensor_k = mesh_tensor_to_torch(
+            result[1],
+            device if is_mesh_device else None,
+            scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+        )
         # If mesh assembly doubled the output (replicate_with_topology sends
         # full tensor to each device, mesh_tensor_to_torch concatenates),
         # fall back to device 0.

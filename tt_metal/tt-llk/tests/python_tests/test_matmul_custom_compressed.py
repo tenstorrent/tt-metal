@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import numpy as np
 import pytest
 from conftest import blackhole_only
 from helpers.compressed_utils import (
@@ -10,6 +9,7 @@ from helpers.compressed_utils import (
     assign_clustered,
     assign_interleaved,
     assign_random,
+    encode_tile_meta,
     generate_exact_assignment,
     run_compressed,
 )
@@ -30,20 +30,9 @@ def pack_b(tiles):
 
 
 def encode_meta(assignment, ct, kt, aux):
-    total = len(assignment)
-    num_u32 = (total + 9) // 10
-    meta = [0] * num_u32
-    prev_fmt = 0
-    for i in range(total):
-        u, j = divmod(i, 10)
-        if j == 0:
-            meta[u] |= prev_fmt & 0b11
-        fmt = assignment[i] & 0b11
-        use_b = 1 if (i % ct) == 0 else 0
-        meta[u] |= use_b << (3 * j + 2)
-        meta[u] |= fmt << (3 * j + 3)
-        prev_fmt = fmt
-    return np.array(meta, dtype=np.uint32).tobytes()
+    # run_compressed's make_meta hook; the packing itself is shared with the compressed_custom_mm
+    # advance test. kt and aux are unused here -- the tile kernel's meta is a flat per-tile stream.
+    return encode_tile_meta(assignment, ct)
 
 
 COMPRESSION_GRANULARITY = DEFAULT_TILE_C_DIM

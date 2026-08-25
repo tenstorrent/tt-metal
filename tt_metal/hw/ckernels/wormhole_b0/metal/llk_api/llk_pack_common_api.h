@@ -127,10 +127,10 @@ inline void llk_pack_dest_section_done() {
  *
  * @tparam pack_mode   Packer program mode.
  * @tparam diagonal    Whether to use diagonal packing.
- * @param  pack_output Output circular buffer / operand index (defaults to 16).
+ * @param  pack_output Output circular buffer / operand index.
  */
 template <PackMode pack_mode = PackMode::Default, bool diagonal = false>
-inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output = 16) {
+inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
@@ -145,10 +145,10 @@ inline void llk_init_packer_dest_offset_registers(const std::uint32_t pack_outpu
  *
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @tparam pack_mode           Packer program mode.
- * @param  pack_output         Output circular buffer / operand index (defaults to 16).
+ * @param  pack_output         Output circular buffer / operand index.
  */
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
-inline void llk_pack_dest_init(const std::uint32_t pack_output = 16) {
+inline void llk_pack_dest_init(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);

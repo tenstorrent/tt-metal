@@ -484,26 +484,4 @@ inline buffer_descriptor_u construct_buf_desc(const TensorShape& tensor_shape, u
     return buf_desc;
 }
 
-/**
- * @brief Creates a tdma_descriptor_t structure from TensorShape and other needed parameters
- * Currently supported buffer descriptor dimensions are:
- * x=16; y=[1, 2, 4, 8, 16]; z=1; or x=16; y=16; z=4; these are hardware constraints.
- *
- * @tparam MODE: L1 access mode. Strided (PACR/UNPACR_STRIDE tiny-tiles) forces y_dim = 1 and z_dim = 1
- *        so L1 rows are indexed as tiles; Continuous keeps the tensor-shape derived y_dim, z_dim.
- * @param tensor_shape: Tile/face dimensions and shape of input tensor
- * @param base_l1_16B: base address of the buffer in L1
- * @param data_format: L1 data encoding format
- * @param buf_desc_id: buffer descriptor table ID
- * @param reg_data_format: Register data encoding format
- */
-template <L1AccessMode MODE = L1AccessMode::Continuous>
-inline tdma_descriptor_t construct_tdma_desc(
-    const TensorShape& tensor_shape, unsigned base_l1_16B, unsigned data_format, std::uint32_t buf_desc_id, unsigned reg_data_format)
-{
-    tdma_descriptor_t tdma_desc = {construct_buf_desc<MODE>(tensor_shape, base_l1_16B, data_format), buf_desc_id, static_cast<DataFormat>(reg_data_format)};
-
-    return tdma_desc;
-}
-
 } // namespace ckernel::trisc

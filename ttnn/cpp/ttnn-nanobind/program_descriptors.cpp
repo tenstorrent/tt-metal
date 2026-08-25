@@ -686,7 +686,11 @@ void py_module_types(nb::module_& mod) {
         .def_rw(
             "math_approx_mode",
             &tt::tt_metal::ComputeConfigDescriptor::math_approx_mode,
-            "Approximation mode for mathematical operations");
+            "Approximation mode for mathematical operations")
+        .def_rw(
+            "enable_trisc2_rvv",
+            &tt::tt_metal::ComputeConfigDescriptor::enable_trisc2_rvv,
+            "Compile the TRISC2 (pack) binary with the RISC-V Vector (Zve32f) extension (Blackhole only)");
 
     // TODO_NANOBIND: do we still need this?
     // export_enum<tt::tt_metal::KernelDescriptor::SourceType>(mod, "SourceType");

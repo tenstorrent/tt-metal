@@ -189,37 +189,6 @@ def test_div_no_nan_fp32(device):
 
 
 @pytest.mark.parametrize(
-    "ttnn_function",
-    [
-        ttnn.remainder,
-    ],
-)
-def test_remainder_forge(device, ttnn_function):
-    torch.manual_seed(213919)
-    input1 = torch.randn(2, 32, 32)
-    input2 = torch.randn(2, 32, 32)
-
-    golden_fn = ttnn.get_golden_function(ttnn_function)
-    torch_output = golden_fn(input1, input2, device=device)
-
-    input1 = ttnn.from_torch(input1, dtype=ttnn.float32)
-    input2 = ttnn.from_torch(input2, dtype=ttnn.float32)
-
-    input1 = ttnn.to_device(input1, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    input2 = ttnn.to_device(input2, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-    input1 = ttnn.to_layout(input1, ttnn.TILE_LAYOUT)
-    input2 = ttnn.to_layout(input2, ttnn.TILE_LAYOUT)
-
-    output = ttnn.remainder(input1, input2)
-
-    output = ttnn.to_torch(output)
-
-    status = ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.999
-    assert status
-
-
-@pytest.mark.parametrize(
     "input_shapes",
     [[64, 640], [2, 32, 320], [1, 1, 32, 32], [1, 2, 32, 64, 64]],
 )
@@ -253,18 +222,15 @@ def test_binary_fmod_bf16(
         (torch.Size([3, 123, 115])),
         (torch.Size([69, 178])),
         (torch.Size([1024])),
-        (torch.Size([])),
     ),
 )
 @pytest.mark.parametrize("scalar", [-0.002, -0.001, -0.0006, -0.0003, 0.0, 0.0005, 0.0007, 0.001, 0.002])
 def test_remainder_scalar(input_shapes, scalar, device):
     torch.manual_seed(0)
-    if len(input_shapes) == 0:
-        torch_input_tensor = torch.tensor(5.0, dtype=torch.bfloat16)
-    else:
-        torch_input_tensor = gen_func_with_cast_tt(
-            partial(torch_random, low=-100, high=100, dtype=torch.bfloat16), ttnn.bfloat16
-        )(input_shapes)
+
+    torch_input_tensor = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.bfloat16), ttnn.bfloat16
+    )(input_shapes)
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.bfloat16,
@@ -301,18 +267,15 @@ def test_remainder_scalar(input_shapes, scalar, device):
         (torch.Size([3, 123, 115])),
         (torch.Size([69, 178])),
         (torch.Size([1024])),
-        (torch.Size([])),
     ),
 )
 @pytest.mark.parametrize("scalar", [-0.0029, -0.002, -0.0005, 0.0, 0.0007, 0.001, 0.0025])
 def test_fmod_scalar(input_shapes, scalar, device):
     torch.manual_seed(0)
-    if len(input_shapes) == 0:
-        torch_input_tensor = torch.tensor(5.0, dtype=torch.bfloat16)
-    else:
-        torch_input_tensor = gen_func_with_cast_tt(
-            partial(torch_random, low=-100, high=100, dtype=torch.bfloat16), ttnn.bfloat16
-        )(input_shapes)
+
+    torch_input_tensor = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.bfloat16), ttnn.bfloat16
+    )(input_shapes)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor,

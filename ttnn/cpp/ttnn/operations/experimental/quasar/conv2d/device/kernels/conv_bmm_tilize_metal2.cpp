@@ -731,10 +731,6 @@ void kernel_main() {
                         {
                             DataflowBuffer curr_out_cb =
                                 curr_matmul_out_cb == matmul_partials_cb ? cb_matmul_partials : cb_mm_out;
-                            // reserve; PKgot=PACK got MATH's committed DEST (tile_regs_wait returned); PKdone=PACK
-                            // packed+pushed. If PKrsv i0=0 prints but PKgot i0=0 does NOT -> PACK stuck waiting on
-                            // MATH's subblock-0 commit = MATH<->PACK deadlock. If PKdone i0=0 prints then PKrsv i0=1
-                            // stalls -> PACK is fine and MATH is the sole bottleneck (MATH-internal MVMUL stall).
                             curr_out_cb.reserve_back(out_subblock_num_tiles);
                             tile_regs_wait();
 

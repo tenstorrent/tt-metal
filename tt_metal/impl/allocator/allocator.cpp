@@ -6,12 +6,13 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/allocator.hpp>
 #include "allocator_state.hpp"
+#include <tt-metalium/experimental/allocation_context.hpp>
 #include "allocator_types.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <enchantum/enchantum.hpp>
 #include <functional>
+#include <algorithm>
 #include <string>
-#include <string_view>
 #include <mutex>
 
 #include <tt_stl/assert.hpp>
@@ -27,7 +28,11 @@
 namespace tt::tt_metal {
 
 AllocatorImpl::AllocatorImpl(const AllocatorConfig& alloc_config) :
-    config_(std::make_unique<AllocatorConfig>(alloc_config)), view_(std::make_unique<Allocator>(this)) {}
+    config_(std::make_unique<AllocatorConfig>(alloc_config)),
+    view_(std::make_unique<Allocator>(this)),
+    tracking_enabled_(trace_allocation_tracking_enabled()),
+    traceback_capture_enabled_(trace_allocation_diagnostics_enabled()),
+    skip_program_cache_(trace_allocation_skip_program_cache_enabled()) {}
 
 void AllocatorImpl::validate_bank_assignments() const {
     TT_ASSERT(not bank_id_to_dram_channel_.empty() and not dram_channel_to_bank_ids_.empty());
@@ -111,16 +116,18 @@ void AllocatorImpl::init_one_bank_per_l1() {
 }
 
 void AllocatorImpl::verify_safe_allocation() const {
-    // Inform the user that its unsafe to allocate buffers when a trace is live on device.
-    // If the user does this, they are meant to ensure that buffers allocated when a trace is active,
-    // have a lifetime that ends before the trace is executed.
-    // Print the warning once per device, to ensure that user output is not clobbered.
+    if (!allocations_unsafe_) {
+        return;
+    }
+
+    // Emit at most once per host thread for the process lifetime, shared across all allocator instances.
     thread_local static bool warning_generated = false;
-    if (allocations_unsafe_ and not warning_generated) {
+    if (!warning_generated) {
         log_warning(
             tt::LogMetal,
-            "Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be "
-            "corrupted once a trace is executed.");
+            "Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers "
+            "may be corrupted once a trace is executed if they are not released before then. Use the trace allocation "
+            "tracker to verify.");
         warning_generated = true;
     }
 }
@@ -160,6 +167,9 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
         buffer->set_per_core_addresses(std::move(addrs));
         allocated_buffers_.insert(buffer);
+        if (tracking_enabled_) [[unlikely]] {
+            this->record_allocation_if_unsafe(buffer);
+        }
         return buffer->per_core_addresses_.at(cores[0]);
     }
 
@@ -204,7 +214,9 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         }
     }
     allocated_buffers_.insert(buffer);
-
+    if (tracking_enabled_) [[unlikely]] {
+        this->record_allocation_if_unsafe(buffer);
+    }
     return address;
 }
 
@@ -354,6 +366,13 @@ const std::vector<uint32_t>& AllocatorImpl::get_bank_ids_from_logical_core(
     return logical_core_to_bank_ids_.at(buffer_type).at(logical_core);
 }
 
+bool AllocatorImpl::has_bank(BufferType buffer_type, const CoreCoord& logical_core) const {
+    // Don't lock mutex_ because logical_core_to_bank_ids_ is populated during init and is not
+    // mutated afterwards, the same reasoning get_num_banks() relies on.
+    auto banks = logical_core_to_bank_ids_.find(buffer_type);
+    return banks != logical_core_to_bank_ids_.end() && banks->second.contains(logical_core);
+}
+
 const AllocatorConfig& AllocatorImpl::get_config() const { return *config_; }
 
 uint32_t AllocatorImpl::get_alignment(BufferType buffer_type) const {
@@ -462,16 +481,6 @@ void AllocatorImpl::reset_allocator_size(const BufferType& buffer_type) {
             TT_THROW("Unsupported buffer type!");
         }
     }
-}
-
-void AllocatorImpl::mark_allocations_unsafe() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    allocations_unsafe_ = true;
-}
-
-void AllocatorImpl::mark_allocations_safe() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    allocations_unsafe_ = false;
 }
 
 void AllocatorImpl::begin_dram_high_water_mark_tracking() {
