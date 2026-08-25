@@ -88,6 +88,12 @@ void kernel_main() {
 
     const uint32_t worker_id_for_reduce = get_arg(args::worker_id_for_reduce);
     const uint32_t worker_id_for_output = get_arg(args::worker_id_for_output);
+    // idle core: do_reduce==65 is out of the valid {0,1} range and marks a core with no assigned
+    // work. Exit before touching any binding or semaphore. (Legacy keyed this off out_addr==0; Metal
+    // 2.0 supplies addresses via TensorBindings, so the compute kernel's ==65 marker is reused.)
+    if (get_arg(args::do_reduce) == 65) {
+        return;
+    }
     const bool is_worker = get_arg(args::do_reduce) == 0;
     const bool do_output = get_arg(args::do_output) == 1;
     const uint32_t cur_head_group = get_arg(args::cur_head_group);

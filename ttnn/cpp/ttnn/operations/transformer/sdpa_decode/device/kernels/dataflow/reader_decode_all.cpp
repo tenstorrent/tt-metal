@@ -96,6 +96,12 @@ void kernel_main() {
 #endif
 
     auto do_reduce_arg = get_arg(args::do_reduce);
+    // idle core: do_reduce==65 is out of the valid {0,1} range and marks a core with no assigned
+    // work. Exit before touching any binding, mcast, or semaphore. (Legacy keyed this off q_addr==0;
+    // Metal 2.0 supplies addresses via TensorBindings, so the compute kernel's ==65 marker is reused.)
+    if (do_reduce_arg == 65) {
+        return;
+    }
     const bool is_worker = do_reduce_arg == 0;
     const bool is_output_core = get_arg(args::do_output) == 1;
     const uint32_t page_table_page_size = get_arg(args::page_table_page_size);

@@ -133,6 +133,13 @@ void kernel_main() {
 #endif
 
     // Runtime arguments
+
+    // Idle core: get_arg(args::do_reduce) is 0 or 1 for active cores; 65 is out of range and marks an
+    // idle core (no assigned work). Exit before touching any buffer.
+    if (get_arg(args::do_reduce) == 65) {
+        return;
+    }
+
     const bool do_reduce = get_arg(args::do_reduce) == 1;
     const bool apply_mask_at_last_chunk = do_reduce && is_causal;
     const bool do_output = get_arg(args::do_output) == 1;

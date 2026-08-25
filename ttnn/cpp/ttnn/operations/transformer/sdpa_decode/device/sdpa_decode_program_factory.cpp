@@ -854,17 +854,15 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     Group<SemaphoreSpec> semaphores;
     Group<SemaphoreBinding> reader_sems;
     Group<SemaphoreBinding> writer_sems;
-    NodeRangeSet active_node_set = [&] {
-        std::vector<CoreRange> ranges;
-        ranges.reserve(core_group.size());
-        for (const auto& c : core_group) {
-            ranges.emplace_back(c, c);
-        }
-        return CoreRangeSet(ranges);
-    }();
-    semaphores.push_back(SemaphoreSpec{.unique_id = SEM_REDUCER, .target_nodes = active_node_set});
-    semaphores.push_back(SemaphoreSpec{.unique_id = SEM_OUTPUT, .target_nodes = active_node_set});
-    semaphores.push_back(SemaphoreSpec{.unique_id = SEM_K_MCAST, .target_nodes = active_node_set});
+    // Faithful to legacy: kernels, DFBs, and semaphores are placed on the FULL core grid, and idle
+    // cores (core_group_idle) are marked with the do_reduce==65 sentinel and early-return in every
+    // kernel. (Legacy keyed idle off addr==0 runtime args; Metal 2.0 injects buffer addresses via
+    // TensorBindings, so there is no addr RTA to zero — the compute kernel's ==65 idle marker is
+    // reused across reader/writer/compute instead.)
+    const NodeRangeSet full_node_set = core_grid;
+    semaphores.push_back(SemaphoreSpec{.unique_id = SEM_REDUCER, .target_nodes = full_node_set});
+    semaphores.push_back(SemaphoreSpec{.unique_id = SEM_OUTPUT, .target_nodes = full_node_set});
+    semaphores.push_back(SemaphoreSpec{.unique_id = SEM_K_MCAST, .target_nodes = full_node_set});
     reader_sems.push_back(SemaphoreBinding{.semaphore_spec_name = SEM_K_MCAST, .accessor_name = "k_mcast"});
     writer_sems.push_back(SemaphoreBinding{.semaphore_spec_name = SEM_REDUCER, .accessor_name = "reducer"});
     writer_sems.push_back(SemaphoreBinding{.semaphore_spec_name = SEM_OUTPUT, .accessor_name = "output"});
@@ -1275,6 +1273,79 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
              {"children_per_round_4", tree_params.children_per_round[4]},
              {"children_per_round_5", tree_params.children_per_round[5]}});
     }
+
+    // Idle cores: placed on the full grid (matching legacy) but do no work. Every named RTA gets a
+    // value so the schema is satisfied on these nodes, do_reduce==65 marks them idle so each kernel
+    // early-returns before touching bindings/semaphores, and the varargs the idle kernels never read
+    // are zero-filled to the active layout.
+    for (const CoreCoord& core : core_group_idle) {
+        AddRuntimeArgsForNode(
+            reader_ra.runtime_arg_values,
+            core,
+            {{"page_table_page_size", 0u},
+             {"do_reduce", 65u},  // Idle marker
+             {"do_output", 0u},
+             {"cur_head_group", 0u},
+             {"cur_batch", 0u},
+             {"core_num_in_reduce", 0u},
+             {"core_num_in_output", 0u},
+             {"cur_pos_arg", 0u},
+             {"do_k_mcast", 0u},
+             {"mcast_x", 0u},
+             {"mcast_y0", 0u},
+             {"mcast_y1", 0u},
+             {"num_dests", 0u}});
+        reader_ra.advanced_options.runtime_varargs[core] = std::vector<uint32_t>(2 * num_output_cores, 0);
+
+        AddRuntimeArgsForNode(
+            writer_ra.runtime_arg_values,
+            core,
+            {{"worker_id_for_reduce", 0u},
+             {"worker_id_for_output", 0u},
+             {"do_reduce", 65u},  // Idle marker
+             {"do_output", 0u},
+             {"cur_head_group", 0u},
+             {"cur_batch", 0u},
+             {"core_num_in_reduce", 0u},
+             {"core_num_in_output", 0u},
+             {"cur_pos_arg", 0u},
+             {"is_tree_root", 0u},
+             {"parent_core_in_group", 0u},
+             {"send_at_round", 0u},
+             {"num_children", 0u},
+             {"my_active_rounds", 0u},
+             {"reduction_group_base_idx", 0u},
+             {"children_per_round_0", 0u},
+             {"children_per_round_1", 0u},
+             {"children_per_round_2", 0u},
+             {"children_per_round_3", 0u},
+             {"children_per_round_4", 0u},
+             {"children_per_round_5", 0u}});
+        writer_ra.advanced_options.runtime_varargs[core] =
+            std::vector<uint32_t>(2 * num_cores_per_head + 2 * num_reducer_cores + 2 * num_output_cores, 0);
+
+        AddRuntimeArgsForNode(
+            compute_ra.runtime_arg_values,
+            core,
+            {{"do_reduce", 65u},  // Idle marker
+             {"do_output", 0u},
+             {"cur_head", 0u},
+             {"cur_batch", 0u},
+             {"core_num_in_reduce", 0u},
+             {"core_num_in_output", 0u},
+             {"cur_pos_arg", 0u},
+             {"is_tree_root", 0u},
+             {"parent_core_in_group", 0u},
+             {"send_at_round", 0u},
+             {"num_children", 0u},
+             {"my_active_rounds", 0u},
+             {"children_per_round_0", 0u},
+             {"children_per_round_1", 0u},
+             {"children_per_round_2", 0u},
+             {"children_per_round_3", 0u},
+             {"children_per_round_4", 0u},
+             {"children_per_round_5", 0u}});
+    }
     run_args.kernel_run_args = {std::move(reader_ra), std::move(writer_ra), std::move(compute_ra)};
 
     // ---- Tensor args (one per declared TensorParameter) ----
@@ -1308,7 +1379,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         .work_units = {WorkUnitSpec{
             .name = "main",
             .kernels = {READER, WRITER, COMPUTE},
-            .target_nodes = active_node_set,
+            .target_nodes = full_node_set,
         }},
     };
 
