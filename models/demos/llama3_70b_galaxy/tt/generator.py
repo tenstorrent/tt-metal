@@ -1687,7 +1687,6 @@ class Generator(WarmupForwardMixin):
             current_pos,
             page_table=page_table,
         )
-
         if on_device_logits:
             return trace_tok_rm[0], None
 
