@@ -1,204 +1,176 @@
 # Verification Report: reduce_scatter
 
-**Op class**: multi-device CCL **with a compute stage** (fabric line gather + TRISC N-way tile SUM +
-per-device-distinct slice output).
-**Verified on**: REAL 4-chip Blackhole hardware, mesh `(1, 4)` with `FabricConfig.FABRIC_1D`
-(topology `bh_quietbox_1x4_hw`), via `scripts/run_multidevice_sim_pytest.py --op reduce_scatter`.
-This is the correct runner for a CCL op — `run_safe_pytest.sh` forces slow dispatch on sim and has
-no multichip/hang awareness. The runner's `--list` gate confirms `reduce_scatter` is registered in
-the topology matrix. Aggregate exit = 0 on every run below.
+**Op class**: multi-device compute-CCL (fabric store-and-forward gather fused, in ONE
+`ttnn.generic_op` dispatch, with an arrival-ordered incremental N-way SUM and a per-device-DISTINCT
+scatter).
+**Verified on**: real 4-chip Blackhole QuietBox, mesh `(1, 4)` with `FabricConfig.FABRIC_1D`
+(topology `bh_quietbox_1x4_hw`, runtime = hardware), via
+`scripts/run_multidevice_sim_pytest.py --op reduce_scatter` — the correct runner for a CCL op
+(`run_safe_pytest.sh` is single-device-oriented and forces slow dispatch on sim). Aggregate exit = 0
+on every run below.
 
 ---
 
 ## Code Review
 
-The implementation closely follows `op_design.md` and the prompt's framework-owner mandates: a
-gather-then-reduce-local-slice algorithm across two ordered `ttnn.generic_op` dispatches on one
-command queue (Phase A fabric store-and-forward gather → Phase B SliceRowWalker-addressed local
-N-way `sum_blocks` reduce). Review found no correctness defects in the kernels; the fixes below are
-host-side hardening plus one capability promotion.
+The implementation follows `op_design.md` faithfully on every binding dimension. Review found **no
+correctness defects and no required fixes** — the helper usage, CB protocol, semaphore discipline,
+and registry wiring are all as designed. Verified in detail:
 
-### Fixed
+### Design conformance (binding dimensions — all match)
 
-1. **`SUPPORTED["dim"]` under-claimed reality — promoted `[3]` → `[3, 2]`** (drift fix-in-place).
-   Reading the code showed the dim=2 machinery was already fully implemented: the host slice rows
-   (`_slice_quantities` carries dim 3, 2, AND 1), the Phase-B reader's
-   `static_assert(is_supported_scatter_dim(dim))` (accepts 1|2|3), and the `SliceRowWalker`
-   run/stride math all generalize over the scatter dim — only the SUPPORTED membership list gated
-   dim=2 behind `UnsupportedAxisValue`. This is the hidden-under-claim variant of `xpass_drift`
-   (validate() refuses before the kernel could XPASS, so the harness can't see it). Promoted and
-   **mechanically verified on hardware**: the 6 golden `dim=2 × Linear` cells now pass
-   (`supported_pass` 6 → 12), plus 6 new verifier-authored extended tests (dim=2 bf16/f32,
-   multibatch, `-2` alias, dim=2 program-cache hit). The immutable acceptance test's
-   `test_reduce_scatter_unsupported_dim_refuses` self-skips as designed once dim=2 is refined in.
-2. **`validate()` ordering — axis gate moved before axis-value-dependent structural checks.**
-   Previously the scatter-dim divisibility check (`shape[dim] % (N*32)`), the H/W tile-alignment
-   check, and the output-spec check ran BEFORE the SUPPORTED membership test. An out-of-SUPPORTED
-   axis value whose shape trips a dependent check (e.g. `dim=1` with `C=1`, or a ROW_MAJOR input
-   with sub-tile H) would raise `ValueError` instead of the registry contract's typed
-   `UnsupportedAxisValue`. Reordered: universal structural checks (MeshDevice, line view, N ≥ 2,
-   rank, dim range, not-sharded) → axis gate (SUPPORTED per-axis, then EXCLUSIONS) →
-   axis-value-dependent structural checks (tile alignment, slice divisibility, page-size guard,
-   output spec). Unobservable in the current golden universe (every INPUT is valid for every TARGET
-   dim), but the refusal type is now correct for ALL out-of-SUPPORTED values regardless of shape.
-   Re-verified: `xfail_wrong_mode = 0`, and `test_reduce_scatter_rejects_indivisible_shape` (an
-   in-SUPPORTED cell with a bad shape) still gets its `ValueError`.
-3. **Signature typing**: `output_tensor: ttnn.Tensor = None` → `ttnn.Tensor | None = None`
-   (matches the prompt's exact signature).
+| Dimension | Design | Implementation |
+|---|---|---|
+| Algorithm | line store-and-forward gather of whole shards fused with an arrival-ordered incremental reduce, ONE dispatch | matches — single `MeshProgramDescriptor`, one `generic_op`; reduce pass k starts on arrival k's semaphore, overlapping arrival k+1's flight (T4/T7) ✓ |
+| Pipeline topology | 3 cores/device: (0,0) fwd relay, (0,1) bwd relay, (0,2) reduce; 7 kernels from 5 sources | matches ✓ |
+| Work distribution | fixed roles, Linear block-flow table T1/T2 (`_block_flow` — fwd sends `1+i` iff `i<N-1`, arrivals `i`; mirror bwd) | matches ✓ |
+| Inter-core comm | fabric `write_page` into the neighbour's `gather_buffer` (uniform mesh address) + TWO in-order counting incs per block (relay core + reduce core), two `GlobalSemaphore`s cached per mesh, parked on the descriptor, R1 re-arm by every consumer | matches ✓ (program-cache test exercises the re-arm; passes) |
 
-### Reviewed and intentionally left as-is
+### Helper usage (verified against the helper banners)
 
-- **Fabric egress uses the CCL kernel helper** (`ccl_helpers_dataflow.hpp`): `FabricStreamSender<>`
-  (declared before the stream — the one lifetime the types don't check) → `open(unicast_route)` →
-  `arm_unicast_write` / `arm_inc` → `write_page` / `inc` → `close()`. The staged open→arm→issue→close
-  path is correct for a many-packet stream (`signal()` is terminal — rightly rejected in the design).
-  The receive ingress, the counting `noc_semaphore_wait_min`, and the cache-reuse
-  `noc_semaphore_set(sem, 0)` re-arm (receiver-after-wait, both relay and line-end paths — §R1) are
-  op-owned per the helper's documented split. No raw multicast/hand-rolled handshake exists —
-  nothing to migrate to `mcast_pipe.hpp`.
-- **Phase-B compute is exactly the mandated helper**: `binary_op_init_common` (kernel-owned hardware
-  startup, per the accum header's ownership note) + `compute_kernel_lib::sum_blocks(cb, cb_out, N, 1,
-  pop_input=true)`. `pop_input=true` is load-bearing (§R7 — real producer/consumer CB; the default
-  `false` would deadlock the reader) and correctly set. The helper owns wait(N)/pop(N)/reserve/push,
-  the tile_regs lifecycle, DEST chunking, and the odd-N seed — no wrapper CB ops around it.
-- **Slice addressing has ONE definition**: host `_slice_quantities` (the `slice_tile_offset` formula)
-  → CT args → kernel `SliceRowWalker` with the design's seed formula
-  (`reset_offsets(start % run, (start / run) * stride)`), and ONE `next()` per output position
-  hoisted above the N-block read loop (§R5). Verified the dim-3 AND dim-2 inverse-map algebra by
-  hand; hardware agrees.
-- **CB sync balance** (per the design ledger): `cb_relay_pages` producer `(1+num_relay_blocks)·P`
-  == consumer (same `if constexpr` guard both sides); `cb_self_copy` reserve-only scratch (0/0,
-  intentional — §R9, do not "fix"); `cb_gathered_slices` `n·N` == `n × sum_blocks(N)`;
-  `cb_summed_slice` `n` == `n`. Push == wait/pop on every CB, both phases, all core roles.
-- **Line-end discipline**: the entire Phase-A writer body sits inside
-  `if constexpr (my_num_targets > 0)` and line-end writers get an empty rt-arg list (§R10); the
-  distinct rt-arg COUNT is a deliberately distinct program-cache hash per device role.
-- **Block-order agreement**: writer sends seed `i` then relays `i∓k`; reader stages the same order;
-  the k-th counting inc on the receiver corresponds exactly to the block the reader reads back —
-  traced both directions, both interior and line-end roles.
-- **`TensorAccessor`** (not deprecated `InterleavedAddrGen`), `void kernel_main()` in all three
-  kernels (including compute — the current style, same as all_reduce), and
-  `api/dataflow/dataflow_api.h` includes — all correct. The uniform 7-scalar CT superset with
-  zero-padding and the `[[maybe_unused]]` documentation of intentionally-unread slots
-  (`ring_size`, the reduce reader's second accessor) is exactly the design's shared-source rule.
-- **Phase-B writer per-tile `noc_async_write_barrier()`** — byte-identical to the proven all_reduce
-  Phase-B writer (the design pins this shape). A `noc_async_writes_flushed()` in-loop + single final
-  barrier would be marginally cheaper; performance-only, no failing cell — left as the proven shape.
+- **Fabric egress** is the full typestate path: `FabricStreamSender<>` (rt-arg block FIRST, cursor
+  from 0) → `open(unicast_route(1))` → `arm_unicast_write(page_size)` / `arm_inc(1)` →
+  `write_page` / `inc` → `close()`. `noc_async_writes_flushed()` before every `cb_pop_front` (R7);
+  both incs on the SAME connection after the block's last page (R8). 2 armed channels — well inside
+  the 8-header pool.
+- **Compute** is helper-native end to end: `binary_op_init_common` boot (helper pre-condition),
+  ONE armed `BlockAccumulate` (R10), C1 seed via degenerate-copy `sum_blocks(num_blocks=1,
+  pop_input=true)` (R4), C2 `rearm()` after `sum_blocks`'s acc_to_dest post-condition (R3), C3
+  in-place `run(g)` (`cb_b == cb_out`, sound per the helper's verified pop-before-reserve ordering),
+  C4 degenerate-copy `sum_blocks` to the writer CB. Matches the header contract exactly, including
+  the documented reason C4 cannot be a second armed accumulator (singular unpack/math state).
+- **Schedule** uses `slice_tile_offset` + `SliceRowWalker` + `is_supported_scatter_dim` from the
+  shared header; identical walk per contribution (R11) keeps `add_tiles` positionally aligned and
+  makes the writer's dense drain valid with no walker of its own.
+- **Receive-side sync** (two-way monotone poll + `noc_semaphore_wait_min` + re-arm) is op-owned raw
+  NoC, matching the dataflow helper's documented scope split (banner: receive ingress/wait is the
+  op's). No raw multicast/handshake exists — nothing to migrate to `mcast_pipe.hpp`.
+- All raw-API fallbacks carry the design's file:line-cited rejections (`sum_blocks` position-major,
+  `reduce_helpers`' `reduce()`, `FabricDuplexSender`, the `LineSliceCursor` step machine).
+
+### Correctness checks
+
+- **CB sync balance** (per device): `cb_relay_pages` push = pop = `num_sends_dir * P` per relay
+  core (0 = 0 on idle line-end directions); `cb_contributions` push `N*S` = pops `S + (N-1)*S`;
+  `cb_accumulator` push `N*S` = pops `(N-1)*S + S` (compute is the single producer, R2);
+  `cb_output_tiles` push `S` = pop `S`. Semaphore waits observed == incs issued before every reset
+  (line-end pure receivers still wait all arrivals before re-arming, T6).
+- **TensorAccessor** everywhere (no `InterleavedAddrGen`), `void kernel_main()`, includes via
+  `api/dataflow/dataflow_api.h` — all correct.
+- **Granule contract**: host `_granule` picks g ∈ {4,2,1} dividing S; kernels `static_assert(S % g
+  == 0)` and `g <= DEST_AUTO_LIMIT`; every CB capacity is a multiple of its quantum (wrap-safe).
+- **Broadcast**: N/A — every binary op is full-tile `add_tiles`; no broadcast operand, no redundant
+  broadcast fills.
+- **Registry/kernel arg wiring**: CT/RT layouts cross-checked host↔kernel for all 7 descriptors
+  (relay reader/writer ×2 directions, reduce reader/compute/writer) — indices line up; the relay
+  writer's fabric block is appended post-construction via the live `runtime_args` view because
+  `build_ccl_fabric_rt_args` mutates the program, exactly as the design mandates.
 
 ### Advisory (no fix; no failing cell to point at)
 
-- **Phase-A self-copy is fully serialized** (read barrier + write barrier per page over P pages,
-  forward reader only). Same advisory as all_reduce; runs once per device on the smallest data path.
-- **Phase A moves full shards** (all_gather traffic, N·P pages per device) where only the S·N slice
-  tiles are eventually consumed — the design's acknowledged cost of gather-then-reduce (§R12).
-  The bandwidth-right fix is the ring algorithm (see Refinement 1 in `op_requirements.md`) or a
-  slice-only relay; recorded under Recommendations, not filed as a refinement (no failing cell).
+- **Fused write+inc not used**: the relay writer sends each block's last page via `write_page` then
+  issues two separate `inc()` packets. `FusedWriteIncChannel` (`arm_fused_write_inc`, flush=true)
+  could fold the last page + the relay-core inc into one packet, saving one fabric packet per block.
+  The design's API mapping deliberately specifies the `arm_unicast_write` + `arm_inc`×2 shape (the
+  two incs target two different cores, so at most one can fuse); the implementation matches the
+  design and is silicon-verified. Performance-only; revisit with Refinement 6 (packet coalescing)
+  if bandwidth ever matters here.
+- **`_SEMAPHORE_CACHE` keyed by `id(mesh_device)`**: id-reuse after a mesh_device is garbage
+  collected could theoretically alias a new device at the same address. Same idiom as the adopted
+  siblings (all_reduce, reduce_scatter_average); acceptable for the pipeline's usage pattern.
+- **Relay reader seeds page-by-page** (read → barrier → push per page). A 2-page lookahead could
+  overlap the local NoC read with the previous page's fabric egress. Runs on the smallest data path;
+  marginal.
 
 ---
 
 ## Registry Conformance
 
-Confirmed the four declarations are present and correctly wired in `reduce_scatter.py`:
+Confirmed the four declarations present and correctly wired in `reduce_scatter.py` (re-exported at
+package level for the golden harness):
 
-- **`INPUT_TAGGERS = {}`** — empty by design (every golden INPUT is valid for every TARGET dim; no
+- **`INPUT_TAGGERS = {}`** — empty by design (every golden INPUT is tile-aligned by construction; no
   shape-derived axis). `validate()` still iterates it with the correct `tagger(inputs, axes)`
-  call shape, so adding a tagger later is a drop-in.
-- **`SUPPORTED = {dtype:[bfloat16, float32], layout:[TILE], topology:[Linear], dim:[3, 2]}`** —
-  covers every axis the kernels gate on, including the op-specific `dim` and `topology` kwargs
-  (the prompt's hard requirement: `dim` is a key even when single-valued). `dim` uses the positive
-  convention with canonicalization (`-1 ≡ 3`, `-2 ≡ 2`) BEFORE the membership test (§R14) —
-  both aliases hardware-tested. (`memory_config` DRAM/L1-interleaved is accepted but not a gated
-  categorical axis, matching the all_reduce precedent; both verified working.)
+  signature, so adding a tagger later is a drop-in.
+- **`SUPPORTED = {dtype:[bfloat16, float32], layout:[TILE], topology:[Linear], dim:[3]}`** — covers
+  every axis the kernels gate on, including the single-valued `dim` and `topology` keys the feature
+  spec mandates (the harness derives xfail marks only from declared axes). `dim` is canonicalized to
+  the positive convention (`dim % 4`) BEFORE the membership test, so `-1 ≡ 3` (acceptance-verified).
 - **`EXCLUSIONS = []`** — present, empty (no in-SUPPORTED cell is refused).
-- **`validate()`** — axis gate raises `UnsupportedAxisValue` per-axis then `ExcludedCell` per-cell
-  (correct order), from `ttnn.operations._op_contract` with the ImportError fallback subclassing
-  `NotImplementedError`. The public `reduce_scatter()` calls `validate()` on its first line, before
-  any allocation or dispatch.
-- **No `INVALID` symbol in the op file** — confirmed absent (INVALID is a feature-spec concept).
+- **`validate()`** — universal structural checks (`ValueError`: MeshDevice, `(1,N)` line N ≥ 2,
+  rank 4, dim range, not sharded, H/W tile-aligned) → axis gate (`UnsupportedAxisValue` per axis,
+  then `ExcludedCell` cell-level — correct order) → axis-value-dependent structural checks
+  (`ValueError`: slice divisibility, 16 B page alignment, S ≤ 256 accumulator budget, output_tensor
+  spec). The design-blessed ordering: an out-of-SUPPORTED axis value always yields the typed
+  refusal, never a shape ValueError computed under the wrong axis. Public `reduce_scatter()` calls
+  `validate()` on its first line, before any allocation.
+- **No `INVALID` symbol in the op file** — confirmed absent. INVALID is sourced from the golden
+  feature spec.
 
-**Drift**: one under-claim found and fixed in place (`dim=2`, see Code Review #1). After the fix the
-verifier CLI reports `xpass_drift = 0`, `supported_fail = 0`, `xfail_wrong_mode = 0`.
+**No drift. No auto-fixes needed.** `xpass_drift = supported_fail = xfail_wrong_mode = 0`.
 
 ### INVALID audit (`eval/golden_tests/reduce_scatter/feature_spec.py`)
 
 `INVALID = []`, and this is **correct** for the current TARGET:
 
 - `TARGET = {dtype:[bf16, f32], layout:[TILE], topology:[Linear, Ring], dim:[3, 2]}` — every
-  combination is constructible (float dtypes on TILE, either topology, either dim; the INPUTS are
-  deliberately multiples of 256 on dims 2 AND 3 so both scatter dims stay tile-aligned on both the
-  (1, 8) sim line and the (1, 4) hardware box — the spec's own note says this avoids needing an
-  INPUT_TAGGER + INVALID pair).
-- **Single-tensor op** — no cross-tensor-axis coupling risk.
-- **Canonical bf8b + ROW_MAJOR entry correctly omitted** — TARGET contains neither bfloat8_b nor
-  ROW_MAJOR, so the entry would reference axis values the harness never generates.
-- **No norm-like weight axes** → no no-weight canonicalization cells needed.
+  combination is constructible (the INPUTS keep dims 2 AND 3 multiples of 256 precisely so every
+  `dim`/mesh-size combination stays tile-aligned; the spec's own comment documents this design).
+- Single-tensor op — no cross-tensor-axis coupling risk.
+- The canonical bf8b + ROW_MAJOR entry is correctly omitted: TARGET contains neither ROW_MAJOR nor
+  bfloat8_b, so the entry would reference axis values the harness never generates.
+- No norm-like weight axes → no no-weight canonicalization cells.
 
-No changes to `feature_spec.py` are proposed.
-
-### Design conformance
-
-Checked against `op_design.md` on the binding dimensions — all match:
-
-| Dimension | Design | Implementation |
-|---|---|---|
-| Algorithm | gather-then-reduce-local-slice, 2 ordered dispatches, queue order as phase barrier | Phase A fabric gather → Phase B slice-addressed N-way `sum_blocks` ✓ |
-| Pipeline topology | Phase A: 2 workers/device (fwd `(0,0)` / bwd `(0,1)`), NCRISC reader + BRISC writer, no compute; Phase B: reader/compute/writer on the work grid | matches ✓ |
-| Parallelization | Phase A 1 worker/direction; Phase B `split_work_to_cores(grid, S)` two-group split, `corerange_to_cores(row_wise=True)` accumulation | matches ✓ |
-| Inter-core comm | ONE op-internal GlobalSemaphore, counting inc-after-block in-order on the connection, receiver re-arm §R1 | matches ✓ (program-cache tests exercise the re-arm, incl. a dim=2 cache-hit test) |
-| Shared schedule | `SliceRowWalker` + host-evaluated `slice_tile_offset`, compile-time `is_supported_scatter_dim` gate | matches ✓ |
-
-One deliberate post-design delta: `SUPPORTED["dim"]` includes 2 (the design's Phase-0 declared
-`[3]` with dim=2 as a refinement candidate — the implementer built the general machinery, the
-verifier promoted it on hardware evidence). `op_design.md` is left as the historical design record.
+No changes to `feature_spec.py` proposed.
 
 ### Prompt rules
 
-`eval/prompts/reduce_scatter.txt` has no `## Rules` (MUST/MUST NOT) section — it carries the
-generation mandate and framework-owner guidance. All satisfied: (1) self-contained op, no
-wrapping/importing of existing CCL ops (verified imports); (2) all THREE helper families composed —
-fabric egress (`FabricStreamSender`), compute accumulation (`sum_blocks`), shared schedule header
-(`SliceRowWalker`/`slice_tile_offset`/`is_supported_scatter_dim` as the ONE slice-addressing
-definition); (3) per-device `MeshProgramDescriptor` entries; (4) GlobalSemaphore created once +
-`synchronize_device` once + parked on the descriptor + no per-call post-dispatch barrier;
-(5) `ccl_dm_route` + `setup_fabric_connection` for route/connection (no reimplemented packet
-sizing — 1:1 page↔packet framing like all_gather/all_reduce, `ccl_packet_dims` legitimately
-unused and its rejection documented in the design); (6) hardware startup in the kernel, `arm`-vs-run
-granularity conflation avoided (`sum_blocks` free function, no `BlockAccumulate` coexists);
-(7) registry contract — `dim` and `topology` exported as SUPPORTED keys; typed refusals verified by
-18→12 clean `xfail_expected` cells across both runs. The prompt's "prefer DUPLEX for a bidirectional
-ring shape" soft guidance does not apply to this algorithm (the two directions send DIFFERENT block
-sequences from DIFFERENT cores — the design's rejection table covers this).
+`eval/prompts/reduce_scatter.txt` has no `## Rules` section — stock policy applies. Its hard
+mandates are all satisfied: generated from scratch (5 newly-authored kernels; no wrap/import/call of
+any existing CCL op), exact import path + positional signature, registry contract with `dim` and
+`topology` as SUPPORTED keys, ONE `generic_op` dispatch with compute overlapping fabric arrival
+(no gather-then-reduce two-dispatch split), loud ValueError shape rejection, typed
+`UnsupportedAxisValue` refusals.
 
 ---
 
 ## Precision Baseline
 
-Measured on the `(1, 4)` Blackhole line (N = 4 summands), dim=3, oracle accumulated in fp32 then
-cast so the reference is not itself limited by bf16 rounding. Metrics are **worst-device** values
-(the output is per-device distinct). From
-`tests/ttnn/unit_tests/operations/reduce_scatter/test_reduce_scatter_precision_baseline.py`.
+Measured on the `(1, 4)` Blackhole line (N = 4 summands), worst case across all four devices'
+DISTINCT output slices; oracle accumulated in fp32 then cast, so the reference is not itself limited
+by bf16 rounding. From `tests/ttnn/unit_tests/operations/reduce_scatter/
+test_reduce_scatter_precision_baseline.py` (8/8 pass).
 
-| Shard shape | dtype | PCC (worst dev) | Max Abs Err | Mean Abs Err | Relative RMS Err |
-|-------------|-------|-----------------|-------------|--------------|------------------|
-| (1,1,32,256)  | bfloat16 | 0.9999964 | 0.031250 | 0.002649 | 0.002731 |
-| (1,1,32,256)  | float32  | 1.0000000 | 0.004516 | 0.000691 | 0.000445 |
-| (1,1,64,512)  | bfloat16 | 0.9999963 | 0.031250 | 0.002692 | 0.002732 |
-| (1,1,64,512)  | float32  | 1.0000000 | 0.004954 | 0.000671 | 0.000436 |
-| (1,1,256,256) | bfloat16 | 0.9999964 | 0.031250 | 0.002634 | 0.002719 |
-| (1,1,256,256) | float32  | 1.0000000 | 0.005202 | 0.000664 | 0.000437 |
-| (2,1,64,256)  | bfloat16 | 0.9999964 | 0.031250 | 0.002673 | 0.002732 |
-| (2,1,64,256)  | float32  | 1.0000000 | 0.004954 | 0.000671 | 0.000435 |
+| Shard shape | dtype | PCC (worst dev) | Max Abs Err | Mean Abs Err | Relative RMS Err | Max ULP* |
+|-------------|-------|-----------------|-------------|--------------|------------------|----------|
+| (1,1,32,256)  | bfloat16 | 0.9999954 | 0.031250 | 0.003532 | 0.003474 | 3.0 |
+| (1,1,32,256)  | float32  | 0.9999999 | 0.008422 | 0.000953 | 0.000640 | ~3.5e4 |
+| (1,1,64,512)  | bfloat16 | 0.9999955 | 0.062500 | 0.003548 | 0.003513 | 3.0 |
+| (1,1,64,512)  | float32  | 0.9999999 | 0.007335 | 0.000934 | 0.000636 | ~5.3e4 |
+| (1,1,256,512) | bfloat16 | 0.9999954 | 0.062500 | 0.003562 | 0.003521 | 3.0 |
+| (1,1,256,512) | float32  | 0.9999999 | 0.008462 | 0.000933 | 0.000631 | ~5.2e4 |
+| (2,1,64,256)  | bfloat16 | 0.9999954 | 0.062500 | 0.003548 | 0.003533 | 3.0 |
+| (2,1,64,256)  | float32  | 0.9999999 | 0.007335 | 0.000930 | 0.000626 | ~5.4e4 |
 
-**Assessment**: Excellent and shape-stable. bf16 error is exactly the bfloat16 storage quantization
-of the summed output (max-abs 0.03125 = one bf16 ULP at magnitude ~2–4, the scale of a sum of 4
-unit-normal terms; rel-RMS ≈ 0.0027 ≈ the bf16 mantissa budget for N=4 — cf. all_reduce's ≈ 0.0087
-at N=8, scaling as expected). float32 error is tiny (rel-RMS ≈ 4.4e-4), attributable to the HiFi4 +
-`fp32_dest_acc_en` on-device accumulation order differing from torch — expected and negligible.
-Every PCC is ≥ 0.999996, far above the golden thresholds.
+\* ULP of the OUTPUT dtype at the oracle's magnitude (floored at magnitude 1).
 
-**Recommended tolerances** (match the golden suite / acceptance test): bf16 `PCC ≥ 0.99`,
-float32 `PCC ≥ 0.999`; `atol ≈ 0.1` (bf16) / `0.02` (f32) for allclose on N=4–8 sums. Generous
-headroom vs. observed.
+**Assessment**: Accuracy is excellent and shape-independent.
+
+- **bf16 error is exactly the accumulation-rounding budget the design predicted (R16)**: max error
+  is **3 bf16 ULP = N−1 pack roundings** — the running sum is packed back to the bf16
+  `cb_accumulator` once per incremental pass, so each of the 3 remote-contribution passes
+  contributes at most one rounding. rel-RMS ≈ 0.0035 ≈ half the bf16 mantissa step. Refinement
+  candidate "fp32 accumulator under bf16 inputs" (design Refinement 5) would cut this to a single
+  final rounding — no failing cell to point at, so it stays a recommendation.
+- **fp32 error (rel-RMS ≈ 6.3e-4)** reflects the FPU's TF32-precision SrcA/SrcB mantissa under
+  HiFi4 (the fp32 DEST accumulates exactly, but each `add_tiles` operand load rounds to ~11 mantissa
+  bits). Same magnitude as the all_reduce baseline (7e-4); expected, negligible vs the 0.999 gate.
+  The large "Max ULP" numbers are near-zero oracle elements measured against the eps-at-magnitude-1
+  floor, not large relative errors.
+
+**Recommended tolerances** (match the golden/acceptance gates, generous headroom vs observed):
+bf16 `PCC ≥ 0.99`, fp32 `PCC ≥ 0.999`; allclose `atol ≈ 0.15` (bf16) / `0.02` (fp32) for N = 4–8
+device sums of unit-normal shards.
 
 ---
 
@@ -206,62 +178,71 @@ headroom vs. observed.
 
 Artifact: `generated/reduce_scatter_verify/verifier_report.json` (from
 `python3 -m eval.verify_supported generated/reduce_scatter_verify ttnn.operations.reduce_scatter`).
-Golden universe: 3 INPUTS × {bf16, f32} × TILE × {Linear, Ring} × dim {3, 2} = 24 cells
-(+ 5 translated-suite tests without axes sidecars → `no_axes_found`, all at their expected status).
+Golden suite: 3 INPUTS × {bf16, f32} × TILE × {Linear, Ring} × {3, 2} = 24 registry cells
+(+ 5 translated tests, tracked as `no_axes_found` — they carry no registry axes by design).
 
-- supported_pass:     **12** (3 INPUTS × 2 dtypes × Linear × dim {3, 2})
-- xfail_expected:     **12** — ALL `topology=Ring` (× dim {3, 2} × 3 INPUTS × 2 dtypes)
+- supported_pass:     **6**   (3 INPUTS × 2 dtypes × Linear × dim=3)
+- xfail_expected:     **18**  (typed `UnsupportedAxisValue` refusals — breakdown below)
 - invalid_skipped:    0   (INVALID = [])
 - supported_fail:     **0**  ✓ ship gate
 - xpass_drift:        **0**  ✓ ship gate
 - xfail_wrong_mode:   **0**  ✓ ship gate
 - supported_marked_xfail: 0
+- no_axes_found:      5   (test_translated.py: 4 passed + 1 xfail Ring refinement cell — expected)
 
-**Gap accounting** (`TARGET − SUPPORTED`, per the queue contract — every pair accounted for):
+All loud categories are 0: SUPPORTED describes reality exactly.
 
-| (axis, missing_value) | Cells | Disposition |
+**`xfail_expected` breakdown (TARGET − SUPPORTED), per-cell iteration of the report:**
+
+| Axis gap | Cells | Disposition |
 |---|---|---|
-| (dim, 2) | 6 | **Closed in this pass** — promoted into SUPPORTED on hardware evidence (Code Review #1) |
-| (topology, Ring) | 12 | **Refinement 1** in `op_requirements.md` |
+| `topology=Ring`, `dim=3` | 6 | → **Refinement 1** (`op_requirements.md`) |
+| `topology=Ring`, `dim=2` | 6 | → Refinements 1 + 2 jointly (flip when BOTH land; whichever lands second collects them) |
+| `topology=Linear`, `dim=2` | 6 | → **Refinement 2** |
 
-**Test suites run (all on real (1,4) Blackhole hardware, aggregate exit 0):**
-- Acceptance: `tests/.../reduce_scatter/test_reduce_scatter.py` — 12 passed, 1 skipped (the dim=2
-  refusal test self-skips post-promotion, by its own design).
-- Extended (verifier-authored): `test_reduce_scatter_extended.py` — 6 passed (dim=2 bf16/f32 +
-  multibatch, `-2` alias, L1-interleaved in/out, dim=2 program-cache hit).
-- Precision baseline: `test_reduce_scatter_precision_baseline.py` — 8 passed.
-- Golden: `eval/golden_tests/reduce_scatter/` — 16 passed, 13 xfailed (12 golden Ring cells + 1
-  translated Ring refinement cell), xfail-strict clean.
+Every `(axis, missing_value)` pair — `(topology, Ring)` and `(dim, 2)` — is covered by a refinement
+entry. No pair is left undocumented; nothing is masked by INVALID.
+
+**Test suites run (all on real silicon, aggregate exit 0):**
+- Acceptance: `tests/.../reduce_scatter/test_reduce_scatter.py` — **15 passed** (5 shapes × 2 dtypes
+  incl. the S=9/g=1 path + negative-dim alias + program-cache + output_tensor + 2 loud rejections).
+- Golden: `eval/golden_tests/reduce_scatter/` — **10 passed, 19 xfailed** (xfail-strict).
+- Precision baseline: `test_reduce_scatter_precision_baseline.py` — **8 passed**.
+- Extended (verifier-authored): `test_reduce_scatter_extended.py` — **5 passed** (L1 interleaved
+  input; the S=256 accumulator-budget boundary AT the cliff — shard (1,1,256,4096), the largest
+  per-core CB footprint the Phase-0 op allocates — and one column PAST it rejecting loudly; fp32
+  output_tensor path; out-of-range-dim + mismatched-output_tensor ValueErrors).
+- Ring fabric precondition: `test_ring_fabric_probe.py` — **4 passed** (wrap-link route math,
+  connection formation, 1-hop transfers both directions under FABRIC_1D — Refinement 1's fabric
+  contract is confirmed live on this box).
 
 ---
 
 ## Recommendations
 
-**Refinement queue** (see `op_requirements.md`): exactly one open refinement — **Ring topology**
-(the only remaining `TARGET − SUPPORTED` gap, 12 cells). It is algorithm-fundamental (the ring
-communication schedule IS the work) and stands alone per the grouping rules.
+Refinement queue (see `op_requirements.md`): **Refinement 1 = Ring topology, Refinement 2 = dim=2.**
+Both are CCL schedule/algorithm work with cross-device data dependencies — no skill in the current
+inventory covers them (explicitly out of scope for `/interleaved-parallel`), so both are
+verifier-authored entries working from `op_design.md`'s refinement sketches and the adopted-sibling
+worked examples.
 
-**Performance observations** (no failing cell → not refinements; most are subsumed by the Ring
-refinement if implemented as a true ring reduce-scatter):
+Directions **beyond the current TARGET** (not refinements — each would need `/golden-tests` to
+expand `feature_spec.py` first; no failing cell points at any of them today):
 
-- **Slice-only gather**: Phase A moves N·P pages per device where Phase B consumes only N·S = P of
-  them. A slice-only relay (or the ring algorithm) reduces fabric traffic by ~N×.
-- **gather_buffer footprint**: N × shard bytes of DRAM per call, allocated fresh per call. The ring
-  algorithm needs only O(S) intermediate space.
-- **Packet coalescing** via `ttnn._ttnn.fabric.ccl_packet_dims` (multi-page packets) — available,
-  deliberately unused in the 1:1 page↔packet Phase-0 framing.
-- **`sum_blocks` granularity > 1**: batching multiple output positions per call would amortize the
-  per-call init; note §R11 (fp32_dest_acc halves DEST to 4) binds any granularity > 1.
-- **Multi-link fabric** (`MuxConn<N>`): single link (`_LINK_IDX = 0`) today.
-- Phase-A self-copy serialization and the Phase-B writer's per-tile barrier (see Code Review).
-
-**Beyond-TARGET directions** (each requires `/golden-tests` to expand `feature_spec.py`'s TARGET
-first; NOT refinements today):
-
-- **dim=1 scatter**: the host row and the kernel `static_assert` already accept dim=1; but
-  `validate()`'s divisibility check over-constrains it (`shape[1] % (N*32)` — C is not a tiled dim,
-  the correct requirement is `C % N == 0` with the H/W tile alignment unchanged). Fix that check
-  when a dim=1 TARGET lands.
-- **ROW_MAJOR layout** (tilize-wrapped reader — `/memory-layouts`), **bfloat8_b** (dtype treatment
-  on the reduce path — `/numeric-formats-metal`), **sharded memory** (validate() rejects with
-  ValueError today), **2-D mesh lines** (validate() pins the `(1, N)` view).
+- **fp32 `cb_accumulator` under bf16 inputs** (design Refinement 5, second half): would cut the bf16
+  baseline's 3-ULP accumulation error to a single final rounding. Requires a mid-kernel
+  data-format reconfig story (breaks the one-boot-init R12 economy) — bundle with large-S if ever
+  taken.
+- **Large-S support** (S > 256): the resident `cb_accumulator = S pages` is the Phase-0 L1 cliff,
+  currently a loud ValueError (boundary verified at S=256 pass / S=264 reject). Chunking or
+  spilling the accumulator is `/memory-budget-metal`-shaped work if a shape axis ever enters TARGET.
+- **Multi-core reduce** (design Refinement 3): splitting S across reduce cores multiplies the
+  per-block inc fan-out (or needs a local mcast of the arrival signal). Golden S ≤ 32 — one core is
+  right-sized today.
+- **True partial-sum line reduce-scatter** (design Refinement 4, the `LineSliceCursor`/
+  `SyncCadence`/`line_rs_*` machine): drops the N× gather traffic; a different algorithm with a
+  3-kernel step-flag agreement surface. The bandwidth lever if perf ever gates.
+- **Packet coalescing / fused write+inc** (design Refinement 6 + the advisory above): fabric packet
+  count reduction.
+- **Sharded input** (currently a loud ValueError): a memory-config expansion needing a sharded
+  reader/writer.
