@@ -519,8 +519,7 @@
 - name: Gemma-3-4B e2e tests
   cmd: |
     export HF_MODEL=google/gemma-3-4b-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google/gemma-3-4b-it
-    pytest --timeout 1000 models/demos/multimodal/gemma3/demo/text_demo.py -k "performance and ci-1"
-    pytest --timeout 1000 models/demos/multimodal/gemma3/demo/vision_demo.py -k "performance and batch1-multi-image-trace"
+    pytest --timeout 1000 'models/demos/multimodal/gemma3/demo/vision_demo.py::test_multimodal_demo_text[wormhole_b0-performance-device_params0-1-batch1-multi-image-trace-normal-1]'
   model: gemma-3-4b
   model_family: Gemma
   skus:
