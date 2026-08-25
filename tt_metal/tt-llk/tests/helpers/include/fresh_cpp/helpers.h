@@ -13,6 +13,14 @@
 namespace ckernel::sfpu
 {
 
+#if __riscv_xtttensixwh
+template <int>
+struct fresh_recip_supported_on_wh
+{
+    static constexpr bool value = false;
+};
+#endif
+
 // Shared: round-to-nearest integer and its int value via the 1.5*2^23
 // rounding-bias identity (|z| < 2^22; golden math, the same identity the
 // production expm1/exp kernels use through raw bit reads).
@@ -101,6 +109,13 @@ sfpi_inline sfpi::vFloat fresh_exp_21f(const sfpi::vFloat val)
 template <int NEWTON_ITERATIONS>
 sfpi_inline sfpi::vFloat fresh_recip(const sfpi::vFloat x)
 {
+#if __riscv_xtttensixwh
+    // SFPARECIP is not available on Wormhole.  Keep the shared semantic
+    // header parseable for unrelated WH test cases, but fail at the actual
+    // call site if a BH/QSR-only reciprocal body is selected there.
+    static_assert(fresh_recip_supported_on_wh<NEWTON_ITERATIONS>::value, "fresh_recip requires BH/QSR SFPARECIP");
+    return x;
+#else
     sfpi::vFloat y = sfpi::approx_recip(x);
     if constexpr (NEWTON_ITERATIONS > 0)
     {
@@ -125,6 +140,7 @@ sfpi_inline sfpi::vFloat fresh_recip(const sfpi::vFloat x)
         }
     }
     return y;
+#endif
 }
 
 } // namespace ckernel::sfpu

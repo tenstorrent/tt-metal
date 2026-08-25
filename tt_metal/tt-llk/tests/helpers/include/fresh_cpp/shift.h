@@ -66,7 +66,15 @@ __attribute__((noinline)) void calculate_right_shift_fresh_cpp()
             }
             else
             {
+#if __riscv_xtttensixwh
+                // WH has no arithmetic SFPSHFT mode.  A logical-shift
+                // instantiation remains valid; selecting the arithmetic
+                // body fails here with an architecture-specific diagnostic.
+                static_assert(LOGICAL, "arithmetic fresh right shift requires BH/QSR");
+                result = value;
+#else
                 result = sfpi::shft(value, -amount, sfpi::ShiftMode::Arithmetic);
+#endif
             }
             v_if (oob != sfpi::vUInt(0u))
             {

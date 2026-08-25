@@ -13,6 +13,14 @@
 namespace ckernel::sfpu
 {
 
+#if __riscv_xtttensixwh
+template <int>
+struct fresh_hwseed_supported_on_wh
+{
+    static constexpr bool value = false;
+};
+#endif
+
 // Reciprocal of a strictly positive finite fp32 vector, stated from the
 // published bit-pattern seed (Blinn's constant-minus-bits approximation,
 // K = 0x7EF127EA; "Floating-point tricks", IEEE CG&A 1997) refined by three
@@ -41,8 +49,18 @@ sfpi_inline sfpi::vFloat fresh_recip_positive(const sfpi::vFloat x)
 // 2026-08-20).  Callers whose domain includes zero or infinite divisors must
 // state those cases themselves (the mod bodies overwrite them explicitly);
 // this statement is exact only on nonzero finite lanes.
+#if __riscv_xtttensixwh
+template <int ARCH_REQUIRES_SFPARECIP = 0>
+#endif
 sfpi_inline sfpi::vFloat fresh_recip_hwseed(const sfpi::vFloat x)
 {
+#if __riscv_xtttensixwh
+    // SFPARECIP is not available on Wormhole.  Making the rejection
+    // template-dependent lets aggregate headers compile for unrelated WH
+    // operations while still refusing any selected unsupported body.
+    static_assert(fresh_hwseed_supported_on_wh<ARCH_REQUIRES_SFPARECIP>::value, "fresh_recip_hwseed requires BH/QSR SFPARECIP");
+    return x;
+#else
     sfpi::vFloat y = sfpi::approx_recip(x);
     for (int step = 0; step < 2; ++step)
     {
@@ -50,6 +68,7 @@ sfpi_inline sfpi::vFloat fresh_recip_hwseed(const sfpi::vFloat x)
         y                    = y * -t - 0.0f;
     }
     return y;
+#endif
 }
 
 // Truncate a non-negative fp32 vector to its integer part: the 2^23

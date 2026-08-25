@@ -69,6 +69,14 @@
 namespace ckernel::sfpu
 {
 
+#if __riscv_xtttensixwh
+template <int>
+struct fresh_lcm_supported_on_wh
+{
+    static constexpr bool value = false;
+};
+#endif
+
 // Right-shift amount that drops v's trailing zeros: -ctz(v) = clz(isolated
 // lowest set bit) - 31 (negative = logical right shift for sfpi::shft).
 // Stated as the shift amount directly so the consumer needs no re-negation
@@ -84,6 +92,12 @@ sfpi_inline sfpi::vInt lcm_fresh_cpp_ctz_shift(const sfpi::vInt v)
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_lcm_fresh_cpp()
 {
+#if __riscv_xtttensixwh
+    // This semantic body uses BH/QSR's 24x24 fractional multiply.  Preserve
+    // an explicit instantiation-time refusal on WH without making every
+    // unrelated binary test TU fail while parsing this aggregate header.
+    static_assert(fresh_lcm_supported_on_wh<ITERATIONS>::value, "fresh LCM requires BH/QSR SFPMUL24");
+#else
     constexpr std::uint32_t tile_rows = 32;
     // Certified round bound for the [1, 20000]^2 stimulus domain: header.
     constexpr int LCM_GCD_ROUNDS = 15;
@@ -166,6 +180,7 @@ __attribute__((noinline)) void calculate_lcm_fresh_cpp()
         }
         ::_llk_math_eltwise_sfpu_inc_dst_face_addr_();
     }
+#endif
 }
 
 template <DstSync DST_SYNC, bool DST_ACCUM, int ITERATIONS>
