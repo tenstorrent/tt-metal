@@ -3990,7 +3990,40 @@ TEST_F(ProgramSpecTestGen1, CPU_OptionalBindingProbeBuildsWithNullAndReal) {
     // the spec names appear in dataflow_buffers / scratchpads.
     // Per-resource null token is_null JIT coverage:
     // NullDFB/Scratchpad/TensorBindingTokenIsNullJITSmoke.
-    const std::filesystem::path kernel_src = "tests/tt_metal/tt_metal/test_kernels/dataflow/optional_binding_probe.cpp";
+    //
+    // Construction from a possibly-null name must go through an overload or a function template
+    // so the DataflowBuffer / Scratchpad ctor call is on a parameter. A direct
+    //   if constexpr (!dfb::optional_dfb.is_null) { DataflowBuffer(dfb::optional_dfb); }
+    // is still ill-formed when the symbol is a null type: the discarded branch is non-dependent,
+    // and the deleted null ctor is diagnosed anyway.
+    const auto kernel_src = KernelSpec::SourceCode{R"(
+void maybe_use_dfb(DFBBindingToken tok) {
+    DataflowBuffer opt(tok);
+    (void)opt;
+}
+void maybe_use_dfb(NullDFBBindingToken) {}
+
+template <typename Tok>
+void maybe_use_scratch(Tok tok) {
+    if constexpr (!tok.is_null) {
+        Scratchpad<uint32_t> pad(tok);
+        (void)pad;
+    }
+}
+
+void kernel_main() {
+    DataflowBuffer always(dfb::always);
+
+    maybe_use_dfb(dfb::optional_dfb);
+    maybe_use_scratch(scratch::optional_pad);
+
+    auto tok = dfb::optional_dfb;
+    (void)tok;
+    if constexpr (tok.is_null) {
+        // this KernelSpec did not attach dfb::optional_dfb
+    }
+}
+)"};
 
     auto make_spec = [&](bool bind_optional) {
         ProgramSpec spec;
