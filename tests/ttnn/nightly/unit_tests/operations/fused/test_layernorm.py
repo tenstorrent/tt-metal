@@ -226,7 +226,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
     ),
     ids=["FLOAT32", "BFLOAT16", "BFLOAT8_B"],
 )
-# gamma_dtype is fused into test_id instead of crossed with it -- see MIX_PRECISION_TEST_IDS.
+# gamma_dtype is fused into test_id -- see MIX_PRECISION_TEST_IDS.
 @pytest.mark.parametrize("test_id, gamma_dtype", MIX_PRECISION_TEST_IDS, ids=MIX_PRECISION_TEST_ID_NAMES)
 def test_layernorm_mix_precision(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device):
     torch.manual_seed(0)
