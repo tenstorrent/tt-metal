@@ -191,11 +191,8 @@ theatre.** Every runtime item below depends on it.
    verified non-disruptive. Activates protection already written, and is the precondition
    for 2 and 4.
 
-2. **`Storage` asserts its circular buffer is large enough (A1, A2).** VERIFIED FEASIBLE: a
-   probe assert in `Storage(cb_id)` comparing `fifo_num_pages` against `S::num_pages`
-   compiles and passes on correct kernels, so `fifo_num_pages` reads correctly on all five
-   projections. About four lines. It replaces a failure mode also confirmed here -- an
-   undersized CB hangs the device with no diagnostic and needs `tt-smi -r`.
+2. **`Storage` asserts its circular buffer is large enough (A1, A2).** DONE, and the
+   feasibility probe that preceded it was WRONG -- see the correction below.
 
 3. **C13 as a COMPILE error, which is better than the runtime check first imagined.** The
    harness can compute whether the core range is exactly rectangular -- bounding-box area
@@ -241,3 +238,128 @@ fruit. Naming it here so it is not repeatedly rediscovered as an easy one.
 Suggested first cut: **1 and 3**, neither of which touches library semantics and one of which
 is free at runtime; then **2 and 5**; and let the negative tests for those build the harness
 that later covers the rest.
+
+
+---
+
+# Outcome of items 1, 2 and 3
+
+All three implemented. Two corrections to what the triage above claimed, both worth keeping
+because each was a plausible-looking verification that did not verify what it appeared to.
+
+## Correction 1: the capacity probe passed for the wrong reason
+
+The triage recorded the `Storage` capacity assert as VERIFIED FEASIBLE because a probe
+compiled and passed. It did -- with `ASSERT_ENABLED` at 0, where `ASSERT(x)` expands to
+`(void(sizeof(not(x))))`. **`sizeof` is an unevaluated context**, so `cb_num_pages` was
+never called, never emitted, and never linked. The probe demonstrated nothing.
+
+Enabling asserts and building it for real failed to link every TRISC:
+
+    undefined reference to `cb_interface'
+
+`cb_interface` has no definition in a TRISC link. `cb_page_bytes` had appeared to prove
+otherwise, and its comment claimed it works "on every projection" -- but every use of it in
+shared code has a result that is dead on compute, so LTO deletes the call before the linker
+sees it. A use compute genuinely evaluates fails.
+
+The check is therefore behind `IS_DM_THREAD`, which loses nothing: the host configures one
+circular buffer per core, so every projection would be checking the same number. The
+adaptor's comment on `cb_num_pages` now records the link constraint rather than repeating
+the claim that misled the probe.
+
+**The general lesson: a check that compiles away cannot be tested by compiling it.**
+
+## Correction 2: the two assert modes are not interchangeable
+
+The triage proposed `TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1`, on the grounds that it enables
+`ASSERT_ENABLED` cheaply. It does, and the six suites run that way passed. But a lightweight
+assert is `ebreak`: it halts the RISC, and **the host cannot tell that from a hang**. The
+undersized-CB case with lightweight asserts on still timed out at 200 seconds with no
+diagnostic, exactly as it did with them off.
+
+Under `TT_METAL_WATCHER` the same case throws to the host:
+
+    BRISC tripped an assert on line 225 ... Current kernel: unified_kernels/example_reduce.cpp
+    TT_THROW: Watcher detected tripped assert and stopped device.
+
+So the watcher is the mode that produces a diagnostic, and per suite it costs about a
+second on thirty -- 30s against 29s on rmsnorm.
+
+The runner defaults to lightweight and takes `--watcher` as a flag. Lightweight turns a
+tripped assert into a timeout -- a poor diagnostic but a real signal -- and the runner names
+the suite and says to re-run that one under `--watcher` for the line. The negative suite
+sets its own environment per case and ignores both.
+
+## What landed
+
+- **`run_unified_tests.sh`** runs every suite with the watcher on. The suites themselves are
+  unchanged, so perf work runs the bench scripts directly and unwatched; every number in
+  `unified_llama_prefill.md` was taken that way and stays comparable.
+- **`Storage`'s constructor** asserts `cb_num_pages(cb_id) >= S::num_pages`, behind a
+  data-movement guard. Greater-or-equal, since a deeper buffer is how prefetch depth works.
+- **`TT_UNIFIED_CORE_GRID_EXACT`**, emitted by the harness only when the core set fills its
+  bounding box, and `static_assert`ed by the no-region `synchronize_cores()`. Compile-time,
+  zero runtime cost.
+- **`test_unified_negative.py`**, which is the part that makes the other three mean
+  something. Each case runs in a subprocess -- a tripped device assert aborts rather than
+  raising, so it cannot be caught in-process -- and a case is only "ok" if it is refused BY
+  THE EXPECTED CHECK. A timeout counts as a failure, since a hang is what these exist to
+  eliminate.
+
+### Verification status, stated exactly
+
+The library changes were verified on a healthy device, after they landed, in batches:
+ten suites, then six, then the layer, then the negative suite -- all eighteen passing. The
+`run_unified_tests.sh` wrapper itself has NOT been observed to complete end to end, because
+the machine ran out of hugepages partway through the attempts (see below) and has not been
+recovered since. The wrapper is a convenience over what was verified suite by suite, and
+that distinction is worth keeping rather than rounding up to "the runner is green".
+
+Both negative cases were confirmed to fail before the fixes and pass after:
+
+| case | before | after |
+|---|---|---|
+| circular buffer one page too small | hangs, needs `tt-smi -r` | assert at `api.h:225`, host throws |
+| no-region barrier on 12 cores in a 2x8 box | would wait on 4 cores never launched | static assertion, does not build |
+
+## What this does NOT cover
+
+The capacity assert catches A1. **A2 it does not** -- a buffer sized exactly one block is
+large enough by this check and still self-deadlocks if the kernel reserves block b+1 before
+popping b. Whether a block needs depth is a property of the access pattern, not of the
+Shape, so `Storage` cannot know it. Still open.
+
+The negative suite has two cases against a catalogue of twenty-nine. It is the harness that
+matters more than the count: the subprocess runner, the watcher, and the rule that a
+refusal must come from the named check.
+
+## The trap that cost the most, and the wrong theory it produced
+
+Long runs began stalling. The first theory was that the watcher could not sustain many
+device cycles; when it stalled in lightweight mode too, the theory became "about twelve
+device open/close cycles in one shell". Both were wrong, and both were built from real
+observations -- the stall really did happen around the twelfth suite, twice.
+
+The actual cause: **hugepage exhaustion.** Every device open takes hugepages, a hard-killed
+process does not give them back, the driver keeps them, and `tt-smi -r` does not release
+them. After enough killed runs `HugePages_Free` in `/proc/meminfo` reaches 0, and from then
+on every device open falls back and hangs -- first launch, any suite, any assert mode.
+
+    grep HugePages_Free /proc/meminfo        # 0 means this has happened
+
+Each failed long run was killed, which leaked more pages, which made the next run fail
+sooner. That is why the evidence looked like "it stalls at twelve": the budget was
+shrinking each round.
+
+**What identified it was stashing the library changes and finding the hang unchanged.** A
+suite that hangs identically with and without your changes is not about your changes. That
+check costs one minute and should come first, not after two false theories -- especially
+when the alternative is bisecting a change that was never at fault.
+
+Recovering needs the driver reset rather than `tt-smi -r`, which is a machine-level action.
+The runner now says all of this in its header, and says not to hard-kill a run.
+
+The lesser trap, still true and still worth the ordering: a negative test that trips an
+assert STOPS the device, so the negative suite runs LAST and a suite failing right after
+work on deliberate hangs deserves a reset before it is believed.
