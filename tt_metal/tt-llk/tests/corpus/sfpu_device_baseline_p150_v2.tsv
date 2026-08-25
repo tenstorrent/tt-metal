@@ -6,7 +6,8 @@
 # Seeded from /home/ttuser/sfpi-uplift/sweep-2x2/weekly-e2e-weekly-20260821 by tools/seed_kernel_baseline.py; committing an
 # update is a REVIEWED manual step (review the run's KERNEL-DELTA.md alongside).
 # Pin anchors (conf_lint R5b/R6b enforce these against sweep_2x2.conf):
-#  28. 2a71feada1d944b4c5b8c114495a8e084c722dd1dbb4cea3ac617f0ae25d69af (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 28 = pin 27 + GJ window-pairing stride-phase (2026-08-24)
+#  29. 45ba7169920924fd6ebeb6eeb3766156b413dbf895e091b53603bed1e35e7d79 (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 29 = pin 28 + RVTT structural profitability/replay-completion hardening; final silicon pending (2026-08-25)
+#  28. 2a71feada1d944b4c5b8c114495a8e084c722dd1dbb4cea3ac617f0ae25d69af (superseded by 29; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 28 = pin 27 + GJ window-pairing stride-phase (2026-08-24)
 #  27. 981d8af93ff044da5cb564df76b2a1e4907c9780501cdb8f1c68f1f17defd8bd (superseded by 28; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 27 = pin 26 + GA MAD-PAIR residency + FZ record-hoist composition pricing (2026-08-23)
 #  26. 6781b2063277d87b0898d79bc42bcfe2202bb0bca2244819eb1e38195fc0fe79 (superseded by 27; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 26 = pin 25 + FW record-hoist tile-loop generalization (2026-08-23)
 #  25. 1540d13a4054a9263e2d7dc5f8afc58a6a090b161fb3ce3bb30efb70be8100f3 (superseded by 26; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 25 = pin 24 + FV X6 face-transpose builtins + surface (2026-08-22)
