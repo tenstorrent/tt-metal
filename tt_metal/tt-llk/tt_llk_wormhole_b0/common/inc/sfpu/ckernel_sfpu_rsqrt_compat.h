@@ -95,7 +95,7 @@ sfpi_inline sfpi::vFloat _reciprocal_compat_(const sfpi::vFloat in)
     v_endif;
 
     // Set newly denormalized exponent to result exponent field
-    sfpi::vFloat out = setexp(result, new_exp);
+    sfpi::vFloat out = sfpi::setexp(result, new_exp);
 
     // Pole guard for in == 0, which the exponent-difference arithmetic above misses: it lands
     // on 126 - exexp(0) = 254, a finite 1.7e38, where an infinity needs 255. The
