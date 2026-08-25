@@ -297,7 +297,9 @@ if __name__ == "__main__":
         out = {}
         for name, spec in placements_for_layer(layer_type).items():
             n_out = 24 if name.endswith("hc.fn") else (spec.batch or 1) * spec.N
-            out[name] = torch.randn(n_out, spec.K)
+            # bf16, the dtype pack_host_tensor stores: comparing against float32
+            # sources would fail on the (intended) downcast rather than on layout.
+            out[name] = torch.randn(n_out, spec.K, dtype=torch.bfloat16)
         return out
 
     layer_types = DEFAULT_LAYER_TYPES

@@ -151,9 +151,41 @@ ProgramDescriptor TilizeMultiCoreShardedRetileProgramFactory::create_descriptor(
     const uint32_t num_real_input_tile_rows = (real_rows_per_core + in_tile_height - 1) / in_tile_height;
     const uint32_t num_real_output_tile_rows = (real_rows_per_core + out_tile_height - 1) / out_tile_height;
 
+    // Width chunking. For very wide shards the mid CB (row-major intermediate) would exceed L1
+    // if sized for the full shard width. We cap the per-chunk width at MAX_CHUNK_ELEMS elements
+    // (MAX_CHUNK_TILES tiles) and process the shard in `num_width_chunks` passes; the compute
+    // kernel manually seeks the aliased src/out CB pointers per (chunk, tile-row). We pick the
+    // largest divisor of tiles_per_block that fits under the cap so num_chunks divides evenly and
+    // the compute kernel needs only one template instantiation per pass.
+    constexpr uint32_t MAX_CHUNK_ELEMS = 256;
+    constexpr uint32_t MAX_CHUNK_TILES = MAX_CHUNK_ELEMS / TILE_WIDTH;
+    static_assert(MAX_CHUNK_TILES > 0, "MAX_CHUNK_ELEMS must be at least one tile wide");
+    auto compute_chunk_tiles = [MAX_CHUNK_TILES](uint32_t total_tiles) {
+        const uint32_t cap = std::min<uint32_t>(total_tiles, MAX_CHUNK_TILES);
+        for (uint32_t cw = cap; cw > 0; --cw) {
+            if (total_tiles % cw == 0) {
+                return cw;
+            }
+        }
+        return 1u;
+    };
+    // Interleaved-output writer reads pages sequentially from the output CB and scatters them by
+    // global tile id, so it requires push_backs in natural (tile-row-major) shard order. Width
+    // chunking would emit pages in (chunk, row) order instead, breaking that contract — keep the
+    // legacy single-pass path for the interleaved case. Sharded output uses zero-copy writes into
+    // the aliased L1 buffer, so the kernel can seek the write pointer per (chunk, row) safely.
+    const uint32_t chunk_tiles = output_is_interleaved ? tiles_per_block : compute_chunk_tiles(tiles_per_block);
+    const uint32_t num_width_chunks = tiles_per_block / chunk_tiles;
+    TT_FATAL(
+        chunk_tiles * num_width_chunks == tiles_per_block,
+        "Sharded retile: chunk_tiles ({}) must evenly divide tiles_per_block ({})",
+        chunk_tiles,
+        tiles_per_block);
+
     // Compute untilizes `num_input_tile_rows` (mid-height) rows into mid, then tilizes them.
     // Aliased c_1/c_2 page sizes can differ, so the allocation must be a multiple of both.
-    const uint32_t mid_input_pages = num_input_tile_rows * tiles_per_block;
+    // Mid CB holds a single width-chunk's worth of tiles; the kernel pops between chunks.
+    const uint32_t mid_input_pages = num_input_tile_rows * chunk_tiles;
     const uint32_t mid_size_align = std::lcm(mid_input_page_size, mid_output_page_size);
     const uint32_t mid_total_size =
         ((mid_input_pages * mid_input_page_size + mid_size_align - 1) / mid_size_align) * mid_size_align;
@@ -293,7 +325,7 @@ ProgramDescriptor TilizeMultiCoreShardedRetileProgramFactory::create_descriptor(
         compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_desc.core_ranges = all_cores;
         compute_desc.compile_time_args = {
-            tiles_per_block,
+            chunk_tiles,
             src0_cb_index,
             mid_cb_index,
             mid_view_cb_index,
@@ -302,6 +334,10 @@ ProgramDescriptor TilizeMultiCoreShardedRetileProgramFactory::create_descriptor(
             out_tile_height,
             mid_output_page_size,
             mid_input_page_size,
+            tiles_per_block,
+            input_single_tile_size,
+            output_single_tile_size,
+            num_width_chunks,
         };
         compute_desc.config = ComputeConfigDescriptor{
             .fp32_dest_acc_en = fp32_llk_acc,

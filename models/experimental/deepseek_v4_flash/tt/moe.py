@@ -548,10 +548,12 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         """
         x_tok_single_tile_memory_config = with_shard_height(x_tok.memory_config(), 1)
         x_tok = ttnn.tilize(x_tok, tile=SINGLE_USER_TILE, memory_config=x_tok_single_tile_memory_config)
+        indices = ttnn.to_memory_config(routing.indices, ttnn.DRAM_MEMORY_CONFIG)
+        scores = ttnn.to_memory_config(routing.scores, ttnn.DRAM_MEMORY_CONFIG)
         out = ttnn.experimental.deepseek.moe.fused_experts(
             x_tok,
-            routing_indices=routing.indices,
-            routing_scores=routing.scores,
+            routing_indices=indices,
+            routing_scores=scores,
             gate_up_weights=self._gate_up_fused,
             down_weights=self._down_fused,
             num_experts=self.top_k,

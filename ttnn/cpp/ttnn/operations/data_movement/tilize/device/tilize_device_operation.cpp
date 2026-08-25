@@ -289,8 +289,10 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
         // A sharded input can be re-tiled in place (zero-copy) when the shard geometry is
         // compatible with the optimized sharded path; otherwise fall back to the interleaved retile.
         if (input_tensor_a.memory_config().is_sharded()) {
+            log_info(tt::LogOp, "ttnn::tilize: Using sharded retile program factory for sharded input");
             return ttnn::prim::TilizeMultiCoreShardedRetileProgramFactory{};
         }
+        log_info(tt::LogOp, "ttnn::tilize: Using retile program factory for non-sharded input");
         return ttnn::prim::TilizeMultiCoreRetileProgramFactory{};
     }
 

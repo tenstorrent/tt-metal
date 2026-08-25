@@ -229,6 +229,13 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
             out_tile_height,
             mid_output_page_size,
             mid_input_page_size,
+            // Width-chunking CTAs. The interleaved retile factory does not chunk (chunk_tiles ==
+            // tiles_per_block, num_width_chunks == 1), which collapses the kernel's outer chunk
+            // loop to a single pass with pointer surgery equivalent to the original path.
+            tiles_per_block,
+            input_single_tile_size,
+            output_single_tile_size,
+            1u,
         };
         cd.config = ComputeConfigDescriptor{
             .fp32_dest_acc_en = fp32_llk_acc,
