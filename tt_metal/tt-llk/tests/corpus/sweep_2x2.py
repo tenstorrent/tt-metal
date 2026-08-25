@@ -409,8 +409,9 @@ ON_FLAGS = (
     # TILE_LOOP/tile 18.727 -> 16.72 = -5.1% vs hand 17.628 (WIN);
     # where TTNN_WHERE_BODY 167.5 -> 154.5 = -2.9% vs hand 159.17 (WIN).
     "-mtt-tensix-optimize-init-hoist "
-    # PROMOTED 2026-08-23 (owner order "promote the knobs", pin-26 union
-    # 6781b2063277): the three knobs with completed silicon A/B books.
+    # PROMOTED 2026-08-23/24 (owner order "promote the knobs", pin-26 union
+    # 6781b2063277 plus lane GJ): the four knobs with completed silicon A/B
+    # books.
     #   window-pairing (lane FT): mulint32-fresh KERNEL -11.32%
     #     (device-golden, knob leg = exactly ONE changed TU corpus-wide);
     #   replay-record-hoist (lanes EC+FW): blaze sdpa_reduce max/sum x
@@ -423,8 +424,14 @@ ON_FLAGS = (
     # Promotion gates: R9 union witnesses added and union-verified on the
     # installed pin-26 binary; ON-28-vs-ON-25 leg byte-compare adjudicated
     # (delta = exactly the lane-proven TU sets); KNOB_MODES flipped
-    # on-plus -> drop-one for all three (their tokens are now ON-set).
+    # on-plus -> drop-one for all four (their tokens are now ON-set).
     "-mtt-tensix-optimize-window-pairing "
+    # Lane GJ, promoted 2026-08-24 after a correctness-gated BH p150 A/B:
+    # mulint32-fresh 38669 -> 35077.7 cycles (-9.29%), versus-hand
+    # LOSS -> WIN; exactly one corpus TU changed, its paired CRAQ passed,
+    # and three no-fire controls stayed byte-identical.  The stride proof
+    # remains generic and fail-closed.
+    "-mtt-tensix-optimize-window-pairing-stride "
     "-mtt-tensix-optimize-replay-record-hoist "
     "-mtt-tensix-optimize-lreg-alloc"
     # M3/prgm-const is NOT in the ON set (un-shipped after pin 9's nightly):
@@ -665,7 +672,8 @@ KNOBS = {
     # rebased by its carrying word's stride phase (rvtt-cost.md F5';
     # SFPLOADMACRO-hosted events latch their Dst row at launch).  The
     # tuner itself only runs under window-pairing, which the ON set
-    # carries — booking A/B is (ON + flag) vs plain ON.  Target row:
+    # carries.  Now that both are promoted, attribution is drop-one
+    # (ON-minus-stride vs full ON).  Target row:
     # mulint32-fresh (interrow drain 2 -> 1, the lane-GG banked
     # 2-nop/row + boundary-pair delivery residual halves; the remaining
     # 1 nop = the REAL fixed-VD WAR hazard the model names as
@@ -748,10 +756,9 @@ KNOB_MODES = {
     # ON-set planner emission places one.  PROMOTED into the ON set
     # 2026-08-23 — drop-one from here (was on-plus while a booking knob).
     "window-pairing": "drop-one",
-    # GJ window-pairing-stride: the generalized stride proof only runs
-    # inside the FT tuner, which only runs under window-pairing on the
-    # ON-set planner emission — booking A/B is (ON + flag) vs plain ON.
-    "window-pairing-stride": "on-plus",
+    # GJ window-pairing-stride: promoted into the ON set 2026-08-24 after
+    # the lane-GJ correctness-gated silicon book; drop-one from here.
+    "window-pairing-stride": "drop-one",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
