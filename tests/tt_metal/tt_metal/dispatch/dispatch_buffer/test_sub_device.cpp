@@ -228,6 +228,10 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerCoversSubDeviceAllocat
     }
     EXPECT_FALSE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
                      .contains(tracked_id));
+    if (trace_allocation_diagnostics_enabled()) {
+        const auto pending_ids = distributed::trace_allocation_tracker::drain_pending_traceback_ids();
+        EXPECT_EQ(std::ranges::find(pending_ids, tracked_id), pending_ids.end());
+    }
 
     auto cross_thread = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
     const auto cross_thread_id = cross_thread->get_backing_buffer()->unique_id();
@@ -235,6 +239,9 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerCoversSubDeviceAllocat
     deallocator.join();
     if (trace_allocation_diagnostics_enabled()) {
         EXPECT_FALSE(distributed::trace_allocation_tracker::get_all_unsafe_tracked_ids().contains(cross_thread_id));
+        // Deallocation from another thread is allowed to leave this thread's
+        // pending ID for live-set reconciliation at its next drain.
+        distributed::trace_allocation_tracker::drain_pending_traceback_ids();
     }
 
     program_cache_allocation->deallocate();
