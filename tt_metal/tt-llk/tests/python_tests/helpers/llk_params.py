@@ -170,6 +170,10 @@ class MathOperation(Enum):
     # Legacy-compat rsqrt (reciprocal-root method); distinct kernel path from the
     # accurate Rsqrt (which uses legacy_compat=false).
     RsqrtCompat = OpSpec("rsqrt_compat", MathOpType.SFPU_UNARY)
+    # Legacy-compat reciprocal (exponent-difference method); distinct kernel path from
+    # the accurate Reciprocal (which uses legacy_compat=false). This is the path the
+    # Compute API's recip_tile() reaches by default, so it is the one production runs.
+    ReciprocalCompat = OpSpec("reciprocal_compat", MathOpType.SFPU_UNARY)
     # Component-wise expm1 shared helper (used by ELU/CELU/SELU); distinct from the
     # standalone Expm1 kernel.
     Expm1Cw = OpSpec("expm1_cw", MathOpType.SFPU_UNARY)
@@ -726,6 +730,7 @@ class PerfRunType(Enum):
     MATH_ISOLATE = 3
     PACK_ISOLATE = 4
     L1_CONGESTION = 5
+    SFPU_ISOLATE = 6
 
 
 # Single pytest case runs every PerfRunType so the module CSV has one
@@ -739,6 +744,11 @@ PERF_RUN_TYPES_QUASAR = [
         PerfRunType.PACK_ISOLATE,
         PerfRunType.L1_CONGESTION,
     ],
+]
+
+# 4-TRISC tests also measure SFPU_ISOLATE. Keep separate so 3-TRISC schemas stay unchanged.
+PERF_RUN_TYPES_QUASAR_4_TRISC = [
+    PERF_RUN_TYPES_QUASAR[0] + [PerfRunType.SFPU_ISOLATE],
 ]
 PERF_LOOP_FACTOR_QUASAR = 32
 
@@ -798,6 +808,14 @@ class TopKXLChunkBaseMode(Enum):
     Static = 0
     UpperStatic = 1
     Runtime = 2
+
+
+class TopKXLSortMode(Enum):
+    """Which local-sort entry point the topk_xl kernel calls."""
+
+    Dispatch = 0
+    Generic = 1
+    EarlyExitK64 = 2
 
 
 class VectorMode(Enum):

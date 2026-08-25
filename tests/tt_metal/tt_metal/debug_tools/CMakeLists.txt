@@ -12,7 +12,12 @@ function(create_unit_test_executable)
     target_precompile_headers(${exec_name} REUSE_FROM metal_common_pch)
 
     # Link libraries
-    target_link_libraries(${exec_name} PRIVATE test_metal_common_libs)
+    target_link_libraries(
+        ${exec_name}
+        PRIVATE
+            test_metal_common_libs
+            ttexalens::elf
+    )
 
     # Set include directories
     target_include_directories(

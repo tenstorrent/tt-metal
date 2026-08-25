@@ -30,6 +30,7 @@ Runtime arguments
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/debug/dprint.h"  // required in all kernels using DPRINT
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
@@ -92,12 +93,14 @@ void kernel_main() {
     uint32_t readable = 0;
     uint32_t end_to_write = 0;
     uint32_t writable = dest_page_size_bytes - write_start_offset;
-    cb_reserve_back(cb_id_in0, 1);
-    cb_reserve_back(cb_id_in1, 1);
-    const uint32_t source_buffer = get_write_ptr(cb_id_in0);
-    const uint32_t dest_buffer = get_write_ptr(cb_id_in1);
-    cb_push_back(cb_id_in1, 1);
-    cb_push_back(cb_id_in0, 1);
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_in1(cb_id_in1);
+    cb_in0.reserve_back(1);
+    cb_in1.reserve_back(1);
+    const uint32_t source_buffer = cb_in0.get_write_ptr();
+    const uint32_t dest_buffer = cb_in1.get_write_ptr();
+    cb_in1.push_back(1);
+    cb_in0.push_back(1);
 
     uint64_t dst_noc_addr = d.get_noc_addr(write_page);
     uint64_t write_offset = (dst_noc_addr & OFFSET_16) + write_start_offset;

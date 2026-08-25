@@ -20,7 +20,7 @@ import os
 
 from .parquet import convert_csvs_to_parquet
 
-_VALID_ARCHES = ("wormhole", "blackhole")
+_VALID_ARCHES = ("wormhole", "blackhole", "quasar")
 _VALID_PIPELINES = ("PR", "nightly")
 
 
@@ -104,7 +104,10 @@ def main(argv=None):
     ap.add_argument("--csv-dir", required=True, help="dir of combined per-test CSVs")
     ap.add_argument("--out", required=True, help="output run parquet path")
     ap.add_argument(
-        "--arch", required=True, choices=_VALID_ARCHES, help="wormhole | blackhole"
+        "--arch",
+        required=True,
+        choices=_VALID_ARCHES,
+        help="wormhole | blackhole | quasar",
     )
     ap.add_argument("--strict", action="store_true", help="fail on schema drift")
     a = ap.parse_args(argv)

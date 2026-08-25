@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // To run (from the tt-metal repo root, after an emule build):
-//   build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Local_L1_Alignment_*"
+//   build_emule/test/tt_metal/unit_tests_api --gtest_filter="UnitMeshFixture.Local_L1_Alignment_*"
 
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -11,6 +11,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "device_fixture.hpp"
 
@@ -19,10 +20,9 @@ using namespace tt::tt_metal;
 
 namespace tt::tt_metal {
 
-TEST_F(MeshDeviceFixture, Local_L1_Alignment_SanityCheck) {
+TEST_F(UnitMeshFixture, Local_L1_Alignment_SanityCheck) {
     GTEST_SKIP() << "Temporarily disabled.";
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
 
@@ -43,7 +43,9 @@ TEST_F(MeshDeviceFixture, Local_L1_Alignment_SanityCheck) {
         logical_core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    EXPECT_DEATH(detail::LaunchProgram(device, program), ".*Local L1 Alignment: Offset 0x5 must be 4-byte aligned.*");
+    EXPECT_DEATH(
+        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        ".*Local L1 Alignment: Offset 0x5 must be 4-byte aligned.*");
 }
 
 }  // namespace tt::tt_metal

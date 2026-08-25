@@ -8,6 +8,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <map>
+#include <optional>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -18,6 +20,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
+#include "llrt/rtoptions.hpp"
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "common/tt_backend_api_types.hpp"
@@ -105,6 +108,60 @@ TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
     for (auto& [id, device] : devices) {
         device->close();
     }
+}
+
+constexpr const char* kTdpLimitEnvVar = "TT_METAL_TDP_LIMIT_WATTS";
+
+// Restores TT_METAL_TDP_LIMIT_WATTS, so the tests that follow in this binary start from the
+// environment they expect. These tests only parse the variable; what the cluster then does with it
+// is covered by the TdpLimit tests in test_release_ownership.cpp, which rebuild the cluster.
+class TdpLimitEnvFixture : public ::testing::Test {
+protected:
+    void SetUp() override {
+        const char* prev = getenv(kTdpLimitEnvVar);
+        prev_ = prev != nullptr ? std::optional<std::string>(prev) : std::nullopt;
+    }
+
+    void TearDown() override {
+        if (prev_.has_value()) {
+            setenv(kTdpLimitEnvVar, prev_->c_str(), /*overwrite=*/1);
+        } else {
+            unsetenv(kTdpLimitEnvVar);
+        }
+    }
+
+private:
+    std::optional<std::string> prev_;
+};
+
+TEST_F(TdpLimitEnvFixture, ParsesEnvVar) {
+    unsetenv(kTdpLimitEnvVar);
+    EXPECT_FALSE(llrt::RunTimeOptions().get_tdp_limit_watts().has_value());
+
+    // Exporting the variable empty is how a shared profile disables the knob without unsetting it.
+    setenv(kTdpLimitEnvVar, "", /*overwrite=*/1);
+    EXPECT_FALSE(llrt::RunTimeOptions().get_tdp_limit_watts().has_value());
+
+    setenv(kTdpLimitEnvVar, "300", /*overwrite=*/1);
+    EXPECT_EQ(llrt::RunTimeOptions().get_tdp_limit_watts(), 300u);
+
+    setenv(kTdpLimitEnvVar, "0", /*overwrite=*/1);
+    EXPECT_EQ(llrt::RunTimeOptions().get_tdp_limit_watts(), llrt::TDP_LIMIT_RESTORE_DEFAULT_SENTINEL);
+
+    // rtoptions only decides whether the value is a watt count it can hold; whether firmware accepts
+    // it is UMD's call at cluster open, so 600 parses even though it is outside the accepted range.
+    setenv(kTdpLimitEnvVar, "600", /*overwrite=*/1);
+    EXPECT_EQ(llrt::RunTimeOptions().get_tdp_limit_watts(), 600u);
+}
+
+// A typo must not quietly leave the run at full power, so parsing is strict. Neither of these is
+// usable as a watt count: one is not a number, the other does not fit the uint32_t that holds it.
+TEST_F(TdpLimitEnvFixture, MalformedEnvVarThrows) {
+    setenv(kTdpLimitEnvVar, "abc", /*overwrite=*/1);
+    EXPECT_ANY_THROW(llrt::RunTimeOptions());
+
+    setenv(kTdpLimitEnvVar, "99999999999999999999", /*overwrite=*/1);
+    EXPECT_ANY_THROW(llrt::RunTimeOptions());
 }
 
 }  // namespace tt::tt_metal
