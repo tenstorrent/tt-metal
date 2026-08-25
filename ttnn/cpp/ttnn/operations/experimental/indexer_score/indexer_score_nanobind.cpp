@@ -267,7 +267,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("kv_len") = nb::none(),
         nb::arg("seq_subshard_axis") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
-        nb::arg("block_cyclic_chunk_local") = nb::none());
+        nb::arg("block_cyclic_chunk_local") = nb::none(),
+        nb::arg("block_cyclic_tp_sharded") = false);
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail

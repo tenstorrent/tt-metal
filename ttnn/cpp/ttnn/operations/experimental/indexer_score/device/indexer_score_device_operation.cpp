@@ -182,6 +182,17 @@ void validate_block_cyclic(const operation_attributes_t& attrs, const tensor_arg
         "block_cyclic_chunk_local ({}) must split evenly into {} tile-aligned key stripes",
         chunk_local,
         attrs.key_stripe_split);
+    // Fused ring: k_local is this rank's TP-REBUILT slab, so it must hold whole stripes -- a partial one would
+    // desync the reader's invP (which addresses stripe s at s * sll/key_stripe_split) from the actual rows.
+    if (attrs.has_fused_ring() && attrs.key_stripe_split > 1) {
+        TT_FATAL(t.k_local.has_value(), "indexer_score fused: k_local is required");
+        const uint32_t sll = t.k_local->logical_shape()[2];
+        TT_FATAL(
+            sll % (attrs.key_stripe_split * tt::constants::TILE_HEIGHT) == 0,
+            "indexer_score fused: k_local seq length ({}) must split evenly into {} tile-aligned key stripes",
+            sll,
+            attrs.key_stripe_split);
+    }
 }
 
 // Semaphore addresses are hashed, but different mesh devices can allocate the same L1 addresses. Re-check
@@ -1019,7 +1030,8 @@ ttnn::Tensor ring_indexer_score_dsa(
     std::optional<uint32_t> kv_len,
     std::optional<uint32_t> seq_subshard_axis,
     std::optional<uint32_t> block_cyclic_sp_axis,
-    std::optional<uint32_t> block_cyclic_chunk_local) {
+    std::optional<uint32_t> block_cyclic_chunk_local,
+    bool block_cyclic_tp_sharded) {
     // Fused DSA: same knobs as indexer_score_dsa (relu, one plane, no pool, real weights) + the all-gather it
     // subsumes. The factory auto-reserves the AG worker column(s) off the compute rectangle.
     ttnn::operations::experimental::indexer_score::FusedRingConfig fused_ring;
@@ -1105,7 +1117,7 @@ ttnn::Tensor ring_indexer_score_dsa(
         /*allow_subshard=*/true,
         block_cyclic_sp_axis,
         block_cyclic_chunk_local,
-        /*block_cyclic_tp_sharded=*/false,  // fused ring is not yet TP-dedup aware
+        block_cyclic_tp_sharded,
         k_local,
         fused_ring);
 }

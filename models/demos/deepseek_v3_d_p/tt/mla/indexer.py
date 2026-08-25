@@ -579,25 +579,6 @@ class TtIndexer:
         entry point has to translate, not just forward()."""
         return self._index_layer_idx if self._is_index_compact else cache_layer_idx
 
-    def _kbuf_all_gather(self, t, cluster_axis):
-        """All-gather the index KEY CACHE over one mesh axis on dim 2 (sequence); no-op when that axis is 1.
-
-        Deliberately NOT _tp_all_gather: that one is shape-locked to the top-k index contract and writes
-        into a preallocated top-k scratch (high_bw_all_gather), while the key cache has a different shape
-        and needs a fresh output. This is the plain all_gather_async the TP-dedup path was validated on."""
-        if (self.sp_factor if cluster_axis == self.sp_axis else self.tp_factor) == 1:
-            return t
-        return ttnn.experimental.all_gather_async(
-            t,
-            dim=2,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=cluster_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=cluster_axis),
-            num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.sp_ccl_topology if cluster_axis == self.sp_axis else self.tp_ccl_topology,
-            cluster_axis=cluster_axis,
-        )
-
     def _tp_replicate_index_kbuf(self, index_kbuf: ttnn.Tensor, cache_batch_idx: int) -> ttnn.Tensor:
         """KV DEDUP ONLY: rebuild this chip's FULL SP slab [1,1,T/sp,D_idx] (block-cyclic order preserved,
         bf16 TILE) out of the sp*tp-striped key cache, so the fused ring op gets the k_local it expects.
@@ -609,25 +590,31 @@ class TtIndexer:
         full-T gather that used to dominate this path) stays fused inside ring_indexer_score_dsa and
         overlaps with scoring.
 
-        SLOT SELECT BEFORE THE GATHER: index_kbuf is user-major [num_users*layer_num, 1, T, D_idx]
-        (same layout as the MLA KVPE cache). Slice the active (user, layer) slot out of dim 0 FIRST, then
-        gather only that single slot — NOT the whole B-slot cache. Gathering all slots materializes a copy
-        of every user/layer (OOMs at high num_layers, exactly like the MLA kvpe gather did). The result is
-        batch-1, so the op needs NO cache_batch_idx (it requires kB==1 when cache_batch_idx is unset). The
-        unwritten suffix is never scored (future positions are causally masked)."""
-        cache_i = ttnn.to_memory_config(index_kbuf, ttnn.DRAM_MEMORY_CONFIG)  # ND_SHARDED → INTERLEAVED
-        if cache_i.shape[0] > 1:  # user-major slot select BEFORE the gather (single-slot cache → skip)
-            sel = ttnn.slice(
-                cache_i,
-                [cache_batch_idx, 0, 0, 0],
-                [cache_batch_idx + 1, 1, cache_i.shape[2], cache_i.shape[3]],
-            )
-            ttnn.deallocate(cache_i)
-            cache_i = sel
-        tp_full = self._kbuf_all_gather(cache_i, self.tp_axis)  # [1,1,T/sp,D_idx] this chip's whole SP slab
-        if tp_full is not cache_i:  # _kbuf_all_gather is a no-op at tp == 1 (not reached: dedup implies tp > 1)
-            ttnn.deallocate(cache_i)
-        return tp_full
+        SLOT SELECT INSIDE THE GATHER: index_kbuf is user-major [num_users*layer_num, 1, T/(sp*tp), D_idx]
+        (same layout as the MLA KVPE cache), and high_bw_all_gather sources the active (user, layer) slot
+        itself via input_batch_index — no host-side slice, and no ND_SHARDED → INTERLEAVED copy of the
+        whole B-slot cache (its TensorAccessor resolves block-cyclic ND-sharded source pages directly).
+        The gathered slot is batch-1, so the ring op needs NO cache_batch_idx (it requires kB==1 when
+        cache_batch_idx is unset). The unwritten suffix is never scored (future positions are causally
+        masked). The output is model-owned scratch — the caller must not deallocate it."""
+        assert index_kbuf.shape[2] % ttnn.TILE_SIZE == 0, (
+            "the TP-local index cache slab must be tile aligned for high_bw_all_gather; "
+            f"got {index_kbuf.shape[2]}"
+        )
+        out = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
+            name="indexer_kbuf_tp_replicate",
+            shape=[1, 1, index_kbuf.shape[2] * self.tp_factor, index_kbuf.shape[3]],
+            dtype=index_kbuf.dtype,
+            layout=index_kbuf.layout,
+        )
+        return ttnn.experimental.high_bw_all_gather(
+            index_kbuf,
+            dim=2,
+            output_tensor=out,
+            num_links=self.ccl_num_links,
+            cluster_axis=self.tp_axis,
+            input_batch_index=cache_batch_idx if index_kbuf.shape[0] > 1 else 0,
+        )
 
     def write_k(
         self,
@@ -869,13 +856,12 @@ class TtIndexer:
             cache_batch_idx=None if kv_deduped else cache_batch_idx,
             block_cyclic_sp_axis=self.sp_axis,
             block_cyclic_chunk_local=seq_len,  # cache slab == chunk_size_global / sp (== Sq'·tp when TP-split)
+            block_cyclic_tp_sharded=kv_deduped,  # rebuilt slab is TP-stripe-major: decode sp*tp stripes
             kv_len=valid_pos,
         )
         if host_start is not None:
             _fused_ring_host_timing["calls"] += 1
             _fused_ring_host_timing["seconds"] += time.perf_counter() - host_start
-        if kv_deduped:
-            ttnn.deallocate(k_local)  # the rebuilt SP slab is per-chunk scratch (k_full is the persistent one)
         # wq_b replicated -> each chip already holds the COMPLETE head-summed logit, so there is NO
         # partial-logit all-reduce over tp. This is the win: the removed step was a 2-CCL (RS+AG) all-reduce
         # spanning the full end_pos-wide logit (+ a TILE<->ROW_MAJOR round-trip), the indexer's dominant cost.

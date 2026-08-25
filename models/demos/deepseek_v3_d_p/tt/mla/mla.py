@@ -319,7 +319,7 @@ class ttMLA:
         assert (
             self.active_seq_len <= self.max_seq_len
         ), f"active_seq_len ({self.active_seq_len}) exceeds max_seq_len ({self.max_seq_len})"
-                # KV dedup: KVPE (and indexer key) caches sharded across SP*TP. Writes pass tp_axis, reads add a
+        # KV dedup: KVPE (and indexer key) caches sharded across SP*TP. Writes pass tp_axis, reads add a
         # TP-inner all-gather leg before the SP gather. Sparse (DSA) path only; the dense forward asserts.
         self.tp_shard_kv = tp_shard_kv
         self.slot_num = slot_num
@@ -1576,7 +1576,9 @@ class ttMLA:
         # wrapper identity here: SP>1 always writes the model-owned persistent scratch. At SP=1,
         # slicing a multi-slot cache creates transient storage, while slicing a single-slot cache
         # is a no-op that aliases the caller-owned persistent cache.
-        if self.sp_factor == 1 and kvpe_cache.storage.shape[0] > 1:
+        # KV dedup is the exception: its two-stage all_gather_async allocates its own output at every
+        # SP factor, so that result is ALWAYS transient and leaks per layer per chunk if not released.
+        if (self.tp_shard_kv and self.tp_factor > 1) or (self.sp_factor == 1 and kvpe_cache.storage.shape[0] > 1):
             ttnn.deallocate(kvpe_dev.storage)
         ttnn.deallocate(tt_q)
         return self._apply_wkv_b2(attn_out, seq_len_local)
