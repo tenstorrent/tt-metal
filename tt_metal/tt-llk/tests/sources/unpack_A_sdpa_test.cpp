@@ -163,31 +163,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_init_wrapper_<copy_type, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
         params.num_faces, formats.math);
 
-    // Re-program the A2D datacopy MOP so its per-face end-op clears ONLY SrcA.
-    //
-    // WHY: the SDPA unpack path (llk_unpack_A_sdpa.h) is a pure SrcA producer and
-    // never publishes a SrcB dummy-DVALID (unlike the generic llk_unpack_A.h NONE
-    // MOP, whose inner op unpack_srcb_set_dvalid makes SrcB valid once per face).
-    // The stock A2D datacopy MOP that the init above programs ends each face with
-    //   TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB)
-    // (llk_math_eltwise_unary_datacopy.h:458-459) which clears BOTH SrcA and SrcB.
-    // With no SrcB ever made valid, clearing SrcB is a clear of a never-valid bank
-    // — HW-legal but flagged by the functional sim as
-    //   [ttsim:NonContractualBehavior] math_clear_src_valid: SrcB bank is not valid.
-    // The SrcB dummy-DVALID cannot be re-supplied from this test at C++ granularity
-    // without deadlocking the unpacker's 2-deep SrcB bank (the generic path only
-    // works because SrcA-unpack and SrcB-set are cycle-locked inside a single HW
-    // MOP loop). The header-faithful alignment is therefore to make the math
-    // consume/clear SrcA only, matching the SrcA-only SDPA unpack.
-    //
-    // The override below is bit-for-bit the stock A2D MOVA2D MOP
-    // (llk_math_eltwise_unary_datacopy.h:456-461: outerloop=num_faces,
-    // innerloop=16>>3=2, loop op MOVA2D(DEST_NORM, ADDR_MOD_2, MOV_8_ROWS)) with
-    // the single change CLR_AB -> CLR_A in the SETRWC end-op. The SrcA data
-    // movement (MOVA2D) is unchanged, so the copy is still a bit-for-bit identity.
-    // Valid only for the datacopy-identity configuration this test drives:
-    // is_fp32_dest_acc_en==false and non-Int/UInt formats, i.e. the MOVA2D branch
-    // (not the ELWADD/MOVB2D fp32/int/uint8/uint16 branches).
+    // A2D datacopy MOP override: end-op clears ONLY SrcA (CLR_A, not the stock CLR_AB).
+    // llk_unpack_A_sdpa is SrcA-only and never validates SrcB, so the stock CLR_AB would
+    // clear a never-valid SrcB bank -- HW-tolerated but non-contractual (ttsim flags it).
+    // Otherwise bit-for-bit the stock MOVA2D MOP; valid only for the datacopy-identity
+    // path this test drives (bf16/fp32, MOVA2D branch -- not the ELWADD/MOVB2D branches).
     {
         constexpr std::uint32_t innerloop = 16 >> 3; // MOV_8_ROWS -> 2 inner iterations per face
         const std::uint32_t outerloop     = params.num_faces;
