@@ -1,5 +1,13 @@
 # REVIEW_RECORD — RVTT profitability and replay-completion hardening
 
+> **INVALIDATED / NOT APPROVED (2026-08-25).**  This is a historical review
+> of an unceremonied candidate, not a shipping-pin approval.  The candidate's
+> DejaGnu run omitted part of the canonical SFPI universe, its ON-set
+> quarantine was not independently adjudicated, and its silicon report
+> contains material versus-hand regressions.  The live harness has been
+> restored to ceremonied pin 28 / ON-28.  Any `APPROVE`, `GREEN`, `current`,
+> or shipping-state language below is superseded by this disposition.
+
 Date: 2026-08-25 UTC
 Reviewer: Codex `/root`; independent static review by local Claude and
 independent implementation reviews by workspace agents Sartre, McClintock,

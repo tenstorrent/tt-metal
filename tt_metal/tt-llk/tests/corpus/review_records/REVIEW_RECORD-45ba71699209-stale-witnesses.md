@@ -1,5 +1,12 @@
 # Pin-29 stale union fire-witness review and quarantine
 
+> **INVALIDATED / NOT RATIFIED (2026-08-25).**  This record describes an
+> unceremonied candidate experiment.  Its three-pass quarantine was
+> self-ratified without the required owner adjudication and is not canonical.
+> Pin 28 / ON-28 is restored with all 12 active R9 witnesses, including
+> crosscall, crossloop, and init-hoist, and with an empty R10 quarantine.
+> Status and approval claims below are retained only as audit history.
+
 Status: **QUARANTINE APPLIED; ACTIVE WITNESS GATE 9/9 GREEN**.  This is a
 reviewed removal, not a compiler-pass promotion.  The three options remain
 available and default-off in the compiler.
