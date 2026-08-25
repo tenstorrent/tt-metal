@@ -45,7 +45,12 @@ except ImportError:  # pragma: no cover
 
 from .all_reduce_program_descriptor import create_mesh_program_descriptor
 
-_RANK = 4  # rank pinned to 4
+# Minimum input rank. The op is otherwise rank-agnostic: the kernels see only P
+# dense pages and the gather_buffer stacks shards along dim 0, which keeps block c
+# at pages [c*P, (c+1)*P) in row-major page order for ANY rank >= 2. (The design's
+# Phase-0 rank-4 pin conflicted with the immutable golden translated suite's
+# rank-2/3 cases — goldens are ground truth, and widening costs no kernel change.)
+_MIN_RANK = 2
 _TILE = 32
 # L1 growth cliff: cb_accumulator holds the whole P-page shard resident on the
 # reduce core (op_design.md "Circular Buffers"). Larger-P spill is beyond-TARGET.
@@ -124,15 +129,16 @@ def validate(input_tensor, *, topology, output_tensor):
         raise ValueError("all_reduce: requires at least 2 mesh devices on the line")
 
     shape = list(input_tensor.shape)
-    if len(shape) != _RANK:
-        raise ValueError(f"all_reduce: expected a rank-4 input shard, got rank {len(shape)}")
+    if len(shape) < _MIN_RANK:
+        raise ValueError(f"all_reduce: expected an input shard of rank >= {_MIN_RANK}, got rank {len(shape)}")
 
     if input_tensor.is_sharded():
         raise ValueError("all_reduce: sharded input not supported (interleaved only)")
 
-    if shape[2] % _TILE != 0 or shape[3] % _TILE != 0:
+    if shape[-2] % _TILE != 0 or shape[-1] % _TILE != 0:
         raise ValueError(
-            f"all_reduce: shard H and W must be tile-aligned (multiples of {_TILE}); " f"got H={shape[2]}, W={shape[3]}"
+            f"all_reduce: shard H and W must be tile-aligned (multiples of {_TILE}); "
+            f"got H={shape[-2]}, W={shape[-1]}"
         )
 
     # --- Axis gate (registry model) ---
