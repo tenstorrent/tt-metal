@@ -332,7 +332,9 @@ def test_matmul_in1_dram_sharded_two_workers_rejects_oversized_storage(device, f
             out_dtype=ttnn.bfloat16,
             function_level_defaults=function_level_defaults,
             num_workers_per_dram_bank=2,
-            N_padded_override=2048,
+            # Keep the intentionally oversized shard tile-aligned for each
+            # Blackhole variant. p150 has eight banks, while p100 has seven.
+            N_padded_override=device.dram_grid_size().x * 32 * 8,
         )
 
 
