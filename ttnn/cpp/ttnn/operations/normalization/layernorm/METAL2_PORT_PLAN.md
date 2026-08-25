@@ -258,15 +258,17 @@ Function-call escapes out of the op directory (all cleared by the audit):
   writes one method, `create_program_artifacts`.
 - **Custom `compute_program_hash`**: none — default reflection-based hash. Nothing to preserve.
 - **Implementation notes**:
-  - The legacy fourth parameter `core_range_set` is **dropped** and its production default,
-    `default_core_range(device)`, is **inlined** at the work-split site
-    ([:193](device/layernorm_op_multi_core.cpp#L193)), per ttnn_factory exception 2. To be precise
-    about why, since this plan's first revision claimed the signature could not carry it: nothing
-    technically prevented keeping it. `ProgramSpecFactoryConcept` tests only for the presence of
-    `create_program_artifacts` and the adapter calls it with exactly three arguments, so a defaulted
-    fourth parameter would have compiled unnoticed. It is dropped because its only caller was the
-    nanobind being deleted below. `default_core_range` itself survives as a static member (the
-    factory body calls it) and its nanobind stays.
+  - The legacy fourth parameter `core_range_set` is **kept**, as
+    `create_program_artifacts(attributes, tensor_args, tensor_return_value, core_range_set = std::nullopt)`.
+    ttnn_factory exception 2 prescribes dropping it, and this plan's first revision followed that,
+    claiming the signature could not carry it. It can: `ProgramSpecFactoryConcept` tests only for the
+    presence of `create_program_artifacts` and the adapter calls it with exactly three arguments, so
+    a defaulted fourth parameter compiles and the framework path simply never supplies it. On the
+    invoker's decision the parameter stays, so the behavior it carries stays in the tree even with no
+    caller reaching it today. Here that behavior is grid *selection*, not validation: the parameter
+    picks the work-split grid, falling back to `default_core_range(device)`
+    ([:277-286](device/layernorm_op_multi_core.cpp#L277-L286)), so keeping it preserves the pre-port
+    behavior exactly. `default_core_range` remains a static member and its nanobind stays.
   - The multi-core `create_descriptor` nanobind
     ([layernorm_nanobind.cpp:320-346](layernorm_nanobind.cpp#L320-L346)) is **deleted** — it would
     otherwise reference a vanished symbol. This is a user-visible API surface change with real
@@ -781,9 +783,10 @@ Function-call escapes out of the op directory (all cleared by the audit):
     simply never supplied by the framework path. This is the invoker's decision, taken so the
     containment validation the parameter guards
     ([device/layernorm_op_multi_core_sharded.cpp:41-70](device/layernorm_op_multi_core_sharded.cpp#L41-L70))
-    stays in the tree; it differs from Part 1, where the equivalent parameter genuinely chose cores
-    and was dropped. It leaves the sharded factory with no caller for the parameter, which is a
-    known cost, not an oversight.
+    stays in the tree. Part 1 keeps its equivalent parameter too; what differs is the job it does
+    there, which is choosing the work-split grid rather than validating a containment property. It
+    leaves the sharded factory with no caller for the parameter, which is a known cost, not an
+    oversight.
   - The sharded `create_descriptor` nanobind
     (the `create_descriptor` static method on the class registration now at
     [layernorm_nanobind.cpp:339](layernorm_nanobind.cpp#L339)) is **deleted** — it would

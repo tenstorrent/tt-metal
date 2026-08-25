@@ -81,26 +81,32 @@ port.
   compiling. It could not be pointed at `create_program_artifacts` either: that returns a
   `ProgramArtifacts`, and neither `ProgramArtifacts` nor `ProgramSpec` is bound to Python anywhere in
   the repo (`ProgramDescriptor` is bound in four files, these in none), so exposing the new method
-  would first mean binding the whole Metal 2.0 type family. The removal follows ttnn_factory's
-  exception 2, which names layernorm's `core_range_set` explicitly: the parameter is dropped and its
-  production default, `default_core_range(device)`, is inlined at the work-split site. **Read that
-  exception's stated reason with care** — see the Friction entry on it below; the outcome it
-  prescribes is right, the reason it gives is not.
-- **On the `core_range_set` parameter specifically**, stated precisely because an earlier revision of
-  this report overstated it: nothing *technically* prevented keeping it. `ProgramSpecFactoryConcept`
+  would first mean binding the whole Metal 2.0 type family. ttnn_factory's exception 2, which names
+  layernorm's `core_range_set` explicitly, prescribes deleting the binding *and* dropping the
+  parameter. **Only the first half is followed here** — see the next bullet and the Friction entry on
+  that exception below.
+- **`core_range_set` is kept**, as
+  `create_program_artifacts(attributes, tensor_args, tensor_return_value, core_range_set = std::nullopt)`,
+  matching the sharded factory. Nothing technically prevented keeping it: `ProgramSpecFactoryConcept`
   tests only for the presence of `create_program_artifacts`, and the adapter calls it with exactly
-  three arguments, so a defaulted fourth parameter would have compiled and gone unnoticed. It was
-  dropped because deleting the binding left it with no caller at all, not because the signature
-  refused it.
-- **What that costs.** Every C++ call already got the whole compute grid, so nothing changed there.
-  But the one Python consumer did pass a genuinely restricted range on the interleaved path
+  three arguments, so a defaulted fourth parameter compiles and is simply never supplied by the
+  framework path. It is retained on the invoker's decision, so the behavior the parameter carries
+  stays in the tree even with no caller reaching it today. Unlike the sharded factory, where the
+  parameter only *validates* a containment property, here it genuinely *selects* the work-split grid
+  ([device/layernorm_op_multi_core.cpp:277-286](device/layernorm_op_multi_core.cpp#L277-L286)):
+  supplying it restricts which cores the tile rows are distributed over, and omitting it takes
+  `default_core_range(device)`, the device's whole compute grid. Keeping it therefore preserves the
+  pre-port behavior exactly rather than merely preserving a check.
+- **What the binding removal costs.** The C++ capability is intact per the bullet above, and every
+  C++ call already omitted the argument, so nothing changed for them. What is gone is the *Python
+  route* to it: the one Python consumer passed a genuinely restricted range on the interleaved path
   ([_utils.py:104](../../../../../../models/experimental/ops/descriptors/normalization/_utils.py#L104),
-  `cr_arg = None if input_tensor.is_sharded() else core_range_set`), so restricting an interleaved
-  layernorm to a subset of cores no longer reaches the factory. Note that the removal is **not**
-  clean from the caller's side: `layer_norm.py` and `rms_norm.py` still take a `core_range_set`
-  argument and forward it, and `op_descriptor.py` still documents it as live behavior, so a caller
-  who passes one is not told it is unsupported — it fails with `AttributeError` further down. Either
-  restoring the capability or withdrawing the argument is a decision for the helper's owner.
+  `cr_arg = None if input_tensor.is_sharded() else core_range_set`), and with no binding it can no
+  longer reach the factory at all. The removal is also **not** clean from the caller's side:
+  `layer_norm.py` and `rms_norm.py` still take a `core_range_set` argument and forward it, and
+  `op_descriptor.py` still documents it as live behavior, so a caller who passes one is not told it
+  is unsupported — it fails with `AttributeError` further down. Because the parameter survives in
+  C++, restoring the capability is now a binding question rather than a factory one.
 - **Known downstream consumers** (all outside the porter's writeable surface; none were edited):
   - [models/experimental/ops/descriptors/normalization/_utils.py:109](../../../../../../models/experimental/ops/descriptors/normalization/_utils.py#L109)
     — `factory.create_descriptor(operation_params, tensor_args, out, cr_arg)`, reached through
@@ -174,10 +180,15 @@ whitelist's own mapping for this call is `DataflowBuffer::get_tile_address`).
   `tensor_return_value`) cannot carry it"*, naming layernorm's `core_range_set` as the case. It can
   carry it: `ProgramSpecFactoryConcept` tests only for the presence of `create_program_artifacts`,
   and the adapter calls it with exactly three arguments, so a defaulted fourth parameter compiles and
-  goes unnoticed. The exception's *prescription* is still right, but for a different reason — the
-  parameter's only caller is the pybind hook the same exception tells you to delete, so it is left
-  with no caller rather than with no room. Worth correcting, because a porter who applies the stated
-  reason to a parameter that *does* still have a C++ caller would drop something a caller depends on.
+  goes unnoticed. **Both layernorm factories now keep the parameter on that basis**, so the
+  exception's prescription was not followed here either: only its pybind half was. Two things are
+  worth correcting in the doc. First the reason, because a porter who applies it to a parameter that
+  *does* still have a C++ caller would drop something a caller depends on. Second the prescription
+  itself, which conflates two separable decisions — deleting a binding whose symbol has vanished is
+  forced, while dropping the parameter that binding fed is a judgment call about whether the behavior
+  is worth keeping without a caller. Layernorm answered that second question the other way for both
+  factories: the parameter carries behavior (grid selection in the interleaved factory, containment
+  validation in the sharded one) that is cheaper to keep than to reconstruct later.
 - **A fully-skipped test session and a stale build look identical when proving
   `METAL2_CHECKS_FORCED`.** The recipe says to rebuild, run one test, and grep the log. The op I
   first picked (`tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py`) skipped all
@@ -395,9 +406,10 @@ port.
 
 - **`core_range_set` kept**, as the invoker decided when asked audit Question 2. The signature is
   `create_program_artifacts(attributes, tensor_args, tensor_return_value, core_range_set = std::nullopt)`.
-  This differs from Part 1, where the equivalent parameter genuinely chose the work-split grid and was
-  dropped: here it only *validates* that the shard grid's multicast bounding box lies inside the given
-  range, and keeping the parameter keeps that validation in the tree. The cost is stated plainly: with
+  Part 1 keeps its equivalent parameter too, so both factories now carry it; what differs is what the
+  parameter does. Here it only *validates* that the shard grid's multicast bounding box lies inside
+  the given range, and keeping the parameter keeps that validation in the tree, whereas in Part 1 it
+  genuinely chooses the work-split grid. The cost is stated plainly: with
   the pybind gone the parameter has no caller at all, so the validation is dead code until something
   calls the factory with a range again.
 - **Pybind entry point removed:** `create_descriptor` on `LayerNormShardedProgramFactory`

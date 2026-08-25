@@ -165,7 +165,10 @@ std::optional<tt::DataFormat> dfb_data_format(const m2::ProgramSpec& spec, const
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::create_program_artifacts(
-    const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value) {
+    const LayerNormParams& operation_attributes,
+    const LayerNormInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<CoreRangeSet>& core_range_set) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     // Extract from operation_attributes and tensor_args
@@ -274,6 +277,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
     uint32_t num_tile_rows = NC * Ht;
 
+    // The caller may restrict the program to a subset of the grid; otherwise take the whole of it.
+    CoreRangeSet requested_cores = core_range_set.has_value() ? core_range_set.value() : default_core_range(device);
+
     // Use split_work_to_cores to properly distribute tile rows across available cores
     auto
         [num_cores,
@@ -281,8 +287,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
          core_group_1,
          core_group_2,
          num_tile_rows_per_core_group_1,
-         num_tile_rows_per_core_group_2] =
-            split_work_to_cores(default_core_range(device), num_tile_rows, true /* row_wise */);
+         num_tile_rows_per_core_group_2] = split_work_to_cores(requested_cores, num_tile_rows, true /* row_wise */);
 
     // Use passed-in reciprocal LUT tensor if using Welford
     std::optional<Tensor> recip_tensor = std::nullopt;

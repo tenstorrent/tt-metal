@@ -17,10 +17,16 @@
 namespace ttnn::prim {
 
 struct LayerNormMultiCoreProgramFactory {
+    // The framework calls this with three arguments. The fourth restricts the cores the program may
+    // touch: non-sharded layernorm splits its tile rows over whichever range it is given, so the
+    // parameter selects the work-split grid, defaulting to the device's whole compute grid.
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
-        const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value);
+        const LayerNormParams& operation_attributes,
+        const LayerNormInputs& tensor_args,
+        Tensor& tensor_return_value,
+        const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
 
-    // Returns the core range non-sharded LayerNorm distributes its tile rows over
+    // Returns the core range non-sharded LayerNorm distributes its tile rows over by default
     static CoreRangeSet default_core_range(tt::tt_metal::IDevice* device);
 };
 
