@@ -92,7 +92,7 @@ ttnn:
     bh_galaxy: 40
     bh_p100: 805
     bh_p150b_civ2: 1045
-    wh_n150_civ2: 1205
+    wh_n150_civ2: 1215
     wh_n300_civ2: 1180
     bh_p150b_civ2_viommu: 115
     bh_p300: 60
@@ -156,7 +156,8 @@ train:
   perf:
     bh_p100: 160
     bh_p150b_civ2: 400
-    bh_galaxy_perf: 180
+  e2e_tier3:
+    bh_sc1: 260
 
 ttsim:
   unit:
@@ -244,6 +245,8 @@ runtime:
     wh_n150_civ2: 13
     bh_p150b_civ2: 13
     bh_loudbox: 5
+    wh_n150: 10
+    bh_p150: 10
     sim_wh_n150: 30
     sim_bh_p150: 30
     sim_wh_galaxy: 10
@@ -308,6 +311,10 @@ llk:
   merge_gate:
     wh_n150_civ2: 300
     bh_p150b_civ2_viommu: 70
+  weekly:
+    sim_wh_n150_xl: 75
+    sim_bh_p150_xl: 240
+    sim_quasar_xl: 180
 
 models:
   merge_gate:
@@ -320,7 +327,6 @@ models:
   stress:
     wh_galaxy_perf: 500
   e2e:
-    wh_llmbox: 198
     bh_p150b_civ2: 8
     bh_p300: 20
     bh_loudbox: 193
@@ -350,10 +356,10 @@ models:
     bh_p300: 8
     bh_quietbox_2: 42
   unit:
-    wh_llmbox: 70
+    wh_llmbox: 25
     wh_galaxy_perf: 10
   unit_tier1:
-    wh_llmbox: 61
+    wh_llmbox: 100
     wh_n150: 110
     wh_galaxy: 235
     wh_galaxy_perf: 45
@@ -380,7 +386,7 @@ models:
     bh_p300: 30
     bh_quietbox_2: 21
   integration:
-    wh_llmbox: 30
+    wh_llmbox: 0
   perf:
     wh_galaxy_perf: 55
   device_perf:
@@ -405,6 +411,7 @@ models:
     bh_loudbox: 1200
     bh_p300: 800
   sweep_tier1:
+    wh_llmbox: 131
     wh_n150: 30
     wh_galaxy: 40
     bh_p150: 30

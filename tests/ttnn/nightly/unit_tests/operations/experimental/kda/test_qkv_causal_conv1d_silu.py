@@ -24,7 +24,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True),
+    pytest.mark.use_module_device({"l1_small_size": 24576}),
 ]
 
 _SEQUENCE = 64
@@ -218,7 +218,9 @@ def test_qkv_causal_conv1d_silu_is_device_deterministic(device: ttnn.Device, cas
         ttnn.deallocate(output)
 
 
-def test_qkv_causal_conv1d_silu_cache_hit_rebinds_fresh_tensors(device: ttnn.Device) -> None:
+def test_qkv_causal_conv1d_silu_cache_hit_rebinds_fresh_tensors(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     widths = (128, 128, 128)
     host_a, device_inputs_a = _device_inputs(device, widths=widths, sequence=32, seed=1911)
     host_b, device_inputs_b = _device_inputs(device, widths=widths, sequence=32, seed=1912)
@@ -253,7 +255,9 @@ def test_qkv_causal_conv1d_silu_cache_hit_rebinds_fresh_tensors(device: ttnn.Dev
         assert not torch.equal(actual_a, actual_b)
 
 
-def test_qkv_causal_conv1d_silu_default_compute_config_matches_explicit_defaults(device: ttnn.Device) -> None:
+def test_qkv_causal_conv1d_silu_default_compute_config_matches_explicit_defaults(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     _, (input_tt, history_tt, taps_tt) = _device_inputs(device, sequence=32, widths=(128, 128, 128), seed=817)
     implicit = _run(input_tt, history_tt, taps_tt, widths=(128, 128, 128), channel_chunk_size=384)
     entries = device.num_program_cache_entries()
@@ -356,7 +360,9 @@ def test_qkv_causal_conv1d_silu_production_performance(device: ttnn.Device, case
     )
 
 
-def test_qkv_causal_conv1d_silu_program_key_includes_split_widths(device: ttnn.Device) -> None:
+def test_qkv_causal_conv1d_silu_program_key_includes_split_widths(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     _, (input_tt, history_tt, taps_tt) = _device_inputs(device, widths=(128, 128, 128), sequence=32, seed=772)
     _run(input_tt, history_tt, taps_tt, widths=(128, 128, 128), channel_chunk_size=384)
     entries = device.num_program_cache_entries()
@@ -366,7 +372,9 @@ def test_qkv_causal_conv1d_silu_program_key_includes_split_widths(device: ttnn.D
     assert device.num_program_cache_entries() == entries + 1
 
 
-def test_qkv_causal_conv1d_silu_program_key_includes_channel_chunk_size(device: ttnn.Device) -> None:
+def test_qkv_causal_conv1d_silu_program_key_includes_channel_chunk_size(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
     widths = (128, 128, 128)
     _, (input_tt, history_tt, taps_tt) = _device_inputs(device, widths=widths, sequence=32, seed=773)
     _run(input_tt, history_tt, taps_tt, widths=widths, channel_chunk_size=384)

@@ -127,6 +127,7 @@
   sp_config: sc1
 
 - name: "Kimi-K3-2.8T MLA chunked accuracy 55k@5k (vs golden trace)"
+  fabric_profile: torus_xy
   cmd: |
     export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3
 
@@ -402,6 +403,7 @@
   sp_config: sc1
 
 - name: "Kimi-K3-2.8T MoE accuracy 5k"
+  fabric_profile: torus_xy
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
@@ -418,6 +420,7 @@
   sp_config: sc1
 
 - name: "Kimi-K3-2.8T MoE perf 5k"
+  fabric_profile: torus_xy
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '

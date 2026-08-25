@@ -17,6 +17,9 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
 )
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def make_torch_tensors(input_shape, dim, keepdim=False, *, dtype=torch.float32):
     """
@@ -554,6 +557,8 @@ def test_moreh_norm_callback(dim_rtol_atol, keepdim, device, is_linalg_vector_no
     """
     torch.manual_seed(2024)
     dim, rtol, atol = dim_rtol_atol
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_norm(
@@ -690,6 +695,8 @@ def test_moreh_norm_backward_callback(dim_rtol_atol, keepdim, device, is_linalg_
     """
     torch.manual_seed(2024)
     dim, rtol, atol = dim_rtol_atol
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_norm_backward(

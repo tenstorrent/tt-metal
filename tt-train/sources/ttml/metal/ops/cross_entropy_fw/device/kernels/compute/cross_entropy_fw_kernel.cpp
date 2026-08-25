@@ -2,20 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <api/debug/dprint.h>
 #include <api/compute/cb_api.h>
 #include <api/compute/pack.h>
 #include <api/compute/reconfig_data_format.h>
 #include <api/compute/reg_api.h>
+#include <api/debug/dprint.h>
 #include <hostdevcommon/kernel_structs.h>
 #include <tensix.h>
 
 #include <cstdint>
 
-#include "api/compute/compute_kernel_api.h"
 #include "api/compute/bcast.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/common.h"
+#include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -25,6 +25,7 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/mask.h"
+#include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 
@@ -42,6 +43,7 @@ constexpr auto cb_max_value_after_reduction = tt::CBIndex::c_8;
 constexpr auto cb_exp_sum_before_reduction = tt::CBIndex::c_9;
 constexpr auto cb_exp_sum_after_reduction = tt::CBIndex::c_10;
 constexpr auto cb_output = tt::CBIndex::c_11;
+constexpr auto cb_mat_mul_reduce = tt::CBIndex::c_12;
 
 constexpr uint32_t onetile = 1;
 
@@ -316,18 +318,17 @@ void reduce_log_sum_exp_x() {
     cb_wait_front(cb_exp_sum_before_reduction, onetile);
     cb_reserve_back(cb_exp_sum_after_reduction, onetile);
 
+    cb_wait_front(cb_mat_mul_reduce, onetile);
+
     tile_regs_acquire();
     const uint32_t reduction_register = 0;
-    reconfig_data_format(cb_scaler, cb_exp_sum_before_reduction);
-    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-        cb_exp_sum_before_reduction, cb_scaler, cb_exp_sum_after_reduction);
-    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-        cb_exp_sum_before_reduction,
-        cb_scaler,
-        /* tile_idx */ 0,
-        /* tile_idx */ 0,
-        /* reduction_register */ reduction_register);
-    reduce_uninit();
+
+    // Row-reduce via matmul against a ones-column tile rather than reduce_tile: reduce_tile
+    // loses precision on large-vocab exp sums (same approach as cross_entropy_bw).
+    reconfig_data_format(cb_mat_mul_reduce, cb_exp_sum_before_reduction);
+    matmul_init(cb_exp_sum_before_reduction, cb_mat_mul_reduce, 0);
+    matmul_tiles(
+        cb_exp_sum_before_reduction, cb_mat_mul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduction_register);
 
     // log(sum(exp(x - max(x))))
     log_tile_init();
