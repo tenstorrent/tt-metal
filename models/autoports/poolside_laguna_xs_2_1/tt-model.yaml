@@ -1,0 +1,140 @@
+# Laguna-XS-2.1 on Blackhole, transcribed from this checkout's current
+# setup_vllm.sh, serve_vllm.sh, README.md, and validated .venv.
+schema: 1
+repo: tt-hous/laguna-xs-2.1
+name: laguna-xs-2.1
+weights: poolside/Laguna-XS-2.1
+type: vllm
+arch: blackhole
+
+source:
+  tt_metal: /home/ttuser/dev/laguna/tt-metal
+  code:
+    # Exact Laguna serving closure for the qualified profiles. Disabled DFlash,
+    # speculative-decode, functional-baseline, and token-dispatch code is omitted.
+    - models/autoports/poolside_laguna_xs_2_1/tt/__init__.py
+    - models/autoports/poolside_laguna_xs_2_1/tt/dflash_reference.py
+    - models/autoports/poolside_laguna_xs_2_1/tt/generator.py
+    - models/autoports/poolside_laguna_xs_2_1/tt/generator_vllm.py
+    - models/autoports/poolside_laguna_xs_2_1/tt/kv_grouping.py
+    - models/autoports/poolside_laguna_xs_2_1/tt/model.py
+    - models/autoports/poolside_laguna_xs_2_1/tt/multichip_decoder.py
+    - models/autoports/poolside_laguna_xs_2_1/tt/optimized_decoder.py
+    - models/autoports/poolside_laguna_xs_2_1/tt/prefill_page_table.py
+    - models/autoports/poolside_laguna_xs_2_1/tt/prefill_runtime.py
+    # LagunaModel.from_pretrained imports this lazily while loading weights.
+    - models/autoports/poolside_laguna_xs_2_1/tests/laguna_weights.py
+    # Installable model-local vLLM plugin and its exact registration payload.
+    - models/autoports/poolside_laguna_xs_2_1/vllm_ext/pyproject.toml
+    - models/autoports/poolside_laguna_xs_2_1/vllm_ext/laguna_vllm_ext
+    - models/autoports/poolside_laguna_xs_2_1/vllm_ext/extra_models/laguna/vllm_metadata.json
+    # Load-bearing numerics: model.py silently uses in-code defaults if absent.
+    - models/autoports/poolside_laguna_xs_2_1/doc/datatype_sweep/selected_precision_config.json
+    # Shared production modules reached by generator.py and Sampling1D, including
+    # the latter's lazy log-probability initialization.
+    - models/common/lightweightmodule.py
+    - models/common/modules/lazy_buffer.py
+    - models/common/modules/tt_ccl.py
+    - models/common/modules/sampling/sampling_1d.py
+    - models/common/utils.py
+    - models/common/sampling/__init__.py
+    - models/common/sampling/_utils.py
+    - models/common/sampling/generator.py
+    - models/common/sampling/tt_log_probs.py
+    - models/common/sampling/tt_penalties.py
+    - models/common/sampling/tt_sampling.py
+    # Importing readiness_check.contract executes this package initializer, whose
+    # production exports require the five modules below.
+    - models/common/readiness_check/__init__.py
+    - models/common/readiness_check/contract.py
+    - models/common/readiness_check/contract_vllm.py
+    - models/common/readiness_check/generate.py
+    - models/common/readiness_check/schema.py
+    - models/common/readiness_check/teacher_forcing.py
+  ubuntu: "22.04"
+  python: "3.12"
+
+runtime:
+  vllm: {version: "0.24.0"}
+  # Seeded from the validated model .venv. The editable tt-metal/extension and
+  # vllm/plugin installs are omitted because the image build supplies those;
+  # the test-only pytest packages are omitted from the serving dependency set.
+  lock: requirements.lock
+  plugin:
+    repo: https://github.com/tenstorrent/vllm-tt-plugin
+    # Exact PEP 610 commit recorded by the validated .venv and requirements.txt.
+    ref: c127c17d80d66ee83d23064d3a62ac844a1170de
+  extension: models/autoports/poolside_laguna_xs_2_1/vllm_ext
+
+serve:
+  port: 8000
+  block_size: 64
+  env:
+    TT_LAGUNA_PIPE_CHUNK: "2048"
+    TT_LAGUNA_HYBRID_KV: "0"
+    TT_LAGUNA_DFLASH: "0"
+    TT_LAGUNA_CONTEXT_PROBE: "0"
+    TT_LAGUNA_MULTI_SEQ_POOL: "0"
+    TT_LAGUNA_STREAMING_PREFILL: "1"
+    TT_LAGUNA_MOE_TOKEN_DISPATCH: "0"
+    TT_LAGUNA_MOE_PREFILL_TILE_SPARSE: "0"
+    TT_LAGUNA_PREFILL_FAST: "1"
+    TT_LAGUNA_PREFILL_FAST_CHUNK: "8192"
+    TT_LAGUNA_PREFILL_SDPA_CHUNK: "8192"
+    TT_LAGUNA_DECODE_K: "64"
+    TT_LAGUNA_DECODE_EXP: "0"
+    TT_LAGUNA_DECODE_MAXCORES: "16"
+    TT_LAGUNA_VERIFY_K: "64"
+    TT_LAGUNA_ENFORCE_MEMORY_MARGIN: "1"
+    TT_LAGUNA_MIN_DRAM_FREE_FRACTION: "0.10"
+    TT_LAGUNA_MIN_CONTIGUOUS_MIB: "128"
+    TT_LAGUNA_CCL_TOPOLOGY: ring
+    TT_LAGUNA_CCL_NUM_LINKS: "2"
+
+serve_profiles:
+  - name: p150x2
+    description: Two P150 ASICs, with ring/two-link fabric and canonical prefix caching.
+    hardware: p150x2
+    mesh_device: P150x2
+    max_num_seqs: 1
+    max_model_len: 131072
+    additional_config:
+      tt:
+        sample_on_device_mode: all
+        trace_region_size: 1500000000
+        fabric_config: FABRIC_1D_RING
+    args:
+      - --trust-remote-code
+      - --enable-prefix-caching
+      - --enable-prompt-tokens-details
+      - --no-enable-chunked-prefill
+      - --enable-auto-tool-choice
+      - [--tool-call-parser, poolside_v1]
+      - [--reasoning-parser, poolside_v1]
+    env:
+      TT_VISIBLE_DEVICES: "0,1"
+      TT_LAGUNA_CCL_TOPOLOGY: ring
+      TT_LAGUNA_CCL_NUM_LINKS: "2"
+      TT_LAGUNA_PREFIX_CACHE: "1"
+      TT_LAGUNA_DECODE_SDPA_PC: "1"
+  - name: p150x4
+    description: Four-P150 regression profile with prefix caching explicitly disabled.
+    hardware: p150x4
+    mesh_device: P150x4
+    max_num_seqs: 8
+    max_model_len: 131072
+    additional_config:
+      tt:
+        sample_on_device_mode: all
+        trace_region_size: 1500000000
+        fabric_config: FABRIC_1D_RING
+    args:
+      - --trust-remote-code
+      - --no-enable-prefix-caching
+      - --enable-auto-tool-choice
+      - [--tool-call-parser, poolside_v1]
+      - [--reasoning-parser, poolside_v1]
+    env:
+      TT_LAGUNA_PREFIX_CACHE: "0"
+      TT_LAGUNA_DECODE_SDPA_PC: "1"
+default_profile: p150x2

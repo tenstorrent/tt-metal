@@ -43,10 +43,6 @@ import re
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
-from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
-from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 
 from .optimized_decoder import (
     TILE,
@@ -614,6 +610,14 @@ class MultichipDecoder(OptimizedDecoder):
         if "exp_gate_up" not in self.w or "exp_down" not in self.w:
             self._token_dispatch_fallback_reason = "stacked routed-expert tensors are unavailable"
             return
+
+        # The qualified serving profiles keep token dispatch disabled. Keep its
+        # DeepSeek-derived implementation out of the standard model import graph;
+        # experimental users only pay this dependency when they explicitly opt in.
+        from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
+        from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
+        from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+        from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 
         dispatch_group_size = 1
         num_dispatch_groups = self.D
