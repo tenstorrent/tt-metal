@@ -18,7 +18,7 @@ ENV_NAMES = (
 
 READ_CONFIG_SCRIPT = """
 import json
-from ttnn.trace_allocation_config import (
+from ttnn.tools.trace_allocation_tracker import (
     TRACE_ALLOC_DIAGNOSTICS,
     TRACE_ALLOC_REFERRER_DEPTH,
     TRACE_ALLOC_TRACKING,
@@ -68,7 +68,7 @@ def read_config(env_overrides):
         ),
     ],
 )
-def test_trace_allocation_config_is_captured_at_startup(env, expected):
+def test_trace_allocation_tracker_config_is_captured_at_startup(env, expected):
     assert read_config(env) == expected
 
 

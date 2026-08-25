@@ -70,7 +70,7 @@ def test_sampling_precompile_preserves_logits_and_request_state(monkeypatch, all
 
 def test_sampling_trace_buffer_reuse_is_bucket_only(monkeypatch):
     marked = []
-    monkeypatch.setattr(ttnn, "mark_corruptible", marked.append, raising=False)
+    monkeypatch.setattr(ttnn, "acknowledge_corruptible", marked.append, raising=False)
 
     _mark_trace_buffers_corruptible(None, ["default"])
     _mark_trace_buffers_corruptible(1, ["input", None, ("output",)])

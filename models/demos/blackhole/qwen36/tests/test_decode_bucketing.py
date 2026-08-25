@@ -86,7 +86,7 @@ def test_trace_buffer_reuse_is_opt_in(monkeypatch):
     from models.tt_transformers.tt.generator import _mark_trace_buffers_corruptible
 
     marked = []
-    monkeypatch.setattr(ttnn, "mark_corruptible", marked.append, raising=False)
+    monkeypatch.setattr(ttnn, "acknowledge_corruptible", marked.append, raising=False)
     _mark_trace_buffers_corruptible(SimpleNamespace(), ["default"])
     _mark_trace_buffers_corruptible(
         SimpleNamespace(_tt_allow_decode_trace_buffer_reuse=True),
@@ -333,14 +333,14 @@ def _parametrize_traced(max_tp=8, trace_bytes=1073741824):
 
 
 def _mark_trace_buffers_corruptible(value):
-    mark_corruptible = getattr(ttnn, "mark_corruptible", None)
-    if mark_corruptible is None or value is None:
+    acknowledge_corruptible = getattr(ttnn, "acknowledge_corruptible", None)
+    if acknowledge_corruptible is None or value is None:
         return
     if isinstance(value, (list, tuple)):
         for item in value:
             _mark_trace_buffers_corruptible(item)
         return
-    mark_corruptible(value)
+    acknowledge_corruptible(value)
 
 
 @torch.no_grad()

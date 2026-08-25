@@ -55,7 +55,7 @@ As a consequence, all allocations made after some trace has been captured, and n
 
 You can use the trace allocation tracker tool to check a program for potentially unsafe allocations.
 
-If we capture multiple traces, we may want to persist the input tensors as placeholders where new inputs will be copied, while being aware that the old contents may be corrupted by executing other traces. To exempt such tensors from validation use mark_corruptible(tensor).
+If we capture multiple traces, we may want to persist the input tensors as placeholders where new inputs will be copied, while being aware that the old contents may be corrupted by executing other traces. To exempt such tensors from validation use acknowledge_corruptible(tensor).
 
 Buffer allocations may not be explicit!
 For example `ttnn.reshape`, when first executed with a new shape, may allocate a lookup table to speed up future executions. If this happens after some trace has already been captured, executing that trace may corrupt this table. This will lead to undefined behavior, including data corruption and hangs.
@@ -110,7 +110,7 @@ This option should normally be used only to reduce diagnostic noise while invest
 Some trace inputs and outputs are intentionally reused even though replaying another trace may overwrite them. Acknowledge a specific device tensor after allocating it with:
 
 ```python
-ttnn.mark_corruptible(tensor)
+ttnn.acknowledge_corruptible(tensor)
 ```
 
 This immediately removes the tensor's backing buffer from validation. Views share their backing-buffer ID, so marking a view acknowledges the shared buffer as well.
@@ -183,8 +183,8 @@ class FunGen:
                 # These two may be overwritten by executing other traces,
                 # But we always write them before use
                 # and read from them right after executing their trace
-                ttnn.mark_corruptible(x)
-                ttnn.mark_corruptible(out)
+                ttnn.acknowledge_corruptible(x)
+                ttnn.acknowledge_corruptible(out)
                 self.trace_inputs[trace_key] = x
                 self.trace_ids[trace_key] = trace_id
                 self.trace_outputs[trace_key] = out
