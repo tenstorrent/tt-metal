@@ -176,9 +176,8 @@ bool has_valid_multi_core_reuse_work_split(
     const auto input_b_k_tiles = key.padded_k / input_b.tile_height;
     const auto n_tiles = key.padded_n / input_b.tile_width;
     return input_a_k_tiles == input_b_k_tiles && input_a_k_tiles % program.in0_block_w == 0 &&
-           m_tiles % program.per_core_m == 0 && n_tiles % program.per_core_n == 0 &&
-           program.per_core_m % program.out_subblock_h == 0 && program.per_core_n % program.out_subblock_w == 0 &&
-           program.out_subblock_h <= 8 / program.out_subblock_w;
+           m_tiles % program.per_core_m == 0 && n_tiles == program.per_core_n &&
+           program.per_core_m % program.out_subblock_h == 0 && program.per_core_n % program.out_subblock_w == 0;
 }
 
 std::optional<tt::tt_metal::Tile> transpose_matmul_tile(const tt::tt_metal::Tile& tile, const bool transpose) {
@@ -352,6 +351,10 @@ CallSemantics addmm_call_semantics(const float alpha, const float beta) noexcept
         .beta_f32_bits = std::bit_cast<std::uint32_t>(beta)};
 }
 
+bool has_nondefault_v1_tile_transpose(const tt::tt_metal::Tile& tile) noexcept {
+    return tile.get_transpose_of_faces() || tile.get_transpose_within_face();
+}
+
 Eligibility v1_eligibility_from_call_state(
     const CallSemantics call,
     const IoContractStatus io_contract_status,
@@ -361,7 +364,8 @@ Eligibility v1_eligibility_from_call_state(
     const bool has_optional_output,
     const bool input_a_sharded,
     const bool input_b_sharded,
-    const bool output_sharded) noexcept {
+    const bool output_sharded,
+    const bool has_unsupported_tile_metadata) noexcept {
     return Eligibility{
         .call = call,
         .io_contract_status = io_contract_status,
@@ -382,7 +386,8 @@ Eligibility v1_eligibility_from_call_state(
         .output_sharded = output_sharded,
         .input_b_batched = parameters.user_run_batched,
         .transpose_a = parameters.transpose_a,
-        .transpose_b = parameters.transpose_b};
+        .transpose_b = parameters.transpose_b,
+        .has_unsupported_tile_metadata = has_unsupported_tile_metadata};
 }
 
 ResolvedMatmulIoContract resolve_matmul_io_contract(const IoContractRequest& request) {
@@ -502,11 +507,14 @@ MaterializationResult materialize_matmul_registry_recipe(const compact::EntryDes
     }
 
     const auto& program = descriptor.replay.program_config;
+    const auto maximum_subblock_area =
+        descriptor.replay.compute_kernel_config.fp32_dest_acc_en ? std::uint32_t{4} : std::uint32_t{8};
     if (program.compute_grid_x == 0 || program.compute_grid_y == 0 || program.in0_block_w == 0 ||
         program.out_subblock_h == 0 || program.out_subblock_w == 0 || program.per_core_m == 0 ||
         program.per_core_n == 0 || program.allowed_worker_cores_present ||
         program.compute_grid_x > descriptor.key.compute_grid_x ||
-        program.compute_grid_y > descriptor.key.compute_grid_y || program.out_subblock_h > 8 / program.out_subblock_w ||
+        program.compute_grid_y > descriptor.key.compute_grid_y ||
+        program.out_subblock_h > maximum_subblock_area / program.out_subblock_w ||
         !has_valid_multi_core_reuse_work_split(descriptor.key, program)) {
         return {.status = MaterializationStatus::InvalidProgramConfig};
     }
@@ -518,7 +526,7 @@ MaterializationResult materialize_matmul_registry_recipe(const compact::EntryDes
             case compact::Domain::DenseMatmul:
             case compact::Domain::DenseLinear: return key.alpha_f32_bits == 0 && key.beta_f32_bits == 0;
             case compact::Domain::DenseAddmm:
-                return key.alpha_f32_bits != 0 && key.alpha_f32_bits != 0x80000000U &&
+                return key.alpha_f32_bits == 0x3F800000U &&
                        (key.beta_f32_bits == 0 || key.beta_f32_bits == 0x80000000U);
         }
         return false;
@@ -527,9 +535,10 @@ MaterializationResult materialize_matmul_registry_recipe(const compact::EntryDes
         key.bcast_batch_present || key.bcast_batch || key.has_activation || key.has_bias || key.run_batched ||
         key.transpose_a || key.transpose_b || key.untilize_out || !scalar_semantics_valid ||
         key.input_a.layout != compact::Layout::Tile || key.input_b.layout != compact::Layout::Tile ||
-        key.output.buffer_type != compact::BufferType::Dram || key.output.layout != compact::Layout::Tile ||
-        key.output.memory_layout != compact::MemoryLayout::Interleaved || key.output.tile_height != 32 ||
-        key.output.tile_width != 32;
+        key.input_a.tile_height != 32 || key.input_a.tile_width != 32 || key.input_b.tile_height != 32 ||
+        key.input_b.tile_width != 32 || key.output.buffer_type != compact::BufferType::Dram ||
+        key.output.layout != compact::Layout::Tile || key.output.memory_layout != compact::MemoryLayout::Interleaved ||
+        key.output.tile_height != 32 || key.output.tile_width != 32;
     if (invalid_key_envelope || state.output != key.output || state.untilize_out || !state.bcast_batch_is_null ||
         !state.user_core_coord_is_null || !state.user_fused_activation_is_null || !state.user_run_batched_is_false ||
         !state.transpose_a_is_false || !state.transpose_b_is_false || !state.output_tile_is_null ||
@@ -593,7 +602,7 @@ ResolutionReason preflight_v1_eligibility(const Eligibility& eligibility) noexce
     if ((is_addmm && (!has_alpha || !has_beta)) || (!is_addmm && (has_alpha || has_beta))) {
         return ResolutionReason::MalformedOperationSemantics;
     }
-    if (is_addmm && (*eligibility.call.alpha_f32_bits == 0 || *eligibility.call.alpha_f32_bits == 0x80000000U)) {
+    if (is_addmm && *eligibility.call.alpha_f32_bits != 0x3F800000U) {
         return ResolutionReason::MalformedOperationSemantics;
     }
     if (eligibility.io_contract_status != IoContractStatus::Resolved) {
@@ -607,10 +616,10 @@ ResolutionReason preflight_v1_eligibility(const Eligibility& eligibility) noexce
     // richer tensor semantics remain ineligible until a later schema binds
     // every bias/activation field exactly.
     if (eligibility.has_bias || eligibility.has_activation || eligibility.transpose_a || eligibility.transpose_b ||
-        eligibility.has_optional_output || eligibility.has_output_tile || eligibility.has_global_cb ||
-        eligibility.has_sub_device || eligibility.has_bcast_batch || eligibility.untilize_out ||
-        eligibility.input_a_sharded || eligibility.input_b_sharded || eligibility.output_sharded ||
-        eligibility.input_b_batched ||
+        eligibility.has_unsupported_tile_metadata || eligibility.has_optional_output || eligibility.has_output_tile ||
+        eligibility.has_global_cb || eligibility.has_sub_device || eligibility.has_bcast_batch ||
+        eligibility.untilize_out || eligibility.input_a_sharded || eligibility.input_b_sharded ||
+        eligibility.output_sharded || eligibility.input_b_batched ||
         (is_addmm && *eligibility.call.beta_f32_bits != 0 && *eligibility.call.beta_f32_bits != 0x80000000U)) {
         return ResolutionReason::UnsupportedSemantics;
     }

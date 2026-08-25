@@ -12,8 +12,8 @@ CODEGEN_DIR = Path(__file__).resolve().parents[1]
 REGISTRY_DIR = CODEGEN_DIR.parent
 EMITTER_PATH = CODEGEN_DIR / "emit_cpp.py"
 FIXTURE_PATH = REGISTRY_DIR / "fixtures" / "valid_multi_core_reuse.lock.json"
-EXPECTED_CONTENT_SHA256 = "3992cfdb6654bad0eb86db62fb50cc9623e5ba5c27a0c9a6c813b088b00e850d"
-EXPECTED_ENTRY_ID = "cd7887816e01e45f91c79b8377aa63d3b9551153c5d32c0defbd9f6ffeb0fb3d"
+EXPECTED_CONTENT_SHA256 = "c2e28f624f15358b46632995603cb682ae7f18703e7fae23bdb592163dd0a919"
+EXPECTED_ENTRY_ID = "2e5422c0e502fec492a20472f0e7f4318095b6fd6cc39dfb0e9225ab6ca4d677"
 
 SPEC = importlib.util.spec_from_file_location("matmul_registry_emit_cpp", EMITTER_PATH)
 assert SPEC is not None and SPEC.loader is not None
@@ -124,10 +124,17 @@ def test_scalar_semantics_are_exclusive_to_addmm(expect_error) -> None:
     lock["entries"][0]["key"]["alpha_f32_bits"] = 0
     lock["entries"][0]["key"]["beta_f32_bits"] = 0x3F800000
     resign(lock, entries=True)
-    with expect_error(emitter.LockValidationError, "nonzero binary32"):
+    with expect_error(emitter.LockValidationError, "exactly 1.0"):
+        emitter.validate_lock(lock)
+
+    lock["entries"][0]["key"]["alpha_f32_bits"] = 0x40000000
+    lock["entries"][0]["key"]["beta_f32_bits"] = 0
+    resign(lock, entries=True)
+    with expect_error(emitter.LockValidationError, "exactly 1.0"):
         emitter.validate_lock(lock)
 
     lock["entries"][0]["key"]["alpha_f32_bits"] = 0x3F800000
+    lock["entries"][0]["key"]["beta_f32_bits"] = 0x3F800000
     resign(lock, entries=True)
     with expect_error(emitter.LockValidationError, "positive or negative zero"):
         emitter.validate_lock(lock)
@@ -184,8 +191,12 @@ def test_unknown_program_family_is_rejected(expect_error) -> None:
 def test_malformed_multi_core_reuse_work_splits_are_rejected(expect_error) -> None:
     cases: list[tuple[str, object]] = [
         ("key.input_a.tile_height", 16),
+        ("key.input_a.tile_width", 16),
         ("key.padded_m", 129),
         ("key.input_b.tile_height", 16),
+        ("key.input_b.tile_width", 16),
+        ("key.output.tile_height", 16),
+        ("key.output.tile_width", 16),
         ("program_config.in0_block_w", 3),
         ("program_config.per_core_m", 3),
         ("program_config.per_core_n", 3),
@@ -213,6 +224,15 @@ def test_malformed_multi_core_reuse_work_splits_are_rejected(expect_error) -> No
     program = lock["entries"][0]["recipe"]["program_config"]
     program["out_subblock_h"] = 4
     program["out_subblock_w"] = 4
+    resign(lock, entries=True)
+    with expect_error(emitter.LockValidationError, "destination-register bound"):
+        emitter.validate_lock(lock)
+
+    lock = fixture()
+    program = lock["entries"][0]["recipe"]["program_config"]
+    program["out_subblock_h"] = 2
+    program["out_subblock_w"] = 4
+    lock["entries"][0]["recipe"]["compute_kernel_config"]["fp32_dest_acc_en"] = True
     resign(lock, entries=True)
     with expect_error(emitter.LockValidationError, "destination-register bound"):
         emitter.validate_lock(lock)

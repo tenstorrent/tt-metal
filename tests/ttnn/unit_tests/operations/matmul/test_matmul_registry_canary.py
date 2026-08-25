@@ -325,24 +325,34 @@ def test_exact_shape_miss_falls_back(device):
     lock = _lock()
     domain = "dense.matmul"
     entry = _compatible_entries(lock, device, domain)[0]
+    key = entry["key"]
+    invariant_key = {name: value for name, value in key.items() if name not in {"logical_m", "padded_m"}}
+    occupied_m = {
+        item["key"]["logical_m"]
+        for item in lock["entries"]
+        if item["domain"] == domain
+        and {name: value for name, value in item["key"].items() if name not in {"logical_m", "padded_m"}}
+        == invariant_key
+        and item["key"]["logical_m"] == item["key"]["padded_m"]
+    }
+    fixed_elements = key["logical_k"] * key["logical_n"]
+    maximum_m = max(0, (MAX_INPUT_ELEMENTS - fixed_elements) // key["logical_k"])
+    tile_height = key["input_a"]["tile_height"]
+    logical_m = next(
+        (value for value in range(tile_height, maximum_m + 1, tile_height) if value not in occupied_m), None
+    )
+    if logical_m is None:
+        _skip_or_fail("could not construct a bounded exact-key miss")
+    host_a, host_b, tensor_a, tensor_b = _inputs(entry, device, logical_m=logical_m)
+    native = _resolved_key(tensor_a, tensor_b, domain, key["output"])
     all_keys = {
         json.dumps({"domain": item["domain"], "key": item["key"]}, sort_keys=True, separators=(",", ":"))
         for item in lock["entries"]
     }
-    miss = None
-    for logical_m in (32, 64, 96, 128, 160, 192, 224, 256, 384, 512, 768, 1024):
-        if logical_m * entry["key"]["logical_k"] > MAX_INPUT_ELEMENTS:
-            continue
-        host_a, host_b, tensor_a, tensor_b = _inputs(entry, device, logical_m=logical_m)
-        native = _resolved_key(tensor_a, tensor_b, domain, entry["key"]["output"])
-        if json.dumps(native, sort_keys=True, separators=(",", ":")) not in all_keys:
-            miss = (host_a, host_b, tensor_a, tensor_b)
-            break
-    if miss is None:
-        _skip_or_fail("could not construct a bounded exact-key miss")
+    assert json.dumps(native, sort_keys=True, separators=(",", ":")) not in all_keys
 
     before = _domain_stats(_plain(REGISTRY.matmul_registry_stats()), domain)
-    _invoke(domain, entry, *miss)
+    _invoke(domain, entry, host_a, host_b, tensor_a, tensor_b)
     after = _domain_stats(_plain(REGISTRY.matmul_registry_stats()), domain)
     _assert_dispatch_delta(before, after, exact_hit=False, reason="empty_registry")
 

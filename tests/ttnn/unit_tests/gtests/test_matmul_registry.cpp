@@ -246,7 +246,7 @@ compact::EntryDescriptor compact_entry(const OperationDomain domain = OperationD
                 .out_subblock_h = 1,
                 .out_subblock_w = 2,
                 .per_core_m = 4,
-                .per_core_n = 8,
+                .per_core_n = 16,
                 .allowed_worker_cores_present = false},
         .compute_kernel_config =
             compact::ComputeKernelDescriptor{
@@ -659,7 +659,7 @@ TEST(MatmulConfigRegistry, CompactTableLookupAndNativeMaterializationAreExact) {
     EXPECT_EQ(program->out_subblock_h, 1);
     EXPECT_EQ(program->out_subblock_w, 2);
     EXPECT_EQ(program->per_core_M, 4);
-    EXPECT_EQ(program->per_core_N, 8);
+    EXPECT_EQ(program->per_core_N, 16);
     EXPECT_FALSE(program->allowed_worker_cores.has_value());
     EXPECT_EQ(native.recipe->compute_kernel_config.math_fidelity, tt::tt_metal::MathFidelity::HiFi2);
     EXPECT_EQ(native.recipe->compute_kernel_config.throttle_level, compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
@@ -700,6 +700,9 @@ TEST(MatmulConfigRegistry, CompactTableLookupAndNativeMaterializationAreExact) {
     invalid_addmm.key.alpha_f32_bits = 0x80000000;
     EXPECT_EQ(materialize_matmul_registry_recipe(invalid_addmm).status, MaterializationStatus::InvalidCallState);
     invalid_addmm = compact_entry(OperationDomain::Addmm);
+    invalid_addmm.key.alpha_f32_bits = 0x40000000;
+    EXPECT_EQ(materialize_matmul_registry_recipe(invalid_addmm).status, MaterializationStatus::InvalidCallState);
+    invalid_addmm = compact_entry(OperationDomain::Addmm);
     invalid_addmm.key.beta_f32_bits = 0x3F800000;
     EXPECT_EQ(materialize_matmul_registry_recipe(invalid_addmm).status, MaterializationStatus::InvalidCallState);
 }
@@ -725,10 +728,14 @@ TEST(MatmulConfigRegistry, CompactMaterializationRejectsEveryTypedBoundary) {
 
     for (const auto mutate : {
              +[](compact::EntryDescriptor& item) { item.key.input_a.tile_height = 16; },
+             +[](compact::EntryDescriptor& item) { item.key.input_a.tile_width = 16; },
              +[](compact::EntryDescriptor& item) { item.key.logical_m = 0; },
              +[](compact::EntryDescriptor& item) { item.key.padded_m = item.key.logical_m - 1; },
              +[](compact::EntryDescriptor& item) { item.key.padded_m = 129; },
              +[](compact::EntryDescriptor& item) { item.key.input_b.tile_height = 16; },
+             +[](compact::EntryDescriptor& item) { item.key.input_b.tile_width = 16; },
+             +[](compact::EntryDescriptor& item) { item.key.output.tile_height = 16; },
+             +[](compact::EntryDescriptor& item) { item.key.output.tile_width = 16; },
              +[](compact::EntryDescriptor& item) { item.replay.program_config.in0_block_w = 3; },
              +[](compact::EntryDescriptor& item) { item.replay.program_config.per_core_m = 3; },
              +[](compact::EntryDescriptor& item) { item.replay.program_config.per_core_n = 3; },
@@ -748,6 +755,12 @@ TEST(MatmulConfigRegistry, CompactMaterializationRejectsEveryTypedBoundary) {
     descriptor = compact_entry();
     descriptor.replay.compute_kernel_config.math_fidelity = static_cast<compact::MathFidelity>(0xff);
     expect_rejection(descriptor, MaterializationStatus::InvalidComputeKernelConfig);
+
+    descriptor = compact_entry();
+    descriptor.replay.compute_kernel_config.fp32_dest_acc_en = true;
+    descriptor.replay.program_config.out_subblock_h = 2;
+    descriptor.replay.program_config.out_subblock_w = 4;
+    expect_rejection(descriptor, MaterializationStatus::InvalidProgramConfig);
 
     descriptor = compact_entry();
     descriptor.replay.call_state.output_tile_is_null = false;
@@ -905,6 +918,29 @@ TEST(MatmulConfigRegistry, DispatchDoesNotResolveAnIncompleteRequest) {
     EXPECT_FALSE(result.materialized_parameters.has_value());
 }
 
+TEST(MatmulConfigRegistry, NondefaultTileFaceMetadataNeverReachesLookup) {
+    const Tile transposed_tile({32, 32}, true);
+    ASSERT_TRUE(has_nondefault_v1_tile_transpose(transposed_tile));
+
+    const ttnn::prim::MatmulParams parameters;
+    const auto eligibility = v1_eligibility_from_call_state(
+        dense_matmul_call_semantics(),
+        IoContractStatus::Resolved,
+        false,
+        false,
+        parameters,
+        false,
+        false,
+        false,
+        false,
+        has_nondefault_v1_tile_transpose(transposed_tile));
+    resolver_invocations = 0;
+    const auto dispatch =
+        resolve_for_dispatch(Mode::On, exact_request(), eligibility, parameters, &counting_certified_resolver);
+    EXPECT_EQ(resolver_invocations, 0);
+    EXPECT_EQ(dispatch.resolution.reason, ResolutionReason::UnsupportedSemantics);
+}
+
 TEST(MatmulConfigRegistry, CallerKnownIneligibilitySkipsRequestAndResolverInShadowAndOn) {
     const ttnn::prim::MatmulParams legacy_parameters;
     for (const auto mode : {Mode::Shadow, Mode::On}) {
@@ -914,6 +950,9 @@ TEST(MatmulConfigRegistry, CallerKnownIneligibilitySkipsRequestAndResolverInShad
                      ResolutionReason::ExplicitOverride},
                  std::pair{
                      Eligibility{.call = dense_matmul_call_semantics(), .has_bias = true},
+                     ResolutionReason::UnsupportedSemantics},
+                 std::pair{
+                     Eligibility{.call = dense_matmul_call_semantics(), .has_unsupported_tile_metadata = true},
                      ResolutionReason::UnsupportedSemantics},
                  std::pair{
                      Eligibility{.call = CallSemantics{.domain = OperationDomain::IneligibleSharedCaller}},
@@ -1587,6 +1626,9 @@ TEST(MatmulConfigRegistry, AddmmRequiresExactScalarBits) {
         ResolutionReason::MalformedOperationSemantics);
     EXPECT_EQ(
         resolve_with(Mode::On, Eligibility{.call = addmm_call_semantics(-0.0F, 1.0F)}).reason,
+        ResolutionReason::MalformedOperationSemantics);
+    EXPECT_EQ(
+        resolve_with(Mode::On, Eligibility{.call = addmm_call_semantics(2.0F, 0.0F)}).reason,
         ResolutionReason::MalformedOperationSemantics);
     EXPECT_EQ(
         resolve_with(Mode::On, Eligibility{.call = addmm_call_semantics(1.0F, 1.0F)}).reason,

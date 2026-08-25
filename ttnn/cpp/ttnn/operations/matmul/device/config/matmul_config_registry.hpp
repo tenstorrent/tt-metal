@@ -120,6 +120,10 @@ struct ResolvedMatmulIoContract {
 // Shadow can observe without changing legacy validation order or exceptions.
 ResolvedMatmulIoContract resolve_matmul_io_contract(const IoContractRequest& request);
 
+// Tile face-orientation metadata is not represented in compact key v1.
+// Reject it before lookup instead of allowing two distinct tensors to alias.
+bool has_nondefault_v1_tile_transpose(const tt::tt_metal::Tile& tile) noexcept;
+
 struct Eligibility {
     CallSemantics call;
     IoContractStatus io_contract_status = IoContractStatus::Resolved;
@@ -141,6 +145,7 @@ struct Eligibility {
     bool input_b_batched = false;
     bool transpose_a = false;
     bool transpose_b = false;
+    bool has_unsupported_tile_metadata = false;
 };
 
 // Shared caller-state projection used by both public wrapper dispatch and the
@@ -155,7 +160,8 @@ Eligibility v1_eligibility_from_call_state(
     bool has_optional_output,
     bool input_a_sharded,
     bool input_b_sharded,
-    bool output_sharded) noexcept;
+    bool output_sharded,
+    bool has_unsupported_tile_metadata = false) noexcept;
 
 // The generated table accepts this complete, exact request—not Eligibility.
 // Keeping the lookup seam typed prevents a certified recipe from crossing an

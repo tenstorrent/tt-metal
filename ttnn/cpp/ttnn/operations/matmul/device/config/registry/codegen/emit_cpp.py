@@ -200,8 +200,8 @@ def _key(value: Any, path: str, domain: str) -> dict[str, Any]:
     if domain == "dense.addmm":
         _uint(item["alpha_f32_bits"], 32, f"{path}.alpha_f32_bits")
         _uint(item["beta_f32_bits"], 32, f"{path}.beta_f32_bits")
-        if item["alpha_f32_bits"] in {0, 0x80000000}:
-            raise LockValidationError(f"{path}.alpha_f32_bits must encode a nonzero binary32 value")
+        if item["alpha_f32_bits"] != 0x3F800000:
+            raise LockValidationError(f"{path}.alpha_f32_bits must encode exactly 1.0 in v1")
         if item["beta_f32_bits"] not in {0, 0x80000000}:
             raise LockValidationError(f"{path}.beta_f32_bits must encode positive or negative zero in v1")
     elif item["alpha_f32_bits"] is not None or item["beta_f32_bits"] is not None:
@@ -212,6 +212,8 @@ def _key(value: Any, path: str, domain: str) -> dict[str, Any]:
     input_b = _tensor(item["input_b"], f"{path}.input_b")
     if input_a["layout"] != "tile" or input_b["layout"] != "tile":
         raise LockValidationError(f"{path}.input_a and {path}.input_b must use tile layout in v1")
+    if any(tensor[axis] != 32 for tensor in (input_a, input_b) for axis in ("tile_height", "tile_width")):
+        raise LockValidationError(f"{path}.input_a and {path}.input_b must use 32x32 tiles in v1")
     output = _tensor(item["output"], f"{path}.output")
     if (
         output["layout"] != "tile"
@@ -251,14 +253,12 @@ def _validate_multi_core_reuse_work_split(key: dict[str, Any], program: dict[str
         raise LockValidationError(f"{path}.in0_block_w must divide padded K tiles")
     if m_tiles % program["per_core_m"] != 0:
         raise LockValidationError(f"{path}.per_core_m must divide padded M tiles")
-    if n_tiles % program["per_core_n"] != 0:
-        raise LockValidationError(f"{path}.per_core_n must divide padded N tiles")
+    if n_tiles != program["per_core_n"]:
+        raise LockValidationError(f"{path}.per_core_n must equal padded N tiles for multi_core_reuse")
     if program["per_core_m"] % program["out_subblock_h"] != 0:
         raise LockValidationError(f"{path}.out_subblock_h must divide per_core_m")
     if program["per_core_n"] % program["out_subblock_w"] != 0:
         raise LockValidationError(f"{path}.out_subblock_w must divide per_core_n")
-    if program["out_subblock_h"] * program["out_subblock_w"] > 8:
-        raise LockValidationError(f"{path} output subblock exceeds the destination-register bound")
 
 
 def _recipe(value: Any, key: dict[str, Any], path: str) -> dict[str, Any]:
@@ -291,8 +291,6 @@ def _recipe(value: Any, key: dict[str, Any], path: str) -> dict[str, Any]:
         raise LockValidationError(f"{path}.program_config.allowed_worker_cores must record exact null")
     if program["compute_grid_x"] > key["compute_grid_x"] or program["compute_grid_y"] > key["compute_grid_y"]:
         raise LockValidationError(f"{path}.program_config compute grid exceeds the attested device grid")
-    _validate_multi_core_reuse_work_split(key, program, f"{path}.program_config")
-
     ckc = _exact_fields(
         item["compute_kernel_config"],
         {
@@ -311,6 +309,10 @@ def _recipe(value: Any, key: dict[str, Any], path: str) -> dict[str, Any]:
         raise LockValidationError(f"{path}.compute_kernel_config.throttle_level is unknown")
     for name in ("math_approx_mode", "fp32_dest_acc_en", "packer_l1_acc", "dst_full_sync_en"):
         _boolean(ckc[name], f"{path}.compute_kernel_config.{name}")
+    _validate_multi_core_reuse_work_split(key, program, f"{path}.program_config")
+    maximum_subblock_area = 4 if ckc["fp32_dest_acc_en"] else 8
+    if program["out_subblock_h"] * program["out_subblock_w"] > maximum_subblock_area:
+        raise LockValidationError(f"{path}.program_config output subblock exceeds the destination-register bound")
 
     state = _exact_fields(
         item["call_state"],

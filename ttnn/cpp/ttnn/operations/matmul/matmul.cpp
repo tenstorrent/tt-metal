@@ -254,7 +254,15 @@ registry::RegistryRequestInspection registry::inspect_registry_request(
             optional_output_tensor.has_value(),
             input_tensor_a.is_sharded(),
             input_tensor_b.is_sharded(),
-            io_contract.output_memory_config.is_sharded())};
+            io_contract.output_memory_config.is_sharded(),
+            has_nondefault_v1_tile_transpose(input_tensor_a.tensor_spec().tile()) ||
+                has_nondefault_v1_tile_transpose(input_tensor_b.tensor_spec().tile()) ||
+                has_nondefault_v1_tile_transpose(io_contract.output_tile) ||
+                input_tensor_a.tensor_spec().tile().get_height() != 32 ||
+                input_tensor_a.tensor_spec().tile().get_width() != 32 ||
+                input_tensor_b.tensor_spec().tile().get_height() != 32 ||
+                input_tensor_b.tensor_spec().tile().get_width() != 32 || io_contract.output_tile.get_height() != 32 ||
+                io_contract.output_tile.get_width() != 32)};
     // Reject caller-known exclusions before shape, device, firmware, and
     // cluster attestation. Shadow must remain an inexpensive observation of
     // the ordinary path for calls that cannot possibly match the v1 table.
