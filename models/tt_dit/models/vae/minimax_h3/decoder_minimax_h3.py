@@ -435,18 +435,22 @@ class MiniMaxH3ViTDecoder3d(Module):
         state["attention_mask"] = self._mask_host
 
     def forward(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
-        """``(1, num_patches, in_channels)`` latent tokens to ``(1, seq_len, C*pt*p*p)``.
+        """``(B, num_patches, in_channels)`` latent tokens to ``(B, seq_len, C*pt*p*p)``.
 
-        The caller flattens the latent voxel grid to tokens and unpatchifies the result;
-        it already owns the tiling, hence the host-side reshapes. :func:`unpatchify` is the
-        tail, and it crops the suffix rows off before reshaping.
+        ``B`` is the per-device tile batch (``waves_per_device`` in the wrapper); the constants
+        (suffix, RoPE tables, mask) are shared across it. The caller flattens the latent voxel grid
+        to tokens and unpatchifies the result; :func:`unpatchify` crops the suffix rows off.
         """
         assert (
             tokens.shape[1] == self.num_patches
         ), f"expected {self.num_patches} patch tokens for latent {self.latent_shape}, got {tokens.shape[1]}"
         hidden = self.proj_in(tokens)
-        # One concat covers the register tokens, the zero cls token and the tile pad.
-        hidden = ttnn.concat([hidden, self.suffix.data], dim=1)
+        # One concat covers the register tokens, the zero cls token and the tile pad. The suffix is
+        # shared across tiles, so broadcast it to the per-device batch when >1 tile runs per device.
+        suffix = self.suffix.data
+        if suffix.shape[0] != hidden.shape[0]:
+            suffix = ttnn.repeat(suffix, ttnn.Shape([hidden.shape[0], 1, 1]))
+        hidden = ttnn.concat([hidden, suffix], dim=1)
         for block in self.transformer_blocks:
             hidden = block(hidden, self.rope_cos.data, self.rope_sin.data, self.attention_mask.data)
         return self.proj_out(self.norm_out(hidden))
