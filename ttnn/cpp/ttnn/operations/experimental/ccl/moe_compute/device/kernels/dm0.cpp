@@ -8,20 +8,17 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "moe_ring_common.h"
 
-// Triple buffering constants
-#define NUM_SLOTS 3  // 3 slots in CB
-
 // Helper macros for counter advancement (avoids modulo on RISC-V)
 #define ADVANCE_SLOT(s)       \
     do {                      \
         (s)++;                \
-        if ((s) >= NUM_SLOTS) \
+        if ((s) >= num_slots) \
             (s) = 0;          \
     } while (0)
 #define ADVANCE_TRID(t)      \
     do {                     \
         (t)++;               \
-        if ((t) > NUM_SLOTS) \
+        if ((t) > num_slots) \
             (t) = 1;         \
     } while (0)
 
@@ -30,6 +27,11 @@ void kernel_main() {
     constexpr uint32_t Ht = get_named_compile_time_arg_val("hidden_tiles");
     constexpr uint32_t Nt = get_named_compile_time_arg_val("intermediate_tiles");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+    constexpr uint32_t weight_tiles_per_block = get_named_compile_time_arg_val("weight_tiles_per_block");
+    constexpr uint32_t num_slots = get_named_compile_time_arg_val("weight_pipeline_slots");
+    constexpr bool compact_weight_pipeline = num_slots == 1;
+    static_assert(num_slots == 1 || num_slots == 3);
+    static_assert(weight_tiles_per_block == 4 || weight_tiles_per_block == 28);
 
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t num_shared_experts = get_named_compile_time_arg_val("num_shared_experts");
@@ -111,14 +113,14 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // W0 and W1 reading constants
     //-------------------------------------------------------------------------
-    constexpr uint32_t w0_w1_txns_per_block = moe_ring::W0_W1_TXNS_PER_BLOCK;
-    constexpr uint32_t w0_w1_tiles_per_txn = moe_ring::W0_W1_TILES_PER_TXN;
-    constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
+    constexpr uint32_t w0_w1_txns_per_block = compact_weight_pipeline ? 1 : moe_ring::W0_W1_TXNS_PER_BLOCK;
+    constexpr uint32_t w0_w1_tiles_per_txn = compact_weight_pipeline ? 4 : moe_ring::W0_W1_TILES_PER_TXN;
+    constexpr uint32_t w0_w1_tiles_per_block = weight_tiles_per_block;
 
     // W2 reading constants
-    constexpr uint32_t w2_txns_per_block = moe_ring::W2_TXNS_PER_BLOCK;
-    constexpr uint32_t w2_tiles_per_txn = moe_ring::W2_TILES_PER_TXN;
-    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;  // 14 * 2 = 28
+    constexpr uint32_t w2_txns_per_block = compact_weight_pipeline ? 1 : moe_ring::W2_TXNS_PER_BLOCK;
+    constexpr uint32_t w2_tiles_per_txn = compact_weight_pipeline ? 4 : moe_ring::W2_TILES_PER_TXN;
+    constexpr uint32_t w2_tiles_per_block = weight_tiles_per_block;
 
     //-------------------------------------------------------------------------
     // DRAM Reading constants
@@ -162,7 +164,8 @@ void kernel_main() {
     // `shard_idx` is the placement-order index in [0, num_banks); the chip bank id is
     // obtained via `shard_to_bank[shard_idx]` (host computes this from the actual
     // buffer placement returned by `buffer()->get_buffer_page_mapping()`).
-    constexpr uint32_t w0_w1_pages_per_logical_shard = Cfg::w0_w1_blocks_per_expert * w0_w1_tiles_per_block;
+    constexpr uint32_t w0_w1_pages_per_logical_shard =
+        Cfg::w0_w1_blocks_per_expert * moe_ring::W0_W1_TXNS_PER_BLOCK * moe_ring::W0_W1_TILES_PER_TXN;
     constexpr uint32_t w0_w1_pages_total = num_cores * w0_w1_pages_per_ring_core_total;
     static_assert(w0_w1_pages_total % num_banks == 0, "w0_w1 pages_total must be divisible by num_banks");
     constexpr uint32_t w0_w1_pages_per_bank_total = w0_w1_pages_total / num_banks;
@@ -176,7 +179,8 @@ void kernel_main() {
         w0_w1_pages_per_bank_total % w0_w1_tiles_per_txn == 0,
         "w0_w1 pages_per_bank_total must be a multiple of tiles_per_txn");
 
-    constexpr uint32_t w2_pages_per_logical_shard = Cfg::w2_blocks_per_expert * w2_tiles_per_block;
+    constexpr uint32_t w2_pages_per_logical_shard =
+        Cfg::w2_blocks_per_expert * moe_ring::W2_TXNS_PER_BLOCK * moe_ring::W2_TILES_PER_TXN;
     constexpr uint32_t w2_pages_total = num_cores * w2_pages_per_ring_core_total;
     static_assert(w2_pages_total % num_banks == 0, "w2 pages_total must be divisible by num_banks");
     constexpr uint32_t w2_pages_per_bank_total = w2_pages_total / num_banks;
@@ -199,7 +203,7 @@ void kernel_main() {
 
     // Precompute slot addresses (avoid multiply in hot loop)
     // Each slot holds 2 transactions (28 tiles)
-    const uint32_t slot_addr[NUM_SLOTS] = {
+    const uint32_t slot_addr[3] = {
         w_cb_base_addr, w_cb_base_addr + w0_w1_bytes_per_block, w_cb_base_addr + 2 * w0_w1_bytes_per_block};
 
     //-------------------------------------------------------------------------
@@ -272,8 +276,9 @@ void kernel_main() {
         // only the real prefix: W0/W1 layout is Nt-outer, so the prefix is a contiguous shortened
         // read. The compute kernel zero-fills the produced in2 gap so the full W2 walk stays correct.
         const bool is_shared_expert = expert_id >= num_experts - num_shared_experts;
-        const uint32_t w0_w1_blocks_this_expert =
+        const uint32_t fast_w0_w1_blocks_this_expert =
             is_shared_expert ? Cfg::w0_w1_blocks_per_shared_expert : Cfg::w0_w1_blocks_per_expert;
+        const uint32_t w0_w1_blocks_this_expert = fast_w0_w1_blocks_this_expert * 28 / w0_w1_tiles_per_block;
 
         // Per-expert slice's first GLOBAL page id (in the FULL flat tensor across all banks).
         const uint32_t w0_w1_slice_first_global_page =
@@ -321,8 +326,9 @@ void kernel_main() {
                         trid_to_issue);
                     w0_w1_global_page += w0_w1_tiles_per_txn;
                 }
-                // Second transaction (may cross a bank boundary):
-                {
+                // Second transaction (may cross a bank boundary). The compact
+                // low-L1 path uses one four-tile transaction per block.
+                if constexpr (!compact_weight_pipeline) {
                     const uint32_t shard_idx = w0_w1_global_page / w0_w1_pages_per_bank_total;
                     const uint32_t in_bank_page = w0_w1_global_page - shard_idx * w0_w1_pages_per_bank_total;
                     const uint32_t in_bank_byte_offset = in_bank_page * w0_w1_tile_size + w0_w1_addr;
@@ -346,7 +352,12 @@ void kernel_main() {
                 ADVANCE_TRID(trid_to_issue);
 
                 // Only when we first start the pipeline, we don't have any txns in flight
-                if (txns_in_flight) {
+                if constexpr (compact_weight_pipeline) {
+                    noc_async_read_barrier_with_trid(trid_to_wait);
+                    cb_r2c_w0_w1.push_back(w0_w1_tiles_per_block);
+                    ADVANCE_TRID(trid_to_wait);
+                    cb_r2c_w0_w1.reserve_back(w0_w1_tiles_per_block);
+                } else if (txns_in_flight) {
                     noc_async_read_barrier_with_trid(trid_to_wait);
                     cb_r2c_w0_w1.push_back(w0_w1_tiles_per_block);
 
@@ -366,7 +377,8 @@ void kernel_main() {
             // Read the FULL Nt-tall W2 for every expert, including shared experts. Shared-expert W2
             // is zero-padded to full Nt height (add_shared_expert_weights); the zero rows are inert
             // under the full contraction the compute kernel performs.
-            for (uint32_t block_id = 0; block_id < Cfg::w2_blocks_per_expert; ++block_id) {
+            constexpr uint32_t w2_blocks_per_expert = Cfg::w2_blocks_per_expert * 28 / w2_tiles_per_block;
+            for (uint32_t block_id = 0; block_id < w2_blocks_per_expert; ++block_id) {
                 noc_async_read_set_trid(trid_to_issue);
 
                 // First transaction:
@@ -389,8 +401,7 @@ void kernel_main() {
                         trid_to_issue);
                     w2_global_page += w2_tiles_per_txn;
                 }
-                // Second transaction (may cross a bank boundary):
-                {
+                if constexpr (!compact_weight_pipeline) {
                     const uint32_t shard_idx = w2_global_page / w2_pages_per_bank_total;
                     const uint32_t in_bank_page = w2_global_page - shard_idx * w2_pages_per_bank_total;
                     const uint32_t in_bank_byte_offset = in_bank_page * w2_tile_size + w2_addr;
@@ -415,24 +426,22 @@ void kernel_main() {
 
                 noc_async_read_barrier_with_trid(trid_to_wait);
                 cb_r2c_w2.push_back(w2_tiles_per_block);
-
                 ADVANCE_TRID(trid_to_wait);
-
-                // Reserve for next block
-                cb_r2c_w2.reserve_back(w2_tiles_per_block * 2);
+                cb_r2c_w2.reserve_back(compact_weight_pipeline ? w2_tiles_per_block : w2_tiles_per_block * 2);
             }
         }
     }
 
     // Drain the pipeline - the last txn in flight
-    noc_async_read_barrier_with_trid(trid_to_wait);
-    cb_r2c_w2.push_back(w2_tiles_per_block);
-
-    // We have one extra slot reserved, which we won't use.
-    // For CB hygiene, we can push it back.
-    cb_r2c_w2.push_back(w2_tiles_per_block);
+    if constexpr (compact_weight_pipeline) {
+        // One reserved block remains; publish it as the compute kernel's drain token.
+        cb_r2c_w2.push_back(w2_tiles_per_block);
+    } else {
+        noc_async_read_barrier_with_trid(trid_to_wait);
+        cb_r2c_w2.push_back(w2_tiles_per_block);
+        cb_r2c_w2.push_back(w2_tiles_per_block);
+    }
 }
 
 #undef ADVANCE_TRID
 #undef ADVANCE_SLOT
-#undef NUM_SLOTS

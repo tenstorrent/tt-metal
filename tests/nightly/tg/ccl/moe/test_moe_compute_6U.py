@@ -296,6 +296,11 @@ _MODELS_1x8 = [
     MoEModelConfig("deepseek_ocr", N=896,  hidden_size=1280, selected_experts_k=6),
     MoEModelConfig("gemma_4_26b",  N=704,  hidden_size=2816, selected_experts_k=8, activation_types=(MoEActivationFunction.GELU,)),
     MoEModelConfig("gpt_oss",      N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), test_modes=("perf", "correctness"), activation_types=(MoEActivationFunction.SWIGLU,)),
+    # Large-intermediate primitive regression: E8/K2/SILU at both decode and
+    # prefill token counts. One expert per device keeps the global expert count
+    # at eight on this mesh; the shape is intentionally model-agnostic.
+    MoEModelConfig("large_intermediate_t1",  N=14336, hidden_size=4096, selected_experts_k=2, experts_per_device_values=(1,), tokens_per_device=1, num_layers=1, num_iterations=1),
+    MoEModelConfig("large_intermediate_t32", N=14336, hidden_size=4096, selected_experts_k=2, experts_per_device_values=(1,), tokens_per_device=32, num_layers=1, num_iterations=1),
 ]
 
 _MODELS_BH_LB_1x8 = [

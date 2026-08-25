@@ -81,6 +81,7 @@ def _run_moe_compute_single_card_test(
     dtype,
     activation_type,
     has_bias=False,
+    weight_dtype=ttnn.bfloat4_b,
 ):
     """
     Single-card MoE compute test body. cluster_axis is fixed to None
@@ -308,7 +309,7 @@ def _run_moe_compute_single_card_test(
         )
     tt_w0_w1 = ttnn.from_torch(
         torch_w0_w1_reordered,
-        dtype=ttnn.bfloat4_b,
+        dtype=weight_dtype,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=w0_w1_mem_config,
@@ -325,7 +326,7 @@ def _run_moe_compute_single_card_test(
         )
     tt_w2 = ttnn.from_torch(
         torch_w2_reordered,
-        dtype=ttnn.bfloat4_b,
+        dtype=weight_dtype,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=w2_mem_config,
@@ -561,6 +562,33 @@ def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape):
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SWIGLU,
         has_bias=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 500000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("tokens_per_device", [1, 32], ids=["tokens1", "tokens32"])
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_single_card_large_intermediate(mesh_device, mesh_shape, tokens_per_device):
+    """Compute-only E8/K2/SILU coverage for the large-intermediate L1 path."""
+    ring_n = effective_matmul_ring_size(mesh_device)
+    _run_moe_compute_single_card_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        experts_per_device=8,
+        tokens_per_device=tokens_per_device,
+        selected_experts_k=2,
+        N=14336,
+        hidden_size=4096,
+        output_height_shard_dim=4,
+        output_width_shard_dim=auto_output_width_shard_dim(4096, matmul_ring_size=ring_n),
+        dtype=ttnn.bfloat16,
+        activation_type=MoEActivationFunction.SILU,
+        has_bias=False,
+        weight_dtype=ttnn.bfloat16,
     )
 
 

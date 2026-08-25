@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 
@@ -21,6 +22,15 @@ uint32_t effective_matmul_ring_size(ttnn::MeshDevice* mesh_device) {
     return (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? 8u : 12u;
 }
 }  // namespace
+
+std::vector<ttnn::DataType> moe_compute_supported_weight_dtypes() {
+    return {ttnn::DataType::BFLOAT4_B, ttnn::DataType::BFLOAT8_B, ttnn::DataType::BFLOAT16};
+}
+
+bool is_moe_compute_weight_dtype_supported(ttnn::DataType dtype) {
+    const auto supported = moe_compute_supported_weight_dtypes();
+    return std::find(supported.begin(), supported.end(), dtype) != supported.end();
+}
 
 std::vector<ttnn::Tensor> moe_compute(
     const ttnn::Tensor& tilize_input_tensor,

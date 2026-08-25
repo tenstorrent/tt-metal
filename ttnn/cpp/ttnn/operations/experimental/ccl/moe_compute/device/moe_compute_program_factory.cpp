@@ -4,6 +4,7 @@
 
 #include "moe_compute_program_factory.hpp"
 #include "moe_compute_device_operation_types.hpp"
+#include "moe_compute_l1_plan.hpp"
 
 #include "ttnn/global_semaphore.hpp"
 
@@ -70,7 +71,12 @@ get_cores(
     uint32_t bh_ring_size,
     const CoreRangeSet& mux_core_range_set) {
     const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
-        mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, mux_core_range_set, bh_ring_size);
+        mesh_device,
+        combine_token_parallel_cores,
+        combine_data_parallel_cores,
+        hidden_size,
+        mux_core_range_set,
+        bh_ring_size);
 
     return {
         selection.tilize_cores,
@@ -358,8 +364,35 @@ MoEComputeMeshWorkloadFactory::create_at(
         "moe_compute: expected matmul_num_cores={}, got {}",
         expected_matmul_n,
         matmul_num_cores);
-    const uint32_t a2a_cb_pages_raw = (intermediate_tiles + matmul_num_cores - 1) / matmul_num_cores;
-    const uint32_t a2a_cb_pages = (a2a_cb_pages_raw + 1) & ~1u;  // even-rounded per #43932
+    const auto weight_data_format = tt::tt_metal::datatype_to_dataformat_converter(matmul_w0_w1_tensor.dtype());
+    const uint32_t weight_tile_bytes = tt::tile_size(weight_data_format);
+    const auto l1_plan =
+        detail::plan_moe_compute_l1(intermediate_tiles, matmul_num_cores, weight_tile_bytes, args.has_bias);
+    const uint32_t a2a_cb_pages = l1_plan.a2a_tiles / matmul_num_cores;
+
+    // c_0 is globally backed by tilize_output_tensor; locally allocated matmul
+    // CBs grow upward from DEFAULT_UNRESERVED and must end below that tensor.
+    // Check this here so dtype-dependent capacity failures name the required
+    // address/range and remedy instead of surfacing later as an opaque Program
+    // allocator clash.
+    const uint32_t matmul_cb_base = tt::tt_metal::hal::get_worker_l1_unreserved_base();
+    const uint32_t required_l1_tensor_base = matmul_cb_base + l1_plan.matmul_static_bytes;
+    const uint32_t actual_l1_tensor_base = tilize_output_tensor.buffer()->address();
+    const uint32_t l1_deficit = detail::moe_compute_l1_deficit(l1_plan, matmul_cb_base, actual_l1_tensor_base);
+    TT_FATAL(
+        actual_l1_tensor_base >= required_l1_tensor_base,
+        "moe_compute: weight dtype {} and intermediate_size {} require matmul CB range [{}, {}) ({} B), but the "
+        "shared L1 tensor begins at {}. The current device L1_SMALL reservation leaves {} B too little ordinary L1; "
+        "reopen the device with l1_small_size reduced by at least {} B (l1_small_size=0 is the maximum-headroom "
+        "diagnostic), or use a smaller supported weight dtype/intermediate size",
+        matmul_w0_w1_tensor.dtype(),
+        intermediate_size,
+        matmul_cb_base,
+        required_l1_tensor_base,
+        l1_plan.matmul_static_bytes,
+        actual_l1_tensor_base,
+        l1_deficit,
+        l1_deficit);
 
     const uint32_t tilize_bounding_box_num_cores = tilize_bounding_box.size();
     const uint32_t matmul_bounding_box_num_cores = matmul_bounding_box.size();
@@ -751,7 +784,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         | Name           | CB Index     | Dtype     | Tile? | Tiles/CB  | DS  | GPT | Remarks                    |
         ----------------------------------------------------------------------------------------------------------
         | cb_s2c_in      | CBIndex::c_0 | Float16_b | true  | (shared)  | 448 | 180 | Shared output buf          |
-        | cb_r2c_w0      | CBIndex::c_3 | Bfp4_b    | true  | 14*6      |  84 |  84 | 3 triple-bufs W0/W1        |
+        | cb_r2c_w0      | CBIndex::c_3 | weight    | true  | planned   |  84 |  84 | streamed W0/W1             |
         | cb_c2w_rdy     | CBIndex::c_4 | Float32   | false | 1         |   — |   — | Compute->writer ready      |
         | cb_w2c_rdy     | CBIndex::c_5 | Float32   | false | 1         |   — |   — | Writer->compute ready      |
         | cb_s2c_in2     | CBIndex::c_6 | Float16_b | true  | a2a*cores |  72 |  96 | Ring A2A activation        |
@@ -764,7 +797,11 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
     // Note: cb_s2c_in and cb_c2s_out are handled separately as it is allocated on Tilize, Matmul, and Combine cores
     std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> matmul_cb_specs0 = {
-        {"cb_r2c_w0", tt::CBIndex::c_3, tt::DataFormat::Bfp4_b, true, 14 * 6},
+        {"cb_r2c_w0",
+         tt::CBIndex::c_3,
+         weight_data_format,
+         true,
+         l1_plan.weight_tiles_per_block * l1_plan.weight_pipeline_slots},
         {"cb_c2w_rdy", tt::CBIndex::c_4, tt::DataFormat::Float32, false, 1},
         {"cb_w2c_rdy", tt::CBIndex::c_5, tt::DataFormat::Float32, false, 1},
         {"cb_s2c_in2", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, a2a_cb_pages * matmul_num_cores},
@@ -1232,6 +1269,8 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"hidden_tiles", hidden_tiles},
         {"intermediate_tiles", intermediate_tiles},
         {"noc_max_burst_bytes", noc_max_burst_bytes},
+        {"weight_tiles_per_block", l1_plan.weight_tiles_per_block},
+        {"weight_pipeline_slots", l1_plan.weight_pipeline_slots},
         // Matmul -> combine: dm1 increments this on combine cores when data is written
         {"matmul_combine_sync_semaphore_id", matmul_combine_sync_semaphore_id},
         // Bypass combine signaling/wait when no combine kernels are built.

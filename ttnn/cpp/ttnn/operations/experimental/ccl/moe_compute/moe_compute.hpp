@@ -15,6 +15,9 @@
 
 namespace ttnn::experimental {
 
+std::vector<ttnn::DataType> moe_compute_supported_weight_dtypes();
+bool is_moe_compute_weight_dtype_supported(ttnn::DataType dtype);
+
 std::vector<ttnn::Tensor> moe_compute(
     const ttnn::Tensor& tilize_input_tensor,
     const ttnn::Tensor& tilize_expert_indices_tensor,

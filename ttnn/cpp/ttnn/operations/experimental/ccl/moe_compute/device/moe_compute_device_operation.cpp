@@ -6,6 +6,7 @@
 #include "kernels/moe_ring_common.h"
 #include "moe_compute_device_operation.hpp"
 #include "moe_compute_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/moe_compute/moe_compute.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
@@ -75,6 +76,17 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         rank_of(tensor_args.matmul_w2_tensor) == 6,
         "matmul_w2_tensor must be rank 6 ([num_cores, L, E, groups_per_core, N, 4*TILE_SIZE]); got rank {}",
         rank_of(tensor_args.matmul_w2_tensor));
+
+    const auto weight_dtype = tensor_args.matmul_w0_w1_tensor.dtype();
+    TT_FATAL(
+        tensor_args.matmul_w2_tensor.dtype() == weight_dtype,
+        "matmul_w0_w1_tensor and matmul_w2_tensor must have the same dtype; got {} and {}",
+        tensor_args.matmul_w0_w1_tensor.dtype(),
+        tensor_args.matmul_w2_tensor.dtype());
+    TT_FATAL(
+        ttnn::experimental::is_moe_compute_weight_dtype_supported(weight_dtype),
+        "MoE compute weights must be bfloat4_b, bfloat8_b, or bfloat16; got {}",
+        weight_dtype);
 
     // When has_bias=True, dm0 derives per-expert byte strides using ceil((K+1)/W0W1_TXN)*W0W1_TXN and
     // ceil((N+1)/W2_TXN)*W2_TXN. The physical tensors must be padded to those tile counts; if not,

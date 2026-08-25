@@ -52,6 +52,7 @@ set(UNIT_TESTS_TTNN_CCL_SOURCES
 )
 
 set(UNIT_TESTS_TTNN_CCL_OPS_SOURCES
+    ccl/test_moe_compute_l1_plan.cpp
     ccl/test_persistent_fabric_ccl_ops.cpp
     ccl/test_send_recv_ops.cpp
 )

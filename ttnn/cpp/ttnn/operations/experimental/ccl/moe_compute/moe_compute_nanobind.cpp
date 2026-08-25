@@ -27,6 +27,13 @@ void bind_moe_compute(nb::module_& mod) {
         .value("SILU", ttnn::experimental::prim::detail::MoEActivationFunction::SILU)
         .value("SWIGLU", ttnn::experimental::prim::detail::MoEActivationFunction::SWIGLU)
         .value("GELU", ttnn::experimental::prim::detail::MoEActivationFunction::GELU);
+    mod.def(
+        "moe_compute_supported_weight_dtypes",
+        &ttnn::experimental::moe_compute_supported_weight_dtypes,
+        R"doc(Return the weight dtypes supported by this fused ``moe_compute`` runtime.
+
+Callers must query this capability before packing or uploading expert weights;
+absence of the function means the runtime predates dtype-aware MoE CBs.)doc");
     ttnn::bind_function<"moe_compute", "ttnn.experimental.">(
         mod,
         R"doc(

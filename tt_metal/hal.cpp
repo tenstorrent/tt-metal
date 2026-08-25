@@ -48,6 +48,11 @@ uint32_t get_erisc_l1_unreserved_size() {
     return hal_ref.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 }
 
+uint32_t get_worker_l1_unreserved_base() {
+    const auto& hal_ref = tt::tt_metal::MetalContext::instance().hal();
+    return hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+}
+
 uint32_t get_max_worker_l1_unreserved_size() {
     const auto& hal_ref = tt::tt_metal::MetalContext::instance().hal();
     size_t l1_end = hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +

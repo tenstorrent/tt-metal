@@ -146,6 +146,7 @@ void kernel_main() {
     constexpr uint32_t Ht = get_named_compile_time_arg_val("hidden_tiles");
     constexpr uint32_t Nt = get_named_compile_time_arg_val("intermediate_tiles");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+    constexpr uint32_t weight_tiles_per_block = get_named_compile_time_arg_val("weight_tiles_per_block");
 
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     [[maybe_unused]] constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -217,19 +218,20 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     constexpr uint32_t w0_w1_txns_per_block = moe_ring::W0_W1_TXNS_PER_BLOCK;
     constexpr uint32_t w0_w1_tiles_per_txn = moe_ring::W0_W1_TILES_PER_TXN;
-    constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
+    constexpr uint32_t w0_w1_tiles_per_block = weight_tiles_per_block;
 
     using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias, shared_expert_tp_factor>;
 
     // W2 reading constants (base-constant aliases only; derived values come from Cfg)
     constexpr auto w2_tiles_per_iter_w = moe_ring::W2_TILES_PER_A2A_ITER_W;
-    constexpr uint32_t w2_tiles_per_block = moe_ring::W2_TILES_PER_TXN * moe_ring::W2_TXNS_PER_BLOCK;  // 14 * 2 = 28
+    constexpr uint32_t w2_tiles_per_block = weight_tiles_per_block;
     [[maybe_unused]] constexpr uint32_t w2_tiles_per_iter_h = moe_ring::W2_TILES_PER_A2A_ITER_H;
 
     //-------------------------------------------------------------------------
     // Ring setup
     //-------------------------------------------------------------------------
-    constexpr uint32_t w2_blocks_per_a2a_iter = Cfg::w2_blocks_per_expert / Cfg::num_a2a_iters;
+    constexpr uint32_t w2_blocks_per_a2a_iter =
+        (Cfg::w2_blocks_per_expert * 28 / w2_tiles_per_block) / Cfg::num_a2a_iters;
 
     [[maybe_unused]] constexpr uint32_t num_a2a_steps_per_iter = num_cores;
 
@@ -343,7 +345,8 @@ void kernel_main() {
 
                 tile_regs_acquire();
                 [[maybe_unused]] uint32_t k_tracker = 0;
-                for (uint32_t block_id = 0; block_id < Cfg::w0_w1_blocks_per_col; ++block_id) {
+                constexpr uint32_t w0_w1_blocks_per_col = Cfg::w0_w1_blocks_per_col * 28 / w0_w1_tiles_per_block;
+                for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_col; ++block_id) {
                     cb_r2c_w0_w1.wait_front(w0_w1_tiles_per_block);
 
                     for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
