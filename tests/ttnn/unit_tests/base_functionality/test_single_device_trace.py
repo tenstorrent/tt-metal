@@ -7,6 +7,7 @@ import tempfile
 import threading
 import typing
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -221,6 +222,32 @@ def test_trace_allocation_tracking_acknowledgments_and_lifetime(device, expect_e
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
 
     try:
+        # Clean trace replay must not pay for a full Python garbage collection.
+        with patch("ttnn.unsafe_allocation_tracker.gc.collect", wraps=gc.collect) as collect:
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            collect.assert_not_called()
+
+        # If the first query finds an unsafe tensor retained only by a Python
+        # reference cycle, conditional GC must retire it and allow replay.
+        gc_was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            cycle = []
+            cyclic_tensor = ttnn.allocate_tensor_on_device(
+                ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device
+            )
+            cyclic_tensor_id = cyclic_tensor.buffer_unique_id()
+            cycle.extend((cycle, cyclic_tensor))
+            del cyclic_tensor
+            del cycle
+            with patch("ttnn.unsafe_allocation_tracker.gc.collect", wraps=gc.collect) as collect:
+                ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+                collect.assert_called_once_with()
+            assert cyclic_tensor_id not in ttnn._ttnn.operations.trace.get_unsafe_tracked_ids(device, trace_id)
+        finally:
+            if gc_was_enabled:
+                gc.enable()
+
         if TRACE_ALLOC_DIAGNOSTICS:
             # Each Python thread must drain only the allocations it dispatched,
             # even when both threads share the same device allocator.
@@ -307,8 +334,10 @@ def test_trace_allocation_tracking_acknowledgments_and_lifetime(device, expect_e
         unsafe_b = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
         if TRACE_ALLOC_DIAGNOSTICS:
             assert raw_temporary_id not in UnsafeAllocationTracker._tracebacks
-        with expect_error(RuntimeError, "Found 2 device buffer") as error:
-            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        with patch("ttnn.unsafe_allocation_tracker.gc.collect", wraps=gc.collect) as collect:
+            with expect_error(RuntimeError, "Found 2 device buffer") as error:
+                ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            collect.assert_called_once_with()
         assert f"Buffer {unsafe_a.buffer_unique_id()}" in str(error.value)
         assert f"Buffer {unsafe_b.buffer_unique_id()}" in str(error.value)
         assert f"Buffer {unsafe_a.buffer_unique_id()}Buffer" not in str(error.value)
