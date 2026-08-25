@@ -309,6 +309,9 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_RELEASE_API_TOKEN }}
           JIRA_PROJECT_KEY: "RELEASE"
           JIRA_ISSUE_TYPE: "Bug"
+          # Overrides the per-test owners in ai_ip_tests.json while set.
+          # Everything lands on one owner for triage, who reassigns.
+          JIRA_ASSIGNEE_ACCOUNT_ID: ${{ vars.RELEASE_JIRA_ASSIGNEE || '63c5a7806178fcc941d86a9d' }}
           RTL_SIM_DETAIL: ${{ steps.rtl-sim.outputs.detail }}
           RTL_SIM_SHA: ${{ steps.rtl-sim.outputs.sha }}
           RTL_SIM_URL: ${{ steps.rtl-sim.outputs.url }}
@@ -371,6 +374,8 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_RELEASE_API_TOKEN }}
           JIRA_PROJECT_KEY: "RELEASE"
           JIRA_ISSUE_TYPE: "Task"
+          # Everything lands on one owner for triage, who reassigns.
+          JIRA_ASSIGNEE_ACCOUNT_ID: ${{ vars.RELEASE_JIRA_ASSIGNEE || '63c5a7806178fcc941d86a9d' }}
           RTL_SIM_CONCLUSION: ${{ needs.check-rtl-sim-status.outputs.conclusion }}
           RTL_SIM_DETAIL: ${{ needs.check-rtl-sim-status.outputs.detail }}
           RTL_SIM_SHA: ${{ needs.check-rtl-sim-status.outputs.sha }}

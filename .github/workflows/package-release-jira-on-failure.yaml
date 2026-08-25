@@ -77,38 +77,110 @@ jobs:
               exit 0 ;;
           esac
 
-          # Failed job names (optionally filtered to the watched set). Capture
-          # first: a gh failure inside <(...) would leave `failed` empty and be
-          # read as "nothing to file".
-          if ! names=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --paginate \
-            --jq '.jobs[] | select(.conclusion=="failure" or .conclusion=="timed_out") | .name'); then
+          # Failed jobs as "name<TAB>url", so the ticket can link each one to
+          # its log. Capture first: a gh failure inside <(...) would leave the
+          # list empty and be read as "nothing to file".
+          if ! rows=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" --paginate \
+            --jq '.jobs[] | select(.conclusion=="failure" or .conclusion=="timed_out")
+                  | [.name, .html_url] | @tsv'); then
             echo "::error::could not list jobs for run $RUN_ID"
             exit 1
           fi
-          mapfile -t failed < <(printf '%s' "$names")
+          mapfile -t rows < <(printf '%s' "$rows")
           if [ -n "${WATCH_JOBS}" ]; then
             filtered=()
             IFS=',' read -ra pats <<< "$WATCH_JOBS"
-            for j in "${failed[@]}"; do
-              for p in "${pats[@]}"; do [[ "$j" == *"$(echo "$p" | xargs)"* ]] && filtered+=("$j") && break; done
+            for r in "${rows[@]}"; do
+              for p in "${pats[@]}"; do
+                [[ "${r%%$'\t'*}" == *"$(echo "$p" | xargs)"* ]] && filtered+=("$r") && break
+              done
             done
-            failed=("${filtered[@]}")
+            rows=("${filtered[@]}")
           fi
+          failed=(); urls=()
+          for r in "${rows[@]}"; do failed+=("${r%%$'\t'*}"); urls+=("${r#*$'\t'}"); done
           if [ "${#failed[@]}" -eq 0 ]; then
             echo "No watched jobs failed; nothing to file."
             echo "file=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "file=true" >> "$GITHUB_OUTPUT"
+
+
+          # Name what failed, not just that something did. A GitHub job name is a path:
+          #   build-test-publish (Ubuntu 22.04) / release-demo-tests / ... / Gemma-4-31B e2e tests [bh_quietbox_2]
+          # The leaf identifies the thing that broke; the second segment identifies the
+          # family it belongs to. Both beat "4 job(s)" in a ticket title.
+          leaves=(); groups=()
+          for j in "${failed[@]}"; do
+            leaf="${j##*/ }"                   # after the last " / "
+            leaf="${leaf%% \[*}"               # drop the trailing [runner] tag
+            leaves+=("$leaf")
+            if [[ "$j" == *" / "* ]]; then
+              g="${j#* / }"; g="${g%% / *}"    # the second path segment
+              groups+=("$g")
+            else
+              groups+=("")                     # unnested job: no family to name
+            fi
+          done
+
+          mapfile -t uniq < <(printf '%s\n' "${leaves[@]}" | awk '!seen[$0]++')
+          mapfile -t ugroups < <(printf '%s\n' "${groups[@]}" | awk '!seen[$0]++')
+
+          if [ "${#ugroups[@]}" -eq 1 ] && [ -n "${ugroups[0]}" ]; then
+            # All from one family: name it, and let the leaves say which ones.
+            what="${ugroups[0]#release-}"; what="${what//-/ }"
+            [ "${#failed[@]}" -eq 1 ] && what="${what%s}"   # "1 demo test", not "tests"
+            details=("${uniq[@]}")
+          elif [ "${#ugroups[@]}" -eq 1 ]; then
+            # Nothing is nested, so there is no family to name -- the leaves are all
+            # the detail there is.
+            what="jobs"; [ "${#failed[@]}" -eq 1 ] && what="job"
+            details=("${uniq[@]}")
+          else
+            # Spread across families: the families are the useful detail, not one
+            # arbitrary leaf. Count each so the shape of the failure is visible.
+            what="jobs"; [ "${#failed[@]}" -eq 1 ] && what="job"
+            mapfile -t details < <(printf '%s\n' "${groups[@]}" | awk '
+              {c[$0]++; if (!($0 in first)) { first[$0]=++n; ord[n]=$0 } }
+              END { for (i = 1; i <= n; i++) { g = ord[i]
+                      label = (g == "" ? "other" : g)
+                      sub(/^release-/, "", label); gsub(/-/, " ", label)
+                      print label " (" c[g] ")" } }')
+          fi
+
+          # Fit as many details as a fixed budget allows, then count the rest. Keeps the
+          # title bounded whatever the job names are -- some carry a parenthesised
+          # cluster description and run past 70 characters on their own.
+          names=""; shown=0
+          for n in "${details[@]}"; do
+            cand="${names:+$names, }$n"
+            [ "${#cand}" -gt 90 ] && break
+            names="$cand"; shown=$((shown + 1))
+          done
+          [ "$shown" -eq 0 ] && { names="${details[0]:0:87}..."; shown=1; }
+          rest=$(( ${#details[@]} - shown ))
+          [ "$rest" -gt 0 ] && names="$names (+$rest more)"
+
+          summary="${#failed[@]} ${what} failed during release ${BRANCH}: ${names}"
+          # Jira caps summaries at 255.
+          [ "${#summary}" -gt 255 ] && summary="${summary:0:252}..."
+
           {
-            echo "summary=Package and release failed on ${HEAD_BRANCH:-unknown} (${#failed[@]} job(s))"
+            echo "summary=$summary"
             echo "description<<EOF"
             echo "The Package and release workflow failed."
-            echo "Branch: ${HEAD_BRANCH:-unknown}"
-            echo "Commit: ${HEAD_SHA:-unknown}"
-            echo "Run: ${RUN_URL:-manual dispatch}"
+            echo "Branch: $BRANCH"
+            if [ -n "${HEAD_SHA:-}" ]; then
+              echo "Commit: [${HEAD_SHA:0:12}](https://github.com/$REPO/commit/$HEAD_SHA)"
+            else
+              echo "Commit: unknown"
+            fi
+            echo "Run: [$RUN_ID](${RUN_URL:-https://github.com/$REPO/actions/runs/$RUN_ID})"
             echo "Failed jobs:"
-            for j in "${failed[@]}"; do echo "- $j"; done
+            # The leaf name, not the whole "a / b / c / leaf" path -- the prefix
+            # is the same for every row and the link carries the full context.
+            for i in "${!failed[@]}"; do echo "- [${failed[$i]##*/ }](${urls[$i]})"; done
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -123,6 +195,9 @@ jobs:
           JIRA_SUMMARY: ${{ steps.collect.outputs.summary }}
           JIRA_DESCRIPTION: ${{ steps.collect.outputs.description }}
           JIRA_LABELS: "ci-failure,package-and-release"
+          # Everything lands on one owner for triage, who reassigns. Override
+          # with the repo variable rather than editing this file.
+          JIRA_ASSIGNEE_ACCOUNT_ID: ${{ vars.RELEASE_JIRA_ASSIGNEE || '63c5a7806178fcc941d86a9d' }}
           # While one issue is open for this pipeline, later failures comment on it.
           # Scope per commit: re-runs of the same release de-dupe onto one
           # ticket, a later release failure opens a new one.

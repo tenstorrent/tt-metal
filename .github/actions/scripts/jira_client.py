@@ -24,6 +24,7 @@ Prints the resulting issue key and URL. Exit non-zero on API/config error.
 import base64
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -67,10 +68,46 @@ def _api(base, email, token, method, path, body=None):
         sys.exit(f"error: cannot reach Jira ({method} {path}): {e.reason}")
 
 
+# [label](url), or a bare URL. Producers write plain text; this is the one
+# place that knows how Jira spells a hyperlink.
+# Lazy label: job names carry their own brackets ("... [bh_sc16]"), so stop at
+# the first "](" rather than the first "]".
+_LINK_RE = re.compile(r"\[([^\n]+?)\]\((https?://[^\s)]+)\)|(https?://[^\s<>)\]]+)")
+
+
+def _line_nodes(line):
+    """Text nodes for one line, with links marked up so Jira renders them."""
+    nodes, pos = [], 0
+    for m in _LINK_RE.finditer(line):
+        if m.start() > pos:
+            nodes.append({"type": "text", "text": line[pos : m.start()]})
+        end = m.end()
+        if m.group(2):
+            label, href = m.group(1), m.group(2)
+        else:
+            href = m.group(3)
+            trimmed = href.rstrip(".,;:")  # trailing punctuation is prose, not URL
+            end -= len(href) - len(trimmed)
+            label = href = trimmed
+        nodes.append({"type": "text", "text": label, "marks": [{"type": "link", "attrs": {"href": href}}]})
+        pos = end
+    if pos < len(line):
+        nodes.append({"type": "text", "text": line[pos:]})
+    return [n for n in nodes if n["text"]]
+
+
+def _commit_link(sha, repo=None):
+    """[short sha](commit url) when the repo is known, else the bare sha."""
+    repo = repo if repo is not None else os.environ.get("GITHUB_REPOSITORY", "")
+    if not sha or not repo:
+        return sha or "unknown"
+    return f"[{sha[:12]}](https://github.com/{repo}/commit/{sha})"
+
+
 def _adf(text):
     """Wrap plain text (newline-separated) in a minimal Atlassian Document Format doc."""
     paragraphs = [
-        {"type": "paragraph", "content": [{"type": "text", "text": line}]}
+        {"type": "paragraph", "content": _line_nodes(line)}
         for line in (text or "").splitlines()
         if line.strip()
     ] or [{"type": "paragraph", "content": []}]
@@ -152,6 +189,7 @@ def main():
             description=_env("JIRA_DESCRIPTION", ""),
             labels=labels,
             dedup_label=_env("JIRA_DEDUP_LABEL", ""),
+            assignee=_env("JIRA_ASSIGNEE_ACCOUNT_ID", "") or None,
             dry_run=_truthy(_env("JIRA_DRY_RUN")),
         )
     )

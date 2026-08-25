@@ -128,3 +128,82 @@ def test_shipped_map_attributes_known_tests(relevance_map, row, expected):
     entry = match_entry(*row, relevance_map)
     assert entry is not None, f"no entry matched {format_test(*row)}"
     assert entry.get("requirement") == expected
+
+
+def test_assignee_env_var_reaches_the_payload(monkeypatch, capsys):
+    """The env name is read by code, so a rename must fail here, not silently."""
+    import jira_client
+
+    for k, v in {
+        "JIRA_BASE_URL": "https://example.invalid",
+        "JIRA_USER_EMAIL": "a@b.c",
+        "JIRA_API_TOKEN": "t",
+        "JIRA_PROJECT_KEY": "RELEASE",
+        "JIRA_SUMMARY": "s",
+        "JIRA_DRY_RUN": "1",
+        "JIRA_ASSIGNEE_ACCOUNT_ID": "acct-123",
+    }.items():
+        monkeypatch.setenv(k, v)
+
+    jira_client.main()
+    assert '"accountId": "acct-123"' in capsys.readouterr().out
+
+    monkeypatch.delenv("JIRA_ASSIGNEE_ACCOUNT_ID")
+    jira_client.main()
+    assert "assignee" not in capsys.readouterr().out
+
+
+def _hrefs(line):
+    from jira_client import _line_nodes
+
+    return [(n["text"], (n.get("marks") or [{}])[0].get("attrs", {}).get("href")) for n in _line_nodes(line)]
+
+
+def test_bare_url_becomes_a_link():
+    assert _hrefs("Run: https://x.test/a") == [("Run: ", None), ("https://x.test/a", "https://x.test/a")]
+
+
+def test_labelled_link_keeps_its_label():
+    assert _hrefs("Commit: [abc123](https://x.test/c/abc123)") == [
+        ("Commit: ", None),
+        ("abc123", "https://x.test/c/abc123"),
+    ]
+
+
+def test_trailing_punctuation_is_not_part_of_the_url():
+    assert _hrefs("see https://x.test/a.")[-1] == (".", None)
+    assert _hrefs("see https://x.test/a.")[1] == ("https://x.test/a", "https://x.test/a")
+
+
+def test_plain_text_is_left_alone():
+    assert _hrefs("no links here") == [("no links here", None)]
+
+
+def test_adf_never_emits_an_empty_text_node():
+    """Jira rejects a text node with an empty string."""
+    from jira_client import _adf
+
+    doc = _adf("https://x.test/a\nplain\n[l](https://x.test/b)")
+    assert all(n["text"] for p in doc["content"] for n in p["content"])
+
+
+def test_commit_link_falls_back_to_the_bare_sha_off_github():
+    from jira_client import _commit_link
+
+    assert _commit_link("deadbeefcafe1234", repo="") == "deadbeefcafe1234"
+    assert _commit_link("deadbeefcafe1234", repo="o/r") == "[deadbeefcafe](https://github.com/o/r/commit/deadbeefcafe1234)"
+    assert _commit_link("", repo="o/r") == "unknown"
+
+
+def test_label_may_contain_brackets():
+    """Job names end in a runner tag: "Gemma-4-31B e2e tests [bh_quietbox_2]"."""
+    nodes = _hrefs("- [Gemma-4-31B e2e tests [bh_quietbox_2]](https://x.test/job/1)")
+    assert nodes == [("- ", None), ("Gemma-4-31B e2e tests [bh_quietbox_2]", "https://x.test/job/1")]
+
+
+def test_two_labelled_links_on_one_line_do_not_merge():
+    assert _hrefs("[a](https://x.test/1) and [b](https://x.test/2)") == [
+        ("a", "https://x.test/1"),
+        (" and ", None),
+        ("b", "https://x.test/2"),
+    ]
