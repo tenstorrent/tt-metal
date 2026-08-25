@@ -120,14 +120,25 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
     // op cannot see and the caller cannot easily attribute (issue #52863). Require the window so
     // the footprint is bounded and explicit. W = M_blocks_per_core reproduces the full-residency
     // layout exactly for callers that genuinely want it.
-    const bool caller_requested_l1_mm_output =
-        attributes.matmul_struct.output_mem_config.has_value() &&
-        attributes.matmul_struct.output_mem_config->buffer_type() == tt::tt_metal::BufferType::L1;
+    //
+    // The minimal matmul resolves an omitted memory_config_mm as the INPUT's memory config
+    // (minimal_matmul_device_operation.cpp compute_output_specs), so an L1 input with no explicit
+    // request still produces an L1 MM output — resolve the effective config the same way, or that
+    // path would silently bypass the window requirement.
+    const bool l1_mm_output =
+        attributes.matmul_struct.output_mem_config.value_or(tensor_args.input_tensor.memory_config()).buffer_type() ==
+        tt::tt_metal::BufferType::L1;
     TT_FATAL(
-        !caller_requested_l1_mm_output || attributes.mm_window_blocks.has_value(),
-        "An L1 memory_config_mm requires mm_window_blocks: the L1 handoff must bound its resident "
-        "shard. Pass mm_window_blocks=2 (measured perf-neutral vs full residency), or "
+        !l1_mm_output || attributes.mm_window_blocks.has_value(),
+        "An L1 MM output (explicit memory_config_mm, or inherited from an L1 input when "
+        "memory_config_mm is omitted) requires mm_window_blocks: the L1 handoff must bound its "
+        "resident shard. Pass mm_window_blocks=2 (measured perf-neutral vs full residency), or "
         "mm_window_blocks=ceil(Mt_per_core / M_block_size) to keep the whole MM output resident.");
+    TT_FATAL(
+        !attributes.mm_window_blocks.has_value() || *attributes.mm_window_blocks >= 1,
+        "mm_window_blocks must be >= 1, got {} — a zero-height window has no valid shard geometry "
+        "(2 is the measured perf-neutral default).",
+        *attributes.mm_window_blocks);
 
     // The windowed handoff also requires the caller-owned counter arrays. Without them the op
     // falls back to a private per-program L1 allocation, retained for the program's cached life —
@@ -157,7 +168,14 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
         // same-address reallocation of a smaller tensor. The factory keeps the exact checks that
         // need build-time information (resolved worker count, chosen core placement); these cover
         // what validation can know.
-        const auto validate_counter_array = [](const Tensor& t, const char* name, uint32_t min_row_slots) {
+        const auto validate_counter_array = [&tensor_args](const Tensor& t, const char* name, uint32_t min_row_slots) {
+            // The factory embeds t.buffer()->address() into kernels running on the input's device;
+            // a counter allocated on a different device would pass the layout checks below while
+            // pointing the kernels at an unrelated local L1 address.
+            TT_FATAL(
+                t.device() == tensor_args.input_tensor.device(),
+                "{} must be allocated on the same device as the input tensor",
+                name);
             TT_FATAL(
                 t.memory_config().buffer_type() == tt::tt_metal::BufferType::L1 &&
                     t.memory_config().shard_spec().has_value(),
@@ -258,11 +276,11 @@ MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
     // circular buffers — and past roughly Mt/gy * Nt/gx > bank capacity does not fit at all. A caller
     // that asked for a DRAM MM output therefore keeps getting one. Opting in means either requesting
     // an L1 MM output outright, or setting mm_window_blocks, which bounds the shard to W M blocks and
-    // is only meaningful in L1.
-    const bool caller_requested_l1_mm_output =
-        attributes.matmul_struct.output_mem_config.has_value() &&
-        attributes.matmul_struct.output_mem_config->buffer_type() == BufferType::L1;
-    const bool use_l1_handoff = attributes.mm_window_blocks.has_value() || caller_requested_l1_mm_output;
+    // is only meaningful in L1. Tested against the RESOLVED matmul output spec rather than the raw
+    // attribute: an omitted memory_config_mm inherits the input's memory config inside the matmul,
+    // so an L1 input lands here too (validation has already required its window).
+    const bool l1_mm_output = mm_output_spec.memory_config().buffer_type() == BufferType::L1;
+    const bool use_l1_handoff = attributes.mm_window_blocks.has_value() || l1_mm_output;
     if (use_l1_handoff && attributes.matmul_struct.config.has_value() &&
         attributes.matmul_struct.config->compute_with_storage_grid_size.x > 0) {
         const auto grid = attributes.matmul_struct.config->compute_with_storage_grid_size;
@@ -279,6 +297,15 @@ MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
         uint32_t shard_ht = Mt_per_core;
         auto windowed_shape = mm_output_shape;
         if (attributes.mm_window_blocks.has_value()) {
+            // Checked here as well as in validate: create_output_tensors (and therefore this
+            // function) runs BEFORE validate_on_program_cache_miss in the launch path, and a zero
+            // window would otherwise reach TensorSpec's shard-grid check as a zero-height shard —
+            // a SIGFPE, not an actionable error.
+            TT_FATAL(
+                *attributes.mm_window_blocks >= 1,
+                "mm_window_blocks must be >= 1, got {} — a zero-height window has no valid shard "
+                "geometry (2 is the measured perf-neutral default).",
+                *attributes.mm_window_blocks);
             const uint32_t mm_block_ht = attributes.matmul_struct.config->M_block_size;
             shard_ht = attributes.mm_window_blocks.value() * mm_block_ht;
             windowed_shape[-2] = gy * shard_ht * tt::constants::TILE_HEIGHT;

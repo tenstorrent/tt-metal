@@ -144,8 +144,11 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         mm_progress_counters = _allocate_counter_array(counter_row_slots)
         mm_credit_counters = _allocate_counter_array(counter_row_slots)
     else:
-        mm_progress_counters = _allocate_counter_array() if pass_counter_buffers else None
-        mm_credit_counters = _allocate_counter_array() if pass_counter_buffers else None
+        # pass_counter_buffers: True = both arrays, "progress_only" = progress without credit
+        # (so the credit-specific rejection is reachable — omitting both always fails on the
+        # progress check first), False = neither.
+        mm_progress_counters = _allocate_counter_array() if pass_counter_buffers in (True, "progress_only") else None
+        mm_credit_counters = _allocate_counter_array() if pass_counter_buffers is True else None
 
     ccl_semaphore_handles = [create_global_semaphores(mesh_device, all_cores, 0) for _ in range(num_iters)]
     barrier_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(num_iters)]
