@@ -7,6 +7,7 @@ based on the layer index. Both share the same RMSNorm + residual pattern and MLP
 """
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt.attention import AttentionConfig, Qwen36GatedAttention
 from models.demos.blackhole.qwen36.tt.gdn import GDNConfig, Qwen36GatedDeltaNet
@@ -15,7 +16,7 @@ from models.demos.blackhole.qwen36.utils.substate import substate
 from models.tt_transformers.tt.common import Mode
 
 
-class Qwen36DecoderLayer:
+class Qwen36DecoderLayer(LightweightModule):
     """Single transformer layer with hybrid attention dispatch.
 
     Pattern: x → attention_norm → attention → residual → ff_norm → MLP → residual
@@ -23,6 +24,7 @@ class Qwen36DecoderLayer:
     """
 
     def __init__(self, mesh_device, args, state_dict, layer_num, tensor_cache_path=None, tt_ccl=None):
+        super().__init__()
         self.layer_num = layer_num
         self.device = mesh_device
         self.args = args
@@ -203,9 +205,10 @@ class Qwen36DecoderLayer:
                             chunk_page_table=chunk_page_table,
                             chunk_start_idx=chunk_start_idx if chunk_start_idx is not None else 0,
                             chunk_start_idx_tensor=chunk_start_idx_tensor,
+                            borrow_output=True,
                         )
                     else:
-                        attn_output = self.attention.forward_prefill(attn_input, cos, sin)
+                        attn_output = self.attention.forward_prefill(attn_input, cos, sin, borrow_output=True)
                 else:
                     attn_output = self.attention.forward_decode(
                         attn_input, position_tensor, cos, sin, page_table=page_table
@@ -218,11 +221,15 @@ class Qwen36DecoderLayer:
                         # Batched per-user prefill: stash this user's from-scratch state for
                         # assembly into row u of the batched buffers (finalize_pending later).
                         attn_output = self.attention.forward_prefill_collect(
-                            attn_input, chunk_size=chunk_size, valid_len=valid_len
+                            attn_input, chunk_size=chunk_size, valid_len=valid_len, borrow_output=True
                         )
                     else:
                         attn_output = self.attention.forward_prefill(
-                            attn_input, chunk_size=chunk_size, valid_len=valid_len, capture_state=True
+                            attn_input,
+                            chunk_size=chunk_size,
+                            valid_len=valid_len,
+                            capture_state=True,
+                            borrow_output=True,
                         )
                 else:
                     attn_output = self.attention.forward_decode(attn_input)
@@ -245,7 +252,16 @@ class Qwen36DecoderLayer:
         ttnn.deallocate(attn_input)
 
         h = ttnn.add(x, attn_output)
-        ttnn.deallocate(attn_output)
+        # GDN prefill's fused matmul+reduce-scatter can return its shared persistent output
+        # directly: the residual add above has consumed it before any later GDN invocation.
+        # Keep that borrowed buffer allocated for reuse; all other attention outputs are owned.
+        borrowed_prefill_output = (
+            mode == "prefill"
+            and attn_output.shape[-2] > ttnn.TILE_SIZE
+            and getattr(self.attention, "_returns_borrowed_prefill_output", False)
+        )
+        if not borrowed_prefill_output:
+            ttnn.deallocate(attn_output)
 
         ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
 

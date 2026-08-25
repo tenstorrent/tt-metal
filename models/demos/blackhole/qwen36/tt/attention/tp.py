@@ -11,6 +11,7 @@ import os
 import torch
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.attention.rope_tp import apply_partial_rope_decode, apply_partial_rope_prefill
 from models.tt_transformers.tt.ccl import tt_all_reduce
@@ -118,10 +119,11 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     return tw
 
 
-class TPAttention:
+class TPAttention(LightweightModule):
     """Standalone TP full-attention with internal per-head KV caches (decode)."""
 
     def __init__(self, mesh, args, tw, tt_ccl):
+        super().__init__()
         self.mesh = mesh
         self.args = args
         self.tw = tw
@@ -134,8 +136,24 @@ class TPAttention:
         self.scale = self.HD**-0.5
         self.rope_dim = args.rope_head_dim
         self.compute_cfg = tpc.COMPUTE_HIFI2
-        # bf8 SDPA (QWEN_SDPA_BF8=1): bf8 Q + bf8 KV; keeps HiFi2 (HiFi4 was slower)
+        # BF8 paged KV (QWEN_SDPA_BF8=1) cuts long-context DRAM traffic. Keep Q in BF16 by
+        # default: the deterministic 128K sampled oracle validated BF8 KV + BF16 Q, while
+        # quantizing Q gave only an incremental profiler win. QWEN36_SDPA_Q_BF8=1 remains a
+        # profiling-only escape hatch.
         self._sdpa_bf8 = os.environ.get("QWEN_SDPA_BF8", "0") == "1"
+        self._sdpa_k_bf8 = self._sdpa_bf8 or os.environ.get("QWEN36_SDPA_K_BF8", "0") == "1"
+        self._sdpa_v_bf8 = self._sdpa_bf8 or os.environ.get("QWEN36_SDPA_V_BF8", "0") == "1"
+        self._sdpa_q_bf8 = self._sdpa_bf8 and os.environ.get("QWEN36_SDPA_Q_BF8", "0") == "1"
+        # Perf-sweep controls for the paged decode kernel.  Keep the production defaults unless
+        # explicitly overridden; the winning settings are promoted after Tracy + PCC validation.
+        self._sdpa_decode_max_cores = int(os.environ.get("QWEN36_SDPA_DECODE_MAX_CORES", "32"))
+        self._sdpa_decode_k_chunk = int(os.environ.get("QWEN36_SDPA_DECODE_K_CHUNK", "0"))
+        assert 1 <= self._sdpa_decode_max_cores <= 64
+        assert self._sdpa_decode_k_chunk == 0 or (
+            self._sdpa_decode_k_chunk >= 32
+            and self._sdpa_decode_k_chunk % 32 == 0
+            and self._sdpa_decode_k_chunk & (self._sdpa_decode_k_chunk - 1) == 0
+        )
         # Must match load_attention_weights_tp gates
         self._dram_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
         self._wo_sharded = getattr(args, "attn_wo_weight_memcfg", None) is not None
@@ -144,6 +162,8 @@ class TPAttention:
         # Fuse prefill norm-allgather + fused-QKV in-proj (all_gather_minimal_matmul_async).
         # Norm's prefill post-AG disabled in layer.py; decode path unchanged.
         self._fuse_agmm = self._fused_qkv
+        self._fuse_out_mmrs_prefill = not self._wo_sharded and args.num_devices > 1
+        self._returns_borrowed_prefill_output = self._fuse_out_mmrs_prefill
         # Decode head split/merge via nlp_create/concat_heads_decode (the batched-decode idiom).
         self._use_nlp_decode_heads = True
         self.k_caches = None
@@ -151,12 +171,25 @@ class TPAttention:
         # External paged KV cache (vLLM/contract path); internal caches kept for demo fallback
         self.paged_k = None
         self.paged_v = None
+        self.decode_paged_k = None
+        self.decode_paged_v = None
         self.use_paged = False
 
-    def set_paged_kv_cache(self, k_cache, v_cache):
-        """Attach an externally-allocated paged KV cache (one call after allocate_kv_caches)."""
+    def set_paged_kv_cache(self, k_cache, v_cache, decode_k_cache=None, decode_v_cache=None):
+        """Attach paged KV caches (one call after allocate_kv_caches).
+
+        The optional decode pair is a BF8 mirror. Prefill reads the authoritative BF16 pair for
+        accuracy and fills both pairs; decode reads the mirror to halve its KV bandwidth.
+        """
         self.paged_k = k_cache
         self.paged_v = v_cache
+        self.decode_paged_k = decode_k_cache
+        self.decode_paged_v = decode_v_cache
+        # Cache dtype is the source of truth. This keeps direct BF16 unit-test caches on their
+        # original path while production allocation defaults to the validated BF8 KV path.
+        self._sdpa_k_bf8 = k_cache.dtype == ttnn.bfloat8_b
+        self._sdpa_v_bf8 = v_cache.dtype == ttnn.bfloat8_b
+        self._sdpa_bf8 = self._sdpa_k_bf8 and self._sdpa_v_bf8
         self.use_paged = True
 
     def _qkv(self, x):
@@ -254,6 +287,33 @@ class TPAttention:
             self.args.act_shard_attn_out,
             self.args.prefill_progcfg,
             self.args.attn_out_dim_tp,
+        )
+
+    def _wo_prefill(self, gated, borrow_output=False):
+        """Row-parallel prefill projection, fused with reduce-scatter when available."""
+        if self._fuse_out_mmrs_prefill and gated.shape[-2] > tpc.TILE_SIZE:
+            out = tpc.matmul_reduce_scatter_prefill(
+                ttnn.reshape(gated, (1, 1, gated.shape[-2], gated.shape[-1])),
+                self.tw["wo"],
+                self.tt_ccl,
+                self.compute_cfg,
+                self.args.ccl_topology(),
+                self.args.num_devices,
+                ttnn.bfloat16,
+                clone_output=not borrow_output,
+            )
+            ttnn.deallocate(gated)
+            return out
+        partial = self._wo_proj(gated, self.tw["wo"])
+        ttnn.deallocate(gated)
+        return tt_all_reduce(
+            partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def _make_heads(self, qg, kp, vp, S):
@@ -408,7 +468,7 @@ class TPAttention:
         self.k_caches = [z() for _ in range(self.NKV)]
         self.v_caches = [z() for _ in range(self.NKV)]
 
-    def forward_prefill(self, x, cos_tt, sin_tt):
+    def forward_prefill(self, x, cos_tt, sin_tt, borrow_output=False):
         """Causal prefill. x [1,1,S,dim]: K-sharded (dim/tp per device) when the fused in-proj
         AG-matmul path is active (``_fuse_agmm`` and S>TILE — the norm skips its post-AG); replicated
         otherwise. Output reduce-scattered on dim=3."""
@@ -467,17 +527,7 @@ class TPAttention:
         )
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)
-        partial = self._wo_proj(gated, tw["wo"])
-        ttnn.deallocate(gated)
-        return tt_all_reduce(
-            partial,
-            self.mesh,
-            self.tt_ccl,
-            cluster_axis=0,
-            dim=3,
-            topology=self.args.ccl_topology(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        return self._wo_prefill(gated, borrow_output=borrow_output)
 
     def _kv_shard_cfg(self, B):
         """Height shard for paged_update_cache (one user per core), sized to the ACTIVE width B.
@@ -565,11 +615,13 @@ class TPAttention:
             compute_with_storage_grid_size=(_sdpa_grid.x, _sdpa_grid.y),
             exp_approx_mode=False,
             q_chunk_size=0,
-            k_chunk_size=0,
+            k_chunk_size=self._sdpa_decode_k_chunk,
+            max_cores_per_head_batch=self._sdpa_decode_max_cores,
         )
         if use_paged:
             # External paged KV: update at cur_pos, then paged SDPA-decode
-            keys, values = self.paged_k, self.paged_v
+            keys = self.decode_paged_k if self.decode_paged_k is not None else self.paged_k
+            values = self.decode_paged_v if self.decode_paged_v is not None else self.paged_v
             k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
             v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
             ttnn.deallocate(k)
@@ -676,6 +728,7 @@ class TPAttention:
         chunk_start_idx=0,
         chunk_start_idx_tensor=None,
         user_id=0,
+        borrow_output=False,
     ):
         """Paged-KV prefill for one chunk: fill cache + chunked SDPA over prior chunks.
 
@@ -706,11 +759,12 @@ class TPAttention:
         q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
         k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
 
-        # bf8 SDPA: paged_fill_cache doesn't cast — cast K/V to cache dtype before fill
-        if self._sdpa_bf8:
+        # paged_fill_cache doesn't cast — cast each stream to its cache dtype before fill.
+        if self._sdpa_k_bf8:
             _k8 = ttnn.typecast(k, ttnn.bfloat8_b)
             ttnn.deallocate(k)
             k = _k8
+        if self._sdpa_v_bf8:
             _v8 = ttnn.typecast(v, ttnn.bfloat8_b)
             ttnn.deallocate(v)
             v = _v8
@@ -727,15 +781,28 @@ class TPAttention:
             k_fill, v_fill = k, v
         ttnn.experimental.paged_fill_cache(k_paged, k_fill, fill_page_table, batch_idx=user_id)
         ttnn.experimental.paged_fill_cache(v_paged, v_fill, fill_page_table, batch_idx=user_id)
+        # Accuracy-preserving decode optimization: prefill attention reads BF16 above, while a
+        # BF8 mirror is populated from the same freshly projected K/V for later decode SDPA.
+        if self.decode_paged_k is not None:
+            k_decode = ttnn.typecast(k_fill, ttnn.bfloat8_b)
+            v_decode = ttnn.typecast(v_fill, ttnn.bfloat8_b)
+            ttnn.experimental.paged_fill_cache(
+                self.decode_paged_k, k_decode, fill_page_table, batch_idx=user_id
+            )
+            ttnn.experimental.paged_fill_cache(
+                self.decode_paged_v, v_decode, fill_page_table, batch_idx=user_id
+            )
+            ttnn.deallocate(k_decode)
+            ttnn.deallocate(v_decode)
         if page_len < S:
             ttnn.deallocate(k_fill)
             ttnn.deallocate(v_fill)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # Chunked SDPA over paged cache; keep Q bf16 unless bf8 mode (QWEN_SDPA_BF8=1), which also
-        # makes the KV cache bf8 -> full bf8 matmul
-        if self._sdpa_bf8:
+        # Chunked SDPA over the paged cache. BF8 KV remains compatible with BF16 Q; quantizing Q
+        # is separately gated because it fails the 128K prefill PCC threshold.
+        if self._sdpa_q_bf8:
             q8 = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
             ttnn.deallocate(q)
         else:
@@ -805,14 +872,4 @@ class TPAttention:
         )
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)
-        partial = self._wo_proj(gated, tw["wo"])
-        ttnn.deallocate(gated)
-        return tt_all_reduce(
-            partial,
-            self.mesh,
-            self.tt_ccl,
-            cluster_axis=0,
-            dim=3,
-            topology=self.args.ccl_topology(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        return self._wo_prefill(gated, borrow_output=borrow_output)

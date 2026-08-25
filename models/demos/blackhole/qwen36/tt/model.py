@@ -14,6 +14,9 @@ from loguru import logger
 from tqdm import tqdm
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.common.modules.embedding.embedding_1d import Embedding1D
+from models.common.modules.tt_ccl import get_tt_ccl
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
@@ -21,19 +24,18 @@ from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
 
-class Qwen36Model:
-    """Qwen3.5-9B text LM on Blackhole P150. HF_MODEL env var selects checkpoint."""
+class Qwen36Model(LightweightModule):
+    """Qwen3.6 text LM on Blackhole P150. HF_MODEL selects the checkpoint/size."""
 
     def __init__(self, mesh_device, args, state_dict, tensor_cache_path=None):
+        super().__init__()
         self.args = args
         self.device = mesh_device
         self.mesh_device = mesh_device  # Generator reads model.mesh_device
         self.num_devices = mesh_device.get_num_devices()
         # CCL for multi-device all-reduce; None on single device (ops no-op).
         if self.num_devices > 1:
-            from models.tt_transformers.tt.ccl import TT_CCL
-
-            self.tt_ccl = TT_CCL(mesh_device)
+            self.tt_ccl = get_tt_ccl(mesh_device)
         else:
             self.tt_ccl = None
         self.configuration = args  # Generator reads model.configuration.max_seq_len
@@ -61,10 +63,8 @@ class Qwen36Model:
         else:
             self.sampling = None
 
-        # Framework Embedding (mesh-aware; replicates on 1-device mesh).
-        from models.tt_transformers.tt.embedding import Embedding
-
-        self.embd = Embedding(
+        # TTTv2 embedding: lazy, hidden-dimension sharded, and mesh-aware.
+        self.embedding = Embedding1D.from_model_args(
             mesh_device=mesh_device,
             args=args,
             weight_cache_path=tensor_cache_path,
@@ -595,7 +595,7 @@ class Qwen36Model:
             device=self.device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
-        x = self.embd(tok)  # [1, T, dim_frac] (hidden dim sharded across mesh)
+        x = self.embedding(tok)  # [1, T, dim_frac] (hidden dim sharded across mesh)
         x = self._scatter_vision_tokens(x, token_ids, vision_tokens)
         x = ttnn.reshape(x, (1, 1, T, x.shape[-1]))
         cos_t, sin_t = self._rope_tp_cos_sin_torch(0, T)
@@ -640,7 +640,7 @@ class Qwen36Model:
             device=self.device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
-        x = self.embd(tok)  # [1,1,dim_frac]
+        x = self.embedding(tok)  # [1,1,dim_frac]
         x = ttnn.reshape(x, (1, 1, 1, x.shape[-1]))  # [1,1,B=1,dim_frac]
         # RoPE position offset by rope_delta for multimodal (KV position cur_pos_tt stays `pos`).
         cos, sin = rot_mats_decode(
@@ -700,7 +700,7 @@ class Qwen36Model:
         where-predicate (replicated on a mesh — it broadcasts over the sharded hidden dim).
 
         Args:
-            x (ttnn.Tensor): text embeddings from ``self.embd`` — ``[B, T, H]`` (the
+            x (ttnn.Tensor): text embeddings from ``self.embedding`` — ``[B, T, H]`` (the
                 raw embedding output), hidden fractured along the last dim on a mesh.
             token_ids (torch.Tensor): the prefill token ids (``input_ids``), ``[B, T]`` on
                 host; image placeholders are the entries equal to ``hf_config.image_token_id``.
@@ -792,7 +792,7 @@ class Qwen36Model:
         self.reset_state(batch_size=B)
 
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
-        x = self.embd(token_ids_ttnn)
+        x = self.embedding(token_ids_ttnn)
         x = self._scatter_vision_tokens(x, token_ids, vision_tokens)
 
         cos, sin = self.rope.get_prefill_rot_mats(0, T)
@@ -816,7 +816,7 @@ class Qwen36Model:
         self.reset_state(batch_size=B)
 
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
-        x = self.embd(token_ids_ttnn)
+        x = self.embedding(token_ids_ttnn)
         x = self._scatter_vision_tokens(x, token_ids, vision_tokens)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(token_ids_ttnn)
@@ -905,7 +905,7 @@ class Qwen36Model:
         B = token_ids.shape[0]
 
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
-        x = self.embd(token_ids_ttnn)
+        x = self.embedding(token_ids_ttnn)
         ttnn.deallocate(token_ids_ttnn)
 
         # RoPE position is offset by rope_delta for a multimodal request (image tokens compress the
@@ -941,7 +941,7 @@ class Qwen36Model:
         sharded_lm_head=True: return the pre-gather vocab-sharded logits (no all-gather)
         for the on-device sampler, which does its own cross-device top-k + gather.
         """
-        x = self.embd(token_ids_buf)
+        x = self.embedding(token_ids_buf)
         if self.num_devices > 1:
             # TP expects [1,1,B,dim_frac]; embd yields [B,1,dim_frac].
             x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1], x.shape[-1]))
@@ -964,7 +964,7 @@ class Qwen36Model:
     ):
         """Trace-safe single-chunk prefill. Updates paged KV + GDN state in place.
         Returns last-layer hidden [1, chunk_size, hidden_size]."""
-        x = self.embd(token_buf)
+        x = self.embedding(token_buf)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         # Trace-safe vision splice (fixed-shape where over persistent buffers; identity when the
         # mask buffer is zero, which is the case for every text-only chunk and request). The caller
@@ -1008,7 +1008,7 @@ class Qwen36Model:
         Full chunk (valid_len==chunk_size); flexible SDPA via device chunk_start_idx.
         Returns hidden [1,1,chunk_size,dim]."""
         chunk_size = self._chunked_chunk_size
-        x = self.embd(token_buf)
+        x = self.embedding(token_buf)
         x = ttnn.reshape(x, (1, 1, chunk_size, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         # Trace-safe vision splice (fixed-shape where over the hidden-sharded persistent buffers;
@@ -1924,7 +1924,7 @@ class Qwen36Model:
         tok = ttnn.from_torch(
             token_slice.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
         )
-        x = self.embd(tok)
+        x = self.embedding(tok)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(tok)
         cos, sin = self.rope.get_prefill_rot_mats(chunk_start, T_tail)
@@ -1979,7 +1979,7 @@ class Qwen36Model:
         tok = ttnn.from_torch(
             token_buf.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
         )
-        x = self.embd(tok)
+        x = self.embedding(tok)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(tok)
         # Trace-safe vision splice: a fixed-shape ttnn.where over persistent buffers (compiled
@@ -2035,7 +2035,7 @@ class Qwen36Model:
             device=self.device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
-        x = self.embd(tok)
+        x = self.embedding(tok)
         x = ttnn.reshape(x, (1, 1, bucket, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(tok)
@@ -2685,26 +2685,36 @@ class Qwen36Model:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def set_paged_kv_caches(self, kv_caches):
-        """Attach paged KV caches to the 8 attention layers."""
+    def set_paged_kv_caches(self, kv_caches, decode_kv_caches=None):
+        """Attach paged KV caches to every gated full-attention layer."""
         self._paged_kv_caches = kv_caches
+        self._paged_decode_kv_caches = decode_kv_caches
         for cache_idx, layer_idx in enumerate(self._attention_layer_indices):
             k_cache, v_cache = kv_caches[cache_idx]
-            self.layers[layer_idx].attention.set_paged_kv_cache(k_cache, v_cache)
+            if decode_kv_caches is None:
+                self.layers[layer_idx].attention.set_paged_kv_cache(k_cache, v_cache)
+            else:
+                decode_k, decode_v = decode_kv_caches[cache_idx]
+                self.layers[layer_idx].attention.set_paged_kv_cache(k_cache, v_cache, decode_k, decode_v)
 
     def allocate_kv_caches(self, kv_cache_shape, dtype, batch_size=1):
-        """Allocate caches for all 32 layers. Returns only the attention KV caches (for vLLM)."""
+        """Allocate and return the gated-attention KV caches used by vLLM."""
         assert self._deltanet_external_states is None, "allocate_kv_caches already called; deallocate first"
-        # QWEN_SDPA_BF8: bf8 paged KV for SDPA; halves KV memory (gated — validate PCC at long ctx).
-        if os.environ.get("QWEN_SDPA_BF8", "0") == "1":
-            dtype = ttnn.bfloat8_b
+        # All-BF8 mode plus independently gated K/V cache precision for long-context tuning.
+        # The separate controls let profiling isolate the score (K) and value (V) traffic.
+        # Validated at 128K against a sampled torch oracle: BF8 KV + BF16 Q retains prefill PCC
+        # (0.998676 vs BF16's 0.998687) and decode PCC 0.999698 while materially reducing SDPA time.
+        # QWEN_SDPA_BF8=0 is the explicit accuracy/debug fallback.
+        all_bf8 = os.environ.get("QWEN_SDPA_BF8", "1") == "1"
+        k_dtype = ttnn.bfloat8_b if all_bf8 or os.environ.get("QWEN36_SDPA_K_BF8", "0") == "1" else dtype
+        v_dtype = ttnn.bfloat8_b if all_bf8 or os.environ.get("QWEN36_SDPA_V_BF8", "0") == "1" else dtype
         if self.num_devices > 1:
-            return self._allocate_kv_caches_tp(kv_cache_shape, dtype, batch_size)
+            return self._allocate_kv_caches_tp(kv_cache_shape, k_dtype, v_dtype, batch_size)
 
         kv_caches = []
         for idx in self._attention_layer_indices:
-            k_cache = ttnn.zeros(kv_cache_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
-            v_cache = ttnn.zeros(kv_cache_shape, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+            k_cache = ttnn.zeros(kv_cache_shape, dtype=k_dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+            v_cache = ttnn.zeros(kv_cache_shape, dtype=v_dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
             kv_caches.append([k_cache, v_cache])
         self.set_paged_kv_caches(kv_caches)
 
@@ -2750,11 +2760,16 @@ class Qwen36Model:
                 ttnn.deallocate(k_cache)
                 ttnn.deallocate(v_cache)
             self._paged_kv_caches = None
+        if getattr(self, "_paged_decode_kv_caches", None) is not None:
+            for k_cache, v_cache in self._paged_decode_kv_caches:
+                ttnn.deallocate(k_cache)
+                ttnn.deallocate(v_cache)
+            self._paged_decode_kv_caches = None
 
-    def _allocate_kv_caches_tp(self, kv_cache_shape, dtype, batch_size):
+    def _allocate_kv_caches_tp(self, kv_cache_shape, k_dtype, v_dtype, batch_size):
         """TP paged KV allocation (B=1). Replicated per device; GDN self-manages state."""
 
-        def _mk():
+        def _mk(dtype):
             return ttnn.as_tensor(
                 torch.zeros(kv_cache_shape, dtype=torch.bfloat16),
                 device=self.device,
@@ -2764,8 +2779,20 @@ class Qwen36Model:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
             )
 
-        kv_caches = [[_mk(), _mk()] for _ in self._attention_layer_indices]
-        self.set_paged_kv_caches(kv_caches)  # binds via TPAttention.set_paged_kv_cache
+        kv_caches = [[_mk(k_dtype), _mk(v_dtype)] for _ in self._attention_layer_indices]
+        # Optional BF8 decode mirror for experiments that retain BF16 primary caches. Production
+        # defaults to one BF8 primary cache, which is both faster and more memory-efficient.
+        use_decode_mirror = (
+            os.environ.get("QWEN36_SDPA_DECODE_BF8", "0") == "1"
+            and k_dtype == ttnn.bfloat16
+            and v_dtype == ttnn.bfloat16
+        )
+        decode_kv_caches = (
+            [[_mk(ttnn.bfloat8_b), _mk(ttnn.bfloat8_b)] for _ in self._attention_layer_indices]
+            if use_decode_mirror
+            else None
+        )
+        self.set_paged_kv_caches(kv_caches, decode_kv_caches)  # binds via TPAttention.set_paged_kv_cache
         for layer in self.layers:
             if not layer.is_full_attention:
                 layer.attention.B = batch_size
@@ -2795,7 +2822,7 @@ class Qwen36Model:
             device=self.device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
-        x = self.embd(tok)
+        x = self.embedding(tok)
         x = self._scatter_vision_tokens(x, token_ids, vision_tokens)
         x = ttnn.reshape(x, (1, 1, T, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
@@ -2964,7 +2991,7 @@ class Qwen36Model:
                     t = token_ids_list[u][0, : vlens[u]].to(torch.int32)
                     tok_bg[i, : t.shape[0]] = t
                 tok = ttnn.from_torch(tok_bg, dtype=ttnn.uint32, device=self.device, mesh_mapper=rep)
-                x = self.embd(tok)  # [Bg, bucket, d]
+                x = self.embedding(tok)  # [Bg, bucket, d]
                 d = x.shape[-1]
                 # Canonical residual-stream shape [1, 1, Bg*bucket, d] (dim1==1) so the framework
                 # norm / MLP / residual add see the SAME layout as the validated per-user path
@@ -3111,7 +3138,7 @@ class Qwen36Model:
             )
         else:
             token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
-            x = self.embd(token_ids_ttnn)
+            x = self.embedding(token_ids_ttnn)
             x = self._scatter_vision_tokens(x, token_ids, vision_tokens)
             ttnn.deallocate(token_ids_ttnn)
 
@@ -3161,7 +3188,7 @@ class Qwen36Model:
             page_table = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
 
         token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
-        x = self.embd(token_ids_ttnn)
+        x = self.embedding(token_ids_ttnn)
         ttnn.deallocate(token_ids_ttnn)
 
         # RoPE position offset by rope_delta for multimodal (KV position stays the true seq pos).

@@ -10,6 +10,7 @@ import os
 from dataclasses import dataclass
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 
 
 @dataclass(frozen=True)
@@ -154,10 +155,11 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
     )
 
 
-class Qwen36MLP:
+class Qwen36MLP(LightweightModule):
     """SwiGLU feed-forward network for Qwen3.5."""
 
     def __init__(self, mesh_device, state_dict, tensor_cache_path=None, args=None, tt_ccl=None):
+        super().__init__()
         self.device = mesh_device
         self.args = args
         self.tt_ccl = tt_ccl

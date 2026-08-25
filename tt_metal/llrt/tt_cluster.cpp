@@ -1206,7 +1206,19 @@ void Cluster::initialize_ethernet_sockets() {
                 continue;
             }
             for (const auto& eth_core : eth_cores) {
-                if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::IDLE) {
+                // The physical descriptor can retain a connection for an Ethernet channel that
+                // firmware did not expose as active (for example, after link retraining). Such a
+                // channel is deliberately absent from device_eth_routing_info_; it cannot back a
+                // usable socket and must not make device enumeration throw unordered_map::at.
+                const auto chip_routing = this->device_eth_routing_info_.find(chip_id);
+                if (chip_routing == this->device_eth_routing_info_.end()) {
+                    continue;
+                }
+                const auto core_routing = chip_routing->second.find(eth_core);
+                if (core_routing == chip_routing->second.end()) {
+                    continue;
+                }
+                if (core_routing->second == EthRouterMode::IDLE) {
                     this->ethernet_sockets_.at(chip_id).at(connected_chip_id).emplace_back(eth_core);
                     this->ethernet_sockets_.at(connected_chip_id)
                         .at(chip_id)

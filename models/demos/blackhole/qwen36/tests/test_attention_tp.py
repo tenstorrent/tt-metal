@@ -261,6 +261,200 @@ def test_attention_tp_paged(mesh_device, reset_seeds, ensure_gc, request):
 
 @torch.no_grad()
 @parametrize_mesh_tp()
+def test_attention_tp_long_context_bf8_pcc(mesh_device, reset_seeds, ensure_gc, monkeypatch):
+    """Compare BF8 and BF16 paged attention after filling the complete 128K context.
+
+    This is intentionally opt-in because it executes 64 production-sized 2K prefill chunks for
+    both cache dtypes. It validates the long-context precision tradeoff used by issue #50475's
+    prefill/decode optimization, including the first decode token after the 128K prompt.
+    """
+    if os.environ.get("QWEN36_LONG_CONTEXT_BF8_PCC") != "1":
+        pytest.skip("set QWEN36_LONG_CONTEXT_BF8_PCC=1 to run the 128K BF8-vs-BF16 gate")
+
+    os.environ.setdefault("HF_MODEL", model_path())
+    prompt_len = int(os.environ.get("QWEN36_LONG_CONTEXT_LENGTH", "131072"))
+    chunk_size, max_seq_len, block_size = 2048, max(131584, prompt_len + 512), 64
+    assert prompt_len >= chunk_size and prompt_len % chunk_size == 0
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=max_seq_len)
+    layer_idx = next(i for i, kind in enumerate(args.attention_type_list) if kind == "full_attention")
+    sd = load_attn_layer(args.CKPT_DIR, layer_idx)
+    weights = load_attention_weights_tp(mesh_device, sd, args)
+    from models.common.modules.tt_ccl import get_tt_ccl
+
+    monkeypatch.setenv("QWEN_SDPA_BF8", "0")
+    monkeypatch.setenv("QWEN36_SDPA_K_BF8", "0")
+    monkeypatch.setenv("QWEN36_SDPA_V_BF8", "0")
+    attention_bf16 = TPAttention(mesh_device, args, weights, get_tt_ccl(mesh_device))
+    variant = os.environ.get("QWEN36_LONG_CONTEXT_VARIANT", "all_bf8")
+    assert variant in ("mirror", "all_bf8")
+    if variant == "all_bf8":
+        monkeypatch.setenv("QWEN_SDPA_BF8", "1")
+    # Candidate either keeps authoritative BF16 caches + a BF8 decode mirror, or exercises the
+    # faster all-BF8 prefill path for comparison against the sampled torch oracle below.
+    attention_bf8 = TPAttention(mesh_device, args, weights, get_tt_ccl(mesh_device))
+
+    # Pad the table/cache block count to a 32-stick boundary. The prompt fills blocks [0,2048),
+    # and the following decode token uses block 2048.
+    num_blocks = ((max_seq_len + block_size - 1) // block_size + 31) // 32 * 32
+
+    def make_cache(dtype):
+        return ttnn.from_torch(
+            torch.zeros(num_blocks, args.n_local_kv_heads, block_size, args.head_dim, dtype=torch.bfloat16),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    attention_bf16.set_paged_kv_cache(make_cache(ttnn.bfloat16), make_cache(ttnn.bfloat16))
+    if variant == "all_bf8":
+        attention_bf8.set_paged_kv_cache(make_cache(ttnn.bfloat8_b), make_cache(ttnn.bfloat8_b))
+    elif os.environ.get("QWEN36_TEST_DECODE_MIRROR", "1") == "1":
+        attention_bf8.set_paged_kv_cache(
+            make_cache(ttnn.bfloat16),
+            make_cache(ttnn.bfloat16),
+            make_cache(ttnn.bfloat8_b),
+            make_cache(ttnn.bfloat8_b),
+        )
+    else:
+        attention_bf8.set_paged_kv_cache(make_cache(ttnn.bfloat16), make_cache(ttnn.bfloat16))
+    page_table = ttnn.from_torch(
+        torch.arange(num_blocks, dtype=torch.int32).reshape(1, -1),
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+    )
+    x = torch.randn(1, 1, chunk_size, args.dim, dtype=torch.bfloat16)
+    x_tt = shard_to_device(mesh_device, x, dim=-1)
+    composer = tp_composer(mesh_device)
+    final_bf16 = final_bf8 = None
+
+    for start in range(0, prompt_len, chunk_size):
+        position_ids = torch.arange(start, start + chunk_size, dtype=torch.int64).reshape(1, -1)
+        cos, sin = rot_mats_prefill(
+            mesh_device, args.rope_head_dim, chunk_size, args.rope_theta, position_ids=position_ids
+        )
+        first_block = start // block_size
+        chunk_page_table = ttnn.from_torch(
+            torch.arange(first_block, first_block + chunk_size // block_size, dtype=torch.int32).reshape(1, -1),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+        )
+        out16 = attention_bf16.forward_prefill_paged(
+            x_tt, cos, sin, page_table, chunk_page_table=chunk_page_table, chunk_start_idx=start
+        )
+        out8 = attention_bf8.forward_prefill_paged(
+            x_tt, cos, sin, page_table, chunk_page_table=chunk_page_table, chunk_start_idx=start
+        )
+        if start + chunk_size == prompt_len:
+            final_bf16 = ttnn.to_torch(out16, mesh_composer=composer).float()
+            final_bf8 = ttnn.to_torch(out8, mesh_composer=composer).float()
+        ttnn.deallocate(out16)
+        ttnn.deallocate(out8)
+        ttnn.deallocate(cos)
+        ttnn.deallocate(sin)
+        ttnn.deallocate(chunk_page_table)
+
+    prefill_pcc = compute_pcc(final_bf16, final_bf8)
+
+    # The long-context chunked SDPA reduction is not deterministic across two independent BF16
+    # executions (the no-mirror control measures ~0.936 final-output PCC at 128K). Compare the
+    # authoritative cache edges directly instead: mirror writes must not alter the BF16 K/V that
+    # prefill reads. First+last blocks cover both early and most-recent cache regions.
+    cache_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=1)
+
+    def cache_edge_pcc(cache_a, cache_b):
+        pieces_a, pieces_b = [], []
+        for block in (0, prompt_len // block_size - 1):
+            end = (block + 1, cache_a.shape[1], block_size, cache_a.shape[3])
+            a = ttnn.slice(cache_a, (block, 0, 0, 0), end)
+            b = ttnn.slice(cache_b, (block, 0, 0, 0), end)
+            pieces_a.append(ttnn.to_torch(a, mesh_composer=cache_composer).float().flatten())
+            pieces_b.append(ttnn.to_torch(b, mesh_composer=cache_composer).float().flatten())
+            ttnn.deallocate(a)
+            ttnn.deallocate(b)
+        return compute_pcc(torch.cat(pieces_a), torch.cat(pieces_b))
+
+    k_cache_pcc = cache_edge_pcc(attention_bf16.paged_k, attention_bf8.paged_k)
+    v_cache_pcc = cache_edge_pcc(attention_bf16.paged_v, attention_bf8.paged_v)
+
+    # Sample the final four query rows against a deterministic torch SDPA oracle. K/V come from
+    # the authoritative BF16 TT cache, so this isolates the attention reduction/cache-precision
+    # choice from projection and cache-layout differences without materializing an SxS matrix.
+    k_host = ttnn.to_torch(attention_bf16.paged_k, mesh_composer=cache_composer).float()
+    v_host = ttnn.to_torch(attention_bf16.paged_v, mesh_composer=cache_composer).float()
+    used_blocks = prompt_len // block_size
+    k_host = k_host[:used_blocks].permute(0, 2, 1, 3).reshape(prompt_len, args.n_kv_heads, args.head_dim)
+    v_host = v_host[:used_blocks].permute(0, 2, 1, 3).reshape(prompt_len, args.n_kv_heads, args.head_dim)
+    sample = 4
+    x_last = x[0, 0, -sample:].float()
+    qg = (x_last @ sd["q_proj.weight"].float().T).reshape(sample, args.n_heads, 2 * args.head_dim)
+    q_ref, gate_ref = qg[..., : args.head_dim], qg[..., args.head_dim :]
+    q_ref = q_ref / torch.sqrt(q_ref.pow(2).mean(-1, keepdim=True) + 1e-6)
+    q_ref = q_ref * (sd["q_norm.weight"].float() + 1.0)
+    positions = torch.arange(prompt_len - sample, prompt_len, dtype=torch.float32)
+    inv = 1.0 / (
+        args.rope_theta
+        ** (torch.arange(0, args.rope_head_dim, 2, dtype=torch.float32) / args.rope_head_dim)
+    )
+    emb = torch.cat([torch.outer(positions, inv)] * 2, dim=-1)
+    q_rope, q_pass = q_ref[..., : args.rope_head_dim], q_ref[..., args.rope_head_dim :]
+    q_rot = torch.cat(
+        [-q_rope[..., args.rope_head_dim // 2 :], q_rope[..., : args.rope_head_dim // 2]], dim=-1
+    )
+    q_ref = torch.cat([q_rope * emb.cos()[:, None, :] + q_rot * emb.sin()[:, None, :], q_pass], dim=-1)
+    head_map = torch.arange(args.n_heads) // (args.n_heads // args.n_kv_heads)
+    k_ref = k_host[:, head_map, :].permute(1, 0, 2)
+    v_ref = v_host[:, head_map, :].permute(1, 0, 2)
+    scores = torch.matmul(q_ref.permute(1, 0, 2), k_ref.transpose(-1, -2)) * (args.head_dim**-0.5)
+    key_positions = torch.arange(prompt_len)
+    scores = scores.masked_fill(key_positions[None, None, :] > positions.to(torch.int64)[None, :, None], -torch.inf)
+    attended = torch.matmul(torch.softmax(scores, dim=-1), v_ref).permute(1, 0, 2)
+    gated_ref = attended * torch.sigmoid(gate_ref)
+    torch_ref = gated_ref.reshape(sample, -1) @ sd["o_proj.weight"].float().T
+    bf16_oracle_pcc = compute_pcc(torch_ref, final_bf16[0, 0, -sample:])
+    candidate_oracle_pcc = compute_pcc(torch_ref, final_bf8[0, 0, -sample:])
+    del k_host, v_host, k_ref, v_ref, scores
+
+    decode_x = replicate_to_device(mesh_device, torch.randn(1, 1, 1, args.dim, dtype=torch.bfloat16))
+    position = torch.tensor([prompt_len], dtype=torch.int32)
+    position_tt = ttnn.from_torch(
+        position, dtype=ttnn.int32, device=mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
+    )
+    cos_d, sin_d = rot_mats_decode(
+        mesh_device, args.rope_head_dim, args.max_seq_len, args.rope_theta, position
+    )
+    decode_bf16 = ttnn.to_torch(
+        attention_bf16.forward_decode(decode_x, position_tt, cos_d, sin_d, page_table=page_table),
+        mesh_composer=composer,
+    ).float()
+    decode_bf8 = ttnn.to_torch(
+        attention_bf8.forward_decode(decode_x, position_tt, cos_d, sin_d, page_table=page_table),
+        mesh_composer=composer,
+    ).float()
+    decode_pcc = compute_pcc(decode_bf16, decode_bf8)
+    logger.info(
+        f"{prompt_len}-token {variant} gate: prefill output={prefill_pcc:.6f}, "
+        f"BF16 K/V cache={k_cache_pcc:.6f}/{v_cache_pcc:.6f}, "
+        f"torch oracle BF16/candidate={bf16_oracle_pcc:.6f}/{candidate_oracle_pcc:.6f}, "
+        f"next decode={decode_pcc:.6f}"
+    )
+    if variant == "mirror":
+        assert k_cache_pcc >= 0.999, f"authoritative BF16 K cache changed: {k_cache_pcc}"
+        assert v_cache_pcc >= 0.999, f"authoritative BF16 V cache changed: {v_cache_pcc}"
+    assert prefill_pcc >= 0.90, f"prefill divergence exceeds the all-BF16 nondeterminism control: {prefill_pcc}"
+    assert bf16_oracle_pcc >= 0.98, f"BF16 long-prefill oracle PCC too low: {bf16_oracle_pcc}"
+    assert candidate_oracle_pcc >= 0.98, f"candidate long-prefill oracle PCC too low: {candidate_oracle_pcc}"
+    assert candidate_oracle_pcc >= bf16_oracle_pcc - 0.01, (
+        f"candidate loses >0.01 PCC vs BF16: {candidate_oracle_pcc} vs {bf16_oracle_pcc}"
+    )
+    assert decode_pcc >= 0.99, f"128K next-decode BF8 PCC too low: {decode_pcc}"
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
 @parametrize_batch(batches=(8, 32))
 def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, request):
     """Per-user batched paged decode (the serving contract).

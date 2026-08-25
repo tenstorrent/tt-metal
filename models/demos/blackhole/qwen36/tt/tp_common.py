@@ -498,9 +498,10 @@ def _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype):
     """Lazily allocate (and cache on tt_ccl) shared persistent buffers for the prefill fused out-proj.
 
     Prefill M (=chunk seq, e.g. 2048) makes per-layer buffers huge (fp32 [1,1,2048,5120]≈42MB × 64
-    layers = infeasible). Prefill runs layers sequentially and each op's output is cloned before the
-    next layer reuses the buffer, so ONE shared set per (M,N,nd,dtype) is safe. Allocated during the
-    pre-capture warmup forward (eager), reused inside the trace. Keyed so variable M/dtype coexist."""
+    layers = infeasible). Prefill runs layers sequentially and the residual add consumes a borrowed
+    output before the next layer reuses it, so ONE shared set per (M,N,nd,dtype) is safe. Callers
+    that need longer ownership request a clone. Allocated during pre-capture warmup and reused in
+    the trace; keyed so variable M/dtype coexist."""
     cache = getattr(tt_ccl, "_qwen36_mmrs_prefill_bufs", None)
     if cache is None:
         cache = {}
@@ -520,13 +521,29 @@ def _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype):
     return cache[key]
 
 
-def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, dtype, grid=(8, 8), rs_offset=(0, 8)):
+def matmul_reduce_scatter_prefill(
+    x,
+    weight,
+    tt_ccl,
+    compute_cfg,
+    topology,
+    nd,
+    dtype,
+    grid=(8, 8),
+    rs_offset=(0, 8),
+    clone_output=True,
+):
     """Fused row-parallel out-proj matmul + reduce-scatter for PREFILL (matmul_reduce_scatter_async).
 
     Unlike decode (M=1, where the 2D matmul collapses to ~8 cores and this loses), at prefill M>>1 the
     2D matmul fills the grid, so overlapping the RS with the matmul is a WIN (biggest for the fp32
     GDN-out with its large RS). grid=(8,8): matmul rows 0-7, RS workers rows 8-9. x: K-sharded
-    [.,M,K_local]; weight [K_local,N]. Returns [1,1,M,N/nd] (cloned; shared buffer survives)."""
+    [.,M,K_local]; weight [K_local,N]. Returns [1,1,M,N/nd]. By default the result is cloned so
+    callers own it. A caller that consumes the result before the next invocation can set
+    ``clone_output=False`` and borrow the shared output buffer, avoiding a large FP32 DRAM copy.
+    The borrowed tensor must not be deallocated or retained across another invocation with the
+    same (M, N, nd, dtype) key.
+    """
     M, K_local = x.shape[-2], x.shape[-1]
     N = weight.shape[-1]
     interm, out_buf = _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype)
@@ -567,7 +584,7 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
         program_config=pc,
         compute_kernel_config=compute_cfg,
     )
-    return ttnn.clone(rs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.clone(rs, memory_config=ttnn.DRAM_MEMORY_CONFIG) if clone_output else rs
 
 
 def sharded_decode_matmul(

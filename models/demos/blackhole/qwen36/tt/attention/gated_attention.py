@@ -3,13 +3,14 @@
 """The Qwen3.5-9B gated full-attention layer — composes config/weights/prefill/decode."""
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.qwen36.tt.attention.config import AttentionConfig
 from models.demos.blackhole.qwen36.tt.attention.decode import decode_forward
 from models.demos.blackhole.qwen36.tt.attention.prefill import prefill_forward
 from models.demos.blackhole.qwen36.tt.attention.weights import load_attention_weights
 
 
-class Qwen36GatedAttention:
+class Qwen36GatedAttention(LightweightModule):
     """Gated Full Attention layer for Qwen3.5-9B with KV cache.
 
     Uses softmax SDPA with GQA (16 Q heads, 4 KV heads, head_dim=256)
@@ -18,6 +19,7 @@ class Qwen36GatedAttention:
     """
 
     def __init__(self, mesh_device, config: AttentionConfig, state_dict, tensor_cache_path=None):
+        super().__init__()
         self.device = mesh_device
         self.config = config
 

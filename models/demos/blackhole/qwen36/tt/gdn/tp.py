@@ -11,6 +11,7 @@ import os
 import torch
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_decode_ttnn,
@@ -158,10 +159,11 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     return tw
 
 
-class TPGatedDeltaNet:
+class TPGatedDeltaNet(LightweightModule):
     """Standalone TP GDN decode (per-device value-head recurrence + all-reduce)."""
 
     def __init__(self, mesh, args, tw, tt_ccl):
+        super().__init__()
         self.mesh = mesh
         self.args = args
         self.tw = tw
@@ -194,6 +196,10 @@ class TPGatedDeltaNet:
         # (~13k crossover from a fixed warmup/compile overhead) but a large win at long ISL (e.g.
         # 128k ~-2s); overlaps the fp32 GDN-out reduce-scatter with the matmul.
         self._fuse_out_mmrs_prefill = not self._out_sharded and args.num_devices > 1
+        # The fused MMRS output is a shared persistent buffer. The decoder layer consumes it
+        # immediately in the residual add and deliberately does not deallocate it. This avoids a
+        # ~10 MiB/device FP32 clone per GDN layer at a 2K prefill chunk.
+        self._returns_borrowed_prefill_output = self._fuse_out_mmrs_prefill
         # Pre-build chunk masks once (trace-safe; avoids from_torch inside captured trace)
         self.chunk_seq_masks = create_chunk_masks_seq(args.gdn_chunk_size, mesh)
         # Prefill fused-op constant tiles, owned by this layer (avoids process-lifetime C++ cache vs device lifetime).
@@ -454,7 +460,9 @@ class TPGatedDeltaNet:
         ttnn.deallocate(ab)
         return qkv, z, a, b
 
-    def forward_prefill(self, x, chunk_size=128, valid_len=None, capture_state=False, return_state=False):
+    def forward_prefill(
+        self, x, chunk_size=128, valid_len=None, capture_state=False, return_state=False, borrow_output=False
+    ):
         """Causal chunk-prefill from scratch. x [1,1,T,dim]: K-sharded (dim/tp per device) when the
         fused in-proj AG-matmul path is active (``_fuse_agmm`` and T>TILE — the norm skips its
         post-AG); replicated otherwise. Output reduce-scattered.
@@ -621,7 +629,14 @@ class TPGatedDeltaNet:
             # fp32 output is load-bearing: o_proj is row-parallel, so the RS SUMS 4 per-device partials
             # across devices — bf16 there tanks PCC to ~0.69 even at ISL 2048 (test_oproj_dtype_isl). Keep fp32.
             out = tpc.matmul_reduce_scatter_prefill(
-                x_out, tw["out"], self.tt_ccl, self.cfg, self.args.ccl_topology(), self.args.num_devices, ttnn.float32
+                x_out,
+                tw["out"],
+                self.tt_ccl,
+                self.cfg,
+                self.args.ccl_topology(),
+                self.args.num_devices,
+                ttnn.float32,
+                clone_output=not borrow_output,
             )
             ttnn.deallocate(gated)
             if return_state:
@@ -643,12 +658,14 @@ class TPGatedDeltaNet:
             return out, captured[0], captured[1]
         return out
 
-    def forward_prefill_collect(self, x, chunk_size=128, valid_len=None):
+    def forward_prefill_collect(self, x, chunk_size=128, valid_len=None, borrow_output=False):
         """Per-user prefill that stashes this user's B=1 state for later assembly.
 
         Called once per user; finalize_pending() then stitches the collected states into the
         batched decode buffers. Returns the user's prefill output (needed for residual + MLP)."""
-        out, rec, conv = self.forward_prefill(x, chunk_size=chunk_size, valid_len=valid_len, return_state=True)
+        out, rec, conv = self.forward_prefill(
+            x, chunk_size=chunk_size, valid_len=valid_len, return_state=True, borrow_output=borrow_output
+        )
         self._pending.append((rec, conv))
         return out
 

@@ -6,13 +6,14 @@ Wraps the experimental ``gated_deltanet_forward_ttnn()`` and the on-device GDN p
 kernel into a module that manages weight tensors, recurrent state, and conv state.
 """
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.qwen36.tt.gdn.config import GDNConfig
 from models.demos.blackhole.qwen36.tt.gdn.decode import recurrent_forward
 from models.demos.blackhole.qwen36.tt.gdn.state import init_recurrent_state, restore_split_conv_from_fused
 from models.demos.blackhole.qwen36.tt.gdn.weights import load_gdn_weights
 
 
-class Qwen36GatedDeltaNet:
+class Qwen36GatedDeltaNet(LightweightModule):
     """Gated DeltaNet (linear attention) layer for Qwen3.5-9B.
 
     Maintains fixed-size recurrent state [B, H, K, V] that replaces the KV cache.
@@ -23,6 +24,7 @@ class Qwen36GatedDeltaNet:
     """
 
     def __init__(self, mesh_device, config: GDNConfig, state_dict, tensor_cache_path=None):
+        super().__init__()
         self.device = mesh_device
         self.cfg = config
 

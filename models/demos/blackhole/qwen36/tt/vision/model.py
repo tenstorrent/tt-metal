@@ -7,9 +7,9 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.modules.tt_ccl import get_tt_ccl
 from models.common.utility_functions import comp_pcc
 from models.demos.blackhole.qwen36.tt.vision.functional import qwen3_5_vision_transformer_preprocess
-from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
@@ -54,7 +54,7 @@ class VisionTransformer(LightweightModule):
         self.weight_cache_path = weight_cache_path
 
         # The vision tower is always tensor-parallel and needs a TT_CCL on hand.
-        self.tt_ccl = tt_ccl if tt_ccl is not None else TT_CCL(args.mesh_device)
+        self.tt_ccl = tt_ccl if tt_ccl is not None else get_tt_ccl(args.mesh_device)
 
         # Create transformation matrix for RoPE QK prefill
         transformation_mat_torch = get_rot_transformation_mat(
