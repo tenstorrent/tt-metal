@@ -2546,17 +2546,25 @@ std::optional<std::string> hostname_for_asic_from_hostname_map(
 void add_inter_mesh_minimal_host_cover_from_hostname_map(
     const TopologyMappingConfig& config,
     const PhysicalMultiMeshGraph& physical_graph,
-    const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
-    std::size_t total_chips_used,
+    const LogicalMultiMeshGraph& logical_multi_mesh_graph,
     ::tt::tt_fabric::MappingConstraints<MeshId, MeshId>& inter_mesh_constraints) {
     if (config.hostname_to_asics.empty()) {
         return;
     }
 
+    const auto& mesh_logical_level_graph = logical_multi_mesh_graph.mesh_level_graph_;
     std::set<MeshId> logical_target_set(
         mesh_logical_level_graph.get_nodes().begin(), mesh_logical_level_graph.get_nodes().end());
     if (logical_target_set.size() <= 1) {
         return;
+    }
+
+    // Total LOGICAL chips the MGD occupies (fabric nodes summed across all logical meshes). Taken from the logical
+    // multi-mesh graph, NOT the physical mesh regions, which can over-provision (a small logical mesh placed inside a
+    // larger physical region) and would inflate the host count.
+    std::size_t total_chips_used = 0;
+    for (const auto& [mesh_id, logical_mesh_adj] : logical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        total_chips_used += logical_mesh_adj.get_nodes().size();
     }
 
     // Build global_mesh_groups in one pass: one group per host for single-host meshes, singleton for multi-host.
@@ -2602,31 +2610,29 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
             "Inter-mesh host alignment: failed to set same-rank groups constraint; falling back to preferred globals");
     }
 
-    // Register the host partitions as same-rank GLOBAL groups with NO target groups. This imposes no hard
-    // grouping (the same-rank constraint is inert when no target is bound to a group), but it exposes per-mesh
-    // host membership to the solver so the occupancy cardinality (SAT) / host-cap prune (DFS) can pack connected
-    // meshes onto the fewest hosts. Must be registered before the cap so the cap has a partition to bind.
-    if (!inter_mesh_constraints.set_same_rank_groups_constraint(
-            /*target_groups=*/{}, global_mesh_groups)) {
+    // 1. DECLARE the host-partition groups. With no target groups this imposes no hard co-location; it only exposes
+    //    per-mesh host membership so the solver can reason about how many hosts a mapping occupies. Everything below
+    //    needs this partition registered.
+    if (!inter_mesh_constraints.set_same_rank_groups_constraint(/*target_groups=*/{}, global_mesh_groups)) {
         log_warning(
             tt::LogFabric, "Inter-mesh host alignment: failed to register host partitions as same-rank global groups");
     } else {
-        // Minimum hosts = ceil(chips used by the MGD / chips per host), rounded up to the next whole host. Count
-        // CHIPS (ASICs), not meshes: meshes-per-host is lumpy (one host can own several small meshes while another
-        // owns a single large one), but the per-host chip capacity is uniform, so the chip-based division gives the
-        // true minimum host count. `total_chips_used` is the LOGICAL chip count the MGD occupies (passed in) -- NOT
-        // the physical mesh-region capacity, which can over-provision (e.g. a 2x4 logical mesh placed inside a 4x4
-        // physical region). Apply it declaratively as a HARD cap (the solver picks WHICH k_min hosts -- never pinned
-        // to a specific, possibly-unroutable cover), with a SOFT minimize fallback if the cap is infeasible. Both
-        // backends honor these via MappingConstraints: SAT through the at-most-K occupancy encoding, DFS via the prune.
+        // 2. TRY A HARD CAP: fit the mapping within the minimum number of hosts,
+        //    k_min = ceil(chips used by the MGD / chips per host), rounded up to the next whole host. Count CHIPS
+        //    (ASICs), not meshes: meshes-per-host is lumpy (one host can own several small meshes while another owns a
+        //    single large one), but the per-host chip capacity is uniform, so the chip-based division is exact. The
+        //    solver picks WHICH k_min hosts -- never pinned to a specific, possibly-unroutable cover.
         std::size_t chips_per_host = 0;
         for (const auto& [hostname, asics] : config.hostname_to_asics) {
             chips_per_host = std::max(chips_per_host, asics.size());
         }
         if (total_chips_used > 0 && chips_per_host > 0) {
             const std::size_t k_min = (total_chips_used + chips_per_host - 1) / chips_per_host;
-            inter_mesh_constraints.set_max_same_rank_groups_used(k_min);  // HARD: fit within k_min hosts (any k_min)
-            inter_mesh_constraints.set_minimize_same_rank_groups_used(true);  // SOFT fallback if the cap is infeasible
+            inter_mesh_constraints.set_max_same_rank_groups_used(k_min);  // HARD: fit within k_min hosts
+
+            // 3. SOFT fallback: if that hard cap is infeasible for this graph's connectivity, the solver reduces to
+            //    merely MINIMIZING the number of host groups used (best-effort) instead of failing the mapping.
+            inter_mesh_constraints.set_minimize_same_rank_groups_used(true);  // SOFT
 
             log_debug(
                 tt::LogFabric,
@@ -2674,10 +2680,10 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
 ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> build_inter_mesh_constraints(
     const TopologyMappingConfig& config,
     const PhysicalMultiMeshGraph& physical_graph,
-    const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
-    std::size_t total_chips_used,
+    const LogicalMultiMeshGraph& logical_multi_mesh_graph,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
     ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> inter_mesh_constraints;
+    const auto& mesh_logical_level_graph = logical_multi_mesh_graph.mesh_level_graph_;
 
     std::map<MeshId, std::set<MeshId>> mesh_level_pinnings;
     for (const auto& group : config.pinnings) {
@@ -2708,7 +2714,7 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
     }
 
     add_inter_mesh_minimal_host_cover_from_hostname_map(
-        config, physical_graph, mesh_logical_level_graph, total_chips_used, inter_mesh_constraints);
+        config, physical_graph, logical_multi_mesh_graph, inter_mesh_constraints);
     return inter_mesh_constraints;
 }
 
@@ -3389,17 +3395,10 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const auto& mesh_logical_graph = adjacency_map_logical.mesh_level_graph_;
     const auto& mesh_physical_graph = adjacency_map_physical.mesh_level_graph_;
 
-    // Total LOGICAL chips the MGD occupies (fabric nodes across all logical meshes) -- used to derive the minimal
-    // host cap as ceil(total_chips / chips_per_host). Taken from the logical graph, not the physical mesh regions,
-    // which can over-provision (a small logical mesh placed inside a larger physical region).
-    std::size_t total_chips_used = 0;
-    for (const auto& [mesh_id, logical_mesh_adj] : adjacency_map_logical.mesh_adjacency_graphs_) {
-        total_chips_used += logical_mesh_adj.get_nodes().size();
-    }
-
-    // Build inter-mesh constraints and determine validation mode
-    auto inter_mesh_constraints = build_inter_mesh_constraints(
-        config, adjacency_map_physical, mesh_logical_graph, total_chips_used, asic_id_to_mesh_rank);
+    // Build inter-mesh constraints and determine validation mode. Pass the full logical multi-mesh graph so the
+    // host-cover cap can read the true logical chip count (fabric nodes per mesh) directly from it.
+    auto inter_mesh_constraints =
+        build_inter_mesh_constraints(config, adjacency_map_physical, adjacency_map_logical, asic_id_to_mesh_rank);
     auto inter_mesh_validation_mode = determine_inter_mesh_validation_mode(config);
 
     // Track statistics for error reporting
