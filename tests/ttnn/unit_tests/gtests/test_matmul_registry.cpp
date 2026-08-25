@@ -4,6 +4,11 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
+#include <cstddef>
+#include <thread>
+#include <variant>
+
 #include "ttnn/operations/matmul/device/config/matmul_config_registry.hpp"
 
 namespace ttnn::operations::matmul::registry {
@@ -120,14 +125,47 @@ TEST(MatmulConfigRegistry, ModeFreezesAtFirstUse) {
     const auto result =
         resolve_with(Mode::Off, Eligibility{.call = CallSemantics{.domain = OperationDomain::DenseMatmul}});
     EXPECT_EQ(result.reason, ResolutionReason::Disabled);
-    EXPECT_FALSE(result.recipe.has_value());
+    EXPECT_EQ(result.recipe, nullptr);
+}
+
+TEST(MatmulConfigRegistry, InvalidConfiguredModeFreezesFailClosed) {
+    const auto original = ttnn::CONFIG.get<"matmul_registry_mode">();
+    reset_startup_mode_for_testing();
+    ttnn::CONFIG.set<"matmul_registry_mode">(static_cast<Mode>(0xff));
+    EXPECT_EQ(current_mode(), Mode::Off);
+    EXPECT_EQ(stats_snapshot().frozen_mode, Mode::Off);
+
+    ttnn::CONFIG.set<"matmul_registry_mode">(original);
+    reset_startup_mode_for_testing();
+}
+
+TEST(MatmulConfigRegistry, ConcurrentFirstUseFreezesOneMode) {
+    const auto original = ttnn::CONFIG.get<"matmul_registry_mode">();
+    reset_startup_mode_for_testing();
+    ttnn::CONFIG.set<"matmul_registry_mode">(Mode::Shadow);
+
+    constexpr std::size_t thread_count = 16;
+    std::array<Mode, thread_count> observed{};
+    std::array<std::thread, thread_count> threads;
+    for (std::size_t index = 0; index < threads.size(); ++index) {
+        threads[index] = std::thread([index, &observed] { observed[index] = current_mode(); });
+    }
+    for (auto& thread : threads) {
+        thread.join();
+    }
+    for (const auto mode : observed) {
+        EXPECT_EQ(mode, Mode::Shadow);
+    }
+
+    ttnn::CONFIG.set<"matmul_registry_mode">(original);
+    reset_startup_mode_for_testing();
 }
 
 TEST(MatmulConfigRegistry, EmptyOnTableFallsBack) {
     const auto result =
         resolve_with(Mode::On, Eligibility{.call = CallSemantics{.domain = OperationDomain::DenseMatmul}});
     EXPECT_EQ(result.reason, ResolutionReason::EmptyRegistry);
-    EXPECT_FALSE(result.recipe.has_value());
+    EXPECT_EQ(result.recipe, nullptr);
 }
 
 TEST(MatmulConfigRegistry, ResolvesDefaultOutputContractFromInputA) {
@@ -189,7 +227,8 @@ TEST(MatmulConfigRegistry, OutputContractAccountsForTransposeTiles) {
 }
 
 TEST(MatmulConfigRegistry, ShadowObservesCertifiedHitButOnlyOnAppliesIt) {
-    const Resolution certified_hit{.reason = ResolutionReason::CertifiedMatch, .recipe = basic_recipe()};
+    const auto recipe = basic_recipe();
+    const Resolution certified_hit{.reason = ResolutionReason::CertifiedMatch, .recipe = &recipe};
 
     EXPECT_EQ(execution_action(Mode::Off, certified_hit), ExecutionAction::Fallback);
     EXPECT_EQ(execution_action(Mode::Shadow, certified_hit), ExecutionAction::ObserveOnly);
@@ -200,8 +239,51 @@ TEST(MatmulConfigRegistry, ShadowObservesCertifiedHitButOnlyOnAppliesIt) {
     auto invalid_recipe = basic_recipe();
     invalid_recipe.untilize_out = true;
     EXPECT_EQ(
-        execution_action(Mode::On, Resolution{.reason = ResolutionReason::CertifiedMatch, .recipe = invalid_recipe}),
+        execution_action(Mode::On, Resolution{.reason = ResolutionReason::CertifiedMatch, .recipe = &invalid_recipe}),
         ExecutionAction::Fallback);
+}
+
+TEST(MatmulConfigRegistry, SyntheticHitIsExactAndMaterializesOnlyInOn) {
+    const auto request = exact_request();
+    const auto eligibility = Eligibility{.call = request.call};
+    auto recipe = basic_recipe();
+    recipe.compute_kernel_config.math_approx_mode = false;
+
+    auto candidate_request = request;
+    const auto shadow =
+        resolve_with_synthetic_candidate_for_testing(Mode::Shadow, request, eligibility, candidate_request, recipe);
+    ASSERT_EQ(shadow.reason, ResolutionReason::CertifiedMatch);
+    ASSERT_EQ(shadow.recipe, &recipe);
+
+    ttnn::prim::MatmulParams legacy;
+    legacy.output_dtype = DataType::FLOAT32;
+    legacy.transpose_a = true;
+    const auto shadow_parameters = materialize_parameters_for_execution(Mode::Shadow, shadow, legacy);
+    EXPECT_FALSE(shadow_parameters.has_value());
+    EXPECT_FALSE(legacy.program_config.has_value());
+    EXPECT_FALSE(legacy.compute_kernel_config.has_value());
+    EXPECT_TRUE(legacy.transpose_a);
+
+    const auto on =
+        resolve_with_synthetic_candidate_for_testing(Mode::On, request, eligibility, candidate_request, recipe);
+    auto on_parameters = materialize_parameters_for_execution(Mode::On, on, legacy);
+    ASSERT_TRUE(on_parameters.has_value());
+    ASSERT_TRUE(on_parameters->program_config.has_value());
+    EXPECT_TRUE(std::holds_alternative<MatmulMultiCoreProgramConfig>(*on_parameters->program_config));
+    ASSERT_TRUE(on_parameters->compute_kernel_config.has_value());
+    EXPECT_FALSE(on_parameters->compute_kernel_config->math_approx_mode);
+    EXPECT_EQ(on_parameters->untilize_out, recipe.untilize_out);
+    EXPECT_EQ(on_parameters->output_dtype, legacy.output_dtype);
+    EXPECT_EQ(on_parameters->transpose_a, legacy.transpose_a);
+    EXPECT_FALSE(legacy.program_config.has_value());
+    EXPECT_FALSE(legacy.compute_kernel_config.has_value());
+
+    candidate_request.workload.logical_m++;
+    const auto miss =
+        resolve_with_synthetic_candidate_for_testing(Mode::On, request, eligibility, candidate_request, recipe);
+    EXPECT_EQ(miss.reason, ResolutionReason::EmptyRegistry);
+    EXPECT_EQ(miss.recipe, nullptr);
+    EXPECT_FALSE(materialize_parameters_for_execution(Mode::On, miss, legacy).has_value());
 }
 
 TEST(MatmulConfigRegistry, ExactRequestDoesNotCrossMatchKeyAxes) {
@@ -258,7 +340,9 @@ TEST(MatmulConfigRegistry, RequestAndEligibilitySemanticsMustAgree) {
 
 TEST(MatmulConfigRegistry, TelemetryIsBoundedAndResettable) {
     reset_stats_for_testing();
-    const Resolution hit{.reason = ResolutionReason::CertifiedMatch, .recipe = basic_recipe()};
+    const auto recipe = basic_recipe();
+    const Resolution hit{.reason = ResolutionReason::CertifiedMatch, .recipe = &recipe};
+    record_resolution(Mode::Off, OperationDomain::DenseMatmul, hit, ExecutionAction::Fallback);
     record_resolution(Mode::Shadow, OperationDomain::DenseMatmul, hit, ExecutionAction::ObserveOnly);
     record_resolution(
         Mode::On,
@@ -279,6 +363,33 @@ TEST(MatmulConfigRegistry, TelemetryIsBoundedAndResettable) {
     reset_stats_for_testing();
     snapshot = stats_snapshot();
     EXPECT_EQ(snapshot.domains[static_cast<std::size_t>(OperationDomain::DenseMatmul)].resolution_attempts, 0);
+}
+
+TEST(MatmulConfigRegistry, TelemetryCountersAreConcurrent) {
+    reset_stats_for_testing();
+    constexpr std::size_t thread_count = 8;
+    constexpr std::size_t iterations = 1000;
+    std::array<std::thread, thread_count> threads;
+    for (auto& thread : threads) {
+        thread = std::thread([] {
+            for (std::size_t iteration = 0; iteration < iterations; ++iteration) {
+                record_resolution(
+                    Mode::On,
+                    OperationDomain::DenseMatmul,
+                    Resolution{.reason = ResolutionReason::EmptyRegistry},
+                    ExecutionAction::Fallback);
+            }
+        });
+    }
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    const auto snapshot = stats_snapshot();
+    const auto& dense = snapshot.domains[static_cast<std::size_t>(OperationDomain::DenseMatmul)];
+    EXPECT_EQ(dense.resolution_attempts, thread_count * iterations);
+    EXPECT_EQ(dense.fallbacks, thread_count * iterations);
+    EXPECT_EQ(dense.reasons[static_cast<std::size_t>(ResolutionReason::EmptyRegistry)], thread_count * iterations);
 }
 
 TEST(MatmulConfigRegistry, RecipeCarriesOneConsistentUntilizeValue) {
@@ -375,32 +486,29 @@ TEST(MatmulConfigRegistry, InconsistentIoContractIsNeverLookedUp) {
             .call = CallSemantics{.domain = OperationDomain::DenseMatmul},
             .io_contract_status = IoContractStatus::OutputTileConflict});
     EXPECT_EQ(result.reason, ResolutionReason::InconsistentIoContract);
-    EXPECT_FALSE(result.recipe.has_value());
+    EXPECT_EQ(result.recipe, nullptr);
 }
 
 TEST(MatmulConfigRegistry, UnsupportedV1SemanticsFallBack) {
-    EXPECT_EQ(
-        resolve_with(
-            Mode::On, Eligibility{.call = CallSemantics{.domain = OperationDomain::DenseMatmul}, .has_bias = true})
-            .reason,
-        ResolutionReason::UnsupportedSemantics);
-    EXPECT_EQ(
-        resolve_with(
-            Mode::On,
-            Eligibility{.call = CallSemantics{.domain = OperationDomain::DenseMatmul}, .input_a_sharded = true})
-            .reason,
-        ResolutionReason::UnsupportedSemantics);
-    EXPECT_EQ(
-        resolve_with(
-            Mode::On,
-            Eligibility{.call = CallSemantics{.domain = OperationDomain::DenseMatmul}, .input_b_batched = true})
-            .reason,
-        ResolutionReason::UnsupportedSemantics);
-    EXPECT_EQ(
-        resolve_with(
-            Mode::On, Eligibility{.call = CallSemantics{.domain = OperationDomain::DenseMatmul}, .transpose_b = true})
-            .reason,
-        ResolutionReason::UnsupportedSemantics);
+    const auto dense_call = CallSemantics{.domain = OperationDomain::DenseMatmul};
+    const auto expect_unsupported = [](const Eligibility& eligibility) {
+        EXPECT_EQ(resolve_with(Mode::On, eligibility).reason, ResolutionReason::UnsupportedSemantics);
+    };
+
+    expect_unsupported(Eligibility{.call = dense_call, .has_bias = true});
+    expect_unsupported(Eligibility{.call = dense_call, .has_activation = true});
+    expect_unsupported(Eligibility{.call = dense_call, .has_optional_output = true});
+    expect_unsupported(Eligibility{.call = dense_call, .has_output_tile = true});
+    expect_unsupported(Eligibility{.call = dense_call, .has_global_cb = true});
+    expect_unsupported(Eligibility{.call = dense_call, .has_sub_device = true});
+    expect_unsupported(Eligibility{.call = dense_call, .has_bcast_batch = true});
+    expect_unsupported(Eligibility{.call = dense_call, .untilize_out = true});
+    expect_unsupported(Eligibility{.call = dense_call, .input_a_sharded = true});
+    expect_unsupported(Eligibility{.call = dense_call, .input_b_sharded = true});
+    expect_unsupported(Eligibility{.call = dense_call, .output_sharded = true});
+    expect_unsupported(Eligibility{.call = dense_call, .input_b_batched = true});
+    expect_unsupported(Eligibility{.call = dense_call, .transpose_a = true});
+    expect_unsupported(Eligibility{.call = dense_call, .transpose_b = true});
 }
 
 }  // namespace

@@ -29,24 +29,12 @@ std::array<AtomicDomainStats, kOperationDomainCount> stats;
 constexpr std::size_t index(const OperationDomain domain) { return static_cast<std::size_t>(domain); }
 constexpr std::size_t index(const ResolutionReason reason) { return static_cast<std::size_t>(reason); }
 
-std::optional<Recipe> lookup_exact(const MatmulRegistryRequest& request) noexcept {
-    struct RegistryEntry {
-        MatmulRegistryRequest request;
-        Recipe recipe;
-    };
-    static const std::array<RegistryEntry, 0> entries{};
-    for (const auto& entry : entries) {
-        if (entry.request == request) {
-            try {
-                return entry.recipe;
-            } catch (...) {
-                // Recipe copies may own activation parameters. Allocation
-                // failure is a miss, never process termination from noexcept.
-                return std::nullopt;
-            }
-        }
-    }
-    return std::nullopt;
+const Recipe* lookup_exact(const MatmulRegistryRequest& request) noexcept {
+    // B0/B2 deliberately carry no native or generated production entry. B1
+    // replaces this stub with POD descriptor lookup plus separate fallible
+    // native materialization; an allocating Recipe must never become the table.
+    static_cast<void>(request);
+    return nullptr;
 }
 
 std::optional<tt::tt_metal::Tile> transpose_matmul_tile(const tt::tt_metal::Tile& tile, const bool transpose) {
@@ -70,10 +58,13 @@ Mode current_mode() noexcept {
     }
 
     const auto configured = ttnn::CONFIG.get<"matmul_registry_mode">();
-    const auto configured_value = static_cast<std::uint8_t>(configured);
+    const auto raw_configured_value = static_cast<std::uint8_t>(configured);
+    const auto configured_value = raw_configured_value <= static_cast<std::uint8_t>(Mode::On)
+                                      ? raw_configured_value
+                                      : static_cast<std::uint8_t>(Mode::Off);
     if (frozen_mode.compare_exchange_strong(
             value, configured_value, std::memory_order_acq_rel, std::memory_order_acquire)) {
-        return configured;
+        return static_cast<Mode>(configured_value);
     }
     return static_cast<Mode>(value);
 }
@@ -142,14 +133,27 @@ ResolvedMatmulIoContract resolve_matmul_io_contract(const IoContractRequest& req
 }
 
 ExecutionAction execution_action(const Mode mode, const Resolution& resolution) noexcept {
-    if (resolution.reason != ResolutionReason::CertifiedMatch || !resolution.recipe.has_value() ||
-        !has_consistent_untilize_out(resolution.recipe.value())) {
+    if (resolution.reason != ResolutionReason::CertifiedMatch || resolution.recipe == nullptr ||
+        !has_consistent_untilize_out(*resolution.recipe)) {
         return ExecutionAction::Fallback;
     }
     if (mode == Mode::On) {
         return ExecutionAction::ApplyRecipe;
     }
     return mode == Mode::Shadow ? ExecutionAction::ObserveOnly : ExecutionAction::Fallback;
+}
+
+std::optional<ttnn::prim::MatmulParams> materialize_parameters_for_execution(
+    const Mode mode, const Resolution& resolution, const ttnn::prim::MatmulParams& legacy_parameters) {
+    if (execution_action(mode, resolution) != ExecutionAction::ApplyRecipe) {
+        return std::nullopt;
+    }
+
+    auto materialized = legacy_parameters;
+    materialized.program_config = resolution.recipe->program_config;
+    materialized.compute_kernel_config = resolution.recipe->compute_kernel_config;
+    materialized.untilize_out = resolution.recipe->untilize_out;
+    return materialized;
 }
 
 bool has_consistent_untilize_out(const Recipe& recipe) noexcept {
@@ -159,7 +163,12 @@ bool has_consistent_untilize_out(const Recipe& recipe) noexcept {
     return !recipe.untilize_out;
 }
 
-Resolution resolve(const Mode mode, const MatmulRegistryRequest& request, const Eligibility& eligibility) noexcept {
+static Resolution resolve_impl(
+    const Mode mode,
+    const MatmulRegistryRequest& request,
+    const Eligibility& eligibility,
+    const MatmulRegistryRequest* synthetic_request,
+    const Recipe* synthetic_recipe) noexcept {
     if (mode == Mode::Off) {
         return {.reason = ResolutionReason::Disabled};
     }
@@ -206,13 +215,29 @@ Resolution resolve(const Mode mode, const MatmulRegistryRequest& request, const 
         return {.reason = ResolutionReason::EmptyRegistry};
     }
 
-    if (auto recipe = lookup_exact(request); recipe.has_value()) {
-        return {.reason = ResolutionReason::CertifiedMatch, .recipe = std::move(recipe)};
+    if (synthetic_request != nullptr && synthetic_recipe != nullptr && *synthetic_request == request) {
+        return {.reason = ResolutionReason::CertifiedMatch, .recipe = synthetic_recipe};
+    }
+    if (const auto* recipe = lookup_exact(request); recipe != nullptr) {
+        return {.reason = ResolutionReason::CertifiedMatch, .recipe = recipe};
     }
 
     // The generated certified table intentionally starts empty. Shadow and On
     // therefore both preserve the existing selector and cache identity today.
     return {.reason = ResolutionReason::EmptyRegistry};
+}
+
+Resolution resolve(const Mode mode, const MatmulRegistryRequest& request, const Eligibility& eligibility) noexcept {
+    return resolve_impl(mode, request, eligibility, nullptr, nullptr);
+}
+
+Resolution resolve_with_synthetic_candidate_for_testing(
+    const Mode mode,
+    const MatmulRegistryRequest& request,
+    const Eligibility& eligibility,
+    const MatmulRegistryRequest& candidate_request,
+    const Recipe& candidate_recipe) noexcept {
+    return resolve_impl(mode, request, eligibility, &candidate_request, &candidate_recipe);
 }
 
 void record_resolution(
@@ -227,7 +252,7 @@ void record_resolution(
     auto& domain_stats = stats[index(domain)];
     domain_stats.resolution_attempts.fetch_add(1, std::memory_order_relaxed);
     domain_stats.reasons[index(resolution.reason)].fetch_add(1, std::memory_order_relaxed);
-    if (resolution.reason == ResolutionReason::CertifiedMatch && resolution.recipe.has_value()) {
+    if (resolution.reason == ResolutionReason::CertifiedMatch && resolution.recipe != nullptr) {
         domain_stats.certified_hits.fetch_add(1, std::memory_order_relaxed);
     }
     switch (action) {

@@ -16,6 +16,7 @@
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/config.hpp"
 
 namespace ttnn::operations::matmul::registry {
@@ -181,13 +182,22 @@ struct Recipe {
 
 struct Resolution {
     ResolutionReason reason = ResolutionReason::Disabled;
-    std::optional<Recipe> recipe = std::nullopt;
+    // B0/B2 use a non-owning pointer only for the device-free synthetic seam;
+    // B1 replaces it with an immutable POD descriptor/index and separate
+    // fallible native materialization.
+    const Recipe* recipe = nullptr;
 };
 
 enum class ExecutionAction { Fallback, ObserveOnly, ApplyRecipe };
 
 // A certified Shadow hit is observable but never mutates execution parameters.
 ExecutionAction execution_action(Mode mode, const Resolution& resolution) noexcept;
+
+// Construct one complete temporary parameter object before dispatch. Shadow
+// and fallback return nullopt without copying or mutating the legacy object.
+// Native recipe copies can allocate, so failures intentionally propagate.
+std::optional<ttnn::prim::MatmulParams> materialize_parameters_for_execution(
+    Mode mode, const Resolution& resolution, const ttnn::prim::MatmulParams& legacy_parameters);
 
 // Every recipe carries one effective untilize_out value. It must agree with the
 // duplicated field in the 1D config, and must be false for all other families.
@@ -200,9 +210,18 @@ Mode current_mode() noexcept;
 // Test only: callers must ensure no concurrent matmul dispatch is in flight.
 void reset_startup_mode_for_testing() noexcept;
 
-// Device-free admission and empty-table lookup. A future table implementation
-// may return a Recipe only after exactly matching the complete typed request key.
+// Device-free admission and empty production-table lookup. B1 replaces the
+// empty stub with exact POD descriptor lookup, not a table of native Recipes.
 Resolution resolve(Mode mode, const MatmulRegistryRequest& request, const Eligibility& eligibility) noexcept;
+
+// Device-free synthetic-hit seam used to prove exact-key, Shadow, and On
+// behavior while the generated production table remains empty.
+Resolution resolve_with_synthetic_candidate_for_testing(
+    Mode mode,
+    const MatmulRegistryRequest& request,
+    const Eligibility& eligibility,
+    const MatmulRegistryRequest& candidate_request,
+    const Recipe& candidate_recipe) noexcept;
 
 struct DomainStatsSnapshot {
     std::uint64_t resolution_attempts = 0;
