@@ -39,6 +39,9 @@ HANG_APP_TTNN_ADD_INTEGERS = (
 )
 HANG_APP_MESH_SOCKET = "tools/tests/triage/hang_apps/mesh_socket_hang/mesh_socket_hang.py"
 
+# Passed to the hang app and asserted on below, so it lives in exactly one place.
+MESH_SOCKET_FIFO_SIZE = 8192
+
 HANG_APP_EXPECTED_RESULTS = {
     HANG_APP_ADD_2_INTEGERS: {
         "lightweight_asserts": {
@@ -631,7 +634,7 @@ class TestTriage:
     [
         (
             HANG_APP_MESH_SOCKET,
-            [str(8192)],
+            [str(MESH_SOCKET_FIFO_SIZE)],
             {"min_devices": 2, "expect_running": True},
             15,  # measured launch-to-wedged: ~3.5s on a warm kernel cache, ~10s cold
         ),
