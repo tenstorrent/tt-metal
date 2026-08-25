@@ -654,6 +654,24 @@ KNOBS = {
     # no-fire.  Controls hold (hardsigmoid-fresh +0.89,
     # blaze-sdpareducerow-max-t8 +0.97).
     "crossrow-pairing": "-mtt-tensix-optimize-crossrow-pairing",
+    # GW (native-compare): BH SFPGT/SFPLE SET_CC lowering for the
+    # strict-greater / less-or-equal float compare webs (sfpi-gcc
+    # agent/isa-unlocks-arecip-gtle, GS-2 unlock).  The GT arm's two-word
+    # SETCC web (mod4 sign-clear + mod2 nonzero) and the LE arm's
+    # three-word web + fenced COMPC each become ONE BH-native compare
+    # against the constant +0.0 register L9 (SET_CC form, mod1=1),
+    # pointwise-equal over all 2^32 compared bit patterns including the
+    # -0/+0/Inf/NaN classes (sfpi-gcc tt/proofs/native-compare-gtle/:
+    # the established qNaN-admitting contract is PRESERVED).  Fail-closed:
+    # BH only, REG operands only, LT/GE/EQ/NE and every other target keep
+    # the established lowering byte-identically.  Booking A/B = (ON-28 +
+    # flag) vs plain ON-28.  Target rows: threshold-fresh (v <= t predicate),
+    # hardshrink-fresh (|v| <= lambda band).  softsign-fresh /
+    # smoothstep-fresh = expected honest no-fire controls (their fresh
+    # bodies carry no GT/LE-direction compare: recip-form and min/max
+    # clamp respectively — the GS-2 row mapping's premise for them is
+    # refuted at the current bodies).
+    "native-compare": "-mtt-tensix-optimize-native-compare",
 }
 
 
@@ -756,6 +774,11 @@ KNOB_MODES = {
     # booking knob; promotion requires an R9 witness and ON-vs-ON
     # attribution ceremony.
     "crossrow-pairing": "on-plus",
+    # GW native-compare: default-off Init(0) booking knob; a pure
+    # expansion-time lowering choice (no scheduler interaction beyond
+    # shorter CC webs).  on-plus while a booking knob; promotion requires
+    # an R9 witness and ON-vs-ON attribution ceremony.
+    "native-compare": "on-plus",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----

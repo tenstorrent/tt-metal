@@ -921,6 +921,7 @@ def eltwise_unary_sfpu(
     fresh_cpp_impl=0,
     reciprocal_impl=0,
     twos_complement=False,
+    golden_mathop=None,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -946,8 +947,11 @@ def eltwise_unary_sfpu(
     )
 
     generate_golden = get_golden_generator(UnarySFPUGolden)
+    # golden_mathop: certification rows whose kernel selector rides a host
+    # SfpuType (lane GW SFPARECIP probes on SfpuType::identity) key their
+    # golden on their own MathOperation instead of the kernel-side mathop.
     golden_tensor = generate_golden(
-        mathop,
+        golden_mathop if golden_mathop is not None else mathop,
         src_A,
         formats.output_format,
         dest_acc,
@@ -1766,6 +1770,104 @@ def test_cast_fp32_to_fp16a_fresh_cpp(fresh_cpp_impl, edge_values):
         custom_atol=0.0,
         custom_rtol=0.0,
         fresh_cpp_impl=fresh_cpp_impl,
+    )
+
+
+# Lane GW SFPARECIP-mode boundary stimuli: every branch edge of the doc
+# functional model (ApproxExp: denormal->1.0 / <0.015625 / <0.6953125 / <2 /
+# tail; ApproxRecip: denormal->Inf / normal / >=2**126 -> 0), both signs,
+# +-0 (the custom spec zero-fills the remainder, so +0 dominates the tile).
+_ARECIP_PROBE_BOUNDARIES = [
+    float.fromhex("0x0.0p+0"),  # 0x00000000
+    float.fromhex("-0x0.0p+0"),  # 0x80000000
+    float.fromhex("0x1.0000000000000p-149"),  # 0x00000001
+    float.fromhex("-0x1.0000000000000p-149"),  # 0x80000001
+    float.fromhex("0x1.fffffc0000000p-127"),  # 0x007FFFFF
+    float.fromhex("-0x1.fffffc0000000p-127"),  # 0x807FFFFF
+    float.fromhex("0x1.0000000000000p-126"),  # 0x00800000
+    float.fromhex("-0x1.0000000000000p-126"),  # 0x80800000
+    float.fromhex("0x1.fffffe0000000p-7"),  # 0x3C7FFFFF
+    float.fromhex("-0x1.fffffe0000000p-7"),  # 0xBC7FFFFF
+    float.fromhex("0x1.0000000000000p-6"),  # 0x3C800000
+    float.fromhex("-0x1.0000000000000p-6"),  # 0xBC800000
+    float.fromhex("0x1.63fffe0000000p-1"),  # 0x3F31FFFF
+    float.fromhex("-0x1.63fffe0000000p-1"),  # 0xBF31FFFF
+    float.fromhex("0x1.6400000000000p-1"),  # 0x3F320000
+    float.fromhex("-0x1.6400000000000p-1"),  # 0xBF320000
+    float.fromhex("0x1.0000000000000p+0"),  # 0x3F800000
+    float.fromhex("-0x1.0000000000000p+0"),  # 0xBF800000
+    float.fromhex("0x1.fffffe0000000p+0"),  # 0x3FFFFFFF
+    float.fromhex("-0x1.fffffe0000000p+0"),  # 0xBFFFFFFF
+    float.fromhex("0x1.0000000000000p+1"),  # 0x40000000
+    float.fromhex("-0x1.0000000000000p+1"),  # 0xC0000000
+    float.fromhex("0x1.921fb60000000p+1"),  # 0x40490FDB
+    float.fromhex("-0x1.921fb60000000p+1"),  # 0xC0490FDB
+    float.fromhex("0x1.fffffe0000000p+125"),  # 0x7E7FFFFF
+    float.fromhex("-0x1.fffffe0000000p+125"),  # 0xFE7FFFFF
+    float.fromhex("0x1.0000000000000p+126"),  # 0x7E800000
+    float.fromhex("-0x1.0000000000000p+126"),  # 0xFE800000
+    float.fromhex("0x1.fffffe0000000p+127"),  # 0x7F7FFFFF
+    float.fromhex("-0x1.fffffe0000000p+127"),  # 0xFF7FFFFF
+]
+
+
+@pytest.mark.parametrize(
+    "stimuli_kind", ["core", "boundaries"], ids=["core", "boundaries"]
+)
+@pytest.mark.parametrize(
+    "mathop",
+    [MathOperation.ApproxExpProbe, MathOperation.ApproxCondRecipProbe],
+    ids=lambda m: m.name,
+)
+def test_arecip_mode_probe_cpp(mathop, stimuli_kind):
+    """Lane GW ISA-unlock certification rows for the two SFPARECIP modes the
+    sfpi surface ships but nothing exercised (GS-3): Mod1=2 EXP and Mod1=1
+    COND_RECIP.
+
+    The kernel body is the bare mode (fresh_cpp/arecipprobe.h: approx_exp /
+    approx_recip(..., RecipMode::IfNegative)); the golden IS the ISA
+    functional model (tt-isa-documentation BlackholeA0 SFPARECIP.md),
+    transcribed mechanically into golden_generators.py.  Comparison is EXACT
+    (atol=rtol=0) on the Float32/dest_acc=Yes pipeline — the lane-CX
+    reachability discipline: the only pipeline that delivers and returns
+    full fp32 bit patterns (denormals and -0.0 included).
+
+    Run against the lane-GW extended craq-sim, a pass certifies the sim
+    extension's transcription; run on silicon, a pass adjudicates the
+    doc-vs-sim SIM GAP (the where-adjudication precedent: silicon is the
+    authority).  The 'boundaries' leg lands exactly on every branch edge of
+    the doc model, both signs; the 'core' leg sweeps the useful ranges.
+    COND_RECIP's compiler contract is VB == VC (recip where the SOURCE is
+    negative, sign NOT rejoined) — the raw-word encoding the lane-GW
+    sfpi-gcc change emits."""
+    if TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE:
+        pytest.skip(reason="SFPARECIP EXP/COND_RECIP probes are BH-only")
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    if stimuli_kind == "boundaries":
+        spec_A = StimuliSpec.custom(values=_ARECIP_PROBE_BOUNDARIES)
+    else:
+        # Core sweep: the EXP mode's useful domain |x| < 2 plus the tail and
+        # recip-relevant magnitudes; signs exercise the sign-preserve (EXP)
+        # and negative-only (COND_RECIP) clauses.
+        spec_A = StimuliSpec.uniform(low=-4.0, high=4.0)
+    # Kernel selector: hosted on SfpuType::identity (generic init; the R7
+    # LLK-pristine rule forbids extending the metal SfpuType enum), impl 5 =
+    # EXP probe, impl 6 = COND_RECIP probe; the golden keys on the probe's
+    # own MathOperation.
+    impl = 5 if mathop is MathOperation.ApproxExpProbe else 6
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        DestAccumulation.Yes,
+        ApproximationMode.No,
+        MathOperation.Identity,
+        FastMode.No,
+        [64, 64],
+        spec_A=spec_A,
+        custom_atol=0.0,
+        custom_rtol=0.0,
+        fresh_cpp_impl=impl,
+        golden_mathop=mathop,
     )
 
 

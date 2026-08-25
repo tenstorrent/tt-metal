@@ -196,6 +196,13 @@ class MathOperation(Enum):
     SqrtCustom = OpSpec("sqrt_custom", MathOpType.SFPU_UNARY)
     Add1 = OpSpec("add1", MathOpType.SFPU_UNARY)
     CastFp32ToFp16a = OpSpec("cast_fp32_to_fp16a", MathOpType.SFPU_UNARY)
+    # Lane GW SFPARECIP-mode certification probes (harness-only rows; golden =
+    # the ISA functional model, exact comparison, BH only).  GOLDEN-ONLY keys:
+    # never pasted into MATH_OP (the kernel selector rides SfpuType::identity
+    # + FRESH_CPP_IMPL 5/6 — the R7 LLK-pristine rule forbids extending the
+    # metal SfpuType enum), so the cpp_enum_value is a non-enum tag.
+    ApproxExpProbe = OpSpec("approx_exp_probe", MathOpType.SFPU_UNARY)
+    ApproxCondRecipProbe = OpSpec("approx_cond_recip_probe", MathOpType.SFPU_UNARY)
     # isinf/isnan family: cpp_enum_value must match the SfpuType enumerator name
     # so SFPU_UNARY_OPERATION = SfpuType::{value} resolves.
     Isinf = OpSpec("isinf", MathOpType.SFPU_UNARY)

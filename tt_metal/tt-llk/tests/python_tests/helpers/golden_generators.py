@@ -2257,6 +2257,8 @@ class UnarySFPUGolden:
             MathOperation.SqrtCustom: self._sqrt,
             MathOperation.Add1: self._add1,
             MathOperation.CastFp32ToFp16a: self._cast_fp32_to_fp16a,
+            MathOperation.ApproxExpProbe: self._approx_exp_probe,
+            MathOperation.ApproxCondRecipProbe: self._approx_cond_recip_probe,
             MathOperation.Isinf: self._isinf,
             MathOperation.Isposinf: self._isposinf,
             MathOperation.Isneginf: self._isneginf,
@@ -2544,6 +2546,110 @@ class UnarySFPUGolden:
     def _logical_not(self, x):
         # logical_not(x) = (x == 0) ? 1 : 0. NaN != 0, so logical_not(nan) = 0.
         return 1.0 if x == 0 else 0.0
+
+
+    # Lane GW SFPARECIP-mode probes: the golden IS the ISA functional model
+    # (tt-isa-documentation BlackholeA0 SFPARECIP.md supporting definitions),
+    # transcribed mechanically (laneGW-evidence-20260825 extraction; the
+    # ApproxRecip table equals the pinned craq-sim's byte-for-byte).  The
+    # rows compare EXACTLY (atol=rtol=0) on the Float32/dest_acc=Yes
+    # pipeline, so a CRAQ pass certifies the sim extension and a device pass
+    # adjudicates doc-vs-silicon.
+    _ARECIP_RECIP_LUT = (
+        127, 125, 123, 121, 119, 117, 116, 114, 112, 110, 109, 107, 105, 104, 102, 100, 99, 97, 96, 94, 93, 91, 90, 88, 87,
+        85, 84, 83, 81, 80, 79, 77, 76, 75, 74, 72, 71, 70, 69, 68, 66, 65, 64, 63, 62, 61, 60, 59, 58, 57,
+        56, 55, 54, 53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43, 42, 41, 40, 40, 39, 38, 37, 36, 35, 35, 34,
+        33, 32, 31, 31, 30, 29, 28, 28, 27, 26, 25, 25, 24, 23, 23, 22, 21, 21, 20, 19, 19, 18, 17, 17, 16,
+        15, 15, 14, 14, 13, 12, 12, 11, 11, 10, 9, 9, 8, 8, 7, 7, 6, 5, 5, 4, 4, 3, 3, 2, 2,
+        1, 1, 0,
+    )
+    _ARECIP_EXP_LUT = (
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+        5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+        6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7,
+        7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 8,
+        8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9,
+        9, 9, 9, 9, 9, 9, 9, 9, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 11, 11, 11,
+        11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12,
+        12, 12, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 14, 14, 14, 14, 14, 14, 14, 14, 14,
+        14, 14, 14, 14, 14, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 16, 16, 16, 16, 16,
+        16, 16, 16, 16, 16, 16, 16, 16, 16, 17, 17, 17, 17, 17, 17, 17, 18, 18, 18, 18, 18, 18, 18, 19, 19,
+        19, 19, 19, 19, 19, 20, 20, 20, 20, 20, 20, 20, 21, 21, 21, 21, 21, 21, 21, 22, 22, 22, 22, 22, 22,
+        22, 23, 23, 23, 23, 23, 23, 24, 24, 24, 24, 24, 24, 24, 25, 25, 25, 25, 25, 25, 25, 26, 26, 26, 26,
+        26, 26, 27, 27, 27, 27, 27, 27, 27, 28, 28, 28, 28, 28, 28, 28, 29, 29, 29, 29, 29, 29, 30, 30, 30,
+        30, 30, 30, 30, 31, 31, 31, 31, 31, 31, 32, 32, 32, 32, 32, 32, 33, 33, 33, 33, 33, 33, 33, 34, 34,
+        34, 34, 34, 34, 35, 35, 35, 35, 35, 35, 36, 36, 36, 36, 36, 37, 37, 37, 38, 38, 38, 39, 39, 39, 40,
+        40, 40, 41, 41, 41, 42, 42, 42, 43, 43, 43, 44, 44, 44, 45, 45, 45, 46, 46, 46, 47, 47, 47, 48, 48,
+        49, 49, 49, 50, 50, 50, 51, 51, 51, 52, 52, 52, 53, 53, 53, 54, 54, 54, 55, 55, 56, 56, 56, 57, 57,
+        57, 58, 58, 58, 59, 59, 60, 60, 60, 61, 61, 61, 62, 62, 63, 63, 63, 64, 64, 64, 65, 65, 66, 66, 66,
+        67, 67, 67, 68, 68, 69, 69, 69, 70, 70, 71, 71, 71, 72, 72, 72, 73, 73, 74, 74, 74, 75, 75, 76, 76,
+        76, 77, 77, 78, 78, 78, 79, 79, 80, 80, 80, 81, 81, 82, 82, 83, 83, 84, 85, 86, 87, 88, 88, 89, 90,
+        91, 92, 93, 94, 94, 95, 96, 97, 98, 99, 100, 101, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113,
+        113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4,
+        5, 5, 6, 6, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13, 14, 15, 15, 16, 16, 17, 17, 18,
+        19, 19, 20, 20, 21, 21, 22, 23, 23, 24, 24, 25, 26, 26, 27, 27, 28, 29, 29, 30, 31, 31, 32, 32, 33,
+        34, 34, 35, 36, 36, 37, 38, 38, 39, 39, 40, 41, 41, 42, 43, 43, 44, 45, 45, 47, 48, 50, 51, 52, 54,
+        55, 57, 58, 60, 61, 63, 64, 66, 67, 69, 70, 72, 73, 75, 76, 78, 80, 81, 83, 85, 86, 88, 90, 91, 93,
+        95, 97, 98, 100, 102, 104, 106, 107, 109, 111, 113, 115, 117, 119, 121, 123, 125, 127, 128, 129, 130, 131, 132, 133, 134,
+        135, 136, 137, 139, 140, 141, 142, 143, 144, 145, 146, 147, 149, 150, 151, 152, 153, 155, 156, 157, 158, 159, 161, 162, 163,
+        165, 166, 167, 168, 170, 171, 172, 174, 175, 177, 178, 179, 181, 182, 184, 185, 187, 188, 189, 191, 192, 194, 196, 197, 199,
+        200, 202, 203, 205, 207, 208, 210, 211, 213, 215, 216, 218, 220, 222, 223, 225, 227, 229, 230, 232, 234,
+    )
+
+    @staticmethod
+    def _approx_recip_model(mag):
+        # ApproxRecip(x) on a non-negative fp32 magnitude (doc functional model).
+        if mag < 0x00800000:  # zero/denormal
+            return 0x7F800000  # Inf
+        if mag < 0x7E800000:  # x < 2**126
+            return ((253 - (mag >> 23)) << 23) | (
+                UnarySFPUGolden._ARECIP_RECIP_LUT[(mag >> 16) & 0x7F] << 16
+            )
+        return 0
+
+    @staticmethod
+    def _approx_exp_model(mag):
+        # ApproxExp(x) on a non-negative fp32 magnitude (doc functional model).
+        if mag < 0x00800000:  # zero/denormal
+            return 0x3F800000  # 1.0
+        if mag < 0x3C800000:  # x < 0.015625
+            return 0x3F810000 | (mag & 0xFFFF)
+        if mag < 0x3F320000:  # x < 0.6953125
+            return (
+                0x3F800000
+                | (UnarySFPUGolden._ARECIP_EXP_LUT[(mag >> 16) - 0x3C80] << 16)
+                | (mag & 0xFFFF)
+            )
+        if mag < 0x40000000:  # x < 2
+            return (
+                0x40000000
+                | (UnarySFPUGolden._ARECIP_EXP_LUT[(mag >> 16) - 0x3C80] << 16)
+                | (mag & 0xFFFF)
+            )
+        return 0x40800000 | (mag & 0xFFFF)
+
+    def _approx_exp_probe(self, x):
+        # SFPARECIP Mod1=2 (EXP): sign-preserved e^|x| — Sign + ApproxExp(x - Sign).
+        bits = struct.unpack("<I", struct.pack("<f", x))[0]
+        out = (bits & 0x80000000) | self._approx_exp_model(bits & 0x7FFFFFFF)
+        return struct.unpack("<f", struct.pack("<I", out))[0]
+
+    def _approx_cond_recip_probe(self, x):
+        # SFPARECIP Mod1=1 (COND_RECIP): where the source is negative,
+        # ApproxRecip of the magnitude, sign NOT rejoined; elsewhere unchanged
+        # (VB == VC, the compiler's single-source surface contract).
+        bits = struct.unpack("<I", struct.pack("<f", x))[0]
+        if bits & 0x80000000:
+            out = self._approx_recip_model(bits & 0x7FFFFFFF)
+        else:
+            out = bits
+        return struct.unpack("<f", struct.pack("<I", out))[0]
 
     def _cast_fp32_to_fp16a(self, x):
         # cast_fp32_to_fp16a lowers to sfpi::convert<vFloat16a> =
