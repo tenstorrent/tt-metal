@@ -113,6 +113,31 @@ def _supported_context() -> int:
     return int(contract.get("current_supported_context") or MAX_CONTEXT)
 
 
+def _reorder_history(history, order, picks):
+    """Reorder a vLLM ``[rows, L]`` token history into graph-row order.
+
+    Type-preserving **on purpose**. ``Generator._row_token_ids`` consumes these
+    with ``torch.as_tensor(history)``, which raises ``TypeError: only integer
+    tensors of a single element can be converted to an index`` when handed a
+    *list of 1-D tensors*. Rebuilding a tensor history with a list comprehension
+    therefore turns a working penalised decode into a crash -- and only when the
+    width ladder is active, since with the ladder off ``order`` is ``None`` and
+    the history is passed through untouched. That is exactly the shape of bug
+    that reaches production: invisible on the default path, fatal on the new one.
+
+    Anything that supports fancy indexing (torch tensors, numpy arrays) is
+    indexed so its type survives; genuine python sequences keep the list
+    comprehension, which is already what ``_row_token_ids`` expects from them.
+    """
+    if history is None:
+        return None
+    if isinstance(history, torch.Tensor):
+        return history[order.to(torch.long)]
+    if hasattr(history, "__getitem__") and hasattr(history, "dtype"):  # numpy & friends
+        return history[list(picks)]
+    return [history[i] for i in picks]
+
+
 def _as_int_list(values, length: int, default) -> list:
     """vLLM hands per-row sampling params over as python lists; normalise them."""
     if values is None:
@@ -356,10 +381,33 @@ class Qwen3CoderForCausalLM:
         self._pending_orders.clear()
         self._next_output_tag = self._next_issue_tag
 
+    #: The ladder used when ``QWEN3_DECODE_WIDTHS`` is unset. Powers of two to
+    #: ``max_num_seqs``: each step runs in the narrowest graph that holds the
+    #: live rows, so the cost a user pays tracks occupancy instead of the slot
+    #: count the server was configured with.
+    #:
+    #: On by default because the alternative default is *known wrong*: a
+    #: ``max_num_seqs=32`` server decodes a single user at 4.3464 t/s/u against
+    #: 49.3636 with the ladder, and a deployment that simply does not set an
+    #: environment variable gets the slow one. That is the same failure shape as
+    #: a missing ``sample_on_device_mode`` -- a config key whose absence looks
+    #: like broken hardware rather than a default.
+    #:
+    #: ``QWEN3_DECODE_WIDTHS=32`` (or any single width equal to ``max_num_seqs``)
+    #: restores the previous fixed-width behaviour exactly.
+    DEFAULT_DECODE_WIDTHS = (1, 2, 4, 8, 16, 32)
+
     def _configured_widths(self) -> list[int]:
+        """Decode graph widths this server may capture, ascending.
+
+        ``max_num_seqs`` is always present -- a graph can never be wider than
+        the slots the caller sends, and the full-width graph must exist as the
+        fallback -- and anything above it is dropped.
+        """
         raw = os.getenv("QWEN3_DECODE_WIDTHS", "").strip()
+        source = raw.split(",") if raw else [str(w) for w in self.DEFAULT_DECODE_WIDTHS]
         widths = {self.max_num_seqs}
-        for piece in raw.split(","):
+        for piece in source:
             piece = piece.strip()
             if not piece:
                 continue
@@ -653,8 +701,8 @@ class Qwen3CoderForCausalLM:
             repetition = [repetition[i] for i in picks]
             # The staged penalty rows are per *graph* row too, and the history
             # they are keyed on has to travel with them.
-            prompt_tokens = None if prompt_tokens is None else [prompt_tokens[i] for i in picks]
-            output_tokens = None if output_tokens is None else [output_tokens[i] for i in picks]
+            prompt_tokens = _reorder_history(prompt_tokens, order, picks)
+            output_tokens = _reorder_history(output_tokens, order, picks)
         live, graph_changed = self.generator.set_penalty_params(
             presence=presence,
             frequency=frequency,
@@ -797,6 +845,26 @@ class Qwen3CoderForCausalLM:
             # which makes the next device-sampled step re-capture through
             # ``_refresh_trace_state`` instead of replaying a released trace.
             self._audit["host_sampled_decode_steps"] += 1
+            # Make the demotion loud. vLLM decides this per request and logs
+            # nothing, so without this line a served request silently drops from
+            # ~49 t/s/u to ~3.6 and the only visible symptom is that the model
+            # "got slow" -- which is exactly how this port's batch-scaling defect
+            # was first reported. The server-level ``sample_on_device_mode: all``
+            # is still correct and still says nothing about it.
+            self._warn_once(
+                "host_sampled_decode",
+                "This request was routed to HOST sampling by vLLM, so decode runs "
+                "eager with no captured trace and no width compaction: measured "
+                "3.595 t/s/u against 49.345 on the traced path, a ~14x slowdown "
+                "for the affected requests. On this 4-die mesh the usual cause is "
+                "`logprobs` -- ANY value including 0, because "
+                "`model_runner.check_perform_device_sampling` tests "
+                "`max_num_logprobs is not None` and then rejects a mesh that is "
+                "not 8 or 32 dies. Other triggers are min_p, bad_words, "
+                "logit_bias and structured output. Drop the offending parameter "
+                "to stay on the traced path; see doc/batch_scaling/README.md, "
+                "'logprobs silently cost 14x on this mesh'.",
+            )
             self._needs_decode_install = True
             self._reset_pending_orders()
             logits = self.generator.decode_forward(

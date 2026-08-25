@@ -286,5 +286,16 @@
       "doc/datatype_sweep/probes/kv_bfp8_diagnosis.json (both cache writers, six cache/input combinations)",
       "doc/datatype_sweep/logs/rows/R19_kv_bfp8.log, R28_kv_bfp8_bw64_24.log"
     ]
+  },
+  "stage11_note": "Stage 11 (batch scaling, doc/batch_scaling/) added the variable-width decode ladder and re-validated the context bound under the SHIPPED SERVING configuration -- vLLM KV pool 263168, max_num_seqs 32, QWEN3_DECODE_WIDTHS 1,2,4,8,16,32 -- which is a different setup from the standalone batch-1 probe recorded in `measured` above. current_supported_context is unchanged at 262144 and there is still no capability reduction: `get_max_tokens_all_users` serves min(max_model_len, 262144). The fields below record exactly how far that bound has been exercised in serving, so that this file -- which tt/generator_vllm.py reads as the source of truth -- and doc/batch_scaling/README.md's limitations state the same thing rather than each carrying half of it.",
+  "stage11_serving_context": {
+    "served_context_tokens": 262144,
+    "serving_validated_prefill_tokens": 262080,
+    "serving_validation_gap_tokens": 64,
+    "serving_validation_gap_fraction": 0.000244140625,
+    "serving_config": "KV pool 263168 tokens (8224 blocks), max_num_seqs 32, QWEN3_DECODE_WIDTHS 1,2,4,8,16,32, trace_region_size 50331648",
+    "evidence": "doc/batch_scaling/probes/kv_pool_ceiling_sixwidth_production.json",
+    "note": "A 262080-token prefill completes at this configuration with 21.9228 GB/die free. The last 64 tokens of the advertised context have NOT been exercised in serving. The standalone batch-1 probe in `measured` did reach 262144, so this is a serving-configuration gap rather than a model-capability one, and the practical risk is small -- but 'measured at 262080' and 'proven at 262144' are different claims and only the first is true for the serving path.",
+    "closes_when": "a 262144-token prefill is run at the serving configuration above; update serving_validated_prefill_tokens to 262144, set the gap fields to 0, and drop the matching limitation from doc/batch_scaling/README.md."
   }
 }
