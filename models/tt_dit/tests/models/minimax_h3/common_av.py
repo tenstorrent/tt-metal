@@ -471,6 +471,9 @@ def run_warm_generation(pipeline, prompt: str, *, seed: int, **gen_kwargs):
     if ttnn.using_distributed_env():
         ttnn.distributed_context_barrier()
 
+    with pipeline.quiet():
+        output = pipeline(prompt, seed=seed, **gen_kwargs)
+
     output = pipeline(prompt, seed=seed, **gen_kwargs)
 
     assert pipeline.last_padded_len == warm_padded_len, (

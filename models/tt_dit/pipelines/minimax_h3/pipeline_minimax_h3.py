@@ -46,6 +46,7 @@ import json
 import os
 import time
 from collections.abc import Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -466,6 +467,16 @@ class MiniMaxH3Pipeline:
         """Generation logs: host rank, measured call only. Warmup is silent."""
         if self._log_generation:
             self._host_log(message)
+
+    @contextmanager
+    def quiet(self):
+        """Silence generation logs (per-step, packed length, VAE profile) for this call."""
+        previous = self._log_generation
+        self._log_generation = False
+        try:
+            yield
+        finally:
+            self._log_generation = previous
 
     def _make_resident(self, stage: str) -> None:
         """Release whatever the previous stage held before the next one allocates.
