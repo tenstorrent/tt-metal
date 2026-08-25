@@ -106,6 +106,14 @@ void kernel_main() {
     constexpr uint32_t partial_iter_output_tiles =
         in_ntiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MAX_TILES_PER_REDUCTION;
 
+#if PACK_TO_SCRATCH == 1
+    // The scratch path assembles every c-block into one full-width stick, and llk_pack_untilize places
+    // a slice at block_c_index * block_ct_dim -- an offset in units of the block's own width -- which a
+    // narrower (remainder) last block cannot express for most widths. Allow one c-block only.
+    static_assert(
+        in_ntiles_c <= MAX_TILES_PER_REDUCTION,
+        "PACK_TO_SCRATCH does not support wide reduction: channels per shard must fit in a single reduction.");
+#endif
     static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::AVG, "Only supports REDUCE_OP = MAX or AVG");
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
     constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::AVG) ? true : false;
