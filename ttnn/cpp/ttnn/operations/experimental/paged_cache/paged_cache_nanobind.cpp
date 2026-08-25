@@ -21,45 +21,6 @@
 namespace ttnn::operations::experimental::paged_cache::detail {
 
 void bind_experimental_paged_cache_operations(nb::module_& mod) {
-    ttnn::bind_function<"indexed_fused_update_cache", "ttnn.experimental.">(
-        mod,
-        R"doc(
-            Writes packed rows from two input tensors into two cache tensors in parallel.
-
-            ``physical_update_idxs_tensor`` is a row-major INT32 tensor with shape
-            ``[1, num_rows]``. Entry ``i`` gives the physical cache row for input
-            row ``i``; negative and out-of-range entries are skipped. Physical rows
-            flatten cache dimensions 0 and 2: ``page = index // cache.shape[2]`` and
-            ``row_in_page = index % cache.shape[2]``. This operation does not perform
-            logical page-table translation.
-
-            Both caches and inputs must be interleaved BF16 TILE tensors. Cache shape
-            is ``[num_pages, num_heads, rows_per_page, head_dim]`` and packed input
-            shape is ``[1, num_heads, num_rows, head_dim]``. The operation updates
-            the cache tensors in place and serializes all rows owned by a head/width
-            worker, so multiple rows may safely target the same physical page.
-
-            Replicated tensors are supported on single- or multi-device meshes;
-            tensor-sharded mesh placements are rejected. Initial hardware support is
-            Wormhole and Blackhole.
-
-            Args:
-                cache_tensor1 (ttnn.Tensor): First paged cache, updated in place.
-                input_tensor1 (ttnn.Tensor): Packed rows for ``cache_tensor1``.
-                cache_tensor2 (ttnn.Tensor): Second paged cache, updated in place.
-                input_tensor2 (ttnn.Tensor): Packed rows for ``cache_tensor2``.
-                physical_update_idxs_tensor (ttnn.Tensor): Physical destination rows.
-
-            Returns:
-                Tuple[ttnn.Tensor, ttnn.Tensor]: The two in-place cache tensors.
-        )doc",
-        &ttnn::experimental::indexed_fused_update_cache,
-        nb::arg("cache_tensor1").noconvert(),
-        nb::arg("input_tensor1").noconvert(),
-        nb::arg("cache_tensor2").noconvert(),
-        nb::arg("input_tensor2").noconvert(),
-        nb::arg("physical_update_idxs_tensor").noconvert());
-
     const auto* paged_update_cache_doc =
         R"doc(
          Paged update cache operation. This operation expects the following inputs: cache_tensor of shape [B, 1, kv_len, head_dim] and input_tensor of shape [1, B, 1[32], head_dim] where input_tensor is height sharded on B cores. update_idxs will specify for each batch element which token to update in the cache.

@@ -30,6 +30,30 @@ def _replicated_device_tensor(tensor, mesh_device, *, dtype=ttnn.bfloat16, layou
     )
 
 
+def _sharded_device_tensor(tensor, mesh_device, shard_dim, *, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
+    return ttnn.from_torch(
+        tensor,
+        device=mesh_device,
+        dtype=dtype,
+        layout=layout,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim),
+    )
+
+
+def _mapped_2d_device_tensor(
+    tensor, mesh_device, mesh_shape, mesh_dims, *, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+):
+    return ttnn.from_torch(
+        tensor,
+        device=mesh_device,
+        dtype=dtype,
+        layout=layout,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=mesh_dims),
+    )
+
+
 def _apply_reference(cache, packed, positions):
     expected = cache.clone()
     rows_per_page = cache.shape[2]
@@ -378,7 +402,131 @@ def test_indexed_fused_update_cache_replicated_mesh(mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device", [2], indirect=True)
-def test_indexed_fused_update_cache_rejects_sharded_mesh(mesh_device, expect_error):
+@pytest.mark.parametrize(
+    "shard_dim,cache_shape",
+    [
+        pytest.param(1, (2, 4, 64, 64), id="heads"),
+        pytest.param(3, (2, 2, 64, 128), id="head_dim"),
+    ],
+)
+def test_indexed_fused_update_cache_tensor_parallel_mesh(mesh_device, shard_dim, cache_shape):
+    torch.manual_seed(37 + shard_dim)
+    source_rows = 6
+    input_shape = (1, cache_shape[1], source_rows, cache_shape[3])
+    cache1 = torch.zeros(cache_shape, dtype=torch.bfloat16)
+    cache2 = torch.zeros(cache_shape, dtype=torch.bfloat16)
+    first_input1 = torch.randn(input_shape, dtype=torch.bfloat16)
+    first_input2 = torch.randn(input_shape, dtype=torch.bfloat16)
+    first_positions = [0, 31, 32, 63, 64, -1]
+
+    cache1_tt = _sharded_device_tensor(cache1, mesh_device, shard_dim)
+    cache2_tt = _sharded_device_tensor(cache2, mesh_device, shard_dim)
+    mesh_device.enable_program_cache()
+    mesh_device.clear_program_cache()
+
+    try:
+        output1, output2 = ttnn.experimental.indexed_fused_update_cache(
+            cache1_tt,
+            _sharded_device_tensor(first_input1, mesh_device, shard_dim),
+            cache2_tt,
+            _sharded_device_tensor(first_input2, mesh_device, shard_dim),
+            _replicated_device_tensor(
+                torch.tensor([first_positions], dtype=torch.int32),
+                mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            ),
+        )
+        cache_entries = mesh_device.num_program_cache_entries()
+
+        assert output1.tensor_topology() == cache1_tt.tensor_topology()
+        assert output2.tensor_topology() == cache2_tt.tensor_topology()
+        assert torch.equal(
+            ttnn.to_torch(output1, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim)),
+            _apply_reference(cache1, first_input1, first_positions),
+        )
+        assert torch.equal(
+            ttnn.to_torch(output2, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim)),
+            _apply_reference(cache2, first_input2, first_positions),
+        )
+
+        # A cache hit must rebind new sharded inputs and replicated positions
+        # while preserving the in-place cache tensors and their topology.
+        second_input1 = torch.randn(input_shape, dtype=torch.bfloat16)
+        second_input2 = torch.randn(input_shape, dtype=torch.bfloat16)
+        second_positions = [2, 3, 65, 95, -1, cache_shape[0] * cache_shape[2]]
+        output1, output2 = ttnn.experimental.indexed_fused_update_cache(
+            cache1_tt,
+            _sharded_device_tensor(second_input1, mesh_device, shard_dim),
+            cache2_tt,
+            _sharded_device_tensor(second_input2, mesh_device, shard_dim),
+            _replicated_device_tensor(
+                torch.tensor([second_positions], dtype=torch.int32),
+                mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            ),
+        )
+
+        assert cache_entries > 0
+        assert mesh_device.num_program_cache_entries() == cache_entries
+        expected1 = _apply_reference(
+            _apply_reference(cache1, first_input1, first_positions), second_input1, second_positions
+        )
+        expected2 = _apply_reference(
+            _apply_reference(cache2, first_input2, first_positions), second_input2, second_positions
+        )
+        assert output1.tensor_topology() == cache1_tt.tensor_topology()
+        assert output2.tensor_topology() == cache2_tt.tensor_topology()
+        assert torch.equal(
+            ttnn.to_torch(output1, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim)), expected1
+        )
+        assert torch.equal(
+            ttnn.to_torch(output2, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim)), expected2
+        )
+    finally:
+        mesh_device.disable_and_clear_program_cache()
+
+
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 2), id="2x2")], indirect=True)
+def test_indexed_fused_update_cache_2d_tensor_parallel_mesh(mesh_device):
+    torch.manual_seed(43)
+    mesh_shape = (2, 2)
+    shard_dims = (1, 3)
+    cache_shape = (2, 4, 64, 128)
+    input_shape = (1, 4, 6, 128)
+    cache1 = torch.zeros(cache_shape, dtype=torch.bfloat16)
+    cache2 = torch.zeros(cache_shape, dtype=torch.bfloat16)
+    input1 = torch.randn(input_shape, dtype=torch.bfloat16)
+    input2 = torch.randn(input_shape, dtype=torch.bfloat16)
+    positions = [0, 31, 32, 63, 64, -1]
+
+    cache1_tt = _mapped_2d_device_tensor(cache1, mesh_device, mesh_shape, shard_dims)
+    cache2_tt = _mapped_2d_device_tensor(cache2, mesh_device, mesh_shape, shard_dims)
+    output1, output2 = ttnn.experimental.indexed_fused_update_cache(
+        cache1_tt,
+        _mapped_2d_device_tensor(input1, mesh_device, mesh_shape, shard_dims),
+        cache2_tt,
+        _mapped_2d_device_tensor(input2, mesh_device, mesh_shape, shard_dims),
+        _mapped_2d_device_tensor(
+            torch.tensor([positions], dtype=torch.int32),
+            mesh_device,
+            mesh_shape,
+            (None, None),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        ),
+    )
+
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=shard_dims)
+    assert output1.tensor_topology() == cache1_tt.tensor_topology()
+    assert output2.tensor_topology() == cache2_tt.tensor_topology()
+    assert torch.equal(ttnn.to_torch(output1, mesh_composer=composer), _apply_reference(cache1, input1, positions))
+    assert torch.equal(ttnn.to_torch(output2, mesh_composer=composer), _apply_reference(cache2, input2, positions))
+
+
+@pytest.mark.parametrize("mesh_device", [2], indirect=True)
+def test_indexed_fused_update_cache_rejects_sharded_positions(mesh_device, expect_error):
     cache_shape = (2, 2, 64, 64)
     input_shape = (1, 2, 4, 64)
     positions = torch.arange(input_shape[2], dtype=torch.int32).reshape(1, -1)
@@ -396,5 +544,47 @@ def test_indexed_fused_update_cache_rejects_sharded_mesh(mesh_device, expect_err
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
     )
 
-    with expect_error(RuntimeError, "must use replicated mesh placement"):
+    with expect_error(RuntimeError, "physical_update_idxs_tensor must be replicated across mesh axes"):
         ttnn.experimental.indexed_fused_update_cache(cache1, input1, cache2, input2, sharded_positions)
+
+
+@pytest.mark.parametrize("mesh_device", [2], indirect=True)
+def test_indexed_fused_update_cache_rejects_mesh_row_sharding(mesh_device, expect_error):
+    cache_shape = (2, 2, 128, 64)
+    input_shape = (1, 2, 8, 64)
+    positions = torch.arange(input_shape[2], dtype=torch.int32).reshape(1, -1)
+
+    with expect_error(RuntimeError, "cache page/row sharding requires physical-index remapping"):
+        ttnn.experimental.indexed_fused_update_cache(
+            _sharded_device_tensor(torch.zeros(cache_shape, dtype=torch.bfloat16), mesh_device, 2),
+            _sharded_device_tensor(torch.zeros(input_shape, dtype=torch.bfloat16), mesh_device, 2),
+            _sharded_device_tensor(torch.zeros(cache_shape, dtype=torch.bfloat16), mesh_device, 2),
+            _sharded_device_tensor(torch.zeros(input_shape, dtype=torch.bfloat16), mesh_device, 2),
+            _replicated_device_tensor(
+                positions,
+                mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            ),
+        )
+
+
+@pytest.mark.parametrize("mesh_device", [2], indirect=True)
+def test_indexed_fused_update_cache_rejects_mismatched_data_topology(mesh_device, expect_error):
+    cache_shape = (2, 4, 64, 128)
+    input_shape = (1, 4, 4, 128)
+    positions = torch.arange(input_shape[2], dtype=torch.int32).reshape(1, -1)
+
+    with expect_error(RuntimeError, "must use identical mesh topology"):
+        ttnn.experimental.indexed_fused_update_cache(
+            _sharded_device_tensor(torch.zeros(cache_shape, dtype=torch.bfloat16), mesh_device, 1),
+            _sharded_device_tensor(torch.zeros(input_shape, dtype=torch.bfloat16), mesh_device, 3),
+            _sharded_device_tensor(torch.zeros(cache_shape, dtype=torch.bfloat16), mesh_device, 1),
+            _sharded_device_tensor(torch.zeros(input_shape, dtype=torch.bfloat16), mesh_device, 3),
+            _replicated_device_tensor(
+                positions,
+                mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            ),
+        )

@@ -4,8 +4,6 @@
 set(TTNN_OP_EXPERIMENTAL_PAGED_CACHE_API_HEADERS paged_cache.hpp)
 
 set(TTNN_OP_EXPERIMENTAL_PAGED_CACHE_SRCS
-    device/indexed_fused_update_cache/indexed_fused_update_cache_device_operation.cpp
-    device/indexed_fused_update_cache/indexed_fused_update_cache_program_factory.cpp
     device/update_cache/paged_update_cache_device_operation.cpp
     device/update_cache/paged_update_cache_program_factory.cpp
     device/fused_update_cache/paged_fused_update_cache_device_operation.cpp

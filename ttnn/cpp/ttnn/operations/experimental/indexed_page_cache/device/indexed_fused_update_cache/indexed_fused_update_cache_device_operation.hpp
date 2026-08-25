@@ -4,6 +4,7 @@
 #pragma once
 
 #include <variant>
+#include <vector>
 
 #include "indexed_fused_update_cache_device_operation_types.hpp"
 #include "indexed_fused_update_cache_program_factory.hpp"
@@ -14,6 +15,7 @@ struct IndexedFusedUpdateCacheDeviceOperation {
     using operation_attributes_t = IndexedFusedUpdateCacheParams;
     using tensor_args_t = IndexedFusedUpdateCacheInputs;
     using spec_return_value_t = IndexedFusedUpdateCacheResultSpec;
+    using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
     using tensor_return_value_t = IndexedFusedUpdateCacheResult;
     using program_factory_t = std::variant<IndexedFusedUpdateCacheProgramFactory>;
 
@@ -21,6 +23,7 @@ struct IndexedFusedUpdateCacheDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 

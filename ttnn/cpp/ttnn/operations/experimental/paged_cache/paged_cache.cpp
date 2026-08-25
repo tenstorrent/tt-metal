@@ -5,23 +5,12 @@
 #include "device/update_cache/paged_update_cache_device_operation.hpp"
 #include "device/fused_update_cache/paged_fused_update_cache_device_operation.hpp"
 #include "device/fill_cache/paged_fill_cache_device_operation.hpp"
-#include "device/indexed_fused_update_cache/indexed_fused_update_cache_device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/experimental/paged_cache/paged_cache.hpp"
 
 namespace ttnn::experimental {
-
-std::tuple<ttnn::Tensor, ttnn::Tensor> indexed_fused_update_cache(
-    const Tensor& cache_tensor1,
-    const Tensor& input_tensor1,
-    const Tensor& cache_tensor2,
-    const Tensor& input_tensor2,
-    const Tensor& physical_update_idxs_tensor) {
-    return ttnn::prim::indexed_fused_update_cache(
-        cache_tensor1, input_tensor1, cache_tensor2, input_tensor2, physical_update_idxs_tensor);
-}
 
 ttnn::Tensor paged_update_cache(
     const Tensor& cache_tensor,

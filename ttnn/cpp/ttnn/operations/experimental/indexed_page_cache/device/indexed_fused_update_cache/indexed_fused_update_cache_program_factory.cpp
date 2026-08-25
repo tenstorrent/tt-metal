@@ -54,7 +54,7 @@ ttnn::device_operation::ProgramArtifacts IndexedFusedUpdateCacheProgramFactory::
     KernelSpec update{
         .unique_id = UPDATE,
         .source =
-            "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
+            "ttnn/cpp/ttnn/operations/experimental/indexed_page_cache/device/kernels/dataflow/"
             "indexed_fused_update_cache.cpp",
         .dfb_bindings =
             {DFBBinding{

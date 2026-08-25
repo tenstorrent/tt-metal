@@ -17,15 +17,43 @@ namespace {
 
 constexpr uint32_t max_update_rows = 256;
 constexpr uint32_t max_positions_page_bytes = max_update_rows * sizeof(int32_t);
+constexpr int cache_heads_dim = 1;
+constexpr int cache_head_dim = 3;
 
 void validate_device_tensor(const Tensor& tensor, const char* name) {
     TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(tensor.buffer() != nullptr, "{} must have a device buffer", name);
-    for (const auto& placement : tensor.device_storage().get_tensor_topology().placements()) {
+}
+
+void validate_mesh_topologies(const IndexedFusedUpdateCacheInputs& args) {
+    using MeshMapperConfig = tt::tt_metal::distributed::MeshMapperConfig;
+
+    const auto& cache_topology = args.cache_tensor1.tensor_topology();
+    TT_FATAL(
+        args.cache_tensor2.tensor_topology() == cache_topology &&
+            args.input_tensor1.tensor_topology() == cache_topology &&
+            args.input_tensor2.tensor_topology() == cache_topology,
+        "cache_tensor1, cache_tensor2, input_tensor1, and input_tensor2 must use identical mesh topology");
+
+    for (const auto& placement : cache_topology.placements()) {
+        if (const auto* shard = std::get_if<MeshMapperConfig::Shard>(&placement)) {
+            TT_FATAL(
+                shard->dim == cache_heads_dim || shard->dim == cache_head_dim,
+                "cache and input tensors may only be mesh-sharded over heads (dim 1) or head dimension (dim 3); "
+                "cache page/row sharding requires physical-index remapping");
+        }
+    }
+
+    const auto& positions_topology = args.physical_update_idxs_tensor.tensor_topology();
+    TT_FATAL(
+        positions_topology.distribution_shape() == cache_topology.distribution_shape() &&
+            positions_topology.mesh_coords() == cache_topology.mesh_coords(),
+        "physical_update_idxs_tensor must use the same mesh shape and coordinates as the cache tensors");
+    for (const auto& placement : positions_topology.placements()) {
         TT_FATAL(
-            std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placement),
-            "{} must use replicated mesh placement; tensor-sharded placement is not supported",
-            name);
+            std::holds_alternative<MeshMapperConfig::Replicate>(placement),
+            "physical_update_idxs_tensor must be replicated across mesh axes; sharded physical positions require "
+            "cache ownership and index-remapping support");
     }
 }
 
@@ -40,8 +68,6 @@ void validate_default_tile(const Tensor& tensor, const char* name) {
 
 void validate_cache_input_pair(
     const Tensor& cache, const Tensor& input, const char* cache_name, const char* input_name) {
-    validate_device_tensor(cache, cache_name);
-    validate_device_tensor(input, input_name);
     TT_FATAL(cache.device() == input.device(), "{} and {} must be on the same device", cache_name, input_name);
     TT_FATAL(cache.layout() == Layout::TILE, "{} must use TILE layout", cache_name);
     TT_FATAL(input.layout() == Layout::TILE, "{} must use TILE layout", input_name);
@@ -93,14 +119,22 @@ IndexedFusedUpdateCacheDeviceOperation::select_program_factory(const operation_a
 
 void IndexedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t&, const tensor_args_t& args) {
-    validate_cache_input_pair(args.cache_tensor1, args.input_tensor1, "cache_tensor1", "input_tensor1");
-    validate_cache_input_pair(args.cache_tensor2, args.input_tensor2, "cache_tensor2", "input_tensor2");
+    validate_device_tensor(args.cache_tensor1, "cache_tensor1");
+    validate_device_tensor(args.input_tensor1, "input_tensor1");
+    validate_device_tensor(args.cache_tensor2, "cache_tensor2");
+    validate_device_tensor(args.input_tensor2, "input_tensor2");
     validate_device_tensor(args.physical_update_idxs_tensor, "physical_update_idxs_tensor");
 
     TT_FATAL(
-        args.cache_tensor1.device() == args.cache_tensor2.device() &&
+        args.cache_tensor1.device() == args.input_tensor1.device() &&
+            args.cache_tensor1.device() == args.cache_tensor2.device() &&
+            args.cache_tensor1.device() == args.input_tensor2.device() &&
             args.cache_tensor1.device() == args.physical_update_idxs_tensor.device(),
         "all indexed_fused_update_cache tensors must be on the same device");
+    validate_mesh_topologies(args);
+
+    validate_cache_input_pair(args.cache_tensor1, args.input_tensor1, "cache_tensor1", "input_tensor1");
+    validate_cache_input_pair(args.cache_tensor2, args.input_tensor2, "cache_tensor2", "input_tensor2");
     TT_FATAL(
         args.cache_tensor1.logical_shape() == args.cache_tensor2.logical_shape(),
         "cache_tensor1 and cache_tensor2 must have identical shapes");
@@ -147,6 +181,12 @@ void IndexedFusedUpdateCacheDeviceOperation::validate_on_program_cache_hit(
 IndexedFusedUpdateCacheDeviceOperation::spec_return_value_t
 IndexedFusedUpdateCacheDeviceOperation::compute_output_specs(const operation_attributes_t&, const tensor_args_t& args) {
     return {args.cache_tensor1.tensor_spec(), args.cache_tensor2.tensor_spec()};
+}
+
+IndexedFusedUpdateCacheDeviceOperation::topology_return_value_t
+IndexedFusedUpdateCacheDeviceOperation::compute_output_topologies(
+    const operation_attributes_t&, const tensor_args_t& args) {
+    return {args.cache_tensor1.tensor_topology(), args.cache_tensor2.tensor_topology()};
 }
 
 IndexedFusedUpdateCacheDeviceOperation::tensor_return_value_t
