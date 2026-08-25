@@ -21,11 +21,11 @@ models:
       - "-c ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_tinyllama_ddp.yaml"
       - "--track_memory"
       - "--batch_size=160"
-      - "--max_steps=10"
+      - "--max_steps=1000"
     mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_32_1_ring_ring.textproto"
     tokenize:
       text_file: "data/shakespeare.txt"
-      hf_tokenizer: "data/tinyllama-tokenizer.json"
+      hf_tokenizer: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
       output_file: "data/tokenized_shakespeare_tinyllama"
 
   - name: "Llama 8B TP=8 DDP=4 Shakespeare"
@@ -39,7 +39,7 @@ models:
     mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_4_8_ring_ring.textproto"
     tokenize:
       text_file: "data/shakespeare.txt"
-      hf_tokenizer: "data/tinyllama-tokenizer.json"
+      hf_tokenizer: "meta-llama/Llama-3.1-8B-Instruct"
       output_file: "data/tokenized_shakespeare_llama8b"
 
   - name: "Llama 8B TP=4 DDP=8 Shakespeare"
@@ -52,7 +52,7 @@ models:
     mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_8_4_ring_ring.textproto"
     tokenize:
       text_file: "data/shakespeare.txt"
-      hf_tokenizer: "data/tinyllama-tokenizer.json"
+      hf_tokenizer: "meta-llama/Llama-3.1-8B-Instruct"
       output_file: "data/tokenized_shakespeare_llama8b"
 
   - name: "Qwen 3 1.7B DDP=32 Shakespeare"
@@ -66,7 +66,7 @@ models:
     mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_32_1_ring_ring.textproto"
     tokenize:
       text_file: "data/shakespeare.txt"
-      hf_tokenizer: "data/tinyllama-tokenizer.json"
+      hf_tokenizer: "Qwen/Qwen3-1.7B"
       output_file: "data/tokenized_shakespeare_qwen3"
 
   - name: "Tiny Deepseek v3 DDP=32 (Char) Shakespeare"
@@ -89,5 +89,5 @@ models:
     mgd: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/mgd/bh_galaxy_4_8_ring_ring.textproto"
     tokenize:
       text_file: "data/shakespeare.txt"
-      hf_tokenizer: "data/tinyllama-tokenizer.json"
+      hf_tokenizer: "meta-llama/Llama-3.1-70B-Instruct"
       output_file: "data/tokenized_shakespeare_llama70b"
