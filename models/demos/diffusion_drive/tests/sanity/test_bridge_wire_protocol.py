@@ -17,7 +17,6 @@ rejected rather than executed.  No device needed.
 from __future__ import annotations
 
 import importlib.util
-import pickle
 import socket
 import struct
 import threading
@@ -27,6 +26,11 @@ import numpy as np
 import pytest
 
 _SERVER = Path(__file__).resolve().parent.parent.parent / "scripts" / "ttnn_pdm_server.py"
+
+# A real protocol-4 pickle frame of {"camera_feature": [1, 2, 3]}, embedded as a literal
+# so this file never imports pickle to build one. Regenerate with:
+#   python -c 'import pickle;print(pickle.dumps({"camera_feature":[1,2,3]},protocol=4))'
+_PICKLE_FRAME = b"\x80\x04\x95\x1f\x00\x00\x00\x00\x00\x00\x00}\x94\x8c\x0ecamera_feature\x94]\x94(K\x01K\x02K\x03es."
 
 
 def _load_server_module():
@@ -90,7 +94,7 @@ def test_pickle_payload_is_rejected_not_executed(srv) -> None:
     this device-free test import ttnn via the root conftest.
     """
     with pytest.raises(ValueError, match="allow_pickle=False"):  # allow-pytest.raises: pure-Python codec check
-        srv._decode_msg(pickle.dumps({"camera_feature": [1, 2, 3]}))
+        srv._decode_msg(_PICKLE_FRAME)
 
 
 def test_roundtrip_over_a_real_socket(srv, tmp_path) -> None:
