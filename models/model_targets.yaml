@@ -1384,14 +1384,29 @@ targets:
   qwen3.6-35b-a3b:
     aliases: ["Qwen3.6-35B-A3B", "Qwen/Qwen3.6-35B-A3B"]
     skus:
-      # TODO: flip to active with CI-measured perf once a passing bh_quietbox_2 run lands
-      # (blocked on staging the 35B-A3B weights on the runner's /mnt/MLPerf HF cache).
+      # Measured on bh_quietbox_2 (P150x4, 4 BH dies) warm trace replay. TTFT is in ms;
+      # decode is batch_size=1 so t/s == t/s/u.
       bh_quietbox_2:
         entries:
           - batch_size: 1
-            seq_len: null
-            status: TODO
-            perf: {}
+            seq_len: 128
+            status: active
+            perf:
+              prefill_time_to_first_token: 490.0
+              decode_t/s: 25.28
+              decode_t/s/u: 25.28
+              tolerance: 0.2
+            accuracy: {}
+            owner_id: U08FBKRKTB8 # Kohei Yamaguchi
+            team: models
+          - batch_size: 1
+            seq_len: 4096
+            status: active
+            perf:
+              prefill_time_to_first_token: 9900.0
+              decode_t/s: 25.19
+              decode_t/s/u: 25.19
+              tolerance: 0.2
             accuracy: {}
             owner_id: U08FBKRKTB8 # Kohei Yamaguchi
             team: models
