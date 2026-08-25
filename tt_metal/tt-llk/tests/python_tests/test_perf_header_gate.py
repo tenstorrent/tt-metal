@@ -34,24 +34,34 @@ from perf_schema_derive import (
 
 
 def _test_name_alias_problems(catalog) -> list:
-    """Every ``test_name_aliases`` map (old -> new) must point at this catalog key.
+    """Every catalog entry must have ``test_name_aliases`` with current -> current.
 
-    The catalog key is the current test name. If an entry records a rename, every
-    value must equal that key and every key must be a previous name — not the
-    current one, and not another catalog entry.
+    Extra keys are previous names. Every value must equal the catalog key, so
+    renaming a test in place without editing this map fails: the identity
+    entry would still point at the old name.
     """
     problems = []
     claimed = {}
     for name, entry in sorted(catalog.items()):
-        aliases = entry.get("test_name_aliases")
-        if not aliases:
-            continue
-        if not isinstance(aliases, dict):
+        if "test_name_aliases" not in entry:
             problems.append(
-                f"  '{name}': test_name_aliases must be a map (old -> new), "
-                f"got {type(aliases).__name__}."
+                f"  '{name}': missing test_name_aliases. Add "
+                f"{{'{name}': '{name}'}} and record any previous names."
             )
             continue
+        aliases = entry["test_name_aliases"]
+        if not isinstance(aliases, dict) or not aliases:
+            problems.append(
+                f"  '{name}': test_name_aliases must be a non-empty map "
+                f"(old -> new), starting with '{name}' -> '{name}'."
+            )
+            continue
+        if aliases.get(name) != name:
+            problems.append(
+                f"  '{name}': test_name_aliases must include the current "
+                f"name '{name}' -> '{name}'. Update this map when the test "
+                f"is renamed."
+            )
         for old, new in aliases.items():
             if new != name:
                 problems.append(
@@ -59,12 +69,7 @@ def _test_name_alias_problems(catalog) -> list:
                     f"but this catalog entry is '{name}'. Every new name must "
                     f"match the current test name."
                 )
-            if old == name:
-                problems.append(
-                    f"  '{name}': test_name_aliases old name '{old}' is the "
-                    f"current test name; the key must be a previous name."
-                )
-            elif old in catalog:
+            if old != name and old in catalog:
                 problems.append(
                     f"  '{name}': test_name_aliases old name '{old}' is still "
                     f"a catalog key. Point aliases at the surviving name only."
@@ -110,7 +115,8 @@ def _assert_schemas_match(catalog, live, arch):
         "",
         "If intentional: update that test's 'columns', bump its 'version', and "
         "for a renamed column add an 'aliases' entry (old -> new). For a renamed "
-        "test, add 'test_name_aliases' (old -> new) on the new name.",
+        "test, update 'test_name_aliases' so the current name maps to itself and "
+        "every previous name maps to the current name.",
     ]
     assert not problems, "\n".join(msg)
 
@@ -134,9 +140,17 @@ def test_test_name_aliases_align_with_catalog_key():
         "perf_new": {
             "version": 1,
             "columns": ["marker"],
-            "test_name_aliases": {"perf_old": "perf_new", "perf_older": "perf_new"},
+            "test_name_aliases": {
+                "perf_new": "perf_new",
+                "perf_old": "perf_new",
+                "perf_older": "perf_new",
+            },
         },
-        "perf_untouched": {"version": 1, "columns": ["marker"]},
+        "perf_untouched": {
+            "version": 1,
+            "columns": ["marker"],
+            "test_name_aliases": {"perf_untouched": "perf_untouched"},
+        },
     }
     assert _test_name_alias_problems(catalog) == []
 
@@ -146,7 +160,10 @@ def test_test_name_aliases_reject_misaligned_new_name():
         "perf_new": {
             "version": 1,
             "columns": ["marker"],
-            "test_name_aliases": {"perf_old": "perf_wrong"},
+            "test_name_aliases": {
+                "perf_new": "perf_new",
+                "perf_old": "perf_wrong",
+            },
         },
     }
     problems = _test_name_alias_problems(catalog)
@@ -156,22 +173,51 @@ def test_test_name_aliases_reject_misaligned_new_name():
     assert "perf_new" in problems[0]
 
 
-def test_test_name_aliases_reject_identity_and_live_old_name():
+def test_test_name_aliases_require_current_identity():
     catalog = {
         "perf_new": {
             "version": 1,
             "columns": ["marker"],
-            "test_name_aliases": {"perf_new": "perf_new"},
+            "test_name_aliases": {"perf_old": "perf_new"},
         },
+    }
+    problems = _test_name_alias_problems(catalog)
+    assert any("must include the current name" in p for p in problems)
+
+
+def test_test_name_aliases_reject_rename_without_updating_map():
+    # Catalog key renamed in place; map still identity of the old name.
+    catalog = {
+        "perf_new": {
+            "version": 1,
+            "columns": ["marker"],
+            "test_name_aliases": {"perf_old": "perf_old"},
+        },
+    }
+    problems = _test_name_alias_problems(catalog)
+    assert any("must include the current name" in p for p in problems)
+    assert any("perf_old" in p and "perf_new" in p for p in problems)
+
+
+def test_test_name_aliases_reject_missing_and_stale_key():
+    catalog = {
+        "perf_new": {"version": 1, "columns": ["marker"]},
         "perf_still_live": {
             "version": 1,
             "columns": ["marker"],
-            "test_name_aliases": {"perf_other": "perf_still_live"},
+            "test_name_aliases": {
+                "perf_still_live": "perf_still_live",
+                "perf_other": "perf_still_live",
+            },
         },
-        "perf_other": {"version": 1, "columns": ["marker"]},
+        "perf_other": {
+            "version": 1,
+            "columns": ["marker"],
+            "test_name_aliases": {"perf_other": "perf_other"},
+        },
     }
     problems = _test_name_alias_problems(catalog)
-    assert any("current test name" in p for p in problems)
+    assert any("missing test_name_aliases" in p for p in problems)
     assert any("still a catalog key" in p for p in problems)
 
 
