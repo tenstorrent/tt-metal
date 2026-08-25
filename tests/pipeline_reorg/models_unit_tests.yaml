@@ -964,6 +964,23 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+- name: TT-DiT encoder unit tests, shared amongst all models.
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE  # umt5 fetches the Wan2.2 tokenizer from the hub
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    export DIT_UNIT_TEST=1  # read at collection time by t5/test_t5_full, umt5/test_umt5, clip/test_clip_full_projection
+    # No -k: params needing more than 8 devices skip themselves in the mesh_device fixture.
+    # -rs keeps those skip reasons visible so a green leg can be told from one that ran nothing.
+    pytest --timeout 10000 -rs --durations=0 models/tt_dit/tests/encoders/
+  model: dit-encoders
+  skus:
+    wh_llmbox:
+      timeout: 180 # TODO: narrow once the first CI run reports real timings
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 # Phi-4-mini: disabled, asserting with 'assert freqs.shape[-1] == ext_factors.shape[-1]'
 # - name: Phi-4-mini unit tests
 #   cmd: |

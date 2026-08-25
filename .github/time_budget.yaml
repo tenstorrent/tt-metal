@@ -356,10 +356,9 @@ models:
     bh_p300: 8
     bh_quietbox_2: 42
   unit:
-    wh_llmbox: 25
     wh_galaxy_perf: 10
   unit_tier1:
-    wh_llmbox: 100
+    wh_llmbox: 275 # TODO: narrow with the dit-encoders timeout once CI reports real timings
     wh_n150: 110
     wh_galaxy: 235
     wh_galaxy_perf: 45

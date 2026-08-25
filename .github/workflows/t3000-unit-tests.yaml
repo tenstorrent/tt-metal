@@ -10,7 +10,6 @@ on:
         type: choice
         options:
           - all
-          - dits
           - tttv2 modules
           - qwen3_vl
       platform:
