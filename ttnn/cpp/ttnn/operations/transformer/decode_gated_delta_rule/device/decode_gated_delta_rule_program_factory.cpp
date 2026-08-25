@@ -41,30 +41,30 @@ constexpr uint32_t ones = tt::CBIndex::c_6;   // 1 tile fp32 all-ones (rowsum co
 constexpr uint32_t qsq = tt::CBIndex::c_7;    // [1,Kt] fp32 q*q
 constexpr uint32_t ksq = tt::CBIndex::c_8;    // [1,Kt] fp32 k*k
 constexpr uint32_t sc = tt::CBIndex::c_9;     // 1 tile fp32 rowsum of squares
-constexpr uint32_t sc2 = tt::CBIndex::c_28;  // 1 tile fp32 q-chain inv-rms factor
-constexpr uint32_t sc3 = tt::CBIndex::c_29;  // 1 tile fp32 k-chain inv-rms factor
+constexpr uint32_t sc2 = tt::CBIndex::c_28;   // 1 tile fp32 q-chain inv-rms factor
+constexpr uint32_t sc3 = tt::CBIndex::c_29;   // 1 tile fp32 k-chain inv-rms factor
 // (each norm chain gets its OWN factor CB: reusing one ring made the second
 // chain's bcast read the first chain's factor - ttsim gdn_decode_simdiag3)
-constexpr uint32_t qn = tt::CBIndex::c_10;    // [1,Kt] fp32 normalized (scaled) q
-constexpr uint32_t kn = tt::CBIndex::c_11;    // [1,Kt] fp32 normalized k
-constexpr uint32_t kcol = tt::CBIndex::c_12;  // [Kt,1] fp32 transpose(kn)
-constexpr uint32_t gexp = tt::CBIndex::c_13;  // 1 tile fp32 exp(g_h)
-constexpr uint32_t sdec = tt::CBIndex::c_14;  // [Kt,Vt] fp32 decayed state h*exp(g)
-constexpr uint32_t vread = tt::CBIndex::c_15; // [1,Vt] fp32 k@h
-constexpr uint32_t delta = tt::CBIndex::c_16; // 2x[1,Vt] fp32 v-v_read, then *beta (ping-pong)
-constexpr uint32_t outer = tt::CBIndex::c_17; // [Kt,Vt] fp32 kcol @ delta
-constexpr uint32_t sout = tt::CBIndex::c_18;  // [Kt,Vt] io new state
-constexpr uint32_t out = tt::CBIndex::c_19;   // [1,Vt] io  o = q@h
+constexpr uint32_t qn = tt::CBIndex::c_10;     // [1,Kt] fp32 normalized (scaled) q
+constexpr uint32_t kn = tt::CBIndex::c_11;     // [1,Kt] fp32 normalized k
+constexpr uint32_t kcol = tt::CBIndex::c_12;   // [Kt,1] fp32 transpose(kn)
+constexpr uint32_t gexp = tt::CBIndex::c_13;   // 1 tile fp32 exp(g_h)
+constexpr uint32_t sdec = tt::CBIndex::c_14;   // [Kt,Vt] fp32 decayed state h*exp(g)
+constexpr uint32_t vread = tt::CBIndex::c_15;  // [1,Vt] fp32 k@h
+constexpr uint32_t delta = tt::CBIndex::c_16;  // 2x[1,Vt] fp32 v-v_read, then *beta (ping-pong)
+constexpr uint32_t outer = tt::CBIndex::c_17;  // [Kt,Vt] fp32 kcol @ delta
+constexpr uint32_t sout = tt::CBIndex::c_18;   // [Kt,Vt] io new state
+constexpr uint32_t out = tt::CBIndex::c_19;    // [1,Vt] io  o = q@h
 // fp32 mirrors of the io inputs + fp32 new state: every math operand is fp32
 // (mixed bf16-srcA x fp32-srcB pairs corrupt the fp32 side; chunk-scan pattern).
-constexpr uint32_t qf = tt::CBIndex::c_20;      // [1,Kt] fp32 q
-constexpr uint32_t kf = tt::CBIndex::c_21;      // [1,Kt] fp32 k
-constexpr uint32_t vf = tt::CBIndex::c_22;      // [1,Vt] fp32 v
-constexpr uint32_t gf = tt::CBIndex::c_23;      // 1 tile fp32 g_h
-constexpr uint32_t betaf = tt::CBIndex::c_24;   // 1 tile fp32 beta_h
-constexpr uint32_t sf = tt::CBIndex::c_25;      // [Kt,Vt] fp32 input state
-constexpr uint32_t snew = tt::CBIndex::c_26;    // [Kt,Vt] fp32 new state
-constexpr uint32_t scratch = tt::CBIndex::c_27; // max(Kt,Vt) io staging pages (full-page DMA)
+constexpr uint32_t qf = tt::CBIndex::c_20;       // [1,Kt] fp32 q
+constexpr uint32_t kf = tt::CBIndex::c_21;       // [1,Kt] fp32 k
+constexpr uint32_t vf = tt::CBIndex::c_22;       // [1,Vt] fp32 v
+constexpr uint32_t gf = tt::CBIndex::c_23;       // 1 tile fp32 g_h
+constexpr uint32_t betaf = tt::CBIndex::c_24;    // 1 tile fp32 beta_h
+constexpr uint32_t sf = tt::CBIndex::c_25;       // [Kt,Vt] fp32 input state
+constexpr uint32_t snew = tt::CBIndex::c_26;     // [Kt,Vt] fp32 new state
+constexpr uint32_t scratch = tt::CBIndex::c_27;  // max(Kt,Vt) io staging pages (full-page DMA)
 }  // namespace cb
 
 tt::tt_metal::ProgramDescriptor DecodeGatedDeltaRuleProgramFactory::create_descriptor(
@@ -129,7 +129,7 @@ tt::tt_metal::ProgramDescriptor DecodeGatedDeltaRuleProgramFactory::create_descr
     add_cb(cb::gexp, 1, 1, tt::DataFormat::Float32);
     add_cb(cb::sdec, kv, 1, tt::DataFormat::Float32);
     add_cb(cb::vread, Vt, 1, tt::DataFormat::Float32);
-    add_cb(cb::delta, Vt, 2, tt::DataFormat::Float32);  // 2x pages: in-place *beta  // 2x pages: in-place *beta
+    add_cb(cb::delta, Vt, 2, tt::DataFormat::Float32);  // 2x pages: in-place *beta
     add_cb(cb::outer, kv, 1, tt::DataFormat::Float32);
     add_cb(cb::sout, kv, 1, df_io);
     add_cb(cb::out, Vt, 2, df_io);
@@ -202,8 +202,7 @@ tt::tt_metal::ProgramDescriptor DecodeGatedDeltaRuleProgramFactory::create_descr
         // kernel derives bh = start + i in its per-instance loop.
         reader.emplace_runtime_args(core, {start, n_inst, q_buf, k_buf, v_buf, beta_buf, g_buf, s0_buf});
         // o is ROW_MAJOR: pass its stick page size (page bh == head bh's row).
-        writer.emplace_runtime_args(
-            core, {start, n_inst, o_buf, static_cast<uint32_t>(o_buf->page_size()), s1_buf});
+        writer.emplace_runtime_args(core, {start, n_inst, o_buf, static_cast<uint32_t>(o_buf->page_size()), s1_buf});
         compute.emplace_runtime_args(core, {n_inst});
     }
     desc.kernels.push_back(std::move(reader));

@@ -72,43 +72,43 @@ void kernel_main() {
 
     // Per-instance loop: this core owns [bh_start, bh_start + n_inst).
     for (uint32_t bh = bh_start; bh < bh_start + n_inst; ++bh) {
-    // o: stage head bh's [V] stick in scratch, then ONE full-page write to
-    // o page bh via the o accessor's page_id form (the same write shape the
-    // new-state write below uses and that ttsim/silicon both land). Tile t's
-    // row 0 holds o cols 32t..32t+31: face 0 (cols 0-15) at element offset 0,
-    // face 1 (cols 16-31) at element offset 256.
-    {
-        CircularBuffer cb(cb_out);
-        cb.wait_front(Vt);
-        const uint32_t src = cb.get_read_ptr();
-        CircularBuffer scb(cb_scratch);
-        scb.reserve_back(1);
-        const uint32_t stage_ = scb.get_write_ptr();
-        stage = stage_;
-        zero(stage, (o_page + 3) / 4);
-        const uint32_t cw = 16 * elem / 4;  // words per 16-element face chunk
-        for (uint32_t t = 0; t < Vt; t++) {
-            const uint32_t s = src + t * tb_io;
-            copy_words(s, stage + (32 * t) * elem, cw);
-            copy_words(s + 256 * elem, stage + (32 * t + 16) * elem, cw);
+        // o: stage head bh's [V] stick in scratch, then ONE full-page write to
+        // o page bh via the o accessor's page_id form (the same write shape the
+        // new-state write below uses and that ttsim/silicon both land). Tile t's
+        // row 0 holds o cols 32t..32t+31: face 0 (cols 0-15) at element offset 0,
+        // face 1 (cols 16-31) at element offset 256.
+        {
+            CircularBuffer cb(cb_out);
+            cb.wait_front(Vt);
+            const uint32_t src = cb.get_read_ptr();
+            CircularBuffer scb(cb_scratch);
+            scb.reserve_back(1);
+            const uint32_t stage_ = scb.get_write_ptr();
+            stage = stage_;
+            zero(stage, (o_page + 3) / 4);
+            const uint32_t cw = 16 * elem / 4;  // words per 16-element face chunk
+            for (uint32_t t = 0; t < Vt; t++) {
+                const uint32_t s = src + t * tb_io;
+                copy_words(s, stage + (32 * t) * elem, cw);
+                copy_words(s + 256 * elem, stage + (32 * t + 16) * elem, cw);
+            }
+            noc.async_write(CoreLocalMem<uint32_t>(stage), o_acc, o_page, {}, {.page_id = bh});
+            noc.async_write_barrier();
+            scb.pop_front(1);
+            cb.pop_front(Vt);
         }
-        noc.async_write(CoreLocalMem<uint32_t>(stage), o_acc, o_page, {}, {.page_id = bh});
-        noc.async_write_barrier();
-        scb.pop_front(1);
-        cb.pop_front(Vt);
-    }
 
-    // new state: full tiles, head-aligned contiguous pages.
-    {
-        CircularBuffer cb(cb_sout);
-        cb.wait_front(kv);
-        const uint32_t base_page = bh * kv;
-        auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cb);
-        for (uint32_t t = 0; t < kv; t++) {
-            noc.async_write(src, s_acc, tb_io, {.offset_bytes = t * tb_io}, {.page_id = base_page + t});
+        // new state: full tiles, head-aligned contiguous pages.
+        {
+            CircularBuffer cb(cb_sout);
+            cb.wait_front(kv);
+            const uint32_t base_page = bh * kv;
+            auto src = use<CircularBuffer::AddrSelector::READ_PTR>(cb);
+            for (uint32_t t = 0; t < kv; t++) {
+                noc.async_write(src, s_acc, tb_io, {.offset_bytes = t * tb_io}, {.page_id = base_page + t});
+            }
+            noc.async_write_barrier();
+            cb.pop_front(kv);
         }
-        noc.async_write_barrier();
-        cb.pop_front(kv);
-    }
     }  // per-instance loop
 }

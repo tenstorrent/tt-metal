@@ -23,7 +23,8 @@ void DecodeGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss(
     auto check = [&](const Tensor& t, const char* name) {
         TT_FATAL(t.layout() == Layout::TILE, "decode_gated_delta_rule: {} must be TILE layout", name);
         TT_FATAL(t.dtype() == dt, "decode_gated_delta_rule: all inputs must share one dtype", name);
-        TT_FATAL(dt == DataType::BFLOAT16 || dt == DataType::FLOAT32, "decode_gated_delta_rule: dtype must be bf16 or fp32");
+        TT_FATAL(
+            dt == DataType::BFLOAT16 || dt == DataType::FLOAT32, "decode_gated_delta_rule: dtype must be bf16 or fp32");
         TT_FATAL(t.buffer() != nullptr, "decode_gated_delta_rule: {} must be on device", name);
     };
     check(in.q, "q");
@@ -46,8 +47,8 @@ void DecodeGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-DecodeGatedDeltaRuleDeviceOperation::spec_return_value_t
-DecodeGatedDeltaRuleDeviceOperation::compute_output_specs(const operation_attributes_t& attrs, const tensor_args_t& in) {
+DecodeGatedDeltaRuleDeviceOperation::spec_return_value_t DecodeGatedDeltaRuleDeviceOperation::compute_output_specs(
+    const operation_attributes_t& attrs, const tensor_args_t& in) {
     const DataType dt = in.q.dtype();
     // o is ROW_MAJOR on purpose: its flat 2D is [B*H, V], so page bh is head
     // bh's own [V] stick and the writer kernel issues ONE full-page write per
@@ -61,8 +62,8 @@ DecodeGatedDeltaRuleDeviceOperation::compute_output_specs(const operation_attrib
         tt::tt_metal::TensorSpec(ttnn::Shape({attrs.B, attrs.H, attrs.K, attrs.V}), layout_tile)};
 }
 
-DecodeGatedDeltaRuleDeviceOperation::tensor_return_value_t
-DecodeGatedDeltaRuleDeviceOperation::create_output_tensors(const operation_attributes_t& attrs, const tensor_args_t& in) {
+DecodeGatedDeltaRuleDeviceOperation::tensor_return_value_t DecodeGatedDeltaRuleDeviceOperation::create_output_tensors(
+    const operation_attributes_t& attrs, const tensor_args_t& in) {
     auto specs = compute_output_specs(attrs, in);
     auto* device = in.q.device();
     std::vector<Tensor> outs;

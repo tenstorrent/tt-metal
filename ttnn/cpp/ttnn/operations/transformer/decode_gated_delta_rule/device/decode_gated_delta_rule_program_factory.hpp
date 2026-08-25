@@ -14,9 +14,7 @@ namespace ttnn::prim {
 
 struct DecodeGatedDeltaRuleProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const DecodeGatedDeltaRuleParams& attrs,
-        const DecodeGatedDeltaRuleInputs& in,
-        std::vector<Tensor>& outputs);
+        const DecodeGatedDeltaRuleParams& attrs, const DecodeGatedDeltaRuleInputs& in, std::vector<Tensor>& outputs);
 };
 
 }  // namespace ttnn::prim
