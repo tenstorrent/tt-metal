@@ -47,14 +47,7 @@ inline void llk_math_eltwise_binary_sfpu_mul_int(
     std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     static_assert(DATA_FORMAT == DataFormat::Int32, "Quasar SFPU mul_int currently supports Int32 only");
     SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        _mul_int32_,
-        (APPROXIMATE, ITERATIONS, SIGN_MAGNITUDE_FORMAT),
-        idst0,
-        idst1,
-        odst,
-        vector_mode);
+        DST_SYNC_MODE, _mul_int32_, (APPROXIMATE, ITERATIONS, SIGN_MAGNITUDE_FORMAT), idst0, idst1, odst, vector_mode);
 }
 
 }  // namespace ckernel

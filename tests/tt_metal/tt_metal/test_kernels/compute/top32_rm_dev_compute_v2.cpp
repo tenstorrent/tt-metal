@@ -90,7 +90,6 @@ void kernel_main() {
     MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::_top32_rm_init_)));
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         _bitonic_top32_of_1024_rm_pre_sorted_prep_,
         (false, DST_ACCUM_MODE, decreasing),
         value_offset_tiles,
@@ -111,7 +110,6 @@ void kernel_main() {
         // step 4
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             _bitonic_top32_of_1024_rm_pre_sorted_prep_,
             (false, DST_ACCUM_MODE, increasing),
             value_offset_tiles + 1,
@@ -121,7 +119,6 @@ void kernel_main() {
         // step 5
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             _bitonic_top32_of_1024_rm_pre_sorted_combine_,
             (false, DST_ACCUM_MODE),
             value_offset_tiles,
@@ -131,7 +128,6 @@ void kernel_main() {
     // step 6
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         _bitonic_top32_of_1024_rm_pre_sorted_final_,
         (false, DST_ACCUM_MODE),
         value_offset_tiles,
@@ -153,19 +149,18 @@ void kernel_main() {
         reconfig_data_format_srca(cb_in0);
         UNPACK((llk_unpack_A_top32_rm_init(cb_in0)));
         UNPACK((llk_unpack_A_top32_rm(cb_in0, i / 64, num_faces)));
-        MATH((llk_math_top32_rm_init(cb_in0)));
-        MATH((llk_math_top32_rm(cb_in0, value_offset_tiles + 1, num_faces)));
+        MATH((llk_math_top32_rm_init<DST_ACCUM_MODE>(cb_in0)));
+        MATH((llk_math_top32_rm<DST_ACCUM_MODE>(cb_in0, value_offset_tiles + 1, num_faces)));
 
         reconfig_data_format_srca(cb_in1);
         UNPACK((llk_unpack_A_top32_rm_init(cb_in1)));
         UNPACK((llk_unpack_A_top32_rm(cb_in1, i / 64, num_faces)));
-        MATH((llk_math_top32_rm_init(cb_in1)));
-        MATH((llk_math_top32_rm(cb_in1, index_offset_tiles + 1, num_faces)));
+        MATH((llk_math_top32_rm_init<DST_ACCUM_MODE>(cb_in1)));
+        MATH((llk_math_top32_rm<DST_ACCUM_MODE>(cb_in1, index_offset_tiles + 1, num_faces)));
 
         // step 8
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             _bitonic_top32_rebuild_,
             (false, DST_ACCUM_MODE),
             value_offset_tiles + 1,
@@ -174,7 +169,6 @@ void kernel_main() {
             false /*skip_second*/));
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             _bitonic_top32_merge_,
             (false, DST_ACCUM_MODE, false /*idir*/),
             value_offset_tiles + 1,
@@ -182,7 +176,6 @@ void kernel_main() {
             false /*across_tiles*/));
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             _bitonic_top32_rebuild_,
             (false, DST_ACCUM_MODE),
             value_offset_tiles + 1,
@@ -193,7 +186,6 @@ void kernel_main() {
         // step 9
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             _bitonic_top32_merge_,
             (false, DST_ACCUM_MODE, false /*idir*/),
             value_offset_tiles,
@@ -201,7 +193,6 @@ void kernel_main() {
             true /*across_tiles*/));
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
             _bitonic_top32_rebuild_,
             (false, DST_ACCUM_MODE),
             value_offset_tiles,

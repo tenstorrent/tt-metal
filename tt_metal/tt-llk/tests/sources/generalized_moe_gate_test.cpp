@@ -182,8 +182,7 @@ constexpr GeneralizedMoeGateEltwiseBinaryMode BINARY_MODE =
     (GMG_RELOAD || GMG_SIGMOID) ? GeneralizedMoeGateEltwiseBinaryMode::RELOAD : GeneralizedMoeGateEltwiseBinaryMode::COPY;
 
 // One SFPU call on DEST tile 0; each gate functor walks its own region offsets from there.
-#define GMG_SFPU_CALL(FN, TEMPLATES, ...) \
-    SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, FN, TEMPLATES, 0 /* dst_index */, VectorMode::RC_custom, ##__VA_ARGS__)
+#define GMG_SFPU_CALL(FN, TEMPLATES, ...) SFPU_UNARY_CALL(dest_sync, FN, TEMPLATES, 0 /* dst_index */, VectorMode::RC_custom, ##__VA_ARGS__)
 
 // The MOP runners take no dst_index, they address whatever tile DEST_TARGET_REG_CFG_MATH_Offset holds.
 // In the op that is tile 0, because the eltwise binary ahead of them runs at dst_index 0 and leaves
@@ -482,13 +481,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 copy_to_dest_tile(SCORES_TILE, formats.math);
 
                 SFPU_UNARY_INIT_FN(sigmoid, sfpu::sigmoid_init, (false /* fast_and_approx */));
-                SFPU_UNARY_CALL(
-                    dest_sync,
-                    is_fp32_dest_acc_en,
-                    calculate_sigmoid,
-                    (false /* fast_and_approx */, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
-                    0,
-                    VectorMode::RC_custom);
+                SFPU_UNARY_CALL(dest_sync, calculate_sigmoid, (false /* fast_and_approx */, is_fp32_dest_acc_en, 8 /* ITERATIONS */), 0, VectorMode::RC_custom);
             }
         }
 

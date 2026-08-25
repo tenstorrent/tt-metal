@@ -30,7 +30,6 @@ namespace ckernel {
 ALWI void threshold_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         _calculate_threshold_,
         (APPROX, 8 /* ITERATIONS */, std::uint32_t),
         idst,

@@ -328,7 +328,6 @@ struct DRAMStreamingExpertsMatmul {
                         if constexpr (CTArgs::tile_r_dim <= 4) {
                             PACK(SFPU_UNARY_CALL(
                                 DST_SYNC_MODE,
-                                DST_ACCUM_MODE,
                                 calculate_silu,
                                 (CTArgs::fp32_dest_acc_en, 2 /*ITERATIONS*/),
                                 0 /*dst_index*/,
@@ -336,7 +335,6 @@ struct DRAMStreamingExpertsMatmul {
                         } else if constexpr (CTArgs::tile_r_dim == 8) {
                             PACK(SFPU_UNARY_CALL(
                                 DST_SYNC_MODE,
-                                DST_ACCUM_MODE,
                                 calculate_silu,
                                 (CTArgs::fp32_dest_acc_en, 4 /*ITERATIONS*/),
                                 0 /*dst_index*/,
@@ -344,7 +342,6 @@ struct DRAMStreamingExpertsMatmul {
                         } else {
                             PACK(SFPU_UNARY_CALL(
                                 DST_SYNC_MODE,
-                                DST_ACCUM_MODE,
                                 calculate_silu,
                                 (CTArgs::fp32_dest_acc_en, 8 /*ITERATIONS*/),
                                 0 /*dst_index*/,

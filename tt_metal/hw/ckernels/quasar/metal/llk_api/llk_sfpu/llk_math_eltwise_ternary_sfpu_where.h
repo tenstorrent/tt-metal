@@ -49,7 +49,6 @@ inline void llk_math_eltwise_ternary_sfpu_where(
     LLK_ASSERT(vector_mode == (int)VectorMode::RC, "Quasar currently only supports vector mode RC");
     SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_where,
         (APPROXIMATE, SFPU_ITERATIONS),
         dst_index0,

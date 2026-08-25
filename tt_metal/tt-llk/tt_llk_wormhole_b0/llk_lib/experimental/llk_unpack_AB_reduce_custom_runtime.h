@@ -62,7 +62,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(std::uint32_
  * This function should NOT be used as a substitute for native reduce unpacking LLK initialization.
  * Use the standard _llk_unpack_AB_reduce_init_ for general-purpose reduction operations.
  */
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t block_ct_dim, bool respect_trigger, const ckernel::TensorShape& tensor_shape)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");

@@ -13,9 +13,11 @@
  * LLK MATH — Top32 row-major transpose
  *****************************************/
 
+template <bool is_fp32_dest_acc_en>
 inline void llk_math_top32_rm_init(const std::uint32_t icb) {
     const std::uint32_t operand_id = get_operand_id(icb);
-    _llk_math_top32_rm_init_<DST_ACCUM_MODE>(get_operand_num_faces(operand_id), get_operand_dst_format(operand_id));
+    _llk_math_top32_rm_init_<is_fp32_dest_acc_en>(
+        get_operand_num_faces(operand_id), get_operand_dst_format(operand_id));
 
     const std::uint32_t src_format = get_operand_src_format(operand_id);
     const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
@@ -24,6 +26,7 @@ inline void llk_math_top32_rm_init(const std::uint32_t icb) {
     }
 }
 
+template <bool is_fp32_dest_acc_en>
 inline void llk_math_top32_rm(const std::uint32_t icb, const std::uint32_t idst, const std::uint32_t num_faces) {
     const std::uint32_t operand_id = get_operand_id(icb);
     const std::uint32_t src_format = get_operand_src_format(operand_id);
@@ -31,9 +34,10 @@ inline void llk_math_top32_rm(const std::uint32_t icb, const std::uint32_t idst,
     const bool is_int32 = (src_format & 0xf) == (std::uint32_t)DataFormat::Int32;
 
     if (is_int32) {
-        _llk_math_top32_rm_<DST_SYNC_MODE, DST_ACCUM_MODE, UnpackToDestEn>(idst, src_format, dst_format, num_faces);
+        _llk_math_top32_rm_<DST_SYNC_MODE, is_fp32_dest_acc_en, UnpackToDestEn>(
+            idst, src_format, dst_format, num_faces);
         llk_math_transpose_dest<false, true>(idst);
     } else {
-        _llk_math_top32_rm_<DST_SYNC_MODE, DST_ACCUM_MODE, false>(idst, src_format, dst_format, num_faces);
+        _llk_math_top32_rm_<DST_SYNC_MODE, is_fp32_dest_acc_en, false>(idst, src_format, dst_format, num_faces);
     }
 }

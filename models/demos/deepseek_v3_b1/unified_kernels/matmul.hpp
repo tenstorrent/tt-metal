@@ -173,7 +173,6 @@ struct Matmul {
                     if constexpr (CTArgs::fuse_sigmoid) {
                         PACK(SFPU_UNARY_CALL(
                             DST_SYNC_MODE,
-                            DST_ACCUM_MODE,
                             calculate_sigmoid,
                             (CTArgs::fused_activation_approx_mode, false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
                             0 /*dst_index*/,
@@ -181,7 +180,6 @@ struct Matmul {
                     } else {
                         PACK(SFPU_UNARY_CALL(
                             DST_SYNC_MODE,
-                            DST_ACCUM_MODE,
                             calculate_silu,
                             (false /*is_fp32_dest_acc_en*/, 2 /*ITERATIONS*/),
                             0 /*dst_index*/,

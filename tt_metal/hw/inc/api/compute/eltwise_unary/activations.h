@@ -32,7 +32,6 @@ namespace ckernel {
 ALWI void hardsigmoid_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_activation,
         (APPROX, ckernel::ActivationType::Hardsigmoid, 8 /* ITERATIONS */),
         idst,
@@ -42,7 +41,6 @@ ALWI void hardsigmoid_tile(uint32_t idst) {
 ALWI void hardsigmoid_tile_pack(uint32_t idst) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_activation,
         (APPROX, ckernel::ActivationType::Hardsigmoid, 8 /* ITERATIONS */),
         idst,
@@ -70,8 +68,7 @@ ALWI void hardsigmoid_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(hardsigmoid, sf
 */
 // clang-format on
 ALWI void softsign_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softsign, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, calculate_softsign, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
 }
 
 /**
@@ -98,7 +95,6 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void celu_tile(uint32_t idst, uint32_t alpha, uint32_t alpha_recip) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         calculate_celu,
         (APPROX, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
         idst,
@@ -127,14 +123,8 @@ ALWI void celu_tile_init() { MATH(SFPU_UNARY_INIT(celu)); }
  */
  // clang-format on
 ALWI void softshrink_tile(uint32_t idst, uint32_t param0) {
-     MATH(SFPU_UNARY_CALL(
-         DST_SYNC_MODE,
-         DST_ACCUM_MODE,
-         calculate_softshrink,
-         (APPROX, 8 /* ITERATIONS */),
-         idst,
-         VectorMode::RC,
-         param0));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, calculate_softshrink, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC, param0));
 }
 
 /**
@@ -161,13 +151,7 @@ ALWI void softshrink_tile_init() { MATH(SFPU_UNARY_INIT(softshrink)); }
 // clang-format on
 ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_hardshrink,
-        (APPROX, 8 /* ITERATIONS */),
-        idst,
-        VectorMode::RC,
-        param0));
+        DST_SYNC_MODE, calculate_hardshrink, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC, param0));
 }
 
 /**

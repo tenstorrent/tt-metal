@@ -33,7 +33,6 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         calculate_softplus,
         (APPROX, is_fp32_dest_acc_en),
         idst,
@@ -54,7 +53,6 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void softplus_tile_pack(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         calculate_softplus,
         (APPROX, is_fp32_dest_acc_en),
         idst,

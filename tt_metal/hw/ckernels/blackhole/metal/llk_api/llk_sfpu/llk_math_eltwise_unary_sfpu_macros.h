@@ -15,7 +15,8 @@
  * explicit so tests and non-standard kernel preludes can supply their own
  * sync mode. Dest accumulation mode is read at runtime inside
  * get_dest_max_tiles_rt so it stays correct after enable/disable_fp32_dest_acc.
- * DST_ACCUM remains in the call-macro signature for compatibility.
+ * Dest-acc-sensitive kernels take is_fp32_dest_acc_en in TEMPLATES, not as a
+ * call-macro argument.
  */
 
 namespace ckernel {
@@ -38,32 +39,39 @@ inline __attribute__((always_inline)) void _sfpu_check_(
  * Macro hygiene: DST_IDX and VECTOR_MODE are evaluated by both the check and
  * params call. Keep call sites to identifiers/literals, not side effects.
  */
-#define SFPU_UNARY_CALL(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...) \
+#define SFPU_UNARY_CALL(DST_SYNC, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...) \
     (::ckernel::_sfpu_check_<DST_SYNC>(DST_IDX, VECTOR_MODE),               \
-     _llk_math_eltwise_unary_sfpu_params_(                                             \
+     _llk_math_eltwise_unary_sfpu_params_(                                  \
          ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX, VECTOR_MODE, ##__VA_ARGS__))
 
 // Non-templated functor in `ckernel::sfpu`.
-#define SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, DST_ACCUM, FN, DST_IDX, VECTOR_MODE, ...) \
+#define SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, FN, DST_IDX, VECTOR_MODE, ...) \
     (::ckernel::_sfpu_check_<DST_SYNC>(DST_IDX, VECTOR_MODE),                     \
      _llk_math_eltwise_unary_sfpu_params_(::ckernel::sfpu::FN, DST_IDX, VECTOR_MODE, ##__VA_ARGS__))
 
 /*
- * SFPU init macros (3 total)
+ * SFPU init macros (4 total)
  *
  * No dst index involved, so no bound check and no DST_SYNC argument.
- * The bare init LLK requires is_fp32_dest_acc_en; this macro supplies the
- * kernel compile-time DST_ACCUM_MODE (the same value compute APIs default to).
- * Argument order mirrors the call macros: OP first (which selects the
- * SfpuType), then the init callback (the FN-like argument), then the
- * templates that parameterise it.
+ * Dest-acc-independent inits use SFPU_UNARY_INIT (defaults to DST_ACCUM_MODE); use
+ * SFPU_UNARY_INIT_ACCUM with an explicit bool when the active dest mode may differ
+ * from the kernel compile-time default (e.g. after set_fp32_dest_acc).
+ * Argument order for callback inits: OP first (which selects the SfpuType),
+ * then the init callback (the FN-like argument), then the templates that
+ * parameterise it.
  */
 
 /*
- * Bare init: no callback.
+ * Bare init: no callback. Uses kernel compile-time DST_ACCUM_MODE.
  *   SFPU_UNARY_INIT(abs);
  */
 #define SFPU_UNARY_INIT(OP) ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::OP, DST_ACCUM_MODE>()
+
+/*
+ * Bare init for dest-acc-sensitive ops. Requires an explicit accum-mode bool.
+ *   SFPU_UNARY_INIT_ACCUM(asin, is_fp32_dest_acc_en);
+ */
+#define SFPU_UNARY_INIT_ACCUM(OP, ACCUM) ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::OP, ACCUM>()
 
 /*
  * Init with a templated callback.

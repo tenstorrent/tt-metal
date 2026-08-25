@@ -94,9 +94,10 @@ inline void calculate_situ_glu(const uint gate_tile_idx, const uint up_tile_idx,
     }
 }
 
+template <bool is_fp32_dest_acc_en>
 inline void situ_glu_init() {
     // One tanh init serves the whole op; the sigmoid half claims no vConstFloatPrgm.
-    tanh_init</*APPROXIMATION_MODE=*/false, /*is_fp32_dest_acc_en=*/false>();
+    tanh_init</*APPROXIMATION_MODE=*/false, is_fp32_dest_acc_en>();
 }
 
 }  // namespace ckernel::sfpu

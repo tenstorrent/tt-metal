@@ -39,7 +39,7 @@ namespace ckernel {
 // exception on the unpack side because each tile must still be addressed around
 // its exponent section.
 
-template <std::uint32_t full_ct_dim, bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <std::uint32_t full_ct_dim, bool configure_remap, bool is_fp32_dest_acc_en>
 ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
 

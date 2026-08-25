@@ -28,7 +28,6 @@ template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void lerp_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst) {
     MATH((SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
         calculate_lerp,
         (APPROX, is_fp32_dest_acc_en, data_format, 8 /* ITERATIONS */),
         idst0,

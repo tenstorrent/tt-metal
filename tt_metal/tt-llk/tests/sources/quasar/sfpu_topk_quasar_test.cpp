@@ -221,7 +221,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     SFPU_UNARY_CALL(
                         dest_sync,
-                        is_fp32_dest_acc_en,
                         calculate_bitonic_topk_phases_steps,
                         (APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT),
                         dst_index,
@@ -236,7 +235,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     SFPU_UNARY_CALL(
                         dest_sync,
-                        is_fp32_dest_acc_en,
                         calculate_bitonic_topk_rebuild,
                         (APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT),
                         dst_index,
@@ -251,7 +249,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // Always merge
                 SFPU_UNARY_CALL(
                     dest_sync,
-                    is_fp32_dest_acc_en,
                     calculate_bitonic_topk_merge,
                     (APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, TOPK_STABLE_SORT),
                     dst_index,
@@ -264,7 +261,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     SFPU_UNARY_CALL(
                         dest_sync,
-                        is_fp32_dest_acc_en,
                         calculate_bitonic_topk_rebuild,
                         (APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT),
                         dst_index,

@@ -44,12 +44,7 @@ ALWI void logical_not_tile(uint32_t idst) {
         : (DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32) ? InstrModLoadStore::INT32
                                                                                   : InstrModLoadStore::DEFAULT;
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_logical_not,
-        (APPROX, INSTRUCTION_MODE, 8 /*ITERATIONS*/),
-        idst,
-        VectorMode::RC));
+        DST_SYNC_MODE, calculate_logical_not, (APPROX, INSTRUCTION_MODE, 8 /*ITERATIONS*/), idst, VectorMode::RC));
 }
 
 /**

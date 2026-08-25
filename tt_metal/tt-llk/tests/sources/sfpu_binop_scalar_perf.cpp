@@ -176,7 +176,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         // measures the representative math cost.
                         SFPU_UNARY_CALL(
                             DST_SYNC_MODE,
-                            is_fp32_dest_acc_en,
                             calculate_binop_with_scalar,
                             (APPROX_MODE, SFPU_BINOP_MODE, 8, is_fp32_dest_acc_en),
                             block_tile,
@@ -205,7 +204,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                         SFPU_UNARY_CALL(
                             DST_SYNC_MODE,
-                            is_fp32_dest_acc_en,
                             calculate_binop_with_scalar,
                             (APPROX_MODE, SFPU_BINOP_MODE, 8, is_fp32_dest_acc_en),
                             block_tile,

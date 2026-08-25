@@ -117,7 +117,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // SFPU ran (the cond tile, here), so Python asserts only processed faces.
     SFPU_TERNARY_CALL(
         dest_sync,
-        is_fp32_dest_acc_en,
         calculate_where,
         (false /*APPROXIMATION_MODE*/),
         params.DST_INDEX + 0u /*DST_IN0*/,

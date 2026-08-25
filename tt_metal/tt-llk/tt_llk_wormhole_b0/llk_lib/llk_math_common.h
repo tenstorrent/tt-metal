@@ -39,7 +39,7 @@ inline void _llk_math_set_fp32_dest_acc_(bool enable)
  * @note srcb_data_format programs ALU_FORMAT_SPEC_REG1_SrcB, which the SFPU also reads to interpret data it loads from DEST.
  *       For SFPU work, pass a srcb_data_format whose exponent family (BF16 vs FP16) matches the data in DEST (tt-llk #951).
  */
-template <bool is_fp32_dest_acc_en = false>
+template <bool is_fp32_dest_acc_en>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
     llk::san::math_operand_configure(srca_data_format, srcb_data_format);

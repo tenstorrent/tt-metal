@@ -32,21 +32,33 @@ inline __attribute__((always_inline)) void _sfpu_check_(std::uint32_t dst_index,
 
 // Macro hygiene: DST_IDX and VECTOR_MODE are evaluated by both the check and
 // params call. Keep call sites to identifiers/literals, not side effects.
-#define SFPU_UNARY_CALL(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...) \
-    (::ckernel::_sfpu_check_<DST_SYNC, DST_ACCUM>(DST_IDX, VECTOR_MODE),               \
-     _llk_math_eltwise_unary_sfpu_params_(                                             \
+// Shared signature matches WH/BH (no DST_ACCUM slot). Inject DST_ACCUM_MODE
+// for dest-tile bounds; Quasar has no runtime dest-acc switch.
+#define SFPU_UNARY_CALL_QSR(DST_SYNC, DST_ACCUM, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...) \
+    (::ckernel::_sfpu_check_<DST_SYNC, DST_ACCUM>(DST_IDX, VECTOR_MODE),                   \
+     _llk_math_eltwise_unary_sfpu_params_(                                                 \
          ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX, VECTOR_MODE, ##__VA_ARGS__))
+
+#define SFPU_UNARY_CALL(DST_SYNC, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...) \
+    SFPU_UNARY_CALL_QSR(DST_SYNC, DST_ACCUM_MODE, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ##__VA_ARGS__)
 
 // Templated functor in `ckernel::sfpu` operating on a non-default Dest tile shape.
-#define SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, DST_ACCUM, TILE_SHAPE, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...) \
-    (::ckernel::_sfpu_check_<DST_SYNC, DST_ACCUM, TILE_SHAPE>(DST_IDX, VECTOR_MODE),                         \
-     _llk_math_eltwise_unary_sfpu_params_<TILE_SHAPE>(                                                       \
+#define SFPU_UNARY_CALL_TINY_TILE_QSR(DST_SYNC, DST_ACCUM, TILE_SHAPE, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...) \
+    (::ckernel::_sfpu_check_<DST_SYNC, DST_ACCUM, TILE_SHAPE>(DST_IDX, VECTOR_MODE),                             \
+     _llk_math_eltwise_unary_sfpu_params_<TILE_SHAPE>(                                                           \
          ::ckernel::sfpu::FN<_SFPU_EXPAND TEMPLATES>, DST_IDX, VECTOR_MODE, ##__VA_ARGS__))
 
+#define SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, TILE_SHAPE, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ...) \
+    SFPU_UNARY_CALL_TINY_TILE_QSR(                                                                \
+        DST_SYNC, DST_ACCUM_MODE, TILE_SHAPE, FN, TEMPLATES, DST_IDX, VECTOR_MODE, ##__VA_ARGS__)
+
 // Non-templated functor in `ckernel::sfpu`.
-#define SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, DST_ACCUM, FN, DST_IDX, VECTOR_MODE, ...) \
-    (::ckernel::_sfpu_check_<DST_SYNC, DST_ACCUM>(DST_IDX, VECTOR_MODE),                     \
+#define SFPU_UNARY_CALL_NO_TEMPLATE_ARGS_QSR(DST_SYNC, DST_ACCUM, FN, DST_IDX, VECTOR_MODE, ...) \
+    (::ckernel::_sfpu_check_<DST_SYNC, DST_ACCUM>(DST_IDX, VECTOR_MODE),                         \
      _llk_math_eltwise_unary_sfpu_params_(::ckernel::sfpu::FN, DST_IDX, VECTOR_MODE, ##__VA_ARGS__))
+
+#define SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, FN, DST_IDX, VECTOR_MODE, ...) \
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS_QSR(DST_SYNC, DST_ACCUM_MODE, FN, DST_IDX, VECTOR_MODE, ##__VA_ARGS__)
 
 // Init macros take OP first, then the optional init callback and template args.
 

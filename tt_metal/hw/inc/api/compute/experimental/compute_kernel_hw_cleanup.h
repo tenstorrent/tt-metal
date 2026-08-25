@@ -63,9 +63,10 @@
  */
 // clang-format on
 #if defined(ARCH_BLACKHOLE)
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void compute_kernel_hw_cleanup() {
-    UNPACK((_llk_unpack_hw_cleanup_canonical_<DST_ACCUM_MODE>()));
-    MATH((_llk_math_hw_cleanup_canonical_<DST_SYNC_MODE, DST_ACCUM_MODE>()));
-    PACK((_llk_pack_hw_cleanup_canonical_<DST_SYNC_MODE, DST_ACCUM_MODE>()));
+    UNPACK((_llk_unpack_hw_cleanup_canonical_<is_fp32_dest_acc_en>()));
+    MATH((_llk_math_hw_cleanup_canonical_<DST_SYNC_MODE, is_fp32_dest_acc_en>()));
+    PACK((_llk_pack_hw_cleanup_canonical_<DST_SYNC_MODE, is_fp32_dest_acc_en>()));
 }
 #endif

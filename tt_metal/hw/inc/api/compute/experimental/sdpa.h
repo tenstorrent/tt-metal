@@ -47,20 +47,23 @@ ALWI void sdpa_bcast_col_reuse_tiles_init(std::uint32_t icb0) {
         icb0, icb0, false)));
 }
 
-template <bool clear_dest = false>
+template <bool clear_dest = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sdpa_bcast_col_reuse_preamble() {
     UNPACK((llk_unpack_A_sdpa_set_srcb_dummy_valid()));
-    MATH((llk_math_sdpa_bcast_col_srcb_reuse_preamble<DST_SYNC_MODE, DST_ACCUM_MODE, clear_dest>()));
+    MATH((llk_math_sdpa_bcast_col_srcb_reuse_preamble<DST_SYNC_MODE, is_fp32_dest_acc_en, clear_dest>()));
 }
 
 ALWI void sdpa_bcast_col_reuse_postamble() { MATH((llk_math_sdpa_bcast_col_srcb_reuse_postamble())); }
 
-template <EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD, std::uint32_t num_tiles>
+template <
+    EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
+    std::uint32_t num_tiles,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sdpa_bcast_col_reuse_tiles(
     std::uint32_t in0_cb_id, std::uint32_t in1_cb_id, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(in0_cb_id, in_tile_index)));
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(in1_cb_id, in_tile_index)));
-    MATH((llk_math_sdpa_bcast_col_srcb_reuse<eltwise_binary_type, num_tiles, DST_ACCUM_MODE, MATH_FIDELITY>(
+    MATH((llk_math_sdpa_bcast_col_srcb_reuse<eltwise_binary_type, num_tiles, is_fp32_dest_acc_en, MATH_FIDELITY>(
         dst_tile_index)));
 }
 
@@ -69,10 +72,10 @@ ALWI void sdpa_mul_bcast_col_reuse_tiles_init(std::uint32_t icb0) {
     sdpa_bcast_col_reuse_tiles_init<EltwiseBinaryType::ELWMUL, num_tiles, dense>(icb0);
 }
 
-template <std::uint32_t num_tiles>
+template <std::uint32_t num_tiles, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sdpa_mul_bcast_col_reuse_tiles(
     std::uint32_t in0_cb_id, std::uint32_t in1_cb_id, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
-    sdpa_bcast_col_reuse_tiles<EltwiseBinaryType::ELWMUL, num_tiles>(
+    sdpa_bcast_col_reuse_tiles<EltwiseBinaryType::ELWMUL, num_tiles, is_fp32_dest_acc_en>(
         in0_cb_id, in1_cb_id, in_tile_index, dst_tile_index);
 }
 
@@ -88,22 +91,23 @@ ALWI void sdpa_bcast_col_srca_srcb_reuse_tiles_init(std::uint32_t icb0) {
           skip_addrmod>(icb0, icb0, false)));
 }
 
-template <bool clear_dest = false>
+template <bool clear_dest = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sdpa_bcast_col_srca_srcb_reuse_preamble(std::uint32_t isrc) {
     UNPACK((llk_unpack_A_sdpa_set_srca_srcb_dummy_valid()));
-    MATH((llk_math_sdpa_bcast_col_srca_srcb_reuse_preamble<DST_SYNC_MODE, DST_ACCUM_MODE, clear_dest>(isrc)));
+    MATH((llk_math_sdpa_bcast_col_srca_srcb_reuse_preamble<DST_SYNC_MODE, is_fp32_dest_acc_en, clear_dest>(isrc)));
 }
 
 template <
     EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
     std::uint32_t num_tiles,
     bool skip_signalling = false,
-    std::uint32_t output_granularity>
+    std::uint32_t output_granularity,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sdpa_bcast_col_srca_srcb_reuse_tiles(std::uint32_t dst_tile_index) {
     MATH((llk_math_sdpa_bcast_col_srca_srcb_reuse<
           eltwise_binary_type,
           num_tiles,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           MATH_FIDELITY,
           skip_signalling,
           output_granularity>(dst_tile_index)));
@@ -114,10 +118,18 @@ ALWI void sdpa_sub_bcast_col_srca_srcb_reuse_tiles_init(std::uint32_t icb0) {
     sdpa_bcast_col_srca_srcb_reuse_tiles_init<EltwiseBinaryType::ELWSUB, num_tiles>(icb0);
 }
 
-template <std::uint32_t num_tiles, bool skip_signalling = false, std::uint32_t output_granularity>
+template <
+    std::uint32_t num_tiles,
+    bool skip_signalling = false,
+    std::uint32_t output_granularity,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sdpa_sub_bcast_col_srca_srcb_reuse_tiles(std::uint32_t dst_tile_index) {
-    sdpa_bcast_col_srca_srcb_reuse_tiles<EltwiseBinaryType::ELWSUB, num_tiles, skip_signalling, output_granularity>(
-        dst_tile_index);
+    sdpa_bcast_col_srca_srcb_reuse_tiles<
+        EltwiseBinaryType::ELWSUB,
+        num_tiles,
+        skip_signalling,
+        output_granularity,
+        is_fp32_dest_acc_en>(dst_tile_index);
 }
 
 template <std::uint32_t num_tiles, bool skip_addrmod = false>
@@ -125,10 +137,18 @@ ALWI void sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init(std::uint32_t icb0) {
     sdpa_bcast_col_srca_srcb_reuse_tiles_init<EltwiseBinaryType::ELWMUL, num_tiles, skip_addrmod>(icb0);
 }
 
-template <std::uint32_t num_tiles, bool skip_signalling = false, std::uint32_t output_granularity>
+template <
+    std::uint32_t num_tiles,
+    bool skip_signalling = false,
+    std::uint32_t output_granularity,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sdpa_mul_bcast_col_srca_srcb_reuse_tiles(std::uint32_t dst_tile_index) {
-    sdpa_bcast_col_srca_srcb_reuse_tiles<EltwiseBinaryType::ELWMUL, num_tiles, skip_signalling, output_granularity>(
-        dst_tile_index);
+    sdpa_bcast_col_srca_srcb_reuse_tiles<
+        EltwiseBinaryType::ELWMUL,
+        num_tiles,
+        skip_signalling,
+        output_granularity,
+        is_fp32_dest_acc_en>(dst_tile_index);
 }
 
 template <DataFormat format>
@@ -439,7 +459,6 @@ template <bool SDPA_EXP_APPROX_MODE, VectorMode vector_mode = VectorMode::C, boo
 void fused_max_sub_exp_add_tile(std::uint32_t idst, int scale_bf16) {
     SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
         calculate_fused_max_sub_exp_add_tile,
         (SDPA_EXP_APPROX_MODE, final_norm),
         idst,
