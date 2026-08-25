@@ -114,52 +114,33 @@ class ComputePipeline:
                 code += uninit_fn(block)
             return code
 
+        def emit_loop(var, limit, step, body):
+            return f"for (std::uint32_t {var} = 0; {var} < {limit}; {var} += {step}) {{\n{body}\n}}\n"
+
+        x_regions = []
+        if full_blocks_x > 0:
+            x_regions.append(("block_x", block_tiles_x, "block_x"))
+        if remaining_tiles_x > 0:
+            x_regions.append((full_x_limit, remaining_tiles_x, None))
+
+        y_regions = []
+        if full_blocks_y > 0:
+            y_regions.append(("block_y", block_tiles_y, "block_y"))
+        if remaining_tiles_y > 0:
+            y_regions.append((full_y_limit, remaining_tiles_y, None))
+
         code = ""
-
-        if full_blocks_x > 0 and full_blocks_y > 0:
-            block = make_block("block_x", "block_y", block_tiles_x, block_tiles_y)
-            code += wrap(
-                block,
-                (
-                    f"for (std::uint32_t block_x = 0; block_x < {full_x_limit}; block_x += {block_tiles_x}) {{\n"
-                    f"for (std::uint32_t block_y = 0; block_y < {full_y_limit}; block_y += {block_tiles_y}) {{\n"
-                    + body_fn(block)
-                    + "}\n"
-                    "}\n"
-                ),
-            )
-
-        if remaining_tiles_y > 0 and full_blocks_x > 0:
-            block = make_block(
-                "block_x", full_y_limit, block_tiles_x, remaining_tiles_y
-            )
-            code += wrap(
-                block,
-                (
-                    f"for (std::uint32_t block_x = 0; block_x < {full_x_limit}; block_x += {block_tiles_x}) {{\n"
-                    + body_fn(block)
-                    + "}\n"
-                ),
-            )
-
-        if remaining_tiles_x > 0 and full_blocks_y > 0:
-            block = make_block(
-                full_x_limit, "block_y", remaining_tiles_x, block_tiles_y
-            )
-            code += wrap(
-                block,
-                (
-                    f"for (std::uint32_t block_y = 0; block_y < {full_y_limit}; block_y += {block_tiles_y}) {{\n"
-                    + body_fn(block)
-                    + "}\n"
-                ),
-            )
-
-        if remaining_tiles_x > 0 and remaining_tiles_y > 0:
-            block = make_block(
-                full_x_limit, full_y_limit, remaining_tiles_x, remaining_tiles_y
-            )
-            code += wrap(block, body_fn(block))
+        for x_origin, x_size, x_var in x_regions:
+            for y_origin, y_size, y_var in y_regions:
+                block = make_block(x_origin, y_origin, x_size, y_size)
+                body = body_fn(block)
+                if not body:
+                    return code
+                if y_var:
+                    body = emit_loop(y_var, full_y_limit, block_tiles_y, body)
+                if x_var:
+                    body = emit_loop(x_var, full_x_limit, block_tiles_x, body)
+                code += wrap(block, body)
 
         return code
 
