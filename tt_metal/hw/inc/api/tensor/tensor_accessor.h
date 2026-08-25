@@ -17,6 +17,9 @@
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "internal/dataflow/dataflow_api_addrgen.h"
+// Arch-specific (resolved by the HAL's per-arch include roots); host builds
+// (e.g. the accessor unit tests) provide a mock instead.
+#include "noc_address_backend.h"
 #endif
 
 // NOLINTBEGIN(misc-unused-parameters)
