@@ -508,6 +508,21 @@ class CheckpointType(Enum):
 
 
 class TtModelArgs:
+    # Keep concurrent slots that share a request seed on salt 0 (see
+    # SeedManager.salt_duplicate_seeds). #53077 salts them apart to separate n>1
+    # completions of one prompt, but these models are served through vLLM v1, whose
+    # ParentRequest._get_child_sampling_params already hands child i `seed + i`
+    # (vllm/v1/engine/parallel_sampling.py) -- so n>1 children never arrive here
+    # sharing a seed. Every duplicate seed that does arrive is independent requests
+    # that must reproduce identically, which the vLLM TT sampling suite asserts
+    # (test_uniform_seed_deterministic and friends: 32 same-seed requests -> 32
+    # identical outputs, observed as 32 DIFFERENT outputs with salting on).
+    #
+    # CLASS attribute, not set in _set_params_from_dict: TtQwenModelArgs overrides that
+    # method without calling super(), so an instance assignment there reaches Llama only
+    # and Qwen3-32B silently keeps the salting default.
+    salt_duplicate_seeds = False
+
     OP_KEYS = (
         # Embedding
         "EMB_WEIGHTS",
@@ -2129,16 +2144,6 @@ class TtModelArgs:
         self.full_model_n_layers = self.n_layers
         self.norm_eps = params.get("norm_eps", params.get("rms_norm_eps"))
         self.vocab_size = params["vocab_size"]
-        # Keep concurrent slots that share a request seed on salt 0 (see
-        # SeedManager.salt_duplicate_seeds). #53077 salts them apart to separate n>1
-        # completions of one prompt, but this model is served through vLLM v1, whose
-        # ParentRequest._get_child_sampling_params already hands child i `seed + i`
-        # (vllm/v1/engine/parallel_sampling.py) -- so n>1 children never arrive here
-        # sharing a seed. Every duplicate seed that does arrive is independent requests
-        # that must reproduce identically, which the vLLM TT sampling suite asserts
-        # (test_uniform_seed_deterministic and friends: 32 same-seed requests -> 32
-        # identical outputs, observed as 32 DIFFERENT outputs with salting on).
-        self.salt_duplicate_seeds = False
         self.padded_vocab_size = 128 * 1024
         self.head_dim = params.get("head_dim", self.dim // self.n_heads)
         if is_hf:
