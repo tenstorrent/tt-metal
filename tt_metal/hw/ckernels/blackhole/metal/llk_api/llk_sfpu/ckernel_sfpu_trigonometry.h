@@ -464,11 +464,7 @@ sfpi_inline sfpi::vFloat sfpu_asin_range_reduced_bf16(sfpi::vFloat val) {
     // asin(x) = sign(x) * [pi/2 - 2*asin(sqrt((1-|x|)/2))].
     sfpi::vFloat abs_v = sfpi::abs(val);
     sfpi::vFloat endpoint = abs_v - 0.625f;
-    // GUARD_NON_FINITE=false: the only callers, sfpu_asin_bf16/sfpu_acos_bf16, guard this under
-    // v_if(abs(val) <= 1.0f), so every committed lane passes sqrt_custom an argument in [0, 0.5]
-    // and can never have exponent 255. Lanes with |v| > 1 or non-finite v still execute here but
-    // keep their quiet_NaN() seed and are discarded, so the guard would be dead.
-    sfpi::vFloat z = sfpu_sqrt_custom<APPROXIMATION_MODE, false>((1.0f - abs_v) * 0.5f);
+    sfpi::vFloat z = sfpu_sqrt_custom<APPROXIMATION_MODE>((1.0f - abs_v) * 0.5f);
 
     v_if(endpoint < 0.0f) { z = abs_v; }
     v_endif;
