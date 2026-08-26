@@ -964,6 +964,35 @@ KNOBS = {
     # Booking lever for smoothstep-fresh; the licensed tanhderivlut
     # cell and every noel leg are byte-identical under the knob.
     "madpair-vocabulary": "-mtt-tensix-optimize-madpair-vocabulary",
+    # HO (store-source-tier, 2026-08-26): HL-F1 generalized — the
+    # store-source-encoding-ceiling copy tax without the store-sink
+    # license gate.  SFPSTORE sources L0-L11 only, so a const-residency
+    # PRGM park (L12-L14) of a store-consumed constant makes the
+    # register allocator materialize a per-consumer SFPMOV copy out of
+    # the constant file — one issued word per row inside a loop.  Under
+    # the knob a store-consumed LOOP-class candidate takes the
+    # pressure-park LREG tier INSTEAD of the park (the hoisted plain
+    # LREG is SFPSTORE-sourceable at zero programming cost); when the
+    # tier refuses (lreg-file-exhausted) the candidate keeps the parked
+    # placement byte-identically.  Value-preserving (the tier hoist is
+    # the same all-lanes materialization move pressure-park already
+    # ships); NOT licensed.  The shape only exists on the reviewed-ON
+    # pipeline (const-residency + pressure-park park the constants the
+    # tax hangs off), so the booking A/B is (ON + flag) vs plain ON.
+    # CENSUS (laneHO shim, 3252 rows x4): CORPUS-INERT at plain ON-34
+    # (0 changed), at ON-34+store-fold (0), and on the LICENSED
+    # store-sink leg (0 — the license's own place() refusal keeps
+    # precedence byte-identically).  PERF-SHAPE FIRE (the HJ
+    # smoothstep class): fill-fresh MATH_ISOLATE/L1_TO_L1 vehicles —
+    # the fill constant parks in L12 (loop class) and pays the per-row
+    # SFPMOV copy; under the knob the loadi hoists to a plain LREG:
+    # rolled row 3->2 words, delivery-shape unroll-8 body 17->16.
+    # BOOKED 2026-08-26: fill-fresh WIN -21.21 -> -25.05 via the
+    # ON-34 + delivery-shape + store-source-tier COMPOSITION leg
+    # (KERNEL 13114 -> 12474, 3-rep cycle-exact, controls reproduce
+    # the HD cells exact; hand arms byte-identical under the knob in
+    # both compositions; laneHO-evidence-20260826).
+    "store-source-tier": "-mtt-tensix-optimize-store-source-tier",
 }
 
 
@@ -1095,6 +1124,12 @@ KNOB_MODES = {
     # (ON + flag) vs plain ON.  on-plus while a booking knob; promotion
     # requires an R9 witness and the ON-vs-ON attribution ceremony.
     "madpair-vocabulary": "on-plus",
+    # HO store-source-tier: default-off Init(0) booking knob; the parked
+    # store-consumed constants it re-tiers exist only under the
+    # reviewed-ON residency classes, so the booking A/B is (ON + flag)
+    # vs plain ON.  on-plus while a booking knob; promotion requires an
+    # R9 witness and the ON-vs-ON attribution ceremony.
+    "store-source-tier": "on-plus",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
