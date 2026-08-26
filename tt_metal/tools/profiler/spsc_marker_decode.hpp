@@ -11,7 +11,9 @@
 // device-side. Frames with SPSC_SPAN_RAW_FLAG in word 0 instead carry the whole raw span (five full
 // rings at fixed offsets, windows circular) -- the drainer's high-fill fallback, where packing would
 // cost write issues to save almost nothing. Inside each window is a packet run (spsc_packet.h):
-// ZONE_ATOMIC packets (3 words: id | end timer_low | duration), legacy ZONE_START/END markers (2 words), STICKY_TIMER
+// ZONE_ATOMIC packets (3 words: id | end timer_low | duration), ZONE_S (2 words: id | end_delta16<<16|dur16,
+// end relative to the lane cursor = last S/ATOMIC end), ZONE_L (5 words: id | end_lo | end_hi | dur_lo | dur_hi,
+// the >3.2s case), legacy ZONE_START/END markers (2 words), STICKY_TIMER
 // (1 word, per-lane wall-clock high half), STICKY_PROG (1 word, per-lane runtime host-id in low27; 2-word PROG_EXT
 // escape past 2^27), EVENT (2 words, a payload-less flag) and DATA (3 + size words, self-describing -- the length lives
 // in its word2). The producer publishes its tail only on packet boundaries, so a window never ends mid-packet.
@@ -43,6 +45,8 @@ static_assert(
 static_assert(PP_ZONE_START == kernel_profiler::SPSC_TYPE_ZONE_START, "ZONE_START wire code disagrees");
 static_assert(PP_ZONE_END == kernel_profiler::SPSC_TYPE_ZONE_END, "ZONE_END wire code disagrees");
 static_assert(PP_ZONE_ATOMIC == kernel_profiler::SPSC_TYPE_ZONE_ATOMIC, "ZONE_ATOMIC wire code disagrees");
+static_assert(PP_ZONE_S == kernel_profiler::SPSC_TYPE_ZONE_S, "ZONE_S wire code disagrees");
+static_assert(PP_ZONE_L == kernel_profiler::SPSC_TYPE_ZONE_L, "ZONE_L wire code disagrees");
 static_assert(PP_STICKY_TIMER == kernel_profiler::SPSC_TYPE_STICKY_TIMER, "STICKY_TIMER wire code disagrees");
 static_assert(PP_TYPE_SHIFT == kernel_profiler::SPSC_SPAN_TYPE_SHIFT, "packet type field moved");
 // The DRISC drain kernel keeps its OWN copy of the PP_DATA packer (it cannot include kernel_profiler.hpp),
@@ -76,6 +80,12 @@ static_assert(kSpscMaxFrameWords == 2656 && kSpscMaxFramePages == 166);
 // Decode state for one socket's frame stream. Written only by that socket's decode thread.
 struct SpanDecodeState {
     std::vector<uint32_t> timer_hi;  // per lane: sticky wall-clock high half
+    // Per lane: the end of the last ZONE_S/ZONE_ATOMIC zone -- the base a ZONE_S's 16-bit end delta
+    // counts from. Mirrors the producer's g_cursor exactly: only those two types move it, and the
+    // producer guarantees the first zone after any launch/rewind is an absolute ZONE_ATOMIC, so a
+    // ZONE_S is never decoded against a cursor the producer didn't set (resync is the one exception;
+    // timestamps recover at the next ZONE_ATOMIC, and resyncs are already counted and flagged).
+    std::vector<uint64_t> cursor;
     std::vector<uint32_t> prog;      // per lane: sticky runtime host-id (every RISC emits its own at launch)
     std::vector<uint32_t> head;      // per lane: monotonic words-consumed mirror; head(N) == tail(N-1)
     std::vector<uint8_t> seeded;
@@ -89,6 +99,7 @@ struct SpanDecodeState {
 
     void reset(uint32_t num_cores) {
         timer_hi.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
+        cursor.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
         prog.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
         head.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
         seeded.assign(static_cast<size_t>(num_cores) * kSpscNRiscDecode, 0);
@@ -113,7 +124,10 @@ inline void spsc_prefetch(const void* p) {
 // Decode ONE whole packed BULK_SPAN frame in place. For each zone packet calls
 //   emit(lane, wire_type, zone_id27, full_ts, dur, prog)
 // where for ZONE_ATOMIC full_ts is the zone END and dur its 32-bit duration (start = end - dur), and
-// for the legacy ZONE_START/END markers (stall zone, >3.2s fallback) dur is 0.
+// for the legacy ZONE_START/END markers (>3.2s fallback) dur is 0. ZONE_S and ZONE_L are NORMALIZED
+// at this boundary -- an S emits as wire_type ZONE_ATOMIC (end resolved off the lane cursor), an L as
+// a synthetic START/END pair (its 64-bit duration cannot ride the 32-bit dur argument) -- so every
+// sink downstream keeps seeing exactly the types it already handles.
 // zone_id27 is the FULL 27-bit structural zone id (hostdevcommon/profiler_zone_id.h).
 // For each PP_DATA/PP_EVENT it calls
 //   emit_data(lane, wire_type, id, full_ts, prog, payload_words, n)   (payload in place, hi-word first)
@@ -194,6 +208,7 @@ inline uint32_t spsc_decode_frame(
         st.live_words += run;
         uint32_t th = st.timer_hi[lane];
         uint32_t pg = st.prog[lane];
+        uint64_t cur = st.cursor[lane];
         if (raw) {
             const uint32_t* ring = frame + kernel_profiler::SPSC_SPAN_PREFIX_WORDS +
                                    kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE + r * kSpscRingCap;
@@ -233,8 +248,32 @@ inline uint32_t spsc_decode_frame(
                     }
                     const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
                     const uint32_t w2 = ring[(hm + i + 2) & kSpscRingMask];
-                    emit(lane, t, pp_low27(w0), pp_full_ts(th, w1), w2, pg);  // ts = END, w2 = duration
+                    cur = pp_full_ts(th, w1);                  // absolute end re-anchors the lane cursor
+                    emit(lane, t, pp_low27(w0), cur, w2, pg);  // ts = END, w2 = duration
                     i += 3;
+                } else if (t == PP_ZONE_S) {
+                    if (i + 2 > run) {
+                        st.anomalies++;
+                        break;
+                    }
+                    const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
+                    cur += pp_zone_s_delta(w1);  // 64-bit add: crosses the lo-wrap with no sticky
+                    emit(lane, PP_ZONE_ATOMIC, pp_low27(w0), cur, pp_zone_s_dur(w1), pg);  // normalized
+                    i += 2;
+                } else if (t == PP_ZONE_L) {
+                    if (i + 5 > run) {
+                        st.anomalies++;
+                        break;
+                    }
+                    const uint64_t end = (static_cast<uint64_t>(ring[(hm + i + 2) & kSpscRingMask]) << 32) |
+                                         ring[(hm + i + 1) & kSpscRingMask];
+                    const uint64_t dur = (static_cast<uint64_t>(ring[(hm + i + 4) & kSpscRingMask]) << 32) |
+                                         ring[(hm + i + 3) & kSpscRingMask];
+                    // 64-bit duration cannot ride the 32-bit dur argument: normalize to a synthetic
+                    // START/END pair for the downstream pairing stack. Does NOT move the cursor.
+                    emit(lane, PP_ZONE_START, pp_low27(w0), end - dur, 0, pg);
+                    emit(lane, PP_ZONE_END, pp_low27(w0), end, 0, pg);
+                    i += 5;
                 } else if (t == PP_ZONE_START || t == PP_ZONE_END) {
                     if (i + 2 > run) {
                         st.anomalies++;
@@ -299,6 +338,7 @@ inline uint32_t spsc_decode_frame(
             }
             st.timer_hi[lane] = th;
             st.prog[lane] = pg;
+            st.cursor[lane] = cur;
             continue;
         }
         p += extent - run;
@@ -337,8 +377,29 @@ inline uint32_t spsc_decode_frame(
                     st.anomalies++;
                     break;
                 }
-                emit(lane, t, pp_low27(w0), pp_full_ts(th, p[i + 1]), p[i + 2], pg);  // ts = END, [2] = duration
+                cur = pp_full_ts(th, p[i + 1]);                  // absolute end re-anchors the lane cursor
+                emit(lane, t, pp_low27(w0), cur, p[i + 2], pg);  // ts = END, [2] = duration
                 i += 3;
+            } else if (t == PP_ZONE_S) {
+                if (i + 2 > run) {
+                    st.anomalies++;
+                    break;
+                }
+                const uint32_t w1 = p[i + 1];
+                cur += pp_zone_s_delta(w1);  // 64-bit add: crosses the lo-wrap with no sticky
+                emit(lane, PP_ZONE_ATOMIC, pp_low27(w0), cur, pp_zone_s_dur(w1), pg);  // normalized
+                i += 2;
+            } else if (t == PP_ZONE_L) {
+                if (i + 5 > run) {
+                    st.anomalies++;
+                    break;
+                }
+                const uint64_t end = (static_cast<uint64_t>(p[i + 2]) << 32) | p[i + 1];
+                const uint64_t dur = (static_cast<uint64_t>(p[i + 4]) << 32) | p[i + 3];
+                // Normalized to a synthetic START/END pair (64-bit duration; see the raw walk). No cursor move.
+                emit(lane, PP_ZONE_START, pp_low27(w0), end - dur, 0, pg);
+                emit(lane, PP_ZONE_END, pp_low27(w0), end, 0, pg);
+                i += 5;
             } else if (t == PP_ZONE_START || t == PP_ZONE_END) {
                 if (i + 2 > run) {
                     st.anomalies++;
@@ -396,6 +457,7 @@ inline uint32_t spsc_decode_frame(
         }
         st.timer_hi[lane] = th;
         st.prog[lane] = pg;
+        st.cursor[lane] = cur;
     }
     if (raw) {
         return kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE + kSpscNRiscDecode * kSpscRingCap;

@@ -38,6 +38,23 @@
  * its logical marker kind to these codes explicitly (see ppfmt in kernel_profiler.hpp). */
 #define PP_ZONE_START 0u
 #define PP_ZONE_END 1u
+/* ZONE_S / ZONE_L: the small and large ends of the variable-width zone family around ZONE_ATOMIC.
+ * Both sides keep a per-lane 64-bit CURSOR = the end of the last S or ATOMIC zone on that lane. Ends
+ * are monotonic per lane (zones are emitted at close, in end order), so an end-relative delta is
+ * unsigned -- and a zone's START may freely precede the cursor (a closing parent), since start is
+ * always reconstructed as end - duration.
+ *   ZONE_S (2 words): [0] type|id27  [1] end_delta16 << 16 | dur16
+ *       end = cursor + delta ; start = end - dur ; cursor = end. The dense-zone hot case: end within
+ *       ~48 us of the previous end AND duration <= ~48 us (@1.35 GHz). The 64-bit cursor add crosses
+ *       the 2^32 lo-wrap for free, so ZONE_S never needs a sticky.
+ *   ZONE_L (5 words): [0] type|id27  [1] end_lo  [2] end_hi  [3] dur_lo  [4] dur_hi
+ *       Two full 64-bit values -- the >3.2 s case, replacing the legacy START/END pair fallback.
+ * There is deliberately NO sticky-lo: a re-anchor is never cheaper as a separate packet than inline in
+ * a 3-word ZONE_ATOMIC, which carries a zone as well. Only S and ATOMIC advance the cursor -- L (and
+ * the legacy pair while it survives) leaves it alone, on producer and decoder identically, so a stale
+ * cursor is merely conservative (the next S falls back to ATOMIC when its delta overflows 16 bits). */
+#define PP_ZONE_S 3u
+#define PP_ZONE_L 4u
 /* ZONE_ATOMIC: one whole zone in ONE 3-word packet, emitted at scope CLOSE. The producer's RAII scope
  * object holds the start timestamp (hi, lo) from open to close, so the open touches nothing but the
  * wall clock and the wire carries 3 words per zone instead of 2+2:
@@ -46,8 +63,9 @@
  * ~3.2 s @ 1.35 GHz; a producer whose zone outlives that falls back to a legacy START/END pair with a
  * sticky refresh before each half (exact, but the stale start trips the host's per-lane order-
  * regression diagnostic once -- desirable visibility for a >3.2 s on-device zone, which is a bug).
- * PRODUCER-STALL keeps the legacy pair on purpose: its two halves are written at different times to
- * protect the ring's stall reserve accounting. Per-lane wire order is END order, so nested zones
+ * PRODUCER-STALL ships as ZONE_ATOMIC too (pinned to this width: its close writes into the stall
+ * reserve with no room check, so its footprint must be fixed; a >=2^32-cycle stall saturates the
+ * duration instead of taking the fallback). Per-lane wire order is END order, so nested zones
  * arrive inner-first; only the END timestamp is a per-lane order invariant (an outer zone's
  * reconstructed START legitimately precedes an already-arrived inner END). */
 #define PP_ZONE_ATOMIC 2u
@@ -167,6 +185,17 @@ static inline uint32_t pp_marker_w1(uint32_t timer_low) { return timer_low; }
 static inline uint32_t pp_zone_atomic_w0(uint32_t zone_id) { return pp_word0(PP_ZONE_ATOMIC, zone_id); }
 static inline uint32_t pp_zone_atomic_dur(uint32_t w2) { return w2; }
 
+/* ZONE_S: word0 = type | id; word1 packs the end's cursor delta (hi16) and the duration (lo16). */
+static inline uint32_t pp_zone_s_w0(uint32_t zone_id) { return pp_word0(PP_ZONE_S, zone_id); }
+static inline uint32_t pp_zone_s_w1(uint32_t end_delta16, uint32_t dur16) {
+    return (end_delta16 << 16) | (dur16 & 0xFFFFu);
+}
+static inline uint32_t pp_zone_s_delta(uint32_t w1) { return w1 >> 16; }
+static inline uint32_t pp_zone_s_dur(uint32_t w1) { return w1 & 0xFFFFu; }
+
+/* ZONE_L: word0 = type | id; then end_lo, end_hi, dur_lo, dur_hi. */
+static inline uint32_t pp_zone_l_w0(uint32_t zone_id) { return pp_word0(PP_ZONE_L, zone_id); }
+
 /* DATA header word0 (type | full 27-bit id) and its separate length word2. */
 static inline uint32_t pp_data_w0(uint32_t id) { return pp_word0(PP_DATA, id & PP_LOW27_MASK); }
 static inline uint32_t pp_data_w2(uint32_t size_words) {
@@ -212,7 +241,10 @@ static inline uint32_t pp_packet_words(uint32_t w0, uint32_t w2) {
     if (t == PP_ZONE_ATOMIC) {
         return 3u;  // word0 + end timer_low + duration
     }
-    return 2u;  // legacy zone markers, PP_EVENT, STICKY_PROG_EXT, STICKY_META
+    if (t == PP_ZONE_L) {
+        return 5u;  // word0 + end_lo + end_hi + dur_lo + dur_hi
+    }
+    return 2u;  // ZONE_S, legacy zone markers, PP_EVENT, STICKY_PROG_EXT, STICKY_META
 }
 
 /* reader-injected source sticky: lane_id = core*NRISC + risc, carried in both words. */

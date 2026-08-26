@@ -367,9 +367,17 @@ constexpr static std::uint32_t SPSC_SPAN_RAW_FLAG = 1u;
 // pacing valves subtract it, so they fire on the earliest occupancy the lag could be hiding.
 static constexpr std::uint32_t SPSC_PUBLISH_BATCH_WORDS = 64;
 
-static constexpr std::uint32_t SPSC_TYPE_ZONE_START = 0;   // legacy pair (workers: stall zone, >3.2s fallback)
+static constexpr std::uint32_t SPSC_TYPE_ZONE_START = 0;   // legacy pair (workers: >3.2s fallback only)
 static constexpr std::uint32_t SPSC_TYPE_ZONE_END = 1;     // legacy pair
 static constexpr std::uint32_t SPSC_TYPE_ZONE_ATOMIC = 2;  // one whole zone: id | end timer_low | duration32
+// Variable-width zone family around ZONE_ATOMIC (the 3-word "medium"), sharing one decode-side model:
+// per lane both sides track a 64-bit CURSOR = the end of the last S/M zone (ends are monotonic per lane
+// -- zones are emitted at close, in end order -- which is what makes an end-relative delta unsigned).
+// ZONE_S encodes end = cursor + delta16 and start = end - dur16 in ONE payload word; ZONE_ATOMIC (M)
+// re-anchors the cursor with its absolute end. ZONE_L carries two full 64-bit values for the >3.2 s
+// case. Only S and M move the cursor, on both producer and decoder identically.
+static constexpr std::uint32_t SPSC_TYPE_ZONE_S = 3;  // 2 words: id | (end_delta16 << 16 | dur16)
+static constexpr std::uint32_t SPSC_TYPE_ZONE_L = 4;  // 5 words: id | end_lo | end_hi | dur_lo | dur_hi
 static constexpr std::uint32_t SPSC_TYPE_STICKY_TIMER = 9;
 static constexpr std::uint32_t SPSC_TIMER_HI_MASK = 0x7FFFFFFu;  // the 27-bit low field of word0
 
