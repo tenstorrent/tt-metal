@@ -130,10 +130,10 @@ public:
     virtual void process_scratchpad_binding_handles(
         std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)>) const {}
 
-    // Tensor group callback: accessor_name + ordered member TensorBinding accessor names.
+    // Tensor binding sequence callback: sequence_name + ordered member TensorBinding accessor names.
     // Emitted as constexpr std::tuple tokens in the `tensor::` namespace (user order; no sort).
-    virtual void process_tensor_groups(
-        std::function<void(const std::string& accessor_name, const std::vector<std::string>& members)>) const {}
+    virtual void process_tensor_binding_sequences(
+        std::function<void(const std::string& sequence_name, const std::vector<std::string>& members)>) const {}
 
     // Named RTA/CRTA schema (Metal 2.0 APIs).
     // The order of names determines the byte offset of each arg within the named-args

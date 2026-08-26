@@ -110,32 +110,45 @@ struct KernelAdvancedOptions {
     std::vector<uint32_t> compile_time_varargs;
 
     ////////////////////////////////////////////////////////////////////////////////
-    // Tensor groups
+    // Tensor binding sequences
     ////////////////////////////////////////////////////////////////////////////////
 
-    // A tensor group bunches existing TensorBindings on this kernel into a
-    // compile-time-sized pack.
+    // A tensor binding sequence gives a kernel an additional way to retrieve its tensor
+    // bindings: positionally, by index, rather than by name.
     //
-    // Each group is emitted into the same `tensor::` namespace as the member
-    // tokens, as a constexpr std::tuple of those tokens in `members` order:
-    //   constexpr auto inputs = std::make_tuple(in0, in1, /* ... */ inN);
-    // An empty members list is std::tuple<>.
+    // In kernel code, a tensor binding is normally retrieved by name (e.g. `tensor::in0`).
+    // Declaring a TensorBindingSequence with a list of tensor binding names also emits the
+    // following into the generated header's `tensor` namespace, in the order specified:
+    //
+    //    constexpr auto my_binding_sequence = std::make_tuple(in0, in1, /* ... */ inN);
+    //
+    // To make use of this, the kernel then calls:
+    //   /* create a tuple of TensorAccessor from the binding token tuple */
+    //   auto accessor_tuple =  make_tensor_accessors(my_binding_sequence);
+    //   /* create an array non-owning, type-erased TensorAccessor handles */
+    //   auto accessor_array = make_abstract_tensor_accessor_wrappers(accessor_tuple);
+    //
+    // Usage: A niche mechanism for a kernel that wishes to express a compile-time-variadic number of
+    //        tensor bindings, and therefore needs to access them positionally. Prefer the default
+    //        named TensorBindingToken access whenever possible.
+    //
+    // Notes:
+    //   - The named tokens are still emitted, so a sequence adds positional access rather than
+    //      replacing named access.
+    //   - A separate count argument is not required, as the sequence is available kernel-side via
+    //      `std::tuple_size_v<decltype(tensor::my_binding_sequence)>`
     //
     // Constraints:
-    //   - Every members entry is a TensorBinding::accessor_name on this kernel
-    //   - No duplicate members within a group
-    //   - Group accessor_name is a valid C++ identifier, unique in this kernel's
-    //     tensor:: namespace.
-    //
-    // CAUTION: This feature exists to address niche use cases only.
-    //          Named TensorBindings remain how a kernel binds tensors; a group
-    //          only packs some of those bindings when the kernel must consume them as a pack.
+    //   - Every `members` entry is a TensorBinding::accessor_name on this kernel
+    //   - No duplicate members within a sequence (one binding may appear in several sequences)
+    //   - `accessor_name` is a valid C++ identifier, unique in this kernel's `tensor::` namespace
+    //   - An empty members list is legal; this produces an empty std::tuple<>.
 
-    struct TensorGroup {
-        std::string accessor_name;         // device: tensor::<accessor_name>
+    struct TensorBindingSequence {
+        std::string sequence_name;         // device: tensor::<sequence_name>
         std::vector<std::string> members;  // TensorBinding::accessor_name; order is the device tuple order
     };
-    Group<TensorGroup> tensor_groups;
+    Group<TensorBindingSequence> tensor_binding_sequences;
 };
 
 struct DFBAdvancedOptions {

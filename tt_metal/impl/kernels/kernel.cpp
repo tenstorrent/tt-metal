@@ -346,11 +346,11 @@ void Kernel::process_scratchpad_binding_handles(
     }
 }
 
-void Kernel::process_tensor_groups(
-    const std::function<void(const std::string& accessor_name, const std::vector<std::string>& members)> callback)
+void Kernel::process_tensor_binding_sequences(
+    const std::function<void(const std::string& sequence_name, const std::vector<std::string>& members)> callback)
     const {
-    for (const auto& group : this->tensor_groups_) {
-        callback(group.accessor_name, group.members);
+    for (const auto& sequence : this->tensor_binding_sequences_) {
+        callback(sequence.sequence_name, sequence.members);
     }
 }
 
@@ -599,13 +599,13 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.size_bytes));
         hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
     }
-    // Tensor groups: user order matches genfiles emission; hash size, name, and ordered members.
+    // Tensor binding sequences: user order matches genfiles emission; hash size, name, and ordered members.
     // Per-member size is hashed before the bytes so {"a","bc"} and {"ab","c"} do not collide.
-    hasher.update(static_cast<uint64_t>(this->tensor_groups_.size()));
-    for (const auto& group : this->tensor_groups_) {
-        hasher.update(group.accessor_name);
-        hasher.update(static_cast<uint64_t>(group.members.size()));
-        for (const auto& member : group.members) {
+    hasher.update(static_cast<uint64_t>(this->tensor_binding_sequences_.size()));
+    for (const auto& sequence : this->tensor_binding_sequences_) {
+        hasher.update(sequence.sequence_name);
+        hasher.update(static_cast<uint64_t>(sequence.members.size()));
+        for (const auto& member : sequence.members) {
             hasher.update(static_cast<uint64_t>(member.size()));
             hasher.update(member);
         }

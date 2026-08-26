@@ -172,14 +172,16 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             scratch_entries.push_back({name, size_bytes, addr_crta_word});
         });
 
-    // Tensor groups: user order (matches Kernel::compute_hash); no sort.
-    struct TgEntry {
+    // Tensor binding sequences: user order (matches Kernel::compute_hash); no sort.
+    struct TensorBindingSequenceEntry {
         string name;
         vector<string> members;
     };
-    vector<TgEntry> tg_entries;
-    settings.process_tensor_groups(
-        [&tg_entries](const string& name, const vector<string>& members) { tg_entries.push_back({name, members}); });
+    vector<TensorBindingSequenceEntry> tensor_binding_sequence_entries;
+    settings.process_tensor_binding_sequences(
+        [&tensor_binding_sequence_entries](const string& name, const vector<string>& members) {
+            tensor_binding_sequence_entries.push_back({name, members});
+        });
 
     // Emit the header content:
     //  - DFB binding tokens are emitted into the dfb namespace
@@ -203,7 +205,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
     if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty() && scratch_entries.empty() &&
-        tg_entries.empty()) {
+        tensor_binding_sequence_entries.empty()) {
         content << "// No bindings for this kernel.\n";
     } else {
         if (!dfb_entries.empty()) {
@@ -217,7 +219,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             // to construct a TensorAccessor or LocalTensorAccessor.
             content << "#include \"api/tensor/tensor_binding_token.h\"\n";
         }
-        if (!tg_entries.empty()) {
+        if (!tensor_binding_sequence_entries.empty()) {
             content << "#include <tuple>\n";
         }
         if (!scratch_entries.empty()) {
@@ -243,7 +245,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "}  // namespace sem\n";
         }
 
-        if (!ta_entries.empty() || !tg_entries.empty()) {
+        if (!ta_entries.empty() || !tensor_binding_sequence_entries.empty()) {
             // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
             // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
             // its implicit base-address CRTA.
@@ -252,20 +254,20 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
             // template with extra metadata in the future without touching kernel source.
             //
-            // Tensor groups are constexpr std::tuple packs of those member tokens (members order).
+            // Tensor binding sequences are constexpr std::tuple of those member tokens (members order).
             content << "namespace tensor {\n";
             for (const auto& entry : ta_entries) {
                 content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset
                         << "u, " << entry.addr_crta_offset << "u>;\n";
                 content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
             }
-            for (const auto& group : tg_entries) {
-                content << "constexpr auto " << group.name << " = std::make_tuple(";
-                for (size_t i = 0; i < group.members.size(); ++i) {
+            for (const auto& sequence : tensor_binding_sequence_entries) {
+                content << "constexpr auto " << sequence.name << " = std::make_tuple(";
+                for (size_t i = 0; i < sequence.members.size(); ++i) {
                     if (i > 0) {
                         content << ", ";
                     }
-                    content << group.members[i];
+                    content << sequence.members[i];
                 }
                 content << ");\n";
             }

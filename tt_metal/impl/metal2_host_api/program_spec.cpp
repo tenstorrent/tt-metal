@@ -540,45 +540,45 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             reserved_type_aliases.insert(binding_name + "_t");
         }
 
-        std::unordered_set<std::string> group_names;
-        for (const auto& group : kernel.advanced_options.tensor_groups) {
+        std::unordered_set<std::string> sequence_names;
+        for (const auto& sequence : kernel.advanced_options.tensor_binding_sequences) {
             TT_FATAL(
-                IsValidCppIdentifier(group.accessor_name),
-                "Kernel '{}' tensor group accessor_name '{}' must be a valid C++ identifier",
+                IsValidCppIdentifier(sequence.sequence_name),
+                "Kernel '{}' tensor binding sequence_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
-                group.accessor_name);
+                sequence.sequence_name);
             TT_FATAL(
-                !accessor_names.contains(group.accessor_name),
-                "Kernel '{}' tensor group accessor_name '{}' collides with a TensorBinding accessor_name",
+                !accessor_names.contains(sequence.sequence_name),
+                "Kernel '{}' tensor binding sequence_name '{}' collides with a TensorBinding accessor_name",
                 kernel.unique_id,
-                group.accessor_name);
+                sequence.sequence_name);
             TT_FATAL(
-                !reserved_type_aliases.contains(group.accessor_name),
-                "Kernel '{}' tensor group accessor_name '{}' collides with generated type alias '{}'",
+                !reserved_type_aliases.contains(sequence.sequence_name),
+                "Kernel '{}' tensor binding sequence_name '{}' collides with generated type alias '{}'",
                 kernel.unique_id,
-                group.accessor_name,
-                group.accessor_name);
-            auto [git, ginserted] = group_names.insert(group.accessor_name);
+                sequence.sequence_name,
+                sequence.sequence_name);
+            auto [sit, sinserted] = sequence_names.insert(sequence.sequence_name);
             TT_FATAL(
-                ginserted,
-                "Kernel '{}' has duplicate tensor group accessor_name '{}'",
+                sinserted,
+                "Kernel '{}' has duplicate tensor binding sequence_name '{}'",
                 kernel.unique_id,
-                group.accessor_name);
+                sequence.sequence_name);
 
             std::unordered_set<std::string> member_names;
-            for (const auto& member : group.members) {
+            for (const auto& member : sequence.members) {
                 TT_FATAL(
                     accessor_names.contains(member),
-                    "Kernel '{}' tensor group '{}' references unknown tensor accessor_name '{}'",
+                    "Kernel '{}' tensor binding sequence '{}' references unknown tensor accessor_name '{}'",
                     kernel.unique_id,
-                    group.accessor_name,
+                    sequence.sequence_name,
                     member);
                 auto [mit, minserted] = member_names.insert(member);
                 TT_FATAL(
                     minserted,
-                    "Kernel '{}' tensor group '{}' has duplicate member '{}'",
+                    "Kernel '{}' tensor binding sequence '{}' has duplicate member '{}'",
                     kernel.unique_id,
-                    group.accessor_name,
+                    sequence.sequence_name,
                     member);
             }
         }
@@ -3198,12 +3198,13 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // will later fill each handle's allocated_address.
         kernel->set_scratchpad_binding_handles(std::move(sp_bindings.handles));
 
-        std::vector<TensorGroupHandle> tensor_groups;
-        tensor_groups.reserve(kernel_spec.advanced_options.tensor_groups.size());
-        for (const auto& group : kernel_spec.advanced_options.tensor_groups) {
-            tensor_groups.push_back(TensorGroupHandle{.accessor_name = group.accessor_name, .members = group.members});
+        std::vector<TensorBindingSequenceHandle> tensor_binding_sequences;
+        tensor_binding_sequences.reserve(kernel_spec.advanced_options.tensor_binding_sequences.size());
+        for (const auto& sequence : kernel_spec.advanced_options.tensor_binding_sequences) {
+            tensor_binding_sequences.push_back(
+                TensorBindingSequenceHandle{.sequence_name = sequence.sequence_name, .members = sequence.members});
         }
-        kernel->set_tensor_groups(std::move(tensor_groups));
+        kernel->set_tensor_binding_sequences(std::move(tensor_binding_sequences));
 
         // Prefix length for device get_compile_time_vararg* bounds (values are in compile_time_args_).
         kernel->set_compile_time_vararg_count(vararg_cta_count);

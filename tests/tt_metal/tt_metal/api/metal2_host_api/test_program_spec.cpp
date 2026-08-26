@@ -3979,14 +3979,14 @@ void kernel_main() {
 }
 
 // ============================================================================
-// TensorGroup: validation + JIT smoke (compile-only, no hardware loop)
+// TensorBindingSequence: validation + JIT smoke (compile-only, no hardware loop)
 // ============================================================================
 
-TEST_F(ProgramSpecTestGen1, CPU_TensorGroupSeveralMembersJITSmoke) {
+TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceSeveralMembersJITSmoke) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.name = "tensor_group_several";
+    spec.name = "tensor_binding_sequence_several";
 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
@@ -3999,8 +3999,8 @@ void kernel_main() {
     static_assert(std::is_same_v<std::tuple_element_t<2, inputs_t>, tensor::in2_t>);
 }
 )"};
-    dm_kernel.advanced_options.tensor_groups = {
-        KernelAdvancedOptions::TensorGroup{.accessor_name = "inputs", .members = {"in0", "in1", "in2"}},
+    dm_kernel.advanced_options.tensor_binding_sequences = {
+        KernelAdvancedOptions::TensorBindingSequence{.sequence_name = "inputs", .members = {"in0", "in1", "in2"}},
     };
 
     spec.kernels = {dm_kernel};
@@ -4018,11 +4018,11 @@ void kernel_main() {
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_TensorGroupEmptyMembersJITSmoke) {
+TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceEmptyMembersJITSmoke) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.name = "tensor_group_empty";
+    spec.name = "tensor_binding_sequence_empty";
 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
@@ -4032,8 +4032,8 @@ void kernel_main() {
     static_assert(std::is_same_v<std::remove_cv_t<decltype(tensor::empty)>, std::tuple<>>);
 }
 )"};
-    dm_kernel.advanced_options.tensor_groups = {
-        KernelAdvancedOptions::TensorGroup{.accessor_name = "empty", .members = {}},
+    dm_kernel.advanced_options.tensor_binding_sequences = {
+        KernelAdvancedOptions::TensorBindingSequence{.sequence_name = "empty", .members = {}},
     };
 
     spec.kernels = {dm_kernel};
@@ -4043,11 +4043,11 @@ void kernel_main() {
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_TensorGroupSingletonMembersJITSmoke) {
+TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceSingletonMembersJITSmoke) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.name = "tensor_group_singleton";
+    spec.name = "tensor_binding_sequence_singleton";
 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
@@ -4058,8 +4058,8 @@ void kernel_main() {
     static_assert(std::is_same_v<std::tuple_element_t<0, solo_t>, tensor::in0_t>);
 }
 )"};
-    dm_kernel.advanced_options.tensor_groups = {
-        KernelAdvancedOptions::TensorGroup{.accessor_name = "solo", .members = {"in0"}},
+    dm_kernel.advanced_options.tensor_binding_sequences = {
+        KernelAdvancedOptions::TensorBindingSequence{.sequence_name = "solo", .members = {"in0"}},
     };
 
     spec.kernels = {dm_kernel};
@@ -4071,11 +4071,11 @@ void kernel_main() {
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_TensorGroupSameBindingInTwoGroupsJITSmoke) {
+TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceSameBindingInTwoSequencesJITSmoke) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.name = "tensor_group_shared_member";
+    spec.name = "tensor_binding_sequence_shared_member";
 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
@@ -4089,9 +4089,9 @@ void kernel_main() {
     static_assert(std::is_same_v<std::tuple_element_t<0, g1_t>, tensor::in0_t>);
 }
 )"};
-    dm_kernel.advanced_options.tensor_groups = {
-        KernelAdvancedOptions::TensorGroup{.accessor_name = "g0", .members = {"in0"}},
-        KernelAdvancedOptions::TensorGroup{.accessor_name = "g1", .members = {"in0"}},
+    dm_kernel.advanced_options.tensor_binding_sequences = {
+        KernelAdvancedOptions::TensorBindingSequence{.sequence_name = "g0", .members = {"in0"}},
+        KernelAdvancedOptions::TensorBindingSequence{.sequence_name = "g1", .members = {"in0"}},
     };
 
     spec.kernels = {dm_kernel};
@@ -4103,15 +4103,15 @@ void kernel_main() {
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_TensorGroupOnComputeKernelJITSmoke) {
+TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceOnComputeKernelJITSmoke) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
 
     spec.tensor_parameters = {MakeMinimalTensorParameter("t0"), MakeMinimalTensorParameter("t1")};
     BindTensorParameterToKernel(spec.kernels[1], "t0", "in0");
     BindTensorParameterToKernel(spec.kernels[1], "t1", "in1");
-    spec.kernels[1].advanced_options.tensor_groups = {
-        KernelAdvancedOptions::TensorGroup{.accessor_name = "inputs", .members = {"in0", "in1"}},
+    spec.kernels[1].advanced_options.tensor_binding_sequences = {
+        KernelAdvancedOptions::TensorBindingSequence{.sequence_name = "inputs", .members = {"in0", "in1"}},
     };
     spec.kernels[1].source = KernelSpec::SourceCode{R"(
 #include <type_traits>
@@ -4127,14 +4127,14 @@ void kernel_main() {
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_TensorGroupNameEqualsDfbAccessorJITSmoke) {
+TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceNameEqualsDfbAccessorJITSmoke) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
     spec.tensor_parameters = {MakeMinimalTensorParameter("t0")};
     BindTensorParameterToKernel(spec.kernels[0], "t0", "in0");
     // Minimal program already binds dfb accessor "input_dfb" on kernels[0].
-    spec.kernels[0].advanced_options.tensor_groups = {
-        KernelAdvancedOptions::TensorGroup{.accessor_name = "input_dfb", .members = {"in0"}},
+    spec.kernels[0].advanced_options.tensor_binding_sequences = {
+        KernelAdvancedOptions::TensorBindingSequence{.sequence_name = "input_dfb", .members = {"in0"}},
     };
     spec.kernels[0].source = KernelSpec::SourceCode{R"(
 #include <type_traits>
@@ -4150,12 +4150,12 @@ void kernel_main() {
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_TensorGroupUnknownMemberFails) {
+TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceUnknownMemberFails) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     spec.tensor_parameters = {MakeMinimalTensorParameter("t0")};
     BindTensorParameterToKernel(spec.kernels[0], "t0", "in0");
-    spec.kernels[0].advanced_options.tensor_groups = {
-        KernelAdvancedOptions::TensorGroup{.accessor_name = "inputs", .members = {"in0", "missing"}},
+    spec.kernels[0].advanced_options.tensor_binding_sequences = {
+        KernelAdvancedOptions::TensorBindingSequence{.sequence_name = "inputs", .members = {"in0", "missing"}},
     };
 
     EXPECT_THAT(
@@ -4164,12 +4164,12 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorGroupUnknownMemberFails) {
             ::testing::HasSubstr("references unknown tensor accessor_name 'missing'")));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_TensorGroupDuplicateMembersFails) {
+TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceDuplicateMembersFails) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     spec.tensor_parameters = {MakeMinimalTensorParameter("t0")};
     BindTensorParameterToKernel(spec.kernels[0], "t0", "in0");
-    spec.kernels[0].advanced_options.tensor_groups = {
-        KernelAdvancedOptions::TensorGroup{.accessor_name = "inputs", .members = {"in0", "in0"}},
+    spec.kernels[0].advanced_options.tensor_binding_sequences = {
+        KernelAdvancedOptions::TensorBindingSequence{.sequence_name = "inputs", .members = {"in0", "in0"}},
     };
 
     EXPECT_THAT(
@@ -4177,12 +4177,12 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorGroupDuplicateMembersFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("has duplicate member 'in0'")));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_TensorGroupNameCollidesWithBindingFails) {
+TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceNameCollidesWithBindingFails) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     spec.tensor_parameters = {MakeMinimalTensorParameter("t0")};
     BindTensorParameterToKernel(spec.kernels[0], "t0", "in0");
-    spec.kernels[0].advanced_options.tensor_groups = {
-        KernelAdvancedOptions::TensorGroup{.accessor_name = "in0", .members = {"in0"}},
+    spec.kernels[0].advanced_options.tensor_binding_sequences = {
+        KernelAdvancedOptions::TensorBindingSequence{.sequence_name = "in0", .members = {"in0"}},
     };
 
     EXPECT_THAT(
@@ -4191,14 +4191,14 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorGroupNameCollidesWithBindingFails) {
             ::testing::HasSubstr("collides with a TensorBinding accessor_name")));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_TensorGroupNameCollidesWithGeneratedTypeAliasFails) {
-    // Codegen emits `using in0_t = TensorBindingToken<...>` for binding "in0". A group named
+TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceNameCollidesWithGeneratedTypeAliasFails) {
+    // Codegen emits `using in0_t = TensorBindingToken<...>` for binding "in0". A sequence named
     // "in0_t" would emit `constexpr auto in0_t = ...` and fail to compile.
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     spec.tensor_parameters = {MakeMinimalTensorParameter("t0")};
     BindTensorParameterToKernel(spec.kernels[0], "t0", "in0");
-    spec.kernels[0].advanced_options.tensor_groups = {
-        KernelAdvancedOptions::TensorGroup{.accessor_name = "in0_t", .members = {"in0"}},
+    spec.kernels[0].advanced_options.tensor_binding_sequences = {
+        KernelAdvancedOptions::TensorBindingSequence{.sequence_name = "in0_t", .members = {"in0"}},
     };
 
     EXPECT_THAT(
@@ -4207,37 +4207,37 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorGroupNameCollidesWithGeneratedTypeAliasFai
             ::testing::HasSubstr("collides with generated type alias 'in0_t'")));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_TensorGroupDuplicateGroupNamesFails) {
+TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceDuplicateSequenceNamesFails) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     spec.tensor_parameters = {MakeMinimalTensorParameter("t0")};
     BindTensorParameterToKernel(spec.kernels[0], "t0", "in0");
-    spec.kernels[0].advanced_options.tensor_groups = {
-        KernelAdvancedOptions::TensorGroup{.accessor_name = "inputs", .members = {"in0"}},
-        KernelAdvancedOptions::TensorGroup{.accessor_name = "inputs", .members = {"in0"}},
+    spec.kernels[0].advanced_options.tensor_binding_sequences = {
+        KernelAdvancedOptions::TensorBindingSequence{.sequence_name = "inputs", .members = {"in0"}},
+        KernelAdvancedOptions::TensorBindingSequence{.sequence_name = "inputs", .members = {"in0"}},
     };
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("has duplicate tensor group accessor_name 'inputs'")));
+            ::testing::HasSubstr("has duplicate tensor binding sequence_name 'inputs'")));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_TensorGroupInvalidIdentifierFails) {
+TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceInvalidIdentifierFails) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     spec.tensor_parameters = {MakeMinimalTensorParameter("t0")};
     BindTensorParameterToKernel(spec.kernels[0], "t0", "in0");
-    spec.kernels[0].advanced_options.tensor_groups = {
-        KernelAdvancedOptions::TensorGroup{.accessor_name = "has-dash", .members = {"in0"}},
+    spec.kernels[0].advanced_options.tensor_binding_sequences = {
+        KernelAdvancedOptions::TensorBindingSequence{.sequence_name = "has-dash", .members = {"in0"}},
     };
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("tensor group accessor_name 'has-dash' must be a valid C++ identifier")));
+            ::testing::HasSubstr("tensor binding sequence_name 'has-dash' must be a valid C++ identifier")));
 }
 
-TEST_F(ProgramSpecTestGen1, CPU_TensorGroupMemberPartitionAffectsKernelHash) {
-    // Same bindings {a, ab, bc, c}; groups differ only by member partition {"a","bc"} vs {"ab","c"}.
+TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceMemberPartitionAffectsKernelHash) {
+    // Same bindings {a, ab, bc, c}; sequences differ only by member partition {"a","bc"} vs {"ab","c"}.
     // Without per-member length delimiting those would hash identically.
     auto make_spec = [](std::vector<std::string> members) {
         ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
@@ -4251,8 +4251,8 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorGroupMemberPartitionAffectsKernelHash) {
         BindTensorParameterToKernel(spec.kernels[0], "t_ab", "ab");
         BindTensorParameterToKernel(spec.kernels[0], "t_bc", "bc");
         BindTensorParameterToKernel(spec.kernels[0], "t_c", "c");
-        spec.kernels[0].advanced_options.tensor_groups = {
-            KernelAdvancedOptions::TensorGroup{.accessor_name = "inputs", .members = std::move(members)},
+        spec.kernels[0].advanced_options.tensor_binding_sequences = {
+            KernelAdvancedOptions::TensorBindingSequence{.sequence_name = "inputs", .members = std::move(members)},
         };
         return spec;
     };
@@ -4263,7 +4263,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorGroupMemberPartitionAffectsKernelHash) {
     auto hash_left = prog_left.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
     auto hash_right = prog_right.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
     EXPECT_NE(hash_left, hash_right)
-        << "Tensor groups with different member partitions must not share a JIT cache slot.";
+        << "Tensor binding sequences with different member partitions must not share a JIT cache slot.";
 }
 
 // ----------------------------------------------------------------------------
