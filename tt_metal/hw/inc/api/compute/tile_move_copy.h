@@ -61,11 +61,11 @@ ALWI void copy_init(
     // arch-specific so WH/BH don't wrongly enable the integer-FPU datacopy MOP.
 #ifndef ARCH_QUASAR
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(cbid)));
-    // Eltwise unary / SFPU ops keep the Src zero-substitution flag disabled to preserve bf16 -0.0.
-    // Folded into the canonical copy init so it is a drop-in for the eltwise-unary short init; this
-    // also preserves the zero flag on the plain-copy path. MATH-only config: it records no
-    // format-reconfig diff, so the single-SrcA reconfig tracking is unchanged. Not present on Quasar.
-    MATH((ckernel::math::_configure_preserve_zero_flag_state_()));
+    // Src zero-substitution flag, chosen by source format: preserve (keep) bf16 -0.0 and 16b integer
+    // datums (drop-in for the eltwise-unary short init and the plain-copy path), but flush fp8
+    // (e4m3/e5m2) whose zero widens to a nonzero SrcA residual and must read back as 0. MATH-only
+    // config: records no format-reconfig diff, so single-SrcA reconfig tracking is unchanged. Not on Quasar.
+    MATH((ckernel::math::_configure_copy_zero_flag_state_(get_operand_dst_format(cbid))));
 #else
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
         cbid)));

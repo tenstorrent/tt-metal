@@ -119,6 +119,18 @@ inline void _configure_preserve_zero_flag_state_()
     _configure_src_zero_flag_(true);
 }
 
+// Datacopy zero-flag, chosen by the source (SrcA) format. Default is preserve (keep) so bf16 -0.0 and
+// 16-bit integer datums survive the move. Exception: fp8 (e4m3 / e5m2) sources widen into a SrcA datum
+// whose zero carries a nonzero high residual, so preserve would read it back as ~2^-15; those must be
+// flushed (zero-substituted) to produce a clean 0. Src format carries extra high bits, so mask to 0x1F.
+inline void _configure_copy_zero_flag_state_(const std::uint32_t src_dst_format)
+{
+    const std::uint32_t fmt = src_dst_format & 0x1F;
+    // Wormhole fp8 is Lf8 (e5m2) only; Fp8_e4m3 is a Blackhole-only DataFormat.
+    const bool flush_fp8 = (fmt == static_cast<std::uint32_t>(DataFormat::Lf8));
+    _configure_src_zero_flag_(!flush_fp8);
+}
+
 // After a raw cfg write that bypassed the setter, mark the tracked value unknown so the next
 // _configure_ re-applies from a known baseline.
 inline void _invalidate_src_zero_flag_state_()
