@@ -44,7 +44,7 @@ from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
 from models.experimental.xtts_v2.frontend import ROMANIZERS, SUPPORTED_LANGUAGES, sinc_resample
 from models.experimental.xtts_v2.tests.language_corpus import WER_SENTENCES
-from models.experimental.xtts_v2.tt.ttnn_xtts_model import OUTPUT_SR, Voice, XttsV2
+from models.experimental.xtts_v2.tt.ttnn_xtts_model import OUTPUT_SR, Voice, XttsV2, _trailing_silence
 
 ASR_MODEL = "openai/whisper-large-v3"  # small hallucinates on short audio and is weak outside en
 ASR_SR = 16000
@@ -86,11 +86,8 @@ LIMITS = {
 # directly rather than left to the average to reveal.
 MAX_DEGENERATE = 2
 
-# The model sometimes keeps emitting codes after the sentence rather than STOP, and those codes
-# vocode to silence. Nothing else sees it: WER hears nothing, and the duration check in
-# test_all_languages_smoke compares audio length against code count, which stay consistent precisely
-# because the model generated the extra codes.
-OVER_RUN_SECONDS = 0.5  # a natural tail is a fraction of this; a run-on is several times it
+# generate() trims a run-on tail and reports what it removed, so the returned waveform no longer
+# shows it. Gate on the report: WER hears nothing either, silence transcribing as nothing.
 # One bound for most languages: at this few runs per language the counts cannot separate one rate
 # from another. FULL_SWEEP_LANG runs far more, so it carries a tighter bound.
 MAX_OVER_RUN = 6
@@ -132,25 +129,6 @@ def _words(s):
     flat = unicodedata.normalize("NFC", flat)  # composed and decomposed forms must compare equal
     keep = lambda c: c.isalnum() or c.isspace() or c == "'" or unicodedata.category(c) in ("Mn", "Mc")
     return "".join(c if keep(c) else " " for c in flat).split()
-
-
-def _trailing_silence(wav):
-    """Seconds of near-silence at the end of a waveform.
-
-    RMS over short windows rather than raw samples: a lone nonzero sample is the noise floor, not
-    speech. The loudness bar is relative to the clip's own peak as well as absolute, because
-    speakers differ in level and a fixed bar alone would call a quiet speaker's tail silence.
-    A clip with no loud window at all counts as silent throughout, which is a fault worth seeing."""
-    n = int(OUTPUT_SR * 0.02)
-    flat = wav.reshape(-1)
-    if flat.numel() < n:
-        return 0.0  # shorter than one window; the empty-audio contract is handled by the caller
-    frames = flat[: flat.numel() // n * n].reshape(-1, n)
-    rms = frames.pow(2).mean(1).sqrt()
-    loud = (rms > max(0.01, 0.02 * rms.max().item())).nonzero()
-    if not len(loud):
-        return len(frames) * n / OUTPUT_SR
-    return (len(frames) - 1 - loud[-1].item()) * n / OUTPUT_SR
 
 
 def _edit_ratio(ref, hyp):
@@ -265,9 +243,9 @@ def run_language(lang, asr, tts, all_voices, verbose=True):
     for name, voice in voices.items():
         for text in texts:
             wav = tts.generate(text, voice, language=lang, seed=SEED)
-            silence = _trailing_silence(wav)
-            if silence > OVER_RUN_SECONDS:
-                over_run.append(f"{name}/{text[:16]}:{silence:.1f}s")
+            trimmed = tts.last_timings["run_on_s"]
+            if trimmed:
+                over_run.append(f"{name}/{text[:16]}:{trimmed:.1f}s")
             scores[(name, text)] = _score(lang, text, asr(wav, lang))
         if verbose:  # per speaker, so a long run shows progress and a failure names the speaker
             row = [scores[(name, t)] for t in texts]

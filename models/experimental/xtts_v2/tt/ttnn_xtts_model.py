@@ -103,6 +103,10 @@ MAX_PREFIX = LATENTS + 404  # 32 cond latents + start/text/stop (<= 404 embedded
 # and the 22050 -> 24000 output resample — both applied as host linear interpolates on z.
 AR_COMP, HOP, ISR, OSR = 1024, 256, 22050, 24000
 FADE_MS = 5  # output fade; a request cut mid-word would otherwise end on a step
+# The model sometimes keeps emitting codes after the sentence instead of STOP, and they vocode to
+# silence. A natural tail is a fraction of RUN_ON_S; a run-on is several times it, so trimming back
+# to TAIL_MS only touches the pathological case.
+RUN_ON_S, TAIL_MS = 0.5, 150
 OUTPUT_SR = OSR
 # The vocoder runs at one of a FIXED set of frame counts (the cap: 605 codes -> 2420 frames
 # @22.05kHz -> 2634 @24kHz); z is padded up to its bucket (_voc_pad) and the waveform trimmed.
@@ -146,6 +150,33 @@ def _voc_pad(z, Lb):
     with a burst that reaches back into the audio that is kept. Repeating the last frame keeps the
     boundary smooth; the padding itself is discarded either way."""
     return torch.cat([z, z[..., -1:].expand(-1, -1, Lb - z.shape[-1])], -1)
+
+
+def _trailing_silence(wav):
+    """Seconds of near-silence at the end of a waveform.
+
+    RMS over short windows rather than raw samples: a lone nonzero sample is the noise floor, not
+    speech. The loudness bar is relative to the clip's own peak as well as absolute, because
+    speakers differ in level and a fixed bar alone would call a quiet speaker's tail silence."""
+    n = int(OUTPUT_SR * 0.02)
+    flat = wav.reshape(-1)
+    if flat.numel() < n:
+        return 0.0  # shorter than one window; the empty-audio contract is handled by the caller
+    frames = flat[: flat.numel() // n * n].reshape(-1, n)
+    rms = frames.pow(2).mean(1).sqrt()
+    loud = (rms > max(0.01, 0.02 * rms.max().item())).nonzero()
+    if not len(loud):
+        return len(frames) * n / OUTPUT_SR  # silent throughout, which is a fault worth seeing
+    return (len(frames) - 1 - loud[-1].item()) * n / OUTPUT_SR
+
+
+def _trim_run_on(wav):
+    """Cut a run-on tail back to a natural length -> (wav, seconds removed)."""
+    silence = _trailing_silence(wav)
+    if silence <= RUN_ON_S:
+        return wav, 0.0
+    keep = wav.shape[-1] - int((silence - TAIL_MS / 1000) * OUTPUT_SR)
+    return wav[..., :keep], (wav.shape[-1] - keep) / OUTPUT_SR
 
 
 def _fade_out(wav, ms=FADE_MS):
@@ -487,6 +518,7 @@ class XttsV2:
                     "decode_ms_per_token": 1000.0 * t_decode,  # the lone START step
                     "codes": 0,
                     "truncated": truncated,
+                    "run_on_s": 0.0,
                     "vocoder_s": 0.0,
                     "wav_samples": 0,
                 }
@@ -498,7 +530,8 @@ class XttsV2:
 
         # --- vocoder: two host interpolates (HifiDecoder.forward) + HiFi-GAN on device. ---
         t0 = time.time()
-        wav = _fade_out(self._vocode(_voc_input(gpt_latents), voice.speaker_embedding))
+        wav, run_on = _trim_run_on(self._vocode(_voc_input(gpt_latents), voice.speaker_embedding))
+        wav = _fade_out(wav)
         t_voc = time.time() - t0
 
         self.last_timings.update(
@@ -509,6 +542,7 @@ class XttsV2:
                 "decode_ms_per_token": 1000.0 * t_decode / max(len(vlat) + 1, 1),
                 "codes": len(codes),
                 "truncated": truncated,
+                "run_on_s": run_on,
                 "vocoder_s": t_voc,
                 "wav_samples": wav.shape[-1],
             }

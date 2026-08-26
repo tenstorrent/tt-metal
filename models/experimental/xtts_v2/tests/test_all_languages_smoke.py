@@ -67,7 +67,8 @@ def test_language_smoke(lang, tts, voice):
         # a caller cannot tell a finished sentence from a cut-off one without this
         assert tts.last_timings["truncated"] == (codes == cap), f"{lang}: truncation misreported"
         assert _voc_bucket(wav.shape[-1] // HOP) in VOC_BUCKETS
-        audio_ms = 1000 * wav.shape[-1] / OUTPUT_SR
+        # a trimmed run-on shortens the audio, so add back what generate reports removing
+        audio_ms = 1000 * (wav.shape[-1] / OUTPUT_SR + tts.last_timings["run_on_s"])
         assert abs(audio_ms - codes * MS_PER_CODE) < MS_PER_CODE, f"{lang}: {audio_ms:.0f}ms, {codes} codes"
         last = (text, cap, wav)
 
