@@ -30,56 +30,22 @@ def _make_input(shape, dtype):
     return torch.rand(shape, dtype=torch.bfloat16)
 
 
+# is_demoted() is `!is_row_invariant(dims)` behind a rank guard: it reads the permutation and
+# nothing else. Shape, dtype and which particular axes move are all invisible to it, so a wider
+# tensor or a second permutation of the same rank re-proves one boolean at the cost of a native
+# golden and a full comparison. Kept below are the axes that do discriminate -- the rank guard's
+# lower bound, and one case per accepted dtype -- plus rank 5, where the fused width-height check
+# in supported_by_codegen() has outer dims to fold and so takes a different branch than at rank 2.
 _DEMOTED = [
-    ([1, 2, 3, 64, 96], {"dims": [2, 1, 4, 3, 0]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 2, 3, 64, 96], {"dims": [2, 1, 4, 3, 0]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 2, 3, 64, 96], {"dims": [2, 1, 4, 3, 0]}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 2, 3, 64, 96], {"dims": [2, 3, 1, 4, 0]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 2, 3, 64, 96], {"dims": [2, 3, 1, 4, 0]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 2, 3, 64, 96], {"dims": [2, 3, 1, 4, 0]}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 2, 3, 64, 96], {"dims": [2, 3, 4, 0, 1]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 2, 3, 64, 96], {"dims": [2, 3, 4, 0, 1]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 2, 3, 64, 96], {"dims": [2, 3, 4, 0, 1]}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 2, 3, 64, 96], {"dims": [4, 0, 2, 3, 1]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 2, 3, 64, 96], {"dims": [4, 0, 2, 3, 1]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 2, 3, 64, 96], {"dims": [4, 0, 2, 3, 1]}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 4, 96, 128], {"dims": [1, 3, 2, 0]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 4, 96, 128], {"dims": [1, 3, 2, 0]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 4, 96, 128], {"dims": [1, 3, 2, 0]}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 4, 96, 128], {"dims": [3, 2, 0, 1]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 4, 96, 128], {"dims": [3, 2, 0, 1]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 4, 96, 128], {"dims": [3, 2, 0, 1]}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+    ([32, 64], {"dims": [1, 0]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
     ([1, 4, 96, 128], {"dims": [3, 2, 1, 0]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 4, 96, 128], {"dims": [3, 2, 1, 0]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 4, 96, 128], {"dims": [3, 2, 1, 0]}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
-    ([2, 3, 4, 32, 64], {"dims": [2, 1, 4, 3, 0]}, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
-    ([2, 3, 4, 32, 64], {"dims": [2, 1, 4, 3, 0]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ([1, 2, 3, 64, 96], {"dims": [2, 1, 4, 3, 0]}, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
     ([2, 3, 4, 32, 64], {"dims": [2, 1, 4, 3, 0]}, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
 ]
 _DEMOTED_IDS = [
-    "[1, 2, 3, 64, 96]|dims=[2, 1, 4, 3, 0]|bfloat16|row_major",
-    "[1, 2, 3, 64, 96]|dims=[2, 1, 4, 3, 0]|float32|row_major",
-    "[1, 2, 3, 64, 96]|dims=[2, 1, 4, 3, 0]|int32|row_major",
-    "[1, 2, 3, 64, 96]|dims=[2, 3, 1, 4, 0]|bfloat16|row_major",
-    "[1, 2, 3, 64, 96]|dims=[2, 3, 1, 4, 0]|float32|row_major",
-    "[1, 2, 3, 64, 96]|dims=[2, 3, 1, 4, 0]|int32|row_major",
-    "[1, 2, 3, 64, 96]|dims=[2, 3, 4, 0, 1]|bfloat16|row_major",
-    "[1, 2, 3, 64, 96]|dims=[2, 3, 4, 0, 1]|float32|row_major",
-    "[1, 2, 3, 64, 96]|dims=[2, 3, 4, 0, 1]|int32|row_major",
-    "[1, 2, 3, 64, 96]|dims=[4, 0, 2, 3, 1]|bfloat16|row_major",
-    "[1, 2, 3, 64, 96]|dims=[4, 0, 2, 3, 1]|float32|row_major",
-    "[1, 2, 3, 64, 96]|dims=[4, 0, 2, 3, 1]|int32|row_major",
-    "[1, 4, 96, 128]|dims=[1, 3, 2, 0]|bfloat16|row_major",
-    "[1, 4, 96, 128]|dims=[1, 3, 2, 0]|float32|row_major",
-    "[1, 4, 96, 128]|dims=[1, 3, 2, 0]|int32|row_major",
-    "[1, 4, 96, 128]|dims=[3, 2, 0, 1]|bfloat16|row_major",
-    "[1, 4, 96, 128]|dims=[3, 2, 0, 1]|float32|row_major",
-    "[1, 4, 96, 128]|dims=[3, 2, 0, 1]|int32|row_major",
+    "[32, 64]|dims=[1, 0]|bfloat16|row_major",
     "[1, 4, 96, 128]|dims=[3, 2, 1, 0]|bfloat16|row_major",
-    "[1, 4, 96, 128]|dims=[3, 2, 1, 0]|float32|row_major",
-    "[1, 4, 96, 128]|dims=[3, 2, 1, 0]|int32|row_major",
-    "[2, 3, 4, 32, 64]|dims=[2, 1, 4, 3, 0]|bfloat16|row_major",
-    "[2, 3, 4, 32, 64]|dims=[2, 1, 4, 3, 0]|float32|row_major",
+    "[1, 2, 3, 64, 96]|dims=[2, 1, 4, 3, 0]|float32|row_major",
     "[2, 3, 4, 32, 64]|dims=[2, 1, 4, 3, 0]|int32|row_major",
 ]
 
