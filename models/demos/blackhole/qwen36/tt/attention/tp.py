@@ -767,16 +767,23 @@ class TPAttention:
             # top-2 gap 4.1, which the near-tie gate in test_spec_decode_tp caught).
             _sc1 = self._kv_update_shard_cfg(1, HD)
             for i in range(n):
-                pos_i = ttnn.slice(exact_kv_pos, (i,), (i + 1,))
-                pt_i = ttnn.slice(exact_kv_pt, (i, 0), (i + 1, exact_kv_pt.shape[-1]))
+                if n == 1:
+                    # full-span ttnn.slice returns an alias of the input; use the caller's
+                    # tensors directly and leave their lifetime to the caller
+                    pos_i = exact_kv_pos
+                    pt_i = exact_kv_pt
+                else:
+                    pos_i = ttnn.slice(exact_kv_pos, (i,), (i + 1,))
+                    pt_i = ttnn.slice(exact_kv_pt, (i, 0), (i + 1, exact_kv_pt.shape[-1]))
                 for _cache, _src in ((k_paged, k_p), (v_paged, v_p)):
                     row = ttnn.slice(_src, (0, i, 0, 0), (1, i + 1, 32, HD))
                     row_sh = ttnn.to_memory_config(row, _sc1)
                     ttnn.deallocate(row)
                     ttnn.experimental.paged_update_cache(_cache, row_sh, update_idxs_tensor=pos_i, page_table=pt_i)
                     ttnn.deallocate(row_sh)
-                ttnn.deallocate(pos_i)
-                ttnn.deallocate(pt_i)
+                if n > 1:
+                    ttnn.deallocate(pos_i)
+                    ttnn.deallocate(pt_i)
             ttnn.deallocate(k_p)
             ttnn.deallocate(v_p)
         else:
