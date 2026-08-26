@@ -669,6 +669,47 @@ KNOBS = {
     # no-fire.  Controls hold (hardsigmoid-fresh +0.89,
     # blaze-sdpareducerow-max-t8 +0.97).
     "crossrow-pairing": "-mtt-tensix-optimize-crossrow-pairing",
+    # HB (crossrow-pairing-seed): the DESIGN-V2 Rule-B rename for the
+    # pairing above (sfpi-gcc agent/rule-b-preservation-seed) — the
+    # named unlock GP adjudicated for roundingops.  A collision web
+    # whose fresh root executes INSIDE a flat CC atom (refused by
+    # crossrow-pairing-rename-cc-domain) renames to a dead LREG: a
+    # PREDICATED root gets an all-lanes SFPMOV mod-2 preservation copy
+    # of the old register seeded after its last preceding definition
+    # (ambient before the atom, or inside the atom's indivisible item —
+    # the mod-2 copy writes every lane regardless of CC), making the
+    # fresh register lane-equal at the root; a FULL-LANE root (the root
+    # IS a bare all-lanes copy — the roundingops copysgn lowering)
+    # renames seed-free at zero word cost.  Seeds are charged in the
+    # same steady-state II model + capture budget; commit requires a
+    # STRICT modeled II improvement over the unseeded candidate (the
+    # non-improving forward tail rolls back).  The seed flag is
+    # effective only where crossrow-pairing admits the loop, so the
+    # knob leg carries BOTH flags — booking A/B = (ON-28 + pairing +
+    # seed) vs plain ON-28 (the pairing+seed ARM); the seed-only delta
+    # (knobB vs knobA) is adjudicated in laneHB-evidence-20260825.
+    # Target rows: roundingops + ceil-fresh (Floor/Ceil fresh math TUs:
+    # the blocking L1 web roots at the all-lanes SFPMOV inside atom 1;
+    # full-lane rename reaches the FULL interleave II 32 -> 28 at 28
+    # words ZERO stalls — Rule-A stopped at 30 — verified on the DT
+    # makespan oracle: as-emitted makespan 50 -> 48 = the audited lower
+    # bound; capture composition intact, 28-word record + 15 launches).
+    # Residual rops webs refuse crossrow-pairing-seed-no-free-lreg (the
+    # 8-LREG wall).  MEASURED (laneHB-evidence-20260825, BH p150, 3 reps
+    # cycle-identical, device corr GREEN at ON-28/pairing/pairing+seed):
+    # roundingops + ceil-fresh KERNEL 66967 (ON-28) / 66964 (pairing) ->
+    # 62867 (pairing+seed) = -6.12%; the knobA->knobB delta is EXACTLY
+    # -4097 cy = the 2 recovered issue slots x 2048 pairs (the modeled
+    # interleave transfers cycle-exact); vs-hand +7.80% -> +1.20%
+    # (same-leg hand 62121).  Corpus knob delta: (pairing+seed) vs
+    # plain pairing = ZERO changed TUs (the seed is corpus-inert; both
+    # equal GP's 2-TU pairing delta vs ON-28) -- the seed's fire
+    # surface is the headline Floor/Ceil TUs.  hardsigmoid-fresh:
+    # 59028 -> 50962 = -13.66% under the PAIRING alone (knobA == knobB;
+    # the pairing's own surprise on this perf TU, vs-hand +0.87% ->
+    # -12.91%); sqrt-fresh byte/cycle-inert control.
+    "crossrow-pairing-seed": "-mtt-tensix-optimize-crossrow-pairing "
+    "-mtt-tensix-optimize-crossrow-pairing-seed",
     # GQ (record-hoist-peel): exec-while-record first-trip peel — rescues
     # exactly the doomed-hoist mirror refusal
     # noexec-rerecord-dststore-composition-unaudited (Dst-store re-record
@@ -841,6 +882,13 @@ KNOB_MODES = {
     # booking knob; promotion requires an R9 witness and ON-vs-ON
     # attribution ceremony.
     "crossrow-pairing": "on-plus",
+    # HB crossrow-pairing-seed: default-off Init(0) booking knob; the
+    # Rule-B rename runs only inside an admitted pairing, so the knob
+    # leg carries pairing + seed together (the arm booking A/B is
+    # (ON + pairing + seed) vs plain ON).  on-plus while a booking
+    # knob; promotion requires an R9 witness and ON-vs-ON attribution
+    # ceremony.
+    "crossrow-pairing-seed": "on-plus",
     # GQ record-hoist-peel: default-off on-plus booking knob — the peel
     # rescues a record-hoist refusal, so its shape only exists on the
     # reviewed-ON pipeline (record-hoist is in the ON set); the booking
