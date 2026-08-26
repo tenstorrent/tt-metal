@@ -54,7 +54,42 @@ GEMMA4_TRACE_PREFILL_SEQ_LENS = _resolve_trace_prefill_seq_lens()
 # rather than one full-length op, so it neither wedges the fetch queue (#49083)
 # nor OOMs a whole-length trace.
 GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN = 4096
-GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS = 32 * 1024
+
+
+def _resolve_max_trace_batched_prefill_tokens() -> int:
+    """Virtual-token ceiling above which batched prefill drops to eager.
+
+    Aligned with the shared planner's ``_MAX_BATCHED_PREFILL_TOKENS`` (128Ki in
+    models/common/llm_runtime/prefill/plan.py). Gemma4 previously used 32Ki --
+    4x tighter than the shared value, and a batch x seq gate no peer model has
+    at all (tt_transformers ``can_enable_trace`` gates on seq_len only, per
+    (model, device), via ``trace_prefill_supported_seq_lens``).
+
+    That divergence was costly, not protective. Measured on P150x8 / 12B at
+    conc=32, isl=2048: crossing 32Ki sent batch-32 prefill down the eager path
+    at ~322 tok/s versus ~5817 tok/s traced -- an 18x regression, not the
+    "no perf gain" the original comment assumed. Eager wide prefill also mixes
+    with traced batch-1 at the same seq_len, which precedes the P150x8 wedge:
+    at budget 65536 the device stalled at 0 tok/s, while the same width kept
+    traced ran clean (TTFT 29278 -> 8555 ms, TPOT 281.3 -> 34.8 ms, 240k ISL
+    unchanged).
+
+    The trace region holds command buffers; the wide prefill's activation
+    (~63 MB/chip for 32x2048 on 12B) lives in DRAM (3.98 GiB/bank x 8 on
+    Blackhole), so the original OOM rationale did not apply to this region.
+
+    Wormhole stays protected by the seq_len gate rather than this cap: its
+    ``GEMMA4_TRACE_PREFILL_SEQ_LENS`` is pinned to [128] on the T3K nightly,
+    so 2048-wide prefills are never trace-eligible there regardless of batch.
+    """
+    raw = os.environ.get("GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS")
+    if raw is None:
+        return 128 * 1024
+    val = int(raw)
+    return val if val > 0 else 10**9
+
+
+GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS = _resolve_max_trace_batched_prefill_tokens()
 
 
 def chunked_prefill_trace_enabled() -> bool:
