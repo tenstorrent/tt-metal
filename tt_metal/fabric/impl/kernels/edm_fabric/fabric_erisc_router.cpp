@@ -461,11 +461,6 @@ enum PacketLocalForwardType : uint8_t {
 // the link is down
 bool did_something;
 
-// This router's logical coordinates, cached at setup so indexed decode does no divide/mod on the hot
-// path. Populated in kernel_main; every 2D router indexes by coordinate.
-uint8_t local_y = 0;
-uint8_t local_x = 0;
-
 /////////////////////////////////////////////
 //   SENDER SIDE HELPERS
 /////////////////////////////////////////////
@@ -597,6 +592,19 @@ FORCE_INLINE constexpr size_t get_downstream_edm_interface_index(eth_chan_direct
 template <size_t DOWNSTREAM_EDM_SIZE, eth_chan_directions DIRECTION>
 constexpr bool dispatch_arm_is_realizable() {
     return get_downstream_edm_interface_index<DIRECTION>() < DOWNSTREAM_EDM_SIZE;
+}
+
+// True when every eth output KEY selects names a downstream this router actually has. A KEY failing
+// this can never be admitted -- admit_indexed_combo<KEY> folds its `ok` to false -- so the raw-action
+// dispatch routes it straight to the refuse arm rather than emitting an unreachable body. On Wormhole
+// this is what retires every KEY with the Z bit set.
+template <uint8_t KEY, size_t DOWNSTREAM_EDM_SIZE>
+constexpr bool combo_is_realizable() {
+    constexpr auto dirs = IndexedMeshRoutingFields::fwd_dirs<static_cast<eth_chan_directions>(my_direction)>();
+    return (!((KEY >> 0) & 1) || dispatch_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[0]>()) &&
+           (!((KEY >> 1) & 1) || dispatch_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[1]>()) &&
+           (!((KEY >> 2) & 1) || dispatch_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[2]>()) &&
+           (!((KEY >> 3) & 1) || dispatch_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[3]>());
 }
 
 template <typename DownstreamSenderT, eth_chan_directions DIRECTION, size_t DOWNSTREAM_EDM_SIZE>
@@ -882,113 +890,438 @@ FORCE_INLINE void forward_indexed_combo(
     }
 }
 
-// Hand-written 16-arm admit dispatch over the dense key: a compile-time KEY drops the queue checks
-// for unselected outputs.
+// Admit dispatch keyed on the RAW 5-bit eth action rather than a packed key.
+//
+// Measured against two alternatives on this core, both worse:
+//   - packing at runtime (closed-form bit-compress) then a 16-arm jump table: Mesh -0.99% vs main
+//   - packing via a 32-entry .data LUT then the same 16-arm table:            Mesh -2.14% vs main
+//   - this form, which GCC lowers to a compare tree over the 8 live arms:     Mesh -0.76% vs main
+//
+// The reason is the data cache: ENABLE_RISC_CPU_DATA_CACHE is false, so every load here is a full
+// uncached L1 round trip. A jump table is not a cheap lookup under those conditions -- it is a load
+// sitting in the dependency chain right before an indirect jump that cannot issue until it lands.
+// Three data-dependent compares are cheaper than one more uncached load. Keep the arm count at 32
+// and the arms three-quarters refusals: that density is exactly what makes GCC pick the tree.
+//
+// RAW_REFUSES covers both structural rejections, at zero runtime cost since they are case labels:
+//   - self bit set: no return path, the host packed an action this router cannot honour
+//   - an arm this router has no downstream for (the Z slot on Wormhole)
+#define RAW_KEY(RAW) (IndexedMeshRoutingFields::pack_fwd_key<static_cast<eth_chan_directions>(my_direction)>(RAW))
+#define RAW_REFUSES(RAW)                                                                                    \
+    (((RAW) & IndexedMeshRoutingFields::action_bit(static_cast<eth_chan_directions>(my_direction))) != 0 || \
+     !combo_is_realizable<RAW_KEY(RAW), DOWNSTREAM_EDM_SIZE>())
+
 template <typename DownstreamSenderT, typename LocalRelayInterfaceT, size_t DOWNSTREAM_EDM_SIZE>
 FORCE_INLINE __attribute__((optimize("jump-tables"))) bool admit_indexed_dispatch(
-    uint8_t key,
+    uint8_t action_eth,
     bool ld,
     std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
     LocalRelayInterfaceT& local_relay_interface) {
-    switch (key) {
-        case 0: return admit_indexed_combo<0>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 1: return admit_indexed_combo<1>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 2: return admit_indexed_combo<2>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 3: return admit_indexed_combo<3>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 4: return admit_indexed_combo<4>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 5: return admit_indexed_combo<5>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 6: return admit_indexed_combo<6>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 7: return admit_indexed_combo<7>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 8: return admit_indexed_combo<8>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 9: return admit_indexed_combo<9>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 10: return admit_indexed_combo<10>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 11: return admit_indexed_combo<11>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 12: return admit_indexed_combo<12>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 13: return admit_indexed_combo<13>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 14: return admit_indexed_combo<14>(ld, downstream_edm_interfaces, local_relay_interface);
-        case 15: return admit_indexed_combo<15>(ld, downstream_edm_interfaces, local_relay_interface);
+    switch (action_eth) {
+        case 0:
+            if constexpr (RAW_REFUSES(0)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(0)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 1:
+            if constexpr (RAW_REFUSES(1)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(1)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 2:
+            if constexpr (RAW_REFUSES(2)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(2)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 3:
+            if constexpr (RAW_REFUSES(3)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(3)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 4:
+            if constexpr (RAW_REFUSES(4)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(4)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 5:
+            if constexpr (RAW_REFUSES(5)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(5)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 6:
+            if constexpr (RAW_REFUSES(6)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(6)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 7:
+            if constexpr (RAW_REFUSES(7)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(7)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 8:
+            if constexpr (RAW_REFUSES(8)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(8)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 9:
+            if constexpr (RAW_REFUSES(9)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(9)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 10:
+            if constexpr (RAW_REFUSES(10)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(10)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 11:
+            if constexpr (RAW_REFUSES(11)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(11)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 12:
+            if constexpr (RAW_REFUSES(12)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(12)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 13:
+            if constexpr (RAW_REFUSES(13)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(13)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 14:
+            if constexpr (RAW_REFUSES(14)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(14)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 15:
+            if constexpr (RAW_REFUSES(15)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(15)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 16:
+            if constexpr (RAW_REFUSES(16)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(16)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 17:
+            if constexpr (RAW_REFUSES(17)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(17)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 18:
+            if constexpr (RAW_REFUSES(18)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(18)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 19:
+            if constexpr (RAW_REFUSES(19)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(19)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 20:
+            if constexpr (RAW_REFUSES(20)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(20)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 21:
+            if constexpr (RAW_REFUSES(21)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(21)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 22:
+            if constexpr (RAW_REFUSES(22)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(22)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 23:
+            if constexpr (RAW_REFUSES(23)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(23)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 24:
+            if constexpr (RAW_REFUSES(24)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(24)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 25:
+            if constexpr (RAW_REFUSES(25)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(25)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 26:
+            if constexpr (RAW_REFUSES(26)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(26)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 27:
+            if constexpr (RAW_REFUSES(27)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(27)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 28:
+            if constexpr (RAW_REFUSES(28)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(28)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 29:
+            if constexpr (RAW_REFUSES(29)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(29)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 30:
+            if constexpr (RAW_REFUSES(30)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(30)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
+        case 31:
+            if constexpr (RAW_REFUSES(31)) {
+                return false;
+            } else {
+                return admit_indexed_combo<RAW_KEY(31)>(ld, downstream_edm_interfaces, local_relay_interface);
+            }
         default: return false;
     }
 }
 
-// Hand-written 16-arm forward dispatch over the same dense key. Every arm is straight-line code, so
-// the switch lowers to a jump table.
+// Forward dispatch on the same raw action, so both switches still fold into one dispatch.
 template <typename DownstreamSenderT, size_t DOWNSTREAM_EDM_SIZE>
 FORCE_INLINE __attribute__((optimize("jump-tables"))) void forward_indexed_dispatch(
-    uint8_t key,
+    uint8_t action_eth,
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     ROUTING_FIELDS_TYPE cached_routing_fields,
     std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
     uint8_t transaction_id) {
     const uint16_t payload_size_bytes = packet_start->payload_size_bytes;
-    switch (key) {
+    switch (action_eth) {
         case 0:
-            forward_indexed_combo<0>(
-                packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            if constexpr (!RAW_REFUSES(0)) {
+                forward_indexed_combo<RAW_KEY(0)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
             break;
         case 1:
-            forward_indexed_combo<1>(
-                packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            if constexpr (!RAW_REFUSES(1)) {
+                forward_indexed_combo<RAW_KEY(1)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
             break;
         case 2:
-            forward_indexed_combo<2>(
-                packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            if constexpr (!RAW_REFUSES(2)) {
+                forward_indexed_combo<RAW_KEY(2)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
             break;
         case 3:
-            forward_indexed_combo<3>(
-                packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            if constexpr (!RAW_REFUSES(3)) {
+                forward_indexed_combo<RAW_KEY(3)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
             break;
         case 4:
-            forward_indexed_combo<4>(
-                packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            if constexpr (!RAW_REFUSES(4)) {
+                forward_indexed_combo<RAW_KEY(4)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
             break;
         case 5:
-            forward_indexed_combo<5>(
-                packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            if constexpr (!RAW_REFUSES(5)) {
+                forward_indexed_combo<RAW_KEY(5)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
             break;
         case 6:
-            forward_indexed_combo<6>(
-                packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            if constexpr (!RAW_REFUSES(6)) {
+                forward_indexed_combo<RAW_KEY(6)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
             break;
         case 7:
-            forward_indexed_combo<7>(
-                packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            if constexpr (!RAW_REFUSES(7)) {
+                forward_indexed_combo<RAW_KEY(7)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
             break;
         case 8:
-            forward_indexed_combo<8>(
-                packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            if constexpr (!RAW_REFUSES(8)) {
+                forward_indexed_combo<RAW_KEY(8)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
             break;
         case 9:
-            forward_indexed_combo<9>(
-                packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            if constexpr (!RAW_REFUSES(9)) {
+                forward_indexed_combo<RAW_KEY(9)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
             break;
         case 10:
-            forward_indexed_combo<10>(
-                packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            if constexpr (!RAW_REFUSES(10)) {
+                forward_indexed_combo<RAW_KEY(10)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
             break;
         case 11:
-            forward_indexed_combo<11>(
-                packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            if constexpr (!RAW_REFUSES(11)) {
+                forward_indexed_combo<RAW_KEY(11)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
             break;
         case 12:
-            forward_indexed_combo<12>(
-                packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            if constexpr (!RAW_REFUSES(12)) {
+                forward_indexed_combo<RAW_KEY(12)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
             break;
         case 13:
-            forward_indexed_combo<13>(
-                packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            if constexpr (!RAW_REFUSES(13)) {
+                forward_indexed_combo<RAW_KEY(13)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
             break;
         case 14:
-            forward_indexed_combo<14>(
-                packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            if constexpr (!RAW_REFUSES(14)) {
+                forward_indexed_combo<RAW_KEY(14)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
             break;
         case 15:
-            forward_indexed_combo<15>(
-                packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            if constexpr (!RAW_REFUSES(15)) {
+                forward_indexed_combo<RAW_KEY(15)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
+            break;
+        case 16:
+            if constexpr (!RAW_REFUSES(16)) {
+                forward_indexed_combo<RAW_KEY(16)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
+            break;
+        case 17:
+            if constexpr (!RAW_REFUSES(17)) {
+                forward_indexed_combo<RAW_KEY(17)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
+            break;
+        case 18:
+            if constexpr (!RAW_REFUSES(18)) {
+                forward_indexed_combo<RAW_KEY(18)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
+            break;
+        case 19:
+            if constexpr (!RAW_REFUSES(19)) {
+                forward_indexed_combo<RAW_KEY(19)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
+            break;
+        case 20:
+            if constexpr (!RAW_REFUSES(20)) {
+                forward_indexed_combo<RAW_KEY(20)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
+            break;
+        case 21:
+            if constexpr (!RAW_REFUSES(21)) {
+                forward_indexed_combo<RAW_KEY(21)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
+            break;
+        case 22:
+            if constexpr (!RAW_REFUSES(22)) {
+                forward_indexed_combo<RAW_KEY(22)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
+            break;
+        case 23:
+            if constexpr (!RAW_REFUSES(23)) {
+                forward_indexed_combo<RAW_KEY(23)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
+            break;
+        case 24:
+            if constexpr (!RAW_REFUSES(24)) {
+                forward_indexed_combo<RAW_KEY(24)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
+            break;
+        case 25:
+            if constexpr (!RAW_REFUSES(25)) {
+                forward_indexed_combo<RAW_KEY(25)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
+            break;
+        case 26:
+            if constexpr (!RAW_REFUSES(26)) {
+                forward_indexed_combo<RAW_KEY(26)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
+            break;
+        case 27:
+            if constexpr (!RAW_REFUSES(27)) {
+                forward_indexed_combo<RAW_KEY(27)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
+            break;
+        case 28:
+            if constexpr (!RAW_REFUSES(28)) {
+                forward_indexed_combo<RAW_KEY(28)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
+            break;
+        case 29:
+            if constexpr (!RAW_REFUSES(29)) {
+                forward_indexed_combo<RAW_KEY(29)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
+            break;
+        case 30:
+            if constexpr (!RAW_REFUSES(30)) {
+                forward_indexed_combo<RAW_KEY(30)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
+            break;
+        case 31:
+            if constexpr (!RAW_REFUSES(31)) {
+                forward_indexed_combo<RAW_KEY(31)>(
+                    packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interfaces, transaction_id);
+            }
             break;
         default: break;
     }
 }
+
+#undef RAW_KEY
+#undef RAW_REFUSES
 
 #endif
 
@@ -1405,6 +1738,9 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     ReceiverChannelResponseCreditSenderT& receiver_channel_response_credit_sender,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
+    uint16_t my_mesh_id,
+    uint8_t my_mesh_coord_y,
+    uint8_t my_mesh_coord_x,
     LocalTelemetryT& local_fabric_telemetry) {
     bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
@@ -1464,7 +1800,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         if constexpr (!skip_src_ch_id_update && !enable_first_level_ack) {
             receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
         }
-        uint8_t fwd_key = 0;
+        // The raw 5-bit eth action; both dispatches index on it directly.
+        uint8_t fwd_action_eth = 0;
         bool local_deliver = false;
         // Set only when this chip is the mesh's exit for the packet; carries the resolved INTERMESH
         // downstream slot from admission to the forward phase.
@@ -1484,53 +1821,49 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 }
                 const std::uint8_t action =
                     IndexedMeshRoutingFields::decode_action<static_cast<eth_chan_directions>(my_direction)>(
-                        packet_header->route_buffer, local_y, local_x, MESH_Y_SIZE);
-                if (!IndexedMeshRoutingFields::action_is_valid<static_cast<eth_chan_directions>(my_direction)>(
-                        action)) {
-                    // Fail-stop: commit no copy and stall the parent RX packet. There is no
-                    // retransmission or recovery path.
-                    ASSERT(false);
-                    can_send_to_all_local_chip_receivers = false;
-                } else {
-                    // This chip is the exit when the maps say deliver here but the final mesh is
-                    // elsewhere. CT-gated so interior routers skip the mesh-id compare.
-                    bool intermesh_exit = false;
-                    if constexpr (is_intramesh_router_on_edge) {
-                        intermesh_exit = IndexedMeshRoutingFields::action_is_intermesh_exit(
-                            action, packet_header->dst_start_mesh_id, routing_table.my_mesh_id);
-                    }
-                    if (intermesh_exit) {
-                        // Forward the packet as-is on the INTERMESH egress in boundary_dir, with no
-                        // local delivery and no map rebuild.
-                        const auto boundary_dir = static_cast<eth_chan_directions>(
-                            routing_table.inter_mesh_direction_table.get_original_direction(
-                                packet_header->dst_start_mesh_id));
-                        // boundary_dir is chosen per destination mesh, so unlike a decoded action it is
-                        // not constrained to the arms this router was built with. Indexing the compact
-                        // array unchecked would read past its end, so fail-stop instead.
-                        const bool boundary_dir_is_addressable =
-                            boundary_dir < eth_chan_directions::COUNT &&
-                            boundary_dir != static_cast<eth_chan_directions>(my_direction) &&
-                            get_downstream_edm_interface_index(boundary_dir) < downstream_edm_interfaces.size();
-                        if (!boundary_dir_is_addressable) {
-                            ASSERT(false);
-                            can_send_to_all_local_chip_receivers = false;
-                        } else {
-                            intermesh_egress = true;
-                            intermesh_egress_index =
-                                static_cast<uint8_t>(get_downstream_edm_interface_index(boundary_dir));
-                            can_send_to_all_local_chip_receivers =
-                                downstream_edm_interfaces[intermesh_egress_index]
-                                    .template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
-                        }
+                        packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
+                // No action_is_valid() gate here. It cost a reserved-mask compare and a self-bit
+                // compare per packet on the RX forward path, and pack_fwd_key() below is now
+                // total over all 256 action values: it masks with ACTION_ETH_MASK and drops the
+                // self bit, so the key it returns is always 0..15 and a malformed action cannot
+                // index past the 16-arm dispatch table. Every remaining index is bounds-checked
+                // where it is formed -- see boundary_dir_is_addressable below.
+                //
+                // This chip is the exit when the maps say deliver here but the final mesh is
+                // elsewhere. CT-gated so interior routers skip the mesh-id compare.
+                bool intermesh_exit = false;
+                if constexpr (is_intramesh_router_on_edge) {
+                    intermesh_exit = IndexedMeshRoutingFields::action_is_intermesh_exit(
+                        action, packet_header->dst_start_mesh_id, my_mesh_id);
+                }
+                if (intermesh_exit) {
+                    // Forward the packet as-is on the INTERMESH egress in boundary_dir, with no
+                    // local delivery and no map rebuild.
+                    const auto boundary_dir = static_cast<eth_chan_directions>(
+                        routing_table.inter_mesh_direction_table.get_original_direction(
+                            packet_header->dst_start_mesh_id));
+                    // boundary_dir is chosen per destination mesh, so unlike a decoded action it is
+                    // not constrained to the arms this router was built with. Indexing the compact
+                    // array unchecked would read past its end, so fail-stop instead.
+                    const bool boundary_dir_is_addressable =
+                        boundary_dir < eth_chan_directions::COUNT &&
+                        boundary_dir != static_cast<eth_chan_directions>(my_direction) &&
+                        get_downstream_edm_interface_index(boundary_dir) < downstream_edm_interfaces.size();
+                    if (!boundary_dir_is_addressable) {
+                        ASSERT(false);
+                        can_send_to_all_local_chip_receivers = false;
                     } else {
-                        local_deliver = (action & IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER) != 0;
-                        fwd_key =
-                            IndexedMeshRoutingFields::pack_fwd_key<static_cast<eth_chan_directions>(my_direction)>(
-                                action);
-                        can_send_to_all_local_chip_receivers = admit_indexed_dispatch(
-                            fwd_key, local_deliver, downstream_edm_interfaces, local_relay_interface);
+                        intermesh_egress = true;
+                        intermesh_egress_index = static_cast<uint8_t>(get_downstream_edm_interface_index(boundary_dir));
+                        can_send_to_all_local_chip_receivers =
+                            downstream_edm_interfaces[intermesh_egress_index]
+                                .template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
                     }
+                } else {
+                    local_deliver = (action & IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER) != 0;
+                    fwd_action_eth = action & IndexedMeshRoutingFields::ACTION_ETH_MASK;
+                    can_send_to_all_local_chip_receivers = admit_indexed_dispatch(
+                        fwd_action_eth, local_deliver, downstream_edm_interfaces, local_relay_interface);
                 }
             }
 #endif
@@ -1570,7 +1903,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                             // Same dense key as admission. Local delivery stays outside the dispatch
                             // so every arm is straight-line code.
                             forward_indexed_dispatch(
-                                fwd_key, packet_header, cached_routing_fields, downstream_edm_interfaces, trid);
+                                fwd_action_eth, packet_header, cached_routing_fields, downstream_edm_interfaces, trid);
                             if (local_deliver) {
                                 forward_to_local_destination<receiver_channel>(
                                     local_relay_interface, packet_header, packet_header->payload_size_bytes, trid);
@@ -1668,6 +2001,9 @@ FORCE_INLINE bool run_receiver_channel_step(
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     ReceiverChannelResponseCreditSenders<NUM_RECEIVER_CHANNELS>& receiver_channel_response_credit_senders,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
+    uint16_t my_mesh_id,
+    uint8_t my_mesh_coord_y,
+    uint8_t my_mesh_coord_x,
     LocalTelemetryT& local_fabric_telemetry) {
     if constexpr (is_receiver_channel_serviced[receiver_channel]) {
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
@@ -1689,6 +2025,9 @@ FORCE_INLINE bool run_receiver_channel_step(
             port_direction_table,
             receiver_channel_response_credit_senders.template get<receiver_channel>(),
             routing_table,
+            my_mesh_id,
+            my_mesh_coord_y,
+            my_mesh_coord_x,
             local_fabric_telemetry);
     }
     return false;
@@ -1847,11 +2186,21 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
     tt::tt_fabric::routing_l1_info_t routing_table = *routing_table_l1;
 
-    {
-        // Cached once here so the hot path reads no table fields and does no divide/mod.
-        local_y = routing_table.my_mesh_coord_y;
-        local_x = routing_table.my_mesh_coord_x;
-    }
+    // This router's logical coordinates. These used to be .bss globals, which meant decode_action()
+    // paid an address materialization plus an uncached L1 load for each of them on every packet --
+    // ENABLE_RISC_CPU_DATA_CACHE is false on this build, so nothing amortises that across iterations.
+    // As by-value locals whose address is never taken they can stay in registers for the whole main
+    // loop. Threaded down to the single hot-path reader rather than re-read there.
+    const uint8_t my_mesh_coord_y = routing_table.my_mesh_coord_y;
+    const uint8_t my_mesh_coord_x = routing_table.my_mesh_coord_x;
+
+    // Same idea, but this one has to be a by-value local rather than a global. routing_table is a
+    // stack copy of the L1 struct and its address is taken (it is passed by const&), so the cache
+    // invalidate at the top of every receiver step forces the compiler to reload any field read
+    // through it. A scalar whose address is never taken is not reachable through that clobber, so
+    // it can stay in a register across the whole main loop. Passed by value from here down to the
+    // intermesh-exit compare, which is the only hot-path reader.
+    const uint16_t my_mesh_id = routing_table.my_mesh_id;
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way
     // TODO: flatten all of these arrays into a single object (one array lookup) OR
@@ -2064,6 +2413,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         port_direction_table,
                         receiver_channel_response_credit_senders,
                         routing_table,
+                        my_mesh_id,
+                        my_mesh_coord_y,
+                        my_mesh_coord_x,
                         local_fabric_telemetry);
 #else
                     rx_progress |= run_receiver_channel_step<
@@ -2080,6 +2432,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         port_direction_table,
                         receiver_channel_response_credit_senders,
                         routing_table,
+                        my_mesh_id,
+                        my_mesh_coord_y,
+                        my_mesh_coord_x,
                         local_fabric_telemetry);
 #endif
                     tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1, ENABLE_FIRST_LEVEL_ACK_VC0>(
@@ -2197,6 +2552,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         port_direction_table,
                         receiver_channel_response_credit_senders,
                         routing_table,
+                        my_mesh_id,
+                        my_mesh_coord_y,
+                        my_mesh_coord_x,
                         local_fabric_telemetry);
 #endif  // FABRIC_2D_VC1_SERVICED
 
