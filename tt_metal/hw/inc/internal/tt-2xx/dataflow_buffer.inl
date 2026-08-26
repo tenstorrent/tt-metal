@@ -18,6 +18,8 @@
 
 #include "api/kernel_thread_globals.h"
 
+#include <type_traits>
+
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH)
 #define DFB_IS_COMPUTE_MATH 1
 #else
@@ -330,6 +332,51 @@ inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
     return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
 #endif
 }
+
+#ifdef COMPILE_FOR_TRISC
+inline uint32_t DataflowBuffer::get_tile_address(uint32_t tile_index) {
+    uint32_t address = 0;
+#if defined(UCK_CHLKC_UNPACK)
+    {
+        const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
+        const uint32_t base_address =
+            slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.rd_entry_idx);
+        const uint32_t offset_address = static_cast<uint32_t>(local_dfb_interface_.stride_size) * tile_index;
+        address = address_units_to_bytes(base_address + offset_address);
+        mailbox_write(ckernel::ThreadId::MathThreadId, address);
+        mailbox_write(ckernel::ThreadId::PackThreadId, address);
+    }
+#elif defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK)
+    address = mailbox_read(ckernel::ThreadId::UnpackThreadId);
+#endif
+    return address;
+}
+
+template <typename T>
+T DataflowBuffer::read_tile_value(uint32_t tile_index, uint32_t element_offset) {
+    static_assert(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4, "read_tile_value: T must be 1, 2, or 4 bytes");
+    static_assert(
+        (std::is_integral_v<T> && std::is_unsigned_v<T> && !std::is_same_v<T, bool>),
+        "read_tile_value: T must be an unsigned integral type");
+
+    T value = T{};
+#if defined(UCK_CHLKC_UNPACK)
+    {
+        const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
+        const uint32_t base_address =
+            slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.rd_entry_idx);
+        const uint32_t offset_address = static_cast<uint32_t>(local_dfb_interface_.stride_size) * tile_index;
+        const uint32_t byte_address = address_units_to_bytes(base_address + offset_address);
+        value = reinterpret_cast<volatile T*>(byte_address)[element_offset];
+        mailbox_write(ckernel::ThreadId::MathThreadId, static_cast<uint32_t>(value));
+        mailbox_write(ckernel::ThreadId::PackThreadId, static_cast<uint32_t>(value));
+    }
+#elif defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK)
+    value = static_cast<T>(mailbox_read(ckernel::ThreadId::UnpackThreadId));
+#endif
+    return value;
+}
+#endif  // COMPILE_FOR_TRISC
 
 #ifndef COMPILE_FOR_TRISC
 template <bool is_producer>
