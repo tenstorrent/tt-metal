@@ -62,8 +62,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_unsafe_(sfpi::vFloat val) {
     sfpi::vFloat z = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(xlog2));
 
     sfpi::vInt exponential_part =
-        sfpi::exexp(z, sfpi::ExponentMode::Biased);    // Extract exponent ( = 2**(integer part of val/ln2))
-    sfpi::vMag fractional_part = sfpi::exman(z);       // Extract mantissa ( = leftover part, in [0; 1])
+        sfpi::exexp(z, sfpi::ExponentMode::Biased);  // Extract exponent ( = 2**(integer part of val/ln2))
+    sfpi::vMag fractional_part = sfpi::exman(z);     // Extract mantissa ( = leftover part, in [0; 1])
 
     sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
 
@@ -397,9 +397,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     return y;
 }
 
-sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) {
-    return _sfpu_exp_fp32_accurate_<true>(x);
-}
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_<true>(x); }
 
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_exp_accurate_(sfpi::vFloat val);
@@ -481,13 +479,40 @@ sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(sfpi::vFloat val, const std
     return result;
 }
 
+// SKIP_NEGATIVE_SANITIZE drops the -88.5 clamp pass from the APPROXIMATION_MODE &&
+// CLAMP_NEGATIVE path. It is a CALLER CONTRACT, not a hint:
+//
+//   the caller must guarantee every input is >= -88.5.
+//
+// Violating it does not degrade gracefully. The Schraudolph form computes i = A*x + (B-C),
+// which goes negative below x = -88.0, and the FP32_TO_UINT16 rounding step takes |i| before
+// clamping to 65535 (it does NOT saturate negatives to zero) -- so an input of, say, -1000
+// comes back as ~3.4e38 instead of ~0. Note this is the opposite direction of error from a
+// missing clamp elsewhere: the result is enormous, not small, so it poisons any downstream sum.
+//
+// Cost of the clamp: the sanitize pass is 8 SFPLOADMACRO + 7 SFPNOP = 15 of the 24 SFPU issue
+// slots this function spends on 8 datums. Skipping it leaves 8 SFPLOADMACRO + 1 SFPNOP = 9,
+// i.e. 3.0 -> 1.125 slots/datum. It cannot be folded into the compute macro instead: SFPSWAP
+// occupies the Simple sub-unit slot that SFPSHFT already needs, and moving the shift to the
+// Round column collides with SFPSTOCHRND, so a clamping variant needs two macro issues.
+//
+// For every input >= -88.5 the result is bit-identical to the sanitized path, since the clamp
+// is a max() that leaves such inputs untouched. exp_init needs no change -- Macro Sequence
+// Register 1 is simply left configured and unused.
+//
+// Not safe for additive-mask softmax: a mask of -1e9 (or -inf) survives the max-subtract and
+// lands far below -88.5. Use the default (false) there.
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
     bool SCALE_EN = false,
     int ITERATIONS = 8,
-    bool CLAMP_NEGATIVE = true>
-void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
+    bool CLAMP_NEGATIVE = true,
+    bool SKIP_NEGATIVE_SANITIZE = false>
+void calculate_exponential(const std::uint32_t exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
+    static_assert(
+        !SKIP_NEGATIVE_SANITIZE || (APPROXIMATION_MODE && CLAMP_NEGATIVE),
+        "SKIP_NEGATIVE_SANITIZE only affects the APPROXIMATION_MODE && CLAMP_NEGATIVE path");
     if constexpr (!APPROXIMATION_MODE) {
         if constexpr (!is_fp32_dest_acc_en) {
             // bfloat16-accurate path: hand-tuned TTI exp_21f kernel.
@@ -508,7 +533,9 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
 #ifdef DISABLE_SFPLOADMACRO
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
-            TTI_SFPSWAP(0, p_sfpu::LREG14, p_sfpu::LREG0, 9);
+            if constexpr (!SKIP_NEGATIVE_SANITIZE) {
+                TTI_SFPSWAP(0, p_sfpu::LREG14, p_sfpu::LREG0, 9);
+            }
             TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
             TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
             TTI_SFPSHFT(15, p_sfpu::LREG0, p_sfpu::LREG0, 1);
@@ -523,71 +550,73 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
         // Sanitize the input values by loading from DEST, comparing against the value -88.5, and if the input value is
         // more negative than that, swap the input value with -88.5 and store back to DEST
         //  - in other words, after the sanitize step, the values in DEST will be in the range {-88.5 , +inf}
-
-        // Macro Sequence Register 1 configured to read back in the original values from dest, sanitize them to a range
-        // we can handle, and then store them back to dest
-        //  LD     : bring in the original value from DEST (y)
-        //  MAD    : unused
-        //  ROUND  : unused
-        //  SIMPLE : SWAP the larger value of y and -88.5 into the LREG
-        //  STORE  : store the sanitized value back to dest
-        TTI_SFPLOADMACRO(
-            4,
-            0,
-            ADDR_MOD_7,
-            0);      // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value - Dest offset  0 is
+        if constexpr (!SKIP_NEGATIVE_SANITIZE) {
+            // Macro Sequence Register 1 configured to read back in the original values from dest, sanitize them to a
+            // range we can handle, and then store them back to dest
+            //  LD     : bring in the original value from DEST (y)
+            //  MAD    : unused
+            //  ROUND  : unused
+            //  SIMPLE : SWAP the larger value of y and -88.5 into the LREG
+            //  STORE  : store the sanitized value back to dest
+            TTI_SFPLOADMACRO(
+                4,
+                0,
+                ADDR_MOD_7,
+                0);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value - Dest offset  0 is
                      // targeting the even columns for rows   3: 0
-        TTI_SFPNOP;  // NOP is necessary because the SWAP operation takes 2 cycles and unfortunately is not pipelined
-        TTI_SFPLOADMACRO(
-            5,
-            0,
-            ADDR_MOD_7,
-            2);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[1] for loaded value - Dest offset  2 is
-                 // targeting the odd  columns for rows   3: 0
-        TTI_SFPNOP;
-        TTI_SFPLOADMACRO(
-            6,
-            0,
-            ADDR_MOD_7,
-            4);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value - Dest offset  4 is
-                 // targeting the even columns for rows   7: 4
-        TTI_SFPNOP;
-        TTI_SFPLOADMACRO(
-            7,
-            0,
-            ADDR_MOD_7,
-            6);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[3] for loaded value - Dest offset  6 is
-                 // targeting the odd  columns for rows   7: 4
-        TTI_SFPNOP;
-        TTI_SFPLOADMACRO(
-            4,
-            0,
-            ADDR_MOD_7,
-            8);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value - Dest offset  8 is
-                 // targeting the even columns for rows  11: 8
-        TTI_SFPNOP;
-        TTI_SFPLOADMACRO(
-            5,
-            0,
-            ADDR_MOD_7,
-            10);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[1] for loaded value - Dest offset 10 is
-                  // targeting the even columns for rows  11: 8
-        TTI_SFPNOP;
-        TTI_SFPLOADMACRO(
-            6,
-            0,
-            ADDR_MOD_7,
-            12);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value - Dest offset 12 is
-                  // targeting the odd  columns for rows  15:12
-        TTI_SFPNOP;
-        TTI_SFPLOADMACRO(
-            7,
-            0,
-            ADDR_MOD_7,
-            14);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[3] for loaded value - Dest offset 14 is
-                  // targeting the even columns for rows  15:12
-        // NOP not needed in this spot because the next LoadMacro is a computational macro which doesn't immediately use
-        // the SIMPLE unit
+            TTI_SFPNOP;  // NOP is necessary because the SWAP operation takes 2 cycles and unfortunately is not
+                         // pipelined
+            TTI_SFPLOADMACRO(
+                5,
+                0,
+                ADDR_MOD_7,
+                2);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[1] for loaded value - Dest offset  2 is
+                     // targeting the odd  columns for rows   3: 0
+            TTI_SFPNOP;
+            TTI_SFPLOADMACRO(
+                6,
+                0,
+                ADDR_MOD_7,
+                4);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value - Dest offset  4 is
+                     // targeting the even columns for rows   7: 4
+            TTI_SFPNOP;
+            TTI_SFPLOADMACRO(
+                7,
+                0,
+                ADDR_MOD_7,
+                6);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[3] for loaded value - Dest offset  6 is
+                     // targeting the odd  columns for rows   7: 4
+            TTI_SFPNOP;
+            TTI_SFPLOADMACRO(
+                4,
+                0,
+                ADDR_MOD_7,
+                8);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[0] for loaded value - Dest offset  8 is
+                     // targeting the even columns for rows  11: 8
+            TTI_SFPNOP;
+            TTI_SFPLOADMACRO(
+                5,
+                0,
+                ADDR_MOD_7,
+                10);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[1] for loaded value - Dest offset 10 is
+                      // targeting the even columns for rows  11: 8
+            TTI_SFPNOP;
+            TTI_SFPLOADMACRO(
+                6,
+                0,
+                ADDR_MOD_7,
+                12);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[2] for loaded value - Dest offset 12 is
+                      // targeting the odd  columns for rows  15:12
+            TTI_SFPNOP;
+            TTI_SFPLOADMACRO(
+                7,
+                0,
+                ADDR_MOD_7,
+                14);  // MACRO Sequence Register 1: LD, SWAP, STORE - uses LREG[3] for loaded value - Dest offset 14 is
+                      // targeting the even columns for rows  15:12
+            // NOP not needed in this spot because the next LoadMacro is a computational macro which doesn't immediately
+            // use the SIMPLE unit
+        }  // if constexpr (!SKIP_NEGATIVE_SANITIZE)
 
         // Macro Sequence Register 0 configured to read back in the sanitized values and calculate the approximate
         // exponential value
@@ -722,7 +751,7 @@ constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(
 
 template <
     bool APPROXIMATION_MODE,
-    uint32_t scale = 0x3F800000,
+    std::uint32_t scale = 0x3F800000,
     bool CLAMP_NEGATIVE = true,
     bool is_fp32_dest_acc_en = false>
 void exp_init() {
