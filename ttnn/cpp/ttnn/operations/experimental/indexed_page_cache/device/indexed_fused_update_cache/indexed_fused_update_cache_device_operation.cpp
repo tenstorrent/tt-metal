@@ -3,6 +3,8 @@
 
 #include "indexed_fused_update_cache_device_operation.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <variant>
@@ -17,6 +19,7 @@ namespace {
 
 constexpr uint32_t max_update_rows = 256;
 constexpr uint32_t max_positions_page_bytes = max_update_rows * sizeof(int32_t);
+constexpr uint64_t max_indexable_cache_rows = static_cast<uint64_t>(std::numeric_limits<int32_t>::max()) + 1;
 constexpr int cache_heads_dim = 1;
 constexpr int cache_head_dim = 3;
 
@@ -54,6 +57,31 @@ void validate_mesh_topologies(const IndexedFusedUpdateCacheInputs& args) {
             std::holds_alternative<MeshMapperConfig::Replicate>(placement),
             "physical_update_idxs_tensor must be replicated across mesh axes; sharded physical positions require "
             "cache ownership and index-remapping support");
+    }
+}
+
+void validate_distinct_bound_tensors(const IndexedFusedUpdateCacheInputs& args) {
+    struct NamedTensor {
+        const char* name;
+        const Tensor* tensor;
+    };
+
+    const std::array<NamedTensor, 5> tensors = {
+        {{"cache_tensor1", &args.cache_tensor1},
+         {"input_tensor1", &args.input_tensor1},
+         {"cache_tensor2", &args.cache_tensor2},
+         {"input_tensor2", &args.input_tensor2},
+         {"physical_update_idxs_tensor", &args.physical_update_idxs_tensor}}};
+    for (std::size_t first = 0; first < tensors.size(); ++first) {
+        for (std::size_t second = first + 1; second < tensors.size(); ++second) {
+            const auto& first_tensor = *tensors[first].tensor;
+            const auto& second_tensor = *tensors[second].tensor;
+            const bool aliases =
+                first_tensor.memory_config().buffer_type() == second_tensor.memory_config().buffer_type() &&
+                first_tensor.mesh_buffer().address() == second_tensor.mesh_buffer().address();
+            TT_FATAL(
+                !aliases, "{} and {} must not alias the same device buffer", tensors[first].name, tensors[second].name);
+        }
     }
 }
 
@@ -137,6 +165,7 @@ void IndexedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         "indexed_fused_update_cache supports only Wormhole and Blackhole, got {}",
         arch);
     validate_mesh_topologies(args);
+    validate_distinct_bound_tensors(args);
 
     validate_cache_input_pair(args.cache_tensor1, args.input_tensor1, "cache_tensor1", "input_tensor1");
     validate_cache_input_pair(args.cache_tensor2, args.input_tensor2, "cache_tensor2", "input_tensor2");
@@ -175,7 +204,9 @@ void IndexedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
 
     const uint64_t total_cache_rows =
         static_cast<uint64_t>(args.cache_tensor1.logical_shape()[0]) * args.cache_tensor1.logical_shape()[2];
-    TT_FATAL(total_cache_rows <= std::numeric_limits<uint32_t>::max(), "flattened cache row count exceeds uint32_t");
+    TT_FATAL(
+        total_cache_rows <= max_indexable_cache_rows,
+        "flattened cache row count exceeds the range addressable by INT32 physical indices");
 }
 
 void IndexedFusedUpdateCacheDeviceOperation::validate_on_program_cache_hit(

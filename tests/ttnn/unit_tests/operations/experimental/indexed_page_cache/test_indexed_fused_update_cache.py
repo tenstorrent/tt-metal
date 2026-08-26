@@ -376,6 +376,59 @@ def test_indexed_fused_update_cache_validation(device, invalid_case, expected_me
         ttnn.experimental.indexed_fused_update_cache(cache1, input1, cache2, input2, positions)
 
 
+@pytest.mark.parametrize(
+    "first_name,second_name",
+    [
+        ("cache_tensor1", "input_tensor1"),
+        ("cache_tensor1", "cache_tensor2"),
+        ("cache_tensor1", "input_tensor2"),
+        ("cache_tensor1", "physical_update_idxs_tensor"),
+        ("input_tensor1", "cache_tensor2"),
+        ("input_tensor1", "input_tensor2"),
+        ("input_tensor1", "physical_update_idxs_tensor"),
+        ("cache_tensor2", "input_tensor2"),
+        ("cache_tensor2", "physical_update_idxs_tensor"),
+        ("input_tensor2", "physical_update_idxs_tensor"),
+    ],
+)
+def test_indexed_fused_update_cache_rejects_bound_tensor_alias_before_cache_insert(
+    device, first_name, second_name, expect_error
+):
+    cache_shape = (2, 2, 64, 64)
+    input_shape = (1, 2, 4, 64)
+    tensors = {
+        "cache_tensor1": _device_tensor(torch.zeros(cache_shape, dtype=torch.bfloat16), device),
+        "input_tensor1": _device_tensor(torch.zeros(input_shape, dtype=torch.bfloat16), device),
+        "cache_tensor2": _device_tensor(torch.zeros(cache_shape, dtype=torch.bfloat16), device),
+        "input_tensor2": _device_tensor(torch.zeros(input_shape, dtype=torch.bfloat16), device),
+        "physical_update_idxs_tensor": _device_tensor(
+            torch.arange(input_shape[2], dtype=torch.int32).reshape(1, -1),
+            device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        ),
+    }
+    tensors[second_name] = tensors[first_name]
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    try:
+        with expect_error(
+            RuntimeError,
+            f"{first_name} and {second_name} must not alias the same device buffer",
+        ):
+            ttnn.experimental.indexed_fused_update_cache(
+                tensors["cache_tensor1"],
+                tensors["input_tensor1"],
+                tensors["cache_tensor2"],
+                tensors["input_tensor2"],
+                tensors["physical_update_idxs_tensor"],
+            )
+        assert device.num_program_cache_entries() == 0
+    finally:
+        device.disable_and_clear_program_cache()
+
+
 @pytest.mark.parametrize("mesh_device", [2], indirect=True)
 def test_indexed_fused_update_cache_replicated_mesh(mesh_device):
     torch.manual_seed(31)
