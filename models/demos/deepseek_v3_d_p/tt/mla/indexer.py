@@ -573,10 +573,9 @@ class TtIndexer:
         The gathered slot is batch-1, so the ring op needs NO cache_batch_idx (it requires kB==1 when
         cache_batch_idx is unset). The unwritten suffix is never scored (future positions are causally
         masked). The output is model-owned scratch — the caller must not deallocate it."""
-        assert index_kbuf.shape[2] % ttnn.TILE_SIZE == 0, (
-            "the TP-local index cache slab must be tile aligned for high_bw_all_gather; "
-            f"got {index_kbuf.shape[2]}"
-        )
+        assert (
+            index_kbuf.shape[2] % ttnn.TILE_SIZE == 0
+        ), f"the TP-local index cache slab must be tile aligned for high_bw_all_gather; got {index_kbuf.shape[2]}"
         out = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
             name="indexer_kbuf_tp_replicate",
             shape=[1, 1, index_kbuf.shape[2] * self.tp_factor, index_kbuf.shape[3]],
