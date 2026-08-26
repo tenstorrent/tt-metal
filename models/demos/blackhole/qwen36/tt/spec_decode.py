@@ -336,20 +336,25 @@ class SpeculativeDecoder:
         self._warm_mtp_last(last_hidden[0], first, T - 1)
         ttnn.deallocate(last_hidden[0])
 
-        # One-time verify-trace capture (replayed every iteration), done AFTER prefill + MTP warm so
-        # every program those paths need is already compiled: a compile that happens once the trace
-        # is parked clobbers it. Its two throwaway passes write KV past the prompt frontier
-        # (warm_start=T) and restore the GDN state they advance. Counts toward TTFT, not decode_time.
-        if not self._vfy_captured:
-            model.capture_verify_trace(self.page_table, self.K + 1, warm_start=T, decode_cfg=True)
-            for dn in self._gdn:
-                dn._capture_slots = False  # trace baked the slot copies; the eager seed must skip them
-            self._vfy_captured = True
-
         # Seed: consume `first` at position T -> (L_T, H_T); anchor p=T.
-        # MUST stay AFTER capture_verify_trace: the capture's throwaway passes write junk KV at
-        # positions [T, T+K], which would clobber the seed's KV at T if the seed ran first.
+        # MUST stay BEFORE capture_verify_trace. The seed is an EAGER verify at T=1, and under the
+        # full-batch GDN verify none of its programs (conv1d over K-1+1 rows, the [1,1,*] slice /
+        # reshape chain) appear in the T=K+1 trace, so running it after capture compiles them while
+        # the trace is parked: their kernel-binary buffers land in memory the replayed trace writes
+        # over, and the NEXT generate's seed (program-cache hit) dispatches corrupted binaries and
+        # hangs the device. Every program the post-capture path needs must be compiled before capture.
+        for dn in self._gdn:
+            dn._capture_slots = False  # the eager seed must not write the trace's slot buffers
         Lp, Hp = self._seed(first, T - 1)
+
+        # One-time verify-trace capture (replayed every iteration), done AFTER prefill + MTP warm +
+        # seed so every program those paths need is already compiled: a compile that happens once the
+        # trace is parked clobbers it. Its two throwaway passes write junk KV at [T+1, T+1+K] — past
+        # the seed's slot at T, and overwritten by the first real verify — and restore the GDN state
+        # they advance. Counts toward TTFT, not decode_time.
+        if not self._vfy_captured:
+            model.capture_verify_trace(self.page_table, self.K + 1, warm_start=T + 1, decode_cfg=True)
+            self._vfy_captured = True
         p = T
         # The base's own next token, confirmed by the anchor logits. It is committed unconditionally
         # next iteration and is what seeds the drafter, so no drafter step re-predicts it.
