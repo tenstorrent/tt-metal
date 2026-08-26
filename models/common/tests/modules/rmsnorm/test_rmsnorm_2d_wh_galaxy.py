@@ -98,6 +98,9 @@ def _resources_config(mesh_device, dim):
             (plan(32, decode_memcfg, semaphores_per_slot=1, topology=ttnn.Topology.Ring),)
         ),
         semaphore_cores=norm_cores,
+        # The fused RMS all-gather binds its semaphore to the norm grid it owns,
+        # so it is the one collective for which narrowing is safe (D3).
+        allow_narrow_semaphore_cores=True,
     )
     return GalaxyResourcesConfig(
         architecture=ttnn.device.Arch.WORMHOLE_B0,

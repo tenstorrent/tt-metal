@@ -270,6 +270,7 @@ def galaxy_prefill_mode_plan(mesh_device: Any, collectives: tuple[GalaxyCollecti
         worker_sub_device_id=worker_id,
         stall_group=(worker_id,),
         semaphore_cores=cores,
+        worker_cores=cores,
         collectives=collectives,
     )
 
@@ -286,6 +287,7 @@ def galaxy_decode_mode_plan(collectives: tuple[GalaxyCollectivePlan, ...]) -> Ga
         worker_sub_device_id=worker_id,
         stall_group=(worker_id,),
         semaphore_cores=workers,
+        worker_cores=workers,
         collectives=collectives,
     )
 

@@ -34,7 +34,12 @@ from models.common.models.qwen3_32b_galaxy.model import (
 )
 from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.rmsnorm import rmsnorm_2d
-from models.common.modules.rmsnorm.rmsnorm_2d import RMSNorm2DGeometry, RMSNorm2DResidualPolicy, _resolve_2d_config
+from models.common.modules.rmsnorm.rmsnorm_2d import (
+    RMSNorm2DConfig,
+    RMSNorm2DGeometry,
+    RMSNorm2DResidualPolicy,
+    _resolve_2d_config,
+)
 
 
 def _hf_config(**overrides):
@@ -484,6 +489,51 @@ def _norm_ccl(mesh):
         )
 
     return SimpleNamespace(context=context, mesh_device=mesh)
+
+
+def test_head_local_qk_norm_agrees_with_the_module_default_by_contract(monkeypatch):
+    """C2: pin the head-local decode placement so the agreement is not luck.
+
+    Qwen3 normalizes each `head_dim`-wide head independently. Milestone B was
+    written against the pre-D2 module, where `HEAD_LOCAL` decode resolved to a
+    width-sharded L1 recipe; D2 changed it to stay interleaved in DRAM like
+    prefill. This model already passes `ttnn.DRAM_MEMORY_CONFIG` explicitly, so
+    the two happen to agree - but nothing checked that, and a config that
+    disagreed would have been rejected in op validation before producing a
+    single number (which is exactly how D2 hid). Pin both sides.
+    """
+
+    monkeypatch.setattr(rmsnorm_2d, "resolve_lazy_weight", lambda weight, **_: weight)
+    mesh = _mesh()
+    params = Qwen3_32BGalaxyModelParameters(n_layers=1)
+
+    explicit = galaxy_model._head_local_norm_config(
+        LazyWeight(source=torch.zeros(params.head_dim, dtype=torch.bfloat16), device=mesh),
+        mesh_device=mesh,
+        precision=QWEN3_32B_GALAXY_ACCURACY,
+        eps=params.rms_norm_eps,
+    )
+    assert explicit.geometry is RMSNorm2DGeometry.HEAD_LOCAL
+    resolved = _resolve_2d_config(explicit)
+
+    # What the model asks for.
+    assert resolved.decode_input_memcfg == ttnn.DRAM_MEMORY_CONFIG
+    assert resolved.decode_output_memcfg == ttnn.DRAM_MEMORY_CONFIG
+    assert resolved.prefill_input_memcfg == ttnn.DRAM_MEMORY_CONFIG
+
+    # What the module resolves for a head-local norm that asks for nothing. If
+    # D2's default ever moves off interleaved DRAM again, this diverges here on
+    # host instead of aborting in op validation on device.
+    default = _resolve_2d_config(
+        RMSNorm2DConfig(
+            weight=LazyWeight(source=torch.zeros(params.head_dim, dtype=torch.bfloat16), device=mesh),
+            mesh_device=mesh,
+            cluster_shape=(8, 4),
+            geometry=RMSNorm2DGeometry.HEAD_LOCAL,
+        )
+    )
+    assert default.decode_input_memcfg == resolved.decode_input_memcfg
+    assert default.decode_progcfg is None and default.decode_stats_memcfg is None
 
 
 def test_distributed_norm_resolves_its_statistics_onto_the_decode_input_origin(monkeypatch):

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -197,6 +198,33 @@ def test_mode_plans_partition_prefill_and_decode_subdevices():
     assert config.decode.worker_sub_device_id == ttnn.SubDeviceId(1)
     assert config.decode.stall_group == (ttnn.SubDeviceId(1),)
     assert config.decode.semaphore_cores.num_cores() == worker_cores().num_cores()
+
+
+def test_mode_plans_fail_closed_on_a_semaphore_set_narrower_than_the_workers():
+    """Milestone A defect D3, promoted from a test-helper docstring into the plan.
+
+    The generic async CCLs pick sender worker cores from the worker subdevice, so
+    a global semaphore allocated on a narrower set leaves a sender polling L1
+    that its own core never had reserved. That hangs indefinitely instead of
+    failing, which is why this is checked rather than commented. Production
+    already complied; nothing made it.
+    """
+
+    _, config = _resources(LLAMA, lengths=(128,))
+
+    for plan in (config.prefill, config.decode):
+        assert plan.worker_cores is not None, "a production plan must declare its worker subdevice"
+        assert plan.worker_cores.subtract(plan.semaphore_cores).num_cores() == 0
+        assert plan.allow_narrow_semaphore_cores is False
+
+    narrow = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 3))})
+    with pytest.raises(ValueError, match="semaphore_cores must cover the worker subdevice"):
+        replace(config.decode, semaphore_cores=narrow)
+
+    # The fused RMS all-gather binds its semaphore to a grid it owns, so it may
+    # narrow - but it has to say so, because the plan cannot tell the two apart.
+    deliberate = replace(config.decode, semaphore_cores=narrow, allow_narrow_semaphore_cores=True)
+    assert deliberate.semaphore_cores is narrow
 
 
 def test_mode_plan_builders_reject_duplicate_keys():

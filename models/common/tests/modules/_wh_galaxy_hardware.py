@@ -14,7 +14,9 @@ import pytest
 
 import ttnn
 from models.common.models.galaxy import GalaxyModePlan, GalaxyResourcesConfig
-from models.common.modules.prefetcher import Prefetcher2D, Prefetcher2DConfig, Prefetcher2DModeConfig
+from models.common.models.galaxy.prefetch import GALAXY_GLOBAL_CB_SIZE, build_galaxy_prefetcher_config
+from models.common.models.galaxy.recipes import prefetch_sender_cores
+from models.common.modules.prefetcher import Prefetcher2D, Prefetcher2DConfig
 
 _FACTORY_MODULE = "models.common.models.galaxy"
 _FACTORY_NAMES = ("create_galaxy_resources", "create_galaxy_ccl", "get_galaxy_ccl")
@@ -185,29 +187,17 @@ def require_galaxy_ccl_hardware_resources(
     return GalaxyHardwareResources(owner=owner, ccl=owner.ccl, prefetcher=subdevices)
 
 
-GALAXY_PREFETCH_SENDER_COORDS = (
-    (0, 9),
-    (0, 0),
-    (0, 4),
-    (0, 5),
-    (4, 0),
-    (4, 9),
-    (4, 1),
-    (4, 7),
-    (4, 6),
-    (4, 2),
-    (4, 4),
-    (4, 5),
-)
-GALAXY_PREFETCH_GLOBAL_CB_SIZE = 728 * 1088
+#: The Galaxy prefetch geometry is a property of the Wormhole Galaxy decode
+#: topology, not of a test. It lives in `models.common.models.galaxy.prefetch`
+#: and is re-exported here only so the existing test imports keep resolving.
+GALAXY_PREFETCH_SENDER_COORDS = tuple((core.x, core.y) for core in prefetch_sender_cores())
+GALAXY_PREFETCH_GLOBAL_CB_SIZE = GALAXY_GLOBAL_CB_SIZE
 
 
 def galaxy_prefetcher_sender_cores() -> ttnn.CoreRangeSet:
     """The 12 real DRAM-prefetch sender cores the address tensor is placed on."""
 
-    return ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in GALAXY_PREFETCH_SENDER_COORDS]
-    )
+    return ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in prefetch_sender_cores()])
 
 
 def galaxy_prefetcher_config(
@@ -215,72 +205,23 @@ def galaxy_prefetcher_config(
     resources: GalaxyResourcesConfig,
     weight_count: int,
     *,
-    global_cb_size: int | None = GALAXY_PREFETCH_GLOBAL_CB_SIZE,
+    global_cb_size: int | None = GALAXY_GLOBAL_CB_SIZE,
 ) -> Prefetcher2DConfig:
     """Resolve the qualified WH Galaxy prefetch sender/receiver geometry.
 
-    12 real senders stream the registered weights into the decode ring; 8 dummy
-    senders exist only so the global circular buffer covers every remaining
-    worker core. `global_cb_size` is exposed so a test can deliberately build an
-    undersized configuration; leave it at the default for a working prefetcher.
+    Delegates to the production construction policy in
+    `models.common.models.galaxy.prefetch`, which owns the 12 real senders, the
+    8 dummy senders that exist only so the global circular buffer covers every
+    remaining worker core, and the global-CB size. `global_cb_size` stays
+    exposed so a test can deliberately build an undersized configuration; leave
+    it at the default for a working prefetcher.
     """
 
-    sender_coords = tuple(ttnn.CoreCoord(x, y) for x, y in GALAXY_PREFETCH_SENDER_COORDS)
-    receiver_pairs = tuple(((1, y), (2, y)) for y in (9, 0, 4, 5)) + tuple(
-        ((5, y), (6, y)) for y in (0, 9, 1, 7, 6, 2, 4, 5)
-    )
-    receiver_sets = tuple(
-        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*start), ttnn.CoreCoord(*end))})
-        for start, end in receiver_pairs
-    )
-    dummy_sender_coords = tuple(
-        ttnn.CoreCoord(x, y) for x, y in ((0, 1), (0, 2), (0, 3), (0, 6), (0, 7), (0, 8), (4, 3), (4, 8))
-    )
-
-    def ranges(*coordinates: tuple[int, int, int, int]) -> Any:
-        return ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)) for x0, y0, x1, y1 in coordinates]
-        )
-
-    dummy_receiver_sets = (
-        ranges((3, 0, 3, 0), (1, 1, 3, 1)),
-        ranges((1, 2, 3, 2)),
-        ranges((1, 3, 3, 3), (3, 4, 3, 4)),
-        ranges((3, 5, 3, 5), (1, 6, 3, 6)),
-        ranges((1, 7, 3, 7)),
-        ranges((1, 8, 3, 8), (3, 9, 3, 9)),
-        ranges((5, 3, 6, 3)),
-        ranges((5, 8, 6, 8)),
-    )
-    all_sender_coords = sender_coords + dummy_sender_coords
-    all_receiver_sets = receiver_sets + dummy_receiver_sets
-    sender_cores = galaxy_prefetcher_sender_cores()
-    address_memory_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(sender_cores, [1, weight_count], ttnn.ShardOrientation.ROW_MAJOR),
-    )
-
-    def mode_config(plan: GalaxyModePlan) -> Prefetcher2DModeConfig:
-        return Prefetcher2DModeConfig(
-            mode=plan.mode,
-            sub_devices=plan.sub_devices,
-            worker_sub_device_id=plan.worker_sub_device_id,
-            stall_group=plan.stall_group,
-            local_l1_size=plan.local_l1_size,
-        )
-
-    return Prefetcher2DConfig(
-        mesh_device=mesh_device,
-        architecture=resources.architecture,
-        prefill=mode_config(resources.prefill),
-        decode=mode_config(resources.decode),
-        sender_receiver_mapping=tuple(zip(all_sender_coords, all_receiver_sets)),
-        global_cb_size=global_cb_size,
+    return build_galaxy_prefetcher_config(
+        mesh_device,
+        resources,
         expected_weight_count=weight_count,
-        address_repeat_count=len(sender_coords),
-        address_memory_config=address_memory_config,
-        address_mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        global_cb_size=global_cb_size,
     )
 
 
@@ -337,6 +278,10 @@ def galaxy_mode_plan(
         worker_sub_device_id=worker_id,
         stall_group=(worker_id,),
         semaphore_cores=semaphore_cores or cores,
+        worker_cores=cores,
+        # An explicit narrowing here is the deliberate fused-RMS case the
+        # docstring describes; GalaxyModePlan rejects it otherwise (D3).
+        allow_narrow_semaphore_cores=semaphore_cores is not None,
         collectives=collectives,
     )
 
@@ -376,6 +321,7 @@ def galaxy_prefetch_decode_mode_plan(collectives: tuple[Any, ...]) -> GalaxyMode
         worker_sub_device_id=worker_id,
         stall_group=(worker_id,),
         semaphore_cores=worker_cores,
+        worker_cores=worker_cores,
         collectives=collectives,
     )
 

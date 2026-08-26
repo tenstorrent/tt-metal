@@ -78,6 +78,14 @@ class GalaxyModePlan:
     semaphore_cores: Any
     collectives: tuple[GalaxyCollectivePlan, ...]
     local_l1_size: int = 0
+    #: The worker subdevice's core set. `ttnn.SubDevice` exposes no accessor, so
+    #: it cannot be recovered from `sub_devices`; supply it here and the D3
+    #: invariant below is enforced rather than merely documented.
+    worker_cores: Any = None
+    #: Opt in to a `semaphore_cores` narrower than the worker subdevice. Safe
+    #: only for a collective that binds its semaphore to a grid it owns, the way
+    #: the fused RMS all-gather does - see `_require_semaphore_cores_cover_workers`.
+    allow_narrow_semaphore_cores: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sub_devices", tuple(self.sub_devices))
@@ -91,6 +99,7 @@ class GalaxyModePlan:
             raise ValueError("stall_group must include worker_sub_device_id")
         if self.semaphore_cores is None:
             raise ValueError("semaphore_cores must be resolved")
+        self._require_semaphore_cores_cover_workers()
         if not self.collectives:
             raise ValueError(f"at least one collective is required for {self.mode}")
         keys = tuple(plan.key for plan in self.collectives)
@@ -98,6 +107,43 @@ class GalaxyModePlan:
             raise ValueError(f"duplicate Galaxy resource key in {self.mode} plan")
         if self.local_l1_size < 0:
             raise ValueError("local_l1_size cannot be negative")
+
+    def _require_semaphore_cores_cover_workers(self) -> None:
+        """Reject a semaphore allocation narrower than the worker subdevice.
+
+        Milestone A defect D3. The generic async CCLs (`all_gather_async`,
+        `reduce_scatter_minimal_async`, `all_reduce_async`,
+        `all_reduce_create_qkv_heads`) choose their sender worker cores from the
+        worker subdevice minus the reserved output cores. A global semaphore
+        allocated on a narrower set therefore leaves a sender polling an L1
+        address its own core never had reserved or zeroed - which **hangs the
+        collective indefinitely** rather than failing it. That cost four
+        consecutive 2700 s timeouts to diagnose, after one process had passed.
+
+        Narrowing is legitimate for a collective that binds its semaphore to a
+        grid it owns, as the fused RMS all-gather does. That case must say so
+        with `allow_narrow_semaphore_cores=True`; it is not inferable from the
+        plan, because both forms key on the same `all_gather` operation name.
+
+        The check is skipped when either side is not a `CoreRangeSet` - host
+        tests legitimately build plans out of stand-in objects.
+        """
+
+        if self.worker_cores is None or self.allow_narrow_semaphore_cores:
+            return
+        subtract = getattr(self.worker_cores, "subtract", None)
+        if not callable(subtract) or not hasattr(self.semaphore_cores, "num_cores"):
+            return
+        uncovered = subtract(self.semaphore_cores)
+        if uncovered.num_cores():
+            raise ValueError(
+                f"{self.mode} semaphore_cores must cover the worker subdevice; "
+                f"{uncovered.num_cores()} worker core(s) are outside it, starting at "
+                f"{uncovered.bounding_box().start}. A sender on an uncovered core polls an L1 "
+                "address that was never reserved or zeroed and hangs (Milestone A defect D3). "
+                "Set allow_narrow_semaphore_cores=True only for a collective that binds its "
+                "semaphore to a grid it owns."
+            )
 
 
 @dataclass(frozen=True)

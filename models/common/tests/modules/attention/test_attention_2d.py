@@ -538,7 +538,8 @@ def test_contiguous_cache_shape_and_foreign_mesh_are_rejected():
         # per core). A 31-row table addresses neither.
         (_page_table(rows=31), "device-local rows"),
         (_page_table(rows=4), "device-local rows"),
-        (_page_table(rows=(32, 64)), "rank-2"),
+        # A rank-3 table: (32, 64) would still be rank 2 and reach the row check.
+        (_page_table(rows=(1, 32, 64)), "rank-2"),
         (_page_table(columns=63), "capacity"),
         (_page_table(dtype="int16"), "dtype"),
     ],
