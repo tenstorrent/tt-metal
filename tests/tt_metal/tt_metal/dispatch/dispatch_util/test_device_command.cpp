@@ -17,7 +17,7 @@
 
 namespace tt::tt_metal {
 
-TEST(DeviceCommandTest, AddDispatchWait) {
+TEST(DeviceCommandTest, CPU_AddDispatchWait) {
     DeviceCommandCalculator calculator;
     calculator.add_dispatch_wait();
 
@@ -26,7 +26,7 @@ TEST(DeviceCommandTest, AddDispatchWait) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddDispatchWaitWithPrefetchStall) {
+TEST(DeviceCommandTest, CPU_AddDispatchWaitWithPrefetchStall) {
     DeviceCommandCalculator calculator;
     calculator.add_dispatch_wait_with_prefetch_stall();
 
@@ -35,7 +35,7 @@ TEST(DeviceCommandTest, AddDispatchWaitWithPrefetchStall) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddPrefetchRelayLinear) {
+TEST(DeviceCommandTest, CPU_AddPrefetchRelayLinear) {
     DeviceCommandCalculator calculator;
     calculator.add_prefetch_relay_linear();
 
@@ -44,7 +44,7 @@ TEST(DeviceCommandTest, AddPrefetchRelayLinear) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddData) {
+TEST(DeviceCommandTest, CPU_AddData) {
     DeviceCommandCalculator calculator;
     calculator.add_data(32);
 
@@ -54,7 +54,7 @@ TEST(DeviceCommandTest, AddData) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddDispatchWriteLinear) {
+TEST(DeviceCommandTest, CPU_AddDispatchWriteLinear) {
     {
         DeviceCommandCalculator calculator;
         calculator.add_dispatch_write_linear<false, false>(5);
@@ -91,7 +91,7 @@ TEST(DeviceCommandTest, AddDispatchWriteLinear) {
     }
 }
 
-TEST(DeviceCommandTest, AddDispatchGoSignalMcast) {
+TEST(DeviceCommandTest, CPU_AddDispatchGoSignalMcast) {
     DeviceCommandCalculator calculator;
     calculator.add_dispatch_go_signal_mcast();
 
@@ -100,7 +100,7 @@ TEST(DeviceCommandTest, AddDispatchGoSignalMcast) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddNotifyDispatchSGoSignalCmd) {
+TEST(DeviceCommandTest, CPU_AddNotifyDispatchSGoSignalCmd) {
     DeviceCommandCalculator calculator;
     calculator.add_notify_dispatch_s_go_signal_cmd();
 
@@ -109,7 +109,7 @@ TEST(DeviceCommandTest, AddNotifyDispatchSGoSignalCmd) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddDispatchSetNumWorkerSems) {
+TEST(DeviceCommandTest, CPU_AddDispatchSetNumWorkerSems) {
     DeviceCommandCalculator calculator;
     calculator.add_dispatch_set_num_worker_sems();
 
@@ -118,7 +118,7 @@ TEST(DeviceCommandTest, AddDispatchSetNumWorkerSems) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddDispatchSetSubDeviceWorkerCounts) {
+TEST(DeviceCommandTest, CPU_AddDispatchSetSubDeviceWorkerCounts) {
     constexpr uint32_t num_sub_devices = 3;
     std::array<uint32_t, num_sub_devices> workers_per_sub_device = {4, 7, 2};
 
@@ -132,7 +132,7 @@ TEST(DeviceCommandTest, AddDispatchSetSubDeviceWorkerCounts) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddDispatchSetGoSignalNocData) {
+TEST(DeviceCommandTest, CPU_AddDispatchSetGoSignalNocData) {
     DeviceCommandCalculator calculator;
     calculator.add_dispatch_set_go_signal_noc_data(5);
 
@@ -142,7 +142,7 @@ TEST(DeviceCommandTest, AddDispatchSetGoSignalNocData) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddDispatchSetWriteOffsets) {
+TEST(DeviceCommandTest, CPU_AddDispatchSetWriteOffsets) {
     DeviceCommandCalculator calculator;
     calculator.add_dispatch_set_write_offsets(CQ_DISPATCH_MAX_WRITE_OFFSETS);
 
@@ -152,7 +152,7 @@ TEST(DeviceCommandTest, AddDispatchSetWriteOffsets) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddDispatchTerminate) {
+TEST(DeviceCommandTest, CPU_AddDispatchTerminate) {
     DeviceCommandCalculator calculator;
     calculator.add_dispatch_terminate();
 
@@ -161,7 +161,7 @@ TEST(DeviceCommandTest, AddDispatchTerminate) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddDispatchWritePaged) {
+TEST(DeviceCommandTest, CPU_AddDispatchWritePaged) {
     {
         DeviceCommandCalculator calculator;
         calculator.add_dispatch_write_paged<false>(1, 5);
@@ -183,7 +183,7 @@ TEST(DeviceCommandTest, AddDispatchWritePaged) {
     }
 }
 
-TEST(DeviceCommandTest, AddPrefetchRelayPaged) {
+TEST(DeviceCommandTest, CPU_AddPrefetchRelayPaged) {
     DeviceCommandCalculator calculator;
     calculator.add_prefetch_relay_paged();
 
@@ -192,7 +192,7 @@ TEST(DeviceCommandTest, AddPrefetchRelayPaged) {
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
 
-TEST(DeviceCommandTest, AddPrefetchRelayPagedPacked) {
+TEST(DeviceCommandTest, CPU_AddPrefetchRelayPagedPacked) {
     DeviceCommandCalculator calculator;
     calculator.add_prefetch_relay_paged_packed(1);
 
@@ -208,7 +208,7 @@ class WritePackedCommandTest : public ::testing::Test {};
 using TestTypes = testing::Types<CQDispatchWritePackedMulticastSubCmd, CQDispatchWritePackedUnicastSubCmd>;
 TYPED_TEST_SUITE(WritePackedCommandTest, TestTypes);
 
-TYPED_TEST(WritePackedCommandTest, AddDispatchWritePacked) {
+TYPED_TEST(WritePackedCommandTest, CPU_AddDispatchWritePacked) {
     {
         DeviceCommandCalculator calculator;
         calculator.add_dispatch_write_packed<TypeParam>(2, 5, 100, /*no_stride*/ false);
@@ -233,7 +233,7 @@ TYPED_TEST(WritePackedCommandTest, AddDispatchWritePacked) {
     }
 }
 
-TEST(DeviceCommandTest, AddDispatchWritePackedLarge) {
+TEST(DeviceCommandTest, CPU_AddDispatchWritePackedLarge) {
     {
         DeviceCommandCalculator calculator;
         calculator.add_dispatch_write_packed_large(1);
@@ -258,7 +258,7 @@ TEST(DeviceCommandTest, AddDispatchWritePackedLarge) {
     }
 }
 
-TYPED_TEST(WritePackedCommandTest, RandomAddDispatchWritePacked) {
+TYPED_TEST(WritePackedCommandTest, CPU_RandomAddDispatchWritePacked) {
     srand(0);
     for (size_t i = 0; i < 100; i++) {
         DeviceCommandCalculator calculator;

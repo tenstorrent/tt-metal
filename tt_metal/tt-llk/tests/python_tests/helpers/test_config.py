@@ -495,6 +495,9 @@ class TestConfig:
                 # resolves with this on the path. Listed last so the tt-llk copy still
                 # wins the basenames that exist in both trees.
                 "-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu",
+                # Keep this list to include roots every Blackhole test needs: INCLUDES is a session-wide
+                # ClassVar, so anything added here lands in the compile command for every Blackhole test. A
+                # root only some tests need belongs in a per-test fixture instead.
             ]
         if TestConfig.ARCH == ChipArchitecture.QUASAR:
             hw_specific_includes = [
@@ -779,6 +782,7 @@ class TestConfig:
         compile_producer: bool,
         stimuli_only: str = None,
         use_stimuli: str = None,
+        collect_only: bool = False,
     ):
         TestConfig.WORKER_ID = worker_id
 
@@ -837,12 +841,14 @@ class TestConfig:
             )
             golden_generators_module.get_golden_generator = get_golden_proxied
 
-        # Always have a fresh build when compiling. Under xdist, only the
-        # controller may remove the shared artifact tree; workers can already
-        # be compiling variants under it.
+        # Start compilation from a clean artifact directory. With xdist, only
+        # the controller can safely remove shared artifacts because workers may
+        # already be writing to them. Skip cleanup during test collection so a
+        # subsequent consumer run can reuse the existing build.
         if (
             TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]
             and worker_id == "master"
+            and not collect_only
         ):
             shutil.rmtree(TestConfig.ARTEFACTS_DIR.absolute(), ignore_errors=True)
 
@@ -978,10 +984,15 @@ class TestConfig:
             self.formats_config = None
             self.pack_size, self.unpack_size_a, self.unpack_size_b = 128, 128, 128
 
-        # Inject use_srcs and dest_acc into StimuliConfig
+        # SrcS MX slice geometry follows unpack_S_dst width (same as _is_srcs_32bit_mode_), not dest_acc.
         if self.variant_stimuli:
             self.variant_stimuli.set_use_srcs(self.unpack_to_srcs)
-            self.variant_stimuli.set_dest_acc(self.dest_acc)
+            srcs_32bit_mode = (
+                self.unpack_to_srcs
+                and self.formats_config is not None
+                and self.formats_config[0].unpack_S_dst.is_32_bit()
+            )
+            self.variant_stimuli.set_srcs_32bit_mode(srcs_32bit_mode)
 
         if (len(self.runtimes) > 0 or len(self.templates) > 0) and self.variant_stimuli:
             itd_param = next(
