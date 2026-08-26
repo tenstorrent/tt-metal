@@ -37,10 +37,12 @@
  * programmable const registers (vConstFloatPrgm0..2), programmed by
  * gumbel_score_tile_init(). Wormhole's rand_tile REPROGRAMS two of those
  * slots (LREG12/13) on every call -- its PRNG state lives elsewhere -- so
- * the init must run AFTER rand_tile within each tile, which is exactly the
- * order the kernel uses: rand_tile(); gumbel_score_tile_init();
- * gumbel_score_tile(). No replay slots are used, so rand's replayed row
- * (Blackhole) is untouched.
+ * the init must run after the LAST rand_tile it is meant to survive. rand
+ * is the ONLY clobberer, which is what lets the kernel batch: it draws a
+ * whole DST batch's noise first, then one init covers every score pass in
+ * the batch (rand_tile(); rand_tile(); gumbel_score_tile_init();
+ * gumbel_score_tile(); gumbel_score_tile()). No replay slots are used, so
+ * rand's replayed row (Blackhole) is untouched.
  */
 
 namespace ttml::metal::sfpu {
@@ -66,8 +68,8 @@ inline void gumbel_score_constants_init() {
 /**
  * Approximate -ln(v) for the noise chain: exponent split plus one quadratic
  * over the mantissa octave -- 2 MADs, three FULL-FP32 constants read for
- * free from the programmable const registers (programmed once per tile by
- * gumbel_score_constants_init), and one fp16a immediate, versus the precise
+ * free from the programmable const registers (programmed once per DST batch
+ * by gumbel_score_constants_init), and one fp16a immediate, versus the precise
  * body's 3 MADs, 4 two-load fp32 constants, and predicated zero guard. The
  * NEGATION is folded into the constants: both call sites want -log (the
  * inner produces -log U, the outer's result IS the Gumbel value), so
@@ -102,11 +104,11 @@ constexpr float kGumbelPolyB = 0.240234375F;     // fp16a-exact minimax under th
 constexpr float kGumbelPolyC = -0x1.69f218p+0F;  // kGumbelNegLn2 - 3*kGumbelPolyB, fp32-exact
 constexpr float kGumbelPolyD = 0x1.2c7228p+0F;   // 2*kGumbelPolyB - kGumbelNegLn2 + 2^-20, fp32-exact
 
-// Program the log constants into the SFPU's programmable const registers, once per tile from
+// Program the log constants into the SFPU's programmable const registers, once per DST batch from
 // gumbel_score_tile_init(). Turning the per-use SFPLOADI immediates (2 call sites x 4 faces = 8
-// materializations per constant per tile) into one programming each is what buys full-fp32 budget
-// for these constants; sfpi exposes only THREE float slots, so kGumbelPolyB -- the cheapest to
-// materialize, a single-load fp16a immediate -- stays inline in gumbel_noise_neg_log.
+// materializations per constant per tile) into one programming per batch is what buys full-fp32
+// budget for these constants; sfpi exposes only THREE float slots, so kGumbelPolyB -- the cheapest
+// to materialize, a single-load fp16a immediate -- stays inline in gumbel_noise_neg_log.
 inline void gumbel_score_constants_init() {
     sfpi::vConstFloatPrgm0 = kGumbelNegLn2;
     sfpi::vConstFloatPrgm1 = kGumbelPolyC;
@@ -173,9 +175,9 @@ inline void _calculate_gumbel_score_(const std::uint32_t inv_temperature_bits) {
  */
 ALWI void gumbel_score_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused>()));
-    // AFTER the llk init (so nothing it resets clobbers them), and after rand_tile in the kernel's
-    // per-tile order (Wormhole's rand reprograms LREG12/13 -- two of the three Prgm slots -- on
-    // every call).
+    // AFTER the llk init (so nothing it resets clobbers them), and after the LAST rand_tile of the
+    // kernel's DST batch (Wormhole's rand reprograms LREG12/13 -- two of the three Prgm slots -- on
+    // every call; nothing else clobbers them, so one init serves every score pass in the batch).
     MATH((ttml::metal::sfpu::gumbel_score_constants_init()));
 }
 
