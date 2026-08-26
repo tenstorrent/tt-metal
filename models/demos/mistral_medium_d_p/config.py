@@ -28,7 +28,7 @@ Per-chip shapes at TP=4 (all tile-aligned; no padding anywhere):
 Note ``n_kv_local = 2``: every other GQA model in the repo lands on exactly one KV head per chip
 (minimax_m3 4/4, gpt_oss 8/8). Two is legal — ``update_padded_kv_cache`` only requires cache and
 input head dims to match, and ring-joint SDPA supports grouped GQA ``NKH == NVH < NQH`` — but it is
-unexercised, so ``tests/unit/test_kv_cache_write_vs_ref.py`` exists to pin it.
+unexercised, so ``tests/unit/test_ring_joint_sp_vs_ref.py`` drives the op at 2/2/24 to pin it.
 """
 
 from loguru import logger
@@ -43,18 +43,24 @@ _VALIDATED_TP = 4
 class MeshConfig:
     """Prefill mesh parallelization. TP is the only knob; SP follows from the mesh shape."""
 
-    def __init__(self, mesh_shape, tp, tp_axis: int = 1):
+    def __init__(self, mesh_shape, tp, tp_axis: int = 1, tp_slice: int = 0):
         """
         Args:
             mesh_shape: (rows, cols) - any mesh size
-            tp: tensor-parallel size (shards features along tp_axis)
+            tp: tensor-parallel DEGREE - the number of feature shards. Drives every per-device
+                shape (`shard_size`, head counts, `hidden/tp`), independent of how many devices
+                actually sit on tp_axis.
             tp_axis: which mesh axis is TP (0=rows, 1=cols, default: 1). The other axis carries
                 sequence-parallel prefill (SP = size of that axis).
+            tp_slice: which of the `tp` shards to materialize when the mesh has a SINGLE device on
+                tp_axis - see `is_tp_slice`.
         """
         self.mesh_shape = tuple(mesh_shape)
         self.tp = tp
         self.tp_axis = tp_axis
         self.sp_axis = 0 if tp_axis == 1 else 1
+        self.tp_devices = self.mesh_shape[self.tp_axis]
+        self.tp_slice = tp_slice
         self.total_devices = self.mesh_shape[0] * self.mesh_shape[1]
         self._validate()
 
@@ -63,11 +69,19 @@ class MeshConfig:
         # shard_mapper always shards across the ENTIRE tp_axis, so TP must span the whole axis: a
         # smaller TP would build per-device feature counts from `tp` while the mapper still split
         # across all `tp_dim_size` devices, giving inconsistent shapes.
-        if self.tp != tp_dim_size:
+        #
+        # The ONE exception is the TP-slice rig (`tp_devices == 1 < tp`): with nothing to shard
+        # across, `take_tp_slice` narrows the host tensor to a single shard and the mapper
+        # replicates, so per-device shapes match a real TP=`tp` mesh. That is what lets a 4-chip
+        # box drive the SP ring at Galaxy per-device sizes. See `is_tp_slice` for the caveats.
+        if self.tp != tp_dim_size and not (tp_dim_size == 1 and self.tp > 1):
             raise ValueError(
-                f"TP({self.tp}) must equal mesh_{self.tp_axis}_size({tp_dim_size}); "
-                f"sub-axis TP is unsupported (shard_mapper shards the full axis)."
+                f"TP({self.tp}) must equal mesh_{self.tp_axis}_size({tp_dim_size}), or that axis "
+                f"must be 1 device wide (the TP-slice rig); sub-axis TP is unsupported "
+                f"(shard_mapper shards the full axis)."
             )
+        if not 0 <= self.tp_slice < self.tp:
+            raise ValueError(f"tp_slice({self.tp_slice}) out of range for tp({self.tp})")
         if (self.mesh_shape, self.tp) != (_VALIDATED_MESH_SHAPE, _VALIDATED_TP):
             logger.warning(
                 f"MeshConfig(mesh_shape={self.mesh_shape}, tp={self.tp}) is untested; only "
@@ -79,10 +93,36 @@ class MeshConfig:
         """Sequence-parallel degree (size of the non-TP axis)."""
         return self.mesh_shape[self.sp_axis]
 
+    @property
+    def is_tp_slice(self) -> bool:
+        """True when the mesh is ONE device wide on the TP axis but `tp` > 1.
+
+        Per-device shapes then match a real TP=`tp` mesh while only shard `tp_slice` exists. Two
+        consequences: the TP close is a no-op (nothing to reduce across), and any ROW-parallel
+        output is a partial sum whose remaining `tp - 1` shards are simply absent - so a reference
+        must be computed over the same slice. COLUMN-parallel outputs (per-head tensors, which is
+        what the SP ring consumes) are exact.
+        """
+        return self.tp_devices == 1 and self.tp > 1
+
+    def take_tp_slice(self, t, dim: int):
+        """Narrow `t` to TP shard `tp_slice` along `dim`. No-op unless `is_tp_slice`.
+
+        A contiguous narrow is exactly what sharding across the TP axis would have handed device
+        `tp_slice`, so callers get Galaxy per-device shapes without a `tp`-wide axis.
+        """
+        if not self.is_tp_slice:
+            return t
+        n = t.shape[dim] // self.tp
+        return t.narrow(dim, self.tp_slice * n, n)
+
     def shard_mapper(self, mesh_device, tensor_dim=None, mesh_dims=None):
         """2D mesh sharding. Default: shard `tensor_dim` along the TP axis, replicate along SP."""
         if mesh_dims is None:
             mesh_dims = (None, tensor_dim) if self.tp_axis == 1 else (tensor_dim, None)
+        if self.is_tp_slice:
+            # Nothing to shard on a 1-wide axis; the caller already narrowed via take_tp_slice.
+            mesh_dims = tuple(None if i == self.tp_axis else d for i, d in enumerate(mesh_dims))
         return ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=mesh_dims)
 
     def column_parallel(self, mesh_device):
@@ -141,4 +181,8 @@ class MeshConfig:
         )
 
     def __repr__(self):
-        return f"MeshConfig({self.mesh_shape}, tp={self.tp}, sp={self.sp}, tp_axis={self.tp_axis})"
+        rig = ", TP-SLICE" if self.is_tp_slice else ""
+        return (
+            f"MeshConfig({self.mesh_shape}, tp={self.tp}, sp={self.sp}, tp_axis={self.tp_axis}, "
+            f"tp_devices={self.tp_devices}{rig})"
+        )

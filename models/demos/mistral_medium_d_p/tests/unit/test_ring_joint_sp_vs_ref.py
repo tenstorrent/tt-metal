@@ -1,21 +1,29 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""DEVICE (>=8 chips): the ring-joint SDPA over the block-cyclic SP KV cache, vs torch.
+"""DEVICE (4 chips, BH QuietBox): the ring-joint SDPA over the block-cyclic SP KV cache, vs torch.
 
-This isolates ``tt/attention/dense_sp.py::dense_sp_attention`` from the rest of the block: Q, K and V
-are placed directly, so a failure here is the ring op or the cache layout, not the projections.
+The core of attention, isolated. This drives ``tt/attention/dense_sp.py::dense_sp_attention`` with Q,
+K and V placed directly, so a failure here is the ring op or the cache layout — never the
+projections. The column/row-parallel QKV and o_proj paths, and the TP CCLs that close them, get
+their own tests later.
 
-The grouping is the point. At TP=4 each chip carries **2 KV heads and 24 Q heads**, so the op runs in
-its grouped-GQA mode (``NKH == NVH < NQH && NQH % NKH == 0`` — see
-``ring_joint_sdpa_device_operation.cpp:759-765``). Every other model in the repo drives this op with
-either 1 KV head per chip or MLA's single latent, so this ratio is new.
+**The TP-slice rig.** The Galaxy target is (8,4) = SP=8 x TP=4, which no 4-chip box can hold. So the
+mesh is (4,1) with ``tp=4``: all four chips go on the SP ring, and ``MeshConfig.take_tp_slice``
+narrows Q/K/V to a single TP shard. Per-chip shapes are then **identical** to Galaxy — 24 Q and 2 KV
+heads — and because ``chunk_global = sp * chunk_local``, dropping SP 8 -> 4 halves the global
+sequence and leaves per-chip work unchanged. Same shapes, same load, quarter the chips.
+
+The grouping is the point. 2 KV / 24 Q heads per chip puts the op in its grouped-GQA mode
+(``NKH == NVH < NQH && NQH % NKH == 0`` — see ``ring_joint_sdpa_device_operation.cpp:759-765``).
+Every other model in the repo drives this op with either 1 KV head per chip or MLA's single latent,
+so this ratio is new — which is exactly why it needs a rung of its own before Galaxy time.
 
 The ring gathers KV across the SP axis internally via online softmax — there is no explicit
-AllGather of K/V — so the reference is a plain full-sequence causal SDPA and the test checks that
-each chip's Q shard sees the whole prefix.
+AllGather of K/V — so the reference is a plain full-sequence causal SDPA over the same head slice,
+and the test checks that each chip's Q shard sees the whole prefix.
 
-Run:  pytest models/demos/mistral_medium_d_p/tests/unit/test_ring_joint_sp_vs_ref.py -k 2x4
+Run:  pytest models/demos/mistral_medium_d_p/tests/unit/test_ring_joint_sp_vs_ref.py -k 4x1
 """
 
 import pytest
@@ -29,7 +37,7 @@ from models.demos.mistral_medium_d_p.tt.attention import allocate_kv_cache, writ
 from models.demos.mistral_medium_d_p.tt.attention.dense_sp import dense_sp_attention
 
 from ..test_factory import mesh_setup, parametrize_mesh_with_fabric
-from .shapes import HEAD_DIM, N_KV, N_Q, per_chip
+from .shapes import HEAD_DIM, N_KV, N_Q, TARGET_TP, per_chip
 
 
 def _torch_causal_gqa(q, k, v, n_q, n_kv):
@@ -43,12 +51,12 @@ def _torch_causal_gqa(q, k, v, n_q, n_kv):
     return torch.softmax(scores, dim=-1) @ v
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4), (8, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(4, 1)])
 @pytest.mark.parametrize("chunk_local", [128], ids=["c128"])
 def test_ring_joint_sp_vs_ref(mesh_device, device_params, chunk_local, reset_seeds):
     """One cache-backed ring-joint SDPA call, 2 KV / 24 Q heads per chip, vs torch."""
     rows, cols = tuple(mesh_device.shape)
-    mesh_config, ccl = mesh_setup(mesh_device)
+    mesh_config, ccl = mesh_setup(mesh_device, tp=TARGET_TP)
     sp, tp, sp_axis, tp_axis = mesh_config.sp, mesh_config.tp, mesh_config.sp_axis, mesh_config.tp_axis
     pc = per_chip(tp)
     n_q_local, n_kv_local = pc["n_q"], pc["n_kv"]
@@ -64,7 +72,20 @@ def test_ring_joint_sp_vs_ref(mesh_device, device_params, chunk_local, reset_see
     k_full = torch.randn(1, N_KV, chunk_global, HEAD_DIM, dtype=torch.bfloat16) * 0.3
     v_full = torch.randn(1, N_KV, chunk_global, HEAD_DIM, dtype=torch.bfloat16) * 0.3
 
-    ref = _torch_causal_gqa(q_full.float(), k_full.float(), v_full.float(), N_Q, N_KV)
+    # Narrow to TP shard `tp_slice`'s heads under the slice rig; a no-op on a real TP-wide mesh.
+    # The GQA grouping survives the narrow: rep = 96/8 = 24/2 = 12, and a column-parallel QKV hands
+    # device i exactly Q heads [24i:24i+24] alongside KV heads [2i:2i+2], so the slice is coherent.
+    q_tp = mesh_config.take_tp_slice(q_full, 1)
+    k_tp = mesh_config.take_tp_slice(k_full, 1)
+    v_tp = mesh_config.take_tp_slice(v_full, 1)
+    n_q_ref, n_kv_ref = q_tp.shape[1], k_tp.shape[1]
+    if mesh_config.is_tp_slice:
+        assert (n_q_ref, n_kv_ref) == (
+            n_q_local,
+            n_kv_local,
+        ), f"TP-slice heads {(n_q_ref, n_kv_ref)} != per_chip(tp={tp}) {(n_q_local, n_kv_local)}"
+
+    ref = _torch_causal_gqa(q_tp.float(), k_tp.float(), v_tp.float(), n_q_ref, n_kv_ref)
 
     kv_cache = allocate_kv_cache(
         mesh_device,
@@ -83,7 +104,8 @@ def test_ring_joint_sp_vs_ref(mesh_device, device_params, chunk_local, reset_see
     def shard_heads_and_seq(t, dtype=ttnn.bfloat8_b):
         dims = [None, None]
         dims[sp_axis] = 2
-        dims[tp_axis] = 1
+        # Nothing to shard on a 1-wide TP axis - take_tp_slice already narrowed the heads.
+        dims[tp_axis] = None if mesh_config.is_tp_slice else 1
         return ttnn.from_torch(
             t[:, :, idx, :],
             device=mesh_device,
@@ -95,8 +117,8 @@ def test_ring_joint_sp_vs_ref(mesh_device, device_params, chunk_local, reset_see
 
     write_kv_chunk(
         kv_cache,
-        shard_heads_and_seq(k_full),
-        shard_heads_and_seq(v_full),
+        shard_heads_and_seq(k_tp),
+        shard_heads_and_seq(v_tp),
         slot_idx=0,
         layer_idx=0,
         kv_actual=0,
@@ -104,7 +126,7 @@ def test_ring_joint_sp_vs_ref(mesh_device, device_params, chunk_local, reset_see
     )
     ttnn.synchronize_device(mesh_device)
 
-    tt_q = shard_heads_and_seq(q_full, dtype=ttnn.bfloat16)
+    tt_q = shard_heads_and_seq(q_tp, dtype=ttnn.bfloat16)
 
     grid = mesh_device.compute_with_storage_grid_size()
     out_tt = dense_sp_attention(
@@ -115,7 +137,9 @@ def test_ring_joint_sp_vs_ref(mesh_device, device_params, chunk_local, reset_see
         None,
         kv_actual=0,
         logical_n=chunk_global,
-        n_kv=N_KV,
+        # get_ring_gather_buffer shards zeros(1, n_kv, ...) across the TP axis, so pass the count
+        # that yields n_kv_local per chip on THIS mesh: 8 at TP=4 wide, 2 on the 1-wide slice rig.
+        n_kv=n_kv_local * mesh_config.tp_devices,
         cache_global=cache_global,
         head_dim=HEAD_DIM,
         mesh_device=mesh_device,
@@ -155,14 +179,18 @@ def test_ring_joint_sp_vs_ref(mesh_device, device_params, chunk_local, reset_see
     got = got[:, :, inv, :]
 
     passing, pcc = comp_pcc(ref, got, 0.99)
-    logger.info(f"ring-joint SDPA SP={sp} TP={tp} ({n_q_local}Q/{n_kv_local}KV per chip): {pcc}")
+    rig = " [TP-slice]" if mesh_config.is_tp_slice else ""
+    logger.info(
+        f"ring-joint SDPA SP={sp} TP={tp}{rig} ({n_q_local}Q/{n_kv_local}KV per chip, "
+        f"seq={chunk_global} global / {C} local): {pcc}"
+    )
     assert passing, f"ring-joint SDPA PCC fail: {pcc}"
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(4, 1)])
 def test_ring_requires_bf8_cache(mesh_device, device_params, reset_seeds, expect_error):
     """The sliding/cache-backed ring path and its gather buffers are bf8; a bf16 cache must fail loud."""
-    mesh_config, ccl = mesh_setup(mesh_device)
+    mesh_config, ccl = mesh_setup(mesh_device, tp=TARGET_TP)
     kv_cache = allocate_kv_cache(
         mesh_device,
         num_layers=1,
@@ -182,7 +210,7 @@ def test_ring_requires_bf8_cache(mesh_device, device_params, reset_seeds, expect
             None,
             kv_actual=0,
             logical_n=64,
-            n_kv=N_KV,
+            n_kv=per_chip(mesh_config.tp)["n_kv"] * mesh_config.tp_devices,
             cache_global=64 * mesh_config.sp,
             head_dim=HEAD_DIM,
             mesh_device=mesh_device,

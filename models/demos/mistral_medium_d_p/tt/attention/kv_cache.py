@@ -15,7 +15,8 @@ substrate that ``update_padded_kv_cache`` and the ring-joint SDPA both already s
 4 KV heads over TP=4 and gpt_oss is 8 over TP=8, both landing on exactly 1/chip. It is legal:
 ``update_padded_kv_cache`` only requires ``cache_shape[1] == input_shape[1]`` and block-cyclic-shards
 the SEQUENCE, so heads are orthogonal to it. Unexercised, though — hence
-``tests/unit/test_kv_cache_write_vs_ref.py``.
+``tests/unit/test_ring_joint_sp_vs_ref.py``, which writes this cache and reads it back through the
+ring op at 2 KV / 24 Q heads per chip.
 
 Sizing note: 88 layers x 2 (K+V) x 8 heads x 128 dim = **352 KiB/token at bf16**, 176 KiB/token at
 bf8. A single 128K-token user is ~22 GiB of cache at bf8 spread over the 32 chips (~0.7 GiB/chip),

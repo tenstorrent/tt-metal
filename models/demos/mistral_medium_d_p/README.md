@@ -68,7 +68,7 @@ Every other GQA model in the repo lands on exactly one KV head per chip (minimax
 8/8), and `deepseek_v3_d_p/utils/kv_cache_utils.py::init_kvpe_cache` hardcodes that `1`. Two is
 legal — `update_padded_kv_cache` only requires `cache_shape[1] == input_shape[1]`, and ring-joint
 SDPA supports grouped GQA (`NKH == NVH < NQH && NQH % NKH == 0`, ours is 2/2/24) — but unexercised.
-`tests/unit/test_kv_cache_write_vs_ref.py` pins it, **on 4 chips**, before any Galaxy time is spent.
+`tests/unit/test_ring_joint_sp_vs_ref.py` pins it, **on 4 chips**, before any Galaxy time is spent.
 
 ## The block contract
 
@@ -92,7 +92,7 @@ skipped), so the 1-chip tests exercise the same code, not a second branch.
 
 | | files | tests |
 |---|---|---|
-| **Attention** | `tt/attention/*`, `tt/rope.py`, `tt/rope_tables.py` | `test_rope_vs_hf`, `test_attention_ops`, `test_attention_vs_ref`, `test_kv_cache_write_vs_ref`, `test_ring_joint_sp_vs_ref`, `test_attention_chunked_vs_ref` |
+| **Attention** | `tt/attention/*`, `tt/rope.py`, `tt/rope_tables.py` | `test_rope_vs_hf`, `test_ring_joint_sp_vs_ref` |
 | **MLP** | `tt/mlp.py` | `test_swiglu_vs_ref`, `test_mlp_vs_ref` |
 | **Shared — frozen** | `config.py`, `tt/ccl.py`, `utils/`, `configs/`, `reference/`, `tt/checkpoint.py`, `tt/rms_norm.py`, `tt/model_config.py`, `tests/test_factory.py`, `tests/unit/shapes.py`, `conftest.py` | `test_checkpoint_ingest`, `test_reference_model`, `test_rms_norm_vs_ref` |
 
@@ -104,10 +104,31 @@ test feeds a full-emb activation in and checks the reduce-scattered output.
 | tier | devices | what it retires |
 |---|---|---|
 | host | **0** | YaRN tables vs HF bit-for-bit, fp8 dequant + Meta-RoPE swizzle, torch ref vs `Ministral3DecoderLayer` |
-| `1x1` | **1** | block math at TP=1; single Blackhole card (p150) |
-| `1x4` | **4** | **production TP=4: 24 Q + 2 KV heads/chip, real reduce-scatter close** — QuietBox-2 / 2×P300 |
-| `2x4` | **8** | SP: ring-joint SDPA, chunked cache-read, SP KV writes — LoudBox / dual-LB |
+| `4x1` | **4** | **ring-joint SDPA at Galaxy per-chip shapes** (24 Q / 2 KV heads) via the TP-slice rig — BH QuietBox-2, its 2×2 opened as a logical 4×1 |
 | `8x4` | **32** | the SP=8 × TP=4 target — Blackhole Galaxy |
+
+The ladder is deliberately short. Only the rung that runs on hardware we can actually get is wired
+up; the rest are added back one at a time as boxes become reachable, so a green run always means
+something was really tested rather than skipped. Currently parked, in the order they should return:
+
+| rung | what it needs | what it would retire |
+|---|---|---|
+| QKV + o_proj on `1x4` | a real 4-wide TP axis | column/row-parallel splits and the TP reduce-scatter close |
+| SP=8 on `8x1` | a LoudBox and a logical 8×1 view | the production ring length |
+| full block on `8x4` | Galaxy | SP=8 × TP=4 together, the only shape that tests both axes at once |
+
+### The TP-slice rig
+
+`4x1` is not TP=1. `MeshConfig(mesh_shape=(4,1), tp=4)` keeps `tp` as the **shape** authority — 24 Q
+and 2 KV heads per chip, exactly Galaxy — while putting all four chips on the SP ring, and
+`take_tp_slice` narrows Q/K/V to one TP shard on the host. Since `chunk_global = sp * chunk_local`,
+dropping SP 8 → 4 halves the *global* sequence and leaves per-chip work identical. Same shapes, same
+load per device, a quarter of the chips.
+
+The one thing it cannot test is any **row-parallel** output: holding 1 of 4 contraction shards makes
+`o_proj` a partial sum whose other three shards are simply absent, so no reference can close it.
+That is precisely why the QKV/o_proj tests are parked for a real 4-wide TP axis rather than bent to
+fit this rung.
 
 The host tier is the trust anchor: it pins the YaRN tables to HF at 0 ULP out to 262144 positions,
 proves the fp8-dequant + Meta-swizzle round-trip, and pins `reference/torch_reference.py` to the real
@@ -122,15 +143,12 @@ pytest models/demos/mistral_medium_d_p/tests/unit/test_rope_vs_hf.py \
        models/demos/mistral_medium_d_p/tests/unit/test_checkpoint_ingest.py \
        models/demos/mistral_medium_d_p/tests/unit/test_reference_model.py --noconftest
 
-pytest models/demos/mistral_medium_d_p/tests/unit -k 1x1   #  1 chip
-pytest models/demos/mistral_medium_d_p/tests/unit -k 1x4   #  4 chips
-pytest models/demos/mistral_medium_d_p/tests/unit -k 2x4   #  8 chips
-pytest models/demos/mistral_medium_d_p/tests/unit -k 8x4   # 32 chips
+pytest models/demos/mistral_medium_d_p/tests/unit -k 4x1   #  4 chips — BH QuietBox-2
 ```
 
 Every device test declares its mesh shapes through `tests/test_factory.py::parametrize_mesh_with_fabric`,
-which auto-filters to what fits on the current system — a test declaring `[(2,4),(8,4)]` skips
-cleanly on a 4-chip box rather than failing.
+which auto-filters to what fits on the current system — a test declaring `[(4,1),(8,4)]` skips the
+Galaxy case cleanly on a 4-chip box rather than failing.
 
 ## Layout
 
