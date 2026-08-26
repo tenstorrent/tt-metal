@@ -448,54 +448,6 @@ def test_ds_mla(
     )
 
 
-@pytest.mark.parametrize(
-    "mesh_device,device_params",
-    [
-        pytest.param((8, 4), torus_xy_device_params(worker_l1_size=_WORKER_L1_SIZE), id="torus-xy-8x4"),
-        pytest.param((2, 4), _local_fabric2d_params(), id="fabric2d-2x4"),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
-@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize(
-    "seq_len",
-    [5 * 1024, 25 * 1024],
-    ids=["seq5k", "seq25k"],
-)
-@pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
-@pytest.mark.parametrize("is_balanced", [False], ids=["sequential"])
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
-@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
-@pytest.mark.timeout(0)
-def test_kimi_mla(
-    use_pretrained,
-    request,
-    mesh_device,
-    seq_len,
-    skip_host_comparison,
-    scale_down_sl,
-    is_balanced,
-    is_ci_env,
-    is_ci_v2_env,
-    device_params,
-    variant,
-):
-    run_model(
-        variant,
-        use_pretrained,
-        request,
-        mesh_device,
-        seq_len,
-        skip_host_comparison,
-        scale_down_sl,
-        is_balanced,
-        is_ci_env,
-        is_ci_v2_env,
-        device_params,
-    )
-
-
 # ---------------------------------------------------------------------------------------------------
 # Unified chunked-prefill driver. One loop (preload -> N iters of write+rope+ring_mla -> compare)
 # parametrized by where the prefix/reference come from. See test_mla_chunked_prefill below.
@@ -978,8 +930,8 @@ def test_mla_chunked_prefill(
     architecture-agnostic (Kimi's YaRN/theta flow through, absorbed-MLA math matches the variant's own
     reference), so this works for both variants. It complements the deepseek GPU-trace path, which only
     replays full-chunk iters and so never exercises real weights across the rotation/partial-chunk edge
-    scenarios that the cpu path covers. Without the env var, fall back to random (mirroring
-    test_kimi_mla). kimi_k2_6 also runs the trace path (loader + k_pe re-interleave are arch-agnostic),
+    scenarios that the cpu path covers. Without the env var, fall back to random. kimi_k2_6 also
+    runs the trace path (loader + k_pe re-interleave are arch-agnostic),
     against its own registered traces. It otherwise runs the same config-driven driver on any arch/mesh.
 
     kimi_k3 (NoPE + output gate, 96 heads) runs 'scalar' only -- 'metadata' is skipped explicitly

@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Confi
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7.modeling_minimax_m2 import MiniMaxM2SparseMoeBlock
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+from models.demos.deepseek_v3_d_p.tests import ci_pruning
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     GATE_KEY_PREFIX_DEEPSEEK,
@@ -252,8 +253,18 @@ REGULAR_GATE_CASES = [
     pytest.param("kimi", GateComputeMode.DEVICE_FP32, id="kimi-device_fp32"),
     pytest.param("kimi_k3", GateComputeMode.HOST_ALL, id="kimi_k3-host_all"),
     pytest.param("kimi_k3", GateComputeMode.DEVICE_FP32, id="kimi_k3-device_fp32"),
-    pytest.param("glm_5_1", GateComputeMode.HOST_ALL, id="glm_5_1-host_all"),
-    pytest.param("glm_5_1", GateComputeMode.DEVICE_FP32, id="glm_5_1-device_fp32"),
+    pytest.param(
+        "glm_5_1",
+        GateComputeMode.HOST_ALL,
+        marks=pytest.mark.uncollect_if(pred=ci_pruning.retired_model),
+        id="glm_5_1-host_all",
+    ),
+    pytest.param(
+        "glm_5_1",
+        GateComputeMode.DEVICE_FP32,
+        marks=pytest.mark.uncollect_if(pred=ci_pruning.retired_model),
+        id="glm_5_1-device_fp32",
+    ),
     pytest.param("minimax_m2_7", GateComputeMode.HOST_ALL, id="minimax_m2_7-host_all"),
     pytest.param("minimax_m2_7", GateComputeMode.DEVICE_FP32, id="minimax_m2_7-device_fp32"),
     pytest.param("gpt_oss_120b", GateComputeMode.GPT_HOST, id="gpt_oss_120b-gpt_host"),
