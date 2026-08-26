@@ -53,10 +53,9 @@ uint32_t tile_size_bytes(const CombineFabric2dInputs& tensor_args) {
            tensor_args.dispatched_buffer.element_size();
 }
 
-// Tiles the untilize takes per pack call, and so the width of the input window. Small, because a whole
-// tile-row is 458 kB at the production shape and would not fit L1 on top of the output ring; a divisor of
-// the row, so the blocks tile it exactly. This is the knob that spans the two ways of buffering the input:
-// one tile at a time at the low end, the whole row at the high end.
+// Tiles the untilize takes per pack call, and so the width of the input window: as wide as it can be, and a
+// divisor of the row so the blocks tile it exactly. Eight is what llk_pack_untilize asserts as its ceiling
+// off the dense path; a whole tile-row would not fit L1 on top of the output ring anyway, at 458 kB.
 constexpr uint32_t UNTILIZE_MAX_BLOCK_TILES = 8;
 
 uint32_t untilize_block_tiles(const CombineFabric2dInputs& tensor_args) {
