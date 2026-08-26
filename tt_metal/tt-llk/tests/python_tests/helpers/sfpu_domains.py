@@ -2102,12 +2102,12 @@ SPECIALS_READY_OPS.update(
         MathOperation.UnaryGe: "As UnaryGt.",
         MathOperation.UnaryMin: "min(x, 0.0) under the total order. +NaN is the maximum, so "
         "the minimum is the other operand -- which is why this diverged where UnaryMax did not.",
-        MathOperation.Clamp: "clamp(x, -1, 1) applied as the kernel applies it: `v_if (val < "
-        "min)` then `v_if (val > max)`, both total-order compares, so a NaN falls through the "
-        "first and lands on max.",
-        MathOperation.Hardtanh: "clamp(x, -1, 1), but via `_calculate_hardtanh_` rather than "
-        "Clamp's `_calculate_clamp_` -- a different kernel with differently formatted constants "
-        "that happens to agree at every special here. The agreement is pinned host-side.",
+        MathOperation.Clamp: "clamp(x, -1, 1) applied as metal `calculate_clamp` applies it: "
+        "max(x, min) then min(x, max), both SFPSWAP total-order folds, so a +NaN outranks "
+        "everything, survives the max, and lands on max via the min.",
+        MathOperation.Hardtanh: "clamp(x, -1, 1) via metal `calculate_hardtanh`, i.e. "
+        "`sfpi::clamp` -- the same SFPSWAP max-then-min composition as Clamp's kernel, so the "
+        "two share one golden by construction. The identity is pinned host-side.",
         MathOperation.ReluMax: "_relu_max_body_: a total-order `> threshold` replaces a NaN "
         "with the threshold, and the relu clamp then sees a finite value.",
         MathOperation.Hardsigmoid: "x * (1/6) + 0.5 through the same _relu_max_body_ the "
