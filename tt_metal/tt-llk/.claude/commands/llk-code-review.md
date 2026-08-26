@@ -260,14 +260,14 @@ Follow these steps precisely:
    and valid new-side diff line:
 
    ```bash
-   gh api --method POST "repos/OWNER/REPOSITORY/pulls/PR_NUMBER/comments" --raw-field body="COMMENT_BODY" --raw-field commit_id="HEAD_SHA" --raw-field path="CHANGED_FILE_PATH" --field line=NEW_SIDE_LINE_NUMBER --raw-field side="RIGHT" --jq '.html_url'
+   gh api --method POST 'repos/OWNER/REPOSITORY/pulls/PR_NUMBER/comments' --raw-field body='COMMENT_BODY' --raw-field commit_id='HEAD_SHA' --raw-field path='CHANGED_FILE_PATH' --field line=NEW_SIDE_LINE_NUMBER --raw-field side='RIGHT' --jq '.html_url'
    ```
 
    For a genuine multi-line anchor, add GitHub's `start_line` and `start_side`;
    `line` remains the last line of the range:
 
    ```bash
-   gh api --method POST "repos/OWNER/REPOSITORY/pulls/PR_NUMBER/comments" --raw-field body="COMMENT_BODY" --raw-field commit_id="HEAD_SHA" --raw-field path="CHANGED_FILE_PATH" --field start_line=FIRST_NEW_SIDE_LINE --raw-field start_side="RIGHT" --field line=LAST_NEW_SIDE_LINE --raw-field side="RIGHT" --jq '.html_url'
+   gh api --method POST 'repos/OWNER/REPOSITORY/pulls/PR_NUMBER/comments' --raw-field body='COMMENT_BODY' --raw-field commit_id='HEAD_SHA' --raw-field path='CHANGED_FILE_PATH' --field start_line=FIRST_NEW_SIDE_LINE --raw-field start_side='RIGHT' --field line=LAST_NEW_SIDE_LINE --raw-field side='RIGHT' --jq '.html_url'
    ```
 
    Verify every successful write returns a non-empty `html_url`. If an inline
