@@ -280,7 +280,7 @@ jobs:
               "input_dirs": ["generated/test_logs"],
               "output_dir": "generated/ai_summaries",
               "scope": "${{ inputs.summary-scope }}",
-              "authoritative_job_status": ${{ matrix.test-group.authoritative_job_status || false }}
+              "authoritative_job_status": ${{ (matrix.test-group.ai_summary && matrix.test-group.ai_summary.authoritative_job_status) || false }}
             }
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}

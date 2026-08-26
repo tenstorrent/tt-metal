@@ -34,6 +34,8 @@
 
 - name: ttnn nightly matmul tests
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  ai_summary:
+    authoritative_job_status: true
   skus:
     wh_n150_civ2:
       timeout: 50

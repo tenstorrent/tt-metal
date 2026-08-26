@@ -1451,7 +1451,7 @@ class TestUnsupportedCases:
             dtype=ttnn.bfloat16,
         )
 
-        with expect_error(RuntimeError, "output_tensor"):
+        with expect_error(RuntimeError, "optional output tensor"):
             ttnn.concat([ttnn_t, ttnn_t], dim=2, output_tensor=out_t)
 
     def test_sharded_height_concat_on_height_sharded_not_supported(self, device, expect_error):

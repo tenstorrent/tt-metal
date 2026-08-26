@@ -29,11 +29,8 @@
   cmd: |
     mkdir -p generated/test_reports
     build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
-  # Negative tests here provoke and catch fatal asserts; assert.hpp logs the TT_FATAL
-  # before throwing, so the crash patterns see a real crash on a passing run. There is
-  # no C++ equivalent of the expect_error fixture, so a green job status settles it.
-  # Failed tests, a non-zero exit code and a missing finish marker still decide.
-  authoritative_job_status: true
+  ai_summary:
+    authoritative_job_status: true
   skus:
     bh_p100:
       timeout: 30
