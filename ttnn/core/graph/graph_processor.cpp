@@ -575,11 +575,13 @@ void GraphProcessor::track_function_end_impl() {
         const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
         // Reset after the last GraphProcessor copies.
         bool last_graph_processor = true;
-        for (auto it = processors.rbegin(); it != processors.rend(); ++it) {
+        auto it = processors.rbegin();
+        while (it != processors.rend()) {
             if (dynamic_cast<GraphProcessor*>(it->get()) != nullptr) {
                 last_graph_processor = (it->get() == this);
                 break;
             }
+            ++it;
         }
         if (last_graph_processor) {
             pending_program_factory_.reset();
