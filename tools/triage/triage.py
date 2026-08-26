@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--noc-id=<id>] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--print-elf-cache-stats] [--triage-summary-path=<path>] [--llm-output] [--llm-output-path=<path>]
+    triage [--noc-id=<id>] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--print-elf-cache-stats] [--triage-summary-path=<path>] [--llm-output] [--llm-output-path=<path>] [--sqlite-output-path=<path>]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -28,6 +28,7 @@ Options:
     --triage-summary-path=<path>     Write a triage summary file to the given path (used by CI for hang reports).
     --llm-output                     Replace Rich tables on the console with a machine-readable report (CSV-formatted tables). Easier and cheaper for LLMs (and grep/CI) to consume. Implies --disable-colors.
     --llm-output-path=<path>         Additionally write the machine-readable report to <path>. Can be combined with --llm-output; without it, Rich output still goes to the console.
+    --sqlite-output-path=<path>      Additionally write a SQLite database to <path>, with one table per script holding that script's rows.
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -629,6 +630,7 @@ def log_warning_risc(risc_name: str, location: OnChipCoordinate, message: str) -
 
 
 _output_serializer: Any = None
+_output_serializer_initialized = False
 
 
 def get_output_serializer() -> Any:
@@ -654,7 +656,17 @@ def init_output_serializer(args: ScriptArguments) -> None:
       --llm-output                      -> CsvSerializer on the console (replaces Rich)
       --llm-output-path=<path>          -> Rich on console + CsvSerializer to file
       --llm-output --llm-output-path=.. -> CsvSerializer on console + CsvSerializer to file
+
+    Builds once per process. `main()` calls this, and so does every
+    `run_script()`, so without the guard a `--run=` invocation would rebuild the
+    back ends per script - reopening `FileSink` with mode "w" and truncating the
+    report down to the last script alone.
     """
+    global _output_serializer_initialized
+    if _output_serializer_initialized:
+        return
+    _output_serializer_initialized = True
+
     from serializers import ConsoleSink, CsvSerializer, FileSink, MultiSerializer, RichSerializer
 
     console_sink = ConsoleSink(console)
@@ -672,6 +684,15 @@ def init_output_serializer(args: ScriptArguments) -> None:
             serializers.append(CsvSerializer(file_sink, get_verbose_level))
         except OSError as e:
             utils.WARN(f"Failed to open --llm-output-path={csv_path!r}: {e}. File output will be skipped.")
+
+    sqlite_path = utils.safe_path(args["--sqlite-output-path"])
+    if sqlite_path:
+        try:
+            from sqlite_serializer import SqliteSerializer
+
+            serializers.append(SqliteSerializer(sqlite_path, get_verbose_level))
+        except Exception as e:
+            utils.WARN(f"Failed to open --sqlite-output-path={sqlite_path!r}: {e}. SQLite output will be skipped.")
 
     set_output_serializer(serializers[0] if len(serializers) == 1 else MultiSerializer(serializers))
 
