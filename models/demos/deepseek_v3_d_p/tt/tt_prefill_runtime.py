@@ -827,9 +827,12 @@ class TtPrefillRuntime:
         index_layer_ids = None
         if kv_caches.index is not None and getattr(self.hf_config, "indexer_types", None):
             from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused
+            from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import merged_num_layers
 
+            # The merged table spans EVERY stage, so the map covers the model's layers, not this rank's slice.
+            total_layers = merged_num_layers(stage_layouts[0]) if stage_layouts else self.config.num_layers
             index_layer_ids = [
-                layer for layer in range(self.config.num_layers) if not indexer_layer_is_reused(self.hf_config, layer)
+                layer for layer in range(total_layers) if not indexer_layer_is_reused(self.hf_config, layer)
             ]
 
         return build_and_serialize_kv_chunk_table(

@@ -306,14 +306,16 @@ def _build_and_serialize_merged_kv_chunk_table(
     # gathered above (dense, one per cache) keep addressing the same rows.
     if index_config_name is not None and index_layer_ids is not None:
         index_dense_layers = configs[index_config_name].num_layers
+        # Global layer total: under PP the `num_layers` arg is this rank's slice, config 0 spans every stage.
+        global_layers = configs["0"].num_layers
         assert len(index_layer_ids) == index_dense_layers, (
             f"index_layer_ids has {len(index_layer_ids)} entries but the index config spans "
             f"{index_dense_layers} compacted layers; every dense row needs a global layer id"
         )
         assert (
-            max(index_layer_ids) < num_layers
-        ), f"index_layer_ids reaches layer {max(index_layer_ids)} but the model has {num_layers} layers"
-        configs[index_config_name].num_layers = num_layers
+            max(index_layer_ids) < global_layers
+        ), f"index_layer_ids reaches layer {max(index_layer_ids)} but the table spans {global_layers} layers"
+        configs[index_config_name].num_layers = global_layers
     table = disagg.KvChunkAddressTable(configs)
 
     for name, cache, head_idx in entries:
