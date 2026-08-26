@@ -1,27 +1,6 @@
----
-argument-hint: <OWNER/REPOSITORY/pull/NUMBER> [--comment]
-allowed-tools:
-  - Agent
-  - Task
-  - Read
-  - Grep
-  - Glob
-  - Skill
-  - Bash(gh api:*)
-  - Bash(gh pr diff:*)
-  - Bash(git diff:*)
-  - Bash(git show:*)
-  - Bash(git log:*)
-  - Bash(git rev-parse:*)
-  - mcp__deepwiki__*
-  - mcp__atlassian__*
-  - mcp__glean_default__*
-description: Code review a pull request
----
+# LLK pull-request review directive
 
-Provide a code review for the given pull request.
-
-Invocation arguments: `$ARGUMENTS`
+Provide a code review for the pull request named in the user prompt.
 
 Parse the pull-request reference and whether the literal `--comment` flag is
 present before doing anything else. Record that boolean once and preserve it

@@ -9,7 +9,8 @@ run-name: "LLK PR Review — PR #${{ inputs.pr_number }} (effort: ${{ inputs.eff
 # with:
 #   * the LLK MCP servers (tt_metal/tt-llk/.mcp.json — DeepWiki, Atlassian, Glean),
 #   * the team's private LLK review knowledge, fetched at runtime and routed to
-#     each reviewer by role, with a compact coordination system prompt.
+#     each reviewer by role, with repository-local review instructions and a
+#     compact coordination system prompt.
 # It posts findings as inline review comments, or an issue-level no-findings
 # summary when no actionable findings survive.
 #
@@ -52,7 +53,7 @@ jobs:
     env:
       PR_NUMBER: ${{ inputs.pr_number }}
     steps:
-      # 1. Checkout the ref containing this workflow and the review command.
+      # 1. Checkout the ref containing this workflow and the review instructions.
       #    This checkout is orchestration-only; PR code is placed in exact
       #    base/head worktrees below.
       - name: Checkout repository
@@ -136,14 +137,17 @@ jobs:
 
           echo "Prepared PR merge-base ${comparison_base_sha:0:12}, base tip ${base_tip_sha:0:12}, and head ${head_sha:0:12}"
 
-      # 4. Validate the runtime knowledge and build a compact coordination prompt.
-      #    Task subagents have isolated contexts, so the repository-local command
-      #    tells each role which source files to read. Keeping the full corpus out
-      #    of the parent prompt avoids paying for irrelevant knowledge repeatedly.
+      # 4. Validate the repository-local review instructions and runtime
+      #    knowledge, then build the complete system prompt.
+      #    Task subagents have isolated contexts, so the repository-local
+      #    instructions tell each role which source files to read. Keeping the
+      #    full corpus out of the parent prompt avoids paying for irrelevant
+      #    knowledge repeatedly.
       - name: Prepare review knowledge
         run: |
           set -euo pipefail
           src=".llk-review-knowledge-src/dashboard/pr_review/knowledge"
+          review_instructions="tt_metal/tt-llk/pr-review/llk-code-review.md"
           out="${GITHUB_WORKSPACE}/.llk-review-system-prompt.md"
           required=(
             pinned-rules.md
@@ -160,7 +164,15 @@ jobs:
             fi
           done
 
+          if [ ! -s "$review_instructions" ]; then
+            echo "::error::Repository-local LLK review instructions are missing or empty"
+            exit 1
+          fi
+
+          cp "$review_instructions" "$out"
+
           {
+            echo
             echo "# LLK review coordination directive"
             echo
             echo "You are the lead orchestrator for a Tenstorrent LLK pull-request review."
@@ -213,10 +225,10 @@ jobs:
             echo "and the exact revision paths in every delegated Task prompt."
             echo "Run git commands directly from the orchestration checkout root. Never use"
             echo "git -C or cd; exact commits are already available in the root object database."
-          } > "$out"
-          echo "Prepared compact coordination prompt ($(wc -w < "$out") words); validated ${#required[@]} knowledge files"
+          } >> "$out"
+          echo "Prepared LLK review system prompt ($(wc -w < "$out") words); validated ${#required[@]} knowledge files"
 
-      # 5. Run the repository-local review command against the PR. It posts via
+      # 5. Run the repository-local LLK review against the PR. It posts via
       #    the authenticated gh CLI instead of the unavailable inline-comment
       #    MCP server.
       - name: Record review start time
@@ -231,7 +243,7 @@ jobs:
           audience: ${{ vars.TS_GHA_PUBLIC_INTERNET_AUDIENCE }}
           tags: tag:tt-github-actions-public-internet-outbound
 
-      - name: Run /llk-code-review
+      - name: Run LLK code review
         id: llk_code_review
         uses: anthropics/claude-code-action@v1
         env:
@@ -244,8 +256,9 @@ jobs:
           anthropic_api_key: ${{ secrets.LLK_PR_REVIEW_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           show_full_output: ${{ inputs.debug_output }}
-          # The command is versioned with this repository under .claude/commands.
-          prompt: "/llk-code-review ${{ github.repository }}/pull/${{ env.PR_NUMBER }} --comment"
+          # The full review contract is appended from the repository-local file
+          # prepared above; this prompt supplies only the invocation arguments.
+          prompt: "Review ${{ github.repository }}/pull/${{ env.PR_NUMBER }} --comment"
           # No --model override: defaults apply, so the command's per-role
           # haiku/sonnet/opus subagents each use their intended model. --effort
           # sets the session reasoning effort (the review command itself takes
