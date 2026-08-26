@@ -130,6 +130,7 @@ enum class EnvVarID {
     TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
+    TT_METAL_DEVICE_PROFILER_SYNC_EVENTS,          // Enable CB/semaphore synchronization-event profiling
     TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
     TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
     TT_METAL_TRACE_PROFILER,                       // Enable trace profiling
@@ -923,6 +924,19 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH=/path/to/reports
         case EnvVarID::TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH:
             this->profiler_noc_events_report_path = std::string(value);
+            break;
+
+        // TT_METAL_DEVICE_PROFILER_SYNC_EVENTS
+        // Enables synchronization-event profiling (CB wait/push, semaphore wait/set markers) for the
+        // critical-path tool. Opt-in: these hooks sit in per-tile hot paths (cb_wait_front, semaphore
+        // spins), so they are compiled in only when asked for. Requires the device profiler to be on
+        // (streaming or DRAM); without it the JIT define is never emitted.
+        // Default: false
+        // Usage: export TT_METAL_DEVICE_PROFILER_SYNC_EVENTS=1
+        case EnvVarID::TT_METAL_DEVICE_PROFILER_SYNC_EVENTS:
+            if (is_env_enabled(value)) {
+                this->profiler_sync_events_enabled = true;
+            }
             break;
 
         // TT_METAL_MEM_PROFILER

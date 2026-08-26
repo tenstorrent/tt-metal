@@ -8,6 +8,7 @@
 #include "core_config.h"
 #include "noc/noc_parameters.h"
 #include "api/debug/dprint.h"
+#include "tools/profiler/synchronization_event_profiler.hpp"
 
 namespace ckernel {
 #ifdef ARCH_QUASAR
@@ -47,6 +48,7 @@ public:
      */
     void up(uint32_t value) {
         auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_);
+        RECORD_SEMAPHORE_SET(local_l1_addr_);
         *sem_addr += value;
     }
 
@@ -58,9 +60,12 @@ public:
      */
     void down(uint32_t value) {
         auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_);
+        RECORD_SEMAPHORE_WAIT_START(local_l1_addr_);
         WAYPOINT("TSDW");
         while ((*sem_addr) < value);
         WAYPOINT("TSDD");
+        RECORD_SEMAPHORE_WAIT_END(local_l1_addr_);
+        RECORD_SEMAPHORE_SET(local_l1_addr_);
         *sem_addr -= value;
     }
 
@@ -73,9 +78,11 @@ public:
      */
     void wait(uint32_t value) {
         auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_);
+        RECORD_SEMAPHORE_WAIT_START(local_l1_addr_);
         WAYPOINT("TSWW");
         while ((*sem_addr) != value);
         WAYPOINT("TSWD");
+        RECORD_SEMAPHORE_WAIT_END(local_l1_addr_);
     }
 
     /**
@@ -85,9 +92,11 @@ public:
      */
     void wait_min(uint32_t value) {
         auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_);
+        RECORD_SEMAPHORE_WAIT_START(local_l1_addr_);
         WAYPOINT("TSWMW");
         while ((*sem_addr) < value);
         WAYPOINT("TSWMD");
+        RECORD_SEMAPHORE_WAIT_END(local_l1_addr_);
     }
 
     /**
@@ -97,6 +106,7 @@ public:
      */
     void set(uint32_t value) {
         auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_);
+        RECORD_SEMAPHORE_SET(local_l1_addr_);
         *sem_addr = value;
     }
 

@@ -7,6 +7,7 @@
 #include "dev_mem_map.h"
 #include "api/dataflow/noc.h"
 #include "api/debug/assert.h"
+#include "tools/profiler/synchronization_event_profiler.hpp"
 
 /**
  * @brief Semaphore synchronization primitive for programmable cores.
@@ -55,6 +56,7 @@ public:
      */
     void up(uint32_t value) {
         auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_);
+        RECORD_SEMAPHORE_SET(local_l1_addr_);
         *sem_addr += value;
     }
 
@@ -80,11 +82,17 @@ public:
      */
     void down(uint32_t value) {
         auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_);
+        // down() is a wait followed by a set, so it emits both: the wait pair
+        // explains a stall, and the set is a real state change another core may be
+        // waiting on.
+        RECORD_SEMAPHORE_WAIT_START(local_l1_addr_);
         WAYPOINT("NSDW");
         do {
             invalidate_l1_cache();
         } while ((*sem_addr) < value);
         WAYPOINT("NSDD");
+        RECORD_SEMAPHORE_WAIT_END(local_l1_addr_);
+        RECORD_SEMAPHORE_SET(local_l1_addr_);
         *sem_addr -= value;
     }
 

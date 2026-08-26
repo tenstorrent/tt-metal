@@ -35,7 +35,10 @@
 
 #include "buffer_types.hpp"
 #include "circular_buffer_config.hpp"
+#include <tt-metalium/cluster.hpp>
 #include "llrt/tt_cluster.hpp"
+#include "llrt/metal_soc_descriptor.hpp"
+#include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <filesystem>
@@ -1328,6 +1331,28 @@ ChipId GetPCIeDeviceID(ChipId device_id) {
 }
 
 ClusterType GetClusterType() { return MetalContext::instance().get_cluster().get_cluster_type(); }
+
+std::pair<uint32_t, uint32_t> TranslateCoreCoord(
+    int device_id, uint32_t x, uint32_t y, const std::string& from_system, const std::string& to_system) {
+    auto parse = [](const std::string& name) {
+        if (name == "LOGICAL") {
+            return CoordSystem::LOGICAL;
+        }
+        if (name == "NOC0") {
+            return CoordSystem::NOC0;
+        }
+        if (name == "NOC1") {
+            return CoordSystem::NOC1;
+        }
+        if (name == "TRANSLATED") {
+            return CoordSystem::TRANSLATED;
+        }
+        TT_THROW("Unknown coordinate system '{}'; expected LOGICAL, NOC0, NOC1 or TRANSLATED", name);
+    };
+    const metal_SocDescriptor& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    const auto translated = soc_desc.translate_coord_to(tt_xy_pair(x, y), parse(from_system), parse(to_system));
+    return {static_cast<uint32_t>(translated.x), static_cast<uint32_t>(translated.y)};
+}
 
 std::string SerializeClusterDescriptor() {
     // Serialize the descriptor the cluster already holds. The cluster makes the

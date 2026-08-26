@@ -320,6 +320,13 @@ void JitBuildEnv::init(
 
         this->defines_ += "-DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=" +
                           std::to_string(config.profiler_dram_bank_size_per_risc_bytes) + " ";
+
+        // Critical-path tool: sync-event markers in cb_wait_front/semaphore paths. A distinct define
+        // (not a PROFILER_OPT bit) so the hook headers can gate without parsing PROFILE_KERNEL's value;
+        // it lands in defines_ and therefore in the JIT cache key like every other profiler option.
+        if (rtoptions.get_profiler_sync_events_enabled()) {
+            this->defines_ += "-DPROFILE_SYNC_EVENTS=1 ";
+        }
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
         // force profiler on if noc events are being profiled

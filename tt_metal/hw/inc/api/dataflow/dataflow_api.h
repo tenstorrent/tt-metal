@@ -25,6 +25,7 @@
 #include "hostdev/dev_msgs.h"
 #include "api/tensor/tensor_accessor.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "tools/profiler/synchronization_event_profiler.hpp"
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
 
@@ -220,6 +221,7 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
         // TODO: change this to fifo_wr_ptr
         get_local_cb_interface(operand).fifo_wr_ptr -= get_local_cb_interface(operand).fifo_size;
     }
+    RECORD_CB_PUSH_BACK(operand);
 }
 
 // clang-format off
@@ -478,9 +480,11 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
     uint16_t pages_received;
 
     WAYPOINT("CWFW");
+    RECORD_CB_WAIT_FRONT_START(operand);
     do {
         pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
     } while (pages_received < num_pages);
+    RECORD_CB_WAIT_FRONT_END(operand);
     WAYPOINT("CWFD");
 }
 
@@ -1532,6 +1536,7 @@ inline void noc_semaphore_set_remote(
         NOC_UNICAST_WRITE_VC,
         /*posted=*/false,
         noc);
+    RECORD_SEMAPHORE_SET_REMOTE(dst_noc_addr);
     ncrisc_noc_fast_write_any_len<noc_mode>(
         noc,
         write_reg_cmd_buf,
@@ -1600,6 +1605,9 @@ inline void noc_semaphore_set_multicast(
         vc,
         /*posted=*/false,
         noc);
+    // Multicast: the address encodes a rectangle, so one record stands for every
+    // waiter inside it.
+    RECORD_SEMAPHORE_SET_REMOTE(dst_noc_addr_multicast);
     ncrisc_noc_fast_write_any_len<noc_mode>(
         noc,
         write_reg_cmd_buf,
@@ -1664,6 +1672,7 @@ inline void noc_semaphore_set_multicast_loopback_src(
         NOC_MULTICAST_WRITE_VC,
         /*posted=*/false,
         noc);
+    RECORD_SEMAPHORE_SET_REMOTE(dst_noc_addr_multicast);
     ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
         noc,
         write_reg_cmd_buf,
@@ -1942,12 +1951,18 @@ void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
 FORCE_INLINE
 void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT, false, -1);
+    // Local L1 offset identifies the semaphore; the waiting core is the recording
+    // core, so its identity is implicit. A remote setter records the full NoC
+    // address instead, which carries the destination coordinates needed to pair
+    // the two sides.
+    RECORD_SEMAPHORE_WAIT_START(reinterpret_cast<uintptr_t>(sem_addr));
 
     WAYPOINT("NSW");
     do {
         invalidate_l1_cache();
     } while ((*sem_addr) != val);
     WAYPOINT("NSD");
+    RECORD_SEMAPHORE_WAIT_END(reinterpret_cast<uintptr_t>(sem_addr));
 }
 
 // clang-format off
@@ -1968,12 +1983,14 @@ void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
 FORCE_INLINE
 void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT, false, -1);
+    RECORD_SEMAPHORE_WAIT_START(reinterpret_cast<uintptr_t>(sem_addr));
 
     WAYPOINT("NSMW");
     do {
         invalidate_l1_cache();
     } while ((*sem_addr) < val);
     WAYPOINT("NSMD");
+    RECORD_SEMAPHORE_WAIT_END(reinterpret_cast<uintptr_t>(sem_addr));
 }
 
 // clang-format off
@@ -1994,6 +2011,7 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
 FORCE_INLINE
 void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     RECORD_NOC_EVENT(NocEventType::SEMAPHORE_SET, false, -1);
+    RECORD_SEMAPHORE_SET(reinterpret_cast<uintptr_t>(sem_addr));
 
     // set semaphore value to val
     (*sem_addr) = val;
@@ -2264,6 +2282,7 @@ template <bool posted = false>
 FORCE_INLINE void noc_semaphore_inc(
     uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC, 0, addr, 0, vc, posted, noc_id);
+    RECORD_SEMAPHORE_SET_REMOTE(addr);
 
     WAYPOINT("NSIW");
     DEBUG_SANITIZE_NOC_ADDR(noc_id, addr, 4);
@@ -2308,6 +2327,7 @@ template <bool posted = false>
 FORCE_INLINE void noc_semaphore_inc_multicast(
     uint64_t addr, uint32_t incr, uint32_t num_dests, uint8_t noc_id = noc_index, uint8_t vc = NOC_MULTICAST_WRITE_VC) {
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC_MULTICAST, 0, addr, 0, vc, posted, noc_id);
+    RECORD_SEMAPHORE_SET_REMOTE(addr);
 
     WAYPOINT("NIMW");
     DEBUG_SANITIZE_NOC_MULTI_ADDR(noc_id, addr, 4);
