@@ -221,6 +221,7 @@ ResolutionReason compatibility_reason(const CompatibilityStatus status) noexcept
         case CompatibilityStatus::EmptyRegistry: return ResolutionReason::EmptyRegistry;
         case CompatibilityStatus::Unavailable: return ResolutionReason::CompatibilityUnavailable;
         case CompatibilityStatus::SchemaMismatch:
+        case CompatibilityStatus::MalformedTable:
         case CompatibilityStatus::DigestMismatch: return ResolutionReason::CompatibilityMismatch;
     }
     return ResolutionReason::CompatibilityUnavailable;
@@ -231,7 +232,7 @@ Resolution resolve_impl(
     const std::optional<RegistryRequest>& request,
     const AttestationStatus attestation_status,
     const Eligibility& eligibility,
-    const compact::TableMetadata& metadata,
+    const compact::TableLock& lock,
     const std::span<const compact::EntryDescriptor> entries,
     const CompatibilityDigests& actual) noexcept {
     if (mode == Mode::Off) {
@@ -257,7 +258,7 @@ Resolution resolve_impl(
     if (!request.has_value()) {
         return {.reason = ResolutionReason::IncompleteRequest};
     }
-    const auto compatibility = validate_compatibility(metadata, entries.size(), actual, request->key.device);
+    const auto compatibility = validate_compatibility(lock, entries, actual, request->key.device);
     if (compatibility != CompatibilityStatus::Compatible) {
         return {.reason = compatibility_reason(compatibility)};
     }
@@ -338,21 +339,27 @@ RequestBuildResult build_registry_request(const RegistryRequestFacts& facts) noe
 }
 
 CompatibilityStatus validate_compatibility(
-    const compact::TableMetadata& metadata,
-    const std::size_t entry_count,
+    const compact::TableLock& lock,
+    const std::span<const compact::EntryDescriptor> entries,
     const CompatibilityDigests& actual,
     const compact::DeviceDescriptor& device) noexcept {
-    if (entry_count == 0) {
-        return CompatibilityStatus::EmptyRegistry;
-    }
-    if (metadata.key_schema_version != compact::kKeySchemaVersion ||
-        metadata.replay_schema_version != compact::kReplaySchemaVersion) {
-        return CompatibilityStatus::SchemaMismatch;
+    switch (compact::validate_table_lock(lock, entries)) {
+        case compact::TableValidationStatus::Valid: break;
+        case compact::TableValidationStatus::Empty: return CompatibilityStatus::EmptyRegistry;
+        case compact::TableValidationStatus::LockSchemaMismatch: return CompatibilityStatus::SchemaMismatch;
+        case compact::TableValidationStatus::EntryCountMismatch:
+        case compact::TableValidationStatus::MissingLockDigest:
+        case compact::TableValidationStatus::EntrySchemaMismatch:
+        case compact::TableValidationStatus::MissingEntryId:
+        case compact::TableValidationStatus::RuntimeCapabilityMismatch:
+        case compact::TableValidationStatus::EntriesNotStrictlySorted:
+            return CompatibilityStatus::MalformedTable;
     }
     if (is_zero(actual.semantic_source_sha256) || is_zero(actual.build_identity_sha256) ||
         is_zero(actual.runtime_capability_sha256)) {
         return CompatibilityStatus::Unavailable;
     }
+    const auto& metadata = lock.metadata;
     if (metadata.semantic_source_sha256 != actual.semantic_source_sha256 ||
         metadata.build_identity_sha256 != actual.build_identity_sha256 ||
         metadata.runtime_capability_sha256 != actual.runtime_capability_sha256 ||
@@ -483,7 +490,7 @@ Resolution resolve(
         request,
         attestation_status,
         eligibility,
-        generated::metadata(),
+        generated::lock(),
         generated::entries(),
         CompatibilityDigests{});
 }
@@ -533,10 +540,10 @@ Resolution resolve_with_table_for_testing(
     const std::optional<RegistryRequest>& request,
     const AttestationStatus attestation_status,
     const Eligibility& eligibility,
-    const compact::TableMetadata& metadata,
+    const compact::TableLock& lock,
     const std::span<const compact::EntryDescriptor> entries,
     const CompatibilityDigests& actual) noexcept {
-    return resolve_impl(mode, request, attestation_status, eligibility, metadata, entries, actual);
+    return resolve_impl(mode, request, attestation_status, eligibility, lock, entries, actual);
 }
 
 Mode current_mode() noexcept {

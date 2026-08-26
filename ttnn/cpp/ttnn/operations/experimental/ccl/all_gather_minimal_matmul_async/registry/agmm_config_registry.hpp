@@ -123,12 +123,13 @@ enum class CompatibilityStatus : std::uint8_t {
     EmptyRegistry,
     Unavailable,
     SchemaMismatch,
+    MalformedTable,
     DigestMismatch,
 };
 
 CompatibilityStatus validate_compatibility(
-    const compact::TableMetadata& metadata,
-    std::size_t entry_count,
+    const compact::TableLock& lock,
+    std::span<const compact::EntryDescriptor> entries,
     const CompatibilityDigests& actual,
     const compact::DeviceDescriptor& device) noexcept;
 
@@ -191,7 +192,7 @@ Resolution resolve_with_table_for_testing(
     const std::optional<RegistryRequest>& request,
     AttestationStatus attestation_status,
     const Eligibility& eligibility,
-    const compact::TableMetadata& metadata,
+    const compact::TableLock& lock,
     std::span<const compact::EntryDescriptor> entries,
     const CompatibilityDigests& actual) noexcept;
 

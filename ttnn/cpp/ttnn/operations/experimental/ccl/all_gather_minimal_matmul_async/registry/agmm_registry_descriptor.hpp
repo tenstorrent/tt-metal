@@ -17,6 +17,7 @@ namespace ttnn::experimental::all_gather_minimal_matmul_registry::compact {
 inline constexpr std::uint16_t kKeySchemaVersion = 1;
 inline constexpr std::uint16_t kReplaySchemaVersion = 1;
 inline constexpr std::uint16_t kCodegenRecipeAbi = 1;
+inline constexpr std::uint16_t kTableLockSchemaVersion = 1;
 inline constexpr std::size_t kMaxTensorRank = 8;
 inline constexpr std::size_t kMaxChunkSizes = 64;
 inline constexpr std::size_t kMaxActivationParameters = 8;
@@ -184,7 +185,90 @@ struct TableMetadata {
     Sha256 semantic_source_sha256{};
     Sha256 build_identity_sha256{};
     Sha256 runtime_capability_sha256{};
+
+    auto operator<=>(const TableMetadata&) const = default;
 };
+
+// This is the complete native hand-off from the offline predictor/exporter to
+// TT-metal.  The lock and entries are generated as C++ constants and compiled
+// into the operation; the runtime never parses a model, JSON, or a sidecar.
+// Provenance digests are deliberately separate so changing evidence, predictor,
+// or exporter cannot silently preserve the same certified table identity.
+struct TableLock {
+    std::uint16_t schema_version{kTableLockSchemaVersion};
+    std::uint16_t codegen_recipe_abi{kCodegenRecipeAbi};
+    std::uint64_t entry_count{};
+    TableMetadata metadata{};
+    Sha256 evidence_manifest_sha256{};
+    Sha256 predictor_sha256{};
+    Sha256 exporter_sha256{};
+
+    auto operator<=>(const TableLock&) const = default;
+};
+
+enum class TableValidationStatus : std::uint8_t {
+    Valid,
+    Empty,
+    LockSchemaMismatch,
+    EntryCountMismatch,
+    MissingLockDigest,
+    EntrySchemaMismatch,
+    MissingEntryId,
+    RuntimeCapabilityMismatch,
+    EntriesNotStrictlySorted,
+};
+
+inline constexpr bool sha256_is_zero(const Sha256& digest) noexcept {
+    for (const auto byte : digest) {
+        if (byte != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// This constexpr structural validator is intentionally usable from a
+// static_assert in generated data.  Cryptographic digests are produced and
+// independently checked by codegen; native code binds their exact values and
+// additionally rejects missing provenance, ABI drift, wrong capability tables,
+// duplicate keys, or a table whose order would invalidate binary search.
+inline constexpr TableValidationStatus validate_table_lock(
+    const TableLock& lock, const std::span<const EntryDescriptor> entries) noexcept {
+    if (lock.schema_version != kTableLockSchemaVersion ||
+        lock.metadata.key_schema_version != kKeySchemaVersion ||
+        lock.metadata.replay_schema_version != kReplaySchemaVersion || lock.codegen_recipe_abi != kCodegenRecipeAbi) {
+        return TableValidationStatus::LockSchemaMismatch;
+    }
+    if (lock.entry_count != entries.size()) {
+        return TableValidationStatus::EntryCountMismatch;
+    }
+    if (entries.empty()) {
+        return TableValidationStatus::Empty;
+    }
+    if (sha256_is_zero(lock.metadata.content_sha256) || sha256_is_zero(lock.metadata.semantic_source_sha256) ||
+        sha256_is_zero(lock.metadata.build_identity_sha256) ||
+        sha256_is_zero(lock.metadata.runtime_capability_sha256) || sha256_is_zero(lock.evidence_manifest_sha256) ||
+        sha256_is_zero(lock.predictor_sha256) || sha256_is_zero(lock.exporter_sha256)) {
+        return TableValidationStatus::MissingLockDigest;
+    }
+    for (std::size_t index = 0; index < entries.size(); ++index) {
+        const auto& entry = entries[index];
+        if (entry.key.schema_version != kKeySchemaVersion || entry.key.codegen_recipe_abi != kCodegenRecipeAbi ||
+            entry.replay.schema_version != kReplaySchemaVersion) {
+            return TableValidationStatus::EntrySchemaMismatch;
+        }
+        if (sha256_is_zero(entry.entry_id)) {
+            return TableValidationStatus::MissingEntryId;
+        }
+        if (entry.key.device.runtime_capability_sha256 != lock.metadata.runtime_capability_sha256) {
+            return TableValidationStatus::RuntimeCapabilityMismatch;
+        }
+        if (index != 0 && !(entries[index - 1].key < entry.key)) {
+            return TableValidationStatus::EntriesNotStrictlySorted;
+        }
+    }
+    return TableValidationStatus::Valid;
+}
 
 inline constexpr const EntryDescriptor* lookup_exact(
     const KeyDescriptor& key, const std::span<const EntryDescriptor> entries) noexcept {
@@ -198,5 +282,8 @@ inline constexpr const EntryDescriptor* lookup_exact(
 static_assert(std::is_trivially_copyable_v<EntryDescriptor>);
 static_assert(std::is_standard_layout_v<EntryDescriptor>);
 static_assert(sizeof(EntryDescriptor) <= 4096);
+static_assert(std::is_trivially_copyable_v<TableLock>);
+static_assert(std::is_standard_layout_v<TableLock>);
+static_assert(sizeof(TableLock) <= 512);
 
 }  // namespace ttnn::experimental::all_gather_minimal_matmul_registry::compact

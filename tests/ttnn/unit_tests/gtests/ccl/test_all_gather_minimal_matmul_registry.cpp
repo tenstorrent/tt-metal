@@ -11,6 +11,7 @@
 
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/registry/agmm_config_registry.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/registry/agmm_registry_data.hpp"
 
 namespace {
 
@@ -105,14 +106,21 @@ compact::EntryDescriptor valid_entry() {
     return entry;
 }
 
-compact::TableMetadata valid_metadata() {
-    return compact::TableMetadata{
-        .key_schema_version = compact::kKeySchemaVersion,
-        .replay_schema_version = compact::kReplaySchemaVersion,
-        .content_sha256 = digest(12),
-        .semantic_source_sha256 = digest(1),
-        .build_identity_sha256 = digest(2),
-        .runtime_capability_sha256 = digest(3)};
+compact::TableLock valid_lock(const std::size_t entry_count = 1) {
+    return compact::TableLock{
+        .schema_version = compact::kTableLockSchemaVersion,
+        .codegen_recipe_abi = compact::kCodegenRecipeAbi,
+        .entry_count = entry_count,
+        .metadata = compact::TableMetadata{
+            .key_schema_version = compact::kKeySchemaVersion,
+            .replay_schema_version = compact::kReplaySchemaVersion,
+            .content_sha256 = digest(12),
+            .semantic_source_sha256 = digest(1),
+            .build_identity_sha256 = digest(2),
+            .runtime_capability_sha256 = digest(3)},
+        .evidence_manifest_sha256 = digest(13),
+        .predictor_sha256 = digest(14),
+        .exporter_sha256 = digest(15)};
 }
 
 registry::CompatibilityDigests valid_compatibility() {
@@ -249,7 +257,7 @@ TEST_F(AgmmRegistryTest, ExactLookupRequiresFullKeyAndCompatibility) {
     const std::array entries{entry};
     const auto request = registry::RegistryRequest{.key = entry.key};
     auto result = registry::resolve_with_table_for_testing(
-        Mode::On, request, registry::AttestationStatus::Success, {}, valid_metadata(), entries, valid_compatibility());
+        Mode::On, request, registry::AttestationStatus::Success, {}, valid_lock(), entries, valid_compatibility());
     ASSERT_EQ(result.reason, registry::ResolutionReason::CertifiedMatch);
     EXPECT_EQ(result.descriptor, &entries.front());
 
@@ -257,7 +265,7 @@ TEST_F(AgmmRegistryTest, ExactLookupRequiresFullKeyAndCompatibility) {
     miss.key.operation.scalar_present = true;
     miss.key.operation.scalar_f32_bits = 0x80000000U;
     result = registry::resolve_with_table_for_testing(
-        Mode::On, miss, registry::AttestationStatus::Success, {}, valid_metadata(), entries, valid_compatibility());
+        Mode::On, miss, registry::AttestationStatus::Success, {}, valid_lock(), entries, valid_compatibility());
     EXPECT_EQ(result.reason, registry::ResolutionReason::ExactMiss);
 
     result = registry::resolve_with_table_for_testing(
@@ -265,10 +273,88 @@ TEST_F(AgmmRegistryTest, ExactLookupRequiresFullKeyAndCompatibility) {
         request,
         registry::AttestationStatus::UnsupportedAttestation,
         {},
-        valid_metadata(),
+        valid_lock(),
         entries,
         valid_compatibility());
     EXPECT_EQ(result.reason, registry::ResolutionReason::UnsupportedAttestation);
+}
+
+TEST_F(AgmmRegistryTest, GeneratedEmptyLockIsCanonicalAndFailClosed) {
+    namespace generated = registry::generated;
+    EXPECT_TRUE(generated::entries().empty());
+    EXPECT_EQ(
+        compact::validate_table_lock(generated::lock(), generated::entries()),
+        compact::TableValidationStatus::Empty);
+    EXPECT_EQ(
+        registry::validate_compatibility(
+            generated::lock(), generated::entries(), valid_compatibility(), valid_key().device),
+        registry::CompatibilityStatus::EmptyRegistry);
+}
+
+TEST_F(AgmmRegistryTest, SyntheticGeneratedLockRequiresTypedProvenanceAndStrictKeyOrder) {
+    auto first = valid_entry();
+    auto second = valid_entry();
+    second.entry_id = digest(6);
+    second.key.workload.logical_n += 32;
+    const std::array sorted_entries{first, second};
+    auto lock = valid_lock(sorted_entries.size());
+    EXPECT_EQ(
+        compact::validate_table_lock(lock, sorted_entries), compact::TableValidationStatus::Valid);
+
+    auto missing_provenance = lock;
+    missing_provenance.predictor_sha256 = {};
+    EXPECT_EQ(
+        compact::validate_table_lock(missing_provenance, sorted_entries),
+        compact::TableValidationStatus::MissingLockDigest);
+
+    auto wrong_count = lock;
+    wrong_count.entry_count -= 1;
+    EXPECT_EQ(
+        compact::validate_table_lock(wrong_count, sorted_entries),
+        compact::TableValidationStatus::EntryCountMismatch);
+
+    auto wrong_abi = lock;
+    wrong_abi.codegen_recipe_abi += 1;
+    EXPECT_EQ(
+        compact::validate_table_lock(wrong_abi, sorted_entries),
+        compact::TableValidationStatus::LockSchemaMismatch);
+
+    auto zero_entry_id = sorted_entries;
+    zero_entry_id.front().entry_id = {};
+    EXPECT_EQ(
+        compact::validate_table_lock(lock, zero_entry_id), compact::TableValidationStatus::MissingEntryId);
+
+    auto wrong_capability = sorted_entries;
+    wrong_capability.back().key.device.runtime_capability_sha256 = digest(16);
+    EXPECT_EQ(
+        compact::validate_table_lock(lock, wrong_capability),
+        compact::TableValidationStatus::RuntimeCapabilityMismatch);
+
+    const std::array reversed_entries{second, first};
+    EXPECT_EQ(
+        compact::validate_table_lock(lock, reversed_entries),
+        compact::TableValidationStatus::EntriesNotStrictlySorted);
+    const std::array duplicate_entries{first, first};
+    EXPECT_EQ(
+        compact::validate_table_lock(lock, duplicate_entries),
+        compact::TableValidationStatus::EntriesNotStrictlySorted);
+}
+
+TEST_F(AgmmRegistryTest, MalformedSyntheticLockCannotSelectARecipe) {
+    const auto entry = valid_entry();
+    const std::array entries{entry};
+    auto lock = valid_lock();
+    lock.evidence_manifest_sha256 = {};
+    const auto result = registry::resolve_with_table_for_testing(
+        Mode::On,
+        registry::RegistryRequest{.key = entry.key},
+        registry::AttestationStatus::Success,
+        {},
+        lock,
+        entries,
+        valid_compatibility());
+    EXPECT_EQ(result.reason, registry::ResolutionReason::CompatibilityMismatch);
+    EXPECT_EQ(result.descriptor, nullptr);
 }
 
 TEST_F(AgmmRegistryTest, PureRequestBuilderBindsEveryResolvedDescriptor) {

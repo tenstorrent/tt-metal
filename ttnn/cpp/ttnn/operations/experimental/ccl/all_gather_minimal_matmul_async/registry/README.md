@@ -6,6 +6,13 @@ separate from the one-chip `matmul`/`linear`/`addmm` registry: it has its own
 configuration switch (`agmm_registry_mode`), compact key and replay ABI,
 compiled table, compatibility contract, circuit breaker, and telemetry.
 
+The offline-to-native boundary is specified in
+[`GENERATED_TABLE_CONTRACT.md`](GENERATED_TABLE_CONTRACT.md). The generated
+lock and exact recipes are typed C++ constants compiled into TT-metal; there is
+no runtime predictor, wrapper, sidecar, or filesystem lookup. A constexpr
+validator rejects ABI drift, missing provenance, capability mismatch, wrong
+entry counts, and non-strict key ordering before a populated header can build.
+
 The production table is empty and the mode defaults to `Off`. `Off` bypasses
 lookup, request construction, attestation, telemetry, and the selected-call
 guard. Empty-table `Shadow` and `On` preserve the legacy configuration and
@@ -65,7 +72,9 @@ The concrete missing contracts are:
   output-topology inference, so the exact pre-launch output topology is not a
   public AGMM contract; and
 - this directory has a semantic dependency manifest but no generated AGMM
-  semantic/build attestation constants wired into its CMake target.
+  semantic/build attestation constants wired into its CMake target. The typed
+  table-lock slots now exist, but their production values and independent
+  runtime comparison inputs remain deliberately empty.
 
 None of those facts can be replaced by process-local IDs, generic C++ hashes,
 streamed debug strings, or the one-chip matmul registry's differently scoped
