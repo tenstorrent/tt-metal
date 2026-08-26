@@ -15,11 +15,14 @@
 // alternating halves of each run -- and one sum would let the leading one's credit release a slot the
 // trailing one is still reading.
 //
-// This is the row-major path: the dispatched buffer already holds rows, so a batch is a copy of the pages
-// the walk asked for into the slot, at the offset their page index implies. Nothing is untilized yet.
+// A TILED dispatched buffer is read a block of tiles at a time and untilized by the compute kernel on this
+// core, a whole tile-row per batch because that is the least an untilize can produce. A ROW_MAJOR one needs
+// no untilize and has no compute kernel, so the rows go straight into the batch and only the ones the walk
+// asked for are read at all.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "combine_fabric2d_untilizer_ct_args.hpp"
 #include "combine_fabric2d_group_walk.hpp"
@@ -75,15 +78,14 @@ volatile tt_l1_ptr uint32_t* freed_by(uint32_t c) {
         kernel_compile_time_args[ct.consumer_base + c * cmbf2d::UNT_PEER_WORDS + 2]);
 }
 
-// Batches this core has staged and batches whose slots it has taken back. Kept apart so the next batch can
-// be built while the consumers still hold the one before it.
+// Batches this core has handed over and batches whose slots it has taken back. Kept apart so the next batch
+// can be built while the consumers still hold the one before it.
 struct Ring {
+    CircularBuffer cb_out{cmbf2d::UNT_CB_OUT};
     uint32_t produced = 0;
     uint32_t popped = 0;
 
-    uint32_t slot_addr() const {
-        return ct.ring_addr + (produced % ct.ring_batches) * cmbf2d::UNT_BATCH_ROWS * ct.token_size_bytes;
-    }
+    bool full() const { return produced - popped >= ct.ring_batches; }
 
     // Wait until every consumer has passed the oldest batch still held, then take its slot back. The minimum
     // over consumers rather than their sum: only the slowest one says the slot is really free.
@@ -95,10 +97,14 @@ struct Ring {
                 invalidate_l1_cache();
             }
         }
+        cb_out.pop_front(cmbf2d::UNT_BATCH_ROWS);
         popped++;
     }
 
+    // Hand the batch over once its rows really exist. The slot is not reclaimed here: that waits until the
+    // ring is full, which is what lets the next batch be built while the consumers work through this one.
     void publish() {
+        cb_out.wait_front((produced - popped + 1) * cmbf2d::UNT_BATCH_ROWS);
         for (uint32_t c = 0; c < ct.num_consumers; c++) {
             noc_semaphore_inc(consumer_noc(c, ct.produced_addr), 1);
         }
@@ -106,25 +112,62 @@ struct Ring {
     }
 };
 
+// The walk, once per local expert, with `body(batch_in_expert, walk)` called for the batches this core owns.
+template <typename Body>
+void walk_my_batches(const cmbf2d::ControlTables& ctl, Body body) {
+    uint32_t batch = 0;
+    for (uint32_t local_expert = 0; local_expert < ct.experts_per_chip; local_expert++) {
+        const cmbf2d::GroupWalk walk = walk_for(ctl, local_expert);
+        for (uint32_t b = 0; b < walk.num_batches(); b++, batch++) {
+            if (batch % ct.num_peers == ct.my_index) {
+                body(b, walk);
+            }
+        }
+    }
+}
+
 void kernel_main() {
     const Dram dram = open_dram();
     const cmbf2d::ControlTables ctl = read_control_tables(dram);
 
+    if (ct.is_tiled()) {
+        // The compute kernel cannot read the control tensors, so it is told how many batches to expect
+        // before the first one arrives. Pushed once and never popped.
+        uint32_t mine = 0;
+        walk_my_batches(ctl, [&](uint32_t, const cmbf2d::GroupWalk&) { mine++; });
+        CircularBuffer cb_batches(cmbf2d::UNT_CB_BATCHES);
+        cb_batches.reserve_back(1);
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_batches.get_write_ptr()) = mine;
+        cb_batches.push_back(1);
+    }
+
     Ring ring;
-    uint32_t batch = 0;  // position in the group's walk, running across experts
-    for (uint32_t local_expert = 0; local_expert < ct.experts_per_chip; local_expert++) {
-        const cmbf2d::GroupWalk walk = walk_for(ctl, local_expert);
-        for (uint32_t b = 0; b < walk.num_batches(); b++, batch++) {
-            if (batch % ct.num_peers != ct.my_index) {
-                continue;
+    walk_my_batches(ctl, [&](uint32_t b, const cmbf2d::GroupWalk& walk) {
+        while (ring.full()) {
+            ring.reclaim_one();
+        }
+        if (ct.is_tiled()) {
+            // The whole tile-row, a block of tiles at a time so the input window stays small. Whole because
+            // that is the least an untilize can do, even when the walk wants only part of it.
+            CircularBuffer cb_in(cmbf2d::UNT_CB_IN);
+            const uint32_t first_tile = walk.tile_row_of(b) * ct.tiles_per_row;
+            for (uint32_t t = 0; t < ct.tiles_per_row; t += ct.block_tiles) {
+                cb_in.reserve_back(ct.block_tiles);
+                const uint32_t dst = cb_in.get_write_ptr();
+                for (uint32_t j = 0; j < ct.block_tiles; j++) {
+                    noc_async_read(dram.in.get_noc_addr(first_tile + t + j), dst + j * ct.tile_bytes, ct.tile_bytes);
+                }
+                noc_async_read_barrier();
+                cb_in.push_back(ct.block_tiles);
             }
-            while (ring.produced - ring.popped >= ct.ring_batches) {
-                ring.reclaim_one();
-            }
+        } else {
+            // Already row-major: the rows go straight into the batch, and only the ones the walk asked for.
+            // Each lands at the offset its page index implies, which is where a reader will look for it.
+            ring.cb_out.reserve_back(cmbf2d::UNT_BATCH_ROWS);
+            const uint32_t dst = ring.cb_out.get_write_ptr();
             uint32_t lo = 0;
             uint32_t hi = 0;
             walk.batch_pages(b, lo, hi);
-            const uint32_t dst = ring.slot_addr();
             for (uint32_t p = lo; p < hi; p++) {
                 noc_async_read(
                     dram.in.get_noc_addr(p),
@@ -132,9 +175,10 @@ void kernel_main() {
                     ct.token_size_bytes);
             }
             noc_async_read_barrier();
-            ring.publish();
+            ring.cb_out.push_back(cmbf2d::UNT_BATCH_ROWS);
         }
-    }
+        ring.publish();
+    });
 
     while (ring.popped < ring.produced) {
         ring.reclaim_one();
