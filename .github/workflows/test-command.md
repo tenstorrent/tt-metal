@@ -188,11 +188,70 @@ post-steps:
     if: always()
     shell: bash
     run: |
-      set -euo pipefail
+      set -Eeuo pipefail
 
       OUT=/tmp/gh-aw/agent_output.json
       RAW=/tmp/gh-aw/safeoutputs.jsonl
       HEAD_REF_FILE=/tmp/gh-aw/agent/pr-head-ref.txt
+
+      # Failing this step does NOT stop a dispatch, so the guard cannot be a bare
+      # `exit 1`. `safe_outputs` is gated on
+      #   !cancelled() && needs.agent.result != 'skipped' && needs.detection.result == 'success'
+      # and `detection` on `always() && needs.agent.result != 'skipped'`, while
+      # `Upload agent artifacts` is `if: always()`. A failed step therefore still
+      # uploads the payload and still dispatches every item in it — with exactly the
+      # unaimed `ref` this guard exists to prevent, and now with a red run to make it
+      # look handled. Deleting the items is the only thing that actually stops them.
+      #
+      # So every abnormal exit routes through `abort`, including unexpected ones: the
+      # ERR trap covers a jq crash, an unreadable payload, or anything else that would
+      # otherwise leave the file untouched on the way out.
+      NOTE=$'\n\n> [!CAUTION]\n> **No pipelines were dispatched.** The ref guard could not confirm which branch\n> this PR points at, so every dispatch in this run was dropped rather than aimed at\n> the repository default branch. Nothing listed above ran. See the failed `agent`\n> job for the reason.'
+
+      aborting=0
+      abort() {
+        # Re-entrancy guard: the ERR trap must not re-fire on a failure inside here.
+        if [ "$aborting" -eq 1 ]; then exit 1; fi
+        aborting=1
+        set +e
+        echo "::error::$1" >&2
+
+        if [ -f "$OUT" ]; then
+          # Drop every dispatch, and tell the reader of the comment that they are gone —
+          # otherwise the comment claims pipelines that were never sent, which is the same
+          # report-disagrees-with-reality failure this whole step is here to close.
+          if jq --arg note "$NOTE" '
+               .items = [ .items[]?
+                        | select(.type != "dispatch_workflow")
+                        | if .type == "add_comment" and ((.body | length) + ($note | length) <= 65000)
+                          then .body += $note
+                          else . end ]
+             ' "$OUT" > "$OUT.tmp" 2>/dev/null; then
+            mv "$OUT.tmp" "$OUT"
+          else
+            # Unparseable payload. Empty it rather than hand it on: a file we cannot read
+            # is a file we cannot promise has no dispatch in it.
+            rm -f "$OUT.tmp"
+            echo '{"items":[]}' > "$OUT"
+          fi
+        fi
+
+        if [ -f "$RAW" ]; then
+          if jq -c 'select(.type != "dispatch_workflow")' "$RAW" > "$RAW.tmp" 2>/dev/null; then
+            mv "$RAW.tmp" "$RAW"
+          else
+            rm -f "$RAW.tmp"
+          fi
+        fi
+
+        {
+          echo "### \`/test\` dispatch refs"
+          echo
+          echo "**No pipelines dispatched.** $1"
+        } >> "$GITHUB_STEP_SUMMARY"
+        exit 1
+      }
+      trap 'abort "The ref guard failed unexpectedly; all dispatches were dropped."' ERR
 
       if [ ! -f "$OUT" ]; then
         echo "No agent output at $OUT; nothing to rewrite."
@@ -205,18 +264,15 @@ post-steps:
         exit 0
       fi
 
-      # Fail closed. A dispatch we cannot aim is worse than no dispatch, because it
-      # reports as a pass.
+      # A dispatch we cannot aim is worse than no dispatch, because it reports as a pass.
       if [ ! -s "$HEAD_REF_FILE" ]; then
-        echo "::error::$DISPATCHES dispatch(es) requested but $HEAD_REF_FILE is missing or empty." >&2
-        exit 1
+        abort "$DISPATCHES dispatch(es) requested but $HEAD_REF_FILE is missing or empty."
       fi
 
       HEAD_REF="$(tr -d '[:space:]' < "$HEAD_REF_FILE")"
       case "$HEAD_REF" in
         ''|main|master|refs/heads/main|refs/heads/master)
-          echo "::error::Refusing to dispatch: PR head ref resolved to '$HEAD_REF'." >&2
-          exit 1
+          abort "Refusing to dispatch: PR head ref resolved to '$HEAD_REF'."
           ;;
       esac
 
@@ -226,12 +282,13 @@ post-steps:
       jq --arg ref "$HEAD_REF" '
         .items = [ .items[]?
                  | if .type == "dispatch_workflow" then . + {ref: $ref} else . end ]
-      ' "$OUT" > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+      ' "$OUT" > "$OUT.tmp"
+      mv "$OUT.tmp" "$OUT"
 
       # Keep the raw NDJSON copy in the artifact consistent with what was acted on, so a
       # later reader of the artifact is not comparing two different stories. Best-effort:
-      # this file is for humans, and a malformed stream must not fail the run once the
-      # authoritative rewrite above has already succeeded.
+      # this file is for humans and is not what gets dispatched, so a malformed stream
+      # must not fail the run once the authoritative rewrite above has succeeded.
       if [ -f "$RAW" ]; then
         if jq -c --arg ref "$HEAD_REF" '
              if .type == "dispatch_workflow" then . + {ref: $ref} else . end
@@ -554,10 +611,10 @@ Copy the branch name from that file verbatim. Do not reconstruct it from the PR 
 comment, or your memory of the diff. Never dispatch `main`, `master`, or a release branch.
 
 A `post-steps` hook now overwrites `ref` on every dispatch item with the contents of that
-file before the `safe_outputs` job acts on them, and hard-fails the run if the file is
-missing or resolves to a default branch. That backstop exists because this rule was
-violated in practice — see the comment above `post-steps:` in the frontmatter. Set `ref`
-correctly anyway: relying on the hook makes your reported inputs disagree with what ran,
+file before the `safe_outputs` job acts on them, and, if that file is missing or resolves
+to a default branch, deletes every dispatch item and fails the run. That backstop exists
+because this rule was violated in practice — see the comment above `post-steps:` in the
+frontmatter. Set `ref` correctly anyway: relying on the hook makes your reported inputs disagree with what ran,
 and the hook is a guard against a mistake, not a substitute for the rule.
 
 ## Reporting
