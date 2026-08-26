@@ -19,25 +19,36 @@ namespace ckernel::sfpu
 // (the [0,0.5) segment is a chord through the origin; laneGI accuracy
 // oracle, exact fma_model_bh pipeline).
 //
-// The compiler's LUT selection surface is 3-entry-only (breakpoints exactly
-// 1.0/2.0; rvtt-lut-tables.cc) and a 3-piece AFFINE tree cannot reach this
-// bar (minimax floor on [0,1) alone is 0.0375 > 0.0234 — laneGI
-// fit_licensed.py), so the licensed arm is an independently fitted
-// magnitude-dispatch tree with POLYNOMIAL leaves at 8.6x tighter accuracy:
-//   [0,1):    degree-3 minimax of g, sup err 2.64e-4
-//   [1,2):    degree-2 minimax,      sup err 1.84e-3
-//   [2,4):    degree-2 minimax,      sup err 2.72e-3
-//   [4,inf):  0.5*a exactly (the asymptote, and the hand kernel's own
-//             [3,inf) segment): sup err m*(1-Phi(m)) at m=4 = 1.27e-4,
-//             decaying to 0 — pointwise-dominant over any offset form in
-//             the bf16-truncation-limited large-|x| regime
-// then out = g + 0.5x.  Proven equal-or-better than hand exhaustively over
-// the bf16 grid (all mul/add fusion orderings) AND over all fp32 stimuli
-// |x| <= 16 under the bf16-RTNE unpack model:
-// laneGI-evidence-20260824/accuracy-oracle/verify_arms.c.
+// LANE GU (2026-08-25; supersedes the laneGI 4-region poly-leaf tree, err
+// 0.0097 but +559% delivery): the licensed arm is re-expressed in EXACTLY
+// the hand kernel's own table geometry — a six-range affine magnitude
+// dispatch tree over the architectural TABLE1 breakpoints (0.5/1/1.5/2/3)
+// whose coefficients all lie on the SFPLUTFP32 LUT16 lattice — the shape
+// the FP16 six-entry LUT selection (-mtt-tensix-optimize-lut-select-fp16,
+// sfpi-gcc agent/fp16-6entry-lut) forms into ONE SFPLUTFP32 mod0 2, the
+// hand kernel's exact instruction.  Multipartite refit (fixed
+// architectural breakpoints; per-segment minimax affine on the LUT16
+// lattice through the exact fma_model_bh pipeline, both fusion
+// orderings): max |err| vs exact gelu over all finite bf16 stimuli
+// 0.017778 raw / 0.018187 bf16-stored — BEATS the hand bar on both
+// metrics (laneGU-evidence-20260825/fits/fit_gu6.out).  The tree<->LUT
+// delivery is BIT-EXACT on BH for every 2^32 input (all-affine slots,
+// exact LUT16 re-encode, six-way bucket agreement certified all-2^32:
+// laneGU-evidence-20260825/admission-proofs/certifier6-run2.log), so the
+// formation needs no finite-math license and the knob leg pairs CRAQ
+// bit-exactly with the plain leg.
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_gelu_appx_licensed_cpp()
 {
+    // The 0.5 of the final "+ 0.5x" is parked in the programmable
+    // constant register — the HAND kernel's own idiom (its init loads
+    // vConstFloatPrgm0 = 0.5).  With it in an LREG the row needs a 9th
+    // live LREG (6 packed table words + x + the half + the LUT result),
+    // so the formed LUT's transactional coefficient hoist refuses on
+    // pressure and the packed words reload per row; as a CReg operand
+    // the MAD reads it directly and the whole loop fits the 8-LREG file
+    // (laneGU measurement: 71223 -> hand-shape loop).
+    sfpi::vConstFloatPrgm0 = 0.5f;
     // NO unroll pragma: measured-negative on this predicated-tree shape
     // (headline-laneGI2-20260824 geluappx-fresh +654.93 unrolled vs
     // headline-laneGI-20260824 +559.07 rolled).
@@ -45,21 +56,30 @@ __attribute__((noinline)) void calculate_gelu_appx_licensed_cpp()
     {
         const sfpi::vFloat x = sfpi::dst_reg[0];
         const sfpi::vFloat a = sfpi::abs(x);
-        sfpi::vFloat g       = a * 0.5f;
-        v_if (a < 1.0f)
+        // [3, inf): the asymptote slope with the fitted lattice intercept.
+        sfpi::vFloat g = a * 0x1p-1f + -0x1.2fcp-15f;
+        v_if (a < 0.5f)
         {
-            g = ((a * -0.101991095f + 0.4528101f) * a + -0.009474259f) * a + 0.00026426624f;
+            g = a * 0x1.58p-3f + -0x1.2fcp-15f;
+        }
+        v_elseif (a < 1.0f)
+        {
+            g = a * 0x1.f68p-2f + -0x1.404p-3f;
+        }
+        v_elseif (a < 1.5f)
+        {
+            g = a * 0x1.3cp-1f + -0x1.1cp-2f;
         }
         v_elseif (a < 2.0f)
         {
-            g = (a * -0.005348735f + 0.63288766f) * a + -0.2880375f;
+            g = a * 0x1.384p-1f + -0x1.0ep-2f;
         }
-        v_elseif (a < 4.0f)
+        v_elseif (a < 3.0f)
         {
-            g = (a * -0.019493172f + 0.63692504f) * a + -0.23865677f;
+            g = a * 0x1.158p-1f + -0x1p-3f;
         }
         v_endif;
-        sfpi::dst_reg[0] = g + x * 0.5f;
+        sfpi::dst_reg[0] = g + x * sfpi::vConstFloatPrgm0;
         sfpi::dst_reg++;
     }
 }

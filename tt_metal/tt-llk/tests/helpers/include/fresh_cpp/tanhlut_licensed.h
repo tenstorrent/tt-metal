@@ -18,18 +18,25 @@ namespace ckernel::sfpu
 // golden domain (all bf16 in [-5, 5]; laneGI accuracy oracle, exact
 // fma_model_bh pipeline).
 //
-// This licensed arm states an INDEPENDENT minimax 3-piece PWL on the same
-// breakpoints (the lut-select-formable shape: affine / affine / constant
-// magnitude-dispatch tree + setsgn, the tanhderivlut-fresh precedent).
-// Fitted max |err| vs exact tanh: 0.041048 (region [0,1) equioscillation) —
-// 3.5x TIGHTER than the hand arm, proven exhaustively over the bf16 grid
-// under the exact BH SFPU arithmetic model for BOTH emissions (formed
-// SFPLUTFP32 mod0=4 and the predicated-tree fallback, every mul/add fusion
-// ordering): laneGI-evidence-20260824/accuracy-oracle/verify_arms.c.
-//
-// Under -mtt-tensix-optimize-lut-select-leaf-ext + -ffinite-math-only (the
-// owner-signed licensed leg, tanhderivlut precedent) the constant tail leaf
-// admits and the tree forms one SFPLUTFP32 (fp32-3entry-sgn-retain).
+// LANE GU (2026-08-25; supersedes the laneGI 3-piece PWL, err 0.041048):
+// the licensed arm upgrades to a SIX-range affine magnitude dispatch tree
+// over the architectural SFPLUTFP32 FP16 six-entry TABLE2 breakpoints
+// (0.5/1/1.5/2/4) with a trailing setsgn, every coefficient on the LUT16
+// lattice — the shape the FP16 six-entry LUT selection
+// (-mtt-tensix-optimize-lut-select-fp16, sfpi-gcc agent/fp16-6entry-lut)
+// forms into ONE SFPLUTFP32 mod0 7 (same 4-word loop as the previously
+// formed 3-entry mod0 4, at 3.6x tighter accuracy).  Multipartite refit
+// (fixed architectural breakpoints; per-segment minimax affine on the
+// LUT16 lattice through the exact fma_model_bh pipeline): max |err| vs
+// exact tanh 0.011509 raw / 0.013277 bf16-stored on all bf16 in [-5, 5]
+// — 12.6x tighter than the hand bar
+// (laneGU-evidence-20260825/fits/fit_gu6.out).  The tree<->LUT delivery
+// is BIT-EXACT on BH for every 2^32 input (all-affine slots, exact LUT16
+// re-encode, six-way bucket agreement certified all-2^32:
+// laneGU-evidence-20260825/admission-proofs/certifier6-run2.log), so —
+// unlike the 3-piece const-tail form — the formation needs NO
+// finite-math license and NO leaf extension, and the knob leg pairs CRAQ
+// bit-exactly with the plain leg.
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_tanh_lut_licensed_cpp()
 {
@@ -37,14 +44,27 @@ __attribute__((noinline)) void calculate_tanh_lut_licensed_cpp()
     {
         const sfpi::vFloat x = sfpi::dst_reg[0];
         const sfpi::vFloat a = sfpi::abs(x);
-        sfpi::vFloat t       = 0.9819684f; // tanh saturation plateau, [2, inf)
-        v_if (a < 1.0f)
+        // [4, inf): tanh saturation with the fitted lattice slope.
+        sfpi::vFloat t = a * 0x1.31p-11f + 0x1.fe8p-1f;
+        v_if (a < 0.5f)
         {
-            t = a * 0.7616004f + 0.041041862f;
+            t = a * 0x1.e44p-1f + 0x1.2fcp-15f;
+        }
+        v_elseif (a < 1.0f)
+        {
+            t = a * 0x1.338p-1f + 0x1.62cp-3f;
+        }
+        v_elseif (a < 1.5f)
+        {
+            t = a * 0x1.28p-2f + 0x1.eb4p-2f;
         }
         v_elseif (a < 2.0f)
         {
-            t = a * 0.20242915f + 0.58077633f;
+            t = a * 0x1.e4cp-4f + 0x1.764p-1f;
+        }
+        v_elseif (a < 4.0f)
+        {
+            t = a * 0x1.244p-6f + 0x1.dfp-1f;
         }
         v_endif;
         sfpi::dst_reg[0] = sfpi::setsgn(t, x);
