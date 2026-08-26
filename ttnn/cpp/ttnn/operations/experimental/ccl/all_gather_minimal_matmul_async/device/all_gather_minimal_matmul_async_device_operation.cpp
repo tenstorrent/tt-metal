@@ -484,6 +484,7 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
             }
         } catch (...) {
             // Unknown trace state is ineligible in both Shadow and On.
+            observed_trace_capture_active = true;
         }
         eligibility.trace_capture_active =
             registry::fail_closed_trace_capture_active(registry_mode, observed_trace_capture_active);

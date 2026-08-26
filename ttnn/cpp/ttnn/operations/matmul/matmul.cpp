@@ -471,6 +471,7 @@ static ttnn::Tensor bound_matmul(
             }
         } catch (...) {
             // An unknown trace state is ineligible in both Shadow and On.
+            observed_trace_capture_active = true;
         }
         const bool trace_capture_active =
             registry::fail_closed_trace_capture_active(registry_mode, observed_trace_capture_active);
@@ -487,7 +488,7 @@ static ttnn::Tensor bound_matmul(
                 optional_output_tensor,
                 trace_capture_active);
             eligibility = inspection.eligibility;
-            registry_request = std::move(inspection.request);
+            registry_request = inspection.request;
             if (registry_request.has_value()) {
                 registry::initialize_registry_compatibility_from_attestation(inspection.device_attestation);
             }
@@ -496,6 +497,7 @@ static ttnn::Tensor bound_matmul(
             // legacy validators do. Preserve legacy exception timing if they
             // cannot form an exact request. Recipe materialization is handled
             // separately by the fail-closed dispatch gate.
+            registry_request.reset();
         }
         auto registry_dispatch =
             registry::resolve_for_dispatch(registry_mode, registry_request, eligibility, parameters);

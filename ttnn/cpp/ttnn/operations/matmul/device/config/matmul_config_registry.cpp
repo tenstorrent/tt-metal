@@ -781,7 +781,7 @@ ResolutionReason validate_v1_request_envelope(
     if (request.schema_version != 1) {
         return ResolutionReason::IncompleteRequest;
     }
-    const auto activation_end =
+    const auto* const activation_end =
         request.activation_param_f32_bits.begin() +
         std::min<std::size_t>(request.activation_param_count, request.activation_param_f32_bits.size());
     const bool nonzero_activation_padding = std::any_of(

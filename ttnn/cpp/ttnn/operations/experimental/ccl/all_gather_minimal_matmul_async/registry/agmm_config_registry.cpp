@@ -537,7 +537,7 @@ DispatchResult resolve_for_dispatch(
             }
         }
     }
-    return DispatchResult{.resolution = resolution, .action = action, .recipe = std::move(recipe)};
+    return DispatchResult{.resolution = resolution, .action = action, .recipe = recipe};
 }
 
 Resolution resolve_with_table_for_testing(

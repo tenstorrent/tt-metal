@@ -42,6 +42,26 @@ compact::Sha256 repeated_digest(const std::uint8_t value) {
     return digest;
 }
 
+compact::Domain compact_domain(const OperationDomain domain) {
+    switch (domain) {
+        case OperationDomain::DenseMatmul: return compact::Domain::DenseMatmul;
+        case OperationDomain::Linear: return compact::Domain::DenseLinear;
+        case OperationDomain::Addmm: return compact::Domain::DenseAddmm;
+        case OperationDomain::IneligibleSharedCaller: break;
+    }
+    throw std::invalid_argument("operation domain has no compact registry representation");
+}
+
+OperationDomain next_public_domain(const OperationDomain domain) {
+    switch (domain) {
+        case OperationDomain::DenseMatmul: return OperationDomain::Linear;
+        case OperationDomain::Linear: return OperationDomain::Addmm;
+        case OperationDomain::Addmm: return OperationDomain::DenseMatmul;
+        case OperationDomain::IneligibleSharedCaller: break;
+    }
+    throw std::invalid_argument("operation domain is not a public registry domain");
+}
+
 static_assert(std::is_trivially_copyable_v<compact::KeyDescriptor>);
 static_assert(std::is_trivially_copyable_v<compact::ReplayDescriptor>);
 static_assert(std::is_trivially_copyable_v<compact::EntryDescriptor>);
@@ -477,9 +497,7 @@ compact::EntryDescriptor compact_entry(const OperationDomain domain = OperationD
         .transpose_a = false,
         .transpose_b = false,
         .untilize_out = false,
-        .domain = domain == OperationDomain::DenseMatmul ? compact::Domain::DenseMatmul
-                  : domain == OperationDomain::Linear    ? compact::Domain::DenseLinear
-                                                         : compact::Domain::DenseAddmm,
+        .domain = compact_domain(domain),
         .alpha_f32_bits = request.call.alpha_f32_bits.value_or(0),
         .beta_f32_bits = request.call.beta_f32_bits.value_or(0)};
     entry.replay = compact::ReplayDescriptor{
@@ -889,13 +907,13 @@ TEST(MatmulConfigRegistry, CompactTableLookupAndNativeMaterializationAreExact) {
     const auto shadow = resolve_with_compact_table_for_testing(
         Mode::Shadow, request, eligibility, compact_metadata(), entries, compatible_digests());
     EXPECT_EQ(shadow.reason, ResolutionReason::CertifiedMatch);
-    EXPECT_EQ(shadow.descriptor, &entries[0]);
+    EXPECT_EQ(shadow.descriptor, entries.data());
     EXPECT_EQ(execution_action(Mode::Shadow, shadow), ExecutionAction::ObserveOnly);
 
     const auto on = resolve_with_compact_table_for_testing(
         Mode::On, request, eligibility, compact_metadata(), entries, compatible_digests());
     ASSERT_EQ(on.reason, ResolutionReason::CertifiedMatch);
-    ASSERT_EQ(on.descriptor, &entries[0]);
+    ASSERT_EQ(on.descriptor, entries.data());
     const auto native = materialize_matmul_registry_recipe(*on.descriptor);
     ASSERT_EQ(native.status, MaterializationStatus::Success);
     ASSERT_TRUE(native.recipe.has_value());
@@ -1091,7 +1109,7 @@ TEST(MatmulConfigRegistry, CompactLookupIsConcurrentAndReadOnly) {
                 const auto result = resolve_with_compact_table_for_testing(
                     Mode::Shadow, request, eligibility, compact_metadata(), entries, compatible_digests());
                 correct[index] = correct[index] && result.reason == ResolutionReason::CertifiedMatch &&
-                                 result.descriptor == &entries[0];
+                                 result.descriptor == entries.data();
             }
         });
     }
@@ -1440,9 +1458,7 @@ TEST(MatmulConfigRegistry, CompactLookupAndMaterializationKeepAllPublicDomainsDi
         ASSERT_NE(hit.descriptor, nullptr);
         EXPECT_EQ(materialize_matmul_registry_recipe(*hit.descriptor).status, MaterializationStatus::Success);
 
-        const auto other_domain = domain == OperationDomain::DenseMatmul ? OperationDomain::Linear
-                                  : domain == OperationDomain::Linear    ? OperationDomain::Addmm
-                                                                         : OperationDomain::DenseMatmul;
+        const auto other_domain = next_public_domain(domain);
         const auto other_request = exact_request(other_domain);
         EXPECT_EQ(
             resolve_with_compact_table_for_testing(
