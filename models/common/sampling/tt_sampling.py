@@ -155,13 +155,11 @@ class TTSampling(LightweightModule):
     ):
         super().__init__()
         self.mesh_device = mesh_device
-        # Use the fast unstable top-k network; _adjust_values_for_tiebreak guarantees the greedy
-        # pick host-side. stable=True (lowest-index tie-break, WH/BH only) is only cheap where the
-        # multi-core factory can pack [bf16 value | u16 index] fused keys: the single-core chunks
-        # of the multi-step path pay ~2.5-3x on the SFPU sort stage, and the BH topk_large_indices
-        # route has no stable mode at all, so the host-side tie-break must stay regardless --
-        # keeping every call unstable buys the guarantee at zero device cost. The attribute and
-        # its plumbing to the ttnn.topk calls are kept so re-enabling is a one-line change.
+        # Use the fast unstable top-k; _adjust_values_for_tiebreak guarantees the correctness
+        # host-side. stable=True (lowest-index tie-break) is only cheap where the
+        # multi-core factory can pack [bf16 value | u16 index] fused keys: otherwise a multi-step
+        # path costs ~2.5-3x more, and additionally the BH topk_large_indices route currently
+        # has no stable mode at all.
         self._topk_stable = False
         # Multi-step reduction is supported only on single device
         self.multi_step_reduction = list(mesh_device.shape) == [1, 1]
