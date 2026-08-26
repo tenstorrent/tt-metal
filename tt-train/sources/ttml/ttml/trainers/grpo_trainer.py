@@ -612,6 +612,28 @@ def dispatch_reward(
     return reward_func(**call_kwargs)
 
 
+def _derive_reward_names(funcs: List[Callable]) -> List[str]:
+    """Derive a unique, human-readable name per reward function.
+
+    Uses ``fn.__name__`` when available; falls back to ``reward_{i}`` for
+    lambdas and other unnamed callables. Duplicate names are disambiguated
+    with a ``_2`` / ``_3`` suffix so per-component metric keys stay unique.
+    """
+    names: List[str] = []
+    seen: dict[str, int] = {}
+    for i, fn in enumerate(funcs):
+        raw = getattr(fn, "__name__", None) or f"reward_{i}"
+        if raw == "<lambda>":
+            raw = f"reward_{i}"
+        if raw in seen:
+            seen[raw] += 1
+            names.append(f"{raw}_{seen[raw]}")
+        else:
+            seen[raw] = 1
+            names.append(raw)
+    return names
+
+
 def compute_advantages_host(rewards_np: np.ndarray, group_size: int) -> np.ndarray:
     """Compute group-relative advantages on the host, kept in host order.
 
@@ -770,15 +792,20 @@ class GRPOTrainer:
         completer: GRPOCompleter,
         dataset: Any,
         config: GRPOConfig,
-        reward_func: Callable[..., List[float]],
-        optimizer_dict: dict,
+        reward_func: Optional[Callable[..., List[float]]] = None,
+        optimizer_dict: Optional[dict] = None,
         callbacks: Optional[List[Any]] = None,
         model_source: Optional[str] = None,
+        reward_funcs: Optional[List[Callable[..., List[float]]]] = None,
     ) -> None:
+        if optimizer_dict is None:
+            raise ValueError("GRPOTrainer: 'optimizer_dict' is required.")
+
+        self._init_rewards(reward_func, reward_funcs)
+
         self.completer = completer
         self.dataset = dataset
         self.config = config
-        self.reward_func = reward_func
         self.optimizer_dict = optimizer_dict
         self.callbacks: List[Any] = list(callbacks or [])
         self.model_source = model_source
@@ -787,8 +814,11 @@ class GRPOTrainer:
         # can add/overwrite entries here (e.g. an eval callback writing
         # ``trainer.metrics["eval_similarity"] = ...``) and later callbacks
         # (notably the built-in ``GRPOMonitor``) read the merged view.
-        # Initialised empty; the trainer rebuilds it at the top of each step.
+        # Pre-seeded with NaN reward-component entries so ``GRPOMonitor``
+        # freezes the CSV header with those columns; rebuilt on every step.
         self.metrics: dict = {}
+        if len(self.reward_funcs) > 1:
+            self.metrics = {f"{name}_mean": float("nan") for name in self._reward_func_names}
         self._callback_times: dict = {}
 
         # Auto-append the framework's default GRPOMonitor unless the config
@@ -798,6 +828,31 @@ class GRPOTrainer:
         if not self.config.disable_default_monitor:
             if not any(isinstance(cb, GRPOMonitor) for cb in self.callbacks):
                 self.callbacks.append(GRPOMonitor(self.config))
+
+    def _init_rewards(
+        self,
+        reward_func: Optional[Callable[..., List[float]]],
+        reward_funcs: Optional[List[Callable[..., List[float]]]],
+    ) -> None:
+        """Validate reward inputs (exactly one of ``reward_func`` /
+        ``reward_funcs`` must be provided) and normalize onto a list.
+
+        When ``reward_funcs`` is given, per-completion rewards from each
+        function are summed element-wise at train time; per-component means
+        are logged separately under ``{fn.__name__}_mean`` keys.
+        """
+        if (reward_func is None) == (reward_funcs is None):
+            raise ValueError(
+                "GRPOTrainer: pass exactly one of 'reward_func' (single callable) "
+                "or 'reward_funcs' (non-empty list of callables)."
+            )
+        if reward_funcs is not None and not reward_funcs:
+            raise ValueError("GRPOTrainer: 'reward_funcs' must be a non-empty list.")
+
+        self.reward_funcs = list(reward_funcs) if reward_funcs is not None else [reward_func]
+        self.reward_func = reward_func
+        self._reward_func_names = _derive_reward_names(self.reward_funcs)
+        self._reward_component_means: dict[str, float] = {}
 
     def _time_callback(self, cb: Any, method_name: str, *args: Any, **kwargs: Any) -> str:
         """Fire ``cb.<method_name>(*args, **kwargs)`` and accumulate its wall-clock
@@ -816,6 +871,34 @@ class GRPOTrainer:
         if not isinstance(cb, GRPOMonitor):
             self._callback_times[key] = self._callback_times.get(key, 0.0) + (time.perf_counter() - cb_t0)
         return key
+
+    def _compute_rewards_and_means(
+        self,
+        completions_strs: List[str],
+        prompts_strs: List[str],
+        dataset_columns_dict: dict,
+    ) -> Tuple[np.ndarray, dict[str, float]]:
+        """Dispatch each reward function, sum element-wise, compute per-component means.
+
+        Returns:
+            rewards_np: Summed rewards, shape ``[B]``.
+            component_means: Per-component ``{name}_mean`` values. Empty when
+                only one reward function is configured.
+        """
+        per_func_rewards = []
+        for fn in self.reward_funcs:
+            values = dispatch_reward(fn, completions_strs, prompts_strs, dataset_columns_dict)
+            per_func_rewards.append(np.array(values, dtype=np.float32))
+
+        component_means: dict[str, float] = {}
+        if len(self.reward_funcs) > 1:
+            component_means = {
+                f"{name}_mean": float(arr.mean()) if arr.size else 0.0
+                for name, arr in zip(self._reward_func_names, per_func_rewards)
+            }
+
+        rewards_np = np.sum(per_func_rewards, axis=0).astype(np.float32)
+        return rewards_np, component_means
 
     def _compute_grpo_loss(
         self,
@@ -1029,8 +1112,10 @@ class GRPOTrainer:
 
             completions_strs = [tokenizer.decode(c, skip_special_tokens=True) for c in completions_batch]
             prompts_strs = [tokenizer.decode(p) for p in prompts_batch]
-            rewards = dispatch_reward(self.reward_func, completions_strs, prompts_strs, dataset_columns_dict)
-            rewards_np = np.array(rewards, dtype=np.float32)
+            rewards_np, self._reward_component_means = self._compute_rewards_and_means(
+                completions_strs, prompts_strs, dataset_columns_dict
+            )
+            rewards = rewards_np.tolist()
 
             advantages_np = compute_advantages_host(rewards_np, grpo_cfg.num_generations)
             completion_lens = [len(c) for c in completions_batch]
@@ -1152,6 +1237,7 @@ class GRPOTrainer:
                     "lr": base_lr * warmup_factor,
                     "generation_time_s": generation_time_s_for_step,
                     **self._callback_times,
+                    **self._reward_component_means,
                 }
                 if grpo_cfg.log_completions and grpo_cfg.num_completions_to_print > 0:
                     k = grpo_cfg.num_completions_to_print

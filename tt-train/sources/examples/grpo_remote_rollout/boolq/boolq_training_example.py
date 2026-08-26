@@ -46,14 +46,14 @@ REPO_ROOT = Path(__file__).resolve().parents[5]
 ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
 
 
-def boolq_reward(completions, answer, **kwargs):
-    rewards = []
-    for text, ground_truth in zip(completions, answer):
-        clean = text.strip().lower()
-        accuracy = 2.0 if clean.startswith(ground_truth.lower()) else -1.0
-        brevity = -0.1 * (len(text) / 20) ** 2
-        rewards.append(accuracy + brevity)
-    return rewards
+def accuracy_reward(completions, answer, **kwargs):
+    """+2 if the completion begins with the correct Yes/No token, -1 otherwise."""
+    return [2.0 if text.strip().lower().startswith(gt.lower()) else -1.0 for text, gt in zip(completions, answer)]
+
+
+def brevity_reward(completions, **kwargs):
+    """Quadratic length penalty in characters, discouraging runaway completions."""
+    return [-0.1 * (len(text) / 20) ** 2 for text in completions]
 
 
 def get_output_dir() -> str:
@@ -167,7 +167,7 @@ def _ttml_main() -> None:
             completer=completer,
             dataset=dataset,
             config=grpo_config,
-            reward_func=boolq_reward,
+            reward_funcs=[accuracy_reward, brevity_reward],
             optimizer_dict=optimizer_dict,
             callbacks=[
                 WeightSyncCallback(completer, every=weight_sync_every),

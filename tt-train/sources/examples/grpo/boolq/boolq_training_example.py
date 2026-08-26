@@ -34,40 +34,14 @@ SYSTEM_PROMPT = (
 )
 
 
-def boolq_reward(completions, answer, **kwargs):
-    rewards = []
-    correct_flags = []
-    brevities = []
-    char_lens = []
-    for text, ground_truth in zip(completions, answer):
-        clean = text.strip().lower()
-        correct = clean.startswith(ground_truth.lower())
-        accuracy = 2.0 if correct else -1.0
-        brevity = -0.1 * (len(text) / 20) ** 2
-        rewards.append(accuracy + brevity)
-        correct_flags.append(1.0 if correct else 0.0)
-        brevities.append(brevity)
-        char_lens.append(len(text))
+def accuracy_reward(completions, answer, **kwargs):
+    """+2 if the completion begins with the correct Yes/No token, -1 otherwise."""
+    return [2.0 if text.strip().lower().startswith(gt.lower()) else -1.0 for text, gt in zip(completions, answer)]
 
-    # Decompose what GRPO is actually optimizing: task correctness (frac_correct
-    # -- THE metric that says the model is learning the task) vs verbosity
-    # (mean_brevity / mean_chars).
-    n = max(len(rewards), 1)
-    frac_correct = sum(correct_flags) / n
-    logging.info(
-        "[reward] frac_correct=%.3f mean_brevity=%.2f mean_chars=%.1f mean_reward=%.2f",
-        frac_correct,
-        sum(brevities) / n,
-        sum(char_lens) / n,
-        sum(rewards) / n,
-    )
-    # Log first generation for the FIRST prompt.
-    if completions:
-        logging.info("[reward] first-prompt gt=%r", answer[0])
-        preview = completions[0].strip().replace("\n", " ")[:300]
-        logging.info("[reward]   gen[%d] = %r", 0, preview)
 
-    return rewards
+def brevity_reward(completions, **kwargs):
+    """Quadratic length penalty in characters, discouraging runaway completions."""
+    return [-0.1 * (len(text) / 20) ** 2 for text in completions]
 
 
 def make_format_boolq(tokenizer, is_qwen3):
@@ -203,7 +177,7 @@ if __name__ == "__main__":
         completer=completer,
         dataset=dataset,
         config=grpo_config,
-        reward_func=boolq_reward,
+        reward_funcs=[accuracy_reward, brevity_reward],
         optimizer_dict=optimizer_dict,
         model_source=model_id,
     )
