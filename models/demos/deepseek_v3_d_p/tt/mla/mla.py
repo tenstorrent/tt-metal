@@ -1752,7 +1752,7 @@ class ttMLA:
             block_cyclic_sp_axis=self.sp_axis if block_cyclic_chunk_local is not None else None,
             block_cyclic_chunk_local=block_cyclic_chunk_local,
             # KV dedup: _gather_kvpe_prefix returns an sp*tp-striped buffer, so decode chunk_local/tp.
-            block_cyclic_tp_sharded=self.tp_shard_kv and block_cyclic_chunk_local is not None,
+            block_cyclic_cache_tp_sharded=self.tp_shard_kv and block_cyclic_chunk_local is not None,
             cache_batch_idx=cache_batch_idx,
         )
         ttnn.deallocate(q_rm)
@@ -1870,7 +1870,7 @@ class ttMLA:
 
         Each device holds only 1/tp of its SP row's slab, so the slab must be rebuilt TP-inner BEFORE the
         SP-outer gather; that order is what yields the linear chip-major buffer sparse_sdpa decodes with
-        sp*tp stripes (block_cyclic_tp_sharded=True), for any slab count. high_bw_all_gather cannot do it:
+        sp*tp stripes (block_cyclic_cache_tp_sharded=True), for any slab count. high_bw_all_gather cannot do it:
         it rides one cluster axis and writes the single model-owned worst-case scratch, which has no room
         for the TP-stage intermediate -- hence the plain, self-allocating all_gather_async this path was
         validated on. Both stages allocate, so the result is ALWAYS transient and the caller releases it
