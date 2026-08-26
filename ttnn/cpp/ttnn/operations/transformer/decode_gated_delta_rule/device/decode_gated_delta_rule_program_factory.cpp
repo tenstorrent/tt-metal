@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
 // SPDX-License-Identifier: Apache-2.0
 //
 // Program factory for the fused T=1 decode gated delta rule op (Device 2.0

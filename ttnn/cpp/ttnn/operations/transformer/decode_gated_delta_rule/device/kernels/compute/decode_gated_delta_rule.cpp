@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
 // SPDX-License-Identifier: Apache-2.0
 //
 // Compute kernel: the whole T=1 gated delta rule recurrent step for one head,
