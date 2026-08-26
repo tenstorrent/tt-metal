@@ -1339,7 +1339,7 @@
 
 - name: TT-DiT Wan2.2-I2V-A14B unit tests
   cmd: |
-    export TT_METAL_WATCHER=120
+    export TT_METAL_WATCHER=30
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
     pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py -k "is_fsdp1"
@@ -1352,7 +1352,7 @@
     #   timeout: 120
     #   tier: 1
     wh_galaxy:
-      timeout: 80
+      timeout: 60
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
