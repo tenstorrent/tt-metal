@@ -463,15 +463,25 @@ comment, or your memory of the diff. Never dispatch `main`, `master`, or a relea
 
 Post exactly one comment. Keep it short enough to read at a glance:
 
-- **What you dispatched** — one row per pipeline: a status badge (below), **the exact
-  inputs you supplied**, and a one-line reason.
+- **What you dispatched** — a table with exactly these three columns, one row per
+  dispatched pipeline:
 
-  State the inputs verbatim as `key: value`, comma-separated, in a code span — not a prose
-  summary like "Blackhole only". A reader has no other way to find out what a dispatched
-  run was scoped to: `workflow_dispatch` inputs are not shown on the run page, so if this
-  row does not say it, the information is gone. Where you deliberately left a suite off,
-  that `false` is the most useful thing in the row — it is the record of a decision, and
-  the reviewer's chance to catch you having narrowed too far.
+  | Pipeline | Inputs | Reason |
+  |---|---|---|
+  | the **badge**, built from the template below — *never* the bare pipeline name | `key: value, …`, or `defaults` | one line |
+
+  **Column 1 is a badge image.** The badge already renders the pipeline's name, so a plain
+  name in that column is strictly worse than a badge: it throws away the live status and
+  the link, which are the entire reason the column exists. If you are about to write
+  `` `sanity-tests` `` there, stop — you have dropped the badge; build it from the template
+  under *Status badges* instead.
+
+  **Column 2 is the exact inputs you supplied**, verbatim as `key: value`, comma-separated,
+  in a code span — not a prose summary like "Blackhole only". A reader has no other way to
+  find out what a dispatched run was scoped to: `workflow_dispatch` inputs are not shown on
+  the run page, so if this cell does not say it, the information is gone. Where you
+  deliberately left a suite off, that `false` is the most useful thing in the row — it is
+  the record of a decision, and the reviewer's chance to catch you having narrowed too far.
 
   If you passed nothing, write `defaults` — and be aware that for the pipelines with suite
   toggles above, `defaults` means *everything*, which is rarely what you intended.
@@ -484,8 +494,9 @@ Post exactly one comment. Keep it short enough to read at a glance:
 
 ### Status badges
 
-Emit one badge per dispatched pipeline, linked to that pipeline's runs filtered to this
-branch. Substituting the workflow's **filename** and the branch from `pr-head-ref.txt`:
+The badge **goes in column 1 of the table above** — it is not a separate section, and not a
+caption. Build one per dispatched pipeline, linked to that pipeline's runs filtered to this
+branch, substituting the workflow's **filename** and the branch from `pr-head-ref.txt`:
 
 ```
 [![](${{ github.server_url }}/${{ github.repository }}/actions/workflows/<file>.yaml/badge.svg?branch=<branch>)](${{ github.server_url }}/${{ github.repository }}/actions/workflows/<file>.yaml?query=branch:<branch>)
@@ -510,6 +521,11 @@ For the same reason a badge may read **"no status"** for the first minute or so,
 run is created — and if that pipeline ran on this branch previously, it will briefly show
 that older result instead. Add one line under the table saying badges go live shortly after
 posting, so nobody reads a cold badge as a failure to launch.
+
+That caveat line is a caption for the badges. **Only include it if the table actually
+contains badges** — printing "badges go live shortly" above a table of plain pipeline names
+tells the reader to wait for something that is never going to appear, and is how a dropped
+badge column disguises itself as a slow one.
 
 Close by noting that these are optional pipelines: they do not gate the PR, and a failure
 here means the change needs another look, not that the PR is blocked from merging.
