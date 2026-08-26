@@ -1,7 +1,9 @@
 # Using the streaming profiler with your own callback
 
 The streaming profiler drains device zones to the host and hands decoded records to any
-callback you register.
+callback you register. (For the on-wire zone packet family and the measurements behind it, see
+[STREAMING_PROFILER_ZONES.md](STREAMING_PROFILER_ZONES.md) — none of it changes the consumer
+contract described here.)
 
 ## Enable (Blackhole)
 
