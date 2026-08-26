@@ -226,6 +226,24 @@ def _assert_outputs_accurate(
         assert_accurate(expected_output, ttnn.to_torch(actual_tt), name=f"{context} {name}", pcc_threshold=0.999)
 
 
+def test_prepare_chunk_recurrence_production_shape_accuracy(device: ttnn.Device) -> None:
+    case_id = "sp1-tp8-h12-n160-k128-v128"
+    num_heads = 12
+    num_chunks = 160
+    key_dim = 128
+    value_dim = 128
+    output_bf16_mask = 0x26
+    host_inputs = _host_inputs(num_heads, num_chunks, key_dim, value_dim, seed=52797)
+    expected = _oracle(host_inputs, num_heads, output_bf16_mask)
+    inputs = _device_inputs(host_inputs, device)
+
+    first = _run(inputs, num_heads, output_bf16_mask=output_bf16_mask)
+    second = _run(inputs, num_heads, output_bf16_mask=output_bf16_mask)
+    _assert_outputs_accurate(expected, first, context=case_id)
+    for name, first_output, second_output in zip(OUTPUT_NAMES, first, second, strict=True):
+        assert_bit_identical(ttnn.to_torch(first_output), ttnn.to_torch(second_output), name=f"{case_id} {name} repeat")
+
+
 def test_prepare_chunk_recurrence_is_device_deterministic(device: ttnn.Device) -> None:
     case = _PRODUCTION_CASE
     host_inputs = _production_host_inputs(seed=1441)
