@@ -118,7 +118,7 @@ class TtCombineModule(LightweightModule):
         Args:
             dispatched_buffer: Expert-processed token embeddings produced by TtRoutedExpert.
                 Shape per device: (1, 1, max_dispatch_buffer_token_size, emb_dim).
-                BFLOAT16 ROW_MAJOR.
+                BFLOAT16, ROW_MAJOR or TILE.
             dispatched_metadata: Per-token routing metadata produced by TtDispatchModule.forward().
                 Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=3).
                 INT32 ROW_MAJOR. Fields per token: [linearized_mesh_coord, token_idx, topk_idx].

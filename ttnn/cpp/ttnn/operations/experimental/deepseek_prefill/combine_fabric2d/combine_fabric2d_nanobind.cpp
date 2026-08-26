@@ -21,8 +21,8 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
 
         Called exactly like `ttnn.experimental.deepseek_prefill.combine`, plus `expert_offsets`.
 
-            dispatched_buffer     the tokens, one per page. A chip's page range for one expert holds
-                                  that expert's tokens grouped by the chip they ORIGINATED on.
+            dispatched_buffer     the tokens, ROW_MAJOR or TILE. A chip's token range for one expert
+                                  holds that expert's tokens grouped by the chip they ORIGINATED on.
             dispatched_metadata   3 int32 per token: (linearized_coord, token_idx, topk_idx). The
                                   token's destination slot is page token_idx * num_experts_per_tok +
                                   topk_idx of the origin chip's output.
@@ -35,8 +35,8 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
         Returns the combined output, (1, 1, seq_len_per_chip, num_experts_per_tok, emb_dim) BFLOAT16
         ROW_MAJOR per device.
 
-        BFLOAT16 ROW_MAJOR input only, and `init_zeros` must be false. There is no fp8 output path: fp8
-        comes out of the packer during untilize and this op has no untilize stage.
+        BFLOAT16 input only, and `init_zeros` must be false. There is no fp8 output path: fp8 comes out of
+        the packer, and the untilize here runs on cores that do not write the output.
         )doc",
         &combine_fabric2d,
         nb::arg("dispatched_buffer"),

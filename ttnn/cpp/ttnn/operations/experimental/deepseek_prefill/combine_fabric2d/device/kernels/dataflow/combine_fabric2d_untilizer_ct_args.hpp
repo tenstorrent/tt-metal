@@ -23,7 +23,7 @@ namespace cmbf2d {
 
 // Scalars packed before the variable-length blocks, i.e. the index the destinations start at. Asserted
 // against the field list below, so it cannot drift out of step with it.
-constexpr uint32_t UNTILIZER_SCALAR_CT_ARGS = 19;
+constexpr uint32_t UNTILIZER_SCALAR_CT_ARGS = 21;
 
 struct UntilizerCtArgs {
     uint32_t token_size_bytes;
@@ -43,10 +43,14 @@ struct UntilizerCtArgs {
     uint32_t my_index;
     uint32_t num_peers;
     uint32_t num_consumers;
-    uint32_t ring_addr;
     uint32_t ring_batches;
     uint32_t control_addr;
     uint32_t produced_addr;
+    // Tile geometry. Zero tiles per row means the dispatched buffer is already row-major and there is
+    // nothing to untilize: the batch is then a copy of the pages the walk asked for.
+    uint32_t tiles_per_row;
+    uint32_t tile_bytes;
+    uint32_t block_tiles;
 
 #ifndef KERNEL_BUILD
     UntilizerCtArgs(
@@ -71,10 +75,12 @@ struct UntilizerCtArgs {
         my_index(plan.my_index),
         num_peers(plan.num_peers),
         num_consumers(static_cast<uint32_t>(plan.consumers.size())),
-        ring_addr(plan.ring_addr),
         ring_batches(UNT_RING_BATCHES),
         control_addr(plan.control_addr),
-        produced_addr(plan.produced_addr) {
+        produced_addr(plan.produced_addr),
+        tiles_per_row(op::dispatched_is_tiled(tensor_args) ? op::tiles_per_token_row(tensor_args) : 0),
+        tile_bytes(op::tile_size_bytes(tensor_args)),
+        block_tiles(op::untilize_block_tiles(tensor_args)) {
         // The own destinations in emission order, which is the order the group walks their runs. Taken from
         // the same work list a reader's schedule is built from, so neither side can reorder alone.
         for (const auto& w : work) {
@@ -107,10 +113,12 @@ struct UntilizerCtArgs {
             my_index,
             num_peers,
             num_consumers,
-            ring_addr,
             ring_batches,
             control_addr,
-            produced_addr};
+            produced_addr,
+            tiles_per_row,
+            tile_bytes,
+            block_tiles};
         word_arr.insert(word_arr.end(), blocks_.begin(), blocks_.end());
         return word_arr;
     }
@@ -131,10 +139,14 @@ struct UntilizerCtArgs {
         my_index(get_compile_time_arg_val(12)),
         num_peers(get_compile_time_arg_val(13)),
         num_consumers(get_compile_time_arg_val(14)),
-        ring_addr(get_compile_time_arg_val(15)),
-        ring_batches(get_compile_time_arg_val(16)),
-        control_addr(get_compile_time_arg_val(17)),
-        produced_addr(get_compile_time_arg_val(18)) {}
+        ring_batches(get_compile_time_arg_val(15)),
+        control_addr(get_compile_time_arg_val(16)),
+        produced_addr(get_compile_time_arg_val(17)),
+        tiles_per_row(get_compile_time_arg_val(18)),
+        tile_bytes(get_compile_time_arg_val(19)),
+        block_tiles(get_compile_time_arg_val(20)) {}
+
+    constexpr bool is_tiled() const { return tiles_per_row != 0; }
 
     static constexpr uint32_t destination_base = UNTILIZER_SCALAR_CT_ARGS;
     static constexpr uint32_t consumer_base = destination_base + get_compile_time_arg_val(10);  // num_destinations

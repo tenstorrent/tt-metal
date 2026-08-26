@@ -14,13 +14,17 @@ namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
 namespace {
 
-void validate_dram_row_major(const ttnn::Tensor& t, const char* tensor_name) {
+void validate_dram_interleaved(const ttnn::Tensor& t, const char* tensor_name) {
     TT_FATAL(t.storage_type() == ttnn::StorageType::DEVICE, "combine_fabric2d: {} must be on device", tensor_name);
     TT_FATAL(
         t.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM &&
             t.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         "combine_fabric2d: {} must be an interleaved DRAM tensor",
         tensor_name);
+}
+
+void validate_dram_row_major(const ttnn::Tensor& t, const char* tensor_name) {
+    validate_dram_interleaved(t, tensor_name);
     TT_FATAL(
         t.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "combine_fabric2d: {} must be ROW_MAJOR so one row is exactly one page",
@@ -97,9 +101,21 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     // ---- Token data. Page = one token, so the last dim is the embedding and the rest is the flat slot
     // index. BFLOAT16 only: the fp8 and TILE paths both need the untilize stage this op does not have.
     const auto& buf = tensor_args.dispatched_buffer;
-    validate_dram_row_major(buf, "dispatched_buffer");
-    // A token is one page — the op does not take a token size, it reads it off the tensor the caller staged.
-    const uint32_t token_page = static_cast<uint32_t>(buf.buffer()->aligned_page_size());
+    validate_dram_interleaved(buf, "dispatched_buffer");
+    TT_FATAL(
+        buf.layout() == tt::tt_metal::Layout::ROW_MAJOR || buf.layout() == tt::tt_metal::Layout::TILE,
+        "combine_fabric2d: dispatched_buffer must be ROW_MAJOR or TILE, got {}",
+        buf.layout());
+    // The op does not take a token size, it reads it off the tensor the caller staged. A ROW_MAJOR buffer
+    // pages by exactly one token; a TILE one is untilized into tokens on the way through.
+    const uint32_t token_page = token_size_bytes(tensor_args);
+    TT_FATAL(
+        buf.layout() == tt::tt_metal::Layout::TILE ||
+            token_page == static_cast<uint32_t>(buf.buffer()->aligned_page_size()),
+        "combine_fabric2d: ROW_MAJOR dispatched_buffer pages by {} B but a token is {} B; one row must be "
+        "exactly one page",
+        buf.buffer()->aligned_page_size(),
+        token_page);
     // A token is the payload of a NoC transfer, which needs 16-byte alignment.
     TT_FATAL(
         token_page % 16 == 0,
@@ -122,8 +138,8 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
     TT_FATAL(
         buf.dtype() == tt::tt_metal::DataType::BFLOAT16,
-        "combine_fabric2d: dispatched_buffer must be BFLOAT16, got {}. The BFLOAT8_B/TILE path needs an "
-        "untilize stage this op does not have.",
+        "combine_fabric2d: dispatched_buffer must be BFLOAT16, got {}. BFLOAT8_B needs a dequantise the "
+        "untilizer cores do not do.",
         buf.dtype());
     const auto buf_shape = buf.logical_shape();
     TT_FATAL(buf_shape.rank() >= 2, "combine_fabric2d: dispatched_buffer must be rank 2 or more");

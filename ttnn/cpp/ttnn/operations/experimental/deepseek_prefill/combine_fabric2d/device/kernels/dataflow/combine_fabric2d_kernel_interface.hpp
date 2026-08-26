@@ -31,8 +31,41 @@ uint32_t ring_extent(const CombineFabric2dParams& args) {
     return args.device->shape()[static_cast<int32_t>(args.axis)];
 }
 
+// One token's row of the embedding. Read off the tensor rather than taken as a parameter — and off its
+// SHAPE, not its page: a ROW_MAJOR dispatched buffer pages by exactly one token, a TILE one does not.
 uint32_t token_size_bytes(const CombineFabric2dInputs& tensor_args) {
-    return static_cast<uint32_t>(tensor_args.dispatched_buffer.buffer()->aligned_page_size());
+    return static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]) *
+           tensor_args.dispatched_buffer.element_size();
+}
+
+bool dispatched_is_tiled(const CombineFabric2dInputs& tensor_args) {
+    return tensor_args.dispatched_buffer.layout() == tt::tt_metal::Layout::TILE;
+}
+
+// Tiles across one token, which is also the tiles in the tile-row a batch untilizes.
+uint32_t tiles_per_token_row(const CombineFabric2dInputs& tensor_args) {
+    return static_cast<uint32_t>(tensor_args.dispatched_buffer.logical_shape()[-1]) /
+           tensor_args.dispatched_buffer.tensor_spec().tile().get_width();
+}
+
+uint32_t tile_size_bytes(const CombineFabric2dInputs& tensor_args) {
+    return static_cast<uint32_t>(tensor_args.dispatched_buffer.tensor_spec().tile().get_tile_hw()) *
+           tensor_args.dispatched_buffer.element_size();
+}
+
+// Tiles the untilize takes per pack call, and so the width of the input window. Small, because a whole
+// tile-row is 458 kB at the production shape and would not fit L1 on top of the output ring; a divisor of
+// the row, so the blocks tile it exactly. This is the knob that spans the two ways of buffering the input:
+// one tile at a time at the low end, the whole row at the high end.
+constexpr uint32_t UNTILIZE_MAX_BLOCK_TILES = 8;
+
+uint32_t untilize_block_tiles(const CombineFabric2dInputs& tensor_args) {
+    for (uint32_t block = UNTILIZE_MAX_BLOCK_TILES; block > 1; block--) {
+        if (tiles_per_token_row(tensor_args) % block == 0) {
+            return block;
+        }
+    }
+    return 1;
 }
 
 uint32_t num_routed_experts(const CombineFabric2dInputs& tensor_args) {
@@ -57,11 +90,10 @@ struct L1Layout {
     // [region_offsets: num_routed_experts], all uint32. Unlike everything above it, nothing on another chip
     // addresses this, so it can sit at the end — but it is still computed identically everywhere.
     uint32_t control;
-    // The untilizers' batch ring and their own copy of the control tables. Untilizer cores are disjoint from
-    // the cores everything above sits on, so these could have shared those addresses; they are placed past
-    // them instead because one layout is easier to hold than two.
-    uint32_t unt_ring;
-    uint32_t unt_control;
+    // An untilizer core's layout, which starts over at the allocator base: it shares no memory with the
+    // cores above, and the base is where the framework puts its first circular buffer.
+    uint32_t unt_ring;     // the batch ring, which IS cb_out
+    uint32_t unt_control;  // its own copy of the control tables, past every circular buffer
 };
 
 struct DramBuffers {
@@ -103,7 +135,6 @@ struct UntilizerPlan {
     uint32_t my_index = 0;   // position in the group
     uint32_t num_peers = 0;  // cores in the group
     uint32_t walks_down = 0;
-    uint32_t ring_addr = 0;
     uint32_t control_addr = 0;
     uint32_t produced_addr = 0;  // the counter this core owns on each of its consumers
     std::vector<HandshakePeer> consumers;
@@ -135,6 +166,13 @@ constexpr uint32_t UNT_BATCH_ROWS = 32;
 // Batches an untilizer keeps in flight, so the next one can be built while its consumers work through the
 // one before it.
 constexpr uint32_t UNT_RING_BATCHES = 2;
+
+// Circular buffer indices on an untilizer core. cb_out is declared FIRST, because the framework lays a
+// program's circular buffers out from the L1 allocator base in declaration order -- which is what makes
+// cb_out and L1Layout::unt_ring the same memory, and so what lets a reader name a row by core and offset.
+constexpr uint32_t UNT_CB_OUT = 0;
+constexpr uint32_t UNT_CB_IN = 1;
+constexpr uint32_t UNT_CB_BATCHES = 2;
 // Words per entry in a handshake block: [noc_x, noc_y, counter_addr].
 constexpr uint32_t UNT_PEER_WORDS = 3;
 
