@@ -88,8 +88,8 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     const auto& device = q.device();
     const auto arch = device.arch();
 
-    const uint32_t BH = attrs.num_heads;
-    const uint32_t NC = attrs.num_chunks;
+    const uint32_t num_heads = attrs.num_heads;
+    const uint32_t num_chunks = attrs.num_chunks;
     constexpr uint32_t chunk_size = TILE_HEIGHT;
     constexpr uint32_t Ct = 1;
     const uint32_t Kt = attrs.key_dim / TILE_WIDTH;
@@ -101,7 +101,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     const uint32_t kc = Kt * Ct;
     const uint32_t scratch = std::max({cc, ck, cv, kv, kc});
     const auto distribution = kda_factory_detail::distribute_prep(
-        device.compute_with_storage_grid_size(), BH * NC, std::numeric_limits<uint32_t>::max());
+        device.compute_with_storage_grid_size(), num_heads * num_chunks, std::numeric_limits<uint32_t>::max());
     const auto& cores = distribution.core_set;
 
     const m2::KernelSpecName READER{"reader"};
@@ -234,7 +234,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::TensorBinding{BETA_TENSOR, "beta"},
             },
         .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}},
-        .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count", "NC", "HV", "Hk"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks", "num_heads"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
 
@@ -264,7 +264,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::TensorBinding{T_INV_OUTPUT, "t_inv_output"},
             },
         .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}},
-        .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count"}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
     };
 
@@ -365,7 +365,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                   return bits;
               }()},
              {"EPS_BITS", 0x358637BDU}},
-        .runtime_arg_schema = {.runtime_arg_names = {"work_count"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"work_item_count"}},
         .hw_config = std::move(compute_hw),
     };
 
@@ -374,19 +374,20 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     m2::KernelRunArgs compute_run{.kernel = COMPUTE};
     for (uint32_t index = 0; index < distribution.cores.size(); ++index) {
         const auto& core = distribution.cores[index];
-        const uint32_t work_start = distribution.wi_start[index];
-        const uint32_t work_count = distribution.wi_count[index];
+        const uint32_t work_item_start = distribution.wi_start[index];
+        const uint32_t work_item_count = distribution.wi_count[index];
         m2::AddRuntimeArgsForNode(
             reader_run.runtime_arg_values,
             core,
-            {{"wi_start", work_start},
-             {"wi_count", work_count},
-             {"NC", NC},
-             {"HV", attrs.num_heads},
-             {"Hk", attrs.num_heads}});
+            {{"work_item_start", work_item_start},
+             {"work_item_count", work_item_count},
+             {"num_chunks", num_chunks},
+             {"num_heads", attrs.num_heads}});
         m2::AddRuntimeArgsForNode(
-            writer_run.runtime_arg_values, core, {{"wi_start", work_start}, {"wi_count", work_count}});
-        m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"work_count", work_count}});
+            writer_run.runtime_arg_values,
+            core,
+            {{"work_item_start", work_item_start}, {"work_item_count", work_item_count}});
+        m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"work_item_count", work_item_count}});
     }
 
     m2::ProgramSpec spec{

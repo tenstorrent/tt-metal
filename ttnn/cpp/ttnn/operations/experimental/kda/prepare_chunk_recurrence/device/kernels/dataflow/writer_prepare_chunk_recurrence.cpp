@@ -10,7 +10,7 @@
 #include "experimental/kernel_args.h"
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
-TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
+TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count) {
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
     constexpr uint32_t cv = Ct * Vt;
@@ -45,14 +45,14 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
         noc.async_write_barrier();
         buffer.pop_front(tiles);
     };
-    for (uint32_t index = 0; index < wi_count; ++index) {
-        const uint32_t hc = wi_start + index;
-        drain(v_beta, v_beta_accessor, cv, hc * cv);
-        drain(t_inv, t_inv_accessor, cc, hc * cc);
-        drain(kd, kd_accessor, ck, hc * ck);
-        drain(intra, intra_accessor, cc, hc * cc);
-        drain(q_decay, q_decay_accessor, ck, hc * ck);
-        drain(k_decay_transposed, k_decay_transposed_accessor, kc, hc * kc);
-        drain(final_decay, final_decay_accessor, Kt, hc * Kt);
+    for (uint32_t index = 0; index < work_item_count; ++index) {
+        const uint32_t work_item = work_item_start + index;
+        drain(v_beta, v_beta_accessor, cv, work_item * cv);
+        drain(t_inv, t_inv_accessor, cc, work_item * cc);
+        drain(kd, kd_accessor, ck, work_item * ck);
+        drain(intra, intra_accessor, cc, work_item * cc);
+        drain(q_decay, q_decay_accessor, ck, work_item * ck);
+        drain(k_decay_transposed, k_decay_transposed_accessor, kc, work_item * kc);
+        drain(final_decay, final_decay_accessor, Kt, work_item * Kt);
     }
 }
