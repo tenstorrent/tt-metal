@@ -3,73 +3,61 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Quasar pool DEBUG harness — runs exactly ONE trace per invocation, fully controlled by env vars.
+Quasar pool DEBUG harness — runs exactly ONE trace per invocation, controlled by the CONFIG
+block below. Edit the variables, rerun, repeat.
 
 Purpose: a lightweight, repeatable correctness check for ttnn.experimental.quasar.max_pool2d /
 avg_pool2d while developing the multi-Tensix (num_threads > 1) pool implementation. Unlike the
 sweep suites, this runs a single hand-picked shape with a hand-picked input pattern so a failure
-is immediately attributable, and dumps the first mismatching output sticks instead of just a PCC.
+is immediately attributable, and dumps the worst mismatching output sticks instead of just a PCC.
 
 Run it via the sibling run_qpool_sim.sh (sets up the craq-sim env), or directly on any backend
 (emulator / WH part) with plain pytest and no TT_METAL_SIMULATOR.
-
-ENV VARS (all optional):
-    QPOOL_OP       max | avg                                   (default max)
-    QPOOL_SHAPE    "H,W,C"   input spatial dims + channels     (default "16,16,64")
-    QPOOL_BATCH    batch size                                  (default 1)
-    QPOOL_KERNEL   "kh,kw"                                     (default "3,3")
-    QPOOL_STRIDE   "sh,sw"                                     (default "2,2")
-    QPOOL_PAD      "ph,pw"                                     (default "1,1")
-    QPOOL_PATTERN  random | ones | zeros | const:<v> | sticks | channels   (default random)
-                   sticks   = every stick (spatial position) is UNIFORM across channels with
-                              value = its global stick index (monotonically increasing) — a
-                              window's max is exactly its highest-index stick, so wrong-stick
-                              selection / off-by-one indexing shows up as an exact wrong integer.
-                   channels = value = channel index, constant across space (row-invariant
-                              oracle: any spatial mixing bug leaves the output unchanged only
-                              if channel routing is intact).
-    QPOOL_MOD      wrap deterministic pattern values at this modulus (0 = off, default 0).
-                   bf16 represents integers exactly only up to 256; set QPOOL_MOD=256 for
-                   bit-exact expectations on big inputs.
-    QPOOL_SEED     RNG seed for pattern=random                 (default 0)
-    QPOOL_CORES    force the height-shard core count (must divide the height-tile count);
-                   default = largest core count that fits the grid and divides evenly.
-                   QPOOL_CORES=1 pins everything to a single cluster.
-    QPOOL_PCC      PCC threshold (used when golden has variance) (default 0.99)
-    QPOOL_RTOL / QPOOL_ATOL   allclose tolerances (default 0.01/0.01 for max, 0.02/0.02 for avg)
-    QPOOL_DUMP     how many worst mismatching sticks to print on failure (default 8)
 
 NOTES:
   * N*H*W must be a multiple of 32 (height sharding needs tile-aligned stick counts) and C must
     be a multiple of 32 (shard width == physical tile width).
   * avg + nonzero padding: golden uses torch's default count_include_pad=True, which may not
-    match the op's semantics — prefer QPOOL_PAD=0,0 for avg (a warning is printed otherwise).
+    match the op's semantics — prefer PADDING = (0, 0) for avg (a warning is printed otherwise).
   * The leak invariant (out.max() <= in.max()) is checked on every run — it is the hard detector
     for stale-L1 / partial-face leaks regardless of pattern.
-
-EXAMPLES:
-    # resnet stem trace, monotonic sticks, single cluster:
-    QPOOL_SHAPE=112,112,64 QPOOL_PATTERN=sticks QPOOL_CORES=1 ./run_qpool_sim.sh
-    # all-ones control, 2x2 window no padding:
-    QPOOL_PATTERN=ones QPOOL_KERNEL=2,2 QPOOL_PAD=0,0 ./run_qpool_sim.sh
+  * Known craq-sim limitation (2026-08-25): shards >= 256 sticks stall or corrupt the second
+    channel tile IN THE SIM ONLY (both pass exactly on WH silicon). Iterate in sim on <= 128-stick
+    shards; check bigger shapes on silicon.
 """
-
-import os
 
 import pytest
 import torch
 
 import ttnn
 
+# =============================== CONFIG — edit me ===============================
+OP = "max"  # "max" | "avg"
+BATCH = 1
+IN_H, IN_W, CHANNELS = 16, 16, 64  # input spatial dims + channels
+KERNEL = (3, 3)
+STRIDE = (2, 2)
+PADDING = (1, 1)
 
-def _env(name, default):
-    return os.environ.get(name, default)
+# Input pattern: "random" | "ones" | "zeros" | "const:<v>" | "sticks" | "channels"
+#   sticks   = every stick (spatial position) is UNIFORM across channels with value = its global
+#              stick index (monotonically increasing) — a window's max is exactly its highest-index
+#              stick, so wrong-stick selection / off-by-one indexing shows as an exact wrong integer.
+#   channels = value = channel index, constant across space (row-invariant oracle: any spatial
+#              mixing bug leaves the output unchanged only if channel routing is intact).
+PATTERN = "random"
+SEED = 0  # RNG seed for PATTERN = "random"
+MOD = 0  # wrap deterministic pattern values at this modulus (0 = off). bf16 represents
+#          integers exactly only up to 256; set MOD = 256 for bit-exact big inputs.
 
+CORES = 0  # height-shard core count; 0 = largest count that fits the grid and divides the
+#            height tiles evenly; 1 pins everything to a single cluster.
 
-def _env_pair(name, default):
-    v = [int(t) for t in _env(name, default).split(",")]
-    assert len(v) == 2, f"{name} must be 'a,b'"
-    return v
+PCC_THRESHOLD = 0.99  # applied when the golden has variance (undefined for constant patterns)
+RTOL = None  # allclose tolerances; None = per-op default (0.01 for max, 0.02 for avg)
+ATOL = None
+DUMP = 8  # how many worst mismatching sticks to print on failure
+# =================================================================================
 
 
 def _build_input(pattern, batch, in_h, in_w, channels, seed, mod):
@@ -94,7 +82,7 @@ def _build_input(pattern, batch, in_h, in_w, channels, seed, mod):
         if mod:
             c = c % mod
         return c.expand(shape).contiguous()
-    raise ValueError(f"unknown QPOOL_PATTERN={pattern!r}")
+    raise ValueError(f"unknown PATTERN={pattern!r}")
 
 
 def _dump_mismatches(got, golden, out_h, out_w, channels, n_dump):
@@ -123,19 +111,14 @@ def _dump_mismatches(got, golden, out_h, out_w, channels, n_dump):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_qpool_debug(mesh_device):
     device = mesh_device
-    is_max = _env("QPOOL_OP", "max") == "max"
-    in_h, in_w, channels = [int(t) for t in _env("QPOOL_SHAPE", "16,16,64").split(",")]
-    batch = int(_env("QPOOL_BATCH", "1"))
-    kernel = _env_pair("QPOOL_KERNEL", "3,3")
-    stride = _env_pair("QPOOL_STRIDE", "2,2")
-    padding = _env_pair("QPOOL_PAD", "1,1")
-    pattern = _env("QPOOL_PATTERN", "random")
-    seed = int(_env("QPOOL_SEED", "0"))
-    mod = int(_env("QPOOL_MOD", "0"))
-    pcc_thresh = float(_env("QPOOL_PCC", "0.99"))
-    rtol = float(_env("QPOOL_RTOL", "0.01" if is_max else "0.02"))
-    atol = float(_env("QPOOL_ATOL", "0.01" if is_max else "0.02"))
-    n_dump = int(_env("QPOOL_DUMP", "8"))
+    is_max = OP == "max"
+    in_h, in_w, channels = IN_H, IN_W, CHANNELS
+    batch = BATCH
+    kernel = list(KERNEL)
+    stride = list(STRIDE)
+    padding = list(PADDING)
+    rtol = RTOL if RTOL is not None else (0.01 if is_max else 0.02)
+    atol = ATOL if ATOL is not None else (0.01 if is_max else 0.02)
 
     out_h = (in_h - kernel[0] + 2 * padding[0]) // stride[0] + 1
     out_w = (in_w - kernel[1] + 2 * padding[1]) // stride[1] + 1
@@ -143,26 +126,25 @@ def test_qpool_debug(mesh_device):
     assert tensor_height % 32 == 0, f"N*H*W={tensor_height} must be a multiple of 32 (height sharding)"
     assert channels % 32 == 0, f"C={channels} must be a multiple of 32 (shard width = tile width)"
     if not is_max and (padding[0] or padding[1]):
-        print("QPOOL WARNING: avg with padding — torch golden uses count_include_pad=True; prefer QPOOL_PAD=0,0")
+        print("QPOOL WARNING: avg with padding — torch golden uses count_include_pad=True; prefer PADDING=(0,0)")
 
     # Input: build float pattern, quantize to bf16 FIRST, then compute the golden from the
     # quantized values so bf16 rounding can never masquerade as a device bug.
-    x_nhwc = _build_input(pattern, batch, in_h, in_w, channels, seed, mod).to(torch.bfloat16)
+    x_nhwc = _build_input(PATTERN, batch, in_h, in_w, channels, SEED, MOD).to(torch.bfloat16)
     input_max = x_nhwc.float().max().item()
     x_nchw_f = x_nhwc.permute(0, 3, 1, 2).float()
     pool_fn = torch.nn.functional.max_pool2d if is_max else torch.nn.functional.avg_pool2d
     golden_nchw = pool_fn(x_nchw_f, kernel_size=kernel, stride=stride, padding=padding)
     golden = golden_nchw.permute(0, 2, 3, 1).reshape(batch * out_h * out_w, channels).contiguous()
 
-    # Height sharding: forced core count via QPOOL_CORES, else grid-adaptive max.
+    # Height sharding: forced core count via CORES, else grid-adaptive max.
     grid = device.compute_with_storage_grid_size()
     max_cores = grid.x * grid.y
     height_tiles = tensor_height // 32
-    forced = int(_env("QPOOL_CORES", "0"))
-    if forced:
-        assert forced <= max_cores, f"QPOOL_CORES={forced} > grid {grid.x}x{grid.y}"
-        assert height_tiles % forced == 0, f"QPOOL_CORES={forced} must divide height tiles ({height_tiles})"
-        num_cores = forced
+    if CORES:
+        assert CORES <= max_cores, f"CORES={CORES} > grid {grid.x}x{grid.y}"
+        assert height_tiles % CORES == 0, f"CORES={CORES} must divide height tiles ({height_tiles})"
+        num_cores = CORES
     else:
         num_cores = max(c for c in range(1, max_cores + 1) if height_tiles % c == 0)
     shard_height = (height_tiles // num_cores) * 32
@@ -176,9 +158,9 @@ def test_qpool_debug(mesh_device):
     )
 
     print(
-        f"\nQPOOL: op={'max' if is_max else 'avg'} in={batch}x{in_h}x{in_w}x{channels} "
-        f"k={kernel} s={stride} p={padding} out={out_h}x{out_w} pattern={pattern} "
-        f"(seed={seed}, mod={mod}) cores={num_cores} shard={shard_height}x{channels}"
+        f"\nQPOOL: op={OP} in={batch}x{in_h}x{in_w}x{channels} "
+        f"k={kernel} s={stride} p={padding} out={out_h}x{out_w} pattern={PATTERN} "
+        f"(seed={SEED}, mod={MOD}) cores={num_cores} shard={shard_height}x{channels}"
     )
 
     x = ttnn.from_torch(x_nhwc.reshape(1, 1, tensor_height, channels), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
@@ -218,7 +200,7 @@ def test_qpool_debug(mesh_device):
     # (1) HARD leak invariant: a correct max/avg pool can never exceed the input max.
     got_max = got.max().item()
     assert got_max <= input_max + 1e-2, (
-        f"stale-L1 leak: out.max={got_max:.4f} > in.max={input_max:.4f} " f"(pattern={pattern}, cores={num_cores})"
+        f"stale-L1 leak: out.max={got_max:.4f} > in.max={input_max:.4f} " f"(pattern={PATTERN}, cores={num_cores})"
     )
 
     # (2) Value check: allclose always; PCC additionally when the golden has variance
@@ -230,9 +212,9 @@ def test_qpool_debug(mesh_device):
         pcc = torch.corrcoef(torch.stack([golden.flatten(), got.flatten()]))[0, 1].item()
     print(f"QPOOL: max_abs_diff={max_diff:.6f} allclose={close}" + (f" pcc={pcc:.6f}" if pcc is not None else ""))
 
-    ok = close and (pcc is None or pcc >= pcc_thresh)
+    ok = close and (pcc is None or pcc >= PCC_THRESHOLD)
     if not ok:
-        _dump_mismatches(got, golden, out_h, out_w, channels, n_dump)
+        _dump_mismatches(got, golden, out_h, out_w, channels, DUMP)
     assert ok, f"mismatch: max_abs_diff={max_diff:.6f} (rtol={rtol}, atol={atol})" + (
-        f", pcc={pcc:.6f} < {pcc_thresh}" if pcc is not None else ""
+        f", pcc={pcc:.6f} < {PCC_THRESHOLD}" if pcc is not None else ""
     )
