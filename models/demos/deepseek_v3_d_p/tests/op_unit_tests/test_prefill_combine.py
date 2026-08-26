@@ -617,7 +617,11 @@ def test_ttnn_combine(
     )
 
 
-_CMB_VERSION_FABRIC2D = 2
+# Which combine the sweep exercises: 1 is the production `combine`, 2 is `combine_fabric2d`. Read
+# from the environment so that a production baseline is a different command, not a different build.
+def sweep_cmb_version():
+    return int(os.environ.get("CMB_VERSION", "2"))
+
 
 # The router shapes combine_fabric2d has to survive. A balanced router is the common case; one expert
 # holding every token of the dispatch group is the case a balanced router cannot produce, and it is
@@ -636,37 +640,34 @@ _CMB_SWEEP_LAYOUTS = (
 )
 
 
+_CMB_SWEEP_MODEL = "dsv3"
+_CMB_SWEEP_MESH = (8, 4)
+
+
 def _cmb_sweep_dimensions():
-    """The single configuration the sweep runs on: dsv3 across the full 8x4 torus-xy mesh, on
-    combine_fabric2d. Traffic shape, layout and scenario are deliberately NOT here — the sweep walks
-    all of them inside one test so they share one open mesh."""
-    wanted_mesh = "torus-xy-8x4"
-    params = []
-    for model_name, model_config_class, _is_extended_model, test_meshes in COMBINE_MODELS:
-        if model_name != "dsv3":
-            continue
-        for target_mesh, fabric_cfg in test_meshes.target_meshes.items():
-            if _mesh_id(target_mesh, fabric_cfg) != wanted_mesh:
-                continue
-            model_config = _model_scaledown_for_combine(
-                model_config_class(), test_meshes.full_model_mesh, target_mesh, False
-            )
-            params.append(
-                pytest.param(
-                    target_mesh,
-                    fabric_to_device_params(fabric_cfg, _CMB_VERSION_FABRIC2D),
-                    model_config.EMB_SIZE,
-                    model_config.NUM_ROUTED_EXPERTS,
-                    model_config.NUM_EXPERTS_PER_TOKEN,
-                    marks=pytest.mark.requires_mesh_topology(
-                        mesh_shape=target_mesh, topology=_topo_marker(target_mesh, fabric_cfg)
-                    ),
-                    id=f"{model_name}-{wanted_mesh}",
-                )
-            )
-    # A mesh id that stopped matching would leave this test with nothing to run and still pass.
-    assert len(params) == 1, f"expected exactly one {wanted_mesh} dsv3 configuration, got {len(params)}"
-    return params
+    """The single configuration the sweep runs on: dsv3 across the full 8x4 mesh. Traffic shape,
+    layout and scenario are deliberately NOT here — the sweep walks all of them inside one test so
+    they share one open mesh."""
+    model_config_class, test_meshes = {
+        name: (config, meshes) for name, config, _is_extended_model, meshes in COMBINE_MODELS
+    }[_CMB_SWEEP_MODEL]
+    fabric_cfg = test_meshes.target_meshes[_CMB_SWEEP_MESH]
+    model_config = _model_scaledown_for_combine(
+        model_config_class(), test_meshes.full_model_mesh, _CMB_SWEEP_MESH, False
+    )
+    return [
+        pytest.param(
+            _CMB_SWEEP_MESH,
+            fabric_to_device_params(fabric_cfg, sweep_cmb_version()),
+            model_config.EMB_SIZE,
+            model_config.NUM_ROUTED_EXPERTS,
+            model_config.NUM_EXPERTS_PER_TOKEN,
+            marks=pytest.mark.requires_mesh_topology(
+                mesh_shape=_CMB_SWEEP_MESH, topology=_topo_marker(_CMB_SWEEP_MESH, fabric_cfg)
+            ),
+            id=f"{_CMB_SWEEP_MODEL}-{_mesh_id(_CMB_SWEEP_MESH, fabric_cfg)}-cmb_v{sweep_cmb_version()}",
+        )
+    ]
 
 
 @pytest.mark.parametrize(
@@ -710,7 +711,7 @@ def test_ttnn_combine2d_sweep(mesh_device, device_params, emb_dim, num_routed_ex
                         run_pcc,
                         layout,
                         False,  # use_fp8_output — fp8 needs TILE, which this op does not take yet
-                        _CMB_VERSION_FABRIC2D,
+                        sweep_cmb_version(),
                         False,  # is_ci_env — the sweep is a local investigation, not a CI gate
                         False,  # is_ci_v2_env
                         iterations,
