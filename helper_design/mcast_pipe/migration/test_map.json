@@ -335,7 +335,8 @@
       "dispatch": "sparse Matmul MCAST_IN0 path",
       "migration_unit": "matmul-in0-mcast-interleaved",
       "inventory": [
-        "MM-SPARSE-IN0"
+        "MM-SPARSE-IN0",
+        "MM-SPARSE-INDEXED"
       ],
       "coverage": "device-verified from an empty isolated cache; sender hash 14177997899853619887 and receiver hash 18131090411884538285"
     },
@@ -455,7 +456,8 @@
         "test_matmul_on_subdevice_1d_mcast",
         "test_matmul_on_subdevice_1d_mcast_full_grid",
         "test_matmul_compute_output_specs_with_allowed_worker_cores: mcast program-config cases"
-      ]
+      ],
+      "result_stale": "2026-08-26 rebase onto e6d0562cfaa changed this test file; the recorded result predates it and must be re-measured before it can be cited as coverage."
     },
     "MM-SPARSE-IN0": {
       "path": "tests/ttnn/unit_tests/operations/matmul/test_sparse_matmul.py",
@@ -469,7 +471,8 @@
         "test_sparse_matmul_inputA_without_nnz"
       ],
       "excluded": "argument-validation tests do not launch the tracked sparse kernels",
-      "verification": "2026-08-06 compile-focused case passed with 0/29 JIT hits; cache contained sender hash 14177997899853619887 and receiver hash 18131090411884538285"
+      "verification": "2026-08-06 compile-focused case passed with 0/29 JIT hits; cache contained sender hash 14177997899853619887 and receiver hash 18131090411884538285",
+      "result_stale": "2026-08-26 rebase onto e6d0562cfaa changed this test file; the recorded result predates it and must be re-measured before it can be cited as coverage."
     },
     "MM-IN1-ALL": {
       "path": "tests/ttnn/unit_tests/operations/matmul/test_matmul.py",
@@ -484,7 +487,8 @@
         "test_matmul_height_sharded_input_with_padding",
         "test_matmul_activation_with_sharded_input",
         "test_matmul_2d_nd_sharded_in1"
-      ]
+      ],
+      "result_stale": "2026-08-26 rebase onto e6d0562cfaa changed this test file; the recorded result predates it and must be re-measured before it can be cited as coverage."
     },
     "MM-IN1-RECEIVER-2D": {
       "path": "tests/ttnn/unit_tests/operations/matmul/test_matmul.py",
@@ -503,7 +507,8 @@
         "test_matmul_activation_with_sharded_input",
         "test_matmul_compute_output_specs_with_allowed_worker_cores: 2D mcast cases",
         "test_matmul_2d_nd_sharded_in1"
-      ]
+      ],
+      "result_stale": "2026-08-26 rebase onto e6d0562cfaa changed this test file; the recorded result predates it and must be re-measured before it can be cited as coverage."
     },
     "MM-BLOCK-SHARDED-HYBRID": {
       "path": "tests/ttnn/unit_tests/operations/matmul/test_matmul.py",
@@ -515,7 +520,8 @@
         "test_matmul_block_sharded_input_with_padding",
         "test_matmul_activation_with_sharded_input",
         "test_matmul_2d_nd_sharded_in1"
-      ]
+      ],
+      "result_stale": "2026-08-26 rebase onto e6d0562cfaa changed this test file; the recorded result predates it and must be re-measured before it can be cited as coverage."
     },
     "CONV-HEIGHT": {
       "path": "tests/ttnn/unit_tests/operations/conv/test_conv2d.py",
@@ -589,21 +595,24 @@
       "tests": [
         "complete file; legacy and all Welford modes"
       ],
-      "result": "181 valid passed, 5 architecture skips; one unrelated strict XPASS in the deliberate garbage-padding negative probe"
+      "result": "181 valid passed, 5 architecture skips; one unrelated strict XPASS in the deliberate garbage-padding negative probe",
+      "result_stale": "2026-08-26 rebase onto e6d0562cfaa changed this test file; the recorded result predates it and must be re-measured before it can be cited as coverage."
     },
     "GN-GENERAL": {
       "path": "tests/ttnn/unit_tests/operations/fused/test_group_norm.py",
       "tests": [
         "complete file, including fixed/default routing, dtype, cache, and no-mcast guards"
       ],
-      "result": "345 passed, 10 expected skips"
+      "result": "345 passed, 10 expected skips",
+      "result_stale": "2026-08-26 rebase onto e6d0562cfaa changed this test file; the recorded result predates it and must be re-measured before it can be cited as coverage."
     },
     "GN-NIGHTLY": {
       "path": "tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py",
       "tests": [
         "complete file"
       ],
-      "result": "203 passed, 6 expected skips"
+      "result": "203 passed, 6 expected skips",
+      "result_stale": "2026-08-26 rebase onto e6d0562cfaa changed this test file; the recorded result predates it and must be re-measured before it can be cited as coverage."
     },
     "GN-INTERLEAVED-RT-LEGACY": {
       "path": "tests/ttnn/perf_tests/operations/mcast/test_mcast_migration_realtime_perf.py",
@@ -639,7 +648,8 @@
         "test_group_norm_no_input_mask",
         "test_group_norm_dram_grid_size: Welford"
       ],
-      "selection": "Run use_welford=False for legacy and use_welford=True for Welford, plus applicable fixed/default-routing nodes."
+      "selection": "Run use_welford=False for legacy and use_welford=True for Welford, plus applicable fixed/default-routing nodes.",
+      "result_stale": "2026-08-26 rebase onto e6d0562cfaa changed this test file; the recorded result predates it and must be re-measured before it can be cited as coverage."
     },
     "TOPK-MULTICORE": {
       "path": "tests/ttnn/unit_tests/operations/reduce/test_topk.py",
@@ -648,7 +658,8 @@
         "test_topk_sub_core_grids: W=16384,k=32 and all pass_indices_tensor variants",
         "test_topk_bfloat8_with_inf: W=16384,k=32"
       ],
-      "excluded": "test_topk_large_2d_shapes and dtype-error tests do not launch the tracked multicore kernels."
+      "excluded": "test_topk_large_2d_shapes and dtype-error tests do not launch the tracked multicore kernels.",
+      "result_stale": "2026-08-26 rebase onto e6d0562cfaa changed this test file; the recorded result predates it and must be re-measured before it can be cited as coverage."
     },
     "SORT-SINGLE-ROW-CONTROL": {
       "path": "tests/ttnn/unit_tests/operations/data_movement/test_sort.py",
@@ -723,6 +734,16 @@
         "complete KSplitGramMatmul operation test binary"
       ],
       "verification": "discovery-only; confirm all sender, receiver, and receiver-writer variants before any migration"
+    },
+    "MM-SPARSE-INDEXED": {
+      "path": "tests/ttnn/unit_tests/operations/matmul/test_sparse_matmul_indexed.py",
+      "tests": [
+        "complete file; indexed/gather mode (#50654) and compact sparse output (#52954)"
+      ],
+      "result": "18 passed on 2026-08-26 after the CT-slot fix below",
+      "added_by": "2026-08-26 reconcile after the rebase onto e6d0562cfaa; the file arrived WITH the new baseline and was not previously mapped.",
+      "why_it_matters": "test_indices_absent_is_unchanged asserts an inactive expert slot stays zero-filled, which is what caught reader_bmm_tile_layout_in1_sender_writer_padding.cpp reading compact_output at upstream's CT slot 32 instead of 28 after the migration removed 4 mcast args. Highest-value regression guard for CT-argument desync on the in1 sender wire; keep it mapped.",
+      "scope_note": "Exercises the SPARSE mcast_1d factory only. The kernel it guards (reader_bmm_tile_layout_in1_sender_writer_padding.cpp) is shared with the dense mcast_1d/2d factories, so a CT-argument desync there can surface here first -- but this suite is NOT coverage for the dense 1D/2D paths; MM-IN1-ALL and MM-IN1-RECEIVER-2D own those."
     }
   },
   "additional_candidate_routes": [
