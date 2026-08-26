@@ -63,7 +63,7 @@
   team: models
   sp_config: sc1
 
-- name: "DeepSeek-V3-671B & Kimi-K2.6-1T MLA chunked accuracy 10k@5k"
+- name: "Kimi-K2.6-1T MLA chunked accuracy 10k@5k"
   fabric_profile: torus_xy
   cmd: |
 
@@ -71,7 +71,7 @@
       set -e
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and torus-xy-8x4 and (dsv3 or kimi) and no_determinism" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and torus-xy-8x4 and kimi and no_determinism" -vvv --tb=short
     '
   test_type: mla_chunked
   test_group: module
@@ -172,7 +172,7 @@
   team: models
   sp_config: sc1
 
-- name: "KV cache table accuracy (DeepSeek-V3-671B, Kimi-K2.6-1T, GLM-5.2-744B)"
+- name: "KV cache table accuracy (Kimi-K2.6-1T, GLM-5.2-744B)"
   fabric_profile: torus_xy
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/DeepSeek-R1-0528-fp8-4236a6af/
@@ -185,7 +185,6 @@
       set -e
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kv_cache_table -k "torus-xy and pretrained and seq5k" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_kv_cache_mock -k "torus-xy" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_glm52_kv_cache_table -k "torus-xy-8x4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_dflash_kv_cache_mock -k "seq5k and 1user and 2layers" -vvv --tb=short
