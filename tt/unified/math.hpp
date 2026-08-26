@@ -1500,7 +1500,7 @@ struct Strategy<FPUFusion> {
     // it already did. Dst mode pays one extra pack, into acc_cb, which it leaves
     // idle at finish anyway -- so neither mode needs a new buffer.
     template <typename Node, typename EpilogueChain>
-    static void bias_finish(const Node& node, uint32_t acc_cb, uint32_t out_cb, EpilogueChain) {
+    static void bias_finish(const Node& node, uint32_t acc_cb, uint32_t out_cb, uint32_t bias_cb, EpilogueChain) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         using G = typename Node::geometry;
         constexpr uint32_t kTranspose = G::transpose;
@@ -1509,8 +1509,8 @@ struct Strategy<FPUFusion> {
         constexpr uint32_t kSubTiles = kSub.tiles();
 
         // Neither of these touches DST, so they program once for every subblock.
-        ckernel::reconfig_data_format(acc_cb, node.bias_cb);
-        ckernel::add_bcast_rows_init_short(acc_cb, node.bias_cb);
+        ckernel::reconfig_data_format(acc_cb, bias_cb);
+        ckernel::add_bcast_rows_init_short(acc_cb, bias_cb);
         pack_to(out_cb);  // this drains the accumulator into the output
 
         for (uint32_t r0 = 0; r0 < G::rt_dim; r0 += kSub.rows) {
@@ -1523,7 +1523,7 @@ struct Strategy<FPUFusion> {
                     // plus its own position across. The total is read from the front of
                     // acc_cb, so its index is subblock-relative while the bias index is
                     // block-absolute.
-                    ckernel::add_tiles_bcast_rows(acc_cb, node.bias_cb, t, c0 + t % kSub.cols, t);
+                    ckernel::add_tiles_bcast_rows(acc_cb, bias_cb, t, c0 + t % kSub.cols, t);
                 }
                 cb_pop_front(acc_cb, kSubTiles);
 
@@ -1676,7 +1676,14 @@ struct Strategy<FPUFusion> {
     // gets it for free: the packer does the summing, so DST only ever holds one
     // block's product.
     template <AccumulatorMode Mode, typename Node, typename EpilogueChain = expr::UnaryChain<>>
-    static void run(const Node& node, uint32_t acc_cb, uint32_t out_cb, bool reload, bool finish, EpilogueChain = {}) {
+    static void run(
+        const Node& node,
+        uint32_t acc_cb,
+        uint32_t out_cb,
+        bool reload,
+        bool finish,
+        EpilogueChain = {},
+        uint32_t epi_bias_cb = kNoBias) {
         using G = typename Node::geometry;
         constexpr uint32_t kAccTiles = G::out_subblock_num_tiles;
 
@@ -1732,7 +1739,14 @@ struct Strategy<FPUFusion> {
         // and 8 subblocks the fold still wins by 0.60, 0.12, 0.31 and 0.42us -- it does not
         // decay as the subblocks multiply.
         constexpr bool kBiasFolded = (Mode == AccumulatorMode::Dst);
-        const bool via_bias = !kBiasFolded && finish && node.bias_cb != kNoBias;
+        // The bias operand can arrive two ways, and they mean the same thing here. On the
+        // NODE it reads as part of the fusion, which is misleading -- a fused op runs every
+        // k-block and this one does not. In the EPILOGUE it reads as what it is: work on
+        // the finished total. The epilogue spelling wins when both are given, and giving
+        // both is a mistake worth catching rather than silently resolving.
+        ASSERT(epi_bias_cb == kNoBias || node.bias_cb == kNoBias);
+        const uint32_t bias_cb = (epi_bias_cb != kNoBias) ? epi_bias_cb : node.bias_cb;
+        const bool via_bias = !kBiasFolded && finish && bias_cb != kNoBias;
 
         for (uint32_t r0 = 0; r0 < G::rt_dim; r0 += kSub.rows) {
             for (uint32_t c0 = 0; c0 < G::ct_dim; c0 += kSub.cols) {
@@ -1795,10 +1809,10 @@ struct Strategy<FPUFusion> {
                 // gets the same ordering by applying the bias inside bias_finish, ahead
                 // of the epilogue there.
                 if constexpr (kBiasFolded) {
-                    if (finish && node.bias_cb != kNoBias) {
-                        AddOp::fpu_reuse_init<true>(node.bias_cb);
+                    if (finish && bias_cb != kNoBias) {
+                        AddOp::fpu_reuse_init<true>(bias_cb);
                         for (uint32_t t = 0; t < kSubTiles; ++t) {
-                            AddOp::fpu_reuse_apply<true>(node.bias_cb, c0 + t % kSub.cols, t);
+                            AddOp::fpu_reuse_apply<true>(bias_cb, c0 + t % kSub.cols, t);
                         }
                         // The reuse op reprogrammed the math unit, so put the matmul's own
                         // programming back for the next subblock.
@@ -1820,7 +1834,7 @@ struct Strategy<FPUFusion> {
                 // A@B without the bias -- relu(relu(A@B) + v) instead of relu(A@B + v).
                 if constexpr (Mode == AccumulatorMode::Dst) {
                     if constexpr (!EpilogueChain::empty) {
-                        if (finish && (kBiasFolded || node.bias_cb == kNoBias)) {
+                        if (finish && (kBiasFolded || bias_cb == kNoBias)) {
                             for (uint32_t t = 0; t < kSubTiles; ++t) {
                                 EpilogueChain::apply_in_place(t);
                             }
@@ -1869,16 +1883,16 @@ struct Strategy<FPUFusion> {
             // A fused bias needs the total in a buffer to add against, so the finishing
             // packs went to acc_cb and bias_finish carries the block to out_cb.
             if (via_bias) {
-                bias_finish(node, acc_cb, out_cb, EpilogueChain{});
+                bias_finish(node, acc_cb, out_cb, bias_cb, EpilogueChain{});
             }
         } else {
             if (!finish) {
                 cb_wait_front(acc_cb, kAccTiles);
                 cb_pop_front(acc_cb, kAccTiles);
-            } else if (!kBiasFolded && node.bias_cb != kNoBias) {
+            } else if (!kBiasFolded && bias_cb != kNoBias) {
                 // The copy-out below, with the bias folded into it -- same wait,
                 // same pop, same pack, one op different.
-                bias_finish(node, acc_cb, out_cb, EpilogueChain{});
+                bias_finish(node, acc_cb, out_cb, bias_cb, EpilogueChain{});
             } else {
                 // Move the completed total into the output buffer. Copying it
                 // through DST rather than letting the DM writer drain acc_cb keeps

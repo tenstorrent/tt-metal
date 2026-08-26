@@ -30,7 +30,7 @@ CB_IN0, CB_IN1, CB_BIAS, CB_OUT, CB_ACC = 0, 1, 2, 16, 24
 TILE = 32
 
 
-def run(device, rt, ct, kt, k_blocks=1, relu=None, mode="dst", seed=0, fidelity=None):
+def run(device, rt, ct, kt, k_blocks=1, relu=None, mode="dst", seed=0, fidelity=None, bias_epilogue=False):
     torch.manual_seed(seed)
     a_blocks = [(torch.rand([1, 1, rt * TILE, kt * TILE]) - 0.5).to(torch.bfloat16) for _ in range(k_blocks)]
     b_blocks = [(torch.rand([1, 1, kt * TILE, ct * TILE]) - 0.5).to(torch.bfloat16) for _ in range(k_blocks)]
@@ -97,6 +97,7 @@ def run(device, rt, ct, kt, k_blocks=1, relu=None, mode="dst", seed=0, fidelity=
             + ([("MM_ACC_L1", "1")] if mode == "l1" else [])
             + ([("MM_SINGLE_SHOT", "1")] if mode == "single" else [])
             + ([("MM_RELU_EPILOGUE", "1")] if relu == "epilogue" else [])
+            + ([("MM_BIAS_EPILOGUE", "1")] if bias_epilogue else [])
         ),
         # So a sweep can pin fidelity to match whatever it compares against.
         **(fidelity or {}),
@@ -138,8 +139,23 @@ def main(argv=None):
     args = p.parse_args(argv)
 
     device = ttnn.open_device(device_id=0)
+    failed = []
     try:
         got, want = run(device, args.rt, args.ct, args.kt, args.k_blocks, args.relu, args.mode)
+
+        # The SAME bias, written in the epilogue instead of on the fusion. Both spellings
+        # mean "added once to the finished total", so they must agree with each other and
+        # with the reference -- and the epilogue one is the spelling whose timing is
+        # stated rather than special-cased. It is checked EXACTLY against the fusion
+        # spelling, because it lowers to the same instructions and anything else is a
+        # difference worth seeing.
+        #
+        # k_blocks > 1 is what gives this teeth twice over: a bias applied per block, and
+        # an epilogue operand DROPPED (which is what evaluating the lambda fixed -- it
+        # compiled and produced an unbiased matmul, 0.49 max error on a +-0.5 bias).
+        epi = None
+        if args.mode != "single":
+            epi, _ = run(device, args.rt, args.ct, args.kt, args.k_blocks, args.relu, args.mode, bias_epilogue=True)
     finally:
         ttnn.close_device(device)
 
@@ -150,7 +166,17 @@ def main(argv=None):
     # notices it, so the absolute error is the check that actually bites.
     logger.info(f"max |got - want| = {err:.4f} (threshold {args.atol})")
     if measured < args.pcc or err > args.atol:
-        logger.error("FAIL")
+        failed.append("fusion-bias")
+
+    if epi is not None:
+        same = (epi - got).abs().max().item()
+        epi_err = (epi - want).abs().max().item()
+        logger.info(f"bias in the EPILOGUE: max |epi - fusion| = {same:.6f}, max |epi - want| = {epi_err:.4f}")
+        if same != 0.0 or epi_err > args.atol:
+            failed.append("epilogue-bias")
+
+    if failed:
+        logger.error(f"FAIL: {failed}")
         return 1
     logger.info("PASS")
     return 0

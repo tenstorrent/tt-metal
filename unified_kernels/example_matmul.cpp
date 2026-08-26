@@ -54,7 +54,7 @@ void kernel_main() {
         u::ComputeBlock b_block = u::noc_load<1, 1>(b_storage, my_column, b, me.x * kKBlocks + k).wait();
 
         u::Block result =
-            total.accumulate(u::matmul(a_block, b_block).bias(bias_row), last, [](auto sum) { return u::relu(sum); });
+            total.accumulate(u::matmul(a_block, b_block), last, [&](auto sum) { return sum.bias(bias_row).relu(); });
 
         if (last) {
             u::noc_store<0>(std::move(result), out, me.y * kGridWidth + me.x);
