@@ -375,7 +375,7 @@
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>output_tensor</strong> (<em>tuple</em><em>[</em><em>ttnn.Tensor</em><em>, </em><em>ttnn.Tensor</em><em>]</em><em>, </em><em>optional</em>) – A tuple with preallocated output tensors for the values and indices. If specified, must be on the same device as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>. Defaults to (<cite>None</cite>, <cite>None</cite>).</p></li>
 <li><p><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>) – Core range set to run the operation on. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>indices_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Input tensor containing pre-computed index values. When provided, the operation reads indices from this tensor instead of generating them. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>indices_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Input tensor containing pre-computed index values. When provided, the operation returns the labels held in this tensor for the selected elements instead of generating positional indices. It must have the same logical shape as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, be in TILE layout, and be UINT16, UINT32, or INT32. Its width must match the resolved output index dtype: a UINT16 tensor is rejected when 32-bit indices are required (reduced dimension above 65535, or a <cite>float32</cite> <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>), and a UINT32/INT32 tensor widens the output indices to 32-bit. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>stable</strong> (<em>bool</em><em>, </em><em>optional</em>) – EXPERIMENTAL, best effort only – do not rely on this for correctness. Asks the LLK’s stable bitonic network to break exact-value ties by lowest index rather than by array position. The stable network is an open issue (tenstorrent/tt-metal#33492): it can still return incorrect indices for tied values, and every stable case in the LLK test suite is currently skipped, so a caller passing <cite>True</cite> may get either tie-break. Only Wormhole B0 and Blackhole implement it at all; other architectures raise. Off by default. Defaults to <cite>False</cite>.</p></li>
 </ul>
 </dd>
@@ -424,7 +424,8 @@
 </table>
 <p>The <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_value_tensor</span></code> will have the same data type as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> and will be in TILE layout.
 The <code class="xref py py-attr docutils literal notranslate"><span class="pre">output_index_tensor</span></code> will be in TILE layout. Its data type is UINT16 or UINT32 by default (chosen
-based on the reduced dimension size), or matches the preallocated index tensor dtype (UINT16, UINT32, or INT32) when one is provided.</p>
+based on the reduced dimension size), widened to 32-bit by a UINT32 or INT32 <code class="xref py py-attr docutils literal notranslate"><span class="pre">indices_tensor</span></code>, or
+matching the preallocated index tensor dtype (UINT16, UINT32, or INT32) when one is provided.</p>
 </div>
 <dl class="simple">
 <dt>Memory Support:</dt>
