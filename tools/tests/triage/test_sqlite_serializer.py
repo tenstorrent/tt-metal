@@ -213,6 +213,37 @@ def test_existing_database_is_not_reused(tmp_path):
     assert con.execute("SELECT count(*) FROM demo").fetchone()[0] == 1
 
 
+def test_record_diagnostics_without_a_result(tmp_path):
+    # main() prints skipped scripts and failed providers itself, so they arrive
+    # through record_diagnostics rather than emit.
+    path = tmp_path / "t.db"
+    serializer = SqliteSerializer(str(path), lambda: 0)
+    serializer.record_diagnostics("inspector_data.py", [], [], True, "Inspector unavailable")
+    serializer.record_diagnostics("dump_configuration.py", [], [], True, "Skipped: dependency failed.")
+    serializer.record_diagnostics("dispatcher_data.py", [], ["Device 0: no rank"], False, None)
+    serializer.close()
+
+    con = sqlite3.connect(str(path))
+    rows = con.execute(f'SELECT "Script", "Severity", "Message" FROM {quote_identifier(DIAGNOSTICS_TABLE)}').fetchall()
+    assert rows == [
+        ("inspector_data.py", "error", "Inspector unavailable"),
+        ("dump_configuration.py", "error", "Skipped: dependency failed."),
+        ("dispatcher_data.py", "warning", "Device 0: no rank"),
+    ]
+    # no script produced rows, so the only table is diagnostics
+    tables = [row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+    assert tables == [DIAGNOSTICS_TABLE]
+
+
+def test_record_diagnostics_with_nothing_to_record(tmp_path):
+    path = tmp_path / "t.db"
+    serializer = SqliteSerializer(str(path), lambda: 0)
+    serializer.record_diagnostics("elfs_cache.py", [], [], False, None)
+    serializer.close()
+    con = sqlite3.connect(str(path))
+    assert con.execute(f"SELECT count(*) FROM {quote_identifier(DIAGNOSTICS_TABLE)}").fetchone()[0] == 0
+
+
 def test_multiple_scripts_share_one_database(tmp_path):
     path = tmp_path / "t.db"
     serializer = SqliteSerializer(str(path), lambda: 0)

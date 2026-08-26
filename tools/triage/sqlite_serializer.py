@@ -163,6 +163,17 @@ class SqliteSerializer(OutputSerializer):
         self._con.executemany(f"INSERT INTO {quote_identifier(table)} ({names}) VALUES ({marks})", rows)
         self._con.commit()
 
+    def record_diagnostics(
+        self,
+        script_name: str,
+        failures: list[str],
+        warnings: list[str],
+        script_failed: bool,
+        failure_message: str | None,
+    ) -> None:
+        self._insert_diagnostics(script_name, failures, warnings, script_failed, failure_message)
+        self._con.commit()
+
     def _insert_diagnostics(
         self,
         script_name: str,

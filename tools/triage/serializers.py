@@ -117,6 +117,16 @@ class OutputSerializer(ABC):
     ) -> None:
         pass
 
+    def record_diagnostics(
+        self,
+        script_name: str,
+        failures: list[str],
+        warnings: list[str],
+        script_failed: bool,
+        failure_message: str | None,
+    ) -> None:
+        pass
+
     def close(self) -> None:
         """Release any owned resources (e.g. file handles). Default is a no-op."""
         pass
@@ -360,6 +370,17 @@ class MultiSerializer(OutputSerializer):
                 failure_message=failure_message,
                 documentation=documentation,
             )
+
+    def record_diagnostics(
+        self,
+        script_name: str,
+        failures: list[str],
+        warnings: list[str],
+        script_failed: bool,
+        failure_message: str | None,
+    ) -> None:
+        for s in self._serializers:
+            s.record_diagnostics(script_name, failures, warnings, script_failed, failure_message)
 
     def close(self) -> None:
         for s in self._serializers:

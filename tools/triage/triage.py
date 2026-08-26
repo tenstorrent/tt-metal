@@ -718,6 +718,24 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
     )
 
 
+def record_diagnostics(script: TriageScript) -> None:
+    global FAILURE_CHECKS, WARNING_CHECKS
+    with FAILURE_CHECKS_LOCK:
+        failures = FAILURE_CHECKS
+        FAILURE_CHECKS = []
+    with WARNING_CHECKS_LOCK:
+        warnings = WARNING_CHECKS
+        WARNING_CHECKS = []
+
+    get_output_serializer().record_diagnostics(
+        script_name=script.name,
+        failures=failures,
+        warnings=warnings,
+        script_failed=script.failed,
+        failure_message=script.failure_message,
+    )
+
+
 def _enforce_dependencies(args: ScriptArguments) -> None:
     """Enforce approved `ttexalens` version unless skipped.
 
@@ -1015,6 +1033,7 @@ def main():
                     print()
                     utils.INFO(f"{script.name}:")
                     utils.WARN(f"  Skipping: dependency {failed_deps} failed")
+                    record_diagnostics(script)
                 else:
                     start_time = time()
                     result = script.run(args=args, context=context)
@@ -1033,6 +1052,7 @@ def main():
                             print()
                             utils.INFO(f"{script.name}{execution_time}:")
                             utils.INFO("  pass")
+                        record_diagnostics(script)
                     else:
                         start_time = time()
                         serialize_result(script, result, execution_time)
