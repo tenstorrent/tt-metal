@@ -278,31 +278,51 @@ def _read_device_map(timeout_s: int) -> dict:
     chips by unique_id without touching the ControlPlane. Returns {(mesh_id, chip_id): unique_id}.
 
     The runner's two publishers do not share an encoding -- the shmem path writes JSON keyed
-    "<mesh>:<chip>", the file-export path writes "<mesh> <chip> <umd>" lines -- so accept either."""
+    "<mesh>:<chip>", the file-export path writes "<mesh> <chip> <umd>" lines -- so accept either.
+
+    A multi-rank runner writes one rank-scoped file per co-located rank (``<stem>_r<rank>.json``), so
+    all matches on this host are merged. Clear stale ``_r*`` siblings between runs whose topology
+    changed -- a leftover file would merge in."""
+    import glob as _glob
     import json
 
+    def _parse(raw: str) -> dict:
+        try:
+            return {tuple(int(x) for x in key.split(":")): int(unique_id) for key, unique_id in json.loads(raw).items()}
+        except json.JSONDecodeError:
+            parsed = {}
+            for line in raw.splitlines():
+                if not line.strip():
+                    continue
+                mesh_id, chip_id, unique_id = line.split()
+                parsed[(int(mesh_id), int(chip_id))] = int(unique_id)
+            return parsed
+
     path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+    stem, ext = os.path.splitext(path)
+
+    def _matches():
+        return ([path] if os.path.exists(path) else []) + sorted(_glob.glob(f"{stem}_r*{ext}"))
+
     deadline = time.perf_counter() + timeout_s
-    while not os.path.exists(path):
+    files = _matches()
+    while not files:
         if time.perf_counter() > deadline:
-            logger.warning(f"[producer] device map {path} not found after {timeout_s}s; skipping KV read.")
+            logger.warning(
+                f"[producer] device map {path} (or {stem}_r*{ext}) not found after {timeout_s}s; skipping KV read."
+            )
             return {}
         time.sleep(0.1)
+        files = _matches()
 
-    with open(path) as f:
-        raw = f.read()
-    try:
-        device_map = {
-            tuple(int(x) for x in key.split(":")): int(unique_id) for key, unique_id in json.loads(raw).items()
-        }
-    except json.JSONDecodeError:
-        device_map = {}
-        for line in raw.splitlines():
-            if not line.strip():
-                continue
-            mesh_id, chip_id, unique_id = line.split()
-            device_map[(int(mesh_id), int(chip_id))] = int(unique_id)
-    logger.info(f"[producer] read device map {path}: {len(device_map)} chips")
+    device_map = {}
+    for f_path in files:
+        with open(f_path) as f:
+            parsed = _parse(f.read())
+        device_map.update(parsed)
+        logger.info(f"[producer] read device map {f_path}: {len(parsed)} chips")
+    if len(files) > 1:
+        logger.info(f"[producer] merged {len(files)} device maps: {len(device_map)} chips total")
     return device_map
 
 
@@ -761,7 +781,15 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
     )
     kv_dir = Path(trace_dir) / "kv_cache"
     mins = {"k": 1.0, "v": 1.0}
+    checked = 0
     for layer in range(NUM_LAYERS):
+        # Skip layers owned by another host's stage (their chips are not in this host's device map).
+        loc0 = table.lookup(layer, 0, slot_id, 0)
+        try:
+            _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
+        except KeyError:
+            continue
+        checked += 1
         dev_k = torch.stack(
             [
                 _read_kv_slice(table, device_map, h, layer, slot_id, read_len, head_dim, _decode_bfp8_chunk)
@@ -788,9 +816,12 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
 
     min_pcc = min(mins.values())
     logger.info(
-        f"[producer] slot {slot_id} GPT-OSS KV PCC over [0,{real_len}) across {NUM_LAYERS} layers -> "
+        f"[producer] slot {slot_id} GPT-OSS KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
         f"K={mins['k']:.5f} V={mins['v']:.5f} (min {min_pcc:.6f})"
     )
+    # Zero resolved layers would return the 1.0 inits as a perfect pass — fail loudly instead.
+    if checked == 0:
+        raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
     return mins
 
 
@@ -819,8 +850,16 @@ def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_l
     )
     kv_dir = Path(trace_dir) / "kv_cache"
     mins = {"k": 1.0, "v": 1.0, "index_k": 1.0}
+    checked = 0
     ik_checked = 0
     for layer in range(NUM_LAYERS):
+        # Skip layers owned by another host's stage (their chips are not in this host's device map).
+        loc0 = table.lookup(layer, 0, slot_id, 0)
+        try:
+            _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
+        except KeyError:
+            continue
+        checked += 1
         dev_k = torch.stack(
             [
                 _read_kv_slice(table, device_map, h, layer, slot_id, read_len, head_dim, _decode_bfp8_chunk)
@@ -861,9 +900,12 @@ def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_l
 
     min_pcc = min(mins.values())
     logger.info(
-        f"[producer] slot {slot_id} M3 KV PCC over [0,{real_len}) across {NUM_LAYERS} layers -> "
+        f"[producer] slot {slot_id} M3 KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
         f"K={mins['k']:.5f} V={mins['v']:.5f} index_k={mins['index_k']:.5f} (min {min_pcc:.6f})"
     )
+    # Zero resolved layers would return the 1.0 inits as a perfect pass — fail loudly instead.
+    if checked == 0:
+        raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
     # Only some traces carry an index_k golden. Its min is still the 1.0 init when none did, so drop the
     # key rather than reporting an unmeasured cache as perfect.
     if not ik_checked:
