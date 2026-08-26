@@ -903,9 +903,8 @@ class TTSampling(LightweightModule):
             # (topk_would_route_to_large_indices mirrors
             # should_route_to_topk_large_indices in topk.cpp; KEEP IN SYNC).
             # Sampling opts out of stable topk for decode perf (_topk_stable is
-            # False): these chunks route to the single-core factory (see the
-            # #53167 note below), where stable pays ~2-3x on the SFPU sort
-            # stage -- the ~free fused-key engine is multi-core only.
+            # False): these chunks route to the single-core factory,
+            # where stable pays ~2-3x on the SFPU sort stage.
             # _adjust_values_for_tiebreak is what guarantees the greedy
             # pick after the gather, regardless of per-device tie order. Calls
             # that would not route keep today's arguments bit-for-bit, and a
