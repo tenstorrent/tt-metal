@@ -591,7 +591,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
                        uint32_t num_entries,
                        tt::DataFormat df,
                        const tt::tt_metal::Tile* tile,
-                       std::optional<TensorParamName> borrowed = std::nullopt,
+                       const std::optional<TensorParamName>& borrowed = std::nullopt,
                        bool multi = false) {
         DataflowBufferSpec s{
             .unique_id = name,
