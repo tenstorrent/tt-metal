@@ -189,6 +189,36 @@ jobs:
           TT_LOGGER_LEVEL: warn
         run: ${{ matrix.test-group.cmd }}
 
+      # Emits to STDOUT, not just $GITHUB_STEP_SUMMARY, on purpose: summaries are not
+      # reachable from the REST API or `gh run view --log`, so a summary-only report means
+      # nobody can check the cache from a script or a terminal. remote_storage_error is the
+      # one that matters -- nonzero means the Redis connection or ACL is rejecting us and the
+      # cache is silently doing nothing, which otherwise just looks like normal compile time.
+      - name: Report kernel ccache stats
+        if: ${{ !cancelled() && inputs.enable-kernel-ccache == true }}
+        run: |
+          echo "=== kernel ccache remote storage ==="
+          # --print-stats is tab-separated and stable; -s is the human fallback for older ccache.
+          if ! ccache --print-stats 2>/dev/null | grep -E '^remote_storage_'; then
+            ccache -s || true
+          fi
+          echo "===================================="
+          hits=$(ccache --print-stats 2>/dev/null | awk -F'\t' '$1=="remote_storage_hit"{print $2}')
+          errs=$(ccache --print-stats 2>/dev/null | awk -F'\t' '$1=="remote_storage_error"{print $2}')
+          tmo=$(ccache --print-stats 2>/dev/null | awk -F'\t' '$1=="remote_storage_timeout"{print $2}')
+          echo "VERDICT: hits=${hits:-?} errors=${errs:-?} timeouts=${tmo:-?}"
+          if [ "${errs:-0}" != "0" ] || [ "${tmo:-0}" != "0" ]; then
+            echo "VERDICT: remote storage is erroring -- the cache is NOT being used."
+          elif [ "${hits:-0}" = "0" ]; then
+            echo "VERDICT: reachable but zero hits -- nothing is populating this cache for these kernels."
+          else
+            echo "VERDICT: cache is being hit."
+          fi
+          if [ -f /tmp/ccache.log ]; then
+            echo "=== remote storage detail (filtered) ==="
+            "$GITHUB_WORKSPACE/.github/scripts/ccache_log_filter.sh" /tmp/ccache.log || true
+          fi
+
       - name: workaround
         run: |
           # The test-reporting action runs git ls-files with no way to opt-out.

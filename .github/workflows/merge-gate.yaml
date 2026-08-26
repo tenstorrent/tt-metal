@@ -362,6 +362,10 @@ jobs:
       enabled-skus: ALL_SKUS_IN_TESTS
       per-test-timeout: 15 # max minutes for any SKU timeout in the basic tests yaml
       product: tt-nn
+      # This job is the second-longest in the gate and its cost is almost entirely
+      # device-kernel JIT, so it benefits most from the shared kernel ccache that
+      # ttnn-smoke-tests already uses. runtime-basic-tests can opt in the same way.
+      enable-kernel-ccache: true
 
   ttnn-merge-gate-tests:
     needs: [build, find-changes]
