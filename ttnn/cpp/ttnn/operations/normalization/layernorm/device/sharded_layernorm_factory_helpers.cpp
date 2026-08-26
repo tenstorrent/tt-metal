@@ -1188,6 +1188,13 @@ void add_compute_defines(m2::KernelSpec& kernel, const SpecConfig& c, bool is_al
 // That one becomes UnpackToDest; the remaining Float32 buffers the kernel consumes get an explicit
 // UnpackToSrc, which is required once the 32-bit Dest register is enabled and which legacy supplied
 // silently.
+//
+// The choice of which buffers get which mode assumes a Gen1 target (Wormhole, Blackhole), where
+// unpacking straight to Dest costs performance unless it is the only way to keep 32 bits of
+// precision. That is why UnpackToDest appears only at the Welford alias and every other Float32
+// buffer is pinned to UnpackToSrc. Gen2 reverses the tradeoff: unpacking to Dest is free there and
+// is the preferred mode for anything the SFPU consumes, so these assignments stay legal but become
+// slower than they need to be. They want revisiting before this op targets Gen2.
 void set_compute_unpack_modes(m2::KernelSpec& kernel, const m2::ProgramSpec& spec, const SpecConfig& c) {
     auto& modes = m2::unpack_modes(std::get<m2::ComputeHardwareConfig>(kernel.hw_config));
     if (c.welford_fp32_alias) {

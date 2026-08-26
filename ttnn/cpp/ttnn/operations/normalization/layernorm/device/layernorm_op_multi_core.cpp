@@ -754,10 +754,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
                    : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp");
 
     auto compute_hw = to_compute_hardware_config(device->arch(), compute_kernel_config);
-    TT_FATAL(
-        std::holds_alternative<m2::ComputeGen1Config>(compute_hw),
-        "layernorm's multi-core factory builds Gen1 (Wormhole / Blackhole) compute configs only; this device "
-        "reports a different generation, which this op does not support yet.");
 
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
@@ -888,6 +884,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     // alias / accumulator sites. Those four become UnpackToDest; the remaining Float32 buffers
     // compute consumes get an explicit UnpackToSrc, which is required once the 32-bit Dest
     // register is enabled and which legacy supplied silently.
+    //
+    // The choice of which buffers get which mode assumes a Gen1 target (Wormhole, Blackhole),
+    // where unpacking straight to Dest costs performance unless it is the only way to keep 32 bits
+    // of precision. That is why UnpackToDest appears only at the fp32 alias sites and every other
+    // Float32 buffer is pinned to UnpackToSrc. Gen2 reverses the tradeoff: unpacking to Dest is
+    // free there and is the preferred mode for anything the SFPU consumes, so these assignments
+    // stay legal but become slower than they need to be. They want revisiting before this op
+    // targets Gen2.
     {
         auto& modes = m2::unpack_modes(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
         std::vector<m2::DFBSpecName> unpack_to_dest;
