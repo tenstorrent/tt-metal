@@ -29,6 +29,8 @@ TTNN_GRAPH_OPS_NO_GOLDEN=1 pytest models/experimental/llama32_1b_quasar/tests/gr
 
 ```bash
 # 1. capture a model run (writes generated/ttnn/reports/<report_name>/graph_capture.python_io.json)
+#    MESH_DEVICE is required — the demo skips at import without it; this capture used N150.
+MESH_DEVICE=N150 \
 TTNN_CONFIG_OVERRIDES='{"enable_graph_report": true, "report_name": "llama32_1b_demo_aug20_0223"}' \
     pytest models/experimental/llama32_1b_quasar/tests/demos/llama32_1b/demo.py -k "token-accuracy"
 
@@ -108,7 +110,12 @@ Exact, straight from the capture:
   `block_h/block_w/subblock_w` and `legacy_reduction`/`legacy_rsqrt`/`use_welford`,
   SDPA's chunk sizes and `max_cores_per_head_batch`, `MinimalMatmulConfig` blocks);
 - scalar kwargs (`epsilon`, `scale`, `num_heads`, `is_decode_mode`, activations …);
-- the output shape/dtype of every returned tensor to assert against.
+- the shape, dtype, layout and memory config of every returned tensor to assert
+  against — a relayout op (`to_memory_config`, `interleaved_to_sharded`) that hands
+  its input back untouched fails on the placement check. The shard *detail* (grid,
+  per-core shape, orientation) is compared only when the captured grid exists on the
+  device under test; on a smaller one the op derives its own grid, so only the memory
+  layout and buffer type are asserted there.
 
 Not recoverable from a capture, and how each is handled:
 
@@ -178,5 +185,7 @@ Source: `generated/ttnn/reports/llama32_1b_demo_aug20_0223/graph_capture.python_
   for that class). `validate_cases.py` fails loudly on a config field with no mapping,
   so a stale table cannot silently drop a field.
 - **A new model** — point the generator at that model's capture and `--out` at its
-  own `tests/graph_ops/`. Only `graph_case.py`'s import of `..ops.op_utils` (for
-  `assert_pcc` / `from_tt` / the mesh fixture parametrization) is model-specific.
+  own `tests/graph_ops/`. The generated files import their runtime from the `--out`
+  directory itself (derive it, or set `--runtime-module`), so copy `graph_case.py`
+  there: only its import of `..ops.op_utils` (for `assert_pcc` / `from_tt` / the mesh
+  fixture parametrization) is model-specific.

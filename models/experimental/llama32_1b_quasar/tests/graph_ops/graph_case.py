@@ -24,10 +24,11 @@ What a case run does
 2. rebuild the captured keyword arguments (memory_config, program_config, dtype,
    scalars, activations);
 3. call the op;
-4. check every returned tensor against its captured output spec (shape + dtype)
-   and finiteness — a multi-output op such as ``nlp_create_qkv_heads`` has all of
-   Q, K and V checked — plus a torch golden (PCC) for the ops where a reference is
-   unambiguous — see ``GOLDEN``.
+4. check every returned tensor against its captured output spec — shape, dtype,
+   layout and memory config (so a relayout op that hands back its input untouched
+   fails), plus finiteness. A multi-output op such as ``nlp_create_qkv_heads`` has
+   all of Q, K and V checked. On top of that, a torch golden (PCC) for the ops
+   where a reference is unambiguous — see ``GOLDEN``.
 
 Fidelity caveats (deliberate, documented, all visible in the generated data)
 ---------------------------------------------------------------------------
@@ -123,13 +124,43 @@ def _core_range_set(ranges):
     )
 
 
+def _shard_grid_fits(spec, mesh_device):
+    """Does the captured shard grid exist on this device? Returns (fits, why not).
+
+    A captured shard grid is absolute (the capture ran on an N150-class 8x8 grid),
+    so on a smaller device — e.g. the 2-node Quasar emulator — it may name cores or
+    DRAM banks that are not there. DRAM shard grids index banks instead of compute
+    cores and are gated separately.
+    """
+    shard = spec.get("shard")
+    if shard is None:
+        return True, ""
+
+    max_x = max(r[2] for r in shard["grid"])
+    max_y = max(r[3] for r in shard["grid"])
+    if spec["buffer"] == "L1":
+        grid = mesh_device.compute_with_storage_grid_size()
+        if max_x >= grid.x or max_y >= grid.y:
+            return False, (
+                f"captured L1 shard grid needs cores up to ({max_x},{max_y}); "
+                f"device compute grid is {grid.x}x{grid.y}"
+            )
+    else:
+        dram_grid = getattr(mesh_device, "dram_grid_size", None)
+        if callable(dram_grid):
+            g = dram_grid()
+            if max_x >= g.x or max_y >= g.y:
+                return False, (
+                    f"captured DRAM shard grid needs banks up to ({max_x},{max_y}); " f"device DRAM grid is {g.x}x{g.y}"
+                )
+    return True, ""
+
+
 def build_memory_config(spec, mesh_device):
     """Rebuild a captured MemoryConfig; skip the case if its grid exceeds the device.
 
-    A captured shard grid is absolute (the capture ran on an N150-class 8x8 grid).
-    On a smaller device — e.g. the 2-node Quasar emulator — such a config cannot be
-    allocated at all, so the case is SKIPPED rather than failed. DRAM shard grids
-    index DRAM banks instead of compute cores and are gated separately.
+    A config whose shard grid is not on this device cannot be allocated at all, so
+    the case is SKIPPED rather than failed (see ``_shard_grid_fits``).
     """
     if spec is None:
         return None
@@ -137,23 +168,9 @@ def build_memory_config(spec, mesh_device):
     if shard is None:
         return ttnn.MemoryConfig(MEM_LAYOUT[spec["layout"]], BUFFER_TYPE[spec["buffer"]])
 
-    max_x = max(r[2] for r in shard["grid"])
-    max_y = max(r[3] for r in shard["grid"])
-    if spec["buffer"] == "L1":
-        grid = mesh_device.compute_with_storage_grid_size()
-        if max_x >= grid.x or max_y >= grid.y:
-            pytest.skip(
-                f"captured L1 shard grid needs cores up to ({max_x},{max_y}); "
-                f"device compute grid is {grid.x}x{grid.y} — shape too large for this device"
-            )
-    else:
-        dram_grid = getattr(mesh_device, "dram_grid_size", None)
-        if callable(dram_grid):
-            g = dram_grid()
-            if max_x >= g.x or max_y >= g.y:
-                pytest.skip(
-                    f"captured DRAM shard grid needs banks up to ({max_x},{max_y}); " f"device DRAM grid is {g.x}x{g.y}"
-                )
+    fits, why = _shard_grid_fits(spec, mesh_device)
+    if not fits:
+        pytest.skip(f"{why} — shape too large for this device")
 
     shard_spec = ttnn.ShardSpec(_core_range_set(shard["grid"]), list(shard["shape"]), ORIENTATION[shard["orientation"]])
     return ttnn.MemoryConfig(MEM_LAYOUT[spec["layout"]], BUFFER_TYPE[spec["buffer"]], shard_spec)
@@ -615,6 +632,42 @@ def _check_finite(host, case, op_name, index):
     )
 
 
+def _check_placement(got, spec, mesh_device, op_name, index):
+    """Assert the output landed in the captured layout / buffer type / shard.
+
+    Without this a no-op ``to_memory_config`` or ``interleaved_to_sharded`` — one
+    that hands back its input untouched — passes on shape and dtype alone, which is
+    exactly the regression those cases exist to catch.
+
+    The shard *detail* (grid, per-core shape, orientation) is compared only when the
+    captured grid exists on this device: on a smaller device the op derives its own
+    grid, and the capture's absolute core coordinates are then not the answer to
+    compare against (the memory layout and buffer type still are).
+    """
+    want_layout = LAYOUT[spec["layout"]]
+    assert got.layout == want_layout, f"{op_name}: output[{index}] layout {got.layout} != captured {want_layout}"
+
+    mem = spec.get("mem")
+    if mem is None or not ttnn.is_tensor_storage_on_device(got):
+        return
+
+    got_mem = got.memory_config()
+    want_mem_layout = MEM_LAYOUT[mem["layout"]]
+    assert got_mem.memory_layout == want_mem_layout, (
+        f"{op_name}: output[{index}] memory layout {got_mem.memory_layout} != captured {want_mem_layout} "
+        f"— the op did not place its output where the model expects it"
+    )
+    want_buffer = BUFFER_TYPE[mem["buffer"]]
+    assert (
+        got_mem.buffer_type == want_buffer
+    ), f"{op_name}: output[{index}] buffer type {got_mem.buffer_type} != captured {want_buffer}"
+
+    if mem.get("shard") is None or not _shard_grid_fits(mem, mesh_device)[0]:
+        return
+    want_mem = build_memory_config(mem, mesh_device)
+    assert got_mem == want_mem, f"{op_name}: output[{index}] memory config {got_mem} != captured {want_mem}"
+
+
 def _check_output(out, case, mesh_device, op_name):
     """Check every returned tensor against its captured spec, then its values.
 
@@ -642,6 +695,7 @@ def _check_output(out, case, mesh_device, op_name):
         ), f"{op_name}: output[{i}] shape {tuple(got.shape)} != captured {want_shape}"
         want_dtype = DTYPE[spec["dtype"]]
         assert got.dtype == want_dtype, f"{op_name}: output[{i}] dtype {got.dtype} != captured {want_dtype}"
+        _check_placement(got, spec, mesh_device, op_name, i)
 
     for i, t in enumerate(tensors):
         _check_finite(from_tt(t, mesh_device), case, op_name, i)

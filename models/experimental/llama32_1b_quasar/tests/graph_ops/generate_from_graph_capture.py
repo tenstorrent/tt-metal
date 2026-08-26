@@ -448,8 +448,8 @@ _HEADER = '''# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # ---------------------------------------------------------------------------
 # GENERATED FILE - do not edit by hand.
 # Regenerate with:
-#   python models/experimental/llama32_1b_quasar/tests/graph_ops/generate_from_graph_capture.py \\
-#       --capture {capture} --out models/experimental/llama32_1b_quasar/tests/graph_ops
+#   python {generator} \\
+#       --capture {capture} --out {out}
 # Source capture: {capture}
 # ---------------------------------------------------------------------------
 """
@@ -468,7 +468,7 @@ no compute_kernel_config).
 import pytest
 
 import ttnn
-from models.experimental.llama32_1b_quasar.tests.graph_ops import graph_case as G
+from {runtime_module} import graph_case as G
 
 _OP = {op_expr}
 
@@ -592,13 +592,42 @@ def summarize(op, cases, raw_count, dropped, dropped_kwargs) -> str:
     return "\n".join(lines)
 
 
-def write_op_file(out_dir: Path, capture: Path, op: str, cases, raw_count, dropped, dropped_kwargs):
+def repo_relative(path: Path) -> Path:
+    """``path`` relative to the repo root, so the header holds a runnable command."""
+    resolved = path.resolve()
+    for root in resolved.parents:
+        if (root / ".git").exists():
+            return resolved.relative_to(root)
+    return resolved
+
+
+def runtime_module(out_dir: Path, explicit: str | None = None) -> str:
+    """Dotted import path of the package that holds ``graph_case.py``.
+
+    Derived from ``--out``, not hardcoded: pointing the generator at another model's
+    ``tests/graph_ops/`` must produce files that import *that* directory's
+    ``graph_case.py``, since the runtime's ``op_utils`` import (assert_pcc, from_tt,
+    the mesh fixture) is model-specific. ``--runtime-module`` overrides the guess.
+    """
+    if explicit:
+        return explicit
+    resolved = out_dir.resolve()
+    for root in resolved.parents:
+        if (root / ".git").exists():
+            return ".".join(resolved.relative_to(root).parts)
+    raise SystemExit(f"cannot derive an import path for --out {out_dir} (no repo root above it); pass --runtime-module")
+
+
+def write_op_file(out_dir: Path, capture: Path, op: str, cases, raw_count, dropped, dropped_kwargs, module: str):
     for i, case in enumerate(cases):
         case["id"] = case_id(i, case)
 
     stem = file_stem(op)
     text = _HEADER.format(
+        generator=repo_relative(Path(__file__)),
         capture=capture,
+        out=out_dir,
+        runtime_module=module,
         op=op,
         summary=summarize(op, cases, raw_count, dropped, dropped_kwargs),
         op_expr=OP_EXPR.get(op, op),
@@ -616,11 +645,21 @@ def main():
     ap.add_argument("--out", required=True, type=Path, help="output directory for test_<op>.py files")
     ap.add_argument("--max-cases", type=int, default=32, help="cap on distinct cases per op (most frequent kept)")
     ap.add_argument("--no-format", action="store_true", help="skip running black on the generated files")
+    ap.add_argument(
+        "--runtime-module",
+        help="dotted import path of the package holding graph_case.py (default: derived from --out)",
+    )
     args = ap.parse_args()
 
     print(f"reading {args.capture} ({args.capture.stat().st_size / 1e6:.0f} MB)")
     per_op, raw_counts, dropped_kwargs = build_cases(args.capture, verbose=True)
     args.out.mkdir(parents=True, exist_ok=True)
+
+    module = runtime_module(args.out, args.runtime_module)
+    print(f"generated tests will import their runtime from {module}.graph_case")
+    if not (args.out / "graph_case.py").exists():
+        print(f"  NOTE {args.out}/graph_case.py does not exist — copy it there and point its op_utils import at")
+        print("       this model's tests/ops/op_utils.py (assert_pcc / from_tt / the mesh fixture)")
 
     written = []
     for op, cases in per_op.items():
@@ -635,7 +674,7 @@ def main():
         if not cases:
             print(f"  SKIP {op}: no reconstructible cases ({len(dropped)} dropped)")
             continue
-        path = write_op_file(args.out, args.capture, op, cases, raw_counts[op], dropped, dropped_kwargs[op])
+        path = write_op_file(args.out, args.capture, op, cases, raw_counts[op], dropped, dropped_kwargs[op], module)
         written.append(path)
         note = f"  ({len(dropped)} case(s) not reconstructible)" if dropped else ""
         print(f"  wrote {path.name:<52} {len(cases):>3} cases{note}")
