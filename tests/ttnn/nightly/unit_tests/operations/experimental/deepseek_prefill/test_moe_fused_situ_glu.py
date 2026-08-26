@@ -95,7 +95,6 @@ def test_moe_fused_situ_glu_3584x3072_rm_bf16_bfp4(device, weight_scale):
         [weights[2]],
         COUNT,
         activation=ttnn.RoutedExpertActivation.SituGlu,
-        implementation=ttnn.RoutedExpertImplementation.MoeFusedSwiGlu,
     )
     composite_actual = ttnn.to_torch(composite_output)[0, 0, :COUNT].float()
     gate = x_host[0, 0].float() @ host_weights[0].float()
@@ -106,6 +105,9 @@ def test_moe_fused_situ_glu_3584x3072_rm_bf16_bfp4(device, weight_scale):
     assert torch.isfinite(composite_actual).all()
     assert_with_pcc(reference, actual, pcc=0.97)
     assert_with_pcc(reference, composite_actual, pcc=0.97)
+    # Cross-check between two DISTINCT kernels: moe_fused_swiglu against the
+    # composite's own. They compute the same math but block and accumulate
+    # differently, so this is a genuine agreement bound, not a self-comparison.
     assert_with_pcc(actual, composite_actual, pcc=0.999)
 
 
