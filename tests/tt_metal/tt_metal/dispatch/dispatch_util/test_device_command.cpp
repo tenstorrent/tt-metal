@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdlib>
-#include <numeric>
+#include <stdexcept>
+#include <string_view>
 #include "tt_metal/impl/dispatch/vector_aligned.hpp"
 #include <utility>
 #include <vector>
@@ -17,6 +17,7 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "tt_metal/impl/program/program_config_command_generator.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 
 namespace tt::tt_metal {
@@ -30,49 +31,100 @@ protected:
 
 TEST_F(DeviceCommandTest, CPU_ProgramConfigBatchingSplitsAtPrefetchEntryLimit) {
     constexpr uint32_t max_prefetch_command_size = 131072;
-    constexpr uint32_t pcie_alignment = 16;
-    constexpr uint32_t l1_alignment = 16;
-    constexpr std::array<uint32_t, 4> command_sizes = {70016, 60000, 60000, 29056};
+    const uint32_t pcie_alignment = ctx_.hal().get_alignment(HalMemType::HOST);
+    const uint32_t l1_alignment = ctx_.hal().get_alignment(HalMemType::L1);
+    constexpr uint32_t transfer_size = 60000;
+    constexpr uint32_t transfer_address_stride = 70000;
+    constexpr uint32_t transfer_count = 4;
 
-    EXPECT_TRUE(dispatch_write_packed_large_requires_new_command(
-        /*current_subcommand_count=*/2,
-        /*current_data_size_bytes=*/120000,
-        /*next_data_size_bytes=*/99072,
-        pcie_alignment,
-        l1_alignment,
-        max_prefetch_command_size));
-    EXPECT_FALSE(dispatch_write_packed_large_requires_new_command(
-        /*current_subcommand_count=*/1,
-        /*current_data_size_bytes=*/60000,
-        /*next_data_size_bytes=*/60000,
-        pcie_alignment,
-        l1_alignment,
-        max_prefetch_command_size));
-    EXPECT_TRUE(dispatch_write_packed_large_requires_new_command(
-        /*current_subcommand_count=*/CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS,
-        /*current_data_size_bytes=*/16,
-        /*next_data_size_bytes=*/16,
-        pcie_alignment,
-        l1_alignment,
-        max_prefetch_command_size));
-    EXPECT_LE(
-        dispatch_write_packed_large_size_bytes(1, 99072, pcie_alignment, l1_alignment), max_prefetch_command_size);
-
-    EXPECT_EQ(std::accumulate(command_sizes.begin(), command_sizes.end(), 0U), 219072);
-    EXPECT_TRUE(std::ranges::all_of(command_sizes, [](uint32_t size) { return size <= max_prefetch_command_size; }));
-}
-
-TEST_F(DeviceCommandTest, CPU_ProgramConfigCommandsRetainPrefetchEntryBoundaries) {
-    constexpr size_t command_count = 4;
-    ProgramCommandSequence program_commands(ctx_);
-    for (size_t command_index = 0; command_index < command_count; ++command_index) {
-        program_commands.program_config_buffer_command_sequences.emplace_back(ctx_);
+    std::array<std::vector<uint8_t>, transfer_count> transfer_payloads;
+    program_dispatch::BatchedTransfers batched_transfers;
+    auto& transfers_for_destination = batched_transfers[{/*noc_xy_addr=*/0x1234, /*num_mcast_dests=*/1}];
+    for (uint32_t transfer_index = 0; transfer_index < transfer_count; ++transfer_index) {
+        transfer_payloads[transfer_index].resize(transfer_size);
+        const uint32_t start_address = transfer_index * transfer_address_stride;
+        transfers_for_destination.emplace(
+            start_address,
+            std::vector<program_dispatch::Transfer>{program_dispatch::Transfer{
+                .start = start_address,
+                .data = ttsl::Span<const uint8_t>(
+                    transfer_payloads[transfer_index].data(), transfer_payloads[transfer_index].size())}});
     }
+
+    DeviceCommandCalculator calculator(pcie_alignment, l1_alignment);
+    program_dispatch::BatchedTransferGenerator generator(program_dispatch::ProgramConfigCommandOptions{
+        .pcie_alignment = pcie_alignment,
+        .l1_alignment = l1_alignment,
+        .max_prefetch_command_size = max_prefetch_command_size,
+        .watcher_assert_enabled = false});
+    generator.construct_commands(batched_transfers, calculator);
+    ASSERT_EQ(generator.command_count(), 2);
+
+    ProgramCommandSequence program_commands(ctx_);
+    generator.assemble_commands(program_commands, program_commands.program_config_buffer_command_sequences);
+    ASSERT_EQ(program_commands.program_config_buffer_command_sequences.size(), generator.command_count());
 
     size_t visited_command_count = 0;
     program_commands.visit_program_config_buffer_commands(
-        [&visited_command_count](const HostMemDeviceCommand&) { ++visited_command_count; });
-    EXPECT_EQ(visited_command_count, command_count);
+        [&visited_command_count, max_prefetch_command_size](const HostMemDeviceCommand& command) {
+            EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
+            EXPECT_LE(command.size_bytes(), max_prefetch_command_size);
+            ++visited_command_count;
+        });
+    EXPECT_EQ(visited_command_count, generator.command_count());
+    EXPECT_EQ(program_commands.get_program_config_buffer_size(), calculator.write_offset_bytes());
+}
+
+TEST_F(DeviceCommandTest, CPU_ProgramConfigBatchingRejectsOversizedTransfer) {
+    constexpr uint32_t max_prefetch_command_size = 50000;
+    constexpr uint32_t transfer_size = 60000;
+    const uint32_t pcie_alignment = ctx_.hal().get_alignment(HalMemType::HOST);
+    const uint32_t l1_alignment = ctx_.hal().get_alignment(HalMemType::L1);
+
+    std::vector<uint8_t> transfer_payload(transfer_size);
+    program_dispatch::BatchedTransfers batched_transfers;
+    batched_transfers[{/*noc_xy_addr=*/0x1234, /*num_mcast_dests=*/1}].emplace(
+        0,
+        std::vector<program_dispatch::Transfer>{program_dispatch::Transfer{
+            .start = 0, .data = ttsl::Span<const uint8_t>(transfer_payload.data(), transfer_payload.size())}});
+
+    DeviceCommandCalculator calculator(pcie_alignment, l1_alignment);
+    program_dispatch::BatchedTransferGenerator generator(program_dispatch::ProgramConfigCommandOptions{
+        .pcie_alignment = pcie_alignment,
+        .l1_alignment = l1_alignment,
+        .max_prefetch_command_size = max_prefetch_command_size,
+        .watcher_assert_enabled = false});
+    try {
+        generator.construct_commands(batched_transfers, calculator);
+        FAIL() << "Expected an oversized program-configuration transfer to be rejected";
+    } catch (const std::runtime_error& error) {
+        EXPECT_NE(std::string_view(error.what()).find("single program-configuration transfer"), std::string_view::npos);
+    }
+}
+
+TEST_F(DeviceCommandTest, CPU_CommandContextSurvivesMove) {
+    constexpr uint32_t transfer_size = 17;
+    const uint32_t l1_alignment = ctx_.hal().get_alignment(HalMemType::L1);
+
+    DeviceCommandCalculator calculator(ctx_);
+    calculator.add_dispatch_write_packed_large(/*num_sub_cmds=*/1, transfer_size);
+
+    HostMemDeviceCommand original_command(ctx_, calculator.write_offset_bytes());
+    HostMemDeviceCommand moved_command(std::move(original_command));
+    std::vector<CQDispatchWritePackedLargeSubCmd> subcommands(1);
+    std::array<uint8_t, transfer_size> payload{};
+    const std::vector<ttsl::Span<const uint8_t>> data_collection{
+        ttsl::Span<const uint8_t>(payload.data(), payload.size())};
+    std::vector<uint8_t*> data_collection_locations;
+    moved_command.add_dispatch_write_packed_large(
+        CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_TYPE_CBS_SEMS_CRTAS,
+        l1_alignment,
+        static_cast<uint16_t>(subcommands.size()),
+        subcommands,
+        data_collection,
+        &data_collection_locations);
+
+    EXPECT_EQ(moved_command.size_bytes(), moved_command.write_offset_bytes());
 }
 
 TEST_F(DeviceCommandTest, CPU_AddDispatchWait) {
