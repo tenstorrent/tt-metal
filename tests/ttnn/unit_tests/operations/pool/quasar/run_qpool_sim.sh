@@ -1,28 +1,26 @@
 #!/usr/bin/env bash
 # Quasar pool debug runner — wraps test_qpool_debug.py with the craq-sim environment.
 #
-# Usage:  [QPOOL_* vars] ./run_qpool_sim.sh [extra pytest args]
-# See test_qpool_debug.py's docstring for the QPOOL_* trace/pattern controls. Examples:
-#   ./run_qpool_sim.sh                                          # tiny default trace, random input
-#   QPOOL_SHAPE=112,112,64 QPOOL_PATTERN=sticks ./run_qpool_sim.sh
-#   QPOOL_PATTERN=ones QPOOL_CORES=1 ./run_qpool_sim.sh
+# Usage:  ./run_qpool_sim.sh [extra pytest args]
+# The trace itself (shape, kernel, pattern, cores, ...) is configured by editing the
+# CONFIG block at the top of test_qpool_debug.py.
 #
-# Sim library resolution (in order):
-#   1. QPOOL_SIM_SO=<path to libttsim.so>   (a soc_descriptor.yaml is staged beside it if missing)
-#   2. $HOME/sim/qsr/libttsim.so
-#   3. auto-staged from ${CRAQ_SIM_HOME:-/localdev/$USER/craq-sim}/src/_out/release_qsr/libttsim.so
-#
-# Runs are wrapped in `timeout` (QPOOL_TIMEOUT seconds, default 1800): a functional sim never
-# fails a hang — it just spins — so a timeout exit (124) should be read as a device-side hang.
+# Runs are wrapped in `timeout` (TIMEOUT_S below): a functional sim never fails a hang —
+# it just spins — so a timeout exit (124) should be read as a device-side hang.
 set -euo pipefail
+
+# =============================== CONFIG — edit me ===============================
+SIM_SO="$HOME/sim/qsr/libttsim.so"          # Quasar craq-sim library (soc_descriptor.yaml
+                                            # is staged beside it if missing)
+CRAQ_DIR="/localdev/$USER/craq-sim"         # craq-sim clone used to auto-stage SIM_SO
+TIMEOUT_S=1800                              # kill the run after this many seconds
+# =================================================================================
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR" && git rev-parse --show-toplevel)
 
-SIM_SO="${QPOOL_SIM_SO:-$HOME/sim/qsr/libttsim.so}"
 if [[ ! -f "$SIM_SO" ]]; then
-    CRAQ="${CRAQ_SIM_HOME:-/localdev/$USER/craq-sim}"
-    BUILT="$CRAQ/src/_out/release_qsr/libttsim.so"
+    BUILT="$CRAQ_DIR/src/_out/release_qsr/libttsim.so"
     if [[ -f "$BUILT" ]]; then
         mkdir -p "$(dirname "$SIM_SO")"
         cp "$BUILT" "$SIM_SO"
@@ -31,8 +29,8 @@ if [[ ! -f "$SIM_SO" ]]; then
         cat >&2 <<EOF
 QPOOL: no Quasar sim library at $SIM_SO and no craq-sim build at $BUILT.
 Build one with:
-    git clone -b quasar git@github.com:tenstorrent/craq-sim.git $CRAQ
-    cd $CRAQ && ./make.py --env TTSIM_MARCH=-march=x86-64-v3 src/_out/release_qsr/libttsim.so
+    git clone -b quasar git@github.com:tenstorrent/craq-sim.git $CRAQ_DIR
+    cd $CRAQ_DIR && ./make.py --env TTSIM_MARCH=-march=x86-64-v3 src/_out/release_qsr/libttsim.so
 (TTSIM_MARCH=-march=x86-64-v3 is only needed on non-AVX-512 hosts, e.g. Zen 2. Keep LTO on:
  disabling it with TTSIM_LTO=0 makes the sim ~20x slower; add it only if the LTO link fails.)
 EOF
@@ -52,12 +50,11 @@ export TT_METAL_FORCE_JIT_COMPILE=1
 unset TT_METAL_LLK_ASSERTS TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS 2>/dev/null || true
 
 cd "$REPO_ROOT"
-TIMEOUT="${QPOOL_TIMEOUT:-1800}"
 set +e
-timeout --foreground "$TIMEOUT" pytest -q -s "$SCRIPT_DIR/test_qpool_debug.py" "$@"
+timeout --foreground "$TIMEOUT_S" pytest -q -s "$SCRIPT_DIR/test_qpool_debug.py" "$@"
 rc=$?
 set -e
 if [[ $rc -eq 124 ]]; then
-    echo "QPOOL: TIMED OUT after ${TIMEOUT}s — treat as a device-side HANG (the sim spins silently on hangs)."
+    echo "QPOOL: TIMED OUT after ${TIMEOUT_S}s — treat as a device-side HANG (the sim spins silently on hangs)."
 fi
 exit $rc
