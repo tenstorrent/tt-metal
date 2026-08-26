@@ -188,7 +188,7 @@ RingSemaphores allocate_ring_semaphores(ttnn::MeshDevice* mesh, uint32_t num_lin
         return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
     };
     RingSemaphores sems{make(), make(), make(), {}, {}};
-    for (uint32_t j = 0; j < UNTILIZERS_PER_GROUP; j++) {
+    for (uint32_t j = 0; j < untilizers_per_group(); j++) {
         sems.untilized.push_back(make());
     }
     for (uint32_t c = 0; c < num_links; c++) {

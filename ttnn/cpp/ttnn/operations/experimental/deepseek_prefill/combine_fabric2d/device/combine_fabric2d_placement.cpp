@@ -5,6 +5,7 @@
 #include "combine_fabric2d_placement.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <set>
 
 #include <tt-metalium/device.hpp>
@@ -51,7 +52,7 @@ UntilizerGroups decide_untilizers(
     UntilizerGroups groups;
     for (uint32_t g = 0; g < UNTILIZER_GROUPS; g++) {
         TT_FATAL(!columns[g].empty(), "combine_fabric2d {}: untilizer group {} has no senders to serve", who, g);
-        for (uint32_t i = 0; i < UNTILIZERS_PER_GROUP; i++) {
+        for (uint32_t i = 0; i < untilizers_per_group(); i++) {
             const CoreCoord core{columns[g][i % columns[g].size()], first_row + i / columns[g].size()};
             TT_FATAL(
                 core.y < grid.y,
@@ -152,6 +153,20 @@ DevicePlacement decide_device_placement(
 }
 
 }  // namespace
+
+uint32_t untilizers_per_group() {
+    static const uint32_t n = [] {
+        const char* env = std::getenv("CMBF2D_UNTILIZERS_PER_GROUP");
+        const uint32_t v = env != nullptr ? static_cast<uint32_t>(std::atoi(env)) : MAX_UNTILIZERS_PER_GROUP;
+        TT_FATAL(
+            v >= 1 && v <= MAX_UNTILIZERS_PER_GROUP,
+            "CMBF2D_UNTILIZERS_PER_GROUP is {}, outside 1..{}",
+            v,
+            MAX_UNTILIZERS_PER_GROUP);
+        return v;
+    }();
+    return n;
+}
 
 MeshPlacement decide_placement(ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links) {
     TT_FATAL(mesh != nullptr, "combine_fabric2d: mesh device is null");
