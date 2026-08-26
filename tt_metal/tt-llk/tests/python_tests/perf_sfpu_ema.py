@@ -71,10 +71,7 @@ def test_perf_sfpu_ema(
     configuration = PerfConfig(
         "sources/sfpu_ema_perf.cpp",
         formats,
-        # MATH_ISOLATE hangs the unpack/math valid-bit handshake for this stateful
-        # two-dst-tile kernel; L1_TO_L1 exercises the same path as the functional
-        # test and is what the numbers below come from.
-        run_types=[PerfRunType.L1_TO_L1],
+        run_types=[PerfRunType.MATH_ISOLATE, PerfRunType.L1_TO_L1],
         # Everything compile-time so the measured kernel does no runtime-parameter
         # reads; all sweep values are single-valued so this does not expand the matrix.
         templates=[

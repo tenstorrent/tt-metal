@@ -70,10 +70,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             // Math isolate wants no software sync from unpack to math, so only the
             // unavoidable hardware valid-bit handshake is driven here.
-            // One valid per tile, matching the single TTI_CLEARDVALID the math side
-            // issues per tile. A num_faces factor here would leave valids unconsumed and
-            // hang the handshake.
-            _perf_unpack_loop_set_valid</* src A */ true, /* src B */ false>(TILE_CNT * LOOP_FACTOR);
+            // One valid per face: the datacopy on the math side of MATH_ISOLATE consumes
+            // SrcA a face at a time, so this count has to include num_faces. It must stay
+            // in step with whatever the math isolate path actually retires -- a mismatch
+            // in either direction hangs the handshake.
+            _perf_unpack_loop_set_valid</* src A */ true, /* src B */ is_fp32_dest_acc_en>(num_faces * TILE_CNT * LOOP_FACTOR);
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
@@ -141,21 +142,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // Only the SFPU math block: no datacopy and no dest handshake, so the
             // measurement is the EMA kernel itself.
             //
-            // llk_math_ema_sfpu_tile brackets itself with
-            // _llk_math_eltwise_sfpu_start_/_done_. Calling it in a loop would re-enter
-            // that bracket every tile, which both hangs the math thread and would charge
-            // the per-tile bracket to the measurement. Bracket once and call the raw
-            // kernel inside, which is the same shape the reduce perf source uses.
-            _llk_math_eltwise_sfpu_start_(EMA_INPUT_DST_INDEX);
+            // Same shape as eltwise_unary_sfpu_perf.cpp's MATH_ISOLATE: the datacopy
+            // stays in. It is what consumes the SrcA valid bits that unpack sets, so
+            // dropping it and trying to retire them with a bare TTI_CLEARDVALID hangs the
+            // math thread. The datacopy is therefore a fixed cost inside this marker, the
+            // same way it is for every other unary SFPU op measured this way -- it is
+            // constant across a before/after comparison of the SFPU block, so it cancels
+            // in the delta.
+            //
+            // EMA always works through dst tile 0 (input) and dst tile 1 (output) via
+            // compile-time offsets, so there is no MAX_TILES_DEST blocking here: every
+            // iteration copies into tile 0 and the kernel writes tile 1.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
                 {
-                    sfpu::_calculate_ema_tile_();
-                    TTI_CLEARDVALID(1, 0);
+                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                        EMA_INPUT_DST_INDEX, formats.math, formats.math);
+                    llk_math_ema_sfpu_tile(EMA_INPUT_DST_INDEX);
                 }
             }
-            _llk_math_eltwise_sfpu_done_();
         }
         else // L1_TO_L1
         {
