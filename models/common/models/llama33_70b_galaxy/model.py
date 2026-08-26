@@ -930,17 +930,20 @@ def build_llama33_70b_galaxy_transformer_2d_config(
         max_batch_size=geometry.max_batch_size,
         embed_scale=1.0,
         decode_output_dtype=precision.decode_activation_dtype,
-        # DRAM, not L1_MEMORY_CONFIG. An L1 *interleaved* embedding output is
-        # round-robined over the whole compute grid, including the two prefetch
-        # sender columns, where the Galaxy global circular buffer already holds
-        # ~55 MB of L1. `ttnn.embedding` then fails to place its own static
-        # circular buffers:
+        # The residual placement itself, not L1_MEMORY_CONFIG and not DRAM.
+        # `ttnn.embedding` takes its program grid from a *sharded* output's shard
+        # grid, and only from there: with an interleaved output - L1 or DRAM - it
+        # spreads over the whole compute grid, including the two prefetch sender
+        # columns, and cannot place its own static circular buffers around the
+        # prefetcher's L1 there:
         #     TT_THROW ... Statically allocated circular buffers in program N
         #     clash with L1 buffers on core range [0-0 - 0-0]
-        # `embed_decode` relocates this straight into the width-sharded,
-        # worker-confined residual placement, so the L1 intermediate bought
-        # nothing that survived the next line.
-        decode_output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+        # Naming the residual placement confines the program to the 16
+        # worker cores that placement already occupies, and makes the relocation
+        # in `embed_decode` a no-op instead of a second copy. Tilized width
+        # sharding is legal for this op: shard [32, 128] is tile-aligned and
+        # divides the local hidden width.
+        decode_output_memcfg=decode.residual_memcfg,
         prefill_output_dtype=precision.prefill_activation_dtype,
         prefill_output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -1048,23 +1051,82 @@ def build_llama33_70b_galaxy_transformer_2d_config(
 
 
 def _relocate(tensor: Any, memory_config: Any, dtype: Any = None) -> Any:
-    """Place a tensor exactly, releasing the source when a copy is produced."""
+    """Place and recast a tensor without leaving the decode sub-device partition.
 
-    needs_placement = memory_config is not None and tensor.memory_config() != memory_config
+    Three of the obvious ways to write this are unsafe on WH Galaxy, because the
+    decode sub-device manager owns only part of the compute grid and tt-metal
+    rejects a program that touches a core the manager does not own:
+
+        TT_FATAL ... Kernel group cores do not match sub device cores
+                     for programmable core type TENSIX
+
+    * ``to_memory_config(t, memcfg, dtype)`` - the three-argument form - goes to
+      ``ttnn::prim::copy``, whose factory splits work over
+      ``device->compute_with_storage_grid_size()`` (with a standing TODO to use
+      the sub-device's worker cores instead).
+    * ``ttnn.typecast(t, dtype)`` on this model's sharded activations reaches the
+      same full-grid split.
+    * ``to_memory_config(t, memcfg)`` between two shard specs that differ in both
+      grid and width - the decode residual grid, 16 cores at 128 wide, to the MLP
+      ring grid, 24 cores at 96 wide - resolves to
+      ``reshard_program_factory_generic``, which also builds over the full grid.
+
+    What *is* safe is the explicit pair: ``sharded_to_interleaved`` runs on its
+    input's ``shard_spec.grid`` and ``interleaved_to_sharded`` on its output
+    shard's cores, and both of those are worker-confined here. Both accept
+    ``output_dtype``, so the recast rides along instead of needing an op of its
+    own.
+
+    The cost is one DRAM round trip per placement hop. That is a real
+    decode-latency cost and belongs on the performance follow-up list; it is not
+    the reason any of this is correct.
+    """
+
+    source_memcfg = tensor.memory_config()
+    needs_placement = memory_config is not None and source_memcfg != memory_config
     needs_dtype = dtype is not None and tensor.dtype != dtype
     if not needs_placement and not needs_dtype:
         return tensor
-    if needs_placement:
-        placed = (
-            ttnn.to_memory_config(tensor, memory_config, dtype)
-            if needs_dtype
-            else ttnn.to_memory_config(tensor, memory_config)
-        )
-    else:
-        placed = ttnn.typecast(tensor, dtype=dtype)
-    if placed is not tensor:
+
+    target_memcfg = memory_config if needs_placement else source_memcfg
+    cast_to = dtype if needs_dtype else None
+
+    if source_memcfg.is_sharded():
+        staged = ttnn.sharded_to_interleaved(tensor, ttnn.DRAM_MEMORY_CONFIG, output_dtype=cast_to)
         deallocate_if_allocated(tensor)
-    return placed
+        if not target_memcfg.is_sharded():
+            if staged.memory_config() == target_memcfg:
+                return staged
+            placed = ttnn.to_memory_config(staged, target_memcfg)
+            if placed is not staged:
+                deallocate_if_allocated(staged)
+            return placed
+        placed = ttnn.interleaved_to_sharded(staged, target_memcfg)
+        deallocate_if_allocated(staged)
+        return placed
+
+    if target_memcfg.is_sharded():
+        placed = ttnn.interleaved_to_sharded(tensor, target_memcfg, output_dtype=cast_to)
+        if placed is not tensor:
+            deallocate_if_allocated(tensor)
+        return placed
+
+    # Interleaved to interleaved. No sharded staging is available to carry the
+    # recast, so this is the one path still exposed to the full-grid typecast
+    # factory. It is not reached by the decode graph, whose activations are
+    # sharded wherever a recast is asked for; if a future recipe does reach it
+    # under a loaded partition, it will abort loudly rather than silently.
+    if needs_dtype:
+        recast = ttnn.typecast(tensor, dtype=dtype)
+        if recast is not tensor:
+            deallocate_if_allocated(tensor)
+        tensor = recast
+    if needs_placement and tensor.memory_config() != target_memcfg:
+        placed = ttnn.to_memory_config(tensor, target_memcfg)
+        if placed is not tensor:
+            deallocate_if_allocated(tensor)
+        tensor = placed
+    return tensor
 
 
 def _release_unless(tensor: Any, *keep: Any) -> None:

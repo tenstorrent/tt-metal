@@ -269,8 +269,18 @@ class RMSNorm2D(LightweightModule):
     def _decode_distributed(self, x: ttnn.Tensor, *, release_input: bool = False) -> ttnn.Tensor:
         """Run the module-owned distributed decode recipe on a resolved tensor."""
         cfg = self.config
-        # Convert to sharded memory config
-        distributed_input = ttnn.to_memory_config(x, memory_config=cfg.decode_input_memcfg)
+        # Convert to sharded memory config, but only if it is not already there.
+        # `ttnn.to_memory_config` returns *the same* tt_metal tensor when the
+        # requested config already matches, and nanobind hands that back as a
+        # fresh Python wrapper - so `is not` below cannot tell "no copy was made"
+        # from "a copy was made". Guarding on the config, the way
+        # `attention_2d.py::_place_qk` and the Galaxy models' `_relocate` already
+        # do, keeps the identity test meaningful.
+        distributed_input = (
+            ttnn.to_memory_config(x, memory_config=cfg.decode_input_memcfg)
+            if x.memory_config() != cfg.decode_input_memcfg
+            else x
+        )
 
         # Run distributed rmsnorm part 1 (sharded)
         tt_stats = ttnn.rms_norm_pre_all_gather(distributed_input, program_config=cfg.decode_progcfg)
@@ -308,7 +318,7 @@ class RMSNorm2D(LightweightModule):
         if release_input:
             x.deallocate(True)
 
-        if cfg.decode_output_memcfg is not None:
+        if cfg.decode_output_memcfg is not None and tt_out.memory_config() != cfg.decode_output_memcfg:
             unplaced_output = tt_out
             tt_out = ttnn.to_memory_config(unplaced_output, cfg.decode_output_memcfg)
             if tt_out is not unplaced_output:

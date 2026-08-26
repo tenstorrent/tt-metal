@@ -434,34 +434,99 @@ class GalaxyAttentionCollectives:
         return self._batch_offsets
 
     def _all_reduce(self, tensor: Any, *, mode: str, cluster_axis: int) -> Any:
+        """Reduce the attention output over a mesh axis, inside the partition.
+
+        Split by mode, exactly as the qualified ``MLP2D._all_reduce_tg`` is:
+
+        **Decode** uses ``ttnn.experimental.all_reduce_async`` against the keyed
+        resource's persistent buffer. That is the same call MLP2D makes for the
+        identical axis-0 hidden reduction, against the same shared resource -
+        ``build_galaxy_decode_collectives`` says so: "Attention and MLP finish
+        decode with the same axis-0 hidden reduction, so they share one keyed
+        resource and one persistent buffer". The buffer's ``(8, 4, TILE, W)``
+        row-sharded shape is a ``buffer_tensor``, not a scatter output, which is
+        why the previous ``reduce_scatter`` + ``all_gather`` pair here validated
+        it and then never passed it anywhere.
+
+        That pair cannot run under the decode partition at all. The Galaxy decode
+        worker sub-device is **not contiguous** - ``worker_cores()`` is ``x=1..3``
+        plus ``x=5..6``, split by the ``x=4`` prefetch sender column - and
+        ``ttnn.reduce_scatter``'s program factory lays its workers out from
+        ``worker_cores(TENSIX, sub_device_id).bounding_box()``, which spans
+        straight across that sender column:
+
+            TT_FATAL ... Kernel group cores do not match sub device cores
+                         for programmable core type TENSIX
+
+        (``reduce_scatter_program_factory.cpp`` carries its own note that
+        "interaction with subdevice needs to be investigated".)
+
+        ``all_reduce_async`` additionally requires a ``WIDTH_SHARDED`` input,
+        while the ``wo`` projection lands in interleaved DRAM, so the input is
+        first placed into the reduction's own output placement with
+        ``interleaved_to_sharded`` - which runs on that placement's cores and so
+        stays inside the partition. No ``dtype`` is passed: the precision recipe
+        keeps the residual stream in bfloat16 so an 80-layer running sum is never
+        re-quantized, and this reduction is part of that sum.
+
+        **Prefill** keeps the plain ``reduce_scatter`` + ``all_gather`` pair,
+        which is what MLP2D uses for prefill too (its ``persistent=False``
+        branch). The prefill mode plan is not partitioned the way decode is.
+        """
+
         context = self.resources.context(mode)
         resource = select_galaxy_resource(context, "all_reduce", cluster_axis, tensor)
         if not resource.persistent_output_buffers:
             raise ValueError(f"{mode} attention all-reduce axis {cluster_axis} requires a persistent output")
         output_memcfg = self._all_reduce_output_memory_config(mode, cluster_axis)
-        reduced = ttnn.reduce_scatter(
-            tensor,
-            3,
-            cluster_axis=cluster_axis,
-            num_links=resource.num_links,
-            topology=resource.topology,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            subdevice_id=context.worker_sub_device_id,
-        )
-        try:
-            output = ttnn.all_gather(
-                reduced,
+
+        if mode != "decode":
+            reduced = ttnn.reduce_scatter(
+                tensor,
                 3,
                 cluster_axis=cluster_axis,
                 num_links=resource.num_links,
                 topology=resource.topology,
-                memory_config=output_memcfg,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 subdevice_id=context.worker_sub_device_id,
+            )
+            try:
+                return ttnn.all_gather(
+                    reduced,
+                    3,
+                    cluster_axis=cluster_axis,
+                    num_links=resource.num_links,
+                    topology=resource.topology,
+                    memory_config=output_memcfg,
+                    subdevice_id=context.worker_sub_device_id,
+                )
+            finally:
+                self.resources.synchronize(mode)
+                deallocate_if_allocated(reduced)
+
+        key = resource.key
+        staged = tensor
+        if not tensor.memory_config().is_sharded():
+            staged = ttnn.interleaved_to_sharded(tensor, output_memcfg)
+        try:
+            return ttnn.experimental.all_reduce_async(
+                staged,
+                resource.persistent_output_buffers[0],
+                cluster_axis=cluster_axis,
+                mesh_device=self.mesh_device,
+                multi_device_global_semaphore=context.next_semaphore_handles(
+                    key.operation, key.cluster_axis, key.geometry, key.sequence_key
+                ),
+                num_links=resource.num_links,
+                memory_config=output_memcfg,
+                topology=resource.topology,
+                subdevice_id=context.worker_sub_device_id,
+                use_optimal_ccl_for_llama=True,
             )
         finally:
             self.resources.synchronize(mode)
-            deallocate_if_allocated(reduced)
-        return output
+            if staged is not tensor:
+                deallocate_if_allocated(staged)
 
     def _all_reduce_output_memory_config(self, mode: str, cluster_axis: int) -> Any:
         if mode != "decode":

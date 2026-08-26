@@ -35,11 +35,20 @@ LLAMA = dict(dim=8192, hidden_dim=28672, n_heads=64, n_kv_heads=8, head_dim=128,
 
 
 class _Tensor:
-    """A shape-only stand-in for a TTNN tensor."""
+    """A shape-only stand-in for a TTNN tensor.
 
-    def __init__(self, name, shape):
+    ``sharded`` matters for the decode output reduction: ``all_reduce_async``
+    rejects an interleaved input, so the collective width-shards it first, and
+    the default here models the interleaved ``wo`` output that really arrives.
+    """
+
+    def __init__(self, name, shape, sharded=False):
         self.name = name
         self.shape = tuple(shape)
+        self.sharded = sharded
+
+    def memory_config(self):
+        return SimpleNamespace(is_sharded=lambda: self.sharded)
 
     def is_allocated(self):
         return True
@@ -66,6 +75,12 @@ def collectives(monkeypatch):
 
     events = []
 
+    # The output reduction is mode-split, mirroring MLP2D: prefill keeps the
+    # plain reduce_scatter + all_gather pair, decode uses all_reduce_async
+    # against the keyed resource's persistent buffer. Decode cannot use the pair
+    # because the Galaxy decode worker sub-device is non-contiguous and
+    # ttnn.reduce_scatter places its workers from that sub-device's bounding box,
+    # which crosses the x=4 prefetch sender column.
     def reduce_scatter(tensor, dim, **kwargs):
         events.append(("reduce_scatter", tensor.shape))
         return _Tensor("scattered", tensor.shape)
@@ -74,23 +89,40 @@ def collectives(monkeypatch):
         events.append(("all_gather", tensor.shape))
         return _Tensor("reduced", tensor.shape)
 
+    def all_reduce_async(tensor, buffer_tensor, **kwargs):
+        events.append(("all_reduce_async", tensor.shape))
+        return _Tensor("reduced", tensor.shape)
+
+    def interleaved_to_sharded(tensor, memory_config, **kwargs):
+        events.append(("interleaved_to_sharded", tensor.shape))
+        return _Tensor(f"sharded-{tensor.name}", tensor.shape)
+
     def reshape(tensor, shape):
         events.append(("reshape", tuple(shape)))
         return _Tensor(f"view-{tensor.name}", tuple(shape))
 
     monkeypatch.setattr(galaxy_collectives.ttnn, "reduce_scatter", reduce_scatter)
     monkeypatch.setattr(galaxy_collectives.ttnn, "all_gather", all_gather)
+    monkeypatch.setattr(galaxy_collectives.ttnn.experimental, "all_reduce_async", all_reduce_async)
+    monkeypatch.setattr(galaxy_collectives.ttnn, "interleaved_to_sharded", interleaved_to_sharded)
     monkeypatch.setattr(galaxy_collectives.ttnn, "reshape", reshape)
     monkeypatch.setattr(galaxy_collectives.ttnn, "Shape", lambda value: tuple(value))
     monkeypatch.setattr(
         galaxy_collectives,
         "select_galaxy_resource",
         lambda *args, **kwargs: SimpleNamespace(
-            num_links=1, topology="ring", persistent_output_buffers=(_Tensor("buffer", (1,)),)
+            num_links=1,
+            topology="ring",
+            persistent_output_buffers=(_Tensor("buffer", (1,)),),
+            key=SimpleNamespace(operation="all_reduce", cluster_axis=0, geometry=(), sequence_key=None),
         ),
     )
     resources = SimpleNamespace(
-        context=lambda mode: SimpleNamespace(worker_sub_device_id="worker"),
+        context=lambda mode: SimpleNamespace(
+            worker_sub_device_id="worker",
+            next_semaphore_handles=lambda *args, **kwargs: ["sem0", "sem1", "sem2"],
+            next_barrier_semaphore_handle=lambda *args, **kwargs: "barrier",
+        ),
         synchronize=lambda mode: events.append(("synchronize", mode)),
     )
     instance = GalaxyAttentionCollectives(
@@ -229,3 +261,26 @@ def test_deallocating_an_already_released_tensor_is_a_no_op():
     galaxy_collectives.deallocate_if_allocated(None)
 
     assert calls == []
+
+
+def test_decode_output_reduction_uses_all_reduce_async_not_the_scatter_pair(collectives):
+    """Decode may not use ttnn.reduce_scatter: the worker sub-device is split.
+
+    ``ttnn.reduce_scatter`` derives its worker layout from
+    ``worker_cores(TENSIX, sub_device_id).bounding_box()``. On WH Galaxy that
+    bounding box spans the ``x=4`` prefetch sender column, so the program lands
+    on cores the decode sub-device manager does not own and aborts with "Kernel
+    group cores do not match sub device cores". ``all_reduce_async`` takes the
+    keyed resource's persistent buffer and stays inside the partition.
+    """
+
+    output = collectives.reduce_output(_Tensor("wo", (1, 1, 32, 2048)), mode="decode", recipe=None)
+
+    assert output.shape == (1, 1, 32, 2048)
+    labels = [event[0] for event in collectives.events]
+    assert "all_reduce_async" in labels, labels
+    assert "reduce_scatter" not in labels, labels
+    assert "all_gather" not in labels, labels
+    # An interleaved wo output has to be width-sharded first; all_reduce_async
+    # rejects TensorMemoryLayout::INTERLEAVED outright.
+    assert "interleaved_to_sharded" in labels, labels

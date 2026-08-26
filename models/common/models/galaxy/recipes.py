@@ -231,11 +231,61 @@ def ring_matmul_program_config(local_k: int, padded_local_n: int) -> Any:
     )
 
 
-def dense_matmul_program_config(rows: int, local_k: int, local_n: int) -> Any:
-    """Return the qualified interleaved multicast matmul program config."""
+def dense_matmul_worker_rectangle(height: int) -> ttnn.CoreRangeSet:
+    """Return the widest worker rectangle a 2D mcast matmul may anchor in.
 
-    grid_x = 7
+    ``MatmulMultiCoreReuseMultiCastProgramConfig`` lays its work grid out as one
+    rectangle from ``allowed_worker_cores.bounding_box().start_coord``, so the
+    cores it can legally use are the largest rectangle that starts at the worker
+    envelope's origin and never leaves it. On WH Galaxy that is three columns
+    wide - ``worker_cores()`` is ``x=1..3`` and ``x=5..6``, split by the ``x=4``
+    prefetch sender column - and the width is searched for rather than named so
+    a change to the envelope moves this with it.
+    """
+
+    workers = worker_cores()
+    start = workers.bounding_box().start
+    width = 0
+    while True:
+        candidate = ttnn.CoreRangeSet({ttnn.CoreRange(start, ttnn.CoreCoord(start.x + width, start.y + height - 1))})
+        if candidate.subtract(workers).num_cores():
+            break
+        width += 1
+    if width == 0:
+        raise ValueError(f"no worker rectangle of height {height} exists at {start}")
+    return ttnn.CoreRangeSet({ttnn.CoreRange(start, ttnn.CoreCoord(start.x + width - 1, start.y + height - 1))})
+
+
+def dense_matmul_program_config(rows: int, local_k: int, local_n: int) -> Any:
+    """Return the qualified interleaved multicast matmul program config.
+
+    The work grid is confined to ``worker_cores()`` with ``allowed_worker_cores``.
+    Without it the op anchors at ``(0, 0)`` and spans the full seven-column
+    compute grid, which reaches the ``x=0`` and ``x=4`` prefetch sender columns
+    and the eight cores that belong to no sub-device at all, and the decode QKV
+    matmul then aborts with
+
+        TT_FATAL ... Illegal kernel placement for
+                     bmm_large_block_zm_fused_bias_activation,
+                     Kernels cannot be placed on dispatch cores!
+
+    This is Milestone A limitation L3. Milestone A recorded it against exactly
+    this ``(7, 1)`` grid and called it terminal; the Milestone B recipes moved
+    the *MLP* to the ring/``gather_in0`` form but left both attention matmuls on
+    this dense config, so L3 was still live on first silicon. ``ttnn`` grew
+    ``allowed_worker_cores`` for this, deprecating
+    ``compute_with_storage_grid_size``, and warns when a config that supports the
+    field leaves it unset - so this is a config fix, not a new mechanism.
+
+    Cost: three columns instead of seven, so these two matmuls get 3/7 of the
+    cores they would otherwise use. That is a correctness-first trade. Moving
+    attention to the 24-core ring form, as the MLP already is, is the
+    performance answer and is not this job's scope.
+    """
+
     grid_y = min(4, max(1, math.ceil(rows / TILE)))
+    allowed = dense_matmul_worker_rectangle(grid_y)
+    grid_x = allowed.bounding_box().end.x - allowed.bounding_box().start.x + 1
     m_tiles = max(1, math.ceil(rows / TILE))
     n_tiles = local_n // TILE
     k_tiles = local_k // TILE
@@ -249,6 +299,7 @@ def dense_matmul_program_config(rows: int, local_k: int, local_n: int) -> Any:
         transpose_mcast=False,
         fused_activation=None,
         fuse_batch=True,
+        allowed_worker_cores=allowed,
     )
 
 
