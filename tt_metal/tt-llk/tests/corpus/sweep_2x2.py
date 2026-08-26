@@ -888,6 +888,25 @@ KNOBS = {
     # census budget XTT_LAUNCH_FLATTEN_FN_BUDGET_WORDS stays as a belt.
     # Booking lever for topk-perf; typed-delivery rows only.
     "launch-flatten": "-mtt-tensix-optimize-launch-flatten",
+    # HJ madpair-vocabulary: MAD-PAIR discovery widened to the operand
+    # vocabulary the downstream combine itself fuses through — the
+    # lane-carrier _lv spellings of the pair members (the muli/addi
+    # immediate folds match those spellings too, so the fold decay
+    # exists there identically) and a single-use SFPMOV complement
+    # wrapper between mul and add (the -a+b rewrite shape).  Discovery
+    # widening ONLY: admission, refusal names, pair-atomic grouping,
+    # the cc-reach proof and pricing are the reviewed GA MAD-PAIR class
+    # unchanged; pairs outside the widened vocabulary keep their
+    # established recognition byte-identically (flag-off control twin).
+    # Fire witnesses (laneHJ-evidence-20260826, pin-30 binary + fix):
+    # smoothstep-fresh row loop 12 -> 11 tt-words (noel parity: the
+    # compl-wrapped 3-2x pair fuses to sfpmad via a claimed PRGM reg);
+    # tanhderivlut-fresh plain leg 17 -> 15 words/row (the sfpadd_lv
+    # CC-merge pair fuses; the lone-mul 16232 copy+muli decay is the
+    # NAMED residual — fold-decay copy pricing, successor class).
+    # Booking lever for smoothstep-fresh; the licensed tanhderivlut
+    # cell and every noel leg are byte-identical under the knob.
+    "madpair-vocabulary": "-mtt-tensix-optimize-madpair-vocabulary",
 }
 
 
@@ -1006,6 +1025,12 @@ KNOB_MODES = {
     # promotion requires an R9 witness and the ON-vs-ON attribution
     # ceremony.
     "launch-flatten": "on-plus",
+    # HJ madpair-vocabulary: default-off Init(0) booking knob; the
+    # widened discovery acts on the reviewed-ON pipeline's EL-hoisted
+    # shapes (the pairs only exist post-hoist), so the booking A/B is
+    # (ON + flag) vs plain ON.  on-plus while a booking knob; promotion
+    # requires an R9 witness and the ON-vs-ON attribution ceremony.
+    "madpair-vocabulary": "on-plus",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
