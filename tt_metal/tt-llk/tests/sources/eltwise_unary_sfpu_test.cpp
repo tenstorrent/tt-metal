@@ -74,6 +74,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "fresh_cpp/absint32.h"
 #include "fresh_cpp/add1.h"
 #include "fresh_cpp/bitwisenot.h"
+#include "fresh_cpp/arecipprobe.h"
 #include "fresh_cpp/castfp32tofp16a.h"
 #include "fresh_cpp/celu.h"
 #include "fresh_cpp/comp.h"
@@ -420,6 +421,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
             else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::cast_fp32_to_fp16a)
             {
                 SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_cast_fp32_to_fp16a_fresh_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            // Lane GW SFPARECIP-mode certification probes (fresh_cpp/arecipprobe.h):
+            // bare EXP (impl 5) / COND_RECIP (impl 6) against the ISA
+            // functional-model golden.  Hosted on SfpuType::identity (generic
+            // init, R7 LLK-pristine: no SfpuType enum extension); the python
+            // side keys the golden on its own MathOperation.Approx*Probe.
+            else if constexpr (FRESH_CPP_IMPL == 5 && SFPU_UNARY_OPERATION == SfpuType::identity)
+            {
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_approx_exp_probe_cpp, (iterations), block_tile, VectorMode::None);
+            }
+            else if constexpr (FRESH_CPP_IMPL == 6 && SFPU_UNARY_OPERATION == SfpuType::identity)
+            {
+                SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_approx_cond_recip_probe_cpp, (iterations), block_tile, VectorMode::None);
             }
             else if constexpr (FRESH_CPP_IMPL == 1 && SFPU_UNARY_OPERATION == SfpuType::celu)
             {
