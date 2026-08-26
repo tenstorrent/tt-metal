@@ -5,6 +5,7 @@
 #include <memory>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/allocator.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
 #include "allocator_state.hpp"
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include "allocator_types.hpp"
@@ -179,12 +180,59 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             break;
         case BufferType::L1: {
             // In HYBRID mode, gather per-bank ranges from device allocators so lockstep avoids occupied regions.
+            //
+            // A lockstep buffer takes ONE address. By default that address is kept clear of
+            // per-core allocations on EVERY bank, because an op may reach the buffer on a core
+            // outside its own shard grid -- a multicast writes to every core in its rectangle
+            // whether or not that core is a destination.
+            //
+            // That default is expensive. The ranges are neither deduplicated nor attributable to
+            // a core, so on a busy grid their union covers the whole address space and a placement
+            // fails with hundreds of KB still free. A buffer that nothing reaches outside its own
+            // cores can opt into range lockstep, which narrows the scan to the cores it occupies:
+            // a distribution spec's cores_with_data(), or a shard spec's grid.
+            //
+            // Either way the scan spans devices: a mesh buffer holds the same address on all of
+            // them.
             std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges;
             if (!hybrid_device_allocators_.empty()) {
                 using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
-                uint32_t num_banks = l1_manager_->num_banks();
+                std::vector<uint32_t> banks_to_scan;
+                auto add_bank_for = [&](const CoreCoord& core) {
+                    // A claimed service core is a legal shard core with no allocator bank (see the
+                    // shard-grid validation in Buffer), so it holds no per-core ranges to avoid.
+                    if (this->has_bank(BufferType::L1, core)) {
+                        banks_to_scan.push_back(logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0));
+                    }
+                };
+                const bool scope_to_own_cores =
+                    experimental::range_lockstep_allocation::is_range_lockstep_allocation(*buffer);
+                // A distribution spec reserves L1 on its cores_with_data(), which is what
+                // Buffer::num_cores() reports for it; shard_spec_ is not set on that path.
+                if (const auto& distribution_spec = buffer->buffer_distribution_spec();
+                    scope_to_own_cores && distribution_spec.has_value()) {
+                    const auto& cores = distribution_spec->cores_with_data();
+                    banks_to_scan.reserve(cores.size());
+                    for (const auto& core : cores) {
+                        add_bank_for(core);
+                    }
+                } else if (scope_to_own_cores && buffer->has_shard_spec()) {
+                    const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
+                    bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+                    const auto& cores = corerange_to_cores(grid, std::nullopt, row_major);
+                    banks_to_scan.reserve(cores.size());
+                    for (const auto& core : cores) {
+                        add_bank_for(core);
+                    }
+                } else {
+                    uint32_t num_l1_banks = l1_manager_->num_banks();
+                    banks_to_scan.reserve(num_l1_banks);
+                    for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {
+                        banks_to_scan.push_back(bank_id);
+                    }
+                }
                 for (auto* dev_alloc : hybrid_device_allocators_) {
-                    for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
+                    for (uint32_t bank_id : banks_to_scan) {
                         auto ranges = dev_alloc->get_l1_allocated_ranges(AllocatorID{bank_id + 1});
                         additional_ranges.insert(additional_ranges.end(), ranges.begin(), ranges.end());
                     }

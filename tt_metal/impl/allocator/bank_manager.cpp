@@ -505,10 +505,22 @@ uint64_t BankManager::allocate_buffer(
 
     if (!chosen.has_value()) {
         auto mem_stats = alloc->get_statistics();
+        // This allocator's own free list is not the whole story: dependency and additional
+        // occupied ranges are subtracted from it before an address is chosen. Reporting only
+        // the free/largest-free-block figures reads as capacity exhaustion even when the
+        // request failed with plenty free, so report what actually survived the subtraction.
+        DeviceAddr placeable_bytes = 0;
+        DeviceAddr largest_placeable = 0;
+        for (const auto& r : available_ranges) {
+            placeable_bytes += (r.second - r.first);
+            largest_placeable = std::max(largest_placeable, r.second - r.first);
+        }
         TT_FATAL(
             false,
             "Out of Memory: Not enough space after considering dependencies to allocate {} B {} across {} banks ({} B "
-            "per bank), bank size is {} B (allocated: {} B, free: {} B, largest free block: {} B)",
+            "per bank), bank size is {} B (allocated: {} B, free: {} B, largest free block: {} B). After subtracting "
+            "{} dependency and {} additional occupied range(s), {} B remained placeable across {} window(s), largest "
+            "{} B",
             size,
             enchantum::to_string(buffer_type_),
             num_banks,
@@ -516,7 +528,12 @@ uint64_t BankManager::allocate_buffer(
             bank_size(),
             mem_stats.total_allocated_bytes,
             mem_stats.total_free_bytes,
-            mem_stats.largest_free_block_bytes);
+            mem_stats.largest_free_block_bytes,
+            this->compute_merged_allocated_ranges(allocator_id).size(),
+            additional_occupied_ranges.size(),
+            placeable_bytes,
+            available_ranges.size(),
+            largest_placeable);
     }
     TT_FATAL(
         chosen.value() % alignment_bytes_ == 0,
