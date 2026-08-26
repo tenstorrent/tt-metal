@@ -731,10 +731,27 @@ def sampling_core_grids() -> tuple[ttnn.CoreRangeSet, ttnn.CoreRangeSet, ttnn.Co
 
 
 def rope_core_grids(mesh_device: Any, *, use_qk_fused: bool) -> tuple[Any, ttnn.CoreRangeSet]:
-    """Return the RotarySetup2D `(core_grid, batch_grid)` for Galaxy decode."""
+    """Return the RotarySetup2D `(core_grid, batch_grid)` for Galaxy decode.
+
+    ``batch_grid`` carries the decode cos/sin shards, so it must lie inside the
+    worker sub-device like every other decode placement here. Taking the first
+    ``rows`` cores of the *whole* compute grid instead puts shards on ``x=0`` and
+    ``x=4`` - the two prefetch sender columns - and on a core outside every
+    sub-device. ``ttnn.embedding`` then builds the decode tables on cores the
+    loaded decode sub-device manager does not own and aborts with
+
+        TT_FATAL ... Kernel group cores do not match sub device cores
+                     for programmable core type TENSIX
+
+    which is the same class of defect as the fused-norm statistics placement
+    (Milestone A D1/C1): a grid named independently of the partition that has to
+    contain it. ``_subgrid_cores`` is the qualified helper the attention KV, SDPA
+    and reduce-scatter placements already use; it anchors at the first worker
+    core ``(1, 0)`` and never leaves ``worker_cores()``.
+    """
 
     validate_galaxy_mesh("Galaxy RoPE", mesh_device)
     core_grid = mesh_device.compute_with_storage_grid_size()
     rows = GALAXY_USERS_PER_COLUMN * (2 if use_qk_fused else 1)
-    batch_grid = ttnn.num_cores_to_corerangeset(rows, core_grid, row_wise=True)
+    batch_grid = _subgrid_cores(rows, row_wise=True)
     return core_grid, batch_grid

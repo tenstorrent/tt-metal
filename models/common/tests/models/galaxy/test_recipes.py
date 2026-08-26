@@ -21,6 +21,7 @@ from models.common.models.galaxy.recipes import (
     dram_sharded_weight_memory_config,
     galaxy_padded_vocab_size,
     pad_ring_width,
+    prefetch_sender_cores,
     resolve_galaxy_decode_placements,
     resolve_galaxy_prefill_placements,
     rope_core_grids,
@@ -280,3 +281,39 @@ def test_geometry_is_frozen():
     with pytest.raises(FrozenInstanceError):
         geometry.dim = 4096
     assert replace(geometry, max_seq_len=4096).max_seq_len == 4096
+
+
+# =============================================================================
+# Decode placements must live inside the worker sub-device
+# =============================================================================
+
+
+@pytest.mark.parametrize("use_qk_fused", [False, True], ids=["plain", "qk-fused"])
+def test_rope_batch_grid_lies_inside_the_worker_sub_device(use_qk_fused):
+    """The decode cos/sin shards may not land on a prefetch sender column.
+
+    A program may only touch cores owned by the loaded sub-device manager. The
+    Galaxy decode manager partitions the grid into prefetch senders (``x=0`` and
+    ``x=4``) and workers, so a decode placement built from the *whole* compute
+    grid puts shards on sender cores and on a core outside every sub-device.
+    ``ttnn.embedding`` then aborts with ``Kernel group cores do not match sub
+    device cores for programmable core type TENSIX``, and because the abort
+    happens inside a multi-sub-device program it leaves the mesh un-drainable -
+    teardown blocks forever in ``FDMeshCommandQueue``'s destructor.
+
+    This is the same failure shape as Milestone A D1/C1 - a grid named
+    independently of the partition that must contain it - so it is checked on
+    host rather than left to a device run.
+    """
+
+    _, batch_grid = rope_core_grids(_mesh(), use_qk_fused=use_qk_fused)
+    rows = 8 * (2 if use_qk_fused else 1)
+    workers = worker_cores()
+
+    assert batch_grid.num_cores() == rows, (batch_grid.num_cores(), rows)
+    outside = batch_grid.subtract(workers)
+    assert outside.num_cores() == 0, f"{outside.num_cores()} rope core(s) outside worker_cores(): {outside}"
+
+    senders = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in prefetch_sender_cores()])
+    overlap = batch_grid.subtract(batch_grid.subtract(senders))
+    assert overlap.num_cores() == 0, f"rope shards overlap prefetch senders: {overlap}"

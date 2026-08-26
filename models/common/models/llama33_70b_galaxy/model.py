@@ -930,7 +930,17 @@ def build_llama33_70b_galaxy_transformer_2d_config(
         max_batch_size=geometry.max_batch_size,
         embed_scale=1.0,
         decode_output_dtype=precision.decode_activation_dtype,
-        decode_output_memcfg=ttnn.L1_MEMORY_CONFIG,
+        # DRAM, not L1_MEMORY_CONFIG. An L1 *interleaved* embedding output is
+        # round-robined over the whole compute grid, including the two prefetch
+        # sender columns, where the Galaxy global circular buffer already holds
+        # ~55 MB of L1. `ttnn.embedding` then fails to place its own static
+        # circular buffers:
+        #     TT_THROW ... Statically allocated circular buffers in program N
+        #     clash with L1 buffers on core range [0-0 - 0-0]
+        # `embed_decode` relocates this straight into the width-sharded,
+        # worker-confined residual placement, so the L1 intermediate bought
+        # nothing that survived the next line.
+        decode_output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
         prefill_output_dtype=precision.prefill_activation_dtype,
         prefill_output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
     )

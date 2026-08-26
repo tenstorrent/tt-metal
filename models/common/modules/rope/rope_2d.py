@@ -85,8 +85,8 @@ class RotarySetup2D(LightweightModule):
             return
         self.cos_matrix = self.config.cos_matrix.get_device_weight()
         self.sin_matrix = self.config.sin_matrix.get_device_weight()
-        self.cos_matrix_prefill = ttnn.clone(self.cos_matrix, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        self.sin_matrix_prefill = ttnn.clone(self.sin_matrix, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        self.cos_matrix_prefill = _materialize_table_copy(self.config.cos_matrix)
+        self.sin_matrix_prefill = _materialize_table_copy(self.config.sin_matrix)
         self.transformation_mat = self.config._decode_trans_mat.get_device_weight()
         self.transformation_mat_prefill = self.config._prefill_trans_mat.get_device_weight()
         self._device_weights_loaded = True
@@ -189,6 +189,48 @@ class RotarySetup2D(LightweightModule):
         self._device_weights_loaded = False
         if failures:
             raise failures[0]
+
+
+def _materialize_table_copy(table: LazyWeight) -> ttnn.Tensor:
+    """Return a second, independent device copy of a resolved RoPE table.
+
+    Written from the host source rather than with an on-device ``ttnn.clone``.
+    The two are numerically identical - same source tensor, same dtype, same
+    layout, same DRAM placement - but they are not interchangeable on Galaxy:
+
+    ``ttnn.clone`` compiles a program over the *full* compute grid, and a
+    program may only touch cores that belong to the loaded sub-device manager.
+    ``load_device_weights`` is lazy, so on the Galaxy decode path it first runs
+    inside ``RotarySetup2D.decode_forward`` - by which time the Galaxy
+    prefetcher has loaded its sender/worker sub-device partition, which does not
+    cover the whole grid. The clone then aborts with
+
+        TT_FATAL ... Kernel group cores do not match sub device cores
+                     for programmable core type TENSIX
+
+    and, because the abort happens inside a multi-sub-device program, it leaves
+    the mesh un-drainable: teardown blocks forever in
+    ``FDMeshCommandQueue::~FDMeshCommandQueue``. Sealing the Galaxy prefetcher
+    loads the decode partition and leaves it loaded, so there is no later moment
+    at which a full-grid clone would be safe either.
+
+    A host-to-device write compiles no program and is therefore legal under any
+    sub-device manager. This is the only lazy device-weight loader among the 2D
+    modules that ran a compute op; the rest already only write.
+
+    No cache entry is requested: this copy must not collide with the decode
+    table's cache key, and it is cheap to rewrite.
+    """
+
+    return LazyWeight(
+        source=table.source,
+        device=table.device,
+        dtype=table.dtype,
+        layout=table.layout,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper_config=table.mesh_mapper_config,
+        pad_value=table.pad_value,
+    ).get_device_weight()
 
 
 def _resolve_rope2d_config(config: RotarySetup2DConfig) -> RotarySetup2DConfig:
